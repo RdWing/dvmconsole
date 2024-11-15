@@ -238,5 +238,13 @@ namespace WhackerLinkConsoleV2
                 GenerateChannelWidgets();
             }
         }
+        private void Button_Click(object sender, RoutedEventArgs e)
+        {
+            if (sender is Button button)
+            {
+                string buttonContent = button.Content.ToString();
+                MessageBox.Show($"Beep boop {buttonContent}");
+            }
+        }
     }
 }
