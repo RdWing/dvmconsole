@@ -12,42 +12,13 @@
                 <MenuItem Header="Enable Edit Mode" Click="ToggleEditMode_Click"/>
                 <MenuItem Header="Select Widgets to Display" Click="SelectWidgets_Click"/>
                 <MenuItem Header="Reset Settings" Click="ResetSettings_Click"/>
+                <MenuItem Header="Alerts">
+                    <MenuItem Header="Add Alert Tone" Click="AddAlertTone_Click"/>
+                </MenuItem>
             </MenuItem>
         </Menu>
 
         <Canvas x:Name="ChannelsCanvas" Margin="0,25,0,0" Background="#1e1e1e">
         </Canvas>
-        <Grid VerticalAlignment="Top" Height="75" Margin="0,10,0,0">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="Auto" />
-                <ColumnDefinition Width="*" />
-            </Grid.ColumnDefinitions>
-            <StackPanel Orientation="Horizontal" Grid.Column="1" HorizontalAlignment="Right" VerticalAlignment="Center">
-                <Button Content="ALERT 1" Height="47" Width="53" Click="Button_Click" />
-                <Button Content="ALERT 2" Height="47" Width="53" Click="Button_Click" />
-                <Button Content="ALERT 3" Height="47" Width="53" Click="Button_Click" />
-                <Button Content="ALERT 4" Height="47" Width="53" Click="Button_Click" />
-                <Button Content="ALERT 5" Height="47" Width="53" Click="Button_Click" />
-                <Button Content="ALERT 6" Height="47" Width="53" Click="Button_Click" />
-                <Button Content="ALERT 7" Height="47" Width="53" Click="Button_Click" />
-                <Button Content="ALERT 8" Height="47" Width="53" Click="Button_Click" />
-                <Button Content="ALERT 9" Height="47" Width="53" Click="Button_Click" />
-                <Button Content="ALERT 10" Height="47" Width="53" Click="Button_Click" />
-                <Button Content="ALERT 11" Height="47" Width="53" Click="Button_Click" />
-                <Button Content="ALERT 12" Height="47" Width="53" Click="Button_Click" />
-                <Button Content="ALERT 13" Height="47" Width="53" Click="Button_Click" />
-                <Button Content="ALERT 14" Height="47" Width="53" Click="Button_Click" />
-                <Button Content="ALERT 15" Height="47" Width="53" Click="Button_Click" />
-            </StackPanel>
-        </Grid>
-
-
-
-
-
-
-
-
-
     </Grid>
 </Window>

@@ -105,8 +105,16 @@ namespace WhackerLinkConsoleV2
                 {
                     var systemStatusBox = new SystemStatusBox(system.Name, system.Address, system.Port);
 
-                    Canvas.SetLeft(systemStatusBox, offsetX);
-                    Canvas.SetTop(systemStatusBox, offsetY);
+                    if (_settingsManager.SystemStatusPositions.TryGetValue(system.Name, out var position))
+                    {
+                        Canvas.SetLeft(systemStatusBox, position.X);
+                        Canvas.SetTop(systemStatusBox, position.Y);
+                    }
+                    else
+                    {
+                        Canvas.SetLeft(systemStatusBox, offsetX);
+                        Canvas.SetTop(systemStatusBox, offsetY);
+                    }
 
                     systemStatusBox.MouseLeftButtonDown += SystemStatusBox_MouseLeftButtonDown;
                     systemStatusBox.MouseMove += SystemStatusBox_MouseMove;
@@ -155,6 +163,29 @@ namespace WhackerLinkConsoleV2
                         }
                     }
                 }
+            }
+
+            foreach (var alertPath in _settingsManager.AlertToneFilePaths)
+            {
+                var alertTone = new AlertTone(alertPath)
+                {
+                    IsEditMode = isEditMode
+                };
+
+                if (_settingsManager.AlertTonePositions.TryGetValue(alertPath, out var position))
+                {
+                    Canvas.SetLeft(alertTone, position.X);
+                    Canvas.SetTop(alertTone, position.Y);
+                }
+                else
+                {
+                    Canvas.SetLeft(alertTone, 20);
+                    Canvas.SetTop(alertTone, 20);
+                }
+
+                alertTone.MouseRightButtonUp += AlertTone_MouseRightButtonUp;
+
+                ChannelsCanvas.Children.Add(alertTone);
             }
         }
 
@@ -212,13 +243,84 @@ namespace WhackerLinkConsoleV2
 
         private void SystemStatusBox_MouseLeftButtonDown(object sender, MouseButtonEventArgs e) => ChannelBox_MouseLeftButtonDown(sender, e);
         private void SystemStatusBox_MouseMove(object sender, MouseEventArgs e) => ChannelBox_MouseMove(sender, e);
-        private void SystemStatusBox_MouseRightButtonDown(object sender, MouseButtonEventArgs e) => ChannelBox_MouseRightButtonDown(sender, e);
+
+        private void SystemStatusBox_MouseRightButtonDown(object sender, MouseButtonEventArgs e)
+        {
+            if (!isEditMode) return;
+
+            if (sender is SystemStatusBox systemStatusBox)
+            {
+                double x = Canvas.GetLeft(systemStatusBox);
+                double y = Canvas.GetTop(systemStatusBox);
+                _settingsManager.SystemStatusPositions[systemStatusBox.SystemName] = new ChannelPosition { X = x, Y = y };
+
+                ChannelBox_MouseRightButtonDown(sender, e);
+            }
+        }
 
         private void ToggleEditMode_Click(object sender, RoutedEventArgs e)
         {
             isEditMode = !isEditMode;
             var menuItem = (MenuItem)sender;
             menuItem.Header = isEditMode ? "Disable Edit Mode" : "Enable Edit Mode";
+            UpdateEditModeForWidgets();
+        }
+
+        private void UpdateEditModeForWidgets()
+        {
+            foreach (var child in ChannelsCanvas.Children)
+            {
+                if (child is AlertTone alertTone)
+                {
+                    alertTone.IsEditMode = isEditMode;
+                }
+            }
+        }
+
+        private void AddAlertTone_Click(object sender, RoutedEventArgs e)
+        {
+            OpenFileDialog openFileDialog = new OpenFileDialog
+            {
+                Filter = "WAV Files (*.wav)|*.wav|All Files (*.*)|*.*",
+                Title = "Select Alert Tone"
+            };
+
+            if (openFileDialog.ShowDialog() == true)
+            {
+                string alertFilePath = openFileDialog.FileName;
+                var alertTone = new AlertTone(alertFilePath)
+                {
+                    IsEditMode = isEditMode
+                };
+
+                if (_settingsManager.AlertTonePositions.TryGetValue(alertFilePath, out var position))
+                {
+                    Canvas.SetLeft(alertTone, position.X);
+                    Canvas.SetTop(alertTone, position.Y);
+                }
+                else
+                {
+                    Canvas.SetLeft(alertTone, 20);
+                    Canvas.SetTop(alertTone, 20);
+                }
+
+                alertTone.MouseRightButtonUp += AlertTone_MouseRightButtonUp;
+
+                ChannelsCanvas.Children.Add(alertTone);
+                _settingsManager.UpdateAlertTonePaths(alertFilePath);
+            }
+        }
+
+        private void AlertTone_MouseRightButtonUp(object sender, MouseButtonEventArgs e)
+        {
+            if (!isEditMode) return;
+
+            if (sender is AlertTone alertTone)
+            {
+                double x = Canvas.GetLeft(alertTone);
+                double y = Canvas.GetTop(alertTone);
+                _settingsManager.UpdateAlertTonePosition(alertTone.AlertFilePath, x, y);
+            }
         }
 
         protected override void OnClosing(System.ComponentModel.CancelEventArgs e)
@@ -236,14 +338,6 @@ namespace WhackerLinkConsoleV2
             else
             {
                 GenerateChannelWidgets();
-            }
-        }
-        private void Button_Click(object sender, RoutedEventArgs e)
-        {
-            if (sender is Button button)
-            {
-                string buttonContent = button.Content.ToString();
-                MessageBox.Show($"Beep boop {buttonContent}");
             }
         }
     }

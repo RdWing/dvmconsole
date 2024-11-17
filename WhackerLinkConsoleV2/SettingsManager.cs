@@ -32,6 +32,9 @@ namespace WhackerLinkConsoleV2
         public string LastCodeplugPath { get; set; } = null;
 
         public Dictionary<string, ChannelPosition> ChannelPositions { get; set; } = new Dictionary<string, ChannelPosition>();
+        public Dictionary<string, ChannelPosition> SystemStatusPositions { get; set; } = new Dictionary<string, ChannelPosition>();
+        public List<string> AlertToneFilePaths { get; set; } = new List<string>();
+        public Dictionary<string, ChannelPosition> AlertTonePositions { get; set; } = new Dictionary<string, ChannelPosition>();
 
         public void LoadSettings()
         {
@@ -48,12 +51,42 @@ namespace WhackerLinkConsoleV2
                     ShowChannels = loadedSettings.ShowChannels;
                     LastCodeplugPath = loadedSettings.LastCodeplugPath;
                     ChannelPositions = loadedSettings.ChannelPositions ?? new Dictionary<string, ChannelPosition>();
+                    SystemStatusPositions = loadedSettings.SystemStatusPositions ?? new Dictionary<string, ChannelPosition>();
+                    AlertToneFilePaths = loadedSettings.AlertToneFilePaths ?? new List<string>();
+                    AlertTonePositions = loadedSettings.AlertTonePositions ?? new Dictionary<string, ChannelPosition>();
                 }
             }
             catch (Exception ex)
             {
                 Console.WriteLine($"Error loading settings: {ex.Message}");
             }
+        }
+
+        public void UpdateAlertTonePaths(string newFilePath)
+        {
+            if (!AlertToneFilePaths.Contains(newFilePath))
+            {
+                AlertToneFilePaths.Add(newFilePath);
+                SaveSettings();
+            }
+        }
+
+        public void UpdateAlertTonePosition(string alertFileName, double x, double y)
+        {
+            AlertTonePositions[alertFileName] = new ChannelPosition { X = x, Y = y };
+            SaveSettings();
+        }
+
+        public void UpdateChannelPosition(string channelName, double x, double y)
+        {
+            ChannelPositions[channelName] = new ChannelPosition { X = x, Y = y };
+            SaveSettings();
+        }
+
+        public void UpdateSystemStatusPosition(string systemName, double x, double y)
+        {
+            SystemStatusPositions[systemName] = new ChannelPosition { X = x, Y = y };
+            SaveSettings();
         }
 
         public void SaveSettings()
@@ -66,19 +99,6 @@ namespace WhackerLinkConsoleV2
             catch (Exception ex)
             {
                 Console.WriteLine($"Error saving settings: {ex.Message}");
-            }
-        }
-
-        public void UpdateChannelPosition(string channelName, double x, double y)
-        {
-            if (ChannelPositions.ContainsKey(channelName))
-            {
-                ChannelPositions[channelName].X = x;
-                ChannelPositions[channelName].Y = y;
-            }
-            else
-            {
-                ChannelPositions[channelName] = new ChannelPosition { X = x, Y = y };
             }
         }
     }
