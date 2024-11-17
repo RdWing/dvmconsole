@@ -173,26 +173,43 @@ namespace WhackerLinkConsoleV2
                     handler.OnVoiceChannelRelease += HandleVoiceRelease;
                     handler.OnAudioData += HandleReceivedAudio;
 
+                    handler.OnUnitRegistrationResponse += (response) =>
+                    {
+                        Dispatcher.Invoke(() =>
+                        {
+                            if (response.Status == (int)ResponseType.GRANT)
+                            {
+                                systemStatusBox.Background = new SolidColorBrush(Colors.Green);
+                                systemStatusBox.ConnectionState = "Connected";
+                            }
+                            else
+                            {
+                                systemStatusBox.Background = new SolidColorBrush(Colors.Red);
+                                systemStatusBox.ConnectionState = "Disconnected";
+                            }
+                        });
+                    };
+
+                    handler.OnClose += () =>
+                    {
+                        Dispatcher.Invoke(() =>
+                        {
+                            systemStatusBox.Background = new SolidColorBrush(Colors.Red);
+                            systemStatusBox.ConnectionState = "Disconnected";
+                        });
+
+                        Thread.Sleep(1000);
+
+                        Task.Factory.StartNew(() =>
+                        {
+                            handler.Connect(system.Address, system.Port);
+                            handler.SendMessage(PacketFactory.CreateUnitRegistrationRequest(system.Rid, system.Site));
+                        });
+                    };
+
                     Task.Factory.StartNew(() =>
                     {
                         handler.Connect(system.Address, system.Port);
-
-                        handler.OnUnitRegistrationResponse += (response) =>
-                        {
-                            Dispatcher.Invoke(() =>
-                            {
-                                if (response.Status == (int)ResponseType.GRANT)
-                                {
-                                    systemStatusBox.Background = new SolidColorBrush(Colors.Green);
-                                    systemStatusBox.ConnectionState = "Connected";
-                                }
-                                else
-                                {
-                                    systemStatusBox.Background = new SolidColorBrush(Colors.Red);
-                                    systemStatusBox.ConnectionState = "Disconnected";
-                                }
-                            });
-                        };
 
                         handler.OnGroupAffiliationResponse += (response) => { /* TODO */ };
 
