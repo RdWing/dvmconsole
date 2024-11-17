@@ -21,6 +21,7 @@
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using System.Windows.Media;
 
 namespace WhackerLinkConsoleV2.Controls
 {
@@ -30,56 +31,60 @@ namespace WhackerLinkConsoleV2.Controls
         public string SystemName { get; set; }
         public string TGID { get; set; }
 
-        public ChannelBox()
+        public event EventHandler<ChannelBox> PTTButtonClicked;
+
+        private readonly SelectedChannelsManager _selectedChannelsManager;
+
+        public bool IsEditMode { get; set; }
+
+        private bool _isSelected;
+        public bool IsSelected
         {
-            InitializeComponent();
-            DataContext = this;
-
-            MouseMove += ChannelBox_MouseMove;
-            MouseDown += ChannelBox_MouseDown;
-            MouseUp += ChannelBox_MouseUp;
-        }
-
-        public ChannelBox(string channelName, string systemName, string tgid) : this()
-        {
-            ChannelName = $"{channelName}";
-            SystemName = $"System: {systemName}";
-            TGID = $"TGID: {tgid}";
-        }
-
-        private Point _dragStartPoint;
-        private bool _isDragging;
-
-        private void ChannelBox_MouseDown(object sender, MouseButtonEventArgs e)
-        {
-            _dragStartPoint = e.GetPosition(null);
-            _isDragging = false;
-        }
-
-        private void ChannelBox_MouseMove(object sender, MouseEventArgs e)
-        {
-            if (e.LeftButton == MouseButtonState.Pressed)
+            get => _isSelected;
+            set
             {
-                Point currentPosition = e.GetPosition(null);
-
-                if (!_isDragging && (Math.Abs(currentPosition.X - _dragStartPoint.X) > SystemParameters.MinimumHorizontalDragDistance ||
-                                     Math.Abs(currentPosition.Y - _dragStartPoint.Y) > SystemParameters.MinimumVerticalDragDistance))
-                {
-                    _isDragging = true;
-                    DataObject data = new DataObject("ChannelBox", this);
-                    DragDrop.DoDragDrop(this, data, DragDropEffects.Move);
-                }
+                _isSelected = value;
+                UpdateBackground();
             }
         }
 
-        private void ChannelBox_MouseUp(object sender, MouseButtonEventArgs e)
+        public ChannelBox(SelectedChannelsManager selectedChannelsManager, string channelName, string systemName, string tgid)
         {
-            _isDragging = false;
+            InitializeComponent();
+            DataContext = this;
+            _selectedChannelsManager = selectedChannelsManager;
+            ChannelName = channelName;
+            SystemName = $"System: {systemName}";
+            TGID = $"TGID: {tgid}";
+            UpdateBackground();
+            MouseLeftButtonDown += ChannelBox_MouseLeftButtonDown;
+        }
+
+        private void ChannelBox_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+        {
+            if (IsEditMode) return;
+
+            IsSelected = !IsSelected;
+            Background = IsSelected ? Brushes.Blue : Brushes.Gray;
+
+            if (IsSelected)
+            {
+                _selectedChannelsManager.AddSelectedChannel(this);
+            }
+            else
+            {
+                _selectedChannelsManager.RemoveSelectedChannel(this);
+            }
+        }
+
+        private void UpdateBackground()
+        {
+            Background = IsSelected ? Brushes.DodgerBlue : Brushes.DarkGray;
         }
 
         private void PTTButton_Click(object sender, RoutedEventArgs e)
         {
-            MessageBox.Show($"Imagine you were talking on {ChannelName} rn");
+            PTTButtonClicked.Invoke(sender, this);
         }
     }
 }

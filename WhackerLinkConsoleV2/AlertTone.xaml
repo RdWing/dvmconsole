@@ -8,8 +8,8 @@
              DataContext="{Binding RelativeSource={RelativeSource Self}}">
     <Border BorderBrush="Gray" BorderThickness="1" CornerRadius="5" Background="Gray">
         <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
-            <TextBlock Text="{Binding AlertFileName}" Margin="5" TextWrapping="Wrap" HorizontalAlignment="Center"/>
-            <Button Content="Play Alert" Background="Green" Click="PlayAlert_Click" Width="80" />
+            <TextBlock Text="{Binding AlertFileName}" Margin="5" TextWrapping="Wrap" Foreground="White" HorizontalAlignment="Center"/>
+            <Button Content="Play Alert" Background="Green" Click="PlayAlert_Click" Foreground="White" Width="80" />
         </StackPanel>
     </Border>
 </UserControl>

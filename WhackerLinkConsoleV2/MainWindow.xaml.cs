@@ -44,11 +44,14 @@ namespace WhackerLinkConsoleV2
         private bool _isDragging;
 
         private SettingsManager _settingsManager = new SettingsManager();
+        private SelectedChannelsManager _selectedChannelsManager;
 
         public MainWindow()
         {
             InitializeComponent();
             _settingsManager.LoadSettings();
+            _selectedChannelsManager = new SelectedChannelsManager();
+
             Loaded += MainWindow_Loaded;
         }
 
@@ -137,7 +140,7 @@ namespace WhackerLinkConsoleV2
                 {
                     foreach (var channel in zone.Channels)
                     {
-                        var channelBox = new ChannelBox(channel.Name, channel.System, channel.Tgid);
+                        var channelBox = new ChannelBox(_selectedChannelsManager, channel.Name, channel.System, channel.Tgid);
 
                         if (_settingsManager.ChannelPositions.TryGetValue(channel.Name, out var position))
                         {
@@ -149,6 +152,8 @@ namespace WhackerLinkConsoleV2
                             Canvas.SetLeft(channelBox, offsetX);
                             Canvas.SetTop(channelBox, offsetY);
                         }
+
+                        channelBox.PTTButtonClicked += ChannelBox_PTTButtonClicked;
 
                         channelBox.MouseLeftButtonDown += ChannelBox_MouseLeftButtonDown;
                         channelBox.MouseMove += ChannelBox_MouseMove;
@@ -241,6 +246,11 @@ namespace WhackerLinkConsoleV2
             _draggedElement = null;
         }
 
+        private void ChannelBox_PTTButtonClicked(object sender, ChannelBox channelBox)
+        {
+            MessageBox.Show($"Imagine you were talking on {channelBox.ChannelName} rn", "PTT Action", MessageBoxButton.OK);
+        }
+
         private void SystemStatusBox_MouseLeftButtonDown(object sender, MouseButtonEventArgs e) => ChannelBox_MouseLeftButtonDown(sender, e);
         private void SystemStatusBox_MouseMove(object sender, MouseEventArgs e) => ChannelBox_MouseMove(sender, e);
 
@@ -273,6 +283,11 @@ namespace WhackerLinkConsoleV2
                 if (child is AlertTone alertTone)
                 {
                     alertTone.IsEditMode = isEditMode;
+                }
+
+                if (child is ChannelBox channelBox)
+                {
+                    channelBox.IsEditMode = isEditMode;
                 }
             }
         }
