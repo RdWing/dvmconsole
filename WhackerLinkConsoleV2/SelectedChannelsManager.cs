@@ -26,6 +26,8 @@ namespace WhackerLinkConsoleV2
     {
         private readonly HashSet<ChannelBox> _selectedChannels;
 
+        public event Action SelectedChannelsChanged;
+
         public SelectedChannelsManager()
         {
             _selectedChannels = new HashSet<ChannelBox>();
@@ -36,6 +38,7 @@ namespace WhackerLinkConsoleV2
             if (_selectedChannels.Add(channel))
             {
                 channel.IsSelected = true;
+                SelectedChannelsChanged.Invoke();
             }
         }
 
@@ -44,6 +47,7 @@ namespace WhackerLinkConsoleV2
             if (_selectedChannels.Remove(channel))
             {
                 channel.IsSelected = false;
+                SelectedChannelsChanged.Invoke();
             }
         }
 
@@ -54,6 +58,7 @@ namespace WhackerLinkConsoleV2
                 channel.IsSelected = false;
             }
             _selectedChannels.Clear();
+            SelectedChannelsChanged.Invoke();
         }
 
         public IReadOnlyCollection<ChannelBox> GetSelectedChannels() => _selectedChannels;

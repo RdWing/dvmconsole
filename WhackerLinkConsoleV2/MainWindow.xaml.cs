@@ -28,7 +28,12 @@ using WhackerLinkLib.Models.Radio;
 using YamlDotNet.Serialization;
 using YamlDotNet.Serialization.NamingConventions;
 using WhackerLinkConsoleV2.Controls;
-using System.Collections.Generic;
+using WebSocketManager = WhackerLinkLib.Managers.WebSocketManager;
+using System.Windows.Media;
+using WhackerLinkLib.Utils;
+using WhackerLinkLib.Models;
+using WhackerLinkLib.Handlers;
+using System.Net;
 
 namespace WhackerLinkConsoleV2
 {
@@ -45,6 +50,7 @@ namespace WhackerLinkConsoleV2
 
         private SettingsManager _settingsManager = new SettingsManager();
         private SelectedChannelsManager _selectedChannelsManager;
+        private WebSocketManager _webSocketManager = new WebSocketManager();
 
         public MainWindow()
         {
@@ -52,6 +58,7 @@ namespace WhackerLinkConsoleV2
             _settingsManager.LoadSettings();
             _selectedChannelsManager = new SelectedChannelsManager();
 
+            _selectedChannelsManager.SelectedChannelsChanged += SelectedChannelsChanged;
             Loaded += MainWindow_Loaded;
         }
 
@@ -131,6 +138,43 @@ namespace WhackerLinkConsoleV2
                         offsetX = 20;
                         offsetY += 140;
                     }
+
+                    _webSocketManager.AddWebSocketHandler(system.Name);
+
+                    Task.Factory.StartNew(() =>
+                    {
+                        WebSocketHandler handler = _webSocketManager.GetWebSocketHandler(system.Name);
+                        handler.Connect(system.Address, system.Port);
+
+                        handler.OnUnitRegistrationResponse += (response) =>
+                        {
+                            Dispatcher.Invoke(() =>
+                            {
+                                if (response.Status == (int)ResponseType.GRANT)
+                                {
+                                    systemStatusBox.Background = new SolidColorBrush(Colors.Green);
+                                    systemStatusBox.ConnectionState = "Connected";
+                                }
+                                else
+                                {
+                                    systemStatusBox.Background = new SolidColorBrush(Colors.Red);
+                                    systemStatusBox.ConnectionState = "Disconnected";
+                                }
+                            });
+                        };
+
+                        handler.OnGroupAffiliationResponse += (response) => { /* TODO */ };
+
+                        if (handler.IsConnected)
+                        {
+                            handler.SendMessage(PacketFactory.CreateUnitRegistrationRequest(system.Rid, system.Site));
+                        }
+                        else
+                        {
+                            systemStatusBox.Background = new SolidColorBrush(Colors.Red);
+                            systemStatusBox.ConnectionState = "Disconnected";
+                        }
+                    });
                 }
             }
 
@@ -197,6 +241,40 @@ namespace WhackerLinkConsoleV2
             }
 
             AdjustCanvasHeight();
+        }
+
+        private void HandleChannelUpdate(ChannelBox channelBox, string lastSrc = "0", bool receiving = false)
+        {
+            if (receiving)
+            {
+                Dispatcher.Invoke(() =>
+                {
+                    channelBox.LastSrcId = lastSrc;
+                    if (channelBox.IsSelected)
+                        channelBox.Background = new SolidColorBrush(Colors.Green);
+                });
+            } else
+            {
+                Dispatcher.Invoke(() =>
+                {
+                    channelBox.LastSrcId = lastSrc;
+                    if (channelBox.IsSelected)
+                        channelBox.Background = new SolidColorBrush(Colors.Blue);
+                });
+            }
+        }
+
+        private void SelectedChannelsChanged()
+        {
+            foreach (ChannelBox channel in _selectedChannelsManager.GetSelectedChannels())
+            {
+                Codeplug.System system = Codeplug.GetSystemForChannel(channel.ChannelName);
+                Codeplug.Channel cpgChannel = Codeplug.GetChannelByName(channel.ChannelName);
+                WebSocketHandler handler = _webSocketManager.GetWebSocketHandler(system.Name);
+
+                if (channel.IsSelected)
+                    handler.SendMessage(PacketFactory.CreateAffiliationRequest(system.Rid, cpgChannel.Tgid, system.Site));
+            }
         }
 
         private void SelectWidgets_Click(object sender, RoutedEventArgs e)

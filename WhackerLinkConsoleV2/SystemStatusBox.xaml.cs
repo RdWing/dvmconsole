@@ -17,16 +17,31 @@
 * Copyright (C) 2024 Caleb, K4PHP
 * 
 */
-
+using System.ComponentModel;
+using System.Runtime.CompilerServices;
 using System.Windows.Controls;
 
 namespace WhackerLinkConsoleV2.Controls
 {
-    public partial class SystemStatusBox : UserControl
+    public partial class SystemStatusBox : UserControl, INotifyPropertyChanged
     {
+        private string _connectionState = "Disconnected";
+
         public string SystemName { get; set; }
         public string AddressPort { get; set; }
-        public string ConnectionState { get; set; } = "Disconnected";
+
+        public string ConnectionState
+        {
+            get => _connectionState;
+            set
+            {
+                if (_connectionState != value)
+                {
+                    _connectionState = value;
+                    NotifyPropertyChanged();
+                }
+            }
+        }
 
         public SystemStatusBox()
         {
@@ -38,6 +53,13 @@ namespace WhackerLinkConsoleV2.Controls
         {
             SystemName = systemName;
             AddressPort = $"Address: {address}:{port}";
+        }
+
+        public event PropertyChangedEventHandler PropertyChanged;
+
+        protected void NotifyPropertyChanged([CallerMemberName] string propertyName = null)
+        {
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
         }
     }
 }
