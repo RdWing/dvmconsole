@@ -4,7 +4,12 @@
         xmlns:local="clr-namespace:WhackerLinkConsoleV2.Controls"
         Title="WhackerLinkConsoleV2" Height="600" Width="1000" Background="#1e1e1e">
     <Grid>
-        <Menu VerticalAlignment="Top" Height="25">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+        </Grid.RowDefinitions>
+
+        <Menu VerticalAlignment="Top" Height="25" Grid.Row="0">
             <MenuItem Header="File">
                 <MenuItem Header="Open Codeplug" Click="OpenCodeplug_Click"/>
             </MenuItem>
@@ -18,7 +23,8 @@
             </MenuItem>
         </Menu>
 
-        <Canvas x:Name="ChannelsCanvas" Margin="0,25,0,0" Background="#1e1e1e">
-        </Canvas>
+        <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Grid.Row="1">
+            <Canvas x:Name="ChannelsCanvas" Background="#1e1e1e" HorizontalAlignment="Stretch"/>
+        </ScrollViewer>
     </Grid>
 </Window>

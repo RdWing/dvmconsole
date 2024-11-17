@@ -192,6 +192,8 @@ namespace WhackerLinkConsoleV2
 
                 ChannelsCanvas.Children.Add(alertTone);
             }
+
+            AdjustCanvasHeight();
         }
 
         private void SelectWidgets_Click(object sender, RoutedEventArgs e)
@@ -235,6 +237,8 @@ namespace WhackerLinkConsoleV2
             {
                 _settingsManager.UpdateChannelPosition(channelBox.ChannelName, newLeft, newTop);
             }
+
+            AdjustCanvasHeight();
         }
 
         private void ChannelBox_MouseRightButtonDown(object sender, MouseButtonEventArgs e)
@@ -265,6 +269,8 @@ namespace WhackerLinkConsoleV2
                 _settingsManager.SystemStatusPositions[systemStatusBox.SystemName] = new ChannelPosition { X = x, Y = y };
 
                 ChannelBox_MouseRightButtonDown(sender, e);
+
+                AdjustCanvasHeight();
             }
         }
 
@@ -323,6 +329,8 @@ namespace WhackerLinkConsoleV2
 
                 ChannelsCanvas.Children.Add(alertTone);
                 _settingsManager.UpdateAlertTonePaths(alertFilePath);
+
+                AdjustCanvasHeight();
             }
         }
 
@@ -335,13 +343,25 @@ namespace WhackerLinkConsoleV2
                 double x = Canvas.GetLeft(alertTone);
                 double y = Canvas.GetTop(alertTone);
                 _settingsManager.UpdateAlertTonePosition(alertTone.AlertFilePath, x, y);
+
+                AdjustCanvasHeight();
             }
         }
 
-        protected override void OnClosing(System.ComponentModel.CancelEventArgs e)
+        private void AdjustCanvasHeight()
         {
-            _settingsManager.SaveSettings();
-            base.OnClosing(e);
+            double maxBottom = 0;
+
+            foreach (UIElement child in ChannelsCanvas.Children)
+            {
+                double childBottom = Canvas.GetTop(child) + child.RenderSize.Height;
+                if (childBottom > maxBottom)
+                {
+                    maxBottom = childBottom;
+                }
+            }
+
+            ChannelsCanvas.Height = maxBottom + 150;
         }
 
         private void MainWindow_Loaded(object sender, RoutedEventArgs e)
@@ -354,6 +374,12 @@ namespace WhackerLinkConsoleV2
             {
                 GenerateChannelWidgets();
             }
+        }
+
+        protected override void OnClosing(System.ComponentModel.CancelEventArgs e)
+        {
+            _settingsManager.SaveSettings();
+            base.OnClosing(e);
         }
     }
 }
