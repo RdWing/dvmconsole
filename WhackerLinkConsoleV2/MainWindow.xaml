@@ -14,6 +14,7 @@
                 <MenuItem Header="Open Codeplug" Click="OpenCodeplug_Click"/>
             </MenuItem>
             <MenuItem Header="Edit">
+                <MenuItem Header="Audio Settings" Click="AudioSettings_Click" />
                 <MenuItem Header="Enable Edit Mode" Click="ToggleEditMode_Click"/>
                 <MenuItem Header="Select Widgets to Display" Click="SelectWidgets_Click"/>
                 <MenuItem Header="Reset Settings" Click="ResetSettings_Click"/>

@@ -310,6 +310,31 @@ namespace WhackerLinkConsoleV2
             }
         }
 
+        private void AudioSettings_Click(object sender, RoutedEventArgs e)
+        {
+            AudioSettingsWindow audioSettingsWindow = new AudioSettingsWindow();
+
+            if (audioSettingsWindow.ShowDialog() == true)
+            {
+                int? inputDeviceIndex = audioSettingsWindow.SelectedInputDeviceIndex;
+                int? outputDeviceIndex = audioSettingsWindow.SelectedOutputDeviceIndex;
+
+                if (inputDeviceIndex.HasValue && outputDeviceIndex.HasValue)
+                {
+                    MessageBox.Show($"Selected Input Device Index: {inputDeviceIndex}\n" +
+                                    $"Selected Output Device Index: {outputDeviceIndex}",
+                                    "Selected Devices");
+
+                    _waveIn.DeviceNumber = inputDeviceIndex.Value;
+                    _waveOut.DeviceNumber = outputDeviceIndex.Value;
+                }
+                else
+                {
+                    MessageBox.Show("No device selected.", "Warning");
+                }
+            }
+        }
+
         private void SelectWidgets_Click(object sender, RoutedEventArgs e)
         {
             var widgetSelectionWindow = new WidgetSelectionWindow();
