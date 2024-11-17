@@ -14,7 +14,7 @@
 
             <TextBlock Text="{Binding ChannelName}" FontWeight="Bold" Foreground="White" FontSize="14" Grid.Row="0"/>
             <TextBlock Text="{Binding SystemName}" Foreground="LightGray" FontSize="12" Grid.Row="1"/>
-            <TextBlock Text="{Binding TGID}" Foreground="LightGray" FontSize="12" Grid.Row="2"/>
+            <TextBlock Text="{Binding LastSrcId}" Foreground="LightGray" FontSize="12" Grid.Row="2"/>
 
             <Button Content="PTT" Width="80" Margin="0,5,0,0" Background="Green" Foreground="White"
                     HorizontalAlignment="Left" Grid.Row="3" Click="PTTButton_Click"/>

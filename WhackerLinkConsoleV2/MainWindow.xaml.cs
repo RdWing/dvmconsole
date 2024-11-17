@@ -140,7 +140,7 @@ namespace WhackerLinkConsoleV2
                 {
                     foreach (var channel in zone.Channels)
                     {
-                        var channelBox = new ChannelBox(_selectedChannelsManager, channel.Name, channel.System, channel.Tgid);
+                        var channelBox = new ChannelBox(_selectedChannelsManager, channel.Name, channel.System);
 
                         if (_settingsManager.ChannelPositions.TryGetValue(channel.Name, out var position))
                         {
@@ -170,27 +170,30 @@ namespace WhackerLinkConsoleV2
                 }
             }
 
-            foreach (var alertPath in _settingsManager.AlertToneFilePaths)
+            if (_settingsManager.ShowAlertTones && Codeplug != null)
             {
-                var alertTone = new AlertTone(alertPath)
+                foreach (var alertPath in _settingsManager.AlertToneFilePaths)
                 {
-                    IsEditMode = isEditMode
-                };
+                    var alertTone = new AlertTone(alertPath)
+                    {
+                        IsEditMode = isEditMode
+                    };
 
-                if (_settingsManager.AlertTonePositions.TryGetValue(alertPath, out var position))
-                {
-                    Canvas.SetLeft(alertTone, position.X);
-                    Canvas.SetTop(alertTone, position.Y);
+                    if (_settingsManager.AlertTonePositions.TryGetValue(alertPath, out var position))
+                    {
+                        Canvas.SetLeft(alertTone, position.X);
+                        Canvas.SetTop(alertTone, position.Y);
+                    }
+                    else
+                    {
+                        Canvas.SetLeft(alertTone, 20);
+                        Canvas.SetTop(alertTone, 20);
+                    }
+
+                    alertTone.MouseRightButtonUp += AlertTone_MouseRightButtonUp;
+
+                    ChannelsCanvas.Children.Add(alertTone);
                 }
-                else
-                {
-                    Canvas.SetLeft(alertTone, 20);
-                    Canvas.SetTop(alertTone, 20);
-                }
-
-                alertTone.MouseRightButtonUp += AlertTone_MouseRightButtonUp;
-
-                ChannelsCanvas.Children.Add(alertTone);
             }
 
             AdjustCanvasHeight();
@@ -204,6 +207,8 @@ namespace WhackerLinkConsoleV2
             {
                 _settingsManager.ShowSystemStatus = widgetSelectionWindow.ShowSystemStatus;
                 _settingsManager.ShowChannels = widgetSelectionWindow.ShowChannels;
+                _settingsManager.ShowAlertTones = widgetSelectionWindow.ShowAlertTones;
+
                 GenerateChannelWidgets();
                 _settingsManager.SaveSettings();
             }

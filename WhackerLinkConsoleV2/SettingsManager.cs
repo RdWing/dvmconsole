@@ -29,6 +29,8 @@ namespace WhackerLinkConsoleV2
 
         public bool ShowSystemStatus { get; set; } = true;
         public bool ShowChannels { get; set; } = true;
+        public bool ShowAlertTones { get; set; } = true;
+
         public string LastCodeplugPath { get; set; } = null;
 
         public Dictionary<string, ChannelPosition> ChannelPositions { get; set; } = new Dictionary<string, ChannelPosition>();
@@ -49,6 +51,7 @@ namespace WhackerLinkConsoleV2
                 {
                     ShowSystemStatus = loadedSettings.ShowSystemStatus;
                     ShowChannels = loadedSettings.ShowChannels;
+                    ShowAlertTones = loadedSettings.ShowAlertTones;
                     LastCodeplugPath = loadedSettings.LastCodeplugPath;
                     ChannelPositions = loadedSettings.ChannelPositions ?? new Dictionary<string, ChannelPosition>();
                     SystemStatusPositions = loadedSettings.SystemStatusPositions ?? new Dictionary<string, ChannelPosition>();

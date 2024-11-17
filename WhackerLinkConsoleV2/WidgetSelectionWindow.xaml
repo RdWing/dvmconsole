@@ -5,7 +5,8 @@
     <StackPanel Margin="20">
         <TextBlock Text="Select Widgets to Display:" FontWeight="Bold" Margin="0,0,0,10" />
         <CheckBox x:Name="SystemStatusCheckBox" Content="System Status" IsChecked="True" />
-        <CheckBox x:Name="ChannelCheckBox" Content="Channel" IsChecked="True" />
+        <CheckBox x:Name="ChannelCheckBox" Content="Channels" IsChecked="True" />
+        <CheckBox x:Name="AlertToneCheckBox" Content="Alert Tones" IsChecked="True" />
         <Button Content="Apply" Width="80" Margin="0,20,0,0" HorizontalAlignment="Center" Click="ApplyButton_Click" />
     </StackPanel>
 </Window>

@@ -29,7 +29,7 @@ namespace WhackerLinkConsoleV2.Controls
     {
         public string ChannelName { get; set; }
         public string SystemName { get; set; }
-        public string TGID { get; set; }
+        public string LastSrcId { get; set; } = "0";
 
         public event EventHandler<ChannelBox> PTTButtonClicked;
 
@@ -48,14 +48,14 @@ namespace WhackerLinkConsoleV2.Controls
             }
         }
 
-        public ChannelBox(SelectedChannelsManager selectedChannelsManager, string channelName, string systemName, string tgid)
+        public ChannelBox(SelectedChannelsManager selectedChannelsManager, string channelName, string systemName)
         {
             InitializeComponent();
             DataContext = this;
             _selectedChannelsManager = selectedChannelsManager;
             ChannelName = channelName;
             SystemName = $"System: {systemName}";
-            TGID = $"TGID: {tgid}";
+            LastSrcId = $"Last SRC: {LastSrcId}";
             UpdateBackground();
             MouseLeftButtonDown += ChannelBox_MouseLeftButtonDown;
         }
