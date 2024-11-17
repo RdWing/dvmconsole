@@ -431,9 +431,9 @@ namespace WhackerLinkConsoleV2
                     Dispatcher.Invoke(() =>
                     {
                         if (channel.IsSelected)
-                            Background = new SolidColorBrush(Colors.DodgerBlue);
+                            channel.Background = new SolidColorBrush(Colors.DodgerBlue);
                         else
-                            Background = new SolidColorBrush(Colors.Gray);
+                            channel.Background = new SolidColorBrush(Colors.Gray);
                     });
 
                     channel.VoiceChannel = null;
