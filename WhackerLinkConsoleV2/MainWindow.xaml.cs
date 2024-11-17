@@ -34,6 +34,10 @@ using WhackerLinkLib.Utils;
 using WhackerLinkLib.Models;
 using WhackerLinkLib.Handlers;
 using System.Net;
+using NAudio.Wave;
+using WhackerLinkLib.Interfaces;
+using WhackerLinkLib.Models.IOSP;
+using Nancy;
 
 namespace WhackerLinkConsoleV2
 {
@@ -47,16 +51,39 @@ namespace WhackerLinkConsoleV2
         private double _offsetX;
         private double _offsetY;
         private bool _isDragging;
+        private bool _stopSending;
 
         private SettingsManager _settingsManager = new SettingsManager();
         private SelectedChannelsManager _selectedChannelsManager;
         private WebSocketManager _webSocketManager = new WebSocketManager();
+
+        private readonly WaveInEvent _waveIn;
+        private readonly WaveOutEvent _waveOut;
+        private readonly BufferedWaveProvider _waveProvider;
 
         public MainWindow()
         {
             InitializeComponent();
             _settingsManager.LoadSettings();
             _selectedChannelsManager = new SelectedChannelsManager();
+
+            _waveIn = new WaveInEvent
+            {
+                WaveFormat = new WaveFormat(8000, 16, 1)
+            };
+            _waveIn.DataAvailable += WaveIn_DataAvailable;
+            _waveIn.RecordingStopped += WaveIn_RecordingStopped;
+
+            _waveIn.StartRecording();
+
+            _waveOut = new WaveOutEvent();
+            _waveProvider = new BufferedWaveProvider(new WaveFormat(8000, 16, 1))
+            {
+                DiscardOnBufferOverflow = true
+            };
+            _waveOut.Init(_waveProvider);
+
+            _waveOut.Play();
 
             _selectedChannelsManager.SelectedChannelsChanged += SelectedChannelsChanged;
             Loaded += MainWindow_Loaded;
@@ -141,9 +168,13 @@ namespace WhackerLinkConsoleV2
 
                     _webSocketManager.AddWebSocketHandler(system.Name);
 
+                    IWebSocketHandler handler = _webSocketManager.GetWebSocketHandler(system.Name);
+                    handler.OnVoiceChannelResponse += HandleVoiceResponse;
+                    handler.OnVoiceChannelRelease += HandleVoiceRelease;
+                    handler.OnAudioData += HandleReceivedAudio;
+
                     Task.Factory.StartNew(() =>
                     {
-                        WebSocketHandler handler = _webSocketManager.GetWebSocketHandler(system.Name);
                         handler.Connect(system.Address, system.Port);
 
                         handler.OnUnitRegistrationResponse += (response) =>
@@ -243,24 +274,26 @@ namespace WhackerLinkConsoleV2
             AdjustCanvasHeight();
         }
 
-        private void HandleChannelUpdate(ChannelBox channelBox, string lastSrc = "0", bool receiving = false)
+        private void WaveIn_RecordingStopped(object sender, EventArgs e)
         {
-            if (receiving)
+            /* stub */
+        }
+
+        private void WaveIn_DataAvailable(object sender, WaveInEventArgs e)
+        {
+            foreach (ChannelBox channel in _selectedChannelsManager.GetSelectedChannels())
             {
-                Dispatcher.Invoke(() =>
+                Codeplug.System system = Codeplug.GetSystemForChannel(channel.ChannelName);
+                Codeplug.Channel cpgChannel = Codeplug.GetChannelByName(channel.ChannelName);
+                IWebSocketHandler handler = _webSocketManager.GetWebSocketHandler(system.Name);
+
+                if (channel.IsSelected && channel.VoiceChannel != null && !_stopSending)
                 {
-                    channelBox.LastSrcId = lastSrc;
-                    if (channelBox.IsSelected)
-                        channelBox.Background = new SolidColorBrush(Colors.Green);
-                });
-            } else
-            {
-                Dispatcher.Invoke(() =>
+                    handler.SendMessage(PacketFactory.CreateVoicePacket(system.Rid, cpgChannel.Tgid, channel.VoiceChannel, e.Buffer, system.Site));
+                } else
                 {
-                    channelBox.LastSrcId = lastSrc;
-                    if (channelBox.IsSelected)
-                        channelBox.Background = new SolidColorBrush(Colors.Blue);
-                });
+                    _stopSending = true;
+                }
             }
         }
 
@@ -270,9 +303,9 @@ namespace WhackerLinkConsoleV2
             {
                 Codeplug.System system = Codeplug.GetSystemForChannel(channel.ChannelName);
                 Codeplug.Channel cpgChannel = Codeplug.GetChannelByName(channel.ChannelName);
-                WebSocketHandler handler = _webSocketManager.GetWebSocketHandler(system.Name);
+                IWebSocketHandler handler = _webSocketManager.GetWebSocketHandler(system.Name);
 
-                if (channel.IsSelected)
+                if (channel.IsSelected && handler.IsConnected)
                     handler.SendMessage(PacketFactory.CreateAffiliationRequest(system.Rid, cpgChannel.Tgid, system.Site));
             }
         }
@@ -289,6 +322,97 @@ namespace WhackerLinkConsoleV2
 
                 GenerateChannelWidgets();
                 _settingsManager.SaveSettings();
+            }
+        }
+
+        private void HandleReceivedAudio(byte[] audioData, VoiceChannel voiceChannel)
+        {
+            foreach (ChannelBox channel in _selectedChannelsManager.GetSelectedChannels())
+            {
+                Codeplug.System system = Codeplug.GetSystemForChannel(channel.ChannelName);
+                Codeplug.Channel cpgChannel = Codeplug.GetChannelByName(channel.ChannelName);
+                IWebSocketHandler handler = _webSocketManager.GetWebSocketHandler(system.Name);
+
+                if (voiceChannel.SrcId != system.Rid && voiceChannel.Frequency == channel.VoiceChannel && voiceChannel.DstId == cpgChannel.Tgid)
+                {
+                    _waveProvider.AddSamples(audioData, 0, audioData.Length);
+                }
+            }
+        }
+
+        private void HandleVoiceRelease(GRP_VCH_RLS response)
+        {
+            foreach (ChannelBox channel in _selectedChannelsManager.GetSelectedChannels())
+            {
+                Codeplug.System system = Codeplug.GetSystemForChannel(channel.ChannelName);
+                Codeplug.Channel cpgChannel = Codeplug.GetChannelByName(channel.ChannelName);
+                IWebSocketHandler handler = _webSocketManager.GetWebSocketHandler(system.Name);
+
+                if (response.DstId == cpgChannel.Tgid && response.SrcId != system.Rid)
+                {
+                    Dispatcher.Invoke(() =>
+                    {
+                        if (channel.IsSelected)
+                            channel.Background = Brushes.DodgerBlue;
+                        else
+                            channel.Background = new SolidColorBrush(Colors.DarkGray);
+                    });
+
+                    channel.VoiceChannel = null;
+                }
+            }
+        }
+
+        private void HandleVoiceResponse(GRP_VCH_RSP response)
+        {
+            foreach (ChannelBox channel in _selectedChannelsManager.GetSelectedChannels())
+            {
+                Codeplug.System system = Codeplug.GetSystemForChannel(channel.ChannelName);
+                Codeplug.Channel cpgChannel = Codeplug.GetChannelByName(channel.ChannelName);
+                IWebSocketHandler handler = _webSocketManager.GetWebSocketHandler(system.Name);
+
+                if (channel.PttState && response.Status == (int)ResponseType.GRANT && response.Channel != null && response.SrcId == system.Rid && response.DstId == cpgChannel.Tgid)
+                {
+                    channel.VoiceChannel = response.Channel;
+                    _stopSending = false;
+                } else if (response.Status == (int)ResponseType.GRANT && response.SrcId != system.Rid && response.DstId == cpgChannel.Tgid)
+                {
+                    channel.VoiceChannel = response.Channel;
+                    channel.LastSrcId = "Last SRC: " + response.SrcId;
+                    Dispatcher.Invoke(() =>
+                    {
+                        channel.Background = new SolidColorBrush(Colors.DarkCyan);
+                    });
+                }
+                else
+                {
+                    Dispatcher.Invoke(() =>
+                    {
+                        if (channel.IsSelected)
+                            Background = new SolidColorBrush(Colors.DodgerBlue);
+                        else
+                            Background = new SolidColorBrush(Colors.Gray);
+                    });
+
+                    channel.VoiceChannel = null;
+                    _stopSending = true;
+                }
+            }
+        }
+
+        private void ChannelBox_PTTButtonClicked(object sender, ChannelBox e)
+        {
+            Codeplug.System system = Codeplug.GetSystemForChannel(e.ChannelName);
+            Codeplug.Channel cpgChannel = Codeplug.GetChannelByName(e.ChannelName);
+            IWebSocketHandler handler = _webSocketManager.GetWebSocketHandler(system.Name);
+
+            if (e.PttState)
+                handler.SendMessage(PacketFactory.CreateVoiceChannelRequest(system.Rid, cpgChannel.Tgid, system.Site));
+            else
+            {
+                _stopSending = true;
+                handler.SendMessage(PacketFactory.CreateVoiceChannelRelease(system.Rid, cpgChannel.Tgid, e.VoiceChannel, system.Site));
+                e.VoiceChannel = null;
             }
         }
 
@@ -331,11 +455,6 @@ namespace WhackerLinkConsoleV2
             _isDragging = false;
             _draggedElement.ReleaseMouseCapture();
             _draggedElement = null;
-        }
-
-        private void ChannelBox_PTTButtonClicked(object sender, ChannelBox channelBox)
-        {
-            MessageBox.Show($"Imagine you were talking on {channelBox.ChannelName} rn", "PTT Action", MessageBoxButton.OK);
         }
 
         private void SystemStatusBox_MouseLeftButtonDown(object sender, MouseButtonEventArgs e) => ChannelBox_MouseLeftButtonDown(sender, e);

@@ -18,6 +18,7 @@
 * 
 */
 
+using System.ComponentModel;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
@@ -25,15 +26,42 @@ using System.Windows.Media;
 
 namespace WhackerLinkConsoleV2.Controls
 {
-    public partial class ChannelBox : UserControl
+    public partial class ChannelBox : UserControl, INotifyPropertyChanged
     {
-        public string ChannelName { get; set; }
-        public string SystemName { get; set; }
-        public string LastSrcId { get; set; } = "0";
+        private readonly SelectedChannelsManager _selectedChannelsManager;
+        private bool _pttState;
+        private string _lastSrcId = "0";
 
         public event EventHandler<ChannelBox> PTTButtonClicked;
+        public event PropertyChangedEventHandler PropertyChanged;
 
-        private readonly SelectedChannelsManager _selectedChannelsManager;
+        public string ChannelName { get; set; }
+        public string SystemName { get; set; }
+
+        public string LastSrcId
+        {
+            get => _lastSrcId;
+            set
+            {
+                if (_lastSrcId != value)
+                {
+                    _lastSrcId = value;
+                    OnPropertyChanged(nameof(LastSrcId));
+                }
+            }
+        }
+
+        public bool PttState
+        {
+            get => _pttState;
+            set
+            {
+                _pttState = value;
+                UpdatePTTColor();
+            }
+        }
+
+        public string VoiceChannel { get; set; }
 
         public bool IsEditMode { get; set; }
 
@@ -77,6 +105,16 @@ namespace WhackerLinkConsoleV2.Controls
             }
         }
 
+        private void UpdatePTTColor()
+        {
+            if (IsEditMode) return;
+
+            if (PttState)
+                PttButton.Background = new SolidColorBrush(Colors.Red);
+            else
+                PttButton.Background = new SolidColorBrush(Colors.Green);
+        }
+
         private void UpdateBackground()
         {
             Background = IsSelected ? Brushes.DodgerBlue : Brushes.DarkGray;
@@ -84,7 +122,13 @@ namespace WhackerLinkConsoleV2.Controls
 
         private void PTTButton_Click(object sender, RoutedEventArgs e)
         {
+            PttState = !PttState;
             PTTButtonClicked.Invoke(sender, this);
         }
+
+        protected virtual void OnPropertyChanged(string propertyName)
+        {
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
+        }   
     }
 }
