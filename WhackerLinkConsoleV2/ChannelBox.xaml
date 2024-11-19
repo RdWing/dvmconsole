@@ -18,6 +18,8 @@
 
             <Button Content="PTT" Width="80" Margin="0,5,0,0" Background="Green" Foreground="White" Name="PttButton"
                     HorizontalAlignment="Left" Grid.Row="3" Click="PTTButton_Click"/>
+            <Button Content="Page Select" Width="80" Margin="80,5,0,0" Background="Green" Foreground="White" Name="PageSelectButton"
+                    HorizontalAlignment="Left" Grid.Row="3" Click="PageSelectButton_Click"/>
         </Grid>
     </Border>
 </UserControl>

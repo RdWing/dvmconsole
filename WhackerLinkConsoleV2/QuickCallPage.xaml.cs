@@ -19,34 +19,27 @@
 */
 
 using System.Windows;
-using WhackerLinkLib.Models.Radio;
 
 namespace WhackerLinkConsoleV2
 {
     /// <summary>
-    /// Interaction logic for DigitalPageWindow.xaml
+    /// Interaction logic for QuickCallPage.xaml
     /// </summary>
-    public partial class DigitalPageWindow : Window
+    public partial class QuickCallPage : Window
     {
-        public List<Codeplug.System> systems = new List<Codeplug.System>();
+        public string ToneA;
+        public string ToneB;
 
-        public string DstId = string.Empty;
-        public Codeplug.System RadioSystem = null;
-
-        public DigitalPageWindow(List<Codeplug.System> systems)
+        public QuickCallPage()
         {
             InitializeComponent();
-            this.systems = systems;
-
-            SystemCombo.DisplayMemberPath = "Name";
-            SystemCombo.ItemsSource = systems;
-            SystemCombo.SelectedIndex = 0;
         }
 
-        private void SendPageButton_Click(object sender, RoutedEventArgs e)
+        private void SendButton_Click(object sender, RoutedEventArgs e)
         {
-            RadioSystem = SystemCombo.SelectedItem as Codeplug.System;
-            DstId = DstIdText.Text;
+            ToneA = ToneAText.Text;
+            ToneB = ToneBText.Text;
+
             DialogResult = true;
             Close();
         }

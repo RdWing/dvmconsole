@@ -30,12 +30,15 @@ namespace WhackerLinkConsoleV2.Controls
     {
         private readonly SelectedChannelsManager _selectedChannelsManager;
         private bool _pttState;
+        private bool _pageState;
         private bool _emergency;
         private string _lastSrcId = "0";
 
         public FlashingBackgroundManager _flashingBackgroundManager;
 
         public event EventHandler<ChannelBox> PTTButtonClicked;
+        public event EventHandler<ChannelBox> PageButtonClicked;
+
         public event PropertyChangedEventHandler PropertyChanged;
 
         public string ChannelName { get; set; }
@@ -61,6 +64,16 @@ namespace WhackerLinkConsoleV2.Controls
             {
                 _pttState = value;
                 UpdatePTTColor();
+            }
+        }
+
+        public bool PageState
+        {
+            get => _pageState;
+            set
+            {
+                _pageState = value;
+                UpdatePageColor();
             }
         }
 
@@ -136,6 +149,16 @@ namespace WhackerLinkConsoleV2.Controls
                 PttButton.Background = new SolidColorBrush(Colors.Green);
         }
 
+        private void UpdatePageColor()
+        {
+            if (IsEditMode) return;
+
+            if (PageState)
+                PageSelectButton.Background = new SolidColorBrush(Colors.Orange);
+            else
+                PageSelectButton.Background = new SolidColorBrush(Colors.Green);
+        }
+
         private void UpdateBackground()
         {
             Background = IsSelected ? Brushes.DodgerBlue : Brushes.DarkGray;
@@ -147,9 +170,15 @@ namespace WhackerLinkConsoleV2.Controls
             PTTButtonClicked.Invoke(sender, this);
         }
 
+        private void PageSelectButton_Click(object sender, RoutedEventArgs e)
+        {
+            PageState = !PageState;
+            PageButtonClicked.Invoke(sender, this);
+        }
+
         protected virtual void OnPropertyChanged(string propertyName)
         {
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
-        }   
+        }
     }
 }

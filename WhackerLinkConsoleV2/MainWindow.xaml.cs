@@ -38,6 +38,8 @@ using NAudio.Wave;
 using WhackerLinkLib.Interfaces;
 using WhackerLinkLib.Models.IOSP;
 using Nancy;
+using Microsoft.AspNetCore.Mvc.ModelBinding.Binders;
+using static System.Windows.Forms.VisualStyles.VisualStyleElement.ProgressBar;
 
 namespace WhackerLinkConsoleV2
 {
@@ -251,6 +253,7 @@ namespace WhackerLinkConsoleV2
                         }
 
                         channelBox.PTTButtonClicked += ChannelBox_PTTButtonClicked;
+                        channelBox.PageButtonClicked += ChannelBox_PageButtonClicked;
 
                         channelBox.MouseLeftButtonDown += ChannelBox_MouseLeftButtonDown;
                         channelBox.MouseMove += ChannelBox_MouseMove;
@@ -347,8 +350,23 @@ namespace WhackerLinkConsoleV2
                                     $"Selected Output Device Index: {outputDeviceIndex}",
                                     "Selected Devices");
 
-                    _waveIn.DeviceNumber = inputDeviceIndex.Value;
-                    _waveOut.DeviceNumber = outputDeviceIndex.Value;
+                    try
+                    {
+                        _waveIn.StopRecording();
+                        _waveIn.DeviceNumber = inputDeviceIndex.Value;
+                        _waveIn.StartRecording();
+
+                        _waveOut.Stop();
+                        _waveOut.DeviceNumber = outputDeviceIndex.Value;
+                        _waveOut.Init(_waveProvider);
+                        _waveOut.Play();
+
+                        MessageBox.Show("Audio devices updated successfully.", "Success");
+                    }
+                    catch (Exception ex)
+                    {
+                        MessageBox.Show($"Failed to update audio devices: {ex.Message}", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
+                    }
                 }
                 else
                 {
@@ -365,6 +383,59 @@ namespace WhackerLinkConsoleV2
             {
                 IWebSocketHandler handler = _webSocketManager.GetWebSocketHandler(pageWindow.RadioSystem.Name);
                 handler.SendMessage(PacketFactory.CreateCallAlertRequest(pageWindow.RadioSystem.Rid, pageWindow.DstId));
+            }
+        }
+
+        private void ManualPage_Click(object sender, RoutedEventArgs e)
+        {
+            QuickCallPage pageWindow = new QuickCallPage();
+            pageWindow.Owner = this;
+            if (pageWindow.ShowDialog() == true)
+            {
+                foreach (ChannelBox channel in _selectedChannelsManager.GetSelectedChannels())
+                {
+                    Codeplug.System system = Codeplug.GetSystemForChannel(channel.ChannelName);
+                    Codeplug.Channel cpgChannel = Codeplug.GetChannelByName(channel.ChannelName);
+                    IWebSocketHandler handler = _webSocketManager.GetWebSocketHandler(system.Name);
+
+                    if (channel.PageState)
+                    {
+                        ToneGenerator generator = new ToneGenerator();
+
+                        byte[] toneA = generator.GenerateTone(Double.Parse(pageWindow.ToneA), 1.0);
+                        byte[] toneB = generator.GenerateTone(Double.Parse(pageWindow.ToneB), 3.0);
+
+                        byte[] combinedAudio = new byte[toneA.Length + toneB.Length];
+                        Buffer.BlockCopy(toneA, 0, combinedAudio, 0, toneA.Length);
+                        Buffer.BlockCopy(toneB, 0, combinedAudio, toneA.Length, toneB.Length);
+
+                        int chunkSize = 1600;
+                        int totalChunks = (combinedAudio.Length + chunkSize - 1) / chunkSize;
+
+                        Task.Factory.StartNew(() =>
+                        {
+                            _waveProvider.ClearBuffer();
+                            _waveProvider.AddSamples(combinedAudio, 0, combinedAudio.Length);
+                        });
+
+                        for (int i = 0; i < totalChunks; i++)
+                        {
+                            int offset = i * chunkSize;
+                            int size = Math.Min(chunkSize, combinedAudio.Length - offset);
+
+                            byte[] chunk = new byte[size];
+                            Buffer.BlockCopy(combinedAudio, offset, chunk, 0, size);
+
+                            handler.SendMessage(PacketFactory.CreateVoicePacket(system.Rid, cpgChannel.Tgid, channel.VoiceChannel, chunk, system.Site));
+                        }
+
+                        handler.SendMessage(PacketFactory.CreateVoiceChannelRelease(system.Rid, cpgChannel.Tgid, channel.VoiceChannel, system.Site));
+                        Dispatcher.Invoke(() =>
+                        {
+                            channel.PageSelectButton.Background = Brushes.Green;
+                        });
+                    }
+                }
             }
         }
 
@@ -468,6 +539,9 @@ namespace WhackerLinkConsoleV2
                     {
                         channel.Background = new SolidColorBrush(Colors.DarkCyan);
                     });
+                } else if (channel.PageState && response.Status == (int)ResponseType.GRANT && response.Channel != null && response.SrcId == system.Rid && response.DstId == cpgChannel.Tgid)
+                {
+                    channel.VoiceChannel = response.Channel;
                 }
                 else
                 {
@@ -482,6 +556,22 @@ namespace WhackerLinkConsoleV2
                     channel.VoiceChannel = null;
                     _stopSending = true;
                 }
+            }
+        }
+
+        private void ChannelBox_PageButtonClicked(object sender, ChannelBox e)
+        {
+            Codeplug.System system = Codeplug.GetSystemForChannel(e.ChannelName);
+            Codeplug.Channel cpgChannel = Codeplug.GetChannelByName(e.ChannelName);
+            IWebSocketHandler handler = _webSocketManager.GetWebSocketHandler(system.Name);
+
+            if (e.PageState)
+                handler.SendMessage(PacketFactory.CreateVoiceChannelRequest(system.Rid, cpgChannel.Tgid, system.Site));
+            else
+            {
+                //_stopSending = true;
+                handler.SendMessage(PacketFactory.CreateVoiceChannelRelease(system.Rid, cpgChannel.Tgid, e.VoiceChannel, system.Site));
+                e.VoiceChannel = null;
             }
         }
 

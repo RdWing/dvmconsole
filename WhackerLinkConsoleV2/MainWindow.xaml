@@ -24,6 +24,7 @@
             </MenuItem>
             <MenuItem Header="Page">
                 <MenuItem Header="P25 Page" Click="P25Page_Click" />
+                <MenuItem Header="Manual QC2" Click="ManualPage_Click" />
             </MenuItem>
             <MenuItem Header="Clear Emergency" Click="ClearEmergency_Click" />
         </Menu>
