@@ -55,6 +55,8 @@ namespace WhackerLinkConsoleV2
 
         private SettingsManager _settingsManager = new SettingsManager();
         private SelectedChannelsManager _selectedChannelsManager;
+        private FlashingBackgroundManager _flashingManager;
+        private WaveFilePlaybackManager _emergencyAlertPlayback;
         private WebSocketManager _webSocketManager = new WebSocketManager();
 
         private readonly WaveInEvent _waveIn;
@@ -66,6 +68,8 @@ namespace WhackerLinkConsoleV2
             InitializeComponent();
             _settingsManager.LoadSettings();
             _selectedChannelsManager = new SelectedChannelsManager();
+            _flashingManager = new FlashingBackgroundManager(null, ChannelsCanvas, null, this);
+            _emergencyAlertPlayback = new WaveFilePlaybackManager(System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "emergency.wav"));
 
             _waveIn = new WaveInEvent
             {
@@ -171,6 +175,7 @@ namespace WhackerLinkConsoleV2
                     IWebSocketHandler handler = _webSocketManager.GetWebSocketHandler(system.Name);
                     handler.OnVoiceChannelResponse += HandleVoiceResponse;
                     handler.OnVoiceChannelRelease += HandleVoiceRelease;
+                    handler.OnEmergencyAlarmResponse += HandleEmergencyAlarmResponse;
                     handler.OnAudioData += HandleReceivedAudio;
 
                     handler.OnUnitRegistrationResponse += (response) =>
@@ -352,9 +357,20 @@ namespace WhackerLinkConsoleV2
             }
         }
 
+        private void P25Page_Click(object sender, RoutedEventArgs e)
+        {
+            DigitalPageWindow pageWindow = new DigitalPageWindow(Codeplug.Systems);
+            pageWindow.Owner = this;
+            if (pageWindow.ShowDialog() == true)
+            {
+                IWebSocketHandler handler = _webSocketManager.GetWebSocketHandler(pageWindow.RadioSystem.Name);
+                handler.SendMessage(PacketFactory.CreateCallAlertRequest(pageWindow.RadioSystem.Rid, pageWindow.DstId));
+            }
+        }
+
         private void SelectWidgets_Click(object sender, RoutedEventArgs e)
         {
-            var widgetSelectionWindow = new WidgetSelectionWindow();
+            WidgetSelectionWindow widgetSelectionWindow = new WidgetSelectionWindow();
             widgetSelectionWindow.Owner = this;
             if (widgetSelectionWindow.ShowDialog() == true)
             {
@@ -364,6 +380,33 @@ namespace WhackerLinkConsoleV2
 
                 GenerateChannelWidgets();
                 _settingsManager.SaveSettings();
+            }
+        }
+
+        private void HandleEmergencyAlarmResponse(EMRG_ALRM_RSP response)
+        {
+            bool forUs = false;
+
+            foreach (ChannelBox channel in _selectedChannelsManager.GetSelectedChannels())
+            {
+                Codeplug.System system = Codeplug.GetSystemForChannel(channel.ChannelName);
+                Codeplug.Channel cpgChannel = Codeplug.GetChannelByName(channel.ChannelName);
+
+                if (response.DstId == cpgChannel.Tgid)
+                {
+                    forUs = true;
+                    channel.Emergency = true;
+                    channel.LastSrcId = response.SrcId;
+                }
+            }
+
+            if (forUs)
+            {
+                Dispatcher.Invoke(() =>
+                {
+                    _flashingManager.Start();
+                    _emergencyAlertPlayback.Start();
+                });
             }
         }
 
@@ -624,6 +667,17 @@ namespace WhackerLinkConsoleV2
         {
             _settingsManager.SaveSettings();
             base.OnClosing(e);
+        }
+
+        private void ClearEmergency_Click(object sender, RoutedEventArgs e)
+        {
+            _emergencyAlertPlayback.Stop();
+            _flashingManager.Stop();
+
+            foreach (ChannelBox channel in _selectedChannelsManager.GetSelectedChannels())
+            {
+                channel.Emergency = false;
+            }
         }
     }
 }

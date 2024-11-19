@@ -30,7 +30,10 @@ namespace WhackerLinkConsoleV2.Controls
     {
         private readonly SelectedChannelsManager _selectedChannelsManager;
         private bool _pttState;
+        private bool _emergency;
         private string _lastSrcId = "0";
+
+        public FlashingBackgroundManager _flashingBackgroundManager;
 
         public event EventHandler<ChannelBox> PTTButtonClicked;
         public event PropertyChangedEventHandler PropertyChanged;
@@ -61,6 +64,23 @@ namespace WhackerLinkConsoleV2.Controls
             }
         }
 
+        public bool Emergency
+        {
+            get => _emergency;
+            set
+            {
+                _emergency = value;
+
+                Dispatcher.Invoke(() =>
+                {
+                    if (value)
+                        _flashingBackgroundManager.Start();
+                    else
+                        _flashingBackgroundManager.Stop();
+                });
+            }
+        }
+
         public string VoiceChannel { get; set; }
 
         public bool IsEditMode { get; set; }
@@ -81,6 +101,7 @@ namespace WhackerLinkConsoleV2.Controls
             InitializeComponent();
             DataContext = this;
             _selectedChannelsManager = selectedChannelsManager;
+            _flashingBackgroundManager = new FlashingBackgroundManager(this);
             ChannelName = channelName;
             SystemName = $"System: {systemName}";
             LastSrcId = $"Last SRC: {LastSrcId}";

@@ -22,6 +22,10 @@
                     <MenuItem Header="Add Alert Tone" Click="AddAlertTone_Click"/>
                 </MenuItem>
             </MenuItem>
+            <MenuItem Header="Page">
+                <MenuItem Header="P25 Page" Click="P25Page_Click" />
+            </MenuItem>
+            <MenuItem Header="Clear Emergency" Click="ClearEmergency_Click" />
         </Menu>
 
         <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Grid.Row="1">
