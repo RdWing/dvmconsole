@@ -40,6 +40,7 @@ using WhackerLinkLib.Models.IOSP;
 using Nancy;
 using Microsoft.AspNetCore.Mvc.ModelBinding.Binders;
 using static System.Windows.Forms.VisualStyles.VisualStyleElement.ProgressBar;
+using System.Media;
 
 namespace WhackerLinkConsoleV2
 {
@@ -279,6 +280,8 @@ namespace WhackerLinkConsoleV2
                         IsEditMode = isEditMode
                     };
 
+                    alertTone.OnAlertTone += SendAlertTone;
+
                     if (_settingsManager.AlertTonePositions.TryGetValue(alertPath, out var position))
                     {
                         Canvas.SetLeft(alertTone, position.X);
@@ -438,6 +441,82 @@ namespace WhackerLinkConsoleV2
                 }
             }
         }
+
+        private async void SendAlertTone(AlertTone e)
+        {
+            if (!string.IsNullOrEmpty(e.AlertFilePath) && File.Exists(e.AlertFilePath))
+            {
+                try
+                {
+                    foreach (ChannelBox channel in _selectedChannelsManager.GetSelectedChannels())
+                    {
+                        Codeplug.System system = Codeplug.GetSystemForChannel(channel.ChannelName);
+                        Codeplug.Channel cpgChannel = Codeplug.GetChannelByName(channel.ChannelName);
+                        IWebSocketHandler handler = _webSocketManager.GetWebSocketHandler(system.Name);
+
+                        if (channel.PageState)
+                        {
+                            List<byte[]> pcmChunks = new List<byte[]>();
+                            WaveFileReader waveReader = null;
+
+                            using (waveReader = new WaveFileReader(e.AlertFilePath))
+                            {
+                                if (waveReader.WaveFormat.Encoding != WaveFormatEncoding.Pcm)
+                                {
+                                    MessageBox.Show("The alert tone is not in PCM format.", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
+                                    return;
+                                }
+
+                                byte[] buffer = new byte[1600];
+                                int bytesRead;
+
+                                while ((bytesRead = waveReader.Read(buffer, 0, buffer.Length)) > 0)
+                                {
+                                    if (bytesRead < buffer.Length)
+                                    {
+                                        byte[] finalChunk = new byte[bytesRead];
+                                        Array.Copy(buffer, finalChunk, bytesRead);
+                                        pcmChunks.Add(finalChunk);
+                                    }
+                                    else
+                                    {
+                                        pcmChunks.Add((byte[])buffer.Clone());
+                                    }
+                                }
+                            }
+
+                            // Send PCM chunks asynchronously
+                            foreach (var chunk in pcmChunks)
+                            {
+                                handler.SendMessage(PacketFactory.CreateVoicePacket(system.Rid, cpgChannel.Tgid, channel.VoiceChannel, chunk, system.Site));
+
+                                // Simulate real-time transmission based on chunk duration
+                                int chunkDurationMs = (int)(1600.0 / waveReader.WaveFormat.AverageBytesPerSecond * 1000);
+                                await Task.Delay(chunkDurationMs); // Wait before sending the next chunk
+                            }
+
+                            // After all chunks are sent, send the VoiceChannelRelease message
+                            handler.SendMessage(PacketFactory.CreateVoiceChannelRelease(system.Rid, cpgChannel.Tgid, channel.VoiceChannel, system.Site));
+
+                            // Update UI
+                            Dispatcher.Invoke(() =>
+                            {
+                                channel.PageSelectButton.Background = Brushes.Green;
+                            });
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    MessageBox.Show($"Failed to process alert tone: {ex.Message}", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
+                }
+            }
+            else
+            {
+                MessageBox.Show("Alert file not set or file not found.", "Alert", MessageBoxButton.OK, MessageBoxImage.Warning);
+            }
+        }
+
 
         private void SelectWidgets_Click(object sender, RoutedEventArgs e)
         {
@@ -690,6 +769,8 @@ namespace WhackerLinkConsoleV2
                 {
                     IsEditMode = isEditMode
                 };
+
+                alertTone.OnAlertTone += SendAlertTone;
 
                 if (_settingsManager.AlertTonePositions.TryGetValue(alertFilePath, out var position))
                 {

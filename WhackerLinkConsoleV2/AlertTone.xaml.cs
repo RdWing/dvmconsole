@@ -28,6 +28,8 @@ namespace WhackerLinkConsoleV2.Controls
 {
     public partial class AlertTone : UserControl
     {
+        public event Action<AlertTone> OnAlertTone;
+
         public static readonly DependencyProperty AlertFileNameProperty =
             DependencyProperty.Register("AlertFileName", typeof(string), typeof(AlertTone), new PropertyMetadata(string.Empty));
 
@@ -57,24 +59,7 @@ namespace WhackerLinkConsoleV2.Controls
 
         private void PlayAlert_Click(object sender, RoutedEventArgs e)
         {
-            if (!string.IsNullOrEmpty(AlertFilePath) && System.IO.File.Exists(AlertFilePath))
-            {
-                try
-                {
-                    using (var player = new SoundPlayer(AlertFilePath))
-                    {
-                        player.Play();
-                    }
-                }
-                catch (Exception ex)
-                {
-                    MessageBox.Show($"Failed to play alert: {ex.Message}", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
-                }
-            }
-            else
-            {
-                MessageBox.Show("Alert file not set or file not found.", "Alert", MessageBoxButton.OK, MessageBoxImage.Warning);
-            }
+            OnAlertTone.Invoke(this);
         }
 
         private void AlertTone_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
