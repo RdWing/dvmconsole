@@ -448,6 +448,18 @@ namespace WhackerLinkConsoleV2
             {
                 try
                 {
+                    try
+                    {
+                        using (var player = new SoundPlayer(e.AlertFilePath))
+                        {
+                            player.Play();
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        MessageBox.Show($"Failed to play alert: {ex.Message}", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
+                    }
+
                     foreach (ChannelBox channel in _selectedChannelsManager.GetSelectedChannels())
                     {
                         Codeplug.System system = Codeplug.GetSystemForChannel(channel.ChannelName);
@@ -485,20 +497,16 @@ namespace WhackerLinkConsoleV2
                                 }
                             }
 
-                            // Send PCM chunks asynchronously
                             foreach (var chunk in pcmChunks)
                             {
                                 handler.SendMessage(PacketFactory.CreateVoicePacket(system.Rid, cpgChannel.Tgid, channel.VoiceChannel, chunk, system.Site));
 
-                                // Simulate real-time transmission based on chunk duration
                                 int chunkDurationMs = (int)(1600.0 / waveReader.WaveFormat.AverageBytesPerSecond * 1000);
-                                await Task.Delay(chunkDurationMs); // Wait before sending the next chunk
+                                await Task.Delay(chunkDurationMs);
                             }
 
-                            // After all chunks are sent, send the VoiceChannelRelease message
                             handler.SendMessage(PacketFactory.CreateVoiceChannelRelease(system.Rid, cpgChannel.Tgid, channel.VoiceChannel, system.Site));
 
-                            // Update UI
                             Dispatcher.Invoke(() =>
                             {
                                 channel.PageSelectButton.Background = Brushes.Green;
