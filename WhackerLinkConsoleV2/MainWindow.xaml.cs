@@ -211,7 +211,14 @@ namespace WhackerLinkConsoleV2
                         Task.Factory.StartNew(() =>
                         {
                             handler.Connect(system.Address, system.Port);
-                            handler.SendMessage(PacketFactory.CreateUnitRegistrationRequest(system.Rid, system.Site));
+
+                            U_REG_REQ release = new U_REG_REQ
+                            {
+                                SrcId = system.Rid,
+                                Site = system.Site
+                            };
+
+                            handler.SendMessage(release.GetData());
                         });
                     };
 
@@ -223,7 +230,13 @@ namespace WhackerLinkConsoleV2
 
                         if (handler.IsConnected)
                         {
-                            handler.SendMessage(PacketFactory.CreateUnitRegistrationRequest(system.Rid, system.Site));
+                            U_REG_REQ release = new U_REG_REQ
+                            {
+                                SrcId = system.Rid,
+                                Site = system.Site
+                            };
+
+                            handler.SendMessage(release.GetData());
                         }
                         else
                         {
@@ -317,7 +330,21 @@ namespace WhackerLinkConsoleV2
 
                 if (channel.IsSelected && channel.VoiceChannel != null && !_stopSending)
                 {
-                    handler.SendMessage(PacketFactory.CreateVoicePacket(system.Rid, cpgChannel.Tgid, channel.VoiceChannel, e.Buffer, system.Site));
+                    object voicePaket = new
+                    {
+                        type = PacketType.AUDIO_DATA,
+                        data = e.Buffer,
+                        voiceChannel = new VoiceChannel
+                        {
+                            Frequency = channel.VoiceChannel,
+                            DstId = cpgChannel.Tgid,
+                            SrcId = system.Rid,
+                            Site = system.Site
+                        },
+                        site = system.Site
+                    };
+
+                    handler.SendMessage(voicePaket);
                 } else
                 {
                     _stopSending = true;
@@ -334,7 +361,16 @@ namespace WhackerLinkConsoleV2
                 IWebSocketHandler handler = _webSocketManager.GetWebSocketHandler(system.Name);
 
                 if (channel.IsSelected && handler.IsConnected)
-                    handler.SendMessage(PacketFactory.CreateAffiliationRequest(system.Rid, cpgChannel.Tgid, system.Site));
+                {
+                    GRP_AFF_REQ release = new GRP_AFF_REQ
+                    {
+                        SrcId = system.Rid,
+                        DstId = cpgChannel.Tgid,
+                        Site = system.Site
+                    };
+
+                    handler.SendMessage(release.GetData());
+                }
             }
         }
 
@@ -385,7 +421,14 @@ namespace WhackerLinkConsoleV2
             if (pageWindow.ShowDialog() == true)
             {
                 IWebSocketHandler handler = _webSocketManager.GetWebSocketHandler(pageWindow.RadioSystem.Name);
-                handler.SendMessage(PacketFactory.CreateCallAlertRequest(pageWindow.RadioSystem.Rid, pageWindow.DstId));
+
+                CALL_ALRT_REQ callAlert = new CALL_ALRT_REQ
+                {
+                    SrcId = pageWindow.RadioSystem.Rid,
+                    DstId = pageWindow.DstId
+                };
+
+                handler.SendMessage(callAlert.GetData());
             }
         }
 
@@ -429,10 +472,32 @@ namespace WhackerLinkConsoleV2
                             byte[] chunk = new byte[size];
                             Buffer.BlockCopy(combinedAudio, offset, chunk, 0, size);
 
-                            handler.SendMessage(PacketFactory.CreateVoicePacket(system.Rid, cpgChannel.Tgid, channel.VoiceChannel, chunk, system.Site));
+                            object voicePaket = new
+                            {
+                                type = PacketType.AUDIO_DATA,
+                                data = chunk,
+                                voiceChannel = new VoiceChannel
+                                {
+                                    Frequency = channel.VoiceChannel,
+                                    DstId = cpgChannel.Tgid,
+                                    SrcId = system.Rid,
+                                    Site = system.Site
+                                },
+                                site = system.Site
+                            };
+
+                            handler.SendMessage(voicePaket);
                         }
 
-                        handler.SendMessage(PacketFactory.CreateVoiceChannelRelease(system.Rid, cpgChannel.Tgid, channel.VoiceChannel, system.Site));
+                        GRP_VCH_RLS release = new GRP_VCH_RLS
+                        {
+                            SrcId = system.Rid,
+                            DstId = cpgChannel.Tgid,
+                            Channel = channel.VoiceChannel,
+                            Site = system.Site
+                        };
+                        
+                        handler.SendMessage(release.GetData());
                         Dispatcher.Invoke(() =>
                         {
                             channel.PageSelectButton.Background = Brushes.Green;
@@ -499,13 +564,35 @@ namespace WhackerLinkConsoleV2
 
                             foreach (var chunk in pcmChunks)
                             {
-                                handler.SendMessage(PacketFactory.CreateVoicePacket(system.Rid, cpgChannel.Tgid, channel.VoiceChannel, chunk, system.Site));
+                                object voicePaket = new
+                                {
+                                    type = PacketType.AUDIO_DATA,
+                                    data = chunk,
+                                    voiceChannel = new VoiceChannel
+                                    {
+                                        Frequency = channel.VoiceChannel,
+                                        DstId = cpgChannel.Tgid,
+                                        SrcId = system.Rid,
+                                        Site = system.Site
+                                    },
+                                    site = system.Site
+                                };
+
+                                handler.SendMessage(voicePaket);
 
                                 int chunkDurationMs = (int)(1600.0 / waveReader.WaveFormat.AverageBytesPerSecond * 1000);
                                 await Task.Delay(chunkDurationMs);
                             }
 
-                            handler.SendMessage(PacketFactory.CreateVoiceChannelRelease(system.Rid, cpgChannel.Tgid, channel.VoiceChannel, system.Site));
+                            GRP_VCH_RLS release = new GRP_VCH_RLS
+                            {
+                                SrcId = system.Rid,
+                                DstId = cpgChannel.Tgid,
+                                Channel = channel.VoiceChannel,
+                                Site = system.Site
+                            };
+
+                            handler.SendMessage(release.GetData());
 
                             Dispatcher.Invoke(() =>
                             {
@@ -653,12 +740,28 @@ namespace WhackerLinkConsoleV2
             IWebSocketHandler handler = _webSocketManager.GetWebSocketHandler(system.Name);
 
             if (e.PageState)
-                handler.SendMessage(PacketFactory.CreateVoiceChannelRequest(system.Rid, cpgChannel.Tgid, system.Site));
+            {
+                GRP_VCH_REQ request = new GRP_VCH_REQ
+                {
+                    SrcId = system.Rid,
+                    DstId = cpgChannel.Tgid,
+                    Site = system.Site
+                };
+
+                handler.SendMessage(request.GetData());
+            }
             else
             {
                 //_stopSending = true;
-                handler.SendMessage(PacketFactory.CreateVoiceChannelRelease(system.Rid, cpgChannel.Tgid, e.VoiceChannel, system.Site));
-                e.VoiceChannel = null;
+                GRP_VCH_RLS release = new GRP_VCH_RLS
+                {
+                    SrcId = system.Rid,
+                    DstId = cpgChannel.Tgid,
+                    Channel = e.VoiceChannel,
+                    Site = system.Site
+                };
+
+                handler.SendMessage(release.GetData()); e.VoiceChannel = null;
             }
         }
 
@@ -669,12 +772,28 @@ namespace WhackerLinkConsoleV2
             IWebSocketHandler handler = _webSocketManager.GetWebSocketHandler(system.Name);
 
             if (e.PttState)
-                handler.SendMessage(PacketFactory.CreateVoiceChannelRequest(system.Rid, cpgChannel.Tgid, system.Site));
+            {
+                GRP_VCH_REQ request = new GRP_VCH_REQ
+                {
+                    SrcId = system.Rid,
+                    DstId = cpgChannel.Tgid,
+                    Site = system.Site
+                };
+
+                handler.SendMessage(request.GetData());
+            }
             else
             {
                 _stopSending = true;
-                handler.SendMessage(PacketFactory.CreateVoiceChannelRelease(system.Rid, cpgChannel.Tgid, e.VoiceChannel, system.Site));
-                e.VoiceChannel = null;
+                GRP_VCH_RLS release = new GRP_VCH_RLS
+                {
+                    SrcId = system.Rid,
+                    DstId = cpgChannel.Tgid,
+                    Channel = e.VoiceChannel,
+                    Site = system.Site
+                };
+
+                handler.SendMessage(release.GetData()); e.VoiceChannel = null;
             }
         }
 
