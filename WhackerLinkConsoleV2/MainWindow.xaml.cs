@@ -761,7 +761,8 @@ namespace WhackerLinkConsoleV2
                     Site = system.Site
                 };
 
-                handler.SendMessage(release.GetData()); e.VoiceChannel = null;
+                handler.SendMessage(release.GetData());
+                e.VoiceChannel = null;
             }
         }
 
@@ -793,7 +794,8 @@ namespace WhackerLinkConsoleV2
                     Site = system.Site
                 };
 
-                handler.SendMessage(release.GetData()); e.VoiceChannel = null;
+                handler.SendMessage(release.GetData());
+                e.VoiceChannel = null;
             }
         }
 
