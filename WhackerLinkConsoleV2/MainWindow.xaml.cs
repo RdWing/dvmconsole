@@ -333,15 +333,17 @@ namespace WhackerLinkConsoleV2
                     object voicePaket = new
                     {
                         type = PacketType.AUDIO_DATA,
-                        data = e.Buffer,
-                        voiceChannel = new VoiceChannel
-                        {
-                            Frequency = channel.VoiceChannel,
-                            DstId = cpgChannel.Tgid,
-                            SrcId = system.Rid,
+                        data = new {
+                            Data = e.Buffer,
+                            VoiceChannel = new VoiceChannel
+                            {
+                                Frequency = channel.VoiceChannel,
+                                DstId = cpgChannel.Tgid,
+                                SrcId = system.Rid,
+                                Site = system.Site
+                            },
                             Site = system.Site
-                        },
-                        site = system.Site
+                        }
                     };
 
                     handler.SendMessage(voicePaket);
@@ -475,15 +477,18 @@ namespace WhackerLinkConsoleV2
                             object voicePaket = new
                             {
                                 type = PacketType.AUDIO_DATA,
-                                data = chunk,
-                                voiceChannel = new VoiceChannel
+                                data = new
                                 {
-                                    Frequency = channel.VoiceChannel,
-                                    DstId = cpgChannel.Tgid,
-                                    SrcId = system.Rid,
+                                    Data = chunk,
+                                    VoiceChannel = new VoiceChannel
+                                    {
+                                        Frequency = channel.VoiceChannel,
+                                        DstId = cpgChannel.Tgid,
+                                        SrcId = system.Rid,
+                                        Site = system.Site
+                                    },
                                     Site = system.Site
-                                },
-                                site = system.Site
+                                }
                             };
 
                             handler.SendMessage(voicePaket);
@@ -567,15 +572,18 @@ namespace WhackerLinkConsoleV2
                                 object voicePaket = new
                                 {
                                     type = PacketType.AUDIO_DATA,
-                                    data = chunk,
-                                    voiceChannel = new VoiceChannel
+                                    data = new
                                     {
-                                        Frequency = channel.VoiceChannel,
-                                        DstId = cpgChannel.Tgid,
-                                        SrcId = system.Rid,
+                                        Data = chunk,
+                                        VoiceChannel = new VoiceChannel
+                                        {
+                                            Frequency = channel.VoiceChannel,
+                                            DstId = cpgChannel.Tgid,
+                                            SrcId = system.Rid,
+                                            Site = system.Site
+                                        },
                                         Site = system.Site
-                                    },
-                                    site = system.Site
+                                    }
                                 };
 
                                 handler.SendMessage(voicePaket);
@@ -655,7 +663,7 @@ namespace WhackerLinkConsoleV2
             }
         }
 
-        private void HandleReceivedAudio(byte[] audioData, VoiceChannel voiceChannel)
+        private void HandleReceivedAudio(AudioPacket audioPacket)
         {
             foreach (ChannelBox channel in _selectedChannelsManager.GetSelectedChannels())
             {
@@ -663,9 +671,9 @@ namespace WhackerLinkConsoleV2
                 Codeplug.Channel cpgChannel = Codeplug.GetChannelByName(channel.ChannelName);
                 IWebSocketHandler handler = _webSocketManager.GetWebSocketHandler(system.Name);
 
-                if (voiceChannel.SrcId != system.Rid && voiceChannel.Frequency == channel.VoiceChannel && voiceChannel.DstId == cpgChannel.Tgid)
+                if (audioPacket.VoiceChannel.SrcId != system.Rid && audioPacket.VoiceChannel.Frequency == channel.VoiceChannel && audioPacket.VoiceChannel.DstId == cpgChannel.Tgid)
                 {
-                    _waveProvider.AddSamples(audioData, 0, audioData.Length);
+                    _waveProvider.AddSamples(audioPacket.Data, 0, audioPacket.Data.Length);
                 }
             }
         }
