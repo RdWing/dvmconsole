@@ -474,24 +474,21 @@ namespace WhackerLinkConsoleV2
                             byte[] chunk = new byte[size];
                             Buffer.BlockCopy(combinedAudio, offset, chunk, 0, size);
 
-                            object voicePaket = new
+                            AudioPacket voicePacket = new AudioPacket
                             {
-                                type = PacketType.AUDIO_DATA,
-                                data = new
+                                Data = chunk,
+                                VoiceChannel = new VoiceChannel
                                 {
-                                    Data = chunk,
-                                    VoiceChannel = new VoiceChannel
-                                    {
-                                        Frequency = channel.VoiceChannel,
-                                        DstId = cpgChannel.Tgid,
-                                        SrcId = system.Rid,
-                                        Site = system.Site
-                                    },
+                                    Frequency = channel.VoiceChannel,
+                                    DstId = cpgChannel.Tgid,
+                                    SrcId = system.Rid,
                                     Site = system.Site
-                                }
+                                },
+                                Site = system.Site,
+                                LopServerVocode = true
                             };
 
-                            handler.SendMessage(voicePaket);
+                            handler.SendMessage(voicePacket.GetData());
                         }
 
                         GRP_VCH_RLS release = new GRP_VCH_RLS
@@ -569,24 +566,21 @@ namespace WhackerLinkConsoleV2
 
                             foreach (var chunk in pcmChunks)
                             {
-                                object voicePaket = new
+                                AudioPacket voicePacket = new AudioPacket
                                 {
-                                    type = PacketType.AUDIO_DATA,
-                                    data = new
+                                    Data = chunk,
+                                    VoiceChannel = new VoiceChannel
                                     {
-                                        Data = chunk,
-                                        VoiceChannel = new VoiceChannel
-                                        {
-                                            Frequency = channel.VoiceChannel,
-                                            DstId = cpgChannel.Tgid,
-                                            SrcId = system.Rid,
-                                            Site = system.Site
-                                        },
+                                        Frequency = channel.VoiceChannel,
+                                        DstId = cpgChannel.Tgid,
+                                        SrcId = system.Rid,
                                         Site = system.Site
-                                    }
+                                    },
+                                    Site = system.Site,
+                                    LopServerVocode = true
                                 };
 
-                                handler.SendMessage(voicePaket);
+                                handler.SendMessage(voicePacket.GetData());
 
                                 int chunkDurationMs = (int)(1600.0 / waveReader.WaveFormat.AverageBytesPerSecond * 1000);
                                 await Task.Delay(chunkDurationMs);
