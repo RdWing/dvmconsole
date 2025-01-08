@@ -614,7 +614,6 @@ namespace WhackerLinkConsoleV2
             }
         }
 
-
         private void SelectWidgets_Click(object sender, RoutedEventArgs e)
         {
             WidgetSelectionWindow widgetSelectionWindow = new WidgetSelectionWindow();
@@ -705,10 +704,14 @@ namespace WhackerLinkConsoleV2
 
                 if (channel.PttState && response.Status == (int)ResponseType.GRANT && response.Channel != null && response.SrcId == system.Rid && response.DstId == cpgChannel.Tgid)
                 {
+                    MessageBox.Show($"here1");
+
                     channel.VoiceChannel = response.Channel;
                     _stopSending = false;
                 } else if (response.Status == (int)ResponseType.GRANT && response.SrcId != system.Rid && response.DstId == cpgChannel.Tgid)
                 {
+                    MessageBox.Show($"here2");
+
                     channel.VoiceChannel = response.Channel;
                     channel.LastSrcId = "Last SRC: " + response.SrcId;
                     Dispatcher.Invoke(() =>
@@ -717,10 +720,14 @@ namespace WhackerLinkConsoleV2
                     });
                 } else if (channel.PageState && response.Status == (int)ResponseType.GRANT && response.Channel != null && response.SrcId == system.Rid && response.DstId == cpgChannel.Tgid)
                 {
+                    MessageBox.Show($"here3");
+
                     channel.VoiceChannel = response.Channel;
                 }
                 else
                 {
+                    MessageBox.Show($"here4");
+
                     Dispatcher.Invoke(() =>
                     {
                         if (channel.IsSelected)
