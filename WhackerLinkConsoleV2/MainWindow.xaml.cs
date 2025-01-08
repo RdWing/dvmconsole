@@ -124,6 +124,7 @@ namespace WhackerLinkConsoleV2
             {
                 var deserializer = new DeserializerBuilder()
                     .WithNamingConvention(CamelCaseNamingConvention.Instance)
+                    .IgnoreUnmatchedProperties()
                     .Build();
 
                 var yaml = File.ReadAllText(filePath);
