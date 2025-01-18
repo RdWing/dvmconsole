@@ -86,7 +86,7 @@ namespace WhackerLinkConsoleV2
 
             _waveIn.StartRecording();
 
-            _waveOut = new WaveOutEvent();
+            _waveOut = new WaveOutEvent(); 
             _waveProvider = new BufferedWaveProvider(new WaveFormat(8000, 16, 1))
             {
                 DiscardOnBufferOverflow = true
