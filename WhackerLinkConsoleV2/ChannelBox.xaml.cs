@@ -166,12 +166,16 @@ namespace WhackerLinkConsoleV2.Controls
 
         private void PTTButton_Click(object sender, RoutedEventArgs e)
         {
+            if (!IsSelected) return;
+
             PttState = !PttState;
             PTTButtonClicked.Invoke(sender, this);
         }
 
         private void PageSelectButton_Click(object sender, RoutedEventArgs e)
         {
+            if (!IsSelected) return;
+
             PageState = !PageState;
             PageButtonClicked.Invoke(sender, this);
         }

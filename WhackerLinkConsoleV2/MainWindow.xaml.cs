@@ -774,6 +774,9 @@ namespace WhackerLinkConsoleV2
             Codeplug.Channel cpgChannel = Codeplug.GetChannelByName(e.ChannelName);
             IWebSocketHandler handler = _webSocketManager.GetWebSocketHandler(system.Name);
 
+            if (!e.IsSelected)
+                return;
+
             if (e.PttState)
             {
                 GRP_VCH_REQ request = new GRP_VCH_REQ
