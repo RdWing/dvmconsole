@@ -68,6 +68,9 @@ namespace WhackerLinkConsoleV2
 
         public MainWindow()
         {
+#if DEBUG
+            ConsoleNative.ShowConsole();
+#endif
             InitializeComponent();
             _settingsManager.LoadSettings();
             _selectedChannelsManager = new SelectedChannelsManager();
@@ -348,9 +351,6 @@ namespace WhackerLinkConsoleV2
                     };
 
                     handler.SendMessage(voicePaket);
-                } else
-                {
-                    _stopSending = true;
                 }
             }
         }
@@ -705,14 +705,10 @@ namespace WhackerLinkConsoleV2
 
                 if (channel.PttState && response.Status == (int)ResponseType.GRANT && response.Channel != null && response.SrcId == system.Rid && response.DstId == cpgChannel.Tgid)
                 {
-                    MessageBox.Show($"here1");
-
                     channel.VoiceChannel = response.Channel;
                     _stopSending = false;
                 } else if (response.Status == (int)ResponseType.GRANT && response.SrcId != system.Rid && response.DstId == cpgChannel.Tgid)
                 {
-                    MessageBox.Show($"here2");
-
                     channel.VoiceChannel = response.Channel;
                     channel.LastSrcId = "Last SRC: " + response.SrcId;
                     Dispatcher.Invoke(() =>
@@ -721,24 +717,20 @@ namespace WhackerLinkConsoleV2
                     });
                 } else if (channel.PageState && response.Status == (int)ResponseType.GRANT && response.Channel != null && response.SrcId == system.Rid && response.DstId == cpgChannel.Tgid)
                 {
-                    MessageBox.Show($"here3");
-
                     channel.VoiceChannel = response.Channel;
                 }
                 else
                 {
-                    MessageBox.Show($"here4");
+                    //Dispatcher.Invoke(() =>
+                    //{
+                    //    if (channel.IsSelected)
+                    //        channel.Background = new SolidColorBrush(Colors.DodgerBlue);
+                    //    else
+                    //        channel.Background = new SolidColorBrush(Colors.Gray);
+                    //});
 
-                    Dispatcher.Invoke(() =>
-                    {
-                        if (channel.IsSelected)
-                            channel.Background = new SolidColorBrush(Colors.DodgerBlue);
-                        else
-                            channel.Background = new SolidColorBrush(Colors.Gray);
-                    });
-
-                    channel.VoiceChannel = null;
-                    _stopSending = true;
+                    //channel.VoiceChannel = null;
+                    //_stopSending = true;
                 }
             }
         }
