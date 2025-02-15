@@ -31,6 +31,7 @@ namespace WhackerLinkConsoleV2.Controls
         private readonly SelectedChannelsManager _selectedChannelsManager;
         private bool _pttState;
         private bool _pageState;
+        private bool _holdState;
         private bool _emergency;
         private string _lastSrcId = "0";
 
@@ -38,6 +39,7 @@ namespace WhackerLinkConsoleV2.Controls
 
         public event EventHandler<ChannelBox> PTTButtonClicked;
         public event EventHandler<ChannelBox> PageButtonClicked;
+        public event EventHandler<ChannelBox> HoldChannelButtonClicked;
 
         public event PropertyChangedEventHandler PropertyChanged;
 
@@ -74,6 +76,16 @@ namespace WhackerLinkConsoleV2.Controls
             {
                 _pageState = value;
                 UpdatePageColor();
+            }
+        }
+
+        public bool HoldState
+        {
+            get => _holdState;
+            set
+            {
+                _holdState = value;
+                UpdateHoldColor();
             }
         }
 
@@ -159,6 +171,16 @@ namespace WhackerLinkConsoleV2.Controls
                 PageSelectButton.Background = new SolidColorBrush(Colors.Green);
         }
 
+        private void UpdateHoldColor()
+        {
+            if (IsEditMode) return;
+
+            //if (HoldState)
+            //    HoldChannelButton.Background = new SolidColorBrush(Colors.Orange);
+            //else
+            //    HoldChannelButton.Background = new SolidColorBrush(Colors.Green);
+        }
+
         private void UpdateBackground()
         {
             Background = IsSelected ? Brushes.DodgerBlue : Brushes.DarkGray;
@@ -178,6 +200,14 @@ namespace WhackerLinkConsoleV2.Controls
 
             PageState = !PageState;
             PageButtonClicked.Invoke(sender, this);
+        }
+
+        private void HoldChannelButton_Click(object sender, RoutedEventArgs e)
+        {
+            if (!IsSelected) return;
+
+            HoldState = !HoldState;
+            HoldChannelButtonClicked.Invoke(sender, this);
         }
 
         protected virtual void OnPropertyChanged(string propertyName)
