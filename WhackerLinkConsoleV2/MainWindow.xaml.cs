@@ -14,7 +14,7 @@
 * You should have received a copy of the GNU General Public License
 * along with this program.  If not, see <http://www.gnu.org/licenses/>.
 * 
-* Copyright (C) 2024 Caleb, K4PHP
+* Copyright (C) 2024-2025 Caleb, K4PHP
 * 
 */
 
@@ -53,7 +53,6 @@ namespace WhackerLinkConsoleV2
         private double _offsetX;
         private double _offsetY;
         private bool _isDragging;
-        private bool _stopSending;
 
         private SettingsManager _settingsManager = new SettingsManager();
         private SelectedChannelsManager _selectedChannelsManager;
@@ -62,8 +61,7 @@ namespace WhackerLinkConsoleV2
         private WebSocketManager _webSocketManager = new WebSocketManager();
 
         private readonly WaveInEvent _waveIn;
-        private readonly WaveOutEvent _waveOut;
-        private readonly BufferedWaveProvider _waveProvider;
+        private readonly AudioManager _audioManager;
 
         public MainWindow()
         {
@@ -85,14 +83,7 @@ namespace WhackerLinkConsoleV2
 
             _waveIn.StartRecording();
 
-            _waveOut = new WaveOutEvent(); 
-            _waveProvider = new BufferedWaveProvider(new WaveFormat(8000, 16, 1))
-            {
-                DiscardOnBufferOverflow = true
-            };
-            _waveOut.Init(_waveProvider);
-
-            _waveOut.Play();
+            _audioManager = new AudioManager();
 
             _selectedChannelsManager.SelectedChannelsChanged += SelectedChannelsChanged;
             Loaded += MainWindow_Loaded;
@@ -331,7 +322,7 @@ namespace WhackerLinkConsoleV2
                 Codeplug.Channel cpgChannel = Codeplug.GetChannelByName(channel.ChannelName);
                 IPeer handler = _webSocketManager.GetWebSocketHandler(system.Name);
 
-                if (channel.IsSelected && channel.VoiceChannel != null && !_stopSending)
+                if (channel.IsSelected && channel.VoiceChannel != null && channel.PttState)
                 {
                     object voicePaket = new
                     {
@@ -397,10 +388,10 @@ namespace WhackerLinkConsoleV2
                         _waveIn.DeviceNumber = inputDeviceIndex.Value;
                         _waveIn.StartRecording();
 
-                        _waveOut.Stop();
-                        _waveOut.DeviceNumber = outputDeviceIndex.Value;
-                        _waveOut.Init(_waveProvider);
-                        _waveOut.Play();
+                        //_waveOut.Stop();
+                        //_waveOut.DeviceNumber = outputDeviceIndex.Value;
+                        //_waveOut.Init(_waveProvider);
+                        //_waveOut.Play();
 
                         MessageBox.Show("Audio devices updated successfully.", "Success");
                     }
@@ -462,8 +453,8 @@ namespace WhackerLinkConsoleV2
 
                         Task.Factory.StartNew(() =>
                         {
-                            _waveProvider.ClearBuffer();
-                            _waveProvider.AddSamples(combinedAudio, 0, combinedAudio.Length);
+                            //_waveProvider.ClearBuffer();
+                            _audioManager.AddTalkgroupStream(cpgChannel.Tgid, combinedAudio);
                         });
 
                         for (int i = 0; i < totalChunks; i++)
@@ -659,6 +650,7 @@ namespace WhackerLinkConsoleV2
         private void HandleReceivedAudio(AudioPacket audioPacket)
         {
             bool shouldReceive = false;
+            string talkgroupId = audioPacket.VoiceChannel.DstId;
 
             foreach (ChannelBox channel in _selectedChannelsManager.GetSelectedChannels())
             {
@@ -667,14 +659,11 @@ namespace WhackerLinkConsoleV2
                 IPeer handler = _webSocketManager.GetWebSocketHandler(system.Name);
 
                 if (audioPacket.VoiceChannel.SrcId != system.Rid && audioPacket.VoiceChannel.Frequency == channel.VoiceChannel && audioPacket.VoiceChannel.DstId == cpgChannel.Tgid)
-                {
-                    _waveProvider.AddSamples(audioPacket.Data, 0, audioPacket.Data.Length);
-                }
+                    shouldReceive = true;
             }
 
             if (shouldReceive)
-                _waveProvider.AddSamples(audioPacket.Data, 0, audioPacket.Data.Length);
-
+                _audioManager.AddTalkgroupStream(talkgroupId, audioPacket.Data);
         }
 
         private void HandleVoiceRelease(GRP_VCH_RLS response)
@@ -711,7 +700,6 @@ namespace WhackerLinkConsoleV2
                 if (channel.PttState && response.Status == (int)ResponseType.GRANT && response.Channel != null && response.SrcId == system.Rid && response.DstId == cpgChannel.Tgid)
                 {
                     channel.VoiceChannel = response.Channel;
-                    _stopSending = false;
                 } else if (response.Status == (int)ResponseType.GRANT && response.SrcId != system.Rid && response.DstId == cpgChannel.Tgid)
                 {
                     channel.VoiceChannel = response.Channel;
@@ -759,7 +747,6 @@ namespace WhackerLinkConsoleV2
             }
             else
             {
-                //_stopSending = true;
                 GRP_VCH_RLS release = new GRP_VCH_RLS
                 {
                     SrcId = system.Rid,
@@ -795,7 +782,6 @@ namespace WhackerLinkConsoleV2
             }
             else
             {
-                _stopSending = true;
                 GRP_VCH_RLS release = new GRP_VCH_RLS
                 {
                     SrcId = system.Rid,
