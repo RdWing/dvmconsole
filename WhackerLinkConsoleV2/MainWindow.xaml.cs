@@ -326,7 +326,7 @@ namespace WhackerLinkConsoleV2
 
         private void WaveIn_DataAvailable(object sender, WaveInEventArgs e)
         {
-            foreach (    ChannelBox channel in _selectedChannelsManager.GetSelectedChannels())
+            foreach (ChannelBox channel in _selectedChannelsManager.GetSelectedChannels())
             {
                 Codeplug.System system = Codeplug.GetSystemForChannel(channel.ChannelName);
                 Codeplug.Channel cpgChannel = Codeplug.GetChannelByName(channel.ChannelName);

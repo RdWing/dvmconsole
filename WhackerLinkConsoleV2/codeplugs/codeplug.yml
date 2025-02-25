@@ -8,8 +8,8 @@ radioWide:
 
 systems:
   - name: "System 1"
-    address: "fne.zone1.scan.stream"
-    port: 3015
+    address: "localhost"
+    port: 3000
     rid: "12345"
     site:
         name: "Central Site"
