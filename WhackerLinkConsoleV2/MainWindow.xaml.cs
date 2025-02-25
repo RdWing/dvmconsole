@@ -32,7 +32,6 @@ using WebSocketManager = WhackerLinkLib.Managers.WebSocketManager;
 using System.Windows.Media;
 using WhackerLinkLib.Utils;
 using WhackerLinkLib.Models;
-using WhackerLinkLib.Handlers;
 using System.Net;
 using NAudio.Wave;
 using WhackerLinkLib.Interfaces;
@@ -179,7 +178,7 @@ namespace WhackerLinkConsoleV2
 
                     _webSocketManager.AddWebSocketHandler(system.Name);
 
-                    IWebSocketHandler handler = _webSocketManager.GetWebSocketHandler(system.Name);
+                    IPeer handler = _webSocketManager.GetWebSocketHandler(system.Name);
                     handler.OnVoiceChannelResponse += HandleVoiceResponse;
                     handler.OnVoiceChannelRelease += HandleVoiceRelease;
                     handler.OnEmergencyAlarmResponse += HandleEmergencyAlarmResponse;
@@ -330,7 +329,7 @@ namespace WhackerLinkConsoleV2
             {
                 Codeplug.System system = Codeplug.GetSystemForChannel(channel.ChannelName);
                 Codeplug.Channel cpgChannel = Codeplug.GetChannelByName(channel.ChannelName);
-                IWebSocketHandler handler = _webSocketManager.GetWebSocketHandler(system.Name);
+                IPeer handler = _webSocketManager.GetWebSocketHandler(system.Name);
 
                 if (channel.IsSelected && channel.VoiceChannel != null && !_stopSending)
                 {
@@ -361,7 +360,7 @@ namespace WhackerLinkConsoleV2
             {
                 Codeplug.System system = Codeplug.GetSystemForChannel(channel.ChannelName);
                 Codeplug.Channel cpgChannel = Codeplug.GetChannelByName(channel.ChannelName);
-                IWebSocketHandler handler = _webSocketManager.GetWebSocketHandler(system.Name);
+                IPeer handler = _webSocketManager.GetWebSocketHandler(system.Name);
 
                 if (channel.IsSelected && handler.IsConnected)
                 {
@@ -423,7 +422,7 @@ namespace WhackerLinkConsoleV2
             pageWindow.Owner = this;
             if (pageWindow.ShowDialog() == true)
             {
-                IWebSocketHandler handler = _webSocketManager.GetWebSocketHandler(pageWindow.RadioSystem.Name);
+                IPeer handler = _webSocketManager.GetWebSocketHandler(pageWindow.RadioSystem.Name);
 
                 CALL_ALRT_REQ callAlert = new CALL_ALRT_REQ
                 {
@@ -445,7 +444,7 @@ namespace WhackerLinkConsoleV2
                 {
                     Codeplug.System system = Codeplug.GetSystemForChannel(channel.ChannelName);
                     Codeplug.Channel cpgChannel = Codeplug.GetChannelByName(channel.ChannelName);
-                    IWebSocketHandler handler = _webSocketManager.GetWebSocketHandler(system.Name);
+                    IPeer handler = _webSocketManager.GetWebSocketHandler(system.Name);
 
                     if (channel.PageState)
                     {
@@ -532,7 +531,7 @@ namespace WhackerLinkConsoleV2
                     {
                         Codeplug.System system = Codeplug.GetSystemForChannel(channel.ChannelName);
                         Codeplug.Channel cpgChannel = Codeplug.GetChannelByName(channel.ChannelName);
-                        IWebSocketHandler handler = _webSocketManager.GetWebSocketHandler(system.Name);
+                        IPeer handler = _webSocketManager.GetWebSocketHandler(system.Name);
 
                         if (channel.PageState)
                         {
@@ -665,7 +664,7 @@ namespace WhackerLinkConsoleV2
             {
                 Codeplug.System system = Codeplug.GetSystemForChannel(channel.ChannelName);
                 Codeplug.Channel cpgChannel = Codeplug.GetChannelByName(channel.ChannelName);
-                IWebSocketHandler handler = _webSocketManager.GetWebSocketHandler(system.Name);
+                IPeer handler = _webSocketManager.GetWebSocketHandler(system.Name);
 
                 if (audioPacket.VoiceChannel.SrcId != system.Rid && audioPacket.VoiceChannel.Frequency == channel.VoiceChannel && audioPacket.VoiceChannel.DstId == cpgChannel.Tgid)
                 {
@@ -684,7 +683,7 @@ namespace WhackerLinkConsoleV2
             {
                 Codeplug.System system = Codeplug.GetSystemForChannel(channel.ChannelName);
                 Codeplug.Channel cpgChannel = Codeplug.GetChannelByName(channel.ChannelName);
-                IWebSocketHandler handler = _webSocketManager.GetWebSocketHandler(system.Name);
+                IPeer handler = _webSocketManager.GetWebSocketHandler(system.Name);
 
                 if (response.DstId == cpgChannel.Tgid && response.SrcId != system.Rid)
                 {
@@ -707,7 +706,7 @@ namespace WhackerLinkConsoleV2
             {
                 Codeplug.System system = Codeplug.GetSystemForChannel(channel.ChannelName);
                 Codeplug.Channel cpgChannel = Codeplug.GetChannelByName(channel.ChannelName);
-                IWebSocketHandler handler = _webSocketManager.GetWebSocketHandler(system.Name);
+                IPeer handler = _webSocketManager.GetWebSocketHandler(system.Name);
 
                 if (channel.PttState && response.Status == (int)ResponseType.GRANT && response.Channel != null && response.SrcId == system.Rid && response.DstId == cpgChannel.Tgid)
                 {
@@ -745,7 +744,7 @@ namespace WhackerLinkConsoleV2
         {
             Codeplug.System system = Codeplug.GetSystemForChannel(e.ChannelName);
             Codeplug.Channel cpgChannel = Codeplug.GetChannelByName(e.ChannelName);
-            IWebSocketHandler handler = _webSocketManager.GetWebSocketHandler(system.Name);
+            IPeer handler = _webSocketManager.GetWebSocketHandler(system.Name);
 
             if (e.PageState)
             {
@@ -778,7 +777,7 @@ namespace WhackerLinkConsoleV2
         {
             Codeplug.System system = Codeplug.GetSystemForChannel(e.ChannelName);
             Codeplug.Channel cpgChannel = Codeplug.GetChannelByName(e.ChannelName);
-            IWebSocketHandler handler = _webSocketManager.GetWebSocketHandler(system.Name);
+            IPeer handler = _webSocketManager.GetWebSocketHandler(system.Name);
 
             if (!e.IsSelected)
                 return;
