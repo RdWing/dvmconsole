@@ -326,7 +326,7 @@ namespace WhackerLinkConsoleV2
 
         private void WaveIn_DataAvailable(object sender, WaveInEventArgs e)
         {
-            foreach (ChannelBox channel in _selectedChannelsManager.GetSelectedChannels())
+            foreach (    ChannelBox channel in _selectedChannelsManager.GetSelectedChannels())
             {
                 Codeplug.System system = Codeplug.GetSystemForChannel(channel.ChannelName);
                 Codeplug.Channel cpgChannel = Codeplug.GetChannelByName(channel.ChannelName);
@@ -659,6 +659,8 @@ namespace WhackerLinkConsoleV2
 
         private void HandleReceivedAudio(AudioPacket audioPacket)
         {
+            bool shouldReceive = false;
+
             foreach (ChannelBox channel in _selectedChannelsManager.GetSelectedChannels())
             {
                 Codeplug.System system = Codeplug.GetSystemForChannel(channel.ChannelName);
@@ -670,6 +672,10 @@ namespace WhackerLinkConsoleV2
                     _waveProvider.AddSamples(audioPacket.Data, 0, audioPacket.Data.Length);
                 }
             }
+
+            if (shouldReceive)
+                _waveProvider.AddSamples(audioPacket.Data, 0, audioPacket.Data.Length);
+
         }
 
         private void HandleVoiceRelease(GRP_VCH_RLS response)
