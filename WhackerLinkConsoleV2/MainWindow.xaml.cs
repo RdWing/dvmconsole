@@ -429,7 +429,7 @@ namespace WhackerLinkConsoleV2
                             _audioManager.AddTalkgroupStream(cpgChannel.Tgid, combinedAudio);
                         });
 
-                        await Task.Run(async () =>
+                        await Task.Run(() =>
                         {
                             for (int i = 0; i < totalChunks; i++)
                             {
@@ -454,12 +454,10 @@ namespace WhackerLinkConsoleV2
                                 };
 
                                 handler.SendMessage(voicePacket.GetData());
-
-                                await Task.Delay(20);
                             }
                         });
 
-                        double totalDurationMs = (toneADuration + toneBDuration) * 1000 + 500;
+                        double totalDurationMs = (toneADuration + toneBDuration) * 1000 + 250;
                         await Task.Delay((int)totalDurationMs);
 
                         GRP_VCH_RLS release = new GRP_VCH_RLS
@@ -474,6 +472,7 @@ namespace WhackerLinkConsoleV2
 
                         Dispatcher.Invoke(() =>
                         {
+                            //channel.PageState = false; // TODO: Investigate
                             channel.PageSelectButton.Background = Brushes.Green;
                         });
                     }
@@ -487,18 +486,6 @@ namespace WhackerLinkConsoleV2
             {
                 try
                 {
-                    try
-                    {
-                        using (var player = new SoundPlayer(e.AlertFilePath))
-                        {
-                            player.Play();
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        MessageBox.Show($"Failed to play alert: {ex.Message}", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
-                    }
-
                     foreach (ChannelBox channel in _selectedChannelsManager.GetSelectedChannels())
                     {
                         Codeplug.System system = Codeplug.GetSystemForChannel(channel.ChannelName);
@@ -507,37 +494,49 @@ namespace WhackerLinkConsoleV2
 
                         if (channel.PageState)
                         {
-                            List<byte[]> pcmChunks = new List<byte[]>();
-                            WaveFileReader waveReader = null;
+                            byte[] pcmData;
 
-                            using (waveReader = new WaveFileReader(e.AlertFilePath))
+                            using (var waveReader = new WaveFileReader(e.AlertFilePath))
                             {
-                                if (waveReader.WaveFormat.Encoding != WaveFormatEncoding.Pcm)
+                                if (waveReader.WaveFormat.Encoding != WaveFormatEncoding.Pcm ||
+                                    waveReader.WaveFormat.SampleRate != 8000 ||
+                                    waveReader.WaveFormat.BitsPerSample != 16 ||
+                                    waveReader.WaveFormat.Channels != 1)
                                 {
-                                    MessageBox.Show("The alert tone is not in PCM format.", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
+                                    MessageBox.Show("The alert tone must be PCM 16-bit, Mono, 8000Hz format.", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
                                     return;
                                 }
 
-                                byte[] buffer = new byte[1600];
-                                int bytesRead;
-
-                                while ((bytesRead = waveReader.Read(buffer, 0, buffer.Length)) > 0)
+                                using (MemoryStream ms = new MemoryStream())
                                 {
-                                    if (bytesRead < buffer.Length)
-                                    {
-                                        byte[] finalChunk = new byte[bytesRead];
-                                        Array.Copy(buffer, finalChunk, bytesRead);
-                                        pcmChunks.Add(finalChunk);
-                                    }
-                                    else
-                                    {
-                                        pcmChunks.Add((byte[])buffer.Clone());
-                                    }
+                                    waveReader.CopyTo(ms);
+                                    pcmData = ms.ToArray();
                                 }
                             }
 
-                            foreach (var chunk in pcmChunks)
+                            int chunkSize = 1600;
+                            int totalChunks = (pcmData.Length + chunkSize - 1) / chunkSize;
+
+                            if (pcmData.Length % chunkSize != 0)
                             {
+                                byte[] paddedData = new byte[totalChunks * chunkSize];
+                                Buffer.BlockCopy(pcmData, 0, paddedData, 0, pcmData.Length);
+                                pcmData = paddedData;
+                            }
+
+                            Task.Factory.StartNew(() =>
+                            {
+                                _audioManager.AddTalkgroupStream(cpgChannel.Tgid, pcmData);
+                            });
+
+                            DateTime startTime = DateTime.UtcNow;
+
+                            for (int i = 0; i < totalChunks; i++)
+                            {
+                                int offset = i * chunkSize;
+                                byte[] chunk = new byte[chunkSize];
+                                Buffer.BlockCopy(pcmData, offset, chunk, 0, chunkSize);
+
                                 AudioPacket voicePacket = new AudioPacket
                                 {
                                     Data = chunk,
@@ -554,9 +553,17 @@ namespace WhackerLinkConsoleV2
 
                                 handler.SendMessage(voicePacket.GetData());
 
-                                int chunkDurationMs = (int)(1600.0 / waveReader.WaveFormat.AverageBytesPerSecond * 1000);
-                                await Task.Delay(chunkDurationMs);
+                                DateTime nextPacketTime = startTime.AddMilliseconds((i + 1) * 100);
+                                TimeSpan waitTime = nextPacketTime - DateTime.UtcNow;
+
+                                if (waitTime.TotalMilliseconds > 0)
+                                {
+                                    await Task.Delay(waitTime);
+                                }
                             }
+
+                            double totalDurationMs = ((double)pcmData.Length / 16000) * 1000 + 500;
+                            await Task.Delay((int)totalDurationMs);
 
                             GRP_VCH_RLS release = new GRP_VCH_RLS
                             {

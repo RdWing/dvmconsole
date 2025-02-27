@@ -24,6 +24,9 @@ using System.Collections.Generic;
 
 namespace WhackerLinkConsoleV2
 {
+    /// <summary>
+    /// Class for managing 
+    /// </summary>
     public class AudioManager
     {
         private Dictionary<string, (WaveOutEvent waveOut, MixingSampleProvider mixer, BufferedWaveProvider buffer, GainSampleProvider gainProvider)> _talkgroupProviders;
