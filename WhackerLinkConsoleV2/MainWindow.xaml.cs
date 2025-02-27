@@ -482,10 +482,9 @@ namespace WhackerLinkConsoleV2
                                         Site = system.Site
                                     },
                                     Site = system.Site,
-                                    LopServerVocode = false
+                                    LopServerVocode = true
                                 };
 
-                                Console.WriteLine("sending sample");
                                 handler.SendMessage(voicePacket.GetData());
 
                                 await Task.Delay(20);
@@ -582,7 +581,7 @@ namespace WhackerLinkConsoleV2
                                         Site = system.Site
                                     },
                                     Site = system.Site,
-                                    LopServerVocode = false
+                                    LopServerVocode = true
                                 };
 
                                 handler.SendMessage(voicePacket.GetData());
