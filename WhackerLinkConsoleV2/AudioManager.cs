@@ -21,7 +21,6 @@
 using NAudio.Wave;
 using NAudio.Wave.SampleProviders;
 using System.Collections.Generic;
-using System.Diagnostics;
 
 namespace WhackerLinkConsoleV2
 {
@@ -29,7 +28,8 @@ namespace WhackerLinkConsoleV2
     {
         private WaveOutEvent _waveOut;
         private MixingSampleProvider _mixer;
-        private Dictionary<string, BufferedWaveProvider> _talkgroupProviders;
+
+        private Dictionary<string, (BufferedWaveProvider buffer, VolumeSampleProvider volumeProvider)> _talkgroupProviders;
 
         /// <summary>
         /// Creates an instance of <see cref="AudioManager"/>
@@ -37,7 +37,7 @@ namespace WhackerLinkConsoleV2
         public AudioManager()
         {
             _waveOut = new WaveOutEvent();
-            _talkgroupProviders = new Dictionary<string, BufferedWaveProvider>();
+            _talkgroupProviders = new Dictionary<string, (BufferedWaveProvider, VolumeSampleProvider)>();
             _mixer = new MixingSampleProvider(WaveFormat.CreateIeeeFloatWaveFormat(8000, 1))
             {
                 ReadFully = true
@@ -55,17 +55,43 @@ namespace WhackerLinkConsoleV2
         public void AddTalkgroupStream(string talkgroupId, byte[] audioData)
         {
             if (!_talkgroupProviders.ContainsKey(talkgroupId))
+                AddTalkgroupStream(talkgroupId);
+
+            _talkgroupProviders[talkgroupId].buffer.AddSamples(audioData, 0, audioData.Length);
+        }
+
+        /// <summary>
+        /// Internal helper to create a talkgroup stream
+        /// </summary>
+        /// <param name="talkgroupId"></param>
+        private void AddTalkgroupStream(string talkgroupId)
+        {
+            var bufferProvider = new BufferedWaveProvider(new WaveFormat(8000, 16, 1))
             {
-                var provider = new BufferedWaveProvider(new WaveFormat(8000, 16, 1))
-                {
-                    DiscardOnBufferOverflow = true
-                };
+                DiscardOnBufferOverflow = true
+            };
 
-                _talkgroupProviders[talkgroupId] = provider;
-                _mixer.AddMixerInput(provider.ToSampleProvider());
+            var volumeProvider = new VolumeSampleProvider(bufferProvider.ToSampleProvider())
+            {
+                Volume = 1.0f
+            };
+
+            _talkgroupProviders[talkgroupId] = (bufferProvider, volumeProvider);
+            _mixer.AddMixerInput(volumeProvider);
+        }
+
+        /// <summary>
+        /// Adjusts the volume of a specific talkgroup stream
+        /// </summary>
+        public void SetTalkgroupVolume(string talkgroupId, float volume)
+        {
+            if (_talkgroupProviders.ContainsKey(talkgroupId))
+                _talkgroupProviders[talkgroupId].volumeProvider.Volume = volume;
+            else
+            {
+                AddTalkgroupStream(talkgroupId);
+                _talkgroupProviders[talkgroupId].volumeProvider.Volume = volume;
             }
-
-            _talkgroupProviders[talkgroupId].AddSamples(audioData, 0, audioData.Length);
         }
 
         /// <summary>

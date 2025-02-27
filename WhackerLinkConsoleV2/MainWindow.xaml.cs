@@ -247,7 +247,7 @@ namespace WhackerLinkConsoleV2
                 {
                     foreach (var channel in zone.Channels)
                     {
-                        var channelBox = new ChannelBox(_selectedChannelsManager, channel.Name, channel.System);
+                        var channelBox = new ChannelBox(_selectedChannelsManager, _audioManager, channel.Name, channel.System, channel.Tgid);
 
                         if (_settingsManager.ChannelPositions.TryGetValue(channel.Name, out var position))
                         {
@@ -269,10 +269,11 @@ namespace WhackerLinkConsoleV2
                         ChannelsCanvas.Children.Add(channelBox);
 
                         offsetX += 220;
+
                         if (offsetX + 200 > ChannelsCanvas.ActualWidth)
                         {
                             offsetX = 20;
-                            offsetY += 140;
+                            offsetY += 170;
                         }
                     }
                 }
@@ -425,7 +426,7 @@ namespace WhackerLinkConsoleV2
             }
         }
 
-        private void ManualPage_Click(object sender, RoutedEventArgs e)
+        private async void ManualPage_Click(object sender, RoutedEventArgs e)
         {
             QuickCallPage pageWindow = new QuickCallPage();
             pageWindow.Owner = this;
@@ -441,8 +442,11 @@ namespace WhackerLinkConsoleV2
                     {
                         ToneGenerator generator = new ToneGenerator();
 
-                        byte[] toneA = generator.GenerateTone(Double.Parse(pageWindow.ToneA), 1.0);
-                        byte[] toneB = generator.GenerateTone(Double.Parse(pageWindow.ToneB), 3.0);
+                        double toneADuration = 1.0;
+                        double toneBDuration = 3.0;
+
+                        byte[] toneA = generator.GenerateTone(Double.Parse(pageWindow.ToneA), toneADuration);
+                        byte[] toneB = generator.GenerateTone(Double.Parse(pageWindow.ToneB), toneBDuration);
 
                         byte[] combinedAudio = new byte[toneA.Length + toneB.Length];
                         Buffer.BlockCopy(toneA, 0, combinedAudio, 0, toneA.Length);
@@ -457,30 +461,39 @@ namespace WhackerLinkConsoleV2
                             _audioManager.AddTalkgroupStream(cpgChannel.Tgid, combinedAudio);
                         });
 
-                        for (int i = 0; i < totalChunks; i++)
+                        await Task.Run(async () =>
                         {
-                            int offset = i * chunkSize;
-                            int size = Math.Min(chunkSize, combinedAudio.Length - offset);
-
-                            byte[] chunk = new byte[size];
-                            Buffer.BlockCopy(combinedAudio, offset, chunk, 0, size);
-
-                            AudioPacket voicePacket = new AudioPacket
+                            for (int i = 0; i < totalChunks; i++)
                             {
-                                Data = chunk,
-                                VoiceChannel = new VoiceChannel
-                                {
-                                    Frequency = channel.VoiceChannel,
-                                    DstId = cpgChannel.Tgid,
-                                    SrcId = system.Rid,
-                                    Site = system.Site
-                                },
-                                Site = system.Site,
-                                LopServerVocode = true
-                            };
+                                int offset = i * chunkSize;
+                                int size = Math.Min(chunkSize, combinedAudio.Length - offset);
 
-                            handler.SendMessage(voicePacket.GetData());
-                        }
+                                byte[] chunk = new byte[chunkSize];
+                                Buffer.BlockCopy(combinedAudio, offset, chunk, 0, size);
+
+                                AudioPacket voicePacket = new AudioPacket
+                                {
+                                    Data = chunk,
+                                    VoiceChannel = new VoiceChannel
+                                    {
+                                        Frequency = channel.VoiceChannel,
+                                        DstId = cpgChannel.Tgid,
+                                        SrcId = system.Rid,
+                                        Site = system.Site
+                                    },
+                                    Site = system.Site,
+                                    LopServerVocode = false
+                                };
+
+                                Console.WriteLine("sending sample");
+                                handler.SendMessage(voicePacket.GetData());
+
+                                await Task.Delay(20);
+                            }
+                        });
+
+                        double totalDurationMs = (toneADuration + toneBDuration) * 1000 + 500;
+                        await Task.Delay((int)totalDurationMs);
 
                         GRP_VCH_RLS release = new GRP_VCH_RLS
                         {
@@ -489,8 +502,9 @@ namespace WhackerLinkConsoleV2
                             Channel = channel.VoiceChannel,
                             Site = system.Site
                         };
-                        
+
                         handler.SendMessage(release.GetData());
+
                         Dispatcher.Invoke(() =>
                         {
                             channel.PageSelectButton.Background = Brushes.Green;
@@ -568,7 +582,7 @@ namespace WhackerLinkConsoleV2
                                         Site = system.Site
                                     },
                                     Site = system.Site,
-                                    LopServerVocode = true
+                                    LopServerVocode = false
                                 };
 
                                 handler.SendMessage(voicePacket.GetData());

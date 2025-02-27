@@ -29,11 +29,14 @@ namespace WhackerLinkConsoleV2.Controls
     public partial class ChannelBox : UserControl, INotifyPropertyChanged
     {
         private readonly SelectedChannelsManager _selectedChannelsManager;
+        private readonly AudioManager _audioManager;
+
         private bool _pttState;
         private bool _pageState;
         private bool _holdState;
         private bool _emergency;
         private string _lastSrcId = "0";
+        private double _volume = 1.0;
 
         public FlashingBackgroundManager _flashingBackgroundManager;
 
@@ -45,6 +48,7 @@ namespace WhackerLinkConsoleV2.Controls
 
         public string ChannelName { get; set; }
         public string SystemName { get; set; }
+        public string DstId { get; set; }
 
         public string LastSrcId
         {
@@ -121,13 +125,29 @@ namespace WhackerLinkConsoleV2.Controls
             }
         }
 
-        public ChannelBox(SelectedChannelsManager selectedChannelsManager, string channelName, string systemName)
+        public double Volume
+        {
+            get => _volume;
+            set
+            {
+                if (_volume != value)
+                {
+                    _volume = value;
+                    OnPropertyChanged(nameof(Volume));
+                    _audioManager.SetTalkgroupVolume(DstId, (float)value);
+                }
+            }
+        }
+
+        public ChannelBox(SelectedChannelsManager selectedChannelsManager, AudioManager audioManager, string channelName, string systemName, string dstId)
         {
             InitializeComponent();
             DataContext = this;
             _selectedChannelsManager = selectedChannelsManager;
+            _audioManager = audioManager;
             _flashingBackgroundManager = new FlashingBackgroundManager(this);
             ChannelName = channelName;
+            DstId = dstId;
             SystemName = $"System: {systemName}";
             LastSrcId = $"Last SRC: {LastSrcId}";
             UpdateBackground();
@@ -208,6 +228,11 @@ namespace WhackerLinkConsoleV2.Controls
 
             HoldState = !HoldState;
             HoldChannelButtonClicked.Invoke(sender, this);
+        }
+
+        private void VolumeSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+        {
+            Volume = e.NewValue;
         }
 
         protected virtual void OnPropertyChanged(string propertyName)
