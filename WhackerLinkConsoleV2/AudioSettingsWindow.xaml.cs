@@ -14,31 +14,79 @@
 * You should have received a copy of the GNU General Public License
 * along with this program.  If not, see <http://www.gnu.org/licenses/>.
 * 
-* Copyright (C) 2024 Caleb, K4PHP
+* Copyright (C) 2024-2025 Caleb, K4PHP
 * 
 */
 
 using System.Windows;
 using System.Collections.Generic;
+using System.Linq;
 using NAudio.Wave;
+using System.Windows.Controls;
+using WhackerLinkLib.Models.Radio;
 
 namespace WhackerLinkConsoleV2
 {
     public partial class AudioSettingsWindow : Window
     {
-        public int? SelectedInputDeviceIndex { get; private set; }
-        public int? SelectedOutputDeviceIndex { get; private set; }
+        private readonly SettingsManager _settingsManager;
+        private readonly AudioManager _audioManager;
+        private readonly List<Codeplug.Channel> _channels;
+        private readonly Dictionary<string, int> _selectedOutputDevices = new Dictionary<string, int>();
 
-        public AudioSettingsWindow()
+        public AudioSettingsWindow(SettingsManager settingsManager, AudioManager audioManager, List<Codeplug.Channel> channels)
         {
             InitializeComponent();
+            _settingsManager = settingsManager;
+            _audioManager = audioManager;
+            _channels = channels;
+
             LoadAudioDevices();
+            LoadChannelOutputSettings();
         }
 
         private void LoadAudioDevices()
         {
-            InputDeviceComboBox.ItemsSource = GetAudioInputDevices();
-            OutputDeviceComboBox.ItemsSource = GetAudioOutputDevices();
+            List<string> inputDevices = GetAudioInputDevices();
+            List<string> outputDevices = GetAudioOutputDevices();
+
+            InputDeviceComboBox.ItemsSource = inputDevices;
+            InputDeviceComboBox.SelectedIndex = _settingsManager.ChannelOutputDevices.ContainsKey("GLOBAL_INPUT")
+                ? _settingsManager.ChannelOutputDevices["GLOBAL_INPUT"]
+                : 0;
+        }
+
+        private void LoadChannelOutputSettings()
+        {
+            List<string> outputDevices = GetAudioOutputDevices();
+
+            foreach (var channel in _channels)
+            {
+                TextBlock channelLabel = new TextBlock
+                {
+                    Text = channel.Name,
+                    FontWeight = FontWeights.Bold,
+                    Margin = new Thickness(0, 5, 0, 0)
+                };
+
+                ComboBox outputDeviceComboBox = new ComboBox
+                {
+                    Width = 350,
+                    ItemsSource = outputDevices,
+                    SelectedIndex = _settingsManager.ChannelOutputDevices.ContainsKey(channel.Tgid)
+                        ? _settingsManager.ChannelOutputDevices[channel.Tgid]
+                        : 0
+                };
+
+                outputDeviceComboBox.SelectionChanged += (s, e) =>
+                {
+                    int selectedIndex = outputDeviceComboBox.SelectedIndex;
+                    _selectedOutputDevices[channel.Tgid] = selectedIndex;
+                };
+
+                ChannelOutputStackPanel.Children.Add(channelLabel);
+                ChannelOutputStackPanel.Children.Add(outputDeviceComboBox);
+            }
         }
 
         private List<string> GetAudioInputDevices()
@@ -69,8 +117,14 @@ namespace WhackerLinkConsoleV2
 
         private void SaveButton_Click(object sender, RoutedEventArgs e)
         {
-            SelectedInputDeviceIndex = InputDeviceComboBox.SelectedIndex;
-            SelectedOutputDeviceIndex = OutputDeviceComboBox.SelectedIndex;
+            int selectedInputIndex = InputDeviceComboBox.SelectedIndex;
+            _settingsManager.UpdateChannelOutputDevice("GLOBAL_INPUT", selectedInputIndex);
+
+            foreach (var entry in _selectedOutputDevices)
+            {
+                _settingsManager.UpdateChannelOutputDevice(entry.Key, entry.Value);
+                _audioManager.SetTalkgroupOutputDevice(entry.Key, entry.Value);
+            }
 
             DialogResult = true;
             Close();

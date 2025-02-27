@@ -83,7 +83,7 @@ namespace WhackerLinkConsoleV2
 
             _waveIn.StartRecording();
 
-            _audioManager = new AudioManager();
+            _audioManager = new AudioManager(_settingsManager);
 
             _selectedChannelsManager.SelectedChannelsChanged += SelectedChannelsChanged;
             Loaded += MainWindow_Loaded;
@@ -370,42 +370,10 @@ namespace WhackerLinkConsoleV2
 
         private void AudioSettings_Click(object sender, RoutedEventArgs e)
         {
-            AudioSettingsWindow audioSettingsWindow = new AudioSettingsWindow();
+            List<Codeplug.Channel> channels = Codeplug?.Zones.SelectMany(z => z.Channels).ToList() ?? new List<Codeplug.Channel>();
 
-            if (audioSettingsWindow.ShowDialog() == true)
-            {
-                int? inputDeviceIndex = audioSettingsWindow.SelectedInputDeviceIndex;
-                int? outputDeviceIndex = audioSettingsWindow.SelectedOutputDeviceIndex;
-
-                if (inputDeviceIndex.HasValue && outputDeviceIndex.HasValue)
-                {
-                    MessageBox.Show($"Selected Input Device Index: {inputDeviceIndex}\n" +
-                                    $"Selected Output Device Index: {outputDeviceIndex}",
-                                    "Selected Devices");
-
-                    try
-                    {
-                        _waveIn.StopRecording();
-                        _waveIn.DeviceNumber = inputDeviceIndex.Value;
-                        _waveIn.StartRecording();
-
-                        //_waveOut.Stop();
-                        //_waveOut.DeviceNumber = outputDeviceIndex.Value;
-                        //_waveOut.Init(_waveProvider);
-                        //_waveOut.Play();
-
-                        MessageBox.Show("Audio devices updated successfully.", "Success");
-                    }
-                    catch (Exception ex)
-                    {
-                        MessageBox.Show($"Failed to update audio devices: {ex.Message}", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
-                    }
-                }
-                else
-                {
-                    MessageBox.Show("No device selected.", "Warning");
-                }
-            }
+            AudioSettingsWindow audioSettingsWindow = new AudioSettingsWindow(_settingsManager, _audioManager, channels);
+            audioSettingsWindow.ShowDialog();
         }
 
         private void P25Page_Click(object sender, RoutedEventArgs e)

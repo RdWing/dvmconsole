@@ -26,25 +26,16 @@ namespace WhackerLinkConsoleV2
 {
     public class AudioManager
     {
-        private WaveOutEvent _waveOut;
-        private MixingSampleProvider _mixer;
-
-        private Dictionary<string, (BufferedWaveProvider buffer, GainSampleProvider gainProvider)> _talkgroupProviders;
+        private Dictionary<string, (WaveOutEvent waveOut, MixingSampleProvider mixer, BufferedWaveProvider buffer, GainSampleProvider gainProvider)> _talkgroupProviders;
+        private SettingsManager _settingsManager;
 
         /// <summary>
         /// Creates an instance of <see cref="AudioManager"/>
         /// </summary>
-        public AudioManager()
+        public AudioManager(SettingsManager settingsManager)
         {
-            _waveOut = new WaveOutEvent();
-            _talkgroupProviders = new Dictionary<string, (BufferedWaveProvider, GainSampleProvider)>();
-            _mixer = new MixingSampleProvider(WaveFormat.CreateIeeeFloatWaveFormat(8000, 1))
-            {
-                ReadFully = true
-            };
-
-            _waveOut.Init(_mixer);
-            _waveOut.Play();
+            _settingsManager = settingsManager;
+            _talkgroupProviders = new Dictionary<string, (WaveOutEvent, MixingSampleProvider, BufferedWaveProvider, GainSampleProvider)>();
         }
 
         /// <summary>
@@ -66,6 +57,13 @@ namespace WhackerLinkConsoleV2
         /// <param name="talkgroupId"></param>
         private void AddTalkgroupStream(string talkgroupId)
         {
+            int deviceIndex = _settingsManager.ChannelOutputDevices.ContainsKey(talkgroupId) ? _settingsManager.ChannelOutputDevices[talkgroupId] : 0;
+
+            var waveOut = new WaveOutEvent
+            {
+                DeviceNumber = deviceIndex
+            };
+
             var bufferProvider = new BufferedWaveProvider(new WaveFormat(8000, 16, 1))
             {
                 DiscardOnBufferOverflow = true
@@ -76,8 +74,17 @@ namespace WhackerLinkConsoleV2
                 Gain = 1.0f
             };
 
-            _talkgroupProviders[talkgroupId] = (bufferProvider, gainProvider);
-            _mixer.AddMixerInput(gainProvider);
+            var mixer = new MixingSampleProvider(WaveFormat.CreateIeeeFloatWaveFormat(8000, 1))
+            {
+                ReadFully = true
+            };
+
+            mixer.AddMixerInput(gainProvider);
+
+            waveOut.Init(mixer);
+            waveOut.Play();
+
+            _talkgroupProviders[talkgroupId] = (waveOut, mixer, bufferProvider, gainProvider);
         }
 
         /// <summary>
@@ -97,11 +104,29 @@ namespace WhackerLinkConsoleV2
         }
 
         /// <summary>
+        /// Set stream output device
+        /// </summary>
+        /// <param name="talkgroupId"></param>
+        /// <param name="deviceIndex"></param>
+        public void SetTalkgroupOutputDevice(string talkgroupId, int deviceIndex)
+        {
+            if (_talkgroupProviders.ContainsKey(talkgroupId))
+            {
+                _talkgroupProviders[talkgroupId].waveOut.Stop();
+                _talkgroupProviders.Remove(talkgroupId);
+            }
+
+            _settingsManager.UpdateChannelOutputDevice(talkgroupId, deviceIndex);
+            AddTalkgroupStream(talkgroupId);
+        }
+
+        /// <summary>
         /// Lop off the wave out
         /// </summary>
         public void Stop()
         {
-            _waveOut.Stop();
+            foreach (var provider in _talkgroupProviders.Values)
+                provider.waveOut.Stop();
         }
     }
 }

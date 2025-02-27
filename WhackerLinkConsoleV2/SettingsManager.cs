@@ -37,6 +37,7 @@ namespace WhackerLinkConsoleV2
         public Dictionary<string, ChannelPosition> SystemStatusPositions { get; set; } = new Dictionary<string, ChannelPosition>();
         public List<string> AlertToneFilePaths { get; set; } = new List<string>();
         public Dictionary<string, ChannelPosition> AlertTonePositions { get; set; } = new Dictionary<string, ChannelPosition>();
+        public Dictionary<string, int> ChannelOutputDevices { get; set; } = new Dictionary<string, int>();
 
         public void LoadSettings()
         {
@@ -57,6 +58,7 @@ namespace WhackerLinkConsoleV2
                     SystemStatusPositions = loadedSettings.SystemStatusPositions ?? new Dictionary<string, ChannelPosition>();
                     AlertToneFilePaths = loadedSettings.AlertToneFilePaths ?? new List<string>();
                     AlertTonePositions = loadedSettings.AlertTonePositions ?? new Dictionary<string, ChannelPosition>();
+                    ChannelOutputDevices = loadedSettings.ChannelOutputDevices ?? new Dictionary<string, int>();
                 }
             }
             catch (Exception ex)
@@ -89,6 +91,12 @@ namespace WhackerLinkConsoleV2
         public void UpdateSystemStatusPosition(string systemName, double x, double y)
         {
             SystemStatusPositions[systemName] = new ChannelPosition { X = x, Y = y };
+            SaveSettings();
+        }
+
+        public void UpdateChannelOutputDevice(string channelName, int deviceIndex)
+        {
+            ChannelOutputDevices[channelName] = deviceIndex;
             SaveSettings();
         }
 
