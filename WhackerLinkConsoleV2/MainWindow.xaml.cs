@@ -562,7 +562,7 @@ namespace WhackerLinkConsoleV2
                                 }
                             }
 
-                            double totalDurationMs = ((double)pcmData.Length / 16000) * 1000 + 500;
+                            double totalDurationMs = ((double)pcmData.Length / 16000) * 1000 + 250;
                             await Task.Delay((int)totalDurationMs);
 
                             GRP_VCH_RLS release = new GRP_VCH_RLS
