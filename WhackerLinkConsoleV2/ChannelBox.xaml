@@ -22,8 +22,8 @@
             <Button Content="Page Select" Width="80" Margin="80,5,0,0" Background="Green" Foreground="White" Name="PageSelectButton"
                     HorizontalAlignment="Left" Grid.Row="3" Click="PageSelectButton_Click"/>
 
-            <Slider Grid.Row="4" Minimum="0" Maximum="1" Value="{Binding Volume, Mode=TwoWay}"
-                    Width="180" Margin="5" Name="VolumeSlider" ValueChanged="VolumeSlider_ValueChanged"/>
+            <Slider Grid.Row="4" Minimum="0" Maximum="4" Value="{Binding Volume, Mode=TwoWay}"
+                Width="180" Margin="5" Name="VolumeSlider" ValueChanged="VolumeSlider_ValueChanged"/>
         </Grid>
     </Border>
 </UserControl>

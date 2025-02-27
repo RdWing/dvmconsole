@@ -29,7 +29,7 @@ namespace WhackerLinkConsoleV2
         private WaveOutEvent _waveOut;
         private MixingSampleProvider _mixer;
 
-        private Dictionary<string, (BufferedWaveProvider buffer, VolumeSampleProvider volumeProvider)> _talkgroupProviders;
+        private Dictionary<string, (BufferedWaveProvider buffer, GainSampleProvider gainProvider)> _talkgroupProviders;
 
         /// <summary>
         /// Creates an instance of <see cref="AudioManager"/>
@@ -37,7 +37,7 @@ namespace WhackerLinkConsoleV2
         public AudioManager()
         {
             _waveOut = new WaveOutEvent();
-            _talkgroupProviders = new Dictionary<string, (BufferedWaveProvider, VolumeSampleProvider)>();
+            _talkgroupProviders = new Dictionary<string, (BufferedWaveProvider, GainSampleProvider)>();
             _mixer = new MixingSampleProvider(WaveFormat.CreateIeeeFloatWaveFormat(8000, 1))
             {
                 ReadFully = true
@@ -71,13 +71,13 @@ namespace WhackerLinkConsoleV2
                 DiscardOnBufferOverflow = true
             };
 
-            var volumeProvider = new VolumeSampleProvider(bufferProvider.ToSampleProvider())
+            var gainProvider = new GainSampleProvider(bufferProvider.ToSampleProvider())
             {
-                Volume = 1.0f
+                Gain = 1.0f
             };
 
-            _talkgroupProviders[talkgroupId] = (bufferProvider, volumeProvider);
-            _mixer.AddMixerInput(volumeProvider);
+            _talkgroupProviders[talkgroupId] = (bufferProvider, gainProvider);
+            _mixer.AddMixerInput(gainProvider);
         }
 
         /// <summary>
@@ -86,11 +86,13 @@ namespace WhackerLinkConsoleV2
         public void SetTalkgroupVolume(string talkgroupId, float volume)
         {
             if (_talkgroupProviders.ContainsKey(talkgroupId))
-                _talkgroupProviders[talkgroupId].volumeProvider.Volume = volume;
+            {
+                _talkgroupProviders[talkgroupId].gainProvider.Gain = volume;
+            }
             else
             {
                 AddTalkgroupStream(talkgroupId);
-                _talkgroupProviders[talkgroupId].volumeProvider.Volume = volume;
+                _talkgroupProviders[talkgroupId].gainProvider.Gain = volume;
             }
         }
 
