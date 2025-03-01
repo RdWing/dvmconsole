@@ -9,6 +9,13 @@
     <Platforms>AnyCPU;x64</Platforms>
   </PropertyGroup>
 
+  <ItemGroup>
+    <None Remove="Assets\channelmarker.png" />
+    <None Remove="Assets\instantptt.png" />
+    <None Remove="Assets\pageselect.png" />
+    <None Remove="Assets\pttselect.png" />
+  </ItemGroup>
+
  
 
   <ItemGroup>
@@ -18,6 +25,21 @@
 
   <ItemGroup>
     <ProjectReference Include="..\WhackerLinkLib\WhackerLinkLib.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Resource Include="Assets\channelmarker.png">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+    </Resource>
+    <Resource Include="Assets\instantptt.png" />
+    <Resource Include="Assets\pageselect.png" />
+    <Resource Include="Assets\pttselect.png" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Page Update="ChannelBox.xaml">
+      <CopyToOutputDirectory></CopyToOutputDirectory>
+    </Page>
   </ItemGroup>
 
 

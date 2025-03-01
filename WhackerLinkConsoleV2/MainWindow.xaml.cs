@@ -268,12 +268,12 @@ namespace WhackerLinkConsoleV2
                         channelBox.MouseRightButtonDown += ChannelBox_MouseRightButtonDown;
                         ChannelsCanvas.Children.Add(channelBox);
 
-                        offsetX += 220;
+                        offsetX += 225;
 
-                        if (offsetX + 200 > ChannelsCanvas.ActualWidth)
+                        if (offsetX + 220 > ChannelsCanvas.ActualWidth)
                         {
                             offsetX = 20;
-                            offsetY += 170;
+                            offsetY += 106;
                         }
                     }
                 }
