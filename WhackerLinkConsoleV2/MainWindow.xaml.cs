@@ -262,6 +262,7 @@ namespace WhackerLinkConsoleV2
 
                         channelBox.PTTButtonClicked += ChannelBox_PTTButtonClicked;
                         channelBox.PageButtonClicked += ChannelBox_PageButtonClicked;
+                        channelBox.HoldChannelButtonClicked += ChannelBox_HoldChannelButtonClicked;
 
                         channelBox.MouseLeftButtonDown += ChannelBox_MouseLeftButtonDown;
                         channelBox.MouseMove += ChannelBox_MouseMove;
@@ -714,6 +715,13 @@ namespace WhackerLinkConsoleV2
                     //_stopSending = true;
                 }
             }
+        }
+
+        private void ChannelBox_HoldChannelButtonClicked(object sender, ChannelBox e)
+        {
+            Codeplug.System system = Codeplug.GetSystemForChannel(e.ChannelName);
+            Codeplug.Channel cpgChannel = Codeplug.GetChannelByName(e.ChannelName);
+            IPeer handler = _webSocketManager.GetWebSocketHandler(system.Name);
         }
 
         private void ChannelBox_PageButtonClicked(object sender, ChannelBox e)

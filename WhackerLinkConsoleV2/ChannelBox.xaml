@@ -37,7 +37,7 @@
             <Button Width="31" Height="33" Background="SteelBlue" x:Name="PageSelectButton" Click="PageSelectButton_Click">
                 <Image Source="pack://application:,,,/WhackerLinkConsoleV2;component/Assets/pageselect.png" Width="24" Height="24"/>
             </Button>
-            <Button Width="28" Height="33" Background="SteelBlue">
+            <Button Width="28" Height="33" Background="SteelBlue" x:Name="ChannelMarkerBtn" Click="ChannelMarkerBtn_Click">
                 <Image Source="pack://application:,,,/WhackerLinkConsoleV2;component/Assets/channelmarker.png" Width="24" Height="24"/>
             </Button>
         </StackPanel>

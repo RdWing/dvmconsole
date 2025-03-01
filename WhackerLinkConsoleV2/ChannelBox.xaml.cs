@@ -195,10 +195,10 @@ namespace WhackerLinkConsoleV2.Controls
         {
             if (IsEditMode) return;
 
-            //if (HoldState)
-            //    HoldChannelButton.Background = new SolidColorBrush(Colors.Orange);
-            //else
-            //    HoldChannelButton.Background = new SolidColorBrush(Colors.Green);
+            if (HoldState)
+                ChannelMarkerBtn.Background = new SolidColorBrush(Colors.Orange);
+            else
+                ChannelMarkerBtn.Background = new SolidColorBrush(Colors.Green);
         }
 
         private void UpdateBackground()
@@ -222,14 +222,6 @@ namespace WhackerLinkConsoleV2.Controls
             PageButtonClicked.Invoke(sender, this);
         }
 
-        private void HoldChannelButton_Click(object sender, RoutedEventArgs e)
-        {
-            if (!IsSelected) return;
-
-            HoldState = !HoldState;
-            HoldChannelButtonClicked.Invoke(sender, this);
-        }
-
         private void VolumeSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
         {
             Volume = e.NewValue;
@@ -238,6 +230,14 @@ namespace WhackerLinkConsoleV2.Controls
         protected virtual void OnPropertyChanged(string propertyName)
         {
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
+        }
+
+        private void ChannelMarkerBtn_Click(object sender, RoutedEventArgs e)
+        {
+            if (!IsSelected) return;
+
+            HoldState = !HoldState;
+            HoldChannelButtonClicked.Invoke(sender, this);
         }
     }
 }
