@@ -160,11 +160,11 @@ namespace WhackerLinkConsoleV2
 
                     ChannelsCanvas.Children.Add(systemStatusBox);
 
-                    offsetX += 220;
-                    if (offsetX + 200 > ChannelsCanvas.ActualWidth)
+                    offsetX += 225;
+                    if (offsetX + 220 > ChannelsCanvas.ActualWidth)
                     {
                         offsetX = 20;
-                        offsetY += 140;
+                        offsetY += 106;
                     }
 
                     _webSocketManager.AddWebSocketHandler(system.Name);
@@ -174,6 +174,7 @@ namespace WhackerLinkConsoleV2
                     handler.OnVoiceChannelRelease += HandleVoiceRelease;
                     handler.OnEmergencyAlarmResponse += HandleEmergencyAlarmResponse;
                     handler.OnAudioData += HandleReceivedAudio;
+                    handler.OnAffiliationUpdate += HandleAffiliationUpdate;
 
                     handler.OnUnitRegistrationResponse += (response) =>
                     {
@@ -653,6 +654,37 @@ namespace WhackerLinkConsoleV2
 
             if (shouldReceive)
                 _audioManager.AddTalkgroupStream(talkgroupId, audioPacket.Data);
+        }
+
+        private void HandleAffiliationUpdate(AFF_UPDATE affUpdate)
+        {
+            foreach (ChannelBox channel in _selectedChannelsManager.GetSelectedChannels())
+            {
+                Codeplug.System system = Codeplug.GetSystemForChannel(channel.ChannelName);
+                Codeplug.Channel cpgChannel = Codeplug.GetChannelByName(channel.ChannelName);
+                IPeer handler = _webSocketManager.GetWebSocketHandler(system.Name);
+
+                bool ridExists = affUpdate.Affiliations.Any(aff => aff.SrcId == system.Rid);
+                bool tgidExists = affUpdate.Affiliations.Any(aff => aff.DstId == cpgChannel.Tgid);
+
+                if (ridExists && tgidExists)
+                {
+                    Console.WriteLine("rid aff'ed");
+                }
+                else
+                {
+                    Console.WriteLine("rid not aff'ed");
+
+                    GRP_AFF_REQ affReq = new GRP_AFF_REQ
+                    {
+                        SrcId = system.Rid,
+                        DstId = cpgChannel.Tgid,
+                        Site = system.Site
+                    };
+
+                    handler.SendMessage(affReq.GetData());
+                }
+            }
         }
 
         private void HandleVoiceRelease(GRP_VCH_RLS response)

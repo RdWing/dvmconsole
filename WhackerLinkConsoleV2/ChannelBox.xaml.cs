@@ -159,7 +159,7 @@ namespace WhackerLinkConsoleV2.Controls
             if (IsEditMode) return;
 
             IsSelected = !IsSelected;
-            Background = IsSelected ? Brushes.Blue : Brushes.Gray;
+            Background = IsSelected ? (Brush)new BrushConverter().ConvertFrom("#FF1E90FF") : Brushes.Gray;
 
             if (IsSelected)
             {
@@ -178,7 +178,7 @@ namespace WhackerLinkConsoleV2.Controls
             if (PttState)
                 PttButton.Background = new SolidColorBrush(Colors.Red);
             else
-                PttButton.Background = new SolidColorBrush(Colors.Green);
+                PttButton.Background = (Brush)new BrushConverter().ConvertFrom("#FF2870AF");
         }
 
         private void UpdatePageColor()
@@ -188,7 +188,7 @@ namespace WhackerLinkConsoleV2.Controls
             if (PageState)
                 PageSelectButton.Background = new SolidColorBrush(Colors.Orange);
             else
-                PageSelectButton.Background = new SolidColorBrush(Colors.Green);
+                PageSelectButton.Background = (Brush)new BrushConverter().ConvertFrom("#FF2870AF");
         }
 
         private void UpdateHoldColor()
@@ -198,12 +198,16 @@ namespace WhackerLinkConsoleV2.Controls
             if (HoldState)
                 ChannelMarkerBtn.Background = new SolidColorBrush(Colors.Orange);
             else
-                ChannelMarkerBtn.Background = new SolidColorBrush(Colors.Green);
+                ChannelMarkerBtn.Background = (Brush)new BrushConverter().ConvertFrom("#FF2870AF");
         }
 
         private void UpdateBackground()
         {
-            Background = IsSelected ? Brushes.DodgerBlue : Brushes.DarkGray;
+            Background = IsSelected ? (Brush)new BrushConverter().ConvertFrom("#FF1E90FF") : Brushes.DarkGray;
+
+            ChannelMarkerBtn.Background = IsSelected ? (Brush)new BrushConverter().ConvertFrom("#FF2870AF") : new SolidColorBrush(Colors.Gray);
+            PageSelectButton.Background = IsSelected ? (Brush)new BrushConverter().ConvertFrom("#FF2870AF") : new SolidColorBrush(Colors.Gray);
+            PttButton.Background = IsSelected ? (Brush)new BrushConverter().ConvertFrom("#FF2870AF") : new SolidColorBrush(Colors.Gray);
         }
 
         private void PTTButton_Click(object sender, RoutedEventArgs e)
@@ -238,6 +242,20 @@ namespace WhackerLinkConsoleV2.Controls
 
             HoldState = !HoldState;
             HoldChannelButtonClicked.Invoke(sender, this);
+        }
+
+        private void PttButton_MouseEnter(object sender, System.Windows.Input.MouseEventArgs e)
+        {
+            if (!IsSelected || PttState) return;
+
+            ((Button)sender).Background = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#FF3FA0FF"));
+        }
+
+        private void PttButton_MouseLeave(object sender, System.Windows.Input.MouseEventArgs e)
+        {
+            if (!IsSelected || PttState) return;
+
+            ((Button)sender).Background = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#FF2870AF"));
         }
     }
 }
