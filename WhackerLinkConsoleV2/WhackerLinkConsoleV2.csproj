@@ -10,10 +10,16 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <None Remove="alerttone.png" />
     <None Remove="Assets\channelmarker.png" />
     <None Remove="Assets\instantptt.png" />
+    <None Remove="Assets\page.png" />
     <None Remove="Assets\pageselect.png" />
     <None Remove="Assets\pttselect.png" />
+    <None Remove="clearemerg.png" />
+    <None Remove="connection.png" />
+    <None Remove="page.png" />
+    <None Remove="whackerlink-logo.png" />
   </ItemGroup>
 
  
@@ -28,12 +34,18 @@
   </ItemGroup>
 
   <ItemGroup>
+    <Resource Include="alerttone.png" />
     <Resource Include="Assets\channelmarker.png">
       <CopyToOutputDirectory>Always</CopyToOutputDirectory>
     </Resource>
     <Resource Include="Assets\instantptt.png" />
+    <Resource Include="Assets\page.png" />
     <Resource Include="Assets\pageselect.png" />
     <Resource Include="Assets\pttselect.png" />
+    <Resource Include="clearemerg.png" />
+    <Resource Include="connection.png" />
+    <Resource Include="page.png" />
+    <Resource Include="whackerlink-logo.png" />
   </ItemGroup>
 
   <ItemGroup>
