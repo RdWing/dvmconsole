@@ -138,7 +138,7 @@ namespace WhackerLinkConsoleV2
             double offsetX = 20;
             double offsetY = 20;
 
-            if (_settingsManager.ShowSystemStatus && Codeplug != null)
+            if (Codeplug != null)
             {
                 foreach (var system in Codeplug.Systems)
                 {
@@ -176,6 +176,9 @@ namespace WhackerLinkConsoleV2
                     handler.OnEmergencyAlarmResponse += HandleEmergencyAlarmResponse;
                     handler.OnAudioData += HandleReceivedAudio;
                     handler.OnAffiliationUpdate += HandleAffiliationUpdate;
+
+                    if (!_settingsManager.ShowSystemStatus)
+                        systemStatusBox.Visibility = Visibility.Collapsed;
 
                     handler.OnUnitRegistrationResponse += (response) =>
                     {
@@ -476,15 +479,23 @@ namespace WhackerLinkConsoleV2
                         Dispatcher.Invoke(() =>
                         {
                             //channel.PageState = false; // TODO: Investigate
+                            channel.PageSelectButton.Background = channel.grayGradient;
                         });
                     }
                 }
             }
         }
 
-        private async void SendAlertTone(AlertTone e)
+        private void SendAlertTone(AlertTone e)
         {
-            if (!string.IsNullOrEmpty(e.AlertFilePath) && File.Exists(e.AlertFilePath))
+            Task.Run(() => SendAlertTone(e.AlertFilePath));
+        }
+
+        private async void SendAlertTone(string filePath)
+        {
+            Console.WriteLine(filePath);
+            Console.WriteLine(File.Exists(filePath));
+            if (!string.IsNullOrEmpty(filePath) && File.Exists(filePath))
             {
                 try
                 {
@@ -498,7 +509,7 @@ namespace WhackerLinkConsoleV2
                         {
                             byte[] pcmData;
 
-                            using (var waveReader = new WaveFileReader(e.AlertFilePath))
+                            using (var waveReader = new WaveFileReader(filePath))
                             {
                                 if (waveReader.WaveFormat.Encoding != WaveFormatEncoding.Pcm ||
                                     waveReader.WaveFormat.SampleRate != 8000 ||
@@ -579,7 +590,7 @@ namespace WhackerLinkConsoleV2
 
                             Dispatcher.Invoke(() =>
                             {
-
+                                channel.PageSelectButton.Background = channel.grayGradient;
                             });
                         }
                     }
@@ -1015,9 +1026,29 @@ namespace WhackerLinkConsoleV2
             }
         }
 
-        private void Button_Click(object sender, RoutedEventArgs e)
+        private void btnAlert1_Click(object sender, RoutedEventArgs e)
         {
-
+            Dispatcher.Invoke(() => {
+                SendAlertTone("alert1.wav");
+            });
         }
+
+        private void btnAlert2_Click(object sender, RoutedEventArgs e)
+        {
+            Dispatcher.Invoke(() =>
+            {
+                SendAlertTone("alert2.wav");
+            });
+        }
+
+        private void btnAlert3_Click(object sender, RoutedEventArgs e)
+        {
+            Dispatcher.Invoke(() =>
+            {
+                SendAlertTone("alert3.wav");
+            });
+        }
+
+        private void Button_Click(object sender, RoutedEventArgs e) { /* sub */ }
     }
 }

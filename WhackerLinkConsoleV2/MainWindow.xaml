@@ -29,14 +29,13 @@
                 <MenuItem Header="P25 Page" Click="P25Page_Click" />
                 <MenuItem Header="Manual QC2" Click="ManualPage_Click" />
             </MenuItem>
-            <MenuItem Header="Clear Emergency" Click="ClearEmergency_Click" />
         </Menu>
 
         <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Grid.Row="2">
             <Canvas x:Name="ChannelsCanvas" Background="#FFF2F2F2" VerticalAlignment="Top"/>
         </ScrollViewer>
 
-        <Button Content="1" VerticalContentAlignment="Bottom" HorizontalAlignment="Left" Margin="254,0,0,0" VerticalAlignment="Center" Height="46" Width="45" Click="Button_Click" BorderBrush="#FFC1C1C1" BorderThickness="1,1,1,1" Grid.Row="1" FontSize="10" FontFamily="Arial">
+        <Button Content="1" VerticalContentAlignment="Bottom" HorizontalAlignment="Left" Margin="254,0,0,0" VerticalAlignment="Center" Height="46" Width="45" x:Name="btnAlert1" Click="btnAlert1_Click" BorderBrush="#FFC1C1C1" BorderThickness="1,1,1,1" Grid.Row="1" FontSize="10" FontFamily="Arial">
             <Button.Resources>
                 <Style TargetType="{x:Type Border}">
                     <Setter Property="CornerRadius" Value="2"/>
@@ -51,8 +50,8 @@
         </Button>
 
         <Image HorizontalAlignment="Left" Height="26" Grid.Row="1" VerticalAlignment="Center" Width="160" Source="/whackerlink-logo.png" Margin="6,0,0,0" Stretch="Fill"/>
-        <Image HorizontalAlignment="Left" Margin="259,3,0,3" Grid.Row="1" Width="37" Source="/alerttone.png" IsHitTestVisible="False"/>
-        <Button Content="2" VerticalContentAlignment="Bottom" HorizontalAlignment="Left" Margin="301,0,0,0" VerticalAlignment="Center" Height="46" Width="45" Click="Button_Click" BorderBrush="#FFC1C1C1" BorderThickness="1,1,1,1" Grid.Row="1" FontSize="10" FontFamily="Arial">
+        <Image HorizontalAlignment="Left" Margin="259,3,0,3" Grid.Row="1" Width="37" Source="/alerttone.png" IsHitTestVisible="False" RenderTransformOrigin="0.5,0.598"/>
+        <Button Content="2" VerticalContentAlignment="Bottom" HorizontalAlignment="Left" Margin="301,0,0,0" VerticalAlignment="Center" Height="46" Width="45" x:Name="btnAlert2" Click="btnAlert2_Click" BorderBrush="#FFC1C1C1" BorderThickness="1,1,1,1" Grid.Row="1" FontSize="10" FontFamily="Arial">
             <Button.Resources>
                 <Style TargetType="{x:Type Border}">
                     <Setter Property="CornerRadius" Value="2"/>
@@ -65,8 +64,8 @@
                 </LinearGradientBrush>
             </Button.Background>
         </Button>
-        <Image HorizontalAlignment="Left" Margin="306,3,0,3" Grid.Row="1" Width="37" Source="/alerttone.png" IsHitTestVisible="False"/>
-        <Button Content="3" VerticalContentAlignment="Bottom" HorizontalAlignment="Left" Margin="348,0,0,0" VerticalAlignment="Center" Height="46" Width="45" Click="Button_Click" BorderBrush="#FFC1C1C1" BorderThickness="1,1,1,1" Grid.Row="1" FontSize="10" FontFamily="Arial">
+        <Image HorizontalAlignment="Left" Margin="306,3,0,3" Grid.Row="1" Width="37" Source="/alerttone.png" IsHitTestVisible="False" RenderTransformOrigin="0.5,0.598"/>
+        <Button Content="3" VerticalContentAlignment="Bottom" HorizontalAlignment="Left" Margin="348,0,0,0" VerticalAlignment="Center" x:Name="btnAlert3" Height="46" Width="45" Click="btnAlert3_Click" BorderBrush="#FFC1C1C1" BorderThickness="1,1,1,1" Grid.Row="1" FontSize="10" FontFamily="Arial">
             <Button.Resources>
                 <Style TargetType="{x:Type Border}">
                     <Setter Property="CornerRadius" Value="2"/>
@@ -80,7 +79,7 @@
             </Button.Background>
         </Button>
         <Image HorizontalAlignment="Left" Margin="353,3,0,3" Grid.Row="1" Width="37" Source="/alerttone.png" IsHitTestVisible="False"/>
-        <Button  VerticalContentAlignment="Bottom" HorizontalAlignment="Left" Margin="170,0,0,0" VerticalAlignment="Center" Height="46" Width="82" Click="Button_Click" BorderBrush="#FFC1C1C1" BorderThickness="1,1,1,1" Grid.Row="1" FontSize="10" FontFamily="Arial">
+        <Button VerticalContentAlignment="Bottom" HorizontalAlignment="Left" Margin="170,0,0,0" VerticalAlignment="Center" Height="46" Width="82" Click="Button_Click" BorderBrush="#FFC1C1C1" BorderThickness="1,1,1,1" Grid.Row="1" FontSize="10" FontFamily="Arial">
             <Button.Resources>
                 <Style TargetType="{x:Type Border}">
                     <Setter Property="CornerRadius" Value="2"/>
@@ -94,7 +93,7 @@
             </Button.Background>
         </Button>
         <Image HorizontalAlignment="Left" Margin="188,3,0,4" Width="63" Source="/Assets/instantptt.png" IsHitTestVisible="False" Grid.Row="1" />
-        <Button Content="" VerticalContentAlignment="Bottom" HorizontalAlignment="Left" Margin="395,0,0,0" VerticalAlignment="Center" Height="46" Width="45" Click="Button_Click" BorderBrush="#FFC1C1C1" BorderThickness="1,1,1,1" Grid.Row="1" FontSize="10" FontFamily="Arial">
+        <Button Content="" VerticalContentAlignment="Bottom" HorizontalAlignment="Left" Margin="395,0,0,0" VerticalAlignment="Center" Height="46" Width="45"  Click="ClearEmergency_Click" BorderBrush="#FFC1C1C1" BorderThickness="1,1,1,1" Grid.Row="1" FontSize="10" FontFamily="Arial">
             <Button.Resources>
                 <Style TargetType="{x:Type Border}">
                     <Setter Property="CornerRadius" Value="2"/>

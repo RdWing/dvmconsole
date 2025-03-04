@@ -37,9 +37,10 @@ namespace WhackerLinkConsoleV2.Controls
         private bool _emergency;
         private string _lastSrcId = "0";
         private double _volume = 1.0;
-        private LinearGradientBrush grayGradient;
-        private LinearGradientBrush redGradient;
-        private LinearGradientBrush orangeGradient;
+
+        internal LinearGradientBrush grayGradient;
+        internal LinearGradientBrush redGradient;
+        internal LinearGradientBrush orangeGradient;
 
         public FlashingBackgroundManager _flashingBackgroundManager;
 
