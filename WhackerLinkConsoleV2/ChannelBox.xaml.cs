@@ -189,6 +189,13 @@ namespace WhackerLinkConsoleV2.Controls
             PttButton.Background = grayGradient;
             PageSelectButton.Background = grayGradient;
             ChannelMarkerBtn.Background = grayGradient;
+
+            if (SystemName == MainWindow.PLAYBACKSYS || ChannelName == MainWindow.PLAYBACKCHNAME || DstId == MainWindow.PLAYBACKTG)
+            {
+                PttButton.IsEnabled = false;
+                PageSelectButton.IsEnabled = false;
+                ChannelMarkerBtn.IsEnabled = false;
+            }
         }
 
         private void ChannelBox_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
@@ -240,6 +247,12 @@ namespace WhackerLinkConsoleV2.Controls
 
         private void UpdateBackground()
         {
+            if (SystemName == MainWindow.PLAYBACKSYS || ChannelName == MainWindow.PLAYBACKCHNAME || DstId == MainWindow.PLAYBACKTG)
+            {
+                Background = IsSelected ? (Brush)new BrushConverter().ConvertFrom("#FFC90000") : Brushes.DarkGray;
+                return;
+            }
+
             Background = IsSelected ? (Brush)new BrushConverter().ConvertFrom("#FF0B004B") : Brushes.DarkGray;
         }
 

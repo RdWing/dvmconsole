@@ -38,12 +38,6 @@ using System.Net;
 using NAudio.Wave;
 using WhackerLinkLib.Interfaces;
 using WhackerLinkLib.Models.IOSP;
-using Nancy;
-using Microsoft.AspNetCore.Mvc.ModelBinding.Binders;
-using static System.Windows.Forms.VisualStyles.VisualStyleElement.ProgressBar;
-using System.Media;
-using System.Threading.Tasks;
-using static WhackerLinkLib.Models.Radio.Codeplug;
 
 namespace WhackerLinkConsoleV2
 {
@@ -65,6 +59,12 @@ namespace WhackerLinkConsoleV2
         private FlashingBackgroundManager _flashingManager;
         private WaveFilePlaybackManager _emergencyAlertPlayback;
         private WebSocketManager _webSocketManager = new WebSocketManager();
+
+        private ChannelBox playbackChannelBox;
+
+        public static string PLAYBACKTG = "LOCPLAYBACK";
+        public static string PLAYBACKSYS = "LOCPLAYBACKSYS";
+        public static string PLAYBACKCHNAME = "PLAYBACK";
 
         private readonly WaveInEvent _waveIn;
         private readonly AudioManager _audioManager;
@@ -325,6 +325,36 @@ namespace WhackerLinkConsoleV2
                 }
             }
 
+            playbackChannelBox = new ChannelBox(_selectedChannelsManager, _audioManager, PLAYBACKCHNAME, PLAYBACKSYS, PLAYBACKTG);
+
+            if (_settingsManager.ChannelPositions.TryGetValue(PLAYBACKCHNAME, out var pos))
+            {
+                Canvas.SetLeft(playbackChannelBox, pos.X);
+                Canvas.SetTop(playbackChannelBox, pos.Y);
+            }
+            else
+            {
+                Canvas.SetLeft(playbackChannelBox, offsetX);
+                Canvas.SetTop(playbackChannelBox, offsetY);
+            }
+
+            playbackChannelBox.PTTButtonClicked += ChannelBox_PTTButtonClicked;
+            playbackChannelBox.PageButtonClicked += ChannelBox_PageButtonClicked;
+            playbackChannelBox.HoldChannelButtonClicked += ChannelBox_HoldChannelButtonClicked;
+
+            playbackChannelBox.MouseLeftButtonDown += ChannelBox_MouseLeftButtonDown;
+            playbackChannelBox.MouseMove += ChannelBox_MouseMove;
+            playbackChannelBox.MouseRightButtonDown += ChannelBox_MouseRightButtonDown;
+            ChannelsCanvas.Children.Add(playbackChannelBox);
+
+            //offsetX += 225;
+
+            //if (offsetX + 220 > ChannelsCanvas.ActualWidth)
+            //{
+            //    offsetX = 20;
+            //    offsetY += 106;
+            //}
+
             AdjustCanvasHeight();
         }
 
@@ -335,14 +365,24 @@ namespace WhackerLinkConsoleV2
 
         private void WaveIn_DataAvailable(object sender, WaveInEventArgs e)
         {
+            bool isAnyTgOn = false;
+
             foreach (ChannelBox channel in _selectedChannelsManager.GetSelectedChannels())
             {
+                if (channel.SystemName == PLAYBACKSYS || channel.ChannelName == PLAYBACKCHNAME || channel.DstId == PLAYBACKTG)
+                {
+                    playbackChannelBox.IsReceiving = true;
+                    continue;
+                }
+
                 Codeplug.System system = Codeplug.GetSystemForChannel(channel.ChannelName);
                 Codeplug.Channel cpgChannel = Codeplug.GetChannelByName(channel.ChannelName);
                 IPeer handler = _webSocketManager.GetWebSocketHandler(system.Name);
 
                 if (channel.IsSelected && channel.VoiceChannel != null && channel.PttState)
                 {
+                    isAnyTgOn = true;
+
                     object voicePaket = new
                     {
                         type = PacketType.AUDIO_DATA,
@@ -362,12 +402,18 @@ namespace WhackerLinkConsoleV2
                     handler.SendMessage(voicePaket);
                 }
             }
+
+            if (isAnyTgOn && playbackChannelBox.IsSelected)
+                _audioManager.AddTalkgroupStream(PLAYBACKTG, e.Buffer);
         }
 
         private void SelectedChannelsChanged()
         {
             foreach (ChannelBox channel in _selectedChannelsManager.GetSelectedChannels())
             {
+                if (channel.SystemName == PLAYBACKSYS || channel.ChannelName == PLAYBACKCHNAME || channel.DstId == PLAYBACKTG)
+                    continue;
+
                 Codeplug.System system = Codeplug.GetSystemForChannel(channel.ChannelName);
                 Codeplug.Channel cpgChannel = Codeplug.GetChannelByName(channel.ChannelName);
                 IPeer handler = _webSocketManager.GetWebSocketHandler(system.Name);
@@ -511,6 +557,9 @@ namespace WhackerLinkConsoleV2
                 {
                     foreach (ChannelBox channel in _selectedChannelsManager.GetSelectedChannels())
                     {
+                        if (channel.SystemName == PLAYBACKSYS || channel.ChannelName == PLAYBACKCHNAME || channel.DstId == PLAYBACKTG)
+                            continue;
+
                         Codeplug.System system = Codeplug.GetSystemForChannel(channel.ChannelName);
                         Codeplug.Channel cpgChannel = Codeplug.GetChannelByName(channel.ChannelName);
                         IPeer handler = _webSocketManager.GetWebSocketHandler(system.Name);
@@ -588,7 +637,7 @@ namespace WhackerLinkConsoleV2
 
                                 double totalDurationMs = ((double)pcmData.Length / 16000);
                                 await Task.Delay((int)totalDurationMs);
-
+                                      
                                 GRP_VCH_RLS release = new GRP_VCH_RLS
                                 {
                                     SrcId = system.Rid,
@@ -671,6 +720,9 @@ namespace WhackerLinkConsoleV2
 
             foreach (ChannelBox channel in _selectedChannelsManager.GetSelectedChannels())
             {
+                if (channel.SystemName == PLAYBACKSYS || channel.ChannelName == PLAYBACKCHNAME || channel.DstId == PLAYBACKTG)
+                    continue;
+
                 Codeplug.System system = Codeplug.GetSystemForChannel(channel.ChannelName);
                 Codeplug.Channel cpgChannel = Codeplug.GetChannelByName(channel.ChannelName);
                 IPeer handler = _webSocketManager.GetWebSocketHandler(system.Name);
@@ -687,6 +739,9 @@ namespace WhackerLinkConsoleV2
         {
             foreach (ChannelBox channel in _selectedChannelsManager.GetSelectedChannels())
             {
+                if (channel.SystemName == PLAYBACKSYS || channel.ChannelName == PLAYBACKCHNAME || channel.DstId == PLAYBACKTG)
+                    continue;
+
                 Codeplug.System system = Codeplug.GetSystemForChannel(channel.ChannelName);
                 Codeplug.Channel cpgChannel = Codeplug.GetChannelByName(channel.ChannelName);
                 IPeer handler = _webSocketManager.GetWebSocketHandler(system.Name);
@@ -718,6 +773,9 @@ namespace WhackerLinkConsoleV2
         {
             foreach (ChannelBox channel in _selectedChannelsManager.GetSelectedChannels())
             {
+                if (channel.SystemName == PLAYBACKSYS || channel.ChannelName == PLAYBACKCHNAME || channel.DstId == PLAYBACKTG)
+                    continue;
+
                 Codeplug.System system = Codeplug.GetSystemForChannel(channel.ChannelName);
                 Codeplug.Channel cpgChannel = Codeplug.GetChannelByName(channel.ChannelName);
                 IPeer handler = _webSocketManager.GetWebSocketHandler(system.Name);
@@ -747,6 +805,9 @@ namespace WhackerLinkConsoleV2
         {
             foreach (ChannelBox channel in _selectedChannelsManager.GetSelectedChannels())
             {
+                if (channel.SystemName == PLAYBACKSYS || channel.ChannelName == PLAYBACKCHNAME || channel.DstId == PLAYBACKTG)
+                    continue;
+
                 Codeplug.System system = Codeplug.GetSystemForChannel(channel.ChannelName);
                 Codeplug.Channel cpgChannel = Codeplug.GetChannelByName(channel.ChannelName);
                 IPeer handler = _webSocketManager.GetWebSocketHandler(system.Name);
@@ -785,6 +846,9 @@ namespace WhackerLinkConsoleV2
 
         private void ChannelBox_HoldChannelButtonClicked(object sender, ChannelBox e)
         {
+            if (e.SystemName == PLAYBACKSYS || e.ChannelName == PLAYBACKCHNAME || e.DstId == PLAYBACKTG)
+                return;
+
             Codeplug.System system = Codeplug.GetSystemForChannel(e.ChannelName);
             Codeplug.Channel cpgChannel = Codeplug.GetChannelByName(e.ChannelName);
             IPeer handler = _webSocketManager.GetWebSocketHandler(system.Name);
@@ -792,6 +856,9 @@ namespace WhackerLinkConsoleV2
 
         private void ChannelBox_PageButtonClicked(object sender, ChannelBox e)
         {
+            if (e.SystemName == PLAYBACKSYS || e.ChannelName == PLAYBACKCHNAME || e.DstId == PLAYBACKTG)
+                return;
+
             Codeplug.System system = Codeplug.GetSystemForChannel(e.ChannelName);
             Codeplug.Channel cpgChannel = Codeplug.GetChannelByName(e.ChannelName);
             IPeer handler = _webSocketManager.GetWebSocketHandler(system.Name);
@@ -824,6 +891,9 @@ namespace WhackerLinkConsoleV2
 
         private void ChannelBox_PTTButtonClicked(object sender, ChannelBox e)
         {
+            if (e.SystemName == PLAYBACKSYS || e.ChannelName == PLAYBACKCHNAME || e.DstId == PLAYBACKTG)
+                return;
+
             Codeplug.System system = Codeplug.GetSystemForChannel(e.ChannelName);
             Codeplug.Channel cpgChannel = Codeplug.GetChannelByName(e.ChannelName);
             IPeer handler = _webSocketManager.GetWebSocketHandler(system.Name);
@@ -1035,6 +1105,9 @@ namespace WhackerLinkConsoleV2
         {
             foreach (ChannelBox channel in _selectedChannelsManager.GetSelectedChannels())
             {
+                if (channel.SystemName == PLAYBACKSYS || channel.ChannelName == PLAYBACKCHNAME || channel.DstId == PLAYBACKTG)
+                    continue;
+
                 Codeplug.System system = Codeplug.GetSystemForChannel(channel.ChannelName);
                 Codeplug.Channel cpgChannel = Codeplug.GetChannelByName(channel.ChannelName);
                 IPeer handler = _webSocketManager.GetWebSocketHandler(system.Name);
@@ -1110,6 +1183,9 @@ namespace WhackerLinkConsoleV2
 
             foreach (ChannelBox channel in _selectedChannelsManager.GetSelectedChannels())
             {
+                if (channel.SystemName == PLAYBACKSYS || channel.ChannelName == PLAYBACKCHNAME || channel.DstId == PLAYBACKTG)
+                    continue;
+
                 Codeplug.System system = Codeplug.GetSystemForChannel(channel.ChannelName);
                 Codeplug.Channel cpgChannel = Codeplug.GetChannelByName(channel.ChannelName);
                 IPeer handler = _webSocketManager.GetWebSocketHandler(system.Name);
