@@ -79,7 +79,7 @@
             </Button.Background>
         </Button>
         <Image HorizontalAlignment="Left" Margin="353,3,0,3" Grid.Row="1" Width="37" Source="/alerttone.png" IsHitTestVisible="False"/>
-        <Button VerticalContentAlignment="Bottom" HorizontalAlignment="Left" Margin="170,0,0,0" VerticalAlignment="Center" Height="46" Width="82" Click="Button_Click" BorderBrush="#FFC1C1C1" BorderThickness="1,1,1,1" Grid.Row="1" FontSize="10" FontFamily="Arial">
+        <Button VerticalContentAlignment="Bottom" HorizontalAlignment="Left" Margin="170,0,0,0" x:Name="btnGlobalPtt" VerticalAlignment="Center" Height="46" Width="82" Click="btnGlobalPtt_Click" BorderBrush="#FFC1C1C1" BorderThickness="1,1,1,1" Grid.Row="1" FontSize="10" FontFamily="Arial">
             <Button.Resources>
                 <Style TargetType="{x:Type Border}">
                     <Setter Property="CornerRadius" Value="2"/>

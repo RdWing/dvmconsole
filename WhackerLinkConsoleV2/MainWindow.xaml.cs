@@ -21,6 +21,7 @@
 
 using Microsoft.Win32;
 using System;
+using System.Timers;
 using System.IO;
 using System.Windows;
 using System.Windows.Controls;
@@ -41,6 +42,8 @@ using Nancy;
 using Microsoft.AspNetCore.Mvc.ModelBinding.Binders;
 using static System.Windows.Forms.VisualStyles.VisualStyleElement.ProgressBar;
 using System.Media;
+using System.Threading.Tasks;
+using static WhackerLinkLib.Models.Radio.Codeplug;
 
 namespace WhackerLinkConsoleV2
 {
@@ -48,6 +51,8 @@ namespace WhackerLinkConsoleV2
     {
         public Codeplug Codeplug { get; set; }
         private bool isEditMode = false;
+
+        private bool globalPttState = false;
 
         private UIElement _draggedElement;
         private Point _startPoint;
@@ -64,6 +69,8 @@ namespace WhackerLinkConsoleV2
         private readonly WaveInEvent _waveIn;
         private readonly AudioManager _audioManager;
 
+        private static System.Timers.Timer _channelHoldTimer;
+
         public MainWindow()
         {
 #if DEBUG
@@ -74,6 +81,11 @@ namespace WhackerLinkConsoleV2
             _selectedChannelsManager = new SelectedChannelsManager();
             _flashingManager = new FlashingBackgroundManager(null, ChannelsCanvas, null, this);
             _emergencyAlertPlayback = new WaveFilePlaybackManager(System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "emergency.wav"));
+
+            _channelHoldTimer = new System.Timers.Timer(10000);
+            _channelHoldTimer.Elapsed += OnHoldTimerElapsed;
+            _channelHoldTimer.AutoReset = true;
+            _channelHoldTimer.Enabled = true;
 
             _waveIn = new WaveInEvent
             {
@@ -488,13 +500,11 @@ namespace WhackerLinkConsoleV2
 
         private void SendAlertTone(AlertTone e)
         {
-            Task.Run(() => SendAlertTone(e.AlertFilePath));
+            Task.Factory.StartNew(() => SendAlertTone(e.AlertFilePath));
         }
 
-        private async void SendAlertTone(string filePath)
+        private void SendAlertTone(string filePath, bool forHold = false)
         {
-            Console.WriteLine(filePath);
-            Console.WriteLine(File.Exists(filePath));
             if (!string.IsNullOrEmpty(filePath) && File.Exists(filePath))
             {
                 try
@@ -505,92 +515,98 @@ namespace WhackerLinkConsoleV2
                         Codeplug.Channel cpgChannel = Codeplug.GetChannelByName(channel.ChannelName);
                         IPeer handler = _webSocketManager.GetWebSocketHandler(system.Name);
 
-                        if (channel.PageState)
+                        if (channel.PageState || (forHold && channel.HoldState))
                         {
                             byte[] pcmData;
 
-                            using (var waveReader = new WaveFileReader(filePath))
-                            {
-                                if (waveReader.WaveFormat.Encoding != WaveFormatEncoding.Pcm ||
-                                    waveReader.WaveFormat.SampleRate != 8000 ||
-                                    waveReader.WaveFormat.BitsPerSample != 16 ||
-                                    waveReader.WaveFormat.Channels != 1)
+                            Task.Factory.StartNew(async () => {
+                                using (var waveReader = new WaveFileReader(filePath))
                                 {
-                                    MessageBox.Show("The alert tone must be PCM 16-bit, Mono, 8000Hz format.", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
-                                    return;
-                                }
-
-                                using (MemoryStream ms = new MemoryStream())
-                                {
-                                    waveReader.CopyTo(ms);
-                                    pcmData = ms.ToArray();
-                                }
-                            }
-
-                            int chunkSize = 1600;
-                            int totalChunks = (pcmData.Length + chunkSize - 1) / chunkSize;
-
-                            if (pcmData.Length % chunkSize != 0)
-                            {
-                                byte[] paddedData = new byte[totalChunks * chunkSize];
-                                Buffer.BlockCopy(pcmData, 0, paddedData, 0, pcmData.Length);
-                                pcmData = paddedData;
-                            }
-
-                            Task.Factory.StartNew(() =>
-                            {
-                                _audioManager.AddTalkgroupStream(cpgChannel.Tgid, pcmData);
-                            });
-
-                            DateTime startTime = DateTime.UtcNow;
-
-                            for (int i = 0; i < totalChunks; i++)
-                            {
-                                int offset = i * chunkSize;
-                                byte[] chunk = new byte[chunkSize];
-                                Buffer.BlockCopy(pcmData, offset, chunk, 0, chunkSize);
-
-                                AudioPacket voicePacket = new AudioPacket
-                                {
-                                    Data = chunk,
-                                    VoiceChannel = new VoiceChannel
+                                    if (waveReader.WaveFormat.Encoding != WaveFormatEncoding.Pcm ||
+                                        waveReader.WaveFormat.SampleRate != 8000 ||
+                                        waveReader.WaveFormat.BitsPerSample != 16 ||
+                                        waveReader.WaveFormat.Channels != 1)
                                     {
-                                        Frequency = channel.VoiceChannel,
-                                        DstId = cpgChannel.Tgid,
-                                        SrcId = system.Rid,
-                                        Site = system.Site
-                                    },
-                                    Site = system.Site,
-                                    LopServerVocode = true
+                                        MessageBox.Show("The alert tone must be PCM 16-bit, Mono, 8000Hz format.", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
+                                        return;
+                                    }
+
+                                    using (MemoryStream ms = new MemoryStream())
+                                    {
+                                        waveReader.CopyTo(ms);
+                                        pcmData = ms.ToArray();
+                                    }
+                                }
+
+                                int chunkSize = 1600;
+                                int totalChunks = (pcmData.Length + chunkSize - 1) / chunkSize;
+
+                                if (pcmData.Length % chunkSize != 0)
+                                {
+                                    byte[] paddedData = new byte[totalChunks * chunkSize];
+                                    Buffer.BlockCopy(pcmData, 0, paddedData, 0, pcmData.Length);
+                                    pcmData = paddedData;
+                                }
+
+                                Task.Factory.StartNew(() =>
+                                {
+                                    _audioManager.AddTalkgroupStream(cpgChannel.Tgid, pcmData);
+                                });
+
+                                DateTime startTime = DateTime.UtcNow;
+
+                                for (int i = 0; i < totalChunks; i++)
+                                {
+                                    int offset = i * chunkSize;
+                                    byte[] chunk = new byte[chunkSize];
+                                    Buffer.BlockCopy(pcmData, offset, chunk, 0, chunkSize);
+
+                                    AudioPacket voicePacket = new AudioPacket
+                                    {
+                                        Data = chunk,
+                                        VoiceChannel = new VoiceChannel
+                                        {
+                                            Frequency = channel.VoiceChannel,
+                                            DstId = cpgChannel.Tgid,
+                                            SrcId = system.Rid,
+                                            Site = system.Site
+                                        },
+                                        Site = system.Site,
+                                        LopServerVocode = true
+                                    };
+
+                                    handler.SendMessage(voicePacket.GetData());
+
+                                    DateTime nextPacketTime = startTime.AddMilliseconds((i + 1) * 100);
+                                    TimeSpan waitTime = nextPacketTime - DateTime.UtcNow;
+
+                                    if (waitTime.TotalMilliseconds > 0)
+                                    {
+                                        await Task.Delay(waitTime);
+                                    }
+                                }
+
+                                double totalDurationMs = ((double)pcmData.Length / 16000);
+                                await Task.Delay((int)totalDurationMs);
+
+                                GRP_VCH_RLS release = new GRP_VCH_RLS
+                                {
+                                    SrcId = system.Rid,
+                                    DstId = cpgChannel.Tgid,
+                                    Channel = channel.VoiceChannel,
+                                    Site = system.Site
                                 };
 
-                                handler.SendMessage(voicePacket.GetData());
-
-                                DateTime nextPacketTime = startTime.AddMilliseconds((i + 1) * 100);
-                                TimeSpan waitTime = nextPacketTime - DateTime.UtcNow;
-
-                                if (waitTime.TotalMilliseconds > 0)
+                                Dispatcher.Invoke(() =>
                                 {
-                                    await Task.Delay(waitTime);
-                                }
-                            }
+                                    handler.SendMessage(release.GetData());
 
-                            double totalDurationMs = ((double)pcmData.Length / 16000) * 1000 - 6000;
-                            await Task.Delay((int)totalDurationMs);
+                                    if (forHold)
+                                        channel.PttButton.Background = channel.grayGradient;
+                                    else
+                                        channel.PageState = false;
+                                });
 
-                            GRP_VCH_RLS release = new GRP_VCH_RLS
-                            {
-                                SrcId = system.Rid,
-                                DstId = cpgChannel.Tgid,
-                                Channel = channel.VoiceChannel,
-                                Site = system.Site
-                            };
-
-                            handler.SendMessage(release.GetData());
-
-                            Dispatcher.Invoke(() =>
-                            {
-                                channel.PageSelectButton.Background = channel.grayGradient;
                             });
                         }
                     }
@@ -711,9 +727,15 @@ namespace WhackerLinkConsoleV2
                     Dispatcher.Invoke(() =>
                     {
                         if (channel.IsSelected)
-                            channel.Background = (Brush)new BrushConverter().ConvertFrom("#FF0B004B"); 
+                        {
+                            channel.Background = (Brush)new BrushConverter().ConvertFrom("#FF0B004B");
+                            channel.IsReceiving = false;
+                        }
                         else
+                        {
                             channel.Background = new SolidColorBrush(Colors.DarkGray);
+                            channel.IsReceiving = false;
+                        }
                     });
 
                     channel.VoiceChannel = null;
@@ -738,9 +760,10 @@ namespace WhackerLinkConsoleV2
                     channel.LastSrcId = "Last SRC: " + response.SrcId;
                     Dispatcher.Invoke(() =>
                     {
-                        channel.Background = (Brush)new BrushConverter().ConvertFrom("#FF00BC48");    
+                        channel.Background = (Brush)new BrushConverter().ConvertFrom("#FF00BC48");
+                        channel.IsReceiving = true;
                     });
-                } else if (channel.PageState && response.Status == (int)ResponseType.GRANT && response.Channel != null && response.SrcId == system.Rid && response.DstId == cpgChannel.Tgid)
+                } else if ((channel.HoldState || channel.PageState) && response.Status == (int)ResponseType.GRANT && response.Channel != null && response.SrcId == system.Rid && response.DstId == cpgChannel.Tgid)
                 {
                     channel.VoiceChannel = response.Channel;
                 }
@@ -847,7 +870,7 @@ namespace WhackerLinkConsoleV2
             element.CaptureMouse();
         }
 
-        private const int GridSize = 5; // Set grid size (adjust as needed)
+        private const int GridSize = 5;
 
         private void ChannelBox_MouseMove(object sender, MouseEventArgs e)
         {
@@ -875,7 +898,6 @@ namespace WhackerLinkConsoleV2
 
             AdjustCanvasHeight();
         }
-
 
         private void ChannelBox_MouseRightButtonDown(object sender, MouseButtonEventArgs e)
         {
@@ -1009,6 +1031,39 @@ namespace WhackerLinkConsoleV2
             }
         }
 
+        private async void OnHoldTimerElapsed(object sender, ElapsedEventArgs e)
+        {
+            foreach (ChannelBox channel in _selectedChannelsManager.GetSelectedChannels())
+            {
+                Codeplug.System system = Codeplug.GetSystemForChannel(channel.ChannelName);
+                Codeplug.Channel cpgChannel = Codeplug.GetChannelByName(channel.ChannelName);
+                IPeer handler = _webSocketManager.GetWebSocketHandler(system.Name);
+
+                if (channel.HoldState && !channel.IsReceiving && !channel.PttState && !channel.PageState)
+                {
+                    //Task.Factory.StartNew(async () =>
+                    //{
+                        Console.WriteLine("Sending channel hold beep");
+
+                        Dispatcher.Invoke(() => { channel.PttButton.Background = channel.redGradient; });
+                        
+                        GRP_VCH_REQ req = new GRP_VCH_REQ
+                        {
+                            SrcId = system.Rid,
+                            DstId = cpgChannel.Tgid,
+                            Site = system.Site
+                        };
+
+                        handler.SendMessage(req.GetData());
+
+                        await Task.Delay(1000);
+
+                        SendAlertTone("hold.wav", true);
+                   // });
+                }
+            }
+        }
+
         protected override void OnClosing(System.ComponentModel.CancelEventArgs e)
         {
             _settingsManager.SaveSettings();
@@ -1047,6 +1102,58 @@ namespace WhackerLinkConsoleV2
             {
                 SendAlertTone("alert3.wav");
             });
+        }
+
+        private void btnGlobalPtt_Click(object sender, RoutedEventArgs e)
+        {
+            globalPttState = !globalPttState;
+
+            foreach (ChannelBox channel in _selectedChannelsManager.GetSelectedChannels())
+            {
+                Codeplug.System system = Codeplug.GetSystemForChannel(channel.ChannelName);
+                Codeplug.Channel cpgChannel = Codeplug.GetChannelByName(channel.ChannelName);
+                IPeer handler = _webSocketManager.GetWebSocketHandler(system.Name);
+
+                if (!channel.IsSelected)
+                    return;
+
+                if (globalPttState)
+                {
+                    Dispatcher.Invoke(() =>
+                    {
+                        btnGlobalPtt.Background = channel.redGradient;
+                    });
+
+
+                    GRP_VCH_REQ request = new GRP_VCH_REQ
+                    {
+                        SrcId = system.Rid,
+                        DstId = cpgChannel.Tgid,
+                        Site = system.Site
+                    };
+
+                    channel.PttState = true;
+
+                    handler.SendMessage(request.GetData());
+                } else
+                {
+                    Dispatcher.Invoke(() =>
+                    {
+                        btnGlobalPtt.Background = channel.grayGradient;
+                    });
+
+                    GRP_VCH_RLS release = new GRP_VCH_RLS
+                    {
+                        SrcId = system.Rid,
+                        DstId = cpgChannel.Tgid,
+                        Site = system.Site
+                    };
+
+                    channel.PttState = false;
+
+                    handler.SendMessage(release.GetData());
+                }
+            }
         }
 
         private void Button_Click(object sender, RoutedEventArgs e) { /* sub */ }

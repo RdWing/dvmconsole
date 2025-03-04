@@ -54,6 +54,8 @@ namespace WhackerLinkConsoleV2.Controls
         public string SystemName { get; set; }
         public string DstId { get; set; }
 
+        public bool IsReceiving { get; set; } = false;
+
         public string LastSrcId
         {
             get => _lastSrcId;
