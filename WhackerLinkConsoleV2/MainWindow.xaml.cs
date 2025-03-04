@@ -15,6 +15,7 @@
 * along with this program.  If not, see <http://www.gnu.org/licenses/>.
 * 
 * Copyright (C) 2024-2025 Caleb, K4PHP
+* Copyright (C) 2025 J. Dean
 * 
 */
 
@@ -182,7 +183,7 @@ namespace WhackerLinkConsoleV2
                         {
                             if (response.Status == (int)ResponseType.GRANT)
                             {
-                                systemStatusBox.Background = new SolidColorBrush(Colors.Green);
+                                systemStatusBox.Background = (Brush)new BrushConverter().ConvertFrom("#FF00BC48"); 
                                 systemStatusBox.ConnectionState = "Connected";
                             }
                             else
@@ -475,7 +476,6 @@ namespace WhackerLinkConsoleV2
                         Dispatcher.Invoke(() =>
                         {
                             //channel.PageState = false; // TODO: Investigate
-                            channel.PageSelectButton.Background = Brushes.Green;
                         });
                     }
                 }
@@ -564,7 +564,7 @@ namespace WhackerLinkConsoleV2
                                 }
                             }
 
-                            double totalDurationMs = ((double)pcmData.Length / 16000) * 1000 + 250;
+                            double totalDurationMs = ((double)pcmData.Length / 16000) * 1000 - 6000;
                             await Task.Delay((int)totalDurationMs);
 
                             GRP_VCH_RLS release = new GRP_VCH_RLS
@@ -579,7 +579,7 @@ namespace WhackerLinkConsoleV2
 
                             Dispatcher.Invoke(() =>
                             {
-                                channel.PageSelectButton.Background = Brushes.Green;
+
                             });
                         }
                     }
@@ -700,7 +700,7 @@ namespace WhackerLinkConsoleV2
                     Dispatcher.Invoke(() =>
                     {
                         if (channel.IsSelected)
-                            channel.Background = Brushes.DodgerBlue;
+                            channel.Background = (Brush)new BrushConverter().ConvertFrom("#FF0B004B"); 
                         else
                             channel.Background = new SolidColorBrush(Colors.DarkGray);
                     });
@@ -727,7 +727,7 @@ namespace WhackerLinkConsoleV2
                     channel.LastSrcId = "Last SRC: " + response.SrcId;
                     Dispatcher.Invoke(() =>
                     {
-                        channel.Background = new SolidColorBrush(Colors.DarkCyan);
+                        channel.Background = (Brush)new BrushConverter().ConvertFrom("#FF00BC48");    
                     });
                 } else if (channel.PageState && response.Status == (int)ResponseType.GRANT && response.Channel != null && response.SrcId == system.Rid && response.DstId == cpgChannel.Tgid)
                 {
@@ -836,17 +836,27 @@ namespace WhackerLinkConsoleV2
             element.CaptureMouse();
         }
 
+        private const int GridSize = 5; // Set grid size (adjust as needed)
+
         private void ChannelBox_MouseMove(object sender, MouseEventArgs e)
         {
             if (!isEditMode || !_isDragging || _draggedElement == null) return;
 
             Point currentPosition = e.GetPosition(ChannelsCanvas);
-            double newLeft = Math.Max(0, Math.Min(currentPosition.X - _offsetX, ChannelsCanvas.ActualWidth - _draggedElement.RenderSize.Width));
-            double newTop = Math.Max(0, Math.Min(currentPosition.Y - _offsetY, ChannelsCanvas.ActualHeight - _draggedElement.RenderSize.Height));
 
+            // Calculate the new position with snapping to the grid
+            double newLeft = Math.Round((currentPosition.X - _offsetX) / GridSize) * GridSize;
+            double newTop = Math.Round((currentPosition.Y - _offsetY) / GridSize) * GridSize;
+
+            // Ensure the box stays within canvas bounds
+            newLeft = Math.Max(0, Math.Min(newLeft, ChannelsCanvas.ActualWidth - _draggedElement.RenderSize.Width));
+            newTop = Math.Max(0, Math.Min(newTop, ChannelsCanvas.ActualHeight - _draggedElement.RenderSize.Height));
+
+            // Apply snapped position
             Canvas.SetLeft(_draggedElement, newLeft);
             Canvas.SetTop(_draggedElement, newTop);
 
+            // Save the new position if it's a ChannelBox
             if (_draggedElement is ChannelBox channelBox)
             {
                 _settingsManager.UpdateChannelPosition(channelBox.ChannelName, newLeft, newTop);
@@ -854,6 +864,7 @@ namespace WhackerLinkConsoleV2
 
             AdjustCanvasHeight();
         }
+
 
         private void ChannelBox_MouseRightButtonDown(object sender, MouseButtonEventArgs e)
         {
@@ -1002,6 +1013,11 @@ namespace WhackerLinkConsoleV2
             {
                 channel.Emergency = false;
             }
+        }
+
+        private void Button_Click(object sender, RoutedEventArgs e)
+        {
+
         }
     }
 }

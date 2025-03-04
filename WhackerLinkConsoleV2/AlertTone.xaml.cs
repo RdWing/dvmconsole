@@ -102,5 +102,10 @@ namespace WhackerLinkConsoleV2.Controls
 
             ReleaseMouseCapture();
         }
+
+        private void TextBox_TextChanged(object sender, TextChangedEventArgs e)
+        {
+
+        }
     }
 }
