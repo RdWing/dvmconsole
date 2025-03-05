@@ -10,6 +10,7 @@ systems:
   - name: "System 1"
     address: "localhost"
     port: 3000
+    authKey: ""
     rid: "12345"
     site:
         name: "Central Site"

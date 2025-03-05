@@ -216,26 +216,21 @@ namespace WhackerLinkConsoleV2
                             systemStatusBox.Background = new SolidColorBrush(Colors.Red);
                             systemStatusBox.ConnectionState = "Disconnected";
                         });
+                    };
 
-                        Thread.Sleep(1000);
+                    handler.OnOpen += () =>
+                    {
+                        Console.WriteLine("Peer connected");
+                    };
 
-                        Task.Factory.StartNew(() =>
-                        {
-                            handler.Connect(system.Address, system.Port);
-
-                            U_REG_REQ release = new U_REG_REQ
-                            {
-                                SrcId = system.Rid,
-                                Site = system.Site
-                            };
-
-                            handler.SendMessage(release.GetData());
-                        });
+                    handler.OnReconnecting += () =>
+                    {
+                        Console.WriteLine("Peer reconnecting");
                     };
 
                     Task.Factory.StartNew(() =>
                     {
-                        handler.Connect(system.Address, system.Port);
+                        handler.Connect(system.Address, system.Port, system.AuthKey);
 
                         handler.OnGroupAffiliationResponse += (response) => { /* TODO */ };
 
