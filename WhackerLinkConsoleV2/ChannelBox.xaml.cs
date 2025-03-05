@@ -166,7 +166,7 @@ namespace WhackerLinkConsoleV2.Controls
             };
 
             grayGradient.GradientStops.Add(new GradientStop((Color)ColorConverter.ConvertFromString("#FFF0F0F0"), 0.485));
-            grayGradient.GradientStops.Add(new GradientStop((Color)ColorConverter.ConvertFromString("#FFE3E3E3"), 0.517));
+            grayGradient.GradientStops.Add(new GradientStop((Color)ColorConverter.ConvertFromString("#FFDCDCDC"), 0.517));
 
             redGradient = new LinearGradientBrush
             {
@@ -174,7 +174,7 @@ namespace WhackerLinkConsoleV2.Controls
                 EndPoint = new Point(0.5, 1)
             };
 
-            redGradient.GradientStops.Add(new GradientStop((Color)ColorConverter.ConvertFromString("#FFFE0000"), 0.485));
+            redGradient.GradientStops.Add(new GradientStop((Color)ColorConverter.ConvertFromString("#FFFF0000"), 0.485));
             redGradient.GradientStops.Add(new GradientStop((Color)ColorConverter.ConvertFromString("#FFD50000"), 0.517));
 
             orangeGradient = new LinearGradientBrush
@@ -183,8 +183,8 @@ namespace WhackerLinkConsoleV2.Controls
                 EndPoint = new Point(0.5, 1)
             };
 
-            orangeGradient.GradientStops.Add(new GradientStop((Color)ColorConverter.ConvertFromString("#FFFFD200"), 0.485));
-            orangeGradient.GradientStops.Add(new GradientStop((Color)ColorConverter.ConvertFromString("#FFE2BA00"), 0.517));
+            orangeGradient.GradientStops.Add(new GradientStop((Color)ColorConverter.ConvertFromString("#FFFFAF00"), 0.485));
+            orangeGradient.GradientStops.Add(new GradientStop((Color)ColorConverter.ConvertFromString("#FFEEA400"), 0.517));
 
             PttButton.Background = grayGradient;
             PageSelectButton.Background = grayGradient;

@@ -3,7 +3,7 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              Width="220" Height="100" Background="#FF0B004B">
     <!-- Border wraps the entire Grid -->
-    <Border BorderBrush="Gray" BorderThickness="1" CornerRadius="0">
+    <Border BorderBrush="Gray" BorderThickness="1,1,1,1" CornerRadius="0">
         <Grid Margin="5">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="41"/>
@@ -28,7 +28,7 @@
                 <Rectangle.Fill>
                     <LinearGradientBrush EndPoint="0.5,1" StartPoint="0.5,0">
                         <GradientStop Color="#FFF0F0F0" Offset="0.485"/>
-                        <GradientStop Color="#FFE3E3E3" Offset="0.517"/>
+                        <GradientStop Color="Gainsboro" Offset="0.517"/>
                     </LinearGradientBrush>
                 </Rectangle.Fill>
             </Rectangle>
@@ -88,7 +88,7 @@
                         </Style>
                     </Button.Resources>
 
-                    <Image Source="pack://application:,,,/WhackerLinkConsoleV2;component/Assets/pageselect.png" Width="39" Height="39"/>
+                    <Image Source="pack://application:,,,/WhackerLinkConsoleV2;component/Assets/pageselect.png" Width="39" Height="39" Margin="1.5,2,0,0"/>
                 </Button>
                 <Button Width="40" Height="40" x:Name="ChannelMarkerBtn" Click="ChannelMarkerBtn_Click" BorderThickness="0,0,0,0" Margin="5,0,0,0">
                     <Button.Resources>
@@ -97,17 +97,17 @@
                         </Style>
                     </Button.Resources>
 
-                    <Image Source="pack://application:,,,/WhackerLinkConsoleV2;component/Assets/channelmarker.png" Width="36" Height="36"/>
+                    <Image Source="pack://application:,,,/WhackerLinkConsoleV2;component/Assets/channelmarker.png" Width="36" Height="40"/>
                 </Button>
             </StackPanel>
-            <Button Background= "lightgray" x:Name="PttButton" Click="PTTButton_Click" HorizontalAlignment="Left" Width="42" Margin="41,1,0,4" Grid.ColumnSpan="2" BorderThickness="1,1,1,1" BorderBrush="#FFC1C1C1" UseLayoutRounding="False" Grid.RowSpan="2">
+            <Button x:Name="PttButton" Click="PTTButton_Click" HorizontalAlignment="Left" Width="42" Margin="41,1,0,4" Grid.ColumnSpan="2" BorderThickness="0,0,0,0" BorderBrush="#FFC1C1C1" UseLayoutRounding="False" Grid.RowSpan="2" Background="#FFEEA400">
                 <Button.Resources>
                     <Style TargetType="{x:Type Border}">
                         <Setter Property="CornerRadius" Value="2"/>
                     </Style>
                 </Button.Resources>
 
-                <Image Source="/Assets/instantptt.png" Width="39" Height="40" Stretch="Fill"/>
+                <Image Source="/Assets/instantptt.png" Width="39" Height="40" Stretch="Fill" Margin="0,0,0,1"/>
             </Button>
         </Grid>
     </Border>

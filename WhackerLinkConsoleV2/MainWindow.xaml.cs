@@ -198,7 +198,7 @@ namespace WhackerLinkConsoleV2
                         {
                             if (response.Status == (int)ResponseType.GRANT)
                             {
-                                systemStatusBox.Background = (Brush)new BrushConverter().ConvertFrom("#FF00BC48"); 
+                                systemStatusBox.Background = (Brush)new BrushConverter().ConvertFrom("#FF00BC48");
                                 systemStatusBox.ConnectionState = "Connected";
                             }
                             else
@@ -386,7 +386,8 @@ namespace WhackerLinkConsoleV2
                     object voicePaket = new
                     {
                         type = PacketType.AUDIO_DATA,
-                        data = new {
+                        data = new
+                        {
                             Data = e.Buffer,
                             VoiceChannel = new VoiceChannel
                             {
@@ -637,7 +638,7 @@ namespace WhackerLinkConsoleV2
 
                                 double totalDurationMs = ((double)pcmData.Length / 16000);
                                 await Task.Delay((int)totalDurationMs);
-                                      
+
                                 GRP_VCH_RLS release = new GRP_VCH_RLS
                                 {
                                     SrcId = system.Rid,
@@ -815,7 +816,8 @@ namespace WhackerLinkConsoleV2
                 if (channel.PttState && response.Status == (int)ResponseType.GRANT && response.Channel != null && response.SrcId == system.Rid && response.DstId == cpgChannel.Tgid)
                 {
                     channel.VoiceChannel = response.Channel;
-                } else if (response.Status == (int)ResponseType.GRANT && response.SrcId != system.Rid && response.DstId == cpgChannel.Tgid)
+                }
+                else if (response.Status == (int)ResponseType.GRANT && response.SrcId != system.Rid && response.DstId == cpgChannel.Tgid)
                 {
                     channel.VoiceChannel = response.Channel;
                     channel.LastSrcId = "Last SRC: " + response.SrcId;
@@ -824,7 +826,8 @@ namespace WhackerLinkConsoleV2
                         channel.Background = (Brush)new BrushConverter().ConvertFrom("#FF00BC48");
                         channel.IsReceiving = true;
                     });
-                } else if ((channel.HoldState || channel.PageState) && response.Status == (int)ResponseType.GRANT && response.Channel != null && response.SrcId == system.Rid && response.DstId == cpgChannel.Tgid)
+                }
+                else if ((channel.HoldState || channel.PageState) && response.Status == (int)ResponseType.GRANT && response.Channel != null && response.SrcId == system.Rid && response.DstId == cpgChannel.Tgid)
                 {
                     channel.VoiceChannel = response.Channel;
                 }
@@ -1116,23 +1119,23 @@ namespace WhackerLinkConsoleV2
                 {
                     //Task.Factory.StartNew(async () =>
                     //{
-                        Console.WriteLine("Sending channel hold beep");
+                    Console.WriteLine("Sending channel hold beep");
 
-                        Dispatcher.Invoke(() => { channel.PttButton.Background = channel.redGradient; });
-                        
-                        GRP_VCH_REQ req = new GRP_VCH_REQ
-                        {
-                            SrcId = system.Rid,
-                            DstId = cpgChannel.Tgid,
-                            Site = system.Site
-                        };
+                    Dispatcher.Invoke(() => { channel.PttButton.Background = channel.redGradient; });
 
-                        handler.SendMessage(req.GetData());
+                    GRP_VCH_REQ req = new GRP_VCH_REQ
+                    {
+                        SrcId = system.Rid,
+                        DstId = cpgChannel.Tgid,
+                        Site = system.Site
+                    };
 
-                        await Task.Delay(1000);
+                    handler.SendMessage(req.GetData());
 
-                        SendAlertTone("hold.wav", true);
-                   // });
+                    await Task.Delay(1000);
+
+                    SendAlertTone("hold.wav", true);
+                    // });
                 }
             }
         }
@@ -1211,7 +1214,8 @@ namespace WhackerLinkConsoleV2
                     channel.PttState = true;
 
                     handler.SendMessage(request.GetData());
-                } else
+                }
+                else
                 {
                     Dispatcher.Invoke(() =>
                     {
