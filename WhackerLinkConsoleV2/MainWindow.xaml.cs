@@ -421,14 +421,17 @@ namespace WhackerLinkConsoleV2
 
                 if (channel.IsSelected && handler.IsConnected)
                 {
-                    GRP_AFF_REQ release = new GRP_AFF_REQ
+                    Task.Run(() =>
                     {
-                        SrcId = system.Rid,
-                        DstId = cpgChannel.Tgid,
-                        Site = system.Site
-                    };
+                        GRP_AFF_REQ release = new GRP_AFF_REQ
+                        {
+                            SrcId = system.Rid,
+                            DstId = cpgChannel.Tgid,
+                            Site = system.Site
+                        };
 
-                    handler.SendMessage(release.GetData());
+                        handler.SendMessage(release.GetData());
+                    });
                 }
             }
         }
@@ -752,20 +755,22 @@ namespace WhackerLinkConsoleV2
 
                 if (ridExists && tgidExists)
                 {
-                    Console.WriteLine("rid aff'ed");
+                    //Console.WriteLine("rid aff'ed");
                 }
                 else
                 {
-                    Console.WriteLine("rid not aff'ed");
-
-                    GRP_AFF_REQ affReq = new GRP_AFF_REQ
+                    //Console.WriteLine("rid not aff'ed");
+                    Task.Run(() =>
                     {
-                        SrcId = system.Rid,
-                        DstId = cpgChannel.Tgid,
-                        Site = system.Site
-                    };
+                        GRP_AFF_REQ affReq = new GRP_AFF_REQ
+                        {
+                            SrcId = system.Rid,
+                            DstId = cpgChannel.Tgid,
+                            Site = system.Site
+                        };
 
-                    handler.SendMessage(affReq.GetData());
+                        handler.SendMessage(affReq.GetData());
+                    });
                 }
             }
         }
