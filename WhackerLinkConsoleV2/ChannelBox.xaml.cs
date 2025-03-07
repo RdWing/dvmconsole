@@ -14,15 +14,17 @@
 * You should have received a copy of the GNU General Public License
 * along with this program.  If not, see <http://www.gnu.org/licenses/>.
 * 
-* Copyright (C) 2024 Caleb, K4PHP
+* Copyright (C) 2024-2025 Caleb, K4PHP
 * 
 */
 
 using System.ComponentModel;
+using System.Security.Cryptography;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
+using fnecore.P25;
 
 namespace WhackerLinkConsoleV2.Controls
 {
@@ -50,9 +52,30 @@ namespace WhackerLinkConsoleV2.Controls
 
         public event PropertyChangedEventHandler PropertyChanged;
 
+        public byte[] netLDU1 = new byte[9 * 25];
+        public byte[] netLDU2 = new byte[9 * 25];
+
+        public int p25N { get; set; } = 0;
+        public int p25SeqNo { get; set; } = 0;
+
+        public byte[] mi = new byte[P25Defines.P25_MI_LENGTH];     // Message Indicator
+        public byte algId = 0;                                     // Algorithm ID
+        public ushort kId = 0;                                     // Key ID
+
+        public List<byte[]> chunkedPcm = new List<byte[]>();
+
         public string ChannelName { get; set; }
         public string SystemName { get; set; }
         public string DstId { get; set; }
+
+#if WIN32
+        public AmbeVocoder extFullRateVocoder;
+        public AmbeVocoder extHalfRateVocoder;
+#endif
+        public MBEEncoder encoder;
+        public MBEDecoder decoder;
+
+        public P25Crypto crypter = new P25Crypto();
 
         public bool IsReceiving { get; set; } = false;
 
@@ -145,6 +168,8 @@ namespace WhackerLinkConsoleV2.Controls
             }
         }
 
+        public uint txStreamId { get; internal set; }
+
         public ChannelBox(SelectedChannelsManager selectedChannelsManager, AudioManager audioManager, string channelName, string systemName, string dstId)
         {
             InitializeComponent();
@@ -196,6 +221,10 @@ namespace WhackerLinkConsoleV2.Controls
                 PageSelectButton.IsEnabled = false;
                 ChannelMarkerBtn.IsEnabled = false;
             }
+
+            byte[] key = { 00, 00, 00, 00, 00 };
+
+            crypter.AddKey(00, 0xaa, key);
         }
 
         private void ChannelBox_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
@@ -256,11 +285,15 @@ namespace WhackerLinkConsoleV2.Controls
             Background = IsSelected ? (Brush)new BrushConverter().ConvertFrom("#FF0B004B") : Brushes.DarkGray;
         }
 
-        private void PTTButton_Click(object sender, RoutedEventArgs e)
+        private async void PTTButton_Click(object sender, RoutedEventArgs e)
         {
             if (!IsSelected) return;
 
+            if (PttState)
+                await Task.Delay(500);
+
             PttState = !PttState;
+
             PTTButtonClicked.Invoke(sender, this);
         }
 

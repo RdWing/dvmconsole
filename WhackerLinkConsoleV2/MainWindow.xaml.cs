@@ -38,6 +38,14 @@ using System.Net;
 using NAudio.Wave;
 using WhackerLinkLib.Interfaces;
 using WhackerLinkLib.Models.IOSP;
+using fnecore.P25;
+using fnecore;
+using Microsoft.VisualBasic;
+using System.Text;
+using Nancy;
+using Constants = fnecore.Constants;
+using System.Security.Cryptography;
+using fnecore.P25.LC.TSBK;
 
 namespace WhackerLinkConsoleV2
 {
@@ -70,6 +78,13 @@ namespace WhackerLinkConsoleV2
         private readonly AudioManager _audioManager;
 
         private static System.Timers.Timer _channelHoldTimer;
+
+        private Dictionary<string, SlotStatus> systemStatuses = new Dictionary<string, SlotStatus>();
+        private FneSystemManager _fneSystemManager = new FneSystemManager();
+
+        private bool cryptodev = false;
+
+        private static HashSet<uint> usedRids = new HashSet<uint>();
 
         public MainWindow()
         {
@@ -180,26 +195,68 @@ namespace WhackerLinkConsoleV2
                         offsetY += 106;
                     }
 
-                    _webSocketManager.AddWebSocketHandler(system.Name);
-
-                    IPeer handler = _webSocketManager.GetWebSocketHandler(system.Name);
-                    handler.OnVoiceChannelResponse += HandleVoiceResponse;
-                    handler.OnVoiceChannelRelease += HandleVoiceRelease;
-                    handler.OnEmergencyAlarmResponse += HandleEmergencyAlarmResponse;
-                    handler.OnAudioData += HandleReceivedAudio;
-                    handler.OnAffiliationUpdate += HandleAffiliationUpdate;
-
-                    if (!_settingsManager.ShowSystemStatus)
-                        systemStatusBox.Visibility = Visibility.Collapsed;
-
-                    handler.OnUnitRegistrationResponse += (response) =>
+                    if (!system.IsDvm)
                     {
-                        Dispatcher.Invoke(() =>
+                        _webSocketManager.AddWebSocketHandler(system.Name);
+
+                        IPeer handler = _webSocketManager.GetWebSocketHandler(system.Name);
+                        handler.OnVoiceChannelResponse += HandleVoiceResponse;
+                        handler.OnVoiceChannelRelease += HandleVoiceRelease;
+                        handler.OnEmergencyAlarmResponse += HandleEmergencyAlarmResponse;
+                        handler.OnAudioData += HandleReceivedAudio;
+                        handler.OnAffiliationUpdate += HandleAffiliationUpdate;
+
+                        handler.OnUnitRegistrationResponse += (response) =>
                         {
-                            if (response.Status == (int)ResponseType.GRANT)
+                            Dispatcher.Invoke(() =>
                             {
-                                systemStatusBox.Background = (Brush)new BrushConverter().ConvertFrom("#FF00BC48");
-                                systemStatusBox.ConnectionState = "Connected";
+                                if (response.Status == (int)ResponseType.GRANT)
+                                {
+                                    systemStatusBox.Background = (Brush)new BrushConverter().ConvertFrom("#FF00BC48");
+                                    systemStatusBox.ConnectionState = "Connected";
+                                }
+                                else
+                                {
+                                    systemStatusBox.Background = new SolidColorBrush(Colors.Red);
+                                    systemStatusBox.ConnectionState = "Disconnected";
+                                }
+                            });
+                        };
+
+                        handler.OnClose += () =>
+                        {
+                            Dispatcher.Invoke(() =>
+                            {
+                                systemStatusBox.Background = new SolidColorBrush(Colors.Red);
+                                systemStatusBox.ConnectionState = "Disconnected";
+                            });
+                        };
+
+                        handler.OnOpen += () =>
+                        {
+                            Console.WriteLine("Peer connected");
+                        };
+
+                        handler.OnReconnecting += () =>
+                        {
+                            Console.WriteLine("Peer reconnecting");
+                        };
+
+                        Task.Run(() =>
+                        {
+                            handler.Connect(system.Address, system.Port, system.AuthKey);
+
+                            handler.OnGroupAffiliationResponse += (response) => { /* TODO */ };
+
+                            if (handler.IsConnected)
+                            {
+                                U_REG_REQ release = new U_REG_REQ
+                                {
+                                    SrcId = system.Rid,
+                                    Site = system.Site
+                                };
+
+                                handler.SendMessage(release.GetData());
                             }
                             else
                             {
@@ -207,49 +264,45 @@ namespace WhackerLinkConsoleV2
                                 systemStatusBox.ConnectionState = "Disconnected";
                             }
                         });
-                    };
-
-                    handler.OnClose += () =>
+                    } else
                     {
-                        Dispatcher.Invoke(() =>
+                        _fneSystemManager.AddFneSystem(system.Name, system, this);
+
+                        systemStatuses.Add(system.Name, new SlotStatus());
+
+                        PeerSystem peer = _fneSystemManager.GetFneSystem(system.Name);
+
+                        peer.peer.PeerConnected += (sender, response) =>
                         {
-                            systemStatusBox.Background = new SolidColorBrush(Colors.Red);
-                            systemStatusBox.ConnectionState = "Disconnected";
-                        });
-                    };
+                            Console.WriteLine("FNE Peer connected");
 
-                    handler.OnOpen += () =>
-                    {
-                        Console.WriteLine("Peer connected");
-                    };
-
-                    handler.OnReconnecting += () =>
-                    {
-                        Console.WriteLine("Peer reconnecting");
-                    };
-
-                    Task.Factory.StartNew(() =>
-                    {
-                        handler.Connect(system.Address, system.Port, system.AuthKey);
-
-                        handler.OnGroupAffiliationResponse += (response) => { /* TODO */ };
-
-                        if (handler.IsConnected)
-                        {
-                            U_REG_REQ release = new U_REG_REQ
+                            Dispatcher.Invoke(() =>
                             {
-                                SrcId = system.Rid,
-                                Site = system.Site
-                            };
+                                systemStatusBox.Background = (Brush)new BrushConverter().ConvertFrom("#FF00BC48");
+                                systemStatusBox.ConnectionState = "Connected";
+                            });
+                        };
 
-                            handler.SendMessage(release.GetData());
-                        }
-                        else
+                        peer.peer.PeerDisconnected += (response) =>
                         {
-                            systemStatusBox.Background = new SolidColorBrush(Colors.Red);
-                            systemStatusBox.ConnectionState = "Disconnected";
-                        }
-                    });
+                            Console.WriteLine("FNE Peer disconnected");
+
+                            Dispatcher.Invoke(() =>
+                            {
+                                systemStatusBox.Background = new SolidColorBrush(Colors.Red);
+                                systemStatusBox.ConnectionState = "Disconnected";
+                            });
+                        };
+
+                        Task.Run(() =>
+                        {
+                            peer.Start();
+                        });
+                    }
+
+                    if (!_settingsManager.ShowSystemStatus)
+                        systemStatusBox.Visibility = Visibility.Collapsed;
+
                 }
             }
 
@@ -372,31 +425,64 @@ namespace WhackerLinkConsoleV2
 
                 Codeplug.System system = Codeplug.GetSystemForChannel(channel.ChannelName);
                 Codeplug.Channel cpgChannel = Codeplug.GetChannelByName(channel.ChannelName);
-                IPeer handler = _webSocketManager.GetWebSocketHandler(system.Name);
 
-                if (channel.IsSelected && channel.VoiceChannel != null && channel.PttState)
+                Task.Run(() =>
                 {
-                    isAnyTgOn = true;
 
-                    object voicePaket = new
+                    if (!system.IsDvm)
                     {
-                        type = PacketType.AUDIO_DATA,
-                        data = new
-                        {
-                            Data = e.Buffer,
-                            VoiceChannel = new VoiceChannel
-                            {
-                                Frequency = channel.VoiceChannel,
-                                DstId = cpgChannel.Tgid,
-                                SrcId = system.Rid,
-                                Site = system.Site
-                            },
-                            Site = system.Site
-                        }
-                    };
+                        IPeer handler = _webSocketManager.GetWebSocketHandler(system.Name);
 
-                    handler.SendMessage(voicePaket);
-                }
+                        if (channel.IsSelected && channel.VoiceChannel != null && channel.PttState)
+                        {
+                            isAnyTgOn = true;
+
+                            object voicePaket = new
+                            {
+                                type = PacketType.AUDIO_DATA,
+                                data = new
+                                {
+                                    Data = e.Buffer,
+                                    VoiceChannel = new VoiceChannel
+                                    {
+                                        Frequency = channel.VoiceChannel,
+                                        DstId = cpgChannel.Tgid,
+                                        SrcId = system.Rid,
+                                        Site = system.Site
+                                    },
+                                    Site = system.Site
+                                }
+                            };
+
+                            handler.SendMessage(voicePaket);
+                        }
+                    }
+                    else
+                    {
+                        PeerSystem handler = _fneSystemManager.GetFneSystem(system.Name);
+
+                        if (channel.IsSelected && channel.PttState)
+                        {
+                            isAnyTgOn = true;
+
+                            int samples = 320;
+
+                            channel.chunkedPcm = AudioConverter.SplitToChunks(e.Buffer);
+
+                            foreach (byte[] chunk in channel.chunkedPcm)
+                            {
+                                if (chunk.Length == samples)
+                                {
+                                    P25EncodeAudioFrame(chunk, handler, channel, cpgChannel, system);
+                                }
+                                else
+                                {
+                                    Console.WriteLine("bad sample length: " + chunk.Length);
+                                }
+                            }
+                        }
+                    }
+                });
             }
 
             if (isAnyTgOn && playbackChannelBox.IsSelected)
@@ -412,21 +498,38 @@ namespace WhackerLinkConsoleV2
 
                 Codeplug.System system = Codeplug.GetSystemForChannel(channel.ChannelName);
                 Codeplug.Channel cpgChannel = Codeplug.GetChannelByName(channel.ChannelName);
-                IPeer handler = _webSocketManager.GetWebSocketHandler(system.Name);
+         
+                if (!system.IsDvm) {
+                    IPeer handler = _webSocketManager.GetWebSocketHandler(system.Name);
 
-                if (channel.IsSelected && handler.IsConnected)
-                {
-                    Task.Run(() =>
+                    if (channel.IsSelected && handler.IsConnected)
                     {
-                        GRP_AFF_REQ release = new GRP_AFF_REQ
-                        {
-                            SrcId = system.Rid,
-                            DstId = cpgChannel.Tgid,
-                            Site = system.Site
-                        };
+                        Console.WriteLine("sending WLINK master aff");
 
-                        handler.SendMessage(release.GetData());
-                    });
+                        Task.Run(() =>
+                        {
+                            GRP_AFF_REQ release = new GRP_AFF_REQ
+                            {
+                                SrcId = system.Rid,
+                                DstId = cpgChannel.Tgid,
+                                Site = system.Site
+                            };
+
+                            handler.SendMessage(release.GetData());
+                        });
+                    }
+                } else
+                {
+                    PeerSystem fne = _fneSystemManager.GetFneSystem(system.Name);
+
+                    if (channel.IsSelected)
+                    {
+                        uint uniqueRid = GetUniqueRid(system.Rid);
+
+                        Console.WriteLine("sending FNE master aff " + uniqueRid);
+
+                        fne.peer.SendMasterGroupAffiliation(uniqueRid, UInt32.Parse(cpgChannel.Tgid));
+                    }
                 }
             }
         }
@@ -445,15 +548,39 @@ namespace WhackerLinkConsoleV2
             pageWindow.Owner = this;
             if (pageWindow.ShowDialog() == true)
             {
-                IPeer handler = _webSocketManager.GetWebSocketHandler(pageWindow.RadioSystem.Name);
-
-                CALL_ALRT_REQ callAlert = new CALL_ALRT_REQ
+                if (!pageWindow.RadioSystem.IsDvm)
                 {
-                    SrcId = pageWindow.RadioSystem.Rid,
-                    DstId = pageWindow.DstId
-                };
+                    IPeer handler = _webSocketManager.GetWebSocketHandler(pageWindow.RadioSystem.Name);
 
-                handler.SendMessage(callAlert.GetData());
+                    CALL_ALRT_REQ callAlert = new CALL_ALRT_REQ
+                    {
+                        SrcId = pageWindow.RadioSystem.Rid,
+                        DstId = pageWindow.DstId
+                    };
+
+                    handler.SendMessage(callAlert.GetData());
+                }
+                else
+                {
+                    PeerSystem handler = _fneSystemManager.GetFneSystem(pageWindow.RadioSystem.Name);
+                    IOSP_CALL_ALRT callAlert = new IOSP_CALL_ALRT(UInt32.Parse(pageWindow.DstId), UInt32.Parse(pageWindow.RadioSystem.Rid));
+
+                    RemoteCallData callData = new RemoteCallData
+                    {
+                        SrcId = UInt32.Parse(pageWindow.RadioSystem.Rid),
+                        DstId = UInt32.Parse(pageWindow.DstId),
+                        LCO = P25Defines.TSBK_IOSP_CALL_ALRT
+                    };
+
+                    byte[] tsbk = new byte[P25Defines.P25_TSBK_LENGTH_BYTES];
+                    byte[] payload = new byte[P25Defines.P25_TSBK_LENGTH_BYTES];
+
+                    callAlert.Encode(ref tsbk, ref payload, true, true);
+
+                    handler.SendP25TSBK(callData, tsbk);
+
+                    Console.WriteLine("sent page");
+                }
             }
         }
 
@@ -467,7 +594,6 @@ namespace WhackerLinkConsoleV2
                 {
                     Codeplug.System system = Codeplug.GetSystemForChannel(channel.ChannelName);
                     Codeplug.Channel cpgChannel = Codeplug.GetChannelByName(channel.ChannelName);
-                    IPeer handler = _webSocketManager.GetWebSocketHandler(system.Name);
 
                     if (channel.PageState)
                     {
@@ -486,7 +612,7 @@ namespace WhackerLinkConsoleV2
                         int chunkSize = 1600;
                         int totalChunks = (combinedAudio.Length + chunkSize - 1) / chunkSize;
 
-                        Task.Factory.StartNew(() =>
+                        Task.Run(() =>
                         {
                             //_waveProvider.ClearBuffer();
                             _audioManager.AddTalkgroupStream(cpgChannel.Tgid, combinedAudio);
@@ -502,36 +628,57 @@ namespace WhackerLinkConsoleV2
                                 byte[] chunk = new byte[chunkSize];
                                 Buffer.BlockCopy(combinedAudio, offset, chunk, 0, size);
 
-                                AudioPacket voicePacket = new AudioPacket
+                                if (!system.IsDvm)
                                 {
-                                    Data = chunk,
-                                    VoiceChannel = new VoiceChannel
-                                    {
-                                        Frequency = channel.VoiceChannel,
-                                        DstId = cpgChannel.Tgid,
-                                        SrcId = system.Rid,
-                                        Site = system.Site
-                                    },
-                                    Site = system.Site,
-                                    LopServerVocode = true
-                                };
+                                    IPeer handler = _webSocketManager.GetWebSocketHandler(system.Name);
 
-                                handler.SendMessage(voicePacket.GetData());
+                                    AudioPacket voicePacket = new AudioPacket
+                                    {
+                                        Data = chunk,
+                                        VoiceChannel = new VoiceChannel
+                                        {
+                                            Frequency = channel.VoiceChannel,
+                                            DstId = cpgChannel.Tgid,
+                                            SrcId = system.Rid,
+                                            Site = system.Site
+                                        },
+                                        Site = system.Site,
+                                        LopServerVocode = true
+                                    };
+
+                                    handler.SendMessage(voicePacket.GetData());
+                                } else
+                                {
+                                    PeerSystem handler = _fneSystemManager.GetFneSystem(system.Name);
+                                    // send to DVM
+                                }
                             }
                         });
 
-                        double totalDurationMs = (toneADuration + toneBDuration) * 1000 + 250;
+                        double totalDurationMs = (toneADuration + toneBDuration) + 250;
                         await Task.Delay((int)totalDurationMs);
 
-                        GRP_VCH_RLS release = new GRP_VCH_RLS
+                        if (!system.IsDvm)
                         {
-                            SrcId = system.Rid,
-                            DstId = cpgChannel.Tgid,
-                            Channel = channel.VoiceChannel,
-                            Site = system.Site
-                        };
+                            IPeer handler = _webSocketManager.GetWebSocketHandler(system.Name);
 
-                        handler.SendMessage(release.GetData());
+                            GRP_VCH_RLS release = new GRP_VCH_RLS
+                            {
+                                SrcId = system.Rid,
+                                DstId = cpgChannel.Tgid,
+                                Channel = channel.VoiceChannel,
+                                Site = system.Site
+                            };
+
+                            handler.SendMessage(release.GetData());
+                        } else
+                        {
+                            PeerSystem handler = _fneSystemManager.GetFneSystem(system.Name);
+
+                            channel.txStreamId = handler.NewStreamId();
+
+                            handler.SendP25TDU(UInt32.Parse(system.Rid), UInt32.Parse(cpgChannel.Tgid), false);
+                        }
 
                         Dispatcher.Invoke(() =>
                         {
@@ -545,7 +692,7 @@ namespace WhackerLinkConsoleV2
 
         private void SendAlertTone(AlertTone e)
         {
-            Task.Factory.StartNew(() => SendAlertTone(e.AlertFilePath));
+            Task.Run(() => SendAlertTone(e.AlertFilePath));
         }
 
         private void SendAlertTone(string filePath, bool forHold = false)
@@ -561,13 +708,12 @@ namespace WhackerLinkConsoleV2
 
                         Codeplug.System system = Codeplug.GetSystemForChannel(channel.ChannelName);
                         Codeplug.Channel cpgChannel = Codeplug.GetChannelByName(channel.ChannelName);
-                        IPeer handler = _webSocketManager.GetWebSocketHandler(system.Name);
 
                         if (channel.PageState || (forHold && channel.HoldState))
                         {
                             byte[] pcmData;
 
-                            Task.Factory.StartNew(async () => {
+                            Task.Run(async () => {
                                 using (var waveReader = new WaveFileReader(filePath))
                                 {
                                     if (waveReader.WaveFormat.Encoding != WaveFormatEncoding.Pcm ||
@@ -596,7 +742,7 @@ namespace WhackerLinkConsoleV2
                                     pcmData = paddedData;
                                 }
 
-                                Task.Factory.StartNew(() =>
+                                Task.Run(() =>
                                 {
                                     _audioManager.AddTalkgroupStream(cpgChannel.Tgid, pcmData);
                                 });
@@ -609,21 +755,40 @@ namespace WhackerLinkConsoleV2
                                     byte[] chunk = new byte[chunkSize];
                                     Buffer.BlockCopy(pcmData, offset, chunk, 0, chunkSize);
 
-                                    AudioPacket voicePacket = new AudioPacket
+                                    if (!system.IsDvm)
                                     {
-                                        Data = chunk,
-                                        VoiceChannel = new VoiceChannel
-                                        {
-                                            Frequency = channel.VoiceChannel,
-                                            DstId = cpgChannel.Tgid,
-                                            SrcId = system.Rid,
-                                            Site = system.Site
-                                        },
-                                        Site = system.Site,
-                                        LopServerVocode = true
-                                    };
+                                        IPeer handler = _webSocketManager.GetWebSocketHandler(system.Name);
 
-                                    handler.SendMessage(voicePacket.GetData());
+                                        AudioPacket voicePacket = new AudioPacket
+                                        {
+                                            Data = chunk,
+                                            VoiceChannel = new VoiceChannel
+                                            {
+                                                Frequency = channel.VoiceChannel,
+                                                DstId = cpgChannel.Tgid,
+                                                SrcId = system.Rid,
+                                                Site = system.Site
+                                            },
+                                            Site = system.Site,
+                                            LopServerVocode = true
+                                        };
+
+                                        handler.SendMessage(voicePacket.GetData());
+                                    }
+                                    else
+                                    {
+                                        PeerSystem handler = _fneSystemManager.GetFneSystem(system.Name);
+
+                                        channel.chunkedPcm = AudioConverter.SplitToChunks(chunk);
+
+                                        foreach (byte[] smallchunk in channel.chunkedPcm)
+                                        {
+                                            if (smallchunk.Length == 320)
+                                            {
+                                                P25EncodeAudioFrame(smallchunk, handler, channel, cpgChannel, system);
+                                            }
+                                        }
+                                    }
 
                                     DateTime nextPacketTime = startTime.AddMilliseconds((i + 1) * 100);
                                     TimeSpan waitTime = nextPacketTime - DateTime.UtcNow;
@@ -634,27 +799,43 @@ namespace WhackerLinkConsoleV2
                                     }
                                 }
 
-                                double totalDurationMs = ((double)pcmData.Length / 16000);
+                                double totalDurationMs = ((double)pcmData.Length / 16000) + 250;
                                 await Task.Delay((int)totalDurationMs);
 
-                                GRP_VCH_RLS release = new GRP_VCH_RLS
+                                if (!system.IsDvm)
                                 {
-                                    SrcId = system.Rid,
-                                    DstId = cpgChannel.Tgid,
-                                    Channel = channel.VoiceChannel,
-                                    Site = system.Site
-                                };
+                                    IPeer handler = _webSocketManager.GetWebSocketHandler(system.Name);
 
-                                Dispatcher.Invoke(() =>
+                                    GRP_VCH_RLS release = new GRP_VCH_RLS
+                                    {
+                                        SrcId = system.Rid,
+                                        DstId = cpgChannel.Tgid,
+                                        Channel = channel.VoiceChannel,
+                                        Site = system.Site
+                                    };
+
+                                    Dispatcher.Invoke(() =>
+                                    {
+                                        handler.SendMessage(release.GetData());
+
+                                        if (forHold)
+                                            channel.PttButton.Background = channel.grayGradient;
+                                        else
+                                            channel.PageState = false;
+                                    });
+                                } else
                                 {
-                                    handler.SendMessage(release.GetData());
+                                    PeerSystem handler = _fneSystemManager.GetFneSystem(system.Name);
+                                    handler.SendP25TDU(UInt32.Parse(system.Rid), UInt32.Parse(cpgChannel.Tgid), false);
 
-                                    if (forHold)
-                                        channel.PttButton.Background = channel.grayGradient;
-                                    else
-                                        channel.PageState = false;
-                                });
-
+                                    Dispatcher.Invoke(() =>
+                                    {
+                                        if (forHold)
+                                            channel.PttButton.Background = channel.grayGradient;
+                                        else
+                                            channel.PageState = false;
+                                    });
+                                }
                             });
                         }
                     }
@@ -724,7 +905,9 @@ namespace WhackerLinkConsoleV2
 
                 Codeplug.System system = Codeplug.GetSystemForChannel(channel.ChannelName);
                 Codeplug.Channel cpgChannel = Codeplug.GetChannelByName(channel.ChannelName);
-                IPeer handler = _webSocketManager.GetWebSocketHandler(system.Name);
+
+                if (system.IsDvm)
+                    continue;
 
                 if (audioPacket.VoiceChannel.SrcId != system.Rid && audioPacket.VoiceChannel.Frequency == channel.VoiceChannel && audioPacket.VoiceChannel.DstId == cpgChannel.Tgid)
                     shouldReceive = true;
@@ -743,6 +926,10 @@ namespace WhackerLinkConsoleV2
 
                 Codeplug.System system = Codeplug.GetSystemForChannel(channel.ChannelName);
                 Codeplug.Channel cpgChannel = Codeplug.GetChannelByName(channel.ChannelName);
+
+                if (system.IsDvm)
+                    continue;
+
                 IPeer handler = _webSocketManager.GetWebSocketHandler(system.Name);
 
                 bool ridExists = affUpdate.Affiliations.Any(aff => aff.SrcId == system.Rid);
@@ -779,6 +966,10 @@ namespace WhackerLinkConsoleV2
 
                 Codeplug.System system = Codeplug.GetSystemForChannel(channel.ChannelName);
                 Codeplug.Channel cpgChannel = Codeplug.GetChannelByName(channel.ChannelName);
+
+                if (system.IsDvm)
+                    continue;
+
                 IPeer handler = _webSocketManager.GetWebSocketHandler(system.Name);
 
                 if (response.DstId == cpgChannel.Tgid && response.SrcId != system.Rid)
@@ -811,6 +1002,10 @@ namespace WhackerLinkConsoleV2
 
                 Codeplug.System system = Codeplug.GetSystemForChannel(channel.ChannelName);
                 Codeplug.Channel cpgChannel = Codeplug.GetChannelByName(channel.ChannelName);
+
+                if (system.IsDvm)
+                    continue;
+
                 IPeer handler = _webSocketManager.GetWebSocketHandler(system.Name);
 
                 if (channel.PttState && response.Status == (int)ResponseType.GRANT && response.Channel != null && response.SrcId == system.Rid && response.DstId == cpgChannel.Tgid)
@@ -854,6 +1049,10 @@ namespace WhackerLinkConsoleV2
 
             Codeplug.System system = Codeplug.GetSystemForChannel(e.ChannelName);
             Codeplug.Channel cpgChannel = Codeplug.GetChannelByName(e.ChannelName);
+
+            if (system.IsDvm)
+                return;
+
             IPeer handler = _webSocketManager.GetWebSocketHandler(system.Name);
         }
 
@@ -864,31 +1063,48 @@ namespace WhackerLinkConsoleV2
 
             Codeplug.System system = Codeplug.GetSystemForChannel(e.ChannelName);
             Codeplug.Channel cpgChannel = Codeplug.GetChannelByName(e.ChannelName);
-            IPeer handler = _webSocketManager.GetWebSocketHandler(system.Name);
 
-            if (e.PageState)
+            if (!system.IsDvm)
             {
-                GRP_VCH_REQ request = new GRP_VCH_REQ
-                {
-                    SrcId = system.Rid,
-                    DstId = cpgChannel.Tgid,
-                    Site = system.Site
-                };
 
-                handler.SendMessage(request.GetData());
+                IPeer handler = _webSocketManager.GetWebSocketHandler(system.Name);
+
+                if (e.PageState)
+                {
+                    GRP_VCH_REQ request = new GRP_VCH_REQ
+                    {
+                        SrcId = system.Rid,
+                        DstId = cpgChannel.Tgid,
+                        Site = system.Site
+                    };
+
+                    handler.SendMessage(request.GetData());
+                }
+                else
+                {
+                    GRP_VCH_RLS release = new GRP_VCH_RLS
+                    {
+                        SrcId = system.Rid,
+                        DstId = cpgChannel.Tgid,
+                        Channel = e.VoiceChannel,
+                        Site = system.Site
+                    };
+
+                    handler.SendMessage(release.GetData());
+                    e.VoiceChannel = null;
+                }
             }
             else
             {
-                GRP_VCH_RLS release = new GRP_VCH_RLS
+                PeerSystem handler = _fneSystemManager.GetFneSystem(system.Name);
+                if (e.PageState)
                 {
-                    SrcId = system.Rid,
-                    DstId = cpgChannel.Tgid,
-                    Channel = e.VoiceChannel,
-                    Site = system.Site
-                };
-
-                handler.SendMessage(release.GetData());
-                e.VoiceChannel = null;
+                    handler.SendP25TDU(UInt32.Parse(system.Rid), UInt32.Parse(cpgChannel.Tgid), true);
+                }
+                else
+                {
+                    handler.SendP25TDU(UInt32.Parse(system.Rid), UInt32.Parse(cpgChannel.Tgid), false);
+                }
             }
         }
 
@@ -899,34 +1115,60 @@ namespace WhackerLinkConsoleV2
 
             Codeplug.System system = Codeplug.GetSystemForChannel(e.ChannelName);
             Codeplug.Channel cpgChannel = Codeplug.GetChannelByName(e.ChannelName);
-            IPeer handler = _webSocketManager.GetWebSocketHandler(system.Name);
 
-            if (!e.IsSelected)
-                return;
-
-            if (e.PttState)
+            if (!system.IsDvm)
             {
-                GRP_VCH_REQ request = new GRP_VCH_REQ
-                {
-                    SrcId = system.Rid,
-                    DstId = cpgChannel.Tgid,
-                    Site = system.Site
-                };
+                IPeer handler = _webSocketManager.GetWebSocketHandler(system.Name);
 
-                handler.SendMessage(request.GetData());
-            }
-            else
+                if (!e.IsSelected)
+                    return;
+
+                if (e.PttState)
+                {
+                    GRP_VCH_REQ request = new GRP_VCH_REQ
+                    {
+                        SrcId = system.Rid,
+                        DstId = cpgChannel.Tgid,
+                        Site = system.Site
+                    };
+
+                    handler.SendMessage(request.GetData());
+                }
+                else
+                {
+                    GRP_VCH_RLS release = new GRP_VCH_RLS
+                    {
+                        SrcId = system.Rid,
+                        DstId = cpgChannel.Tgid,
+                        Channel = e.VoiceChannel,
+                        Site = system.Site
+                    };
+
+                    handler.SendMessage(release.GetData());
+                    e.VoiceChannel = null;
+                }
+            } else
             {
-                GRP_VCH_RLS release = new GRP_VCH_RLS
-                {
-                    SrcId = system.Rid,
-                    DstId = cpgChannel.Tgid,
-                    Channel = e.VoiceChannel,
-                    Site = system.Site
-                };
+                PeerSystem handler = _fneSystemManager.GetFneSystem(system.Name);
 
-                handler.SendMessage(release.GetData());
-                e.VoiceChannel = null;
+                if (!e.IsSelected)
+                    return;
+
+                uint srcId = UInt32.Parse(system.Rid);
+                uint dstId = UInt32.Parse(cpgChannel.Tgid);
+
+                if (e.PttState)
+                {
+                    e.txStreamId = handler.NewStreamId();
+
+                    Console.WriteLine("sending grant demand " + dstId);
+                    handler.SendP25TDU(srcId, dstId, true);
+                }
+                else
+                {
+                    Console.WriteLine("sending terminator " + dstId);
+                    handler.SendP25TDU(srcId, dstId, false);
+                }
             }
         }
 
@@ -1113,29 +1355,45 @@ namespace WhackerLinkConsoleV2
 
                 Codeplug.System system = Codeplug.GetSystemForChannel(channel.ChannelName);
                 Codeplug.Channel cpgChannel = Codeplug.GetChannelByName(channel.ChannelName);
-                IPeer handler = _webSocketManager.GetWebSocketHandler(system.Name);
 
-                if (channel.HoldState && !channel.IsReceiving && !channel.PttState && !channel.PageState)
+                if (!system.IsDvm)
                 {
-                    //Task.Factory.StartNew(async () =>
-                    //{
-                    Console.WriteLine("Sending channel hold beep");
 
-                    Dispatcher.Invoke(() => { channel.PttButton.Background = channel.redGradient; });
+                    IPeer handler = _webSocketManager.GetWebSocketHandler(system.Name);
 
-                    GRP_VCH_REQ req = new GRP_VCH_REQ
+                    if (channel.HoldState && !channel.IsReceiving && !channel.PttState && !channel.PageState)
                     {
-                        SrcId = system.Rid,
-                        DstId = cpgChannel.Tgid,
-                        Site = system.Site
-                    };
+                        //Task.Factory.StartNew(async () =>
+                        //{
+                        Console.WriteLine("Sending channel hold beep");
 
-                    handler.SendMessage(req.GetData());
+                        Dispatcher.Invoke(() => { channel.PttButton.Background = channel.redGradient; });
 
-                    await Task.Delay(1000);
+                        GRP_VCH_REQ req = new GRP_VCH_REQ
+                        {
+                            SrcId = system.Rid,
+                            DstId = cpgChannel.Tgid,
+                            Site = system.Site
+                        };
 
-                    SendAlertTone("hold.wav", true);
-                    // });
+                        handler.SendMessage(req.GetData());
+
+                        await Task.Delay(1000);
+
+                        SendAlertTone("hold.wav", true);
+                        // });
+                    }
+                } else
+                {
+                    PeerSystem handler = _fneSystemManager.GetFneSystem(system.Name);
+
+                    if (channel.HoldState && !channel.IsReceiving && !channel.PttState && !channel.PageState)
+                    {
+                        handler.SendP25TDU(UInt32.Parse(system.Rid), UInt32.Parse(cpgChannel.Tgid), true);
+                        await Task.Delay(1000);
+
+                        SendAlertTone("hold.wav", true);
+                    }
                 }
             }
         }
@@ -1180,8 +1438,11 @@ namespace WhackerLinkConsoleV2
             });
         }
 
-        private void btnGlobalPtt_Click(object sender, RoutedEventArgs e)
+        private async void btnGlobalPtt_Click(object sender, RoutedEventArgs e)
         {
+            if (globalPttState)
+                await Task.Delay(500);
+
             globalPttState = !globalPttState;
 
             foreach (ChannelBox channel in _selectedChannelsManager.GetSelectedChannels())
@@ -1191,51 +1452,606 @@ namespace WhackerLinkConsoleV2
 
                 Codeplug.System system = Codeplug.GetSystemForChannel(channel.ChannelName);
                 Codeplug.Channel cpgChannel = Codeplug.GetChannelByName(channel.ChannelName);
-                IPeer handler = _webSocketManager.GetWebSocketHandler(system.Name);
 
-                if (!channel.IsSelected)
-                    return;
-
-                if (globalPttState)
+                if (!system.IsDvm)
                 {
-                    Dispatcher.Invoke(() =>
+                    IPeer handler = _webSocketManager.GetWebSocketHandler(system.Name);
+
+                    if (!channel.IsSelected)
+                        continue;
+
+                    if (globalPttState)
                     {
-                        btnGlobalPtt.Background = channel.redGradient;
-                    });
+                        Dispatcher.Invoke(() =>
+                        {
+                            btnGlobalPtt.Background = channel.redGradient;
+                        });
 
 
-                    GRP_VCH_REQ request = new GRP_VCH_REQ
+                        GRP_VCH_REQ request = new GRP_VCH_REQ
+                        {
+                            SrcId = system.Rid,
+                            DstId = cpgChannel.Tgid,
+                            Site = system.Site
+                        };
+
+                        channel.PttState = true;
+
+                        handler.SendMessage(request.GetData());
+                    }
+                    else
                     {
-                        SrcId = system.Rid,
-                        DstId = cpgChannel.Tgid,
-                        Site = system.Site
-                    };
+                        Dispatcher.Invoke(() =>
+                        {
+                            btnGlobalPtt.Background = channel.grayGradient;
+                        });
 
-                    channel.PttState = true;
+                        GRP_VCH_RLS release = new GRP_VCH_RLS
+                        {
+                            SrcId = system.Rid,
+                            DstId = cpgChannel.Tgid,
+                            Site = system.Site
+                        };
 
-                    handler.SendMessage(request.GetData());
-                }
-                else
+                        channel.PttState = false;
+
+                        handler.SendMessage(release.GetData());
+                    }
+                } else
                 {
-                    Dispatcher.Invoke(() =>
+                    PeerSystem handler = _fneSystemManager.GetFneSystem(system.Name);
+
+                    channel.txStreamId = handler.NewStreamId();
+
+                    if (globalPttState)
                     {
-                        btnGlobalPtt.Background = channel.grayGradient;
-                    });
+                        Dispatcher.Invoke(() =>
+                        {
+                            btnGlobalPtt.Background = channel.redGradient;
+                            channel.PttState = true;
+                        });
 
-                    GRP_VCH_RLS release = new GRP_VCH_RLS
+                        handler.SendP25TDU(UInt32.Parse(system.Rid), UInt32.Parse(cpgChannel.Tgid), true);
+                    }
+                    else
                     {
-                        SrcId = system.Rid,
-                        DstId = cpgChannel.Tgid,
-                        Site = system.Site
-                    };
+                        Dispatcher.Invoke(() =>
+                        {
+                            btnGlobalPtt.Background = channel.grayGradient;
+                            channel.PttState = false;
+                        });
 
-                    channel.PttState = false;
-
-                    handler.SendMessage(release.GetData());
+                        handler.SendP25TDU(UInt32.Parse(system.Rid), UInt32.Parse(cpgChannel.Tgid), false);
+                    }
                 }
             }
         }
 
         private void Button_Click(object sender, RoutedEventArgs e) { /* sub */ }
+
+        /// <summary>
+        /// Helper to encode and transmit PCM audio as P25 IMBE frames.
+        /// </summary>
+        private void P25EncodeAudioFrame(byte[] pcm, PeerSystem handler, ChannelBox channel, Codeplug.Channel cpgChannel, Codeplug.System system)
+        {
+            if (channel.p25N > 17)
+                channel.p25N = 0;
+            if (channel.p25N == 0)
+                FneUtils.Memset(channel.netLDU1, 0, 9 * 25);
+            if (channel.p25N == 9)
+                FneUtils.Memset(channel.netLDU2, 0, 9 * 25);
+
+            // Log.Logger.Debug($"BYTE BUFFER {FneUtils.HexDump(pcm)}");
+
+            //// pre-process: apply gain to PCM audio frames
+            //if (Program.Configuration.TxAudioGain != 1.0f)
+            //{
+            //    BufferedWaveProvider buffer = new BufferedWaveProvider(waveFormat);
+            //    buffer.AddSamples(pcm, 0, pcm.Length);
+
+            //    VolumeWaveProvider16 gainControl = new VolumeWaveProvider16(buffer);
+            //    gainControl.Volume = Program.Configuration.TxAudioGain;
+            //    gainControl.Read(pcm, 0, pcm.Length);
+            //}
+
+            int smpIdx = 0;
+            short[] samples = new short[FneSystemBase.MBE_SAMPLES_LENGTH];
+            for (int pcmIdx = 0; pcmIdx < pcm.Length; pcmIdx += 2)
+            {
+                samples[smpIdx] = (short)((pcm[pcmIdx + 1] << 8) + pcm[pcmIdx + 0]);
+                smpIdx++;
+            }
+
+            // Log.Logger.Debug($"SAMPLE BUFFER {FneUtils.HexDump(samples)}");
+
+            // encode PCM samples into IMBE codewords
+            byte[] imbe = new byte[FneSystemBase.IMBE_BUF_LEN];
+
+#if WIN32
+            if (channel.extFullRateVocoder == null)
+                channel.extFullRateVocoder = new AmbeVocoder(true);
+
+            channel.extFullRateVocoder.encode(samples, out imbe);
+#else
+            if (channel.encoder == null)
+                channel.encoder = new MBEEncoder(MBE_MODE.IMBE_88BIT);
+
+            channel.encoder.encode(samples, imbe);
+#endif
+            // Log.Logger.Debug($"IMBE {FneUtils.HexDump(imbe)}");
+
+            // fill the LDU buffers appropriately
+            switch (channel.p25N)
+            {
+                // LDU1
+                case 0:
+                    Buffer.BlockCopy(imbe, 0, channel.netLDU1, 10, FneSystemBase.IMBE_BUF_LEN);
+                    break;
+                case 1:
+                    Buffer.BlockCopy(imbe, 0, channel.netLDU1, 26, FneSystemBase.IMBE_BUF_LEN);
+                    break;
+                case 2:
+                    Buffer.BlockCopy(imbe, 0, channel.netLDU1, 55, FneSystemBase.IMBE_BUF_LEN);
+                    break;
+                case 3:
+                    Buffer.BlockCopy(imbe, 0, channel.netLDU1, 80, FneSystemBase.IMBE_BUF_LEN);
+                    break;
+                case 4:
+                    Buffer.BlockCopy(imbe, 0, channel.netLDU1, 105, FneSystemBase.IMBE_BUF_LEN);
+                    break;
+                case 5:
+                    Buffer.BlockCopy(imbe, 0, channel.netLDU1, 130, FneSystemBase.IMBE_BUF_LEN);
+                    break;
+                case 6:
+                    Buffer.BlockCopy(imbe, 0, channel.netLDU1, 155, FneSystemBase.IMBE_BUF_LEN);
+                    break;
+                case 7:
+                    Buffer.BlockCopy(imbe, 0, channel.netLDU1, 180, FneSystemBase.IMBE_BUF_LEN);
+                    break;
+                case 8:
+                    Buffer.BlockCopy(imbe, 0, channel.netLDU1, 204, FneSystemBase.IMBE_BUF_LEN);
+                    break;
+
+                // LDU2
+                case 9:
+                    Buffer.BlockCopy(imbe, 0, channel.netLDU2, 10, FneSystemBase.IMBE_BUF_LEN);
+                    break;
+                case 10:
+                    Buffer.BlockCopy(imbe, 0, channel.netLDU2, 26, FneSystemBase.IMBE_BUF_LEN);
+                    break;
+                case 11:
+                    Buffer.BlockCopy(imbe, 0, channel.netLDU2, 55, FneSystemBase.IMBE_BUF_LEN);
+                    break;
+                case 12:
+                    Buffer.BlockCopy(imbe, 0, channel.netLDU2, 80, FneSystemBase.IMBE_BUF_LEN);
+                    break;
+                case 13:
+                    Buffer.BlockCopy(imbe, 0, channel.netLDU2, 105, FneSystemBase.IMBE_BUF_LEN);
+                    break;
+                case 14:
+                    Buffer.BlockCopy(imbe, 0, channel.netLDU2, 130, FneSystemBase.IMBE_BUF_LEN);
+                    break;
+                case 15:
+                    Buffer.BlockCopy(imbe, 0, channel.netLDU2, 155, FneSystemBase.IMBE_BUF_LEN);
+                    break;
+                case 16:
+                    Buffer.BlockCopy(imbe, 0, channel.netLDU2, 180, FneSystemBase.IMBE_BUF_LEN);
+                    break;
+                case 17:
+                    Buffer.BlockCopy(imbe, 0, channel.netLDU2, 204, FneSystemBase.IMBE_BUF_LEN);
+                    break;
+            }
+
+            uint srcId = UInt32.Parse(system.Rid);
+            uint dstId = UInt32.Parse(cpgChannel.Tgid);
+
+            FnePeer peer = handler.peer;
+            RemoteCallData callData = new RemoteCallData()
+            {
+                SrcId = srcId,
+                DstId = dstId,
+                LCO = P25Defines.LC_GROUP
+            };
+
+            // send P25 LDU1
+            if (channel.p25N == 8U)
+            {
+                ushort pktSeq = 0;
+                if (channel.p25SeqNo == 0U)
+                    pktSeq = peer.pktSeq(true);
+                else
+                    pktSeq = peer.pktSeq();
+
+                //Console.WriteLine($"({channel.SystemName}) P25D: Traffic *VOICE FRAME    * PEER {handler.PeerId} SRC_ID {srcId} TGID {dstId} [STREAM ID {channel.txStreamId}]");
+
+                byte[] payload = new byte[200];
+                handler.CreateNewP25MessageHdr((byte)P25DUID.LDU1, callData, ref payload);
+                handler.CreateP25LDU1Message(channel.netLDU1, ref payload, srcId, dstId);
+
+                peer.SendMaster(new Tuple<byte, byte>(Constants.NET_FUNC_PROTOCOL, Constants.NET_PROTOCOL_SUBFUNC_P25), payload, pktSeq, channel.txStreamId);
+            }
+
+            // send P25 LDU2
+            if (channel.p25N == 17U)
+            {
+                ushort pktSeq = 0;
+                if (channel.p25SeqNo == 0U)
+                    pktSeq = peer.pktSeq(true);
+                else
+                    pktSeq = peer.pktSeq();
+
+                //Console.WriteLine($"({channel.SystemName}) P25D: Traffic *VOICE FRAME    * PEER {handler.PeerId} SRC_ID {srcId} TGID {dstId} [STREAM ID {channel.txStreamId}]");
+
+                byte[] payload = new byte[200];
+                handler.CreateNewP25MessageHdr((byte)P25DUID.LDU2, callData, ref payload);
+                handler.CreateP25LDU2Message(channel.netLDU2, ref payload);
+
+                peer.SendMaster(new Tuple<byte, byte>(Constants.NET_FUNC_PROTOCOL, Constants.NET_PROTOCOL_SUBFUNC_P25), payload, pktSeq, channel.txStreamId);
+            }
+
+            channel.p25SeqNo++;
+            channel.p25N++;
+        }
+
+        /// <summary>
+        /// Helper to decode and playback P25 IMBE frames as PCM audio.
+        /// </summary>
+        /// <param name="ldu"></param>
+        /// <param name="e"></param>
+        private void P25DecodeAudioFrame(byte[] ldu, P25DataReceivedEvent e, PeerSystem system, ChannelBox channel, bool emergency = false, P25Crypto.FrameType frameType = P25Crypto.FrameType.LDU1)
+        {
+            try
+            {
+                // decode 9 IMBE codewords into PCM samples
+                for (int n = 0; n < 9; n++)
+                {
+                    byte[] imbe = new byte[FneSystemBase.IMBE_BUF_LEN];
+                    switch (n)
+                    {
+                        case 0:
+                            Buffer.BlockCopy(ldu, 10, imbe, 0, FneSystemBase.IMBE_BUF_LEN);
+                            break;
+                        case 1:
+                            Buffer.BlockCopy(ldu, 26, imbe, 0, FneSystemBase.IMBE_BUF_LEN);
+                            break;
+                        case 2:
+                            Buffer.BlockCopy(ldu, 55, imbe, 0, FneSystemBase.IMBE_BUF_LEN);
+                            break;
+                        case 3:
+                            Buffer.BlockCopy(ldu, 80, imbe, 0, FneSystemBase.IMBE_BUF_LEN);
+                            break;
+                        case 4:
+                            Buffer.BlockCopy(ldu, 105, imbe, 0, FneSystemBase.IMBE_BUF_LEN);
+                            break;
+                        case 5:
+                            Buffer.BlockCopy(ldu, 130, imbe, 0, FneSystemBase.IMBE_BUF_LEN);
+                            break;
+                        case 6:
+                            Buffer.BlockCopy(ldu, 155, imbe, 0, FneSystemBase.IMBE_BUF_LEN);
+                            break;
+                        case 7:
+                            Buffer.BlockCopy(ldu, 180, imbe, 0, FneSystemBase.IMBE_BUF_LEN);
+                            break;
+                        case 8:
+                            Buffer.BlockCopy(ldu, 204, imbe, 0, FneSystemBase.IMBE_BUF_LEN);
+                            break;
+                    }
+
+                    //Log.Logger.Debug($"Decoding IMBE buffer: {FneUtils.HexDump(imbe)}");
+
+                    short[] samples = new short[FneSystemBase.MBE_SAMPLES_LENGTH];
+                    int errs = 0;
+#if WIN32
+                    if (channel.extFullRateVocoder == null)
+                        channel.extFullRateVocoder = new AmbeVocoder(true);
+
+                    errs = channel.extFullRateVocoder.decode(imbe, out samples);
+#else
+                    if (cryptodev)
+                    {
+                        Console.WriteLine($"MI: {FneUtils.HexDump(channel.mi)}");
+                        Console.WriteLine($"Algorithm ID: {channel.algId}");
+                        Console.WriteLine($"Key ID: {channel.kId}");
+
+                        channel.crypter.Process(imbe, frameType, n);
+                    }
+
+                    //Console.WriteLine(FneUtils.HexDump(imbe));
+
+                    errs = channel.decoder.decode(imbe, samples);
+#endif
+
+                    if (emergency)
+                    {
+                        if (!channel.Emergency)
+                        {
+                            Task.Run(() =>
+                            {
+                                HandleEmergencyAlarmResponse(new EMRG_ALRM_RSP
+                                {
+                                    SrcId = e.SrcId.ToString(),
+                                    DstId = e.DstId.ToString()
+                                });
+                            });
+                        }
+                    }
+
+                    if (samples != null)
+                    {
+                        //Log.Logger.Debug($"({Config.Name}) P25D: Traffic *VOICE FRAME    * PEER {e.PeerId} SRC_ID {e.SrcId} TGID {e.DstId} VC{n} ERRS {errs} [STREAM ID {e.StreamId}]");
+                        //Log.Logger.Debug($"IMBE {FneUtils.HexDump(imbe)}");
+                        //Console.WriteLine($"SAMPLE BUFFER {FneUtils.HexDump(samples)}");
+
+                        int pcmIdx = 0;
+                        byte[] pcmData = new byte[samples.Length * 2];
+                        for (int i = 0; i < samples.Length; i++)
+                        {
+                            pcmData[pcmIdx] = (byte)(samples[i] & 0xFF);
+                            pcmData[pcmIdx + 1] = (byte)((samples[i] >> 8) & 0xFF);
+                            pcmIdx += 2;
+                        }
+
+                        _audioManager.AddTalkgroupStream(e.DstId.ToString(), pcmData);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Audio Decode Exception: {ex.Message}");
+            }
+        }
+
+        private uint GetUniqueRid(string ridString)
+        {
+            uint rid;
+
+            // Try to parse the RID, default to 1000 if parsing fails
+            if (!UInt32.TryParse(ridString, out rid))
+            {
+                rid = 1000;
+            }
+
+            // Ensure uniqueness by incrementing if needed
+            while (usedRids.Contains(rid))
+            {
+                rid++;
+            }
+
+            // Store the new unique RID
+            usedRids.Add(rid);
+
+            return rid;
+        }
+
+        /// <summary>
+        /// Event handler used to process incoming P25 data.
+        /// </summary>
+        /// <param name="sender"></param>
+        /// <param name="e"></param>
+        public void P25DataReceived(P25DataReceivedEvent e, DateTime pktTime)
+        {
+            uint sysId = (uint)((e.Data[11U] << 8) | (e.Data[12U] << 0));
+            uint netId = FneUtils.Bytes3ToUInt32(e.Data, 16);
+            byte control = e.Data[14U];
+
+            byte len = e.Data[23];
+            byte[] data = new byte[len];
+            for (int i = 24; i < len; i++)
+                data[i - 24] = e.Data[i];
+
+            Dispatcher.Invoke(() =>
+            {
+                foreach (ChannelBox channel in _selectedChannelsManager.GetSelectedChannels())
+                {
+                    Codeplug.System system = Codeplug.GetSystemForChannel(channel.ChannelName);
+                    Codeplug.Channel cpgChannel = Codeplug.GetChannelByName(channel.ChannelName);
+
+                    if (!system.IsDvm)
+                        continue;
+
+                    PeerSystem handler = _fneSystemManager.GetFneSystem(system.Name);
+
+                    if (!channel.IsEnabled)
+                        continue;
+
+                    if (cpgChannel.Tgid != e.DstId.ToString())
+                        continue;
+
+                    bool ignoreCall = false;
+                    byte callAlgoId = 0x00;
+
+                    if (!systemStatuses.ContainsKey(system.Name))
+                    {
+                        systemStatuses[system.Name] = new SlotStatus();
+                    }
+
+                    if (channel.decoder == null)
+                    {
+                        channel.decoder = new MBEDecoder(MBE_MODE.IMBE_88BIT);
+                    }
+
+                    SlotStatus slot = systemStatuses[system.Name];
+
+                    // is this a new call stream?
+                    if (e.StreamId != slot.RxStreamId && ((e.DUID != P25DUID.TDU) && (e.DUID != P25DUID.TDULC)))
+                    {
+                        channel.IsReceiving = true;
+                        callAlgoId = P25Defines.P25_ALGO_UNENCRYPT;
+                        slot.RxStart = pktTime;
+                        // Console.WriteLine($"({system.Name}) P25D: Traffic *CALL START     * PEER {e.PeerId} SRC_ID {e.SrcId} TGID {e.DstId} [STREAM ID {e.StreamId}]");
+
+                        channel.LastSrcId = "Last SRC: " + e.SrcId;
+                        channel.Background = (Brush)new BrushConverter().ConvertFrom("#FF00BC48");
+                    }
+
+                    // Is the call over?
+                    if (((e.DUID == P25DUID.TDU) || (e.DUID == P25DUID.TDULC)) && (slot.RxType != FrameType.TERMINATOR))
+                    {
+                        ignoreCall = false;
+                        callAlgoId = P25Defines.P25_ALGO_UNENCRYPT;
+                        channel.IsReceiving = false;
+                        TimeSpan callDuration = pktTime - slot.RxStart;
+                        // Console.WriteLine($"({system.Name}) P25D: Traffic *CALL END       * PEER {e.PeerId} SRC_ID {e.SrcId} TGID {e.DstId} DUR {callDuration} [STREAM ID {e.StreamId}]");
+                        channel.Background = (Brush)new BrushConverter().ConvertFrom("#FF0B004B");
+                        return;
+                    }
+
+                    if (ignoreCall && callAlgoId == P25Defines.P25_ALGO_UNENCRYPT)
+                        ignoreCall = false;
+
+                    // if this is an LDU1 see if this is the first LDU with HDU encryption data
+                    if (e.DUID == P25DUID.LDU1 && !ignoreCall)
+                    {
+                        byte frameType = e.Data[180];
+                        if (frameType == P25Defines.P25_FT_HDU_VALID)
+                            callAlgoId = e.Data[181];
+                    }
+
+                    if (e.DUID == P25DUID.LDU2 && !ignoreCall)
+                        callAlgoId = data[88];
+
+                    if (ignoreCall)
+                        return;
+
+                    bool isEmergency = false;
+
+                    int count = 0;
+                    switch (e.DUID)
+                    {
+                        case P25DUID.LDU1:
+                            {
+                                // The '62', '63', '64', '65', '66', '67', '68', '69', '6A' records are LDU1
+                                if ((data[0U] == 0x62U) && (data[22U] == 0x63U) &&
+                                    (data[36U] == 0x64U) && (data[53U] == 0x65U) &&
+                                    (data[70U] == 0x66U) && (data[87U] == 0x67U) &&
+                                    (data[104U] == 0x68U) && (data[121U] == 0x69U) &&
+                                    (data[138U] == 0x6AU))
+                                {
+                                    // The '62' record - IMBE Voice 1
+                                    Buffer.BlockCopy(data, count, channel.netLDU1, 0, 22);
+                                    count += 22;
+
+                                    // The '63' record - IMBE Voice 2
+                                    Buffer.BlockCopy(data, count, channel.netLDU1, 25, 14);
+                                    count += 14;
+
+                                    // The '64' record - IMBE Voice 3 + Link Control
+                                    Buffer.BlockCopy(data, count, channel.netLDU1, 50, 17);
+
+                                    byte serviceOptions = data[count + 3];
+                                    isEmergency = (serviceOptions & 0x80) == 0x80;
+
+                                    count += 17;
+
+                                    // The '65' record - IMBE Voice 4 + Link Control
+                                    Buffer.BlockCopy(data, count, channel.netLDU1, 75, 17);
+                                    count += 17;
+
+                                    // The '66' record - IMBE Voice 5 + Link Control
+                                    Buffer.BlockCopy(data, count, channel.netLDU1, 100, 17);
+                                    count += 17;
+
+                                    // The '67' record - IMBE Voice 6 + Link Control
+                                    Buffer.BlockCopy(data, count, channel.netLDU1, 125, 17);
+                                    count += 17;
+
+                                    // The '68' record - IMBE Voice 7 + Link Control
+                                    Buffer.BlockCopy(data, count, channel.netLDU1, 150, 17);
+                                    count += 17;
+
+                                    // The '69' record - IMBE Voice 8 + Link Control
+                                    Buffer.BlockCopy(data, count, channel.netLDU1, 175, 17);
+                                    count += 17;
+
+                                    // The '6A' record - IMBE Voice 9 + Low Speed Data
+                                    Buffer.BlockCopy(data, count, channel.netLDU1, 200, 16);
+                                    count += 16;
+
+                                    if (cryptodev)
+                                    {
+                                        if (channel.mi != null && channel.mi.Length > 0)
+                                            channel.crypter.Prepare(channel.algId, channel.kId, P25Crypto.ProtocolType.P25Phase1, channel.mi);
+                                    }
+
+                                    // decode 9 IMBE codewords into PCM samples
+                                    P25DecodeAudioFrame(channel.netLDU1, e, handler, channel, isEmergency);
+                                }
+                            }
+                            break;
+                        case P25DUID.LDU2:
+                            {
+                                // The '6B', '6C', '6D', '6E', '6F', '70', '71', '72', '73' records are LDU2
+                                if ((data[0U] == 0x6BU) && (data[22U] == 0x6CU) &&
+                                    (data[36U] == 0x6DU) && (data[53U] == 0x6EU) &&
+                                    (data[70U] == 0x6FU) && (data[87U] == 0x70U) &&
+                                    (data[104U] == 0x71U) && (data[121U] == 0x72U) &&
+                                    (data[138U] == 0x73U))
+                                {
+                                    // The '6B' record - IMBE Voice 10
+                                    Buffer.BlockCopy(data, count, channel.netLDU2, 0, 22);
+                                    count += 22;
+
+                                    // The '6C' record - IMBE Voice 11
+                                    Buffer.BlockCopy(data, count, channel.netLDU2, 25, 14);
+                                    count += 14;
+
+                                    // The '6D' record - IMBE Voice 12 + Encryption Sync
+                                    Buffer.BlockCopy(data, count, channel.netLDU2, 50, 17);
+                                    channel.mi[0] = data[count + 1];
+                                    channel.mi[1] = data[count + 2];
+                                    channel.mi[2] = data[count + 3];
+                                    count += 17;
+
+                                    // The '6E' record - IMBE Voice 13 + Encryption Sync
+                                    Buffer.BlockCopy(data, count, channel.netLDU2, 75, 17);
+                                    channel.mi[3] = data[count + 1];
+                                    channel.mi[4] = data[count + 2];
+                                    channel.mi[5] = data[count + 3];
+                                    count += 17;
+
+                                    // The '6F' record - IMBE Voice 14 + Encryption Sync
+                                    Buffer.BlockCopy(data, count, channel.netLDU2, 100, 17);
+                                    channel.mi[6] = data[count + 1];
+                                    channel.mi[7] = data[count + 2];
+                                    channel.mi[8] = data[count + 3];
+                                    count += 17;
+
+                                    // The '70' record - IMBE Voice 15 + Encryption Sync
+                                    Buffer.BlockCopy(data, count, channel.netLDU2, 125, 17);
+                                    channel.algId = data[count + 1];                                    // Algorithm ID
+                                    channel.kId = (ushort)((data[count + 2] << 8) | data[count + 3]);   // Key ID
+                                    count += 17;
+
+                                    // The '71' record - IMBE Voice 16 + Encryption Sync
+                                    Buffer.BlockCopy(data, count, channel.netLDU2, 150, 17);
+                                    count += 17;
+
+                                    // The '72' record - IMBE Voice 17 + Encryption Sync
+                                    Buffer.BlockCopy(data, count, channel.netLDU2, 175, 17);
+                                    count += 17;
+
+                                    // The '73' record - IMBE Voice 18 + Low Speed Data
+                                    Buffer.BlockCopy(data, count, channel.netLDU2, 200, 16);
+                                    count += 16;
+
+                                    if (channel.mi != null && channel.mi.Length > 0 && cryptodev)
+                                        channel.crypter.Prepare(channel.algId, channel.kId, P25Crypto.ProtocolType.P25Phase1, channel.mi);
+
+                                    // decode 9 IMBE codewords into PCM samples
+                                    P25DecodeAudioFrame(channel.netLDU2, e, handler, channel, isEmergency, P25Crypto.FrameType.LDU2);
+                                }
+                            }
+                            break;
+                    }
+
+                    slot.RxRFS = e.SrcId;
+                    slot.RxType = e.FrameType;
+                    slot.RxTGId = e.DstId;
+                    slot.RxTime = pktTime;
+                    slot.RxStreamId = e.StreamId;
+
+                }
+            });
+        }
     }
 }
