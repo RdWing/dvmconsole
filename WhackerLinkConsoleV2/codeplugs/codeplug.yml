@@ -24,6 +24,27 @@ systems:
         siteID: 1
         range: 1.5
 
+    # Example DVM Project FNE system
+  - name: "System 2"
+    address: "localhost"
+    port: 3001
+    authKey: "RPT_PASSWORD"
+    peerId: 1234567
+    isDvm: true
+    # Note: for proper operation with affiliated traffic, this id will use +1 for each channel you have for affiliation purposes
+    rid: "12345"
+    site:
+        name: "Central Site"
+        controlChannel: "772.74375"
+        voiceChannels: []
+        location:
+          x: 757.89
+          y: 1274.17
+          z: 360.3
+        systemID: 1
+        siteID: 1
+        range: 1.5
+
 
 zones:
   - name: "Zone 1"
