@@ -707,7 +707,7 @@ namespace WhackerLinkConsoleV2
                         {
                             PeerSystem handler = _fneSystemManager.GetFneSystem(system.Name);
 
-                            channel.txStreamId = handler.NewStreamId();
+                            await Task.Delay(4000);
 
                             handler.SendP25TDU(UInt32.Parse(system.Rid), UInt32.Parse(cpgChannel.Tgid), false);
                         }
@@ -858,6 +858,9 @@ namespace WhackerLinkConsoleV2
                                 } else
                                 {
                                     PeerSystem handler = _fneSystemManager.GetFneSystem(system.Name);
+
+                                    await Task.Delay(3000);
+
                                     handler.SendP25TDU(UInt32.Parse(system.Rid), UInt32.Parse(cpgChannel.Tgid), false);
 
                                     Dispatcher.Invoke(() =>
@@ -2026,7 +2029,7 @@ namespace WhackerLinkConsoleV2
                         return;
                     }
 
-                    if (channel.algId != cpgChannel.GetAlgoId() && channel.algId != P25Defines.P25_ALGO_UNENCRYPT)
+                    if ((channel.algId != cpgChannel.GetAlgoId() || channel.kId != cpgChannel.GetKeyId()) && channel.algId != P25Defines.P25_ALGO_UNENCRYPT)
                         continue;
 
                     int count = 0;
