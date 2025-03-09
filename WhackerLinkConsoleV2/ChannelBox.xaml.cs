@@ -57,6 +57,7 @@ namespace WhackerLinkConsoleV2.Controls
 
         public int p25N { get; set; } = 0;
         public int p25SeqNo { get; set; } = 0;
+        public int p25Errs { get; set; } = 0;
 
         public byte[] mi = new byte[P25Defines.P25_MI_LENGTH];     // Message Indicator
         public byte algId = 0;                                     // Algorithm ID

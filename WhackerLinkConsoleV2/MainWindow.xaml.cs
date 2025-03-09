@@ -48,6 +48,7 @@ using System.Security.Cryptography;
 using fnecore.P25.LC.TSBK;
 using WebSocketSharp;
 using NWaves.Signals;
+using static WhackerLinkConsoleV2.P25Crypto;
 
 namespace WhackerLinkConsoleV2
 {
@@ -92,7 +93,7 @@ namespace WhackerLinkConsoleV2
 
         public MainWindow()
         {
-#if DEBUG
+#if !DEBUG
             ConsoleNative.ShowConsole();
 #endif
             InitializeComponent();
@@ -1837,34 +1838,23 @@ namespace WhackerLinkConsoleV2
                     //Log.Logger.Debug($"Decoding IMBE buffer: {FneUtils.HexDump(imbe)}");
 
                     short[] samples = new short[FneSystemBase.MBE_SAMPLES_LENGTH];
-                    int errs = 0;
-#if WIN32
+
                     if (cryptodev)
                     {
                         //Console.WriteLine($"MI: {FneUtils.HexDump(channel.mi)}");
                         //Console.WriteLine($"Algorithm ID: {channel.algId}");
                         //Console.WriteLine($"Key ID: {channel.kId}");
-
                         channel.crypter.Process(imbe, frameType, n);
                     }
 
+#if WIN32
                     if (channel.extFullRateVocoder == null)
                         channel.extFullRateVocoder = new AmbeVocoder(true);
 
-                    errs = channel.extFullRateVocoder.decode(imbe, out samples);
+                    channel.p25Errs = channel.extFullRateVocoder.decode(imbe, out samples);
 #else
-                    if (cryptodev)
-                    {
-                        Console.WriteLine($"MI: {FneUtils.HexDump(channel.mi)}");
-                        Console.WriteLine($"Algorithm ID: {channel.algId}");
-                        Console.WriteLine($"Key ID: {channel.kId}");
 
-                        channel.crypter.Process(imbe, frameType, n);
-                    }
-
-                    //Console.WriteLine(FneUtils.HexDump(imbe));
-
-                    errs = channel.decoder.decode(imbe, samples);
+                    channel.p25Errs = channel.decoder.decode(imbe, samples);
 #endif
 
                     if (emergency)
@@ -2020,7 +2010,7 @@ namespace WhackerLinkConsoleV2
                     }
 
                     // Is the call over?
-                    if (((e.DUID == P25DUID.TDU) || (e.DUID == P25DUID.TDULC)) && (slot.RxType != FrameType.TERMINATOR))
+                    if (((e.DUID == P25DUID.TDU) || (e.DUID == P25DUID.TDULC)) && (slot.RxType != fnecore.FrameType.TERMINATOR))
                     {
                         channel.IsReceiving = false;
                         TimeSpan callDuration = pktTime - slot.RxStart;
@@ -2031,6 +2021,8 @@ namespace WhackerLinkConsoleV2
 
                     if ((channel.algId != cpgChannel.GetAlgoId() || channel.kId != cpgChannel.GetKeyId()) && channel.algId != P25Defines.P25_ALGO_UNENCRYPT)
                         continue;
+
+                    byte[] newMI = new byte[P25Defines.P25_MI_LENGTH];
 
                     int count = 0;
 
@@ -2107,23 +2099,23 @@ namespace WhackerLinkConsoleV2
 
                                     // The '6D' record - IMBE Voice 12 + Encryption Sync
                                     Buffer.BlockCopy(data, count, channel.netLDU2, 50, 17);
-                                    channel.mi[0] = data[count + 1];
-                                    channel.mi[1] = data[count + 2];
-                                    channel.mi[2] = data[count + 3];
+                                    newMI[0] = data[count + 1];
+                                    newMI[1] = data[count + 2];
+                                    newMI[2] = data[count + 3];
                                     count += 17;
 
                                     // The '6E' record - IMBE Voice 13 + Encryption Sync
                                     Buffer.BlockCopy(data, count, channel.netLDU2, 75, 17);
-                                    channel.mi[3] = data[count + 1];
-                                    channel.mi[4] = data[count + 2];
-                                    channel.mi[5] = data[count + 3];
+                                    newMI[3] = data[count + 1];
+                                    newMI[4] = data[count + 2];
+                                    newMI[5] = data[count + 3];
                                     count += 17;
 
                                     // The '6F' record - IMBE Voice 14 + Encryption Sync
                                     Buffer.BlockCopy(data, count, channel.netLDU2, 100, 17);
-                                    channel.mi[6] = data[count + 1];
-                                    channel.mi[7] = data[count + 2];
-                                    channel.mi[8] = data[count + 3];
+                                    newMI[6] = data[count + 1];
+                                    newMI[7] = data[count + 2];
+                                    newMI[8] = data[count + 3];
                                     count += 17;
 
                                     // The '70' record - IMBE Voice 15 + Encryption Sync
@@ -2143,6 +2135,13 @@ namespace WhackerLinkConsoleV2
                                     // The '73' record - IMBE Voice 18 + Low Speed Data
                                     Buffer.BlockCopy(data, count, channel.netLDU2, 200, 16);
                                     count += 16;
+
+                                    if (channel.p25Errs > 0) // temp, need to actually get erros I guess
+                                        P25Crypto.CycleP25Lfsr(channel.mi);
+                                    else
+                                        Array.Copy(newMI, channel.mi, P25Defines.P25_MI_LENGTH);
+
+                                    Console.WriteLine(channel.p25Errs);
 
                                     // decode 9 IMBE codewords into PCM samples
                                     P25DecodeAudioFrame(channel.netLDU2, e, handler, channel, isEmergency, P25Crypto.FrameType.LDU2);

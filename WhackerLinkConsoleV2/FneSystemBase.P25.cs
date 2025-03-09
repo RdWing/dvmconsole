@@ -453,10 +453,8 @@ namespace WhackerLinkConsoleV2
         {
             DateTime pktTime = DateTime.Now;
 
-            if ( e.DUID == P25DUID.TSDU || e.DUID == P25DUID.PDU)
+            if (e.DUID == P25DUID.HDU || e.DUID == P25DUID.TSDU || e.DUID == P25DUID.PDU)
                 return;
-
-            byte control = e.Data[14U];
 
             if (e.CallType == CallType.GROUP)
             {

@@ -117,6 +117,41 @@ namespace WhackerLinkConsoleV2
         }
 
         /// <summary>
+        /// Cycles the P25 LFSR (Linear Feedback Shift Register) based on the given polynomial.
+        /// </summary>
+        /// <param name="MI">The message indicator array to be processed.</param>
+        public static void CycleP25Lfsr(byte[] MI)
+        {
+            if (MI == null || MI.Length < 9)
+                throw new ArgumentException("MI must be at least 9 bytes long.");
+
+            ulong lfsr = 0;
+
+            // Load the first 8 bytes into the LFSR
+            for (int i = 0; i < 8; i++)
+            {
+                lfsr = (lfsr << 8) | MI[i];
+            }
+
+            // Perform 64-bit LFSR cycling using the polynomial:
+            // C(x) = x^64 + x^62 + x^46 + x^38 + x^27 + x^15 + 1
+            for (int cnt = 0; cnt < 64; cnt++)
+            {
+                ulong bit = ((lfsr >> 63) ^ (lfsr >> 61) ^ (lfsr >> 45) ^ (lfsr >> 37) ^ (lfsr >> 26) ^ (lfsr >> 14)) & 0x1;
+                lfsr = (lfsr << 1) | bit;
+            }
+
+            // Store the result back into MI
+            for (int i = 7; i >= 0; i--)
+            {
+                MI[i] = (byte)(lfsr & 0xFF);
+                lfsr >>= 8;
+            }
+
+            MI[8] = 0; // Last byte is always set to zero
+        }
+
+        /// <summary>
         /// Process RC4
         /// </summary>
         /// <param name="PCW"></param>
