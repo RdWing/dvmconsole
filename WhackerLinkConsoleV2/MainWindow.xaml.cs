@@ -46,6 +46,8 @@ using Nancy;
 using Constants = fnecore.Constants;
 using System.Security.Cryptography;
 using fnecore.P25.LC.TSBK;
+using WebSocketSharp;
+using NWaves.Signals;
 
 namespace WhackerLinkConsoleV2
 {
@@ -82,9 +84,11 @@ namespace WhackerLinkConsoleV2
         private Dictionary<string, SlotStatus> systemStatuses = new Dictionary<string, SlotStatus>();
         private FneSystemManager _fneSystemManager = new FneSystemManager();
 
-        private bool cryptodev = false;
+        private bool cryptodev = true;
 
         private static HashSet<uint> usedRids = new HashSet<uint>();
+
+        List<Tuple<uint, uint>> fneAffs = new List<Tuple<uint, uint>>();
 
         public MainWindow()
         {
@@ -194,6 +198,9 @@ namespace WhackerLinkConsoleV2
                         offsetX = 20;
                         offsetY += 106;
                     }
+
+                    if (File.Exists(system.AliasPath))
+                        system.RidAlias = AliasTools.LoadAliases(system.AliasPath);
 
                     if (!system.IsDvm)
                     {
@@ -313,6 +320,8 @@ namespace WhackerLinkConsoleV2
                     foreach (var channel in zone.Channels)
                     {
                         var channelBox = new ChannelBox(_selectedChannelsManager, _audioManager, channel.Name, channel.System, channel.Tgid);
+
+                        channelBox.crypter.AddKey(channel.GetKeyId(), channel.GetAlgoId(), channel.GetEncryptionKey());
 
                         if (_settingsManager.ChannelPositions.TryGetValue(channel.Name, out var position))
                         {
@@ -524,12 +533,27 @@ namespace WhackerLinkConsoleV2
 
                     if (channel.IsSelected)
                     {
-                        uint uniqueRid = GetUniqueRid(system.Rid);
+                        uint newTgid = UInt32.Parse(cpgChannel.Tgid);
+                        bool exists = fneAffs.Any(aff => aff.Item2 == newTgid);
 
-                        Console.WriteLine("sending FNE master aff " + uniqueRid);
+                        if (!exists)
+                            fneAffs.Add(new Tuple<uint, uint>(GetUniqueRid(system.Rid), newTgid));
 
-                        fne.peer.SendMasterGroupAffiliation(uniqueRid, UInt32.Parse(cpgChannel.Tgid));
+                        //Console.WriteLine("FNE Affiliations:");
+                        //foreach (var aff in fneAffs)
+                        //{
+                        //    Console.WriteLine($"  RID: {aff.Item1}, TGID: {aff.Item2}");
+                        //}
                     }
+                }
+            }
+
+            foreach (Codeplug.System system in Codeplug.Systems)
+            {
+                if (system.IsDvm)
+                {
+                    PeerSystem fne = _fneSystemManager.GetFneSystem(system.Name);
+                    fne.peer.SendMasterAffiliationUpdate(fneAffs);
                 }
             }
         }
@@ -610,6 +634,10 @@ namespace WhackerLinkConsoleV2
                         Buffer.BlockCopy(toneB, 0, combinedAudio, toneA.Length, toneB.Length);
 
                         int chunkSize = 1600;
+
+                        if (system.IsDvm)
+                            chunkSize = 320;
+
                         int totalChunks = (combinedAudio.Length + chunkSize - 1) / chunkSize;
 
                         Task.Run(() =>
@@ -650,12 +678,16 @@ namespace WhackerLinkConsoleV2
                                 } else
                                 {
                                     PeerSystem handler = _fneSystemManager.GetFneSystem(system.Name);
-                                    // send to DVM
+
+                                    if (chunk.Length == 320)
+                                    {
+                                        P25EncodeAudioFrame(chunk, handler, channel, cpgChannel, system);
+                                     }
                                 }
                             }
                         });
 
-                        double totalDurationMs = (toneADuration + toneBDuration) + 250;
+                        double totalDurationMs = (toneADuration + toneBDuration) * 1000 + 750;
                         await Task.Delay((int)totalDurationMs);
 
                         if (!system.IsDvm)
@@ -1015,7 +1047,20 @@ namespace WhackerLinkConsoleV2
                 else if (response.Status == (int)ResponseType.GRANT && response.SrcId != system.Rid && response.DstId == cpgChannel.Tgid)
                 {
                     channel.VoiceChannel = response.Channel;
-                    channel.LastSrcId = "Last SRC: " + response.SrcId;
+
+                    string alias = string.Empty;
+
+                    try
+                    {
+                        alias = AliasTools.GetAliasByRid(system.RidAlias, int.Parse(response.SrcId));
+                    }
+                    catch (Exception) { }
+
+                    if (alias.IsNullOrEmpty())
+                        channel.LastSrcId = "Last SRC: " + response.SrcId;
+                    else
+                        channel.LastSrcId = "Last: " + alias;
+
                     Dispatcher.Invoke(() =>
                     {
                         channel.Background = (Brush)new BrushConverter().ConvertFrom("#FF00BC48");
@@ -1529,6 +1574,34 @@ namespace WhackerLinkConsoleV2
 
         private void Button_Click(object sender, RoutedEventArgs e) { /* sub */ }
 
+        private void SelectAll_Click(object sender, RoutedEventArgs e)
+        {
+            foreach (ChannelBox channel in ChannelsCanvas.Children.OfType<ChannelBox>())
+            {
+                if (channel.SystemName == PLAYBACKSYS || channel.ChannelName == PLAYBACKCHNAME || channel.DstId == PLAYBACKTG)
+                    continue;
+
+                Codeplug.System system = Codeplug.GetSystemForChannel(channel.ChannelName);
+                Codeplug.Channel cpgChannel = Codeplug.GetChannelByName(channel.ChannelName);
+
+                if (!channel.IsSelected)
+                {
+                    channel.IsSelected = true;
+
+                    channel.Background = channel.IsSelected ? (Brush)new BrushConverter().ConvertFrom("#FF0B004B") : Brushes.Gray;
+
+                    if (channel.IsSelected)
+                    {
+                        _selectedChannelsManager.AddSelectedChannel(channel);
+                    }
+                    else
+                    {
+                        _selectedChannelsManager.RemoveSelectedChannel(channel);
+                    }
+                }
+            }
+        }
+
         /// <summary>
         /// Helper to encode and transmit PCM audio as P25 IMBE frames.
         /// </summary>
@@ -1562,22 +1635,43 @@ namespace WhackerLinkConsoleV2
                 smpIdx++;
             }
 
+            // Convert to floats
+            float[] fSamples = AudioConverter.PcmToFloat(samples);
+
+            // Convert to signal
+            DiscreteSignal signal = new DiscreteSignal(8000, fSamples, true);
+
             // Log.Logger.Debug($"SAMPLE BUFFER {FneUtils.HexDump(samples)}");
 
             // encode PCM samples into IMBE codewords
             byte[] imbe = new byte[FneSystemBase.IMBE_BUF_LEN];
 
+
+            int tone = 0;
+
+            if (true) // TODO: Disable/enable detection
+            {
+                tone = channel.toneDetector.Detect(signal);
+            }
+            if (tone > 0)
+            {
+                MBEToneGenerator.IMBEEncodeSingleTone((ushort)tone, imbe);
+                Console.WriteLine($"({system.Name}) P25D: {tone} HZ TONE DETECT");
+            }
+            else
+            {
 #if WIN32
-            if (channel.extFullRateVocoder == null)
-                channel.extFullRateVocoder = new AmbeVocoder(true);
+                if (channel.extFullRateVocoder == null)
+                    channel.extFullRateVocoder = new AmbeVocoder(true);
 
-            channel.extFullRateVocoder.encode(samples, out imbe);
+                channel.extFullRateVocoder.encode(samples, out imbe);
 #else
-            if (channel.encoder == null)
-                channel.encoder = new MBEEncoder(MBE_MODE.IMBE_88BIT);
+                if (channel.encoder == null)
+                    channel.encoder = new MBEEncoder(MBE_MODE.IMBE_88BIT);
 
-            channel.encoder.encode(samples, imbe);
+                channel.encoder.encode(samples, imbe);
 #endif
+            }
             // Log.Logger.Debug($"IMBE {FneUtils.HexDump(imbe)}");
 
             // fill the LDU buffers appropriately
@@ -1742,6 +1836,15 @@ namespace WhackerLinkConsoleV2
                     short[] samples = new short[FneSystemBase.MBE_SAMPLES_LENGTH];
                     int errs = 0;
 #if WIN32
+                    if (cryptodev)
+                    {
+                        //Console.WriteLine($"MI: {FneUtils.HexDump(channel.mi)}");
+                        //Console.WriteLine($"Algorithm ID: {channel.algId}");
+                        //Console.WriteLine($"Key ID: {channel.kId}");
+
+                        channel.crypter.Process(imbe, frameType, n);
+                    }
+
                     if (channel.extFullRateVocoder == null)
                         channel.extFullRateVocoder = new AmbeVocoder(true);
 
@@ -1846,6 +1949,8 @@ namespace WhackerLinkConsoleV2
                     Codeplug.System system = Codeplug.GetSystemForChannel(channel.ChannelName);
                     Codeplug.Channel cpgChannel = Codeplug.GetChannelByName(channel.ChannelName);
 
+                    bool isEmergency = false;
+
                     if (!system.IsDvm)
                         continue;
 
@@ -1856,9 +1961,6 @@ namespace WhackerLinkConsoleV2
 
                     if (cpgChannel.Tgid != e.DstId.ToString())
                         continue;
-
-                    bool ignoreCall = false;
-                    byte callAlgoId = 0x00;
 
                     if (!systemStatuses.ContainsKey(system.Name))
                     {
@@ -1872,23 +1974,51 @@ namespace WhackerLinkConsoleV2
 
                     SlotStatus slot = systemStatuses[system.Name];
 
+                    // if this is an LDU1 see if this is the first LDU with HDU encryption data
+                    if (e.DUID == P25DUID.LDU1)
+                    {
+                        byte frameType = e.Data[180];
+
+                        // get the initial MI and other enc info (bug found by the screeeeeeeeech on initial tx...)
+                        if (frameType == P25Defines.P25_FT_HDU_VALID)
+                        {
+                            channel.algId = e.Data[181];
+                            channel.kId = (ushort)((e.Data[182] << 8) | e.Data[183]);
+                            Array.Copy(e.Data, 184, channel.mi, 0, P25Defines.P25_MI_LENGTH);
+
+                            channel.crypter.Prepare(channel.algId, channel.kId, P25Crypto.ProtocolType.P25Phase1, channel.mi);
+                        }
+                    }
+
                     // is this a new call stream?
                     if (e.StreamId != slot.RxStreamId && ((e.DUID != P25DUID.TDU) && (e.DUID != P25DUID.TDULC)))
                     {
                         channel.IsReceiving = true;
-                        callAlgoId = P25Defines.P25_ALGO_UNENCRYPT;
                         slot.RxStart = pktTime;
                         // Console.WriteLine($"({system.Name}) P25D: Traffic *CALL START     * PEER {e.PeerId} SRC_ID {e.SrcId} TGID {e.DstId} [STREAM ID {e.StreamId}]");
 
-                        channel.LastSrcId = "Last SRC: " + e.SrcId;
-                        channel.Background = (Brush)new BrushConverter().ConvertFrom("#FF00BC48");
+                        string alias = string.Empty;
+
+                        try
+                        {
+                            alias = AliasTools.GetAliasByRid(system.RidAlias, (int)e.SrcId);
+                        }
+                        catch (Exception) { }
+
+                        if (alias.IsNullOrEmpty())
+                            channel.LastSrcId = "Last SRC: " + e.SrcId;
+                        else
+                            channel.LastSrcId = "Last: " + alias;
+                        
+                        if (channel.algId != P25Defines.P25_ALGO_UNENCRYPT)
+                            channel.Background = (Brush)new BrushConverter().ConvertFrom("#ffdeaf0a");
+                        else
+                            channel.Background = (Brush)new BrushConverter().ConvertFrom("#FF00BC48");
                     }
 
                     // Is the call over?
                     if (((e.DUID == P25DUID.TDU) || (e.DUID == P25DUID.TDULC)) && (slot.RxType != FrameType.TERMINATOR))
                     {
-                        ignoreCall = false;
-                        callAlgoId = P25Defines.P25_ALGO_UNENCRYPT;
                         channel.IsReceiving = false;
                         TimeSpan callDuration = pktTime - slot.RxStart;
                         // Console.WriteLine($"({system.Name}) P25D: Traffic *CALL END       * PEER {e.PeerId} SRC_ID {e.SrcId} TGID {e.DstId} DUR {callDuration} [STREAM ID {e.StreamId}]");
@@ -1896,26 +2026,11 @@ namespace WhackerLinkConsoleV2
                         return;
                     }
 
-                    if (ignoreCall && callAlgoId == P25Defines.P25_ALGO_UNENCRYPT)
-                        ignoreCall = false;
-
-                    // if this is an LDU1 see if this is the first LDU with HDU encryption data
-                    if (e.DUID == P25DUID.LDU1 && !ignoreCall)
-                    {
-                        byte frameType = e.Data[180];
-                        if (frameType == P25Defines.P25_FT_HDU_VALID)
-                            callAlgoId = e.Data[181];
-                    }
-
-                    if (e.DUID == P25DUID.LDU2 && !ignoreCall)
-                        callAlgoId = data[88];
-
-                    if (ignoreCall)
-                        return;
-
-                    bool isEmergency = false;
+                    if (channel.algId != cpgChannel.GetAlgoId() && channel.algId != P25Defines.P25_ALGO_UNENCRYPT)
+                        continue;
 
                     int count = 0;
+
                     switch (e.DUID)
                     {
                         case P25DUID.LDU1:
@@ -1937,10 +2052,8 @@ namespace WhackerLinkConsoleV2
 
                                     // The '64' record - IMBE Voice 3 + Link Control
                                     Buffer.BlockCopy(data, count, channel.netLDU1, 50, 17);
-
                                     byte serviceOptions = data[count + 3];
                                     isEmergency = (serviceOptions & 0x80) == 0x80;
-
                                     count += 17;
 
                                     // The '65' record - IMBE Voice 4 + Link Control
@@ -1966,12 +2079,6 @@ namespace WhackerLinkConsoleV2
                                     // The '6A' record - IMBE Voice 9 + Low Speed Data
                                     Buffer.BlockCopy(data, count, channel.netLDU1, 200, 16);
                                     count += 16;
-
-                                    if (cryptodev)
-                                    {
-                                        if (channel.mi != null && channel.mi.Length > 0)
-                                            channel.crypter.Prepare(channel.algId, channel.kId, P25Crypto.ProtocolType.P25Phase1, channel.mi);
-                                    }
 
                                     // decode 9 IMBE codewords into PCM samples
                                     P25DecodeAudioFrame(channel.netLDU1, e, handler, channel, isEmergency);
@@ -2034,15 +2141,15 @@ namespace WhackerLinkConsoleV2
                                     Buffer.BlockCopy(data, count, channel.netLDU2, 200, 16);
                                     count += 16;
 
-                                    if (channel.mi != null && channel.mi.Length > 0 && cryptodev)
-                                        channel.crypter.Prepare(channel.algId, channel.kId, P25Crypto.ProtocolType.P25Phase1, channel.mi);
-
                                     // decode 9 IMBE codewords into PCM samples
                                     P25DecodeAudioFrame(channel.netLDU2, e, handler, channel, isEmergency, P25Crypto.FrameType.LDU2);
                                 }
                             }
                             break;
                     }
+
+                    if (channel.mi != null && cryptodev)
+                        channel.crypter.Prepare(channel.algId, channel.kId, P25Crypto.ProtocolType.P25Phase1, channel.mi);
 
                     slot.RxRFS = e.SrcId;
                     slot.RxType = e.FrameType;

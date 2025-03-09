@@ -1,12 +1,33 @@
-﻿// Based on OP25 p25_crypt_algs.cpp
+﻿/*
+* WhackerLink - WhackerLinkConsoleV2
+*
+* This program is free software: you can redistribute it and/or modify
+* it under the terms of the GNU General Public License as published by
+* the Free Software Foundation, either version 3 of the License, or
+* (at your option) any later version.
+*
+* This program is distributed in the hope that it will be useful,
+* but WITHOUT ANY WARRANTY; without even the implied warranty of
+* MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+* GNU General Public License for more details.
+*
+* You should have received a copy of the GNU General Public License
+* along with this program.  If not, see <http://www.gnu.org/licenses/>.
+* 
+* Derrived from https://github.com/boatbod/op25/op25/gr-op25_repeater/lib/p25_crypt_algs.cc
+* 
+* Copyright (C) 2025 Caleb, K4PHP
+* 
+*/
 
 namespace WhackerLinkConsoleV2
 {
+    /// <summary>
+    /// P25 Crypto class
+    /// </summary>
     public class P25Crypto
     {
-        private int debug;
-        private int msgqId;
-        private ProtocolType prType;
+        private ProtocolType protocol;
         private byte algId;
         private ushort keyId;
         private byte[] messageIndicator = new byte[9];
@@ -14,21 +35,31 @@ namespace WhackerLinkConsoleV2
         private byte[] adpKeystream = new byte[469];
         private int adpPosition;
 
-        public P25Crypto(int debug = 0, int msgqId = 0)
+        /// <summary>
+        /// Creates an instance of <see cref="P25Crypto"/>
+        /// </summary>
+        public P25Crypto()
         {
-            this.debug = debug;
-            this.msgqId = msgqId;
-            this.prType = ProtocolType.Unknown;
+            this.protocol = ProtocolType.Unknown;
             this.algId = 0x80;
             this.keyId = 0;
             this.adpPosition = 0;
         }
 
+        /// <summary>
+        /// Clear keys
+        /// </summary>
         public void Reset()
         {
             keys.Clear();
         }
 
+        /// <summary>
+        /// Add key to keys list
+        /// </summary>
+        /// <param name="keyid"></param>
+        /// <param name="algid"></param>
+        /// <param name="key"></param>
         public void AddKey(ushort keyid, byte algid, byte[] key)
         {
             if (keyid == 0 || algid == 0x80)
@@ -37,7 +68,15 @@ namespace WhackerLinkConsoleV2
             keys[keyid] = new KeyInfo(algid, key);
         }
 
-        public bool Prepare(byte algid, ushort keyid, ProtocolType prType, byte[] MI)
+        /// <summary>
+        /// Prepare P25 encryption meta data info
+        /// </summary>
+        /// <param name="algid"></param>
+        /// <param name="keyid"></param>
+        /// <param name="protocol"></param>
+        /// <param name="MI"></param>
+        /// <returns></returns>
+        public bool Prepare(byte algid, ushort keyid, ProtocolType protocol, byte[] MI)
         {
             this.algId = algid;
             this.keyId = keyid;
@@ -45,19 +84,13 @@ namespace WhackerLinkConsoleV2
 
             if (!keys.ContainsKey(keyid))
             {
-                if (debug >= 10)
-                    Console.Error.WriteLine($"P25Crypto::Prepare: KeyID [0x{keyid:X}] not found");
-
                 return false;
             }
 
-            if (debug >= 10)
-                Console.WriteLine($"P25Crypto::Prepare: KeyID [0x{keyid:X}] found");
-
-            if (algid == 0xAA) // ADP RC4
+            if (algid == 0xAA)
             {
                 this.adpPosition = 0;
-                this.prType = prType;
+                this.protocol = protocol;
                 AdpKeystreamGen();
                 return true;
             }
@@ -65,17 +98,31 @@ namespace WhackerLinkConsoleV2
             return false;
         }
 
+        /// <summary>
+        /// Process P25 frames for crypto
+        /// </summary>
+        /// <param name="PCW"></param>
+        /// <param name="frameType"></param>
+        /// <param name="voiceSubframe"></param>
+        /// <returns></returns>
         public bool Process(byte[] PCW, FrameType frameType, int voiceSubframe)
         {
             if (!keys.ContainsKey(keyId))
                 return false;
 
-            if (algId == 0xAA) // ADP RC4
+            if (algId == 0xAA)
                 return AdpProcess(PCW, frameType, voiceSubframe);
 
             return false;
         }
 
+        /// <summary>
+        /// Process RC4
+        /// </summary>
+        /// <param name="PCW"></param>
+        /// <param name="frameType"></param>
+        /// <param name="voiceSubframe"></param>
+        /// <returns></returns>
         private bool AdpProcess(byte[] PCW, FrameType frameType, int voiceSubframe)
         {
             int offset = 256;
@@ -92,9 +139,8 @@ namespace WhackerLinkConsoleV2
                 default: return false;
             }
 
-            if (prType == ProtocolType.P25Phase1)
+            if (protocol == ProtocolType.P25Phase1)
             {
-                // FDMA
                 offset += (adpPosition * 11) + 267 + (adpPosition < 8 ? 0 : 2);
                 adpPosition = (adpPosition + 1) % 9;
                 for (int j = 0; j < 11; ++j)
@@ -102,19 +148,21 @@ namespace WhackerLinkConsoleV2
                     PCW[j] ^= adpKeystream[j + offset];
                 }
             }
-            else if (prType == ProtocolType.P25Phase2)
+            else if (protocol == ProtocolType.P25Phase2)
             {
-                // TDMA
                 for (int j = 0; j < 7; ++j)
                 {
                     PCW[j] ^= adpKeystream[j + offset];
                 }
-                PCW[6] &= 0x80; // Mask everything except MSB of the final codeword
+                PCW[6] &= 0x80;
             }
 
             return true;
         }
 
+        /// <summary>
+        /// Create RC4 key stream
+        /// </summary>
         private void AdpKeystreamGen()
         {
             byte[] adpKey = new byte[13];
@@ -136,7 +184,6 @@ namespace WhackerLinkConsoleV2
             for (; i < 5; i++)
                 adpKey[i] = keySize > 0 ? keyData[i - padding] : (byte)0; 
 
-            // Append MI bytes
             for (i = 5; i < 13; ++i)
             {
                 adpKey[i] = messageIndicator[i - 5];
@@ -151,7 +198,7 @@ namespace WhackerLinkConsoleV2
             for (i = 0; i < 256; ++i) 
             {
                 j = (j + S[i] + K[i]) & 0xFF;
-                Swap(ref S[i], ref S[j]);
+                Swap(S, i, j);
             }
 
             i = j = 0;
@@ -159,18 +206,27 @@ namespace WhackerLinkConsoleV2
             {
                 i = (i + 1) & 0xFF;
                 j = (j + S[i]) & 0xFF;
-                Swap(ref S[i], ref S[j]);
+                Swap(S, i, j);
                 adpKeystream[k] = S[(S[i] + S[j]) & 0xFF];
             }
         }
 
-        private void Swap(ref byte a, ref byte b)
+        /// <summary>
+        /// Preform a swap
+        /// </summary>
+        /// <param name="S"></param>
+        /// <param name="i"></param>
+        /// <param name="j"></param>
+        private void Swap(byte[] S, int i, int j)
         {
-            byte temp = a;
-            a = b;
-            b = temp;
+            byte temp = S[i];
+            S[i] = S[j];
+            S[j] = temp;
         }
 
+        /// <summary>
+        /// P25 protocol type
+        /// </summary>
         public enum ProtocolType
         {
             Unknown = 0,
@@ -178,6 +234,9 @@ namespace WhackerLinkConsoleV2
             P25Phase2
         }
 
+        /// <summary>
+        /// P25 frame type
+        /// </summary>
         public enum FrameType
         {
             Unknown = 0,
@@ -190,6 +249,9 @@ namespace WhackerLinkConsoleV2
             V4_3
         }
 
+        /// <summary>
+        /// Key info object
+        /// </summary>
         private class KeyInfo
         {
             public byte AlgId { get; }

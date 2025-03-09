@@ -75,9 +75,12 @@ namespace WhackerLinkConsoleV2.Controls
         public MBEEncoder encoder;
         public MBEDecoder decoder;
 
+        public MBEToneDetector toneDetector = new MBEToneDetector();
+
         public P25Crypto crypter = new P25Crypto();
 
         public bool IsReceiving { get; set; } = false;
+        public bool IsReceivingEncrypted { get; set; } = false;
 
         public string LastSrcId
         {
@@ -221,10 +224,6 @@ namespace WhackerLinkConsoleV2.Controls
                 PageSelectButton.IsEnabled = false;
                 ChannelMarkerBtn.IsEnabled = false;
             }
-
-            byte[] key = { 00, 00, 00, 00, 00 };
-
-            crypter.AddKey(00, 0xaa, key);
         }
 
         private void ChannelBox_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)

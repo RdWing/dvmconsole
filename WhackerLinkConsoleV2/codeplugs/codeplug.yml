@@ -52,6 +52,9 @@ zones:
       - name: "Channel 1"
         system: "System 1"
         tgid: "2001"
+        keyId: 0x50
+        algoId: 0xaa
+        encryptionKey: 0x01, 0x23, 0x45, 0x67, 0x89
       - name: "Channel 2"
         system: "System 1"
         tgid: "15002"
