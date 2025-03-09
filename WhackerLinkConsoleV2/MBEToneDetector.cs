@@ -1,4 +1,6 @@
-﻿using System;
+﻿// From github.com/w3axl/rc2-dvm
+
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;

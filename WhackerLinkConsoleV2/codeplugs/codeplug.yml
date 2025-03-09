@@ -45,7 +45,6 @@ systems:
         siteID: 1
         range: 1.5
 
-
 zones:
   - name: "Zone 1"
     channels:
