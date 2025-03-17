@@ -5,6 +5,7 @@ using System.Text;
 using System.Threading.Tasks;
 using fnecore.DMR;
 using fnecore;
+using fnecore.P25.kmm;
 
 namespace WhackerLinkConsoleV2
 {
@@ -178,6 +179,23 @@ namespace WhackerLinkConsoleV2
         protected override void PeerConnected(object sender, PeerConnectedEvent e)
         {
             return;
+        }
+
+        /// <summary>
+        /// 
+        /// </summary>
+        /// <param name="sender"></param>
+        /// <param name="e"></param>
+        protected override void KeyResponse(object sender, KeyResponseEvent e)
+        {
+            byte[] payload = e.Data.Skip(11).ToArray();
+
+            //Console.WriteLine(FneUtils.HexDump(payload));
+
+            if (e.MessageId == (byte)KmmMessageType.MODIFY_KEY_CMD)
+            {
+                mainWindow.KeyResponseReceived(e);
+            }
         }
 
         /// <summary>

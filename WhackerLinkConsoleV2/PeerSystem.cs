@@ -23,6 +23,7 @@ using Serilog;
 using fnecore;
 using WhackerLinkLib.Models.Radio;
 using static WhackerLinkLib.Models.Radio.Codeplug;
+using Microsoft.AspNetCore.Mvc.Formatters;
 
 namespace WhackerLinkConsoleV2
 {
@@ -75,6 +76,15 @@ namespace WhackerLinkConsoleV2
 
             // set configuration parameters
             peer.Passphrase = system.AuthKey;
+            peer.Information = new PeerInformation
+            {
+                Details = new PeerDetails
+                {
+                    ConventionalPeer = true,
+                    Software = "WLINKCONSOLE",
+                    Identity = "CONS OP"
+                }
+            };
 
             peer.PingTime = 5;
 

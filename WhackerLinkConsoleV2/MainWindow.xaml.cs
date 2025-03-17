@@ -93,7 +93,7 @@ namespace WhackerLinkConsoleV2
 
         public MainWindow()
         {
-#if !DEBUG
+#if DEBUG
             ConsoleNative.ShowConsole();
 #endif
             InitializeComponent();
@@ -291,6 +291,7 @@ namespace WhackerLinkConsoleV2
                             });
                         };
 
+
                         peer.peer.PeerDisconnected += (response) =>
                         {
                             Console.WriteLine("FNE Peer disconnected");
@@ -322,7 +323,7 @@ namespace WhackerLinkConsoleV2
                     {
                         var channelBox = new ChannelBox(_selectedChannelsManager, _audioManager, channel.Name, channel.System, channel.Tgid);
 
-                        channelBox.crypter.AddKey(channel.GetKeyId(), channel.GetAlgoId(), channel.GetEncryptionKey());
+                        //channelBox.crypter.AddKey(channel.GetKeyId(), channel.GetAlgoId(), channel.GetEncryptionKey());
 
                         if (_settingsManager.ChannelPositions.TryGetValue(channel.Name, out var position))
                         {
@@ -537,6 +538,9 @@ namespace WhackerLinkConsoleV2
                         uint newTgid = UInt32.Parse(cpgChannel.Tgid);
                         bool exists = fneAffs.Any(aff => aff.Item2 == newTgid);
 
+                        if (cpgChannel.GetAlgoId() != 0 && cpgChannel.GetKeyId() != 0)
+                            fne.peer.SendMasterKeyRequest(cpgChannel.GetAlgoId(), cpgChannel.GetKeyId());
+
                         if (!exists)
                             fneAffs.Add(new Tuple<uint, uint>(GetUniqueRid(system.Rid), newTgid));
 
@@ -554,7 +558,7 @@ namespace WhackerLinkConsoleV2
                 if (system.IsDvm)
                 {
                     PeerSystem fne = _fneSystemManager.GetFneSystem(system.Name);
-                    fne.peer.SendMasterAffiliationUpdate(fneAffs);
+                    //fne.peer.SendMasterAffiliationUpdate(fneAffs);
                 }
             }
         }
@@ -1839,13 +1843,7 @@ namespace WhackerLinkConsoleV2
 
                     short[] samples = new short[FneSystemBase.MBE_SAMPLES_LENGTH];
 
-                    if (cryptodev)
-                    {
-                        //Console.WriteLine($"MI: {FneUtils.HexDump(channel.mi)}");
-                        //Console.WriteLine($"Algorithm ID: {channel.algId}");
-                        //Console.WriteLine($"Key ID: {channel.kId}");
-                        channel.crypter.Process(imbe, frameType, n);
-                    }
+                    channel.crypter.Process(imbe, frameType, n);
 
 #if WIN32
                     if (channel.extFullRateVocoder == null)
@@ -1917,6 +1915,53 @@ namespace WhackerLinkConsoleV2
             usedRids.Add(rid);
 
             return rid;
+        }
+
+        /// <summary>
+        /// 
+        /// </summary>
+        /// <param name="e"></param>
+        public void KeyResponseReceived(KeyResponseEvent e)
+        {
+            //Console.WriteLine($"Message ID: {e.KmmKey.MessageId}");
+            //Console.WriteLine($"Decrypt Info Format: {e.KmmKey.DecryptInfoFmt}");
+            //Console.WriteLine($"Algorithm ID: {e.KmmKey.AlgId}");
+            //Console.WriteLine($"Key ID: {e.KmmKey.KeyId}");
+            //Console.WriteLine($"Keyset ID: {e.KmmKey.KeysetItem.KeysetId}");
+            //Console.WriteLine($"Keyset Alg ID: {e.KmmKey.KeysetItem.AlgId}");
+            //Console.WriteLine($"Keyset Key Length: {e.KmmKey.KeysetItem.KeyLength}");
+            //Console.WriteLine($"Number of Keys: {e.KmmKey.KeysetItem.Keys.Count}");
+
+            foreach (var key in e.KmmKey.KeysetItem.Keys)
+            {
+                //Console.WriteLine($"  Key Format: {key.KeyFormat}");
+                //Console.WriteLine($"  SLN: {key.Sln}");
+                //Console.WriteLine($"  Key ID: {key.KeyId}");
+                //Console.WriteLine($"  Key Data: {BitConverter.ToString(key.GetKey())}");
+
+                Dispatcher.Invoke(() =>
+                {
+                    foreach (ChannelBox channel in _selectedChannelsManager.GetSelectedChannels())
+                    {
+                        Codeplug.System system = Codeplug.GetSystemForChannel(channel.ChannelName);
+                        Codeplug.Channel cpgChannel = Codeplug.GetChannelByName(channel.ChannelName);
+
+                        if (!system.IsDvm)
+                            continue;
+
+                        PeerSystem handler = _fneSystemManager.GetFneSystem(system.Name);
+
+                        if (cpgChannel.GetKeyId() != 0 && cpgChannel.GetAlgoId() != 0)
+                            channel.crypter.AddKey(key.KeyId, e.KmmKey.KeysetItem.AlgId, key.GetKey());
+                    }
+                });
+            }
+        }
+
+        private void KeyStatus_Click(object sender, RoutedEventArgs e)
+        {
+            KeyStatusWindow keyStatus = new KeyStatusWindow(Codeplug, this);
+            keyStatus.Show();
         }
 
         /// <summary>
@@ -2136,12 +2181,10 @@ namespace WhackerLinkConsoleV2
                                     Buffer.BlockCopy(data, count, channel.netLDU2, 200, 16);
                                     count += 16;
 
-                                    if (channel.p25Errs > 0) // temp, need to actually get erros I guess
+                                    if (channel.p25Errs > 0) // temp, need to actually get errors I guess
                                         P25Crypto.CycleP25Lfsr(channel.mi);
                                     else
                                         Array.Copy(newMI, channel.mi, P25Defines.P25_MI_LENGTH);
-
-                                    Console.WriteLine(channel.p25Errs);
 
                                     // decode 9 IMBE codewords into PCM samples
                                     P25DecodeAudioFrame(channel.netLDU2, e, handler, channel, isEmergency, P25Crypto.FrameType.LDU2);
@@ -2150,7 +2193,7 @@ namespace WhackerLinkConsoleV2
                             break;
                     }
 
-                    if (channel.mi != null && cryptodev)
+                    if (channel.mi != null)
                         channel.crypter.Prepare(channel.algId, channel.kId, P25Crypto.ProtocolType.P25Phase1, channel.mi);
 
                     slot.RxRFS = e.SrcId;

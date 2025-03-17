@@ -52,8 +52,8 @@ zones:
         system: "System 1"
         tgid: "2001"
         keyId: 0x50
-        algoId: 0xaa
-        encryptionKey: 0x01, 0x23, 0x45, 0x67, 0x89
+        algoId: 0xaa # 0xAA or 0x84 (RC4 or AES)
+        encryptionKey: null # Ignored now, we use dvmfne KMM support
       - name: "Channel 2"
         system: "System 1"
         tgid: "15002"

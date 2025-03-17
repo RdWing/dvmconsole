@@ -175,6 +175,19 @@
                 </LinearGradientBrush>
             </Button.Background>
         </Button>
+        <Button VerticalContentAlignment="Center" Content="Key Stats" HorizontalAlignment="Left" Margin="696,0,0,0" VerticalAlignment="Center" Height="46" Width="44"  Click="KeyStatus_Click" BorderBrush="#FFC1C1C1" BorderThickness="1,1,1,1" FontSize="10" FontFamily="Arial" Grid.Row="1">
+            <Button.Resources>
+                <Style TargetType="{x:Type Border}">
+                    <Setter Property="CornerRadius" Value="2"/>
+                </Style>
+            </Button.Resources>
+            <Button.Background>
+                <LinearGradientBrush EndPoint="0.5,1" StartPoint="0.5,0">
+                    <GradientStop Color="#FFF0F0F0" Offset="0.485"/>
+                    <GradientStop Color="#FFDBDBDB" Offset="0.517"/>
+                </LinearGradientBrush>
+            </Button.Background>
+        </Button>
         <Image HorizontalAlignment="Left" Margin="514,3,0,3" Grid.Row="1" Width="38" Source="/Assets/page.png" IsHitTestVisible="False"/>
         <Button Content="" VerticalContentAlignment="Bottom" HorizontalAlignment="Left" Margin="556,0,0,0" VerticalAlignment="Center" Height="46" Width="44"  Click="AudioSettings_Click" BorderBrush="#FFC1C1C1" BorderThickness="1,1,1,1" Grid.Row="1" FontSize="10" FontFamily="Arial">
             <Button.Resources>

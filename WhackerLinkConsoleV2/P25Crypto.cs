@@ -15,16 +15,19 @@
 * along with this program.  If not, see <http://www.gnu.org/licenses/>.
 * 
 * Derrived from https://github.com/boatbod/op25/op25/gr-op25_repeater/lib/p25_crypt_algs.cc
+* Derrived from https://github.com/boatbod/op25/blob/master/op25/gr-op25_repeater/lib/op25_crypt_aes.cc
 * 
 * Copyright (C) 2025 Caleb, K4PHP
 * 
 */
 
+using System;
+using System.Collections.Generic;
+using System.Security.Cryptography;
+using System.Linq;
+
 namespace WhackerLinkConsoleV2
 {
-    /// <summary>
-    /// P25 Crypto class
-    /// </summary>
     public class P25Crypto
     {
         private ProtocolType protocol;
@@ -32,34 +35,25 @@ namespace WhackerLinkConsoleV2
         private ushort keyId;
         private byte[] messageIndicator = new byte[9];
         private Dictionary<ushort, KeyInfo> keys = new Dictionary<ushort, KeyInfo>();
-        private byte[] adpKeystream = new byte[469];
+        private byte[] aesKeystream = new byte[240]; // AES buffer
+        private byte[] adpKeystream = new byte[469]; // ADP buffer
+        private int aesPosition;
         private int adpPosition;
 
-        /// <summary>
-        /// Creates an instance of <see cref="P25Crypto"/>
-        /// </summary>
         public P25Crypto()
         {
             this.protocol = ProtocolType.Unknown;
             this.algId = 0x80;
             this.keyId = 0;
+            this.aesPosition = 0;
             this.adpPosition = 0;
         }
 
-        /// <summary>
-        /// Clear keys
-        /// </summary>
         public void Reset()
         {
             keys.Clear();
         }
 
-        /// <summary>
-        /// Add key to keys list
-        /// </summary>
-        /// <param name="keyid"></param>
-        /// <param name="algid"></param>
-        /// <param name="key"></param>
         public void AddKey(ushort keyid, byte algid, byte[] key)
         {
             if (keyid == 0 || algid == 0x80)
@@ -68,60 +62,247 @@ namespace WhackerLinkConsoleV2
             keys[keyid] = new KeyInfo(algid, key);
         }
 
-        /// <summary>
-        /// Prepare P25 encryption meta data info
-        /// </summary>
-        /// <param name="algid"></param>
-        /// <param name="keyid"></param>
-        /// <param name="protocol"></param>
-        /// <param name="MI"></param>
-        /// <returns></returns>
+        public bool HasKey(ushort keyId)
+        {
+            return keys.ContainsKey(keyId);
+        }
+
         public bool Prepare(byte algid, ushort keyid, ProtocolType protocol, byte[] MI)
         {
             this.algId = algid;
             this.keyId = keyid;
+            this.protocol = protocol;
             Array.Copy(MI, this.messageIndicator, Math.Min(MI.Length, this.messageIndicator.Length));
 
             if (!keys.ContainsKey(keyid))
-            {
                 return false;
-            }
 
-            if (algid == 0xAA)
+            if (algid == 0x84) // AES-256
+            {
+                this.aesPosition = 0;
+                GenerateAesKeystream();
+                return true;
+            }
+            else if (algid == 0xAA) // ADP (RC4)
             {
                 this.adpPosition = 0;
-                this.protocol = protocol;
-                AdpKeystreamGen();
+                GenerateAdpKeystream();
                 return true;
             }
 
             return false;
         }
 
-        /// <summary>
-        /// Process P25 frames for crypto
-        /// </summary>
-        /// <param name="PCW"></param>
-        /// <param name="frameType"></param>
-        /// <param name="voiceSubframe"></param>
-        /// <returns></returns>
         public bool Process(byte[] PCW, FrameType frameType, int voiceSubframe)
         {
             if (!keys.ContainsKey(keyId))
                 return false;
 
-            if (algId == 0xAA)
-                return AdpProcess(PCW, frameType, voiceSubframe);
-
-            return false;
+            return algId switch
+            {
+                0x84 => AesProcess(PCW, frameType, voiceSubframe),
+                0xAA => AdpProcess(PCW, frameType, voiceSubframe),
+                _ => false
+            };
         }
 
         /// <summary>
-        /// Cycles the P25 LFSR (Linear Feedback Shift Register) based on the given polynomial.
+        /// Create ADP key stream
         /// </summary>
-        /// <param name="MI">The message indicator array to be processed.</param>
+        private void GenerateAdpKeystream()
+        {
+            byte[] adpKey = new byte[13];
+            byte[] S = new byte[256];
+            byte[] K = new byte[256];
+
+            if (!keys.ContainsKey(keyId))
+                return;
+
+            byte[] keyData = keys[keyId].Key;
+
+            int keySize = keyData.Length;
+            int padding = Math.Max(5 - keySize, 0);
+            int i, j = 0, k;
+
+            for (i = 0; i < padding; i++)
+                adpKey[i] = 0;
+
+            for (; i < 5; i++)
+                adpKey[i] = keySize > 0 ? keyData[i - padding] : (byte)0;
+
+            for (i = 5; i < 13; ++i)
+            {
+                adpKey[i] = messageIndicator[i - 5];
+            }
+
+            for (i = 0; i < 256; ++i)
+            {
+                K[i] = adpKey[i % 13];
+                S[i] = (byte)i;
+            }
+
+            for (i = 0; i < 256; ++i)
+            {
+                j = (j + S[i] + K[i]) & 0xFF;
+                Swap(S, i, j);
+            }
+
+            i = j = 0;
+            for (k = 0; k < 469; ++k)
+            {
+                i = (i + 1) & 0xFF;
+                j = (j + S[i]) & 0xFF;
+                Swap(S, i, j);
+                adpKeystream[k] = S[(S[i] + S[j]) & 0xFF];
+            }
+        }
+
+        /// <summary>
+        /// Preform a swap
+        /// </summary>
+        /// <param name="S"></param>
+        /// <param name="i"></param>
+        /// <param name="j"></param>
+        private void Swap(byte[] S, int i, int j)
+        {
+            byte temp = S[i];
+            S[i] = S[j];
+            S[j] = temp;
+        }
+
+        /// <summary>
+        /// Process AES256
+        /// </summary>
+        /// <param name="PCW"></param>
+        /// <param name="frameType"></param>
+        /// <param name="voiceSubframe"></param>
+        /// <returns></returns>
+        private bool AesProcess(byte[] PCW, FrameType frameType, int voiceSubframe)
+        {
+            int offset = 16;
+
+            switch (frameType)
+            {
+                case FrameType.LDU1: offset += 0; break;
+                case FrameType.LDU2: offset += 101; break;
+                case FrameType.V4_0: offset += 7 * voiceSubframe; break;
+                case FrameType.V4_1: offset += 7 * (voiceSubframe + 4); break;
+                case FrameType.V4_2: offset += 7 * (voiceSubframe + 8); break;
+                case FrameType.V4_3: offset += 7 * (voiceSubframe + 12); break;
+                case FrameType.V2: offset += 7 * (voiceSubframe + 16); break;
+                default: return false;
+            }
+
+            if (protocol == ProtocolType.P25Phase1)
+            {
+                offset += (aesPosition * 11) + 11 + (aesPosition < 8 ? 0 : 2);
+                aesPosition = (aesPosition + 1) % 9;
+
+                for (int j = 0; j < 11; ++j)
+                {
+                    PCW[j] ^= aesKeystream[j + offset];
+                }
+            }
+            else if (protocol == ProtocolType.P25Phase2)
+            {
+                for (int j = 0; j < 7; ++j)
+                {
+                    PCW[j] ^= aesKeystream[j + offset];
+                }
+                PCW[6] &= 0x80;
+            }
+
+            return true;
+        }
+
+        /// <summary>
+        /// Process ADP
+        /// </summary>
+        /// <param name="PCW"></param>
+        /// <param name="frameType"></param>
+        /// <param name="voiceSubframe"></param>
+        /// <returns></returns>
+        private bool AdpProcess(byte[] PCW, FrameType frameType, int voiceSubframe)
+        {
+            int offset = 256;
+
+            switch (frameType)
+            {
+                case FrameType.LDU1: offset = 0; break;
+                case FrameType.LDU2: offset = 101; break;
+                case FrameType.V4_0: offset += 7 * voiceSubframe; break;
+                case FrameType.V4_1: offset += 7 * (voiceSubframe + 4); break;
+                case FrameType.V4_2: offset += 7 * (voiceSubframe + 8); break;
+                case FrameType.V4_3: offset += 7 * (voiceSubframe + 12); break;
+                case FrameType.V2: offset += 7 * (voiceSubframe + 16); break;
+                default: return false;
+            }
+
+            if (protocol == ProtocolType.P25Phase1)
+            {
+                offset += (adpPosition * 11) + 267 + (adpPosition < 8 ? 0 : 2);
+                adpPosition = (adpPosition + 1) % 9;
+
+                for (int j = 0; j < 11; ++j)
+                {
+                    PCW[j] ^= adpKeystream[j + offset];
+                }
+            }
+            else if (protocol == ProtocolType.P25Phase2)
+            {
+                for (int j = 0; j < 7; ++j)
+                {
+                    PCW[j] ^= adpKeystream[j + offset];
+                }
+                PCW[6] &= 0x80;
+            }
+
+            return true;
+        }
+
+        /// <summary>
+        /// Create AES key stream
+        /// </summary>
+        private void GenerateAesKeystream()
+        {
+            if (!keys.ContainsKey(keyId))
+                return;
+
+            byte[] key = keys[keyId].Key;
+            byte[] iv = ExpandMiTo128(messageIndicator);
+
+            using (var aes = Aes.Create())
+            {
+                aes.KeySize = 256;
+                aes.BlockSize = 128;
+                aes.Key = key.Length == 32 ? key : key.Concat(new byte[32 - key.Length]).ToArray();
+                aes.Mode = CipherMode.ECB;
+                aes.Padding = PaddingMode.None;
+
+                using (var encryptor = aes.CreateEncryptor())
+                {
+                    byte[] input = new byte[16];
+                    Array.Copy(iv, input, 16);
+                    byte[] output = new byte[16];
+
+                    for (int i = 0; i < aesKeystream.Length / 16; i++)
+                    {
+                        encryptor.TransformBlock(input, 0, 16, output, 0);
+                        Buffer.BlockCopy(output, 0, aesKeystream, i * 16, 16);
+                        Array.Copy(output, input, 16);
+                    }
+                }
+            }
+        }
+
+        /// <summary>
+        /// Cycle P25 LFSR
+        /// </summary>
+        /// <param name="MI"></param>
+        /// <exception cref="ArgumentException"></exception>
         public static void CycleP25Lfsr(byte[] MI)
         {
+            // TODO: use step LFSR
             if (MI == null || MI.Length < 9)
                 throw new ArgumentException("MI must be at least 9 bytes long.");
 
@@ -152,141 +333,68 @@ namespace WhackerLinkConsoleV2
         }
 
         /// <summary>
-        /// Process RC4
+        /// Step LFSR
         /// </summary>
-        /// <param name="PCW"></param>
-        /// <param name="frameType"></param>
-        /// <param name="voiceSubframe"></param>
+        /// <param name="lfsr"></param>
         /// <returns></returns>
-        private bool AdpProcess(byte[] PCW, FrameType frameType, int voiceSubframe)
+        private static ulong StepP25Lfsr(ref ulong lfsr)
         {
-            int offset = 256;
+            // Extract overflow bit (bit 63)
+            ulong ovBit = (lfsr >> 63) & 0x1;
 
-            switch (frameType)
-            {
-                case FrameType.LDU1: offset = 0; break;
-                case FrameType.LDU2: offset = 101; break;
-                case FrameType.V4_0: offset += 7 * voiceSubframe; break;
-                case FrameType.V4_1: offset += 7 * (voiceSubframe + 4); break;
-                case FrameType.V4_2: offset += 7 * (voiceSubframe + 8); break;
-                case FrameType.V4_3: offset += 7 * (voiceSubframe + 12); break;
-                case FrameType.V2: offset += 7 * (voiceSubframe + 16); break;
-                default: return false;
-            }
+            // Compute feedback bit using polynomial: x^64 + x^62 + x^46 + x^38 + x^27 + x^15 + 1
+            ulong fbBit = ((lfsr >> 63) ^ (lfsr >> 61) ^ (lfsr >> 45) ^ (lfsr >> 37) ^
+                           (lfsr >> 26) ^ (lfsr >> 14)) & 0x1;
 
-            if (protocol == ProtocolType.P25Phase1)
-            {
-                offset += (adpPosition * 11) + 267 + (adpPosition < 8 ? 0 : 2);
-                adpPosition = (adpPosition + 1) % 9;
-                for (int j = 0; j < 11; ++j)
-                {
-                    PCW[j] ^= adpKeystream[j + offset];
-                }
-            }
-            else if (protocol == ProtocolType.P25Phase2)
-            {
-                for (int j = 0; j < 7; ++j)
-                {
-                    PCW[j] ^= adpKeystream[j + offset];
-                }
-                PCW[6] &= 0x80;
-            }
+            // Shift LFSR left and insert feedback bit
+            lfsr = (lfsr << 1) | fbBit;
 
-            return true;
+            return ovBit;
         }
 
         /// <summary>
-        /// Create RC4 key stream
+        /// Expland MI to 128 IV
         /// </summary>
-        private void AdpKeystreamGen()
+        /// <param name="mi"></param>
+        /// <returns></returns>
+        /// <exception cref="ArgumentException"></exception>
+        private static byte[] ExpandMiTo128(byte[] mi)
         {
-            byte[] adpKey = new byte[13];
-            byte[] S = new byte[256];
-            byte[] K = new byte[256];
+            if (mi == null || mi.Length < 8)
+                throw new ArgumentException("MI must be at least 8 bytes long.");
 
-            if (!keys.ContainsKey(keyId))
-                return;
+            byte[] iv = new byte[16];
 
-            byte[] keyData = keys[keyId].Key;
-
-            int keySize = keyData.Length;
-            int padding = Math.Max(5 - keySize, 0);
-            int i, j = 0, k; 
-
-            for (i = 0; i < padding; i++)
-                adpKey[i] = 0; 
-
-            for (; i < 5; i++)
-                adpKey[i] = keySize > 0 ? keyData[i - padding] : (byte)0; 
-
-            for (i = 5; i < 13; ++i)
+            // Copy first 64 bits of MI into LFSR
+            ulong lfsr = 0;
+            for (int i = 0; i < 8; i++)
             {
-                adpKey[i] = messageIndicator[i - 5];
+                lfsr = (lfsr << 8) | mi[i];
             }
 
-            for (i = 0; i < 256; ++i)
+            // Use LFSR routine to compute the expansion
+            ulong overflow = 0;
+            for (int i = 0; i < 64; i++)
             {
-                K[i] = adpKey[i % 13];
-                S[i] = (byte)i;
+                overflow = (overflow << 1) | StepP25Lfsr(ref lfsr);
             }
 
-            for (i = 0; i < 256; ++i) 
+            // Copy expansion and LFSR to IV
+            for (int i = 7; i >= 0; i--)
             {
-                j = (j + S[i] + K[i]) & 0xFF;
-                Swap(S, i, j);
+                iv[i] = (byte)(overflow & 0xFF);
+                overflow >>= 8;
+            }
+            for (int i = 15; i >= 8; i--)
+            {
+                iv[i] = (byte)(lfsr & 0xFF);
+                lfsr >>= 8;
             }
 
-            i = j = 0;
-            for (k = 0; k < 469; ++k)
-            {
-                i = (i + 1) & 0xFF;
-                j = (j + S[i]) & 0xFF;
-                Swap(S, i, j);
-                adpKeystream[k] = S[(S[i] + S[j]) & 0xFF];
-            }
+            return iv;
         }
 
-        /// <summary>
-        /// Preform a swap
-        /// </summary>
-        /// <param name="S"></param>
-        /// <param name="i"></param>
-        /// <param name="j"></param>
-        private void Swap(byte[] S, int i, int j)
-        {
-            byte temp = S[i];
-            S[i] = S[j];
-            S[j] = temp;
-        }
 
-        /// <summary>
-        /// P25 protocol type
-        /// </summary>
-        public enum ProtocolType
-        {
-            Unknown = 0,
-            P25Phase1,
-            P25Phase2
-        }
-
-        /// <summary>
-        /// P25 frame type
-        /// </summary>
-        public enum FrameType
-        {
-            Unknown = 0,
-            LDU1,
-            LDU2,
-            V2,
-            V4_0,
-            V4_1,
-            V4_2,
-            V4_3
-        }
-
-        /// <summary>
-        /// Key info object
-        /// </summary>
         private class KeyInfo
         {
             public byte AlgId { get; }
@@ -297,6 +405,25 @@ namespace WhackerLinkConsoleV2
                 AlgId = algid;
                 Key = key;
             }
+        }
+
+        public enum ProtocolType
+        {
+            Unknown = 0,
+            P25Phase1,
+            P25Phase2
+        }
+
+        public enum FrameType
+        {
+            Unknown = 0,
+            LDU1,
+            LDU2,
+            V2,
+            V4_0,
+            V4_1,
+            V4_2,
+            V4_3
         }
     }
 }
