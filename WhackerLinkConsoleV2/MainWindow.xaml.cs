@@ -49,6 +49,7 @@ using fnecore.P25.LC.TSBK;
 using WebSocketSharp;
 using NWaves.Signals;
 using static WhackerLinkConsoleV2.P25Crypto;
+using static WhackerLinkLib.Models.Radio.Codeplug;
 
 namespace WhackerLinkConsoleV2
 {
@@ -73,6 +74,8 @@ namespace WhackerLinkConsoleV2
 
         private ChannelBox playbackChannelBox;
 
+        CallHistoryWindow callHistoryWindow = new CallHistoryWindow();
+
         public static string PLAYBACKTG = "LOCPLAYBACK";
         public static string PLAYBACKSYS = "LOCPLAYBACKSYS";
         public static string PLAYBACKCHNAME = "PLAYBACK";
@@ -93,7 +96,7 @@ namespace WhackerLinkConsoleV2
 
         public MainWindow()
         {
-#if DEBUG
+#if !DEBUG
             ConsoleNative.ShowConsole();
 #endif
             InitializeComponent();
@@ -276,8 +279,6 @@ namespace WhackerLinkConsoleV2
                     {
                         _fneSystemManager.AddFneSystem(system.Name, system, this);
 
-                        systemStatuses.Add(system.Name, new SlotStatus());
-
                         PeerSystem peer = _fneSystemManager.GetFneSystem(system.Name);
 
                         peer.peer.PeerConnected += (sender, response) =>
@@ -324,6 +325,8 @@ namespace WhackerLinkConsoleV2
                         var channelBox = new ChannelBox(_selectedChannelsManager, _audioManager, channel.Name, channel.System, channel.Tgid);
 
                         //channelBox.crypter.AddKey(channel.GetKeyId(), channel.GetAlgoId(), channel.GetEncryptionKey());
+
+                        systemStatuses.Add(channel.Name, new SlotStatus());
 
                         if (_settingsManager.ChannelPositions.TryGetValue(channel.Name, out var position))
                         {
@@ -1615,6 +1618,8 @@ namespace WhackerLinkConsoleV2
         /// </summary>
         private void P25EncodeAudioFrame(byte[] pcm, PeerSystem handler, ChannelBox channel, Codeplug.Channel cpgChannel, Codeplug.System system)
         {
+            bool encryptCall = true; // TODO: make this dynamic somewhere?
+
             if (channel.p25N > 17)
                 channel.p25N = 0;
             if (channel.p25N == 0)
@@ -1681,6 +1686,35 @@ namespace WhackerLinkConsoleV2
 #endif
             }
             // Log.Logger.Debug($"IMBE {FneUtils.HexDump(imbe)}");
+
+            if (encryptCall && cpgChannel.GetAlgoId() != 0 && cpgChannel.GetKeyId() != 0)
+            {
+                // initial HDU MI
+                if (channel.p25N == 0)
+                {
+                    if (channel.mi.All(b => b == 0))
+                    {
+                        Random random = new Random();
+
+                        for (int i = 0; i < P25Defines.P25_MI_LENGTH; i++)
+                        {
+                            channel.mi[i] = (byte)random.Next(0x00, 0x100);
+                        }
+
+                        channel.crypter.Prepare(cpgChannel.GetAlgoId(), cpgChannel.GetKeyId(), ProtocolType.P25Phase1, channel.mi);
+                    }
+                }
+
+                // crypto time
+                channel.crypter.Process(imbe, channel.p25N < 9U ? P25Crypto.FrameType.LDU1 : P25Crypto.FrameType.LDU2, 0);
+
+                // last block of LDU2, prepare a new MI
+                if (channel.p25N == 17U)
+                {
+                    P25Crypto.CycleP25Lfsr(channel.mi);
+                    channel.crypter.Prepare(cpgChannel.GetAlgoId(), cpgChannel.GetKeyId(), ProtocolType.P25Phase1, channel.mi);
+                }
+            }
 
             // fill the LDU buffers appropriately
             switch (channel.p25N)
@@ -1767,7 +1801,7 @@ namespace WhackerLinkConsoleV2
                 //Console.WriteLine($"({channel.SystemName}) P25D: Traffic *VOICE FRAME    * PEER {handler.PeerId} SRC_ID {srcId} TGID {dstId} [STREAM ID {channel.txStreamId}]");
 
                 byte[] payload = new byte[200];
-                handler.CreateNewP25MessageHdr((byte)P25DUID.LDU1, callData, ref payload);
+                handler.CreateNewP25MessageHdr((byte)P25DUID.LDU1, callData, ref payload, cpgChannel.GetAlgoId(), cpgChannel.GetKeyId(), channel.mi);
                 handler.CreateP25LDU1Message(channel.netLDU1, ref payload, srcId, dstId);
 
                 peer.SendMaster(new Tuple<byte, byte>(Constants.NET_FUNC_PROTOCOL, Constants.NET_PROTOCOL_SUBFUNC_P25), payload, pktSeq, channel.txStreamId);
@@ -1785,8 +1819,8 @@ namespace WhackerLinkConsoleV2
                 //Console.WriteLine($"({channel.SystemName}) P25D: Traffic *VOICE FRAME    * PEER {handler.PeerId} SRC_ID {srcId} TGID {dstId} [STREAM ID {channel.txStreamId}]");
 
                 byte[] payload = new byte[200];
-                handler.CreateNewP25MessageHdr((byte)P25DUID.LDU2, callData, ref payload);
-                handler.CreateP25LDU2Message(channel.netLDU2, ref payload);
+                handler.CreateNewP25MessageHdr((byte)P25DUID.LDU2, callData, ref payload, cpgChannel.GetAlgoId(), cpgChannel.GetKeyId(), channel.mi);
+                handler.CreateP25LDU2Message(channel.netLDU2, ref payload, new CryptoParams { AlgId = cpgChannel.GetAlgoId(), KeyId = cpgChannel.GetKeyId(), Mi = channel.mi });
 
                 peer.SendMaster(new Tuple<byte, byte>(Constants.NET_FUNC_PROTOCOL, Constants.NET_PROTOCOL_SUBFUNC_P25), payload, pktSeq, channel.txStreamId);
             }
@@ -1988,6 +2022,7 @@ namespace WhackerLinkConsoleV2
                     Codeplug.Channel cpgChannel = Codeplug.GetChannelByName(channel.ChannelName);
 
                     bool isEmergency = false;
+                    bool encrypted = false;
 
                     if (!system.IsDvm)
                         continue;
@@ -2000,9 +2035,9 @@ namespace WhackerLinkConsoleV2
                     if (cpgChannel.Tgid != e.DstId.ToString())
                         continue;
 
-                    if (!systemStatuses.ContainsKey(system.Name))
+                    if (!systemStatuses.ContainsKey(cpgChannel.Name))
                     {
-                        systemStatuses[system.Name] = new SlotStatus();
+                        systemStatuses[cpgChannel.Name] = new SlotStatus();
                     }
 
                     if (channel.decoder == null)
@@ -2010,7 +2045,7 @@ namespace WhackerLinkConsoleV2
                         channel.decoder = new MBEDecoder(MBE_MODE.IMBE_88BIT);
                     }
 
-                    SlotStatus slot = systemStatuses[system.Name];
+                    SlotStatus slot = systemStatuses[cpgChannel.Name];
 
                     // if this is an LDU1 see if this is the first LDU with HDU encryption data
                     if (e.DUID == P25DUID.LDU1)
@@ -2025,6 +2060,8 @@ namespace WhackerLinkConsoleV2
                             Array.Copy(e.Data, 184, channel.mi, 0, P25Defines.P25_MI_LENGTH);
 
                             channel.crypter.Prepare(channel.algId, channel.kId, P25Crypto.ProtocolType.P25Phase1, channel.mi);
+
+                            encrypted = true;
                         }
                     }
 
@@ -2034,6 +2071,9 @@ namespace WhackerLinkConsoleV2
                         channel.IsReceiving = true;
                         slot.RxStart = pktTime;
                         // Console.WriteLine($"({system.Name}) P25D: Traffic *CALL START     * PEER {e.PeerId} SRC_ID {e.SrcId} TGID {e.DstId} [STREAM ID {e.StreamId}]");
+
+                        callHistoryWindow.AddCall(cpgChannel.Name, (int)e.SrcId, (int)e.DstId);
+                        callHistoryWindow.ChannelKeyed(cpgChannel.Name, (int)e.SrcId, encrypted);
 
                         string alias = string.Empty;
 
@@ -2061,6 +2101,7 @@ namespace WhackerLinkConsoleV2
                         TimeSpan callDuration = pktTime - slot.RxStart;
                         // Console.WriteLine($"({system.Name}) P25D: Traffic *CALL END       * PEER {e.PeerId} SRC_ID {e.SrcId} TGID {e.DstId} DUR {callDuration} [STREAM ID {e.StreamId}]");
                         channel.Background = (Brush)new BrushConverter().ConvertFrom("#FF0B004B");
+                        callHistoryWindow.ChannelUnkeyed(cpgChannel.Name, (int)e.SrcId);
                         return;
                     }
 
@@ -2204,6 +2245,11 @@ namespace WhackerLinkConsoleV2
 
                 }
             });
+        }
+
+        private void CallHist_Click(object sender, RoutedEventArgs e)
+        {
+            callHistoryWindow.Show();
         }
     }
 }
