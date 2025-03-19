@@ -690,7 +690,7 @@ namespace WhackerLinkConsoleV2
                                     if (chunk.Length == 320)
                                     {
                                         P25EncodeAudioFrame(chunk, handler, channel, cpgChannel, system);
-                                     }
+                                    }
                                 }
                             }
                         });
@@ -1210,6 +1210,8 @@ namespace WhackerLinkConsoleV2
                 if (!e.IsSelected)
                     return;
 
+                FneUtils.Memset(e.mi, 0x00, P25Defines.P25_MI_LENGTH);
+
                 uint srcId = UInt32.Parse(system.Rid);
                 uint dstId = UInt32.Parse(cpgChannel.Tgid);
 
@@ -1458,6 +1460,7 @@ namespace WhackerLinkConsoleV2
         {
             _settingsManager.SaveSettings();
             base.OnClosing(e);
+            Application.Current.Shutdown();
         }
 
         private void ClearEmergency_Click(object sender, RoutedEventArgs e)
@@ -1700,9 +1703,9 @@ namespace WhackerLinkConsoleV2
                         {
                             channel.mi[i] = (byte)random.Next(0x00, 0x100);
                         }
-
-                        channel.crypter.Prepare(cpgChannel.GetAlgoId(), cpgChannel.GetKeyId(), ProtocolType.P25Phase1, channel.mi);
                     }
+
+                    channel.crypter.Prepare(cpgChannel.GetAlgoId(), cpgChannel.GetKeyId(), ProtocolType.P25Phase1, channel.mi);
                 }
 
                 // crypto time
@@ -2070,7 +2073,9 @@ namespace WhackerLinkConsoleV2
                     {
                         channel.IsReceiving = true;
                         slot.RxStart = pktTime;
-                        // Console.WriteLine($"({system.Name}) P25D: Traffic *CALL START     * PEER {e.PeerId} SRC_ID {e.SrcId} TGID {e.DstId} [STREAM ID {e.StreamId}]");
+                        Console.WriteLine($"({system.Name}) P25D: Traffic *CALL START     * PEER {e.PeerId} SRC_ID {e.SrcId} TGID {e.DstId} [STREAM ID {e.StreamId}]");
+
+                        FneUtils.Memset(channel.mi, 0x00, P25Defines.P25_MI_LENGTH);
 
                         callHistoryWindow.AddCall(cpgChannel.Name, (int)e.SrcId, (int)e.DstId);
                         callHistoryWindow.ChannelKeyed(cpgChannel.Name, (int)e.SrcId, encrypted);
@@ -2087,7 +2092,7 @@ namespace WhackerLinkConsoleV2
                             channel.LastSrcId = "Last SRC: " + e.SrcId;
                         else
                             channel.LastSrcId = "Last: " + alias;
-                        
+
                         if (channel.algId != P25Defines.P25_ALGO_UNENCRYPT)
                             channel.Background = (Brush)new BrushConverter().ConvertFrom("#ffdeaf0a");
                         else
@@ -2099,7 +2104,7 @@ namespace WhackerLinkConsoleV2
                     {
                         channel.IsReceiving = false;
                         TimeSpan callDuration = pktTime - slot.RxStart;
-                        // Console.WriteLine($"({system.Name}) P25D: Traffic *CALL END       * PEER {e.PeerId} SRC_ID {e.SrcId} TGID {e.DstId} DUR {callDuration} [STREAM ID {e.StreamId}]");
+                        Console.WriteLine($"({system.Name}) P25D: Traffic *CALL END       * PEER {e.PeerId} SRC_ID {e.SrcId} TGID {e.DstId} DUR {callDuration} [STREAM ID {e.StreamId}]");
                         channel.Background = (Brush)new BrushConverter().ConvertFrom("#FF0B004B");
                         callHistoryWindow.ChannelUnkeyed(cpgChannel.Name, (int)e.SrcId);
                         return;

@@ -48,8 +48,11 @@ namespace WhackerLinkConsoleV2
 
         public static string GetAliasByRid(List<RadioAlias> aliases, int rid)
         {
+            if (aliases == null || aliases.Count == 0)
+                return string.Empty;
+
             var match = aliases.FirstOrDefault(a => a.Rid == rid);
-            return match?.Alias;
+            return match?.Alias ?? string.Empty;
         }
     }
 }
