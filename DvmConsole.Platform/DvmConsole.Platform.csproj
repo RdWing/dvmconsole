@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>disable</Nullable>
+    <RootNamespace>DvmConsole.Platform</RootNamespace>
+    <Copyright>Copyright (c) 2025 Caleb, K4PHP and DVMProject (https://github.com/dvmproject) Authors.</Copyright>
+    <PackageLicenseExpression>AGPL-3.0-only</PackageLicenseExpression>
+    <Title>Digital Voice Modem - Desktop Dispatch Console Platform Abstraction</Title>
+    <Authors>Caleb, K4PHP and DVMProject (https://github.com/dvmproject) Authors</Authors>
+    <Company>DVMProject</Company>
+    <Product>Digital Voice Modem - Desktop Dispatch Console Platform Abstraction</Product>
+    <RepositoryUrl>https://github.com/DVMProject/dvmconsole</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+  </PropertyGroup>
+
+</Project>

@@ -1,0 +1,48 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:platform="using:DvmConsole.Platform"
+        x:Class="DvmConsole.Avalonia.MainWindow"
+        Title="DVM Console — Avalonia shell"
+        Width="960" Height="600"
+        WindowStartupLocation="CenterScreen">
+
+    <NativeMenu.Menu>
+        <NativeMenu>
+            <NativeMenuItem Header="App">
+                <NativeMenu>
+                    <NativeMenuItem Header="Quit" />
+                </NativeMenu>
+            </NativeMenuItem>
+        </NativeMenu>
+    </NativeMenu.Menu>
+
+    <DockPanel>
+        <Border DockPanel.Dock="Bottom"
+                BorderBrush="#3F3F3F"
+                BorderThickness="0,1,0,0"
+                Padding="12,6">
+            <TextBlock Text="Shell gate: macOS Avalonia frontend skeleton — no audio, network, or modem behavior attached."
+                       FontSize="12"
+                       Foreground="#8C8C8C" />
+        </Border>
+
+        <StackPanel VerticalAlignment="Center"
+                    HorizontalAlignment="Center"
+                    Spacing="10">
+            <TextBlock Text="DVM Console"
+                       FontSize="34"
+                       FontWeight="Bold"
+                       HorizontalAlignment="Center" />
+            <TextBlock Text="macOS Avalonia frontend skeleton"
+                       FontSize="16"
+                       Foreground="#8C8C8C"
+                       HorizontalAlignment="Center" />
+            <TextBlock FontSize="14"
+                       HorizontalAlignment="Center">
+                <Run Text="Host platform: " />
+                <Run Text="{x:Static platform:PlatformInfo.Description}"
+                     FontWeight="Bold" />
+            </TextBlock>
+        </StackPanel>
+    </DockPanel>
+</Window>
