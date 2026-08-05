@@ -1,0 +1,34 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+    <RootNamespace>DvmConsole.Vocoder.Tests</RootNamespace>
+    <AssemblyName>DvmConsole.Vocoder.Tests</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.9.0" />
+    <PackageReference Include="xunit" Version="2.7.1" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.5.7">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <!--
+      Link the production interop source directly (no ProjectReference to the WPF
+      dvmconsole project) so this suite runs headless on net8.0/Linux. The linked
+      file must self-contain every type it references; production types it cannot
+      reach (e.g. VocoderToneLookupTable) are provided by ProductionStubs.cs in
+      this project, and the unused `using fnecore;` is inert because no fnecore
+      type is referenced.
+    -->
+    <Compile Include="..\..\dvmconsole\VocoderInterop.cs" Link="VocoderInterop.cs" />
+  </ItemGroup>
+
+</Project>

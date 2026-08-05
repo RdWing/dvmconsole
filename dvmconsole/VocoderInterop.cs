@@ -27,11 +27,33 @@ namespace dvmconsole
     } // public enum MBE_MODE
 
     /// <summary>
+    /// Shared frame-size and mode helpers for the native codec wrappers.
+    /// The native C ABI carries no buffer lengths, so the managed wrappers
+    /// enforce the documented frame sizes before every native call.
+    /// </summary>
+    internal static class MBECodec
+    {
+        public static void ValidateMode(MBE_MODE mode)
+        {
+            if (mode != MBE_MODE.DMR_AMBE && mode != MBE_MODE.IMBE_88BIT)
+                throw new ArgumentOutOfRangeException(nameof(mode), mode, $"Unsupported MBE_MODE value: {(int)mode}");
+        }
+
+        public static int CodeBytesFor(MBE_MODE mode) =>
+            mode == MBE_MODE.DMR_AMBE ? MBEInterleaver.AMBE_CODEWORD_SAMPLES : MBEInterleaver.IMBE_CODEWORD_SAMPLES;
+
+        public static int CodeBitsFor(MBE_MODE mode) =>
+            mode == MBE_MODE.DMR_AMBE ? MBEInterleaver.AMBE_CODEWORD_BITS : MBEInterleaver.IMBE_CODEWORD_BITS;
+    } // internal static class MBECodec
+
+    /// <summary>
     /// Wrapper class for the C++ dvmvocoder encoder library.
     /// </summary>
     /// Using info from https://stackoverflow.com/a/315064/1842613
-    public class MBEEncoder
+    public class MBEEncoder : IDisposable
     {
+        private readonly object gate = new object();
+        private readonly MBE_MODE mode;
         private IntPtr encoder;
 
         /*
@@ -42,9 +64,34 @@ namespace dvmconsole
         /// Initializes a new instance of the <see cref="MBEEncoder"/> class.
         /// </summary>
         /// <param name="mode">Vocoder Mode (DMR or P25)</param>
+        /// <exception cref="ArgumentOutOfRangeException"></exception>
+        /// <exception cref="InvalidOperationException"></exception>
         public MBEEncoder(MBE_MODE mode)
         {
+            MBECodec.ValidateMode(mode);
+            this.mode = mode;
             encoder = MBEEncoder_Create(mode);
+            if (encoder == IntPtr.Zero)
+                throw new InvalidOperationException("MBEEncoder_Create returned IntPtr.Zero! The native libvocoder encoder could not be created.");
+        }
+
+        /// <summary>
+        /// Releases the native encoder. Idempotent and thread-safe: concurrent
+        /// calls (and the finalizer path) serialize on an internal gate, so the
+        /// native handle is deleted exactly once and never while an encode is
+        /// in flight.
+        /// </summary>
+        public void Dispose()
+        {
+            lock (gate)
+            {
+                if (encoder != IntPtr.Zero)
+                {
+                    MBEEncoder_Delete(encoder);
+                    encoder = IntPtr.Zero;
+                }
+            }
+            GC.SuppressFinalize(this);
         }
 
         /// <summary>
@@ -52,7 +99,7 @@ namespace dvmconsole
         /// </summary>
         ~MBEEncoder()
         {
-            MBEEncoder_Delete(encoder);
+            Dispose();
         }
 
         /// <summary>
@@ -60,15 +107,16 @@ namespace dvmconsole
         /// </summary>
         /// <returns></returns>
         [DllImport("libvocoder", CallingConvention = CallingConvention.Cdecl)]
-        public static extern IntPtr MBEEncoder_Create(MBE_MODE mode);
+        private static extern IntPtr MBEEncoder_Create(MBE_MODE mode);
 
         /// <summary>
         /// Encode PCM16 samples to MBE codeword
         /// </summary>
+        /// <param name="pEncoder">Native encoder handle</param>
         /// <param name="samples">Input PCM samples</param>
         /// <param name="codeword">Output MBE codeword</param>
         [DllImport("libvocoder", CallingConvention = CallingConvention.Cdecl)]
-        public static extern void MBEEncoder_Encode(IntPtr pEncoder, [In] Int16[] samples, [Out] byte[] codeword);
+        private static extern void MBEEncoder_Encode(IntPtr pEncoder, [In] Int16[] samples, [Out] byte[] codeword);
 
         /// <summary>
         /// Encode MBE to bits
@@ -77,41 +125,79 @@ namespace dvmconsole
         /// <param name="bits"></param>
         /// <param name="codeword"></param>
         [DllImport("libvocoder", CallingConvention = CallingConvention.Cdecl)]
-        public static extern void MBEEncoder_EncodeBits(IntPtr pEncoder, [In] char[] bits, [Out] byte[] codeword);
+        private static extern void MBEEncoder_EncodeBits(IntPtr pEncoder, [In] byte[] bits, [Out] byte[] codeword);
 
         /// <summary>
         /// Delete a created MBEEncoder
         /// </summary>
         /// <param name="pEncoder"></param>
         [DllImport("libvocoder", CallingConvention = CallingConvention.Cdecl)]
-        public static extern void MBEEncoder_Delete(IntPtr pEncoder);
+        private static extern void MBEEncoder_Delete(IntPtr pEncoder);
 
         /// <summary>
         /// Encode PCM16 samples to MBE codeword
         /// </summary>
-        /// <param name="samples"></param>
-        /// <param name="codeword"></param>
+        /// <param name="samples">Input PCM samples (must contain exactly 160 samples)</param>
+        /// <param name="codeword">Output MBE codeword (must be exactly 9 bytes DMR / 11 bytes IMBE)</param>
+        /// <exception cref="ObjectDisposedException"></exception>
+        /// <exception cref="ArgumentNullException"></exception>
+        /// <exception cref="ArgumentOutOfRangeException"></exception>
         public void encode([In] Int16[] samples, [Out] byte[] codeword)
         {
-            MBEEncoder_Encode(encoder, samples, codeword);
+            lock (gate)
+            {
+                if (encoder == IntPtr.Zero)
+                    throw new ObjectDisposedException(nameof(MBEEncoder));
+                if (samples == null)
+                    throw new ArgumentNullException(nameof(samples));
+                if (codeword == null)
+                    throw new ArgumentNullException(nameof(codeword));
+                if (samples.Length != MBEInterleaver.PCM_SAMPLES)
+                    throw new ArgumentOutOfRangeException(nameof(samples), $"PCM sample array must contain exactly {MBEInterleaver.PCM_SAMPLES} samples, was {samples.Length}.");
+                if (codeword.Length != MBECodec.CodeBytesFor(mode))
+                    throw new ArgumentOutOfRangeException(nameof(codeword), $"Codeword array must be {MBECodec.CodeBytesFor(mode)} bytes for {mode}, was {codeword.Length}.");
+
+                MBEEncoder_Encode(encoder, samples, codeword);
+            }
+            GC.KeepAlive(this);
         }
 
         /// <summary>
-        /// 
+        /// Encode MBE bits to a codeword
         /// </summary>
-        /// <param name="bits"></param>
-        /// <param name="codeword"></param>
-        public void encodeBits([In] char[] bits, [Out] byte[] codeword)
+        /// <param name="bits">Input MBE bits (must contain exactly 49 bits DMR / 88 bits IMBE)</param>
+        /// <param name="codeword">Output MBE codeword (must be exactly 9 bytes DMR / 11 bytes IMBE)</param>
+        /// <exception cref="ObjectDisposedException"></exception>
+        /// <exception cref="ArgumentNullException"></exception>
+        /// <exception cref="ArgumentOutOfRangeException"></exception>
+        public void encodeBits([In] byte[] bits, [Out] byte[] codeword)
         {
-            MBEEncoder_EncodeBits(encoder, bits, codeword);
+            lock (gate)
+            {
+                if (encoder == IntPtr.Zero)
+                    throw new ObjectDisposedException(nameof(MBEEncoder));
+                if (bits == null)
+                    throw new ArgumentNullException(nameof(bits));
+                if (codeword == null)
+                    throw new ArgumentNullException(nameof(codeword));
+                if (bits.Length != MBECodec.CodeBitsFor(mode))
+                    throw new ArgumentOutOfRangeException(nameof(bits), $"Bit array must contain {MBECodec.CodeBitsFor(mode)} bits for {mode}, was {bits.Length}.");
+                if (codeword.Length != MBECodec.CodeBytesFor(mode))
+                    throw new ArgumentOutOfRangeException(nameof(codeword), $"Codeword array must be {MBECodec.CodeBytesFor(mode)} bytes for {mode}, was {codeword.Length}.");
+
+                MBEEncoder_EncodeBits(encoder, bits, codeword);
+            }
+            GC.KeepAlive(this);
         }
     } // public class MBEEncoder
 
     /// <summary>
     /// Wrapper class for the C++ dvmvocoder decoder library.
     /// </summary>
-    public class MBEDecoder
+    public class MBEDecoder : IDisposable
     {
+        private readonly object gate = new object();
+        private readonly MBE_MODE mode;
         private IntPtr decoder;
 
         /*
@@ -122,9 +208,34 @@ namespace dvmconsole
         /// Initializes a new instance of the <see cref="MBEDecoder"/> class.
         /// </summary>
         /// <param name="mode">Vocoder Mode (DMR or P25)</param>
+        /// <exception cref="ArgumentOutOfRangeException"></exception>
+        /// <exception cref="InvalidOperationException"></exception>
         public MBEDecoder(MBE_MODE mode)
         {
+            MBECodec.ValidateMode(mode);
+            this.mode = mode;
             decoder = MBEDecoder_Create(mode);
+            if (decoder == IntPtr.Zero)
+                throw new InvalidOperationException("MBEDecoder_Create returned IntPtr.Zero! The native libvocoder decoder could not be created.");
+        }
+
+        /// <summary>
+        /// Releases the native decoder. Idempotent and thread-safe: concurrent
+        /// calls (and the finalizer path) serialize on an internal gate, so the
+        /// native handle is deleted exactly once and never while a decode is
+        /// in flight.
+        /// </summary>
+        public void Dispose()
+        {
+            lock (gate)
+            {
+                if (decoder != IntPtr.Zero)
+                {
+                    MBEDecoder_Delete(decoder);
+                    decoder = IntPtr.Zero;
+                }
+            }
+            GC.SuppressFinalize(this);
         }
 
         /// <summary>
@@ -132,7 +243,7 @@ namespace dvmconsole
         /// </summary>
         ~MBEDecoder()
         {
-            MBEDecoder_Delete(decoder);
+            Dispose();
         }
 
         /// <summary>
@@ -140,16 +251,17 @@ namespace dvmconsole
         /// </summary>
         /// <returns></returns>
         [DllImport("libvocoder", CallingConvention = CallingConvention.Cdecl)]
-        public static extern IntPtr MBEDecoder_Create(MBE_MODE mode);
+        private static extern IntPtr MBEDecoder_Create(MBE_MODE mode);
 
         /// <summary>
         /// Decode MBE codeword to samples
         /// </summary>
-        /// <param name="samples">Input PCM samples</param>
-        /// <param name="codeword">Output MBE codeword</param>
+        /// <param name="pDecoder">Native decoder handle</param>
+        /// <param name="codeword">Input MBE codeword</param>
+        /// <param name="samples">Output PCM samples</param>
         /// <returns>Number of decode errors</returns>
         [DllImport("libvocoder", CallingConvention = CallingConvention.Cdecl)]
-        public static extern Int32 MBEDecoder_Decode(IntPtr pDecoder, [In] byte[] codeword, [Out] Int16[] samples);
+        private static extern Int32 MBEDecoder_Decode(IntPtr pDecoder, [In] byte[] codeword, [Out] Int16[] samples);
 
         /// <summary>
         /// Decode MBE to bits
@@ -159,34 +271,73 @@ namespace dvmconsole
         /// <param name="mbeBits"></param>
         /// <returns></returns>
         [DllImport("libvocoder", CallingConvention = CallingConvention.Cdecl)]
-        public static extern Int32 MBEDecoder_DecodeBits(IntPtr pDecoder, [In] byte[] codeword, [Out] char[] bits);
+        private static extern Int32 MBEDecoder_DecodeBits(IntPtr pDecoder, [In] byte[] codeword, [Out] byte[] bits);
 
         /// <summary>
         /// Delete a created MBEDecoder
         /// </summary>
         /// <param name="pDecoder"></param>
         [DllImport("libvocoder", CallingConvention = CallingConvention.Cdecl)]
-        public static extern void MBEDecoder_Delete(IntPtr pDecoder);
+        private static extern void MBEDecoder_Delete(IntPtr pDecoder);
 
         /// <summary>
         /// Decode MBE codeword to PCM16 samples
         /// </summary>
-        /// <param name="samples"></param>
-        /// <param name="codeword"></param>
+        /// <param name="codeword">Input MBE codeword (must be exactly 9 bytes DMR / 11 bytes IMBE)</param>
+        /// <param name="samples">Output PCM samples (must contain exactly 160 samples)</param>
+        /// <exception cref="ObjectDisposedException"></exception>
+        /// <exception cref="ArgumentNullException"></exception>
+        /// <exception cref="ArgumentOutOfRangeException"></exception>
         public Int32 decode([In] byte[] codeword, [Out] Int16[] samples)
         {
-            return MBEDecoder_Decode(decoder, codeword, samples);
+            Int32 ret;
+            lock (gate)
+            {
+                if (decoder == IntPtr.Zero)
+                    throw new ObjectDisposedException(nameof(MBEDecoder));
+                if (codeword == null)
+                    throw new ArgumentNullException(nameof(codeword));
+                if (samples == null)
+                    throw new ArgumentNullException(nameof(samples));
+                if (codeword.Length != MBECodec.CodeBytesFor(mode))
+                    throw new ArgumentOutOfRangeException(nameof(codeword), $"Codeword array must be {MBECodec.CodeBytesFor(mode)} bytes for {mode}, was {codeword.Length}.");
+                if (samples.Length != MBEInterleaver.PCM_SAMPLES)
+                    throw new ArgumentOutOfRangeException(nameof(samples), $"PCM sample array must contain exactly {MBEInterleaver.PCM_SAMPLES} samples, was {samples.Length}.");
+
+                ret = MBEDecoder_Decode(decoder, codeword, samples);
+            }
+            GC.KeepAlive(this);
+            return ret;
         }
 
         /// <summary>
         /// Decode MBE codeword to bits
         /// </summary>
-        /// <param name="codeword"></param>
-        /// <param name="bits"></param>
-        /// <returns></returns>
-        public Int32 decodeBits([In] byte[] codeword, [Out] char[] bits)
+        /// <param name="codeword">Input MBE codeword (must be exactly 9 bytes DMR / 11 bytes IMBE)</param>
+        /// <param name="bits">Output MBE bits (must contain exactly 49 bits DMR / 88 bits IMBE)</param>
+        /// <exception cref="ObjectDisposedException"></exception>
+        /// <exception cref="ArgumentNullException"></exception>
+        /// <exception cref="ArgumentOutOfRangeException"></exception>
+        public Int32 decodeBits([In] byte[] codeword, [Out] byte[] bits)
         {
-            return MBEDecoder_DecodeBits(decoder, codeword, bits);
+            Int32 ret;
+            lock (gate)
+            {
+                if (decoder == IntPtr.Zero)
+                    throw new ObjectDisposedException(nameof(MBEDecoder));
+                if (codeword == null)
+                    throw new ArgumentNullException(nameof(codeword));
+                if (bits == null)
+                    throw new ArgumentNullException(nameof(bits));
+                if (codeword.Length != MBECodec.CodeBytesFor(mode))
+                    throw new ArgumentOutOfRangeException(nameof(codeword), $"Codeword array must be {MBECodec.CodeBytesFor(mode)} bytes for {mode}, was {codeword.Length}.");
+                if (bits.Length != MBECodec.CodeBitsFor(mode))
+                    throw new ArgumentOutOfRangeException(nameof(bits), $"Bit array must contain {MBECodec.CodeBitsFor(mode)} bits for {mode}, was {bits.Length}.");
+
+                ret = MBEDecoder_DecodeBits(decoder, codeword, bits);
+            }
+            GC.KeepAlive(this);
+            return ret;
         }
     } // public class MBEDecoder
 
@@ -278,7 +429,7 @@ namespace dvmconsole
     /// <summary>
     /// 
     /// </summary>
-    public class MBEInterleaver
+    public class MBEInterleaver : IDisposable
     {
         public const int PCM_SAMPLES = 160;
         public const int AMBE_CODEWORD_SAMPLES = 9;
@@ -286,10 +437,14 @@ namespace dvmconsole
         public const int IMBE_CODEWORD_SAMPLES = 11;
         public const int IMBE_CODEWORD_BITS = 88;
 
+        private readonly object gate = new object();
+
         private MBE_MODE mode;
 
         private MBEEncoder encoder;
         private MBEDecoder decoder;
+
+        private bool disposed;
 
         /*
         ** Methods
@@ -299,11 +454,44 @@ namespace dvmconsole
         /// Initializes a new instance of the <see cref="MBEInterleaver"/> class.
         /// </summary>
         /// <param name="mode"></param>
+        /// <exception cref="ArgumentOutOfRangeException"></exception>
         public MBEInterleaver(MBE_MODE mode)
         {
+            MBECodec.ValidateMode(mode);
             this.mode = mode;
             encoder = new MBEEncoder(this.mode);
-            decoder = new MBEDecoder(this.mode);
+            try
+            {
+                decoder = new MBEDecoder(this.mode);
+            }
+            catch
+            {
+                // Do not leak the already-created native encoder if decoder
+                // creation fails.
+                encoder.Dispose();
+                encoder = null;
+                throw;
+            }
+        }
+
+        /// <summary>
+        /// Releases the owned encoder and decoder (deterministic, idempotent,
+        /// thread-safe: concurrent calls and the finalizer path serialize on an
+        /// internal gate, so the children are disposed exactly once and never
+        /// while an Encode/Decode is in flight).
+        /// </summary>
+        public void Dispose()
+        {
+            lock (gate)
+            {
+                if (!disposed)
+                {
+                    disposed = true;
+                    encoder.Dispose();
+                    decoder.Dispose();
+                }
+            }
+            GC.SuppressFinalize(this);
         }
 
         /// <summary>
@@ -316,39 +504,49 @@ namespace dvmconsole
         /// <exception cref="ArgumentOutOfRangeException"></exception>
         public int Decode([In] byte[] codeword, [Out] byte[] mbeBits)
         {
-            // Input validation
-            if (codeword == null)
-                throw new NullReferenceException("Input MBE codeword is null!");
-
-            char[] bits = null;
-            int bitCount = 0;
-
-            // Set up based on mode
-            if (mode == MBE_MODE.DMR_AMBE)
+            int errs;
+            lock (gate)
             {
-                if (codeword.Length != AMBE_CODEWORD_SAMPLES)
-                    throw new ArgumentOutOfRangeException($"AMBE codeword length is != {AMBE_CODEWORD_SAMPLES}");
-                bitCount = AMBE_CODEWORD_BITS;
-                bits = new char[bitCount];
+                // Input validation
+                if (disposed)
+                    throw new ObjectDisposedException(nameof(MBEInterleaver));
+                if (codeword == null)
+                    throw new ArgumentNullException(nameof(codeword));
+                if (mbeBits == null)
+                    throw new ArgumentNullException(nameof(mbeBits));
+                if (mbeBits.Length != MBECodec.CodeBitsFor(mode))
+                    throw new ArgumentOutOfRangeException(nameof(mbeBits), $"Bit array must contain {MBECodec.CodeBitsFor(mode)} bits for {mode}, was {mbeBits.Length}.");
+
+                byte[] bits = null;
+                int bitCount = 0;
+
+                // Set up based on mode
+                if (mode == MBE_MODE.DMR_AMBE)
+                {
+                    if (codeword.Length != AMBE_CODEWORD_SAMPLES)
+                        throw new ArgumentOutOfRangeException($"AMBE codeword length is != {AMBE_CODEWORD_SAMPLES}");
+                    bitCount = AMBE_CODEWORD_BITS;
+                    bits = new byte[bitCount];
+                }
+                else if (mode == MBE_MODE.IMBE_88BIT)
+                {
+                    if (codeword.Length != IMBE_CODEWORD_SAMPLES)
+                        throw new ArgumentOutOfRangeException($"IMBE codeword length is != {IMBE_CODEWORD_SAMPLES}");
+                    bitCount = IMBE_CODEWORD_BITS;
+                    bits = new byte[bitCount];
+                }
+
+                if (bits == null)
+                    throw new NullReferenceException("Failed to initialize decoder");
+
+                // Decode
+                errs = decoder.decodeBits(codeword, bits);
+
+                // Copy
+                for (int i = 0; i < bitCount; i++)
+                    mbeBits[i] = (byte)(bits[i] & 0x01);
             }
-            else if (mode == MBE_MODE.IMBE_88BIT)
-            {
-                if (codeword.Length != IMBE_CODEWORD_SAMPLES)
-                    throw new ArgumentOutOfRangeException($"IMBE codeword length is != {IMBE_CODEWORD_SAMPLES}");
-                bitCount = IMBE_CODEWORD_BITS;
-                bits = new char[bitCount];
-            }
-
-            if (bits == null)
-                throw new NullReferenceException("Failed to initialize decoder");
-
-            // Decode
-            int errs = decoder.decodeBits(codeword, bits);
-
-            // Copy
-            for (int i = 0; i < bitCount; i++)
-                mbeBits[i] = (byte)(bits[i] & 0x01);
-
+            GC.KeepAlive(this);
             return errs;
         }
 
@@ -362,61 +560,73 @@ namespace dvmconsole
         /// <exception cref="ArgumentException"></exception>
         public void Encode([In] byte[] mbeBits, [Out] byte[] codeword)
         {
-            if (mbeBits == null)
+            lock (gate)
             {
-                throw new NullReferenceException("Input MBE bit array is null!");
-            }
-
-            char[] bits = null;
-
-            // Set up based on mode
-            if (mode == MBE_MODE.DMR_AMBE)
-            {
-                if (mbeBits.Length != AMBE_CODEWORD_BITS)
+                if (disposed)
+                    throw new ObjectDisposedException(nameof(MBEInterleaver));
+                if (mbeBits == null)
                 {
-                    throw new ArgumentOutOfRangeException($"AMBE codeword bit length is != {AMBE_CODEWORD_BITS}");
+                    throw new ArgumentNullException(nameof(mbeBits));
                 }
-                bits = new char[AMBE_CODEWORD_BITS];
-                for (int i = 0; i < mbeBits.Length; i++)
-                    bits[i] = (char)(mbeBits[i] & 0x01);
-            }
-            else if (mode == MBE_MODE.IMBE_88BIT)
-            {
-                if (mbeBits.Length != IMBE_CODEWORD_BITS)
+                if (codeword == null)
                 {
-                    throw new ArgumentOutOfRangeException($"IMBE codeword bit length is != {IMBE_CODEWORD_BITS}");
+                    throw new ArgumentNullException(nameof(codeword));
                 }
-                bits = new char[IMBE_CODEWORD_BITS];
-                for (int i = 0; i < mbeBits.Length; i++)
-                    bits[i] = (char)(mbeBits[i] & 0x01);
-            }
+                if (codeword.Length != MBECodec.CodeBytesFor(mode))
+                    throw new ArgumentOutOfRangeException(nameof(codeword), $"Codeword array must be {MBECodec.CodeBytesFor(mode)} bytes for {mode}, was {codeword.Length}.");
 
-            if (bits == null)
-            {
-                throw new ArgumentException("Bit array did not get set up properly!");
-            }
+                byte[] bits = null;
 
-            // Encode samples
-            if (mode == MBE_MODE.DMR_AMBE)
-            {
-                // Create output array
-                byte[] codewords = new byte[AMBE_CODEWORD_SAMPLES];
-                // Encode
-                encoder.encodeBits(bits, codewords);
-                // Copy
-                for (int i = 0; i < AMBE_CODEWORD_SAMPLES; i++)
-                    codeword[i] = codewords[i];
+                // Set up based on mode
+                if (mode == MBE_MODE.DMR_AMBE)
+                {
+                    if (mbeBits.Length != AMBE_CODEWORD_BITS)
+                    {
+                        throw new ArgumentOutOfRangeException($"AMBE codeword bit length is != {AMBE_CODEWORD_BITS}");
+                    }
+                    bits = new byte[AMBE_CODEWORD_BITS];
+                    for (int i = 0; i < mbeBits.Length; i++)
+                        bits[i] = (byte)(mbeBits[i] & 0x01);
+                }
+                else if (mode == MBE_MODE.IMBE_88BIT)
+                {
+                    if (mbeBits.Length != IMBE_CODEWORD_BITS)
+                    {
+                        throw new ArgumentOutOfRangeException($"IMBE codeword bit length is != {IMBE_CODEWORD_BITS}");
+                    }
+                    bits = new byte[IMBE_CODEWORD_BITS];
+                    for (int i = 0; i < mbeBits.Length; i++)
+                        bits[i] = (byte)(mbeBits[i] & 0x01);
+                }
+
+                if (bits == null)
+                {
+                    throw new ArgumentException("Bit array did not get set up properly!");
+                }
+
+                // Encode samples
+                if (mode == MBE_MODE.DMR_AMBE)
+                {
+                    // Create output array
+                    byte[] codewords = new byte[AMBE_CODEWORD_SAMPLES];
+                    // Encode
+                    encoder.encodeBits(bits, codewords);
+                    // Copy
+                    for (int i = 0; i < AMBE_CODEWORD_SAMPLES; i++)
+                        codeword[i] = codewords[i];
+                }
+                else if (mode == MBE_MODE.IMBE_88BIT)
+                {
+                    // Create output array
+                    byte[] codewords = new byte[IMBE_CODEWORD_SAMPLES];
+                    // Encode
+                    encoder.encodeBits(bits, codewords);
+                    // Copy
+                    for (int i = 0; i < IMBE_CODEWORD_SAMPLES; i++)
+                        codeword[i] = codewords[i];
+                }
             }
-            else if (mode == MBE_MODE.IMBE_88BIT)
-            {
-                // Create output array
-                byte[] codewords = new byte[IMBE_CODEWORD_SAMPLES];
-                // Encode
-                encoder.encodeBits(bits, codewords);
-                // Copy
-                for (int i = 0; i < IMBE_CODEWORD_SAMPLES; i++)
-                    codeword[i] = codewords[i];
-            }
+            GC.KeepAlive(this);
         }
     } // public class MBEInterleaver
 } // namespace dvmconsole
