@@ -1,0 +1,33 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0-windows7.0</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <!-- WPF reference assemblies are compiled on Linux via the Windows
+         targeting pack; WPF runtime execution remains Windows-only. -->
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+    <RootNamespace>DvmConsole.Wpf.Tests</RootNamespace>
+    <AssemblyName>DvmConsole.Wpf.Tests</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.9.0" />
+    <PackageReference Include="xunit" Version="2.7.1" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.5.7">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- WPF adapter gate: locks the live dvmconsole.SelectedChannelsManager
+         (the non-generic WPF implementation) as the parity baseline for the
+         portable generic SelectedChannelsManager<T> in DvmConsole.Core. -->
+    <ProjectReference Include="..\..\dvmconsole\DVMConsole.csproj" />
+  </ItemGroup>
+
+</Project>

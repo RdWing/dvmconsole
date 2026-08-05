@@ -30,6 +30,8 @@ Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "DvmConsole.Platform.Tests",
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "DvmConsole.Avalonia.Tests", "tests\DvmConsole.Avalonia.Tests\DvmConsole.Avalonia.Tests.csproj", "{DF13AADD-F7A7-4C2D-B123-6BF805AC5E56}"
 EndProject
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "DvmConsole.Wpf.Tests", "tests\DvmConsole.Wpf.Tests\DvmConsole.Wpf.Tests.csproj", "{9A457803-E438-438F-94F8-AC3E03329B3D}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|x64 = Debug|x64
@@ -118,6 +120,14 @@ Global
 		{DF13AADD-F7A7-4C2D-B123-6BF805AC5E56}.Release|x64.Build.0 = Release|Any CPU
 		{DF13AADD-F7A7-4C2D-B123-6BF805AC5E56}.Release|x86.ActiveCfg = Release|Any CPU
 		{DF13AADD-F7A7-4C2D-B123-6BF805AC5E56}.Release|x86.Build.0 = Release|Any CPU
+		{9A457803-E438-438F-94F8-AC3E03329B3D}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{9A457803-E438-438F-94F8-AC3E03329B3D}.Debug|x64.Build.0 = Debug|Any CPU
+		{9A457803-E438-438F-94F8-AC3E03329B3D}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{9A457803-E438-438F-94F8-AC3E03329B3D}.Debug|x86.Build.0 = Debug|Any CPU
+		{9A457803-E438-438F-94F8-AC3E03329B3D}.Release|x64.ActiveCfg = Release|Any CPU
+		{9A457803-E438-438F-94F8-AC3E03329B3D}.Release|x64.Build.0 = Release|Any CPU
+		{9A457803-E438-438F-94F8-AC3E03329B3D}.Release|x86.ActiveCfg = Release|Any CPU
+		{9A457803-E438-438F-94F8-AC3E03329B3D}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -131,5 +141,6 @@ Global
 		{EF5C5FD8-4509-4F4D-B4E0-7620F49C368A} = {1E24623E-6010-48C3-9D81-B8CD39211ADF}
 		{BBF39596-CBEA-4D50-AC47-F0E120FD40D0} = {1E24623E-6010-48C3-9D81-B8CD39211ADF}
 		{DF13AADD-F7A7-4C2D-B123-6BF805AC5E56} = {1E24623E-6010-48C3-9D81-B8CD39211ADF}
+		{9A457803-E438-438F-94F8-AC3E03329B3D} = {1E24623E-6010-48C3-9D81-B8CD39211ADF}
 	EndGlobalSection
 EndGlobal
