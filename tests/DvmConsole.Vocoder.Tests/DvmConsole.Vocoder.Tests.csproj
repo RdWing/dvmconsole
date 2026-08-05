@@ -29,6 +29,7 @@
       type is referenced.
     -->
     <Compile Include="..\..\dvmconsole\VocoderInterop.cs" Link="VocoderInterop.cs" />
+    <Compile Include="..\..\dvmconsole\VocoderLibraryProbe.cs" Link="VocoderLibraryProbe.cs" />
   </ItemGroup>
 
 </Project>
