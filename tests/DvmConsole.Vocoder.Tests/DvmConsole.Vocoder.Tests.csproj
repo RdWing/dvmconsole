@@ -23,13 +23,20 @@
     <!--
       Link the production interop source directly (no ProjectReference to the WPF
       dvmconsole project) so this suite runs headless on net8.0/Linux. The linked
-      file must self-contain every type it references; production types it cannot
-      reach (e.g. VocoderToneLookupTable) are provided by ProductionStubs.cs in
-      this project, and the unused `using fnecore;` is inert because no fnecore
-      type is referenced.
+      file must self-contain every type it references; the one type it cannot
+      reach (VocoderToneLookupTable) comes from the DvmConsole.Core
+      ProjectReference below, and the unused `using fnecore;` is inert because no
+      fnecore type is referenced.
     -->
     <Compile Include="..\..\dvmconsole\VocoderInterop.cs" Link="VocoderInterop.cs" />
     <Compile Include="..\..\dvmconsole\VocoderLibraryProbe.cs" Link="VocoderLibraryProbe.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Portable dvmconsole.VocoderToneLookupTable (72-entry IMBE tone table),
+         consumed by the linked VocoderInterop.cs MBEToneGenerator. Core is
+         net8.0 so it builds headless on Linux. -->
+    <ProjectReference Include="..\..\DvmConsole.Core\DvmConsole.Core.csproj" />
   </ItemGroup>
 
 </Project>
