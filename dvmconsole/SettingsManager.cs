@@ -569,6 +569,12 @@ namespace dvmconsole
         public IFileSystemPaths FileSystemPaths { get; }
 
         /// <summary>
+        /// Settings store used for whole-file settings persistence.
+        /// </summary>
+        [JsonIgnore]
+        public ISettingsStore SettingsStore { get; }
+
+        /// <summary>
         /// Initializes a new instance of the <see cref="SettingsManager"/> class.
         /// </summary>
         public SettingsManager() : this(new DefaultFileSystemPaths(null, null, App.USER_PROFILE_PATH_OVERRIDE))
@@ -579,9 +585,19 @@ namespace dvmconsole
         /// Initializes a new instance of the <see cref="SettingsManager"/> class with explicit filesystem paths.
         /// </summary>
         /// <param name="paths">Filesystem paths; when null the default paths honoring the profile override are used.</param>
-        public SettingsManager(IFileSystemPaths paths)
+        public SettingsManager(IFileSystemPaths paths) : this(paths, null)
+        {
+        }
+
+        /// <summary>
+        /// Initializes a new instance of the <see cref="SettingsManager"/> class with explicit filesystem paths and settings store.
+        /// </summary>
+        /// <param name="paths">Filesystem paths; when null the default paths honoring the profile override are used.</param>
+        /// <param name="store">Settings store; when null a JSON store bound to <see cref="IFileSystemPaths.SettingsFilePath"/> is used.</param>
+        public SettingsManager(IFileSystemPaths paths, ISettingsStore store)
         {
             FileSystemPaths = paths ?? new DefaultFileSystemPaths(null, null, App.USER_PROFILE_PATH_OVERRIDE);
+            SettingsStore = store ?? new JsonSettingsStore(FileSystemPaths.SettingsFilePath);
             _instance = this;
         }
 
@@ -593,13 +609,17 @@ namespace dvmconsole
             if (App.USER_PROFILE_PATH_OVERRIDE == string.Empty && !Directory.Exists(FileSystemPaths.ApplicationDataRootPath))
                 Directory.CreateDirectory(FileSystemPaths.ApplicationDataRootPath);
 
-            if (!File.Exists(FileSystemPaths.SettingsFilePath))
+            if (!SettingsStore.Exists)
                 return false;
 
             try
             {
-                string json = File.ReadAllText(FileSystemPaths.SettingsFilePath);
-                SettingsManager loadedSettings = JsonConvert.DeserializeObject<SettingsManager>(json);
+                if (!SettingsStore.TryLoad<SettingsManager>(out SettingsManager loadedSettings))
+                {
+                    _instance = this;
+                    Log.WriteLine("Error loading settings: settings file could not be loaded.");
+                    return false;
+                }
                 _instance = this;
 
                 if (loadedSettings != null)
@@ -752,8 +772,7 @@ namespace dvmconsole
 
             try
             {
-                string json = JsonConvert.SerializeObject(this, Formatting.Indented);
-                File.WriteAllText(FileSystemPaths.SettingsFilePath, json);
+                SettingsStore.Save(this);
             }
             catch (Exception ex)
             {
@@ -1011,8 +1030,7 @@ namespace dvmconsole
         /// </summary>
         public void Reset()
         {
-            if (File.Exists(FileSystemPaths.SettingsFilePath))
-                File.Delete(FileSystemPaths.SettingsFilePath);
+            SettingsStore.Delete();
         }
 
         /// <summary>
