@@ -20,6 +20,9 @@
     <!-- Same YamlDotNet version pinned by dvmconsole/DVMConsole.csproj (16.2.0),
          required by the YamlMember attributes in the Core-owned Codeplug.cs. -->
     <PackageReference Include="YamlDotNet" Version="16.2.0" />
+    <!-- Same Newtonsoft.Json version pinned by dvmconsole/DVMConsole.csproj (13.0.3),
+         required by the JsonIgnore attributes on the Core-owned settings test models. -->
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
   </ItemGroup>
 
   <ItemGroup>
