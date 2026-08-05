@@ -23,6 +23,9 @@
     <!-- Same Newtonsoft.Json version pinned by dvmconsole/DVMConsole.csproj (13.0.3),
          required by the JsonIgnore attributes on the Core-owned settings test models. -->
     <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
+    <!-- Same NWaves version pinned by dvmconsole/DVMConsole.csproj (0.9.6),
+         required by the STFT used in the Core-owned MBEToneDetector. -->
+    <PackageReference Include="NWaves" Version="0.9.6" />
   </ItemGroup>
 
   <ItemGroup>
