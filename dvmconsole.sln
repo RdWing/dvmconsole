@@ -20,6 +20,8 @@ Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "DvmConsole.Vocoder.Tests", 
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "DvmConsole.Core.Tests", "tests\DvmConsole.Core.Tests\DvmConsole.Core.Tests.csproj", "{4E50D7AC-A2C6-412C-BE3B-7A59AF7E77E5}"
 EndProject
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "FneCore.Tests", "tests\FneCore.Tests\FneCore.Tests.csproj", "{EF5C5FD8-4509-4F4D-B4E0-7620F49C368A}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|x64 = Debug|x64
@@ -68,6 +70,14 @@ Global
 		{4E50D7AC-A2C6-412C-BE3B-7A59AF7E77E5}.Release|x64.Build.0 = Release|Any CPU
 		{4E50D7AC-A2C6-412C-BE3B-7A59AF7E77E5}.Release|x86.ActiveCfg = Release|Any CPU
 		{4E50D7AC-A2C6-412C-BE3B-7A59AF7E77E5}.Release|x86.Build.0 = Release|Any CPU
+		{EF5C5FD8-4509-4F4D-B4E0-7620F49C368A}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{EF5C5FD8-4509-4F4D-B4E0-7620F49C368A}.Debug|x64.Build.0 = Debug|Any CPU
+		{EF5C5FD8-4509-4F4D-B4E0-7620F49C368A}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{EF5C5FD8-4509-4F4D-B4E0-7620F49C368A}.Debug|x86.Build.0 = Debug|Any CPU
+		{EF5C5FD8-4509-4F4D-B4E0-7620F49C368A}.Release|x64.ActiveCfg = Release|Any CPU
+		{EF5C5FD8-4509-4F4D-B4E0-7620F49C368A}.Release|x64.Build.0 = Release|Any CPU
+		{EF5C5FD8-4509-4F4D-B4E0-7620F49C368A}.Release|x86.ActiveCfg = Release|Any CPU
+		{EF5C5FD8-4509-4F4D-B4E0-7620F49C368A}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -78,5 +88,6 @@ Global
 	GlobalSection(NestedProjects) = preSolution
 		{4C86A695-DDBA-4525-9D01-FF9F042B344C} = {1E24623E-6010-48C3-9D81-B8CD39211ADF}
 		{4E50D7AC-A2C6-412C-BE3B-7A59AF7E77E5} = {1E24623E-6010-48C3-9D81-B8CD39211ADF}
+		{EF5C5FD8-4509-4F4D-B4E0-7620F49C368A} = {1E24623E-6010-48C3-9D81-B8CD39211ADF}
 	EndGlobalSection
 EndGlobal
