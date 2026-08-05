@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+    <RootNamespace>DvmConsole.Platform.Tests</RootNamespace>
+    <AssemblyName>DvmConsole.Platform.Tests</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.9.0" />
+    <PackageReference Include="xunit" Version="2.7.1" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.5.7">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- NativeLibraryProbe adapter gate: NativeLibraryProbeTests.cs locks the
+         DvmConsole.Platform.Native.NativeLibraryProbe adapter (RED until it
+         exists) against the INativeLibraryProbe contract. -->
+    <ProjectReference Include="..\..\DvmConsole.Platform\DvmConsole.Platform.csproj" />
+  </ItemGroup>
+
+</Project>
