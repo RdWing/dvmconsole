@@ -1,0 +1,73 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# Deterministic minimal codeplug fixture for the YAML schema contract gate
+# (tests/DvmConsole.Core.Tests/CodeplugSchemaTests.cs). Deliberately small,
+# self-contained, and free of real network credentials or secrets — every
+# address/password here is an obviously fake placeholder.
+#
+# Property names follow the exact production deserializer configuration from
+# MainWindow.xaml.cs LoadCodeplug: CamelCaseNamingConvention + IgnoreUnmatchedProperties.
+# Keys backed by YamlMember aliases with ApplyNamingConventions=false
+# (web_streams, rx_only, selectable_encryption, card_size) must appear
+# verbatim in snake_case.
+
+keyFile: fixtures/test-key.yml
+
+systems:
+  - name: Simplex Repeater
+    identity: 310001
+    address: 127.0.0.1
+    port: 31000
+    password: placeholder-password
+    encrypted: false
+    peerId: 310000
+    rid: "3100001"
+    aliasPath: ./fixtures/alias.yml
+    ridAlias:
+      - alias: Test Radio
+        rid: 3100001
+
+zones:
+  - name: Zone A
+    tabColor: "#1a2b3c"
+    tabTextColor: "#ffffff"
+    channels:
+      - name: CH 1 Aliased Flags
+        system: Simplex Repeater
+        tgid: "31001"
+        slot: 1
+        mode: dmr
+        algo: none
+        rx_only: true
+        selectable_encryption: true
+        card_size: large
+      - name: CH 2 Minimal
+        system: Simplex Repeater
+        tgid: "31002"
+    web_streams:
+      - name: Local Feed
+        url: http://127.0.0.1:8080/stream.mp3
+        authUsername: feed-user
+        authPassword: feed-placeholder
+        idleColor: "#00cc44"
+
+groups:
+  - name: Dispatch
+    type: multiselect
+  - name: Tac 1
+    type: patch
+
+# Legacy key exercised by NormalizeGroups: "Tac 1" collides with a current
+# group (current wins), "Legacy Patch" carries a blank-padded type that must
+# normalize to "patch", and the blank-type path is exercised on the legacy
+# "Tac 1" entry.
+patchGroups:
+  - name: Tac 1
+    type: ""
+  - name: Legacy Patch
+    type: "  PATCH  "
+
+patchSourceIdPassthrough: true
+
+# Unknown keys must be tolerated by the production configuration
+# (IgnoreUnmatchedProperties); this exercises that tolerance.
+futureOption: ignored-by-deserializer
