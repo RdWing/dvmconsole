@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+    <RootNamespace>DvmConsole.Avalonia.Tests</RootNamespace>
+    <AssemblyName>DvmConsole.Avalonia.Tests</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.9.0" />
+    <PackageReference Include="xunit" Version="2.7.1" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.5.7">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- AvaloniaFileDialogService adapter gate: AvaloniaFileDialogServiceTests.cs
+         locks the DvmConsole.Avalonia.Dialogs.AvaloniaFileDialogService adapter
+         against the IFileDialogService contract, using headless DispatchProxy
+         fakes for Avalonia's IStorageProvider instead of Avalonia.Headless,
+         displays, files, secrets, or native pickers. -->
+    <ProjectReference Include="..\..\DvmConsole.Avalonia\DvmConsole.Avalonia.csproj" />
+  </ItemGroup>
+
+</Project>

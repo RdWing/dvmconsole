@@ -1,6 +1,8 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 using Avalonia;
 using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Markup.Xaml;
+using DvmConsole.Avalonia.Dialogs;
 
 namespace DvmConsole.Avalonia
 {
@@ -15,7 +17,10 @@ namespace DvmConsole.Avalonia
         {
             if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
             {
-                desktop.MainWindow = new MainWindow();
+                var mainWindow = new MainWindow();
+                mainWindow.FileDialogService =
+                    new AvaloniaFileDialogService(mainWindow.StorageProvider);
+                desktop.MainWindow = mainWindow;
             }
 
             base.OnFrameworkInitializationCompleted();

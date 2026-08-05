@@ -28,6 +28,8 @@ Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "FneCore.Tests", "tests\FneC
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "DvmConsole.Platform.Tests", "tests\DvmConsole.Platform.Tests\DvmConsole.Platform.Tests.csproj", "{BBF39596-CBEA-4D50-AC47-F0E120FD40D0}"
 EndProject
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "DvmConsole.Avalonia.Tests", "tests\DvmConsole.Avalonia.Tests\DvmConsole.Avalonia.Tests.csproj", "{DF13AADD-F7A7-4C2D-B123-6BF805AC5E56}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|x64 = Debug|x64
@@ -108,6 +110,14 @@ Global
 		{BBF39596-CBEA-4D50-AC47-F0E120FD40D0}.Release|x64.Build.0 = Release|Any CPU
 		{BBF39596-CBEA-4D50-AC47-F0E120FD40D0}.Release|x86.ActiveCfg = Release|Any CPU
 		{BBF39596-CBEA-4D50-AC47-F0E120FD40D0}.Release|x86.Build.0 = Release|Any CPU
+		{DF13AADD-F7A7-4C2D-B123-6BF805AC5E56}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{DF13AADD-F7A7-4C2D-B123-6BF805AC5E56}.Debug|x64.Build.0 = Debug|Any CPU
+		{DF13AADD-F7A7-4C2D-B123-6BF805AC5E56}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{DF13AADD-F7A7-4C2D-B123-6BF805AC5E56}.Debug|x86.Build.0 = Debug|Any CPU
+		{DF13AADD-F7A7-4C2D-B123-6BF805AC5E56}.Release|x64.ActiveCfg = Release|Any CPU
+		{DF13AADD-F7A7-4C2D-B123-6BF805AC5E56}.Release|x64.Build.0 = Release|Any CPU
+		{DF13AADD-F7A7-4C2D-B123-6BF805AC5E56}.Release|x86.ActiveCfg = Release|Any CPU
+		{DF13AADD-F7A7-4C2D-B123-6BF805AC5E56}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -120,5 +130,6 @@ Global
 		{4E50D7AC-A2C6-412C-BE3B-7A59AF7E77E5} = {1E24623E-6010-48C3-9D81-B8CD39211ADF}
 		{EF5C5FD8-4509-4F4D-B4E0-7620F49C368A} = {1E24623E-6010-48C3-9D81-B8CD39211ADF}
 		{BBF39596-CBEA-4D50-AC47-F0E120FD40D0} = {1E24623E-6010-48C3-9D81-B8CD39211ADF}
+		{DF13AADD-F7A7-4C2D-B123-6BF805AC5E56} = {1E24623E-6010-48C3-9D81-B8CD39211ADF}
 	EndGlobalSection
 EndGlobal
