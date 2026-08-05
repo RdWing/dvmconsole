@@ -30,6 +30,10 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\DvmConsole.Core\DvmConsole.Core.csproj" />
+    <!-- Platform contract gate: fake-driven contract tests (PlatformContractTests.cs)
+         lock the DvmConsole.Platform abstraction surface (audio, dialogs, hotkeys,
+         native probe, composition) before any native adapter exists. -->
+    <ProjectReference Include="..\..\DvmConsole.Platform\DvmConsole.Platform.csproj" />
   </ItemGroup>
 
   <ItemGroup>
