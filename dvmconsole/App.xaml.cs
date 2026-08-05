@@ -36,6 +36,7 @@ namespace dvmconsole
         /// </summary>
         public App()
         {
+            AudioConverterLog.Route = message => Log.WriteLog(message);
             string diagnostic = VocoderLibraryProbe.Probe();
             if (diagnostic != null)
             {

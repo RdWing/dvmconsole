@@ -34,7 +34,7 @@ namespace dvmconsole
 
             if (audioData.Length != origLen)
             {
-                Log.WriteLine($"Invalid PCM length: {audioData.Length}, expected: {origLen}");
+                AudioConverterLog.WriteLine($"Invalid PCM length: {audioData.Length}, expected: {origLen}");
                 return chunks;
             }
 
@@ -57,7 +57,7 @@ namespace dvmconsole
         {
             if (chunks.Count * expectedLength != origLen)
             {
-                Log.WriteLine($"Invalid number of chunks: {chunks.Count}, expected total length: {origLen}");
+                AudioConverterLog.WriteLine($"Invalid number of chunks: {chunks.Count}, expected total length: {origLen}");
                 return null;
             }
 
