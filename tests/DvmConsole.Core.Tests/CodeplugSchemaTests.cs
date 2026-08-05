@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 /**
-* YAML schema/fixture gate for the linked production dvmconsole/Codeplug.cs.
+* YAML schema/fixture gate for the production DvmConsole.Core Codeplug.cs.
 * The compile-smoke contract tests (CodeplugContractTests.cs) pin enum values,
 * defaults, and helper behavior; this file pins the on-disk YAML schema:
 * camelCase naming, snake_case aliases (web_streams, rx_only,

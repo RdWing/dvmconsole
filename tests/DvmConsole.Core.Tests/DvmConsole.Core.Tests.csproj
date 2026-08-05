@@ -18,21 +18,12 @@
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
     </PackageReference>
     <!-- Same YamlDotNet version pinned by dvmconsole/DVMConsole.csproj (16.2.0),
-         required by the YamlMember attributes in the linked Codeplug.cs. -->
+         required by the YamlMember attributes in the Core-owned Codeplug.cs. -->
     <PackageReference Include="YamlDotNet" Version="16.2.0" />
   </ItemGroup>
 
   <ItemGroup>
-    <!--
-      Link the production Codeplug source directly (no ProjectReference to the
-      WPF dvmconsole project) so this suite runs headless on net8.0/Linux, the
-      same pattern as tests/DvmConsole.Vocoder.Tests. Codeplug.cs depends on
-      fnecore.P25.P25Defines (linked below), YamlDotNet, and the production
-      dvmconsole.RadioAlias type, which is provided by ProductionStubs.cs in
-      this project.
-    -->
-    <Compile Include="..\..\dvmconsole\Codeplug.cs" Link="Codeplug.cs" />
-    <Compile Include="..\..\fnecore\P25\P25Defines.cs" Link="P25Defines.cs" />
+    <ProjectReference Include="..\..\DvmConsole.Core\DvmConsole.Core.csproj" />
   </ItemGroup>
 
   <ItemGroup>

@@ -15,7 +15,6 @@
 *
 */
 
-using fnecore.P25;
 using YamlDotNet.Serialization;
 
 namespace dvmconsole
@@ -330,13 +329,13 @@ namespace dvmconsole
                 switch ((Algo ?? string.Empty).ToLowerInvariant())
                 {
                     case "aes":
-                        return P25Defines.P25_ALGO_AES;
+                        return P25AlgoIds.P25_ALGO_AES;
                     case "des":
-                        return P25Defines.P25_ALGO_DES;
+                        return P25AlgoIds.P25_ALGO_DES;
                     case "arc4":
-                        return P25Defines.P25_ALGO_ARC4;
+                        return P25AlgoIds.P25_ALGO_ARC4;
                     default:
-                        return P25Defines.P25_ALGO_UNENCRYPT;
+                        return P25AlgoIds.P25_ALGO_UNENCRYPT;
                 }
             }
 
@@ -346,7 +345,7 @@ namespace dvmconsole
             /// <returns></returns>
             public bool HasEncryptionConfig()
             {
-                return GetAlgoId() != P25Defines.P25_ALGO_UNENCRYPT && GetKeyId() > 0;
+                return GetAlgoId() != P25AlgoIds.P25_ALGO_UNENCRYPT && GetKeyId() > 0;
             }
 
             /// <summary>

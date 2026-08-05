@@ -185,6 +185,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\fnecore\fnecore.csproj" />
+    <ProjectReference Include="..\DvmConsole.Core\DvmConsole.Core.csproj" />
   </ItemGroup>
 
   <ItemGroup>

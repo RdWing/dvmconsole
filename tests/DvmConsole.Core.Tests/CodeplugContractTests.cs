@@ -1,13 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 /**
-* Deterministic compile-smoke contract tests for the linked production
-* dvmconsole/Codeplug.cs. These assert stable serialization-facing surface
+* Deterministic compile-smoke contract tests for the production
+* DvmConsole.Core/Configuration/Codeplug.cs. These assert stable serialization-facing surface
 * (enum values, defaults, helper behavior) that a codeplug YAML round-trip
 * depends on. YAML fixture/schema round-trip tests are a separate gate and
 * intentionally not part of this scaffold.
 */
 using dvmconsole;
-using fnecore.P25;
 using Xunit;
 
 namespace DvmConsole.Core.Tests
@@ -43,7 +42,7 @@ namespace DvmConsole.Core.Tests
 
         /// <summary>
         /// A channel without an explicit mode resolves to P25 (the legacy
-        /// default), exercising the linked P25Defines-free enum path.
+        /// default), exercising the portable Core-owned enum path.
         /// </summary>
         [Fact]
         public void Channel_GetChannelMode_DefaultsToP25()
@@ -54,16 +53,16 @@ namespace DvmConsole.Core.Tests
         }
 
         /// <summary>
-        /// The default unencrypted algorithm id is the P25Defines constant
-        /// (0x80), proving the linked fnecore/P25/P25Defines.cs compiles and
-        /// resolves from Codeplug.GetAlgoId().
+        /// The default unencrypted algorithm id is the P25AlgoIds constant
+        /// (0x80), proving the portable DvmConsole.Core constant resolves from
+        /// Codeplug.GetAlgoId().
         /// </summary>
         [Fact]
         public void Channel_GetAlgoId_DefaultsToUnencrypt()
         {
             var channel = new Codeplug.Channel();
 
-            Assert.Equal(P25Defines.P25_ALGO_UNENCRYPT, channel.GetAlgoId());
+            Assert.Equal(P25AlgoIds.P25_ALGO_UNENCRYPT, channel.GetAlgoId());
             Assert.False(channel.HasEncryptionConfig());
             Assert.Equal(0, channel.GetKeyId());
         }
@@ -284,18 +283,18 @@ namespace DvmConsole.Core.Tests
         */
 
         /// <summary>
-        /// Algo strings map (case-insensitively) to the linked P25Defines
-        /// algorithm id constants.
+        /// Algo strings map (case-insensitively) to the DvmConsole.Core
+        /// P25AlgoIds algorithm id constants.
         /// </summary>
         [Fact]
-        public void Channel_GetAlgoId_MapsKnownAlgorithmsToP25DefinesConstants()
+        public void Channel_GetAlgoId_MapsKnownAlgorithmsToP25AlgoIdsConstants()
         {
-            Assert.Equal(P25Defines.P25_ALGO_AES, new Codeplug.Channel { Algo = "aes" }.GetAlgoId());
-            Assert.Equal(P25Defines.P25_ALGO_AES, new Codeplug.Channel { Algo = "AES" }.GetAlgoId());
-            Assert.Equal(P25Defines.P25_ALGO_DES, new Codeplug.Channel { Algo = "des" }.GetAlgoId());
-            Assert.Equal(P25Defines.P25_ALGO_DES, new Codeplug.Channel { Algo = "DES" }.GetAlgoId());
-            Assert.Equal(P25Defines.P25_ALGO_ARC4, new Codeplug.Channel { Algo = "arc4" }.GetAlgoId());
-            Assert.Equal(P25Defines.P25_ALGO_ARC4, new Codeplug.Channel { Algo = "Arc4" }.GetAlgoId());
+            Assert.Equal(P25AlgoIds.P25_ALGO_AES, new Codeplug.Channel { Algo = "aes" }.GetAlgoId());
+            Assert.Equal(P25AlgoIds.P25_ALGO_AES, new Codeplug.Channel { Algo = "AES" }.GetAlgoId());
+            Assert.Equal(P25AlgoIds.P25_ALGO_DES, new Codeplug.Channel { Algo = "des" }.GetAlgoId());
+            Assert.Equal(P25AlgoIds.P25_ALGO_DES, new Codeplug.Channel { Algo = "DES" }.GetAlgoId());
+            Assert.Equal(P25AlgoIds.P25_ALGO_ARC4, new Codeplug.Channel { Algo = "arc4" }.GetAlgoId());
+            Assert.Equal(P25AlgoIds.P25_ALGO_ARC4, new Codeplug.Channel { Algo = "Arc4" }.GetAlgoId());
         }
 
         /// <summary>
@@ -305,10 +304,10 @@ namespace DvmConsole.Core.Tests
         [Fact]
         public void Channel_GetAlgoId_UnknownOrNullAlgorithm_ReturnsUnencrypt()
         {
-            Assert.Equal(P25Defines.P25_ALGO_UNENCRYPT, new Codeplug.Channel { Algo = "adp" }.GetAlgoId());
-            Assert.Equal(P25Defines.P25_ALGO_UNENCRYPT, new Codeplug.Channel { Algo = "none" }.GetAlgoId());
-            Assert.Equal(P25Defines.P25_ALGO_UNENCRYPT, new Codeplug.Channel { Algo = null }.GetAlgoId());
-            Assert.Equal(P25Defines.P25_ALGO_UNENCRYPT, new Codeplug.Channel().GetAlgoId());
+            Assert.Equal(P25AlgoIds.P25_ALGO_UNENCRYPT, new Codeplug.Channel { Algo = "adp" }.GetAlgoId());
+            Assert.Equal(P25AlgoIds.P25_ALGO_UNENCRYPT, new Codeplug.Channel { Algo = "none" }.GetAlgoId());
+            Assert.Equal(P25AlgoIds.P25_ALGO_UNENCRYPT, new Codeplug.Channel { Algo = null }.GetAlgoId());
+            Assert.Equal(P25AlgoIds.P25_ALGO_UNENCRYPT, new Codeplug.Channel().GetAlgoId());
         }
 
         /// <summary>

@@ -12,6 +12,8 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Solution Items", "Solution 
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "fnecore", "fnecore\fnecore.csproj", "{1F06ECB1-9928-1430-63F4-2E01522A0510}"
 EndProject
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "DvmConsole.Core", "DvmConsole.Core\DvmConsole.Core.csproj", "{22545B4F-07ED-4721-9D70-FDFB4127744F}"
+EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "tests", "tests", "{1E24623E-6010-48C3-9D81-B8CD39211ADF}"
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "DvmConsole.Vocoder.Tests", "tests\DvmConsole.Vocoder.Tests\DvmConsole.Vocoder.Tests.csproj", "{4C86A695-DDBA-4525-9D01-FF9F042B344C}"
@@ -42,6 +44,14 @@ Global
 		{1F06ECB1-9928-1430-63F4-2E01522A0510}.Release|x64.Build.0 = Release|Any CPU
 		{1F06ECB1-9928-1430-63F4-2E01522A0510}.Release|x86.ActiveCfg = Release|Any CPU
 		{1F06ECB1-9928-1430-63F4-2E01522A0510}.Release|x86.Build.0 = Release|Any CPU
+		{22545B4F-07ED-4721-9D70-FDFB4127744F}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{22545B4F-07ED-4721-9D70-FDFB4127744F}.Debug|x64.Build.0 = Debug|Any CPU
+		{22545B4F-07ED-4721-9D70-FDFB4127744F}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{22545B4F-07ED-4721-9D70-FDFB4127744F}.Debug|x86.Build.0 = Debug|Any CPU
+		{22545B4F-07ED-4721-9D70-FDFB4127744F}.Release|x64.ActiveCfg = Release|Any CPU
+		{22545B4F-07ED-4721-9D70-FDFB4127744F}.Release|x64.Build.0 = Release|Any CPU
+		{22545B4F-07ED-4721-9D70-FDFB4127744F}.Release|x86.ActiveCfg = Release|Any CPU
+		{22545B4F-07ED-4721-9D70-FDFB4127744F}.Release|x86.Build.0 = Release|Any CPU
 		{4C86A695-DDBA-4525-9D01-FF9F042B344C}.Debug|x64.ActiveCfg = Debug|Any CPU
 		{4C86A695-DDBA-4525-9D01-FF9F042B344C}.Debug|x64.Build.0 = Debug|Any CPU
 		{4C86A695-DDBA-4525-9D01-FF9F042B344C}.Debug|x86.ActiveCfg = Debug|Any CPU
