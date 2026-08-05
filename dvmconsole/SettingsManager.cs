@@ -48,7 +48,6 @@ namespace dvmconsole
 
         public static string DefaultTarRecordingsPath => _compatPaths.DefaultTarRecordingsPath;
 
-        private const string SETTINGS_TRANSFER_FORMAT = "dvmconsole-settings-transfer";
 
         private static SettingsManager _instance = null;
 
@@ -395,24 +394,9 @@ namespace dvmconsole
 
         /// <summary>
         /// Import/export category shown in the settings transfer window.
+        /// Owned by DvmConsole.Core; the concrete category list below stays
+        /// here in the WPF assembly.
         /// </summary>
-        public class SettingsTransferCategoryDefinition
-        {
-            public string Id { get; set; } = string.Empty;
-            public string DisplayName { get; set; } = string.Empty;
-            public string Description { get; set; } = string.Empty;
-            public List<string> PropertyNames { get; set; } = new List<string>();
-        }
-
-        private class SettingsTransferFile
-        {
-            public string Format { get; set; } = SETTINGS_TRANSFER_FORMAT;
-            public int Version { get; set; } = 1;
-            public DateTime ExportedUtc { get; set; } = DateTime.UtcNow;
-            public List<string> Categories { get; set; } = new List<string>();
-            public JObject Settings { get; set; } = new JObject();
-        }
-
         private static readonly List<SettingsTransferCategoryDefinition> SETTINGS_TRANSFER_CATEGORIES = new List<SettingsTransferCategoryDefinition>
         {
             new SettingsTransferCategoryDefinition
@@ -877,22 +861,11 @@ namespace dvmconsole
             if (string.IsNullOrWhiteSpace(filePath))
                 throw new ArgumentException("Export path is required.", nameof(filePath));
 
-            List<SettingsTransferCategoryDefinition> selectedCategories = ResolveTransferCategories(categoryIds).ToList();
+            List<SettingsTransferCategoryDefinition> selectedCategories = SettingsTransferCodec.ResolveCategories(SETTINGS_TRANSFER_CATEGORIES, categoryIds);
             if (selectedCategories.Count == 0)
                 throw new InvalidOperationException("Select at least one settings category to export.");
 
-            JObject settingsPayload = new JObject();
-            foreach (string propertyName in selectedCategories.SelectMany(c => c.PropertyNames).Distinct(StringComparer.OrdinalIgnoreCase))
-            {
-                PropertyInfo property = typeof(SettingsManager).GetProperty(propertyName);
-                if (property == null || !property.CanRead)
-                    continue;
-
-                object value = property.GetValue(this);
-                settingsPayload[propertyName] = value == null
-                    ? JValue.CreateNull()
-                    : JToken.FromObject(value);
-            }
+            JObject settingsPayload = SettingsTransferCodec.BuildPayload(this, selectedCategories.SelectMany(c => c.PropertyNames));
 
             SettingsTransferFile transferFile = new SettingsTransferFile
             {
@@ -901,11 +874,7 @@ namespace dvmconsole
                 Settings = settingsPayload
             };
 
-            string directory = Path.GetDirectoryName(filePath);
-            if (!string.IsNullOrWhiteSpace(directory) && !Directory.Exists(directory))
-                Directory.CreateDirectory(directory);
-
-            File.WriteAllText(filePath, JsonConvert.SerializeObject(transferFile, Formatting.Indented));
+            SettingsTransferCodec.WriteFile(transferFile, filePath);
         }
 
         public List<string> ImportSettingsTransfer(string filePath, IEnumerable<string> categoryIds)
@@ -915,22 +884,18 @@ namespace dvmconsole
             if (!File.Exists(filePath))
                 throw new FileNotFoundException("Settings transfer file was not found.", filePath);
 
-            SettingsTransferFile transferFile = JsonConvert.DeserializeObject<SettingsTransferFile>(File.ReadAllText(filePath));
-            if (transferFile == null || transferFile.Settings == null)
-                throw new InvalidOperationException("The selected file is not a valid settings transfer file.");
-            if (!string.Equals(transferFile.Format, SETTINGS_TRANSFER_FORMAT, StringComparison.OrdinalIgnoreCase))
-                throw new InvalidOperationException("The selected file is not a dvmconsole settings transfer file.");
+            SettingsTransferFile transferFile = SettingsTransferCodec.ReadFile(filePath);
 
             HashSet<string> exportedCategories = new HashSet<string>(
                 transferFile.Categories ?? Enumerable.Empty<string>(),
                 StringComparer.OrdinalIgnoreCase);
 
-            List<SettingsTransferCategoryDefinition> selectedCategories = ResolveTransferCategories(categoryIds)
+            List<SettingsTransferCategoryDefinition> selectedCategories = SettingsTransferCodec.ResolveCategories(SETTINGS_TRANSFER_CATEGORIES, categoryIds)
                 .Where(category => exportedCategories.Count == 0 || exportedCategories.Contains(category.Id))
                 .ToList();
 
             if (selectedCategories.Count == 0)
-                throw new InvalidOperationException("None of the selected categories exist in this transfer file.");
+                throw new InvalidOperationException(SettingsTransferCodec.NO_CATEGORIES_RESOLVED_MESSAGE);
 
             foreach (string propertyName in selectedCategories.SelectMany(c => c.PropertyNames).Distinct(StringComparer.OrdinalIgnoreCase))
             {
@@ -941,43 +906,13 @@ namespace dvmconsole
                 if (property == null || !property.CanWrite)
                     continue;
 
-                object value = ConvertSettingsTransferToken(token, property.PropertyType);
+                object value = SettingsTransferCodec.ConvertToken(token, property.PropertyType);
                 property.SetValue(this, value);
             }
 
             NormalizeImportedSettings();
             SaveSettings();
             return selectedCategories.Select(c => c.DisplayName).ToList();
-        }
-
-        private static IEnumerable<SettingsTransferCategoryDefinition> ResolveTransferCategories(IEnumerable<string> categoryIds)
-        {
-            HashSet<string> selectedIds = new HashSet<string>(
-                categoryIds?.Where(id => !string.IsNullOrWhiteSpace(id)).Select(id => id.Trim()) ?? Enumerable.Empty<string>(),
-                StringComparer.OrdinalIgnoreCase);
-
-            if (selectedIds.Count == 0)
-                yield break;
-
-            foreach (SettingsTransferCategoryDefinition category in SETTINGS_TRANSFER_CATEGORIES)
-            {
-                if (selectedIds.Contains(category.Id))
-                    yield return category;
-            }
-        }
-
-        private static object ConvertSettingsTransferToken(JToken token, Type targetType)
-        {
-            if (token == null || token.Type == JTokenType.Null)
-            {
-                Type nullableType = Nullable.GetUnderlyingType(targetType);
-                if (!targetType.IsValueType || nullableType != null)
-                    return null;
-
-                return Activator.CreateInstance(targetType);
-            }
-
-            return token.ToObject(targetType);
         }
 
         private void NormalizeImportedSettings()
