@@ -44,17 +44,10 @@ namespace dvmconsole
         public const double TONE_PRESET_MAX_DURATION_SECONDS = 10.0;
         public const string DTMF_PRESET_STEP_KIND_DIGIT = "digit";
 
-        public static readonly string UserAppData = Environment.GetFolderPath(
-            Environment.SpecialFolder.ApplicationData);
-        public static readonly string DefaultTarRecordingsPath = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments),
-            "DVMConsole",
-            "TAR");
+        private static readonly IFileSystemPaths _compatPaths = new DefaultFileSystemPaths();
 
-        public static readonly string RootAppDataPath = "DVMProject" + Path.DirectorySeparatorChar + "dvmconsole";
-        public static string UserAppDataPath = UserAppData + Path.DirectorySeparatorChar + RootAppDataPath;
+        public static string DefaultTarRecordingsPath => _compatPaths.DefaultTarRecordingsPath;
 
-        private static string SettingsFilePath = UserAppDataPath + Path.DirectorySeparatorChar + "UserSettings.json";
         private const string SETTINGS_TRANSFER_FORMAT = "dvmconsole-settings-transfer";
 
         private static SettingsManager _instance = null;
@@ -570,10 +563,25 @@ namespace dvmconsole
         };
 
         /// <summary>
+        /// Filesystem paths used by the settings manager.
+        /// </summary>
+        [JsonIgnore]
+        public IFileSystemPaths FileSystemPaths { get; }
+
+        /// <summary>
         /// Initializes a new instance of the <see cref="SettingsManager"/> class.
         /// </summary>
-        public SettingsManager()
+        public SettingsManager() : this(new DefaultFileSystemPaths(null, null, App.USER_PROFILE_PATH_OVERRIDE))
         {
+        }
+
+        /// <summary>
+        /// Initializes a new instance of the <see cref="SettingsManager"/> class with explicit filesystem paths.
+        /// </summary>
+        /// <param name="paths">Filesystem paths; when null the default paths honoring the profile override are used.</param>
+        public SettingsManager(IFileSystemPaths paths)
+        {
+            FileSystemPaths = paths ?? new DefaultFileSystemPaths(null, null, App.USER_PROFILE_PATH_OVERRIDE);
             _instance = this;
         }
 
@@ -582,24 +590,15 @@ namespace dvmconsole
         /// </summary>
         public bool LoadSettings()
         {
-            // was the user profile path being overridden?
-            if (App.USER_PROFILE_PATH_OVERRIDE != string.Empty)
-            {
-                UserAppDataPath = App.USER_PROFILE_PATH_OVERRIDE;
-                SettingsFilePath = UserAppDataPath + Path.DirectorySeparatorChar + "UserSettings.json";
-            }
-            else
-            {
-                if (!Directory.Exists(UserAppDataPath))
-                    Directory.CreateDirectory(UserAppDataPath);
-            }
+            if (App.USER_PROFILE_PATH_OVERRIDE == string.Empty && !Directory.Exists(FileSystemPaths.ApplicationDataRootPath))
+                Directory.CreateDirectory(FileSystemPaths.ApplicationDataRootPath);
 
-            if (!File.Exists(SettingsFilePath))
+            if (!File.Exists(FileSystemPaths.SettingsFilePath))
                 return false;
 
             try
             {
-                string json = File.ReadAllText(SettingsFilePath);
+                string json = File.ReadAllText(FileSystemPaths.SettingsFilePath);
                 SettingsManager loadedSettings = JsonConvert.DeserializeObject<SettingsManager>(json);
                 _instance = this;
 
@@ -689,7 +688,28 @@ namespace dvmconsole
                     SyncLegacyAlertToneState();
 
                     if (SaveTraceLog)
-                        Log.SetupTextWriter(Environment.CurrentDirectory, "dvmconsole.log");
+                    {
+                        try
+                        {
+                            if (!Directory.Exists(FileSystemPaths.TraceLogDirectoryPath))
+                                Directory.CreateDirectory(FileSystemPaths.TraceLogDirectoryPath);
+                            Log.SetupTextWriter(FileSystemPaths.TraceLogDirectoryPath, "dvmconsole.log");
+                        }
+                        catch
+                        {
+                            // Preferred log directory (e.g. an unwritable profile override root) is not
+                            // usable; fall back to the legacy current-directory log file.
+                            try
+                            {
+                                Log.SetupTextWriter(Environment.CurrentDirectory, "dvmconsole.log");
+                            }
+                            catch
+                            {
+                                // Trace logging is best-effort; a logging setup failure must never
+                                // invalidate settings loading.
+                            }
+                        }
+                    }
 
                     Assembly asm = Assembly.GetExecutingAssembly();
 #if DEBUG
@@ -727,13 +747,13 @@ namespace dvmconsole
         {
             _instance = this;
 
-            if (!Directory.Exists(UserAppDataPath))
-                Directory.CreateDirectory(UserAppDataPath);
+            if (!Directory.Exists(FileSystemPaths.ApplicationDataRootPath))
+                Directory.CreateDirectory(FileSystemPaths.ApplicationDataRootPath);
 
             try
             {
                 string json = JsonConvert.SerializeObject(this, Formatting.Indented);
-                File.WriteAllText(SettingsFilePath, json);
+                File.WriteAllText(FileSystemPaths.SettingsFilePath, json);
             }
             catch (Exception ex)
             {
@@ -991,8 +1011,8 @@ namespace dvmconsole
         /// </summary>
         public void Reset()
         {
-            if (File.Exists(SettingsFilePath))
-                File.Delete(SettingsFilePath);
+            if (File.Exists(FileSystemPaths.SettingsFilePath))
+                File.Delete(FileSystemPaths.SettingsFilePath);
         }
 
         /// <summary>
