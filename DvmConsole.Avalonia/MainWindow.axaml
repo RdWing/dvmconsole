@@ -1,9 +1,13 @@
 <Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        xmlns:platform="using:DvmConsole.Platform"
+        xmlns:vm="using:DvmConsole.Avalonia.ViewModels"
         x:Class="DvmConsole.Avalonia.MainWindow"
-        Title="DVM Console — Avalonia shell"
-        Width="960" Height="600"
+        x:DataType="vm:MainWindowViewModel"
+        Title="DVM Console"
+        Width="1180" Height="760"
+        MinWidth="920" MinHeight="680"
+        Background="#0B1114"
+        Foreground="#EFF7F5"
         WindowStartupLocation="CenterScreen">
 
     <NativeMenu.Menu>
@@ -16,33 +20,209 @@
         </NativeMenu>
     </NativeMenu.Menu>
 
-    <DockPanel>
-        <Border DockPanel.Dock="Bottom"
-                BorderBrush="#3F3F3F"
-                BorderThickness="0,1,0,0"
-                Padding="12,6">
-            <TextBlock Text="Shell gate: macOS Avalonia frontend skeleton — no audio, network, or modem behavior attached."
-                       FontSize="12"
-                       Foreground="#8C8C8C" />
+    <Window.Styles>
+        <Style Selector="TextBlock.kicker">
+            <Setter Property="FontFamily" Value="Inter" />
+            <Setter Property="FontSize" Value="11" />
+            <Setter Property="FontWeight" Value="Bold" />
+            <Setter Property="Foreground" Value="#5FE1D2" />
+            <Setter Property="LetterSpacing" Value="2" />
+        </Style>
+        <Style Selector="TextBlock.title">
+            <Setter Property="FontFamily" Value="Inter" />
+            <Setter Property="FontSize" Value="30" />
+            <Setter Property="FontWeight" Value="Bold" />
+        </Style>
+        <Style Selector="TextBlock.muted">
+            <Setter Property="FontFamily" Value="Inter" />
+            <Setter Property="Foreground" Value="#8EA3A3" />
+        </Style>
+        <Style Selector="TextBlock.data-label">
+            <Setter Property="FontFamily" Value="Inter" />
+            <Setter Property="FontSize" Value="11" />
+            <Setter Property="FontWeight" Value="Bold" />
+            <Setter Property="Foreground" Value="#8EA3A3" />
+            <Setter Property="LetterSpacing" Value="1" />
+        </Style>
+        <Style Selector="TextBlock.data-value">
+            <Setter Property="FontFamily" Value="Inter" />
+            <Setter Property="FontSize" Value="14" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+        </Style>
+        <Style Selector="Border.panel">
+            <Setter Property="Background" Value="#111B1F" />
+            <Setter Property="BorderBrush" Value="#24373A" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="8" />
+        </Style>
+        <Style Selector="Border.channel-card">
+            <Setter Property="Background" Value="#142126" />
+            <Setter Property="BorderBrush" Value="#2A4548" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="6" />
+        </Style>
+    </Window.Styles>
+
+    <DockPanel Margin="24">
+        <Border DockPanel.Dock="Top"
+                BorderBrush="#24373A"
+                BorderThickness="0,0,0,1"
+                Padding="0,0,0,20"
+                Margin="0,0,0,20">
+            <Grid ColumnDefinitions="*,Auto">
+                <StackPanel Spacing="4">
+                    <TextBlock Classes="kicker" Text="DVM // DISPATCH" />
+                    <TextBlock Classes="title" Text="{Binding ProductName}" />
+                    <TextBlock Classes="muted" Text="Operator console · Avalonia frontend" />
+                </StackPanel>
+
+                <StackPanel Grid.Column="1"
+                            HorizontalAlignment="Right"
+                            VerticalAlignment="Center"
+                            Spacing="6">
+                    <Border Background="#302718"
+                            BorderBrush="#735E2E"
+                            BorderThickness="1"
+                            CornerRadius="16"
+                            Padding="12,7"
+                            HorizontalAlignment="Right">
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <Ellipse Width="8" Height="8" Fill="#F3B562" VerticalAlignment="Center" />
+                            <TextBlock Text="{Binding ConnectionLabel}"
+                                       FontSize="12"
+                                       FontWeight="Bold" />
+                        </StackPanel>
+                    </Border>
+                    <TextBlock Classes="muted"
+                               Text="{Binding ConnectionDetail}"
+                               HorizontalAlignment="Right" />
+                </StackPanel>
+            </Grid>
         </Border>
 
-        <StackPanel VerticalAlignment="Center"
-                    HorizontalAlignment="Center"
-                    Spacing="10">
-            <TextBlock Text="DVM Console"
-                       FontSize="34"
-                       FontWeight="Bold"
-                       HorizontalAlignment="Center" />
-            <TextBlock Text="macOS Avalonia frontend skeleton"
-                       FontSize="16"
-                       Foreground="#8C8C8C"
-                       HorizontalAlignment="Center" />
-            <TextBlock FontSize="14"
-                       HorizontalAlignment="Center">
-                <Run Text="Host platform: " />
-                <Run Text="{x:Static platform:PlatformInfo.Description}"
-                     FontWeight="Bold" />
-            </TextBlock>
-        </StackPanel>
+        <Border DockPanel.Dock="Bottom"
+                BorderBrush="#24373A"
+                BorderThickness="0,1,0,0"
+                Padding="0,16,0,0"
+                Margin="0,20,0,0">
+            <Grid ColumnDefinitions="*,Auto">
+                <StackPanel Spacing="3">
+                    <TextBlock Classes="kicker" Text="RUNTIME NOTE" />
+                    <TextBlock Classes="muted"
+                               Text="Protocol, modem, and native audio services are not attached to this shell yet." />
+                </StackPanel>
+                <TextBlock Grid.Column="1"
+                           Classes="muted"
+                           Text="macOS migration · managed shell gate"
+                           VerticalAlignment="Bottom" />
+            </Grid>
+        </Border>
+
+        <Grid ColumnDefinitions="220,16,*">
+            <Border Grid.Column="0" Classes="panel" Padding="18">
+                <StackPanel Spacing="20">
+                    <StackPanel Spacing="5">
+                        <TextBlock Classes="kicker" Text="SYSTEM" />
+                        <TextBlock Classes="data-value" Text="FNE connection" />
+                        <TextBlock Classes="muted" Text="No profile loaded" />
+                    </StackPanel>
+
+                    <Border Background="#182326"
+                            BorderBrush="#31484A"
+                            BorderThickness="1"
+                            CornerRadius="6"
+                            Padding="12">
+                        <StackPanel Spacing="8">
+                            <TextBlock Classes="data-label" Text="CONNECTION" />
+                            <TextBlock Classes="data-value" Text="NOT CONFIGURED" />
+                            <TextBlock Classes="muted"
+                                       Text="The settings adapter will provide endpoint and credentials." />
+                        </StackPanel>
+                    </Border>
+
+                    <StackPanel Spacing="8">
+                        <TextBlock Classes="data-label" Text="CAPABILITIES" />
+                        <TextBlock Classes="muted" Text="• Native audio pending" />
+                        <TextBlock Classes="muted" Text="• Global hotkey fallback ready" />
+                        <TextBlock Classes="muted" Text="• File dialogs available" />
+                    </StackPanel>
+                </StackPanel>
+            </Border>
+
+            <Grid Grid.Column="2" RowDefinitions="Auto,Auto,*" RowSpacing="16">
+                <Grid ColumnDefinitions="*,Auto">
+                    <StackPanel Spacing="4">
+                        <TextBlock Classes="kicker" Text="CHANNEL GRID" />
+                        <TextBlock FontSize="20" FontWeight="SemiBold" Text="Operator slots" />
+                    </StackPanel>
+                    <TextBlock Grid.Column="1"
+                               Classes="muted"
+                               Text="4 fixed slots"
+                               VerticalAlignment="Bottom" />
+                </Grid>
+
+                <Border Grid.Row="1" Classes="panel" Padding="14">
+                    <ItemsControl ItemsSource="{Binding Channels}">
+                        <ItemsControl.ItemsPanel>
+                            <ItemsPanelTemplate>
+                                <WrapPanel Orientation="Horizontal" />
+                            </ItemsPanelTemplate>
+                        </ItemsControl.ItemsPanel>
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate x:DataType="vm:ChannelSlotViewModel">
+                                <Border Classes="channel-card"
+                                        Width="230"
+                                        Margin="0,0,12,12"
+                                        Padding="14">
+                                    <StackPanel Spacing="14">
+                                        <Grid ColumnDefinitions="*,Auto">
+                                            <TextBlock Classes="kicker" Text="{Binding Label}" />
+                                            <Ellipse Grid.Column="1"
+                                                     Width="8" Height="8"
+                                                     Fill="#536769"
+                                                     VerticalAlignment="Center" />
+                                        </Grid>
+                                        <StackPanel Spacing="4">
+                                            <TextBlock Classes="data-label" Text="TALKGROUP" />
+                                            <TextBlock Classes="data-value" Text="{Binding Talkgroup}" />
+                                        </StackPanel>
+                                        <TextBlock Classes="muted" Text="{Binding Status}" />
+                                    </StackPanel>
+                                </Border>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </Border>
+
+                <Grid Grid.Row="2" ColumnDefinitions="*,16,*">
+                    <Border Classes="panel" Padding="18">
+                        <StackPanel Spacing="14">
+                            <TextBlock Classes="kicker" Text="AUDIO PATH" />
+                            <Grid RowDefinitions="Auto,Auto" RowSpacing="12">
+                                <Grid ColumnDefinitions="*,Auto">
+                                    <TextBlock Classes="data-label" Text="CAPTURE" />
+                                    <TextBlock Grid.Column="1" Classes="muted" Text="NOT ATTACHED" />
+                                </Grid>
+                                <Grid Grid.Row="1" ColumnDefinitions="*,Auto">
+                                    <TextBlock Classes="data-label" Text="PLAYBACK" />
+                                    <TextBlock Grid.Column="1" Classes="muted" Text="NOT ATTACHED" />
+                                </Grid>
+                            </Grid>
+                            <TextBlock Classes="muted"
+                                       Text="CoreAudio enumeration and realtime I/O require the macOS backend gate." />
+                        </StackPanel>
+                    </Border>
+
+                    <Border Grid.Column="2" Classes="panel" Padding="18">
+                        <StackPanel Spacing="14">
+                            <TextBlock Classes="kicker" Text="PTT CAPABILITY" />
+                            <TextBlock Classes="data-value" Text="NOT ATTACHED" />
+                            <TextBlock Classes="muted"
+                                       Text="Global hotkey capability and in-window PTT controls will be wired with the console command state machine." />
+                        </StackPanel>
+                    </Border>
+                </Grid>
+            </Grid>
+        </Grid>
     </DockPanel>
 </Window>

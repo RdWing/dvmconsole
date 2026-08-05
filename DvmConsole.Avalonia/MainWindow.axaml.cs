@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 using Avalonia.Controls;
 using DvmConsole.Avalonia.Dialogs;
+using DvmConsole.Avalonia.ViewModels;
 using DvmConsole.Platform.Dialogs;
 
 namespace DvmConsole.Avalonia
@@ -10,6 +11,7 @@ namespace DvmConsole.Avalonia
         public MainWindow()
         {
             InitializeComponent();
+            DataContext = new MainWindowViewModel();
         }
 
         /// <summary>
