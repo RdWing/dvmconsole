@@ -159,7 +159,16 @@ namespace DvmConsole.Avalonia
                     persistence,
                     vocoderStatus,
                     streams,
-                    codeplug.Codeplug?.Systems);
+                    codeplug.Codeplug?.Systems,
+                    // Placeholder codec/traffic seams for the audio
+                    // router: the null codec pair keeps the router fully
+                    // wired while decoding/encoding is inert, and the
+                    // stub sender counts units without sending — the
+                    // Platform-native vocoder adapter and the fnecore
+                    // traffic adapter land in follow-on slices.
+                    new NullVoiceFrameDecoder(),
+                    new NullVoiceFrameEncoder(),
+                    new StubVoiceTrafficSender());
                 mainWindow.FileDialogService =
                     new AvaloniaFileDialogService(mainWindow.StorageProvider);
                 desktop.MainWindow = mainWindow;

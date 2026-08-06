@@ -53,18 +53,15 @@ namespace DvmConsole.Avalonia
         private FneConnectionServiceBridge? fneConnectionBridge = null;
 
         /// <summary>
-        /// Receive-side monitor audio pipeline composed when an audio stream
-        /// factory is supplied to the full-arity constructor; null keeps the
-        /// slice dormant (headless tests are unaffected).
+        /// Headless talkgroup audio router composed when an audio stream
+        /// factory is supplied to the full-arity constructor; null keeps
+        /// the audio slice dormant (headless tests are unaffected). The
+        /// router owns the shared factory and is disposed on window
+        /// close. Composed with the null codec pair and the stub traffic
+        /// sender until the Platform-native vocoder adapter and the
+        /// fnecore traffic adapter land (follow-on slices).
         /// </summary>
-        private MonitorAudioPipeline? monitorAudioPipeline = null;
-
-        /// <summary>
-        /// Transmit-side capture audio pipeline composed when an audio stream
-        /// factory is supplied to the full-arity constructor; null keeps the
-        /// slice dormant (headless tests are unaffected).
-        /// </summary>
-        private CaptureAudioPipeline? captureAudioPipeline = null;
+        private TalkgroupAudioRouter? talkgroupAudioRouter = null;
 
         public MainWindow()
             : this(null, null)
@@ -136,18 +133,21 @@ namespace DvmConsole.Avalonia
         /// catalog, global hotkey service, optional physical key-state
         /// reader, optional audio-settings persistence, the startup
         /// vocoder-readiness result, an optional audio stream factory,
-        /// and the optional codeplug systems seeding the FNE slice. The
-        /// factory, readiness, and systems parameters are last so the
-        /// pre-existing four-argument constructor remains
+        /// the optional codeplug systems seeding the FNE slice, and the
+        /// optional voice codec/traffic seams for the audio router. The
+        /// factory, readiness, systems, codec and sender parameters are
+        /// last so the pre-existing four-argument constructor remains
         /// source-compatible, including null-literal calls. When a
         /// key-state reader is present, exactly one 250 ms dispatcher
         /// timer polls the PTT hotkey and detaches on close. When audio
         /// settings are present, this window subscribes once to their
         /// property changes and applies selections to the ComboBoxes.
-        /// When an audio stream factory is supplied, the monitor and
-        /// capture audio pipelines are composed (both own the shared
-        /// factory) and disposed on window close after the FNE slice;
-        /// otherwise the audio pipelines stay dormant. A null or empty
+        /// When an audio stream factory is supplied, a talkgroup audio
+        /// router is composed over it (owning the shared factory) with
+        /// the injected codec and traffic seams — the null codec pair and
+        /// stub sender when none are supplied, until the real adapters
+        /// land — and disposed on window close after the FNE slice;
+        /// otherwise the audio slice stays dormant. A null or empty
         /// systems list leaves the FNE slice dormant with zero rows; a
         /// populated list seeds the connection manager and service with
         /// the codeplug's real systems.
@@ -159,7 +159,10 @@ namespace DvmConsole.Avalonia
             AudioSettingsPersistence? persistence,
             VocoderReadinessResult? vocoderStatus,
             IAudioStreamFactory? audioStreams = null,
-            IReadOnlyList<Codeplug.System>? systems = null)
+            IReadOnlyList<Codeplug.System>? systems = null,
+            IVoiceFrameDecoder? voiceDecoder = null,
+            IVoiceFrameEncoder? voiceEncoder = null,
+            IVoiceTrafficSender? voiceSender = null)
         {
             InitializeComponent();
             DataContext = new MainWindowViewModel(systems, catalog, hotkeys, persistence, vocoderStatus);
@@ -176,13 +179,34 @@ namespace DvmConsole.Avalonia
                 fneConnectionBridge.Attach();
             }
 
-            // Compose the audio pipelines over the shared factory when one
-            // was supplied; both pipelines own the factory and are disposed
-            // on window close. Null keeps the slice dormant.
-            if (audioStreams is not null)
+            // Compose the talkgroup audio router over the shared factory
+            // when one was supplied; the router owns the factory and is
+            // disposed on window close. The null codec pair and the stub
+            // traffic sender are the placeholder seams until the
+            // Platform-native vocoder adapter and the fnecore traffic
+            // adapter land (follow-on slices): the router stays fully
+            // wired while decoding/encoding is inert and no traffic is
+            // sent. Null keeps the audio slice dormant.
+            if (audioStreams is not null && DataContext is MainWindowViewModel audioViewModel)
             {
-                monitorAudioPipeline = new MonitorAudioPipeline(audioStreams);
-                captureAudioPipeline = new CaptureAudioPipeline(audioStreams);
+                var decoder = voiceDecoder ?? new NullVoiceFrameDecoder();
+                var encoder = voiceEncoder ?? new NullVoiceFrameEncoder();
+                var sender = voiceSender ?? new StubVoiceTrafficSender();
+
+                talkgroupAudioRouter = new TalkgroupAudioRouter(
+                    audioStreams,
+                    decoder,
+                    encoder,
+                    sender,
+                    () => audioViewModel.AudioSettings?.SelectedOutputId ?? AudioDeviceId.Default);
+
+                if (audioViewModel.Ptt is { } ptt)
+                {
+                    ptt.PttStateRequested += OnPttStateRequested;
+                }
+
+                talkgroupAudioRouter.CaptureEnded += OnCaptureEnded;
+                talkgroupAudioRouter.MonitorStreamEnded += OnMonitorStreamEnded;
             }
 
             if (hotkeys is not null)
@@ -505,13 +529,13 @@ namespace DvmConsole.Avalonia
 
         /// <summary>
         /// Stops and detaches the PTT key-up watchdog timer and tears
-        /// down the headless FNE slice and the audio pipelines when the
-        /// window closes: the bridge detaches first (stopping event flow
-        /// in both directions), then the service disconnects and disposes
-        /// every transport and cancels all schedulers, and finally the
-        /// audio pipelines stop and dispose their streams and the shared
-        /// factory. All disposals are idempotent, so a repeated close
-        /// event is harmless.
+        /// down the headless FNE slice and the talkgroup audio router
+        /// when the window closes: the bridge detaches first (stopping
+        /// event flow in both directions), then the service disconnects
+        /// and disposes every transport and cancels all schedulers, and
+        /// finally the router stops every audio pipeline and disposes
+        /// the shared factory. All disposals are idempotent, so a
+        /// repeated close event is harmless.
         /// </summary>
         private void OnWindowClosed(object? sender, EventArgs e)
         {
@@ -524,16 +548,83 @@ namespace DvmConsole.Avalonia
             fneConnectionBridge?.Dispose();
             fneConnectionService?.Dispose();
 
-            if (captureAudioPipeline is { } capture)
+            if (talkgroupAudioRouter is { } router)
             {
-                _ = capture.DisposeAsync();
-            }
-
-            if (monitorAudioPipeline is { } monitor)
-            {
-                _ = monitor.DisposeAsync();
+                _ = router.DisposeAsync();
             }
         }
+
+        /// <summary>
+        /// Routes a PTT engagement change from the view-model's PTT slice
+        /// to the talkgroup audio router: engage begins a transmit for
+        /// the resolved target, release ends it. A press with no resolved
+        /// target (channel assignment has not landed) is a no-op. The
+        /// event may arrive on the UI thread only (the PTT slice is
+        /// UI-thread driven); the router itself is thread-safe either
+        /// way.
+        /// </summary>
+        private void OnPttStateRequested(bool isDown)
+        {
+            if (talkgroupAudioRouter is not { } router)
+            {
+                return;
+            }
+
+            if (isDown)
+            {
+                var target = ResolveTransmitTarget();
+                if (target is not { } resolved)
+                {
+                    return;
+                }
+
+                var inputDeviceId = (DataContext as MainWindowViewModel)?.AudioSettings?.SelectedInputId
+                    ?? AudioDeviceId.Default;
+                _ = router.BeginTransmitAsync(resolved, inputDeviceId, CancellationToken.None);
+            }
+            else
+            {
+                _ = router.EndTransmitAsync();
+            }
+        }
+
+        /// <summary>
+        /// Resolves the transmit target for a PTT press. Returns null
+        /// until channel assignment lands (a follow-on slice wires the
+        /// primary channel's system/talkgroup/slot into a
+        /// <see cref="TransmitTarget"/>); a null target makes the PTT
+        /// press a no-op — the audio router is untouched.
+        /// </summary>
+        private TransmitTarget? ResolveTransmitTarget() => null;
+
+        /// <summary>
+        /// Marshals a capture-end notification from the talkgroup audio
+        /// router onto the UI thread as the view-model's
+        /// <see cref="MainWindowViewModel.AudioStatusMessage"/>.
+        /// </summary>
+        private void OnCaptureEnded(AudioStreamEnd end)
+            => Dispatcher.UIThread.Post(() =>
+            {
+                if (DataContext is MainWindowViewModel viewModel)
+                {
+                    viewModel.AudioStatusMessage = $"PTT capture ended: {end.StopReason}";
+                }
+            });
+
+        /// <summary>
+        /// Marshals a monitor-stream-end notification (per-talkgroup or
+        /// transmit-loopback device loss) from the talkgroup audio router
+        /// onto the UI thread as the view-model's
+        /// <see cref="MainWindowViewModel.AudioStatusMessage"/>.
+        /// </summary>
+        private void OnMonitorStreamEnded()
+            => Dispatcher.UIThread.Post(() =>
+            {
+                if (DataContext is MainWindowViewModel viewModel)
+                {
+                    viewModel.AudioStatusMessage = "Monitor stream ended: output device lost";
+                }
+            });
 
         /// <summary>
         /// Thin click wiring for the Set hotkey button: begins window-local

@@ -72,6 +72,33 @@ namespace DvmConsole.Avalonia.ViewModels
         /// </summary>
         public string AudioSaveFeedback => audioSaveFeedback;
 
+        private string? audioStatusMessage;
+
+        /// <summary>
+        /// Shell-visible audio status line written by the window when the
+        /// talkgroup audio router reports a capture end or a monitor
+        /// stream end, marshalled onto the UI thread by the shell. Null
+        /// when no status is outstanding. Change-only: a
+        /// <see cref="PropertyChanged"/> notification is raised only when
+        /// the value actually changes.
+        /// </summary>
+        public string? AudioStatusMessage
+        {
+            get => audioStatusMessage;
+            set
+            {
+                if (audioStatusMessage == value)
+                {
+                    return;
+                }
+
+                audioStatusMessage = value;
+                PropertyChanged?.Invoke(
+                    this,
+                    new PropertyChangedEventArgs(nameof(AudioStatusMessage)));
+            }
+        }
+
         /// <summary>
         /// The PTT capability slice composed from the injected hotkey
         /// service, or null when no service was provided. Get-only and
