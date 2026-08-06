@@ -289,6 +289,50 @@ namespace DvmConsole.Avalonia.Tests
         }
 
         [Fact]
+        public async Task Adapter_Connect_SendsRptlLoginRequest()
+        {
+            // fnecore sends NET_FUNC_RPTL only from its maintenance loop,
+            // which the adapter deliberately skips (StartWithoutMaintainence
+            // — the Core service owns the heartbeat). The adapter must
+            // replicate the login request itself or a real FNE connection
+            // hangs in WAITING_LOGIN forever. This test binds a fake master
+            // on the system's port and asserts the first datagram is the
+            // RPTL login (real sockets, loopback only).
+            var master = new System.Net.Sockets.UdpClient();
+            master.Client.Bind(new System.Net.IPEndPoint(System.Net.IPAddress.Loopback, 62031));
+            try
+            {
+                var spy = new BackgroundSpy();
+                var adapter = new FnecorePeerAdapter(MakeSystem(), spy.Background);
+
+                adapter.Connect();
+                spy.RunAll();
+
+                var receive = master.ReceiveAsync();
+                var completed = await Task.WhenAny(receive, Task.Delay(5000));
+                Assert.Same(receive, completed); // login datagram arrived
+
+                var datagram = receive.GetAwaiter().GetResult().Buffer;
+                var header = new RtpFNEHeader();
+                Assert.True(header.Decode(datagram), "datagram must carry a decodable RTP/FNE header");
+                Assert.Equal(Constants.NET_FUNC_RPTL, header.Function);
+
+                // Payload: "RPTL" tag + peer id (4 bytes each), after the
+                // 12-byte RTP header, the 4-byte RTP extension header, and
+                // the 16-byte FNE extension (RtpFNEHeaderExtLength is in
+                // 32-bit words: 4 words = 16 bytes).
+                var payloadStart = 12 + 4 + Constants.RtpFNEHeaderExtLength * 4;
+                Assert.True(datagram.Length >= payloadStart + 8, "RPTL payload must be 8 bytes");
+                var tag = System.Text.Encoding.ASCII.GetString(datagram, payloadStart, 4);
+                Assert.Equal("RPTL", tag);
+            }
+            finally
+            {
+                master.Close();
+            }
+        }
+
+        [Fact]
         public void Adapter_ImplementsIfneTransport_Surface()
         {
             var type = typeof(FnecorePeerAdapter);

@@ -217,6 +217,19 @@ namespace DvmConsole.Avalonia.Services
                     if (!fne.IsStarted)
                     {
                         fne.StartWithoutMaintainence();
+
+                        // fnecore sends NET_FUNC_RPTL only from its
+                        // maintenance loop (FnePeer.cs:1508-1511), which
+                        // the adapter deliberately skips — the Core
+                        // service owns the heartbeat. Replicate the
+                        // login request here, once per Connect, or a
+                        // real FNE connection hangs in WAITING_LOGIN
+                        // forever. (The maintenance loop's ping remains
+                        // the Core service's job once RUNNING.)
+                        byte[] res = new byte[8];
+                        FneUtils.StringToBytes(Constants.TAG_REPEATER_LOGIN, res, 0, 4);
+                        FneUtils.WriteBytes(fne.PeerId, ref res, 4);
+                        fne.SendMasterTraffic(FneBase.CreateOpcode(Constants.NET_FUNC_RPTL), res);
                     }
                 }
                 catch
