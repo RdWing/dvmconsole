@@ -70,6 +70,20 @@
             <Setter Property="BorderBrush" Value="#F3B562" />
             <Setter Property="BorderThickness" Value="2" />
         </Style>
+        <Style Selector="Button.ptt-button">
+            <Setter Property="Background" Value="#1A262B" />
+            <Setter Property="BorderBrush" Value="#2A4548" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="6" />
+            <Setter Property="Foreground" Value="#8EA3A3" />
+            <Setter Property="FontWeight" Value="Bold" />
+            <Setter Property="Padding" Value="14,10" />
+        </Style>
+        <Style Selector="Button.ptt-button.engaged">
+            <Setter Property="Background" Value="#0F3B38" />
+            <Setter Property="BorderBrush" Value="#5FE1D2" />
+            <Setter Property="Foreground" Value="#EFF7F5" />
+        </Style>
     </Window.Styles>
 
     <DockPanel Margin="24">
@@ -352,6 +366,13 @@
                                                Text="Press a key combination while capture is active."
                                                IsVisible="{Binding HotkeyCapture.IsCapturing}" />
                                 </StackPanel>
+
+                                <Button Classes="ptt-button"
+                                        Classes.engaged="{Binding Ptt.IsEngaged}"
+                                        Content="PUSH TO TALK"
+                                        PointerPressed="PttButton_PointerPressed"
+                                        PointerReleased="PttButton_PointerReleased"
+                                        PointerCaptureLost="PttButton_PointerCaptureLost" />
 
                                 <TextBlock Classes="muted"
                                            Text="Hotkey events are routed on the UI thread; registration attaches with the macOS backend gate." />

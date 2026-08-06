@@ -199,6 +199,67 @@ namespace DvmConsole.Avalonia
         }
 
         /// <summary>
+        /// Thin pointer-press wiring for the dashboard PUSH TO TALK button.
+        /// Translates the pointer update through
+        /// <see cref="PttButtonPointerInterpreter.TryGetPttPointerAction"/>
+        /// and forwards an accepted left-button press to the PTT capability
+        /// slice. Safe no-op for any other pointer update, null data
+        /// context, or absent slice.
+        /// </summary>
+        private void PttButton_PointerPressed(object? sender, PointerPressedEventArgs e)
+        {
+            if (!PttButtonPointerInterpreter.TryGetPttPointerAction(
+                    e.Properties.PointerUpdateKind, out var isDown)
+                || !isDown)
+            {
+                return;
+            }
+
+            if (DataContext is MainWindowViewModel viewModel)
+            {
+                viewModel.Ptt?.PttPointerDown();
+            }
+        }
+
+        /// <summary>
+        /// Thin pointer-release wiring for the dashboard PUSH TO TALK
+        /// button. Translates the pointer update through
+        /// <see cref="PttButtonPointerInterpreter.TryGetPttPointerAction"/>
+        /// and forwards an accepted left-button release to the PTT
+        /// capability slice. Safe no-op for any other pointer update, null
+        /// data context, or absent slice.
+        /// </summary>
+        private void PttButton_PointerReleased(object? sender, PointerReleasedEventArgs e)
+        {
+            if (!PttButtonPointerInterpreter.TryGetPttPointerAction(
+                    e.Properties.PointerUpdateKind, out var isDown)
+                || isDown)
+            {
+                return;
+            }
+
+            if (DataContext is MainWindowViewModel viewModel)
+            {
+                viewModel.Ptt?.PttPointerUp();
+            }
+        }
+
+        /// <summary>
+        /// Thin pointer-capture-loss wiring for the dashboard PUSH TO TALK
+        /// button. Forwards an unconditional release to the PTT capability
+        /// slice so engagement can never stick when pointer capture is lost;
+        /// the redundant release is intentional and idempotent. Safe no-op
+        /// when the view-model or slice is absent.
+        /// </summary>
+        private void PttButton_PointerCaptureLost(object? sender, PointerCaptureLostEventArgs e)
+        {
+            if (DataContext is MainWindowViewModel viewModel)
+            {
+                viewModel.Ptt?.PttPointerUp();
+            }
+        }
+
+        /// <summary>
         /// Thin click wiring for the FNE system-card Start/Stop toggle
         /// button. Resolves the row from the sender button's data
         /// context and forwards a Stop request when the row reports a
