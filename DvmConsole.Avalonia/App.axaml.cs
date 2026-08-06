@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 #nullable enable
 using Avalonia;
+using Avalonia.Controls;
 using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Markup.Xaml;
 using Avalonia.Threading;
@@ -10,6 +11,7 @@ using DvmConsole.Avalonia.Dialogs;
 using DvmConsole.Avalonia.Persistence;
 using DvmConsole.Avalonia.Services;
 using DvmConsole.Avalonia.ViewModels;
+using DvmConsole.Avalonia.Views;
 using DvmConsole.Core.Configuration;
 using DvmConsole.Platform;
 using DvmConsole.Platform.Audio;
@@ -116,6 +118,50 @@ namespace DvmConsole.Avalonia
             return result;
         }
 
+        /// <summary>
+        /// Adds the native "About" menu item that opens the About
+        /// dialog on the main window. The item is inserted into the
+        /// first top-level submenu (the App menu) ahead of its
+        /// trailing items; when the menu tree does not match that
+        /// shape the item is appended to the top-level menu. Failures
+        /// degrade to no menu item, never to a startup crash.
+        /// </summary>
+        private static void AddAboutMenuItem(MainWindow mainWindow)
+        {
+            try
+            {
+                NativeMenu? menu = NativeMenu.GetMenu(mainWindow);
+                if (menu is null)
+                {
+                    return;
+                }
+
+                var aboutItem = new NativeMenuItem("About");
+                aboutItem.Click += (_, _) =>
+                {
+                    var about = new AboutWindow();
+                    about.ShowDialog(mainWindow);
+                };
+
+                NativeMenuItem? appItem = menu.Items
+                    .OfType<NativeMenuItem>()
+                    .FirstOrDefault(item => item.Menu is { });
+                if (appItem?.Menu is { } appMenu && appMenu.Items.Count > 0)
+                {
+                    // Insert ahead of the trailing item (Quit).
+                    appMenu.Items.Insert(appMenu.Items.Count - 1, aboutItem);
+                }
+                else
+                {
+                    menu.Items.Add(aboutItem);
+                }
+            }
+            catch
+            {
+                // A menu-structure surprise must never fail startup.
+            }
+        }
+
         public override void OnFrameworkInitializationCompleted()
         {
             if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
@@ -189,6 +235,12 @@ namespace DvmConsole.Avalonia
                 mainWindow.FileDialogService =
                     new AvaloniaFileDialogService(mainWindow.StorageProvider);
                 desktop.MainWindow = mainWindow;
+
+                // Native "About" menu item: opens the About dialog on
+                // the main window. Kept in the shell so the About slice
+                // stays self-contained; an unexpected menu structure
+                // degrades to no item rather than failing startup.
+                AddAboutMenuItem(mainWindow);
 
                 if (catalog is MacAudioDeviceCatalog mac)
                 {

@@ -1,0 +1,67 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:DvmConsole.Avalonia.ViewModels"
+        x:Class="DvmConsole.Avalonia.Views.AboutWindow"
+        x:DataType="vm:AboutWindowViewModel"
+        Title="About"
+        Width="460"
+        SizeToContent="Height"
+        CanResize="False"
+        ShowInTaskbar="False"
+        WindowStartupLocation="CenterOwner"
+        Background="#0B1114"
+        Foreground="#EFF7F5">
+
+    <!-- WPF AboutWindow.xaml content parity: product identity,
+         version information (release + short hash), the AGPL license
+         notice with its license link, and Repository/Close actions. -->
+    <StackPanel Margin="24" Spacing="14">
+
+        <StackPanel Spacing="2">
+            <TextBlock Text="{Binding ProductName}"
+                       FontFamily="Inter"
+                       FontSize="20"
+                       FontWeight="Bold" />
+            <TextBlock Text="{Binding ProductSubtitle}"
+                       FontFamily="Inter"
+                       FontSize="14"
+                       Foreground="#8EA3A3" />
+        </StackPanel>
+
+        <Border Padding="16"
+                CornerRadius="8"
+                Background="#111B1F"
+                BorderBrush="#24373A"
+                BorderThickness="1">
+            <StackPanel Spacing="10">
+                <TextBlock Text="Version Information"
+                           FontFamily="Inter"
+                           FontSize="16"
+                           FontWeight="SemiBold" />
+                <TextBlock Text="{Binding VersionLine}"
+                           FontFamily="Inter" />
+                <Rectangle Height="1"
+                           Fill="#24373A" />
+                <TextBlock Text="License"
+                           FontFamily="Inter"
+                           FontWeight="SemiBold" />
+                <TextBlock Text="{Binding LicenseLine}"
+                           FontFamily="Inter"
+                           TextWrapping="Wrap" />
+                <HyperlinkButton Content="AGPL-3.0 License"
+                                 Click="License_OnClick"
+                                 Foreground="#5FE1D2" />
+            </StackPanel>
+        </Border>
+
+        <StackPanel Orientation="Horizontal"
+                    Spacing="10"
+                    HorizontalAlignment="Right">
+            <Button Content="Repository"
+                    Click="Repository_OnClick" />
+            <Button Content="Close"
+                    Click="Close_OnClick" />
+        </StackPanel>
+
+    </StackPanel>
+</Window>
