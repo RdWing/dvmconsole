@@ -7,6 +7,7 @@ using Avalonia.Interactivity;
 using Avalonia.Threading;
 using DvmConsole.Avalonia.Dialogs;
 using DvmConsole.Avalonia.Input;
+using DvmConsole.Avalonia.Persistence;
 using DvmConsole.Avalonia.ViewModels;
 using DvmConsole.Platform.Audio;
 using DvmConsole.Platform.Dialogs;
@@ -49,18 +50,48 @@ namespace DvmConsole.Avalonia
         /// Creates the dashboard window with the given audio device
         /// catalog and global hotkey service composed into the
         /// view-model; nulls leave the corresponding slices absent.
-        /// When the audio slice is present, this window subscribes once
-        /// to its property changes and applies the saved selections to
-        /// the audio ComboBoxes. When a hotkey service is present, this
-        /// window subscribes once to its
-        /// <see cref="IGlobalHotkeyService.HotkeyPressed"/> event and
-        /// marshals every event to the UI thread. No registration,
-        /// unregistration, or disposal is performed here.
+        /// No audio persistence is composed, so the audio slice is
+        /// request-only.
         /// </summary>
         public MainWindow(IAudioDeviceCatalog? catalog, IGlobalHotkeyService? hotkeys)
+            : this(catalog, hotkeys, (IKeyboardKeyStateReader?)null)
+        {
+        }
+
+        /// <summary>
+        /// Creates the dashboard window with the given audio device
+        /// catalog, global hotkey service and optional physical key-state
+        /// reader. When a key-state reader is supplied, the PTT watchdog
+        /// is enabled; otherwise it remains dormant.
+        /// </summary>
+        public MainWindow(
+            IAudioDeviceCatalog? catalog,
+            IGlobalHotkeyService? hotkeys,
+            IKeyboardKeyStateReader? keyStateReader)
+            : this(catalog, hotkeys, keyStateReader, null)
+        {
+        }
+
+        /// <summary>
+        /// Creates the dashboard window with the given audio device
+        /// catalog, global hotkey service, optional physical key-state
+        /// reader, and optional audio-settings persistence. The persistence
+        /// parameter is last so the pre-existing three-argument watchdog
+        /// constructor remains source-compatible, including null-literal
+        /// calls. When a key-state reader is present, exactly one 250 ms
+        /// dispatcher timer polls the PTT hotkey and detaches on close.
+        /// When audio settings are present, this window subscribes once to
+        /// their property changes and applies selections to the ComboBoxes.
+        /// No registration, unregistration, or disposal is performed here.
+        /// </summary>
+        public MainWindow(
+            IAudioDeviceCatalog? catalog,
+            IGlobalHotkeyService? hotkeys,
+            IKeyboardKeyStateReader? keyStateReader,
+            AudioSettingsPersistence? persistence)
         {
             InitializeComponent();
-            DataContext = new MainWindowViewModel(null, catalog, hotkeys);
+            DataContext = new MainWindowViewModel(null, catalog, hotkeys, persistence);
 
             if (hotkeys is not null)
             {
@@ -73,26 +104,7 @@ namespace DvmConsole.Avalonia
                 settings.PropertyChanged += AudioSettings_PropertyChanged;
                 ApplyAudioSelections();
             }
-        }
 
-        /// <summary>
-        /// Creates the dashboard window with an audio device catalog, a
-        /// global hotkey service, and an optional physical key-state
-        /// reader composed into the view-model; nulls leave the
-        /// corresponding slices absent. When a key-state reader is
-        /// supplied, exactly one 250 ms dispatcher timer polls the
-        /// currently configured PTT hotkey and drives the PTT slice's
-        /// key-up watchdog, so a hotkey key-up the service never
-        /// delivers cannot leave PTT stuck engaged; the timer stops and
-        /// detaches on window <see cref="Window.Closed"/>. No
-        /// registration, unregistration, or disposal is performed here.
-        /// </summary>
-        public MainWindow(
-            IAudioDeviceCatalog? catalog,
-            IGlobalHotkeyService? hotkeys,
-            IKeyboardKeyStateReader? keyStateReader)
-            : this(catalog, hotkeys)
-        {
             if (keyStateReader is null)
             {
                 return;

@@ -4,7 +4,9 @@ using Avalonia;
 using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Markup.Xaml;
 using Avalonia.Threading;
+using dvmconsole;
 using DvmConsole.Avalonia.Dialogs;
+using DvmConsole.Avalonia.Persistence;
 using DvmConsole.Avalonia.ViewModels;
 using DvmConsole.Platform;
 using DvmConsole.Platform.Audio;
@@ -70,7 +72,9 @@ namespace DvmConsole.Avalonia
             {
                 var catalog = CreateAudioDeviceCatalog();
                 var hotkeys = CreateGlobalHotkeyService();
-                var mainWindow = new MainWindow(catalog, hotkeys);
+                var persistence = new AudioSettingsPersistence(
+                    new SettingsSectionStore(new DefaultFileSystemPaths().SettingsFilePath));
+                var mainWindow = new MainWindow(catalog, hotkeys, null, persistence);
                 mainWindow.FileDialogService =
                     new AvaloniaFileDialogService(mainWindow.StorageProvider);
                 desktop.MainWindow = mainWindow;

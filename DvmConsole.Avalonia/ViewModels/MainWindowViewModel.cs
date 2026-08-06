@@ -4,6 +4,7 @@ using System;
 using System.Collections.Generic;
 using System.ComponentModel;
 using dvmconsole;
+using DvmConsole.Avalonia.Persistence;
 using DvmConsole.Platform.Audio;
 using DvmConsole.Platform.Hotkeys;
 
@@ -29,6 +30,8 @@ namespace DvmConsole.Avalonia.ViewModels
         private const string AudioSavedFeedbackText = "Audio settings saved";
 
         private readonly SelectedChannelsManager<ChannelSlotViewModel> selectedChannelsManager;
+
+        private readonly AudioSettingsPersistence? audioPersistence;
 
         private string audioSaveFeedback = string.Empty;
 
@@ -181,13 +184,41 @@ namespace DvmConsole.Avalonia.ViewModels
         /// device catalog, and a PTT capability slice composed from the
         /// given hotkey service; null systems yield an empty manager, a
         /// null catalog yields a null <see cref="AudioSettings"/>, and a
-        /// null hotkey service yields a null <see cref="Ptt"/>.
+        /// null hotkey service yields a null <see cref="Ptt"/>. No
+        /// audio persistence is composed, so the slice is request-only.
         /// </summary>
         public MainWindowViewModel(
             IReadOnlyList<Codeplug.System>? systems,
             IAudioDeviceCatalog? catalog,
             IGlobalHotkeyService? hotkeys)
+            : this(systems, catalog, hotkeys, null)
         {
+        }
+
+        /// <summary>
+        /// Creates the offline dashboard with exactly four channel slots,
+        /// an FNE connection manager seeded from the given codeplug
+        /// systems, an audio-settings slice composed from the given
+        /// device catalog, a PTT capability slice composed from the
+        /// given hotkey service, and optional audio-settings persistence.
+        /// Null systems yield an empty manager, a null catalog yields a
+        /// null <see cref="AudioSettings"/>, and a null hotkey service
+        /// yields a null <see cref="Ptt"/>. When the catalog and
+        /// persistence are both supplied, the audio section is loaded at
+        /// construction and its keys are mapped to device ids that seed
+        /// the audio-settings slice; a missing, malformed or unreadable
+        /// load degrades to the default ids and default AGC state without
+        /// throwing. A null persistence keeps the slice exactly
+        /// request-only.
+        /// </summary>
+        public MainWindowViewModel(
+            IReadOnlyList<Codeplug.System>? systems,
+            IAudioDeviceCatalog? catalog,
+            IGlobalHotkeyService? hotkeys,
+            AudioSettingsPersistence? persistence)
+        {
+            audioPersistence = persistence;
+
             FneConnections = new FneConnectionManagerViewModel(systems);
             FneConnections.PropertyChanged += OnFneConnectionManagerChanged;
 
@@ -216,7 +247,31 @@ namespace DvmConsole.Avalonia.ViewModels
 
             HotkeyCapture = Ptt is null ? null : new HotkeyCaptureViewModel(Ptt);
 
-            AudioSettings = catalog is null ? null : new AudioSettingsViewModel(catalog);
+            var savedInputId = AudioDeviceId.Default;
+            var savedOutputId = AudioDeviceId.Default;
+            var savedAgcEnabled = false;
+
+            if (catalog is not null && persistence is not null)
+            {
+                try
+                {
+                    if (persistence.TryLoad(out UserSettingsAudioSection section))
+                    {
+                        savedInputId = AudioSettingsPersistence.ToAudioDeviceId(section.AudioInputDeviceKey);
+                        savedOutputId = AudioSettingsPersistence.ToAudioDeviceId(section.MasterOutputDeviceKey);
+                        savedAgcEnabled = section.AudioInputAgcEnabled;
+                    }
+                }
+                catch
+                {
+                    // Degrade to defaults; persistence must never break
+                    // dashboard construction.
+                }
+            }
+
+            AudioSettings = catalog is null
+                ? null
+                : new AudioSettingsViewModel(catalog, savedInputId, savedOutputId, savedAgcEnabled);
 
             if (AudioSettings is not null)
             {
@@ -230,8 +285,29 @@ namespace DvmConsole.Avalonia.ViewModels
             AudioDeviceId outputId,
             bool agcEnabled)
         {
-            // The payload values are intentionally ignored: the
-            // acknowledgement text is fixed and change-only.
+            // Persist the payload when a store is composed. Failure is
+            // isolated to a diagnostic: a malformed or I/O-unsafe save
+            // must never escape or prevent the acknowledgement below.
+            if (audioPersistence is not null)
+            {
+                try
+                {
+                    audioPersistence.Save(new UserSettingsAudioSection
+                    {
+                        AudioInputDeviceKey = AudioSettingsPersistence.ToSettingsKey(inputId),
+                        MasterOutputDeviceKey = AudioSettingsPersistence.ToSettingsKey(outputId),
+                        AudioInputAgcEnabled = agcEnabled
+                    });
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine(
+                        $"Audio settings persistence failed: {ex}");
+                }
+            }
+
+            // The acknowledgement text is fixed and change-only; the
+            // payload values are intentionally ignored beyond persistence.
             if (audioSaveFeedback == AudioSavedFeedbackText)
             {
                 return;
