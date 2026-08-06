@@ -265,25 +265,33 @@ namespace DvmConsole.Avalonia.ViewModels
         /// systems, an audio-settings slice composed from the given
         /// device catalog, a PTT capability slice composed from the
         /// given hotkey service, optional audio-settings persistence,
-        /// and an optional startup vocoder-readiness result. Null
-        /// systems yield an empty manager, a null catalog yields a
-        /// null <see cref="AudioSettings"/>, and a null hotkey service
-        /// yields a null <see cref="Ptt"/>. When the catalog and
-        /// persistence are both supplied, the audio section is loaded at
-        /// construction and its keys are mapped to device ids that seed
-        /// the audio-settings slice; a missing, malformed or unreadable
-        /// load degrades to the default ids and default AGC state without
-        /// throwing. A null persistence keeps the slice exactly
-        /// request-only. A null readiness result leaves
-        /// <see cref="VocoderStatus"/> null; otherwise it is composed
-        /// exactly once from the result.
+        /// an optional startup vocoder-readiness result, and an
+        /// optional codeplug for the temporary channel-assignment
+        /// (transmit-target) slice. Null systems yield an empty manager,
+        /// a null catalog yields a null <see cref="AudioSettings"/>, and
+        /// a null hotkey service yields a null <see cref="Ptt"/>. When
+        /// the catalog and persistence are both supplied, the audio
+        /// section is loaded at construction and its keys are mapped to
+        /// device ids that seed the audio-settings slice; a missing,
+        /// malformed or unreadable load degrades to the default ids and
+        /// default AGC state without throwing. A null persistence keeps
+        /// the slice exactly request-only. A null readiness result
+        /// leaves <see cref="VocoderStatus"/> null; otherwise it is
+        /// composed exactly once from the result. When a codeplug is
+        /// supplied, slot i (0-based) is assigned the i-th channel of
+        /// the flattened <c>Zones[].Channels</c> order — the first
+        /// <c>ChannelCount</c> channels, with slots beyond the list
+        /// staying unassigned (null <see cref="ChannelSlotViewModel.ChannelName"/>);
+        /// this is temporary until the zone UI slice lands. A null
+        /// codeplug leaves every slot unassigned.
         /// </summary>
         public MainWindowViewModel(
             IReadOnlyList<Codeplug.System>? systems,
             IAudioDeviceCatalog? catalog,
             IGlobalHotkeyService? hotkeys,
             AudioSettingsPersistence? persistence,
-            VocoderReadinessResult? vocoderStatus)
+            VocoderReadinessResult? vocoderStatus,
+            Codeplug? codeplug = null)
         {
             VocoderStatus = vocoderStatus is null
                 ? null
@@ -296,11 +304,25 @@ namespace DvmConsole.Avalonia.ViewModels
             FneConnections = new FneConnectionManagerViewModel(systems);
             FneConnections.PropertyChanged += OnFneConnectionManagerChanged;
 
+            // Temporary channel assignment until the zone UI slice
+            // lands: slot i (0-based) is assigned the i-th channel of
+            // the flattened Zones[].Channels order, first N channels;
+            // slots beyond the list stay unassigned with a null
+            // ChannelName. A null codeplug (or null zones/channels)
+            // leaves every slot unassigned.
+            var assignedChannels = codeplug?.Zones
+                ?.SelectMany(zone => zone.Channels ?? Enumerable.Empty<Codeplug.Channel>())
+                .ToList()
+                ?? new List<Codeplug.Channel>();
+
             var channels = new ChannelSlotViewModel[ChannelCount];
             for (var i = 0; i < ChannelCount; i++)
             {
                 var number = i + 1;
-                channels[i] = new ChannelSlotViewModel(number, $"CHANNEL {number:00}");
+                channels[i] = new ChannelSlotViewModel(
+                    number,
+                    $"CHANNEL {number:00}",
+                    i < assignedChannels.Count ? assignedChannels[i].Name : null);
             }
 
             Channels = channels;

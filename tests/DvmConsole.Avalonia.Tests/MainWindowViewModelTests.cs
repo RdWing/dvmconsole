@@ -1341,5 +1341,85 @@ namespace DvmConsole.Avalonia.Tests
             Assert.NotNull(vm.HotkeyCapture);
             Assert.Equal(0, fake.GetCapabilityCalls);
         }
+
+        /* ------------------------------------------------------------------
+        ** Channel-assignment (transmit-target slice)
+        ** ---------------------------------------------------------------- */
+
+        private static Codeplug MakeCodeplug()
+        {
+            return new Codeplug
+            {
+                Systems = new System.Collections.Generic.List<Codeplug.System>
+                {
+                    new Codeplug.System { Name = "Repeater 1", Rid = "1000001" },
+                },
+                Zones = new System.Collections.Generic.List<Codeplug.Zone>
+                {
+                    new Codeplug.Zone
+                    {
+                        Name = "Zone A",
+                        Channels = new System.Collections.Generic.List<Codeplug.Channel>
+                        {
+                            new Codeplug.Channel { Name = "CH 1 DMR", System = "Repeater 1", Tgid = "31001", Slot = 1, Mode = "dmr" },
+                            new Codeplug.Channel { Name = "CH 2 P25", System = "Repeater 1", Tgid = "31002", Slot = 2, Mode = "p25" },
+                            new Codeplug.Channel { Name = "CH 3", System = "Repeater 1", Tgid = "31003", Slot = 1, Mode = "dmr" },
+                            new Codeplug.Channel { Name = "CH 4", System = "Repeater 1", Tgid = "31004", Slot = 2, Mode = "dmr" },
+                            new Codeplug.Channel { Name = "CH 5 Extra", System = "Repeater 1", Tgid = "31005", Slot = 1, Mode = "dmr" },
+                        },
+                    },
+                },
+            };
+        }
+
+        [Fact]
+        public void CodeplugCtor_AssignsFirstNFlattenedChannels_InOrder()
+        {
+            var vm = new MainWindowViewModel(MakeCodeplug().Systems, null, null, null, null, MakeCodeplug());
+
+            Assert.Equal("CH 1 DMR", vm.Channels[0].ChannelName);
+            Assert.Equal("CH 2 P25", vm.Channels[1].ChannelName);
+            Assert.Equal("CH 3", vm.Channels[2].ChannelName);
+            Assert.Equal("CH 4", vm.Channels[3].ChannelName);
+        }
+
+        [Fact]
+        public void CodeplugCtor_FewerChannelsThanSlots_RemainingUnassigned()
+        {
+            var codeplug = MakeCodeplug();
+            // Keep only the first two channels (remove CH 3, CH 4, CH 5).
+            codeplug.Zones[0].Channels.RemoveAt(4);
+            codeplug.Zones[0].Channels.RemoveAt(3);
+            codeplug.Zones[0].Channels.RemoveAt(2);
+
+            var vm = new MainWindowViewModel(codeplug.Systems, null, null, null, null, codeplug);
+
+            Assert.Equal("CH 1 DMR", vm.Channels[0].ChannelName);
+            Assert.Equal("CH 2 P25", vm.Channels[1].ChannelName);
+            Assert.Null(vm.Channels[2].ChannelName);
+            Assert.Null(vm.Channels[3].ChannelName);
+        }
+
+        [Fact]
+        public void NullCodeplug_AllSlotsUnassigned()
+        {
+            var vm = new MainWindowViewModel(null, null, null, null, null, null);
+
+            Assert.All(vm.Channels, c => Assert.Null(c.ChannelName));
+        }
+
+        [Fact]
+        public void PrimaryChannel_ChannelName_FlowsToPttResolution()
+        {
+            var vm = new MainWindowViewModel(MakeCodeplug().Systems, null, null, null, null, MakeCodeplug());
+
+            // WPF-mirrored selection semantics: a plain click selects;
+            // a setPrimary click on the selected slot promotes it.
+            vm.ProcessChannelClick(1, setPrimary: false);
+            vm.ProcessChannelClick(1, setPrimary: true);
+
+            Assert.NotNull(vm.PrimaryChannel);
+            Assert.Equal("CH 1 DMR", vm.PrimaryChannel!.ChannelName);
+        }
     }
 }

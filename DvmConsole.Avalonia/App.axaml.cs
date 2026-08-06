@@ -184,7 +184,8 @@ namespace DvmConsole.Avalonia
                     (IVoiceFrameDecoder?)voiceCodec ?? new NullVoiceFrameDecoder(),
                     (IVoiceFrameEncoder?)voiceCodec ?? new NullVoiceFrameEncoder(),
                     new FnecoreVoiceTrafficSender(fnecoreTransportFactory.ResolveAdapter),
-                    fnecoreTransportFactory);
+                    fnecoreTransportFactory,
+                    codeplug.Codeplug);
                 mainWindow.FileDialogService =
                     new AvaloniaFileDialogService(mainWindow.StorageProvider);
                 desktop.MainWindow = mainWindow;

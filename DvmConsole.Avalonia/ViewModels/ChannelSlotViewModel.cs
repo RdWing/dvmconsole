@@ -20,13 +20,17 @@ namespace DvmConsole.Avalonia.ViewModels
         private bool pttEngaged;
 
         /// <summary>
-        /// Creates a channel slot with the given 1-based number and display
-        /// label, in the unassigned default state (unselected, non-primary).
+        /// Creates a channel slot with the given 1-based number, display
+        /// label and optional assigned codeplug channel name, in the
+        /// unassigned default state (unselected, non-primary). The
+        /// channel-name parameter is trailing and optional so existing
+        /// two-argument constructions stay source-compatible.
         /// </summary>
-        public ChannelSlotViewModel(int number, string label)
+        public ChannelSlotViewModel(int number, string label, string? channelName = null)
         {
             Number = number;
             Label = label;
+            ChannelName = channelName;
         }
 
         /// <summary>The 1-based slot number (1..4 on the dashboard).</summary>
@@ -34,6 +38,14 @@ namespace DvmConsole.Avalonia.ViewModels
 
         /// <summary>The display label, e.g. <c>CHANNEL 01</c>.</summary>
         public string Label { get; }
+
+        /// <summary>
+        /// The codeplug channel name assigned to this slot, or null when
+        /// no channel is assigned. Immutable at construction like
+        /// <see cref="Number"/>, <see cref="Label"/>, <see cref="Talkgroup"/>
+        /// and <see cref="Status"/>.
+        /// </summary>
+        public string? ChannelName { get; }
 
         /// <summary>
         /// The talkgroup assigned to this slot; <c>NO TALKGROUP</c> until

@@ -81,6 +81,14 @@ namespace DvmConsole.Avalonia
         /// </summary>
         private TalkgroupAudioRouter? talkgroupAudioRouter = null;
 
+        /// <summary>
+        /// Resolves the primary channel's codeplug channel name onto the
+        /// router's <see cref="TransmitTarget"/>; null until a codeplug
+        /// is supplied to the full-arity constructor, keeping the PTT
+        /// path a documented no-op.
+        /// </summary>
+        private readonly TransmitTargetResolver? transmitTargetResolver = null;
+
         public MainWindow()
             : this(null, null)
         {
@@ -151,12 +159,14 @@ namespace DvmConsole.Avalonia
         /// catalog, global hotkey service, optional physical key-state
         /// reader, optional audio-settings persistence, the startup
         /// vocoder-readiness result, an optional audio stream factory,
-        /// the optional codeplug systems seeding the FNE slice, and the
-        /// optional voice codec/traffic seams for the audio router, and
+        /// the optional codeplug systems seeding the FNE slice, the
+        /// optional voice codec/traffic seams for the audio router,
         /// the optional FNE transport factory backing the connection
-        /// slice. The
-        /// factory, readiness, systems, codec, sender and transport
-        /// parameters are
+        /// slice, and the optional codeplug backing the transmit-target
+        /// resolver (temporary channel assignment until the zone UI
+        /// slice). The
+        /// factory, readiness, systems, codec, sender, transport and
+        /// codeplug parameters are
         /// last so the pre-existing four-argument constructor remains
         /// source-compatible, including null-literal calls. When a
         /// key-state reader is present, exactly one 250 ms dispatcher
@@ -187,10 +197,17 @@ namespace DvmConsole.Avalonia
             IVoiceFrameDecoder? voiceDecoder = null,
             IVoiceFrameEncoder? voiceEncoder = null,
             IVoiceTrafficSender? voiceSender = null,
-            IFneTransportFactory? transportFactory = null)
+            IFneTransportFactory? transportFactory = null,
+            Codeplug? codeplug = null)
         {
             InitializeComponent();
-            DataContext = new MainWindowViewModel(systems, catalog, hotkeys, persistence, vocoderStatus);
+            DataContext = new MainWindowViewModel(systems, catalog, hotkeys, persistence, vocoderStatus, codeplug);
+
+            // Compose the transmit-target resolver over the codeplug so
+            // the PTT path resolves the primary channel's codeplug name
+            // onto the router's transmit target; null keeps the PTT
+            // path a no-op (the resolver never throws).
+            transmitTargetResolver = codeplug is null ? null : new TransmitTargetResolver(codeplug);
 
             // Compose the headless FNE slice over the codeplug systems:
             // a null or empty list (missing/failed load) keeps it
@@ -643,13 +660,20 @@ namespace DvmConsole.Avalonia
         }
 
         /// <summary>
-        /// Resolves the transmit target for a PTT press. Returns null
-        /// until channel assignment lands (a follow-on slice wires the
-        /// primary channel's system/talkgroup/slot into a
-        /// <see cref="TransmitTarget"/>); a null target makes the PTT
-        /// press a no-op — the audio router is untouched.
+        /// Resolves the transmit target for a PTT press from the primary
+        /// channel's codeplug channel name via the composed
+        /// <see cref="TransmitTargetResolver"/>. Returns null — making
+        /// the PTT press a no-op, the audio router untouched — when no
+        /// resolver was composed (no codeplug), the view-model is
+        /// absent, no primary channel is set, or the primary channel's
+        /// name does not resolve to a transmittable target.
         /// </summary>
-        private TransmitTarget? ResolveTransmitTarget() => null;
+        private TransmitTarget? ResolveTransmitTarget()
+            => transmitTargetResolver is { } resolver
+                && DataContext is MainWindowViewModel vm
+                && vm.PrimaryChannel?.ChannelName is { } name
+                    ? resolver.Resolve(name)
+                    : null;
 
         /// <summary>
         /// Marshals a capture-end notification from the talkgroup audio

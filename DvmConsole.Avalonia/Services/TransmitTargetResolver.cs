@@ -1,0 +1,114 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+#nullable enable
+using System;
+using System.Linq;
+using dvmconsole;
+using DvmConsole.Platform.Audio;
+
+namespace DvmConsole.Avalonia.Services
+{
+    /// <summary>
+    /// Maps a selected channel NAME onto the router's
+    /// <see cref="TransmitTarget"/>, making the shell's PTT path real.
+    /// WPF parity with shell degrade-not-throw semantics: null/blank
+    /// name, unknown channel, RxOnly channel, NXDN mode (the router is
+    /// DMR/P25 only), a missing system, and malformed Rid/Tgid all
+    /// resolve to null — never throw (the resolver runs on the PTT-down
+    /// UI path and the sender re-parses at send time). SourceId comes
+    /// from <c>uint.Parse(system.Rid)</c> (WPF MainWindow.DMR.cs:49);
+    /// Slot passes through as byte (1-based, WPF MainWindow.DMR.cs:48);
+    /// mode comes from <c>Codeplug.Channel.GetChannelMode</c>
+    /// (case-insensitive).
+    /// </summary>
+    public sealed class TransmitTargetResolver
+    {
+        private readonly Codeplug codeplug;
+
+        /// <summary>
+        /// Creates a resolver over the given codeplug.
+        /// </summary>
+        /// <param name="codeplug">The codeplug to resolve channels against.</param>
+        /// <exception cref="ArgumentNullException">
+        /// <paramref name="codeplug"/> is null.
+        /// </exception>
+        public TransmitTargetResolver(Codeplug codeplug)
+        {
+            this.codeplug = codeplug ?? throw new ArgumentNullException(nameof(codeplug));
+        }
+
+        /// <summary>
+        /// Resolves the channel with the given name onto a transmit
+        /// target, or null when the channel cannot transmit. Total and
+        /// never throws: null/blank name, unknown channel
+        /// (first-zone-wins), RxOnly channel, NXDN mode (the shell
+        /// router is DMR/P25 only), a system not present in the
+        /// codeplug, or a Rid/Tgid that does not parse as a uint all
+        /// degrade to null.
+        /// </summary>
+        /// <param name="channelName">The codeplug channel name to resolve.</param>
+        /// <returns>
+        /// The transmit target for the channel, or null when the
+        /// channel cannot transmit.
+        /// </returns>
+        public TransmitTarget? Resolve(string? channelName)
+        {
+            if (string.IsNullOrWhiteSpace(channelName))
+            {
+                return null;
+            }
+
+            if (codeplug.Zones is null)
+            {
+                return null;
+            }
+
+            // Iterate zones defensively instead of delegating to the Core
+            // GetChannelByName helper, which throws on a zone whose
+            // Channels list is null (structurally valid YAML can omit the
+            // channels: key). First-zone-wins, exact-name match, and
+            // null-entry guards preserve GetChannelByName's semantics
+            // without its unguarded path.
+            var channel = codeplug.Zones
+                .SelectMany(zone => zone.Channels ?? Enumerable.Empty<Codeplug.Channel>())
+                .FirstOrDefault(c => c is not null && c.Name == channelName);
+            if (channel is null || channel.RxOnly)
+            {
+                return null;
+            }
+
+            var mode = channel.GetChannelMode();
+            if (mode == Codeplug.ChannelMode.NXDN)
+            {
+                // The shell router is DMR/P25 only
+                // (TalkgroupAudioRouter.cs:350).
+                return null;
+            }
+
+            if (codeplug.Systems is null)
+            {
+                return null;
+            }
+
+            var system = codeplug.Systems.FirstOrDefault(s => s.Name == channel.System);
+            if (system is null)
+            {
+                return null;
+            }
+
+            if (!uint.TryParse(system.Rid, out var sourceId)
+                || !uint.TryParse(channel.Tgid, out _))
+            {
+                // WPF uint.Parse would throw; the shell degrades — the
+                // sender re-parses at send time.
+                return null;
+            }
+
+            return new TransmitTarget(
+                system.Name,
+                channel.Tgid,
+                (byte)channel.Slot,
+                mode == Codeplug.ChannelMode.P25 ? VoiceMode.P25 : VoiceMode.Dmr,
+                sourceId);
+        }
+    }
+}
