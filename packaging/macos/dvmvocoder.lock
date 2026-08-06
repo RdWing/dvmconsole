@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+#
+# dvmvocoder.lock - pin file for the reproducible macOS dvmvocoder build gate
+# (packaging/macos/build-vocoder.sh). The gate builds exactly the upstream
+# source pinned below and refuses any other commit, branch, or tag.
+#
+# Note: the upstream dvmvocoder project is GPL-2.0-only (see its CMakeLists.txt
+# and headers). Building it here is for local/offline packaging; any
+# distribution of the resulting binaries must respect the upstream license.
+#
+# Format: plain KEY=VALUE lines (shell-parseable; '#' comments are ignored).
+DVMVOCODER_URL=https://github.com/DVMProject/dvmvocoder.git
+DVMVOCODER_COMMIT=80ec5b66c0cfeff7b3f9ea9e1a8249f2b3ac3767

@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SPDX-License-Identifier: AGPL-3.0-only -->
+<!--
+  Digital Voice Modem - Desktop Dispatch Console (Avalonia Shell)
+  AGPLv3 Open Source. Use is subject to license terms.
+  DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
+
+  macOS application bundle Info.plist for the Avalonia shell.
+
+  This checked-in file intentionally contains substitution tokens instead of
+  literal values so one template serves all builds. The values are injected
+  by packaging/macos/build-app.sh (perl -pe with environment variables)
+  before the file is installed as <app>/Contents/Info.plist:
+
+    DVM_BUNDLE_IDENTIFIER          <- $DVM_BUNDLE_IDENTIFIER  (default org.dvmproject.dvmconsole)
+    DVM_BUNDLE_SHORT_VERSION       <- $DVM_BUNDLE_SHORT_VERSION (default 0.1.0)
+    DVM_BUNDLE_VERSION             <- $DVM_BUNDLE_VERSION     (default 1)
+    DVM_LS_MINIMUM_SYSTEM_VERSION  <- $DVM_LS_MINIMUM_SYSTEM_VERSION (default 12.0)
+
+  Each token is spelled AT-sign, DVM_..., AT-sign (e.g. DVM_BUNDLE_VERSION
+  surrounded by AT-signs) in the <string> values below.
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>en</string>
+	<key>CFBundleExecutable</key>
+	<string>DvmConsole.Avalonia</string>
+	<key>CFBundleIconFile</key>
+	<string>AppIcon</string>
+	<key>CFBundleIdentifier</key>
+	<string>@DVM_BUNDLE_IDENTIFIER@</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>DvmConsole</string>
+	<key>CFBundleDisplayName</key>
+	<string>DVM Console</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>@DVM_BUNDLE_SHORT_VERSION@</string>
+	<key>CFBundleVersion</key>
+	<string>@DVM_BUNDLE_VERSION@</string>
+	<key>CFBundleSignature</key>
+	<string>????</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>@DVM_LS_MINIMUM_SYSTEM_VERSION@</string>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>DVM Console uses the microphone to capture and monitor digital voice dispatch audio.</string>
+	<key>NSHumanReadableCopyright</key>
+	<string>Copyright (c) 2025 Caleb, K4PHP and DVMProject (https://github.com/dvmproject) Authors.</string>
+</dict>
+</plist>
