@@ -12,6 +12,7 @@ using DvmConsole.Platform;
 using DvmConsole.Platform.Audio;
 using DvmConsole.Platform.Audio.Mac;
 using DvmConsole.Platform.Hotkeys;
+using DvmConsole.Platform.Hotkeys.Mac;
 using DvmConsole.Platform.Native;
 
 namespace DvmConsole.Avalonia
@@ -55,17 +56,31 @@ namespace DvmConsole.Avalonia
 
         /// <summary>
         /// Creates the global hotkey service for the application
-        /// lifetime. Until an OS-specific event-tap or Win32 hotkey
-        /// implementation is selected, the unavailable fallback is
-        /// composed on every host — macOS included: every gesture
-        /// reports unsupported and no hotkey event ever fires, so the
-        /// PTT slice stays unconfigured and the window shows the
-        /// capability placeholder. The application owns the service for
-        /// its whole lifetime; disposal is handled by a later concrete
-        /// factory/lifecycle slice.
+        /// lifetime. On macOS the CGEventTap-backed adapter is composed
+        /// with its TCC permission probe: the probe reports whether the
+        /// process holds Accessibility and Input Monitoring permission,
+        /// so GetCapability can surface PermissionRequired and
+        /// registration is denied (never prompted, never bypasses TCC)
+        /// until the user grants access in System Settings. On every
+        /// other host the unavailable fallback is composed: every
+        /// gesture reports unsupported and no hotkey event ever fires.
+        /// The application owns the service for its whole lifetime;
+        /// disposal is handled by a later concrete factory/lifecycle
+        /// slice.
         /// </summary>
         private static IGlobalHotkeyService CreateGlobalHotkeyService()
-            => new UnavailableGlobalHotkeyService();
+            => PlatformInfo.IsMacOS
+                ? new MacGlobalHotkeyService(new CoreGraphicsEventTap(), new MacPermissionProbe())
+                : new UnavailableGlobalHotkeyService();
+
+        /// <summary>
+        /// Creates the macOS CGEventSourceKeyState-backed key-state
+        /// reader used by the PTT hotkey key-up watchdog, or null on
+        /// every other host where the watchdog stays dormant. The
+        /// application owns the reader for its whole lifetime.
+        /// </summary>
+        private static IKeyboardKeyStateReader? CreateKeyStateReader()
+            => PlatformInfo.IsMacOS ? new MacKeyStateReader() : null;
 
         /// <summary>
         /// Runs the startup vocoder-readiness check through the
@@ -118,7 +133,13 @@ namespace DvmConsole.Avalonia
                 // No-op on every other host and in un-packaged runs.
                 MacBundleLibraryResolver.Register(typeof(NativeLibraryProbe).Assembly);
                 var vocoderStatus = CheckVocoderReadiness();
-                var mainWindow = new MainWindow(catalog, hotkeys, null, persistence, vocoderStatus, streams);
+                var mainWindow = new MainWindow(
+                    catalog,
+                    hotkeys,
+                    CreateKeyStateReader(),
+                    persistence,
+                    vocoderStatus,
+                    streams);
                 mainWindow.FileDialogService =
                     new AvaloniaFileDialogService(mainWindow.StorageProvider);
                 desktop.MainWindow = mainWindow;
