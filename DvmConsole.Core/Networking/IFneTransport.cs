@@ -46,7 +46,7 @@ namespace DvmConsole.Core.Networking
         /// <see cref="IDisposable"/> so the transport surface is
         /// self-contained.
         /// </summary>
-        void Dispose();
+        new void Dispose();
 
         /// <summary>
         /// Sends one maintenance keepalive. <see cref="PingAcknowledged"/>

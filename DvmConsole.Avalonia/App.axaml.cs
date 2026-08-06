@@ -8,12 +8,14 @@ using dvmconsole;
 using DvmConsole.Avalonia.Dialogs;
 using DvmConsole.Avalonia.Persistence;
 using DvmConsole.Avalonia.ViewModels;
+using DvmConsole.Core.Configuration;
 using DvmConsole.Platform;
 using DvmConsole.Platform.Audio;
 using DvmConsole.Platform.Audio.Mac;
 using DvmConsole.Platform.Hotkeys;
 using DvmConsole.Platform.Hotkeys.Mac;
 using DvmConsole.Platform.Native;
+using System.IO;
 
 namespace DvmConsole.Avalonia
 {
@@ -133,13 +135,31 @@ namespace DvmConsole.Avalonia
                 // No-op on every other host and in un-packaged runs.
                 MacBundleLibraryResolver.Register(typeof(NativeLibraryProbe).Assembly);
                 var vocoderStatus = CheckVocoderReadiness();
+
+                // Load the codeplug from the repo-convention path and
+                // seed the FNE slice with its real systems. A missing or
+                // unreadable codeplug degrades to no systems (the FNE
+                // manager and service stay empty) rather than failing
+                // startup; the diagnostic mirrors the vocoder-readiness
+                // stdout pattern so headless logs observe it. The load
+                // itself never throws.
+                var codeplug = CodeplugLoader.LoadFromFile(
+                    Path.Combine(System.Environment.CurrentDirectory, "configs", "codeplug.yml"));
+                if (!codeplug.Succeeded)
+                {
+                    System.Console.WriteLine(
+                        "codeplug unavailable: " + (codeplug.ErrorMessage ?? "load failed"));
+                    System.Console.Out.Flush();
+                }
+
                 var mainWindow = new MainWindow(
                     catalog,
                     hotkeys,
                     CreateKeyStateReader(),
                     persistence,
                     vocoderStatus,
-                    streams);
+                    streams,
+                    codeplug.Codeplug?.Systems);
                 mainWindow.FileDialogService =
                     new AvaloniaFileDialogService(mainWindow.StorageProvider);
                 desktop.MainWindow = mainWindow;

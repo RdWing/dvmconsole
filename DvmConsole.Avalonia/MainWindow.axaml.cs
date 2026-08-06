@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 #nullable enable
+using System.Collections.Generic;
 using System.ComponentModel;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Threading;
+using dvmconsole;
 using DvmConsole.Avalonia.Dialogs;
 using DvmConsole.Avalonia.Input;
 using DvmConsole.Avalonia.Persistence;
@@ -36,9 +38,10 @@ namespace DvmConsole.Avalonia
         /// <summary>
         /// Headless FNE connection service composed by this window
         /// together with its bridge; null until the view model is
-        /// created in the five-dependency constructor. Systems stay null
-        /// until a codeplug loader exists, so the slice is dormant: zero
-        /// rows, no transports, no events.
+        /// created in the full-arity constructor. The systems list from
+        /// the constructor seeds the service's rows; a null or empty
+        /// list keeps the slice dormant: zero rows, no transports, no
+        /// events.
         /// </summary>
         private IFneConnectionService? fneConnectionService = null;
 
@@ -132,8 +135,9 @@ namespace DvmConsole.Avalonia
         /// Creates the dashboard window with the given audio device
         /// catalog, global hotkey service, optional physical key-state
         /// reader, optional audio-settings persistence, the startup
-        /// vocoder-readiness result, and an optional audio stream
-        /// factory. The factory and readiness parameters are last so the
+        /// vocoder-readiness result, an optional audio stream factory,
+        /// and the optional codeplug systems seeding the FNE slice. The
+        /// factory, readiness, and systems parameters are last so the
         /// pre-existing four-argument constructor remains
         /// source-compatible, including null-literal calls. When a
         /// key-state reader is present, exactly one 250 ms dispatcher
@@ -143,7 +147,10 @@ namespace DvmConsole.Avalonia
         /// When an audio stream factory is supplied, the monitor and
         /// capture audio pipelines are composed (both own the shared
         /// factory) and disposed on window close after the FNE slice;
-        /// otherwise the audio pipelines stay dormant.
+        /// otherwise the audio pipelines stay dormant. A null or empty
+        /// systems list leaves the FNE slice dormant with zero rows; a
+        /// populated list seeds the connection manager and service with
+        /// the codeplug's real systems.
         /// </summary>
         public MainWindow(
             IAudioDeviceCatalog? catalog,
@@ -151,19 +158,20 @@ namespace DvmConsole.Avalonia
             IKeyboardKeyStateReader? keyStateReader,
             AudioSettingsPersistence? persistence,
             VocoderReadinessResult? vocoderStatus,
-            IAudioStreamFactory? audioStreams = null)
+            IAudioStreamFactory? audioStreams = null,
+            IReadOnlyList<Codeplug.System>? systems = null)
         {
             InitializeComponent();
-            DataContext = new MainWindowViewModel(null, catalog, hotkeys, persistence, vocoderStatus);
+            DataContext = new MainWindowViewModel(systems, catalog, hotkeys, persistence, vocoderStatus);
 
-            // Compose the dormant headless FNE slice: systems stay null
-            // until a codeplug loader exists, so no transport factory
-            // call is ever made and no row can ever raise a request.
-            // The bridge is inert with zero rows and safe to construct
-            // in headless tests.
+            // Compose the headless FNE slice over the codeplug systems:
+            // a null or empty list (missing/failed load) keeps it
+            // dormant — no transport factory call is ever made and no
+            // row can ever raise a request. The bridge is inert with
+            // zero rows and safe to construct in headless tests.
             if (DataContext is MainWindowViewModel viewModel)
             {
-                fneConnectionService = new FneConnectionService(null, new UnavailableFneTransportFactory());
+                fneConnectionService = new FneConnectionService(systems, new UnavailableFneTransportFactory());
                 fneConnectionBridge = new FneConnectionServiceBridge(fneConnectionService, viewModel.FneConnections);
                 fneConnectionBridge.Attach();
             }

@@ -52,7 +52,7 @@ namespace DvmConsole.Core.Networking
         /// Redeclared from <see cref="IDisposable"/> so the service
         /// surface is self-contained.
         /// </summary>
-        void Dispose();
+        new void Dispose();
 
         /// <summary>
         /// Restarts the connection for the named system: the current
