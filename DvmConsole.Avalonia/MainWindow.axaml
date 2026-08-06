@@ -180,6 +180,7 @@
                                 <Border Classes="channel-card"
                                         Classes.selected="{Binding IsSelected}"
                                         Classes.primary="{Binding IsPrimary}"
+                                        PointerPressed="ChannelCard_PointerPressed"
                                         Width="230"
                                         Margin="0,0,12,12"
                                         Padding="14">
