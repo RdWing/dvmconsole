@@ -32,6 +32,14 @@ namespace DvmConsole.Avalonia.ViewModels
         public string ProductName { get; } = "DVM Console";
 
         /// <summary>
+        /// The FNE connection-manager slice. Constructed empty unless a
+        /// codeplug system list is injected through the constructor; the
+        /// dashboard header mirrors its connected aggregate when that state
+        /// changes.
+        /// </summary>
+        public FneConnectionManagerViewModel FneConnections { get; }
+
+        /// <summary>
         /// The connection state label, e.g. <c>OFFLINE</c> or
         /// <c>LINKED</c>. Set verbatim by <see cref="SetConnectionState"/>.
         /// </summary>
@@ -84,10 +92,24 @@ namespace DvmConsole.Avalonia.ViewModels
         public event PropertyChangedEventHandler? PropertyChanged;
 
         /// <summary>
-        /// Creates the offline dashboard with exactly four channel slots.
+        /// Creates the offline dashboard with exactly four channel slots
+        /// and an empty FNE connection manager.
         /// </summary>
         public MainWindowViewModel()
+            : this(null)
         {
+        }
+
+        /// <summary>
+        /// Creates the offline dashboard with exactly four channel slots
+        /// and an FNE connection manager seeded from the given codeplug
+        /// systems; a null list yields an empty manager.
+        /// </summary>
+        public MainWindowViewModel(IReadOnlyList<Codeplug.System>? systems)
+        {
+            FneConnections = new FneConnectionManagerViewModel(systems);
+            FneConnections.PropertyChanged += OnFneConnectionManagerChanged;
+
             var channels = new ChannelSlotViewModel[ChannelCount];
             for (var i = 0; i < ChannelCount; i++)
             {
@@ -106,6 +128,31 @@ namespace DvmConsole.Avalonia.ViewModels
 
             SelectedChannels = selectedChannelsManager.GetSelectedChannels();
             PrimaryChannel = null;
+        }
+
+        private void OnFneConnectionManagerChanged(
+            object? sender,
+            PropertyChangedEventArgs e)
+        {
+            if (e.PropertyName != nameof(FneConnectionManagerViewModel.ConnectedSystemSummary))
+            {
+                return;
+            }
+
+            if (FneConnections.AnyConnected)
+            {
+                SetConnectionState(
+                    "LINKED",
+                    FneConnections.ConnectedSystemSummary ?? "FNE connected",
+                    isConnected: true);
+            }
+            else
+            {
+                SetConnectionState(
+                    "OFFLINE",
+                    "Awaiting FNE configuration",
+                    isConnected: false);
+            }
         }
 
         /// <summary>

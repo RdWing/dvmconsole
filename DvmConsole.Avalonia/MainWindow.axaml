@@ -127,25 +127,51 @@
 
         <Grid ColumnDefinitions="220,16,*">
             <Border Grid.Column="0" Classes="panel" Padding="18">
-                <StackPanel Spacing="20">
+                <StackPanel Spacing="16">
                     <StackPanel Spacing="5">
                         <TextBlock Classes="kicker" Text="SYSTEM" />
-                        <TextBlock Classes="data-value" Text="FNE connection" />
-                        <TextBlock Classes="muted" Text="No profile loaded" />
+                        <TextBlock Classes="data-value" Text="FNE connections" />
                     </StackPanel>
 
-                    <Border Background="#182326"
-                            BorderBrush="#31484A"
-                            BorderThickness="1"
-                            CornerRadius="6"
-                            Padding="12">
-                        <StackPanel Spacing="8">
-                            <TextBlock Classes="data-label" Text="CONNECTION" />
-                            <TextBlock Classes="data-value" Text="NOT CONFIGURED" />
-                            <TextBlock Classes="muted"
-                                       Text="The settings adapter will provide endpoint and credentials." />
-                        </StackPanel>
-                    </Border>
+                    <TextBlock Classes="muted"
+                               Text="No systems configured"
+                               IsVisible="{Binding FneConnections.HasNoSystems}" />
+
+                    <ItemsControl ItemsSource="{Binding FneConnections.Systems}"
+                                  IsVisible="{Binding FneConnections.HasSystems}">
+                        <ItemsControl.ItemsPanel>
+                            <ItemsPanelTemplate>
+                                <StackPanel Spacing="10" />
+                            </ItemsPanelTemplate>
+                        </ItemsControl.ItemsPanel>
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate x:DataType="vm:FneSystemConnectionViewModel">
+                                <Border Background="#182326"
+                                        BorderBrush="#31484A"
+                                        BorderThickness="1"
+                                        CornerRadius="6"
+                                        Padding="12">
+                                    <StackPanel Spacing="8">
+                                        <Grid ColumnDefinitions="*,Auto">
+                                            <TextBlock Classes="data-value" Text="{Binding SystemName}" />
+                                            <TextBlock Grid.Column="1"
+                                                       Classes="muted"
+                                                       Text="{Binding StatusText}" />
+                                        </Grid>
+                                        <TextBlock Classes="muted" Text="{Binding Endpoint}" />
+                                        <StackPanel Orientation="Horizontal" Spacing="8">
+                                            <Button Content="{Binding ToggleButtonText}"
+                                                    IsEnabled="{Binding ButtonsEnabled}"
+                                                    Click="FneStartStop_Click" />
+                                            <Button Content="Restart"
+                                                    IsEnabled="{Binding ButtonsEnabled}"
+                                                    Click="FneRestart_Click" />
+                                        </StackPanel>
+                                    </StackPanel>
+                                </Border>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
 
                     <StackPanel Spacing="8">
                         <TextBlock Classes="data-label" Text="CAPABILITIES" />

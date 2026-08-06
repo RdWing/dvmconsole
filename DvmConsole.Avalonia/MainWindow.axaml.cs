@@ -2,6 +2,7 @@
 #nullable enable
 using Avalonia.Controls;
 using Avalonia.Input;
+using Avalonia.Interactivity;
 using DvmConsole.Avalonia.Dialogs;
 using DvmConsole.Avalonia.Input;
 using DvmConsole.Avalonia.ViewModels;
@@ -58,6 +59,54 @@ namespace DvmConsole.Avalonia
             {
                 viewModel.ProcessChannelClick(slotNumber, setPrimary);
             }
+        }
+
+        /// <summary>
+        /// Thin click wiring for the FNE system-card Start/Stop toggle
+        /// button. Resolves the row from the sender button's data
+        /// context and forwards a Stop request when the row reports a
+        /// connection, otherwise a Start request, to the window
+        /// view-model's FNE connection manager. Safe no-op for any other
+        /// sender, null data context, or non-row data context. This shell
+        /// never touches fnecore or the network; it only forwards
+        /// requests.
+        /// </summary>
+        private void FneStartStop_Click(object? sender, RoutedEventArgs e)
+        {
+            if (sender is not Button button
+                || button.DataContext is not FneSystemConnectionViewModel row
+                || DataContext is not MainWindowViewModel viewModel)
+            {
+                return;
+            }
+
+            if (row.IsConnected)
+            {
+                viewModel.FneConnections.StopSystem(row.SystemName);
+            }
+            else
+            {
+                viewModel.FneConnections.StartSystem(row.SystemName);
+            }
+        }
+
+        /// <summary>
+        /// Thin click wiring for the FNE system-card Restart button.
+        /// Resolves the row from the sender button's data context and
+        /// forwards a Restart request to the window view-model's FNE
+        /// connection manager. Safe no-op for any other sender, null data
+        /// context, or non-row data context.
+        /// </summary>
+        private void FneRestart_Click(object? sender, RoutedEventArgs e)
+        {
+            if (sender is not Button button
+                || button.DataContext is not FneSystemConnectionViewModel row
+                || DataContext is not MainWindowViewModel viewModel)
+            {
+                return;
+            }
+
+            viewModel.FneConnections.RestartSystem(row.SystemName);
         }
     }
 }
