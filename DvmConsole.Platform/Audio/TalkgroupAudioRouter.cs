@@ -627,7 +627,7 @@ namespace DvmConsole.Platform.Audio
                 }
 
                 var samples = VoiceFrameSplitter.BytesToSamples(chunk);
-                if (!_encoder.TryEncode(samples, out var codeword))
+                if (!_encoder.TryEncode(session.Target.Mode, samples, out var codeword))
                 {
                     continue;
                 }

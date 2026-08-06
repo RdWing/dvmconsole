@@ -19,16 +19,21 @@ namespace DvmConsole.Platform.Audio
     {
         /// <summary>
         /// Encodes one 20 ms PCM voice frame into one voice codeword.
+        /// The mode is caller-supplied because the input is
+        /// mode-agnostic (always 160 samples) while the native
+        /// codec handle is mode-bound: the caller knows the mode from
+        /// the transmit target (<see cref="TransmitTarget.Mode"/>).
         /// </summary>
+        /// <param name="mode">The voice mode selecting the codec.</param>
         /// <param name="samples">The 160 16-bit little-endian PCM samples to encode.</param>
         /// <param name="codeword">
         /// The encoded codeword when the frame encoded: 9 bytes for DMR
-        /// or 11 bytes for P25 (the caller knows the mode).
+        /// or 11 bytes for P25.
         /// </param>
         /// <returns>
         /// True when the samples encoded into <paramref name="codeword"/>;
         /// false when the frame is unencodable and must be skipped.
         /// </returns>
-        bool TryEncode(ReadOnlyMemory<short> samples, out byte[] codeword);
+        bool TryEncode(VoiceMode mode, ReadOnlyMemory<short> samples, out byte[] codeword);
     }
 }

@@ -226,19 +226,14 @@ namespace DvmConsole.Platform.Tests
 
         private sealed class FakeVoiceFrameEncoder : IVoiceFrameEncoder
         {
-            public bool Reject;
             public int EncodeCount { get; private set; }
             public int CodewordLength = 9;
+            public readonly List<VoiceMode> ReceivedModes = new();
 
-            public bool TryEncode(ReadOnlyMemory<short> samples, out byte[] codeword)
+            public bool TryEncode(VoiceMode mode, ReadOnlyMemory<short> samples, out byte[] codeword)
             {
                 EncodeCount++;
-                if (Reject)
-                {
-                    codeword = Array.Empty<byte>();
-                    return false;
-                }
-
+                ReceivedModes.Add(mode);
                 codeword = new byte[CodewordLength];
                 return true;
             }
@@ -513,6 +508,12 @@ namespace DvmConsole.Platform.Tests
 
             var ldu = Assert.Single(sender.P25Ldus);
             Assert.Equal(225, ldu.Ldu225.Length);
+
+            // The router must forward the session's mode to the encoder seam
+            // (a regression hardcoding VoiceMode.Dmr would still assemble an
+            // 11-byte codeword through the fake, so pin the mode arrival).
+            Assert.NotEmpty(encoder.ReceivedModes);
+            Assert.All(encoder.ReceivedModes, m => Assert.Equal(VoiceMode.P25, m));
         }
 
         [Fact]

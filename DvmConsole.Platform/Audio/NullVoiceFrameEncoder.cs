@@ -13,7 +13,7 @@ namespace DvmConsole.Platform.Audio
     public sealed class NullVoiceFrameEncoder : IVoiceFrameEncoder
     {
         /// <inheritdoc />
-        public bool TryEncode(ReadOnlyMemory<short> samples, out byte[] codeword)
+        public bool TryEncode(VoiceMode mode, ReadOnlyMemory<short> samples, out byte[] codeword)
         {
             codeword = Array.Empty<byte>();
             return false;
