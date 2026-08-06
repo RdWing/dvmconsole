@@ -124,9 +124,8 @@ namespace dvmconsole
 
             this.settingsManager = settingsManager;
             this.savedCallback = savedCallback;
-            RecordingFolderPath = string.IsNullOrWhiteSpace(settingsManager?.TarRecordingsRootPath)
-                ? SettingsManager.DefaultTarRecordingsPath
-                : settingsManager.TarRecordingsRootPath.Trim();
+            RecordingFolderPath = TarRecordingsPath.Resolve(
+                settingsManager?.TarRecordingsRootPath, SettingsManager.DefaultTarRecordingsPath);
 
             ZoneGroups = new ObservableCollection<TarZoneConfigGroup>(
                 BuildZoneGroups(zones ?? Enumerable.Empty<Codeplug.Zone>()));

@@ -634,9 +634,8 @@ namespace dvmconsole
                     ChannelVolumes = loadedSettings.ChannelVolumes ?? new Dictionary<string, double>();
                     SelectableEncryptionStates = loadedSettings.SelectableEncryptionStates ?? new Dictionary<string, bool>();
                     WebStreamVolumes = loadedSettings.WebStreamVolumes ?? new Dictionary<string, double>();
-                    TarRecordingsRootPath = string.IsNullOrWhiteSpace(loadedSettings.TarRecordingsRootPath)
-                        ? DefaultTarRecordingsPath
-                        : loadedSettings.TarRecordingsRootPath.Trim();
+                    TarRecordingsRootPath = TarRecordingsPath.Resolve(
+                        loadedSettings.TarRecordingsRootPath, DefaultTarRecordingsPath);
                     TarChannelConfigs = loadedSettings.TarChannelConfigs ?? new Dictionary<string, TarChannelConfig>();
                     ToolbarClockConfigSlots = NormalizeToolbarClockConfigSlots(
                         loadedSettings.ToolbarClockConfigSlots,
@@ -944,9 +943,8 @@ namespace dvmconsole
             MasterOutputDeviceKey = NormalizeAudioDeviceKey(MasterOutputDeviceKey);
             MigrateLegacyAudioSettings();
 
-            TarRecordingsRootPath = string.IsNullOrWhiteSpace(TarRecordingsRootPath)
-                ? DefaultTarRecordingsPath
-                : TarRecordingsRootPath.Trim();
+            TarRecordingsRootPath = TarRecordingsPath.Resolve(
+                TarRecordingsRootPath, DefaultTarRecordingsPath);
             ToolbarClockConfigSlots = NormalizeToolbarClockConfigSlots(ToolbarClockConfigSlots, ToolbarClockConfigs);
             ToolbarClockConfigs = ToolbarClockConfigSlotsToList(ToolbarClockConfigSlots);
             CallHistoryWindowPlacement = NormalizeWindowPlacement(
@@ -1688,9 +1686,8 @@ namespace dvmconsole
         /// </summary>
         public void SaveTarSettings(string rootPath, IDictionary<string, TarChannelConfig> configs)
         {
-            TarRecordingsRootPath = string.IsNullOrWhiteSpace(rootPath)
-                ? DefaultTarRecordingsPath
-                : rootPath.Trim();
+            TarRecordingsRootPath = TarRecordingsPath.Resolve(
+                rootPath, DefaultTarRecordingsPath);
 
             Dictionary<string, TarChannelConfig> normalized = new Dictionary<string, TarChannelConfig>(StringComparer.OrdinalIgnoreCase);
             foreach (KeyValuePair<string, TarChannelConfig> kvp in configs ?? new Dictionary<string, TarChannelConfig>())

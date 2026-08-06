@@ -69,9 +69,8 @@ namespace dvmconsole
 
         public string GetConfiguredRecordingRoot()
         {
-            return string.IsNullOrWhiteSpace(settingsManager.TarRecordingsRootPath)
-                ? SettingsManager.DefaultTarRecordingsPath
-                : settingsManager.TarRecordingsRootPath.Trim();
+            return TarRecordingsPath.Resolve(
+                settingsManager.TarRecordingsRootPath, SettingsManager.DefaultTarRecordingsPath);
         }
 
         public Dictionary<string, TarChannelConfig> GetChannelConfigs()
@@ -377,9 +376,8 @@ namespace dvmconsole
 
         public static bool TryEnsureRecordingRoot(string rootPath, out string normalizedPath, out string errorMessage)
         {
-            normalizedPath = string.IsNullOrWhiteSpace(rootPath)
-                ? SettingsManager.DefaultTarRecordingsPath
-                : rootPath.Trim();
+            normalizedPath = TarRecordingsPath.Resolve(
+                rootPath, SettingsManager.DefaultTarRecordingsPath);
             errorMessage = string.Empty;
 
             try
