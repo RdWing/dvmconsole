@@ -71,17 +71,27 @@ namespace DvmConsole.Avalonia
         /// Runs the startup vocoder-readiness check through the
         /// native-library probe and returns its result. The probe owns
         /// loading, export resolution and handle release; this shell
-        /// only maps the outcome. A failure diagnostic is written to
-        /// the debug output; the check itself never throws.
+        /// only maps the outcome. The final readiness line is written to
+        /// stdout and flushed so headless SSH/launchd logs observe it: the
+        /// stable <c>libvocoder ready</c> line on success, the probe
+        /// diagnostic on failure (which also keeps its existing debug
+        /// output sink). The check itself never throws.
         /// </summary>
         private static VocoderReadinessResult CheckVocoderReadiness()
         {
             var result = new VocoderReadiness(new NativeLibraryProbe()).Check();
 
-            if (!result.IsReady && result.Diagnostic is { } diagnostic)
+            if (result.IsReady)
+            {
+                System.Console.WriteLine("libvocoder ready");
+            }
+            else if (result.Diagnostic is { } diagnostic)
             {
                 System.Diagnostics.Debug.WriteLine(diagnostic);
+                System.Console.WriteLine(diagnostic);
             }
+
+            System.Console.Out.Flush();
 
             return result;
         }
@@ -94,6 +104,13 @@ namespace DvmConsole.Avalonia
                 var hotkeys = CreateGlobalHotkeyService();
                 var persistence = new AudioSettingsPersistence(
                     new SettingsSectionStore(new DefaultFileSystemPaths().SettingsFilePath));
+                // Packaged macOS .app: register the bundle resolver for
+                // future DllImport-based libvocoder loads in the Platform
+                // assembly. The startup readiness probe maps and loads the
+                // bundle candidate explicitly, since its assembly-aware
+                // TryLoad path does not invoke the DllImportResolver.
+                // No-op on every other host and in un-packaged runs.
+                MacBundleLibraryResolver.Register(typeof(NativeLibraryProbe).Assembly);
                 var vocoderStatus = CheckVocoderReadiness();
                 var mainWindow = new MainWindow(catalog, hotkeys, null, persistence, vocoderStatus);
                 mainWindow.FileDialogService =

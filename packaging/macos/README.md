@@ -202,14 +202,19 @@ this packaging slice:
   unavailable.
 - When a real dylib is supplied (typically one of the `build-vocoder.sh`
   outputs), it is copied into `Contents/Frameworks` as-is (no
-  `install_name_tool` rewriting). Note that `DllImport("libvocoder")`
-  resolution is not guaranteed by mere presence in `Contents/Frameworks` —
-  dyld only finds it there if the library's install name/`@rpath` chain points
-  into the bundle (the dvmvocoder CMake default install name
-  `@rpath/libvocoder.dylib` is compatible), or a
-  `DllImportResolver`/`NativeLibrary` probe is wired up to look there. Wiring
-  that resolution is a **later slice**; the copy step is provided now so the
-  bundle layout is already correct.
+  `install_name_tool` rewriting). Resolution of the packaged
+  `Contents/Frameworks/libvocoder.dylib` is **now wired**: on macOS the
+  Avalonia shell registers
+  `DvmConsole.Platform.Native.MacBundleLibraryResolver` (via
+  `NativeLibrary.SetDllImportResolver`), which maps the logical `libvocoder`
+  name to `<bundle>/Contents/Frameworks/libvocoder.dylib` whenever the
+  process base directory is `<bundle>/Contents/MacOS`, and returns
+  `IntPtr.Zero` for every other case so normal runtime resolution is
+  unchanged — un-packaged development runs therefore keep using the usual
+  dyld search paths. The mapping never checks the filesystem; without
+  `-v`/`VOCODER_DYLIB` the candidate path simply does not exist and the
+  startup probe still reports the vocoder unavailable. Script behavior is
+  unchanged.
 
 ## Unsigned status & running locally
 

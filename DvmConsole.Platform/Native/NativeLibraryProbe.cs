@@ -22,8 +22,27 @@ namespace DvmConsole.Platform.Native
     /// version-suffixed. For exactly those three logical names the probe maps
     /// to the library's install path before loading (see
     /// <see cref="ResolveLoadName(string, bool)"/>). Every other logical name
-    /// is still loaded as-is under the OS's own resolution rules, and results
-    /// always carry the caller's logical name — never the mapped path.
+    /// is still loaded as-is under the OS's own resolution rules, and result
+    /// objects always carry the caller's logical name — never the mapped
+    /// path. Only the packaged-path failure diagnostic described below may
+    /// additionally include the resolved candidate path.
+    ///
+    /// A second, deliberate exception exists for packaged macOS apps: when
+    /// the process runs inside a <c>.app</c> bundle (base directory ending in
+    /// <c>Contents/MacOS</c>) and the logical name is <c>libvocoder</c>, the
+    /// probe first loads the bundled candidate
+    /// <c>&lt;bundle&gt;/Contents/Frameworks/libvocoder.dylib</c> by explicit
+    /// path (see
+    /// <see cref="MacBundleLibraryResolver.ResolveLibraryPath(string?, string?, bool)"/>).
+    /// The candidate is mapped and loaded directly because the
+    /// assembly-aware <see cref="NativeLibrary.TryLoad(string, Assembly, DllImportSearchPath?, out IntPtr)"/>
+    /// overload does not itself invoke the assembly's registered
+    /// <see cref="DllImportResolver"/> in the real macOS runtime path; the
+    /// resolver registration
+    /// (<see cref="MacBundleLibraryResolver.Register(Assembly)"/>) remains in
+    /// place for DllImport-based consumers. Off macOS, outside a bundle, or
+    /// for any other logical name no candidate exists and the probe falls
+    /// back to logical-name loading under the OS's own resolution rules.
     ///
     /// A probe is intentionally side-effect free beyond the transient load:
     /// successful handles are always freed, including when an export is
@@ -105,12 +124,42 @@ namespace DvmConsole.Platform.Native
                     nameof(logicalName));
             }
 
-            var loadName = ResolveLoadName(logicalName, _isMacOS);
-            if (!NativeLibrary.TryLoad(loadName, out IntPtr handle))
+            // Packaged macOS apps carry libvocoder.dylib inside the .app
+            // bundle. Map the logical name to that explicit candidate and
+            // load it by path: the assembly-aware TryLoad overload does not
+            // invoke the registered DllImportResolver in the actual macOS
+            // runtime path, so relying on it leaves the bundled library
+            // unloaded. The resolver registration remains the mechanism for
+            // DllImport-based consumers, not for this probe.
+            string? bundleCandidate =
+                MacBundleLibraryResolver.ResolveLibraryPath(logicalName, AppContext.BaseDirectory, _isMacOS);
+
+            IntPtr handle;
+            if (bundleCandidate != null)
             {
-                return NativeLibraryProbeResult.Failure(
-                    logicalName,
-                    $"The {logicalName} native library could not be loaded by logical name.");
+                if (!NativeLibrary.TryLoad(bundleCandidate, out handle))
+                {
+                    return NativeLibraryProbeResult.Failure(
+                        logicalName,
+                        $"The {logicalName} native library could not be loaded from its packaged bundle path ({bundleCandidate}).");
+                }
+            }
+            else
+            {
+                var loadName = ResolveLoadName(logicalName, _isMacOS);
+                // Logical-name fallback: off macOS, outside a bundle, or for
+                // any other logical name, load through the assembly-aware
+                // overload, which preserves the existing logical-name
+                // fallback/default resolution behavior. That overload does
+                // not itself invoke a DllImportResolver registered for the
+                // probing assembly; the resolver registration remains for
+                // DllImport-based consumers.
+                if (!NativeLibrary.TryLoad(loadName, typeof(NativeLibraryProbe).Assembly, (DllImportSearchPath?)null, out handle))
+                {
+                    return NativeLibraryProbeResult.Failure(
+                        logicalName,
+                        $"The {logicalName} native library could not be loaded by logical name.");
+                }
             }
 
             try
