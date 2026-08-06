@@ -49,6 +49,20 @@ namespace DvmConsole.Avalonia
         /// </summary>
         private FneConnectionServiceBridge? fneConnectionBridge = null;
 
+        /// <summary>
+        /// Receive-side monitor audio pipeline composed when an audio stream
+        /// factory is supplied to the full-arity constructor; null keeps the
+        /// slice dormant (headless tests are unaffected).
+        /// </summary>
+        private MonitorAudioPipeline? monitorAudioPipeline = null;
+
+        /// <summary>
+        /// Transmit-side capture audio pipeline composed when an audio stream
+        /// factory is supplied to the full-arity constructor; null keeps the
+        /// slice dormant (headless tests are unaffected).
+        /// </summary>
+        private CaptureAudioPipeline? captureAudioPipeline = null;
+
         public MainWindow()
             : this(null, null)
         {
@@ -117,22 +131,27 @@ namespace DvmConsole.Avalonia
         /// <summary>
         /// Creates the dashboard window with the given audio device
         /// catalog, global hotkey service, optional physical key-state
-        /// reader, optional audio-settings persistence, and the startup
-        /// vocoder-readiness result. The readiness parameter is last so
-        /// the pre-existing four-argument constructor remains
+        /// reader, optional audio-settings persistence, the startup
+        /// vocoder-readiness result, and an optional audio stream
+        /// factory. The factory and readiness parameters are last so the
+        /// pre-existing four-argument constructor remains
         /// source-compatible, including null-literal calls. When a
         /// key-state reader is present, exactly one 250 ms dispatcher
         /// timer polls the PTT hotkey and detaches on close. When audio
         /// settings are present, this window subscribes once to their
-        /// property changes and applies selections to the ComboBoxes. No
-        /// registration, unregistration, or disposal is performed here.
+        /// property changes and applies selections to the ComboBoxes.
+        /// When an audio stream factory is supplied, the monitor and
+        /// capture audio pipelines are composed (both own the shared
+        /// factory) and disposed on window close after the FNE slice;
+        /// otherwise the audio pipelines stay dormant.
         /// </summary>
         public MainWindow(
             IAudioDeviceCatalog? catalog,
             IGlobalHotkeyService? hotkeys,
             IKeyboardKeyStateReader? keyStateReader,
             AudioSettingsPersistence? persistence,
-            VocoderReadinessResult? vocoderStatus)
+            VocoderReadinessResult? vocoderStatus,
+            IAudioStreamFactory? audioStreams = null)
         {
             InitializeComponent();
             DataContext = new MainWindowViewModel(null, catalog, hotkeys, persistence, vocoderStatus);
@@ -147,6 +166,15 @@ namespace DvmConsole.Avalonia
                 fneConnectionService = new FneConnectionService(null, new UnavailableFneTransportFactory());
                 fneConnectionBridge = new FneConnectionServiceBridge(fneConnectionService, viewModel.FneConnections);
                 fneConnectionBridge.Attach();
+            }
+
+            // Compose the audio pipelines over the shared factory when one
+            // was supplied; both pipelines own the factory and are disposed
+            // on window close. Null keeps the slice dormant.
+            if (audioStreams is not null)
+            {
+                monitorAudioPipeline = new MonitorAudioPipeline(audioStreams);
+                captureAudioPipeline = new CaptureAudioPipeline(audioStreams);
             }
 
             if (hotkeys is not null)
@@ -469,11 +497,13 @@ namespace DvmConsole.Avalonia
 
         /// <summary>
         /// Stops and detaches the PTT key-up watchdog timer and tears
-        /// down the headless FNE slice when the window closes: the
-        /// bridge detaches first (stopping event flow in both
-        /// directions), then the service disconnects and disposes every
-        /// transport and cancels all schedulers. Both disposals are
-        /// idempotent, so a repeated close event is harmless.
+        /// down the headless FNE slice and the audio pipelines when the
+        /// window closes: the bridge detaches first (stopping event flow
+        /// in both directions), then the service disconnects and disposes
+        /// every transport and cancels all schedulers, and finally the
+        /// audio pipelines stop and dispose their streams and the shared
+        /// factory. All disposals are idempotent, so a repeated close
+        /// event is harmless.
         /// </summary>
         private void OnWindowClosed(object? sender, EventArgs e)
         {
@@ -485,6 +515,16 @@ namespace DvmConsole.Avalonia
 
             fneConnectionBridge?.Dispose();
             fneConnectionService?.Dispose();
+
+            if (captureAudioPipeline is { } capture)
+            {
+                _ = capture.DisposeAsync();
+            }
+
+            if (monitorAudioPipeline is { } monitor)
+            {
+                _ = monitor.DisposeAsync();
+            }
         }
 
         /// <summary>

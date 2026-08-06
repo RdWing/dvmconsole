@@ -101,6 +101,12 @@ namespace DvmConsole.Avalonia
             if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
             {
                 var catalog = CreateAudioDeviceCatalog();
+                // The catalog is not owned by the factory (MacAudioStreamFactory
+                // catalog-constructor does not dispose it); the MainWindow owns
+                // the factory and disposes the audio pipelines on close.
+                var streams = catalog is MacAudioDeviceCatalog macCatalog
+                    ? new MacAudioStreamFactory(macCatalog)
+                    : null;
                 var hotkeys = CreateGlobalHotkeyService();
                 var persistence = new AudioSettingsPersistence(
                     new SettingsSectionStore(new DefaultFileSystemPaths().SettingsFilePath));
@@ -112,7 +118,7 @@ namespace DvmConsole.Avalonia
                 // No-op on every other host and in un-packaged runs.
                 MacBundleLibraryResolver.Register(typeof(NativeLibraryProbe).Assembly);
                 var vocoderStatus = CheckVocoderReadiness();
-                var mainWindow = new MainWindow(catalog, hotkeys, null, persistence, vocoderStatus);
+                var mainWindow = new MainWindow(catalog, hotkeys, null, persistence, vocoderStatus, streams);
                 mainWindow.FileDialogService =
                     new AvaloniaFileDialogService(mainWindow.StorageProvider);
                 desktop.MainWindow = mainWindow;
