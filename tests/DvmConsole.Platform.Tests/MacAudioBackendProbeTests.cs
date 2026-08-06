@@ -40,6 +40,8 @@ namespace DvmConsole.Platform.Tests
         {
             "AudioObjectGetPropertyDataSize",
             "AudioObjectGetPropertyData",
+            "AudioObjectAddPropertyListener",
+            "AudioObjectRemovePropertyListener",
         };
 
         private static readonly string[] ExpectedAudioToolboxExports =
@@ -52,6 +54,8 @@ namespace DvmConsole.Platform.Tests
             "AudioQueueAllocateBuffer",
             "AudioQueueEnqueueBuffer",
             "AudioFileOpenURL",
+            "AudioQueueSetParameter",
+            "AudioQueueSetProperty",
         };
 
         /*
@@ -272,7 +276,7 @@ namespace DvmConsole.Platform.Tests
         }
 
         /// <summary>
-        /// The CoreAudio export manifest is exactly the two approved exports
+        /// The CoreAudio export manifest is exactly the four approved exports
         /// in order, with no OS file name trappings.
         /// </summary>
         [Fact]
@@ -291,7 +295,7 @@ namespace DvmConsole.Platform.Tests
         }
 
         /// <summary>
-        /// The AudioToolbox export manifest is exactly the eight approved
+        /// The AudioToolbox export manifest is exactly the ten approved
         /// exports in order, with no OS file name trappings.
         /// </summary>
         [Fact]

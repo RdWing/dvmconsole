@@ -170,6 +170,8 @@ namespace DvmConsole.Platform.Audio.Mac
             {
                 "AudioObjectGetPropertyDataSize",
                 "AudioObjectGetPropertyData",
+                "AudioObjectAddPropertyListener",
+                "AudioObjectRemovePropertyListener",
             });
 
         /// <summary>
@@ -187,6 +189,8 @@ namespace DvmConsole.Platform.Audio.Mac
                 "AudioQueueAllocateBuffer",
                 "AudioQueueEnqueueBuffer",
                 "AudioFileOpenURL",
+                "AudioQueueSetParameter",
+                "AudioQueueSetProperty",
             });
 
         /*
