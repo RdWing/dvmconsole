@@ -1250,5 +1250,96 @@ namespace DvmConsole.Avalonia.Tests
                 });
             Assert.NotNull(compose);
         }
+
+        // ---- Hotkey-capture composition: three-parameter constructor ------------------
+
+        /// <summary>
+        /// The three-parameter constructor also composes a get-only
+        /// HotkeyCaptureViewModel from the injected hotkey service:
+        /// stable across reads, initially idle, and constructed with zero
+        /// service queries.
+        /// </summary>
+        [Fact]
+        public void ThreeArgCtor_WithHotkeys_HotkeyCaptureComposed_StableAndIdle()
+        {
+            var fake = new FakeGlobalHotkeyService();
+
+            var vm = new MainWindowViewModel(null, null, fake);
+
+            Assert.NotNull(vm.HotkeyCapture);
+            Assert.Same(vm.HotkeyCapture, vm.HotkeyCapture);
+            Assert.False(vm.HotkeyCapture.IsCapturing);
+            Assert.Equal(0, fake.GetCapabilityCalls);
+        }
+
+        /// <summary>
+        /// A null hotkey service yields a null HotkeyCapture (and null
+        /// Ptt) while the offline dashboard stays untouched.
+        /// </summary>
+        [Fact]
+        public void ThreeArgCtor_NullHotkeys_HotkeyCaptureNull()
+        {
+            var vm = new MainWindowViewModel(null, null, null);
+
+            Assert.Null(vm.HotkeyCapture);
+            Assert.Null(vm.Ptt);
+            Assert.Equal("OFFLINE", vm.ConnectionLabel);
+            Assert.Equal(4, vm.Channels.Count);
+        }
+
+        /// <summary>
+        /// The composed capture slice is wired to the composed Ptt slice:
+        /// a captured gesture reaches Ptt exactly once (HotkeyChangeRequested
+        /// with the gesture, Ptt.Hotkey set), and ClearHotkey forwards the
+        /// null clear request to the same Ptt.
+        /// </summary>
+        [Fact]
+        public void HotkeyCapture_CapturedGestureRequestsPttOnce_ClearRequestsNull()
+        {
+            var vm = new MainWindowViewModel(null, null, new FakeGlobalHotkeyService());
+            Assert.NotNull(vm.HotkeyCapture);
+            Assert.NotNull(vm.Ptt);
+            var requests = new List<HotkeyGesture?>();
+            vm.Ptt.HotkeyChangeRequested += gesture => requests.Add(gesture);
+            var gesture = new HotkeyGesture(HotkeyKey.F1, HotkeyModifiers.Control | HotkeyModifiers.Shift);
+
+            vm.HotkeyCapture.StartCapture();
+            vm.HotkeyCapture.ApplyKey(gesture);
+
+            Assert.Equal(new List<HotkeyGesture?> { gesture }, requests);
+            Assert.Equal(gesture, vm.Ptt.Hotkey);
+            Assert.False(vm.HotkeyCapture.IsCapturing);
+
+            vm.HotkeyCapture.ClearHotkey();
+
+            Assert.Equal(new List<HotkeyGesture?> { gesture, null }, requests);
+            Assert.Null(vm.Ptt.Hotkey);
+            Assert.False(vm.HotkeyCapture.IsCapturing);
+        }
+
+        /// <summary>
+        /// Shape gate for the hotkey-capture composition surface: the
+        /// HotkeyCapture property has the exact HotkeyCaptureViewModel
+        /// type and is get-only, MainWindowViewModel stays non-disposable,
+        /// and construction performs no service access of any kind.
+        /// </summary>
+        [Fact]
+        public void HotkeyCaptureCompositionShape_ExactProperty_NoServiceAccessAtConstruction()
+        {
+            var main = typeof(MainWindowViewModel);
+
+            var capture = main.GetProperty("HotkeyCapture");
+            Assert.NotNull(capture);
+            Assert.Equal(typeof(HotkeyCaptureViewModel), capture!.PropertyType);
+            Assert.False(capture.CanWrite);
+
+            Assert.False(typeof(IDisposable).IsAssignableFrom(main));
+
+            var fake = new FakeGlobalHotkeyService();
+            var vm = new MainWindowViewModel(null, null, fake);
+
+            Assert.NotNull(vm.HotkeyCapture);
+            Assert.Equal(0, fake.GetCapabilityCalls);
+        }
     }
 }

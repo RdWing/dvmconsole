@@ -61,6 +61,15 @@ namespace DvmConsole.Avalonia.ViewModels
         public PttCapabilityViewModel? Ptt { get; }
 
         /// <summary>
+        /// The hotkey-capture slice composed from the PTT capability
+        /// slice, or null when no hotkey service was provided (and thus
+        /// <see cref="Ptt"/> is null). Get-only and constructed exactly
+        /// once from the composed <see cref="Ptt"/>; performs no service
+        /// query at construction and owns no disposable resources.
+        /// </summary>
+        public HotkeyCaptureViewModel? HotkeyCapture { get; }
+
+        /// <summary>
         /// The connection state label, e.g. <c>OFFLINE</c> or
         /// <c>LINKED</c>. Set verbatim by <see cref="SetConnectionState"/>.
         /// </summary>
@@ -186,6 +195,8 @@ namespace DvmConsole.Avalonia.ViewModels
             Ptt = hotkeys is null
                 ? null
                 : new PttCapabilityViewModel(hotkeys, () => PrimaryChannel, () => SelectedChannels);
+
+            HotkeyCapture = Ptt is null ? null : new HotkeyCaptureViewModel(Ptt);
 
             AudioSettings = catalog is null ? null : new AudioSettingsViewModel(catalog);
         }
