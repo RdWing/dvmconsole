@@ -61,6 +61,13 @@
             <Setter Property="BorderThickness" Value="1" />
             <Setter Property="CornerRadius" Value="6" />
         </Style>
+        <Style Selector="Border.channel-card.selected">
+            <Setter Property="BorderBrush" Value="#4E8A8C" />
+        </Style>
+        <Style Selector="Border.channel-card.primary">
+            <Setter Property="BorderBrush" Value="#F3B562" />
+            <Setter Property="BorderThickness" Value="2" />
+        </Style>
     </Window.Styles>
 
     <DockPanel Margin="24">
@@ -171,6 +178,8 @@
                         <ItemsControl.ItemTemplate>
                             <DataTemplate x:DataType="vm:ChannelSlotViewModel">
                                 <Border Classes="channel-card"
+                                        Classes.selected="{Binding IsSelected}"
+                                        Classes.primary="{Binding IsPrimary}"
                                         Width="230"
                                         Margin="0,0,12,12"
                                         Padding="14">

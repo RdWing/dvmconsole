@@ -3,6 +3,7 @@
 using System;
 using System.Collections.Generic;
 using System.ComponentModel;
+using dvmconsole;
 
 namespace DvmConsole.Avalonia.ViewModels
 {
@@ -10,13 +11,22 @@ namespace DvmConsole.Avalonia.ViewModels
     /// Pure managed view-model for the operator dashboard main window. The
     /// dashboard starts disconnected and awaiting FNE configuration, with
     /// exactly four fixed channel slots; connection state is replaced
-    /// wholesale through <see cref="SetConnectionState"/>. This class is
-    /// deliberately free of Avalonia, protocol, audio, and network
-    /// behavior so it can be driven headlessly.
+    /// wholesale through <see cref="SetConnectionState"/>. Channel
+    /// selection is tracked through the Core
+    /// <see cref="SelectedChannelsManager{T}"/> with literal WPF
+    /// <c>ProcessSelectionClick</c> semantics via
+    /// <see cref="ProcessChannelClick"/>. This class is deliberately free
+    /// of Avalonia, protocol, audio, and network behavior so it can be
+    /// driven headlessly.
     /// </summary>
     public sealed class MainWindowViewModel : INotifyPropertyChanged
     {
         private const int ChannelCount = 4;
+
+        private readonly SelectedChannelsManager<ChannelSlotViewModel> selectedChannelsManager;
+
+        private IReadOnlyCollection<ChannelSlotViewModel> selectedChannels =
+            Array.Empty<ChannelSlotViewModel>();
 
         /// <summary>The fixed product name shown by the dashboard.</summary>
         public string ProductName { get; } = "DVM Console";
@@ -48,10 +58,28 @@ namespace DvmConsole.Avalonia.ViewModels
         public IReadOnlyList<ChannelSlotViewModel> Channels { get; }
 
         /// <summary>
+        /// A detached snapshot of the currently selected slots. Every
+        /// access returns a fresh collection instance that is independent
+        /// of the view-model: mutating it never affects the selection, and
+        /// the snapshot is refreshed whenever the selection changes.
+        /// </summary>
+        public IReadOnlyCollection<ChannelSlotViewModel> SelectedChannels
+        {
+            get => new List<ChannelSlotViewModel>(selectedChannels);
+            private set => selectedChannels = value;
+        }
+
+        /// <summary>
+        /// The current primary channel, or null when no primary is set.
+        /// </summary>
+        public ChannelSlotViewModel? PrimaryChannel { get; private set; }
+
+        /// <summary>
         /// Raised whenever a connection-state property changes. All four
         /// properties are reported on every <see cref="SetConnectionState"/>
         /// call, in the locked order: ConnectionLabel, ConnectionDetail,
-        /// IsConnected, CanConnect.
+        /// IsConnected, CanConnect. Also raised for SelectedChannels and
+        /// PrimaryChannel when the selection changes.
         /// </summary>
         public event PropertyChangedEventHandler? PropertyChanged;
 
@@ -68,6 +96,16 @@ namespace DvmConsole.Avalonia.ViewModels
             }
 
             Channels = channels;
+
+            selectedChannelsManager = new SelectedChannelsManager<ChannelSlotViewModel>(
+                selectionVisualChanged: (slot, isSelected) => slot.IsSelected = isSelected,
+                primaryVisualChanged: (slot, isPrimary) => slot.IsPrimary = isPrimary);
+
+            selectedChannelsManager.SelectedChannelsChanged += OnSelectedChannelsChanged;
+            selectedChannelsManager.PrimaryChannelChanged += OnPrimaryChannelChanged;
+
+            SelectedChannels = selectedChannelsManager.GetSelectedChannels();
+            PrimaryChannel = null;
         }
 
         /// <summary>
@@ -99,6 +137,81 @@ namespace DvmConsole.Avalonia.ViewModels
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ConnectionDetail)));
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsConnected)));
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CanConnect)));
+        }
+
+        /// <summary>
+        /// Applies a channel-slot click with the literal WPF
+        /// <c>ProcessSelectionClick</c> branch order through the Core
+        /// <see cref="SelectedChannelsManager{T}"/>: a primary click
+        /// (setPrimary true) on an already-selected slot sets or moves the
+        /// primary, or clears it when the slot is already primary; any
+        /// other click toggles membership (select unselected, deselect
+        /// selected). A primary click on an unselected slot selects it
+        /// only. Deselecting the primary slot also clears the primary.
+        /// </summary>
+        /// <param name="slotNumber">The 1-based slot number to click.</param>
+        /// <param name="setPrimary">True for the primary-toggle (Ctrl-click) variant.</param>
+        /// <exception cref="ArgumentOutOfRangeException">
+        /// <paramref name="slotNumber"/> is outside the valid 1..4 range.
+        /// </exception>
+        public void ProcessChannelClick(int slotNumber, bool setPrimary)
+        {
+            if (slotNumber < 1 || slotNumber > ChannelCount)
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(slotNumber),
+                    slotNumber,
+                    $"Slot number must be between 1 and {ChannelCount}.");
+            }
+
+            var slot = Channels[slotNumber - 1];
+
+            if (slot.IsSelected && setPrimary)
+            {
+                // WPF Ctrl-click branch: toggle PRIMARY state instead of deselecting.
+                if (selectedChannelsManager.PrimaryChannel == slot)
+                {
+                    selectedChannelsManager.ClearPrimaryChannel();
+                }
+                else
+                {
+                    selectedChannelsManager.SetPrimaryChannel(slot);
+                }
+
+                return;
+            }
+
+            if (slot.IsSelected)
+            {
+                selectedChannelsManager.RemoveSelectedChannel(slot);
+            }
+            else
+            {
+                selectedChannelsManager.AddSelectedChannel(slot);
+            }
+        }
+
+        private void OnSelectedChannelsChanged()
+        {
+            SelectedChannels = selectedChannelsManager.GetSelectedChannels();
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SelectedChannels)));
+        }
+
+        private void OnPrimaryChannelChanged()
+        {
+            if (PrimaryChannel is { } previous)
+            {
+                previous.IsPrimary = false;
+            }
+
+            var current = selectedChannelsManager.PrimaryChannel;
+            if (current is not null)
+            {
+                current.IsPrimary = true;
+            }
+
+            PrimaryChannel = current;
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(PrimaryChannel)));
         }
     }
 }
