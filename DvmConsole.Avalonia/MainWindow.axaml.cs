@@ -263,5 +263,78 @@ namespace DvmConsole.Avalonia
                     ptt.ApplyHotkeyPress(e.Gesture, e.EventType);
                 }
             });
+
+        /// <summary>
+        /// Thin click wiring for the Set hotkey button: begins window-local
+        /// hotkey capture on the capture slice. Safe no-op when the
+        /// view-model or capture slice is absent; the slice itself ignores
+        /// repeated starts while already capturing.
+        /// </summary>
+        private void HotkeyCapture_Start_Click(object? sender, RoutedEventArgs e)
+        {
+            if (DataContext is MainWindowViewModel viewModel)
+            {
+                viewModel.HotkeyCapture?.StartCapture();
+            }
+        }
+
+        /// <summary>
+        /// Thin click wiring for the Clear button: forwards a clear
+        /// request to the capture slice, which always clears the PTT
+        /// hotkey and cancels capture. Safe no-op when the view-model or
+        /// capture slice is absent.
+        /// </summary>
+        private void HotkeyCapture_Clear_Click(object? sender, RoutedEventArgs e)
+        {
+            if (DataContext is MainWindowViewModel viewModel)
+            {
+                viewModel.HotkeyCapture?.ClearHotkey();
+            }
+        }
+
+        /// <summary>
+        /// Thin click wiring for the Cancel button: cancels an in-progress
+        /// capture on the capture slice. Safe no-op when the view-model or
+        /// capture slice is absent; the slice itself ignores cancels while
+        /// idle.
+        /// </summary>
+        private void HotkeyCapture_Cancel_Click(object? sender, RoutedEventArgs e)
+        {
+            if (DataContext is MainWindowViewModel viewModel)
+            {
+                viewModel.HotkeyCapture?.Cancel();
+            }
+        }
+
+        /// <summary>
+        /// Window-local hotkey capture: while the capture slice reports
+        /// <see cref="HotkeyCaptureViewModel.IsCapturing"/>, every key
+        /// event reaching the window is translated with
+        /// <see cref="KeyGestureMapper.TryMap"/> and applied to the
+        /// slice, which stores the gesture on the PTT capability and
+        /// exits capture. Unsupported keys leave capture active and the
+        /// event unhandled; supported keys mark the event handled so the
+        /// capture consumes it. Escape is a supported gesture (it maps
+        /// to <see cref="HotkeyKey.Escape"/>) and is intentionally not
+        /// special-cased. This is window-local routing only — no
+        /// registration, persistence, or native behavior is performed
+        /// here. Safe no-op when the view-model or capture slice is
+        /// absent or capture is idle.
+        /// </summary>
+        private void Window_KeyDown(object? sender, KeyEventArgs e)
+        {
+            if (DataContext is not MainWindowViewModel viewModel
+                || viewModel.HotkeyCapture is not { } capture
+                || !capture.IsCapturing)
+            {
+                return;
+            }
+
+            if (KeyGestureMapper.TryMap(e.Key, e.KeyModifiers, out var gesture))
+            {
+                capture.ApplyKey(gesture);
+                e.Handled = true;
+            }
+        }
     }
 }
