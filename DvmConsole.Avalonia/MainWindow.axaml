@@ -1,6 +1,7 @@
 <Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:vm="using:DvmConsole.Avalonia.ViewModels"
+        xmlns:conv="using:Avalonia.Data.Converters"
         x:Class="DvmConsole.Avalonia.MainWindow"
         x:DataType="vm:MainWindowViewModel"
         Title="DVM Console"
@@ -234,18 +235,58 @@
                     <Border Classes="panel" Padding="18">
                         <StackPanel Spacing="14">
                             <TextBlock Classes="kicker" Text="AUDIO PATH" />
-                            <Grid RowDefinitions="Auto,Auto" RowSpacing="12">
-                                <Grid ColumnDefinitions="*,Auto">
+
+                            <StackPanel Spacing="10"
+                                        IsVisible="{Binding AudioSettings, Converter={x:Static conv:ObjectConverters.IsNull}}">
+                                <TextBlock Classes="data-value" Text="Audio devices unavailable" />
+                                <TextBlock Classes="muted"
+                                           Text="This session has no audio device catalog; CoreAudio enumeration attaches with the macOS backend gate." />
+                            </StackPanel>
+
+                            <StackPanel Spacing="12"
+                                        IsVisible="{Binding AudioSettings, Converter={x:Static conv:ObjectConverters.IsNotNull}}">
+                                <StackPanel Spacing="6">
                                     <TextBlock Classes="data-label" Text="CAPTURE" />
-                                    <TextBlock Grid.Column="1" Classes="muted" Text="NOT ATTACHED" />
-                                </Grid>
-                                <Grid Grid.Row="1" ColumnDefinitions="*,Auto">
+                                    <ComboBox x:Name="AudioInputComboBox"
+                                              ItemsSource="{Binding AudioSettings.InputDevices}"
+                                              SelectionChanged="AudioInputComboBox_SelectionChanged">
+                                        <ComboBox.ItemTemplate>
+                                            <DataTemplate x:DataType="vm:AudioDeviceOptionViewModel">
+                                                <TextBlock Text="{Binding Name}" />
+                                            </DataTemplate>
+                                        </ComboBox.ItemTemplate>
+                                    </ComboBox>
+                                </StackPanel>
+
+                                <StackPanel Spacing="6">
                                     <TextBlock Classes="data-label" Text="PLAYBACK" />
-                                    <TextBlock Grid.Column="1" Classes="muted" Text="NOT ATTACHED" />
+                                    <ComboBox x:Name="AudioOutputComboBox"
+                                              ItemsSource="{Binding AudioSettings.OutputDevices}"
+                                              SelectionChanged="AudioOutputComboBox_SelectionChanged">
+                                        <ComboBox.ItemTemplate>
+                                            <DataTemplate x:DataType="vm:AudioDeviceOptionViewModel">
+                                                <TextBlock Text="{Binding Name}" />
+                                            </DataTemplate>
+                                        </ComboBox.ItemTemplate>
+                                    </ComboBox>
+                                </StackPanel>
+
+                                <Grid ColumnDefinitions="*,Auto">
+                                    <TextBlock Classes="data-label"
+                                               Text="AUTO GAIN CONTROL"
+                                               VerticalAlignment="Center" />
+                                    <ToggleSwitch Grid.Column="1"
+                                                  IsChecked="{Binding AudioSettings.AgcEnabled, Mode=TwoWay}"
+                                                  VerticalAlignment="Center" />
                                 </Grid>
-                            </Grid>
-                            <TextBlock Classes="muted"
-                                       Text="CoreAudio enumeration and realtime I/O require the macOS backend gate." />
+
+                                <TextBlock Classes="muted"
+                                           Text="Selection changes are session state; Save raises a request only and persists nothing yet." />
+
+                                <Button Content="Save"
+                                        HorizontalAlignment="Right"
+                                        Click="AudioSave_Click" />
+                            </StackPanel>
                         </StackPanel>
                     </Border>
 

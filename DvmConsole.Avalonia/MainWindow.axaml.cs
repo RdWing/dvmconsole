@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 #nullable enable
+using System.ComponentModel;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Interactivity;
@@ -21,12 +22,114 @@ namespace DvmConsole.Avalonia
         /// <summary>
         /// Creates the dashboard window with the given audio device
         /// catalog composed into the view-model; a null catalog leaves
-        /// the audio-settings slice absent.
+        /// the audio-settings slice absent. When the slice is present,
+        /// this window subscribes once to its property changes and
+        /// applies the saved selections to the audio ComboBoxes.
         /// </summary>
         public MainWindow(IAudioDeviceCatalog? catalog)
         {
             InitializeComponent();
             DataContext = new MainWindowViewModel(null, catalog);
+
+            if (DataContext is MainWindowViewModel viewModel
+                && viewModel.AudioSettings is { } settings)
+            {
+                settings.PropertyChanged += AudioSettings_PropertyChanged;
+                ApplyAudioSelections();
+            }
+        }
+
+        /// <summary>
+        /// Re-applies both ComboBox selections whenever the audio-settings
+        /// slice reports a device-list or selection-id change. List
+        /// notifications are mandatory because <see cref="AudioSettingsViewModel.Refresh"/>
+        /// replaces row instances wholesale; the mapper re-resolves the
+        /// saved id against the current rows.
+        /// </summary>
+        private void AudioSettings_PropertyChanged(object? sender, PropertyChangedEventArgs e)
+        {
+            if (e.PropertyName is nameof(AudioSettingsViewModel.InputDevices)
+                or nameof(AudioSettingsViewModel.OutputDevices)
+                or nameof(AudioSettingsViewModel.SelectedInputId)
+                or nameof(AudioSettingsViewModel.SelectedOutputId))
+            {
+                ApplyAudioSelections();
+            }
+        }
+
+        /// <summary>
+        /// Applies the audio-settings slice's saved selections to the
+        /// input and output ComboBoxes by resolving each id to its option
+        /// row with <see cref="AudioDeviceSelectionMapper.FindById"/>.
+        /// Null-safe: a null view-model, slice, or unmapped id is a no-op
+        /// (the selection clears). Selection ids are never converted or
+        /// otherwise written here — the view-model remains the single
+        /// source of truth for the saved ids.
+        /// </summary>
+        private void ApplyAudioSelections()
+        {
+            if (DataContext is not MainWindowViewModel viewModel
+                || viewModel.AudioSettings is not { } settings)
+            {
+                return;
+            }
+
+            AudioInputComboBox.SelectedItem =
+                AudioDeviceSelectionMapper.FindById(settings.InputDevices, settings.SelectedInputId);
+            AudioOutputComboBox.SelectedItem =
+                AudioDeviceSelectionMapper.FindById(settings.OutputDevices, settings.SelectedOutputId);
+        }
+
+        /// <summary>
+        /// Forwards a user-picked input row to the audio-settings slice.
+        /// Safe no-op for any other sender, null selection, null data
+        /// context, or absent slice.
+        /// </summary>
+        private void AudioInputComboBox_SelectionChanged(object? sender, SelectionChangedEventArgs e)
+        {
+            if (sender is not ComboBox comboBox
+                || comboBox.SelectedItem is not AudioDeviceOptionViewModel row
+                || DataContext is not MainWindowViewModel viewModel
+                || viewModel.AudioSettings is not { } settings)
+            {
+                return;
+            }
+
+            settings.SelectedInputId = row.Id;
+        }
+
+        /// <summary>
+        /// Forwards a user-picked output row to the audio-settings slice.
+        /// Safe no-op for any other sender, null selection, null data
+        /// context, or absent slice.
+        /// </summary>
+        private void AudioOutputComboBox_SelectionChanged(object? sender, SelectionChangedEventArgs e)
+        {
+            if (sender is not ComboBox comboBox
+                || comboBox.SelectedItem is not AudioDeviceOptionViewModel row
+                || DataContext is not MainWindowViewModel viewModel
+                || viewModel.AudioSettings is not { } settings)
+            {
+                return;
+            }
+
+            settings.SelectedOutputId = row.Id;
+        }
+
+        /// <summary>
+        /// Request-only Save wiring: forwards a Save request to the
+        /// audio-settings slice via <see cref="AudioSettingsViewModel.Commit"/>,
+        /// which raises <see cref="AudioSettingsViewModel.SaveRequested"/>
+        /// with the current selection and AGC state. Nothing is persisted,
+        /// subscribed, or touched natively here. Safe no-op when the
+        /// view-model or slice is absent.
+        /// </summary>
+        private void AudioSave_Click(object? sender, RoutedEventArgs e)
+        {
+            if (DataContext is MainWindowViewModel viewModel)
+            {
+                viewModel.AudioSettings?.Commit();
+            }
         }
 
         /// <summary>
