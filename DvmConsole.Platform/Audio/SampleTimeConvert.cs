@@ -1,4 +1,4 @@
-﻿// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: AGPL-3.0-only
 /**
 * Digital Voice Modem - Audio Bridge
 * AGPLv3 Open Source. Use is subject to license terms.
@@ -10,13 +10,13 @@
 *   Copyright (C) 2023 Bryan Biedenkapp, N2PLL
 *
 */
+#nullable enable
 
-using NAudio.Wave;
-
-namespace dvmconsole
+namespace DvmConsole.Platform.Audio
 {
     /// <summary>
-    /// 
+    /// Time, sample and byte count conversions for PCM audio, preserving the
+    /// original arithmetic over <see cref="PcmFormat"/>.
     /// </summary>
     public class SampleTimeConvert
     {
@@ -27,10 +27,10 @@ namespace dvmconsole
         /// <summary>
         /// (ms) to sample count conversion
         /// </summary>
-        /// <param name="format">Wave format</param>
+        /// <param name="format">PCM format</param>
         /// <param name="ms">Number of milliseconds</param>
         /// <returns>Number of samples</returns>
-        public static int ToSamples(WaveFormat format, int ms)
+        public static int ToSamples(PcmFormat format, int ms)
         {
             return (int)(((long)ms) * format.SampleRate * format.Channels / 1000);
         }
@@ -38,10 +38,10 @@ namespace dvmconsole
         /// <summary>
         /// Sample count to (ms) conversion
         /// </summary>
-        /// <param name="format">Wave format</param>
+        /// <param name="format">PCM format</param>
         /// <param name="samples">Number of samples</param>
         /// <returns>Number of milliseconds</returns>
-        public static int ToMS(WaveFormat format, int samples)
+        public static int ToMS(PcmFormat format, int samples)
         {
             return (int)(((float)samples / (float)format.SampleRate / (float)format.Channels) * 1000);
         }
@@ -49,10 +49,10 @@ namespace dvmconsole
         /// <summary>
         /// samples to bytes conversion
         /// </summary>
-        /// <param name="format">Wave format</param>
+        /// <param name="format">PCM format</param>
         /// <param name="samples">Number of samples</param>
         /// <returns>Number of bytes for the number of samples</returns>
-        public static int ToBytes(WaveFormat format, int samples)
+        public static int ToBytes(PcmFormat format, int samples)
         {
             return samples * (format.BitsPerSample / 8);
         }
@@ -60,12 +60,12 @@ namespace dvmconsole
         /// <summary>
         /// (ms) to bytes conversion
         /// </summary>
-        /// <param name="format">Wave format</param>
+        /// <param name="format">PCM format</param>
         /// <param name="ms">Number of milliseconds</param>
         /// <returns>Number of bytes for the amount of audio in (ms)</returns>
-        public static int MSToSampleBytes(WaveFormat format, int ms)
+        public static int MSToSampleBytes(PcmFormat format, int ms)
         {
             return ToBytes(format, ToSamples(format, ms));
         }
     } // public class SampleTimeConvert
-} // namespace dvmconsole
+} // namespace DvmConsole.Platform.Audio
