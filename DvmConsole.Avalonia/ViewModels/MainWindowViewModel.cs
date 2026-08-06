@@ -26,7 +26,11 @@ namespace DvmConsole.Avalonia.ViewModels
     {
         private const int ChannelCount = 4;
 
+        private const string AudioSavedFeedbackText = "Audio settings saved";
+
         private readonly SelectedChannelsManager<ChannelSlotViewModel> selectedChannelsManager;
+
+        private string audioSaveFeedback = string.Empty;
 
         private IReadOnlyCollection<ChannelSlotViewModel> selectedChannels =
             Array.Empty<ChannelSlotViewModel>();
@@ -49,6 +53,20 @@ namespace DvmConsole.Avalonia.ViewModels
         /// subscription and owns no disposable resources.
         /// </summary>
         public AudioSettingsViewModel? AudioSettings { get; }
+
+        /// <summary>
+        /// Shell-visible acknowledgement for the audio-settings slice, or
+        /// empty when no acknowledgement is outstanding. The composed
+        /// <see cref="AudioSettings"/> raises <c>SaveRequested</c> when
+        /// the dashboard commits; this property then becomes the exact
+        /// text <c>Audio settings saved</c>. Any change-only selection or
+        /// AGC change (SelectedInputId, SelectedOutputId, AgcEnabled)
+        /// clears it back to empty. Get-only and change-only: a
+        /// <see cref="PropertyChanged"/> notification is raised only when
+        /// the value actually changes, and sessions without a catalog
+        /// keep this permanently empty and never subscribe.
+        /// </summary>
+        public string AudioSaveFeedback => audioSaveFeedback;
 
         /// <summary>
         /// The PTT capability slice composed from the injected hotkey
@@ -199,6 +217,53 @@ namespace DvmConsole.Avalonia.ViewModels
             HotkeyCapture = Ptt is null ? null : new HotkeyCaptureViewModel(Ptt);
 
             AudioSettings = catalog is null ? null : new AudioSettingsViewModel(catalog);
+
+            if (AudioSettings is not null)
+            {
+                AudioSettings.SaveRequested += OnAudioSaveRequested;
+                AudioSettings.PropertyChanged += OnAudioSettingsChanged;
+            }
+        }
+
+        private void OnAudioSaveRequested(
+            AudioDeviceId inputId,
+            AudioDeviceId outputId,
+            bool agcEnabled)
+        {
+            // The payload values are intentionally ignored: the
+            // acknowledgement text is fixed and change-only.
+            if (audioSaveFeedback == AudioSavedFeedbackText)
+            {
+                return;
+            }
+
+            audioSaveFeedback = AudioSavedFeedbackText;
+            PropertyChanged?.Invoke(
+                this,
+                new PropertyChangedEventArgs(nameof(AudioSaveFeedback)));
+        }
+
+        private void OnAudioSettingsChanged(
+            object? sender,
+            PropertyChangedEventArgs e)
+        {
+            if (e.PropertyName is not (
+                nameof(AudioSettingsViewModel.SelectedInputId)
+                or nameof(AudioSettingsViewModel.SelectedOutputId)
+                or nameof(AudioSettingsViewModel.AgcEnabled)))
+            {
+                return;
+            }
+
+            if (audioSaveFeedback.Length == 0)
+            {
+                return;
+            }
+
+            audioSaveFeedback = string.Empty;
+            PropertyChanged?.Invoke(
+                this,
+                new PropertyChangedEventArgs(nameof(AudioSaveFeedback)));
         }
 
         private void OnFneConnectionManagerChanged(

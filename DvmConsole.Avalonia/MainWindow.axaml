@@ -301,6 +301,10 @@
                                 <Button Content="Save"
                                         HorizontalAlignment="Right"
                                         Click="AudioSave_Click" />
+
+                                <TextBlock Classes="muted"
+                                           Text="{Binding AudioSaveFeedback}"
+                                           IsVisible="{Binding AudioSaveFeedback, Converter={x:Static conv:StringConverters.IsNotNullOrEmpty}}" />
                             </StackPanel>
                         </StackPanel>
                     </Border>
