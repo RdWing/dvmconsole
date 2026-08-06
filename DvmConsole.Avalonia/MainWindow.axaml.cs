@@ -12,6 +12,7 @@ using DvmConsole.Avalonia.ViewModels;
 using DvmConsole.Platform.Audio;
 using DvmConsole.Platform.Dialogs;
 using DvmConsole.Platform.Hotkeys;
+using DvmConsole.Platform.Native;
 
 namespace DvmConsole.Avalonia
 {
@@ -82,16 +83,41 @@ namespace DvmConsole.Avalonia
         /// dispatcher timer polls the PTT hotkey and detaches on close.
         /// When audio settings are present, this window subscribes once to
         /// their property changes and applies selections to the ComboBoxes.
-        /// No registration, unregistration, or disposal is performed here.
+        /// No vocoder readiness result is composed, so the view-model's
+        /// <c>VocoderStatus</c> stays null. No registration,
+        /// unregistration, or disposal is performed here.
         /// </summary>
         public MainWindow(
             IAudioDeviceCatalog? catalog,
             IGlobalHotkeyService? hotkeys,
             IKeyboardKeyStateReader? keyStateReader,
             AudioSettingsPersistence? persistence)
+            : this(catalog, hotkeys, keyStateReader, persistence, null)
+        {
+        }
+
+        /// <summary>
+        /// Creates the dashboard window with the given audio device
+        /// catalog, global hotkey service, optional physical key-state
+        /// reader, optional audio-settings persistence, and the startup
+        /// vocoder-readiness result. The readiness parameter is last so
+        /// the pre-existing four-argument constructor remains
+        /// source-compatible, including null-literal calls. When a
+        /// key-state reader is present, exactly one 250 ms dispatcher
+        /// timer polls the PTT hotkey and detaches on close. When audio
+        /// settings are present, this window subscribes once to their
+        /// property changes and applies selections to the ComboBoxes. No
+        /// registration, unregistration, or disposal is performed here.
+        /// </summary>
+        public MainWindow(
+            IAudioDeviceCatalog? catalog,
+            IGlobalHotkeyService? hotkeys,
+            IKeyboardKeyStateReader? keyStateReader,
+            AudioSettingsPersistence? persistence,
+            VocoderReadinessResult? vocoderStatus)
         {
             InitializeComponent();
-            DataContext = new MainWindowViewModel(null, catalog, hotkeys, persistence);
+            DataContext = new MainWindowViewModel(null, catalog, hotkeys, persistence, vocoderStatus);
 
             if (hotkeys is not null)
             {

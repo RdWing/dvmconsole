@@ -192,6 +192,9 @@
                     <StackPanel Spacing="8">
                         <TextBlock Classes="data-label" Text="CAPABILITIES" />
                         <TextBlock Classes="muted" Text="• Native audio pending" />
+                        <TextBlock Classes="muted"
+                                   Text="{Binding VocoderStatus}"
+                                   IsVisible="{Binding VocoderStatus, Converter={x:Static conv:ObjectConverters.IsNotNull}}" />
                         <TextBlock Classes="muted" Text="• Global hotkey fallback ready" />
                         <TextBlock Classes="muted" Text="• File dialogs available" />
                     </StackPanel>

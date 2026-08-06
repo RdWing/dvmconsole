@@ -12,6 +12,7 @@ using DvmConsole.Platform;
 using DvmConsole.Platform.Audio;
 using DvmConsole.Platform.Audio.Mac;
 using DvmConsole.Platform.Hotkeys;
+using DvmConsole.Platform.Native;
 
 namespace DvmConsole.Avalonia
 {
@@ -66,6 +67,25 @@ namespace DvmConsole.Avalonia
         private static IGlobalHotkeyService CreateGlobalHotkeyService()
             => new UnavailableGlobalHotkeyService();
 
+        /// <summary>
+        /// Runs the startup vocoder-readiness check through the
+        /// native-library probe and returns its result. The probe owns
+        /// loading, export resolution and handle release; this shell
+        /// only maps the outcome. A failure diagnostic is written to
+        /// the debug output; the check itself never throws.
+        /// </summary>
+        private static VocoderReadinessResult CheckVocoderReadiness()
+        {
+            var result = new VocoderReadiness(new NativeLibraryProbe()).Check();
+
+            if (!result.IsReady && result.Diagnostic is { } diagnostic)
+            {
+                System.Diagnostics.Debug.WriteLine(diagnostic);
+            }
+
+            return result;
+        }
+
         public override void OnFrameworkInitializationCompleted()
         {
             if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
@@ -74,7 +94,8 @@ namespace DvmConsole.Avalonia
                 var hotkeys = CreateGlobalHotkeyService();
                 var persistence = new AudioSettingsPersistence(
                     new SettingsSectionStore(new DefaultFileSystemPaths().SettingsFilePath));
-                var mainWindow = new MainWindow(catalog, hotkeys, null, persistence);
+                var vocoderStatus = CheckVocoderReadiness();
+                var mainWindow = new MainWindow(catalog, hotkeys, null, persistence, vocoderStatus);
                 mainWindow.FileDialogService =
                     new AvaloniaFileDialogService(mainWindow.StorageProvider);
                 desktop.MainWindow = mainWindow;

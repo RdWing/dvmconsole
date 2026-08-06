@@ -7,6 +7,7 @@ using dvmconsole;
 using DvmConsole.Avalonia.Persistence;
 using DvmConsole.Platform.Audio;
 using DvmConsole.Platform.Hotkeys;
+using DvmConsole.Platform.Native;
 
 namespace DvmConsole.Avalonia.ViewModels
 {
@@ -196,6 +197,16 @@ namespace DvmConsole.Avalonia.ViewModels
         }
 
         /// <summary>
+        /// Startup-only vocoder readiness status, or null when no
+        /// readiness result was composed. A ready result maps to the
+        /// stable text <c>libvocoder ready</c>; a failure exposes the
+        /// probe diagnostic verbatim. Get-only and never notified:
+        /// composed exactly once at construction, this is startup
+        /// status, not session state.
+        /// </summary>
+        public string? VocoderStatus { get; }
+
+        /// <summary>
         /// Creates the offline dashboard with exactly four channel slots,
         /// an FNE connection manager seeded from the given codeplug
         /// systems, an audio-settings slice composed from the given
@@ -209,14 +220,50 @@ namespace DvmConsole.Avalonia.ViewModels
         /// the audio-settings slice; a missing, malformed or unreadable
         /// load degrades to the default ids and default AGC state without
         /// throwing. A null persistence keeps the slice exactly
-        /// request-only.
+        /// request-only. No vocoder readiness result is composed, so
+        /// <see cref="VocoderStatus"/> stays null.
         /// </summary>
         public MainWindowViewModel(
             IReadOnlyList<Codeplug.System>? systems,
             IAudioDeviceCatalog? catalog,
             IGlobalHotkeyService? hotkeys,
             AudioSettingsPersistence? persistence)
+            : this(systems, catalog, hotkeys, persistence, null)
         {
+        }
+
+        /// <summary>
+        /// Creates the offline dashboard with exactly four channel slots,
+        /// an FNE connection manager seeded from the given codeplug
+        /// systems, an audio-settings slice composed from the given
+        /// device catalog, a PTT capability slice composed from the
+        /// given hotkey service, optional audio-settings persistence,
+        /// and an optional startup vocoder-readiness result. Null
+        /// systems yield an empty manager, a null catalog yields a
+        /// null <see cref="AudioSettings"/>, and a null hotkey service
+        /// yields a null <see cref="Ptt"/>. When the catalog and
+        /// persistence are both supplied, the audio section is loaded at
+        /// construction and its keys are mapped to device ids that seed
+        /// the audio-settings slice; a missing, malformed or unreadable
+        /// load degrades to the default ids and default AGC state without
+        /// throwing. A null persistence keeps the slice exactly
+        /// request-only. A null readiness result leaves
+        /// <see cref="VocoderStatus"/> null; otherwise it is composed
+        /// exactly once from the result.
+        /// </summary>
+        public MainWindowViewModel(
+            IReadOnlyList<Codeplug.System>? systems,
+            IAudioDeviceCatalog? catalog,
+            IGlobalHotkeyService? hotkeys,
+            AudioSettingsPersistence? persistence,
+            VocoderReadinessResult? vocoderStatus)
+        {
+            VocoderStatus = vocoderStatus is null
+                ? null
+                : vocoderStatus.IsReady
+                    ? $"{VocoderReadiness.LogicalLibraryName} ready"
+                    : vocoderStatus.Diagnostic;
+
             audioPersistence = persistence;
 
             FneConnections = new FneConnectionManagerViewModel(systems);
