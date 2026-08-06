@@ -8,7 +8,9 @@ using Avalonia.Threading;
 using DvmConsole.Avalonia.Dialogs;
 using DvmConsole.Avalonia.Input;
 using DvmConsole.Avalonia.Persistence;
+using DvmConsole.Avalonia.Services;
 using DvmConsole.Avalonia.ViewModels;
+using DvmConsole.Core.Networking;
 using DvmConsole.Platform.Audio;
 using DvmConsole.Platform.Dialogs;
 using DvmConsole.Platform.Hotkeys;
@@ -30,6 +32,22 @@ namespace DvmConsole.Avalonia
         /// key-state reader was supplied or after the window closes.
         /// </summary>
         private readonly DispatcherTimer? watchdogTimer = null;
+
+        /// <summary>
+        /// Headless FNE connection service composed by this window
+        /// together with its bridge; null until the view model is
+        /// created in the five-dependency constructor. Systems stay null
+        /// until a codeplug loader exists, so the slice is dormant: zero
+        /// rows, no transports, no events.
+        /// </summary>
+        private IFneConnectionService? fneConnectionService = null;
+
+        /// <summary>
+        /// The bridge forwarding the FNE connection manager's requests
+        /// into <see cref="fneConnectionService"/> and marshalling
+        /// service state back onto the UI thread; null until composed.
+        /// </summary>
+        private FneConnectionServiceBridge? fneConnectionBridge = null;
 
         public MainWindow()
             : this(null, null)
@@ -119,17 +137,31 @@ namespace DvmConsole.Avalonia
             InitializeComponent();
             DataContext = new MainWindowViewModel(null, catalog, hotkeys, persistence, vocoderStatus);
 
+            // Compose the dormant headless FNE slice: systems stay null
+            // until a codeplug loader exists, so no transport factory
+            // call is ever made and no row can ever raise a request.
+            // The bridge is inert with zero rows and safe to construct
+            // in headless tests.
+            if (DataContext is MainWindowViewModel viewModel)
+            {
+                fneConnectionService = new FneConnectionService(null, new UnavailableFneTransportFactory());
+                fneConnectionBridge = new FneConnectionServiceBridge(fneConnectionService, viewModel.FneConnections);
+                fneConnectionBridge.Attach();
+            }
+
             if (hotkeys is not null)
             {
                 hotkeys.HotkeyPressed += OnHotkeyPressed;
             }
 
-            if (DataContext is MainWindowViewModel viewModel
-                && viewModel.AudioSettings is { } settings)
+            if (DataContext is MainWindowViewModel viewModelWithSettings
+                && viewModelWithSettings.AudioSettings is { } settings)
             {
                 settings.PropertyChanged += AudioSettings_PropertyChanged;
                 ApplyAudioSelections();
             }
+
+            Closed += OnWindowClosed;
 
             if (keyStateReader is null)
             {
@@ -141,7 +173,6 @@ namespace DvmConsole.Avalonia
             watchdogTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(250) };
             watchdogTimer.Tick += OnWatchdogTick;
             watchdogTimer.Start();
-            Closed += OnWindowClosed;
         }
 
         /// <summary>
@@ -437,9 +468,12 @@ namespace DvmConsole.Avalonia
         }
 
         /// <summary>
-        /// Stops and detaches the PTT key-up watchdog timer when the
-        /// window closes, releasing the timer and its capture of this
-        /// window.
+        /// Stops and detaches the PTT key-up watchdog timer and tears
+        /// down the headless FNE slice when the window closes: the
+        /// bridge detaches first (stopping event flow in both
+        /// directions), then the service disconnects and disposes every
+        /// transport and cancels all schedulers. Both disposals are
+        /// idempotent, so a repeated close event is harmless.
         /// </summary>
         private void OnWindowClosed(object? sender, EventArgs e)
         {
@@ -448,6 +482,9 @@ namespace DvmConsole.Avalonia
                 timer.Tick -= OnWatchdogTick;
                 timer.Stop();
             }
+
+            fneConnectionBridge?.Dispose();
+            fneConnectionService?.Dispose();
         }
 
         /// <summary>
