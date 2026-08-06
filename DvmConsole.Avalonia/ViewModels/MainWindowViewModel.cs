@@ -5,6 +5,7 @@ using System.Collections.Generic;
 using System.ComponentModel;
 using dvmconsole;
 using DvmConsole.Platform.Audio;
+using DvmConsole.Platform.Hotkeys;
 
 namespace DvmConsole.Avalonia.ViewModels
 {
@@ -48,6 +49,16 @@ namespace DvmConsole.Avalonia.ViewModels
         /// subscription and owns no disposable resources.
         /// </summary>
         public AudioSettingsViewModel? AudioSettings { get; }
+
+        /// <summary>
+        /// The PTT capability slice composed from the injected hotkey
+        /// service, or null when no service was provided. Get-only and
+        /// constructed exactly once; the slice is wired to the LIVE
+        /// dashboard selection, resolving the primary and selected
+        /// channels at press time, and performs no service query until
+        /// its <c>SetHotkey</c> is called. Owns no disposable resources.
+        /// </summary>
+        public PttCapabilityViewModel? Ptt { get; }
 
         /// <summary>
         /// The connection state label, e.g. <c>OFFLINE</c> or
@@ -126,11 +137,29 @@ namespace DvmConsole.Avalonia.ViewModels
         /// an FNE connection manager seeded from the given codeplug
         /// systems, and an audio-settings slice composed from the given
         /// device catalog; null systems yield an empty manager and a null
-        /// catalog yields a null <see cref="AudioSettings"/>.
+        /// catalog yields a null <see cref="AudioSettings"/>. No hotkey
+        /// service is composed, so <see cref="Ptt"/> stays null.
         /// </summary>
         public MainWindowViewModel(
             IReadOnlyList<Codeplug.System>? systems,
             IAudioDeviceCatalog? catalog)
+            : this(systems, catalog, null)
+        {
+        }
+
+        /// <summary>
+        /// Creates the offline dashboard with exactly four channel slots,
+        /// an FNE connection manager seeded from the given codeplug
+        /// systems, an audio-settings slice composed from the given
+        /// device catalog, and a PTT capability slice composed from the
+        /// given hotkey service; null systems yield an empty manager, a
+        /// null catalog yields a null <see cref="AudioSettings"/>, and a
+        /// null hotkey service yields a null <see cref="Ptt"/>.
+        /// </summary>
+        public MainWindowViewModel(
+            IReadOnlyList<Codeplug.System>? systems,
+            IAudioDeviceCatalog? catalog,
+            IGlobalHotkeyService? hotkeys)
         {
             FneConnections = new FneConnectionManagerViewModel(systems);
             FneConnections.PropertyChanged += OnFneConnectionManagerChanged;
@@ -153,6 +182,10 @@ namespace DvmConsole.Avalonia.ViewModels
 
             SelectedChannels = selectedChannelsManager.GetSelectedChannels();
             PrimaryChannel = null;
+
+            Ptt = hotkeys is null
+                ? null
+                : new PttCapabilityViewModel(hotkeys, () => PrimaryChannel, () => SelectedChannels);
 
             AudioSettings = catalog is null ? null : new AudioSettingsViewModel(catalog);
         }

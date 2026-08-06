@@ -41,6 +41,21 @@
 * event subscription requirement — the audio slice must work with zero
 * wiring beyond the constructor argument.
 *
+* PTT-capability composition contract (RED phase for the bounded PTT
+* composition slice): the parameterless constructor keeps Ptt null and
+* the offline dashboard unchanged — no hotkey service is ever created,
+* held, or queried. The exact three-parameter constructor
+* (IReadOnlyList<Codeplug.System>?, IAudioDeviceCatalog?,
+* IGlobalHotkeyService?) composes a get-only PttCapabilityViewModel
+* from the injected service, wired to the LIVE dashboard selection:
+* its primary resolver returns the current PrimaryChannel and its
+* selected resolver the current SelectedChannels snapshot, both
+* resolved at press time. A null service yields a null Ptt while the
+* systems/catalog composition stays independent. The composition adds
+* no IDisposable surface, performs no service query until the slice's
+* SetHotkey is called, and leaves the existing one- and two-argument
+* null calls binding to their exact constructors.
+*
 * The tests are fully headless and pure managed: no Avalonia.Headless
 * package, window, display, native call, file, or secret is involved.
 *
@@ -52,6 +67,7 @@ using System.ComponentModel;
 using dvmconsole;
 using DvmConsole.Avalonia.ViewModels;
 using DvmConsole.Platform.Audio;
+using DvmConsole.Platform.Hotkeys;
 using Xunit;
 
 namespace DvmConsole.Avalonia.Tests
@@ -895,6 +911,343 @@ namespace DvmConsole.Avalonia.Tests
 
             var compose = main.GetConstructor(
                 new[] { typeof(IReadOnlyList<Codeplug.System>), typeof(IAudioDeviceCatalog) });
+            Assert.NotNull(compose);
+        }
+
+        // ---- PTT composition: fixture ------------------------------------------
+
+        /// <summary>
+        /// Minimal, headless <see cref="IGlobalHotkeyService"/> fake: every
+        /// capability query is counted and reports
+        /// <see cref="HotkeyCapability.Unsupported"/>, registration and
+        /// unregistration are no-ops that always complete, and disposal is a
+        /// no-op. The press event is declared but never raised — the PTT
+        /// composition slice under test only ever queries capability, and
+        /// only after <c>SetHotkey</c>.
+        /// </summary>
+        private sealed class FakeGlobalHotkeyService : IGlobalHotkeyService
+        {
+            /// <summary>Total <see cref="GetCapability"/> calls.</summary>
+            public int GetCapabilityCalls { get; private set; }
+
+#pragma warning disable CS0067 // Declared but never raised; declaration is all the contract needs.
+            public event EventHandler<HotkeyEventArgs>? HotkeyPressed;
+#pragma warning restore CS0067
+
+            public HotkeyCapability GetCapability(HotkeyGesture gesture)
+            {
+                GetCapabilityCalls++;
+                return HotkeyCapability.Unsupported;
+            }
+
+            public Task<HotkeyRegistrationResult> RegisterAsync(
+                HotkeyGesture gesture,
+                CancellationToken cancellationToken)
+                => Task.FromResult(new HotkeyRegistrationResult(HotkeyRegistrationStatus.Registered, gesture));
+
+            public Task UnregisterAsync(HotkeyGesture gesture, CancellationToken cancellationToken)
+                => Task.CompletedTask;
+
+            public void Dispose()
+            {
+            }
+        }
+
+        // ---- PTT composition: parameterless constructor --------------------------
+
+        /// <summary>
+        /// The parameterless constructor stays hotkey-free: Ptt is null and
+        /// the offline dashboard (OFFLINE label, four channel slots, empty
+        /// FNE manager, null AudioSettings) is untouched. No hotkey service
+        /// is created or queried — there is nothing to query.
+        /// </summary>
+        [Fact]
+        public void DefaultCtor_PttNull_DashboardUnchanged()
+        {
+            var vm = new MainWindowViewModel();
+
+            Assert.Null(vm.Ptt);
+            Assert.Equal("OFFLINE", vm.ConnectionLabel);
+            Assert.Equal("Awaiting FNE configuration", vm.ConnectionDetail);
+            Assert.Equal(4, vm.Channels.Count);
+            Assert.False(vm.FneConnections.HasSystems);
+            Assert.Null(vm.AudioSettings);
+        }
+
+        // ---- PTT composition: three-parameter constructor -------------------------
+
+        /// <summary>
+        /// The three-parameter constructor composes a live, get-only
+        /// PttCapabilityViewModel from the injected hotkey service: stable
+        /// across reads and initially disengaged. The service is queried
+        /// only when the slice's SetHotkey is called — construction performs
+        /// zero capability lookups.
+        /// </summary>
+        [Fact]
+        public void ThreeArgCtor_WithHotkeys_PttComposed_NoCapabilityQueryUntilSetHotkey()
+        {
+            var fake = new FakeGlobalHotkeyService();
+
+            var vm = new MainWindowViewModel(null, null, fake);
+
+            Assert.NotNull(vm.Ptt);
+            Assert.Same(vm.Ptt, vm.Ptt);
+            Assert.Equal(0, fake.GetCapabilityCalls);
+            Assert.False(vm.Ptt.IsEngaged);
+            Assert.Equal("OFFLINE", vm.ConnectionLabel);
+            Assert.Equal(4, vm.Channels.Count);
+            Assert.False(vm.FneConnections.HasSystems);
+            Assert.Null(vm.AudioSettings);
+        }
+
+        /// <summary>
+        /// Pointer engagement resolves the live primary channel at press
+        /// time: pressing with a primary set engages exactly that slot
+        /// (PttEngaged true, PttStateRequested(true)) and releasing clears
+        /// both (PttEngaged false, PttStateRequested(false)).
+        /// </summary>
+        [Fact]
+        public void PointerEngagement_WithPrimary_RequestsStateAndUpdatesSlots()
+        {
+            var vm = new MainWindowViewModel(null, null, new FakeGlobalHotkeyService());
+            Assert.NotNull(vm.Ptt);
+            var slot = vm.Channels[0];
+            vm.ProcessChannelClick(slot.Number, setPrimary: false);
+            vm.ProcessChannelClick(slot.Number, setPrimary: true);
+            var requests = new List<bool>();
+            vm.Ptt.PttStateRequested += engaged => requests.Add(engaged);
+
+            vm.Ptt.PttPointerDown();
+
+            Assert.True(vm.Ptt.IsEngaged);
+            Assert.True(slot.PttEngaged);
+            Assert.Equal(new List<bool> { true }, requests);
+
+            vm.Ptt.PttPointerUp();
+
+            Assert.False(vm.Ptt.IsEngaged);
+            Assert.False(slot.PttEngaged);
+            Assert.Equal(new List<bool> { true, false }, requests);
+        }
+
+        /// <summary>
+        /// The existing null-argument calls keep binding to their exact
+        /// constructors once the three-parameter constructor exists: the
+        /// third parameter is not optional, so one- and two-argument null
+        /// calls stay unambiguous, and a null hotkey service yields a null
+        /// Ptt.
+        /// </summary>
+        [Fact]
+        public void NullArgumentCalls_RemainUnambiguous()
+        {
+            var bare = new MainWindowViewModel(null);
+            var pair = new MainWindowViewModel(null, null);
+            var triple = new MainWindowViewModel(null, null, null);
+
+            Assert.Null(bare.Ptt);
+            Assert.Null(pair.Ptt);
+            Assert.Null(triple.Ptt);
+            Assert.Equal("OFFLINE", triple.ConnectionLabel);
+        }
+
+        // ---- PTT composition: engagement targeting ---------------------------------
+
+        /// <summary>
+        /// With no primary channel and AllChannels false (the default),
+        /// pointer engagement has no target: IsEngaged stays false, no
+        /// PttStateRequested is raised, and no slot reports PttEngaged.
+        /// </summary>
+        [Fact]
+        public void Ptt_NoPrimaryAndAllChannelsFalse_NoTarget()
+        {
+            var vm = new MainWindowViewModel(null, null, new FakeGlobalHotkeyService());
+            Assert.NotNull(vm.Ptt);
+            Assert.False(vm.Ptt.AllChannels);
+            var requests = new List<bool>();
+            vm.Ptt.PttStateRequested += engaged => requests.Add(engaged);
+
+            vm.Ptt.PttPointerDown();
+
+            Assert.False(vm.Ptt.IsEngaged);
+            Assert.Empty(requests);
+            Assert.All(vm.Channels, slot => Assert.False(slot.PttEngaged));
+        }
+
+        /// <summary>
+        /// With AllChannels true and no primary, pointer engagement engages
+        /// exactly the live selected channels: each selected slot reports
+        /// PttEngaged, and releasing clears each of them with a matching
+        /// PttStateRequested(false).
+        /// </summary>
+        [Fact]
+        public void Ptt_AllChannelsTrue_EngagesAllSelected()
+        {
+            var vm = new MainWindowViewModel(null, null, new FakeGlobalHotkeyService());
+            Assert.NotNull(vm.Ptt);
+            var first = vm.Channels[0];
+            var second = vm.Channels[1];
+            vm.ProcessChannelClick(first.Number, setPrimary: false);
+            vm.ProcessChannelClick(second.Number, setPrimary: false);
+            var requests = new List<bool>();
+            vm.Ptt.PttStateRequested += engaged => requests.Add(engaged);
+
+            vm.Ptt.AllChannels = true;
+            vm.Ptt.PttPointerDown();
+
+            Assert.True(vm.Ptt.IsEngaged);
+            Assert.True(first.PttEngaged);
+            Assert.True(second.PttEngaged);
+            Assert.False(vm.Channels[2].PttEngaged);
+            Assert.Equal(new List<bool> { true }, requests);
+
+            vm.Ptt.PttPointerUp();
+
+            Assert.False(vm.Ptt.IsEngaged);
+            Assert.False(first.PttEngaged);
+            Assert.False(second.PttEngaged);
+            Assert.Equal(new List<bool> { true, false }, requests);
+        }
+
+        /// <summary>
+        /// The primary channel wins over the selected channels: with a
+        /// primary set and AllChannels true, engagement targets only the
+        /// primary slot, never the other selected slots.
+        /// </summary>
+        [Fact]
+        public void Ptt_PrimaryWinsOverSelectedChannels()
+        {
+            var vm = new MainWindowViewModel(null, null, new FakeGlobalHotkeyService());
+            Assert.NotNull(vm.Ptt);
+            var first = vm.Channels[0];
+            var third = vm.Channels[2];
+            vm.ProcessChannelClick(first.Number, setPrimary: false);
+            vm.ProcessChannelClick(third.Number, setPrimary: false);
+            vm.ProcessChannelClick(first.Number, setPrimary: true);
+            vm.Ptt.AllChannels = true;
+
+            vm.Ptt.PttPointerDown();
+
+            Assert.True(first.PttEngaged);
+            Assert.False(third.PttEngaged);
+            Assert.True(vm.Ptt.IsEngaged);
+        }
+
+        /// <summary>
+        /// A null hotkey service yields a null Ptt while the systems and
+        /// catalog composition stays fully independent: the FNE manager is
+        /// seeded from the codeplug systems and AudioSettings snapshots the
+        /// catalog exactly as in the two-parameter constructor.
+        /// </summary>
+        [Fact]
+        public void ThreeArgCtor_NullHotkeys_PttNull_SystemsAndCatalogComposeIndependently()
+        {
+            var catalog = new FakeAudioDeviceCatalog(
+                inputs: new[]
+                {
+                    new AudioDeviceInfo(AudioDeviceId.FromKey("mic-1"), AudioDeviceDirection.Input, "Built-in Microphone"),
+                });
+
+            var vm = new MainWindowViewModel(
+                new[]
+                {
+                    new Codeplug.System
+                    {
+                        Name = "TEST-NET",
+                        Identity = "TEST-CALLSIGN",
+                        Address = "127.0.0.1",
+                        Port = 54000,
+                        PeerId = 1u,
+                        Encrypted = true,
+                    },
+                },
+                catalog,
+                null);
+
+            Assert.Null(vm.Ptt);
+            Assert.True(vm.FneConnections.HasSystems);
+            Assert.Single(vm.FneConnections.Systems);
+            Assert.Equal("TEST-NET", vm.FneConnections.Systems[0].SystemName);
+            Assert.NotNull(vm.AudioSettings);
+            Assert.Equal(2, vm.AudioSettings.InputDevices.Count);
+        }
+
+        // ---- PTT composition: live resolver wiring ---------------------------------
+
+        /// <summary>
+        /// The PTT slice is wired to the LIVE dashboard selection, not to a
+        /// construction-time snapshot: selections and the primary made (or
+        /// repointed) after construction are what pointer engagement
+        /// resolves at press time — for both the primary resolver and the
+        /// selected-channels resolver.
+        /// </summary>
+        [Fact]
+        public void Ptt_ResolversAreLive_SelectionChangesAfterConstructionApply()
+        {
+            var vm = new MainWindowViewModel(null, null, new FakeGlobalHotkeyService());
+            Assert.NotNull(vm.Ptt);
+            var first = vm.Channels[0];
+            var second = vm.Channels[1];
+            var third = vm.Channels[2];
+
+            // Primary chosen after construction engages at press time.
+            vm.ProcessChannelClick(first.Number, setPrimary: false);
+            vm.ProcessChannelClick(first.Number, setPrimary: true);
+            vm.Ptt.PttPointerDown();
+            Assert.True(first.PttEngaged);
+            Assert.False(third.PttEngaged);
+            vm.Ptt.PttPointerUp();
+
+            // Repointing the live primary after construction redirects the
+            // next press; the old snapshot is not re-engaged.
+            vm.ProcessChannelClick(first.Number, setPrimary: false); // deselect + clear primary
+            vm.ProcessChannelClick(third.Number, setPrimary: false);
+            vm.ProcessChannelClick(third.Number, setPrimary: true);
+            vm.Ptt.PttPointerDown();
+            Assert.True(third.PttEngaged);
+            Assert.False(first.PttEngaged);
+            vm.Ptt.PttPointerUp();
+
+            // The selected-channels resolver is live too: AllChannels=true
+            // set after construction engages the current selection.
+            vm.ProcessChannelClick(third.Number, setPrimary: false); // deselect + clear primary
+            vm.ProcessChannelClick(second.Number, setPrimary: false);
+            vm.Ptt.AllChannels = true;
+            vm.Ptt.PttPointerDown();
+            Assert.True(second.PttEngaged);
+            Assert.False(first.PttEngaged);
+            Assert.False(third.PttEngaged);
+            vm.Ptt.PttPointerUp();
+        }
+
+        // ---- PTT composition: compile-time shape ------------------------------------
+
+        /// <summary>
+        /// Shape gate for the PTT composition surface: the Ptt property has
+        /// the exact <c>PttCapabilityViewModel</c> type and is get-only,
+        /// MainWindowViewModel stays non-disposable (no IDisposable
+        /// surface), and the exact
+        /// (IReadOnlyList&lt;Codeplug.System&gt;?, IAudioDeviceCatalog?,
+        /// IGlobalHotkeyService?) constructor exists.
+        /// </summary>
+        [Fact]
+        public void PttCompositionShape_ExactPropertyAndConstructor()
+        {
+            var main = typeof(MainWindowViewModel);
+
+            var ptt = main.GetProperty("Ptt");
+            Assert.NotNull(ptt);
+            Assert.Equal(typeof(PttCapabilityViewModel), ptt!.PropertyType);
+            Assert.False(ptt.CanWrite);
+
+            Assert.False(typeof(IDisposable).IsAssignableFrom(main));
+
+            var compose = main.GetConstructor(
+                new[]
+                {
+                    typeof(IReadOnlyList<Codeplug.System>),
+                    typeof(IAudioDeviceCatalog),
+                    typeof(IGlobalHotkeyService),
+                });
             Assert.NotNull(compose);
         }
     }
