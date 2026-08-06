@@ -89,6 +89,119 @@ namespace DvmConsole.Platform.Tests
         }
 
         /// <summary>
+        /// The probe takes logical library names, never OS file names or
+        /// paths: path separators and framework bundle names are rejected
+        /// exactly like platform extensions.
+        /// </summary>
+        [Fact]
+        public void PathAndFrameworkStyleLogicalNames_ThrowArgumentException()
+        {
+            var probe = CreateProbe();
+
+            foreach (var logicalName in new[]
+            {
+                "/usr/lib/libSystem.B.dylib",
+                "CoreAudio.framework/CoreAudio",
+                "CoreAudio.framework",
+                "AudioToolbox.FRAMEWORK",
+                "bin\\vocoder.dll",
+                "C:\\Windows\\System32\\kernel32.dll",
+            })
+            {
+                Assert.Throws<ArgumentException>(
+                    () => probe.Probe(logicalName, new[] { "malloc" }));
+            }
+        }
+
+        /*
+        ** macOS install-path mapping (host-independent)
+        */
+
+        /// <summary>
+        /// On macOS the three P/Invoke framework libraries are resolved to
+        /// their install paths so the OS loader can find them.
+        /// </summary>
+        [Theory]
+        [InlineData("CoreAudio", "/System/Library/Frameworks/CoreAudio.framework/CoreAudio")]
+        [InlineData("AudioToolbox", "/System/Library/Frameworks/AudioToolbox.framework/AudioToolbox")]
+        [InlineData("libSystem", "/usr/lib/libSystem.B.dylib")]
+        public void ResolveLoadName_OnMacOs_MapsTheThreePInvokeLibrariesToInstallPaths(
+            string logicalName, string expectedLoadName)
+        {
+            Assert.Equal(expectedLoadName, NativeLibraryProbe.ResolveLoadName(logicalName, isMacOS: true));
+        }
+
+        /// <summary>
+        /// The macOS mapping matches the three logical names
+        /// case-insensitively, so framework names in any casing still reach
+        /// the right install path.
+        /// </summary>
+        [Theory]
+        [InlineData("coreaudio", "/System/Library/Frameworks/CoreAudio.framework/CoreAudio")]
+        [InlineData("COREAUDIO", "/System/Library/Frameworks/CoreAudio.framework/CoreAudio")]
+        [InlineData("audiotoolbox", "/System/Library/Frameworks/AudioToolbox.framework/AudioToolbox")]
+        [InlineData("AudioTOOLBOX", "/System/Library/Frameworks/AudioToolbox.framework/AudioToolbox")]
+        [InlineData("libsystem", "/usr/lib/libSystem.B.dylib")]
+        [InlineData("LIBSYSTEM", "/usr/lib/libSystem.B.dylib")]
+        public void ResolveLoadName_OnMacOs_MatchesTheThreeLogicalNamesCaseInsensitively(
+            string logicalName, string expectedLoadName)
+        {
+            Assert.Equal(expectedLoadName, NativeLibraryProbe.ResolveLoadName(logicalName, isMacOS: true));
+        }
+
+        /// <summary>
+        /// The macOS mapping is exact: names that merely contain a mapped
+        /// name, and unknown names, fall through unchanged.
+        /// </summary>
+        [Fact]
+        public void ResolveLoadName_OnMacOs_FallsThroughUnchangedForOtherNames()
+        {
+            Assert.Equal("dvmvocoder", NativeLibraryProbe.ResolveLoadName("dvmvocoder", isMacOS: true));
+            Assert.Equal("libc", NativeLibraryProbe.ResolveLoadName("libc", isMacOS: true));
+            Assert.Equal("CoreAudioKit", NativeLibraryProbe.ResolveLoadName("CoreAudioKit", isMacOS: true));
+            Assert.Equal("libSystemExtra", NativeLibraryProbe.ResolveLoadName("libSystemExtra", isMacOS: true));
+        }
+
+        /// <summary>
+        /// Off macOS every logical name passes through unchanged, including
+        /// the three framework names: the mapping is the macOS exception, not
+        /// a general rewrite.
+        /// </summary>
+        [Fact]
+        public void ResolveLoadName_OffMacOs_FallsThroughUnchangedForEveryName()
+        {
+            Assert.Equal("CoreAudio", NativeLibraryProbe.ResolveLoadName("CoreAudio", isMacOS: false));
+            Assert.Equal("AudioToolbox", NativeLibraryProbe.ResolveLoadName("AudioToolbox", isMacOS: false));
+            Assert.Equal("libSystem", NativeLibraryProbe.ResolveLoadName("libSystem", isMacOS: false));
+            Assert.Equal("dvmvocoder", NativeLibraryProbe.ResolveLoadName("dvmvocoder", isMacOS: false));
+        }
+
+        /// <summary>
+        /// The macOS install-path mapping never leaks into public results: a
+        /// probe that applies the mapping and fails still reports the
+        /// caller's exact logical name (original casing included) in the
+        /// result and the diagnostic — never the mapped path.
+        /// </summary>
+        [Fact]
+        public void Probe_WithMacOsMapping_UnloadableFrameworkName_FailurePreservesOriginalLogicalName()
+        {
+            // Forced macOS mapping on any host: "coreaudio" maps to the
+            // CoreAudio framework install path. On non-macOS hosts the load
+            // fails; on macOS the required bogus export is missing. Either
+            // way the failure must carry the caller's logical name, not the
+            // mapped path.
+            var probe = new NativeLibraryProbe(isMacOS: true);
+
+            var result = probe.Probe("coreaudio", new[] { "dvmconsole_export_that_does_not_exist" });
+
+            Assert.False(result.IsSuccess);
+            Assert.Equal("coreaudio", result.LogicalName);
+            Assert.NotNull(result.Diagnostic);
+            Assert.Contains("coreaudio", result.Diagnostic);
+            Assert.DoesNotContain("/System/Library/Frameworks/CoreAudio.framework", result.Diagnostic);
+        }
+
+        /// <summary>
         /// A well-formed logical name that resolves to nothing is a failure
         /// result that preserves the logical name and names it in the
         /// diagnostic.
