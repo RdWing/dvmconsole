@@ -34,6 +34,17 @@ namespace DvmConsole.Avalonia.ViewModels
         private bool allChannels;
         private bool isEngaged;
 
+        /// <summary>
+        /// Hotkey key-down latch: armed by an accepted matching
+        /// <see cref="HotkeyEventType.Pressed"/> and cleared by the
+        /// matching <see cref="HotkeyEventType.Released"/>, a watchdog
+        /// key-up detection, or a hotkey Clear/Set that changes the
+        /// configured gesture. Guards the hotkey path against repeat
+        /// presses (notably the toggle-off of a repeat press in toggle
+        /// mode) and feeds the key-up watchdog.
+        /// </summary>
+        private bool hotkeyDownLatched;
+
         /// <summary>The press-time target snapshot of the current engagement; null while released.</summary>
         private IReadOnlyList<ChannelSlotViewModel>? engagedTargets;
 
@@ -140,6 +151,13 @@ namespace DvmConsole.Avalonia.ViewModels
             var hotkeyChanged = hotkey is not { } existing || existing != gesture;
             hotkey = gesture;
 
+            if (hotkeyChanged)
+            {
+                // A changed gesture invalidates any in-flight key-down
+                // latch; the old gesture's key is no longer watched.
+                hotkeyDownLatched = false;
+            }
+
             var newCapability = hotkeys.GetCapability(gesture);
             var capabilityChanged = newCapability != capability;
             capability = newCapability;
@@ -173,6 +191,7 @@ namespace DvmConsole.Avalonia.ViewModels
             }
 
             hotkey = null;
+            hotkeyDownLatched = false;
             var capabilityChanged = capability != HotkeyCapability.Unsupported;
             capability = HotkeyCapability.Unsupported;
 
@@ -211,7 +230,11 @@ namespace DvmConsole.Avalonia.ViewModels
         /// gesture is configured and equals the incoming one: momentary
         /// maps Pressed to a down and Released to an up; toggle maps
         /// Pressed to a down and ignores Released. Mismatched or
-        /// unconfigured gestures are no-ops.
+        /// unconfigured gestures are no-ops. An accepted matching
+        /// Pressed arms the hotkey key-down latch; repeat Pressed
+        /// events while the latch is armed are ignored in both modes,
+        /// and a matching Released always clears the latch (releasing
+        /// PTT only in momentary mode).
         /// </summary>
         public void ApplyHotkeyPress(HotkeyGesture gesture, HotkeyEventType eventType)
         {
@@ -222,11 +245,49 @@ namespace DvmConsole.Avalonia.ViewModels
 
             if (eventType == HotkeyEventType.Pressed)
             {
+                if (hotkeyDownLatched)
+                {
+                    return;
+                }
+
+                hotkeyDownLatched = true;
                 PressDown();
             }
-            else if (!engagedFromToggle)
+            else
+            {
+                hotkeyDownLatched = false;
+
+                if (!engagedFromToggle)
+                {
+                    Release();
+                }
+            }
+        }
+
+        /// <summary>
+        /// Key-up watchdog tick driven by the shell's physical key-state
+        /// poll. Self-contained: no-op while the hotkey key-down latch is
+        /// clear or the key is physically down. When the latch is armed
+        /// and the key is physically up, the missed key-up is resolved:
+        /// the latch clears and, for an engagement started in momentary
+        /// mode, the idempotent release is forced and
+        /// <see cref="KeyUpMissed"/> is raised exactly once; a toggle
+        /// engagement only clears the latch — it stays engaged and no
+        /// signal is raised. Never touches the pointer path.
+        /// </summary>
+        internal void WatchdogTick(bool keyIsPhysicallyDown)
+        {
+            if (!hotkeyDownLatched || keyIsPhysicallyDown)
+            {
+                return;
+            }
+
+            hotkeyDownLatched = false;
+
+            if (!engagedFromToggle)
             {
                 Release();
+                KeyUpMissed?.Invoke();
             }
         }
 
@@ -344,6 +405,15 @@ namespace DvmConsole.Avalonia.ViewModels
 
         /// <summary>Raised with the requested PTT engagement state (true = engage, false = release).</summary>
         public event Action<bool>? PttStateRequested;
+
+        /// <summary>
+        /// Raised exactly once when the key-up watchdog resolves a
+        /// missed hotkey key-up in momentary mode (the idempotent
+        /// release was forced because the physical key came up without
+        /// a matching <see cref="HotkeyEventType.Released"/>). Internal:
+        /// consumed by the shell; not part of the public PTT surface.
+        /// </summary>
+        internal event Action? KeyUpMissed;
 
         /// <summary>Raised with the requested hotkey gesture (null = clear).</summary>
         public event Action<HotkeyGesture?>? HotkeyChangeRequested;

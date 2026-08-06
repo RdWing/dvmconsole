@@ -16,6 +16,19 @@ namespace DvmConsole.Avalonia
 {
     public partial class MainWindow : Window
     {
+        /// <summary>
+        /// Optional physical key-state probe driving the PTT key-up
+        /// watchdog timer; null keeps the watchdog dormant. Set only by
+        /// the three-dependency constructor.
+        /// </summary>
+        private readonly IKeyboardKeyStateReader? keyStateReader = null;
+
+        /// <summary>
+        /// The single 250 ms PTT key-up watchdog timer; null while no
+        /// key-state reader was supplied or after the window closes.
+        /// </summary>
+        private readonly DispatcherTimer? watchdogTimer = null;
+
         public MainWindow()
             : this(null, null)
         {
@@ -60,6 +73,37 @@ namespace DvmConsole.Avalonia
                 settings.PropertyChanged += AudioSettings_PropertyChanged;
                 ApplyAudioSelections();
             }
+        }
+
+        /// <summary>
+        /// Creates the dashboard window with an audio device catalog, a
+        /// global hotkey service, and an optional physical key-state
+        /// reader composed into the view-model; nulls leave the
+        /// corresponding slices absent. When a key-state reader is
+        /// supplied, exactly one 250 ms dispatcher timer polls the
+        /// currently configured PTT hotkey and drives the PTT slice's
+        /// key-up watchdog, so a hotkey key-up the service never
+        /// delivers cannot leave PTT stuck engaged; the timer stops and
+        /// detaches on window <see cref="Window.Closed"/>. No
+        /// registration, unregistration, or disposal is performed here.
+        /// </summary>
+        public MainWindow(
+            IAudioDeviceCatalog? catalog,
+            IGlobalHotkeyService? hotkeys,
+            IKeyboardKeyStateReader? keyStateReader)
+            : this(catalog, hotkeys)
+        {
+            if (keyStateReader is null)
+            {
+                return;
+            }
+
+            this.keyStateReader = keyStateReader;
+
+            watchdogTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(250) };
+            watchdogTimer.Tick += OnWatchdogTick;
+            watchdogTimer.Start();
+            Closed += OnWindowClosed;
         }
 
         /// <summary>
@@ -324,6 +368,49 @@ namespace DvmConsole.Avalonia
                     ptt.ApplyHotkeyPress(e.Gesture, e.EventType);
                 }
             });
+
+        /// <summary>
+        /// Drives the PTT key-up watchdog once per timer tick: probes
+        /// the currently configured hotkey gesture's physical key state
+        /// through the injected reader and forwards the result to the
+        /// PTT capability slice. Ticks with no PTT slice or no
+        /// configured gesture are skipped. A throwing probe never
+        /// force-releases PTT — the tick is skipped and a diagnostic is
+        /// written to the debug output only.
+        /// </summary>
+        private void OnWatchdogTick(object? sender, EventArgs e)
+        {
+            if (DataContext is not MainWindowViewModel viewModel
+                || viewModel.Ptt is not { } ptt
+                || ptt.Hotkey is not { } gesture)
+            {
+                return;
+            }
+
+            try
+            {
+                ptt.WatchdogTick(keyStateReader!.IsKeyDown(gesture));
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine(
+                    $"PTT key-state probe failed; watchdog tick skipped: {ex}");
+            }
+        }
+
+        /// <summary>
+        /// Stops and detaches the PTT key-up watchdog timer when the
+        /// window closes, releasing the timer and its capture of this
+        /// window.
+        /// </summary>
+        private void OnWindowClosed(object? sender, EventArgs e)
+        {
+            if (watchdogTimer is { } timer)
+            {
+                timer.Tick -= OnWatchdogTick;
+                timer.Stop();
+            }
+        }
 
         /// <summary>
         /// Thin click wiring for the Set hotkey button: begins window-local
