@@ -36,6 +36,7 @@
   <ItemGroup>
     <ProjectReference Include="..\DvmConsole.Core\DvmConsole.Core.csproj" />
     <ProjectReference Include="..\DvmConsole.Platform\DvmConsole.Platform.csproj" />
+    <ProjectReference Include="..\fnecore\fnecore.csproj" />
   </ItemGroup>
 
 </Project>

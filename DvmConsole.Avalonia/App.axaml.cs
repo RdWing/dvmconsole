@@ -5,8 +5,10 @@ using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Markup.Xaml;
 using Avalonia.Threading;
 using dvmconsole;
+using DvmConsole.Avalonia.Audio;
 using DvmConsole.Avalonia.Dialogs;
 using DvmConsole.Avalonia.Persistence;
+using DvmConsole.Avalonia.Services;
 using DvmConsole.Avalonia.ViewModels;
 using DvmConsole.Core.Configuration;
 using DvmConsole.Platform;
@@ -156,12 +158,20 @@ namespace DvmConsole.Avalonia
                 // Compose the real dual-mode libvocoder adapter when the
                 // startup readiness probe found the library; otherwise
                 // keep the null codec pair so the router stays fully
-                // wired while decoding/encoding is inert. The stub
-                // sender counts units without sending — the fnecore
-                // traffic adapter lands in a follow-on slice.
+                // wired while decoding/encoding is inert. The fnecore
+                // traffic sender resolves each transmit target's live
+                // adapter through the transport factory shared with the
+                // FNE slice, so PTT traffic flows once the system's
+                // connection is started.
                 LibVocoderVoiceCodec? voiceCodec = vocoderStatus.IsReady
                     ? new LibVocoderVoiceCodec(new LibVocoderNative())
                     : null;
+
+                // The transport factory is shared by the FNE slice and
+                // the voice traffic sender: the connection service
+                // creates adapters through it (registered per system
+                // name) and the sender resolves them at transmit time.
+                var fnecoreTransportFactory = new FnecoreTransportFactory();
 
                 var mainWindow = new MainWindow(
                     catalog,
@@ -173,7 +183,8 @@ namespace DvmConsole.Avalonia
                     codeplug.Codeplug?.Systems,
                     (IVoiceFrameDecoder?)voiceCodec ?? new NullVoiceFrameDecoder(),
                     (IVoiceFrameEncoder?)voiceCodec ?? new NullVoiceFrameEncoder(),
-                    new StubVoiceTrafficSender());
+                    new FnecoreVoiceTrafficSender(fnecoreTransportFactory.ResolveAdapter),
+                    fnecoreTransportFactory);
                 mainWindow.FileDialogService =
                     new AvaloniaFileDialogService(mainWindow.StorageProvider);
                 desktop.MainWindow = mainWindow;

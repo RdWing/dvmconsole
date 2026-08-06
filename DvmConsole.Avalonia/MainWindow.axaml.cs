@@ -53,6 +53,24 @@ namespace DvmConsole.Avalonia
         private FneConnectionServiceBridge? fneConnectionBridge = null;
 
         /// <summary>
+        /// The fnecore transport factory backing the FNE slice; null
+        /// until the full-arity constructor composes it (from the
+        /// injected factory or a fresh instance). The factory registry
+        /// is shared with the voice traffic sender composed by
+        /// <see cref="App"/> and its <see cref="FnecoreTransportFactory.OnCreated"/>
+        /// hook subscribes the receive glue to every adapter.
+        /// </summary>
+        private FnecoreTransportFactory? fnecoreTransportFactory = null;
+
+        /// <summary>
+        /// Routes received FNE voice frames into the talkgroup audio
+        /// router; null while no audio router is composed or after the
+        /// window closes. Frames arriving after close are dropped by
+        /// the glue's disposed state.
+        /// </summary>
+        private FneReceiveGlue? fneReceiveGlue = null;
+
+        /// <summary>
         /// Headless talkgroup audio router composed when an audio stream
         /// factory is supplied to the full-arity constructor; null keeps
         /// the audio slice dormant (headless tests are unaffected). The
@@ -134,8 +152,11 @@ namespace DvmConsole.Avalonia
         /// reader, optional audio-settings persistence, the startup
         /// vocoder-readiness result, an optional audio stream factory,
         /// the optional codeplug systems seeding the FNE slice, and the
-        /// optional voice codec/traffic seams for the audio router. The
-        /// factory, readiness, systems, codec and sender parameters are
+        /// optional voice codec/traffic seams for the audio router, and
+        /// the optional FNE transport factory backing the connection
+        /// slice. The
+        /// factory, readiness, systems, codec, sender and transport
+        /// parameters are
         /// last so the pre-existing four-argument constructor remains
         /// source-compatible, including null-literal calls. When a
         /// key-state reader is present, exactly one 250 ms dispatcher
@@ -147,7 +168,10 @@ namespace DvmConsole.Avalonia
         /// the injected codec and traffic seams — the null codec pair and
         /// stub sender when none are supplied, until the real adapters
         /// land — and disposed on window close after the FNE slice;
-        /// otherwise the audio slice stays dormant. A null or empty
+        /// otherwise the audio slice stays dormant. The receive glue is
+        /// composed with the router and subscribes to every adapter the
+        /// transport factory creates, routing received voice frames into
+        /// the router. A null or empty
         /// systems list leaves the FNE slice dormant with zero rows; a
         /// populated list seeds the connection manager and service with
         /// the codeplug's real systems.
@@ -162,7 +186,8 @@ namespace DvmConsole.Avalonia
             IReadOnlyList<Codeplug.System>? systems = null,
             IVoiceFrameDecoder? voiceDecoder = null,
             IVoiceFrameEncoder? voiceEncoder = null,
-            IVoiceTrafficSender? voiceSender = null)
+            IVoiceTrafficSender? voiceSender = null,
+            IFneTransportFactory? transportFactory = null)
         {
             InitializeComponent();
             DataContext = new MainWindowViewModel(systems, catalog, hotkeys, persistence, vocoderStatus);
@@ -171,10 +196,16 @@ namespace DvmConsole.Avalonia
             // a null or empty list (missing/failed load) keeps it
             // dormant — no transport factory call is ever made and no
             // row can ever raise a request. The bridge is inert with
-            // zero rows and safe to construct in headless tests.
+            // zero rows and safe to construct in headless tests. The
+            // injected transport factory (the FnecoreTransportFactory
+            // shared with App's voice traffic sender) is used when
+            // supplied; otherwise a fresh fnecore-backed factory is
+            // composed.
             if (DataContext is MainWindowViewModel viewModel)
             {
-                fneConnectionService = new FneConnectionService(systems, new UnavailableFneTransportFactory());
+                var factory = transportFactory ?? new FnecoreTransportFactory();
+                fnecoreTransportFactory = factory as FnecoreTransportFactory;
+                fneConnectionService = new FneConnectionService(systems, factory);
                 fneConnectionBridge = new FneConnectionServiceBridge(fneConnectionService, viewModel.FneConnections);
                 fneConnectionBridge.Attach();
             }
@@ -199,6 +230,25 @@ namespace DvmConsole.Avalonia
                     encoder,
                     sender,
                     () => audioViewModel.AudioSettings?.SelectedOutputId ?? AudioDeviceId.Default);
+
+                // Wire the FNE receive path into the router: the glue
+                // classifies adapter frame events and routes voice
+                // frames by talkgroup key. The factory's creation hook
+                // subscribes the glue to every adapter as the
+                // connection service creates it — including the fresh
+                // adapters a Restart creates — so no service or bridge
+                // change is needed.
+                fneReceiveGlue = new FneReceiveGlue(
+                    (key, frame, mode) => talkgroupAudioRouter!.RouteVoiceFrame(key, frame, mode));
+
+                if (fnecoreTransportFactory is { } factory)
+                {
+                    factory.OnCreated += adapter =>
+                    {
+                        adapter.DmrFrameReceived += e => fneReceiveGlue?.OnDmrFrame(adapter.ConfiguredSystemName, e);
+                        adapter.P25FrameReceived += e => fneReceiveGlue?.OnP25Frame(adapter.ConfiguredSystemName, e);
+                    };
+                }
 
                 if (audioViewModel.Ptt is { } ptt)
                 {
@@ -529,10 +579,13 @@ namespace DvmConsole.Avalonia
 
         /// <summary>
         /// Stops and detaches the PTT key-up watchdog timer and tears
-        /// down the headless FNE slice and the talkgroup audio router
+        /// down the headless FNE slice, the receive glue and the
+        /// talkgroup audio router
         /// when the window closes: the bridge detaches first (stopping
         /// event flow in both directions), then the service disconnects
-        /// and disposes every transport and cancels all schedulers, and
+        /// and disposes every transport and cancels all schedulers, the
+        /// glue detaches its routing delegate so late frames are
+        /// dropped, and
         /// finally the router stops every audio pipeline and disposes
         /// the shared factory. All disposals are idempotent, so a
         /// repeated close event is harmless.
@@ -547,6 +600,7 @@ namespace DvmConsole.Avalonia
 
             fneConnectionBridge?.Dispose();
             fneConnectionService?.Dispose();
+            fneReceiveGlue?.Dispose();
 
             if (talkgroupAudioRouter is { } router)
             {
