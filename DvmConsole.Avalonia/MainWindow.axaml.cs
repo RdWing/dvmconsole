@@ -6,6 +6,7 @@ using Avalonia.Interactivity;
 using DvmConsole.Avalonia.Dialogs;
 using DvmConsole.Avalonia.Input;
 using DvmConsole.Avalonia.ViewModels;
+using DvmConsole.Platform.Audio;
 using DvmConsole.Platform.Dialogs;
 
 namespace DvmConsole.Avalonia
@@ -13,9 +14,19 @@ namespace DvmConsole.Avalonia
     public partial class MainWindow : Window
     {
         public MainWindow()
+            : this(null)
+        {
+        }
+
+        /// <summary>
+        /// Creates the dashboard window with the given audio device
+        /// catalog composed into the view-model; a null catalog leaves
+        /// the audio-settings slice absent.
+        /// </summary>
+        public MainWindow(IAudioDeviceCatalog? catalog)
         {
             InitializeComponent();
-            DataContext = new MainWindowViewModel();
+            DataContext = new MainWindowViewModel(null, catalog);
         }
 
         /// <summary>

@@ -28,6 +28,19 @@
 * implements INotifyPropertyChanged with writable IsSelected/IsPrimary
 * while Number/Label/Talkgroup/Status stay read-only.
 *
+* Audio-settings composition contract (RED phase for the bounded
+* composition slice): the parameterless constructor stays catalog-free —
+* AudioSettings is null and no catalog method is ever consulted — with
+* the OFFLINE state, four channel slots and empty FneConnections
+* untouched. The exact two-parameter constructor
+* (IReadOnlyList<Codeplug.System>?, IAudioDeviceCatalog?) composes a
+* get-only AudioSettingsViewModel from the injected catalog: stable
+* across reads, system-default row first then catalog devices in source
+* order, independent of the FNE manager; a null catalog yields
+* AudioSettings null. The composition adds no IDisposable surface and no
+* event subscription requirement — the audio slice must work with zero
+* wiring beyond the constructor argument.
+*
 * The tests are fully headless and pure managed: no Avalonia.Headless
 * package, window, display, native call, file, or secret is involved.
 *
@@ -36,7 +49,9 @@
 */
 #nullable enable
 using System.ComponentModel;
+using dvmconsole;
 using DvmConsole.Avalonia.ViewModels;
+using DvmConsole.Platform.Audio;
 using Xunit;
 
 namespace DvmConsole.Avalonia.Tests
@@ -633,6 +648,254 @@ namespace DvmConsole.Avalonia.Tests
             Assert.Equal(typeof(string), slot.GetProperty(nameof(ChannelSlotViewModel.Status))!.PropertyType);
             Assert.Equal(typeof(bool), slot.GetProperty(nameof(ChannelSlotViewModel.IsSelected))!.PropertyType);
             Assert.Equal(typeof(bool), slot.GetProperty(nameof(ChannelSlotViewModel.IsPrimary))!.PropertyType);
+        }
+
+        // ---- Audio settings composition: fixture ----------------------------------
+
+        /// <summary>
+        /// Immutable, headless <see cref="IAudioDeviceCatalog"/> fake: the
+        /// direction lists are supplied snapshots, defaults are looked up
+        /// by the <see cref="AudioDeviceId.IsDefault"/> marker, ids resolve
+        /// case-insensitively across both directions, and disposal is
+        /// completed. A static access counter lets tests prove the
+        /// parameterless constructor never touches a catalog. No events
+        /// and no native code — the slice under test must never depend on
+        /// either.
+        /// </summary>
+        private sealed class FakeAudioDeviceCatalog : IAudioDeviceCatalog
+        {
+            /// <summary>Total catalog method invocations since the last reset.</summary>
+            public static int AccessCount { get; private set; }
+
+            /// <summary>Resets <see cref="AccessCount"/> to zero.</summary>
+            public static void ResetAccessCount() => AccessCount = 0;
+
+            private readonly IReadOnlyList<AudioDeviceInfo> inputs;
+            private readonly IReadOnlyList<AudioDeviceInfo> outputs;
+
+            /// <summary>
+            /// Creates a fake serving the given snapshot lists (empty when
+            /// null).
+            /// </summary>
+            public FakeAudioDeviceCatalog(
+                IReadOnlyList<AudioDeviceInfo>? inputs = null,
+                IReadOnlyList<AudioDeviceInfo>? outputs = null)
+            {
+                this.inputs = inputs ?? Array.Empty<AudioDeviceInfo>();
+                this.outputs = outputs ?? Array.Empty<AudioDeviceInfo>();
+            }
+
+            public IReadOnlyList<AudioDeviceInfo> GetInputs()
+            {
+                AccessCount++;
+                return inputs;
+            }
+
+            public IReadOnlyList<AudioDeviceInfo> GetOutputs()
+            {
+                AccessCount++;
+                return outputs;
+            }
+
+            public AudioDeviceInfo? GetDefaultInput()
+            {
+                AccessCount++;
+                return inputs.FirstOrDefault(d => d.Id.IsDefault);
+            }
+
+            public AudioDeviceInfo? GetDefaultOutput()
+            {
+                AccessCount++;
+                return outputs.FirstOrDefault(d => d.Id.IsDefault);
+            }
+
+            public bool TryFind(AudioDeviceId id, out AudioDeviceInfo? device)
+            {
+                AccessCount++;
+                if (id.IsDefault)
+                {
+                    device = GetDefaultOutput() ?? GetDefaultInput();
+                    return device is not null;
+                }
+
+                device = inputs.Concat(outputs).FirstOrDefault(d =>
+                    string.Equals(d.Id.Value, id.Value, StringComparison.OrdinalIgnoreCase));
+                return device is not null;
+            }
+
+            public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+        }
+
+        // ---- Audio settings composition: parameterless constructor -------------------
+
+        /// <summary>
+        /// The parameterless constructor stays catalog-free: AudioSettings
+        /// is null, no catalog method is ever consulted, and the offline
+        /// dashboard (OFFLINE label, four channel slots, empty FNE
+        /// manager) is untouched.
+        /// </summary>
+        [Fact]
+        public void DefaultCtor_AudioSettingsNull_NoCatalogAccess()
+        {
+            FakeAudioDeviceCatalog.ResetAccessCount();
+
+            var vm = new MainWindowViewModel();
+
+            Assert.Null(vm.AudioSettings);
+            Assert.Equal(0, FakeAudioDeviceCatalog.AccessCount);
+            Assert.Equal("OFFLINE", vm.ConnectionLabel);
+            Assert.Equal("Awaiting FNE configuration", vm.ConnectionDetail);
+            Assert.Equal(4, vm.Channels.Count);
+            Assert.False(vm.FneConnections.HasSystems);
+        }
+
+        // ---- Audio settings composition: two-parameter constructor -------------------
+
+        /// <summary>
+        /// The two-parameter constructor composes a live
+        /// AudioSettingsViewModel from the injected catalog: the property
+        /// is stable across reads, and each direction lists the
+        /// system-default row first followed by the catalog devices in
+        /// source order.
+        /// </summary>
+        [Fact]
+        public void TwoArgCtor_WithCatalog_AudioSettingsComposed()
+        {
+            var catalog = new FakeAudioDeviceCatalog(
+                inputs: new[]
+                {
+                    new AudioDeviceInfo(AudioDeviceId.FromKey("mic-1"), AudioDeviceDirection.Input, "Built-in Microphone"),
+                    new AudioDeviceInfo(AudioDeviceId.FromKey("mic-2"), AudioDeviceDirection.Input, "USB Microphone"),
+                },
+                outputs: new[]
+                {
+                    new AudioDeviceInfo(AudioDeviceId.FromKey("spk-1"), AudioDeviceDirection.Output, "Built-in Speakers"),
+                });
+
+            var vm = new MainWindowViewModel(null, catalog);
+
+            Assert.NotNull(vm.AudioSettings);
+            Assert.Same(vm.AudioSettings, vm.AudioSettings);
+
+            Assert.Equal(3, vm.AudioSettings.InputDevices.Count);
+            Assert.True(vm.AudioSettings.InputDevices[0].Id.IsDefault);
+            Assert.Equal("mic-1", vm.AudioSettings.InputDevices[1].Id.Value);
+            Assert.Equal("Built-in Microphone", vm.AudioSettings.InputDevices[1].Name);
+            Assert.Equal("mic-2", vm.AudioSettings.InputDevices[2].Id.Value);
+
+            Assert.Equal(2, vm.AudioSettings.OutputDevices.Count);
+            Assert.True(vm.AudioSettings.OutputDevices[0].Id.IsDefault);
+            Assert.Equal("spk-1", vm.AudioSettings.OutputDevices[1].Id.Value);
+            Assert.Equal("Built-in Speakers", vm.AudioSettings.OutputDevices[1].Name);
+        }
+
+        /// <summary>
+        /// Systems and catalog compose independently through the
+        /// two-parameter constructor: the FNE manager is seeded from the
+        /// codeplug systems while AudioSettings snapshots the catalog;
+        /// neither affects the other.
+        /// </summary>
+        [Fact]
+        public void TwoArgCtor_SystemsAndCatalog_ComposeIndependently()
+        {
+            var catalog = new FakeAudioDeviceCatalog(
+                inputs: new[]
+                {
+                    new AudioDeviceInfo(AudioDeviceId.FromKey("mic-1"), AudioDeviceDirection.Input, "Built-in Microphone"),
+                });
+
+            var vm = new MainWindowViewModel(
+                new[]
+                {
+                    new Codeplug.System
+                    {
+                        Name = "TEST-NET",
+                        Identity = "TEST-CALLSIGN",
+                        Address = "127.0.0.1",
+                        Port = 54000,
+                        PeerId = 1u,
+                        Encrypted = true,
+                    },
+                },
+                catalog);
+
+            Assert.True(vm.FneConnections.HasSystems);
+            Assert.Single(vm.FneConnections.Systems);
+            Assert.Equal("TEST-NET", vm.FneConnections.Systems[0].SystemName);
+
+            Assert.NotNull(vm.AudioSettings);
+            Assert.Equal(2, vm.AudioSettings.InputDevices.Count);
+            Assert.Equal("mic-1", vm.AudioSettings.InputDevices[1].Id.Value);
+        }
+
+        /// <summary>
+        /// Null-catalog compatibility: (null, null) yields a valid
+        /// dashboard whose AudioSettings is null, with the offline state,
+        /// four channel slots and an empty FNE manager intact.
+        /// </summary>
+        [Fact]
+        public void TwoArgCtor_NullCatalog_AudioSettingsNull()
+        {
+            var vm = new MainWindowViewModel(null, null);
+
+            Assert.Null(vm.AudioSettings);
+            Assert.Equal("OFFLINE", vm.ConnectionLabel);
+            Assert.Equal(4, vm.Channels.Count);
+            Assert.False(vm.FneConnections.HasSystems);
+        }
+
+        /// <summary>
+        /// A null catalog with systems still seeds the FNE manager, while
+        /// AudioSettings stays null.
+        /// </summary>
+        [Fact]
+        public void TwoArgCtor_NullCatalogWithSystems_FneComposesOnly()
+        {
+            var vm = new MainWindowViewModel(
+                new[]
+                {
+                    new Codeplug.System
+                    {
+                        Name = "TEST-NET",
+                        Identity = "TEST-CALLSIGN",
+                        Address = "127.0.0.1",
+                        Port = 54000,
+                        PeerId = 1u,
+                        Encrypted = true,
+                    },
+                },
+                null);
+
+            Assert.True(vm.FneConnections.HasSystems);
+            Assert.Null(vm.AudioSettings);
+        }
+
+        // ---- Audio settings composition: compile-time shape ---------------------------
+
+        /// <summary>
+        /// Shape gate for the audio-settings composition surface: the
+        /// AudioSettings property has the exact
+        /// <c>AudioSettingsViewModel</c> type and is get-only,
+        /// MainWindowViewModel stays non-disposable (no IDisposable
+        /// surface, no event subscription requirement), and the exact
+        /// (IReadOnlyList&lt;Codeplug.System&gt;?, IAudioDeviceCatalog?)
+        /// constructor exists.
+        /// </summary>
+        [Fact]
+        public void AudioSettingsCompositionShape_ExactPropertyAndConstructor()
+        {
+            var main = typeof(MainWindowViewModel);
+
+            var audioSettings = main.GetProperty(nameof(MainWindowViewModel.AudioSettings));
+            Assert.NotNull(audioSettings);
+            Assert.Equal(typeof(AudioSettingsViewModel), audioSettings!.PropertyType);
+            Assert.False(audioSettings.CanWrite);
+
+            Assert.False(typeof(IDisposable).IsAssignableFrom(main));
+
+            var compose = main.GetConstructor(
+                new[] { typeof(IReadOnlyList<Codeplug.System>), typeof(IAudioDeviceCatalog) });
+            Assert.NotNull(compose);
         }
     }
 }

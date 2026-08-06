@@ -4,6 +4,7 @@ using System;
 using System.Collections.Generic;
 using System.ComponentModel;
 using dvmconsole;
+using DvmConsole.Platform.Audio;
 
 namespace DvmConsole.Avalonia.ViewModels
 {
@@ -16,8 +17,9 @@ namespace DvmConsole.Avalonia.ViewModels
     /// <see cref="SelectedChannelsManager{T}"/> with literal WPF
     /// <c>ProcessSelectionClick</c> semantics via
     /// <see cref="ProcessChannelClick"/>. This class is deliberately free
-    /// of Avalonia, protocol, audio, and network behavior so it can be
-    /// driven headlessly.
+    /// of Avalonia, protocol, network, and native behavior; the optional
+    /// audio-settings slice is composed only from an injected portable
+    /// catalog so it can still be driven headlessly.
     /// </summary>
     public sealed class MainWindowViewModel : INotifyPropertyChanged
     {
@@ -38,6 +40,14 @@ namespace DvmConsole.Avalonia.ViewModels
         /// changes.
         /// </summary>
         public FneConnectionManagerViewModel FneConnections { get; }
+
+        /// <summary>
+        /// The audio-settings slice composed from the injected device
+        /// catalog, or null when no catalog was provided. Get-only and
+        /// constructed exactly once; the slice performs no catalog event
+        /// subscription and owns no disposable resources.
+        /// </summary>
+        public AudioSettingsViewModel? AudioSettings { get; }
 
         /// <summary>
         /// The connection state label, e.g. <c>OFFLINE</c> or
@@ -103,9 +113,24 @@ namespace DvmConsole.Avalonia.ViewModels
         /// <summary>
         /// Creates the offline dashboard with exactly four channel slots
         /// and an FNE connection manager seeded from the given codeplug
-        /// systems; a null list yields an empty manager.
+        /// systems; a null list yields an empty manager. No audio catalog
+        /// is composed.
         /// </summary>
         public MainWindowViewModel(IReadOnlyList<Codeplug.System>? systems)
+            : this(systems, null)
+        {
+        }
+
+        /// <summary>
+        /// Creates the offline dashboard with exactly four channel slots,
+        /// an FNE connection manager seeded from the given codeplug
+        /// systems, and an audio-settings slice composed from the given
+        /// device catalog; null systems yield an empty manager and a null
+        /// catalog yields a null <see cref="AudioSettings"/>.
+        /// </summary>
+        public MainWindowViewModel(
+            IReadOnlyList<Codeplug.System>? systems,
+            IAudioDeviceCatalog? catalog)
         {
             FneConnections = new FneConnectionManagerViewModel(systems);
             FneConnections.PropertyChanged += OnFneConnectionManagerChanged;
@@ -128,6 +153,8 @@ namespace DvmConsole.Avalonia.ViewModels
 
             SelectedChannels = selectedChannelsManager.GetSelectedChannels();
             PrimaryChannel = null;
+
+            AudioSettings = catalog is null ? null : new AudioSettingsViewModel(catalog);
         }
 
         private void OnFneConnectionManagerChanged(
