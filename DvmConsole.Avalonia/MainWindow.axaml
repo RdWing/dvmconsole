@@ -293,9 +293,52 @@
                     <Border Grid.Column="2" Classes="panel" Padding="18">
                         <StackPanel Spacing="14">
                             <TextBlock Classes="kicker" Text="PTT CAPABILITY" />
-                            <TextBlock Classes="data-value" Text="NOT ATTACHED" />
-                            <TextBlock Classes="muted"
-                                       Text="Global hotkey capability and in-window PTT controls will be wired with the console command state machine." />
+
+                            <StackPanel Spacing="10"
+                                        IsVisible="{Binding Ptt, Converter={x:Static conv:ObjectConverters.IsNull}}">
+                                <TextBlock Classes="data-value" Text="Global hotkey capability not attached" />
+                                <TextBlock Classes="muted"
+                                           Text="No global hotkey service is composed for this session; PTT engagement attaches with the macOS hotkey backend gate." />
+                            </StackPanel>
+
+                            <StackPanel Spacing="12"
+                                        IsVisible="{Binding Ptt, Converter={x:Static conv:ObjectConverters.IsNotNull}}">
+                                <StackPanel Spacing="6">
+                                    <TextBlock Classes="data-label" Text="HOTKEY" />
+                                    <TextBlock Classes="data-value" Text="{Binding Ptt.Hotkey}" />
+                                </StackPanel>
+
+                                <StackPanel Spacing="6">
+                                    <TextBlock Classes="data-label" Text="CAPABILITY" />
+                                    <TextBlock Classes="data-value" Text="{Binding Ptt.Capability}" />
+                                </StackPanel>
+
+                                <Grid ColumnDefinitions="*,Auto">
+                                    <TextBlock Classes="data-label"
+                                               Text="TOGGLE MODE"
+                                               VerticalAlignment="Center" />
+                                    <ToggleSwitch Grid.Column="1"
+                                                  IsChecked="{Binding Ptt.ToggleMode, Mode=TwoWay}"
+                                                  VerticalAlignment="Center" />
+                                </Grid>
+
+                                <Grid ColumnDefinitions="*,Auto">
+                                    <TextBlock Classes="data-label"
+                                               Text="ALL CHANNELS"
+                                               VerticalAlignment="Center" />
+                                    <ToggleSwitch Grid.Column="1"
+                                                  IsChecked="{Binding Ptt.AllChannels, Mode=TwoWay}"
+                                                  VerticalAlignment="Center" />
+                                </Grid>
+
+                                <StackPanel Spacing="6">
+                                    <TextBlock Classes="data-label" Text="ENGAGEMENT" />
+                                    <TextBlock Classes="data-value" Text="{Binding Ptt.IsEngaged}" />
+                                </StackPanel>
+
+                                <TextBlock Classes="muted"
+                                           Text="Hotkey events are routed on the UI thread; registration attaches with the macOS backend gate." />
+                            </StackPanel>
                         </StackPanel>
                     </Border>
                 </Grid>

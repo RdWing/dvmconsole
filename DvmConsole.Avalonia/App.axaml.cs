@@ -9,6 +9,7 @@ using DvmConsole.Avalonia.ViewModels;
 using DvmConsole.Platform;
 using DvmConsole.Platform.Audio;
 using DvmConsole.Platform.Audio.Mac;
+using DvmConsole.Platform.Hotkeys;
 
 namespace DvmConsole.Avalonia
 {
@@ -49,12 +50,27 @@ namespace DvmConsole.Avalonia
             }
         }
 
+        /// <summary>
+        /// Creates the global hotkey service for the application
+        /// lifetime. Until an OS-specific event-tap or Win32 hotkey
+        /// implementation is selected, the unavailable fallback is
+        /// composed on every host — macOS included: every gesture
+        /// reports unsupported and no hotkey event ever fires, so the
+        /// PTT slice stays unconfigured and the window shows the
+        /// capability placeholder. The application owns the service for
+        /// its whole lifetime; disposal is handled by a later concrete
+        /// factory/lifecycle slice.
+        /// </summary>
+        private static IGlobalHotkeyService CreateGlobalHotkeyService()
+            => new UnavailableGlobalHotkeyService();
+
         public override void OnFrameworkInitializationCompleted()
         {
             if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
             {
                 var catalog = CreateAudioDeviceCatalog();
-                var mainWindow = new MainWindow(catalog);
+                var hotkeys = CreateGlobalHotkeyService();
+                var mainWindow = new MainWindow(catalog, hotkeys);
                 mainWindow.FileDialogService =
                     new AvaloniaFileDialogService(mainWindow.StorageProvider);
                 desktop.MainWindow = mainWindow;

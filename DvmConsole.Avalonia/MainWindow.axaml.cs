@@ -4,32 +4,55 @@ using System.ComponentModel;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Interactivity;
+using Avalonia.Threading;
 using DvmConsole.Avalonia.Dialogs;
 using DvmConsole.Avalonia.Input;
 using DvmConsole.Avalonia.ViewModels;
 using DvmConsole.Platform.Audio;
 using DvmConsole.Platform.Dialogs;
+using DvmConsole.Platform.Hotkeys;
 
 namespace DvmConsole.Avalonia
 {
     public partial class MainWindow : Window
     {
         public MainWindow()
-            : this(null)
+            : this(null, null)
         {
         }
 
         /// <summary>
         /// Creates the dashboard window with the given audio device
         /// catalog composed into the view-model; a null catalog leaves
-        /// the audio-settings slice absent. When the slice is present,
-        /// this window subscribes once to its property changes and
-        /// applies the saved selections to the audio ComboBoxes.
+        /// the audio-settings slice absent, and no hotkey service is
+        /// composed so the PTT slice is absent too.
         /// </summary>
         public MainWindow(IAudioDeviceCatalog? catalog)
+            : this(catalog, null)
+        {
+        }
+
+        /// <summary>
+        /// Creates the dashboard window with the given audio device
+        /// catalog and global hotkey service composed into the
+        /// view-model; nulls leave the corresponding slices absent.
+        /// When the audio slice is present, this window subscribes once
+        /// to its property changes and applies the saved selections to
+        /// the audio ComboBoxes. When a hotkey service is present, this
+        /// window subscribes once to its
+        /// <see cref="IGlobalHotkeyService.HotkeyPressed"/> event and
+        /// marshals every event to the UI thread. No registration,
+        /// unregistration, or disposal is performed here.
+        /// </summary>
+        public MainWindow(IAudioDeviceCatalog? catalog, IGlobalHotkeyService? hotkeys)
         {
             InitializeComponent();
-            DataContext = new MainWindowViewModel(null, catalog);
+            DataContext = new MainWindowViewModel(null, catalog, hotkeys);
+
+            if (hotkeys is not null)
+            {
+                hotkeys.HotkeyPressed += OnHotkeyPressed;
+            }
 
             if (DataContext is MainWindowViewModel viewModel
                 && viewModel.AudioSettings is { } settings)
@@ -222,5 +245,23 @@ namespace DvmConsole.Avalonia
 
             viewModel.FneConnections.RestartSystem(row.SystemName);
         }
+
+        /// <summary>
+        /// Routes a global hotkey event from the injected service onto
+        /// the UI thread and forwards it to the PTT capability slice.
+        /// The event may arrive on any thread the service raises from;
+        /// the unconditional post guarantees the slice is only ever
+        /// touched on the UI thread. Safe no-op when the view-model or
+        /// the PTT slice is absent; the slice itself ignores gestures
+        /// that are not configured.
+        /// </summary>
+        private void OnHotkeyPressed(object? sender, HotkeyEventArgs e)
+            => Dispatcher.UIThread.Post(() =>
+            {
+                if (DataContext is MainWindowViewModel vm && vm.Ptt is { } ptt)
+                {
+                    ptt.ApplyHotkeyPress(e.Gesture, e.EventType);
+                }
+            });
     }
 }
