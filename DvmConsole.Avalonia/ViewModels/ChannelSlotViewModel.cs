@@ -8,14 +8,16 @@ namespace DvmConsole.Avalonia.ViewModels
     /// View-model for one operator-dashboard channel slot. The identity of
     /// a slot is immutable: number, label, and the unassigned defaults
     /// (NO TALKGROUP, IDLE) are fixed at construction. The live selection
-    /// state (<see cref="IsSelected"/>, <see cref="IsPrimary"/>) is
-    /// writable and observable, driven by the dashboard's
-    /// <c>SelectedChannelsManager</c>.
+    /// state (<see cref="IsSelected"/>, <see cref="IsPrimary"/>) and the
+    /// PTT engagement state (<see cref="PttEngaged"/>) are writable and
+    /// observable, driven by the dashboard's
+    /// <c>SelectedChannelsManager</c> and PTT state slice.
     /// </summary>
     public sealed class ChannelSlotViewModel : INotifyPropertyChanged
     {
         private bool isSelected;
         private bool isPrimary;
+        private bool pttEngaged;
 
         /// <summary>
         /// Creates a channel slot with the given 1-based number and display
@@ -84,8 +86,27 @@ namespace DvmConsole.Avalonia.ViewModels
         }
 
         /// <summary>
-        /// Raised when <see cref="IsSelected"/> or <see cref="IsPrimary"/>
-        /// changes.
+        /// True when this slot is engaged for push-to-talk. Raises
+        /// <see cref="PropertyChanged"/> only when the value changes.
+        /// </summary>
+        public bool PttEngaged
+        {
+            get => pttEngaged;
+            set
+            {
+                if (pttEngaged == value)
+                {
+                    return;
+                }
+
+                pttEngaged = value;
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(PttEngaged)));
+            }
+        }
+
+        /// <summary>
+        /// Raised when <see cref="IsSelected"/>, <see cref="IsPrimary"/>
+        /// or <see cref="PttEngaged"/> changes.
         /// </summary>
         public event PropertyChangedEventHandler? PropertyChanged;
     }
