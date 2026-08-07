@@ -78,13 +78,20 @@ namespace DvmConsole.Platform.Audio
         /// </summary>
         private sealed class TransmitSession
         {
-            public TransmitSession(TransmitTarget target, int codewordsPerUnit)
+            public TransmitSession(
+                TransmitTarget target,
+                AudioDeviceId inputDeviceId,
+                int codewordsPerUnit)
             {
                 Target = target;
+                InputDeviceId = inputDeviceId;
                 CodewordsPerUnit = codewordsPerUnit;
             }
 
             public TransmitTarget Target { get; }
+
+            /// <summary>Input device used by this transmit session.</summary>
+            public AudioDeviceId InputDeviceId { get; }
 
             /// <summary>Codewords per complete unit: 3 for DMR, 9 for P25.</summary>
             public int CodewordsPerUnit { get; }
@@ -118,6 +125,14 @@ namespace DvmConsole.Platform.Audio
             public int CaptureEndedRaised;
 
             /// <summary>
+            /// Set when a DeviceLost end needs a device-change notification
+            /// to restart the capture without ending the transmit session.
+            /// Volatile: set from the capture-end observer outside the
+            /// transmit gate, read under it.
+            /// </summary>
+            public volatile bool RestartPending;
+
+            /// <summary>
             /// 0/1 — set once the capture pump delivered a block for this
             /// session (the stream actually ran). A Requested end for a
             /// session whose stream never delivered a block ended as it
@@ -134,6 +149,9 @@ namespace DvmConsole.Platform.Audio
         private readonly Func<AudioDeviceId> _resolveOutputDevice;
         private readonly TimeSpan _idleReleaseDelay;
         private readonly Func<TimeSpan, Action, IDisposable> _scheduler;
+        private readonly Func<DateTime> _clock;
+
+        private static readonly TimeSpan CaptureRestartThrottle = TimeSpan.FromSeconds(10);
 
         private readonly object _routeGate = new();
         private readonly Dictionary<string, TalkgroupState> _talkgroups =
@@ -143,10 +161,22 @@ namespace DvmConsole.Platform.Audio
         private TransmitSession? _session;
         private CaptureAudioPipeline? _capturePipeline;
         private MonitorAudioPipeline? _txMonitorPipeline;
+        private DateTime? _lastCaptureRestart;
+        private bool _captureRestartInProgress;
+
+        /// <summary>
+        /// One-shot retry armed when a capture is lost again inside the
+        /// throttle window (the replug burst can exhaust the HAL events).
+        /// Guarded by <see cref="_transmitGate"/>; nulled by its own
+        /// callback and cancelled on deliberate end/dispose.
+        /// </summary>
+        private IDisposable? _captureRestartRetry;
+
         private int _disposed;
 
         /// <summary>
-        /// Raised exactly once per transmit when the capture stream ends
+        /// Raised once per capture incarnation (and reset after a successful
+        /// device-loss replacement) when the capture stream ends
         /// for any reason other than a deliberate
         /// <see cref="EndTransmitAsync"/> or a stream that ended before it
         /// ever delivered a block: a DeviceLost end verbatim, a Requested
@@ -183,6 +213,7 @@ namespace DvmConsole.Platform.Audio
         /// One-shot scheduler for the idle release; defaults to a real
         /// one-shot <see cref="Timer"/>-based scheduler.
         /// </param>
+        /// <param name="clock">UTC clock used by the capture-restart throttle.</param>
         /// <exception cref="ArgumentNullException">
         /// Thrown when <paramref name="streams"/>, <paramref name="decoder"/>,
         /// <paramref name="encoder"/>, <paramref name="sender"/> or
@@ -195,7 +226,8 @@ namespace DvmConsole.Platform.Audio
             IVoiceTrafficSender sender,
             Func<AudioDeviceId> resolveOutputDevice,
             TimeSpan? idleReleaseDelay = null,
-            Func<TimeSpan, Action, IDisposable>? scheduler = null)
+            Func<TimeSpan, Action, IDisposable>? scheduler = null,
+            Func<DateTime>? clock = null)
         {
             _factory = streams ?? throw new ArgumentNullException(nameof(streams));
             _decoder = decoder ?? throw new ArgumentNullException(nameof(decoder));
@@ -205,6 +237,7 @@ namespace DvmConsole.Platform.Audio
                 ?? throw new ArgumentNullException(nameof(resolveOutputDevice));
             _idleReleaseDelay = idleReleaseDelay ?? DefaultIdleReleaseDelay;
             _scheduler = scheduler ?? DefaultSchedule;
+            _clock = clock ?? (() => DateTime.UtcNow);
         }
 
         /// <summary>
@@ -274,23 +307,33 @@ namespace DvmConsole.Platform.Audio
                     state.Pipeline = created;
                 }
 
+                // Capture the instance for this frame. A DeviceLost write
+                // raises the end event synchronously and clears state.Pipeline;
+                // the remaining codewords still belong to this stopped
+                // instance and must not dereference the cleared state slot.
+                var pipelineForFrame = state.Pipeline;
+                if (pipelineForFrame is null)
+                {
+                    return;
+                }
+
                 // New audio resets the idle-release timer: cancel the
                 // pending release and arm a fresh one for this pipeline.
                 state.ReleaseHandle?.Dispose();
-                ScheduleRelease(talkgroupKey, state, state.Pipeline);
+                ScheduleRelease(talkgroupKey, state, pipelineForFrame);
 
                 if (mode == VoiceMode.Dmr)
                 {
                     foreach (var codeword in VoiceFrameSplitter.SplitDmrFrame(frame))
                     {
-                        state.Pipeline.WriteVoiceFrame(codeword);
+                        pipelineForFrame.WriteVoiceFrame(codeword);
                     }
                 }
                 else
                 {
                     foreach (var codeword in VoiceFrameSplitter.SplitP25Ldu(frame))
                     {
-                        state.Pipeline.WriteVoiceFrame(codeword);
+                        pipelineForFrame.WriteVoiceFrame(codeword);
                     }
                 }
             }
@@ -347,7 +390,10 @@ namespace DvmConsole.Platform.Audio
                             "A transmit is already active; call EndTransmitAsync before beginning another.");
                     }
 
-                    var session = new TransmitSession(target, target.Mode == VoiceMode.Dmr ? 3 : 9);
+                    var session = new TransmitSession(
+                        target,
+                        inputDeviceId,
+                        target.Mode == VoiceMode.Dmr ? 3 : 9);
                     var capture = new CaptureAudioPipeline(_factory);
 
                     // Local-monitor loopback (WPF AddLiveMonitorStream parity,
@@ -410,6 +456,150 @@ namespace DvmConsole.Platform.Audio
         }
 
         /// <summary>
+        /// Retries the capture for the current transmit after a
+        /// <see cref="AudioStreamStopReason.DeviceLost"/> end. The session,
+        /// target, input device, pending codewords, stream id and sequence
+        /// number are retained so a HAL unplug does not split the logical
+        /// transmission. A successful retry is throttled for ten seconds;
+        /// a failed retry remains pending for the next
+        /// <c>MacAudioDeviceCatalog.DevicesChanged</c> notification.
+        /// </summary>
+        /// <remarks>
+        /// WPF force-restarts its input immediately from RecordingStopped.
+        /// macOS deliberately waits for the catalog's device-change signal
+        /// after a failed retry, avoiding a restart storm while the device is
+        /// still absent.
+        /// </remarks>
+        public async Task<bool> RequestCaptureRestartAsync()
+        {
+            TransmitSession? session;
+            CaptureAudioPipeline? oldCapture;
+            var success = false;
+
+            lock (_transmitGate)
+            {
+                if (Volatile.Read(ref _disposed) != 0
+                    || _session is not { } active
+                    || !active.RestartPending
+                    || _captureRestartInProgress)
+                {
+                    return false;
+                }
+
+                var now = _clock();
+                if (_lastCaptureRestart is { } last
+                    && now - last < CaptureRestartThrottle)
+                {
+                    // A fast replug burst (device-list + default-device
+                    // changes) can all land inside the window after a
+                    // successful restart. If the capture is already lost
+                    // again, no further HAL event will arrive, so arm a
+                    // one-shot retry at the end of the window instead of
+                    // stranding the session on a dead capture (WPF
+                    // force-restarts from RecordingStopped; macOS waits
+                    // for this retry or the next device change). The
+                    // callback self-cancels on fire and re-enters this
+                    // method; a still-absent device leaves pending set and
+                    // does not consume a fresh throttle window.
+                    if (active.RestartPending && _captureRestartRetry is null)
+                    {
+                        var remaining = CaptureRestartThrottle - (now - last);
+                        IDisposable? handle = null;
+                        handle = _scheduler(remaining, () =>
+                        {
+                            handle?.Dispose();
+                            _captureRestartRetry = null;
+                            _ = RequestCaptureRestartAsync();
+                        });
+                        _captureRestartRetry = handle;
+                    }
+
+                    return false;
+                }
+
+                _captureRestartInProgress = true;
+                session = active;
+                oldCapture = _capturePipeline;
+                _capturePipeline = null;
+            }
+
+            try
+            {
+                if (oldCapture is not null)
+                {
+                    await oldCapture.StopAsync().ConfigureAwait(false);
+                }
+
+                var replacement = new CaptureAudioPipeline(_factory);
+                Task<AudioStreamEnd> endTask;
+                try
+                {
+                    endTask = replacement.StartAsync(
+                        session.InputDeviceId,
+                        block => PumpBlockAsync(session, block),
+                        CancellationToken.None);
+                }
+                catch
+                {
+                    try
+                    {
+                        await replacement.StopAsync().ConfigureAwait(false);
+                    }
+                    catch
+                    {
+                        // Preserve the device-start failure.
+                    }
+
+                    throw;
+                }
+
+                var keepReplacement = false;
+                lock (_transmitGate)
+                {
+                    if (Volatile.Read(ref _disposed) == 0
+                        && ReferenceEquals(_session, session)
+                        && !session.TransmitEnded)
+                    {
+                        _capturePipeline = replacement;
+                        session.RestartPending = false;
+                        Interlocked.Exchange(ref session.CaptureEndedRaised, 0);
+                        _lastCaptureRestart = _clock();
+                        keepReplacement = true;
+                        success = true;
+                    }
+                }
+
+                if (!keepReplacement)
+                {
+                    await replacement.StopAsync().ConfigureAwait(false);
+                    return false;
+                }
+
+                ObserveEndAsync(endTask, session);
+                return true;
+            }
+            catch (Exception exception)
+            {
+                System.Diagnostics.Debug.WriteLine(
+                    $"PTT capture restart unavailable; waiting for the next device change: {exception}");
+                return false;
+            }
+            finally
+            {
+                lock (_transmitGate)
+                {
+                    _captureRestartInProgress = false;
+                    if (!success
+                        && ReferenceEquals(_session, session)
+                        && !session.TransmitEnded)
+                    {
+                        session.RestartPending = true;
+                    }
+                }
+            }
+        }
+
+        /// <summary>
         /// Ends the active transmit: stops the capture input (no further
         /// sends; a late pump block after the end is a no-op) and the
         /// local-monitor loopback. Idempotent when no transmit is active.
@@ -440,6 +630,10 @@ namespace DvmConsole.Platform.Audio
                 _capturePipeline = null;
                 _txMonitorPipeline = null;
                 _session = null;
+
+                // A deliberate end cancels any armed capture-restart retry.
+                _captureRestartRetry?.Dispose();
+                _captureRestartRetry = null;
             }
 
             var stops = new List<Task>(2);
@@ -514,6 +708,11 @@ namespace DvmConsole.Platform.Audio
                     _capturePipeline = null;
                     stops.Add(capture.StopAsync());
                 }
+
+                // Teardown cancels any armed capture-restart retry; the
+                // disposed guard already makes a late fire a no-op.
+                _captureRestartRetry?.Dispose();
+                _captureRestartRetry = null;
 
                 _session = null;
             }
@@ -776,6 +975,11 @@ namespace DvmConsole.Platform.Audio
             var raised = end.StopReason == AudioStreamStopReason.Requested
                 ? AudioStreamEnd.DeviceLost()
                 : end;
+
+            if (raised.StopReason == AudioStreamStopReason.DeviceLost)
+            {
+                session.RestartPending = true;
+            }
 
             try
             {

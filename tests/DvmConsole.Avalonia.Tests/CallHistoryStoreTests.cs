@@ -20,6 +20,8 @@
 */
 using System;
 using System.Collections.Generic;
+using System.Threading;
+using System.Threading.Tasks;
 using DvmConsole.Avalonia.Services;
 using DvmConsole.Platform.Audio;
 using Xunit;
@@ -341,6 +343,114 @@ namespace DvmConsole.Avalonia.Tests
             store.AddFrame(Voice("k", 111, 222, 2), "CH 1");
 
             Assert.Equal("Recovered", store.Entries[0].Alias);
+        }
+
+        /* ------------------------------------------------------------------
+        ** Channel-name fallback + concurrent commit ordering
+        ** (receive-glue composition review deleg_22cc7617 findings 1-2;
+        ** audit deleg_1e79ef4e READY)
+        /* ---------------------------------------------------------------- */
+
+        [Fact]
+        public void AddFrame_NullChannelName_FallsBackToRawTalkgroupKey()
+        {
+            var store = new CallHistoryStore();
+            store.AddFrame(Voice("sys 1|222|slot:1", 111, 222, 1), null);
+
+            // WPF skips unresolvable channels entirely (MainWindow.DMR.cs
+            // 258-260); recording the raw talkgroup key is a deliberate
+            // improvement, so the caller's null must not become an empty
+            // string.
+            Assert.Equal("sys 1|222|slot:1", store.Entries[0].ChannelName);
+        }
+
+        [Fact]
+        public void AddFrame_EmptyChannelName_StoredAsIs()
+        {
+            var store = new CallHistoryStore();
+            store.AddFrame(Voice("k", 111, 222, 1), string.Empty);
+
+            // Preservation pin: only null triggers the raw-key fallback.
+            Assert.Equal(string.Empty, store.Entries[0].ChannelName);
+        }
+
+        [Fact]
+        public async Task AddFrame_ConcurrentDifferentStreams_StaleFrameDropped()
+        {
+            using var resolverEntered = new ManualResetEventSlim();
+            using var releaseResolver = new ManualResetEventSlim();
+            var store = new CallHistoryStore();
+            var resolverCalls = 0;
+            store.SetAliasResolver((_, _) =>
+            {
+                // Only the first (blocked) invocation gates; the second
+                // passes through so the test thread does not deadlock.
+                if (Interlocked.Increment(ref resolverCalls) == 1)
+                {
+                    resolverEntered.Set();
+                    releaseResolver.Wait();
+                }
+
+                return "resolved";
+            });
+
+            int changes = 0;
+            store.Changed += () => changes++;
+
+            // A: stream 1 blocks inside the resolver (snapshot taken,
+            // commit not yet made).
+            var a = Task.Run(() => store.AddFrame(Voice("k", 111, 222, 1), "CH 1"));
+            Assert.True(resolverEntered.Wait(TimeSpan.FromSeconds(5)));
+
+            // B: stream 2 commits while A is still resolving.
+            store.AddFrame(Voice("k", 111, 222, 2), "CH 1");
+
+            releaseResolver.Set();
+            await a;
+
+            // A's stale frame must be dropped: exactly B's entry survives,
+            // and the Changed event fired once (B's commit only).
+            Assert.Single(store.Entries);
+            Assert.Equal(1, changes);
+
+            // The surviving entry is B's: a stream-2 continuation dedups,
+            // a fresh stream-3 call records.
+            store.AddFrame(Voice("k", 111, 222, 2), "CH 1");
+            Assert.Single(store.Entries);
+            store.AddFrame(Voice("k", 111, 222, 3), "CH 1");
+            Assert.Equal(2, store.Entries.Count);
+            Assert.Equal(2, changes);
+        }
+
+        [Fact]
+        public async Task AddFrame_ConcurrentSameStream_StillDedups()
+        {
+            using var resolverEntered = new ManualResetEventSlim();
+            using var releaseResolver = new ManualResetEventSlim();
+            var store = new CallHistoryStore();
+            var resolverCalls = 0;
+            store.SetAliasResolver((_, _) =>
+            {
+                if (Interlocked.Increment(ref resolverCalls) == 1)
+                {
+                    resolverEntered.Set();
+                    releaseResolver.Wait();
+                }
+
+                return "resolved";
+            });
+
+            // Preservation pin: concurrent frames of one stream still
+            // yield exactly one entry.
+            var a = Task.Run(() => store.AddFrame(Voice("k", 111, 222, 42), "CH 1"));
+            Assert.True(resolverEntered.Wait(TimeSpan.FromSeconds(5)));
+
+            store.AddFrame(Voice("k", 111, 222, 42), "CH 1");
+
+            releaseResolver.Set();
+            await a;
+
+            Assert.Single(store.Entries);
         }
     }
 }

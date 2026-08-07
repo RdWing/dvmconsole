@@ -189,5 +189,34 @@ namespace DvmConsole.Avalonia.Tests
             Assert.Equal("system 1|222", seen.Key);
             Assert.False(seen.IsTerminator);
         }
+
+        /* ------------------------------------------------------------------
+        ** Observer detach on dispose
+        ** (receive-glue composition review deleg_22cc7617 finding 3;
+        ** audit deleg_1e79ef4e READY)
+        /* ---------------------------------------------------------------- */
+
+        [Fact]
+        public void Dispose_DetachesCallFrameObservers_AndRouting()
+        {
+            int observed = 0;
+            int routed = 0;
+            var glue = MakeGlue((_, _, _) => routed++);
+            glue.CallFrameObserved += _ => observed++;
+
+            glue.OnDmrFrame("System 1", MakeDmrVoice(111, 222, 1, 7));
+            Assert.Equal(1, observed);
+            Assert.Equal(1, routed);
+
+            glue.Dispose();
+            glue.Dispose(); // idempotent
+
+            // A late adapter frame after the shell closed must neither
+            // reach the call-history observer nor the router delegate.
+            glue.OnDmrFrame("System 1", MakeDmrVoice(111, 222, 1, 7));
+            glue.OnP25Frame("System 1", MakeP25Voice(111, 222, 7));
+            Assert.Equal(1, observed);
+            Assert.Equal(1, routed);
+        }
     }
 }

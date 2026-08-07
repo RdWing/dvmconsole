@@ -15,8 +15,8 @@ namespace DvmConsole.Avalonia.Services
     /// <see cref="VoiceMode.P25"/> audio units keyed by the WPF-parity
     /// talkgroup key. Terminators are dropped — the router's idle shed
     /// ends the pipeline (zero router changes). Dispose detaches the
-    /// routing delegate so frames arriving after the shell closes are
-    /// no-ops.
+    /// routing delegate and clears the call-frame observers, so frames
+    /// arriving after the shell closes are silent no-ops.
     /// </summary>
     public sealed class FneReceiveGlue : IDisposable
     {
@@ -107,9 +107,15 @@ namespace DvmConsole.Avalonia.Services
         }
 
         /// <summary>
-        /// Detaches the routing delegate: frames routed after disposal
-        /// are silent no-ops. Idempotent.
+        /// Detaches the routing delegate and clears the
+        /// <see cref="CallFrameObserved"/> subscribers: frames arriving
+        /// after disposal are silent no-ops — neither observed nor
+        /// routed. Idempotent.
         /// </summary>
-        public void Dispose() => route = null;
+        public void Dispose()
+        {
+            route = null;
+            CallFrameObserved = null;
+        }
     }
 }

@@ -14,6 +14,7 @@ using DvmConsole.Avalonia.Services;
 using DvmConsole.Avalonia.ViewModels;
 using DvmConsole.Core.Networking;
 using DvmConsole.Platform.Audio;
+using DvmConsole.Platform.Audio.Mac;
 using DvmConsole.Platform.Dialogs;
 using DvmConsole.Platform.Hotkeys;
 using DvmConsole.Platform.Native;
@@ -80,6 +81,9 @@ namespace DvmConsole.Avalonia
         /// fnecore traffic adapter land (follow-on slices).
         /// </summary>
         private TalkgroupAudioRouter? talkgroupAudioRouter = null;
+
+        /// <summary>Concrete macOS catalog subscribed for capture recovery.</summary>
+        private MacAudioDeviceCatalog? macAudioDeviceCatalog = null;
 
         /// <summary>
         /// Resolves the primary channel's codeplug channel name onto the
@@ -163,8 +167,7 @@ namespace DvmConsole.Avalonia
         /// optional voice codec/traffic seams for the audio router,
         /// the optional FNE transport factory backing the connection
         /// slice, the optional codeplug backing the transmit-target
-        /// resolver (temporary channel assignment until the zone UI
-        /// slice), the optional call-history store, and the optional
+        /// resolver, the optional call-history store, and the optional
         /// alias resolver backing the store's RID-alias column
         /// (per-system alias files, WPF-parity; a null resolver keeps
         /// the entries' aliases empty). The
@@ -179,13 +182,11 @@ namespace DvmConsole.Avalonia
         /// property changes and applies selections to the ComboBoxes.
         /// When an audio stream factory is supplied, a talkgroup audio
         /// router is composed over it (owning the shared factory) with
-        /// the injected codec and traffic seams — the null codec pair and
-        /// stub sender when none are supplied, until the real adapters
-        /// land — and disposed on window close after the FNE slice;
-        /// otherwise the audio slice stays dormant. The receive glue is
-        /// composed with the router and subscribes to every adapter the
-        /// transport factory creates, routing received voice frames into
-        /// the router. A null or empty
+        /// the injected codec and traffic seams; the null codec pair and
+        /// stub sender keep headless construction inert. The receive glue
+        /// is always composed and subscribes to every adapter the
+        /// transport factory creates, so call history still records
+        /// received frames when audio is unavailable. A null or empty
         /// systems list leaves the FNE slice dormant with zero rows; a
         /// populated list seeds the connection manager and service with
         /// the codeplug's real systems.
@@ -233,14 +234,60 @@ namespace DvmConsole.Avalonia
                 fneConnectionBridge.Attach();
             }
 
+            // Compose the receive glue independently of audio. Call
+            // history and connection status must keep working when the
+            // host has no audio catalog (non-macOS tests, a CoreAudio
+            // permission failure, or a headless session). The optional
+            // router is resolved at event time, so frames are still
+            // classified and recorded while audio stays dormant.
+            fneReceiveGlue = new FneReceiveGlue(
+                (key, frame, mode) => talkgroupAudioRouter?.RouteVoiceFrame(key, frame, mode));
+
+            if (fnecoreTransportFactory is { } receiveFactory)
+            {
+                receiveFactory.OnCreated += adapter =>
+                {
+                    adapter.DmrFrameReceived += e => fneReceiveGlue?.OnDmrFrame(adapter.ConfiguredSystemName, e);
+                    adapter.P25FrameReceived += e => fneReceiveGlue?.OnP25Frame(adapter.ConfiguredSystemName, e);
+                };
+            }
+
+            var receiveChannelResolver = codeplug is null
+                ? null
+                : new ReceiveChannelResolver(codeplug);
+
+            if (callHistory is not null && fneReceiveGlue is { } receiveGlue)
+            {
+                // Wire the optional alias resolver into the store so
+                // recorded entries carry the subscriber alias for their
+                // (system, source id); unresolved aliases stay empty.
+                if (aliasResolver is not null)
+                {
+                    callHistory.SetAliasResolver(
+                        (system, src) => aliasResolver.Resolve(system, src) ?? string.Empty);
+                }
+
+                receiveGlue.CallFrameObserved += metadata =>
+                {
+                    var channelName = receiveChannelResolver?.Resolve(
+                        metadata.SystemName, metadata.DstId, metadata.Slot);
+                    callHistory.AddFrame(metadata, channelName);
+                };
+
+                callHistory.Changed += () => Dispatcher.UIThread.Post(() =>
+                {
+                    if (DataContext is MainWindowViewModel vm)
+                    {
+                        vm.CallHistory?.Refresh();
+                    }
+                });
+            }
+
             // Compose the talkgroup audio router over the shared factory
             // when one was supplied; the router owns the factory and is
             // disposed on window close. The null codec pair and the stub
-            // traffic sender are the placeholder seams until the
-            // Platform-native vocoder adapter and the fnecore traffic
-            // adapter land (follow-on slices): the router stays fully
-            // wired while decoding/encoding is inert and no traffic is
-            // sent. Null keeps the audio slice dormant.
+            // traffic sender keep the audio slice inert until native
+            // vocoder readiness succeeds.
             if (audioStreams is not null && DataContext is MainWindowViewModel audioViewModel)
             {
                 var decoder = voiceDecoder ?? new NullVoiceFrameDecoder();
@@ -254,66 +301,6 @@ namespace DvmConsole.Avalonia
                     sender,
                     () => audioViewModel.AudioSettings?.SelectedOutputId ?? AudioDeviceId.Default);
 
-                // Wire the FNE receive path into the router: the glue
-                // classifies adapter frame events and routes voice
-                // frames by talkgroup key. The factory's creation hook
-                // subscribes the glue to every adapter as the
-                // connection service creates it — including the fresh
-                // adapters a Restart creates — so no service or bridge
-                // change is needed.
-                fneReceiveGlue = new FneReceiveGlue(
-                    (key, frame, mode) => talkgroupAudioRouter!.RouteVoiceFrame(key, frame, mode));
-
-                if (fnecoreTransportFactory is { } factory)
-                {
-                    factory.OnCreated += adapter =>
-                    {
-                        adapter.DmrFrameReceived += e => fneReceiveGlue?.OnDmrFrame(adapter.ConfiguredSystemName, e);
-                        adapter.P25FrameReceived += e => fneReceiveGlue?.OnP25Frame(adapter.ConfiguredSystemName, e);
-                    };
-                }
-
-                // Compose the call-history slice over the receive glue:
-                // every classified frame is resolved to a codeplug
-                // channel name — a null resolver (no codeplug) or a
-                // resolution miss falls back to the raw talkgroup key
-                // with a null channel name — and recorded into the
-                // store. The store's Changed event refreshes the panel
-                // on the UI thread. A null store keeps the slice
-                // dormant.
-                if (callHistory is not null)
-                {
-                    var receiveChannelResolver = codeplug is null
-                        ? null
-                        : new ReceiveChannelResolver(codeplug);
-
-                    // Wire the optional alias resolver into the store
-                    // so recorded entries carry the subscriber alias
-                    // for their (system, source id); the resolver never
-                    // throws, and a null resolver leaves the alias
-                    // empty (WPF parity for unresolved ids).
-                    if (aliasResolver is not null)
-                    {
-                        callHistory.SetAliasResolver(
-                            (system, src) => aliasResolver.Resolve(system, src) ?? string.Empty);
-                    }
-
-                    fneReceiveGlue.CallFrameObserved += metadata =>
-                    {
-                        var channelName = receiveChannelResolver?.Resolve(
-                            metadata.SystemName, metadata.DstId, metadata.Slot);
-                        callHistory.AddFrame(metadata, channelName);
-                    };
-
-                    callHistory.Changed += () => Dispatcher.UIThread.Post(() =>
-                    {
-                        if (DataContext is MainWindowViewModel vm)
-                        {
-                            vm.CallHistory?.Refresh();
-                        }
-                    });
-                }
-
                 if (audioViewModel.Ptt is { } ptt)
                 {
                     ptt.PttStateRequested += OnPttStateRequested;
@@ -321,6 +308,12 @@ namespace DvmConsole.Avalonia
 
                 talkgroupAudioRouter.CaptureEnded += OnCaptureEnded;
                 talkgroupAudioRouter.MonitorStreamEnded += OnMonitorStreamEnded;
+
+                if (catalog is MacAudioDeviceCatalog macCatalog)
+                {
+                    macAudioDeviceCatalog = macCatalog;
+                    macCatalog.DevicesChanged += OnAudioDevicesChanged;
+                }
             }
 
             if (hotkeys is not null)
@@ -656,6 +649,11 @@ namespace DvmConsole.Avalonia
         /// </summary>
         private void OnWindowClosed(object? sender, EventArgs e)
         {
+            if (macAudioDeviceCatalog is { } macCatalog)
+            {
+                macCatalog.DevicesChanged -= OnAudioDevicesChanged;
+            }
+
             if (watchdogTimer is { } timer)
             {
                 timer.Tick -= OnWatchdogTick;
@@ -670,6 +668,11 @@ namespace DvmConsole.Avalonia
             {
                 _ = router.DisposeAsync();
             }
+        }
+
+        private void OnAudioDevicesChanged(object? sender, EventArgs e)
+        {
+            Dispatcher.UIThread.Post(() => _ = talkgroupAudioRouter?.RequestCaptureRestartAsync());
         }
 
         /// <summary>

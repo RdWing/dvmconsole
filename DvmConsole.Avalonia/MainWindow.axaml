@@ -133,7 +133,7 @@
                 <StackPanel Spacing="3">
                     <TextBlock Classes="kicker" Text="RUNTIME NOTE" />
                     <TextBlock Classes="muted"
-                               Text="Protocol, modem, and native audio services are not attached to this shell yet." />
+                               Text="Protocol, modem, and native audio services attach when the host supports them; unavailable capabilities stay gated." />
                 </StackPanel>
                 <TextBlock Grid.Column="1"
                            Classes="muted"
@@ -192,7 +192,7 @@
 
                     <StackPanel Spacing="8">
                         <TextBlock Classes="data-label" Text="CAPABILITIES" />
-                        <TextBlock Classes="muted" Text="• Native audio pending" />
+                        <TextBlock Classes="muted" Text="• Native audio device routing" />
                         <TextBlock Classes="muted"
                                    Text="{Binding VocoderStatus}"
                                    IsVisible="{Binding VocoderStatus, Converter={x:Static conv:ObjectConverters.IsNotNull}}" />

@@ -107,6 +107,7 @@ namespace DvmConsole.Platform.Tests
             public Func<ReadOnlyMemory<byte>, Task>? OnData;
             public AudioStreamEnd StartResult = AudioStreamEnd.Requested();
             public TaskCompletionSource<AudioStreamEnd>? EndGate;
+            public Exception? StartException;
             public int StartCount;
             public int StopCount;
 
@@ -115,6 +116,11 @@ namespace DvmConsole.Platform.Tests
                 CancellationToken cancellationToken)
             {
                 StartCount++;
+                if (StartException is not null)
+                {
+                    throw StartException;
+                }
+
                 OnData = onData;
                 return EndGate is not null
                     ? EndGate.Task
@@ -173,6 +179,12 @@ namespace DvmConsole.Platform.Tests
             /// </summary>
             public TaskCompletionSource<AudioStreamEnd>? EndGateOnCreate;
 
+            /// <summary>
+            /// When set, the next created input's StartAsync throws this
+            /// exception; the setting is consumed on first use.
+            /// </summary>
+            public Exception? StartExceptionOnCreate;
+
             public IAudioInput CreateInput(AudioDeviceId deviceId, PcmFormat format)
             {
                 var input = new FakeAudioInput(
@@ -180,8 +192,10 @@ namespace DvmConsole.Platform.Tests
                     format)
                 {
                     EndGate = EndGateOnCreate,
+                    StartException = StartExceptionOnCreate,
                 };
                 EndGateOnCreate = null;
+                StartExceptionOnCreate = null;
                 Inputs.Add(input);
                 return input;
             }
@@ -290,6 +304,12 @@ namespace DvmConsole.Platform.Tests
             }
         }
 
+        /// <summary>Deterministic UTC clock for restart-throttle tests.</summary>
+        private sealed class ManualClock
+        {
+            public DateTime UtcNow { get; set; } = new DateTime(2026, 8, 6, 0, 0, 0, DateTimeKind.Utc);
+        }
+
         private static readonly TransmitTarget DmrTarget = new(
             "System 1", "31001", 1, VoiceMode.Dmr, 1001);
 
@@ -298,14 +318,27 @@ namespace DvmConsole.Platform.Tests
             FakeVoiceFrameDecoder decoder,
             FakeVoiceFrameEncoder encoder,
             RecordingTrafficSender sender,
-            ManualScheduler scheduler)
+            ManualScheduler scheduler,
+            ManualClock? clock = null)
             => new TalkgroupAudioRouter(
                 factory,
                 decoder,
                 encoder,
                 sender,
                 () => AudioDeviceId.Default,
-                scheduler: scheduler.Schedule);
+                scheduler: scheduler.Schedule,
+                clock: clock is null ? null : () => clock.UtcNow);
+
+        private static async Task WaitUntilAsync(Func<bool> condition)
+        {
+            var deadline = DateTime.UtcNow.AddSeconds(5);
+            while (!condition() && DateTime.UtcNow < deadline)
+            {
+                await Task.Delay(10);
+            }
+
+            Assert.True(condition());
+        }
 
         /* ------------------------------------------------------------------
         ** Receive routing
@@ -570,6 +603,260 @@ namespace DvmConsole.Platform.Tests
 
             await Task.Delay(50); // allow any duplicate raise to land
             Assert.Single(ends); // exactly once
+        }
+
+        [Fact]
+        public async Task CaptureDeviceLost_LeavesTransmitSessionCurrent()
+        {
+            var factory = new FakeAudioStreamFactory
+            {
+                EndGateOnCreate = new TaskCompletionSource<AudioStreamEnd>(
+                    TaskCreationOptions.RunContinuationsAsynchronously),
+            };
+            var router = CreateRouter(
+                factory, new FakeVoiceFrameDecoder(), new FakeVoiceFrameEncoder(),
+                new RecordingTrafficSender(), new ManualScheduler());
+            var ends = new List<AudioStreamEnd>();
+            router.CaptureEnded += ends.Add;
+
+            await router.BeginTransmitAsync(DmrTarget, AudioDeviceId.Default, CancellationToken.None);
+            factory.Inputs[0].EndGate!.SetResult(AudioStreamEnd.DeviceLost());
+            await WaitUntilAsync(() => ends.Count == 1);
+
+            // Device loss is recoverable state, not an implicit transmit end.
+            await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                router.BeginTransmitAsync(DmrTarget, AudioDeviceId.Default, CancellationToken.None));
+
+            await router.EndTransmitAsync();
+        }
+
+        [Fact]
+        public async Task RequestCaptureRestart_RestartsSameSessionAndContinuesSequence()
+        {
+            var factory = new FakeAudioStreamFactory
+            {
+                EndGateOnCreate = new TaskCompletionSource<AudioStreamEnd>(
+                    TaskCreationOptions.RunContinuationsAsynchronously),
+            };
+            var encoder = new FakeVoiceFrameEncoder { CodewordLength = 9 };
+            var sender = new RecordingTrafficSender();
+            var router = CreateRouter(
+                factory, new FakeVoiceFrameDecoder(), encoder, sender, new ManualScheduler());
+            var ends = new List<AudioStreamEnd>();
+            router.CaptureEnded += ends.Add;
+
+            await router.BeginTransmitAsync(DmrTarget, AudioDeviceId.Default, CancellationToken.None);
+            await factory.Inputs[0].OnData!(new byte[1600]);
+            Assert.Single(sender.DmrFrames);
+
+            factory.Inputs[0].EndGate!.SetResult(AudioStreamEnd.DeviceLost());
+            await WaitUntilAsync(() => ends.Count == 1);
+
+            factory.EndGateOnCreate = new TaskCompletionSource<AudioStreamEnd>(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            Assert.True(await router.RequestCaptureRestartAsync());
+            Assert.Equal(2, factory.Inputs.Count);
+            Assert.Equal(1, factory.Inputs[0].StopCount);
+
+            await factory.Inputs[1].OnData!(new byte[1600]);
+            Assert.Equal(3, sender.DmrFrames.Count);
+            Assert.Equal(2u, sender.DmrFrames[1].StreamId);
+            Assert.Equal(1, sender.DmrFrames[1].Seq);
+            Assert.Equal(DmrTarget, sender.DmrFrames[1].Target);
+            Assert.Equal(3u, sender.DmrFrames[2].StreamId);
+            Assert.Equal(2, sender.DmrFrames[2].Seq);
+
+            await router.EndTransmitAsync();
+        }
+
+        [Fact]
+        public async Task RequestCaptureRestart_WhenNotPending_IsNoOp()
+        {
+            var factory = new FakeAudioStreamFactory
+            {
+                EndGateOnCreate = new TaskCompletionSource<AudioStreamEnd>(
+                    TaskCreationOptions.RunContinuationsAsynchronously),
+            };
+            var router = CreateRouter(
+                factory, new FakeVoiceFrameDecoder(), new FakeVoiceFrameEncoder(),
+                new RecordingTrafficSender(), new ManualScheduler());
+
+            await router.BeginTransmitAsync(DmrTarget, AudioDeviceId.Default, CancellationToken.None);
+
+            Assert.False(await router.RequestCaptureRestartAsync());
+            Assert.Single(factory.Inputs);
+
+            await router.EndTransmitAsync();
+        }
+
+        [Fact]
+        public async Task RequestCaptureRestart_AfterEndTransmit_IsNoOp()
+        {
+            var factory = new FakeAudioStreamFactory
+            {
+                EndGateOnCreate = new TaskCompletionSource<AudioStreamEnd>(
+                    TaskCreationOptions.RunContinuationsAsynchronously),
+            };
+            var router = CreateRouter(
+                factory, new FakeVoiceFrameDecoder(), new FakeVoiceFrameEncoder(),
+                new RecordingTrafficSender(), new ManualScheduler());
+            var ends = new List<AudioStreamEnd>();
+            router.CaptureEnded += ends.Add;
+
+            await router.BeginTransmitAsync(DmrTarget, AudioDeviceId.Default, CancellationToken.None);
+            factory.Inputs[0].EndGate!.SetResult(AudioStreamEnd.DeviceLost());
+            await WaitUntilAsync(() => ends.Count == 1);
+            await router.EndTransmitAsync();
+
+            factory.EndGateOnCreate = new TaskCompletionSource<AudioStreamEnd>(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            Assert.False(await router.RequestCaptureRestartAsync());
+            Assert.Single(factory.Inputs);
+        }
+
+        [Fact]
+        public async Task RequestCaptureRestart_IsThrottledForTenSeconds()
+        {
+            var clock = new ManualClock();
+            var factory = new FakeAudioStreamFactory
+            {
+                EndGateOnCreate = new TaskCompletionSource<AudioStreamEnd>(
+                    TaskCreationOptions.RunContinuationsAsynchronously),
+            };
+            var router = CreateRouter(
+                factory, new FakeVoiceFrameDecoder(), new FakeVoiceFrameEncoder(),
+                new RecordingTrafficSender(), new ManualScheduler(), clock);
+            var ends = new List<AudioStreamEnd>();
+            router.CaptureEnded += ends.Add;
+
+            await router.BeginTransmitAsync(DmrTarget, AudioDeviceId.Default, CancellationToken.None);
+            factory.Inputs[0].EndGate!.SetResult(AudioStreamEnd.DeviceLost());
+            await WaitUntilAsync(() => ends.Count == 1);
+            factory.EndGateOnCreate = new TaskCompletionSource<AudioStreamEnd>(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            Assert.True(await router.RequestCaptureRestartAsync());
+
+            factory.Inputs[1].EndGate!.SetResult(AudioStreamEnd.DeviceLost());
+            await WaitUntilAsync(() => ends.Count == 2);
+            factory.EndGateOnCreate = new TaskCompletionSource<AudioStreamEnd>(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+
+            Assert.False(await router.RequestCaptureRestartAsync());
+            clock.UtcNow = clock.UtcNow.AddSeconds(10.1);
+            Assert.True(await router.RequestCaptureRestartAsync());
+            Assert.Equal(3, factory.Inputs.Count);
+
+            await router.EndTransmitAsync();
+        }
+
+        [Fact]
+        public async Task RequestCaptureRestart_ThrottledWhilePending_ArmsOneShotRetry()
+        {
+            // A fast replug burst (device-list + default-device changes)
+            // can all land inside the ten-second window after a successful
+            // restart. If the replacement capture is lost again inside the
+            // window, no further HAL event will arrive — the throttled
+            // request must arm a one-shot retry at the end of the window
+            // instead of stranding the session on a dead capture.
+            var clock = new ManualClock();
+            var scheduler = new ManualScheduler();
+            var factory = new FakeAudioStreamFactory
+            {
+                EndGateOnCreate = new TaskCompletionSource<AudioStreamEnd>(
+                    TaskCreationOptions.RunContinuationsAsynchronously),
+            };
+            var router = CreateRouter(
+                factory, new FakeVoiceFrameDecoder(), new FakeVoiceFrameEncoder(),
+                new RecordingTrafficSender(), scheduler, clock);
+            var ends = new List<AudioStreamEnd>();
+            router.CaptureEnded += ends.Add;
+
+            await router.BeginTransmitAsync(DmrTarget, AudioDeviceId.Default, CancellationToken.None);
+
+            // First loss + successful restart consumes the throttle window.
+            factory.Inputs[0].EndGate!.SetResult(AudioStreamEnd.DeviceLost());
+            await WaitUntilAsync(() => ends.Count == 1);
+            factory.EndGateOnCreate = new TaskCompletionSource<AudioStreamEnd>(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            Assert.True(await router.RequestCaptureRestartAsync());
+
+            // Replacement lost again INSIDE the window; the throttled call
+            // returns false but arms exactly one retry.
+            factory.Inputs[1].EndGate!.SetResult(AudioStreamEnd.DeviceLost());
+            await WaitUntilAsync(() => ends.Count == 2);
+            factory.EndGateOnCreate = new TaskCompletionSource<AudioStreamEnd>(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+
+            Assert.False(await router.RequestCaptureRestartAsync());
+            Assert.Equal(1, scheduler.PendingCount);
+            Assert.False(await router.RequestCaptureRestartAsync());
+            Assert.Equal(1, scheduler.PendingCount); // never double-armed
+
+            // The retry fires at the end of the window and recovers the
+            // capture without any new HAL event.
+            clock.UtcNow = clock.UtcNow.AddSeconds(10.1);
+            scheduler.Elapse();
+            await WaitUntilAsync(() => factory.Inputs.Count == 3);
+            Assert.Equal(0, scheduler.PendingCount); // self-cancelled on fire
+
+            // The retried replacement is a live capture incarnation: a
+            // fresh DeviceLost on it raises CaptureEnded again (the end
+            // guard was reset by the successful retry).
+            factory.Inputs[2].EndGate!.SetResult(AudioStreamEnd.DeviceLost());
+            await WaitUntilAsync(() => ends.Count == 3);
+
+            await router.EndTransmitAsync();
+            Assert.Equal(0, scheduler.PendingCount);
+        }
+
+        [Fact]
+        public async Task RequestCaptureRestart_WhenDeviceStillAbsent_StaysPending()
+        {
+            var factory = new FakeAudioStreamFactory
+            {
+                EndGateOnCreate = new TaskCompletionSource<AudioStreamEnd>(
+                    TaskCreationOptions.RunContinuationsAsynchronously),
+            };
+            var router = CreateRouter(
+                factory, new FakeVoiceFrameDecoder(), new FakeVoiceFrameEncoder(),
+                new RecordingTrafficSender(), new ManualScheduler());
+            var ends = new List<AudioStreamEnd>();
+            router.CaptureEnded += ends.Add;
+
+            await router.BeginTransmitAsync(DmrTarget, AudioDeviceId.Default, CancellationToken.None);
+            factory.Inputs[0].EndGate!.SetResult(AudioStreamEnd.DeviceLost());
+            await WaitUntilAsync(() => ends.Count == 1);
+
+            factory.StartExceptionOnCreate = new AudioDeviceException(
+                AudioDeviceErrorKind.OpenFailed, "device still absent");
+            Assert.False(await router.RequestCaptureRestartAsync());
+            Assert.Equal(2, factory.Inputs.Count);
+
+            factory.EndGateOnCreate = new TaskCompletionSource<AudioStreamEnd>(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            Assert.True(await router.RequestCaptureRestartAsync());
+            Assert.Equal(3, factory.Inputs.Count);
+
+            await router.EndTransmitAsync();
+        }
+
+        [Fact]
+        public void MonitorDeviceLost_RecreatesPipelineOnNextFrame()
+        {
+            var factory = new FakeAudioStreamFactory();
+            var router = CreateRouter(
+                factory, new FakeVoiceFrameDecoder(), new FakeVoiceFrameEncoder(),
+                new RecordingTrafficSender(), new ManualScheduler());
+            var ends = new List<AudioStreamEnd>();
+            router.MonitorStreamEnded += () => ends.Add(AudioStreamEnd.DeviceLost());
+
+            router.RouteVoiceFrame("SYS1/TG1", new byte[27], VoiceMode.Dmr);
+            factory.Outputs[0].NextWriteStatus = AudioWriteStatus.DeviceLost;
+            router.RouteVoiceFrame("SYS1/TG1", new byte[27], VoiceMode.Dmr);
+
+            Assert.Single(ends);
+            router.RouteVoiceFrame("SYS1/TG1", new byte[27], VoiceMode.Dmr);
+            Assert.Equal(2, factory.Outputs.Count);
         }
 
         [Fact]

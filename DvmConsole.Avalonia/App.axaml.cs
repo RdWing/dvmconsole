@@ -122,13 +122,13 @@ namespace DvmConsole.Avalonia
         /// <summary>
         /// Loads each codeplug system's alias file and composes the
         /// per-system alias resolver for the call-history slice,
-        /// WPF-parity (MainWindow.xaml.cs:1064-1065). A system whose
-        /// alias file is missing or unreadable is left out of the map —
-        /// its calls resolve to no alias rather than failing startup;
-        /// a null codeplug yields a null resolver (no aliases
-        /// anywhere). The load itself never throws.
+        /// WPF-parity (MainWindow.xaml.cs:1064-1065). Inline aliases are
+        /// the seed; an existing external alias file replaces them. A
+        /// missing or unreadable external file leaves inline aliases in
+        /// place, so alias loading never fails startup. A null codeplug
+        /// yields a null resolver (no aliases anywhere).
         /// </summary>
-        private static AliasResolver? BuildAliasResolver(Codeplug? codeplug)
+        internal static AliasResolver? BuildAliasResolver(Codeplug? codeplug)
         {
             if (codeplug is null)
             {
@@ -139,20 +139,59 @@ namespace DvmConsole.Avalonia
 
             foreach (var system in codeplug.Systems ?? new List<Codeplug.System>())
             {
-                if (File.Exists(system.AliasPath))
+                if (system is null || string.IsNullOrWhiteSpace(system.Name))
+                {
+                    continue;
+                }
+
+                IReadOnlyList<RadioAlias> aliases =
+                    system.RidAlias ?? new List<RadioAlias>();
+
+                if (!string.IsNullOrWhiteSpace(system.AliasPath)
+                    && File.Exists(system.AliasPath))
                 {
                     try
                     {
-                        aliasesBySystem[system.Name] = AliasTools.LoadAliases(system.AliasPath);
+                        aliases = AliasTools.LoadAliases(system.AliasPath);
                     }
                     catch
                     {
-                        // Never throw at startup: leave the system out of the map.
+                        // Keep inline aliases when an external file is bad.
                     }
                 }
+
+                aliasesBySystem[system.Name] = aliases;
             }
 
             return new AliasResolver(aliasesBySystem);
+        }
+
+        /// <summary>
+        /// Creates the call-history store with the WPF console-RID
+        /// suppression rule. The configured RID is indexed by system name
+        /// once at startup so receive-frame classification stays cheap and
+        /// never depends on mutable codeplug objects.
+        /// </summary>
+        internal static CallHistoryStore CreateCallHistoryStore(Codeplug codeplug)
+        {
+            var consoleRids = new Dictionary<string, uint>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (var system in codeplug.Systems ?? new List<Codeplug.System>())
+            {
+                if (system is null
+                    || string.IsNullOrWhiteSpace(system.Name)
+                    || !uint.TryParse(system.Rid, out var consoleRid))
+                {
+                    continue;
+                }
+
+                consoleRids[system.Name] = consoleRid;
+            }
+
+            return new CallHistoryStore(
+                suppress: (systemName, sourceId) =>
+                    consoleRids.TryGetValue(systemName, out var consoleRid)
+                    && consoleRid == sourceId);
         }
 
         /// <summary>
@@ -187,6 +226,15 @@ namespace DvmConsole.Avalonia
                 {
                     // Insert ahead of the trailing item (Quit).
                     appMenu.Items.Insert(appMenu.Items.Count - 1, aboutItem);
+
+                    if (appMenu.Items
+                        .OfType<NativeMenuItem>()
+                        .FirstOrDefault(item => item.Header is string header
+                            && string.Equals(header, "Quit", StringComparison.Ordinal)) is { } quitItem)
+                    {
+                        quitItem.Click += (_, _) =>
+                            (Current?.ApplicationLifetime as IClassicDesktopStyleApplicationLifetime)?.Shutdown();
+                    }
                 }
                 else
                 {
@@ -245,14 +293,14 @@ namespace DvmConsole.Avalonia
                 // the panel shows its muted "not attached" state).
                 var callHistory = codeplug.Codeplug is null
                     ? null
-                    : new CallHistoryStore();
+                    : CreateCallHistoryStore(codeplug.Codeplug);
 
                 // Load per-system alias files (WPF-parity) and compose
                 // the alias resolver over them so call-history entries
                 // carry the subscriber alias for their (system, source
                 // id). A null codeplug yields a null resolver — no
-                // aliases anywhere; a missing or unreadable alias file
-                // leaves only that system without aliases. Never throws.
+                // aliases anywhere; inline aliases survive a missing or
+                // unreadable external alias file. Never throws.
                 var aliasResolver = BuildAliasResolver(codeplug.Codeplug);
 
                 // Compose the real dual-mode libvocoder adapter when the

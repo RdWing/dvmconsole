@@ -60,7 +60,11 @@ namespace DvmConsole.Avalonia.Services
         /// <summary>The talkgroup router key of the call stream.</summary>
         public string Key { get; }
 
-        /// <summary>The resolved codeplug channel name, or empty for the raw-key fallback.</summary>
+        /// <summary>
+        /// The resolved codeplug channel name. A null channel name from
+        /// the caller falls back to the raw talkgroup key; an empty
+        /// string is stored as-is.
+        /// </summary>
         public string ChannelName { get; }
 
         /// <summary>The FNE system name the frame arrived on.</summary>
@@ -90,13 +94,21 @@ namespace DvmConsole.Avalonia.Services
     /// stream id matches the last recorded frame is a dedup no-op, and a
     /// terminator clears the key's stream without being recorded itself,
     /// so a reused stream id after a call end still starts a fresh entry
-    /// (WPF isNewCallStream parity MainWindow.DMR.cs:335). The optional
+    /// (WPF isNewCallStream parity MainWindow.DMR.cs:335). WPF skips
+    /// unresolvable channels entirely (MainWindow.DMR.cs:258-260);
+    /// this port instead records the raw talkgroup key as the channel
+    /// name — a deliberate improvement (see <see cref="AddFrame"/>).
+    /// The optional
     /// suppression delegate (system name, source id) mirrors the WPF
     /// console-RID filter (MainWindow.Tar.cs:177-180): true means the
     /// frame is not recorded. The optional alias resolver set through
     /// <see cref="SetAliasResolver"/> resolves each recorded entry's
     /// <see cref="CallHistoryEntry.Alias"/> from (system name, source
     /// id) at record time; unset or null keeps the alias empty.
+    /// Commits are linearizable per key: a frame whose key's stream
+    /// state moved on while its alias was being resolved (a different
+    /// stream committed meanwhile) is dropped, so the first committer
+    /// per key wins.
     /// <see cref="Changed"/> is raised on any entry mutation
     /// (add/evict), never on dedup no-ops. No UI, no persistence, no
     /// disposal: receive threads write, the UI thread reads snapshots.
@@ -137,8 +149,8 @@ namespace DvmConsole.Avalonia.Services
         /// time: each recorded entry's <see cref="CallHistoryEntry.Alias"/>
         /// is resolved from (system name, source id) when a resolver is
         /// set; a null resolver keeps the alias empty (the default).
-        /// Thread-safe: the resolver is read inside the store's lock in
-        /// <see cref="AddFrame"/>.
+        /// Thread-safe: <see cref="AddFrame"/> snapshots the resolver under
+        /// the store lock before invoking it outside the lock.
         /// </summary>
         /// <param name="resolver">The resolver, or null to clear it.</param>
         public void SetAliasResolver(Func<string, uint, string>? resolver)
@@ -177,10 +189,13 @@ namespace DvmConsole.Avalonia.Services
         /// (same key, same stream id) is a dedup no-op; a suppressed
         /// frame (system name, source id) is not recorded. New calls are
         /// inserted at index 0 and the oldest entry is evicted at the
-        /// cap.
+        /// cap. Commits are linearizable per key: a frame whose key's
+        /// stream state moved on while its alias was being resolved (a
+        /// different stream committed meanwhile) is dropped — no entry,
+        /// no event — so the first committer per key wins.
         /// </summary>
         /// <param name="m">The classified frame metadata.</param>
-        /// <param name="channelName">The resolved codeplug channel name, or null for the raw-key fallback.</param>
+        /// <param name="channelName">The resolved codeplug channel name; null records the raw talkgroup key, empty string is stored as-is.</param>
         public void AddFrame(ReceivedCallMetadata m, string? channelName)
         {
             if (m is null)
@@ -190,6 +205,8 @@ namespace DvmConsole.Avalonia.Services
 
             Action? changed = null;
             Func<string, uint, string>? resolver;
+            bool hadLast;
+            uint snapshotStream;
 
             lock (gate)
             {
@@ -214,6 +231,12 @@ namespace DvmConsole.Avalonia.Services
                     return;
                 }
 
+                // Snapshot the key's last-stream state under this lock:
+                // if it moves while the alias is resolved below, the
+                // re-lock drops this frame as stale — the first
+                // committer per key wins.
+                hadLast = lastStreamByKey.TryGetValue(m.Key, out snapshotStream);
+
                 resolver = aliasResolver;
             }
 
@@ -236,6 +259,17 @@ namespace DvmConsole.Avalonia.Services
 
             lock (gate)
             {
+                // Linearizable commit: if the key's last-stream state
+                // changed since the snapshot — a different stream was
+                // committed, or a terminator cleared the stream — while
+                // the alias was being resolved, this frame is stale:
+                // drop it with no mutation and no event.
+                if (lastStreamByKey.TryGetValue(m.Key, out var currentStream) != hadLast
+                    || (hadLast && currentStream != snapshotStream))
+                {
+                    return;
+                }
+
                 if (lastStreamByKey.TryGetValue(m.Key, out var lastStream)
                     && lastStream == m.StreamId)
                 {
@@ -253,7 +287,7 @@ namespace DvmConsole.Avalonia.Services
 
                 entries.Insert(0, new CallHistoryEntry(
                     m.Key,
-                    channelName ?? string.Empty,
+                    channelName ?? m.Key,
                     m.SystemName,
                     m.SrcId,
                     m.DstId,
