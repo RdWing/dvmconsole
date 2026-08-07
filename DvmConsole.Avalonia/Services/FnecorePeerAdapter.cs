@@ -2,8 +2,10 @@
 #nullable enable
 using System;
 using System.Net;
+using System.Reflection;
 using System.Threading.Tasks;
 using dvmconsole;
+using DvmConsole.Avalonia.ViewModels;
 using DvmConsole.Core.Networking;
 using fnecore;
 using fnecore.DMR;
@@ -36,6 +38,21 @@ namespace DvmConsole.Avalonia.Services
         /// client identity, not the configured name.
         /// </summary>
         public string ConfiguredSystemName { get; }
+
+        /// <summary>
+        /// The fnecore peer's software identity, WPF parity
+        /// (dvmconsole/PeerSystem.cs:77-80): "CONSOLE_RxxAyy" derived
+        /// from the assembly version instead of a hardcoded string.
+        /// </summary>
+        public string SoftwareIdentity { get; }
+
+        /// <summary>
+        /// The shared "CONSOLE_RxxAyy" identity backing both
+        /// <see cref="SoftwareIdentity"/> and the peer construction.
+        /// </summary>
+        private static readonly string SoftwareIdentityValue =
+            "CONSOLE_" + AboutWindowViewModel.FormatReleaseVersion(
+                Assembly.GetExecutingAssembly().GetName().Version);
 
         private readonly Action<Action> background;
 
@@ -85,10 +102,11 @@ namespace DvmConsole.Avalonia.Services
         /// <param name="system">The configured FNE system.</param>
         /// <param name="background">The deferral seam; defaults to <see cref="Task.Run"/>.</param>
         public FnecorePeerAdapter(Codeplug.System system, Action<Action>? background = null)
-            : base(CreatePeer(system))
+            : base(CreatePeer(system, SoftwareIdentityValue))
         {
             this.background = background ?? (action => Task.Run(action));
             ConfiguredSystemName = system?.Name ?? string.Empty;
+            SoftwareIdentity = SoftwareIdentityValue;
 
             // Relay fnecore's own connection-state events. PeerConnected
             // fires from the login ACK path; PeerDisconnected is the
@@ -146,7 +164,7 @@ namespace DvmConsole.Avalonia.Services
         /// </summary>
         /// <param name="system">The configured FNE system.</param>
         /// <returns>The configured, unstarted peer.</returns>
-        private static FnePeer CreatePeer(Codeplug.System system)
+        private static FnePeer CreatePeer(Codeplug.System system, string softwareIdentity)
         {
             if (system is null)
             {
@@ -187,7 +205,7 @@ namespace DvmConsole.Avalonia.Services
                 Details = new PeerDetails
                 {
                     ConventionalPeer = true,
-                    Software = "CONSOLE_R00A00",
+                    Software = softwareIdentity,
                     Identity = system.Identity,
                 },
             };

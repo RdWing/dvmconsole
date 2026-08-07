@@ -111,7 +111,7 @@ namespace DvmConsole.Avalonia.ViewModels
         /// AboutWindow.xaml.cs parity); "Unknown" when no version is
         /// supplied.
         /// </summary>
-        private static string FormatReleaseVersion(Version? assemblyVersion)
+        internal static string FormatReleaseVersion(Version? assemblyVersion)
             => assemblyVersion is null
                 ? "Unknown"
                 : $"R{assemblyVersion.Major:D2}A{assemblyVersion.Minor:D2}";

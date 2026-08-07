@@ -491,5 +491,103 @@ namespace DvmConsole.Avalonia.Tests
             Assert.True(type.IsSealed);
             Assert.True(typeof(IVoiceTrafficSender).IsAssignableFrom(type));
         }
+
+        /* ------------------------------------------------------------------
+        ** fnecore transport follow-ups (audit deleg_dc79235a READY)
+        ** ---------------------------------------------------------------- */
+
+        [Fact]
+        public void Adapter_SoftwareIdentity_MatchesAssemblyVersionDerivation()
+        {
+            // WPF parity (PeerSystem.cs:77-80): CONSOLE_RxxAyy derived
+            // from the assembly version — not the hardcoded CONSOLE_R00A00.
+            // The expected value is read from the production assembly
+            // dynamically so the test stays green across version bumps.
+            var adapter = new FnecorePeerAdapter(MakeSystem());
+
+            var property = typeof(FnecorePeerAdapter).GetProperty("SoftwareIdentity");
+            Assert.NotNull(property); // RED: absent today
+
+            var version = typeof(FnecorePeerAdapter).Assembly.GetName().Version;
+            var expected = "CONSOLE_"
+                + $"R{version!.Major:D2}A{version.Minor:D2}";
+            Assert.Equal(expected, property!.GetValue(adapter));
+        }
+
+        [Fact]
+        public void UnavailableFneTransportFactory_Removed_NoResidualType()
+        {
+            // The dead fallback factory has zero production references;
+            // deleting it must leave no residual type behind.
+            var type = typeof(FnecoreTransportFactory).Assembly
+                .GetType("DvmConsole.Avalonia.Services.UnavailableFneTransportFactory");
+            Assert.Null(type); // RED: type still exists today
+        }
+
+        [Fact]
+        public void Sender_DmrMalformedTalkgroupId_SilentNoOp()
+        {
+            var sink = new PacketSink();
+            var adapter = new FnecorePeerAdapter(MakeSystem());
+            var sender = new FnecoreVoiceTrafficSender(
+                _ => adapter, sink);
+
+            var target = new TransmitTarget("Test Sys", "not-a-number", 1, VoiceMode.Dmr, 1001);
+            var ex = Record.Exception(() =>
+                sender.SendDmrVoice(target, new byte[27], 1, 0));
+
+            Assert.Null(ex); // FormatException today (audio thread!)
+            Assert.Empty(sink.Sent);
+        }
+
+        [Fact]
+        public void Sender_P25MalformedTalkgroupId_SilentNoOp()
+        {
+            var sink = new PacketSink();
+            var adapter = new FnecorePeerAdapter(MakeSystem());
+            var sender = new FnecoreVoiceTrafficSender(
+                _ => adapter, sink);
+
+            var target = new TransmitTarget("Test Sys", "not-a-number", 1, VoiceMode.P25, 1001);
+            var ex = Record.Exception(() =>
+                sender.SendP25Ldu(target, false, new byte[225], 1, 0));
+
+            Assert.Null(ex); // FormatException today
+            Assert.Empty(sink.Sent);
+        }
+
+        [Fact]
+        public void Sender_DmrSlotZero_SilentNoOp()
+        {
+            var sink = new PacketSink();
+            var adapter = new FnecorePeerAdapter(MakeSystem());
+            var sender = new FnecoreVoiceTrafficSender(
+                _ => adapter, sink);
+
+            // Slot 0 wraps to 255 today (unchecked byte arithmetic) and a
+            // corrupt packet reaches the network; it must be a silent no-op.
+            var target = new TransmitTarget("Test Sys", "31001", 0, VoiceMode.Dmr, 1001);
+            var ex = Record.Exception(() =>
+                sender.SendDmrVoice(target, new byte[27], 1, 0));
+
+            Assert.Null(ex);
+            Assert.Empty(sink.Sent);
+        }
+
+        [Fact]
+        public void Sender_DmrSlotOutOfRange_SilentNoOp()
+        {
+            var sink = new PacketSink();
+            var adapter = new FnecorePeerAdapter(MakeSystem());
+            var sender = new FnecoreVoiceTrafficSender(
+                _ => adapter, sink);
+
+            var target = new TransmitTarget("Test Sys", "31001", 3, VoiceMode.Dmr, 1001);
+            var ex = Record.Exception(() =>
+                sender.SendDmrVoice(target, new byte[27], 1, 0));
+
+            Assert.Null(ex);
+            Assert.Empty(sink.Sent);
+        }
     }
 }

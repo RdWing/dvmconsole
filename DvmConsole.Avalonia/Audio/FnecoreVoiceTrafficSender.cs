@@ -40,8 +40,11 @@ namespace DvmConsole.Avalonia.Audio
     /// (system name | talkgroup id | slot). The P25 path derives the
     /// real LDU1/LDU2 alternation from the LDU sequence parity — the
     /// recorded router gap (the router always passes
-    /// <c>isLdu2:false</c>). A system with no resolved adapter is a
-    /// silent no-op: nothing is built and nothing is sent.
+    /// <c>isLdu2:false</c>). A system with no resolved adapter, a
+    /// malformed talkgroup id, or (DMR) an out-of-range slot is a
+    /// silent no-op: nothing is built and nothing is sent (WPF wraps
+    /// the whole encode in try/catch → Log; the audio path never
+    /// throws).
     /// </summary>
     public sealed class FnecoreVoiceTrafficSender : IVoiceTrafficSender
     {
@@ -110,15 +113,31 @@ namespace DvmConsole.Avalonia.Audio
                 return;
             }
 
+            if (target.Slot < 1 || target.Slot > 2)
+            {
+                // Out-of-range DMR slot (TransmitTarget contract,
+                // IVoiceTrafficSender.cs:26): silent no-op — the
+                // unchecked (byte)(Slot - 1) in the builders would
+                // wrap slot 0 to 255 and emit a corrupt packet.
+                return;
+            }
+
+            if (!uint.TryParse(target.TalkgroupId, out uint dstId))
+            {
+                // Malformed talkgroup id: silent no-op — the audio path
+                // never throws (WPF wraps the encode in try/catch → Log).
+                return;
+            }
+
             if (seqNo % 6 == 0)
             {
                 // WPF cadence (MainWindow.DMR.cs:57-86): the
                 // VOICE_LC_HEADER packet precedes the voice frame at the
                 // start of each six-frame slot.
-                SendPacket(adapter, DmrOpcode, BuildDmrHeader(adapter, target, seqNo), seqNo, streamId);
+                SendPacket(adapter, DmrOpcode, BuildDmrHeader(adapter, target, dstId, seqNo), seqNo, streamId);
             }
 
-            SendPacket(adapter, DmrOpcode, BuildDmrVoice(adapter, target, ambe27, seqNo), seqNo, streamId);
+            SendPacket(adapter, DmrOpcode, BuildDmrVoice(adapter, target, dstId, ambe27, seqNo), seqNo, streamId);
         }
 
         /// <inheritdoc />
@@ -128,6 +147,13 @@ namespace DvmConsole.Avalonia.Audio
             if (adapter is null)
             {
                 // Unknown or not-yet-started system: silent no-op.
+                return;
+            }
+
+            if (!uint.TryParse(target.TalkgroupId, out uint dstId))
+            {
+                // Malformed talkgroup id: silent no-op — the audio path
+                // never throws (WPF wraps the encode in try/catch → Log).
                 return;
             }
 
@@ -141,7 +167,7 @@ namespace DvmConsole.Avalonia.Audio
             var callData = new RemoteCallData
             {
                 SrcId = target.SourceId,
-                DstId = uint.Parse(target.TalkgroupId),
+                DstId = dstId,
                 LCO = P25Defines.LC_GROUP,
             };
 
@@ -154,7 +180,7 @@ namespace DvmConsole.Avalonia.Audio
             }
             else
             {
-                adapter.CreateP25LDU1Message(ldu, ref payload, target.SourceId, uint.Parse(target.TalkgroupId));
+                adapter.CreateP25LDU1Message(ldu, ref payload, target.SourceId, dstId);
             }
 
             SendPacket(adapter, P25Opcode, payload, seqNo, streamId);
@@ -201,11 +227,10 @@ namespace DvmConsole.Avalonia.Audio
         /// the 33-byte frame, and the frame is packed into the network
         /// packet with a VOICE_SYNC frame type.
         /// </summary>
-        private byte[] BuildDmrHeader(FnecorePeerAdapter adapter, TransmitTarget target, int seqNo)
+        private byte[] BuildDmrHeader(FnecorePeerAdapter adapter, TransmitTarget target, uint dstId, int seqNo)
         {
             byte slot = (byte)(target.Slot - 1);
             uint srcId = target.SourceId;
-            uint dstId = uint.Parse(target.TalkgroupId);
 
             // Generate the DMR LC and seed the target's embedded state.
             var dmrLC = new LC
@@ -243,11 +268,10 @@ namespace DvmConsole.Avalonia.Audio
         /// other frame is VOICE with the embedded signalling (EMB with
         /// the LCSS from the target's embedded state).
         /// </summary>
-        private byte[] BuildDmrVoice(FnecorePeerAdapter adapter, TransmitTarget target, ReadOnlyMemory<byte> ambe27, int seqNo)
+        private byte[] BuildDmrVoice(FnecorePeerAdapter adapter, TransmitTarget target, uint dstId, ReadOnlyMemory<byte> ambe27, int seqNo)
         {
             byte slot = (byte)(target.Slot - 1);
             uint srcId = target.SourceId;
-            uint dstId = uint.Parse(target.TalkgroupId);
             byte n = (byte)(seqNo % 6);
 
             byte[] ambe = ambe27.ToArray();
