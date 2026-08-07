@@ -207,6 +207,21 @@ namespace DvmConsole.Avalonia.Tests
         }
 
         [Fact]
+        public void SuppressedTerminator_ClearsStreamState()
+        {
+            var suppressNext = false;
+            var store = new CallHistoryStore(100, (_, _) => suppressNext);
+
+            store.AddFrame(Voice("k", 100, 200, 1), "CH 1");
+            suppressNext = true;
+            store.AddFrame(Term("k", 100, 200, 1), "CH 1");
+            suppressNext = false;
+            store.AddFrame(Voice("k", 100, 200, 1), "CH 1");
+
+            Assert.Equal(2, store.Entries.Count);
+        }
+
+        [Fact]
         public void NullSuppress_RecordsEverything()
         {
             var store = new CallHistoryStore();
@@ -250,6 +265,82 @@ namespace DvmConsole.Avalonia.Tests
             Assert.Equal(VoiceMode.P25, entry.Mode);
             Assert.Equal("", entry.Alias);
             Assert.True(entry.Timestamp >= stamp);
+        }
+
+        /* ------------------------------------------------------------------
+        ** Alias resolution (alias.yml follow-on, additive seam)
+        /* ---------------------------------------------------------------- */
+
+        [Fact]
+        public void SetAliasResolver_ExactSurface()
+        {
+            var type = typeof(CallHistoryStore);
+            Assert.NotNull(type.GetMethod(nameof(CallHistoryStore.SetAliasResolver), new[]
+            {
+                typeof(Func<string, uint, string>),
+            }));
+        }
+
+        [Fact]
+        public void AliasResolver_AppliedAtRecordTime()
+        {
+            var store = new CallHistoryStore();
+            store.SetAliasResolver((system, src) =>
+                system == "System 1" && src == 111 ? "Alpha Base" : string.Empty);
+
+            store.AddFrame(Voice("k", 111, 222, 1), "CH 1");
+
+            Assert.Equal("Alpha Base", store.Entries[0].Alias);
+        }
+
+        [Fact]
+        public void AliasResolver_NullResult_StoresEmpty()
+        {
+            var store = new CallHistoryStore();
+            store.SetAliasResolver((_, _) => null!);
+
+            store.AddFrame(Voice("k", 111, 222, 1), "CH 1");
+
+            Assert.Equal(string.Empty, store.Entries[0].Alias);
+        }
+
+        [Fact]
+        public void AliasResolver_NeverSet_StoresEmpty()
+        {
+            var store = new CallHistoryStore();
+
+            store.AddFrame(Voice("k", 111, 222, 1), "CH 1");
+
+            Assert.Equal(string.Empty, store.Entries[0].Alias);
+        }
+
+        [Fact]
+        public void AliasResolver_ClearedAfterNull_StoresEmpty()
+        {
+            var store = new CallHistoryStore();
+            store.SetAliasResolver((_, _) => "Bravo");
+            store.SetAliasResolver(null!);
+
+            store.AddFrame(Voice("k", 111, 222, 1), "CH 1");
+
+            Assert.Equal(string.Empty, store.Entries[0].Alias);
+        }
+
+        [Fact]
+        public void AliasResolver_ThrowFallsBackWithoutCorruptingState()
+        {
+            var store = new CallHistoryStore();
+            store.SetAliasResolver((_, _) => throw new InvalidOperationException("resolver failed"));
+
+            store.AddFrame(Voice("k", 111, 222, 1), "CH 1");
+
+            Assert.Single(store.Entries);
+            Assert.Equal(string.Empty, store.Entries[0].Alias);
+
+            store.SetAliasResolver((_, _) => "Recovered");
+            store.AddFrame(Voice("k", 111, 222, 2), "CH 1");
+
+            Assert.Equal("Recovered", store.Entries[0].Alias);
         }
     }
 }

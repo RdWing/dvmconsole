@@ -20,6 +20,7 @@ using DvmConsole.Platform.Audio.Vocoder;
 using DvmConsole.Platform.Hotkeys;
 using DvmConsole.Platform.Hotkeys.Mac;
 using DvmConsole.Platform.Native;
+using System.Collections.Generic;
 using System.IO;
 
 namespace DvmConsole.Avalonia
@@ -119,6 +120,42 @@ namespace DvmConsole.Avalonia
         }
 
         /// <summary>
+        /// Loads each codeplug system's alias file and composes the
+        /// per-system alias resolver for the call-history slice,
+        /// WPF-parity (MainWindow.xaml.cs:1064-1065). A system whose
+        /// alias file is missing or unreadable is left out of the map —
+        /// its calls resolve to no alias rather than failing startup;
+        /// a null codeplug yields a null resolver (no aliases
+        /// anywhere). The load itself never throws.
+        /// </summary>
+        private static AliasResolver? BuildAliasResolver(Codeplug? codeplug)
+        {
+            if (codeplug is null)
+            {
+                return null;
+            }
+
+            var aliasesBySystem = new Dictionary<string, IReadOnlyList<RadioAlias>>();
+
+            foreach (var system in codeplug.Systems ?? new List<Codeplug.System>())
+            {
+                if (File.Exists(system.AliasPath))
+                {
+                    try
+                    {
+                        aliasesBySystem[system.Name] = AliasTools.LoadAliases(system.AliasPath);
+                    }
+                    catch
+                    {
+                        // Never throw at startup: leave the system out of the map.
+                    }
+                }
+            }
+
+            return new AliasResolver(aliasesBySystem);
+        }
+
+        /// <summary>
         /// Adds the native "About" menu item that opens the About
         /// dialog on the main window. The item is inserted into the
         /// first top-level submenu (the App menu) ahead of its
@@ -210,6 +247,14 @@ namespace DvmConsole.Avalonia
                     ? null
                     : new CallHistoryStore();
 
+                // Load per-system alias files (WPF-parity) and compose
+                // the alias resolver over them so call-history entries
+                // carry the subscriber alias for their (system, source
+                // id). A null codeplug yields a null resolver — no
+                // aliases anywhere; a missing or unreadable alias file
+                // leaves only that system without aliases. Never throws.
+                var aliasResolver = BuildAliasResolver(codeplug.Codeplug);
+
                 // Compose the real dual-mode libvocoder adapter when the
                 // startup readiness probe found the library; otherwise
                 // keep the null codec pair so the router stays fully
@@ -241,7 +286,8 @@ namespace DvmConsole.Avalonia
                     new FnecoreVoiceTrafficSender(fnecoreTransportFactory.ResolveAdapter),
                     fnecoreTransportFactory,
                     codeplug.Codeplug,
-                    callHistory);
+                    callHistory,
+                    aliasResolver);
                 mainWindow.FileDialogService =
                     new AvaloniaFileDialogService(mainWindow.StorageProvider);
                 desktop.MainWindow = mainWindow;

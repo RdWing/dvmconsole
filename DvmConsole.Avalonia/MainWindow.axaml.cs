@@ -162,11 +162,15 @@ namespace DvmConsole.Avalonia
         /// the optional codeplug systems seeding the FNE slice, the
         /// optional voice codec/traffic seams for the audio router,
         /// the optional FNE transport factory backing the connection
-        /// slice, and the optional codeplug backing the transmit-target
+        /// slice, the optional codeplug backing the transmit-target
         /// resolver (temporary channel assignment until the zone UI
-        /// slice). The
-        /// factory, readiness, systems, codec, sender, transport and
-        /// codeplug parameters are
+        /// slice), the optional call-history store, and the optional
+        /// alias resolver backing the store's RID-alias column
+        /// (per-system alias files, WPF-parity; a null resolver keeps
+        /// the entries' aliases empty). The
+        /// factory, readiness, systems, codec, sender, transport,
+        /// codeplug, call-history store and alias-resolver parameters
+        /// are
         /// last so the pre-existing four-argument constructor remains
         /// source-compatible, including null-literal calls. When a
         /// key-state reader is present, exactly one 250 ms dispatcher
@@ -199,7 +203,8 @@ namespace DvmConsole.Avalonia
             IVoiceTrafficSender? voiceSender = null,
             IFneTransportFactory? transportFactory = null,
             Codeplug? codeplug = null,
-            CallHistoryStore? callHistory = null)
+            CallHistoryStore? callHistory = null,
+            AliasResolver? aliasResolver = null)
         {
             InitializeComponent();
             DataContext = new MainWindowViewModel(systems, catalog, hotkeys, persistence, vocoderStatus, codeplug, callHistory);
@@ -281,6 +286,17 @@ namespace DvmConsole.Avalonia
                     var receiveChannelResolver = codeplug is null
                         ? null
                         : new ReceiveChannelResolver(codeplug);
+
+                    // Wire the optional alias resolver into the store
+                    // so recorded entries carry the subscriber alias
+                    // for their (system, source id); the resolver never
+                    // throws, and a null resolver leaves the alias
+                    // empty (WPF parity for unresolved ids).
+                    if (aliasResolver is not null)
+                    {
+                        callHistory.SetAliasResolver(
+                            (system, src) => aliasResolver.Resolve(system, src) ?? string.Empty);
+                    }
 
                     fneReceiveGlue.CallFrameObserved += metadata =>
                     {

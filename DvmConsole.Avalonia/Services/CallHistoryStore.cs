@@ -26,10 +26,11 @@ namespace DvmConsole.Avalonia.Services
     /// <summary>
     /// One immutable call-history row: the codeplug channel name for the
     /// receive target (raw-key fallback when no channel matched), the
-    /// system, source/destination ids, an alias slot (empty in this
-    /// slice — alias loading is a follow-on), the voice mode and the
-    /// receive timestamp. Get-only: rows are replaced wholesale by
-    /// refresh, never mutated in place.
+    /// system, source/destination ids, the subscriber alias resolved at
+    /// record time through the optional alias resolver (empty when none
+    /// is set or the id is unmatched), the voice mode and the receive
+    /// timestamp. Get-only: rows are replaced wholesale by refresh,
+    /// never mutated in place.
     /// </summary>
     public sealed class CallHistoryEntry
     {
@@ -71,7 +72,7 @@ namespace DvmConsole.Avalonia.Services
         /// <summary>The destination talkgroup id.</summary>
         public uint DstId { get; }
 
-        /// <summary>The subscriber alias, empty in this slice.</summary>
+        /// <summary>The subscriber alias, resolved at record time via the optional alias resolver.</summary>
         public string Alias { get; }
 
         /// <summary>The voice mode of the call.</summary>
@@ -92,10 +93,13 @@ namespace DvmConsole.Avalonia.Services
     /// (WPF isNewCallStream parity MainWindow.DMR.cs:335). The optional
     /// suppression delegate (system name, source id) mirrors the WPF
     /// console-RID filter (MainWindow.Tar.cs:177-180): true means the
-    /// frame is not recorded. <see cref="Changed"/> is raised on any
-    /// entry mutation (add/evict), never on dedup no-ops. No UI, no
-    /// persistence, no disposal: receive threads write, the UI thread
-    /// reads snapshots.
+    /// frame is not recorded. The optional alias resolver set through
+    /// <see cref="SetAliasResolver"/> resolves each recorded entry's
+    /// <see cref="CallHistoryEntry.Alias"/> from (system name, source
+    /// id) at record time; unset or null keeps the alias empty.
+    /// <see cref="Changed"/> is raised on any entry mutation
+    /// (add/evict), never on dedup no-ops. No UI, no persistence, no
+    /// disposal: receive threads write, the UI thread reads snapshots.
     /// </summary>
     public sealed class CallHistoryStore
     {
@@ -108,6 +112,8 @@ namespace DvmConsole.Avalonia.Services
         private readonly int maxCallHistory;
 
         private readonly Func<string, uint, bool>? suppress;
+
+        private Func<string, uint, string>? aliasResolver;
 
         private readonly List<CallHistoryEntry> entries = new();
 
@@ -124,6 +130,23 @@ namespace DvmConsole.Avalonia.Services
         {
             this.maxCallHistory = Math.Clamp(maxCallHistory, MinCallHistory, MaxCallHistory);
             this.suppress = suppress;
+        }
+
+        /// <summary>
+        /// Sets (or clears) the alias resolver consulted at record
+        /// time: each recorded entry's <see cref="CallHistoryEntry.Alias"/>
+        /// is resolved from (system name, source id) when a resolver is
+        /// set; a null resolver keeps the alias empty (the default).
+        /// Thread-safe: the resolver is read inside the store's lock in
+        /// <see cref="AddFrame"/>.
+        /// </summary>
+        /// <param name="resolver">The resolver, or null to clear it.</param>
+        public void SetAliasResolver(Func<string, uint, string>? resolver)
+        {
+            lock (gate)
+            {
+                aliasResolver = resolver;
+            }
         }
 
         /// <summary>
@@ -166,20 +189,21 @@ namespace DvmConsole.Avalonia.Services
             }
 
             Action? changed = null;
+            Func<string, uint, string>? resolver;
 
             lock (gate)
             {
-                if (suppress is not null && suppress(m.SystemName, m.SrcId))
+                if (m.IsTerminator)
                 {
+                    // Close the key's stream before suppression is
+                    // consulted. A suppressed terminator still ends the
+                    // stream, and the terminator itself is never recorded.
+                    lastStreamByKey.Remove(m.Key);
                     return;
                 }
 
-                if (m.IsTerminator)
+                if (suppress is not null && suppress(m.SystemName, m.SrcId))
                 {
-                    // Close the key's stream. The terminator itself is
-                    // never recorded; clearing the marker lets a reused
-                    // stream id after the call end start a fresh entry.
-                    lastStreamByKey.Remove(m.Key);
                     return;
                 }
 
@@ -187,6 +211,36 @@ namespace DvmConsole.Avalonia.Services
                     && lastStream == m.StreamId)
                 {
                     // Same call stream: dedup no-op, no mutation, no event.
+                    return;
+                }
+
+                resolver = aliasResolver;
+            }
+
+            // Alias resolution is an injected boundary. Do not hold the
+            // store lock while it runs: a slow or re-entrant resolver must
+            // not block snapshot readers. A resolver failure degrades to
+            // the same empty alias as an unmatched RID.
+            var alias = string.Empty;
+            if (resolver is not null)
+            {
+                try
+                {
+                    alias = resolver(m.SystemName, m.SrcId) ?? string.Empty;
+                }
+                catch
+                {
+                    alias = string.Empty;
+                }
+            }
+
+            lock (gate)
+            {
+                if (lastStreamByKey.TryGetValue(m.Key, out var lastStream)
+                    && lastStream == m.StreamId)
+                {
+                    // Another receive thread recorded this stream while
+                    // the alias was being resolved.
                     return;
                 }
 
@@ -203,7 +257,7 @@ namespace DvmConsole.Avalonia.Services
                     m.SystemName,
                     m.SrcId,
                     m.DstId,
-                    string.Empty,
+                    alias,
                     m.Mode,
                     DateTimeOffset.UtcNow));
 
