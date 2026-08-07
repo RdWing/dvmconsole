@@ -32,6 +32,17 @@ namespace DvmConsole.Avalonia.Services
         }
 
         /// <summary>
+        /// Additive call-history seam: raised for every CLASSIFIED
+        /// receive frame — voice AND terminator — after classification
+        /// succeeds and before routing. Control frames (frames
+        /// <see cref="FneFrameMapper.TryExtractDmr"/> /
+        /// <see cref="FneFrameMapper.TryExtractP25"/> return false for)
+        /// stay silent. Routing behavior is untouched: terminators are
+        /// still dropped from routing and voice frames are still routed.
+        /// </summary>
+        public event Action<ReceivedCallMetadata>? CallFrameObserved;
+
+        /// <summary>
         /// Classifies one DMR receive event and routes voice frames to
         /// the router; terminators and other control frames are dropped.
         /// </summary>
@@ -39,11 +50,23 @@ namespace DvmConsole.Avalonia.Services
         /// <param name="e">The raw DMR receive event.</param>
         public void OnDmrFrame(string systemName, DMRDataReceivedEvent e)
         {
+            if (!FneFrameMapper.TryExtractDmr(e, out var ambe, out var terminator))
+            {
+                return;
+            }
+
+            CallFrameObserved?.Invoke(new ReceivedCallMetadata(
+                systemName,
+                e.SrcId,
+                e.DstId,
+                e.Slot,
+                VoiceMode.Dmr,
+                e.StreamId,
+                FneFrameMapper.BuildDmrTalkgroupKey(systemName, e.DstId, e.Slot),
+                terminator));
+
             var route = this.route;
-            if (route is null
-                || !FneFrameMapper.TryExtractDmr(e, out var ambe, out var terminator)
-                || terminator
-                || ambe is null)
+            if (route is null || terminator || ambe is null)
             {
                 return;
             }
@@ -59,11 +82,23 @@ namespace DvmConsole.Avalonia.Services
         /// <param name="e">The raw P25 receive event.</param>
         public void OnP25Frame(string systemName, P25DataReceivedEvent e)
         {
+            if (!FneFrameMapper.TryExtractP25(e, out var ldu, out var terminator))
+            {
+                return;
+            }
+
+            CallFrameObserved?.Invoke(new ReceivedCallMetadata(
+                systemName,
+                e.SrcId,
+                e.DstId,
+                0,
+                VoiceMode.P25,
+                e.StreamId,
+                FneFrameMapper.BuildP25TalkgroupKey(systemName, e.DstId),
+                terminator));
+
             var route = this.route;
-            if (route is null
-                || !FneFrameMapper.TryExtractP25(e, out var ldu, out var terminator)
-                || terminator
-                || ldu is null)
+            if (route is null || terminator || ldu is null)
             {
                 return;
             }

@@ -1,6 +1,7 @@
 <Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:vm="using:DvmConsole.Avalonia.ViewModels"
+        xmlns:svc="using:DvmConsole.Avalonia.Services"
         xmlns:conv="using:Avalonia.Data.Converters"
         x:Class="DvmConsole.Avalonia.MainWindow"
         x:DataType="vm:MainWindowViewModel"
@@ -266,7 +267,7 @@
                     </ItemsControl>
                 </Border>
 
-                <Grid Grid.Row="3" ColumnDefinitions="*,16,*">
+                <Grid Grid.Row="3" ColumnDefinitions="*,16,*,16,*">
                     <Border Classes="panel" Padding="18">
                         <StackPanel Spacing="14">
                             <TextBlock Classes="kicker" Text="AUDIO PATH" />
@@ -330,6 +331,55 @@
                     </Border>
 
                     <Border Grid.Column="2" Classes="panel" Padding="18">
+                        <StackPanel Spacing="14">
+                            <TextBlock Classes="kicker" Text="CALL HISTORY" />
+
+                            <StackPanel Spacing="10"
+                                        IsVisible="{Binding CallHistory, Converter={x:Static conv:ObjectConverters.IsNull}}">
+                                <TextBlock Classes="data-value" Text="Call history not attached" />
+                                <TextBlock Classes="muted"
+                                           Text="No call-history store is composed for this session; received calls are not recorded." />
+                            </StackPanel>
+
+                            <StackPanel Spacing="12"
+                                        IsVisible="{Binding CallHistory, Converter={x:Static conv:ObjectConverters.IsNotNull}}">
+                                <Grid ColumnDefinitions="78,*,*,62,62">
+                                    <TextBlock Classes="data-label" Text="TIMESTAMP" />
+                                    <TextBlock Grid.Column="1" Classes="data-label" Text="CHANNEL" />
+                                    <TextBlock Grid.Column="2" Classes="data-label" Text="RID ALIAS" />
+                                    <TextBlock Grid.Column="3" Classes="data-label" Text="RID" TextAlignment="Right" />
+                                    <TextBlock Grid.Column="4" Classes="data-label" Text="TGID" TextAlignment="Right" />
+                                </Grid>
+
+                                <ScrollViewer MaxHeight="260" HorizontalScrollBarVisibility="Disabled">
+                                    <ItemsControl ItemsSource="{Binding CallHistory.Rows}">
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate x:DataType="svc:CallHistoryEntry">
+                                                <Grid ColumnDefinitions="78,*,*,62,62" Margin="0,3,0,3">
+                                                    <TextBlock Classes="muted" FontSize="11"
+                                                               Text="{Binding Timestamp, StringFormat={}{0:HH:mm:ss}}" />
+                                                    <TextBlock Grid.Column="1" Classes="data-value" FontSize="12"
+                                                               Text="{Binding ChannelName}"
+                                                               TextTrimming="CharacterEllipsis" />
+                                                    <TextBlock Grid.Column="2" Classes="muted" FontSize="11"
+                                                               Text="{Binding Alias}" />
+                                                    <TextBlock Grid.Column="3" Classes="muted" FontSize="11"
+                                                               Text="{Binding SrcId}" TextAlignment="Right" />
+                                                    <TextBlock Grid.Column="4" Classes="muted" FontSize="11"
+                                                               Text="{Binding DstId}" TextAlignment="Right" />
+                                                </Grid>
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                </ScrollViewer>
+
+                                <TextBlock Classes="muted"
+                                           Text="One entry per call stream; received calls record automatically." />
+                            </StackPanel>
+                        </StackPanel>
+                    </Border>
+
+                    <Border Grid.Column="4" Classes="panel" Padding="18">
                         <StackPanel Spacing="14">
                             <TextBlock Classes="kicker" Text="PTT CAPABILITY" />
 

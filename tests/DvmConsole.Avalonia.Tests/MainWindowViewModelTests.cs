@@ -65,6 +65,7 @@
 #nullable enable
 using System.ComponentModel;
 using dvmconsole;
+using DvmConsole.Avalonia.Services;
 using DvmConsole.Avalonia.ViewModels;
 using DvmConsole.Platform.Audio;
 using DvmConsole.Platform.Hotkeys;
@@ -676,6 +677,24 @@ namespace DvmConsole.Avalonia.Tests
                 main.GetProperty(nameof(MainWindowViewModel.SelectedZone))!.PropertyType);
             var selectedZoneSetter = main.GetProperty(nameof(MainWindowViewModel.SelectedZone))!.SetMethod;
             Assert.NotNull(selectedZoneSetter);
+        }
+
+        [Fact]
+        public void CallHistory_NullStore_NullPanel()
+        {
+            var vm = new MainWindowViewModel(MakeCodeplug().Systems, null, null, null, null, MakeCodeplug());
+
+            Assert.Null(vm.CallHistory); // muted state
+        }
+
+        [Fact]
+        public void CallHistory_WithStore_PanelAttached()
+        {
+            var store = new CallHistoryStore();
+            var vm = new MainWindowViewModel(MakeCodeplug().Systems, null, null, null, null, MakeCodeplug(), store);
+
+            Assert.NotNull(vm.CallHistory);
+            Assert.Same(store, vm.CallHistory!.Store);
         }
 
         // ---- Audio settings composition: fixture ----------------------------------

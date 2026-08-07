@@ -5,6 +5,7 @@ using System.Collections.Generic;
 using System.ComponentModel;
 using dvmconsole;
 using DvmConsole.Avalonia.Persistence;
+using DvmConsole.Avalonia.Services;
 using DvmConsole.Platform.Audio;
 using DvmConsole.Platform.Hotkeys;
 using DvmConsole.Platform.Native;
@@ -117,6 +118,16 @@ namespace DvmConsole.Avalonia.ViewModels
         /// query at construction and owns no disposable resources.
         /// </summary>
         public HotkeyCaptureViewModel? HotkeyCapture { get; }
+
+        /// <summary>
+        /// The call-history slice composed from the injected store, or
+        /// null when no store was provided. Get-only and constructed
+        /// exactly once; the slice performs no store-event subscription
+        /// (the shell refreshes it via the store's
+        /// <see cref="CallHistoryStore.Changed"/> event) and owns no
+        /// disposable resources.
+        /// </summary>
+        public CallHistoryViewModel? CallHistory { get; }
 
         /// <summary>
         /// The connection state label, e.g. <c>OFFLINE</c> or
@@ -327,8 +338,9 @@ namespace DvmConsole.Avalonia.ViewModels
         /// systems, an audio-settings slice composed from the given
         /// device catalog, a PTT capability slice composed from the
         /// given hotkey service, optional audio-settings persistence,
-        /// an optional startup vocoder-readiness result, and an
-        /// optional codeplug for the zone/channel UI slice. Null systems
+        /// an optional startup vocoder-readiness result, an optional
+        /// codeplug for the zone/channel UI slice, and an optional
+        /// call-history store for the CALL HISTORY slice. Null systems
         /// yield an empty manager,
         /// a null catalog yields a null <see cref="AudioSettings"/>, and
         /// a null hotkey service yields a null <see cref="Ptt"/>. When
@@ -347,7 +359,9 @@ namespace DvmConsole.Avalonia.ViewModels
         /// with slots beyond the list staying unassigned — null
         /// <see cref="ChannelSlotViewModel.ChannelName"/>). A null
         /// codeplug leaves <see cref="Zones"/> empty, no zone selected,
-        /// and every slot unassigned.
+        /// and every slot unassigned. A null store leaves
+        /// <see cref="CallHistory"/> null, keeping the CALL HISTORY
+        /// panel in its muted "not attached" state.
         /// </summary>
         public MainWindowViewModel(
             IReadOnlyList<Codeplug.System>? systems,
@@ -355,7 +369,8 @@ namespace DvmConsole.Avalonia.ViewModels
             IGlobalHotkeyService? hotkeys,
             AudioSettingsPersistence? persistence,
             VocoderReadinessResult? vocoderStatus,
-            Codeplug? codeplug = null)
+            Codeplug? codeplug = null,
+            CallHistoryStore? callHistory = null)
         {
             VocoderStatus = vocoderStatus is null
                 ? null
@@ -405,6 +420,10 @@ namespace DvmConsole.Avalonia.ViewModels
                 : new PttCapabilityViewModel(hotkeys, () => PrimaryChannel, () => SelectedChannels);
 
             HotkeyCapture = Ptt is null ? null : new HotkeyCaptureViewModel(Ptt);
+
+            CallHistory = callHistory is null
+                ? null
+                : new CallHistoryViewModel(callHistory);
 
             var savedInputId = AudioDeviceId.Default;
             var savedOutputId = AudioDeviceId.Default;

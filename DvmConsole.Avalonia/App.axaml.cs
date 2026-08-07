@@ -201,6 +201,15 @@ namespace DvmConsole.Avalonia
                     System.Console.Out.Flush();
                 }
 
+                // Compose the call-history store only when the codeplug
+                // loaded: the store records received calls, resolving
+                // their targets to codeplug channel names. A null
+                // codeplug keeps the slice dormant (a null store, and
+                // the panel shows its muted "not attached" state).
+                var callHistory = codeplug.Codeplug is null
+                    ? null
+                    : new CallHistoryStore();
+
                 // Compose the real dual-mode libvocoder adapter when the
                 // startup readiness probe found the library; otherwise
                 // keep the null codec pair so the router stays fully
@@ -231,7 +240,8 @@ namespace DvmConsole.Avalonia
                     (IVoiceFrameEncoder?)voiceCodec ?? new NullVoiceFrameEncoder(),
                     new FnecoreVoiceTrafficSender(fnecoreTransportFactory.ResolveAdapter),
                     fnecoreTransportFactory,
-                    codeplug.Codeplug);
+                    codeplug.Codeplug,
+                    callHistory);
                 mainWindow.FileDialogService =
                     new AvaloniaFileDialogService(mainWindow.StorageProvider);
                 desktop.MainWindow = mainWindow;

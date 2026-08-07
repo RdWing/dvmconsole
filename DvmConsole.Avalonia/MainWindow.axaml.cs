@@ -198,10 +198,11 @@ namespace DvmConsole.Avalonia
             IVoiceFrameEncoder? voiceEncoder = null,
             IVoiceTrafficSender? voiceSender = null,
             IFneTransportFactory? transportFactory = null,
-            Codeplug? codeplug = null)
+            Codeplug? codeplug = null,
+            CallHistoryStore? callHistory = null)
         {
             InitializeComponent();
-            DataContext = new MainWindowViewModel(systems, catalog, hotkeys, persistence, vocoderStatus, codeplug);
+            DataContext = new MainWindowViewModel(systems, catalog, hotkeys, persistence, vocoderStatus, codeplug, callHistory);
 
             // Compose the transmit-target resolver over the codeplug so
             // the PTT path resolves the primary channel's codeplug name
@@ -265,6 +266,36 @@ namespace DvmConsole.Avalonia
                         adapter.DmrFrameReceived += e => fneReceiveGlue?.OnDmrFrame(adapter.ConfiguredSystemName, e);
                         adapter.P25FrameReceived += e => fneReceiveGlue?.OnP25Frame(adapter.ConfiguredSystemName, e);
                     };
+                }
+
+                // Compose the call-history slice over the receive glue:
+                // every classified frame is resolved to a codeplug
+                // channel name — a null resolver (no codeplug) or a
+                // resolution miss falls back to the raw talkgroup key
+                // with a null channel name — and recorded into the
+                // store. The store's Changed event refreshes the panel
+                // on the UI thread. A null store keeps the slice
+                // dormant.
+                if (callHistory is not null)
+                {
+                    var receiveChannelResolver = codeplug is null
+                        ? null
+                        : new ReceiveChannelResolver(codeplug);
+
+                    fneReceiveGlue.CallFrameObserved += metadata =>
+                    {
+                        var channelName = receiveChannelResolver?.Resolve(
+                            metadata.SystemName, metadata.DstId, metadata.Slot);
+                        callHistory.AddFrame(metadata, channelName);
+                    };
+
+                    callHistory.Changed += () => Dispatcher.UIThread.Post(() =>
+                    {
+                        if (DataContext is MainWindowViewModel vm)
+                        {
+                            vm.CallHistory?.Refresh();
+                        }
+                    });
                 }
 
                 if (audioViewModel.Ptt is { } ptt)
