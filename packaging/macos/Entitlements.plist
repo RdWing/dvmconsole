@@ -10,10 +10,14 @@
     - allow-jit                       JIT + dynamic codegen (CoreCLR)
     - allow-unsigned-executable-memory  CoreCLR executable-heap allocation
     - allow-dyld-environment-variables DYLD_* passthrough (tests/smokes)
-  The bundled native libvocoder.dylib is signed along with the app, so
-  library validation can stay at its (default) strict setting; if the
-  vocoder is ever replaced by an unsigned build, add
-  disable-library-validation instead of relaxing anything else.
+    - disable-library-validation     REQUIRED by .NET host libraries
+      (libhostfxr.dylib etc. fail the team-ID check under hardened
+      runtime without it — verified: a hardened-runtime signed bundle
+      without this entitlement fails at launch with "mapping process
+      and mapped file (non-platform) have different Team IDs"; with
+      it, the signed bundle launches). This is the documented .NET
+      distribution guidance for hardened runtime.
+  The bundled native libvocoder.dylib is signed along with the app.
 -->
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -23,6 +27,8 @@
 	<key>com.apple.security.cs.allow-unsigned-executable-memory</key>
 	<true/>
 	<key>com.apple.security.cs.allow-dyld-environment-variables</key>
+	<true/>
+	<key>com.apple.security.cs.disable-library-validation</key>
 	<true/>
 </dict>
 </plist>

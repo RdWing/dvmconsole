@@ -100,13 +100,13 @@ if [ "${#cred_args[@]}" -eq 0 ]; then
 fi
 
 codesign_bin="$(command -v codesign || true)"
-notarytool_bin="$(command -v notarytool || true)"
-stapler_bin="$(command -v stapler || true)"
+notarytool_bin="$(command -v notarytool || xcrun --find notarytool 2>/dev/null || true)"
+stapler_bin="$(command -v stapler || xcrun --find stapler 2>/dev/null || true)"
 if [ -z "${codesign_bin}" ]; then
     die "codesign not found (install Xcode Command Line Tools)"
 fi
 if [ -z "${notarytool_bin}" ] || [ -z "${stapler_bin}" ]; then
-    die "notarytool/stapler not found (install Xcode Command Line Tools)"
+    die "notarytool/stapler not found (install Xcode Command Line Tools; xcrun --find tried)"
 fi
 
 # --- Plan ------------------------------------------------------------------
@@ -134,8 +134,16 @@ codesign --verify --deep --strict --verbose=2 "${app_path}" 2>&1 \
     | sed 's/^/    /'
 
 # --- 3. Notarize ------------------------------------------------------------
-printf '\n[3/4] notarytool submit + wait...\n'
-submission="$(xcrun notarytool submit "${app_path}" "${cred_args[@]}" \
+printf '\n[3/4] notarytool submit + wait (zip archive)...\n'
+# notarytool accepts .zip/.pkg/.dmg — a bare .app is rejected. Build a
+# zip next to the bundle (excluding macOS metadata) and submit that.
+app_dir="$(dirname "${app_path}")"
+app_base="$(basename "${app_path}" .app)"
+zip_path="${app_dir}/${app_base}.zip"
+rm -f "${zip_path}"
+ditto -c -k --keepParent "${app_path}" "${zip_path}"
+
+submission="$(xcrun notarytool submit "${zip_path}" "${cred_args[@]}" \
     --wait --output-format json)"
 printf '%s\n' "${submission}" | sed 's/^/    /'
 status="$(printf '%s' "${submission}" | python3 -c \
