@@ -145,6 +145,68 @@ namespace DvmConsole.Avalonia.ViewModels
         public IReadOnlyList<ChannelSlotViewModel> Channels { get; }
 
         /// <summary>
+        /// The codeplug zones retained by the dashboard in codeplug
+        /// order, or empty when no codeplug was composed. Each entry
+        /// wraps a codeplug zone wholesale, including zones whose
+        /// channel list is null. Get-only; the collection is fixed at
+        /// construction.
+        /// </summary>
+        public IReadOnlyList<ZoneViewModel> Zones { get; }
+
+        private ZoneViewModel? selectedZone;
+
+        /// <summary>
+        /// The zone currently driving the four channel slots, or null
+        /// when the codeplug has no zones. Defaults to the first zone
+        /// when zones exist. Change-only: a
+        /// <see cref="PropertyChanged"/> notification is raised only
+        /// when the value actually changes, and a call that changes
+        /// nothing raises nothing. Foreign instances (not a member of
+        /// <see cref="Zones"/>) and null (while zones exist) are
+        /// rejected as silent no-ops. On an accepted change the four
+        /// slots are re-assigned from the new zone's channels and the
+        /// slot-scoped selection is reset wholesale.
+        /// </summary>
+        public ZoneViewModel? SelectedZone
+        {
+            get => selectedZone;
+            set
+            {
+                if (ReferenceEquals(selectedZone, value))
+                {
+                    return;
+                }
+
+                // The selection must be a member of Zones (reference
+                // identity); foreign instances are rejected silently.
+                if (value is not null && !Zones.Contains(value))
+                {
+                    return;
+                }
+
+                // While zones exist the dashboard always has a selected
+                // zone; null is rejected silently.
+                if (value is null && Zones.Count > 0)
+                {
+                    return;
+                }
+
+                selectedZone = value;
+                PropertyChanged?.Invoke(
+                    this,
+                    new PropertyChangedEventArgs(nameof(SelectedZone)));
+
+                // Selection is slot-scoped: the slots are about to be
+                // re-pointed at a different zone's channels, so any
+                // selection or primary on the old assignments is
+                // meaningless. Reset before re-assigning; a silent
+                // primary retarget would surprise the operator.
+                ResetSelectionAndPrimary();
+                ReassignSlotsFromSelectedZone();
+            }
+        }
+
+        /// <summary>
         /// A detached snapshot of the currently selected slots. Every
         /// access returns a fresh collection instance that is independent
         /// of the view-model: mutating it never affects the selection, and
@@ -266,8 +328,8 @@ namespace DvmConsole.Avalonia.ViewModels
         /// device catalog, a PTT capability slice composed from the
         /// given hotkey service, optional audio-settings persistence,
         /// an optional startup vocoder-readiness result, and an
-        /// optional codeplug for the temporary channel-assignment
-        /// (transmit-target) slice. Null systems yield an empty manager,
+        /// optional codeplug for the zone/channel UI slice. Null systems
+        /// yield an empty manager,
         /// a null catalog yields a null <see cref="AudioSettings"/>, and
         /// a null hotkey service yields a null <see cref="Ptt"/>. When
         /// the catalog and persistence are both supplied, the audio
@@ -278,12 +340,14 @@ namespace DvmConsole.Avalonia.ViewModels
         /// the slice exactly request-only. A null readiness result
         /// leaves <see cref="VocoderStatus"/> null; otherwise it is
         /// composed exactly once from the result. When a codeplug is
-        /// supplied, slot i (0-based) is assigned the i-th channel of
-        /// the flattened <c>Zones[].Channels</c> order — the first
-        /// <c>ChannelCount</c> channels, with slots beyond the list
-        /// staying unassigned (null <see cref="ChannelSlotViewModel.ChannelName"/>);
-        /// this is temporary until the zone UI slice lands. A null
-        /// codeplug leaves every slot unassigned.
+        /// supplied, its zones are retained in codeplug order as
+        /// <see cref="Zones"/> with the first zone selected by default
+        /// (<see cref="SelectedZone"/>); the four slots are assigned
+        /// from the selected zone's channels (first <c>ChannelCount</c>,
+        /// with slots beyond the list staying unassigned — null
+        /// <see cref="ChannelSlotViewModel.ChannelName"/>). A null
+        /// codeplug leaves <see cref="Zones"/> empty, no zone selected,
+        /// and every slot unassigned.
         /// </summary>
         public MainWindowViewModel(
             IReadOnlyList<Codeplug.System>? systems,
@@ -304,25 +368,19 @@ namespace DvmConsole.Avalonia.ViewModels
             FneConnections = new FneConnectionManagerViewModel(systems);
             FneConnections.PropertyChanged += OnFneConnectionManagerChanged;
 
-            // Temporary channel assignment until the zone UI slice
-            // lands: slot i (0-based) is assigned the i-th channel of
-            // the flattened Zones[].Channels order, first N channels;
-            // slots beyond the list stay unassigned with a null
-            // ChannelName. A null codeplug (or null zones/channels)
-            // leaves every slot unassigned.
-            var assignedChannels = codeplug?.Zones
-                ?.SelectMany(zone => zone.Channels ?? Enumerable.Empty<Codeplug.Channel>())
+            // Retain the codeplug zones in codeplug order; each zone's
+            // channel list passes through as-is, including null lists
+            // (an empty codeplug yields no zones).
+            Zones = codeplug?.Zones
+                ?.Select(zone => new ZoneViewModel(zone.Name, zone.Channels))
                 .ToList()
-                ?? new List<Codeplug.Channel>();
+                ?? new List<ZoneViewModel>();
 
             var channels = new ChannelSlotViewModel[ChannelCount];
             for (var i = 0; i < ChannelCount; i++)
             {
                 var number = i + 1;
-                channels[i] = new ChannelSlotViewModel(
-                    number,
-                    $"CHANNEL {number:00}",
-                    i < assignedChannels.Count ? assignedChannels[i].Name : null);
+                channels[i] = new ChannelSlotViewModel(number, $"CHANNEL {number:00}");
             }
 
             Channels = channels;
@@ -336,6 +394,11 @@ namespace DvmConsole.Avalonia.ViewModels
 
             SelectedChannels = selectedChannelsManager.GetSelectedChannels();
             PrimaryChannel = null;
+
+            // Default the zone selection to the first zone; the setter
+            // assigns the slots from its channels (all unassigned when
+            // no zones exist).
+            SelectedZone = Zones.Count > 0 ? Zones[0] : null;
 
             Ptt = hotkeys is null
                 ? null
@@ -543,6 +606,54 @@ namespace DvmConsole.Avalonia.ViewModels
             else
             {
                 selectedChannelsManager.AddSelectedChannel(slot);
+            }
+        }
+
+        /// <summary>
+        /// Resets the slot-scoped selection wholesale: the selection
+        /// manager is cleared (unselecting the old slot instances and
+        /// nulling the primary through its own event path), then every
+        /// slot is forced back to the unselected, non-primary state so
+        /// no card carries stale flags regardless of manager
+        /// bookkeeping.
+        /// </summary>
+        private void ResetSelectionAndPrimary()
+        {
+            selectedChannelsManager.ClearPrimaryChannel();
+            selectedChannelsManager.ClearSelections();
+
+            foreach (var slot in Channels)
+            {
+                slot.IsSelected = false;
+                slot.IsPrimary = false;
+            }
+        }
+
+        /// <summary>
+        /// Assigns slots 0..3 (1-based 1..4) from the selected zone's
+        /// channels in order — the first <see cref="ChannelCount"/>
+        /// channels. A zone with a null channel list, or fewer channels
+        /// than slots, leaves the remainder unassigned (null
+        /// <see cref="ChannelSlotViewModel.ChannelName"/>, <c>NO
+        /// TALKGROUP</c>).
+        /// </summary>
+        private void ReassignSlotsFromSelectedZone()
+        {
+            var zoneChannels = selectedZone?.Channels;
+
+            for (var i = 0; i < ChannelCount; i++)
+            {
+                var slot = Channels[i];
+
+                if (zoneChannels is not null && i < zoneChannels.Count)
+                {
+                    var channel = zoneChannels[i];
+                    slot.Reassign(channel.Name, channel.Tgid);
+                }
+                else
+                {
+                    slot.Reassign(null, null);
+                }
             }
         }
 

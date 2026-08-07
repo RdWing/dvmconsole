@@ -1,15 +1,20 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 #nullable enable
+using System;
 using System.ComponentModel;
 
 namespace DvmConsole.Avalonia.ViewModels
 {
     /// <summary>
-    /// View-model for one operator-dashboard channel slot. The identity of
-    /// a slot is immutable: number, label, and the unassigned defaults
-    /// (NO TALKGROUP, IDLE) are fixed at construction. The live selection
-    /// state (<see cref="IsSelected"/>, <see cref="IsPrimary"/>) and the
-    /// PTT engagement state (<see cref="PttEngaged"/>) are writable and
+    /// View-model for one operator-dashboard channel slot. The identity
+    /// of a slot is immutable: number and label are fixed at
+    /// construction, as is the unassigned default (IDLE status). The
+    /// channel assignment is mutable through the internal
+    /// <see cref="Reassign"/> entry point, which the dashboard's
+    /// zone-selection slice uses to re-point the four fixed slots at a
+    /// selected zone's channels. The live selection state
+    /// (<see cref="IsSelected"/>, <see cref="IsPrimary"/>) and the PTT
+    /// engagement state (<see cref="PttEngaged"/>) are writable and
     /// observable, driven by the dashboard's
     /// <c>SelectedChannelsManager</c> and PTT state slice.
     /// </summary>
@@ -18,6 +23,8 @@ namespace DvmConsole.Avalonia.ViewModels
         private bool isSelected;
         private bool isPrimary;
         private bool pttEngaged;
+        private string? channelName;
+        private string talkgroup = "NO TALKGROUP";
 
         /// <summary>
         /// Creates a channel slot with the given 1-based number, display
@@ -30,7 +37,7 @@ namespace DvmConsole.Avalonia.ViewModels
         {
             Number = number;
             Label = label;
-            ChannelName = channelName;
+            this.channelName = channelName;
         }
 
         /// <summary>The 1-based slot number (1..4 on the dashboard).</summary>
@@ -41,17 +48,19 @@ namespace DvmConsole.Avalonia.ViewModels
 
         /// <summary>
         /// The codeplug channel name assigned to this slot, or null when
-        /// no channel is assigned. Immutable at construction like
-        /// <see cref="Number"/>, <see cref="Label"/>, <see cref="Talkgroup"/>
-        /// and <see cref="Status"/>.
+        /// no channel is assigned. Get-only: the assignment is replaced
+        /// wholesale through the internal <see cref="Reassign"/> entry
+        /// point, never mutated in place. The identity members
+        /// (<see cref="Number"/>, <see cref="Label"/>) are immutable.
         /// </summary>
-        public string? ChannelName { get; }
+        public string? ChannelName => channelName;
 
         /// <summary>
         /// The talkgroup assigned to this slot; <c>NO TALKGROUP</c> until
-        /// configuration assigns one.
+        /// configuration assigns one. Get-only: replaced wholesale
+        /// through the internal <see cref="Reassign"/> entry point.
         /// </summary>
-        public string Talkgroup { get; } = "NO TALKGROUP";
+        public string Talkgroup => talkgroup;
 
         /// <summary>
         /// The operational status of this slot; <c>IDLE</c> until assigned.
@@ -117,8 +126,52 @@ namespace DvmConsole.Avalonia.ViewModels
         }
 
         /// <summary>
-        /// Raised when <see cref="IsSelected"/>, <see cref="IsPrimary"/>
-        /// or <see cref="PttEngaged"/> changes.
+        /// Replaces the channel assignment of this slot with the given
+        /// channel name and talkgroup, raising change-only
+        /// <see cref="PropertyChanged"/> notifications: a notification
+        /// is raised for a member only when its value actually changes,
+        /// and a call that changes nothing raises nothing at all. A null
+        /// or whitespace-only talkgroup normalizes to the stable
+        /// <c>NO TALKGROUP</c> text. The assignment is replaced
+        /// wholesale; identity members (<see cref="Number"/>,
+        /// <see cref="Label"/>) and <see cref="Status"/> are untouched.
+        /// </summary>
+        /// <param name="channelName">The new channel name, or null for unassigned.</param>
+        /// <param name="talkgroup">The new talkgroup, or null for none.</param>
+        internal void Reassign(string? channelName, string? talkgroup)
+        {
+            var normalizedTalkgroup = string.IsNullOrWhiteSpace(talkgroup)
+                ? "NO TALKGROUP"
+                : talkgroup;
+
+            var channelNameChanged = !string.Equals(
+                this.channelName, channelName, StringComparison.Ordinal);
+            var talkgroupChanged = !string.Equals(
+                this.talkgroup, normalizedTalkgroup, StringComparison.Ordinal);
+
+            if (!channelNameChanged && !talkgroupChanged)
+            {
+                return;
+            }
+
+            this.channelName = channelName;
+            this.talkgroup = normalizedTalkgroup;
+
+            if (channelNameChanged)
+            {
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ChannelName)));
+            }
+
+            if (talkgroupChanged)
+            {
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(Talkgroup)));
+            }
+        }
+
+        /// <summary>
+        /// Raised when <see cref="ChannelName"/>, <see cref="Talkgroup"/>,
+        /// <see cref="IsSelected"/>, <see cref="IsPrimary"/> or
+        /// <see cref="PttEngaged"/> changes.
         /// </summary>
         public event PropertyChangedEventHandler? PropertyChanged;
     }

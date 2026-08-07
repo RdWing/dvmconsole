@@ -201,7 +201,7 @@
                 </StackPanel>
             </Border>
 
-            <Grid Grid.Column="2" RowDefinitions="Auto,Auto,*" RowSpacing="16">
+            <Grid Grid.Column="2" RowDefinitions="Auto,Auto,Auto,*" RowSpacing="16">
                 <Grid ColumnDefinitions="*,Auto">
                     <StackPanel Spacing="4">
                         <TextBlock Classes="kicker" Text="CHANNEL GRID" />
@@ -209,11 +209,23 @@
                     </StackPanel>
                     <TextBlock Grid.Column="1"
                                Classes="muted"
-                               Text="4 fixed slots"
+                               Text="{Binding SelectedZone.Name}"
                                VerticalAlignment="Bottom" />
                 </Grid>
 
-                <Border Grid.Row="1" Classes="panel" Padding="14">
+                <ComboBox Grid.Row="1"
+                          ItemsSource="{Binding Zones}"
+                          SelectedItem="{Binding SelectedZone, Mode=TwoWay}"
+                          HorizontalAlignment="Left"
+                          MinWidth="280">
+                    <ComboBox.ItemTemplate>
+                        <DataTemplate x:DataType="vm:ZoneViewModel">
+                            <TextBlock Text="{Binding Name}" />
+                        </DataTemplate>
+                    </ComboBox.ItemTemplate>
+                </ComboBox>
+
+                <Border Grid.Row="2" Classes="panel" Padding="14">
                     <ItemsControl ItemsSource="{Binding Channels}">
                         <ItemsControl.ItemsPanel>
                             <ItemsPanelTemplate>
@@ -238,6 +250,11 @@
                                                      VerticalAlignment="Center" />
                                         </Grid>
                                         <StackPanel Spacing="4">
+                                            <TextBlock Classes="data-label" Text="CHANNEL" />
+                                            <TextBlock Classes="data-value" Text="{Binding ChannelName}"
+                                                       IsVisible="{Binding ChannelName, Converter={x:Static conv:StringConverters.IsNotNullOrEmpty}}" />
+                                        </StackPanel>
+                                        <StackPanel Spacing="4">
                                             <TextBlock Classes="data-label" Text="TALKGROUP" />
                                             <TextBlock Classes="data-value" Text="{Binding Talkgroup}" />
                                         </StackPanel>
@@ -249,7 +266,7 @@
                     </ItemsControl>
                 </Border>
 
-                <Grid Grid.Row="2" ColumnDefinitions="*,16,*">
+                <Grid Grid.Row="3" ColumnDefinitions="*,16,*">
                     <Border Classes="panel" Padding="18">
                         <StackPanel Spacing="14">
                             <TextBlock Classes="kicker" Text="AUDIO PATH" />

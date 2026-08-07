@@ -654,16 +654,28 @@ namespace DvmConsole.Avalonia.Tests
             Assert.True(typeof(INotifyPropertyChanged).IsAssignableFrom(slot));
             Assert.False(slot.GetProperty(nameof(ChannelSlotViewModel.Number))!.CanWrite);
             Assert.False(slot.GetProperty(nameof(ChannelSlotViewModel.Label))!.CanWrite);
+            Assert.False(slot.GetProperty(nameof(ChannelSlotViewModel.ChannelName))!.CanWrite);
             Assert.False(slot.GetProperty(nameof(ChannelSlotViewModel.Talkgroup))!.CanWrite);
             Assert.False(slot.GetProperty(nameof(ChannelSlotViewModel.Status))!.CanWrite);
             Assert.True(slot.GetProperty(nameof(ChannelSlotViewModel.IsSelected))!.CanWrite);
             Assert.True(slot.GetProperty(nameof(ChannelSlotViewModel.IsPrimary))!.CanWrite);
             Assert.Equal(typeof(int), slot.GetProperty(nameof(ChannelSlotViewModel.Number))!.PropertyType);
             Assert.Equal(typeof(string), slot.GetProperty(nameof(ChannelSlotViewModel.Label))!.PropertyType);
+            Assert.Equal(typeof(string), slot.GetProperty(nameof(ChannelSlotViewModel.ChannelName))!.PropertyType);
             Assert.Equal(typeof(string), slot.GetProperty(nameof(ChannelSlotViewModel.Talkgroup))!.PropertyType);
             Assert.Equal(typeof(string), slot.GetProperty(nameof(ChannelSlotViewModel.Status))!.PropertyType);
             Assert.Equal(typeof(bool), slot.GetProperty(nameof(ChannelSlotViewModel.IsSelected))!.PropertyType);
             Assert.Equal(typeof(bool), slot.GetProperty(nameof(ChannelSlotViewModel.IsPrimary))!.PropertyType);
+
+            // Zone UI surface (audit deleg_9f6f3919).
+            Assert.Equal(
+                typeof(IReadOnlyList<ZoneViewModel>),
+                main.GetProperty(nameof(MainWindowViewModel.Zones))!.PropertyType);
+            Assert.Equal(
+                typeof(ZoneViewModel),
+                main.GetProperty(nameof(MainWindowViewModel.SelectedZone))!.PropertyType);
+            var selectedZoneSetter = main.GetProperty(nameof(MainWindowViewModel.SelectedZone))!.SetMethod;
+            Assert.NotNull(selectedZoneSetter);
         }
 
         // ---- Audio settings composition: fixture ----------------------------------
@@ -1373,10 +1385,11 @@ namespace DvmConsole.Avalonia.Tests
         }
 
         [Fact]
-        public void CodeplugCtor_AssignsFirstNFlattenedChannels_InOrder()
+        public void CodeplugCtor_DefaultZone_SlotsAssignedInOrder()
         {
             var vm = new MainWindowViewModel(MakeCodeplug().Systems, null, null, null, null, MakeCodeplug());
 
+            Assert.Equal("Zone A", vm.SelectedZone!.Name); // first zone is the default
             Assert.Equal("CH 1 DMR", vm.Channels[0].ChannelName);
             Assert.Equal("CH 2 P25", vm.Channels[1].ChannelName);
             Assert.Equal("CH 3", vm.Channels[2].ChannelName);
