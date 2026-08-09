@@ -61,6 +61,24 @@ namespace DvmConsole.Platform.Audio
         /// <param name="streamId">Monotonically increasing stream id for the transmit.</param>
         /// <param name="seqNo">Sequence number of this LDU within the transmit.</param>
         void SendP25Ldu(TransmitTarget target, bool isLdu2, ReadOnlyMemory<byte> ldu225, uint streamId, int seqNo);
+
+        /// <summary>
+        /// Sends the DMR end-of-call signalling for a transmit: the
+        /// silence-pad frames to the next six-frame boundary followed
+        /// by the DATA_SYNC TERMINATOR_WITH_LC frame (WPF parity).
+        /// </summary>
+        /// <param name="target">The transmit target.</param>
+        /// <param name="streamId">Stream id of the transmit being ended.</param>
+        /// <param name="nextSeqNo">Sequence number of the next frame after the last voice frame.</param>
+        void SendDmrTerminator(TransmitTarget target, uint streamId, int nextSeqNo);
+
+        /// <summary>
+        /// Sends one P25 end-of-call TDU (terminator data unit).
+        /// </summary>
+        /// <param name="target">The transmit target.</param>
+        /// <param name="streamId">Stream id of the transmit being ended.</param>
+        /// <param name="grantDemand">True for a call-start TDU demanding a channel grant.</param>
+        void SendP25Tdu(TransmitTarget target, uint streamId, bool grantDemand);
     }
 
     /// <summary>
@@ -76,6 +94,12 @@ namespace DvmConsole.Platform.Audio
         /// <summary>Number of P25 LDUs sent.</summary>
         public int P25LduCount { get; set; }
 
+        /// <summary>Number of DMR end-of-call terminators sent.</summary>
+        public int DmrTerminatorCount { get; set; }
+
+        /// <summary>Number of P25 end-of-call TDUs sent.</summary>
+        public int P25TduCount { get; set; }
+
         /// <inheritdoc />
         public void SendDmrVoice(TransmitTarget target, ReadOnlyMemory<byte> ambe27, uint streamId, int seqNo)
             => DmrFrameCount++;
@@ -83,5 +107,13 @@ namespace DvmConsole.Platform.Audio
         /// <inheritdoc />
         public void SendP25Ldu(TransmitTarget target, bool isLdu2, ReadOnlyMemory<byte> ldu225, uint streamId, int seqNo)
             => P25LduCount++;
+
+        /// <inheritdoc />
+        public void SendDmrTerminator(TransmitTarget target, uint streamId, int nextSeqNo)
+            => DmrTerminatorCount++;
+
+        /// <inheritdoc />
+        public void SendP25Tdu(TransmitTarget target, uint streamId, bool grantDemand)
+            => P25TduCount++;
     }
 }

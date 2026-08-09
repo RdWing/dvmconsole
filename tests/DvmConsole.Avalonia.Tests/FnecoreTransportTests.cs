@@ -33,6 +33,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
 using DvmConsole.Avalonia.Audio;
@@ -90,6 +91,18 @@ namespace DvmConsole.Avalonia.Tests
                 Password = "pw",
                 Encrypted = false,
             };
+
+        private static void InvokeSenderMethod(
+            FnecoreVoiceTrafficSender sender,
+            string methodName,
+            params object?[] arguments)
+        {
+            var method = typeof(FnecoreVoiceTrafficSender).GetMethod(
+                methodName,
+                BindingFlags.Public | BindingFlags.Instance);
+            Assert.NotNull(method);
+            method!.Invoke(sender, arguments);
+        }
 
         /* ------------------------------------------------------------------
         ** Factory
@@ -383,6 +396,173 @@ namespace DvmConsole.Avalonia.Tests
             // The router always passes isLdu2:false; the sender derives the
             // real alternation from seqNo parity (WPF parity).
             Assert.All(sink.Sent, s => Assert.NotNull(s.Payload));
+        }
+
+        [Fact]
+        public void Sender_EndSignalApiShape_IsAdditive()
+        {
+            var type = typeof(IVoiceTrafficSender);
+
+            Assert.NotNull(type.GetMethod(
+                "SendDmrTerminator",
+                new[] { typeof(TransmitTarget), typeof(uint), typeof(int) }));
+            Assert.NotNull(type.GetMethod(
+                "SendP25Tdu",
+                new[] { typeof(TransmitTarget), typeof(uint), typeof(bool) }));
+        }
+
+        [Fact]
+        public void Sender_DmrTerminator_PadsToBoundary_ThenEmitsTerminatorWithLc()
+        {
+            var sink = new PacketSink();
+            var adapter = new FnecorePeerAdapter(MakeSystem());
+            var sender = new FnecoreVoiceTrafficSender(_ => adapter, sink);
+            var target = new TransmitTarget("Test Sys", "31001", 1, VoiceMode.Dmr, 1001);
+
+            // nextSeq=4 means n=(4-3)%6=1, so five silence pads then
+            // the terminator; the port clamps only the seq<3 underflow.
+            InvokeSenderMethod(sender, "SendDmrTerminator", target, 7u, 4);
+
+            Assert.Equal(6, sink.Sent.Count);
+            Assert.Equal(new ushort[] { 4, 5, 6, 7, 8, 9 }, sink.Sent.Select(s => s.Seq).ToArray());
+            Assert.All(sink.Sent, packet =>
+            {
+                Assert.Equal(55, packet.Payload.Length);
+                Assert.Equal(7u, packet.StreamId);
+            });
+
+            var terminatorFrame = sink.Sent[^1].Payload.Skip(20).Take(33).ToArray();
+            var slotType = new SlotType(terminatorFrame);
+            Assert.Equal(DMRDataType.TERMINATOR_WITH_LC, (DMRDataType)slotType.DataType);
+        }
+
+        [Fact]
+        public void Sender_DmrTerminator_ShortTransmit_ClampsUnderflow_NoPadding()
+        {
+            var sink = new PacketSink();
+            var adapter = new FnecorePeerAdapter(MakeSystem());
+            var sender = new FnecoreVoiceTrafficSender(_ => adapter, sink);
+            var target = new TransmitTarget("Test Sys", "31001", 1, VoiceMode.Dmr, 1001);
+
+            InvokeSenderMethod(sender, "SendDmrTerminator", target, 0u, 2);
+
+            var packet = Assert.Single(sink.Sent);
+            Assert.Equal((ushort)2, packet.Seq);
+            var slotType = new SlotType(packet.Payload.Skip(20).Take(33).ToArray());
+            Assert.Equal(DMRDataType.TERMINATOR_WITH_LC, (DMRDataType)slotType.DataType);
+        }
+
+        [Fact]
+        public void Sender_DmrTerminator_AtFrameBoundary_NoPadding()
+        {
+            var sink = new PacketSink();
+            var adapter = new FnecorePeerAdapter(MakeSystem());
+            var sender = new FnecoreVoiceTrafficSender(_ => adapter, sink);
+            var target = new TransmitTarget("Test Sys", "31001", 1, VoiceMode.Dmr, 1001);
+
+            // fnecore's n==0 path skips padding and emits the terminator
+            // immediately; the pad loop is guarded by if (n > 0).
+            InvokeSenderMethod(sender, "SendDmrTerminator", target, 0u, 3);
+
+            var packet = Assert.Single(sink.Sent);
+            Assert.Equal((ushort)3, packet.Seq);
+            var slotType = new SlotType(packet.Payload.Skip(20).Take(33).ToArray());
+            Assert.Equal(DMRDataType.TERMINATOR_WITH_LC, (DMRDataType)slotType.DataType);
+        }
+
+        [Fact]
+        public void Sender_DmrTerminator_EncodesTargetSlotTwo()
+        {
+            var sink = new PacketSink();
+            var adapter = new FnecorePeerAdapter(MakeSystem());
+            var sender = new FnecoreVoiceTrafficSender(_ => adapter, sink);
+            var target = new TransmitTarget("Test Sys", "31001", 2, VoiceMode.Dmr, 1001);
+
+            InvokeSenderMethod(sender, "SendDmrTerminator", target, 1u, 0);
+
+            var packet = Assert.Single(sink.Sent);
+            // The adapter receives the zero-based target slot (2 -> 1);
+            // fnecore's existing CreateDMRMessage maps that value to the
+            // same wire convention used by SendDmrVoice.
+            Assert.Equal(0, packet.Payload[15] & 0x80);
+        }
+
+        [Fact]
+        public void Sender_DmrTerminator_InvalidTarget_NoOp()
+        {
+            var sink = new PacketSink();
+            var adapter = new FnecorePeerAdapter(MakeSystem());
+            var sender = new FnecoreVoiceTrafficSender(_ => adapter, sink);
+
+            InvokeSenderMethod(
+                sender,
+                "SendDmrTerminator",
+                new TransmitTarget("Test Sys", "not-a-number", 1, VoiceMode.Dmr, 1001),
+                1u,
+                0);
+            InvokeSenderMethod(
+                sender,
+                "SendDmrTerminator",
+                new TransmitTarget("Test Sys", "31001", 0, VoiceMode.Dmr, 1001),
+                1u,
+                0);
+            InvokeSenderMethod(
+                sender,
+                "SendDmrTerminator",
+                new TransmitTarget("Missing", "31001", 1, VoiceMode.Dmr, 1001),
+                1u,
+                0);
+
+            Assert.Empty(sink.Sent);
+        }
+
+        [Fact]
+        public void Sender_P25Tdu_UsesCallEndSequence_AndGrantDemandBit()
+        {
+            var sink = new PacketSink();
+            var adapter = new FnecorePeerAdapter(MakeSystem());
+            var sender = new FnecoreVoiceTrafficSender(_ => adapter, sink);
+            var target = new TransmitTarget("Test Sys", "31002", 1, VoiceMode.P25, 1001);
+
+            InvokeSenderMethod(sender, "SendP25Tdu", target, 9u, false);
+
+            var packet = Assert.Single(sink.Sent);
+            Assert.Equal(200, packet.Payload.Length);
+            Assert.Equal((ushort)65535, packet.Seq);
+            Assert.Equal(9u, packet.StreamId);
+            Assert.Equal("P25D", System.Text.Encoding.ASCII.GetString(packet.Payload, 0, 4));
+            Assert.Equal((byte)P25DUID.TDU, packet.Payload[22]);
+            Assert.Equal((byte)24, packet.Payload[23]);
+            Assert.Equal(0, packet.Payload[14] & 0x80);
+
+            sink.Sent.Clear();
+            InvokeSenderMethod(sender, "SendP25Tdu", target, 9u, true);
+
+            var grantPacket = Assert.Single(sink.Sent);
+            Assert.Equal(0x80, grantPacket.Payload[14] & 0x80);
+        }
+
+        [Fact]
+        public void Sender_P25Tdu_InvalidTarget_NoOp()
+        {
+            var sink = new PacketSink();
+            var adapter = new FnecorePeerAdapter(MakeSystem());
+            var sender = new FnecoreVoiceTrafficSender(_ => adapter, sink);
+
+            InvokeSenderMethod(
+                sender,
+                "SendP25Tdu",
+                new TransmitTarget("Test Sys", "not-a-number", 1, VoiceMode.P25, 1001),
+                1u,
+                false);
+            InvokeSenderMethod(
+                sender,
+                "SendP25Tdu",
+                new TransmitTarget("Missing", "31001", 1, VoiceMode.P25, 1001),
+                1u,
+                false);
+
+            Assert.Empty(sink.Sent);
         }
 
         [Fact]

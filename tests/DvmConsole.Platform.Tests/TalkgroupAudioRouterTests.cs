@@ -111,6 +111,7 @@ namespace DvmConsole.Platform.Tests
             public Exception? StartException;
             public int StartCount;
             public int StopCount;
+            public bool CompleteEndOnStop { get; set; } = true;
 
             public Task<AudioStreamEnd> StartAsync(
                 Func<ReadOnlyMemory<byte>, Task> onData,
@@ -131,6 +132,11 @@ namespace DvmConsole.Platform.Tests
             public Task StopAsync()
             {
                 StopCount++;
+                if (CompleteEndOnStop)
+                {
+                    EndGate?.TrySetResult(AudioStreamEnd.Requested());
+                }
+
                 return Task.CompletedTask;
             }
         }
@@ -258,12 +264,20 @@ namespace DvmConsole.Platform.Tests
         {
             public readonly List<(TransmitTarget Target, byte[] Ambe27, uint StreamId, int Seq)> DmrFrames = new();
             public readonly List<(TransmitTarget Target, bool IsLdu2, byte[] Ldu225, uint StreamId, int Seq)> P25Ldus = new();
+            public readonly List<(TransmitTarget Target, uint StreamId, int Seq)> DmrTerminators = new();
+            public readonly List<(TransmitTarget Target, uint StreamId, bool GrantDemand)> P25Tdus = new();
 
             public void SendDmrVoice(TransmitTarget target, ReadOnlyMemory<byte> ambe27, uint streamId, int seqNo)
                 => DmrFrames.Add((target, ambe27.ToArray(), streamId, seqNo));
 
             public void SendP25Ldu(TransmitTarget target, bool isLdu2, ReadOnlyMemory<byte> ldu225, uint streamId, int seqNo)
                 => P25Ldus.Add((target, isLdu2, ldu225.ToArray(), streamId, seqNo));
+
+            public void SendDmrTerminator(TransmitTarget target, uint streamId, int nextSeqNo)
+                => DmrTerminators.Add((target, streamId, nextSeqNo));
+
+            public void SendP25Tdu(TransmitTarget target, uint streamId, bool grantDemand)
+                => P25Tdus.Add((target, streamId, grantDemand));
         }
 
         /// <summary>One-shot scheduler double, like the FNE service tests.</summary>
@@ -349,6 +363,19 @@ namespace DvmConsole.Platform.Tests
                 router,
                 new object?[] { targets, AudioDeviceId.Default, CancellationToken.None }));
             await task;
+        }
+
+        [Fact]
+        public void VoiceTrafficSender_EndSignalApiShape_IsAdditive()
+        {
+            var type = typeof(IVoiceTrafficSender);
+
+            Assert.NotNull(type.GetMethod(
+                "SendDmrTerminator",
+                new[] { typeof(TransmitTarget), typeof(uint), typeof(int) }));
+            Assert.NotNull(type.GetMethod(
+                "SendP25Tdu",
+                new[] { typeof(TransmitTarget), typeof(uint), typeof(bool) }));
         }
 
         private static async Task WaitUntilAsync(Func<bool> condition)
@@ -515,6 +542,31 @@ namespace DvmConsole.Platform.Tests
         }
 
         [Fact]
+        public async Task CaptureStopAsync_WaitsForInputEndTaskAfterStopRequest()
+        {
+            var endGate = new TaskCompletionSource<AudioStreamEnd>(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            var factory = new FakeAudioStreamFactory
+            {
+                EndGateOnCreate = endGate,
+            };
+            var pipeline = new CaptureAudioPipeline(factory);
+
+            var startTask = pipeline.StartAsync(
+                AudioDeviceId.Default,
+                _ => Task.CompletedTask,
+                CancellationToken.None);
+            factory.Inputs[0].CompleteEndOnStop = false;
+
+            var stopTask = pipeline.StopAsync();
+            Assert.False(stopTask.IsCompleted);
+
+            endGate.SetResult(AudioStreamEnd.Requested());
+            await stopTask;
+            Assert.Equal(AudioStreamStopReason.Requested, (await startTask).StopReason);
+        }
+
+        [Fact]
         public async Task BeginTransmit_Dmr_AccumulatesTriple_Sends27ByteFrame()
         {
             var factory = new FakeAudioStreamFactory();
@@ -649,6 +701,95 @@ namespace DvmConsole.Platform.Tests
             Assert.Equal(1, input.StopCount);
             await input.OnData!(new byte[1600]); // late block after end
             Assert.Equal(sendsBefore, sender.DmrFrames.Count);
+        }
+
+        [Fact]
+        public async Task EndTransmit_Dmr_SendsOneTerminatorWithNextSequence()
+        {
+            var factory = new FakeAudioStreamFactory();
+            var sender = new RecordingTrafficSender();
+            var router = CreateRouter(
+                factory, new FakeVoiceFrameDecoder(), new FakeVoiceFrameEncoder(), sender, new ManualScheduler());
+
+            await router.BeginTransmitAsync(DmrTarget, AudioDeviceId.Default, CancellationToken.None);
+            await factory.Inputs[0].OnData!(new byte[1600]); // one frame, seq 0; next seq is 1
+            await router.EndTransmitAsync();
+
+            var signal = Assert.Single(sender.DmrTerminators);
+            Assert.Equal(DmrTarget, signal.Target);
+            Assert.Equal(1u, signal.StreamId);
+            Assert.Equal(1, signal.Seq);
+        }
+
+        [Fact]
+        public async Task EndTransmit_P25_SendsFourTdus_WithNoGrantDemand()
+        {
+            var factory = new FakeAudioStreamFactory();
+            var sender = new RecordingTrafficSender();
+            var router = CreateRouter(
+                factory, new FakeVoiceFrameDecoder(), new FakeVoiceFrameEncoder { CodewordLength = 11 }, sender, new ManualScheduler());
+            var target = new TransmitTarget("System 1", "31002", 1, VoiceMode.P25, 1001);
+
+            await router.BeginTransmitAsync(target, AudioDeviceId.Default, CancellationToken.None);
+            await router.EndTransmitAsync();
+
+            Assert.Equal(4, sender.P25Tdus.Count);
+            Assert.All(sender.P25Tdus, signal =>
+            {
+                Assert.Equal(target, signal.Target);
+                Assert.Equal(0u, signal.StreamId);
+                Assert.False(signal.GrantDemand);
+            });
+        }
+
+        [Fact]
+        public async Task EndTransmit_MixedTargets_SendsEachModeSignal()
+        {
+            var factory = new FakeAudioStreamFactory();
+            var sender = new RecordingTrafficSender();
+            var router = CreateRouter(
+                factory, new FakeVoiceFrameDecoder(), new FakeVoiceFrameEncoder(), sender, new ManualScheduler());
+            var p25 = new TransmitTarget("System 2", "31003", 1, VoiceMode.P25, 1002);
+
+            await BeginTransmitTargetsAsync(router, new[] { DmrTarget, p25 });
+            await router.EndTransmitAsync();
+
+            Assert.Single(sender.DmrTerminators);
+            Assert.Equal(DmrTarget, sender.DmrTerminators[0].Target);
+            Assert.Equal(4, sender.P25Tdus.Count);
+            Assert.All(sender.P25Tdus, signal => Assert.Equal(p25, signal.Target));
+        }
+
+        [Fact]
+        public async Task EndTransmit_Twice_DoesNotDuplicateEndSignals()
+        {
+            var factory = new FakeAudioStreamFactory();
+            var sender = new RecordingTrafficSender();
+            var router = CreateRouter(
+                factory, new FakeVoiceFrameDecoder(), new FakeVoiceFrameEncoder(), sender, new ManualScheduler());
+
+            await router.BeginTransmitAsync(DmrTarget, AudioDeviceId.Default, CancellationToken.None);
+            await router.EndTransmitAsync();
+            await router.EndTransmitAsync();
+
+            Assert.Single(sender.DmrTerminators);
+        }
+
+        [Fact]
+        public async Task EndTransmit_LateBlock_DoesNotSendAfterTerminator()
+        {
+            var factory = new FakeAudioStreamFactory();
+            var sender = new RecordingTrafficSender();
+            var router = CreateRouter(
+                factory, new FakeVoiceFrameDecoder(), new FakeVoiceFrameEncoder(), sender, new ManualScheduler());
+
+            await router.BeginTransmitAsync(DmrTarget, AudioDeviceId.Default, CancellationToken.None);
+            var input = factory.Inputs[0];
+            await router.EndTransmitAsync();
+            await input.OnData!(new byte[1600]);
+
+            Assert.Single(sender.DmrTerminators);
+            Assert.Empty(sender.DmrFrames);
         }
 
         [Fact]
@@ -993,10 +1134,12 @@ namespace DvmConsole.Platform.Tests
                 TaskCreationOptions.RunContinuationsAsynchronously);
             await router.BeginTransmitAsync(DmrTarget, AudioDeviceId.Default, CancellationToken.None);
             var inputA = factory.Inputs[0];
+            inputA.CompleteEndOnStop = false;
             factory.EndGateOnCreate = null;
 
-            // End A: the input is stopped but A's end task is still pending.
-            await router.EndTransmitAsync();
+            // End A requests the input stop but waits for A's end task.
+            var endATask = router.EndTransmitAsync();
+            Assert.False(endATask.IsCompleted);
 
             // Quick re-begin (session B) while A's end task is in flight.
             await router.BeginTransmitAsync(DmrTarget, AudioDeviceId.Default, CancellationToken.None);
@@ -1004,7 +1147,8 @@ namespace DvmConsole.Platform.Tests
 
             // A's end task completes Requested AFTER B reset the session flags:
             // this must NOT surface as a spurious CaptureEnded.
-            inputA.EndGate!.SetResult(AudioStreamEnd.Requested());
+            inputA.EndGate!.TrySetResult(AudioStreamEnd.Requested());
+            await endATask;
             await Task.Delay(100); // allow any spurious raise to land
             Assert.Empty(ends);
 

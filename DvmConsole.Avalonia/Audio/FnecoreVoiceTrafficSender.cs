@@ -77,6 +77,25 @@ namespace DvmConsole.Avalonia.Audio
         /// </summary>
         private const int P25PacketSize = 200;
 
+        /// <summary>
+        /// P25 message header size field value inside the network frame
+        /// (fnecore parity <c>FneSystemBase.P25_MSG_HDR_SIZE</c>).
+        /// </summary>
+        private const byte P25MsgHdrSize = 24;
+
+        /// <summary>
+        /// DMR silence frame used for the terminator pad packets
+        /// (fnecore parity <c>FneSystemBase.DMR_SILENCE_DATA</c>). The
+        /// fnecore constant is protected; this is the local 33-byte copy
+        /// the frame builder consumes.
+        /// </summary>
+        private static readonly byte[] DmrSilenceData =
+        {
+            0x01, 0x00, 0xB9, 0xE8, 0x81, 0x52, 0x61, 0x73, 0x00, 0x2A, 0x6B,
+            0xB9, 0xE8, 0x81, 0x52, 0x60, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01,
+            0x73, 0x00, 0x2A, 0x6B, 0xB9, 0xE8, 0x81, 0x52, 0x61, 0x73, 0x00,
+        };
+
         private readonly Func<string, FnecorePeerAdapter?> resolveAdapter;
         private readonly IPacketSink? sink;
 
@@ -184,6 +203,173 @@ namespace DvmConsole.Avalonia.Audio
             }
 
             SendPacket(adapter, P25Opcode, payload, seqNo, streamId);
+        }
+
+        /// <inheritdoc />
+        public void SendDmrTerminator(TransmitTarget target, uint streamId, int nextSeqNo)
+        {
+            var adapter = ResolveTargetAdapter(target.SystemName);
+            if (adapter is null)
+            {
+                // Unknown system (no adapter, or a resolver answering
+                // with an adapter configured for another name): silent
+                // no-op.
+                return;
+            }
+
+            if (target.Slot < 1 || target.Slot > 2)
+            {
+                // Out-of-range DMR slot (TransmitTarget contract): silent
+                // no-op, matching the voice-path guard.
+                return;
+            }
+
+            if (!uint.TryParse(target.TalkgroupId, out uint dstId))
+            {
+                // Malformed talkgroup id: silent no-op — the audio path
+                // never throws.
+                return;
+            }
+
+            byte slot = (byte)(target.Slot - 1);
+            uint srcId = target.SourceId;
+
+            // Set the target's embedded LC state before the pads: every
+            // pad embeds signalling, so a transmit that ends before any
+            // VOICE_LC_HEADER (a short PTT with no voice frame) still
+            // pads with this transmit's group link control — the
+            // no-block release is valid.
+            var dmrLC = new LC
+            {
+                FLCO = (byte)DMRFLCO.FLCO_GROUP,
+                SrcId = srcId,
+                DstId = dstId,
+            };
+            GetEmbeddedData(target).SetLC(dmrLC);
+
+            // WPF/fnecore parity (FneSystemBase.SendDMRTerminator):
+            // n=(nextSeqNo-3)%6 silence-pad frames to the next six-frame
+            // boundary, then one DATA_SYNC TERMINATOR_WITH_LC frame.
+            // Intentional delta: WPF computes n with a byte cast over a
+            // uint-promoted difference, so nextSeqNo < 3 yields n=254 and
+            // 6-n underflows to ~4.29e9 pad frames (the pad-loop hang);
+            // the port clamps to no padding, terminator only — the same
+            // wire as the working n==0 case.
+            if (nextSeqNo >= 3)
+            {
+                byte n = (byte)((nextSeqNo - 3U) % 6U);
+                int fill = 6 - n;
+                int seqNo = nextSeqNo;
+
+                // fnecore parity (FneSystemBase.cs:395): the pad loop is
+                // guarded by n > 0, so at a frame boundary (n == 0,
+                // nextSeqNo 3, 9, ...) zero pads are emitted and only the
+                // terminator goes out.
+                if (n > 0)
+                {
+                    for (var i = 0; i < fill; i++)
+                    {
+                        // fnecore parity: each pad copies the silence frame,
+                        // embeds the signalling for the fixed position n
+                        // (the WPF quirk — n is computed once and reused for
+                        // every pad while the seq increments per pad), and
+                        // goes out as a DATA_SYNC frame with the pad's seq.
+                        byte[] data = new byte[DmrFrameLengthBytes];
+                        Buffer.BlockCopy(DmrSilenceData, 0, data, 0, DmrFrameLengthBytes);
+
+                        byte lcss = GetEmbeddedData(target).GetData(ref data, n);
+
+                        var emb = new EMB
+                        {
+                            ColorCode = 0,
+                            LCSS = lcss,
+                        };
+                        emb.Encode(ref data);
+
+                        byte[] dmrpkt = new byte[DmrPacketSize];
+                        adapter.CreateDMRMessage(ref dmrpkt, srcId, dstId, slot, FrameType.DATA_SYNC, (byte)seqNo, n);
+                        Buffer.BlockCopy(data, 0, dmrpkt, 20, DmrFrameLengthBytes);
+
+                        SendPacket(adapter, DmrOpcode, dmrpkt, seqNo, streamId);
+                        seqNo++;
+                    }
+                }
+
+                SendPacket(adapter, DmrOpcode, BuildDmrTerminator(adapter, slot, srcId, dstId, seqNo), seqNo, streamId);
+            }
+            else
+            {
+                SendPacket(adapter, DmrOpcode, BuildDmrTerminator(adapter, slot, srcId, dstId, nextSeqNo), nextSeqNo, streamId);
+            }
+        }
+
+        /// <inheritdoc />
+        public void SendP25Tdu(TransmitTarget target, uint streamId, bool grantDemand)
+        {
+            var adapter = ResolveTargetAdapter(target.SystemName);
+            if (adapter is null)
+            {
+                // Unknown system (no adapter, or a resolver answering
+                // with an adapter configured for another name): silent
+                // no-op.
+                return;
+            }
+
+            if (!uint.TryParse(target.TalkgroupId, out uint dstId))
+            {
+                // Malformed talkgroup id: silent no-op — the audio path
+                // never throws.
+                return;
+            }
+
+            byte[] payload = new byte[P25PacketSize];
+            var callData = new RemoteCallData
+            {
+                SrcId = target.SourceId,
+                DstId = dstId,
+                LCO = P25Defines.LC_GROUP,
+            };
+
+            // WPF/fnecore parity (FneSystemBase.SendP25TDU): a 200-byte
+            // frame with the TDU DUID, the message header size at
+            // payload[23], the grant-demand control bit at payload[14],
+            // sent with the RTP call-end sequence (65535) and the live
+            // stream id (WPF sends stream id 0 — port delta).
+            adapter.CreateP25MessageHdr((byte)P25DUID.TDU, callData, ref payload);
+            payload[23] = P25MsgHdrSize;
+            if (grantDemand)
+            {
+                payload[14] |= 0x80;
+            }
+
+            SendPacket(adapter, P25Opcode, payload, Constants.RtpCallEndSeq, streamId);
+        }
+
+        /// <summary>
+        /// Resolves the adapter for a target system name and verifies it
+        /// is the adapter configured for that name. A resolver that
+        /// answers with an adapter configured for a DIFFERENT name (a
+        /// test double ignoring its argument, or a miswired resolver) is
+        /// treated as unknown — silent no-op. The production factory
+        /// resolver already returns null for unknown names
+        /// (FnecoreTransportFactory.ResolveAdapter), so this is a
+        /// belt-and-braces guard; the comparison is case-insensitive
+        /// (factory lookup parity).
+        /// </summary>
+        private FnecorePeerAdapter? ResolveTargetAdapter(string systemName)
+        {
+            var adapter = resolveAdapter(systemName);
+            if (adapter is null)
+            {
+                return null;
+            }
+
+            return string.Equals(
+                adapter.ConfiguredSystemName,
+                systemName,
+                StringComparison.OrdinalIgnoreCase)
+                ? adapter
+                : null;
         }
 
         /// <summary>
@@ -302,6 +488,54 @@ namespace DvmConsole.Avalonia.Audio
             // Generate the DMR network frame and pack the payload.
             byte[] dmrpkt = new byte[DmrPacketSize];
             adapter.CreateDMRMessage(ref dmrpkt, srcId, dstId, slot, frameType, (byte)seqNo, n);
+            Buffer.BlockCopy(data, 0, dmrpkt, 20, DmrFrameLengthBytes);
+
+            return dmrpkt;
+        }
+
+        /// <summary>
+        /// Builds the 55-byte DATA_SYNC TERMINATOR_WITH_LC network
+        /// packet (fnecore parity FneSystemBase.SendDMRTerminator's
+        /// terminator block): the encoded group full LC is written into
+        /// the 33-byte frame, then the slot type is merged into the
+        /// frame's embedded-signalling gap, and the frame is packed
+        /// into the network packet with a DATA_SYNC frame type.
+        /// Intentional deltas: the port writes the slot type AFTER the
+        /// LC encode — the fnecore order (slot type first) zeroes it,
+        /// because <see cref="FullLC.Encode"/> replaces the frame buffer
+        /// with the BPTC-interleaved LC — so the port's terminator
+        /// carries a decodable slot type; the port encodes the target's
+        /// DMR slot (WPF hardcodes slot 1 at every call site) and the
+        /// caller's seq number (WPF reuses one peer packet sequence for
+        /// the whole terminator run — the port's per-frame incrementing
+        /// convention).
+        /// </summary>
+        private byte[] BuildDmrTerminator(FnecorePeerAdapter adapter, byte slot, uint srcId, uint dstId, int seqNo)
+        {
+            byte[] data = new byte[DmrFrameLengthBytes];
+
+            var dmrLC = new LC
+            {
+                FLCO = (byte)DMRFLCO.FLCO_GROUP,
+                SrcId = srcId,
+                DstId = dstId,
+            };
+
+            // The BPTC encode replaces the frame buffer, so the slot
+            // type must be written AFTER it: SlotType.GetData merges
+            // into the embedded-signalling gap (bytes 12-20) while
+            // preserving the BPTC bits it shares (byte 12 top 2, byte
+            // 20 low 2).
+            FullLC.Encode(dmrLC, ref data, DMRDataType.TERMINATOR_WITH_LC);
+
+            var slotType = new SlotType
+            {
+                DataType = (byte)DMRDataType.TERMINATOR_WITH_LC,
+            };
+            slotType.GetData(ref data);
+
+            byte[] dmrpkt = new byte[DmrPacketSize];
+            adapter.CreateDMRMessage(ref dmrpkt, srcId, dstId, slot, FrameType.DATA_SYNC, (byte)seqNo, 0);
             Buffer.BlockCopy(data, 0, dmrpkt, 20, DmrFrameLengthBytes);
 
             return dmrpkt;

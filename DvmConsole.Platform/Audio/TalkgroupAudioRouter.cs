@@ -179,6 +179,12 @@ namespace DvmConsole.Platform.Audio
 
         private static readonly TimeSpan CaptureRestartThrottle = TimeSpan.FromSeconds(10);
 
+        /// <summary>
+        /// Number of P25 TDUs emitted at the end of a P25 transmit
+        /// (WPF wrapper loop parity, FneSystemBase.P25.cs:80-82).
+        /// </summary>
+        private const int P25EndTduCount = 4;
+
         private readonly object _routeGate = new();
         private readonly Dictionary<string, TalkgroupState> _talkgroups =
             new Dictionary<string, TalkgroupState>(StringComparer.Ordinal);
@@ -693,12 +699,18 @@ namespace DvmConsole.Platform.Audio
         /// <summary>
         /// Ends the active transmit: stops the capture input (no further
         /// sends; a late pump block after the end is a no-op) and the
-        /// local-monitor loopback. Idempotent when no transmit is active.
+        /// local-monitor loopback, then emits the end-of-call signalling
+        /// once per active target — a DMR terminator, or four P25 TDUs
+        /// (WPF parity) — carrying the target's own stream id and next
+        /// sequence number. Idempotent when no transmit is active (a
+        /// second call emits nothing; the session-scoped emission runs
+        /// exactly once per transmit, after the streams are stopped).
         /// </summary>
         public async Task EndTransmitAsync()
         {
             CaptureAudioPipeline? capture;
             MonitorAudioPipeline? monitor;
+            IReadOnlyList<TargetEntry>? targets = null;
 
             lock (_transmitGate)
             {
@@ -715,6 +727,11 @@ namespace DvmConsole.Platform.Audio
                 // this session's end state).
                 active.EndRequested = true;
                 active.TransmitEnded = true;
+
+                // The per-target entries live with the session: their
+                // stream/seq counters are the final values of this
+                // transmit (the pump is stopped before they are read).
+                targets = active.Targets;
 
                 capture = _capturePipeline;
                 monitor = _txMonitorPipeline;
@@ -739,6 +756,33 @@ namespace DvmConsole.Platform.Audio
             }
 
             await Task.WhenAll(stops).ConfigureAwait(false);
+
+            // End-of-call signalling, once per active target, AFTER the
+            // capture and monitor are stopped: a DMR transmit ends with
+            // one terminator, a P25 transmit with four TDUs (WPF
+            // wrapper loop parity, FneSystemBase.P25.cs:80-82). Each
+            // signal carries the target's own stream id and next
+            // sequence number (WPF sends stream id 0 and hardcodes the
+            // DMR slot — both port deltas). The sender contract is
+            // never-throw, so the fire-and-forget caller cannot fault
+            // here.
+            if (targets is not null)
+            {
+                foreach (var entry in targets)
+                {
+                    if (entry.Target.Mode == VoiceMode.Dmr)
+                    {
+                        _sender.SendDmrTerminator(entry.Target, entry.StreamIdCounter, entry.SeqNo);
+                    }
+                    else
+                    {
+                        for (var i = 0; i < P25EndTduCount; i++)
+                        {
+                            _sender.SendP25Tdu(entry.Target, entry.StreamIdCounter, grantDemand: false);
+                        }
+                    }
+                }
+            }
         }
 
         /// <summary>
