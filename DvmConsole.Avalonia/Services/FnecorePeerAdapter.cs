@@ -23,7 +23,8 @@ namespace DvmConsole.Avalonia.Services
     /// <see cref="FnePeer.StartWithoutMaintainence"/> is used — the Core
     /// <see cref="FneConnectionService"/> owns the heartbeat through
     /// <see cref="Ping"/>; incoming PONG frames are translated to
-    /// <see cref="PingAcknowledged"/> by decoding each raw frame in the
+    /// <see cref="PingAcknowledged"/> by reading the validated RtpFNE
+    /// function byte at absolute offset 18 of each raw frame in the
     /// peer's <see cref="FnePeer.NetworkFrameHandler"/> (no fnecore fork
     /// change). Receive events are re-raised as
     /// <see cref="DmrFrameReceived"/> / <see cref="P25FrameReceived"/>
@@ -131,10 +132,18 @@ namespace DvmConsole.Avalonia.Services
             // acknowledged event and return false so fnecore still
             // processes the frame (updating its own ping counters); all
             // other frames are left untouched.
+            //
+            // PONG is detected with an allocation-free direct read:
+            // RtpFNEHeader.Function sits at absolute byte offset 18
+            // (RTP header 12 + extension field offset 6,
+            // fnecore/RtpFNEHeader.cs:60,86). The byte is only read
+            // after the length guard, so short or malformed frames are
+            // safe. ReadFrame validates reachable network frames before
+            // invoking this handler; the guard additionally covers
+            // direct invocations.
             fne.NetworkFrameHandler = (frame, peerId, streamId) =>
             {
-                var header = new RtpFNEHeader();
-                if (header.Decode(frame.Message) && header.Function == Constants.NET_FUNC_PONG)
+                if (frame.Message.Length > 18 && frame.Message[18] == Constants.NET_FUNC_PONG)
                 {
                     try
                     {
@@ -286,7 +295,8 @@ namespace DvmConsole.Avalonia.Services
         {
             // WPF parity FnePeer.cs:1534-1535: one-byte ping message.
             // The acknowledged side is delivered through the
-            // NetworkFrameHandler PONG detection.
+            // NetworkFrameHandler PONG detection (validated offset-18
+            // direct read, no per-frame header allocation).
             fne.SendMasterTraffic(
                 FneBase.CreateOpcode(Constants.NET_FUNC_PING, Constants.NET_SUBFUNC_NOP),
                 new byte[1],

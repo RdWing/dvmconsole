@@ -15,8 +15,9 @@
 * deferred non-blocking decision, resolved as adapter-internal
 * backgrounding (contract, service, bridge, and Core tests untouched).
 * StartWithoutMaintainence() is used (the Core service owns the
-* heartbeat); PONG frames are translated to PingAcknowledged via
-* RtpFNEHeader.Decode in the NetworkFrameHandler (no fork change);
+* heartbeat); PONG frames are translated to PingAcknowledged via the
+* validated RtpFNE function-byte offset in NetworkFrameHandler (no fork
+* change);
 * receive events are re-raised as DmrFrameReceived/P25FrameReceived
 * for the shell glue.
 *
@@ -105,6 +106,76 @@ namespace DvmConsole.Avalonia.Tests
                 BindingFlags.Public | BindingFlags.Instance);
             Assert.NotNull(method);
             method!.Invoke(sender, arguments);
+        }
+
+        private static fnecore.RawNetworkFrame GetNetworkFrameHandler(FnecorePeerAdapter adapter)
+        {
+            var field = typeof(fnecore.FneSystemBase).GetField(
+                "fne",
+                BindingFlags.Instance | BindingFlags.NonPublic);
+            Assert.NotNull(field);
+
+            var peer = Assert.IsType<fnecore.FnePeer>(field!.GetValue(adapter));
+            Assert.NotNull(peer.NetworkFrameHandler);
+            return peer.NetworkFrameHandler!;
+        }
+
+        private static byte[] MakeFneExtensionFrame(byte function)
+        {
+            var header = new RtpFNEHeader
+            {
+                Function = function,
+            };
+            var message = new byte[32];
+            header.Encode(ref message);
+            return message;
+        }
+
+        [Fact]
+        public void Adapter_NetworkFrameHandler_ShortFrame_IsSafe()
+        {
+            var adapter = new FnecorePeerAdapter(MakeSystem());
+            var handler = GetNetworkFrameHandler(adapter);
+
+            var exception = Record.Exception(() =>
+                Assert.False(handler(
+                    new UdpFrame { Message = new byte[4] },
+                    0,
+                    0)));
+
+            Assert.Null(exception);
+        }
+
+        [Fact]
+        public void Adapter_NetworkFrameHandler_Pong_RaisesPingAcknowledged()
+        {
+            var adapter = new FnecorePeerAdapter(MakeSystem());
+            var handler = GetNetworkFrameHandler(adapter);
+            var acknowledgements = 0;
+            adapter.PingAcknowledged += () => acknowledgements++;
+
+            Assert.False(handler(
+                new UdpFrame { Message = MakeFneExtensionFrame(Constants.NET_FUNC_PONG) },
+                0,
+                0));
+
+            Assert.Equal(1, acknowledgements);
+        }
+
+        [Fact]
+        public void Adapter_NetworkFrameHandler_NonPong_DoesNotAcknowledge()
+        {
+            var adapter = new FnecorePeerAdapter(MakeSystem());
+            var handler = GetNetworkFrameHandler(adapter);
+            var acknowledgements = 0;
+            adapter.PingAcknowledged += () => acknowledgements++;
+
+            Assert.False(handler(
+                new UdpFrame { Message = MakeFneExtensionFrame(Constants.NET_FUNC_PING) },
+                0,
+                0));
+
+            Assert.Equal(0, acknowledgements);
         }
 
         /* ------------------------------------------------------------------
