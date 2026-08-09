@@ -20,7 +20,10 @@ namespace DvmConsole.Platform.Audio
     /// <see cref="CaptureAudioPipeline"/> per PTT, splits each 1600-byte
     /// capture block into five 320-byte chunks (AudioConverter.
     /// SplitToChunks parity), encodes each chunk PER-CODEWORD through
-    /// the injected <see cref="IVoiceFrameEncoder"/>, accumulates DMR
+    /// the injected <see cref="IVoiceFrameEncoder"/> — once per unique
+    /// voice mode, fanned out to every target entry of that mode (the
+    /// AllChannels PTT fan-out; one capture serves all targets, each
+    /// with independent stream/seq counters) — accumulates DMR
     /// triples (3 x 9 bytes) and P25 LDUs (9 x 11 bytes) and delivers
     /// complete units through the injected <see cref="IVoiceTrafficSender"/>,
     /// while looping the raw PCM back to a local-monitor output with the
@@ -72,26 +75,25 @@ namespace DvmConsole.Platform.Audio
         }
 
         /// <summary>
-        /// Active transmit session state. Guarded by
-        /// <see cref="_transmitGate"/>; the pending-codeword list is only
-        /// touched by the capture pump thread.
+        /// Per-target transmit state within an active transmit session.
+        /// Ordered: entries are processed in the order the targets were
+        /// supplied to
+        /// <see cref="BeginTransmitAsync(IReadOnlyList{TransmitTarget}, AudioDeviceId, CancellationToken)"/>,
+        /// so a capture block fans out one complete unit per target, in
+        /// target order. The pending-codeword list is only touched by
+        /// the capture pump thread; the stream id and sequence counters
+        /// are per-target, so every target's frames carry independent
+        /// stream/seq numbering.
         /// </summary>
-        private sealed class TransmitSession
+        private sealed class TargetEntry
         {
-            public TransmitSession(
-                TransmitTarget target,
-                AudioDeviceId inputDeviceId,
-                int codewordsPerUnit)
+            public TargetEntry(TransmitTarget target, int codewordsPerUnit)
             {
                 Target = target;
-                InputDeviceId = inputDeviceId;
                 CodewordsPerUnit = codewordsPerUnit;
             }
 
             public TransmitTarget Target { get; }
-
-            /// <summary>Input device used by this transmit session.</summary>
-            public AudioDeviceId InputDeviceId { get; }
 
             /// <summary>Codewords per complete unit: 3 for DMR, 9 for P25.</summary>
             public int CodewordsPerUnit { get; }
@@ -104,6 +106,30 @@ namespace DvmConsole.Platform.Audio
 
             /// <summary>Per-frame sequence number within this transmit.</summary>
             public int SeqNo;
+        }
+
+        /// <summary>
+        /// Active transmit session state. Guarded by
+        /// <see cref="_transmitGate"/>; the per-target pending-codeword
+        /// lists are only touched by the capture pump thread.
+        /// </summary>
+        private sealed class TransmitSession
+        {
+            public TransmitSession(AudioDeviceId inputDeviceId, IReadOnlyList<TargetEntry> targets)
+            {
+                InputDeviceId = inputDeviceId;
+                Targets = targets;
+            }
+
+            /// <summary>Input device used by this transmit session.</summary>
+            public AudioDeviceId InputDeviceId { get; }
+
+            /// <summary>
+            /// Ordered per-target transmit state; one entry per target
+            /// of the session, retained across capture restarts so a HAL
+            /// unplug does not split the logical transmission.
+            /// </summary>
+            public IReadOnlyList<TargetEntry> Targets { get; }
 
             /// <summary>
             /// Set under the transmit gate when a deliberate end was
@@ -351,7 +377,8 @@ namespace DvmConsole.Platform.Audio
         /// (the typed <see cref="AudioDeviceException"/> when the input
         /// device is unavailable), the loopback monitor created for the
         /// attempt is stopped, no transmit state is committed and the
-        /// original exception propagates to the caller.
+        /// original exception propagates to the caller. Delegates to the
+        /// list overload with a single-element list.
         /// </summary>
         /// <param name="target">The transmit target.</param>
         /// <param name="inputDeviceId">Device to capture microphone audio from.</param>
@@ -363,11 +390,66 @@ namespace DvmConsole.Platform.Audio
         /// <exception cref="AudioDeviceException">
         /// Thrown, typed, when the input device is unavailable.
         /// </exception>
-        public async Task BeginTransmitAsync(
+        public Task BeginTransmitAsync(
             TransmitTarget target,
             AudioDeviceId inputDeviceId,
             CancellationToken cancellationToken)
         {
+            return BeginTransmitAsync(
+                new[] { target },
+                inputDeviceId,
+                cancellationToken);
+        }
+
+        /// <summary>
+        /// Begins a transmit for the given targets: creates ONE capture
+        /// pipeline over the factory, starts the capture on the requested
+        /// input device, and routes the raw PCM to a local-monitor output
+        /// (250 ms shed) while the capture pump encodes each 320-byte
+        /// chunk once per unique voice mode and accumulates complete DMR
+        /// triples / P25 LDUs for EVERY target entry of that mode — the
+        /// AllChannels PTT fan-out. Each target's frames carry
+        /// independent stream-id and sequence counters (per-target state
+        /// entries, ordered as supplied). An empty target list is a
+        /// completed no-op: no capture, no loopback monitor, no session
+        /// state. The local monitor degrades to absent when its output
+        /// device is unavailable; the transmit itself is unaffected. When
+        /// the capture stream cannot start (the typed
+        /// <see cref="AudioDeviceException"/> when the input device is
+        /// unavailable), the loopback monitor created for the attempt is
+        /// stopped, no transmit state is committed and the original
+        /// exception propagates to the caller.
+        /// </summary>
+        /// <param name="targets">The transmit targets, in fan-out order.</param>
+        /// <param name="inputDeviceId">Device to capture microphone audio from.</param>
+        /// <param name="cancellationToken">Cancels the capture stream.</param>
+        /// <exception cref="ArgumentNullException">
+        /// Thrown when <paramref name="targets"/> is null.
+        /// </exception>
+        /// <exception cref="InvalidOperationException">
+        /// Thrown when a transmit is already active (single-transmit
+        /// gate); end the active transmit first.
+        /// </exception>
+        /// <exception cref="AudioDeviceException">
+        /// Thrown, typed, when the input device is unavailable.
+        /// </exception>
+        public async Task BeginTransmitAsync(
+            IReadOnlyList<TransmitTarget> targets,
+            AudioDeviceId inputDeviceId,
+            CancellationToken cancellationToken)
+        {
+            if (targets is null)
+            {
+                throw new ArgumentNullException(nameof(targets));
+            }
+
+            // An empty target list is a completed no-op: no capture, no
+            // loopback monitor, no session state, regardless of lifecycle.
+            if (targets.Count == 0)
+            {
+                return;
+            }
+
             if (Volatile.Read(ref _disposed) != 0)
             {
                 throw new ObjectDisposedException(nameof(TalkgroupAudioRouter));
@@ -390,10 +472,19 @@ namespace DvmConsole.Platform.Audio
                             "A transmit is already active; call EndTransmitAsync before beginning another.");
                     }
 
-                    var session = new TransmitSession(
-                        target,
-                        inputDeviceId,
-                        target.Mode == VoiceMode.Dmr ? 3 : 9);
+                    // One ordered per-target state entry per supplied
+                    // target; a session with no resolvable targets never
+                    // reaches this point (the empty list short-circuits
+                    // above).
+                    var entries = new List<TargetEntry>(targets.Count);
+                    foreach (var target in targets)
+                    {
+                        entries.Add(new TargetEntry(
+                            target,
+                            target.Mode == VoiceMode.Dmr ? 3 : 9));
+                    }
+
+                    var session = new TransmitSession(inputDeviceId, entries);
                     var capture = new CaptureAudioPipeline(_factory);
 
                     // Local-monitor loopback (WPF AddLiveMonitorStream parity,
@@ -794,12 +885,15 @@ namespace DvmConsole.Platform.Audio
         /// <summary>
         /// Capture pump callback (runs on the capture thread): splits each
         /// 1600-byte block into five 320-byte chunks, routes each chunk to
-        /// the local monitor, encodes it per-codeword and accumulates
-        /// complete DMR triples / P25 LDUs for the traffic sender. A chunk
-        /// the encoder rejects is skipped; a block delivered after the
-        /// session's <see cref="EndTransmitAsync"/> sends nothing (the
-        /// ended flag is per-session, so a late block on a prior session's
-        /// pump after a quick re-begin is a no-op).
+        /// the local monitor, encodes it ONCE per unique voice mode
+        /// present in the session and accumulates the encoded codeword
+        /// into every target entry of that mode (the AllChannels
+        /// fan-out), sending each target's complete DMR triples / P25
+        /// LDUs with independent stream/seq counters. A chunk the encoder
+        /// rejects is skipped; a block delivered after the session's
+        /// <see cref="EndTransmitAsync"/> sends nothing (the ended flag
+        /// is per-session, so a late block on a prior session's pump
+        /// after a quick re-begin is a no-op).
         /// </summary>
         private Task PumpBlockAsync(TransmitSession session, ReadOnlyMemory<byte> block)
         {
@@ -826,50 +920,74 @@ namespace DvmConsole.Platform.Audio
                 }
 
                 var samples = VoiceFrameSplitter.BytesToSamples(chunk);
-                if (!_encoder.TryEncode(session.Target.Mode, samples, out var codeword))
-                {
-                    continue;
-                }
 
-                AccumulateAndSend(session, codeword);
+                // Encode ONCE per unique mode (all targets of the same
+                // mode share the same encoded codeword; the encoder seam
+                // is mode-keyed, so a second encode of the same chunk for
+                // a sibling target would be redundant), then accumulate
+                // the codeword into every entry of that mode.
+                var encodedModes = new HashSet<VoiceMode>();
+                foreach (var entry in session.Targets)
+                {
+                    if (!encodedModes.Add(entry.Target.Mode))
+                    {
+                        continue;
+                    }
+
+                    if (!_encoder.TryEncode(entry.Target.Mode, samples, out var codeword))
+                    {
+                        continue;
+                    }
+
+                    AccumulateAndSend(session, entry.Target.Mode, codeword);
+                }
             }
 
             return Task.CompletedTask;
         }
 
         /// <summary>
-        /// Accumulates one encoded codeword into the session's pending
-        /// list and sends every complete unit: a DMR AMBE triple (three
-        /// 9-byte codewords concatenated into a 27-byte frame, WPF
-        /// MainWindow.DMR.cs:126-130 parity) via
+        /// Accumulates one encoded codeword into EVERY target entry of
+        /// the given mode and sends each entry's complete units: a DMR
+        /// AMBE triple (three 9-byte codewords concatenated into a
+        /// 27-byte frame, WPF MainWindow.DMR.cs:126-130 parity) via
         /// <see cref="IVoiceTrafficSender.SendDmrVoice"/>, or a P25 LDU
         /// (nine 11-byte IMBE codewords placed at the locked WPF offsets
         /// within a 225-byte LDU, MainWindow.P25.cs:154-178 parity) via
         /// <see cref="IVoiceTrafficSender.SendP25Ldu"/> (LDU1), each with
-        /// a monotonically increasing stream id and a per-frame sequence
-        /// number. Partial units carry over to the next block.
+        /// the entry's own monotonically increasing stream id and
+        /// per-frame sequence number, so sibling targets never share
+        /// stream/seq state. Partial units carry over to the next block.
         /// </summary>
-        private void AccumulateAndSend(TransmitSession session, byte[] codeword)
+        private void AccumulateAndSend(TransmitSession session, VoiceMode mode, byte[] codeword)
         {
-            session.PendingCodewords.Add(codeword);
-
-            while (session.PendingCodewords.Count >= session.CodewordsPerUnit)
+            foreach (var entry in session.Targets)
             {
-                var unit = AssembleUnit(
-                    session,
-                    session.PendingCodewords.GetRange(0, session.CodewordsPerUnit));
-                session.PendingCodewords.RemoveRange(0, session.CodewordsPerUnit);
-
-                var streamId = ++session.StreamIdCounter;
-                var seqNo = session.SeqNo++;
-
-                if (session.Target.Mode == VoiceMode.Dmr)
+                if (entry.Target.Mode != mode)
                 {
-                    _sender.SendDmrVoice(session.Target, unit, streamId, seqNo);
+                    continue;
                 }
-                else
+
+                entry.PendingCodewords.Add(codeword);
+
+                while (entry.PendingCodewords.Count >= entry.CodewordsPerUnit)
                 {
-                    _sender.SendP25Ldu(session.Target, isLdu2: false, unit, streamId, seqNo);
+                    var unit = AssembleUnit(
+                        entry,
+                        entry.PendingCodewords.GetRange(0, entry.CodewordsPerUnit));
+                    entry.PendingCodewords.RemoveRange(0, entry.CodewordsPerUnit);
+
+                    var streamId = ++entry.StreamIdCounter;
+                    var seqNo = entry.SeqNo++;
+
+                    if (entry.Target.Mode == VoiceMode.Dmr)
+                    {
+                        _sender.SendDmrVoice(entry.Target, unit, streamId, seqNo);
+                    }
+                    else
+                    {
+                        _sender.SendP25Ldu(entry.Target, isLdu2: false, unit, streamId, seqNo);
+                    }
                 }
             }
         }
@@ -883,9 +1001,9 @@ namespace DvmConsole.Platform.Audio
         /// zeroed — the fnecore traffic adapter (follow-on slice) fills
         /// them.
         /// </summary>
-        private static byte[] AssembleUnit(TransmitSession session, List<byte[]> codewords)
+        private static byte[] AssembleUnit(TargetEntry entry, List<byte[]> codewords)
         {
-            if (session.Target.Mode == VoiceMode.Dmr)
+            if (entry.Target.Mode == VoiceMode.Dmr)
             {
                 var unit = new byte[27];
                 for (var i = 0; i < codewords.Count; i++)

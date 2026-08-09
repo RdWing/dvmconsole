@@ -678,12 +678,21 @@ namespace DvmConsole.Avalonia
         /// <summary>
         /// Routes a PTT engagement change from the view-model's PTT slice
         /// to the talkgroup audio router: engage begins a transmit for
-        /// the resolved target, release ends it. A press with no resolved
-        /// target (channel assignment has not landed) is a no-op. The
-        /// event may arrive on the UI thread only (the PTT slice is
-        /// UI-thread driven); the router itself is thread-safe either
-        /// way.
+        /// the resolved targets (the PTT slice's press-time
+        /// <see cref="PttCapabilityViewModel.EngagedTargets"/> snapshot
+        /// fanned out through the resolver, or the primary channel when
+        /// the PTT slice is absent), release ends it. A press with no
+        /// resolved target (channel assignment has not landed) is a
+        /// no-op. The event may arrive on the UI thread only (the PTT
+        /// slice is UI-thread driven); the router itself is thread-safe
+        /// either way.
         /// </summary>
+        /// <remarks>
+        /// Deliberate deviation from the WPF single-channel PTT path: one
+        /// capture serves all engaged targets, so a release ends every
+        /// target together — there is no per-target release in the
+        /// AllChannels mode (RED-pinned fan-out contract).
+        /// </remarks>
         private void OnPttStateRequested(bool isDown)
         {
             if (talkgroupAudioRouter is not { } router)
@@ -693,15 +702,15 @@ namespace DvmConsole.Avalonia
 
             if (isDown)
             {
-                var target = ResolveTransmitTarget();
-                if (target is not { } resolved)
+                var targets = ResolveTransmitTargets();
+                if (targets.Count == 0)
                 {
                     return;
                 }
 
                 var inputDeviceId = (DataContext as MainWindowViewModel)?.AudioSettings?.SelectedInputId
                     ?? AudioDeviceId.Default;
-                _ = router.BeginTransmitAsync(resolved, inputDeviceId, CancellationToken.None);
+                _ = router.BeginTransmitAsync(targets, inputDeviceId, CancellationToken.None);
             }
             else
             {
@@ -710,20 +719,43 @@ namespace DvmConsole.Avalonia
         }
 
         /// <summary>
-        /// Resolves the transmit target for a PTT press from the primary
-        /// channel's codeplug channel name via the composed
-        /// <see cref="TransmitTargetResolver"/>. Returns null — making
-        /// the PTT press a no-op, the audio router untouched — when no
-        /// resolver was composed (no codeplug), the view-model is
-        /// absent, no primary channel is set, or the primary channel's
-        /// name does not resolve to a transmittable target.
+        /// Resolves the transmit targets for a PTT press: the PTT
+        /// view-model's press-time
+        /// <see cref="PttCapabilityViewModel.EngagedTargets"/> snapshot
+        /// projected onto codeplug channel names and resolved through the
+        /// composed <see cref="TransmitTargetResolver"/> (order-preserving;
+        /// unresolvable slots are skipped, an all-unresolvable snapshot
+        /// yields an empty list). When the PTT slice is absent, the
+        /// primary channel is the fallback target (the pre-fan-out
+        /// behavior). Returns an empty list — making the PTT press a
+        /// no-op, the audio router untouched — when no resolver was
+        /// composed (no codeplug), neither the PTT slice nor a primary
+        /// channel is available, or nothing resolves to a transmittable
+        /// target.
         /// </summary>
-        private TransmitTarget? ResolveTransmitTarget()
-            => transmitTargetResolver is { } resolver
-                && DataContext is MainWindowViewModel vm
-                && vm.PrimaryChannel?.ChannelName is { } name
-                    ? resolver.Resolve(name)
-                    : null;
+        private IReadOnlyList<TransmitTarget> ResolveTransmitTargets()
+        {
+            if (transmitTargetResolver is not { } resolver
+                || DataContext is not MainWindowViewModel vm)
+            {
+                return Array.Empty<TransmitTarget>();
+            }
+
+            if (vm.Ptt is { } ptt)
+            {
+                // The press-time snapshot is non-null whenever the PTT
+                // slice raised a true engagement (engagement is a no-op
+                // without targets); a null snapshot resolves to no
+                // targets.
+                return resolver.ResolveAll(ptt.EngagedTargets?.Select(slot => slot.ChannelName));
+            }
+
+            return vm.PrimaryChannel?.ChannelName is { } name
+                ? resolver.Resolve(name) is { } fallback
+                    ? new[] { fallback }
+                    : Array.Empty<TransmitTarget>()
+                : Array.Empty<TransmitTarget>();
+        }
 
         /// <summary>
         /// Marshals a capture-end notification from the talkgroup audio

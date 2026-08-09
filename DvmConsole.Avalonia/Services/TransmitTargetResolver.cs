@@ -110,5 +110,41 @@ namespace DvmConsole.Avalonia.Services
                 mode == Codeplug.ChannelMode.P25 ? VoiceMode.P25 : VoiceMode.Dmr,
                 sourceId);
         }
+
+        /// <summary>
+        /// Resolves each channel name in order onto a transmit target,
+        /// skipping names that resolve to null, and returns the targets
+        /// in input order. Total and never throws: a null or empty
+        /// input yields an empty list, and every name degrades exactly
+        /// as <see cref="Resolve"/> (null/blank, unknown, RxOnly, NXDN,
+        /// missing system, malformed Rid/Tgid — all skipped, never
+        /// thrown). Powers the AllChannels PTT fan-out: the shell
+        /// projects the engaged slots' channel names onto this method.
+        /// </summary>
+        /// <param name="channelNames">The codeplug channel names to resolve.</param>
+        /// <returns>
+        /// The transmit targets for the resolvable channels in input
+        /// order; empty when the input is null/empty or no channel
+        /// resolves.
+        /// </returns>
+        public IReadOnlyList<TransmitTarget> ResolveAll(IEnumerable<string?>? channelNames)
+        {
+            if (channelNames is null)
+            {
+                return Array.Empty<TransmitTarget>();
+            }
+
+            var targets = new List<TransmitTarget>();
+            foreach (var channelName in channelNames)
+            {
+                var target = Resolve(channelName);
+                if (target is not null)
+                {
+                    targets.Add(target.Value);
+                }
+            }
+
+            return targets;
+        }
     }
 }

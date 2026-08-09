@@ -19,6 +19,9 @@
 * mode via Codeplug.Channel.GetChannelMode (case-insensitive).
 */
 using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Reflection;
 using DvmConsole.Avalonia.Services;
 using dvmconsole;
 using DvmConsole.Platform.Audio;
@@ -259,6 +262,59 @@ namespace DvmConsole.Avalonia.Tests
             Assert.Equal("31002", target.TalkgroupId);
             Assert.Equal((byte)2, target.Slot);
             Assert.Equal(1000001u, target.SourceId);
+        }
+
+        [Fact]
+        public void ResolveAll_ApiShape_IsOrderedTargetList()
+        {
+            var method = typeof(TransmitTargetResolver)
+                .GetMethods(BindingFlags.Public | BindingFlags.Instance)
+                .SingleOrDefault(m => m.Name == "ResolveAll");
+
+            Assert.NotNull(method);
+            Assert.Equal(typeof(IReadOnlyList<TransmitTarget>), method!.ReturnType);
+            Assert.Equal(
+                new[] { typeof(IEnumerable<string>) },
+                method.GetParameters().Select(p => p.ParameterType));
+        }
+
+        [Fact]
+        public void ResolveAll_PreservesOrder_AndSkipsUnresolvableChannels()
+        {
+            var resolver = new TransmitTargetResolver(MakeCodeplug());
+            var method = typeof(TransmitTargetResolver)
+                .GetMethods(BindingFlags.Public | BindingFlags.Instance)
+                .SingleOrDefault(m => m.Name == "ResolveAll");
+            Assert.NotNull(method);
+
+            var targets = Assert.IsAssignableFrom<IReadOnlyList<TransmitTarget>>(
+                method!.Invoke(
+                    resolver,
+                    new object?[] { new[] { "CH 2 P25", "No Such Channel", "CH 1 DMR" } }));
+
+            Assert.Equal(2, targets.Count);
+            Assert.Equal("31002", targets[0].TalkgroupId);
+            Assert.Equal("31001", targets[1].TalkgroupId);
+        }
+
+        [Fact]
+        public void ResolveAll_NullBlankUnknownAndEmptyInput_ReturnEmpty_NoThrow()
+        {
+            var resolver = new TransmitTargetResolver(MakeCodeplug());
+            var method = typeof(TransmitTargetResolver)
+                .GetMethods(BindingFlags.Public | BindingFlags.Instance)
+                .SingleOrDefault(m => m.Name == "ResolveAll");
+            Assert.NotNull(method);
+
+            var targets = Assert.IsAssignableFrom<IReadOnlyList<TransmitTarget>>(
+                method!.Invoke(
+                    resolver,
+                    new object?[] { new string?[] { null, "", "   ", "No Such Channel" } }));
+            var nullInput = Assert.IsAssignableFrom<IReadOnlyList<TransmitTarget>>(
+                method.Invoke(resolver, new object?[] { null }));
+
+            Assert.Empty(targets);
+            Assert.Empty(nullInput);
         }
     }
 }

@@ -34,6 +34,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
 using DvmConsole.Platform.Audio;
@@ -313,6 +314,9 @@ namespace DvmConsole.Platform.Tests
         private static readonly TransmitTarget DmrTarget = new(
             "System 1", "31001", 1, VoiceMode.Dmr, 1001);
 
+        private static readonly TransmitTarget DmrTarget2 = new(
+            "System 2", "31002", 2, VoiceMode.Dmr, 1002);
+
         private static TalkgroupAudioRouter CreateRouter(
             IAudioStreamFactory factory,
             FakeVoiceFrameDecoder decoder,
@@ -328,6 +332,24 @@ namespace DvmConsole.Platform.Tests
                 () => AudioDeviceId.Default,
                 scheduler: scheduler.Schedule,
                 clock: clock is null ? null : () => clock.UtcNow);
+
+        private static async Task BeginTransmitTargetsAsync(
+            TalkgroupAudioRouter router,
+            IReadOnlyList<TransmitTarget> targets)
+        {
+            var method = typeof(TalkgroupAudioRouter)
+                .GetMethods(BindingFlags.Public | BindingFlags.Instance)
+                .SingleOrDefault(m =>
+                    m.Name == "BeginTransmitAsync"
+                    && m.GetParameters().Length == 3
+                    && m.GetParameters()[0].ParameterType == typeof(IReadOnlyList<TransmitTarget>));
+            Assert.NotNull(method);
+
+            var task = Assert.IsAssignableFrom<Task>(method!.Invoke(
+                router,
+                new object?[] { targets, AudioDeviceId.Default, CancellationToken.None }));
+            await task;
+        }
 
         private static async Task WaitUntilAsync(Func<bool> condition)
         {
@@ -547,6 +569,65 @@ namespace DvmConsole.Platform.Tests
             // 11-byte codeword through the fake, so pin the mode arrival).
             Assert.NotEmpty(encoder.ReceivedModes);
             Assert.All(encoder.ReceivedModes, m => Assert.Equal(VoiceMode.P25, m));
+        }
+
+        [Fact]
+        public async Task BeginTransmit_MultipleDmrTargets_FansOutIndependentFrames()
+        {
+            var factory = new FakeAudioStreamFactory();
+            var encoder = new FakeVoiceFrameEncoder { CodewordLength = 9 };
+            var sender = new RecordingTrafficSender();
+            var router = CreateRouter(
+                factory, new FakeVoiceFrameDecoder(), encoder, sender, new ManualScheduler());
+
+            await BeginTransmitTargetsAsync(router, new[] { DmrTarget, DmrTarget2 });
+            await factory.Inputs[0].OnData!(new byte[1600]);
+
+            Assert.Equal(2, sender.DmrFrames.Count);
+            Assert.Equal((DmrTarget, 1u, 0),
+                (sender.DmrFrames[0].Target, sender.DmrFrames[0].StreamId, sender.DmrFrames[0].Seq));
+            Assert.Equal((DmrTarget2, 1u, 0),
+                (sender.DmrFrames[1].Target, sender.DmrFrames[1].StreamId, sender.DmrFrames[1].Seq));
+
+            await router.EndTransmitAsync();
+        }
+
+        [Fact]
+        public async Task BeginTransmit_MixedDmrAndP25Targets_FansOutByMode()
+        {
+            var factory = new FakeAudioStreamFactory();
+            var encoder = new FakeVoiceFrameEncoder { CodewordLength = 9 };
+            var sender = new RecordingTrafficSender();
+            var router = CreateRouter(
+                factory, new FakeVoiceFrameDecoder(), encoder, sender, new ManualScheduler());
+            var p25 = new TransmitTarget("System 2", "31003", 1, VoiceMode.P25, 1002);
+
+            await BeginTransmitTargetsAsync(router, new[] { DmrTarget, p25 });
+            await factory.Inputs[0].OnData!(new byte[1600]);
+            await factory.Inputs[0].OnData!(new byte[1600]);
+
+            Assert.Equal(3, sender.DmrFrames.Count);
+            Assert.Single(sender.P25Ldus);
+            Assert.Equal(p25, sender.P25Ldus[0].Target);
+            Assert.Contains(VoiceMode.Dmr, encoder.ReceivedModes);
+            Assert.Contains(VoiceMode.P25, encoder.ReceivedModes);
+            Assert.Equal(20, encoder.EncodeCount); // 2 blocks x 5 chunks x 2 unique modes
+
+            await router.EndTransmitAsync();
+        }
+
+        [Fact]
+        public async Task BeginTransmit_EmptyTargetList_IsNoOp()
+        {
+            var factory = new FakeAudioStreamFactory();
+            var router = CreateRouter(
+                factory, new FakeVoiceFrameDecoder(), new FakeVoiceFrameEncoder(),
+                new RecordingTrafficSender(), new ManualScheduler());
+
+            await BeginTransmitTargetsAsync(router, Array.Empty<TransmitTarget>());
+
+            Assert.Empty(factory.Inputs);
+            Assert.Empty(factory.Outputs);
         }
 
         [Fact]

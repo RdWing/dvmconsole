@@ -134,6 +134,17 @@ namespace DvmConsole.Avalonia.ViewModels
         public bool IsEngaged => isEngaged;
 
         /// <summary>
+        /// The press-time target snapshot of the current engagement
+        /// (the primary channel, or the reference-deduplicated
+        /// AllChannels selection), or null while released. Get-only:
+        /// populated by engagement and cleared by release — never
+        /// re-resolved mid-engagement, so a release always releases
+        /// exactly the pressed targets. Consumed by the shell to fan
+        /// the PTT out to every engaged target.
+        /// </summary>
+        public IReadOnlyList<ChannelSlotViewModel>? EngagedTargets => engagedTargets;
+
+        /// <summary>
         /// Assigns the hotkey gesture, queries its capability exactly
         /// once, raises <see cref="Hotkey"/> / <see cref="Capability"/>
         /// change-only notifications, and raises

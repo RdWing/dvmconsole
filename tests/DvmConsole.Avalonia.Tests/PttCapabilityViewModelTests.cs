@@ -211,13 +211,13 @@ namespace DvmConsole.Avalonia.Tests
                 },
                 ctor.GetParameters().Select(p => p.ParameterType).ToArray());
 
-            // Exactly the five declared public instance properties.
+            // Exactly the six declared public instance properties.
             var properties = type
                 .GetProperties(BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly)
                 .OrderBy(p => p.Name)
                 .ToArray();
             Assert.Equal(
-                new[] { "AllChannels", "Capability", "Hotkey", "IsEngaged", "ToggleMode" },
+                new[] { "AllChannels", "Capability", "EngagedTargets", "Hotkey", "IsEngaged", "ToggleMode" },
                 properties.Select(p => p.Name).ToArray());
 
             Assert.Equal(typeof(HotkeyGesture?), type.GetProperty("Hotkey")!.PropertyType);
@@ -225,12 +225,14 @@ namespace DvmConsole.Avalonia.Tests
             Assert.Equal(typeof(bool), type.GetProperty("ToggleMode")!.PropertyType);
             Assert.Equal(typeof(bool), type.GetProperty("AllChannels")!.PropertyType);
             Assert.Equal(typeof(bool), type.GetProperty("IsEngaged")!.PropertyType);
+            Assert.Equal(typeof(IReadOnlyList<ChannelSlotViewModel>), type.GetProperty("EngagedTargets")!.PropertyType);
 
             Assert.False(type.GetProperty("Hotkey")!.CanWrite);
             Assert.False(type.GetProperty("Capability")!.CanWrite);
             Assert.True(type.GetProperty("ToggleMode")!.CanWrite);
             Assert.True(type.GetProperty("AllChannels")!.CanWrite);
             Assert.False(type.GetProperty("IsEngaged")!.CanWrite);
+            Assert.False(type.GetProperty("EngagedTargets")!.CanWrite);
 
             // Exactly the five declared public instance methods (accessors excluded).
             var methods = type
@@ -490,6 +492,32 @@ namespace DvmConsole.Avalonia.Tests
             Assert.True(second.PttEngaged);
             Assert.True(vm.IsEngaged);
             Assert.Equal(new[] { true }, requests.ToArray());
+        }
+
+        [Fact]
+        public void EngagedTargets_ExposesPressSnapshot_AndClearsAfterRelease()
+        {
+            var first = Slot(1);
+            var second = Slot(2);
+            IReadOnlyCollection<ChannelSlotViewModel> selected = new[] { first, second };
+            var (_, vm) = Create(primary: () => null, selected: () => selected);
+            vm.AllChannels = true;
+
+            vm.PttPointerDown();
+
+            var property = typeof(PttCapabilityViewModel).GetProperty("EngagedTargets");
+            Assert.NotNull(property);
+            var snapshot = Assert.IsAssignableFrom<IReadOnlyList<ChannelSlotViewModel>>(
+                property!.GetValue(vm));
+            Assert.Equal(new[] { first, second }, snapshot);
+
+            // Release must use the press-time snapshot, not a live resolver.
+            selected = new[] { second };
+            vm.PttPointerUp();
+
+            Assert.False(first.PttEngaged);
+            Assert.False(second.PttEngaged);
+            Assert.Null(property.GetValue(vm));
         }
 
         [Fact]
