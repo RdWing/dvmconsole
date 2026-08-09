@@ -18,7 +18,7 @@ using fnecore;
 namespace dvmconsole
 {
     /// <summary>
-    /// 
+    ///
     /// </summary>
     public enum MBE_MODE
     {
@@ -342,7 +342,7 @@ namespace dvmconsole
     } // public class MBEDecoder
 
     /// <summary>
-    /// 
+    ///
     /// </summary>
     public static class MBEToneGenerator
     {
@@ -427,7 +427,7 @@ namespace dvmconsole
     } // public static class MBEToneGenerator
 
     /// <summary>
-    /// 
+    ///
     /// </summary>
     public class MBEInterleaver : IDisposable
     {
@@ -495,7 +495,7 @@ namespace dvmconsole
         }
 
         /// <summary>
-        /// 
+        ///
         /// </summary>
         /// <param name="codeword"></param>
         /// <param name="mbeBits"></param>
@@ -551,7 +551,7 @@ namespace dvmconsole
         }
 
         /// <summary>
-        /// 
+        ///
         /// </summary>
         /// <param name="mbeBits"></param>
         /// <param name="codeword"></param>

@@ -18,25 +18,23 @@ using dvmconsole.Controls;
 namespace dvmconsole
 {
     /// <summary>
-    /// WPF adapter over the portable generic
-    /// <see cref="SelectedChannelsManager{T}"/> Core type. Preserves the
-    /// original non-generic WPF API exactly while delegating all state and
-    /// event ordering to the Core implementation; the Core manager owns the
-    /// ChannelBox visual/log side effects via constructor-injected delegates.
+    ///
     /// </summary>
     public class SelectedChannelsManager
     {
-        private readonly SelectedChannelsManager<ChannelBox> core;
+        private ChannelBox primaryChannel;
 
-        public ChannelBox PrimaryChannel => core.PrimaryChannel;
-        public IReadOnlyCollection<ChannelBox> GetSelectedChannels() => core.GetSelectedChannels();
+        private readonly HashSet<ChannelBox> selectedChannels;
+
+        public ChannelBox PrimaryChannel => primaryChannel;
+        public IReadOnlyCollection<ChannelBox> GetSelectedChannels() => selectedChannels;
 
         /*
         ** Events
         */
 
         /// <summary>
-        /// 
+        ///
         /// </summary>
         public event Action SelectedChannelsChanged;
 
@@ -57,42 +55,75 @@ namespace dvmconsole
         /// </summary>
         public SelectedChannelsManager()
         {
-            core = new SelectedChannelsManager<ChannelBox>(
-                (channel, selected) => channel.IsSelected = selected,
-                (channel, primary) => channel.IsPrimary = primary,
-                channel => Log.WriteLine($"Setting primary channel to {channel.ChannelName}"));
-
-            core.SelectedChannelsChanged += () => SelectedChannelsChanged?.Invoke();
-            core.PrimaryChannelChanged += () => PrimaryChannelChanged?.Invoke();
-            core.ChannelSelectionChanged += (channel, selected) => ChannelSelectionChanged?.Invoke(channel, selected);
+            selectedChannels = new HashSet<ChannelBox>();
         }
 
         /// <summary>
-        /// 
+        ///
         /// </summary>
         /// <param name="channel"></param>
-        public void AddSelectedChannel(ChannelBox channel) => core.AddSelectedChannel(channel);
+        public void AddSelectedChannel(ChannelBox channel)
+        {
+            if (selectedChannels.Add(channel))
+            {
+                channel.IsSelected = true;
+                ChannelSelectionChanged?.Invoke(channel, true);
+                SelectedChannelsChanged?.Invoke();
+            }
+        }
 
         /// <summary>
-        /// 
+        ///
         /// </summary>
         /// <param name="channel"></param>
-        public void RemoveSelectedChannel(ChannelBox channel) => core.RemoveSelectedChannel(channel);
+        public void RemoveSelectedChannel(ChannelBox channel)
+        {
+            if (selectedChannels.Remove(channel))
+            {
+                if (primaryChannel == channel)
+                {
+                    ClearPrimaryChannel();
+                }
+                channel.IsPrimary = false;
+                channel.IsSelected = false;
+                ChannelSelectionChanged?.Invoke(channel, false);
+                SelectedChannelsChanged?.Invoke();
+            }
+        }
 
         /// <summary>
-        /// 
+        ///
         /// </summary>
-        public void ClearSelections() => core.ClearSelections();
+        public void ClearSelections()
+        {
+            foreach (var channel in selectedChannels)
+            {
+                channel.IsSelected = false;
+                ChannelSelectionChanged?.Invoke(channel, false);
+            }
+
+            selectedChannels.Clear();
+            SelectedChannelsChanged?.Invoke();
+        }
 
         /// <summary>
         /// Sets primary channel to the passed ChannelBox
         /// </summary>
         /// <param name="channel"></param>
-        public void SetPrimaryChannel(ChannelBox channel) => core.SetPrimaryChannel(channel);
+        public void SetPrimaryChannel(ChannelBox channel)
+        {
+            Log.WriteLine($"Setting primary channel to {channel.ChannelName}");
+            primaryChannel = channel;
+            PrimaryChannelChanged?.Invoke();
+        }
         
         /// <summary>
         /// Clears the primary channel selection, setting it to null
         /// </summary>
-        public void ClearPrimaryChannel() => core.ClearPrimaryChannel();
+        public void ClearPrimaryChannel()
+        {
+            primaryChannel = null;
+            PrimaryChannelChanged?.Invoke();
+        }
     } // public class SelectedChannelsManager
 } // namespace dvmconsole

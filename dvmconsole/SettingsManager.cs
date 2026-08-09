@@ -43,11 +43,23 @@ namespace dvmconsole
         public const double TONE_PRESET_MIN_DURATION_SECONDS = 0.25;
         public const double TONE_PRESET_MAX_DURATION_SECONDS = 10.0;
         public const string DTMF_PRESET_STEP_KIND_DIGIT = "digit";
+        public const double AUDIO_INPUT_GAIN_MIN = 0.25;
+        public const double AUDIO_INPUT_GAIN_MAX = 3.0;
+        public const double AUDIO_INPUT_EQ_GAIN_DB_MIN = -12.0;
+        public const double AUDIO_INPUT_EQ_GAIN_DB_MAX = 12.0;
 
-        private static readonly IFileSystemPaths _compatPaths = new DefaultFileSystemPaths();
+        public static readonly string UserAppData = Environment.GetFolderPath(
+            Environment.SpecialFolder.ApplicationData);
+        public static readonly string DefaultTarRecordingsPath = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments),
+            "DVMConsole",
+            "TAR");
 
-        public static string DefaultTarRecordingsPath => _compatPaths.DefaultTarRecordingsPath;
+        public static readonly string RootAppDataPath = "DVMProject" + Path.DirectorySeparatorChar + "dvmconsole";
+        public static string UserAppDataPath = UserAppData + Path.DirectorySeparatorChar + RootAppDataPath;
 
+        private static string SettingsFilePath = UserAppDataPath + Path.DirectorySeparatorChar + "UserSettings.json";
+        private const string SETTINGS_TRANSFER_FORMAT = "dvmconsole-settings-transfer";
 
         private static SettingsManager _instance = null;
 
@@ -145,6 +157,30 @@ namespace dvmconsole
         /// Enables simple console microphone automatic gain control.
         /// </summary>
         public bool AudioInputAgcEnabled { get; set; } = false;
+        /// <summary>
+        /// Console microphone gain applied before transmit encoding.
+        /// </summary>
+        public double AudioInputGain { get; set; } = 1.0;
+        /// <summary>
+        /// Low-band microphone EQ gain in dB.
+        /// </summary>
+        public double AudioInputEqLowGainDb { get; set; } = 0.0;
+        /// <summary>
+        /// Mid-band microphone EQ gain in dB.
+        /// </summary>
+        public double AudioInputEqMidGainDb { get; set; } = 0.0;
+        /// <summary>
+        /// High-band microphone EQ gain in dB.
+        /// </summary>
+        public double AudioInputEqHighGainDb { get; set; } = 0.0;
+        /// <summary>
+        /// Last selected/saved microphone processing preset name.
+        /// </summary>
+        public string AudioInputPresetName { get; set; } = string.Empty;
+        /// <summary>
+        /// User-defined microphone gain/EQ presets.
+        /// </summary>
+        public List<AudioInputPresetConfig> AudioInputPresets { get; set; } = new List<AudioInputPresetConfig>();
         /// <summary>
         /// Suppresses local RX speaker playback while the console is transmitting.
         /// </summary>
@@ -249,6 +285,18 @@ namespace dvmconsole
             public string DisplayName { get; set; } = string.Empty;
             public string TargetResourceKey { get; set; } = string.Empty;
             public List<DtmfPresetStep> Steps { get; set; } = new List<DtmfPresetStep>();
+        }
+
+        /// <summary>
+        /// Persisted microphone gain/EQ preset.
+        /// </summary>
+        public class AudioInputPresetConfig
+        {
+            public string Name { get; set; } = string.Empty;
+            public double Gain { get; set; } = 1.0;
+            public double LowGainDb { get; set; } = 0.0;
+            public double MidGainDb { get; set; } = 0.0;
+            public double HighGainDb { get; set; } = 0.0;
         }
 
         /// <summary>
@@ -394,9 +442,24 @@ namespace dvmconsole
 
         /// <summary>
         /// Import/export category shown in the settings transfer window.
-        /// Owned by DvmConsole.Core; the concrete category list below stays
-        /// here in the WPF assembly.
         /// </summary>
+        public class SettingsTransferCategoryDefinition
+        {
+            public string Id { get; set; } = string.Empty;
+            public string DisplayName { get; set; } = string.Empty;
+            public string Description { get; set; } = string.Empty;
+            public List<string> PropertyNames { get; set; } = new List<string>();
+        }
+
+        private class SettingsTransferFile
+        {
+            public string Format { get; set; } = SETTINGS_TRANSFER_FORMAT;
+            public int Version { get; set; } = 1;
+            public DateTime ExportedUtc { get; set; } = DateTime.UtcNow;
+            public List<string> Categories { get; set; } = new List<string>();
+            public JObject Settings { get; set; } = new JObject();
+        }
+
         private static readonly List<SettingsTransferCategoryDefinition> SETTINGS_TRANSFER_CATEGORIES = new List<SettingsTransferCategoryDefinition>
         {
             new SettingsTransferCategoryDefinition
@@ -432,6 +495,12 @@ namespace dvmconsole
                     nameof(MasterOutputDevice),
                     nameof(MasterOutputDeviceKey),
                     nameof(AudioInputAgcEnabled),
+                    nameof(AudioInputGain),
+                    nameof(AudioInputEqLowGainDb),
+                    nameof(AudioInputEqMidGainDb),
+                    nameof(AudioInputEqHighGainDb),
+                    nameof(AudioInputPresetName),
+                    nameof(AudioInputPresets),
                     nameof(MuteRxAudioWhileTransmitting),
                     nameof(ChannelVolumes),
                     nameof(WebStreamVolumes)
@@ -547,41 +616,10 @@ namespace dvmconsole
         };
 
         /// <summary>
-        /// Filesystem paths used by the settings manager.
-        /// </summary>
-        [JsonIgnore]
-        public IFileSystemPaths FileSystemPaths { get; }
-
-        /// <summary>
-        /// Settings store used for whole-file settings persistence.
-        /// </summary>
-        [JsonIgnore]
-        public ISettingsStore SettingsStore { get; }
-
-        /// <summary>
         /// Initializes a new instance of the <see cref="SettingsManager"/> class.
         /// </summary>
-        public SettingsManager() : this(new DefaultFileSystemPaths(null, null, App.USER_PROFILE_PATH_OVERRIDE))
+        public SettingsManager()
         {
-        }
-
-        /// <summary>
-        /// Initializes a new instance of the <see cref="SettingsManager"/> class with explicit filesystem paths.
-        /// </summary>
-        /// <param name="paths">Filesystem paths; when null the default paths honoring the profile override are used.</param>
-        public SettingsManager(IFileSystemPaths paths) : this(paths, null)
-        {
-        }
-
-        /// <summary>
-        /// Initializes a new instance of the <see cref="SettingsManager"/> class with explicit filesystem paths and settings store.
-        /// </summary>
-        /// <param name="paths">Filesystem paths; when null the default paths honoring the profile override are used.</param>
-        /// <param name="store">Settings store; when null a JSON store bound to <see cref="IFileSystemPaths.SettingsFilePath"/> is used.</param>
-        public SettingsManager(IFileSystemPaths paths, ISettingsStore store)
-        {
-            FileSystemPaths = paths ?? new DefaultFileSystemPaths(null, null, App.USER_PROFILE_PATH_OVERRIDE);
-            SettingsStore = store ?? new JsonSettingsStore(FileSystemPaths.SettingsFilePath);
             _instance = this;
         }
 
@@ -590,20 +628,25 @@ namespace dvmconsole
         /// </summary>
         public bool LoadSettings()
         {
-            if (App.USER_PROFILE_PATH_OVERRIDE == string.Empty && !Directory.Exists(FileSystemPaths.ApplicationDataRootPath))
-                Directory.CreateDirectory(FileSystemPaths.ApplicationDataRootPath);
+            // was the user profile path being overridden?
+            if (App.USER_PROFILE_PATH_OVERRIDE != string.Empty)
+            {
+                UserAppDataPath = App.USER_PROFILE_PATH_OVERRIDE;
+                SettingsFilePath = UserAppDataPath + Path.DirectorySeparatorChar + "UserSettings.json";
+            }
+            else
+            {
+                if (!Directory.Exists(UserAppDataPath))
+                    Directory.CreateDirectory(UserAppDataPath);
+            }
 
-            if (!SettingsStore.Exists)
+            if (!File.Exists(SettingsFilePath))
                 return false;
 
             try
             {
-                if (!SettingsStore.TryLoad<SettingsManager>(out SettingsManager loadedSettings))
-                {
-                    _instance = this;
-                    Log.WriteLine("Error loading settings: settings file could not be loaded.");
-                    return false;
-                }
+                string json = File.ReadAllText(SettingsFilePath);
+                SettingsManager loadedSettings = JsonConvert.DeserializeObject<SettingsManager>(json);
                 _instance = this;
 
                 if (loadedSettings != null)
@@ -629,13 +672,20 @@ namespace dvmconsole
                     MasterOutputDevice = NormalizeAudioDeviceIndex(loadedSettings.MasterOutputDevice);
                     MasterOutputDeviceKey = NormalizeAudioDeviceKey(loadedSettings.MasterOutputDeviceKey);
                     AudioInputAgcEnabled = loadedSettings.AudioInputAgcEnabled;
+                    AudioInputGain = NormalizeAudioInputGain(loadedSettings.AudioInputGain);
+                    AudioInputEqLowGainDb = NormalizeAudioInputEqGainDb(loadedSettings.AudioInputEqLowGainDb);
+                    AudioInputEqMidGainDb = NormalizeAudioInputEqGainDb(loadedSettings.AudioInputEqMidGainDb);
+                    AudioInputEqHighGainDb = NormalizeAudioInputEqGainDb(loadedSettings.AudioInputEqHighGainDb);
+                    AudioInputPresetName = loadedSettings.AudioInputPresetName?.Trim() ?? string.Empty;
+                    AudioInputPresets = NormalizeAudioInputPresets(loadedSettings.AudioInputPresets);
                     MuteRxAudioWhileTransmitting = loadedSettings.MuteRxAudioWhileTransmitting;
                     MigrateLegacyAudioSettings();
                     ChannelVolumes = loadedSettings.ChannelVolumes ?? new Dictionary<string, double>();
                     SelectableEncryptionStates = loadedSettings.SelectableEncryptionStates ?? new Dictionary<string, bool>();
                     WebStreamVolumes = loadedSettings.WebStreamVolumes ?? new Dictionary<string, double>();
-                    TarRecordingsRootPath = TarRecordingsPath.Resolve(
-                        loadedSettings.TarRecordingsRootPath, DefaultTarRecordingsPath);
+                    TarRecordingsRootPath = string.IsNullOrWhiteSpace(loadedSettings.TarRecordingsRootPath)
+                        ? DefaultTarRecordingsPath
+                        : loadedSettings.TarRecordingsRootPath.Trim();
                     TarChannelConfigs = loadedSettings.TarChannelConfigs ?? new Dictionary<string, TarChannelConfig>();
                     ToolbarClockConfigSlots = NormalizeToolbarClockConfigSlots(
                         loadedSettings.ToolbarClockConfigSlots,
@@ -691,28 +741,7 @@ namespace dvmconsole
                     SyncLegacyAlertToneState();
 
                     if (SaveTraceLog)
-                    {
-                        try
-                        {
-                            if (!Directory.Exists(FileSystemPaths.TraceLogDirectoryPath))
-                                Directory.CreateDirectory(FileSystemPaths.TraceLogDirectoryPath);
-                            Log.SetupTextWriter(FileSystemPaths.TraceLogDirectoryPath, "dvmconsole.log");
-                        }
-                        catch
-                        {
-                            // Preferred log directory (e.g. an unwritable profile override root) is not
-                            // usable; fall back to the legacy current-directory log file.
-                            try
-                            {
-                                Log.SetupTextWriter(Environment.CurrentDirectory, "dvmconsole.log");
-                            }
-                            catch
-                            {
-                                // Trace logging is best-effort; a logging setup failure must never
-                                // invalidate settings loading.
-                            }
-                        }
-                    }
+                        Log.SetupTextWriter(Environment.CurrentDirectory, "dvmconsole.log");
 
                     Assembly asm = Assembly.GetExecutingAssembly();
 #if DEBUG
@@ -750,12 +779,13 @@ namespace dvmconsole
         {
             _instance = this;
 
-            if (!Directory.Exists(FileSystemPaths.ApplicationDataRootPath))
-                Directory.CreateDirectory(FileSystemPaths.ApplicationDataRootPath);
+            if (!Directory.Exists(UserAppDataPath))
+                Directory.CreateDirectory(UserAppDataPath);
 
             try
             {
-                SettingsStore.Save(this);
+                string json = JsonConvert.SerializeObject(this, Formatting.Indented);
+                File.WriteAllText(SettingsFilePath, json);
             }
             catch (Exception ex)
             {
@@ -860,11 +890,22 @@ namespace dvmconsole
             if (string.IsNullOrWhiteSpace(filePath))
                 throw new ArgumentException("Export path is required.", nameof(filePath));
 
-            List<SettingsTransferCategoryDefinition> selectedCategories = SettingsTransferCodec.ResolveCategories(SETTINGS_TRANSFER_CATEGORIES, categoryIds);
+            List<SettingsTransferCategoryDefinition> selectedCategories = ResolveTransferCategories(categoryIds).ToList();
             if (selectedCategories.Count == 0)
                 throw new InvalidOperationException("Select at least one settings category to export.");
 
-            JObject settingsPayload = SettingsTransferCodec.BuildPayload(this, selectedCategories.SelectMany(c => c.PropertyNames));
+            JObject settingsPayload = new JObject();
+            foreach (string propertyName in selectedCategories.SelectMany(c => c.PropertyNames).Distinct(StringComparer.OrdinalIgnoreCase))
+            {
+                PropertyInfo property = typeof(SettingsManager).GetProperty(propertyName);
+                if (property == null || !property.CanRead)
+                    continue;
+
+                object value = property.GetValue(this);
+                settingsPayload[propertyName] = value == null
+                    ? JValue.CreateNull()
+                    : JToken.FromObject(value);
+            }
 
             SettingsTransferFile transferFile = new SettingsTransferFile
             {
@@ -873,7 +914,11 @@ namespace dvmconsole
                 Settings = settingsPayload
             };
 
-            SettingsTransferCodec.WriteFile(transferFile, filePath);
+            string directory = Path.GetDirectoryName(filePath);
+            if (!string.IsNullOrWhiteSpace(directory) && !Directory.Exists(directory))
+                Directory.CreateDirectory(directory);
+
+            File.WriteAllText(filePath, JsonConvert.SerializeObject(transferFile, Formatting.Indented));
         }
 
         public List<string> ImportSettingsTransfer(string filePath, IEnumerable<string> categoryIds)
@@ -883,18 +928,22 @@ namespace dvmconsole
             if (!File.Exists(filePath))
                 throw new FileNotFoundException("Settings transfer file was not found.", filePath);
 
-            SettingsTransferFile transferFile = SettingsTransferCodec.ReadFile(filePath);
+            SettingsTransferFile transferFile = JsonConvert.DeserializeObject<SettingsTransferFile>(File.ReadAllText(filePath));
+            if (transferFile == null || transferFile.Settings == null)
+                throw new InvalidOperationException("The selected file is not a valid settings transfer file.");
+            if (!string.Equals(transferFile.Format, SETTINGS_TRANSFER_FORMAT, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException("The selected file is not a dvmconsole settings transfer file.");
 
             HashSet<string> exportedCategories = new HashSet<string>(
                 transferFile.Categories ?? Enumerable.Empty<string>(),
                 StringComparer.OrdinalIgnoreCase);
 
-            List<SettingsTransferCategoryDefinition> selectedCategories = SettingsTransferCodec.ResolveCategories(SETTINGS_TRANSFER_CATEGORIES, categoryIds)
+            List<SettingsTransferCategoryDefinition> selectedCategories = ResolveTransferCategories(categoryIds)
                 .Where(category => exportedCategories.Count == 0 || exportedCategories.Contains(category.Id))
                 .ToList();
 
             if (selectedCategories.Count == 0)
-                throw new InvalidOperationException(SettingsTransferCodec.NO_CATEGORIES_RESOLVED_MESSAGE);
+                throw new InvalidOperationException("None of the selected categories exist in this transfer file.");
 
             foreach (string propertyName in selectedCategories.SelectMany(c => c.PropertyNames).Distinct(StringComparer.OrdinalIgnoreCase))
             {
@@ -905,13 +954,43 @@ namespace dvmconsole
                 if (property == null || !property.CanWrite)
                     continue;
 
-                object value = SettingsTransferCodec.ConvertToken(token, property.PropertyType);
+                object value = ConvertSettingsTransferToken(token, property.PropertyType);
                 property.SetValue(this, value);
             }
 
             NormalizeImportedSettings();
             SaveSettings();
             return selectedCategories.Select(c => c.DisplayName).ToList();
+        }
+
+        private static IEnumerable<SettingsTransferCategoryDefinition> ResolveTransferCategories(IEnumerable<string> categoryIds)
+        {
+            HashSet<string> selectedIds = new HashSet<string>(
+                categoryIds?.Where(id => !string.IsNullOrWhiteSpace(id)).Select(id => id.Trim()) ?? Enumerable.Empty<string>(),
+                StringComparer.OrdinalIgnoreCase);
+
+            if (selectedIds.Count == 0)
+                yield break;
+
+            foreach (SettingsTransferCategoryDefinition category in SETTINGS_TRANSFER_CATEGORIES)
+            {
+                if (selectedIds.Contains(category.Id))
+                    yield return category;
+            }
+        }
+
+        private static object ConvertSettingsTransferToken(JToken token, Type targetType)
+        {
+            if (token == null || token.Type == JTokenType.Null)
+            {
+                Type nullableType = Nullable.GetUnderlyingType(targetType);
+                if (!targetType.IsValueType || nullableType != null)
+                    return null;
+
+                return Activator.CreateInstance(targetType);
+            }
+
+            return token.ToObject(targetType);
         }
 
         private void NormalizeImportedSettings()
@@ -941,10 +1020,17 @@ namespace dvmconsole
             AudioInputDeviceKey = NormalizeAudioDeviceKey(AudioInputDeviceKey);
             MasterOutputDevice = NormalizeAudioDeviceIndex(MasterOutputDevice);
             MasterOutputDeviceKey = NormalizeAudioDeviceKey(MasterOutputDeviceKey);
+            AudioInputGain = NormalizeAudioInputGain(AudioInputGain);
+            AudioInputEqLowGainDb = NormalizeAudioInputEqGainDb(AudioInputEqLowGainDb);
+            AudioInputEqMidGainDb = NormalizeAudioInputEqGainDb(AudioInputEqMidGainDb);
+            AudioInputEqHighGainDb = NormalizeAudioInputEqGainDb(AudioInputEqHighGainDb);
+            AudioInputPresetName = AudioInputPresetName?.Trim() ?? string.Empty;
+            AudioInputPresets = NormalizeAudioInputPresets(AudioInputPresets);
             MigrateLegacyAudioSettings();
 
-            TarRecordingsRootPath = TarRecordingsPath.Resolve(
-                TarRecordingsRootPath, DefaultTarRecordingsPath);
+            TarRecordingsRootPath = string.IsNullOrWhiteSpace(TarRecordingsRootPath)
+                ? DefaultTarRecordingsPath
+                : TarRecordingsRootPath.Trim();
             ToolbarClockConfigSlots = NormalizeToolbarClockConfigSlots(ToolbarClockConfigSlots, ToolbarClockConfigs);
             ToolbarClockConfigs = ToolbarClockConfigSlotsToList(ToolbarClockConfigSlots);
             CallHistoryWindowPlacement = NormalizeWindowPlacement(
@@ -963,7 +1049,8 @@ namespace dvmconsole
         /// </summary>
         public void Reset()
         {
-            SettingsStore.Delete();
+            if (File.Exists(SettingsFilePath))
+                File.Delete(SettingsFilePath);
         }
 
         /// <summary>
@@ -1272,6 +1359,38 @@ namespace dvmconsole
                         })
                         .ToList()
                 })
+                .ToList();
+        }
+
+        public static double NormalizeAudioInputGain(double gain)
+        {
+            return double.IsNaN(gain) || double.IsInfinity(gain)
+                ? 1.0
+                : Math.Clamp(gain, AUDIO_INPUT_GAIN_MIN, AUDIO_INPUT_GAIN_MAX);
+        }
+
+        public static double NormalizeAudioInputEqGainDb(double gainDb)
+        {
+            return double.IsNaN(gainDb) || double.IsInfinity(gainDb)
+                ? 0.0
+                : Math.Clamp(gainDb, AUDIO_INPUT_EQ_GAIN_DB_MIN, AUDIO_INPUT_EQ_GAIN_DB_MAX);
+        }
+
+        public static List<AudioInputPresetConfig> NormalizeAudioInputPresets(IEnumerable<AudioInputPresetConfig> presets)
+        {
+            return (presets ?? Enumerable.Empty<AudioInputPresetConfig>())
+                .Where(preset => preset != null)
+                .Select(preset => new AudioInputPresetConfig
+                {
+                    Name = string.IsNullOrWhiteSpace(preset.Name) ? "Mic Preset" : preset.Name.Trim(),
+                    Gain = NormalizeAudioInputGain(preset.Gain),
+                    LowGainDb = NormalizeAudioInputEqGainDb(preset.LowGainDb),
+                    MidGainDb = NormalizeAudioInputEqGainDb(preset.MidGainDb),
+                    HighGainDb = NormalizeAudioInputEqGainDb(preset.HighGainDb)
+                })
+                .GroupBy(preset => preset.Name, StringComparer.OrdinalIgnoreCase)
+                .Select(group => group.Last())
+                .OrderBy(preset => preset.Name, StringComparer.OrdinalIgnoreCase)
                 .ToList();
         }
 
@@ -1686,8 +1805,9 @@ namespace dvmconsole
         /// </summary>
         public void SaveTarSettings(string rootPath, IDictionary<string, TarChannelConfig> configs)
         {
-            TarRecordingsRootPath = TarRecordingsPath.Resolve(
-                rootPath, DefaultTarRecordingsPath);
+            TarRecordingsRootPath = string.IsNullOrWhiteSpace(rootPath)
+                ? DefaultTarRecordingsPath
+                : rootPath.Trim();
 
             Dictionary<string, TarChannelConfig> normalized = new Dictionary<string, TarChannelConfig>(StringComparer.OrdinalIgnoreCase);
             foreach (KeyValuePair<string, TarChannelConfig> kvp in configs ?? new Dictionary<string, TarChannelConfig>())
