@@ -176,7 +176,11 @@ namespace DvmConsole.Avalonia.ViewModels
         /// <see cref="Zones"/>) and null (while zones exist) are
         /// rejected as silent no-ops. On an accepted change the four
         /// slots are re-assigned from the new zone's channels and the
-        /// slot-scoped selection is reset wholesale.
+        /// slot-scoped selection is reset wholesale. The
+        /// <see cref="PropertyChanged"/> notification is raised only
+        /// after the zone assignment, slot reassignment, and selection
+        /// reset are complete, so observers see the fully applied
+        /// zone/slot/selection state.
         /// </summary>
         public ZoneViewModel? SelectedZone
         {
@@ -203,9 +207,6 @@ namespace DvmConsole.Avalonia.ViewModels
                 }
 
                 selectedZone = value;
-                PropertyChanged?.Invoke(
-                    this,
-                    new PropertyChangedEventArgs(nameof(SelectedZone)));
 
                 // Selection is slot-scoped: the slots are about to be
                 // re-pointed at a different zone's channels, so any
@@ -214,6 +215,12 @@ namespace DvmConsole.Avalonia.ViewModels
                 // primary retarget would surprise the operator.
                 ResetSelectionAndPrimary();
                 ReassignSlotsFromSelectedZone();
+
+                // Publish last: observers of this notification must
+                // see the zone, slots, and selection fully applied.
+                PropertyChanged?.Invoke(
+                    this,
+                    new PropertyChangedEventArgs(nameof(SelectedZone)));
             }
         }
 

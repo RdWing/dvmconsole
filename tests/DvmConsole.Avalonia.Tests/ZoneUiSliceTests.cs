@@ -217,6 +217,36 @@ namespace DvmConsole.Avalonia.Tests
         }
 
         [Fact]
+        public void SelectedZone_NotificationOccursAfterStateIsConsistent()
+        {
+            var vm = new MainWindowViewModel(MakeCodeplug().Systems, null, null, null, null, MakeCodeplug());
+            vm.ProcessChannelClick(1, setPrimary: false);
+            vm.ProcessChannelClick(1, setPrimary: true);
+
+            var notificationCount = 0;
+            vm.PropertyChanged += (sender, args) =>
+            {
+                if (args.PropertyName != nameof(MainWindowViewModel.SelectedZone))
+                {
+                    return;
+                }
+
+                notificationCount++;
+                Assert.Same(vm.Zones[1], vm.SelectedZone);
+                Assert.Null(vm.PrimaryChannel);
+                Assert.Empty(vm.SelectedChannels);
+                Assert.Equal("B1", vm.Channels[0].ChannelName);
+                Assert.Equal("B2", vm.Channels[1].ChannelName);
+                Assert.All(vm.Channels, channel => Assert.False(channel.IsSelected));
+                Assert.All(vm.Channels, channel => Assert.False(channel.IsPrimary));
+            };
+
+            vm.SelectedZone = vm.Zones[1];
+
+            Assert.Equal(1, notificationCount);
+        }
+
+        [Fact]
         public void SameZoneReselect_NoOp_ZeroNotifications()
         {
             var vm = new MainWindowViewModel(MakeCodeplug().Systems, null, null, null, null, MakeCodeplug());
