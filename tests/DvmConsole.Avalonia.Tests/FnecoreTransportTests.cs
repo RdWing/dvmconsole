@@ -20,10 +20,13 @@
 * receive events are re-raised as DmrFrameReceived/P25FrameReceived
 * for the shell glue.
 *
-* FnecoreVoiceTrafficSender assembles WPF-exact DMR packets (seqNo 0
-* emits VOICE_LC_HEADER then VOICE with EMB/LCSS) and P25 LDU
-* messages (isLdu2 derived from seqNo parity — the recorded router
-* gap), through an injectable packet sink for headless testing.
+* FnecoreVoiceTrafficSender assembles WPF-exact DMR packets: the
+* VOICE_LC_HEADER is emitted once at frame seqNo 0 / RTP packet 0;
+* voice payload d4 uses packet-domain seqNo+1 (first voice d4=1,
+* n=0, then WPF's 2,3,4,5,0... positions); RTP voice sequence is
+* frame seqNo+1 modulo 65535. P25 LDU messages derive isLdu2 from
+* seqNo parity (the recorded router gap), through an injectable packet
+* sink for headless testing.
 *
 * FneReceiveGlue subscribes adapter frame events, maps via
 * FneFrameMapper, and routes audio frames into the talkgroup router;
@@ -377,7 +380,32 @@ namespace DvmConsole.Avalonia.Tests
             Assert.NotNull(sink.Sent[0].Payload); // VOICE_LC_HEADER packet
             Assert.NotNull(sink.Sent[1].Payload); // VOICE packet
             Assert.Equal(0, sink.Sent[0].Seq);
-            Assert.Equal(0, sink.Sent[1].Seq);
+            Assert.Equal(1, sink.Sent[1].Seq);
+            Assert.Equal((byte)0, sink.Sent[0].Payload[4]);
+            Assert.Equal((byte)1, sink.Sent[1].Payload[4]);
+        }
+
+        [Fact]
+        public void Sender_DmrHeader_OncePerTransmit_NoSharedSeq()
+        {
+            var sink = new PacketSink();
+            var adapter = new FnecorePeerAdapter(MakeSystem());
+            var sender = new FnecoreVoiceTrafficSender(_ => adapter, sink);
+            var target = new TransmitTarget("Test Sys", "31001", 1, VoiceMode.Dmr, 1001);
+
+            for (var seqNo = 0; seqNo < 8; seqNo++)
+            {
+                sender.SendDmrVoice(target, new byte[27], 1, seqNo);
+            }
+
+            Assert.Equal(9, sink.Sent.Count);
+            Assert.Equal(
+                new ushort[] { 0, 1, 2, 3, 4, 5, 6, 7, 8 },
+                sink.Sent.Select(packet => packet.Seq).ToArray());
+            Assert.Equal(
+                new byte[] { 0, 1, 2, 3, 4, 5, 6, 7, 8 },
+                sink.Sent.Select(packet => packet.Payload[4]).ToArray());
+            Assert.Equal((byte)2, (byte)(sink.Sent[2].Payload[15] & 0x0F));
         }
 
         [Fact]
@@ -412,6 +440,29 @@ namespace DvmConsole.Avalonia.Tests
         }
 
         [Fact]
+        public void Sender_DmrTerminator_ContinuesPacketDomain()
+        {
+            var sink = new PacketSink();
+            var adapter = new FnecorePeerAdapter(MakeSystem());
+            var sender = new FnecoreVoiceTrafficSender(_ => adapter, sink);
+            var target = new TransmitTarget("Test Sys", "31001", 1, VoiceMode.Dmr, 1001);
+
+            for (var seqNo = 0; seqNo < 4; seqNo++)
+            {
+                sender.SendDmrVoice(target, new byte[27], 7, seqNo);
+            }
+
+            InvokeSenderMethod(sender, "SendDmrTerminator", target, 7u, 4);
+
+            Assert.Equal(
+                new ushort[] { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9 },
+                sink.Sent.Select(packet => packet.Seq).ToArray());
+            Assert.Equal(
+                new byte[] { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9 },
+                sink.Sent.Select(packet => packet.Payload[4]).ToArray());
+        }
+
+        [Fact]
         public void Sender_DmrTerminator_PadsToBoundary_ThenEmitsTerminatorWithLc()
         {
             var sink = new PacketSink();
@@ -419,12 +470,12 @@ namespace DvmConsole.Avalonia.Tests
             var sender = new FnecoreVoiceTrafficSender(_ => adapter, sink);
             var target = new TransmitTarget("Test Sys", "31001", 1, VoiceMode.Dmr, 1001);
 
-            // nextSeq=4 means n=(4-3)%6=1, so five silence pads then
-            // the terminator; the port clamps only the seq<3 underflow.
+            // nextSeq=4 maps to packetSeq=5; n=(5-3)%6=2, so four
+            // silence pads then the terminator.
             InvokeSenderMethod(sender, "SendDmrTerminator", target, 7u, 4);
 
-            Assert.Equal(6, sink.Sent.Count);
-            Assert.Equal(new ushort[] { 4, 5, 6, 7, 8, 9 }, sink.Sent.Select(s => s.Seq).ToArray());
+            Assert.Equal(5, sink.Sent.Count);
+            Assert.Equal(new ushort[] { 5, 6, 7, 8, 9 }, sink.Sent.Select(s => s.Seq).ToArray());
             Assert.All(sink.Sent, packet =>
             {
                 Assert.Equal(55, packet.Payload.Length);
@@ -444,7 +495,7 @@ namespace DvmConsole.Avalonia.Tests
             var sender = new FnecoreVoiceTrafficSender(_ => adapter, sink);
             var target = new TransmitTarget("Test Sys", "31001", 1, VoiceMode.Dmr, 1001);
 
-            InvokeSenderMethod(sender, "SendDmrTerminator", target, 0u, 2);
+            InvokeSenderMethod(sender, "SendDmrTerminator", target, 0u, 1);
 
             var packet = Assert.Single(sink.Sent);
             Assert.Equal((ushort)2, packet.Seq);
@@ -460,14 +511,31 @@ namespace DvmConsole.Avalonia.Tests
             var sender = new FnecoreVoiceTrafficSender(_ => adapter, sink);
             var target = new TransmitTarget("Test Sys", "31001", 1, VoiceMode.Dmr, 1001);
 
-            // fnecore's n==0 path skips padding and emits the terminator
-            // immediately; the pad loop is guarded by if (n > 0).
-            InvokeSenderMethod(sender, "SendDmrTerminator", target, 0u, 3);
+            // nextSeq=2 maps to packetSeq=3, so fnecore's n==0 path
+            // skips padding and emits the terminator immediately.
+            InvokeSenderMethod(sender, "SendDmrTerminator", target, 0u, 2);
 
             var packet = Assert.Single(sink.Sent);
             Assert.Equal((ushort)3, packet.Seq);
             var slotType = new SlotType(packet.Payload.Skip(20).Take(33).ToArray());
             Assert.Equal(DMRDataType.TERMINATOR_WITH_LC, (DMRDataType)slotType.DataType);
+        }
+
+        [Fact]
+        public void Sender_DmrTerminator_WrapsRtpPacketSequence()
+        {
+            var sink = new PacketSink();
+            var adapter = new FnecorePeerAdapter(MakeSystem());
+            var sender = new FnecoreVoiceTrafficSender(_ => adapter, sink);
+            var target = new TransmitTarget("Test Sys", "31001", 1, VoiceMode.Dmr, 1001);
+
+            // nextSeq=65534 maps to packetSeq=65535, which is reserved
+            // for P25 call-end signaling and must wrap to RTP sequence 0.
+            InvokeSenderMethod(sender, "SendDmrTerminator", target, 0u, 65534);
+
+            var packet = Assert.Single(sink.Sent);
+            Assert.Equal((ushort)0, packet.Seq);
+            Assert.Equal((byte)255, packet.Payload[4]);
         }
 
         [Fact]

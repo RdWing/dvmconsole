@@ -34,10 +34,17 @@ namespace DvmConsole.Avalonia.Audio
     /// DMR and P25 packets and delivers them through the target
     /// system's <see cref="FnecorePeerAdapter"/> (WPF
     /// MainWindow.DMR.cs:62-122 / MainWindow.P25.cs parity). The DMR
-    /// path emits the VOICE_LC_HEADER before the voice frame at the
-    /// start of every six-frame slot (seqNo % 6 == 0) and keeps the
+    /// path emits the VOICE_LC_HEADER exactly once per transmit
+    /// (frame seqNo 0, RTP packet seq 0) and keeps the
     /// embedded link-control state isolated per transmit target
-    /// (system name | talkgroup id | slot). The P25 path derives the
+    /// (system name | talkgroup id | slot). The DMR RTP packet
+    /// sequence is per-packet: voice frame f goes out at packet f+1
+    /// (the header consumed packet 0), derived from the router's
+    /// frame-domain seqNo without sender-local state. The payload d4
+    /// carries the PACKET-domain dmrSeqNo (seqNo + 1; header 0,
+    /// voice 1..N) and n follows WPF's pre-header-increment
+    /// dmrSeqNo % 6 (first voice frame n = 0, then 2, 3, 4, 5, 0, ...).
+    /// The P25 path derives the
     /// real LDU1/LDU2 alternation from the LDU sequence parity — the
     /// recorded router gap (the router always passes
     /// <c>isLdu2:false</c>). A system with no resolved adapter, a
@@ -148,15 +155,25 @@ namespace DvmConsole.Avalonia.Audio
                 return;
             }
 
-            if (seqNo % 6 == 0)
+            if (seqNo == 0)
             {
-                // WPF cadence (MainWindow.DMR.cs:57-86): the
-                // VOICE_LC_HEADER packet precedes the voice frame at the
-                // start of each six-frame slot.
-                SendPacket(adapter, DmrOpcode, BuildDmrHeader(adapter, target, dstId, seqNo), seqNo, streamId);
+                // WPF parity (MainWindow.DMR.cs:57-85): the
+                // VOICE_LC_HEADER packet precedes the first voice frame
+                // exactly once per transmit, at RTP packet sequence 0
+                // (pktSeq is reset before the header block).
+                SendPacket(adapter, DmrOpcode, BuildDmrHeader(adapter, target, dstId, seqNo), 0, streamId);
             }
 
-            SendPacket(adapter, DmrOpcode, BuildDmrVoice(adapter, target, dstId, ambe27, seqNo), seqNo, streamId);
+            // WPF parity (MainWindow.DMR.cs:88-91, 119-122): the RTP
+            // packet sequence is per-packet — voice frame f goes out at
+            // packet f+1 because the header consumed packet 0 — while
+            // the PACKET-domain dmrSeqNo (= seqNo + 1, the voice d4)
+            // stays in the payload. The router's FRAME-domain seqNo is
+            // only the frame counter; see BuildDmrVoice for the
+            // two-domain mapping. Wraps modulo RtpCallEndSeq; 65535 is
+            // reserved for the P25 call-end TDU and is never emitted on
+            // voice.
+            SendPacket(adapter, DmrOpcode, BuildDmrVoice(adapter, target, dstId, ambe27, seqNo), ToRtpPacketSequence(seqNo + 1), streamId);
         }
 
         /// <inheritdoc />
@@ -248,22 +265,29 @@ namespace DvmConsole.Avalonia.Audio
             GetEmbeddedData(target).SetLC(dmrLC);
 
             // WPF/fnecore parity (FneSystemBase.SendDMRTerminator):
-            // n=(nextSeqNo-3)%6 silence-pad frames to the next six-frame
-            // boundary, then one DATA_SYNC TERMINATOR_WITH_LC frame.
-            // Intentional delta: WPF computes n with a byte cast over a
-            // uint-promoted difference, so nextSeqNo < 3 yields n=254 and
-            // 6-n underflows to ~4.29e9 pad frames (the pad-loop hang);
-            // the port clamps to no padding, terminator only — the same
-            // wire as the working n==0 case.
-            if (nextSeqNo >= 3)
+            // WPF passes the PACKET-domain sequence (channel.dmrSeqNo
+            // = N+1 after N frames — the header consumed one) into the
+            // terminator wrapper, while the router supplies the
+            // FRAME-domain nextSeqNo (N); translate to packetBase =
+            // nextSeqNo + 1 (a short PTT with no voice frame,
+            // nextSeqNo 0, has no header and starts at packet 0).
+            // n=(packetBase-3)%6 silence-pad frames to the next
+            // six-frame boundary, then one DATA_SYNC TERMINATOR_WITH_LC
+            // frame. Intentional delta: WPF computes n with a byte cast
+            // over a uint-promoted difference, so packetBase < 3 yields
+            // n=254 and 6-n underflows to ~4.29e9 pad frames (the
+            // pad-loop hang); the port clamps to no padding, terminator
+            // only — the same wire as the working n==0 case.
+            int packetBase = nextSeqNo + (nextSeqNo > 0 ? 1 : 0);
+            if (packetBase >= 3)
             {
-                byte n = (byte)((nextSeqNo - 3U) % 6U);
+                byte n = (byte)((packetBase - 3U) % 6U);
                 int fill = 6 - n;
-                int seqNo = nextSeqNo;
+                int seqNo = packetBase;
 
                 // fnecore parity (FneSystemBase.cs:395): the pad loop is
                 // guarded by n > 0, so at a frame boundary (n == 0,
-                // nextSeqNo 3, 9, ...) zero pads are emitted and only the
+                // packetBase 3, 9, ...) zero pads are emitted and only the
                 // terminator goes out.
                 if (n > 0)
                 {
@@ -290,16 +314,16 @@ namespace DvmConsole.Avalonia.Audio
                         adapter.CreateDMRMessage(ref dmrpkt, srcId, dstId, slot, FrameType.DATA_SYNC, (byte)seqNo, n);
                         Buffer.BlockCopy(data, 0, dmrpkt, 20, DmrFrameLengthBytes);
 
-                        SendPacket(adapter, DmrOpcode, dmrpkt, seqNo, streamId);
+                        SendPacket(adapter, DmrOpcode, dmrpkt, ToRtpPacketSequence(seqNo), streamId);
                         seqNo++;
                     }
                 }
 
-                SendPacket(adapter, DmrOpcode, BuildDmrTerminator(adapter, slot, srcId, dstId, seqNo), seqNo, streamId);
+                SendPacket(adapter, DmrOpcode, BuildDmrTerminator(adapter, slot, srcId, dstId, seqNo), ToRtpPacketSequence(seqNo), streamId);
             }
             else
             {
-                SendPacket(adapter, DmrOpcode, BuildDmrTerminator(adapter, slot, srcId, dstId, nextSeqNo), nextSeqNo, streamId);
+                SendPacket(adapter, DmrOpcode, BuildDmrTerminator(adapter, slot, srcId, dstId, packetBase), ToRtpPacketSequence(packetBase), streamId);
             }
         }
 
@@ -370,6 +394,21 @@ namespace DvmConsole.Avalonia.Audio
                 StringComparison.OrdinalIgnoreCase)
                 ? adapter
                 : null;
+        }
+
+        /// <summary>
+        /// Wraps a DMR RTP packet sequence modulo
+        /// <see cref="Constants.RtpCallEndSeq"/>: sequences cycle
+        /// 0..65534 and 65535 (reserved for the P25 call-end TDU) is
+        /// never emitted on DMR voice, pads, or terminators. The DMR
+        /// payload d4/frame-domain value is intentionally NOT wrapped
+        /// — it keeps the raw sequence's unchecked byte cast (the
+        /// callers pass the unwrapped value into
+        /// <c>CreateDMRMessage</c>).
+        /// </summary>
+        private static int ToRtpPacketSequence(int seqNo)
+        {
+            return seqNo % Constants.RtpCallEndSeq;
         }
 
         /// <summary>
@@ -453,12 +492,29 @@ namespace DvmConsole.Avalonia.Audio
         /// nibble to data[19]), the sync frame is VOICE_SYNC and every
         /// other frame is VOICE with the embedded signalling (EMB with
         /// the LCSS from the target's embedded state).
+        /// Two DMR sequence domains meet here. The router passes the
+        /// FRAME-domain seqNo (0 = first voice frame); WPF's
+        /// <c>channel.dmrSeqNo</c> counts PACKETS (the header consumed
+        /// packet 0), so the payload d4 carries dmrSeqNo = seqNo + 1
+        /// (header 0, voice 1..N). WPF computes
+        /// <c>channel.dmrN = dmrSeqNo % 6</c> at the top of the frame
+        /// block — BEFORE the header path increments dmrSeqNo — so the
+        /// first voice frame (router seqNo 0, dmrSeqNo 1) carries n = 0
+        /// (VOICE_SYNC) and every later frame carries
+        /// n = (seqNo + 1) % 6 (VOICE, embedded signalling).
         /// </summary>
         private byte[] BuildDmrVoice(FnecorePeerAdapter adapter, TransmitTarget target, uint dstId, ReadOnlyMemory<byte> ambe27, int seqNo)
         {
             byte slot = (byte)(target.Slot - 1);
             uint srcId = target.SourceId;
-            byte n = (byte)(seqNo % 6);
+
+            // WPF parity (MainWindow.DMR.cs:53, 85, 124): the payload
+            // d4 is the PACKET-domain dmrSeqNo (router frame seqNo + 1
+            // — the header consumed packet 0), and n is the dmrSeqNo
+            // modulo 6 as computed BEFORE the header block incremented
+            // it, so the first voice frame keeps n = 0 (VOICE_SYNC).
+            int dmrSeqNo = seqNo + 1;
+            byte n = seqNo == 0 ? (byte)0 : (byte)(dmrSeqNo % 6);
 
             byte[] ambe = ambe27.ToArray();
             byte[] data = new byte[DmrFrameLengthBytes];
@@ -485,9 +541,12 @@ namespace DvmConsole.Avalonia.Audio
                 emb.Encode(ref data);
             }
 
-            // Generate the DMR network frame and pack the payload.
+            // Generate the DMR network frame and pack the payload. The
+            // packet-domain dmrSeqNo goes into d4 (WPF MainWindow.DMR.cs:
+            // 119 — the voice d4 starts at 1, never 0); n drives the
+            // frame type and embedded-signalling position above.
             byte[] dmrpkt = new byte[DmrPacketSize];
-            adapter.CreateDMRMessage(ref dmrpkt, srcId, dstId, slot, frameType, (byte)seqNo, n);
+            adapter.CreateDMRMessage(ref dmrpkt, srcId, dstId, slot, frameType, (byte)dmrSeqNo, n);
             Buffer.BlockCopy(data, 0, dmrpkt, 20, DmrFrameLengthBytes);
 
             return dmrpkt;
