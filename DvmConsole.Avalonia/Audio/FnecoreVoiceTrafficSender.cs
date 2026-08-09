@@ -52,6 +52,14 @@ namespace DvmConsole.Avalonia.Audio
     /// silent no-op: nothing is built and nothing is sent (WPF wraps
     /// the whole encode in try/catch → Log; the audio path never
     /// throws).
+    /// <para>
+    /// DMR slot convention: <c>TransmitTarget.Slot</c> and fnecore's
+    /// TX slot API are both 1-based (1 = TS1 → wire bit clear,
+    /// 2 = TS2 → wire bit 0x80, fnecore FneSystemBase.cs:366), and
+    /// the validated slot passes through unchanged at every DMR
+    /// builder. RX wire events remain 0-based elsewhere (fnecore
+    /// FnePeer.cs:786).
+    /// </para>
     /// </summary>
     public sealed class FnecoreVoiceTrafficSender : IVoiceTrafficSender
     {
@@ -143,8 +151,10 @@ namespace DvmConsole.Avalonia.Audio
             {
                 // Out-of-range DMR slot (TransmitTarget contract,
                 // IVoiceTrafficSender.cs:26): silent no-op — the
-                // unchecked (byte)(Slot - 1) in the builders would
-                // wrap slot 0 to 255 and emit a corrupt packet.
+                // builders pass the validated 1-based slot straight
+                // through to fnecore's 1-based TX API, so an
+                // unguarded slot 0 would silently encode as TS2 on
+                // the wire (fnecore FneSystemBase.cs:366).
                 return;
             }
 
@@ -248,7 +258,13 @@ namespace DvmConsole.Avalonia.Audio
                 return;
             }
 
-            byte slot = (byte)(target.Slot - 1);
+            // Pass the validated 1-based slot through unchanged:
+            // fnecore's TX slot API is 1-based (FneSystemBase.cs:366:
+            // Slot 1 → wire TS1 bit clear, Slot 2 → TS2 bit 0x80),
+            // matching TransmitTarget.Slot — the removed Slot - 1
+            // wrote the inverted timeslot. (RX wire events remain
+            // 0-based elsewhere.)
+            byte slot = (byte)target.Slot;
             uint srcId = target.SourceId;
 
             // Set the target's embedded LC state before the pads: every
@@ -454,7 +470,10 @@ namespace DvmConsole.Avalonia.Audio
         /// </summary>
         private byte[] BuildDmrHeader(FnecorePeerAdapter adapter, TransmitTarget target, uint dstId, int seqNo)
         {
-            byte slot = (byte)(target.Slot - 1);
+            // fnecore's TX slot API is 1-based like TransmitTarget.Slot
+            // (FneSystemBase.cs:366: 1 → TS1 bit clear, 2 → 0x80), so the
+            // validated slot passes through unchanged.
+            byte slot = (byte)target.Slot;
             uint srcId = target.SourceId;
 
             // Generate the DMR LC and seed the target's embedded state.
@@ -505,7 +524,10 @@ namespace DvmConsole.Avalonia.Audio
         /// </summary>
         private byte[] BuildDmrVoice(FnecorePeerAdapter adapter, TransmitTarget target, uint dstId, ReadOnlyMemory<byte> ambe27, int seqNo)
         {
-            byte slot = (byte)(target.Slot - 1);
+            // fnecore's TX slot API is 1-based like TransmitTarget.Slot
+            // (FneSystemBase.cs:366: 1 → TS1 bit clear, 2 → 0x80), so the
+            // validated slot passes through unchanged.
+            byte slot = (byte)target.Slot;
             uint srcId = target.SourceId;
 
             // WPF parity (MainWindow.DMR.cs:53, 85, 124): the payload
@@ -564,7 +586,9 @@ namespace DvmConsole.Avalonia.Audio
         /// because <see cref="FullLC.Encode"/> replaces the frame buffer
         /// with the BPTC-interleaved LC — so the port's terminator
         /// carries a decodable slot type; the port encodes the target's
-        /// DMR slot (WPF hardcodes slot 1 at every call site) and the
+        /// DMR slot — 1-based, passed through unchanged to fnecore's
+        /// 1-based TX API (WPF hardcodes slot 1 at every call site) —
+        /// and the
         /// caller's seq number (WPF reuses one peer packet sequence for
         /// the whole terminator run — the port's per-frame incrementing
         /// convention).

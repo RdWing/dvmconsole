@@ -457,6 +457,31 @@ namespace DvmConsole.Avalonia.Tests
         }
 
         [Fact]
+        public void Sender_DmrVoice_EncodesOneBasedTargetSlotOnWire()
+        {
+            var sink = new PacketSink();
+            var adapter = new FnecorePeerAdapter(MakeSystem());
+            var sender = new FnecoreVoiceTrafficSender(_ => adapter, sink);
+
+            sender.SendDmrVoice(
+                new TransmitTarget("Test Sys", "31001", 1, VoiceMode.Dmr, 1001),
+                new byte[27],
+                1,
+                0);
+            Assert.Equal(0, sink.Sent[0].Payload[15] & 0x80); // TS1
+            Assert.Equal(0, sink.Sent[1].Payload[15] & 0x80); // TS1
+
+            sink.Sent.Clear();
+            sender.SendDmrVoice(
+                new TransmitTarget("Test Sys", "31001", 2, VoiceMode.Dmr, 1001),
+                new byte[27],
+                1,
+                0);
+            Assert.Equal(0x80, sink.Sent[0].Payload[15] & 0x80); // TS2
+            Assert.Equal(0x80, sink.Sent[1].Payload[15] & 0x80); // TS2
+        }
+
+        [Fact]
         public void Sender_DmrHeader_OncePerTransmit_NoSharedSeq()
         {
             var sink = new PacketSink();
@@ -620,10 +645,9 @@ namespace DvmConsole.Avalonia.Tests
             InvokeSenderMethod(sender, "SendDmrTerminator", target, 1u, 0);
 
             var packet = Assert.Single(sink.Sent);
-            // The adapter receives the zero-based target slot (2 -> 1);
-            // fnecore's existing CreateDMRMessage maps that value to the
-            // same wire convention used by SendDmrVoice.
-            Assert.Equal(0, packet.Payload[15] & 0x80);
+            // CreateDMRMessage's TX API is one-based: Slot 2 sets the
+            // wire TS2 bit (fnecore/FneSystemBase.cs:366).
+            Assert.Equal(0x80, packet.Payload[15] & 0x80);
         }
 
         [Fact]
@@ -883,8 +907,9 @@ namespace DvmConsole.Avalonia.Tests
             var sender = new FnecoreVoiceTrafficSender(
                 _ => adapter, sink);
 
-            // Slot 0 wraps to 255 today (unchecked byte arithmetic) and a
-            // corrupt packet reaches the network; it must be a silent no-op.
+            // Without the 1..2 guard, fnecore's one-based TX API would
+            // encode Slot 0 as TS2 (the non-1 branch); it must be a silent
+            // no-op instead of reaching the network.
             var target = new TransmitTarget("Test Sys", "31001", 0, VoiceMode.Dmr, 1001);
             var ex = Record.Exception(() =>
                 sender.SendDmrVoice(target, new byte[27], 1, 0));
