@@ -185,6 +185,13 @@ namespace DvmConsole.Platform.Audio
         /// </summary>
         private const int P25EndTduCount = 4;
 
+        /// <summary>
+        /// Pacing interval of the generated-PCM transmit pump
+        /// (<see cref="TransmitPcmAsync"/>): one 320-byte frame per
+        /// 20 ms — the codec frame period.
+        /// </summary>
+        private static readonly TimeSpan TransmitFrameInterval = TimeSpan.FromMilliseconds(20);
+
         private readonly object _routeGate = new();
         private readonly Dictionary<string, TalkgroupState> _talkgroups =
             new Dictionary<string, TalkgroupState>(StringComparer.Ordinal);
@@ -786,6 +793,201 @@ namespace DvmConsole.Platform.Audio
         }
 
         /// <summary>
+        /// Transmits one-shot, generated PCM as a complete additive
+        /// transmit. Core supplies the fully synthesized and normalized
+        /// PCM (8000 Hz / 16-bit / mono alert-tone audio), and this
+        /// method owns the pacing, encoding, accumulation and sender
+        /// delivery — no capture input is opened, no local-monitor
+        /// loopback is created and file playback is never used.
+        /// Playback of the generated PCM is a separate shell seam: the
+        /// shell renders any local audio through its own playback path
+        /// while the router only transports the traffic. Each 320-byte
+        /// frame is encoded once per unique voice mode through the
+        /// injected encoder and fanned out to every target entry of
+        /// that mode (the AllChannels fan-out, with independent
+        /// per-target stream/seq counters), paced at one frame per
+        /// 20 ms with a cancellable delay. When
+        /// <paramref name="sendStartSignal"/> is set, one P25
+        /// grant-demand TDU (initial stream id 0) is sent per P25
+        /// target before the PCM; DMR has no start signal. The
+        /// transmit ends exactly once — even on cancellation — with
+        /// the same end-of-call signalling as
+        /// <see cref="EndTransmitAsync"/>: one DMR terminator per DMR
+        /// target, or four non-grant P25 TDUs per P25 target, using
+        /// the entries' own stream/sequence counters. If the shell
+        /// already ended the session via <see cref="EndTransmitAsync"/>,
+        /// that end stands and the signals are not duplicated. The
+        /// generated session is serialized against the capture
+        /// transmit through the same single-transmit gate
+        /// (<see cref="_session"/>).
+        /// </summary>
+        /// <param name="targets">The transmit targets, in fan-out order.</param>
+        /// <param name="pcm">
+        /// Synthesized/normalized PCM from Core, an exact whole number
+        /// of <see cref="AudioPcm.FrameBytes"/> frames.
+        /// </param>
+        /// <param name="sendStartSignal">
+        /// True to send one P25 grant-demand TDU per P25 target
+        /// (stream id 0) before the PCM; no DMR start signal exists.
+        /// </param>
+        /// <param name="cancellationToken">Cancels the paced frame loop.</param>
+        /// <exception cref="ArgumentNullException">
+        /// Thrown when <paramref name="targets"/> is null.
+        /// </exception>
+        /// <exception cref="ArgumentException">
+        /// Thrown when <paramref name="pcm"/> length is not a multiple
+        /// of <see cref="AudioPcm.FrameBytes"/>.
+        /// </exception>
+        /// <exception cref="ObjectDisposedException">
+        /// Thrown when the router is disposed and the call is not an
+        /// empty no-op.
+        /// </exception>
+        /// <exception cref="InvalidOperationException">
+        /// Thrown when a transmit is already active (single-transmit
+        /// gate); end the active transmit first.
+        /// </exception>
+        public async Task TransmitPcmAsync(
+            IReadOnlyList<TransmitTarget> targets,
+            ReadOnlyMemory<byte> pcm,
+            bool sendStartSignal,
+            CancellationToken cancellationToken)
+        {
+            if (targets is null)
+            {
+                throw new ArgumentNullException(nameof(targets));
+            }
+
+            // An empty target list or empty PCM is a completed no-op,
+            // regardless of lifecycle: no session, no signalling, no
+            // sender traffic.
+            if (targets.Count == 0 || pcm.Length == 0)
+            {
+                return;
+            }
+
+            if (Volatile.Read(ref _disposed) != 0)
+            {
+                throw new ObjectDisposedException(nameof(TalkgroupAudioRouter));
+            }
+
+            if (pcm.Length % AudioPcm.FrameBytes != 0)
+            {
+                throw new ArgumentException(
+                    $"Generated PCM length must be a multiple of {AudioPcm.FrameBytes} bytes (one 20 ms frame).",
+                    nameof(pcm));
+            }
+
+            TransmitSession session;
+            lock (_transmitGate)
+            {
+                if (_session is not null)
+                {
+                    throw new InvalidOperationException(
+                        "A transmit is already active; call EndTransmitAsync before beginning another.");
+                }
+
+                // One ordered per-target state entry per supplied
+                // target, built exactly as BeginTransmitAsync builds
+                // them (3 codewords per DMR unit, 9 per P25 LDU). The
+                // generated session uses the default device — the id is
+                // never used to open a capture input.
+                var entries = new List<TargetEntry>(targets.Count);
+                foreach (var target in targets)
+                {
+                    entries.Add(new TargetEntry(
+                        target,
+                        target.Mode == VoiceMode.Dmr ? 3 : 9));
+                }
+
+                session = new TransmitSession(AudioDeviceId.Default, entries);
+                _session = session;
+            }
+
+            try
+            {
+                // P25 call-start signalling, once per P25 target,
+                // BEFORE the PCM, on the initial stream id 0; DMR has
+                // no start signal (a grant-demand TDU is P25-only).
+                if (sendStartSignal)
+                {
+                    foreach (var entry in session.Targets)
+                    {
+                        if (entry.Target.Mode == VoiceMode.P25)
+                        {
+                            _sender.SendP25Tdu(entry.Target, streamId: 0, grantDemand: true);
+                        }
+                    }
+                }
+
+                var frameCount = pcm.Length / AudioPcm.FrameBytes;
+                for (var i = 0; i < frameCount; i++)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+
+                    // A concurrent EndTransmitAsync (shell) ended the
+                    // session: stop pumping so no voice frames follow
+                    // its terminators; the finally block then skips the
+                    // duplicate end signalling because the session is no
+                    // longer ours.
+                    if (session.TransmitEnded)
+                    {
+                        break;
+                    }
+
+                    // Pace one frame per 20 ms; the delay is cancellable.
+                    if (i > 0)
+                    {
+                        await Task.Delay(TransmitFrameInterval, cancellationToken).ConfigureAwait(false);
+                    }
+
+                    await PumpPcmFrame(
+                        session,
+                        pcm.Slice(i * AudioPcm.FrameBytes, AudioPcm.FrameBytes)).ConfigureAwait(false);
+                }
+            }
+            finally
+            {
+                // End exactly once: clear the generated session only if
+                // it is still the router's current transmit, and only
+                // then emit the end-of-call signalling — one DMR
+                // terminator per DMR target, four non-grant P25 TDUs
+                // per P25 target — using the entries' own stream/seq
+                // counters (parity EndTransmitAsync). If
+                // EndTransmitAsync (or dispose) already ended the
+                // session, _session is no longer ours and nothing is
+                // duplicated; the end signals are delivered even when
+                // the frame loop exited on cancellation.
+                var ownsSession = false;
+                lock (_transmitGate)
+                {
+                    if (ReferenceEquals(_session, session))
+                    {
+                        _session = null;
+                        ownsSession = true;
+                    }
+                }
+
+                if (ownsSession)
+                {
+                    foreach (var entry in session.Targets)
+                    {
+                        if (entry.Target.Mode == VoiceMode.Dmr)
+                        {
+                            _sender.SendDmrTerminator(entry.Target, entry.StreamIdCounter, entry.SeqNo);
+                        }
+                        else
+                        {
+                            for (var i = 0; i < P25EndTduCount; i++)
+                            {
+                                _sender.SendP25Tdu(entry.Target, entry.StreamIdCounter, grantDemand: false);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        /// <summary>
         /// Stops every live pipeline (per-talkgroup monitors, the capture
         /// input and the transmit loopback monitor), cancels all pending
         /// idle releases and disposes the owned factory exactly once.
@@ -927,17 +1129,55 @@ namespace DvmConsole.Platform.Audio
         private void OnTxMonitorStreamEnded(AudioStreamEnd end) => MonitorStreamEnded?.Invoke();
 
         /// <summary>
+        /// Encodes one 320-byte PCM frame ONCE per unique voice mode
+        /// present in the session and accumulates the encoded codeword
+        /// into every target entry of that mode, sending each entry's
+        /// complete DMR triples / P25 LDUs with independent stream/seq
+        /// counters (the AllChannels fan-out). A frame the encoder
+        /// rejects is skipped. Shared by the capture pump
+        /// (<see cref="PumpBlockAsync"/>, after the loopback-monitor
+        /// write) and the generated-PCM pump
+        /// (<see cref="TransmitPcmAsync"/>, which never writes a
+        /// monitor).
+        /// </summary>
+        private Task PumpPcmFrame(TransmitSession session, ReadOnlyMemory<byte> frame)
+        {
+            var samples = VoiceFrameSplitter.BytesToSamples(frame);
+
+            // Encode ONCE per unique mode (all targets of the same
+            // mode share the same encoded codeword; the encoder seam
+            // is mode-keyed, so a second encode of the same frame for
+            // a sibling target would be redundant), then accumulate
+            // the codeword into every entry of that mode.
+            var encodedModes = new HashSet<VoiceMode>();
+            foreach (var entry in session.Targets)
+            {
+                if (!encodedModes.Add(entry.Target.Mode))
+                {
+                    continue;
+                }
+
+                if (!_encoder.TryEncode(entry.Target.Mode, samples, out var codeword))
+                {
+                    continue;
+                }
+
+                AccumulateAndSend(session, entry.Target.Mode, codeword);
+            }
+
+            return Task.CompletedTask;
+        }
+
+        /// <summary>
         /// Capture pump callback (runs on the capture thread): splits each
         /// 1600-byte block into five 320-byte chunks, routes each chunk to
-        /// the local monitor, encodes it ONCE per unique voice mode
-        /// present in the session and accumulates the encoded codeword
-        /// into every target entry of that mode (the AllChannels
-        /// fan-out), sending each target's complete DMR triples / P25
-        /// LDUs with independent stream/seq counters. A chunk the encoder
-        /// rejects is skipped; a block delivered after the session's
-        /// <see cref="EndTransmitAsync"/> sends nothing (the ended flag
-        /// is per-session, so a late block on a prior session's pump
-        /// after a quick re-begin is a no-op).
+        /// the local monitor and encodes/accumulates it through
+        /// <see cref="PumpPcmFrame"/> (once per unique voice mode, the
+        /// AllChannels fan-out, per-target stream/seq counters). A chunk
+        /// the encoder rejects is skipped; a block delivered after the
+        /// session's <see cref="EndTransmitAsync"/> sends nothing (the
+        /// ended flag is per-session, so a late block on a prior
+        /// session's pump after a quick re-begin is a no-op).
         /// </summary>
         private Task PumpBlockAsync(TransmitSession session, ReadOnlyMemory<byte> block)
         {
@@ -963,28 +1203,7 @@ namespace DvmConsole.Platform.Audio
                     monitor.WritePcm(chunk);
                 }
 
-                var samples = VoiceFrameSplitter.BytesToSamples(chunk);
-
-                // Encode ONCE per unique mode (all targets of the same
-                // mode share the same encoded codeword; the encoder seam
-                // is mode-keyed, so a second encode of the same chunk for
-                // a sibling target would be redundant), then accumulate
-                // the codeword into every entry of that mode.
-                var encodedModes = new HashSet<VoiceMode>();
-                foreach (var entry in session.Targets)
-                {
-                    if (!encodedModes.Add(entry.Target.Mode))
-                    {
-                        continue;
-                    }
-
-                    if (!_encoder.TryEncode(entry.Target.Mode, samples, out var codeword))
-                    {
-                        continue;
-                    }
-
-                    AccumulateAndSend(session, entry.Target.Mode, codeword);
-                }
+                PumpPcmFrame(session, chunk);
             }
 
             return Task.CompletedTask;
