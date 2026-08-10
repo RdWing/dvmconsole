@@ -12,17 +12,20 @@ namespace DvmConsole.Avalonia.ViewModels
     /// channel assignment is mutable through the internal
     /// <see cref="Reassign"/> entry point, which the dashboard's
     /// zone-selection slice uses to re-point the four fixed slots at a
-    /// selected zone's channels. The live selection state
-    /// (<see cref="IsSelected"/>, <see cref="IsPrimary"/>) and the PTT
-    /// engagement state (<see cref="PttEngaged"/>) are writable and
-    /// observable, driven by the dashboard's
-    /// <c>SelectedChannelsManager</c> and PTT state slice.
+    /// zone's channels. The live selection state
+    /// (<see cref="IsSelected"/>, <see cref="IsPrimary"/>), the PTT
+    /// engagement state (<see cref="PttEngaged"/>) and the TAR
+    /// recording indicator state (<see cref="TarRecordingEnabled"/>)
+    /// are writable and observable, driven by the dashboard's
+    /// <c>SelectedChannelsManager</c>, PTT state slice and TAR
+    /// indicator wiring.
     /// </summary>
     public sealed class ChannelSlotViewModel : INotifyPropertyChanged
     {
         private bool isSelected;
         private bool isPrimary;
         private bool pttEngaged;
+        private bool tarRecordingEnabled;
         private string? channelName;
         private string talkgroup = "NO TALKGROUP";
 
@@ -126,6 +129,41 @@ namespace DvmConsole.Avalonia.ViewModels
         }
 
         /// <summary>
+        /// True when TAR recording is enabled for this channel slot,
+        /// defaulting to false. Headless indicator state only: shell
+        /// wiring to the recorder lifecycle is a later slice. Raises
+        /// <see cref="PropertyChanged"/> only when the value changes.
+        /// Tooltip text is WPF-parity with the original
+        /// <c>ChannelBox.SetTarRecordingIndicator</c>
+        /// (dvmconsole/Controls/ChannelBox.xaml.cs:1510-1516).
+        /// </summary>
+        public bool TarRecordingEnabled
+        {
+            get => tarRecordingEnabled;
+            set
+            {
+                if (tarRecordingEnabled == value)
+                {
+                    return;
+                }
+
+                tarRecordingEnabled = value;
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(TarRecordingEnabled)));
+            }
+        }
+
+        /// <summary>
+        /// The tooltip text for this slot's TAR recording indicator,
+        /// derived from <see cref="TarRecordingEnabled"/> with the
+        /// WPF-original wording
+        /// (dvmconsole/Controls/ChannelBox.xaml.cs:1510-1516).
+        /// </summary>
+        public string TarRecordingIndicatorToolTip =>
+            tarRecordingEnabled
+                ? "TAR recording enabled for this channel"
+                : "TAR recording disabled for this channel";
+
+        /// <summary>
         /// Replaces the channel assignment of this slot with the given
         /// channel name and talkgroup, raising change-only
         /// <see cref="PropertyChanged"/> notifications: a notification
@@ -170,8 +208,9 @@ namespace DvmConsole.Avalonia.ViewModels
 
         /// <summary>
         /// Raised when <see cref="ChannelName"/>, <see cref="Talkgroup"/>,
-        /// <see cref="IsSelected"/>, <see cref="IsPrimary"/> or
-        /// <see cref="PttEngaged"/> changes.
+        /// <see cref="IsSelected"/>, <see cref="IsPrimary"/>,
+        /// <see cref="PttEngaged"/> or <see cref="TarRecordingEnabled"/>
+        /// changes.
         /// </summary>
         public event PropertyChangedEventHandler? PropertyChanged;
     }

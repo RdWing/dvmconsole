@@ -219,13 +219,17 @@ namespace DvmConsole.Avalonia
                     about.ShowDialog(mainWindow);
                 };
 
+                NativeMenuItem tarItem = CreateTarConfigurationMenuItem(mainWindow);
+
                 NativeMenuItem? appItem = menu.Items
                     .OfType<NativeMenuItem>()
                     .FirstOrDefault(item => item.Menu is { });
                 if (appItem?.Menu is { } appMenu && appMenu.Items.Count > 0)
                 {
-                    // Insert ahead of the trailing item (Quit).
+                    // Insert ahead of the trailing item (Quit): About,
+                    // then TAR Configuration, then Quit.
                     appMenu.Items.Insert(appMenu.Items.Count - 1, aboutItem);
+                    appMenu.Items.Insert(appMenu.Items.Count - 1, tarItem);
 
                     if (appMenu.Items
                         .OfType<NativeMenuItem>()
@@ -239,12 +243,38 @@ namespace DvmConsole.Avalonia
                 else
                 {
                     menu.Items.Add(aboutItem);
+                    menu.Items.Add(tarItem);
                 }
             }
             catch
             {
                 // A menu-structure surprise must never fail startup.
             }
+        }
+
+        /// <summary>
+        /// Creates the native "TAR Configuration" menu item that opens the
+        /// TAR configuration dialog on the main window. The click handler
+        /// is null-safe: with a null main window it is an inert no-op and
+        /// never throws. When a main window is supplied, the item is
+        /// enabled only while the window's data context is a
+        /// <see cref="MainWindowViewModel"/> whose TAR configuration slice
+        /// is composed (a loaded codeplug and TAR settings persistence); a
+        /// missing codeplug or TAR composition yields a disabled item whose
+        /// click stays inert.
+        /// </summary>
+        internal static NativeMenuItem CreateTarConfigurationMenuItem(MainWindow? mainWindow)
+        {
+            var item = new NativeMenuItem("TAR Configuration");
+
+            if (mainWindow is not null)
+            {
+                item.IsEnabled = mainWindow.DataContext is MainWindowViewModel viewModel
+                    && viewModel.TarConfiguration is not null;
+            }
+
+            item.Click += (_, _) => mainWindow?.OpenTarConfiguration();
+            return item;
         }
 
         public override void OnFrameworkInitializationCompleted()
@@ -259,8 +289,14 @@ namespace DvmConsole.Avalonia
                     ? new MacAudioStreamFactory(macCatalog)
                     : null;
                 var hotkeys = CreateGlobalHotkeyService();
-                var persistence = new AudioSettingsPersistence(
-                    new SettingsSectionStore(new DefaultFileSystemPaths().SettingsFilePath));
+                // One shared settings store backs both persistence
+                // adapters: the Core store saves only the section it is
+                // asked to update and preserves every unrelated property
+                // value-for-value, so the audio and TAR settings coexist
+                // in the same settings file without clobbering each other.
+                var settingsStore = new SettingsSectionStore(new DefaultFileSystemPaths().SettingsFilePath);
+                var persistence = new AudioSettingsPersistence(settingsStore);
+                var tarPersistence = new TarSettingsPersistence(settingsStore);
                 // Packaged macOS .app: register the bundle resolver for
                 // future DllImport-based libvocoder loads in the Platform
                 // assembly. The startup readiness probe maps and loads the
@@ -335,7 +371,8 @@ namespace DvmConsole.Avalonia
                     fnecoreTransportFactory,
                     codeplug.Codeplug,
                     callHistory,
-                    aliasResolver);
+                    aliasResolver,
+                    tarPersistence);
                 mainWindow.FileDialogService =
                     new AvaloniaFileDialogService(mainWindow.StorageProvider);
                 desktop.MainWindow = mainWindow;

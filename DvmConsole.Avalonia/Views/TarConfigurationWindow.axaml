@@ -1,0 +1,160 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:DvmConsole.Avalonia.ViewModels"
+        xmlns:conv="using:Avalonia.Data.Converters"
+        x:Class="DvmConsole.Avalonia.Views.TarConfigurationWindow"
+        x:ClassModifier="internal"
+        x:DataType="vm:TarConfigurationViewModel"
+        Title="TAR Configuration"
+        Width="980" Height="560"
+        MinWidth="840" MinHeight="460"
+        WindowStartupLocation="CenterOwner"
+        Background="#0B1114"
+        Foreground="#EFF7F5">
+
+    <!-- WPF TarConfigurationWindow.xaml content parity (dark Fluent theme):
+         recording-root selection, per-zone/per-channel TAR settings grid,
+         status/error feedback, and Save/Close actions. The WPF DataGrid is
+         projected as a plain column-aligned ItemsControl grid; no DataGrid
+         package dependency. All bindings target the headless
+         TarConfigurationViewModel; this window never persists anything. -->
+
+    <Window.Styles>
+        <Style Selector="TextBlock.kicker">
+            <Setter Property="FontFamily" Value="Inter" />
+            <Setter Property="FontSize" Value="11" />
+            <Setter Property="FontWeight" Value="Bold" />
+            <Setter Property="Foreground" Value="#5FE1D2" />
+            <Setter Property="LetterSpacing" Value="2" />
+        </Style>
+        <Style Selector="TextBlock.muted">
+            <Setter Property="FontFamily" Value="Inter" />
+            <Setter Property="Foreground" Value="#8EA3A3" />
+        </Style>
+        <Style Selector="TextBlock.data-label">
+            <Setter Property="FontFamily" Value="Inter" />
+            <Setter Property="FontSize" Value="11" />
+            <Setter Property="FontWeight" Value="Bold" />
+            <Setter Property="Foreground" Value="#8EA3A3" />
+            <Setter Property="LetterSpacing" Value="1" />
+        </Style>
+        <Style Selector="Border.panel">
+            <Setter Property="Background" Value="#111B1F" />
+            <Setter Property="BorderBrush" Value="#24373A" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="8" />
+        </Style>
+    </Window.Styles>
+
+    <Grid Margin="20" RowDefinitions="Auto,12,Auto,12,*,8,Auto,16,Auto">
+
+        <StackPanel Grid.Row="0" Spacing="4">
+            <TextBlock FontSize="18"
+                       FontWeight="SemiBold"
+                       Text="Talkgroup Audio Recorder" />
+            <TextBlock Classes="muted"
+                       TextWrapping="Wrap"
+                       Text="Choose where TAR saves recordings, then enable recording per talkgroup and set retention or ignored subscriber IDs." />
+        </StackPanel>
+
+        <Border Grid.Row="2" Classes="panel" Padding="16">
+            <Grid RowDefinitions="Auto,8,Auto">
+                <TextBlock Grid.Row="0"
+                           Classes="data-label"
+                           Text="RECORDING FOLDER" />
+                <Grid Grid.Row="2" ColumnDefinitions="*,Auto">
+                    <TextBox Text="{Binding RecordingFolderPath, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                             VerticalContentAlignment="Center"
+                             Watermark="Select a TAR recordings folder" />
+                    <Button Grid.Column="1"
+                            Content="Browse"
+                            Width="90"
+                            Margin="12,0,0,0"
+                            Click="Browse_Click" />
+                </Grid>
+            </Grid>
+        </Border>
+
+        <ScrollViewer Grid.Row="4" HorizontalScrollBarVisibility="Disabled">
+            <ItemsControl ItemsSource="{Binding ZoneGroups}">
+                <ItemsControl.ItemsPanel>
+                    <ItemsPanelTemplate>
+                        <StackPanel Spacing="14" />
+                    </ItemsPanelTemplate>
+                </ItemsControl.ItemsPanel>
+                <ItemsControl.ItemTemplate>
+                    <DataTemplate x:DataType="vm:TarConfigurationViewModel+TarZoneConfigGroup">
+                        <Border Classes="panel" Padding="14">
+                            <StackPanel Spacing="8">
+                                <TextBlock Classes="kicker"
+                                           Text="{Binding ZoneName}" />
+                                <Grid ColumnDefinitions="64,180,220,100,80,90,*">
+                                    <TextBlock Classes="data-label" Text="REC" />
+                                    <TextBlock Grid.Column="1" Classes="data-label" Text="SYSTEM" />
+                                    <TextBlock Grid.Column="2" Classes="data-label" Text="CHANNEL" />
+                                    <TextBlock Grid.Column="3" Classes="data-label" Text="TG" />
+                                    <TextBlock Grid.Column="4" Classes="data-label" Text="MODE" />
+                                    <TextBlock Grid.Column="5" Classes="data-label" Text="KEEP DAYS" />
+                                    <TextBlock Grid.Column="6" Classes="data-label" Text="IGNORE RIDS" />
+                                </Grid>
+                                <ItemsControl ItemsSource="{Binding Channels}">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate x:DataType="vm:TarConfigurationViewModel+TarChannelConfigItem">
+                                            <Grid ColumnDefinitions="64,180,220,100,80,90,*"
+                                                  Margin="0,3">
+                                                <CheckBox IsChecked="{Binding Enabled, Mode=TwoWay}"
+                                                          Margin="10,0,0,0"
+                                                          VerticalAlignment="Center" />
+                                                <TextBlock Grid.Column="1"
+                                                           Text="{Binding SystemName}"
+                                                           TextTrimming="CharacterEllipsis"
+                                                           VerticalAlignment="Center" />
+                                                <TextBlock Grid.Column="2"
+                                                           Text="{Binding ChannelName}"
+                                                           TextTrimming="CharacterEllipsis"
+                                                           VerticalAlignment="Center" />
+                                                <TextBlock Grid.Column="3"
+                                                           Text="{Binding TalkgroupId}"
+                                                           VerticalAlignment="Center" />
+                                                <TextBlock Grid.Column="4"
+                                                           Text="{Binding Mode}"
+                                                           VerticalAlignment="Center" />
+                                                <TextBox Grid.Column="5"
+                                                         Text="{Binding RetentionDays, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                                         Margin="0,0,8,0"
+                                                         VerticalContentAlignment="Center" />
+                                                <TextBox Grid.Column="6"
+                                                         Text="{Binding IgnoredSubscriberIdsText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                                         VerticalContentAlignment="Center" />
+                                            </Grid>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                            </StackPanel>
+                        </Border>
+                    </DataTemplate>
+                </ItemsControl.ItemTemplate>
+            </ItemsControl>
+        </ScrollViewer>
+
+        <StackPanel Grid.Row="6" Spacing="2">
+            <TextBlock Text="{Binding StatusText}"
+                       Foreground="#4CAF7D"
+                       IsVisible="{Binding StatusText, Converter={x:Static conv:StringConverters.IsNotNullOrEmpty}}" />
+            <TextBlock Text="{Binding ErrorText}"
+                       Foreground="#E57373"
+                       IsVisible="{Binding ErrorText, Converter={x:Static conv:StringConverters.IsNotNullOrEmpty}}" />
+        </StackPanel>
+
+        <Grid Grid.Row="8" ColumnDefinitions="Auto,*,Auto">
+            <Button Grid.Column="0"
+                    Content="Close"
+                    Width="90"
+                    Click="Close_Click" />
+            <Button Grid.Column="2"
+                    Content="Save"
+                    Width="90"
+                    Click="Save_Click" />
+        </Grid>
+    </Grid>
+</Window>

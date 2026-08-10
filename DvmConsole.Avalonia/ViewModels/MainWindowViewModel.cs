@@ -31,11 +31,28 @@ namespace DvmConsole.Avalonia.ViewModels
 
         private const string AudioSavedFeedbackText = "Audio settings saved";
 
+        private const string TarSavedFeedbackText = "TAR settings saved.";
+
+        private const string TarSaveFailedFeedbackText = "TAR settings save failed.";
+
         private readonly SelectedChannelsManager<ChannelSlotViewModel> selectedChannelsManager;
 
         private readonly AudioSettingsPersistence? audioPersistence;
 
+        private readonly TarSettingsPersistence? tarPersistence;
+
+        /// <summary>
+        /// The normalized resource key (<see cref="ResourceIdentity.Build"/>)
+        /// of the codeplug channel currently assigned to each fixed slot,
+        /// or null for unassigned slots. Kept in sync by
+        /// <see cref="ReassignSlotsFromSelectedZone"/> and consumed by the
+        /// TAR indicator projection.
+        /// </summary>
+        private readonly string?[] slotResourceKeys = new string?[ChannelCount];
+
         private string audioSaveFeedback = string.Empty;
+
+        private string tarSaveFeedback = string.Empty;
 
         private IReadOnlyCollection<ChannelSlotViewModel> selectedChannels =
             Array.Empty<ChannelSlotViewModel>();
@@ -130,6 +147,55 @@ namespace DvmConsole.Avalonia.ViewModels
         public CallHistoryViewModel? CallHistory { get; }
 
         /// <summary>
+        /// The TAR configuration slice composed from the injected codeplug
+        /// and TAR settings persistence, or null when either was not
+        /// provided. Get-only and constructed exactly once: the slice is
+        /// projected from <c>codeplug.Zones</c> in codeplug order and seeded
+        /// from the persisted section loaded at construction (a missing,
+        /// malformed or unreadable load degrades to the section DTO
+        /// defaults without throwing), with the persisted recording root
+        /// supplied as both the configured and the fallback folder. Each
+        /// channel's settings resolve with the WPF
+        /// <c>SettingsManager.GetTarChannelConfig</c> lookup order
+        /// (SettingsManager.cs:1780-1801): the resource key first, then
+        /// the legacy talkgroup id, then the legacy channel name, otherwise
+        /// the new default <see cref="TarChannelConfig"/>. The persisted
+        /// map is already normalized (trimmed keys, blank keys skipped,
+        /// case-insensitive) by the persistence adapter, and the resolver
+        /// never mutates the loaded section's config instances. The slice
+        /// performs no persistence I/O on its own; commits raise
+        /// <c>SaveRequested</c> for the dashboard to persist. The slice
+        /// also feeds the dashboard's slot indicators: each item's
+        /// <see cref="TarConfigurationViewModel.TarChannelConfigItem.Enabled"/>
+        /// is projected into the
+        /// <see cref="ChannelSlotViewModel.TarRecordingEnabled"/> of the
+        /// fixed slot whose assigned channel shares its normalized
+        /// resource key, re-projected when the zone selection changes and
+        /// refreshed immediately when an item's Enabled changes.
+        /// </summary>
+        public TarConfigurationViewModel? TarConfiguration { get; }
+
+        /// <summary>
+        /// Shell-visible persistence result for the TAR configuration
+        /// slice, or empty when no save has been committed. The composed
+        /// <see cref="TarConfiguration"/> raises <c>SaveRequested</c> when
+        /// the dashboard commits; this property then reports the
+        /// persistence boundary result exactly: <c>TAR settings saved.</c>
+        /// on a successful write, or <c>TAR settings save failed.</c> when
+        /// the persistence write throws (the exception is isolated to a
+        /// debug diagnostic and never escapes the headless save event).
+        /// Feedback ownership is split from the slice's own
+        /// validation/payload status: <see cref="TarConfigurationViewModel.StatusText"/>
+        /// and <see cref="TarConfigurationViewModel.ErrorText"/> describe
+        /// the payload, while this property owns the persistence boundary
+        /// result. Get-only and change-only: a
+        /// <see cref="PropertyChanged"/> notification is raised only when
+        /// the value actually changes, and sessions without a composed
+        /// slice keep this permanently empty and never subscribe.
+        /// </summary>
+        public string TarSaveFeedback => tarSaveFeedback;
+
+        /// <summary>
         /// The connection state label, e.g. <c>OFFLINE</c> or
         /// <c>LINKED</c>. Set verbatim by <see cref="SetConnectionState"/>.
         /// </summary>
@@ -151,7 +217,12 @@ namespace DvmConsole.Avalonia.ViewModels
         /// <summary>
         /// The fixed channel slots of the dashboard, numbered 1..4.
         /// Exposed read-only; the backing collection is never mutated
-        /// after construction.
+        /// after construction. The
+        /// <see cref="ChannelSlotViewModel.TarRecordingEnabled"/>
+        /// indicator of each assigned slot is projected from the composed
+        /// <see cref="TarConfiguration"/> by normalized resource key, and
+        /// stays false when no TAR configuration is composed or the slot
+        /// is unassigned.
         /// </summary>
         public IReadOnlyList<ChannelSlotViewModel> Channels { get; }
 
@@ -175,8 +246,10 @@ namespace DvmConsole.Avalonia.ViewModels
         /// nothing raises nothing. Foreign instances (not a member of
         /// <see cref="Zones"/>) and null (while zones exist) are
         /// rejected as silent no-ops. On an accepted change the four
-        /// slots are re-assigned from the new zone's channels and the
-        /// slot-scoped selection is reset wholesale. The
+        /// slots are re-assigned from the new zone's channels, the
+        /// slot-scoped selection is reset wholesale, and the TAR
+        /// recording indicators are re-projected from the composed
+        /// <see cref="TarConfiguration"/>. The
         /// <see cref="PropertyChanged"/> notification is raised only
         /// after the zone assignment, slot reassignment, and selection
         /// reset are complete, so observers see the fully applied
@@ -368,7 +441,12 @@ namespace DvmConsole.Avalonia.ViewModels
         /// codeplug leaves <see cref="Zones"/> empty, no zone selected,
         /// and every slot unassigned. A null store leaves
         /// <see cref="CallHistory"/> null, keeping the CALL HISTORY
-        /// panel in its muted "not attached" state.
+        /// panel in its muted "not attached" state. When a codeplug and
+        /// TAR settings persistence are both supplied, the TAR
+        /// configuration slice is composed from the codeplug zones and
+        /// the persisted section (<see cref="TarConfiguration"/>); a
+        /// null persistence leaves it null with
+        /// <see cref="TarSaveFeedback"/> permanently empty.
         /// </summary>
         public MainWindowViewModel(
             IReadOnlyList<Codeplug.System>? systems,
@@ -377,7 +455,8 @@ namespace DvmConsole.Avalonia.ViewModels
             AudioSettingsPersistence? persistence,
             VocoderReadinessResult? vocoderStatus,
             Codeplug? codeplug = null,
-            CallHistoryStore? callHistory = null)
+            CallHistoryStore? callHistory = null,
+            TarSettingsPersistence? tarPersistence = null)
         {
             VocoderStatus = vocoderStatus is null
                 ? null
@@ -386,6 +465,8 @@ namespace DvmConsole.Avalonia.ViewModels
                     : vocoderStatus.Diagnostic;
 
             audioPersistence = persistence;
+
+            this.tarPersistence = tarPersistence;
 
             FneConnections = new FneConnectionManagerViewModel(systems);
             FneConnections.PropertyChanged += OnFneConnectionManagerChanged;
@@ -431,6 +512,87 @@ namespace DvmConsole.Avalonia.ViewModels
             CallHistory = callHistory is null
                 ? null
                 : new CallHistoryViewModel(callHistory);
+
+            // TAR configuration slice: composed only when a codeplug and
+            // TAR settings persistence are both supplied. The persisted
+            // section is loaded at construction; a missing, malformed or
+            // unreadable load degrades to the section DTO defaults without
+            // throwing. The persisted recording root seeds both the
+            // configured and the fallback folder, and the persisted config
+            // map backs a resolver with the WPF
+            // SettingsManager.GetTarChannelConfig lookup order.
+            UserSettingsTarSection tarSection = new UserSettingsTarSection();
+            if (codeplug is not null && tarPersistence is not null)
+            {
+                try
+                {
+                    if (tarPersistence.TryLoad(out UserSettingsTarSection loaded))
+                    {
+                        tarSection = loaded;
+                    }
+                }
+                catch
+                {
+                    // Degrade to the section DTO defaults; persistence must
+                    // never break dashboard construction.
+                }
+
+                TarConfiguration = new TarConfigurationViewModel(
+                    codeplug.Zones,
+                    (resourceKey, channelName, talkgroupId) =>
+                    {
+                        // WPF SettingsManager.GetTarChannelConfig
+                        // (SettingsManager.cs:1780-1801) lookup order:
+                        // resource key, then legacy talkgroup id, then
+                        // legacy channel name, else the new default. The
+                        // adapter's map is already normalized (trimmed
+                        // keys, blank keys skipped, case-insensitive), so
+                        // the dictionary comparer provides the lookup
+                        // semantics; the loaded config instances are
+                        // returned untouched.
+                        Dictionary<string, TarChannelConfig> loadedConfigs = tarSection.TarChannelConfigs;
+                        if (!string.IsNullOrWhiteSpace(resourceKey)
+                            && loadedConfigs.TryGetValue(resourceKey, out TarChannelConfig? resourceConfig))
+                        {
+                            return resourceConfig;
+                        }
+
+                        if (!string.IsNullOrWhiteSpace(talkgroupId)
+                            && loadedConfigs.TryGetValue(talkgroupId, out TarChannelConfig? talkgroupConfig))
+                        {
+                            return talkgroupConfig;
+                        }
+
+                        if (!string.IsNullOrWhiteSpace(channelName)
+                            && loadedConfigs.TryGetValue(channelName, out TarChannelConfig? channelConfig))
+                        {
+                            return channelConfig;
+                        }
+
+                        return new TarChannelConfig();
+                    },
+                    tarSection.TarRecordingsRootPath,
+                    tarSection.TarRecordingsRootPath);
+            }
+
+            if (TarConfiguration is not null)
+            {
+                TarConfiguration.SaveRequested += OnTarSaveRequested;
+
+                // Project the persisted Enabled state into the fixed slot
+                // indicators and subscribe to every item so dialog edits
+                // refresh the matching slot immediately. Items are fixed
+                // at composition, so the subscription is exactly once per
+                // item and never needs renewal.
+                ProjectTarIndicators();
+                foreach (TarConfigurationViewModel.TarZoneConfigGroup group in TarConfiguration.ZoneGroups)
+                {
+                    foreach (TarConfigurationViewModel.TarChannelConfigItem item in group.Channels)
+                    {
+                        item.PropertyChanged += OnTarChannelConfigItemChanged;
+                    }
+                }
+            }
 
             var savedInputId = AudioDeviceId.Default;
             var savedOutputId = AudioDeviceId.Default;
@@ -502,6 +664,42 @@ namespace DvmConsole.Avalonia.ViewModels
             PropertyChanged?.Invoke(
                 this,
                 new PropertyChangedEventArgs(nameof(AudioSaveFeedback)));
+        }
+
+        private void OnTarSaveRequested(
+            string recordingFolderPath,
+            IReadOnlyDictionary<string, TarChannelConfig> configs)
+        {
+            // The persistence boundary result is owned by this property:
+            // a successful write reports the fixed success text, a
+            // throwing write is isolated to a debug diagnostic and
+            // reports the fixed failure text. The exception must never
+            // escape the headless save event.
+            string feedback = TarSavedFeedbackText;
+            if (tarPersistence is { } persistence)
+            {
+                try
+                {
+                    persistence.Save(recordingFolderPath, configs);
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine(
+                        $"TAR settings persistence failed: {ex}");
+                    feedback = TarSaveFailedFeedbackText;
+                }
+            }
+
+            // The acknowledgement text is fixed and change-only.
+            if (tarSaveFeedback == feedback)
+            {
+                return;
+            }
+
+            tarSaveFeedback = feedback;
+            PropertyChanged?.Invoke(
+                this,
+                new PropertyChangedEventArgs(nameof(TarSaveFeedback)));
         }
 
         private void OnAudioSettingsChanged(
@@ -661,7 +859,11 @@ namespace DvmConsole.Avalonia.ViewModels
         /// channels. A zone with a null channel list, or fewer channels
         /// than slots, leaves the remainder unassigned (null
         /// <see cref="ChannelSlotViewModel.ChannelName"/>, <c>NO
-        /// TALKGROUP</c>).
+        /// TALKGROUP</c>). Each slot's normalized resource key
+        /// (<see cref="ResourceIdentity.Build"/>) is retained alongside
+        /// the assignment, and the TAR recording indicators are
+        /// re-projected from the composed <see cref="TarConfiguration"/>
+        /// (a missing TAR configuration keeps every indicator false).
         /// </summary>
         private void ReassignSlotsFromSelectedZone()
         {
@@ -675,12 +877,90 @@ namespace DvmConsole.Avalonia.ViewModels
                 {
                     var channel = zoneChannels[i];
                     slot.Reassign(channel.Name, channel.Tgid);
+                    slotResourceKeys[i] = ResourceIdentity.Build(channel.System, channel.Tgid);
                 }
                 else
                 {
                     slot.Reassign(null, null);
+                    slotResourceKeys[i] = null;
                 }
             }
+
+            ProjectTarIndicators();
+        }
+
+        /// <summary>
+        /// Projects the composed TAR configuration into the fixed slot
+        /// indicators: each slot's
+        /// <see cref="ChannelSlotViewModel.TarRecordingEnabled"/> becomes
+        /// the Enabled state of the TAR item whose resource key matches
+        /// the slot's assigned channel (normalized by
+        /// <see cref="ResourceIdentity.Build"/>), or false when no TAR
+        /// configuration is composed, the slot is unassigned, or no item
+        /// matches. The slot setter is change-only, so re-projection never
+        /// raises spurious notifications. This is headless indicator
+        /// state only: nothing is persisted here and no UI, recorder or
+        /// lifecycle code runs.
+        /// </summary>
+        private void ProjectTarIndicators()
+        {
+            if (TarConfiguration is null)
+            {
+                return;
+            }
+
+            for (var i = 0; i < ChannelCount; i++)
+            {
+                Channels[i].TarRecordingEnabled =
+                    FindTarItem(slotResourceKeys[i])?.Enabled ?? false;
+            }
+        }
+
+        /// <summary>
+        /// Finds the TAR configuration item whose resource key matches the
+        /// given key (case-insensitive, mirroring the persistence
+        /// adapter's normalization), scanning every zone group in
+        /// composition order, or null when no item matches. Items sharing
+        /// a resource key are kept synchronized by the TAR slice itself,
+        /// so the first match is authoritative.
+        /// </summary>
+        private TarConfigurationViewModel.TarChannelConfigItem? FindTarItem(string? resourceKey)
+        {
+            if (TarConfiguration is null || string.IsNullOrWhiteSpace(resourceKey))
+            {
+                return null;
+            }
+
+            foreach (TarConfigurationViewModel.TarZoneConfigGroup group in TarConfiguration.ZoneGroups)
+            {
+                foreach (TarConfigurationViewModel.TarChannelConfigItem item in group.Channels)
+                {
+                    if (string.Equals(item.ResourceKey, resourceKey, StringComparison.OrdinalIgnoreCase))
+                    {
+                        return item;
+                    }
+                }
+            }
+
+            return null;
+        }
+
+        /// <summary>
+        /// Refreshes the slot indicators when a TAR configuration item's
+        /// <see cref="TarConfigurationViewModel.TarChannelConfigItem.Enabled"/>
+        /// changes, so dialog edits surface on the dashboard immediately.
+        /// Other item properties do not affect the indicators and are
+        /// ignored. The projection itself is change-only, so a refresh
+        /// that changes nothing raises nothing.
+        /// </summary>
+        private void OnTarChannelConfigItemChanged(object? sender, PropertyChangedEventArgs e)
+        {
+            if (e.PropertyName != nameof(TarConfigurationViewModel.TarChannelConfigItem.Enabled))
+            {
+                return;
+            }
+
+            ProjectTarIndicators();
         }
 
         private void OnSelectedChannelsChanged()

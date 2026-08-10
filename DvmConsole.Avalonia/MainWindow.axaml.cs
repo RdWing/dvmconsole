@@ -12,6 +12,7 @@ using DvmConsole.Avalonia.Input;
 using DvmConsole.Avalonia.Persistence;
 using DvmConsole.Avalonia.Services;
 using DvmConsole.Avalonia.ViewModels;
+using DvmConsole.Avalonia.Views;
 using DvmConsole.Core.Networking;
 using DvmConsole.Platform.Audio;
 using DvmConsole.Platform.Audio.Mac;
@@ -167,13 +168,17 @@ namespace DvmConsole.Avalonia
         /// optional voice codec/traffic seams for the audio router,
         /// the optional FNE transport factory backing the connection
         /// slice, the optional codeplug backing the transmit-target
-        /// resolver, the optional call-history store, and the optional
+        /// resolver, the optional call-history store, the optional
         /// alias resolver backing the store's RID-alias column
         /// (per-system alias files, WPF-parity; a null resolver keeps
-        /// the entries' aliases empty). The
+        /// the entries' aliases empty), and the optional TAR settings
+        /// persistence adapter backing the TAR configuration slice
+        /// (WPF-compatible normalization over the Core merge-preserving
+        /// settings store; a null adapter keeps the TAR slice absent
+        /// and the view-model's save feedback permanently empty). The
         /// factory, readiness, systems, codec, sender, transport,
-        /// codeplug, call-history store and alias-resolver parameters
-        /// are
+        /// codeplug, call-history store, alias-resolver and
+        /// tar-persistence parameters are
         /// last so the pre-existing four-argument constructor remains
         /// source-compatible, including null-literal calls. When a
         /// key-state reader is present, exactly one 250 ms dispatcher
@@ -205,10 +210,11 @@ namespace DvmConsole.Avalonia
             IFneTransportFactory? transportFactory = null,
             Codeplug? codeplug = null,
             CallHistoryStore? callHistory = null,
-            AliasResolver? aliasResolver = null)
+            AliasResolver? aliasResolver = null,
+            TarSettingsPersistence? tarPersistence = null)
         {
             InitializeComponent();
-            DataContext = new MainWindowViewModel(systems, catalog, hotkeys, persistence, vocoderStatus, codeplug, callHistory);
+            DataContext = new MainWindowViewModel(systems, catalog, hotkeys, persistence, vocoderStatus, codeplug, callHistory, tarPersistence);
 
             // Compose the transmit-target resolver over the codeplug so
             // the PTT path resolves the primary channel's codeplug name
@@ -441,6 +447,29 @@ namespace DvmConsole.Avalonia
         /// fallback keeps the shell behaviorally unchanged until then.
         /// </summary>
         internal IFileDialogService FileDialogService { get; set; } = NoopFileDialogService.Instance;
+
+        /// <summary>
+        /// Opens the TAR configuration dialog with this window as its
+        /// owner. The dialog is constructed over the composed TAR
+        /// configuration view-model and this window's
+        /// <see cref="FileDialogService"/>; persistence stays owned by
+        /// the view-model (its <c>SaveRequested</c> subscription is
+        /// composed upstream), so nothing is saved or written here. Safe
+        /// no-op when the data context is not a
+        /// <see cref="MainWindowViewModel"/> or its TAR configuration
+        /// slice is absent (no codeplug or no TAR persistence).
+        /// </summary>
+        internal void OpenTarConfiguration()
+        {
+            if (DataContext is not MainWindowViewModel viewModel
+                || viewModel.TarConfiguration is not { } tarConfiguration)
+            {
+                return;
+            }
+
+            var dialog = new TarConfigurationWindow(tarConfiguration, FileDialogService);
+            _ = dialog.ShowDialog(this);
+        }
 
         /// <summary>
         /// Thin pointer-press wiring for the channel-card template. Filters
