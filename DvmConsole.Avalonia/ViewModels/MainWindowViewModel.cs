@@ -4,6 +4,7 @@ using System;
 using System.Collections.Generic;
 using System.ComponentModel;
 using dvmconsole;
+using DvmConsole.Avalonia.Input;
 using DvmConsole.Avalonia.Persistence;
 using DvmConsole.Avalonia.Services;
 using DvmConsole.Platform.Audio;
@@ -123,7 +124,13 @@ namespace DvmConsole.Avalonia.ViewModels
         /// constructed exactly once; the slice is wired to the LIVE
         /// dashboard selection, resolving the primary and selected
         /// channels at press time, and performs no service query until
-        /// its <c>SetHotkey</c> is called. Owns no disposable resources.
+        /// its <c>SetHotkey</c> is called. When PTT settings persistence
+        /// is also composed, the slice is seeded from the persisted
+        /// section at construction (toggle mode, all-channels scope,
+        /// and a mapped hotkey gesture). This composition is
+        /// deliberately load-only: reverse hotkey encoding and two-way
+        /// save wiring are deferred to a later seam. Owns no disposable
+        /// resources.
         /// </summary>
         public PttCapabilityViewModel? Ptt { get; }
 
@@ -419,8 +426,10 @@ namespace DvmConsole.Avalonia.ViewModels
         /// device catalog, a PTT capability slice composed from the
         /// given hotkey service, optional audio-settings persistence,
         /// an optional startup vocoder-readiness result, an optional
-        /// codeplug for the zone/channel UI slice, and an optional
-        /// call-history store for the CALL HISTORY slice. Null systems
+        /// codeplug for the zone/channel UI slice, an optional
+        /// call-history store for the CALL HISTORY slice, optional TAR
+        /// settings persistence, and optional PTT settings persistence.
+        /// Null systems
         /// yield an empty manager,
         /// a null catalog yields a null <see cref="AudioSettings"/>, and
         /// a null hotkey service yields a null <see cref="Ptt"/>. When
@@ -446,7 +455,21 @@ namespace DvmConsole.Avalonia.ViewModels
         /// configuration slice is composed from the codeplug zones and
         /// the persisted section (<see cref="TarConfiguration"/>); a
         /// null persistence leaves it null with
-        /// <see cref="TarSaveFeedback"/> permanently empty.
+        /// <see cref="TarSaveFeedback"/> permanently empty. When the
+        /// hotkey service and PTT settings persistence are both
+        /// supplied, the PTT slice is seeded at construction from the
+        /// persisted section: <see cref="PttCapabilityViewModel.ToggleMode"/>
+        /// from <c>TogglePTTMode</c>,
+        /// <see cref="PttCapabilityViewModel.AllChannels"/> from
+        /// <c>GlobalPTTKeysAllChannels</c>, and the hotkey from
+        /// <c>GlobalPTTShortcut</c> decoded through the persisted-hotkey
+        /// mapper; a missing, malformed or unreadable load, or an
+        /// unsupported or zero persisted shortcut, degrades to the PTT
+        /// defaults already held by the slice without throwing. A null
+        /// persistence leaves the slice exactly request-only. This
+        /// composition is deliberately load-only: reverse hotkey
+        /// encoding and two-way save wiring are deferred to a later
+        /// seam.
         /// </summary>
         public MainWindowViewModel(
             IReadOnlyList<Codeplug.System>? systems,
@@ -456,7 +479,8 @@ namespace DvmConsole.Avalonia.ViewModels
             VocoderReadinessResult? vocoderStatus,
             Codeplug? codeplug = null,
             CallHistoryStore? callHistory = null,
-            TarSettingsPersistence? tarPersistence = null)
+            TarSettingsPersistence? tarPersistence = null,
+            PttSettingsPersistence? pttPersistence = null)
         {
             VocoderStatus = vocoderStatus is null
                 ? null
@@ -506,6 +530,40 @@ namespace DvmConsole.Avalonia.ViewModels
             Ptt = hotkeys is null
                 ? null
                 : new PttCapabilityViewModel(hotkeys, () => PrimaryChannel, () => SelectedChannels);
+
+            // Load-only PTT settings composition: when the PTT slice and
+            // PTT settings persistence are both composed, the persisted
+            // section seeds the slice before the hotkey-capture slice is
+            // built. The persisted raw WPF Keys integer is decoded through
+            // PersistedHotkeyMapper; an unsupported or zero shortcut
+            // leaves Ptt.Hotkey null while the mode and scope still load.
+            // A missing, malformed or unreadable load degrades to the PTT
+            // defaults already held by the slice without throwing.
+            // Deliberately load-only: no HotkeyChangeRequested
+            // subscription, reverse encoding, or save wiring exist yet.
+            if (Ptt is not null && pttPersistence is not null)
+            {
+                try
+                {
+                    if (pttPersistence.TryLoad(out UserSettingsPttSection pttSection))
+                    {
+                        Ptt.ToggleMode = pttSection.TogglePTTMode;
+                        Ptt.AllChannels = pttSection.GlobalPTTKeysAllChannels;
+                        if (PersistedHotkeyMapper.TryMap(
+                            pttSection.GlobalPTTShortcut,
+                            out HotkeyGesture gesture))
+                        {
+                            Ptt.SetHotkey(gesture);
+                        }
+                    }
+                }
+                catch
+                {
+                    // Degrade to the PTT defaults already held by the
+                    // slice; persistence must never break dashboard
+                    // construction.
+                }
+            }
 
             HotkeyCapture = Ptt is null ? null : new HotkeyCaptureViewModel(Ptt);
 
