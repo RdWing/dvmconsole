@@ -45,6 +45,10 @@ namespace DvmConsole.Avalonia.ViewModels
 
         private const string TarSaveFailedFeedbackText = "TAR settings save failed.";
 
+        private const string PreferencesSavedFeedbackText = "Preferences settings saved";
+
+        private const string PreferencesSaveFailedFeedbackText = "Preferences settings save failed.";
+
         private const string PttHotkeyPermissionFeedbackText =
             "Global hotkey permission required.";
 
@@ -58,6 +62,8 @@ namespace DvmConsole.Avalonia.ViewModels
         private readonly TarSettingsPersistence? tarPersistence;
 
         private readonly PttSettingsPersistence? pttPersistence;
+
+        private PreferencesSettingsPersistence? preferencesPersistence;
 
         private readonly Dictionary<string, int> channelOutputDevices =
             new(StringComparer.OrdinalIgnoreCase);
@@ -75,6 +81,8 @@ namespace DvmConsole.Avalonia.ViewModels
         private string tarSaveFeedback = string.Empty;
 
         private string pttHotkeyFeedback = string.Empty;
+
+        private string preferencesSaveFeedback = string.Empty;
 
         private IReadOnlyCollection<ChannelSlotViewModel> selectedChannels =
             Array.Empty<ChannelSlotViewModel>();
@@ -118,6 +126,13 @@ namespace DvmConsole.Avalonia.ViewModels
         /// already-registered outcome clears stale feedback. Change-only.
         /// </summary>
         public string PttHotkeyFeedback => pttHotkeyFeedback;
+
+        /// <summary>
+        /// Shell-visible acknowledgement for the operator-preferences
+        /// persistence boundary. Success and failure use fixed text and the
+        /// property raises change-only notifications.
+        /// </summary>
+        public string PreferencesSaveFeedback => preferencesSaveFeedback;
 
         private string? audioStatusMessage;
 
@@ -185,6 +200,37 @@ namespace DvmConsole.Avalonia.ViewModels
         /// resources.
         /// </summary>
         public PttCapabilityViewModel? Ptt { get; }
+
+        /// <summary>
+        /// Operator-preferences state seeded from the optional persistence
+        /// adapter. The slice raises save requests only for effective
+        /// post-hydration changes; runtime application belongs to later
+        /// preference gates.
+        /// </summary>
+        public OperatorPreferencesViewModel? Preferences { get; private set; }
+
+        /// <summary>
+        /// Attaches the shared operator-preferences persistence adapter after
+        /// shell construction. This preserves the existing MainWindow
+        /// constructor's TAR/viewer parameter order while keeping hydration
+        /// ahead of all change/save subscriptions.
+        /// </summary>
+        public void AttachPreferencesPersistence(PreferencesSettingsPersistence persistence)
+        {
+            ArgumentNullException.ThrowIfNull(persistence);
+            if (Preferences is not null)
+            {
+                return;
+            }
+
+            preferencesPersistence = persistence;
+            Preferences = new OperatorPreferencesViewModel(persistence);
+            PropertyChanged?.Invoke(
+                this,
+                new PropertyChangedEventArgs(nameof(Preferences)));
+            Preferences.PropertyChanged += OnPreferencesChanged;
+            Preferences.SaveRequested += OnPreferencesSaveRequested;
+        }
 
         /// <summary>
         /// The hotkey-capture slice composed from the PTT capability
@@ -564,7 +610,8 @@ namespace DvmConsole.Avalonia.ViewModels
             Codeplug? codeplug = null,
             CallHistoryStore? callHistory = null,
             TarSettingsPersistence? tarPersistence = null,
-            PttSettingsPersistence? pttPersistence = null)
+            PttSettingsPersistence? pttPersistence = null,
+            PreferencesSettingsPersistence? preferencesPersistence = null)
         {
             VocoderStatus = vocoderStatus is null
                 ? null
@@ -577,6 +624,8 @@ namespace DvmConsole.Avalonia.ViewModels
             this.tarPersistence = tarPersistence;
 
             this.pttPersistence = pttPersistence;
+
+            this.preferencesPersistence = preferencesPersistence;
 
             FneConnections = new FneConnectionManagerViewModel(systems);
             FneConnections.PropertyChanged += OnFneConnectionManagerChanged;
@@ -661,6 +710,11 @@ namespace DvmConsole.Avalonia.ViewModels
             if (Ptt is not null && pttPersistence is not null)
             {
                 Ptt.SaveRequested += OnPttSaveRequested;
+            }
+
+            if (preferencesPersistence is not null)
+            {
+                AttachPreferencesPersistence(preferencesPersistence);
             }
 
             HotkeyCapture = Ptt is null ? null : new HotkeyCaptureViewModel(Ptt);
@@ -1056,6 +1110,47 @@ namespace DvmConsole.Avalonia.ViewModels
             }
         }
 
+        private void OnPreferencesSaveRequested()
+        {
+            if (preferencesPersistence is null || Preferences is null)
+            {
+                return;
+            }
+
+            var feedback = PreferencesSavedFeedbackText;
+            try
+            {
+                if (!preferencesPersistence.TryLoad(out UserSettingsPreferencesSection section))
+                {
+                    section = new UserSettingsPreferencesSection();
+                }
+
+                section.TalkPermitTone = Preferences.TalkPermitTone;
+                section.MuteRxAudioWhileTransmitting = Preferences.MuteRxAudioWhileTransmitting;
+                section.RetainPatchStateOnStartup = Preferences.RetainPatchStateOnStartup;
+                section.RestoreSelectedChannelsOnStartup = Preferences.RestoreSelectedChannelsOnStartup;
+                section.DarkMode = Preferences.DarkMode;
+                section.KeepWindowOnTop = Preferences.KeepWindowOnTop;
+                preferencesPersistence.Save(section);
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine(
+                    $"Operator preferences persistence failed: {ex}");
+                feedback = PreferencesSaveFailedFeedbackText;
+            }
+
+            if (preferencesSaveFeedback == feedback)
+            {
+                return;
+            }
+
+            preferencesSaveFeedback = feedback;
+            PropertyChanged?.Invoke(
+                this,
+                new PropertyChangedEventArgs(nameof(PreferencesSaveFeedback)));
+        }
+
         private void OnTarSaveRequested(
             string recordingFolderPath,
             IReadOnlyDictionary<string, TarChannelConfig> configs)
@@ -1119,6 +1214,32 @@ namespace DvmConsole.Avalonia.ViewModels
             PropertyChanged?.Invoke(
                 this,
                 new PropertyChangedEventArgs(nameof(AudioSaveFeedback)));
+        }
+
+        private void OnPreferencesChanged(
+            object? sender,
+            PropertyChangedEventArgs e)
+        {
+            if (e.PropertyName is not (
+                nameof(OperatorPreferencesViewModel.TalkPermitTone)
+                or nameof(OperatorPreferencesViewModel.MuteRxAudioWhileTransmitting)
+                or nameof(OperatorPreferencesViewModel.RetainPatchStateOnStartup)
+                or nameof(OperatorPreferencesViewModel.RestoreSelectedChannelsOnStartup)
+                or nameof(OperatorPreferencesViewModel.DarkMode)
+                or nameof(OperatorPreferencesViewModel.KeepWindowOnTop)))
+            {
+                return;
+            }
+
+            if (preferencesSaveFeedback.Length == 0)
+            {
+                return;
+            }
+
+            preferencesSaveFeedback = string.Empty;
+            PropertyChanged?.Invoke(
+                this,
+                new PropertyChangedEventArgs(nameof(PreferencesSaveFeedback)));
         }
 
         private void OnFneConnectionManagerChanged(

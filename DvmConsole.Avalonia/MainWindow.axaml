@@ -15,6 +15,32 @@
 
     <NativeMenu.Menu>
         <NativeMenu>
+            <NativeMenuItem Header="Settings">
+                <NativeMenu>
+                    <NativeMenuItem Header="Talk Permit Tone"
+                                    ToggleType="CheckBox"
+                                    IsChecked="{Binding Preferences.TalkPermitTone, Mode=TwoWay}" />
+                    <NativeMenuItem Header="Mute RX Audio While Transmitting"
+                                    ToggleType="CheckBox"
+                                    IsChecked="{Binding Preferences.MuteRxAudioWhileTransmitting, Mode=TwoWay}" />
+                    <NativeMenuItem Header="Retain Patch State On Startup"
+                                    ToggleType="CheckBox"
+                                    IsChecked="{Binding Preferences.RetainPatchStateOnStartup, Mode=TwoWay}" />
+                    <NativeMenuItem Header="Restore Selected Channels On Startup"
+                                    ToggleType="CheckBox"
+                                    IsChecked="{Binding Preferences.RestoreSelectedChannelsOnStartup, Mode=TwoWay}" />
+                </NativeMenu>
+            </NativeMenuItem>
+            <NativeMenuItem Header="View">
+                <NativeMenu>
+                    <NativeMenuItem Header="Dark Mode"
+                                    ToggleType="CheckBox"
+                                    IsChecked="{Binding Preferences.DarkMode, Mode=TwoWay}" />
+                    <NativeMenuItem Header="Always on Top"
+                                    ToggleType="CheckBox"
+                                    IsChecked="{Binding Preferences.KeepWindowOnTop, Mode=TwoWay}" />
+                </NativeMenu>
+            </NativeMenuItem>
             <NativeMenuItem Header="App">
                 <NativeMenu>
                     <NativeMenuItem Header="Quit" />
@@ -212,6 +238,10 @@
                     <TextBlock Classes="muted"
                                Text="{Binding TarViewerStatusMessage}"
                                IsVisible="{Binding TarViewerStatusMessage, Converter={x:Static conv:StringConverters.IsNotNullOrEmpty}}"
+                               TextWrapping="Wrap" />
+                    <TextBlock Classes="muted"
+                               Text="{Binding PreferencesSaveFeedback}"
+                               IsVisible="{Binding PreferencesSaveFeedback, Converter={x:Static conv:StringConverters.IsNotNullOrEmpty}}"
                                TextWrapping="Wrap" />
                 </StackPanel>
             </Border>

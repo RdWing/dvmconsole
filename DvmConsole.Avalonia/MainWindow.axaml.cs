@@ -429,6 +429,14 @@ namespace DvmConsole.Avalonia
             watchdogTimer.Start();
         }
 
+        public void AttachPreferencesPersistence(PreferencesSettingsPersistence preferencesPersistence)
+        {
+            if (DataContext is MainWindowViewModel viewModel)
+            {
+                viewModel.AttachPreferencesPersistence(preferencesPersistence);
+            }
+        }
+
         private void AttachReceiveProjection(MainWindowViewModel viewModel)
         {
             receiveProjectionViewModel = viewModel;

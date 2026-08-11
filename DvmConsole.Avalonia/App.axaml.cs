@@ -392,6 +392,7 @@ namespace DvmConsole.Avalonia
                 var persistence = new AudioSettingsPersistence(settingsStore);
                 var tarPersistence = new TarSettingsPersistence(settingsStore);
                 var pttPersistence = new PttSettingsPersistence(settingsStore);
+                var preferencesPersistence = new PreferencesSettingsPersistence(settingsStore);
                 var tarRecorder = CreateTarRecorder(tarPersistence, fileSystemPaths.DefaultTarRecordingsPath);
                 var tarViewerColumnPersistence =
                     new TarViewerColumnSettingsPersistence(settingsStore);
@@ -489,6 +490,7 @@ namespace DvmConsole.Avalonia
                     tarRecorder,
                     tarWaveFilePlayer,
                     tarViewerColumnPersistence);
+                mainWindow.AttachPreferencesPersistence(preferencesPersistence);
                 mainWindow.FileDialogService =
                     new AvaloniaFileDialogService(mainWindow.StorageProvider);
                 mainWindow.TarFileRevealService = new DesktopFileRevealService();
