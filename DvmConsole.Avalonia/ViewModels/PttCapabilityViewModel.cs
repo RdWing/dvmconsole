@@ -103,6 +103,7 @@ namespace DvmConsole.Avalonia.ViewModels
 
                 toggleMode = value;
                 RaisePropertyChanged(nameof(ToggleMode));
+                RaiseSaveRequested();
             }
         }
 
@@ -123,6 +124,7 @@ namespace DvmConsole.Avalonia.ViewModels
 
                 allChannels = value;
                 RaisePropertyChanged(nameof(AllChannels));
+                RaiseSaveRequested();
             }
         }
 
@@ -183,6 +185,11 @@ namespace DvmConsole.Avalonia.ViewModels
                 RaisePropertyChanged(nameof(Capability));
             }
 
+            if (hotkeyChanged)
+            {
+                RaiseSaveRequested();
+            }
+
             HotkeyChangeRequested?.Invoke(gesture);
         }
 
@@ -213,6 +220,7 @@ namespace DvmConsole.Avalonia.ViewModels
                 RaisePropertyChanged(nameof(Capability));
             }
 
+            RaiseSaveRequested();
             HotkeyChangeRequested?.Invoke(null);
         }
 
@@ -430,5 +438,17 @@ namespace DvmConsole.Avalonia.ViewModels
 
         /// <summary>Raised with the requested hotkey gesture (null = clear).</summary>
         public event Action<HotkeyGesture?>? HotkeyChangeRequested;
+
+        /// <summary>
+        /// Raised exactly once for each effective persisted PTT change:
+        /// a changed or cleared hotkey, a changed toggle-mode value, or a
+        /// changed all-channels value. The payload is the current complete
+        /// PTT state; no event is raised for no-op assignments. Hydration is
+        /// silent when the consumer subscribes after construction.
+        /// </summary>
+        public event Action<HotkeyGesture?, bool, bool>? SaveRequested;
+
+        private void RaiseSaveRequested()
+            => SaveRequested?.Invoke(hotkey, toggleMode, allChannels);
     }
 }

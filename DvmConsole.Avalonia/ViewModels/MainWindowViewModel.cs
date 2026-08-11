@@ -51,6 +51,8 @@ namespace DvmConsole.Avalonia.ViewModels
 
         private readonly TarSettingsPersistence? tarPersistence;
 
+        private readonly PttSettingsPersistence? pttPersistence;
+
         private readonly Dictionary<string, int> channelOutputDevices =
             new(StringComparer.OrdinalIgnoreCase);
 
@@ -533,10 +535,10 @@ namespace DvmConsole.Avalonia.ViewModels
         /// mapper; a missing, malformed or unreadable load, or an
         /// unsupported or zero persisted shortcut, degrades to the PTT
         /// defaults already held by the slice without throwing. A null
-        /// persistence leaves the slice exactly request-only. This
-        /// composition is deliberately load-only: reverse hotkey
-        /// encoding and two-way save wiring are deferred to a later
-        /// seam.
+        /// persistence leaves the slice exactly request-only. The
+        /// post-hydration PTT save event persists effective changes back
+        /// through the supplied section adapter; malformed or failed saves
+        /// are isolated so they never break dashboard operation.
         /// </summary>
         public MainWindowViewModel(
             IReadOnlyList<Codeplug.System>? systems,
@@ -558,6 +560,8 @@ namespace DvmConsole.Avalonia.ViewModels
             audioPersistence = persistence;
 
             this.tarPersistence = tarPersistence;
+
+            this.pttPersistence = pttPersistence;
 
             FneConnections = new FneConnectionManagerViewModel(systems);
             FneConnections.PropertyChanged += OnFneConnectionManagerChanged;
@@ -615,8 +619,6 @@ namespace DvmConsole.Avalonia.ViewModels
             // leaves Ptt.Hotkey null while the mode and scope still load.
             // A missing, malformed or unreadable load degrades to the PTT
             // defaults already held by the slice without throwing.
-            // Deliberately load-only: no HotkeyChangeRequested
-            // subscription, reverse encoding, or save wiring exist yet.
             if (Ptt is not null && pttPersistence is not null)
             {
                 try
@@ -639,6 +641,11 @@ namespace DvmConsole.Avalonia.ViewModels
                     // slice; persistence must never break dashboard
                     // construction.
                 }
+            }
+
+            if (Ptt is not null && pttPersistence is not null)
+            {
+                Ptt.SaveRequested += OnPttSaveRequested;
             }
 
             HotkeyCapture = Ptt is null ? null : new HotkeyCaptureViewModel(Ptt);
@@ -967,6 +974,44 @@ namespace DvmConsole.Avalonia.ViewModels
             PropertyChanged?.Invoke(
                 this,
                 new PropertyChangedEventArgs(nameof(AudioSaveFeedback)));
+        }
+
+        private void OnPttSaveRequested(
+            HotkeyGesture? gesture,
+            bool toggleMode,
+            bool allChannels)
+        {
+            if (pttPersistence is null)
+            {
+                return;
+            }
+
+            try
+            {
+                if (!pttPersistence.TryLoad(out UserSettingsPttSection section))
+                {
+                    section = new UserSettingsPttSection();
+                }
+
+                section.TogglePTTMode = toggleMode;
+                section.GlobalPTTKeysAllChannels = allChannels;
+
+                if (gesture is null)
+                {
+                    section.GlobalPTTShortcut = 0;
+                }
+                else if (PersistedHotkeyEncoder.TryMap(gesture.Value, out var persistedKeys))
+                {
+                    section.GlobalPTTShortcut = persistedKeys;
+                }
+
+                pttPersistence.Save(section);
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine(
+                    $"PTT settings persistence failed: {ex}");
+            }
         }
 
         private void OnTarSaveRequested(

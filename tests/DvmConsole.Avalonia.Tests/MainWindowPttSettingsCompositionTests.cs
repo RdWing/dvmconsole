@@ -15,10 +15,10 @@ using Xunit;
 namespace DvmConsole.Avalonia.Tests
 {
     /// <summary>
-    /// RED contract for the headless PTT settings composition boundary.
+    /// Contract for the headless PTT settings composition boundary.
     /// The dashboard loads persisted PTT state into the already-composed PTT
-    /// capability view-model; reverse hotkey encoding and two-way save wiring
-    /// remain later seams.
+    /// capability view-model and persists effective post-hydration PTT
+    /// changes through the shared section store.
     /// </summary>
     public sealed class MainWindowPttSettingsCompositionTests
     {
@@ -119,7 +119,7 @@ namespace DvmConsole.Avalonia.Tests
         }
 
         [Fact]
-        public void CompositionIsLoadOnlyUntilReverseEncodingAndSaveWiringExist()
+        public void CompositionPersistsPostHydrationHotkeyChangesWithoutHydrationWrite()
         {
             using var dir = new TempDir();
             var persistence = CreatePersistence(dir.SettingsPath);
@@ -129,7 +129,7 @@ namespace DvmConsole.Avalonia.Tests
             vm.Ptt!.SetHotkey(new HotkeyGesture(HotkeyKey.F2, HotkeyModifiers.None));
 
             Assert.True(persistence.TryLoad(out var stored));
-            Assert.Equal(0x20041, stored.GlobalPTTShortcut);
+            Assert.Equal(0x71, stored.GlobalPTTShortcut);
         }
 
         private static MainWindowViewModel CreateViewModel(

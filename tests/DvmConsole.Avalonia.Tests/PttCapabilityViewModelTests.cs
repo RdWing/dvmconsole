@@ -26,7 +26,8 @@
 * get-only. SetHotkey rejects HotkeyKey.None with ArgumentException,
 * otherwise assigns the gesture, re-queries capability, raises
 * Hotkey/Capability PropertyChanged once each (change-only) and raises
-* HotkeyChangeRequested exactly once. ClearHotkey is a no-op while Hotkey
+* HotkeyChangeRequested exactly once and raises SaveRequested only for an
+* effective persisted change. ClearHotkey is a no-op while Hotkey
 * is already null, otherwise resets Hotkey to null and Capability to
 * Unsupported (change-only notifications) and raises
 * HotkeyChangeRequested(null).
@@ -182,9 +183,9 @@ namespace DvmConsole.Avalonia.Tests
         /// <summary>
         /// Locks the exact public surface of <c>PttCapabilityViewModel</c>:
         /// sealed, notifiable, non-disposable, in the Avalonia view-model
-        /// namespace, with exactly the contract ctor, five declared public
+        /// with exactly the contract ctor, six declared public
         /// properties with exact types/accessibility, five declared public
-        /// methods with exact signatures, and three declared public events
+        /// methods with exact signatures, and four declared public events
         /// with exact handler types. Compiler-generated backing members are
         /// allowed; anything else declared public fails this gate.
         /// </summary>
@@ -250,18 +251,19 @@ namespace DvmConsole.Avalonia.Tests
             Assert.Equal(typeof(void), type.GetMethod("ApplyHotkeyPress", new[] { typeof(HotkeyGesture), typeof(HotkeyEventType) })!.ReturnType);
             Assert.Equal(typeof(void), type.GetMethod("SetHotkey", new[] { typeof(HotkeyGesture) })!.ReturnType);
 
-            // Exactly the three declared public instance events.
+            // Exactly the four declared public instance events.
             var events = type
                 .GetEvents(BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly)
                 .OrderBy(e => e.Name)
                 .ToArray();
             Assert.Equal(
-                new[] { "HotkeyChangeRequested", "PropertyChanged", "PttStateRequested" },
+                new[] { "HotkeyChangeRequested", "PropertyChanged", "PttStateRequested", "SaveRequested" },
                 events.Select(e => e.Name).ToArray());
 
             Assert.Equal(typeof(PropertyChangedEventHandler), type.GetEvent("PropertyChanged")!.EventHandlerType);
             Assert.Equal(typeof(Action<bool>), type.GetEvent("PttStateRequested")!.EventHandlerType);
             Assert.Equal(typeof(Action<HotkeyGesture?>), type.GetEvent("HotkeyChangeRequested")!.EventHandlerType);
+            Assert.Equal(typeof(Action<HotkeyGesture?, bool, bool>), type.GetEvent("SaveRequested")!.EventHandlerType);
         }
 
         /// <summary>
