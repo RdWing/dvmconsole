@@ -1468,6 +1468,7 @@ namespace DvmConsole.Avalonia.ViewModels
                             channel.RxOnly,
                             channel.CardSize,
                             channel.ResourceColor);
+                        slot.IsEncryptionSelectable = CanSelectEncryption(channel);
                         slot.Volume = ResolveMonitorVolume(slot.ResourceKey);
                         var outputOptions = BuildMonitorOutputOptions(slot.ResourceKey);
                         slot.SetMonitorOutputDevices(
@@ -1487,6 +1488,19 @@ namespace DvmConsole.Avalonia.ViewModels
             }
 
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(Channels)));
+        }
+
+        /// <summary>
+        /// Mirrors the WPF selectable-encryption eligibility rule without
+        /// composing security or transmit behavior: only P25 channels with
+        /// the codeplug selectable flag and valid configured key material
+        /// expose the card indicator/action.
+        /// </summary>
+        private static bool CanSelectEncryption(Codeplug.Channel channel)
+        {
+            return string.Equals(channel.Mode?.Trim(), "P25", StringComparison.OrdinalIgnoreCase)
+                && channel.SelectableEncryption
+                && channel.HasEncryptionConfig();
         }
 
         /// <summary>

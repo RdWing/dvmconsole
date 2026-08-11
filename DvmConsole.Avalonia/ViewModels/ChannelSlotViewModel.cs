@@ -65,6 +65,11 @@ namespace DvmConsole.Avalonia.ViewModels
         private string lastSrcId = "Last ID: 0";
         private bool isTxEncrypted;
         private bool isEncryptionSelectable;
+        private bool isPatchGroupMember;
+        private bool isPatchGroupActive;
+        private bool isMultiSelectMember;
+        private bool pageState;
+        private bool holdState;
         private bool fneConnectionWarningVisible;
         private string fneConnectionWarningToolTip = string.Empty;
 
@@ -217,6 +222,109 @@ namespace DvmConsole.Avalonia.ViewModels
                 PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsEncryptionSelectable)));
             }
         }
+
+        /// <summary>True when the resource belongs to one or more patch groups.</summary>
+        public bool IsPatchGroupMember
+        {
+            get => isPatchGroupMember;
+            set
+            {
+                if (isPatchGroupMember == value)
+                {
+                    return;
+                }
+
+                isPatchGroupMember = value;
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsPatchGroupMember)));
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(GroupIndicatorToolTip)));
+            }
+        }
+
+        /// <summary>True when one or more patch groups are currently enabled.</summary>
+        public bool IsPatchGroupActive
+        {
+            get => isPatchGroupActive;
+            set
+            {
+                if (isPatchGroupActive == value)
+                {
+                    return;
+                }
+
+                isPatchGroupActive = value;
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsPatchGroupActive)));
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(GroupIndicatorToolTip)));
+            }
+        }
+
+        /// <summary>True when the resource belongs to the current multi-select group.</summary>
+        public bool IsMultiSelectMember
+        {
+            get => isMultiSelectMember;
+            set
+            {
+                if (isMultiSelectMember == value)
+                {
+                    return;
+                }
+
+                isMultiSelectMember = value;
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsMultiSelectMember)));
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(GroupIndicatorToolTip)));
+            }
+        }
+
+        /// <summary>True when page-select is active for this resource.</summary>
+        public bool PageState
+        {
+            get => pageState;
+            set
+            {
+                if (pageState == value)
+                {
+                    return;
+                }
+
+                pageState = value;
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(PageState)));
+            }
+        }
+
+        /// <summary>True when the resource is held for marker/hold behavior.</summary>
+        public bool HoldState
+        {
+            get => holdState;
+            set
+            {
+                if (holdState == value)
+                {
+                    return;
+                }
+
+                holdState = value;
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(HoldState)));
+            }
+        }
+
+        /// <summary>
+        /// WPF-priority tooltip for the resource group indicator: current
+        /// multi-select membership wins over enabled and ordinary patch
+        /// membership.
+        /// </summary>
+        public string GroupIndicatorToolTip =>
+            isMultiSelectMember
+                ? "Member of the current multi-select group"
+                : isPatchGroupMember
+                    ? isPatchGroupActive
+                        ? "Member of one or more enabled patch groups"
+                        : "Member of one or more patch groups"
+                    : string.Empty;
+
+        /// <summary>WPF-parity tooltip for the selectable encryption state.</summary>
+        public string SelectableEncryptionToolTip =>
+            isTxEncrypted
+                ? "Selectable encryption: encrypted TX. Click to transmit clear."
+                : "Selectable encryption: clear TX. Click to transmit encrypted.";
 
         /// <summary>True when the slot's FNE system is unavailable.</summary>
         public bool FneConnectionWarningVisible
@@ -601,11 +709,82 @@ namespace DvmConsole.Avalonia.ViewModels
         }
 
         /// <summary>
+        /// Applies the WPF page-select guard, toggles the local state, and
+        /// raises a request-only event for the shell/backend seam.
+        /// </summary>
+        public void RequestPageSelect()
+        {
+            if (isRxOnly || !isSelected)
+            {
+                return;
+            }
+
+            PageState = !PageState;
+            PageSelectRequested?.Invoke(this);
+        }
+
+        /// <summary>
+        /// Applies the WPF marker guard, toggles the local hold state, and
+        /// raises a request-only event for the shell/backend seam.
+        /// </summary>
+        public void RequestMarker()
+        {
+            if (isRxOnly || !isSelected)
+            {
+                return;
+            }
+
+            HoldState = !HoldState;
+            MarkerRequested?.Invoke(this);
+        }
+
+        /// <summary>
+        /// Raises a request-only call-history event for selected resources.
+        /// </summary>
+        public void RequestChannelHistory()
+        {
+            if (!isSelected)
+            {
+                return;
+            }
+
+            ChannelHistoryRequested?.Invoke(this);
+        }
+
+        /// <summary>
+        /// Applies the WPF selectable-encryption guard, toggles the local
+        /// transmit state, and raises a request-only event. Backend security
+        /// behavior remains outside this slice.
+        /// </summary>
+        public void RequestSelectableEncryption()
+        {
+            if (!isEncryptionSelectable || pttEngaged)
+            {
+                return;
+            }
+
+            IsTxEncrypted = !IsTxEncrypted;
+            SelectableEncryptionRequested?.Invoke(this);
+        }
+
+        /// <summary>
         /// Raised when <see cref="ChannelName"/>, <see cref="Talkgroup"/>,
         /// <see cref="IsSelected"/>, <see cref="IsPrimary"/>,
         /// <see cref="PttEngaged"/> or <see cref="TarRecordingEnabled"/>
         /// changes.
         /// </summary>
         public event PropertyChangedEventHandler? PropertyChanged;
+
+        /// <summary>Raised after a guarded page-select request is accepted.</summary>
+        public event Action<ChannelSlotViewModel>? PageSelectRequested;
+
+        /// <summary>Raised after a guarded marker request is accepted.</summary>
+        public event Action<ChannelSlotViewModel>? MarkerRequested;
+
+        /// <summary>Raised after a selected-resource history request is accepted.</summary>
+        public event Action<ChannelSlotViewModel>? ChannelHistoryRequested;
+
+        /// <summary>Raised after a guarded selectable-encryption request is accepted.</summary>
+        public event Action<ChannelSlotViewModel>? SelectableEncryptionRequested;
     }
 }
