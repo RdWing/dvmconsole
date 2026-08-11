@@ -297,6 +297,7 @@ namespace DvmConsole.Avalonia
                 var settingsStore = new SettingsSectionStore(new DefaultFileSystemPaths().SettingsFilePath);
                 var persistence = new AudioSettingsPersistence(settingsStore);
                 var tarPersistence = new TarSettingsPersistence(settingsStore);
+                var pttPersistence = new PttSettingsPersistence(settingsStore);
                 // Packaged macOS .app: register the bundle resolver for
                 // future DllImport-based libvocoder loads in the Platform
                 // assembly. The startup readiness probe maps and loads the
@@ -372,7 +373,8 @@ namespace DvmConsole.Avalonia
                     codeplug.Codeplug,
                     callHistory,
                     aliasResolver,
-                    tarPersistence);
+                    tarPersistence,
+                    pttPersistence);
                 mainWindow.FileDialogService =
                     new AvaloniaFileDialogService(mainWindow.StorageProvider);
                 desktop.MainWindow = mainWindow;

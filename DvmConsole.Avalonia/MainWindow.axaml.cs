@@ -171,14 +171,17 @@ namespace DvmConsole.Avalonia
         /// resolver, the optional call-history store, the optional
         /// alias resolver backing the store's RID-alias column
         /// (per-system alias files, WPF-parity; a null resolver keeps
-        /// the entries' aliases empty), and the optional TAR settings
+        /// the entries' aliases empty), the optional TAR settings
         /// persistence adapter backing the TAR configuration slice
         /// (WPF-compatible normalization over the Core merge-preserving
         /// settings store; a null adapter keeps the TAR slice absent
-        /// and the view-model's save feedback permanently empty). The
+        /// and the view-model's save feedback permanently empty), and
+        /// the optional PTT settings persistence adapter backing the
+        /// PTT slice (shared settings store, WPF-parity; a null
+        /// adapter keeps the PTT slice absent). The
         /// factory, readiness, systems, codec, sender, transport,
-        /// codeplug, call-history store, alias-resolver and
-        /// tar-persistence parameters are
+        /// codeplug, call-history store, alias-resolver, tar-persistence
+        /// and ptt-persistence parameters are
         /// last so the pre-existing four-argument constructor remains
         /// source-compatible, including null-literal calls. When a
         /// key-state reader is present, exactly one 250 ms dispatcher
@@ -211,10 +214,11 @@ namespace DvmConsole.Avalonia
             Codeplug? codeplug = null,
             CallHistoryStore? callHistory = null,
             AliasResolver? aliasResolver = null,
-            TarSettingsPersistence? tarPersistence = null)
+            TarSettingsPersistence? tarPersistence = null,
+            PttSettingsPersistence? pttPersistence = null)
         {
             InitializeComponent();
-            DataContext = new MainWindowViewModel(systems, catalog, hotkeys, persistence, vocoderStatus, codeplug, callHistory, tarPersistence);
+            DataContext = new MainWindowViewModel(systems, catalog, hotkeys, persistence, vocoderStatus, codeplug, callHistory, tarPersistence, pttPersistence);
 
             // Compose the transmit-target resolver over the codeplug so
             // the PTT path resolves the primary channel's codeplug name
