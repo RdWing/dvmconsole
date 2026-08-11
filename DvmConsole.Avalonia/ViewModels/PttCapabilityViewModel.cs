@@ -378,17 +378,19 @@ namespace DvmConsole.Avalonia.ViewModels
 
         /// <summary>
         /// Resolves the press-time target snapshot: the primary channel
-        /// wins when it resolves; otherwise <see cref="AllChannels"/>
-        /// resolves the selected channels; otherwise there is no target
-        /// (null). Duplicate slot references are de-duplicated by
-        /// reference, preserving order.
+        /// wins when it resolves; an RX-only primary blocks the press
+        /// rather than falling through to <see cref="AllChannels"/>.
+        /// With no primary, AllChannels resolves only PTT-eligible
+        /// selected channels; otherwise there is no target (null).
+        /// Duplicate slot references are de-duplicated by reference,
+        /// preserving order.
         /// </summary>
         private IReadOnlyList<ChannelSlotViewModel>? ResolveTargets()
         {
             var primary = primaryChannel();
             if (primary is not null)
             {
-                return new[] { primary };
+                return primary.IsPttEnabled ? new[] { primary } : null;
             }
 
             if (!allChannels)
@@ -399,7 +401,7 @@ namespace DvmConsole.Avalonia.ViewModels
             var targets = new List<ChannelSlotViewModel>();
             foreach (var slot in selectedChannels())
             {
-                if (slot is not null && !targets.Contains(slot))
+                if (slot is { IsPttEnabled: true } && !targets.Contains(slot))
                 {
                     targets.Add(slot);
                 }

@@ -2,9 +2,20 @@
 #nullable enable
 using System;
 using System.ComponentModel;
+using Avalonia.Media;
 
 namespace DvmConsole.Avalonia.ViewModels
 {
+    /// <summary>
+    /// Fixed presentation sizes supported by the WPF resource card.
+    /// </summary>
+    public enum ChannelCardSize
+    {
+        Small,
+        Normal,
+        Large,
+    }
+
     /// <summary>
     /// View-model for one operator-dashboard channel resource. The identity
     /// of a slot is immutable: number and label are fixed at
@@ -22,6 +33,14 @@ namespace DvmConsole.Avalonia.ViewModels
     /// </summary>
     public sealed class ChannelSlotViewModel : INotifyPropertyChanged
     {
+        public const string DefaultIdleColor = "#142126";
+        public const double SmallCardWidth = 154d;
+        public const double SmallCardHeight = 68d;
+        public const double NormalCardWidth = 264d;
+        public const double NormalCardHeight = 110d;
+        public const double LargeCardWidth = 380d;
+        public const double LargeCardHeight = 158d;
+
         private bool isSelected;
         private bool isPrimary;
         private bool pttEngaged;
@@ -29,6 +48,12 @@ namespace DvmConsole.Avalonia.ViewModels
         private string? channelName;
         private string talkgroup = "NO TALKGROUP";
         private string? resourceKey;
+        private string channelMode = string.Empty;
+        private string systemName = string.Empty;
+        private bool isRxOnly;
+        private ChannelCardSize cardSize = ChannelCardSize.Normal;
+        private string idleColor = DefaultIdleColor;
+        private IBrush idleBrush = new SolidColorBrush(Color.Parse(DefaultIdleColor));
 
         /// <summary>
         /// Creates a channel slot with the given 1-based number, display
@@ -58,6 +83,46 @@ namespace DvmConsole.Avalonia.ViewModels
         /// (<see cref="Number"/>, <see cref="Label"/>) are immutable.
         /// </summary>
         public string? ChannelName => channelName;
+
+        /// <summary>The normalized channel mode, or empty when unassigned.</summary>
+        public string ChannelMode => channelMode;
+
+        /// <summary>The codeplug system name, or empty when unassigned.</summary>
+        public string SystemName => systemName;
+
+        /// <summary>The normalized talkgroup ID, or <c>NO TALKGROUP</c> when blank.</summary>
+        public string TalkgroupId => talkgroup;
+
+        /// <summary>True when the resource is receive-only.</summary>
+        public bool IsRxOnly => isRxOnly;
+
+        /// <summary>True when this resource is eligible for PTT.</summary>
+        public bool IsPttEnabled => !isRxOnly;
+
+        /// <summary>The configured resource-card size.</summary>
+        public ChannelCardSize CardSize => cardSize;
+
+        /// <summary>The rendered width for <see cref="CardSize"/>.</summary>
+        public double CardWidth => cardSize switch
+        {
+            ChannelCardSize.Small => SmallCardWidth,
+            ChannelCardSize.Large => LargeCardWidth,
+            _ => NormalCardWidth,
+        };
+
+        /// <summary>The rendered height for <see cref="CardSize"/>.</summary>
+        public double CardHeight => cardSize switch
+        {
+            ChannelCardSize.Small => SmallCardHeight,
+            ChannelCardSize.Large => LargeCardHeight,
+            _ => NormalCardHeight,
+        };
+
+        /// <summary>The validated idle color used by the card background.</summary>
+        public string IdleColor => idleColor;
+
+        /// <summary>The validated idle brush used by the card background.</summary>
+        public IBrush IdleBrush => idleBrush;
 
         /// <summary>
         /// The talkgroup assigned to this slot; <c>NO TALKGROUP</c> until
@@ -194,11 +259,35 @@ namespace DvmConsole.Avalonia.ViewModels
         /// unassigned. Trailing and optional so existing two-argument
         /// calls stay source-compatible.
         /// </param>
-        internal void Reassign(string? channelName, string? talkgroup, string? resourceKey = null)
+        /// <param name="channelMode">
+        /// The channel mode; recognized values are normalized to uppercase,
+        /// unknown non-empty values fall back to P25, and null/blank means
+        /// unassigned.
+        /// </param>
+        /// <param name="systemName">The codeplug system name, or null for unassigned.</param>
+        /// <param name="isRxOnly">True when the resource must not be used for PTT.</param>
+        /// <param name="cardSize">The codeplug card size; malformed values use Normal.</param>
+        /// <param name="idleColor">
+        /// The codeplug idle color; malformed or blank values use
+        /// <see cref="DefaultIdleColor"/>.
+        /// </param>
+        internal void Reassign(
+            string? channelName,
+            string? talkgroup,
+            string? resourceKey = null,
+            string? channelMode = null,
+            string? systemName = null,
+            bool isRxOnly = false,
+            string? cardSize = null,
+            string? idleColor = null)
         {
             var normalizedTalkgroup = string.IsNullOrWhiteSpace(talkgroup)
                 ? "NO TALKGROUP"
                 : talkgroup;
+            var normalizedMode = NormalizeChannelMode(channelMode);
+            var normalizedSystemName = systemName?.Trim() ?? string.Empty;
+            var normalizedCardSize = ParseCardSize(cardSize);
+            var normalizedIdle = NormalizeIdleColor(idleColor);
 
             var channelNameChanged = !string.Equals(
                 this.channelName, channelName, StringComparison.Ordinal);
@@ -206,8 +295,23 @@ namespace DvmConsole.Avalonia.ViewModels
                 this.talkgroup, normalizedTalkgroup, StringComparison.Ordinal);
             var resourceKeyChanged = !string.Equals(
                 this.resourceKey, resourceKey, StringComparison.Ordinal);
+            var channelModeChanged = !string.Equals(
+                this.channelMode, normalizedMode, StringComparison.Ordinal);
+            var systemNameChanged = !string.Equals(
+                this.systemName, normalizedSystemName, StringComparison.Ordinal);
+            var rxOnlyChanged = this.isRxOnly != isRxOnly;
+            var cardSizeChanged = this.cardSize != normalizedCardSize;
+            var idleColorChanged = !string.Equals(
+                this.idleColor, normalizedIdle.Color, StringComparison.Ordinal);
 
-            if (!channelNameChanged && !talkgroupChanged && !resourceKeyChanged)
+            if (!channelNameChanged
+                && !talkgroupChanged
+                && !resourceKeyChanged
+                && !channelModeChanged
+                && !systemNameChanged
+                && !rxOnlyChanged
+                && !cardSizeChanged
+                && !idleColorChanged)
             {
                 return;
             }
@@ -215,6 +319,12 @@ namespace DvmConsole.Avalonia.ViewModels
             this.channelName = channelName;
             this.talkgroup = normalizedTalkgroup;
             this.resourceKey = resourceKey;
+            this.channelMode = normalizedMode;
+            this.systemName = normalizedSystemName;
+            this.isRxOnly = isRxOnly;
+            this.cardSize = normalizedCardSize;
+            this.idleColor = normalizedIdle.Color;
+            this.idleBrush = normalizedIdle.Brush;
 
             if (channelNameChanged)
             {
@@ -225,6 +335,69 @@ namespace DvmConsole.Avalonia.ViewModels
             {
                 PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(Talkgroup)));
             }
+
+            if (channelModeChanged)
+            {
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ChannelMode)));
+            }
+
+            if (systemNameChanged)
+            {
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SystemName)));
+            }
+
+            if (rxOnlyChanged)
+            {
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsRxOnly)));
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsPttEnabled)));
+            }
+
+            if (cardSizeChanged)
+            {
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CardSize)));
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CardWidth)));
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CardHeight)));
+            }
+
+            if (idleColorChanged)
+            {
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IdleColor)));
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IdleBrush)));
+            }
+        }
+
+        private static string NormalizeChannelMode(string? value)
+        {
+            if (string.IsNullOrWhiteSpace(value))
+            {
+                return string.Empty;
+            }
+
+            var normalized = value.Trim().ToUpperInvariant();
+            return normalized is "DMR" or "P25" or "NXDN"
+                ? normalized
+                : "P25";
+        }
+
+        private static ChannelCardSize ParseCardSize(string? value)
+        {
+            return value?.Trim().ToLowerInvariant() switch
+            {
+                "small" => ChannelCardSize.Small,
+                "large" => ChannelCardSize.Large,
+                _ => ChannelCardSize.Normal,
+            };
+        }
+
+        private static (string Color, IBrush Brush) NormalizeIdleColor(string? value)
+        {
+            if (!string.IsNullOrWhiteSpace(value)
+                && Color.TryParse(value.Trim(), out var parsed))
+            {
+                return (value.Trim(), new SolidColorBrush(parsed));
+            }
+
+            return (DefaultIdleColor, new SolidColorBrush(Color.Parse(DefaultIdleColor)));
         }
 
         /// <summary>

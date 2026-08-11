@@ -994,7 +994,12 @@ namespace DvmConsole.Avalonia.ViewModels
                     slot.Reassign(
                         channel.Name,
                         channel.Tgid,
-                        ResourceIdentity.Build(channel.System, channel.Tgid));
+                        ResourceIdentity.Build(channel.System, channel.Tgid),
+                        channel.Mode,
+                        channel.System,
+                        channel.RxOnly,
+                        channel.CardSize,
+                        channel.ResourceColor);
                     rebuilt.Add(slot);
                 }
             }

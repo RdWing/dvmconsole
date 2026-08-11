@@ -244,7 +244,9 @@
                                         Classes.selected="{Binding IsSelected}"
                                         Classes.primary="{Binding IsPrimary}"
                                         PointerPressed="ChannelCard_PointerPressed"
-                                        Width="230"
+                                        Width="{Binding CardWidth}"
+                                        Height="{Binding CardHeight}"
+                                        Background="{Binding IdleBrush}"
                                         Margin="0,0,12,12"
                                         Padding="14">
                                     <StackPanel Spacing="14">
@@ -260,10 +262,23 @@
                                             <TextBlock Classes="data-value" Text="{Binding ChannelName}"
                                                        IsVisible="{Binding ChannelName, Converter={x:Static conv:StringConverters.IsNotNullOrEmpty}}" />
                                         </StackPanel>
+                                        <Grid ColumnDefinitions="*,*" ColumnSpacing="12">
+                                            <StackPanel Spacing="4">
+                                                <TextBlock Classes="data-label" Text="MODE" />
+                                                <TextBlock Classes="data-value" Text="{Binding ChannelMode}" />
+                                            </StackPanel>
+                                            <StackPanel Grid.Column="1" Spacing="4">
+                                                <TextBlock Classes="data-label" Text="SYSTEM" />
+                                                <TextBlock Classes="data-value" Text="{Binding SystemName}" />
+                                            </StackPanel>
+                                        </Grid>
                                         <StackPanel Spacing="4">
                                             <TextBlock Classes="data-label" Text="TALKGROUP" />
                                             <TextBlock Classes="data-value" Text="{Binding Talkgroup}" />
                                         </StackPanel>
+                                        <TextBlock Classes="muted"
+                                                   Text="RX ONLY"
+                                                   IsVisible="{Binding IsRxOnly}" />
                                         <TextBlock Classes="muted" Text="{Binding Status}" />
                                     </StackPanel>
                                 </Border>
