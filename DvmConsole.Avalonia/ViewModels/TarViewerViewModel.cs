@@ -6,6 +6,7 @@ using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Runtime.CompilerServices;
 using dvmconsole;
+using DvmConsole.Avalonia.Persistence;
 
 namespace DvmConsole.Avalonia.ViewModels
 {
@@ -14,10 +15,10 @@ namespace DvmConsole.Avalonia.ViewModels
     /// WPF-compatible projection of persisted recordings into display rows plus
     /// the TAR viewer's search/field/date filter semantics, ported from the WPF
     /// <c>TarViewerWindow</c> oracle with no Avalonia controls, dispatcher,
-    /// async refresh, playback, file reveal, confirmation dialogs, deletion,
-    /// settings, or MainWindow references.
-    /// The shell window owns those event and platform-service seams; the remaining
-    /// viewer work is column-visibility behavior and MainWindow/menu composition.
+    /// async refresh, playback, file reveal, confirmation dialogs, deletion, or
+    /// MainWindow references. Column descriptors and merge-preserving visibility
+    /// persistence remain headless; the shell window owns platform services and
+    /// menu/control event seams.
     /// </summary>
     public sealed class TarViewerViewModel : INotifyPropertyChanged
     {
@@ -80,6 +81,49 @@ namespace DvmConsole.Avalonia.ViewModels
                     : Metadata.EncryptionKeyId.HasValue
                         ? $"{Metadata.EncryptionAlgorithm} / {Metadata.EncryptionKeyId.Value:X4}"
                         : Metadata.EncryptionAlgorithm;
+
+            /// <summary>
+            /// Descriptor-backed cells in stable column order. Visibility is
+            /// owned by each descriptor, so toggles do not rebuild or filter rows.
+            /// </summary>
+            public IReadOnlyList<TarViewerCell> Cells { get; private set; } =
+                Array.Empty<TarViewerCell>();
+
+            internal void SetColumns(IReadOnlyList<TarViewerColumnDescriptor> columns)
+            {
+                Cells = columns.Select(column => new TarViewerCell(
+                    column,
+                    GetColumnValue(column.Key))).ToList();
+            }
+
+            private string GetColumnValue(string key)
+                => key switch
+                {
+                    "Time" => LocalStartDisplay,
+                    "Duration" => DurationDisplay,
+                    "Channel" => ChannelName,
+                    "Talkgroup" => TalkgroupId,
+                    "SourceId" => SubscriberId,
+                    "Alias" => SubscriberAlias,
+                    "Direction" => Direction,
+                    "Protocol" => Protocol,
+                    "System" => SystemName,
+                    "Encryption" => EncryptionSummary,
+                    _ => string.Empty
+                };
+        }
+
+        /// <summary>One display value bound to a column descriptor.</summary>
+        public sealed class TarViewerCell
+        {
+            internal TarViewerCell(TarViewerColumnDescriptor column, string value)
+            {
+                Column = column;
+                Value = value;
+            }
+
+            public TarViewerColumnDescriptor Column { get; }
+            public string Value { get; }
         }
 
         private readonly List<TarRecordingMetadata> loadedRecordings = new List<TarRecordingMetadata>();
@@ -102,13 +146,23 @@ namespace DvmConsole.Avalonia.ViewModels
         /// filters start at their WPF defaults (all pass) with no rows loaded.
         /// </summary>
         /// <param name="recorder">TAR recording engine; must not be null.</param>
-        public TarViewerViewModel(TarRecorder recorder)
+        /// <param name="columnPersistence">Optional merge-preserving column settings.</param>
+        public TarViewerViewModel(
+            TarRecorder recorder,
+            TarViewerColumnSettingsPersistence? columnPersistence = null)
         {
             Recorder = recorder ?? throw new ArgumentNullException(nameof(recorder));
+            ColumnVisibility = new TarViewerColumnVisibilityModel(columnPersistence);
         }
 
         /// <summary>The headless recording engine backing this view-model.</summary>
         public TarRecorder Recorder { get; }
+
+        /// <summary>WPF-parity column descriptors and persisted visibility.</summary>
+        public TarViewerColumnVisibilityModel ColumnVisibility { get; }
+
+        /// <summary>Stable WPF-parity column descriptors for the shell.</summary>
+        public IReadOnlyList<TarViewerColumnDescriptor> Columns => ColumnVisibility.Columns;
 
         /// <summary>Currently visible rows, rebuilt wholesale from the loaded
         /// recordings in recorder order (newest-first) whenever filters change.</summary>
@@ -264,6 +318,7 @@ namespace DvmConsole.Avalonia.ViewModels
             foreach (TarRecordingMetadata recording in loadedRecordings)
             {
                 TarRecordingListItem item = new TarRecordingListItem { Metadata = recording };
+                item.SetColumns(Columns);
                 if (MatchesFilters(item))
                     Rows.Add(item);
             }

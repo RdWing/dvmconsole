@@ -44,7 +44,7 @@
                 Classes="panel"
                 Padding="18"
                 Margin="0,0,0,14">
-            <Grid ColumnDefinitions="*,Auto">
+            <Grid ColumnDefinitions="*,Auto,Auto">
                 <StackPanel Spacing="4">
                     <TextBlock Text="TAR // RECORDINGS"
                                Foreground="#5FE1D2"
@@ -57,6 +57,27 @@
                                Text="Search, review, play, reveal, and remove persisted recordings." />
                 </StackPanel>
                 <Button Grid.Column="1"
+                        Classes="action"
+                        Content="Columns"
+                        Click="ColumnsButton_Click"
+                        VerticalAlignment="Center">
+                    <Button.ContextMenu>
+                        <ContextMenu>
+                            <MenuItem x:Name="TimeColumnMenuItem" Header="Time" Tag="Time" ToggleType="CheckBox" StaysOpenOnClick="True" Click="ColumnVisibilityMenuItem_Click" />
+                            <MenuItem x:Name="DurationColumnMenuItem" Header="Duration" Tag="Duration" ToggleType="CheckBox" StaysOpenOnClick="True" Click="ColumnVisibilityMenuItem_Click" />
+                            <MenuItem x:Name="ChannelColumnMenuItem" Header="Channel" Tag="Channel" ToggleType="CheckBox" StaysOpenOnClick="True" Click="ColumnVisibilityMenuItem_Click" />
+                            <MenuItem x:Name="TalkgroupColumnMenuItem" Header="Talkgroup" Tag="Talkgroup" ToggleType="CheckBox" StaysOpenOnClick="True" Click="ColumnVisibilityMenuItem_Click" />
+                            <MenuItem x:Name="SourceIdColumnMenuItem" Header="Source ID" Tag="SourceId" ToggleType="CheckBox" StaysOpenOnClick="True" Click="ColumnVisibilityMenuItem_Click" />
+                            <MenuItem x:Name="AliasColumnMenuItem" Header="Alias" Tag="Alias" ToggleType="CheckBox" StaysOpenOnClick="True" Click="ColumnVisibilityMenuItem_Click" />
+                            <Separator />
+                            <MenuItem x:Name="DirectionColumnMenuItem" Header="Direction" Tag="Direction" ToggleType="CheckBox" StaysOpenOnClick="True" Click="ColumnVisibilityMenuItem_Click" />
+                            <MenuItem x:Name="ProtocolColumnMenuItem" Header="Protocol" Tag="Protocol" ToggleType="CheckBox" StaysOpenOnClick="True" Click="ColumnVisibilityMenuItem_Click" />
+                            <MenuItem x:Name="SystemColumnMenuItem" Header="System" Tag="System" ToggleType="CheckBox" StaysOpenOnClick="True" Click="ColumnVisibilityMenuItem_Click" />
+                            <MenuItem x:Name="EncryptionColumnMenuItem" Header="Encryption" Tag="Encryption" ToggleType="CheckBox" StaysOpenOnClick="True" Click="ColumnVisibilityMenuItem_Click" />
+                        </ContextMenu>
+                    </Button.ContextMenu>
+                </Button>
+                <Button Grid.Column="2"
                         Classes="action"
                         Content="Close"
                         Click="Close_Click"
@@ -153,30 +174,57 @@
         </Border>
 
         <Border Classes="panel" Padding="1">
-            <ListBox x:Name="RecordingsList"
-                     ItemsSource="{Binding Rows}"
-                     SelectionChanged="RecordingsList_SelectionChanged"
-                     Background="Transparent"
-                     BorderThickness="0">
-                <ListBox.ItemTemplate>
-                    <DataTemplate x:DataType="vm:TarViewerViewModel+TarRecordingListItem">
-                        <Border Padding="10,8"
-                                BorderBrush="#24373A"
-                                BorderThickness="0,0,0,1">
-                            <Grid ColumnDefinitions="150,90,*,110,110,110,130"
-                                  ColumnSpacing="10">
-                                <TextBlock Grid.Column="0" Text="{Binding LocalStartDisplay}" />
-                                <TextBlock Grid.Column="1" Text="{Binding DurationDisplay}" />
-                                <TextBlock Grid.Column="2" Text="{Binding ChannelName}" TextTrimming="CharacterEllipsis" />
-                                <TextBlock Grid.Column="3" Text="{Binding TalkgroupId}" />
-                                <TextBlock Grid.Column="4" Text="{Binding SubscriberId}" />
-                                <TextBlock Grid.Column="5" Text="{Binding Direction}" />
-                                <TextBlock Grid.Column="6" Text="{Binding EncryptionSummary}" TextTrimming="CharacterEllipsis" />
-                            </Grid>
-                        </Border>
-                    </DataTemplate>
-                </ListBox.ItemTemplate>
-            </ListBox>
+            <StackPanel>
+                <Border Background="#142126"
+                        Padding="10,8"
+                        BorderBrush="#24373A"
+                        BorderThickness="0,0,0,1">
+                    <ItemsControl ItemsSource="{Binding Columns}">
+                        <ItemsControl.ItemsPanel>
+                            <ItemsPanelTemplate>
+                                <StackPanel Orientation="Horizontal" Spacing="10" />
+                            </ItemsPanelTemplate>
+                        </ItemsControl.ItemsPanel>
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate x:DataType="vm:TarViewerColumnDescriptor">
+                                <TextBlock Text="{Binding Header}"
+                                           Width="{Binding Width}"
+                                           IsVisible="{Binding IsVisible}"
+                                           Classes="label" />
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </Border>
+                <ListBox x:Name="RecordingsList"
+                         ItemsSource="{Binding Rows}"
+                         SelectionChanged="RecordingsList_SelectionChanged"
+                         Background="Transparent"
+                         BorderThickness="0">
+                    <ListBox.ItemTemplate>
+                        <DataTemplate x:DataType="vm:TarViewerViewModel+TarRecordingListItem">
+                            <Border Padding="10,8"
+                                    BorderBrush="#24373A"
+                                    BorderThickness="0,0,0,1">
+                                <ItemsControl ItemsSource="{Binding Cells}">
+                                    <ItemsControl.ItemsPanel>
+                                        <ItemsPanelTemplate>
+                                            <StackPanel Orientation="Horizontal" Spacing="10" />
+                                        </ItemsPanelTemplate>
+                                    </ItemsControl.ItemsPanel>
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate x:DataType="vm:TarViewerViewModel+TarViewerCell">
+                                            <TextBlock Text="{Binding Value}"
+                                                       Width="{Binding Column.Width}"
+                                                       IsVisible="{Binding Column.IsVisible}"
+                                                       TextTrimming="CharacterEllipsis" />
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                            </Border>
+                        </DataTemplate>
+                    </ListBox.ItemTemplate>
+                </ListBox>
+            </StackPanel>
         </Border>
     </DockPanel>
 </Window>

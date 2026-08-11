@@ -113,9 +113,14 @@ namespace DvmConsole.Avalonia.Tests
                             parameter => parameter.ParameterType == typeof(AliasResolver))));
             ParameterInfo[] parameters = constructor.GetParameters();
 
-            Assert.Equal(typeof(PttSettingsPersistence), parameters[^3].ParameterType);
-            Assert.Equal(typeof(TarRecorder), parameters[^2].ParameterType);
-            Assert.Equal(typeof(IAudioWaveFilePlayer), parameters[^1].ParameterType);
+            Assert.Equal(typeof(PttSettingsPersistence), parameters[^4].ParameterType);
+            Assert.Equal(typeof(TarRecorder), parameters[^3].ParameterType);
+            Assert.Equal(typeof(IAudioWaveFilePlayer), parameters[^2].ParameterType);
+            Assert.Equal(typeof(TarViewerColumnSettingsPersistence), parameters[^1].ParameterType);
+            Assert.True(parameters[^4].IsOptional);
+            Assert.Null(parameters[^4].DefaultValue);
+            Assert.True(parameters[^3].IsOptional);
+            Assert.Null(parameters[^3].DefaultValue);
             Assert.True(parameters[^2].IsOptional);
             Assert.Null(parameters[^2].DefaultValue);
             Assert.True(parameters[^1].IsOptional);

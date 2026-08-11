@@ -7,6 +7,7 @@ using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using DvmConsole.Avalonia.Persistence;
 using DvmConsole.Avalonia.ViewModels;
 using dvmconsole;
 using Newtonsoft.Json;
@@ -31,7 +32,11 @@ namespace DvmConsole.Avalonia.Tests
             Assert.True(type.IsPublic);
             Assert.True(type.IsSealed);
             Assert.Single(constructors);
-            Assert.Equal(new[] { typeof(TarRecorder) }, constructors[0].GetParameters().Select(parameter => parameter.ParameterType));
+            Assert.Equal(
+                new[] { typeof(TarRecorder), typeof(TarViewerColumnSettingsPersistence) },
+                constructors[0].GetParameters().Select(parameter => parameter.ParameterType));
+            Assert.True(constructors[0].GetParameters()[1].IsOptional);
+            Assert.Null(constructors[0].GetParameters()[1].DefaultValue);
 
             using var temp = new TempDirectory();
             var viewModel = new TarViewerViewModel(CreateRecorder(temp.Root));

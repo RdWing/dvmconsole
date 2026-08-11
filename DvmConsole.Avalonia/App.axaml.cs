@@ -378,6 +378,8 @@ namespace DvmConsole.Avalonia
                 var tarPersistence = new TarSettingsPersistence(settingsStore);
                 var pttPersistence = new PttSettingsPersistence(settingsStore);
                 var tarRecorder = CreateTarRecorder(tarPersistence, fileSystemPaths.DefaultTarRecordingsPath);
+                var tarViewerColumnPersistence =
+                    new TarViewerColumnSettingsPersistence(settingsStore);
                 IAudioWaveFilePlayer? tarWaveFilePlayer = null;
                 try
                 {
@@ -470,7 +472,8 @@ namespace DvmConsole.Avalonia
                     tarPersistence,
                     pttPersistence,
                     tarRecorder,
-                    tarWaveFilePlayer);
+                    tarWaveFilePlayer,
+                    tarViewerColumnPersistence);
                 mainWindow.FileDialogService =
                     new AvaloniaFileDialogService(mainWindow.StorageProvider);
                 mainWindow.TarFileRevealService = new DesktopFileRevealService();

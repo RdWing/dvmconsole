@@ -4,6 +4,7 @@ using System;
 using System.Collections.Specialized;
 using System.ComponentModel;
 using System.IO;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Avalonia.Controls;
@@ -47,7 +48,60 @@ namespace DvmConsole.Avalonia.Views
             DataContext = viewModel;
             viewModel.PropertyChanged += ViewModel_PropertyChanged;
             viewModel.Rows.CollectionChanged += Rows_CollectionChanged;
+            InitializeColumnVisibilityMenu();
             RefreshView(rebuildIndex: false);
+        }
+
+        private void ColumnsButton_Click(object? sender, RoutedEventArgs e)
+        {
+            if (sender is Button button && button.ContextMenu is { } menu)
+            {
+                menu.PlacementTarget = button;
+                menu.Open(button);
+            }
+        }
+
+        private void InitializeColumnVisibilityMenu()
+        {
+            foreach (MenuItem item in new[]
+            {
+                TimeColumnMenuItem,
+                DurationColumnMenuItem,
+                ChannelColumnMenuItem,
+                TalkgroupColumnMenuItem,
+                SourceIdColumnMenuItem,
+                AliasColumnMenuItem,
+                DirectionColumnMenuItem,
+                ProtocolColumnMenuItem,
+                SystemColumnMenuItem,
+                EncryptionColumnMenuItem
+            })
+            {
+                if (item.Tag is string key
+                    && viewModel.Columns.FirstOrDefault(column =>
+                        string.Equals(column.Key, key, StringComparison.OrdinalIgnoreCase)) is { } column)
+                {
+                    item.IsChecked = column.IsVisible;
+                }
+            }
+        }
+
+        private void ColumnVisibilityMenuItem_Click(object? sender, RoutedEventArgs e)
+        {
+            if (sender is not MenuItem item || item.Tag is not string key)
+                return;
+
+            if (!viewModel.ColumnVisibility.TrySetVisibility(key, item.IsChecked))
+                return;
+
+            try
+            {
+                viewModel.ColumnVisibility.Save();
+            }
+            catch (Exception exception)
+            {
+                SetStatus($"Unable to save TAR Viewer columns: {exception.Message}");
+            }
         }
 
         public string StatusText

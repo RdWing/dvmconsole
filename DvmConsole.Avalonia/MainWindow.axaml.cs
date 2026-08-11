@@ -96,6 +96,7 @@ namespace DvmConsole.Avalonia
 
         private readonly TarRecorder? tarRecorder;
         private readonly IAudioWaveFilePlayer? tarWaveFilePlayer;
+        private readonly TarViewerColumnSettingsPersistence? tarViewerColumnPersistence;
         private TarViewerWindow? tarViewerWindow;
 
         public MainWindow()
@@ -221,11 +222,13 @@ namespace DvmConsole.Avalonia
             TarSettingsPersistence? tarPersistence = null,
             PttSettingsPersistence? pttPersistence = null,
             TarRecorder? tarRecorder = null,
-            IAudioWaveFilePlayer? tarWaveFilePlayer = null)
+            IAudioWaveFilePlayer? tarWaveFilePlayer = null,
+            TarViewerColumnSettingsPersistence? tarViewerColumnPersistence = null)
         {
             InitializeComponent();
             this.tarRecorder = tarRecorder;
             this.tarWaveFilePlayer = tarWaveFilePlayer;
+            this.tarViewerColumnPersistence = tarViewerColumnPersistence;
             DataContext = new MainWindowViewModel(systems, catalog, hotkeys, persistence, vocoderStatus, codeplug, callHistory, tarPersistence, pttPersistence);
 
             // Compose the transmit-target resolver over the codeplug so
@@ -529,7 +532,7 @@ namespace DvmConsole.Avalonia
             }
 
             var viewer = new TarViewerWindow(
-                new TarViewerViewModel(tarRecorder),
+                new TarViewerViewModel(tarRecorder, tarViewerColumnPersistence),
                 tarWaveFilePlayer,
                 TarFileRevealService,
                 TarConfirmationService);
