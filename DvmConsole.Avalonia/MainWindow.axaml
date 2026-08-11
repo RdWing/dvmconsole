@@ -258,6 +258,7 @@
                                         PointerPressed="ChannelCard_PointerPressed"
                                         Width="{Binding CardWidth}"
                                         Height="{Binding CardHeight}"
+                                        ClipToBounds="True"
                                         Background="{Binding IdleBrush}"
                                         Margin="0,0,12,12"
                                         Padding="14">
