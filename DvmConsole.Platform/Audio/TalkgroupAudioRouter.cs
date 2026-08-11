@@ -12,10 +12,12 @@ namespace DvmConsole.Platform.Audio
     /// engine of the console. Receive side routes per-talkgroup
     /// <see cref="MonitorAudioPipeline"/> instances (lazy creation,
     /// WPF AudioManager parity 250 ms shed via the pipeline, 2 s idle
-    /// release) and decodes each frame PER-CODEWORD through the injected
-    /// <see cref="IVoiceFrameDecoder"/> (a DMR 27-byte frame yields three
-    /// 9-byte codeword writes of 320 PCM bytes, a P25 225-byte LDU nine
-    /// 11-byte codeword writes — MainWindow.DMR.cs:182-203,
+    /// release), decodes each frame PER-CODEWORD through the injected
+    /// <see cref="IVoiceFrameDecoder"/>, and sends each successful decoded
+    /// PCM frame to the optional <see cref="IDecodedPcmObserver"/> before
+    /// optional local-monitor playback (a DMR 27-byte frame yields three
+    /// 9-byte codeword decodes of 320 PCM bytes, a P25 225-byte LDU nine
+    /// 11-byte codeword decodes — MainWindow.DMR.cs:182-203,
     /// MainWindow.P25.cs:301-333). Transmit side gates one
     /// <see cref="CaptureAudioPipeline"/> per PTT, splits each 1600-byte
     /// capture block into five 320-byte chunks (AudioConverter.
@@ -173,6 +175,7 @@ namespace DvmConsole.Platform.Audio
         private readonly IVoiceFrameEncoder _encoder;
         private readonly IVoiceTrafficSender _sender;
         private readonly Func<AudioDeviceId> _resolveOutputDevice;
+        private readonly IDecodedPcmObserver? _decodedPcmObserver;
         private readonly TimeSpan _idleReleaseDelay;
         private readonly Func<TimeSpan, Action, IDisposable> _scheduler;
         private readonly Func<DateTime> _clock;
@@ -244,6 +247,10 @@ namespace DvmConsole.Platform.Audio
         /// <param name="encoder">Per-codeword voice-frame encoder seam.</param>
         /// <param name="sender">Traffic sender receiving complete DMR frames and P25 LDUs.</param>
         /// <param name="resolveOutputDevice">Resolves the output device for monitor playback.</param>
+        /// <param name="decodedPcmObserver">
+        /// Optional receive observer invoked once per successful decoded
+        /// codeword, independently of monitor output selection.
+        /// </param>
         /// <param name="idleReleaseDelay">
         /// Idle delay before a silent talkgroup's monitor pipeline is
         /// released; defaults to 2 s (WPF AudioManager parity).
@@ -266,7 +273,8 @@ namespace DvmConsole.Platform.Audio
             Func<AudioDeviceId> resolveOutputDevice,
             TimeSpan? idleReleaseDelay = null,
             Func<TimeSpan, Action, IDisposable>? scheduler = null,
-            Func<DateTime>? clock = null)
+            Func<DateTime>? clock = null,
+            IDecodedPcmObserver? decodedPcmObserver = null)
         {
             _factory = streams ?? throw new ArgumentNullException(nameof(streams));
             _decoder = decoder ?? throw new ArgumentNullException(nameof(decoder));
@@ -274,6 +282,7 @@ namespace DvmConsole.Platform.Audio
             _sender = sender ?? throw new ArgumentNullException(nameof(sender));
             _resolveOutputDevice = resolveOutputDevice
                 ?? throw new ArgumentNullException(nameof(resolveOutputDevice));
+            _decodedPcmObserver = decodedPcmObserver;
             _idleReleaseDelay = idleReleaseDelay ?? DefaultIdleReleaseDelay;
             _scheduler = scheduler ?? DefaultSchedule;
             _clock = clock ?? (() => DateTime.UtcNow);
@@ -326,54 +335,74 @@ namespace DvmConsole.Platform.Audio
 
                 if (state.Pipeline is null)
                 {
-                    var pipeline = new MonitorAudioPipeline(_factory, _decoder);
+                    var pipeline = new MonitorAudioPipeline(_factory);
                     try
                     {
                         pipeline.Start(_resolveOutputDevice());
                     }
                     catch (AudioDeviceException exception)
                     {
-                        // The output device is unavailable; skip the frame
-                        // silently and retry pipeline creation on the next
-                        // frame (decoder-reject-style silent skip).
+                        // Monitor playback is optional. Decoding and the
+                        // observer boundary below must still run when the
+                        // selected output is unavailable; retry monitor
+                        // creation on the next received frame.
                         System.Diagnostics.Debug.WriteLine(
-                            $"Talkgroup monitor unavailable for {talkgroupKey}; frame skipped: {exception.Message}");
-                        return;
+                            $"Talkgroup monitor unavailable for {talkgroupKey}; observing without playback: {exception.Message}");
                     }
 
-                    var created = pipeline;
-                    created.StreamEnded += _ => OnPipelineStreamEnded(state, created);
-                    state.Pipeline = created;
+                    if (pipeline.IsRunning)
+                    {
+                        var created = pipeline;
+                        created.StreamEnded += _ => OnPipelineStreamEnded(state, created);
+                        state.Pipeline = created;
+                    }
                 }
 
                 // Capture the instance for this frame. A DeviceLost write
                 // raises the end event synchronously and clears state.Pipeline;
-                // the remaining codewords still belong to this stopped
+                // the remaining codewords still belong to that stopped
                 // instance and must not dereference the cleared state slot.
                 var pipelineForFrame = state.Pipeline;
-                if (pipelineForFrame is null)
+
+                // New audio resets the idle-release timer only when local
+                // monitor playback exists. Observation is independent of
+                // this selection and continues when the pipeline is absent.
+                if (pipelineForFrame is not null)
                 {
-                    return;
+                    state.ReleaseHandle?.Dispose();
+                    ScheduleRelease(talkgroupKey, state, pipelineForFrame);
                 }
 
-                // New audio resets the idle-release timer: cancel the
-                // pending release and arm a fresh one for this pipeline.
-                state.ReleaseHandle?.Dispose();
-                ScheduleRelease(talkgroupKey, state, pipelineForFrame);
+                var codewords = mode == VoiceMode.Dmr
+                    ? VoiceFrameSplitter.SplitDmrFrame(frame)
+                    : VoiceFrameSplitter.SplitP25Ldu(frame);
 
-                if (mode == VoiceMode.Dmr)
+                foreach (var codeword in codewords)
                 {
-                    foreach (var codeword in VoiceFrameSplitter.SplitDmrFrame(frame))
+                    if (!_decoder.TryDecode(codeword, out var samples))
                     {
-                        pipelineForFrame.WriteVoiceFrame(codeword);
+                        continue;
                     }
-                }
-                else
-                {
-                    foreach (var codeword in VoiceFrameSplitter.SplitP25Ldu(frame))
+
+                    var pcm = VoiceFrameSplitter.SamplesToBytes(samples);
+                    if (pcm.Length != AudioPcm.FrameBytes)
                     {
-                        pipelineForFrame.WriteVoiceFrame(codeword);
+                        continue;
                     }
+
+                    try
+                    {
+                        _decodedPcmObserver?.ObserveDecodedPcm(talkgroupKey, mode, pcm);
+                    }
+                    catch (Exception exception)
+                    {
+                        // Observation is additive; a TAR/patch subscriber
+                        // must never break receive routing or local audio.
+                        System.Diagnostics.Debug.WriteLine(
+                            $"Decoded PCM observer failed for {talkgroupKey}: {exception.Message}");
+                    }
+
+                    pipelineForFrame?.WritePcm(pcm);
                 }
             }
         }
