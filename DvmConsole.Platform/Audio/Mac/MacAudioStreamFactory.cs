@@ -74,6 +74,12 @@ namespace DvmConsole.Platform.Audio.Mac
             return new MacAudioFilePlayer(this);
         }
 
+        public IAudioWaveFilePlayer CreateWaveFilePlayer()
+        {
+            ThrowIfDisposed();
+            return new MacAudioWaveFilePlayer(this);
+        }
+
         public async ValueTask DisposeAsync()
         {
             if (Interlocked.Exchange(ref _disposed, 1) != 0)
@@ -147,6 +153,45 @@ namespace DvmConsole.Platform.Audio.Mac
                 return new AudioPlaybackResult(AudioPlaybackOutcome.Failed, "A PCM file path is required.");
             }
 
+            // File-open failures (missing or unreadable file) are user-facing,
+            // not programmer errors: report them as typed failures without
+            // disturbing the WAVE contract. Stream lifetime stays owned by the
+            // delegated playback below, disposed when it completes or throws.
+            FileStream stream;
+            try
+            {
+                stream = new FileStream(
+                    filePath,
+                    FileMode.Open,
+                    FileAccess.Read,
+                    FileShare.Read,
+                    AudioPcm.BlockBytes,
+                    FileOptions.Asynchronous | FileOptions.SequentialScan);
+            }
+            catch (IOException exception)
+            {
+                return new AudioPlaybackResult(AudioPlaybackOutcome.Failed, exception.Message);
+            }
+            catch (UnauthorizedAccessException exception)
+            {
+                return new AudioPlaybackResult(AudioPlaybackOutcome.Failed, exception.Message);
+            }
+
+            await using (stream)
+            {
+                return await PlayPcmStreamAsync(stream, cancellationToken).ConfigureAwait(false);
+            }
+        }
+
+        internal async Task<AudioPlaybackResult> PlayPcmStreamAsync(
+            Stream stream,
+            CancellationToken cancellationToken)
+        {
+            if (stream is null)
+            {
+                return new AudioPlaybackResult(AudioPlaybackOutcome.Failed, "A PCM stream is required.");
+            }
+
             CancellationTokenSource stopSource;
             lock (_stateGate)
             {
@@ -172,13 +217,6 @@ namespace DvmConsole.Platform.Audio.Mac
                     _output = output;
                 }
 
-                await using var stream = new FileStream(
-                    filePath,
-                    FileMode.Open,
-                    FileAccess.Read,
-                    FileShare.Read,
-                    AudioPcm.BlockBytes,
-                    FileOptions.Asynchronous | FileOptions.SequentialScan);
                 var buffer = new byte[AudioPcm.BlockBytes];
                 while (true)
                 {

@@ -16,12 +16,8 @@ namespace DvmConsole.Avalonia.ViewModels
     /// <c>TarViewerWindow</c> oracle with no Avalonia controls, dispatcher,
     /// async refresh, playback, file reveal, confirmation dialogs, deletion,
     /// settings, or MainWindow references.
-    /// Later seams (documented for the shell gate): playback/stop via NAudio or
-    /// an equivalent, explorer reveal, delete confirmation, column-visibility
-    /// menu, refresh status text, and XAML binding to <see cref="Rows"/> (the
-    /// collection raises <see cref="ObservableCollection{T}.CollectionChanged"/>
-    /// on wholesale rebuild, so a bound DataGrid follows without extra
-    /// notification plumbing).
+    /// The shell window owns those event and platform-service seams; the remaining
+    /// viewer work is column-visibility behavior and MainWindow/menu composition.
     /// </summary>
     public sealed class TarViewerViewModel : INotifyPropertyChanged
     {
