@@ -112,6 +112,31 @@ namespace DvmConsole.Avalonia.Services
         }
 
         /// <summary>
+        /// Recovers the codeplug channel name for a resolved target without
+        /// changing the Platform target record shape.
+        /// </summary>
+        public string? ResolveChannelName(TransmitTarget target)
+        {
+            if (codeplug.Zones is null)
+                return null;
+
+            return codeplug.Zones
+                .SelectMany(zone => zone.Channels ?? Enumerable.Empty<Codeplug.Channel>())
+                .Where(channel => channel is not null && !channel.RxOnly)
+                .Where(channel => string.Equals(channel.System, target.SystemName, StringComparison.Ordinal))
+                .Where(channel => string.Equals(channel.Tgid, target.TalkgroupId, StringComparison.Ordinal))
+                .Where(channel => (byte)channel.Slot == target.Slot)
+                .Where(channel => channel.GetChannelMode() == (target.Mode == VoiceMode.P25
+                    ? Codeplug.ChannelMode.P25
+                    : Codeplug.ChannelMode.DMR))
+                .FirstOrDefault(channel => codeplug.Systems?.Any(system =>
+                    string.Equals(system.Name, target.SystemName, StringComparison.Ordinal)
+                    && uint.TryParse(system.Rid, out uint sourceId)
+                    && sourceId == target.SourceId) == true)
+                ?.Name;
+        }
+
+        /// <summary>
         /// Resolves each channel name in order onto a transmit target,
         /// skipping names that resolve to null, and returns the targets
         /// in input order. Total and never throws: a null or empty

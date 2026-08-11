@@ -74,6 +74,7 @@ namespace DvmConsole.Platform.Audio
         {
             public MonitorAudioPipeline? Pipeline;
             public IDisposable? ReleaseHandle;
+            public VoiceMode Mode;
         }
 
         /// <summary>
@@ -176,6 +177,7 @@ namespace DvmConsole.Platform.Audio
         private readonly IVoiceTrafficSender _sender;
         private readonly Func<AudioDeviceId> _resolveOutputDevice;
         private readonly IDecodedPcmObserver? _decodedPcmObserver;
+        private readonly ITransmittedPcmObserver? _transmittedPcmObserver;
         private readonly TimeSpan _idleReleaseDelay;
         private readonly Func<TimeSpan, Action, IDisposable> _scheduler;
         private readonly Func<DateTime> _clock;
@@ -239,6 +241,13 @@ namespace DvmConsole.Platform.Audio
         public event Action? MonitorStreamEnded;
 
         /// <summary>
+        /// Raised when the receive monitor's idle release ends a talkgroup
+        /// stream without an explicit terminator. The shell uses this to
+        /// close the matching TAR session exactly once.
+        /// </summary>
+        public event Action<string, VoiceMode>? TalkgroupStreamEnded;
+
+        /// <summary>
         /// Creates the talkgroup audio router over the given stream
         /// factory and seams.
         /// </summary>
@@ -250,6 +259,10 @@ namespace DvmConsole.Platform.Audio
         /// <param name="decodedPcmObserver">
         /// Optional receive observer invoked once per successful decoded
         /// codeword, independently of monitor output selection.
+        /// </param>
+        /// <param name="transmittedPcmObserver">
+        /// Optional observer invoked for each PCM frame selected for every
+        /// resolved transmit target before encoding/network delivery.
         /// </param>
         /// <param name="idleReleaseDelay">
         /// Idle delay before a silent talkgroup's monitor pipeline is
@@ -274,7 +287,8 @@ namespace DvmConsole.Platform.Audio
             TimeSpan? idleReleaseDelay = null,
             Func<TimeSpan, Action, IDisposable>? scheduler = null,
             Func<DateTime>? clock = null,
-            IDecodedPcmObserver? decodedPcmObserver = null)
+            IDecodedPcmObserver? decodedPcmObserver = null,
+            ITransmittedPcmObserver? transmittedPcmObserver = null)
         {
             _factory = streams ?? throw new ArgumentNullException(nameof(streams));
             _decoder = decoder ?? throw new ArgumentNullException(nameof(decoder));
@@ -283,6 +297,7 @@ namespace DvmConsole.Platform.Audio
             _resolveOutputDevice = resolveOutputDevice
                 ?? throw new ArgumentNullException(nameof(resolveOutputDevice));
             _decodedPcmObserver = decodedPcmObserver;
+            _transmittedPcmObserver = transmittedPcmObserver;
             _idleReleaseDelay = idleReleaseDelay ?? DefaultIdleReleaseDelay;
             _scheduler = scheduler ?? DefaultSchedule;
             _clock = clock ?? (() => DateTime.UtcNow);
@@ -333,6 +348,8 @@ namespace DvmConsole.Platform.Audio
                     _talkgroups.Add(talkgroupKey, state);
                 }
 
+                state.Mode = mode;
+
                 if (state.Pipeline is null)
                 {
                     var pipeline = new MonitorAudioPipeline(_factory);
@@ -371,6 +388,11 @@ namespace DvmConsole.Platform.Audio
                 {
                     state.ReleaseHandle?.Dispose();
                     ScheduleRelease(talkgroupKey, state, pipelineForFrame);
+                }
+                else
+                {
+                    state.ReleaseHandle?.Dispose();
+                    ScheduleObservationRelease(talkgroupKey, state);
                 }
 
                 var codewords = mode == VoiceMode.Dmr
@@ -1111,22 +1133,64 @@ namespace DvmConsole.Platform.Audio
         }
 
         /// <summary>
+        /// Arms the same idle lifecycle when monitor output is unavailable.
+        /// Decoded observation must not depend on a playback pipeline, but
+        /// the recording session still needs an idle terminator.
+        /// </summary>
+        private void ScheduleObservationRelease(string talkgroupKey, TalkgroupState state)
+        {
+            IDisposable? handle = null;
+            handle = _scheduler(_idleReleaseDelay, () =>
+            {
+                handle?.Dispose();
+                ReleaseObservationOnly(talkgroupKey, state);
+            });
+            state.ReleaseHandle = handle;
+        }
+
+        /// <summary>
         /// Idle release: stops the talkgroup's pipeline and marks it
         /// released so subsequent frames create a fresh pipeline.
         /// </summary>
         private void ReleaseTalkgroup(string talkgroupKey, TalkgroupState state, MonitorAudioPipeline pipeline)
         {
+            VoiceMode? mode = null;
             lock (_routeGate)
             {
                 if (state.Pipeline == pipeline)
                 {
                     state.Pipeline = null;
+                    mode = state.Mode;
                 }
             }
 
             // Stopped, never disposed: the pipeline must not dispose the
             // shared factory.
             _ = pipeline.StopAsync();
+            if (mode is { } releasedMode && Volatile.Read(ref _disposed) == 0)
+            {
+                TalkgroupStreamEnded?.Invoke(talkgroupKey, releasedMode);
+            }
+        }
+
+        private void ReleaseObservationOnly(string talkgroupKey, TalkgroupState state)
+        {
+            VoiceMode? mode = null;
+            lock (_routeGate)
+            {
+                if (_talkgroups.TryGetValue(talkgroupKey, out var current)
+                    && ReferenceEquals(current, state)
+                    && state.Pipeline is null)
+                {
+                    state.ReleaseHandle = null;
+                    mode = state.Mode;
+                }
+            }
+
+            if (mode is { } releasedMode && Volatile.Read(ref _disposed) == 0)
+            {
+                TalkgroupStreamEnded?.Invoke(talkgroupKey, releasedMode);
+            }
         }
 
         /// <summary>
@@ -1181,6 +1245,16 @@ namespace DvmConsole.Platform.Audio
             var encodedModes = new HashSet<VoiceMode>();
             foreach (var entry in session.Targets)
             {
+                try
+                {
+                    _transmittedPcmObserver?.ObserveTransmittedPcm(entry.Target, frame);
+                }
+                catch (Exception exception)
+                {
+                    System.Diagnostics.Debug.WriteLine(
+                        $"Transmitted PCM observer failed for {entry.Target.SystemName}: {exception.Message}");
+                }
+
                 if (!encodedModes.Add(entry.Target.Mode))
                 {
                     continue;

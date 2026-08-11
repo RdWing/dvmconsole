@@ -177,8 +177,9 @@ namespace DvmConsole.Avalonia.Tests
             Assert.Equal("Repeater 1", target!.Value.SystemName);
             Assert.Equal("31001", target.Value.TalkgroupId);
             Assert.Equal(1, target.Value.Slot);
-            Assert.Equal(VoiceMode.Dmr, target.Value.Mode);
+            Assert.Equal(VoiceMode.Dmr, target!.Value.Mode);
             Assert.Equal(1000001u, target.Value.SourceId);
+            Assert.Equal("CH 1 DMR", resolver.ResolveChannelName(target.Value));
         }
 
         [Fact]

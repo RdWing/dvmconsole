@@ -234,20 +234,35 @@ namespace DvmConsole.Avalonia
                 defaultRecordingRoot,
                 (resourceKey, channelName, talkgroupId) =>
                 {
+                    IReadOnlyDictionary<string, TarChannelConfig> currentConfigs = configs;
+                    try
+                    {
+                        if (persistence.TryLoad(out UserSettingsTarSection currentSection)
+                            && currentSection.TarChannelConfigs is not null)
+                        {
+                            currentConfigs = currentSection.TarChannelConfigs;
+                        }
+                    }
+                    catch
+                    {
+                        // Keep the last known normalized snapshot when a
+                        // settings read races a malformed or locked file.
+                    }
+
                     if (!string.IsNullOrWhiteSpace(resourceKey)
-                        && configs.TryGetValue(resourceKey, out TarChannelConfig? config))
+                        && currentConfigs.TryGetValue(resourceKey, out TarChannelConfig? config))
                     {
                         return config;
                     }
 
                     if (!string.IsNullOrWhiteSpace(talkgroupId)
-                        && configs.TryGetValue(talkgroupId, out config))
+                        && currentConfigs.TryGetValue(talkgroupId, out config))
                     {
                         return config;
                     }
 
                     if (!string.IsNullOrWhiteSpace(channelName)
-                        && configs.TryGetValue(channelName, out config))
+                        && currentConfigs.TryGetValue(channelName, out config))
                     {
                         return config;
                     }

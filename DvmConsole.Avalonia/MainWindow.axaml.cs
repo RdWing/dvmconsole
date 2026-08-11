@@ -2,6 +2,7 @@
 #nullable enable
 using System.Collections.Generic;
 using System.ComponentModel;
+using System.Threading.Tasks;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Interactivity;
@@ -36,6 +37,12 @@ namespace DvmConsole.Avalonia
         /// key-state reader was supplied or after the window closes.
         /// </summary>
         private readonly DispatcherTimer? watchdogTimer = null;
+
+        /// <summary>
+        /// Hourly TAR retention maintenance timer; null when recording is
+        /// not composed or after the window closes.
+        /// </summary>
+        private readonly DispatcherTimer? tarRetentionTimer = null;
 
         /// <summary>
         /// Headless FNE connection service composed by this window
@@ -95,6 +102,7 @@ namespace DvmConsole.Avalonia
         private readonly TransmitTargetResolver? transmitTargetResolver = null;
 
         private readonly TarRecorder? tarRecorder;
+        private readonly TarRecordingCoordinator? tarRecordingCoordinator;
         private readonly IAudioWaveFilePlayer? tarWaveFilePlayer;
         private readonly TarViewerColumnSettingsPersistence? tarViewerColumnPersistence;
         private TarViewerWindow? tarViewerWindow;
@@ -227,6 +235,7 @@ namespace DvmConsole.Avalonia
         {
             InitializeComponent();
             this.tarRecorder = tarRecorder;
+            this.tarRecordingCoordinator = tarRecorder is null ? null : new TarRecordingCoordinator(tarRecorder);
             this.tarWaveFilePlayer = tarWaveFilePlayer;
             this.tarViewerColumnPersistence = tarViewerColumnPersistence;
             DataContext = new MainWindowViewModel(systems, catalog, hotkeys, persistence, vocoderStatus, codeplug, callHistory, tarPersistence, pttPersistence);
@@ -277,12 +286,12 @@ namespace DvmConsole.Avalonia
                 ? null
                 : new ReceiveChannelResolver(codeplug);
 
-            if (callHistory is not null && fneReceiveGlue is { } receiveGlue)
+            if (fneReceiveGlue is { } receiveGlue)
             {
                 // Wire the optional alias resolver into the store so
                 // recorded entries carry the subscriber alias for their
                 // (system, source id); unresolved aliases stay empty.
-                if (aliasResolver is not null)
+                if (callHistory is not null && aliasResolver is not null)
                 {
                     callHistory.SetAliasResolver(
                         (system, src) => aliasResolver.Resolve(system, src) ?? string.Empty);
@@ -292,16 +301,27 @@ namespace DvmConsole.Avalonia
                 {
                     var channelName = receiveChannelResolver?.Resolve(
                         metadata.SystemName, metadata.DstId, metadata.Slot);
-                    callHistory.AddFrame(metadata, channelName);
+                    tarRecordingCoordinator?.HandleReceiveFrame(
+                        metadata,
+                        channelName,
+                        aliasResolver?.Resolve(metadata.SystemName, metadata.SrcId),
+                        isEncrypted: false,
+                        encryptionAlgorithm: null,
+                        encryptionKeyId: null,
+                        DateTime.UtcNow);
+                    callHistory?.AddFrame(metadata, channelName);
                 };
 
-                callHistory.Changed += () => Dispatcher.UIThread.Post(() =>
+                if (callHistory is not null)
                 {
-                    if (DataContext is MainWindowViewModel vm)
+                    callHistory.Changed += () => Dispatcher.UIThread.Post(() =>
                     {
-                        vm.CallHistory?.Refresh();
-                    }
-                });
+                        if (DataContext is MainWindowViewModel vm)
+                        {
+                            vm.CallHistory?.Refresh();
+                        }
+                    });
+                }
             }
 
             // Compose the talkgroup audio router over the shared factory
@@ -320,7 +340,9 @@ namespace DvmConsole.Avalonia
                     decoder,
                     encoder,
                     sender,
-                    () => audioViewModel.AudioSettings?.SelectedOutputId ?? AudioDeviceId.Default);
+                    () => audioViewModel.AudioSettings?.SelectedOutputId ?? AudioDeviceId.Default,
+                    decodedPcmObserver: tarRecordingCoordinator,
+                    transmittedPcmObserver: tarRecordingCoordinator);
 
                 if (audioViewModel.Ptt is { } ptt)
                 {
@@ -329,12 +351,22 @@ namespace DvmConsole.Avalonia
 
                 talkgroupAudioRouter.CaptureEnded += OnCaptureEnded;
                 talkgroupAudioRouter.MonitorStreamEnded += OnMonitorStreamEnded;
+                talkgroupAudioRouter.TalkgroupStreamEnded += OnTalkgroupStreamEnded;
 
                 if (catalog is MacAudioDeviceCatalog macCatalog)
                 {
                     macAudioDeviceCatalog = macCatalog;
                     macCatalog.DevicesChanged += OnAudioDevicesChanged;
                 }
+            }
+
+            if (tarRecordingCoordinator is { } recordingCoordinator)
+            {
+                recordingCoordinator.RunRetentionMaintenance();
+                var timer = new DispatcherTimer { Interval = TimeSpan.FromHours(1) };
+                timer.Tick += (_, _) => recordingCoordinator.RunRetentionMaintenance();
+                timer.Start();
+                tarRetentionTimer = timer;
             }
 
             if (hotkeys is not null)
@@ -761,7 +793,7 @@ namespace DvmConsole.Avalonia
         {
             tarViewerWindow?.Close();
             tarViewerWindow = null;
-            tarRecorder?.StopAllSessions(DateTime.UtcNow);
+            tarRetentionTimer?.Stop();
 
             if (macAudioDeviceCatalog is { } macCatalog)
             {
@@ -780,7 +812,25 @@ namespace DvmConsole.Avalonia
 
             if (talkgroupAudioRouter is { } router)
             {
-                _ = router.DisposeAsync();
+                _ = DisposeRouterAndFlushRecordingsAsync(router);
+            }
+            else
+            {
+                tarRecordingCoordinator?.StopAllTransmit(DateTime.UtcNow);
+                tarRecordingCoordinator?.Dispose();
+            }
+        }
+
+        private async Task DisposeRouterAndFlushRecordingsAsync(TalkgroupAudioRouter router)
+        {
+            try
+            {
+                await router.DisposeAsync().ConfigureAwait(false);
+            }
+            finally
+            {
+                tarRecordingCoordinator?.StopAllTransmit(DateTime.UtcNow);
+                tarRecordingCoordinator?.Dispose();
             }
         }
 
@@ -824,11 +874,31 @@ namespace DvmConsole.Avalonia
 
                 var inputDeviceId = (DataContext as MainWindowViewModel)?.AudioSettings?.SelectedInputId
                     ?? AudioDeviceId.Default;
+                foreach (var target in targets)
+                {
+                    tarRecordingCoordinator?.TryStartTransmit(
+                        target,
+                        transmitTargetResolver?.ResolveChannelName(target) ?? target.TalkgroupId,
+                        DateTime.UtcNow,
+                        out _);
+                }
                 _ = router.BeginTransmitAsync(targets, inputDeviceId, CancellationToken.None);
             }
             else
             {
-                _ = router.EndTransmitAsync();
+                _ = EndTransmitAndStopRecordingAsync(router);
+            }
+        }
+
+        private async Task EndTransmitAndStopRecordingAsync(TalkgroupAudioRouter router)
+        {
+            try
+            {
+                await router.EndTransmitAsync().ConfigureAwait(false);
+            }
+            finally
+            {
+                tarRecordingCoordinator?.StopAllTransmit(DateTime.UtcNow);
             }
         }
 
@@ -899,6 +969,13 @@ namespace DvmConsole.Avalonia
                     viewModel.AudioStatusMessage = "Monitor stream ended: output device lost";
                 }
             });
+
+        /// <summary>
+        /// Closes an RX TAR session when the router's idle release fires and
+        /// no explicit terminator was classified by the receive glue.
+        /// </summary>
+        private void OnTalkgroupStreamEnded(string key, VoiceMode mode)
+            => tarRecordingCoordinator?.EndReceive(key, mode, DateTime.UtcNow);
 
         /// <summary>
         /// Thin click wiring for the Set hotkey button: begins window-local
