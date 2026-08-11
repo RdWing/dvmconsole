@@ -11,6 +11,8 @@
 *
 */
 
+using System.Collections.Generic;
+
 namespace dvmconsole
 {
     /// <summary>
@@ -37,5 +39,24 @@ namespace dvmconsole
         /// True when automatic gain control is enabled for the audio input.
         /// </summary>
         public bool AudioInputAgcEnabled { get; set; } = false;
+
+        /// <summary>
+        /// Legacy per-resource output device indices keyed by stable resource
+        /// identity. Retained for WPF settings compatibility.
+        /// </summary>
+        public Dictionary<string, int> ChannelOutputDevices { get; set; } = new();
+
+        /// <summary>
+        /// Stable per-resource output device keys keyed by resource identity.
+        /// An absent key inherits the master output device.
+        /// </summary>
+        public Dictionary<string, string> ChannelOutputDeviceKeys { get; set; } = new();
+
+        /// <summary>
+        /// Per-resource monitor volumes keyed by stable resource identity.
+        /// Values are interpreted in the WPF-compatible 0..4 range by the
+        /// audio runtime; this DTO preserves the persisted value verbatim.
+        /// </summary>
+        public Dictionary<string, double> ChannelVolumes { get; set; } = new();
     }
 }

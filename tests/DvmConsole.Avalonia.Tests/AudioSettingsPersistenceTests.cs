@@ -94,7 +94,19 @@ namespace DvmConsole.Avalonia.Tests
             {
                 AudioInputDeviceKey = "USB-MIC-01",
                 MasterOutputDeviceKey = "USB-SPK-02",
-                AudioInputAgcEnabled = true
+                AudioInputAgcEnabled = true,
+                ChannelOutputDevices = new Dictionary<string, int>
+                {
+                    ["System 1/31001"] = 2,
+                },
+                ChannelOutputDeviceKeys = new Dictionary<string, string>
+                {
+                    ["System 1/31001"] = "USB-SPK-02",
+                },
+                ChannelVolumes = new Dictionary<string, double>
+                {
+                    ["System 1/31001"] = 3.5,
+                },
             };
 
             persistence.Save(expected);
@@ -103,6 +115,9 @@ namespace DvmConsole.Avalonia.Tests
             Assert.Equal(expected.AudioInputDeviceKey, actual.AudioInputDeviceKey);
             Assert.Equal(expected.MasterOutputDeviceKey, actual.MasterOutputDeviceKey);
             Assert.Equal(expected.AudioInputAgcEnabled, actual.AudioInputAgcEnabled);
+            Assert.Equal(expected.ChannelOutputDevices, actual.ChannelOutputDevices);
+            Assert.Equal(expected.ChannelOutputDeviceKeys, actual.ChannelOutputDeviceKeys);
+            Assert.Equal(expected.ChannelVolumes, actual.ChannelVolumes);
         }
 
         [Fact]
@@ -126,13 +141,28 @@ namespace DvmConsole.Avalonia.Tests
             {
                 AudioInputDeviceKey = "new-input",
                 MasterOutputDeviceKey = "new-output",
-                AudioInputAgcEnabled = true
+                AudioInputAgcEnabled = true,
+                ChannelOutputDevices = new Dictionary<string, int>
+                {
+                    ["System 1/31001"] = 2,
+                },
+                ChannelOutputDeviceKeys = new Dictionary<string, string>
+                {
+                    ["System 1/31001"] = "USB-SPK-02",
+                },
+                ChannelVolumes = new Dictionary<string, double>
+                {
+                    ["System 1/31001"] = 3.5,
+                },
             });
 
             var saved = JObject.Parse(File.ReadAllText(dir.SettingsPath));
             Assert.Equal("new-input", (string)saved["AudioInputDeviceKey"]!);
             Assert.Equal("new-output", (string)saved["MasterOutputDeviceKey"]!);
             Assert.True((bool)saved["AudioInputAgcEnabled"]!);
+            Assert.Equal(2, (int)saved["ChannelOutputDevices"]!["System 1/31001"]!);
+            Assert.Equal("USB-SPK-02", (string)saved["ChannelOutputDeviceKeys"]!["System 1/31001"]!);
+            Assert.Equal(3.5, (double)saved["ChannelVolumes"]!["System 1/31001"]!);
             Assert.Equal("system-1", (string)saved["FneSystems"]![0]!["Name"]!);
             Assert.Equal(62031, (int)saved["FneSystems"]![0]!["Port"]!);
             Assert.Equal(1200, (int)saved["WindowLayout"]!["Width"]!);
@@ -150,6 +180,9 @@ namespace DvmConsole.Avalonia.Tests
             Assert.Equal("windows-default", section.AudioInputDeviceKey);
             Assert.Equal("windows-default", section.MasterOutputDeviceKey);
             Assert.False(section.AudioInputAgcEnabled);
+            Assert.Empty(section.ChannelOutputDevices);
+            Assert.Empty(section.ChannelOutputDeviceKeys);
+            Assert.Empty(section.ChannelVolumes);
         }
 
         [Fact]

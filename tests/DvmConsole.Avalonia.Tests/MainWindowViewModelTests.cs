@@ -1453,5 +1453,56 @@ namespace DvmConsole.Avalonia.Tests
             Assert.NotNull(vm.PrimaryChannel);
             Assert.Equal("CH 1 DMR", vm.PrimaryChannel!.ChannelName);
         }
+
+        [Fact]
+        public void ToggleSelectAllCurrentZone_SelectsThenClearsEveryResource()
+        {
+            var codeplug = MakeCodeplug();
+            var vm = new MainWindowViewModel(codeplug.Systems, null, null, null, null, codeplug);
+
+            vm.ToggleSelectAllCurrentZone();
+            Assert.Equal(vm.Channels.Count, vm.SelectedChannels.Count);
+            Assert.All(vm.Channels, slot => Assert.True(slot.IsSelected));
+
+            vm.ToggleSelectAllCurrentZone();
+            Assert.Empty(vm.SelectedChannels);
+            Assert.All(vm.Channels, slot => Assert.False(slot.IsSelected));
+        }
+
+        [Fact]
+        public void ChannelVolume_ClampsToWpfRange_AndNotifiesOnlyOnEffectiveChange()
+        {
+            var slot = new ChannelSlotViewModel(1, "CHANNEL 01");
+            var notifications = new List<string>();
+            slot.PropertyChanged += (_, args) => notifications.Add(args.PropertyName!);
+
+            slot.Volume = 5.0;
+            Assert.Equal(4.0, slot.Volume);
+            slot.Volume = 4.0;
+            slot.Volume = -1.0;
+            Assert.Equal(0.0, slot.Volume);
+
+            Assert.Equal(
+                new[] { nameof(ChannelSlotViewModel.Volume), nameof(ChannelSlotViewModel.Volume) },
+                notifications);
+        }
+
+        [Fact]
+        public void ChannelSelectionChanged_RelaysTheSlotAndNewState()
+        {
+            var vm = new MainWindowViewModel();
+            ChannelSlotViewModel? changedSlot = null;
+            bool? selected = null;
+            vm.ChannelSelectionChanged += (slot, isSelected) =>
+            {
+                changedSlot = slot;
+                selected = isSelected;
+            };
+
+            vm.ProcessChannelClick(1, setPrimary: false);
+
+            Assert.Same(vm.Channels[0], changedSlot);
+            Assert.True(selected);
+        }
     }
 }

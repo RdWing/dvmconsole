@@ -359,7 +359,13 @@ namespace DvmConsole.Platform.Tests
             pipeline.Start(AudioDeviceId.Default);
 
             pipeline.Volume = 1.5f;
-            Assert.Equal(1f, factory.Output!.Volume);
+            Assert.Equal(1.5f, factory.Output!.Volume);
+
+            pipeline.Volume = 4.0f;
+            Assert.Equal(4.0f, factory.Output.Volume);
+
+            pipeline.Volume = 4.5f;
+            Assert.Equal(4.0f, factory.Output.Volume);
 
             pipeline.Volume = -0.5f;
             Assert.Equal(0f, factory.Output.Volume);

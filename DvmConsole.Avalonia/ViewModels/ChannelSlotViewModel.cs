@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 #nullable enable
 using System;
+using System.Collections.Generic;
 using System.ComponentModel;
 using Avalonia.Media;
+using DvmConsole.Platform.Audio;
 
 namespace DvmConsole.Avalonia.ViewModels
 {
@@ -43,6 +45,10 @@ namespace DvmConsole.Avalonia.ViewModels
 
         private bool isSelected;
         private bool isPrimary;
+        private double volume = 1.0;
+        private IReadOnlyList<AudioDeviceOptionViewModel> monitorOutputDevices =
+            Array.Empty<AudioDeviceOptionViewModel>();
+        private AudioDeviceOptionViewModel? monitorOutputDevice;
         private bool pttEngaged;
         private bool tarRecordingEnabled;
         private string? channelName;
@@ -303,6 +309,79 @@ namespace DvmConsole.Avalonia.ViewModels
                 isPrimary = value;
                 PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsPrimary)));
             }
+        }
+
+        /// <summary>
+        /// Local monitor volume for this resource in the WPF-compatible
+        /// 0..4 range. Values are clamped and notify only when the effective
+        /// value changes.
+        /// </summary>
+        public double Volume
+        {
+            get => volume;
+            set
+            {
+                var clamped = double.IsNaN(value) || double.IsInfinity(value)
+                    ? 1.0
+                    : Math.Clamp(value, 0.0, 4.0);
+                if (Math.Abs(volume - clamped) < double.Epsilon)
+                {
+                    return;
+                }
+
+                volume = clamped;
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(Volume)));
+            }
+        }
+
+        /// <summary>
+        /// Output devices offered for this resource's local monitor. The
+        /// first row is the WPF-compatible inherit-master choice.
+        /// </summary>
+        public IReadOnlyList<AudioDeviceOptionViewModel> MonitorOutputDevices =>
+            monitorOutputDevices;
+
+        /// <summary>
+        /// The selected per-resource monitor output, or the inherit-master
+        /// row when no stable per-resource override is active.
+        /// </summary>
+        public AudioDeviceOptionViewModel? MonitorOutputDevice
+        {
+            get => monitorOutputDevice;
+            set
+            {
+                if (ReferenceEquals(monitorOutputDevice, value))
+                {
+                    return;
+                }
+
+                monitorOutputDevice = value;
+                PropertyChanged?.Invoke(
+                    this,
+                    new PropertyChangedEventArgs(nameof(MonitorOutputDevice)));
+            }
+        }
+
+        /// <summary>
+        /// Replaces the output options and selects the requested stable id.
+        /// This is internal projection state; user edits flow through the
+        /// public <see cref="MonitorOutputDevice"/> setter.
+        /// </summary>
+        internal void SetMonitorOutputDevices(
+            IReadOnlyList<AudioDeviceOptionViewModel> devices,
+            AudioDeviceOptionViewModel? selected)
+        {
+            monitorOutputDevices = devices ?? Array.Empty<AudioDeviceOptionViewModel>();
+            PropertyChanged?.Invoke(
+                this,
+                new PropertyChangedEventArgs(nameof(MonitorOutputDevices)));
+
+            MonitorOutputDevice = selected is not null
+                && monitorOutputDevices.Contains(selected)
+                ? selected
+                : monitorOutputDevices.Count > 0
+                    ? monitorOutputDevices[0]
+                    : null;
         }
 
         /// <summary>

@@ -19,11 +19,18 @@ namespace DvmConsole.Avalonia.ViewModels
         /// <param name="id">Opaque device id.</param>
         /// <param name="name">Human-readable device name.</param>
         /// <param name="isAvailable">True when the device is currently available.</param>
-        public AudioDeviceOptionViewModel(AudioDeviceId id, string name, bool isAvailable)
+        /// <param name="isInheritMaster">True for the per-resource row that
+        /// inherits the current master output.</param>
+        public AudioDeviceOptionViewModel(
+            AudioDeviceId id,
+            string name,
+            bool isAvailable,
+            bool isInheritMaster = false)
         {
             Id = id;
             Name = name;
             IsAvailable = isAvailable;
+            IsInheritMaster = isInheritMaster;
         }
 
         /// <summary>Opaque device id.</summary>
@@ -34,5 +41,11 @@ namespace DvmConsole.Avalonia.ViewModels
 
         /// <summary>True when the device is currently available.</summary>
         public bool IsAvailable { get; }
+
+        /// <summary>
+        /// True only for the WPF-compatible per-resource inherit-master
+        /// option; explicit system-default output rows remain false.
+        /// </summary>
+        public bool IsInheritMaster { get; }
     }
 }

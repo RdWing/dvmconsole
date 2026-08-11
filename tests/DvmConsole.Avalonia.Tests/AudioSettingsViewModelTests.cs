@@ -128,10 +128,11 @@ namespace DvmConsole.Avalonia.Tests
         // ---- A. AudioDeviceOptionViewModel: row shape --------------------------
 
         /// <summary>
-        /// Shape gate for the option row: sealed type, exactly three public
-        /// read-only instance properties (Id / Name / IsAvailable) with the
-        /// exact contract types, and a single (AudioDeviceId, string, bool)
-        /// ctor. No secrets, native handles, or UI surface.
+        /// Shape gate for the option row: sealed type, exactly four public
+        /// read-only instance properties (Id / Name / IsAvailable /
+        /// IsInheritMaster) with the exact contract types, and a single
+        /// (AudioDeviceId, string, bool, bool) ctor. No secrets, native
+        /// handles, or UI surface.
         /// </summary>
         [Fact]
         public void OptionRow_Shape_Sealed_ReadOnlyProps_ExactCtor_NoExtras()
@@ -144,23 +145,26 @@ namespace DvmConsole.Avalonia.Tests
                 .Select(p => p.Name)
                 .OrderBy(n => n, StringComparer.Ordinal)
                 .ToArray();
-            Assert.Equal(new[] { "Id", "IsAvailable", "Name" }, names);
+            Assert.Equal(new[] { "Id", "IsAvailable", "IsInheritMaster", "Name" }, names);
 
             Assert.Equal(typeof(AudioDeviceId), row.GetProperty(nameof(AudioDeviceOptionViewModel.Id))!.PropertyType);
             Assert.Equal(typeof(string), row.GetProperty(nameof(AudioDeviceOptionViewModel.Name))!.PropertyType);
             Assert.Equal(typeof(bool), row.GetProperty(nameof(AudioDeviceOptionViewModel.IsAvailable))!.PropertyType);
+            Assert.Equal(typeof(bool), row.GetProperty(nameof(AudioDeviceOptionViewModel.IsInheritMaster))!.PropertyType);
 
             Assert.False(row.GetProperty(nameof(AudioDeviceOptionViewModel.Id))!.CanWrite);
             Assert.False(row.GetProperty(nameof(AudioDeviceOptionViewModel.Name))!.CanWrite);
             Assert.False(row.GetProperty(nameof(AudioDeviceOptionViewModel.IsAvailable))!.CanWrite);
+            Assert.False(row.GetProperty(nameof(AudioDeviceOptionViewModel.IsInheritMaster))!.CanWrite);
 
             var ctor = row.GetConstructors();
             Assert.Single(ctor);
             var parameters = ctor[0].GetParameters();
-            Assert.Equal(3, parameters.Length);
+            Assert.Equal(4, parameters.Length);
             Assert.Equal(typeof(AudioDeviceId), parameters[0].ParameterType);
             Assert.Equal(typeof(string), parameters[1].ParameterType);
             Assert.Equal(typeof(bool), parameters[2].ParameterType);
+            Assert.Equal(typeof(bool), parameters[3].ParameterType);
         }
 
         /// <summary>

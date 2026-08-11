@@ -131,10 +131,13 @@ namespace DvmConsole.Core.Tests
 
             Assert.True(File.Exists(path));
             var saved = JObject.Parse(File.ReadAllText(path));
-            Assert.Equal(3, saved.Properties().Count());
+            Assert.Equal(6, saved.Properties().Count());
             Assert.Equal("input-key", (string)saved[nameof(UserSettingsAudioSection.AudioInputDeviceKey)]);
             Assert.Equal("output-key", (string)saved[nameof(UserSettingsAudioSection.MasterOutputDeviceKey)]);
             Assert.True((bool)saved[nameof(UserSettingsAudioSection.AudioInputAgcEnabled)]);
+            Assert.Empty(saved[nameof(UserSettingsAudioSection.ChannelOutputDevices)]!);
+            Assert.Empty(saved[nameof(UserSettingsAudioSection.ChannelOutputDeviceKeys)]!);
+            Assert.Empty(saved[nameof(UserSettingsAudioSection.ChannelVolumes)]!);
         }
 
         [Fact]

@@ -357,12 +357,19 @@ namespace DvmConsole.Avalonia
                     sender,
                     () => audioViewModel.AudioSettings?.SelectedOutputId ?? AudioDeviceId.Default,
                     decodedPcmObserver: tarRecordingCoordinator,
-                    transmittedPcmObserver: tarRecordingCoordinator);
+                    transmittedPcmObserver: tarRecordingCoordinator,
+                    resolveMonitorEnabled: audioViewModel.IsMonitorEnabled,
+                    resolveTalkgroupOutputDevice: audioViewModel.ResolveMonitorOutputDevice,
+                    resolveTalkgroupVolume: audioViewModel.ResolveMonitorVolume);
 
                 if (audioViewModel.Ptt is { } ptt)
                 {
                     ptt.PttStateRequested += OnPttStateRequested;
                 }
+
+                audioViewModel.ChannelSelectionChanged += OnChannelSelectionChanged;
+                audioViewModel.ChannelVolumeChanged += OnChannelVolumeChanged;
+                audioViewModel.ChannelOutputDeviceChanged += OnChannelOutputDeviceChanged;
 
                 talkgroupAudioRouter.CaptureEnded += OnCaptureEnded;
                 talkgroupAudioRouter.MonitorStreamEnded += OnMonitorStreamEnded;
@@ -480,7 +487,61 @@ namespace DvmConsole.Avalonia
                 or nameof(AudioSettingsViewModel.SelectedOutputId))
             {
                 ApplyAudioSelections();
+                if (e.PropertyName is nameof(AudioSettingsViewModel.OutputDevices)
+                    or nameof(AudioSettingsViewModel.SelectedOutputId))
+                {
+                    RestartSelectedMonitors();
+                }
             }
+        }
+
+        private void RestartSelectedMonitors()
+        {
+            if (talkgroupAudioRouter is not { } router
+                || DataContext is not MainWindowViewModel viewModel)
+            {
+                return;
+            }
+
+            foreach (var slot in viewModel.SelectedChannels)
+            {
+                if (!string.IsNullOrWhiteSpace(slot.ResourceKey))
+                {
+                    router.StopMonitor(slot.ResourceKey);
+                }
+            }
+        }
+
+        private void OnChannelSelectionChanged(ChannelSlotViewModel slot, bool isSelected)
+        {
+            if (isSelected || string.IsNullOrWhiteSpace(slot.ResourceKey))
+            {
+                return;
+            }
+
+            Dispatcher.UIThread.Post(() => talkgroupAudioRouter?.StopMonitor(slot.ResourceKey));
+        }
+
+        private void OnChannelVolumeChanged(ChannelSlotViewModel slot)
+        {
+            if (string.IsNullOrWhiteSpace(slot.ResourceKey))
+            {
+                return;
+            }
+
+            Dispatcher.UIThread.Post(() =>
+                talkgroupAudioRouter?.SetMonitorVolume(slot.ResourceKey, (float)slot.Volume));
+        }
+
+        private void OnChannelOutputDeviceChanged(ChannelSlotViewModel slot)
+        {
+            if (string.IsNullOrWhiteSpace(slot.ResourceKey))
+            {
+                return;
+            }
+
+            Dispatcher.UIThread.Post(() =>
+                talkgroupAudioRouter?.StopMonitor(slot.ResourceKey));
         }
 
         /// <summary>
@@ -652,6 +713,14 @@ namespace DvmConsole.Avalonia
             }
 
             viewer.Show(this);
+        }
+
+        private void SelectAllChannels_Click(object? sender, RoutedEventArgs e)
+        {
+            if (DataContext is MainWindowViewModel viewModel)
+            {
+                viewModel.ToggleSelectAllCurrentZone();
+            }
         }
 
         /// <summary>
@@ -898,6 +967,13 @@ namespace DvmConsole.Avalonia
             fneConnectionBridge?.Dispose();
             fneConnectionService?.Dispose();
             fneReceiveGlue?.Dispose();
+
+            if (DataContext is MainWindowViewModel audioViewModel)
+            {
+                audioViewModel.ChannelSelectionChanged -= OnChannelSelectionChanged;
+                audioViewModel.ChannelVolumeChanged -= OnChannelVolumeChanged;
+                audioViewModel.ChannelOutputDeviceChanged -= OnChannelOutputDeviceChanged;
+            }
 
             if (talkgroupAudioRouter is { } router)
             {

@@ -176,6 +176,9 @@ namespace DvmConsole.Platform.Audio
         private readonly IVoiceFrameEncoder _encoder;
         private readonly IVoiceTrafficSender _sender;
         private readonly Func<AudioDeviceId> _resolveOutputDevice;
+        private readonly Func<string, bool> _resolveMonitorEnabled;
+        private readonly Func<string, AudioDeviceId> _resolveTalkgroupOutputDevice;
+        private readonly Func<string, float> _resolveTalkgroupVolume;
         private readonly IDecodedPcmObserver? _decodedPcmObserver;
         private readonly ITransmittedPcmObserver? _transmittedPcmObserver;
         private readonly TimeSpan _idleReleaseDelay;
@@ -264,6 +267,19 @@ namespace DvmConsole.Platform.Audio
         /// Optional observer invoked for each PCM frame selected for every
         /// resolved transmit target before encoding/network delivery.
         /// </param>
+        /// <param name="resolveMonitorEnabled">
+        /// Optional per-resource local-monitor selection resolver. A null
+        /// resolver preserves the legacy behavior and enables monitor
+        /// playback for every routed resource.
+        /// </param>
+        /// <param name="resolveTalkgroupOutputDevice">
+        /// Optional per-resource output resolver. A null resolver falls back
+        /// to <paramref name="resolveOutputDevice"/>.
+        /// </param>
+        /// <param name="resolveTalkgroupVolume">
+        /// Optional per-resource monitor volume resolver in the WPF-compatible
+        /// 0..4 range. A null resolver uses unity gain.
+        /// </param>
         /// <param name="idleReleaseDelay">
         /// Idle delay before a silent talkgroup's monitor pipeline is
         /// released; defaults to 2 s (WPF AudioManager parity).
@@ -288,7 +304,10 @@ namespace DvmConsole.Platform.Audio
             Func<TimeSpan, Action, IDisposable>? scheduler = null,
             Func<DateTime>? clock = null,
             IDecodedPcmObserver? decodedPcmObserver = null,
-            ITransmittedPcmObserver? transmittedPcmObserver = null)
+            ITransmittedPcmObserver? transmittedPcmObserver = null,
+            Func<string, bool>? resolveMonitorEnabled = null,
+            Func<string, AudioDeviceId>? resolveTalkgroupOutputDevice = null,
+            Func<string, float>? resolveTalkgroupVolume = null)
         {
             _factory = streams ?? throw new ArgumentNullException(nameof(streams));
             _decoder = decoder ?? throw new ArgumentNullException(nameof(decoder));
@@ -296,11 +315,98 @@ namespace DvmConsole.Platform.Audio
             _sender = sender ?? throw new ArgumentNullException(nameof(sender));
             _resolveOutputDevice = resolveOutputDevice
                 ?? throw new ArgumentNullException(nameof(resolveOutputDevice));
+            _resolveMonitorEnabled = resolveMonitorEnabled ?? (_ => true);
+            _resolveTalkgroupOutputDevice = resolveTalkgroupOutputDevice
+                ?? (_ => _resolveOutputDevice());
+            _resolveTalkgroupVolume = resolveTalkgroupVolume ?? (_ => 1.0f);
             _decodedPcmObserver = decodedPcmObserver;
             _transmittedPcmObserver = transmittedPcmObserver;
             _idleReleaseDelay = idleReleaseDelay ?? DefaultIdleReleaseDelay;
             _scheduler = scheduler ?? DefaultSchedule;
             _clock = clock ?? (() => DateTime.UtcNow);
+        }
+
+        /// <summary>
+        /// Stops local monitor playback for one resource without ending its
+        /// decoded-observer/TAR lifecycle. A later frame recreates playback
+        /// only when the monitor-enable resolver returns true.
+        /// </summary>
+        public void StopMonitor(string talkgroupKey)
+        {
+            if (talkgroupKey is null)
+            {
+                throw new ArgumentNullException(nameof(talkgroupKey));
+            }
+
+            if (Volatile.Read(ref _disposed) != 0)
+            {
+                return;
+            }
+
+            lock (_routeGate)
+            {
+                foreach (var entry in _talkgroups)
+                {
+                    if (!MatchesTalkgroupControlKey(entry.Key, talkgroupKey))
+                    {
+                        continue;
+                    }
+
+                    if (entry.Value.Pipeline is { } pipeline)
+                    {
+                        StopMonitorLocked(entry.Value, pipeline);
+                    }
+                    else
+                    {
+                        entry.Value.ReleaseHandle?.Dispose();
+                        entry.Value.ReleaseHandle = null;
+                    }
+                }
+            }
+        }
+
+        /// <summary>
+        /// Updates the local monitor volume for a live resource pipeline.
+        /// Values are clamped by <see cref="MonitorAudioPipeline.Volume"/>
+        /// to the WPF-compatible 0..4 range. A resource without a live
+        /// pipeline retains the value through the resolver on its next start.
+        /// </summary>
+        public void SetMonitorVolume(string talkgroupKey, float volume)
+        {
+            if (talkgroupKey is null)
+            {
+                throw new ArgumentNullException(nameof(talkgroupKey));
+            }
+
+            if (Volatile.Read(ref _disposed) != 0)
+            {
+                return;
+            }
+
+            lock (_routeGate)
+            {
+                foreach (var entry in _talkgroups)
+                {
+                    if (MatchesTalkgroupControlKey(entry.Key, talkgroupKey)
+                        && entry.Value.Pipeline is { } pipeline)
+                    {
+                        pipeline.Volume = volume;
+                    }
+                }
+            }
+        }
+
+        private static bool MatchesTalkgroupControlKey(string stateKey, string controlKey)
+        {
+            if (string.Equals(stateKey, controlKey, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+
+            return !controlKey.Contains("|slot:", StringComparison.OrdinalIgnoreCase)
+                && stateKey.StartsWith(
+                    controlKey + "|slot:",
+                    StringComparison.OrdinalIgnoreCase);
         }
 
         /// <summary>
@@ -349,13 +455,20 @@ namespace DvmConsole.Platform.Audio
                 }
 
                 state.Mode = mode;
+                var monitorEnabled = _resolveMonitorEnabled(talkgroupKey);
 
-                if (state.Pipeline is null)
+                if (!monitorEnabled && state.Pipeline is { } disabledPipeline)
+                {
+                    StopMonitorLocked(state, disabledPipeline);
+                }
+
+                if (monitorEnabled && state.Pipeline is null)
                 {
                     var pipeline = new MonitorAudioPipeline(_factory);
                     try
                     {
-                        pipeline.Start(_resolveOutputDevice());
+                        pipeline.Start(_resolveTalkgroupOutputDevice(talkgroupKey));
+                        pipeline.Volume = _resolveTalkgroupVolume(talkgroupKey);
                     }
                     catch (AudioDeviceException exception)
                     {
@@ -1146,6 +1259,20 @@ namespace DvmConsole.Platform.Audio
                 ReleaseObservationOnly(talkgroupKey, state);
             });
             state.ReleaseHandle = handle;
+        }
+
+        private static void StopMonitorLocked(TalkgroupState state, MonitorAudioPipeline pipeline)
+        {
+            state.ReleaseHandle?.Dispose();
+            state.ReleaseHandle = null;
+            if (ReferenceEquals(state.Pipeline, pipeline))
+            {
+                state.Pipeline = null;
+            }
+
+            // Stopped, never disposed: the pipeline shares the router-owned
+            // stream factory with every other receive/transmit pipeline.
+            _ = pipeline.StopAsync();
         }
 
         /// <summary>

@@ -39,6 +39,7 @@ namespace DvmConsole.Avalonia.ViewModels
         private const int CompatibilitySlotCount = 4;
 
         private const string AudioSavedFeedbackText = "Audio settings saved";
+        private const int LegacyDefaultOutputDevice = -1;
 
         private const string TarSavedFeedbackText = "TAR settings saved.";
 
@@ -49,6 +50,17 @@ namespace DvmConsole.Avalonia.ViewModels
         private readonly AudioSettingsPersistence? audioPersistence;
 
         private readonly TarSettingsPersistence? tarPersistence;
+
+        private readonly Dictionary<string, int> channelOutputDevices =
+            new(StringComparer.OrdinalIgnoreCase);
+
+        private readonly Dictionary<string, string> channelOutputDeviceKeys =
+            new(StringComparer.OrdinalIgnoreCase);
+
+        private readonly Dictionary<string, double> channelVolumes =
+            new(StringComparer.OrdinalIgnoreCase);
+
+        private bool projectingAudioState;
 
         private string audioSaveFeedback = string.Empty;
 
@@ -366,6 +378,24 @@ namespace DvmConsole.Avalonia.ViewModels
         public event PropertyChangedEventHandler? PropertyChanged;
 
         /// <summary>
+        /// Raised when one slot enters or leaves local monitor selection.
+        /// The shell uses this to stop only the matching speaker pipeline;
+        /// decoded receive observation, network handling and TAR remain
+        /// independent.
+        /// </summary>
+        public event Action<ChannelSlotViewModel, bool>? ChannelSelectionChanged;
+
+        /// <summary>
+        /// Raised when a slot's local monitor volume changes.
+        /// </summary>
+        public event Action<ChannelSlotViewModel>? ChannelVolumeChanged;
+
+        /// <summary>
+        /// Raised when a slot's local monitor output changes.
+        /// </summary>
+        public event Action<ChannelSlotViewModel>? ChannelOutputDeviceChanged;
+
+        /// <summary>
         /// Creates the offline dashboard with exactly four channel slots
         /// and an empty FNE connection manager.
         /// </summary>
@@ -563,6 +593,7 @@ namespace DvmConsole.Avalonia.ViewModels
 
             selectedChannelsManager.SelectedChannelsChanged += OnSelectedChannelsChanged;
             selectedChannelsManager.PrimaryChannelChanged += OnPrimaryChannelChanged;
+            selectedChannelsManager.ChannelSelectionChanged += OnChannelSelectionChanged;
 
             SelectedChannels = selectedChannelsManager.GetSelectedChannels();
             PrimaryChannel = null;
@@ -701,15 +732,22 @@ namespace DvmConsole.Avalonia.ViewModels
             var savedOutputId = AudioDeviceId.Default;
             var savedAgcEnabled = false;
 
-            if (catalog is not null && persistence is not null)
+            if (persistence is not null)
             {
                 try
                 {
                     if (persistence.TryLoad(out UserSettingsAudioSection section))
                     {
-                        savedInputId = AudioSettingsPersistence.ToAudioDeviceId(section.AudioInputDeviceKey);
-                        savedOutputId = AudioSettingsPersistence.ToAudioDeviceId(section.MasterOutputDeviceKey);
-                        savedAgcEnabled = section.AudioInputAgcEnabled;
+                        if (catalog is not null)
+                        {
+                            savedInputId = AudioSettingsPersistence.ToAudioDeviceId(section.AudioInputDeviceKey);
+                            savedOutputId = AudioSettingsPersistence.ToAudioDeviceId(section.MasterOutputDeviceKey);
+                            savedAgcEnabled = section.AudioInputAgcEnabled;
+                        }
+
+                        CopyAudioMap(channelOutputDevices, section.ChannelOutputDevices);
+                        CopyAudioMap(channelOutputDeviceKeys, section.ChannelOutputDeviceKeys);
+                        CopyAudioMap(channelVolumes, section.ChannelVolumes);
                     }
                 }
                 catch
@@ -723,10 +761,191 @@ namespace DvmConsole.Avalonia.ViewModels
                 ? null
                 : new AudioSettingsViewModel(catalog, savedInputId, savedOutputId, savedAgcEnabled);
 
+            ApplyPersistedAudioStateToCurrentChannels();
+
             if (AudioSettings is not null)
             {
                 AudioSettings.SaveRequested += OnAudioSaveRequested;
                 AudioSettings.PropertyChanged += OnAudioSettingsChanged;
+            }
+        }
+
+        private static void CopyAudioMap<T>(
+            Dictionary<string, T> target,
+            IReadOnlyDictionary<string, T>? source)
+        {
+            target.Clear();
+            if (source is null)
+            {
+                return;
+            }
+
+            foreach (var pair in source)
+            {
+                if (!string.IsNullOrWhiteSpace(pair.Key))
+                {
+                    target[pair.Key.Trim()] = pair.Value;
+                }
+            }
+        }
+
+        private void ApplyPersistedAudioStateToCurrentChannels()
+        {
+            projectingAudioState = true;
+            try
+            {
+                foreach (var slot in channels)
+                {
+                    slot.Volume = ResolveMonitorVolume(slot.ResourceKey);
+                    var options = BuildMonitorOutputOptions(slot.ResourceKey);
+                    slot.SetMonitorOutputDevices(
+                        options,
+                        FindConfiguredMonitorOutputOption(slot.ResourceKey, options));
+                }
+            }
+            finally
+            {
+                projectingAudioState = false;
+            }
+        }
+
+        private static bool IsInheritMasterOutputKey(string? key)
+            => string.Equals(
+                key?.Trim(),
+                "inherit-master-output",
+                StringComparison.OrdinalIgnoreCase);
+
+        private static AudioDeviceId ToMonitorOutputDeviceId(string? key)
+        {
+            if (string.Equals(
+                    key?.Trim(),
+                    "inherit-master-output",
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                return AudioDeviceId.Default;
+            }
+
+            return AudioSettingsPersistence.ToAudioDeviceId(key);
+        }
+
+        private IReadOnlyList<AudioDeviceOptionViewModel> BuildMonitorOutputOptions(
+            string? resourceKey)
+        {
+            if (AudioSettings is null)
+            {
+                return Array.Empty<AudioDeviceOptionViewModel>();
+            }
+
+            var options = new List<AudioDeviceOptionViewModel>(AudioSettings.OutputDevices);
+            options.Insert(
+                0,
+                new AudioDeviceOptionViewModel(
+                    AudioDeviceId.Default,
+                    "Default (Master Output)",
+                    true,
+                    isInheritMaster: true));
+
+            if (!string.IsNullOrWhiteSpace(resourceKey)
+                && channelOutputDeviceKeys.TryGetValue(resourceKey.Trim(), out var savedKey))
+            {
+                var savedId = ToMonitorOutputDeviceId(savedKey);
+                if (!savedId.IsDefault
+                    && !options.Exists(option =>
+                        string.Equals(option.Id.Value, savedId.Value, StringComparison.OrdinalIgnoreCase)))
+                {
+                    options.Add(
+                        new AudioDeviceOptionViewModel(
+                            savedId,
+                            "Saved output device unavailable; using Master Output until it returns",
+                            false));
+                }
+            }
+
+            return options;
+        }
+
+        private AudioDeviceOptionViewModel? FindConfiguredMonitorOutputOption(
+            string? resourceKey,
+            IReadOnlyList<AudioDeviceOptionViewModel> options)
+        {
+            if (string.IsNullOrWhiteSpace(resourceKey))
+            {
+                return options.Count > 0 ? options[0] : null;
+            }
+
+            if (!channelOutputDeviceKeys.TryGetValue(resourceKey.Trim(), out var savedKey))
+            {
+                var legacyDevice = TryResolveLegacyOutputDevice(resourceKey.Trim());
+                return legacyDevice is { } resolvedLegacy
+                    ? options.FirstOrDefault(option =>
+                        !option.IsInheritMaster && option.Id == resolvedLegacy)
+                        ?? (options.Count > 0 ? options[0] : null)
+                    : options.Count > 0 ? options[0] : null;
+            }
+
+            if (string.Equals(
+                    savedKey.Trim(),
+                    "inherit-master-output",
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                return options.FirstOrDefault(option => option.IsInheritMaster);
+            }
+
+            var normalizedKey = AudioSettingsPersistence.ToSettingsKey(
+                ToMonitorOutputDeviceId(savedKey));
+            return options.FirstOrDefault(option =>
+                !option.IsInheritMaster
+                && string.Equals(
+                    AudioSettingsPersistence.ToSettingsKey(option.Id),
+                    normalizedKey,
+                    StringComparison.OrdinalIgnoreCase));
+        }
+
+        private void RefreshMonitorOutputOptions()
+        {
+            projectingAudioState = true;
+            try
+            {
+                foreach (var slot in channels)
+                {
+                    var options = BuildMonitorOutputOptions(slot.ResourceKey);
+                    slot.SetMonitorOutputDevices(
+                        options,
+                        FindConfiguredMonitorOutputOption(slot.ResourceKey, options));
+                }
+            }
+            finally
+            {
+                projectingAudioState = false;
+            }
+        }
+
+        private void PersistAudioSettings(
+            AudioDeviceId inputId,
+            AudioDeviceId outputId,
+            bool agcEnabled)
+        {
+            if (audioPersistence is null)
+            {
+                return;
+            }
+
+            try
+            {
+                audioPersistence.Save(new UserSettingsAudioSection
+                {
+                    AudioInputDeviceKey = AudioSettingsPersistence.ToSettingsKey(inputId),
+                    MasterOutputDeviceKey = AudioSettingsPersistence.ToSettingsKey(outputId),
+                    AudioInputAgcEnabled = agcEnabled,
+                    ChannelOutputDevices = new Dictionary<string, int>(channelOutputDevices, StringComparer.OrdinalIgnoreCase),
+                    ChannelOutputDeviceKeys = new Dictionary<string, string>(channelOutputDeviceKeys, StringComparer.OrdinalIgnoreCase),
+                    ChannelVolumes = new Dictionary<string, double>(channelVolumes, StringComparer.OrdinalIgnoreCase),
+                });
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine(
+                    $"Audio settings persistence failed: {ex}");
             }
         }
 
@@ -735,26 +954,7 @@ namespace DvmConsole.Avalonia.ViewModels
             AudioDeviceId outputId,
             bool agcEnabled)
         {
-            // Persist the payload when a store is composed. Failure is
-            // isolated to a diagnostic: a malformed or I/O-unsafe save
-            // must never escape or prevent the acknowledgement below.
-            if (audioPersistence is not null)
-            {
-                try
-                {
-                    audioPersistence.Save(new UserSettingsAudioSection
-                    {
-                        AudioInputDeviceKey = AudioSettingsPersistence.ToSettingsKey(inputId),
-                        MasterOutputDeviceKey = AudioSettingsPersistence.ToSettingsKey(outputId),
-                        AudioInputAgcEnabled = agcEnabled
-                    });
-                }
-                catch (Exception ex)
-                {
-                    System.Diagnostics.Debug.WriteLine(
-                        $"Audio settings persistence failed: {ex}");
-                }
-            }
+            PersistAudioSettings(inputId, outputId, agcEnabled);
 
             // The acknowledgement text is fixed and change-only; the
             // payload values are intentionally ignored beyond persistence.
@@ -809,6 +1009,12 @@ namespace DvmConsole.Avalonia.ViewModels
             object? sender,
             PropertyChangedEventArgs e)
         {
+            if (e.PropertyName is nameof(AudioSettingsViewModel.OutputDevices)
+                or nameof(AudioSettingsViewModel.SelectedOutputId))
+            {
+                RefreshMonitorOutputOptions();
+            }
+
             if (e.PropertyName is not (
                 nameof(AudioSettingsViewModel.SelectedInputId)
                 or nameof(AudioSettingsViewModel.SelectedOutputId)
@@ -944,6 +1150,260 @@ namespace DvmConsole.Avalonia.ViewModels
         }
 
         /// <summary>
+        /// Toggles selection for every resource in the current zone. If any
+        /// current resource is unselected, all are selected; otherwise all
+        /// are unselected. Primary state is managed by the same selection
+        /// manager path as individual clicks.
+        /// </summary>
+        public void ToggleSelectAllCurrentZone()
+        {
+            var selectAll = channels.Any(slot => !slot.IsSelected);
+            foreach (var slot in channels)
+            {
+                if (selectAll && !slot.IsSelected)
+                {
+                    selectedChannelsManager.AddSelectedChannel(slot);
+                }
+                else if (!selectAll && slot.IsSelected)
+                {
+                    selectedChannelsManager.RemoveSelectedChannel(slot);
+                }
+            }
+        }
+
+        /// <summary>
+        /// Returns true when a stable resource identity is currently selected
+        /// for local monitor playback.
+        /// </summary>
+        public bool IsMonitorEnabled(string? resourceKey)
+        {
+            var normalizedResourceKey = NormalizeMonitorResourceKey(resourceKey);
+            if (normalizedResourceKey.Length == 0)
+            {
+                return false;
+            }
+
+            foreach (var slot in selectedChannels)
+            {
+                if (string.Equals(
+                        slot.ResourceKey,
+                        normalizedResourceKey,
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// Resolves a resource's output device. A currently available
+        /// per-resource stable key wins; stale or missing keys fall back to
+        /// the currently available master output, then the platform default.
+        /// </summary>
+        public AudioDeviceId ResolveMonitorOutputDevice(string? resourceKey)
+        {
+            var normalizedResourceKey = NormalizeMonitorResourceKey(resourceKey);
+            if (normalizedResourceKey.Length > 0)
+            {
+                if (channelOutputDeviceKeys.TryGetValue(normalizedResourceKey, out var savedKey))
+                {
+                    if (!IsInheritMasterOutputKey(savedKey))
+                    {
+                        var resourceDevice = ToMonitorOutputDeviceId(savedKey);
+                        if (IsAvailableOutput(resourceDevice))
+                        {
+                            return resourceDevice;
+                        }
+                    }
+                }
+                else if (TryResolveLegacyOutputDevice(normalizedResourceKey) is { } legacyDevice)
+                {
+                    return legacyDevice;
+                }
+            }
+
+            var master = AudioSettings?.SelectedOutputId ?? AudioDeviceId.Default;
+            return IsAvailableOutput(master) ? master : AudioDeviceId.Default;
+        }
+
+        /// <summary>
+        /// Resolves a resource volume by stable identity, clamping malformed
+        /// persisted values into the WPF-compatible 0..4 range. Unmapped
+        /// resources use unity gain.
+        /// </summary>
+        public float ResolveMonitorVolume(string? resourceKey)
+        {
+            var normalizedResourceKey = NormalizeMonitorResourceKey(resourceKey);
+            if (normalizedResourceKey.Length == 0
+                || !channelVolumes.TryGetValue(normalizedResourceKey, out var savedVolume)
+                || double.IsNaN(savedVolume)
+                || double.IsInfinity(savedVolume))
+            {
+                return 1.0f;
+            }
+
+            return (float)Math.Clamp(savedVolume, 0.0, 4.0);
+        }
+
+        private static string NormalizeMonitorResourceKey(string? resourceKey)
+        {
+            if (string.IsNullOrWhiteSpace(resourceKey))
+            {
+                return string.Empty;
+            }
+
+            var normalized = resourceKey.Trim();
+            var slotMarker = normalized.IndexOf("|slot:", StringComparison.OrdinalIgnoreCase);
+            return slotMarker > 0 ? normalized[..slotMarker] : normalized;
+        }
+
+        private void SetMonitorOutputDevice(
+            ChannelSlotViewModel slot,
+            AudioDeviceOptionViewModel option)
+        {
+            ArgumentNullException.ThrowIfNull(slot);
+            ArgumentNullException.ThrowIfNull(option);
+            if (string.IsNullOrWhiteSpace(slot.ResourceKey))
+            {
+                return;
+            }
+
+            var resourceKey = slot.ResourceKey.Trim();
+            if (option.IsInheritMaster)
+            {
+                channelOutputDevices.Remove(resourceKey);
+                channelOutputDeviceKeys.Remove(resourceKey);
+            }
+            else
+            {
+                channelOutputDevices[resourceKey] = ResolveLegacyOutputDeviceIndex(option.Id);
+                channelOutputDeviceKeys[resourceKey] =
+                    AudioSettingsPersistence.ToSettingsKey(option.Id);
+            }
+            PersistAudioSettings(
+                AudioSettings?.SelectedInputId ?? AudioDeviceId.Default,
+                AudioSettings?.SelectedOutputId ?? AudioDeviceId.Default,
+                AudioSettings?.AgcEnabled ?? false);
+            ChannelOutputDeviceChanged?.Invoke(slot);
+        }
+
+        /// <summary>
+        /// Stores a per-resource output choice by stable identity and saves
+        /// the complete audio section. A default id means inherit the current
+        /// master output for this convenience API.
+        /// </summary>
+        public void SetMonitorOutputDevice(ChannelSlotViewModel slot, AudioDeviceId deviceId)
+        {
+            ArgumentNullException.ThrowIfNull(slot);
+            if (string.IsNullOrWhiteSpace(slot.ResourceKey))
+            {
+                return;
+            }
+
+            var resourceKey = slot.ResourceKey.Trim();
+            if (deviceId.IsDefault)
+            {
+                channelOutputDevices.Remove(resourceKey);
+                channelOutputDeviceKeys.Remove(resourceKey);
+            }
+            else
+            {
+                channelOutputDevices[resourceKey] = ResolveLegacyOutputDeviceIndex(deviceId);
+                channelOutputDeviceKeys[resourceKey] =
+                    AudioSettingsPersistence.ToSettingsKey(deviceId);
+            }
+            PersistAudioSettings(
+                AudioSettings?.SelectedInputId ?? AudioDeviceId.Default,
+                AudioSettings?.SelectedOutputId ?? AudioDeviceId.Default,
+                AudioSettings?.AgcEnabled ?? false);
+            ChannelOutputDeviceChanged?.Invoke(slot);
+        }
+
+        private AudioDeviceId? TryResolveLegacyOutputDevice(string resourceKey)
+        {
+            if (AudioSettings is null
+                || !channelOutputDevices.TryGetValue(resourceKey, out var wantedIndex)
+                || wantedIndex < 0)
+            {
+                return null;
+            }
+
+            var currentIndex = 0;
+            foreach (var option in AudioSettings.OutputDevices)
+            {
+                if (option.Id.IsDefault || !option.IsAvailable)
+                {
+                    continue;
+                }
+
+                if (currentIndex == wantedIndex)
+                {
+                    return option.Id;
+                }
+
+                currentIndex++;
+            }
+
+            return null;
+        }
+
+        private int ResolveLegacyOutputDeviceIndex(AudioDeviceId deviceId)
+        {
+            if (deviceId.IsDefault || AudioSettings is null)
+            {
+                return LegacyDefaultOutputDevice;
+            }
+
+            var legacyIndex = 0;
+            foreach (var option in AudioSettings.OutputDevices)
+            {
+                if (option.Id.IsDefault)
+                {
+                    continue;
+                }
+
+                if (option.IsAvailable
+                    && string.Equals(option.Id.Value, deviceId.Value, StringComparison.OrdinalIgnoreCase))
+                {
+                    return legacyIndex;
+                }
+
+                if (option.IsAvailable)
+                {
+                    legacyIndex++;
+                }
+            }
+
+            return LegacyDefaultOutputDevice;
+        }
+
+        private bool IsAvailableOutput(AudioDeviceId deviceId)
+        {
+            if (deviceId.IsDefault)
+            {
+                return true;
+            }
+
+            if (AudioSettings is null)
+            {
+                return false;
+            }
+
+            foreach (var option in AudioSettings.OutputDevices)
+            {
+                if (option.IsAvailable
+                    && string.Equals(option.Id.Value, deviceId.Value, StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        /// <summary>
         /// Resets the slot-scoped selection wholesale: the selection
         /// manager is cleared (unselecting the old slot instances and
         /// nulling the primary through its own event path), then every
@@ -982,30 +1442,49 @@ namespace DvmConsole.Avalonia.ViewModels
         /// </summary>
         private void ReassignSlotsFromSelectedZone()
         {
-            var rebuilt = new List<ChannelSlotViewModel>();
-
-            if (selectedZone?.Channels is { } zoneChannels)
+            foreach (var oldSlot in channels)
             {
-                for (var i = 0; i < zoneChannels.Count; i++)
-                {
-                    var channel = zoneChannels[i];
-                    var number = i + 1;
-                    var slot = new ChannelSlotViewModel(number, $"CHANNEL {number:00}");
-                    slot.Reassign(
-                        channel.Name,
-                        channel.Tgid,
-                        ResourceIdentity.Build(channel.System, channel.Tgid),
-                        channel.Mode,
-                        channel.System,
-                        channel.RxOnly,
-                        channel.CardSize,
-                        channel.ResourceColor);
-                    rebuilt.Add(slot);
-                }
+                oldSlot.PropertyChanged -= OnChannelSlotPropertyChanged;
             }
 
-            channels = rebuilt;
-            ProjectTarIndicators();
+            projectingAudioState = true;
+            try
+            {
+                var rebuilt = new List<ChannelSlotViewModel>();
+
+                if (selectedZone?.Channels is { } zoneChannels)
+                {
+                    for (var i = 0; i < zoneChannels.Count; i++)
+                    {
+                        var channel = zoneChannels[i];
+                        var number = i + 1;
+                        var slot = new ChannelSlotViewModel(number, $"CHANNEL {number:00}");
+                        slot.Reassign(
+                            channel.Name,
+                            channel.Tgid,
+                            ResourceIdentity.Build(channel.System, channel.Tgid),
+                            channel.Mode,
+                            channel.System,
+                            channel.RxOnly,
+                            channel.CardSize,
+                            channel.ResourceColor);
+                        slot.Volume = ResolveMonitorVolume(slot.ResourceKey);
+                        var outputOptions = BuildMonitorOutputOptions(slot.ResourceKey);
+                        slot.SetMonitorOutputDevices(
+                            outputOptions,
+                            FindConfiguredMonitorOutputOption(slot.ResourceKey, outputOptions));
+                        slot.PropertyChanged += OnChannelSlotPropertyChanged;
+                        rebuilt.Add(slot);
+                    }
+                }
+
+                channels = rebuilt;
+                ProjectTarIndicators();
+            }
+            finally
+            {
+                projectingAudioState = false;
+            }
 
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(Channels)));
         }
@@ -1084,6 +1563,38 @@ namespace DvmConsole.Avalonia.ViewModels
             }
 
             ProjectTarIndicators();
+        }
+
+        private void OnChannelSelectionChanged(ChannelSlotViewModel slot, bool isSelected)
+        {
+            ChannelSelectionChanged?.Invoke(slot, isSelected);
+        }
+
+        private void OnChannelSlotPropertyChanged(object? sender, PropertyChangedEventArgs e)
+        {
+            if (sender is not ChannelSlotViewModel slot
+                || projectingAudioState
+                || string.IsNullOrWhiteSpace(slot.ResourceKey))
+            {
+                return;
+            }
+
+            if (e.PropertyName == nameof(ChannelSlotViewModel.Volume))
+            {
+                channelVolumes[slot.ResourceKey.Trim()] = slot.Volume;
+                PersistAudioSettings(
+                    AudioSettings?.SelectedInputId ?? AudioDeviceId.Default,
+                    AudioSettings?.SelectedOutputId ?? AudioDeviceId.Default,
+                    AudioSettings?.AgcEnabled ?? false);
+                ChannelVolumeChanged?.Invoke(slot);
+                return;
+            }
+
+            if (e.PropertyName == nameof(ChannelSlotViewModel.MonitorOutputDevice)
+                && slot.MonitorOutputDevice is { } output)
+            {
+                SetMonitorOutputDevice(slot, output);
+            }
         }
 
         private void OnSelectedChannelsChanged()

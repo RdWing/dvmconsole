@@ -228,17 +228,20 @@
                                VerticalAlignment="Bottom" />
                 </Grid>
 
-                <ComboBox Grid.Row="1"
-                          ItemsSource="{Binding Zones}"
-                          SelectedItem="{Binding SelectedZone, Mode=TwoWay}"
-                          HorizontalAlignment="Left"
-                          MinWidth="280">
-                    <ComboBox.ItemTemplate>
-                        <DataTemplate x:DataType="vm:ZoneViewModel">
-                            <TextBlock Text="{Binding Name}" />
-                        </DataTemplate>
-                    </ComboBox.ItemTemplate>
-                </ComboBox>
+                <StackPanel Grid.Row="1" Orientation="Horizontal" Spacing="10">
+                    <ComboBox ItemsSource="{Binding Zones}"
+                              SelectedItem="{Binding SelectedZone, Mode=TwoWay}"
+                              HorizontalAlignment="Left"
+                              MinWidth="280">
+                        <ComboBox.ItemTemplate>
+                            <DataTemplate x:DataType="vm:ZoneViewModel">
+                                <TextBlock Text="{Binding Name}" />
+                            </DataTemplate>
+                        </ComboBox.ItemTemplate>
+                    </ComboBox>
+                    <Button Content="SELECT / CLEAR ALL"
+                            Click="SelectAllChannels_Click" />
+                </StackPanel>
 
                 <Border Grid.Row="2" Classes="panel" Padding="14">
                     <ItemsControl ItemsSource="{Binding Channels}">
@@ -288,6 +291,25 @@
                                             <TextBlock Classes="data-value" Text="{Binding Talkgroup}" />
                                         </StackPanel>
                                         <TextBlock Classes="muted" Text="{Binding LastSrcId}" />
+                                        <StackPanel Spacing="2">
+                                            <TextBlock Classes="data-label" Text="OUTPUT" />
+                                            <ComboBox ItemsSource="{Binding MonitorOutputDevices}"
+                                                      SelectedItem="{Binding MonitorOutputDevice, Mode=TwoWay}">
+                                                <ComboBox.ItemTemplate>
+                                                    <DataTemplate x:DataType="vm:AudioDeviceOptionViewModel">
+                                                        <TextBlock Text="{Binding Name}" />
+                                                    </DataTemplate>
+                                                </ComboBox.ItemTemplate>
+                                            </ComboBox>
+                                        </StackPanel>
+                                        <StackPanel Spacing="2">
+                                            <TextBlock Classes="data-label" Text="VOLUME" />
+                                            <Slider Minimum="0"
+                                                    Maximum="4"
+                                                    TickFrequency="1"
+                                                    IsSnapToTickEnabled="False"
+                                                    Value="{Binding Volume, Mode=TwoWay}" />
+                                        </StackPanel>
                                         <TextBlock Classes="muted"
                                                    Text="RX ACTIVE"
                                                    IsVisible="{Binding IsReceiving}" />

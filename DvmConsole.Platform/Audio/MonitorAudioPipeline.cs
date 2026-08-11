@@ -27,6 +27,7 @@ namespace DvmConsole.Platform.Audio
         /// dvmconsole/AudioManager.cs:75-89).
         /// </summary>
         private static readonly TimeSpan DefaultMaxBufferedDuration = TimeSpan.FromMilliseconds(250);
+        private const float MaxVolume = 4.0f;
 
         private readonly IAudioStreamFactory _factory;
         private readonly IVoiceFrameDecoder? _decoder;
@@ -212,15 +213,17 @@ namespace DvmConsole.Platform.Audio
         }
 
         /// <summary>
-        /// Playback volume, clamped to the unit interval and forwarded to the
-        /// playback stream.
+        /// Playback volume, clamped to the WPF-compatible 0..4 range and
+        /// forwarded to the playback stream.
         /// </summary>
         public float Volume
         {
             get => _volume;
             set
             {
-                var clamped = Math.Clamp(value, 0.0f, 1.0f);
+                var clamped = float.IsNaN(value) || float.IsInfinity(value)
+                    ? 1.0f
+                    : Math.Clamp(value, 0.0f, MaxVolume);
                 _volume = clamped;
                 if (Volatile.Read(ref _output) is { } output)
                 {

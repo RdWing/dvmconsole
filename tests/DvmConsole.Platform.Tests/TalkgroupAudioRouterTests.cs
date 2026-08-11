@@ -325,6 +325,19 @@ namespace DvmConsole.Platform.Tests
             public DateTime UtcNow { get; set; } = new DateTime(2026, 8, 6, 0, 0, 0, DateTimeKind.Utc);
         }
 
+        private sealed class RecordingDecodedPcmObserver : IDecodedPcmObserver
+        {
+            public int FrameCount { get; private set; }
+
+            public void ObserveDecodedPcm(
+                string talkgroupKey,
+                VoiceMode mode,
+                ReadOnlyMemory<byte> pcm)
+            {
+                FrameCount++;
+            }
+        }
+
         private static readonly TransmitTarget DmrTarget = new(
             "System 1", "31001", 1, VoiceMode.Dmr, 1001);
 
@@ -436,6 +449,118 @@ namespace DvmConsole.Platform.Tests
             var output = Assert.Single(factory.Outputs);
             Assert.Equal(9, output.Writes.Count); // 9 x 11-byte codewords
             Assert.All(output.Writes, w => Assert.Equal(320, w.Length));
+        }
+
+        [Fact]
+        public void RouteVoiceFrame_MonitorSelectionSuppressesSpeakerOnly_AndStopsImmediately()
+        {
+            var factory = new FakeAudioStreamFactory();
+            var scheduler = new ManualScheduler();
+            var observer = new RecordingDecodedPcmObserver();
+            var monitorEnabled = false;
+            var router = new TalkgroupAudioRouter(
+                factory,
+                new FakeVoiceFrameDecoder(),
+                new FakeVoiceFrameEncoder(),
+                new RecordingTrafficSender(),
+                () => AudioDeviceId.Default,
+                scheduler: scheduler.Schedule,
+                decodedPcmObserver: observer,
+                resolveMonitorEnabled: _ => monitorEnabled);
+
+            router.RouteVoiceFrame("SYS1/TG1", new byte[27], VoiceMode.Dmr);
+
+            Assert.Empty(factory.Outputs);
+            Assert.Equal(3, observer.FrameCount);
+
+            monitorEnabled = true;
+            router.RouteVoiceFrame("SYS1/TG1", new byte[27], VoiceMode.Dmr);
+            var output = Assert.Single(factory.Outputs);
+            Assert.Equal(6, observer.FrameCount);
+
+            router.StopMonitor("SYS1/TG1");
+            Assert.Equal(1, output.StopCount);
+
+            monitorEnabled = false;
+            router.RouteVoiceFrame("SYS1/TG1", new byte[27], VoiceMode.Dmr);
+            Assert.Equal(9, observer.FrameCount);
+            Assert.Single(factory.Outputs);
+        }
+
+        [Fact]
+        public void RouteVoiceFrame_DeselectedStillSchedulesObservationRelease()
+        {
+            var factory = new FakeAudioStreamFactory();
+            var scheduler = new ManualScheduler();
+            var observer = new RecordingDecodedPcmObserver();
+            var ended = new List<(string Key, VoiceMode Mode)>();
+            var router = new TalkgroupAudioRouter(
+                factory,
+                new FakeVoiceFrameDecoder(),
+                new FakeVoiceFrameEncoder(),
+                new RecordingTrafficSender(),
+                () => AudioDeviceId.Default,
+                scheduler: scheduler.Schedule,
+                decodedPcmObserver: observer,
+                resolveMonitorEnabled: _ => false);
+            router.TalkgroupStreamEnded += (key, mode) => ended.Add((key, mode));
+
+            router.RouteVoiceFrame("SYS1/TG1", new byte[27], VoiceMode.Dmr);
+
+            Assert.Empty(factory.Outputs);
+            Assert.Equal(3, observer.FrameCount);
+            Assert.Equal(1, scheduler.PendingCount);
+
+            scheduler.Elapse();
+
+            Assert.Equal(("SYS1/TG1", VoiceMode.Dmr), Assert.Single(ended));
+        }
+
+        [Fact]
+        public void RouteVoiceFrame_UsesPerKeyOutputAndVolumeResolvers()
+        {
+            var factory = new FakeAudioStreamFactory();
+            var key = "System 1/31001";
+            var router = new TalkgroupAudioRouter(
+                factory,
+                new FakeVoiceFrameDecoder(),
+                new FakeVoiceFrameEncoder(),
+                new RecordingTrafficSender(),
+                () => AudioDeviceId.Default,
+                resolveTalkgroupOutputDevice: routedKey =>
+                    AudioDeviceId.FromKey("output-for-" + routedKey),
+                resolveTalkgroupVolume: routedKey =>
+                    routedKey == key ? 3.5f : 1.0f);
+
+            router.RouteVoiceFrame(key, new byte[27], VoiceMode.Dmr);
+
+            var output = Assert.Single(factory.Outputs);
+            Assert.Equal(AudioDeviceId.FromKey("output-for-" + key), output.Device.Id);
+            Assert.Equal(3.5f, output.Volume);
+
+            router.SetMonitorVolume(key, 4.0f);
+            Assert.Equal(4.0f, output.Volume);
+        }
+
+        [Fact]
+        public void DmrSuffixedState_ControlOperationsUseUnsuffixedResourceKey()
+        {
+            var factory = new FakeAudioStreamFactory();
+            var router = CreateRouter(
+                factory,
+                new FakeVoiceFrameDecoder(),
+                new FakeVoiceFrameEncoder(),
+                new RecordingTrafficSender(),
+                new ManualScheduler());
+
+            router.RouteVoiceFrame("SYS1/TG1|slot:0", new byte[27], VoiceMode.Dmr);
+            var output = Assert.Single(factory.Outputs);
+
+            router.SetMonitorVolume("SYS1/TG1", 3.5f);
+            Assert.Equal(3.5f, output.Volume);
+
+            router.StopMonitor("SYS1/TG1");
+            Assert.Equal(1, output.StopCount);
         }
 
         [Fact]

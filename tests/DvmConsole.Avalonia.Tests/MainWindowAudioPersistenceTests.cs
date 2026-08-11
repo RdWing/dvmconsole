@@ -95,6 +95,162 @@ namespace DvmConsole.Avalonia.Tests
         }
 
         [Fact]
+        public void ResourceAudioState_LoadsByStableKey_AndSavesExplicitThenInheritedOutput()
+        {
+            using var dir = new TempDir();
+            var codeplug = MakeCodeplug();
+            var resourceKey = ResourceIdentity.Build("Repeater 1", "31001");
+            var persistence = CreatePersistence(dir.SettingsPath);
+            persistence.Save(new UserSettingsAudioSection
+            {
+                MasterOutputDeviceKey = "spk-1",
+                ChannelOutputDeviceKeys = new Dictionary<string, string>
+                {
+                    [resourceKey] = "spk-1",
+                },
+                ChannelVolumes = new Dictionary<string, double>
+                {
+                    [resourceKey] = 3.5,
+                },
+            });
+
+            var vm = new MainWindowViewModel(
+                codeplug.Systems,
+                new FakeAudioDeviceCatalog(CreateInputs(), CreateOutputs()),
+                null,
+                persistence,
+                null,
+                codeplug);
+            var slot = Assert.Single(vm.Channels);
+
+            Assert.Equal(3.5, slot.Volume);
+            Assert.Equal(AudioDeviceId.FromKey("spk-1"), vm.ResolveMonitorOutputDevice(resourceKey));
+            Assert.Equal(
+                AudioDeviceId.FromKey("spk-1"),
+                vm.ResolveMonitorOutputDevice(resourceKey + "|slot:1"));
+            Assert.Equal(3.5f, vm.ResolveMonitorVolume(resourceKey + "|slot:1"));
+            Assert.False(slot.MonitorOutputDevice!.IsInheritMaster);
+            Assert.Equal("spk-1", slot.MonitorOutputDevice.Id.Value);
+
+            vm.ToggleSelectAllCurrentZone();
+            Assert.True(vm.IsMonitorEnabled(resourceKey + "|slot:1"));
+
+            vm.SetMonitorOutputDevice(slot, AudioDeviceId.FromKey("spk-1"));
+            var savedExplicit = JObject.Parse(File.ReadAllText(dir.SettingsPath));
+            Assert.Equal("spk-1", (string)savedExplicit["ChannelOutputDeviceKeys"]![resourceKey]!);
+            Assert.Equal(0, (int)savedExplicit["ChannelOutputDevices"]![resourceKey]!);
+
+            slot.MonitorOutputDevice = slot.MonitorOutputDevices[0];
+            var savedInherited = JObject.Parse(File.ReadAllText(dir.SettingsPath));
+            Assert.Null(savedInherited["ChannelOutputDeviceKeys"]![resourceKey]);
+            Assert.Null(savedInherited["ChannelOutputDevices"]![resourceKey]);
+            Assert.Equal(AudioDeviceId.FromKey("spk-1"), vm.ResolveMonitorOutputDevice(resourceKey));
+        }
+
+        [Fact]
+        public void ResourceAudioState_LegacyOutputIndexLoadsWhenStableKeyIsAbsent()
+        {
+            using var dir = new TempDir();
+            var codeplug = MakeCodeplug();
+            var resourceKey = ResourceIdentity.Build("Repeater 1", "31001");
+            var persistence = CreatePersistence(dir.SettingsPath);
+            persistence.Save(new UserSettingsAudioSection
+            {
+                MasterOutputDeviceKey = "spk-1",
+                ChannelOutputDevices = new Dictionary<string, int>
+                {
+                    [resourceKey] = 0,
+                },
+            });
+
+            var vm = new MainWindowViewModel(
+                codeplug.Systems,
+                new FakeAudioDeviceCatalog(CreateInputs(), CreateOutputs()),
+                null,
+                persistence,
+                null,
+                codeplug);
+
+            Assert.Equal(AudioDeviceId.FromKey("spk-1"), vm.ResolveMonitorOutputDevice(resourceKey));
+            Assert.Equal("spk-1", vm.Channels[0].MonitorOutputDevice!.Id.Value);
+        }
+
+        [Fact]
+        public void ResourceAudioState_PreservesExplicitSystemDefaultSeparateFromInheritMaster()
+        {
+            using var dir = new TempDir();
+            var codeplug = MakeCodeplug();
+            var resourceKey = ResourceIdentity.Build("Repeater 1", "31001");
+            var persistence = CreatePersistence(dir.SettingsPath);
+            persistence.Save(new UserSettingsAudioSection
+            {
+                MasterOutputDeviceKey = "spk-1",
+                ChannelOutputDevices = new Dictionary<string, int>
+                {
+                    [resourceKey] = -1,
+                },
+                ChannelOutputDeviceKeys = new Dictionary<string, string>
+                {
+                    [resourceKey] = "windows-default",
+                },
+            });
+
+            var vm = new MainWindowViewModel(
+                codeplug.Systems,
+                new FakeAudioDeviceCatalog(CreateInputs(), CreateOutputs()),
+                null,
+                persistence,
+                null,
+                codeplug);
+            var slot = Assert.Single(vm.Channels);
+
+            Assert.Equal(AudioDeviceId.Default, vm.ResolveMonitorOutputDevice(resourceKey));
+            Assert.NotNull(slot.MonitorOutputDevice);
+            Assert.False(slot.MonitorOutputDevice!.IsInheritMaster);
+            Assert.Equal(AudioDeviceId.Default, slot.MonitorOutputDevice.Id);
+            Assert.Equal("System Default Output", slot.MonitorOutputDevice.Name);
+
+            var saved = JObject.Parse(File.ReadAllText(dir.SettingsPath));
+            Assert.Equal(
+                "windows-default",
+                (string)saved["ChannelOutputDeviceKeys"]![resourceKey]!);
+            Assert.Equal(-1, (int)saved["ChannelOutputDevices"]![resourceKey]!);
+        }
+
+        [Fact]
+        public void ResourceAudioState_StaleOutputFallsBackToAvailableMaster()
+        {
+            using var dir = new TempDir();
+            var codeplug = MakeCodeplug();
+            var resourceKey = ResourceIdentity.Build("Repeater 1", "31001");
+            var persistence = CreatePersistence(dir.SettingsPath);
+            persistence.Save(new UserSettingsAudioSection
+            {
+                MasterOutputDeviceKey = "spk-1",
+                ChannelOutputDeviceKeys = new Dictionary<string, string>
+                {
+                    [resourceKey] = "removed-speaker",
+                },
+            });
+
+            var vm = new MainWindowViewModel(
+                codeplug.Systems,
+                new FakeAudioDeviceCatalog(CreateInputs(), CreateOutputs()),
+                null,
+                persistence,
+                null,
+                codeplug);
+
+            Assert.Equal(AudioDeviceId.FromKey("spk-1"), vm.ResolveMonitorOutputDevice(resourceKey));
+            Assert.NotNull(vm.Channels[0].MonitorOutputDevice);
+            Assert.False(vm.Channels[0].MonitorOutputDevice!.IsAvailable);
+            Assert.Equal("removed-speaker", vm.Channels[0].MonitorOutputDevice!.Id.Value);
+            Assert.Contains(
+                vm.Channels[0].MonitorOutputDevices,
+                option => option.Id.Value == "removed-speaker" && !option.IsAvailable);
+        }
+
+        [Fact]
         public void MalformedLoad_DoesNotThrowAndUsesAudioDefaults()
         {
             using var dir = new TempDir();
@@ -163,6 +319,33 @@ namespace DvmConsole.Avalonia.Tests
                     AudioDeviceId.FromKey("spk-1"),
                     AudioDeviceDirection.Output,
                     "Speaker 1"),
+            };
+
+        private static Codeplug MakeCodeplug()
+            => new()
+            {
+                Systems = new List<Codeplug.System>
+                {
+                    new Codeplug.System { Name = "Repeater 1", Rid = "1000001" },
+                },
+                Zones = new List<Codeplug.Zone>
+                {
+                    new Codeplug.Zone
+                    {
+                        Name = "Zone A",
+                        Channels = new List<Codeplug.Channel>
+                        {
+                            new Codeplug.Channel
+                            {
+                                Name = "CH 1",
+                                System = "Repeater 1",
+                                Tgid = "31001",
+                                Slot = 1,
+                                Mode = "dmr",
+                            },
+                        },
+                    },
+                },
             };
 
         private sealed class FakeAudioDeviceCatalog : IAudioDeviceCatalog
