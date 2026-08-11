@@ -6,13 +6,13 @@ using System.ComponentModel;
 namespace DvmConsole.Avalonia.ViewModels
 {
     /// <summary>
-    /// View-model for one operator-dashboard channel slot. The identity
+    /// View-model for one operator-dashboard channel resource. The identity
     /// of a slot is immutable: number and label are fixed at
     /// construction, as is the unassigned default (IDLE status). The
     /// channel assignment is mutable through the internal
     /// <see cref="Reassign"/> entry point, which the dashboard's
-    /// zone-selection slice uses to re-point the four fixed slots at a
-    /// zone's channels. The live selection state
+    /// zone-selection slice uses to point channel resources at a zone's
+    /// channels. The live selection state
     /// (<see cref="IsSelected"/>, <see cref="IsPrimary"/>), the PTT
     /// engagement state (<see cref="PttEngaged"/>) and the TAR
     /// recording indicator state (<see cref="TarRecordingEnabled"/>)
@@ -28,6 +28,7 @@ namespace DvmConsole.Avalonia.ViewModels
         private bool tarRecordingEnabled;
         private string? channelName;
         private string talkgroup = "NO TALKGROUP";
+        private string? resourceKey;
 
         /// <summary>
         /// Creates a channel slot with the given 1-based number, display
@@ -43,7 +44,7 @@ namespace DvmConsole.Avalonia.ViewModels
             this.channelName = channelName;
         }
 
-        /// <summary>The 1-based slot number (1..4 on the dashboard).</summary>
+        /// <summary>The 1-based resource number within the active zone.</summary>
         public int Number { get; }
 
         /// <summary>The display label, e.g. <c>CHANNEL 01</c>.</summary>
@@ -64,6 +65,15 @@ namespace DvmConsole.Avalonia.ViewModels
         /// through the internal <see cref="Reassign"/> entry point.
         /// </summary>
         public string Talkgroup => talkgroup;
+
+        /// <summary>
+        /// The normalized resource key (<see cref="dvmconsole.ResourceIdentity.Build"/>)
+        /// of the codeplug channel assigned to this slot, or null when no
+        /// channel is assigned. Get-only: the key travels with the
+        /// assignment through the internal <see cref="Reassign"/> entry
+        /// point and is never mutated in place.
+        /// </summary>
+        public string? ResourceKey => resourceKey;
 
         /// <summary>
         /// The operational status of this slot; <c>IDLE</c> until assigned.
@@ -165,18 +175,26 @@ namespace DvmConsole.Avalonia.ViewModels
 
         /// <summary>
         /// Replaces the channel assignment of this slot with the given
-        /// channel name and talkgroup, raising change-only
-        /// <see cref="PropertyChanged"/> notifications: a notification
-        /// is raised for a member only when its value actually changes,
-        /// and a call that changes nothing raises nothing at all. A null
-        /// or whitespace-only talkgroup normalizes to the stable
-        /// <c>NO TALKGROUP</c> text. The assignment is replaced
-        /// wholesale; identity members (<see cref="Number"/>,
+        /// channel name, talkgroup and normalized resource key, raising
+        /// change-only <see cref="PropertyChanged"/> notifications: a
+        /// notification is raised for a member only when its value
+        /// actually changes, and a call that changes nothing raises
+        /// nothing at all. A null or whitespace-only talkgroup normalizes
+        /// to the stable <c>NO TALKGROUP</c> text. The assignment is
+        /// replaced wholesale; identity members (<see cref="Number"/>,
         /// <see cref="Label"/>) and <see cref="Status"/> are untouched.
+        /// <see cref="ResourceKey"/> is get-only and non-notifying; it is
+        /// set here alongside the assignment (null for unassigned).
         /// </summary>
         /// <param name="channelName">The new channel name, or null for unassigned.</param>
         /// <param name="talkgroup">The new talkgroup, or null for none.</param>
-        internal void Reassign(string? channelName, string? talkgroup)
+        /// <param name="resourceKey">
+        /// The normalized resource key of the assigned channel
+        /// (<see cref="dvmconsole.ResourceIdentity.Build"/>), or null for
+        /// unassigned. Trailing and optional so existing two-argument
+        /// calls stay source-compatible.
+        /// </param>
+        internal void Reassign(string? channelName, string? talkgroup, string? resourceKey = null)
         {
             var normalizedTalkgroup = string.IsNullOrWhiteSpace(talkgroup)
                 ? "NO TALKGROUP"
@@ -186,14 +204,17 @@ namespace DvmConsole.Avalonia.ViewModels
                 this.channelName, channelName, StringComparison.Ordinal);
             var talkgroupChanged = !string.Equals(
                 this.talkgroup, normalizedTalkgroup, StringComparison.Ordinal);
+            var resourceKeyChanged = !string.Equals(
+                this.resourceKey, resourceKey, StringComparison.Ordinal);
 
-            if (!channelNameChanged && !talkgroupChanged)
+            if (!channelNameChanged && !talkgroupChanged && !resourceKeyChanged)
             {
                 return;
             }
 
             this.channelName = channelName;
             this.talkgroup = normalizedTalkgroup;
+            this.resourceKey = resourceKey;
 
             if (channelNameChanged)
             {

@@ -14,10 +14,10 @@
 * WPF parity: zones are TABS (one TabItem per Codeplug.Zones entry,
 * dvmconsole/MainWindow.xaml.cs:379-469); each zone's channels render
 * as ChannelBox cards with channelName (systemName) + Tgid display
-* (ChannelBox.xaml:31-68). The Avalonia desk keeps its 4 fixed slots
-* populated from the SELECTED zone's channels (first 4; remainder
-* unassigned). Talkgroup display = channel.Tgid, "NO TALKGROUP" when
-* blank.
+* (ChannelBox.xaml:31-68). The Avalonia desk exposes every channel from
+* the SELECTED zone in codeplug order. Talkgroup display = channel.Tgid,
+* "NO TALKGROUP" when blank. The parameterless dashboard retains its four
+* compatibility slots.
 */
 using System;
 using System.Collections.Generic;
@@ -152,7 +152,7 @@ namespace DvmConsole.Avalonia.Tests
         ** ---------------------------------------------------------------- */
 
         [Fact]
-        public void DefaultZone_SlotsAssignedFromFirstFourChannels()
+        public void DefaultZone_ResourcesAssignedFromEveryChannel()
         {
             var vm = new MainWindowViewModel(MakeCodeplug().Systems, null, null, null, null, MakeCodeplug());
 
@@ -162,10 +162,11 @@ namespace DvmConsole.Avalonia.Tests
             Assert.Equal("31002", vm.Channels[1].Talkgroup);
             Assert.Equal("CH 3", vm.Channels[2].ChannelName);
             Assert.Equal("CH 4", vm.Channels[3].ChannelName);
+            Assert.Equal("CH 5 Extra", vm.Channels[4].ChannelName);
         }
 
         [Fact]
-        public void ZoneWithFewerThanFourChannels_RemainingUnassigned()
+        public void ZoneWithFewerThanFourChannels_ExposesExactCollection()
         {
             var vm = new MainWindowViewModel(MakeCodeplug().Systems, null, null, null, null, MakeCodeplug());
 
@@ -175,21 +176,17 @@ namespace DvmConsole.Avalonia.Tests
             Assert.Equal("32001", vm.Channels[0].Talkgroup);
             Assert.Equal("B2", vm.Channels[1].ChannelName);
             Assert.Equal("32002", vm.Channels[1].Talkgroup);
-            Assert.Null(vm.Channels[2].ChannelName);
-            Assert.Equal("NO TALKGROUP", vm.Channels[2].Talkgroup);
-            Assert.Null(vm.Channels[3].ChannelName);
-            Assert.Equal("NO TALKGROUP", vm.Channels[3].Talkgroup);
+            Assert.Equal(2, vm.Channels.Count);
         }
 
         [Fact]
-        public void ZoneWithNullChannels_AllSlotsUnassigned_NoThrow()
+        public void ZoneWithNullChannels_ExposesEmptyCollection_NoThrow()
         {
             var vm = new MainWindowViewModel(MakeCodeplug().Systems, null, null, null, null, MakeCodeplug());
 
             vm.SelectedZone = vm.Zones[2]; // Zone C: null Channels
 
-            Assert.All(vm.Channels, c => Assert.Null(c.ChannelName));
-            Assert.All(vm.Channels, c => Assert.Equal("NO TALKGROUP", c.Talkgroup));
+            Assert.Empty(vm.Channels);
         }
 
         /* ------------------------------------------------------------------

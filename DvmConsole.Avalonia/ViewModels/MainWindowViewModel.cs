@@ -15,9 +15,12 @@ namespace DvmConsole.Avalonia.ViewModels
 {
     /// <summary>
     /// Pure managed view-model for the operator dashboard main window. The
-    /// dashboard starts disconnected and awaiting FNE configuration, with
-    /// exactly four fixed channel slots; connection state is replaced
-    /// wholesale through <see cref="SetConnectionState"/>. Channel
+    /// dashboard starts disconnected and awaiting FNE configuration;
+    /// connection state is replaced wholesale through
+    /// <see cref="SetConnectionState"/>. The channel resources exposed by
+    /// <see cref="Channels"/> are the complete channel collection of the
+    /// selected codeplug zone in codeplug order; sessions without a
+    /// codeplug keep the four fixed compatibility slots. Channel
     /// selection is tracked through the Core
     /// <see cref="SelectedChannelsManager{T}"/> with literal WPF
     /// <c>ProcessSelectionClick</c> semantics via
@@ -28,7 +31,12 @@ namespace DvmConsole.Avalonia.ViewModels
     /// </summary>
     public sealed class MainWindowViewModel : INotifyPropertyChanged
     {
-        private const int ChannelCount = 4;
+        /// <summary>
+        /// The fixed slot count of the no-codeplug compatibility
+        /// dashboard. Codeplug sessions project the selected zone's
+        /// complete channel collection instead.
+        /// </summary>
+        private const int CompatibilitySlotCount = 4;
 
         private const string AudioSavedFeedbackText = "Audio settings saved";
 
@@ -41,15 +49,6 @@ namespace DvmConsole.Avalonia.ViewModels
         private readonly AudioSettingsPersistence? audioPersistence;
 
         private readonly TarSettingsPersistence? tarPersistence;
-
-        /// <summary>
-        /// The normalized resource key (<see cref="ResourceIdentity.Build"/>)
-        /// of the codeplug channel currently assigned to each fixed slot,
-        /// or null for unassigned slots. Kept in sync by
-        /// <see cref="ReassignSlotsFromSelectedZone"/> and consumed by the
-        /// TAR indicator projection.
-        /// </summary>
-        private readonly string?[] slotResourceKeys = new string?[ChannelCount];
 
         private string audioSaveFeedback = string.Empty;
 
@@ -200,9 +199,9 @@ namespace DvmConsole.Avalonia.ViewModels
         /// <see cref="TarConfigurationViewModel.TarChannelConfigItem.Enabled"/>
         /// is projected into the
         /// <see cref="ChannelSlotViewModel.TarRecordingEnabled"/> of the
-        /// fixed slot whose assigned channel shares its normalized
-        /// resource key, re-projected when the zone selection changes and
-        /// refreshed immediately when an item's Enabled changes.
+        /// resource whose assigned channel shares its normalized resource
+        /// key, re-projected when the zone selection changes and refreshed
+        /// immediately when an item's Enabled changes.
         /// </summary>
         public TarConfigurationViewModel? TarConfiguration { get; }
 
@@ -245,17 +244,29 @@ namespace DvmConsole.Avalonia.ViewModels
         /// <summary>True when the operator may initiate a connection.</summary>
         public bool CanConnect { get; private set; } = true;
 
+        private IReadOnlyList<ChannelSlotViewModel> channels =
+            Array.Empty<ChannelSlotViewModel>();
+
         /// <summary>
-        /// The fixed channel slots of the dashboard, numbered 1..4.
-        /// Exposed read-only; the backing collection is never mutated
-        /// after construction. The
+        /// The channel resources of the operator dashboard. With a
+        /// codeplug zone selected this is the zone's complete channel
+        /// collection in codeplug order — exactly the zone channels,
+        /// numbered 1..N with <c>CHANNEL 01</c>-style labels, never
+        /// truncated and never padded with filler slots; a zone whose
+        /// channel list is null or empty exposes an empty collection.
+        /// The collection is rebuilt wholesale on every zone switch
+        /// (fresh slot instances, so no stale selection state survives),
+        /// and a <see cref="PropertyChanged"/> notification is raised
+        /// for <c>Channels</c> so shell bindings re-render. Sessions
+        /// without a codeplug keep the four fixed compatibility slots
+        /// (numbered 1..4), all unassigned. The
         /// <see cref="ChannelSlotViewModel.TarRecordingEnabled"/>
-        /// indicator of each assigned slot is projected from the composed
-        /// <see cref="TarConfiguration"/> by normalized resource key, and
-        /// stays false when no TAR configuration is composed or the slot
-        /// is unassigned.
+        /// indicator of each assigned resource is projected from the
+        /// composed <see cref="TarConfiguration"/> by normalized
+        /// resource key, and stays false when no TAR configuration is
+        /// composed or the resource is unassigned.
         /// </summary>
-        public IReadOnlyList<ChannelSlotViewModel> Channels { get; }
+        public IReadOnlyList<ChannelSlotViewModel> Channels => channels;
 
         /// <summary>
         /// The codeplug zones retained by the dashboard in codeplug
@@ -269,22 +280,22 @@ namespace DvmConsole.Avalonia.ViewModels
         private ZoneViewModel? selectedZone;
 
         /// <summary>
-        /// The zone currently driving the four channel slots, or null
+        /// The zone currently driving the channel resources, or null
         /// when the codeplug has no zones. Defaults to the first zone
         /// when zones exist. Change-only: a
         /// <see cref="PropertyChanged"/> notification is raised only
         /// when the value actually changes, and a call that changes
         /// nothing raises nothing. Foreign instances (not a member of
         /// <see cref="Zones"/>) and null (while zones exist) are
-        /// rejected as silent no-ops. On an accepted change the four
-        /// slots are re-assigned from the new zone's channels, the
+        /// rejected as silent no-ops. On an accepted change the channel
+        /// collection is rebuilt from the new zone's channels, the
         /// slot-scoped selection is reset wholesale, and the TAR
         /// recording indicators are re-projected from the composed
         /// <see cref="TarConfiguration"/>. The
         /// <see cref="PropertyChanged"/> notification is raised only
-        /// after the zone assignment, slot reassignment, and selection
+        /// after the zone assignment, collection rebuild, and selection
         /// reset are complete, so observers see the fully applied
-        /// zone/slot/selection state.
+        /// zone/resource/selection state.
         /// </summary>
         public ZoneViewModel? SelectedZone
         {
@@ -444,8 +455,9 @@ namespace DvmConsole.Avalonia.ViewModels
         }
 
         /// <summary>
-        /// Creates the offline dashboard with exactly four channel slots,
-        /// an FNE connection manager seeded from the given codeplug
+        /// Creates the offline dashboard with a compatibility resource
+        /// collection when no codeplug zone is supplied, an FNE connection
+        /// manager seeded from the given codeplug
         /// systems, an audio-settings slice composed from the given
         /// device catalog, a PTT capability slice composed from the
         /// given hotkey service, optional audio-settings persistence,
@@ -467,12 +479,13 @@ namespace DvmConsole.Avalonia.ViewModels
         /// composed exactly once from the result. When a codeplug is
         /// supplied, its zones are retained in codeplug order as
         /// <see cref="Zones"/> with the first zone selected by default
-        /// (<see cref="SelectedZone"/>); the four slots are assigned
-        /// from the selected zone's channels (first <c>ChannelCount</c>,
-        /// with slots beyond the list staying unassigned — null
-        /// <see cref="ChannelSlotViewModel.ChannelName"/>). A null
+        /// (<see cref="SelectedZone"/>); <see cref="Channels"/> exposes
+        /// the selected zone's complete channel collection in codeplug
+        /// order (empty when the zone's channel list is null or empty).
+        /// A null
         /// codeplug leaves <see cref="Zones"/> empty, no zone selected,
-        /// and every slot unassigned. A null store leaves
+        /// and the four unassigned compatibility slots in
+        /// <see cref="Channels"/>. A null store leaves
         /// <see cref="CallHistory"/> null, keeping the CALL HISTORY
         /// panel in its muted "not attached" state. When a codeplug and
         /// TAR settings persistence are both supplied, the TAR
@@ -527,14 +540,22 @@ namespace DvmConsole.Avalonia.ViewModels
                 .ToList()
                 ?? new List<ZoneViewModel>();
 
-            var channels = new ChannelSlotViewModel[ChannelCount];
-            for (var i = 0; i < ChannelCount; i++)
+            // Sessions without a codeplug keep the four fixed
+            // compatibility slots, all unassigned. Codeplug sessions
+            // leave the collection empty here; the SelectedZone
+            // assignment below rebuilds it from the selected zone's
+            // complete channel collection.
+            if (Zones.Count == 0)
             {
-                var number = i + 1;
-                channels[i] = new ChannelSlotViewModel(number, $"CHANNEL {number:00}");
-            }
+                var legacy = new ChannelSlotViewModel[CompatibilitySlotCount];
+                for (var i = 0; i < CompatibilitySlotCount; i++)
+                {
+                    var number = i + 1;
+                    legacy[i] = new ChannelSlotViewModel(number, $"CHANNEL {number:00}");
+                }
 
-            Channels = channels;
+                channels = legacy;
+            }
 
             selectedChannelsManager = new SelectedChannelsManager<ChannelSlotViewModel>(
                 selectionVisualChanged: (slot, isSelected) => slot.IsSelected = isSelected,
@@ -547,8 +568,8 @@ namespace DvmConsole.Avalonia.ViewModels
             PrimaryChannel = null;
 
             // Default the zone selection to the first zone; the setter
-            // assigns the slots from its channels (all unassigned when
-            // no zones exist).
+            // rebuilds the channel collection from its channels (the
+            // four compatibility slots stay when no zones exist).
             SelectedZone = Zones.Count > 0 ? Zones[0] : null;
 
             Ptt = hotkeys is null
@@ -661,11 +682,11 @@ namespace DvmConsole.Avalonia.ViewModels
             {
                 TarConfiguration.SaveRequested += OnTarSaveRequested;
 
-                // Project the persisted Enabled state into the fixed slot
+                // Project the persisted Enabled state into the resource
                 // indicators and subscribe to every item so dialog edits
-                // refresh the matching slot immediately. Items are fixed
-                // at composition, so the subscription is exactly once per
-                // item and never needs renewal.
+                // refresh the matching resource immediately. Items are
+                // fixed at composition, so the subscription is exactly
+                // once per item and never needs renewal.
                 ProjectTarIndicators();
                 foreach (TarConfigurationViewModel.TarZoneConfigGroup group in TarConfiguration.ZoneGroups)
                 {
@@ -864,28 +885,35 @@ namespace DvmConsole.Avalonia.ViewModels
         }
 
         /// <summary>
-        /// Applies a channel-slot click with the literal WPF
+        /// Applies a channel-resource click with the literal WPF
         /// <c>ProcessSelectionClick</c> branch order through the Core
         /// <see cref="SelectedChannelsManager{T}"/>: a primary click
-        /// (setPrimary true) on an already-selected slot sets or moves the
-        /// primary, or clears it when the slot is already primary; any
-        /// other click toggles membership (select unselected, deselect
-        /// selected). A primary click on an unselected slot selects it
-        /// only. Deselecting the primary slot also clears the primary.
+        /// (setPrimary true) on an already-selected resource sets or
+        /// moves the primary, or clears it when the resource is already
+        /// primary; any other click toggles membership (select
+        /// unselected, deselect selected). A primary click on an
+        /// unselected resource selects it only. Deselecting the primary
+        /// resource also clears the primary.
         /// </summary>
-        /// <param name="slotNumber">The 1-based slot number to click.</param>
+        /// <param name="slotNumber">
+        /// The 1-based resource number to click. With a codeplug zone
+        /// active the valid range is 1..<see cref="Channels"/>.Count;
+        /// the no-codeplug compatibility dashboard keeps the fixed 1..4
+        /// range.
+        /// </param>
         /// <param name="setPrimary">True for the primary-toggle (Ctrl-click) variant.</param>
         /// <exception cref="ArgumentOutOfRangeException">
-        /// <paramref name="slotNumber"/> is outside the valid 1..4 range.
+        /// <paramref name="slotNumber"/> is outside the active resource
+        /// collection.
         /// </exception>
         public void ProcessChannelClick(int slotNumber, bool setPrimary)
         {
-            if (slotNumber < 1 || slotNumber > ChannelCount)
+            if (slotNumber < 1 || slotNumber > Channels.Count)
             {
                 throw new ArgumentOutOfRangeException(
                     nameof(slotNumber),
                     slotNumber,
-                    $"Slot number must be between 1 and {ChannelCount}.");
+                    $"Slot number must be between 1 and {Channels.Count}.");
             }
 
             var slot = Channels[slotNumber - 1];
@@ -936,53 +964,61 @@ namespace DvmConsole.Avalonia.ViewModels
         }
 
         /// <summary>
-        /// Assigns slots 0..3 (1-based 1..4) from the selected zone's
-        /// channels in order — the first <see cref="ChannelCount"/>
-        /// channels. A zone with a null channel list, or fewer channels
-        /// than slots, leaves the remainder unassigned (null
-        /// <see cref="ChannelSlotViewModel.ChannelName"/>, <c>NO
-        /// TALKGROUP</c>). Each slot's normalized resource key
-        /// (<see cref="ResourceIdentity.Build"/>) is retained alongside
-        /// the assignment, and the TAR recording indicators are
-        /// re-projected from the composed <see cref="TarConfiguration"/>
-        /// (a missing TAR configuration keeps every indicator false).
+        /// Rebuilds <see cref="Channels"/> from the selected zone's
+        /// channel collection in codeplug order: one slot per zone
+        /// channel, numbered 1..N and labelled <c>CHANNEL 01</c>-style,
+        /// with the channel name, talkgroup and normalized resource key
+        /// (<see cref="ResourceIdentity.Build"/>) assigned wholesale.
+        /// A zone with a null or empty channel list yields an empty
+        /// collection — no filler slots are ever added. Fresh slot
+        /// instances are created for every rebuild, so no selection or
+        /// assignment state survives a zone switch. The collection is
+        /// replaced wholesale (never mutated in place) and a
+        /// <see cref="PropertyChanged"/> notification is raised for
+        /// <c>Channels</c> so shell bindings re-render. The TAR
+        /// recording indicators are re-projected from the composed
+        /// <see cref="TarConfiguration"/> (a missing TAR configuration
+        /// keeps every indicator false).
         /// </summary>
         private void ReassignSlotsFromSelectedZone()
         {
-            var zoneChannels = selectedZone?.Channels;
+            var rebuilt = new List<ChannelSlotViewModel>();
 
-            for (var i = 0; i < ChannelCount; i++)
+            if (selectedZone?.Channels is { } zoneChannels)
             {
-                var slot = Channels[i];
-
-                if (zoneChannels is not null && i < zoneChannels.Count)
+                for (var i = 0; i < zoneChannels.Count; i++)
                 {
                     var channel = zoneChannels[i];
-                    slot.Reassign(channel.Name, channel.Tgid);
-                    slotResourceKeys[i] = ResourceIdentity.Build(channel.System, channel.Tgid);
-                }
-                else
-                {
-                    slot.Reassign(null, null);
-                    slotResourceKeys[i] = null;
+                    var number = i + 1;
+                    var slot = new ChannelSlotViewModel(number, $"CHANNEL {number:00}");
+                    slot.Reassign(
+                        channel.Name,
+                        channel.Tgid,
+                        ResourceIdentity.Build(channel.System, channel.Tgid));
+                    rebuilt.Add(slot);
                 }
             }
 
+            channels = rebuilt;
             ProjectTarIndicators();
+
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(Channels)));
         }
 
         /// <summary>
-        /// Projects the composed TAR configuration into the fixed slot
-        /// indicators: each slot's
+        /// Projects the composed TAR configuration into the channel
+        /// indicators: each resource's
         /// <see cref="ChannelSlotViewModel.TarRecordingEnabled"/> becomes
         /// the Enabled state of the TAR item whose resource key matches
-        /// the slot's assigned channel (normalized by
+        /// the resource's own
+        /// <see cref="ChannelSlotViewModel.ResourceKey"/> (normalized by
         /// <see cref="ResourceIdentity.Build"/>), or false when no TAR
-        /// configuration is composed, the slot is unassigned, or no item
-        /// matches. The slot setter is change-only, so re-projection never
-        /// raises spurious notifications. This is headless indicator
-        /// state only: nothing is persisted here and no UI, recorder or
-        /// lifecycle code runs.
+        /// configuration is composed, the resource is unassigned, or no
+        /// item matches. Every dynamic resource in
+        /// <see cref="Channels"/> is projected; the slot setter is
+        /// change-only, so re-projection never raises spurious
+        /// notifications. This is headless indicator state only: nothing
+        /// is persisted here and no UI, recorder or lifecycle code runs.
         /// </summary>
         private void ProjectTarIndicators()
         {
@@ -991,10 +1027,10 @@ namespace DvmConsole.Avalonia.ViewModels
                 return;
             }
 
-            for (var i = 0; i < ChannelCount; i++)
+            foreach (var slot in Channels)
             {
-                Channels[i].TarRecordingEnabled =
-                    FindTarItem(slotResourceKeys[i])?.Enabled ?? false;
+                slot.TarRecordingEnabled =
+                    FindTarItem(slot.ResourceKey)?.Enabled ?? false;
             }
         }
 

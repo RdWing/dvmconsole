@@ -1404,7 +1404,7 @@ namespace DvmConsole.Avalonia.Tests
         }
 
         [Fact]
-        public void CodeplugCtor_DefaultZone_SlotsAssignedInOrder()
+        public void CodeplugCtor_DefaultZone_ResourcesAssignedInOrder()
         {
             var vm = new MainWindowViewModel(MakeCodeplug().Systems, null, null, null, null, MakeCodeplug());
 
@@ -1413,10 +1413,11 @@ namespace DvmConsole.Avalonia.Tests
             Assert.Equal("CH 2 P25", vm.Channels[1].ChannelName);
             Assert.Equal("CH 3", vm.Channels[2].ChannelName);
             Assert.Equal("CH 4", vm.Channels[3].ChannelName);
+            Assert.Equal("CH 5 Extra", vm.Channels[4].ChannelName);
         }
 
         [Fact]
-        public void CodeplugCtor_FewerChannelsThanSlots_RemainingUnassigned()
+        public void CodeplugCtor_FewerChannelsThanSlots_ExposesExactCollection()
         {
             var codeplug = MakeCodeplug();
             // Keep only the first two channels (remove CH 3, CH 4, CH 5).
@@ -1428,8 +1429,7 @@ namespace DvmConsole.Avalonia.Tests
 
             Assert.Equal("CH 1 DMR", vm.Channels[0].ChannelName);
             Assert.Equal("CH 2 P25", vm.Channels[1].ChannelName);
-            Assert.Null(vm.Channels[2].ChannelName);
-            Assert.Null(vm.Channels[3].ChannelName);
+            Assert.Equal(2, vm.Channels.Count);
         }
 
         [Fact]
