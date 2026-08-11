@@ -80,6 +80,18 @@ namespace DvmConsole.Avalonia
         private FneReceiveGlue? fneReceiveGlue = null;
 
         /// <summary>
+        /// Tracks classified receive state independently of the receive
+        /// thread and projects it onto the current channel slot instances.
+        /// </summary>
+        private ReceiveProjection? receiveProjection = null;
+
+        /// <summary>One-second WPF-parity receive idle sweep timer.</summary>
+        private DispatcherTimer? receiveProjectionTimer = null;
+
+        /// <summary>View-model subscribed for zone rebuild projection.</summary>
+        private MainWindowViewModel? receiveProjectionViewModel = null;
+
+        /// <summary>
         /// Headless talkgroup audio router composed when an audio stream
         /// factory is supplied to the full-arity constructor; null keeps
         /// the audio slice dormant (headless tests are unaffected). The
@@ -262,6 +274,7 @@ namespace DvmConsole.Avalonia
                 fneConnectionService = new FneConnectionService(systems, factory);
                 fneConnectionBridge = new FneConnectionServiceBridge(fneConnectionService, viewModel.FneConnections);
                 fneConnectionBridge.Attach();
+                AttachReceiveProjection(viewModel);
             }
 
             // Compose the receive glue independently of audio. Call
@@ -299,12 +312,14 @@ namespace DvmConsole.Avalonia
 
                 receiveGlue.CallFrameObserved += metadata =>
                 {
+                    var alias = aliasResolver?.Resolve(metadata.SystemName, metadata.SrcId);
+                    receiveProjection?.Observe(metadata, alias, DateTimeOffset.UtcNow);
                     var channelName = receiveChannelResolver?.Resolve(
                         metadata.SystemName, metadata.DstId, metadata.Slot);
                     tarRecordingCoordinator?.HandleReceiveFrame(
                         metadata,
                         channelName,
-                        aliasResolver?.Resolve(metadata.SystemName, metadata.SrcId),
+                        alias,
                         isEncrypted: false,
                         encryptionAlgorithm: null,
                         encryptionKeyId: null,
@@ -394,6 +409,61 @@ namespace DvmConsole.Avalonia
             watchdogTimer.Tick += OnWatchdogTick;
             watchdogTimer.Start();
         }
+
+        private void AttachReceiveProjection(MainWindowViewModel viewModel)
+        {
+            receiveProjectionViewModel = viewModel;
+            receiveProjection = new ReceiveProjection(
+                action => Dispatcher.UIThread.Post(action),
+                () => receiveProjectionViewModel?.Channels
+                    ?? Array.Empty<ChannelSlotViewModel>());
+
+            viewModel.PropertyChanged += MainWindowViewModel_PropertyChanged;
+            foreach (var system in viewModel.FneConnections.Systems)
+            {
+                system.PropertyChanged += FneSystemConnection_PropertyChanged;
+                ApplyFneConnectionWarning(system);
+            }
+
+            var timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
+            timer.Tick += OnReceiveProjectionTimerTick;
+            timer.Start();
+            receiveProjectionTimer = timer;
+            receiveProjection.Reproject();
+        }
+
+        private void MainWindowViewModel_PropertyChanged(object? sender, PropertyChangedEventArgs e)
+        {
+            if (e.PropertyName is nameof(MainWindowViewModel.Channels)
+                or nameof(MainWindowViewModel.SelectedZone))
+            {
+                receiveProjection?.Reproject();
+            }
+        }
+
+        private void FneSystemConnection_PropertyChanged(object? sender, PropertyChangedEventArgs e)
+        {
+            if (sender is FneSystemConnectionViewModel system
+                && e.PropertyName is nameof(FneSystemConnectionViewModel.IsConnected)
+                    or nameof(FneSystemConnectionViewModel.IsStarted))
+            {
+                ApplyFneConnectionWarning(system);
+            }
+        }
+
+        private void ApplyFneConnectionWarning(FneSystemConnectionViewModel system)
+        {
+            var connected = system.IsConnected && system.IsStarted;
+            var detail = connected
+                ? null
+                : system.IsConnected
+                    ? "FNE system not started"
+                    : "FNE disconnected";
+            receiveProjection?.SetFneConnectionWarning(system.SystemName, connected, detail);
+        }
+
+        private void OnReceiveProjectionTimerTick(object? sender, EventArgs e)
+            => receiveProjection?.SweepIdle(DateTimeOffset.UtcNow);
 
         /// <summary>
         /// Re-applies both ComboBox selections whenever the audio-settings
@@ -806,6 +876,25 @@ namespace DvmConsole.Avalonia
                 timer.Stop();
             }
 
+            if (receiveProjectionTimer is { } receiveTimer)
+            {
+                receiveTimer.Tick -= OnReceiveProjectionTimerTick;
+                receiveTimer.Stop();
+            }
+
+            if (receiveProjectionViewModel is { } receiveViewModel)
+            {
+                receiveViewModel.PropertyChanged -= MainWindowViewModel_PropertyChanged;
+                foreach (var system in receiveViewModel.FneConnections.Systems)
+                {
+                    system.PropertyChanged -= FneSystemConnection_PropertyChanged;
+                }
+            }
+
+            receiveProjection?.Dispose();
+            receiveProjection = null;
+            receiveProjectionViewModel = null;
+
             fneConnectionBridge?.Dispose();
             fneConnectionService?.Dispose();
             fneReceiveGlue?.Dispose();
@@ -975,7 +1064,10 @@ namespace DvmConsole.Avalonia
         /// no explicit terminator was classified by the receive glue.
         /// </summary>
         private void OnTalkgroupStreamEnded(string key, VoiceMode mode)
-            => tarRecordingCoordinator?.EndReceive(key, mode, DateTime.UtcNow);
+        {
+            receiveProjection?.Clear(key);
+            tarRecordingCoordinator?.EndReceive(key, mode, DateTime.UtcNow);
+        }
 
         /// <summary>
         /// Thin click wiring for the Set hotkey button: begins window-local

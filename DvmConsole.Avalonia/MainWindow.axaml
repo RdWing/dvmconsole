@@ -71,6 +71,15 @@
             <Setter Property="BorderBrush" Value="#F3B562" />
             <Setter Property="BorderThickness" Value="2" />
         </Style>
+        <Style Selector="Ellipse.activity">
+            <Setter Property="Fill" Value="#536769" />
+        </Style>
+        <Style Selector="Ellipse.activity.receiving">
+            <Setter Property="Fill" Value="#5FE1D2" />
+        </Style>
+        <Style Selector="Ellipse.activity.receiving.encrypted">
+            <Setter Property="Fill" Value="#F3B562" />
+        </Style>
         <Style Selector="Button.ptt-button">
             <Setter Property="Background" Value="#1A262B" />
             <Setter Property="BorderBrush" Value="#2A4548" />
@@ -253,8 +262,10 @@
                                         <Grid ColumnDefinitions="*,Auto">
                                             <TextBlock Classes="kicker" Text="{Binding Label}" />
                                             <Ellipse Grid.Column="1"
+                                                     Classes="activity"
+                                                     Classes.receiving="{Binding IsReceiving}"
+                                                     Classes.encrypted="{Binding IsReceivingEncrypted}"
                                                      Width="8" Height="8"
-                                                     Fill="#536769"
                                                      VerticalAlignment="Center" />
                                         </Grid>
                                         <StackPanel Spacing="4">
@@ -276,6 +287,19 @@
                                             <TextBlock Classes="data-label" Text="TALKGROUP" />
                                             <TextBlock Classes="data-value" Text="{Binding Talkgroup}" />
                                         </StackPanel>
+                                        <TextBlock Classes="muted" Text="{Binding LastSrcId}" />
+                                        <TextBlock Classes="muted"
+                                                   Text="RX ACTIVE"
+                                                   IsVisible="{Binding IsReceiving}" />
+                                        <TextBlock Classes="muted"
+                                                   Text="TX ACTIVE"
+                                                   IsVisible="{Binding PttEngaged}" />
+                                        <TextBlock Classes="muted"
+                                                   Text="TX ENCRYPTED"
+                                                   IsVisible="{Binding IsTxEncrypted}" />
+                                        <TextBlock Classes="muted"
+                                                   Text="{Binding FneConnectionWarningToolTip}"
+                                                   IsVisible="{Binding FneConnectionWarningVisible}" />
                                         <TextBlock Classes="muted"
                                                    Text="RX ONLY"
                                                    IsVisible="{Binding IsRxOnly}" />

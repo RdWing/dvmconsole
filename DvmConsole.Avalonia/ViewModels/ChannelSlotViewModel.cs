@@ -54,6 +54,13 @@ namespace DvmConsole.Avalonia.ViewModels
         private ChannelCardSize cardSize = ChannelCardSize.Normal;
         private string idleColor = DefaultIdleColor;
         private IBrush idleBrush = new SolidColorBrush(Color.Parse(DefaultIdleColor));
+        private bool isReceiving;
+        private bool isReceivingEncrypted;
+        private string lastSrcId = "Last ID: 0";
+        private bool isTxEncrypted;
+        private bool isEncryptionSelectable;
+        private bool fneConnectionWarningVisible;
+        private string fneConnectionWarningToolTip = string.Empty;
 
         /// <summary>
         /// Creates a channel slot with the given 1-based number, display
@@ -123,6 +130,120 @@ namespace DvmConsole.Avalonia.ViewModels
 
         /// <summary>The validated idle brush used by the card background.</summary>
         public IBrush IdleBrush => idleBrush;
+
+        /// <summary>True while a matching receive stream is active.</summary>
+        public bool IsReceiving
+        {
+            get => isReceiving;
+            set
+            {
+                if (isReceiving == value)
+                {
+                    return;
+                }
+
+                isReceiving = value;
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsReceiving)));
+            }
+        }
+
+        /// <summary>True while the active receive stream is encrypted.</summary>
+        public bool IsReceivingEncrypted
+        {
+            get => isReceivingEncrypted;
+            set
+            {
+                if (isReceivingEncrypted == value)
+                {
+                    return;
+                }
+
+                isReceivingEncrypted = value;
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsReceivingEncrypted)));
+            }
+        }
+
+        /// <summary>The WPF-parity last-source display, retained through idle.</summary>
+        public string LastSrcId
+        {
+            get => lastSrcId;
+            set
+            {
+                var normalized = value ?? string.Empty;
+                if (string.Equals(lastSrcId, normalized, StringComparison.Ordinal))
+                {
+                    return;
+                }
+
+                lastSrcId = normalized;
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(LastSrcId)));
+            }
+        }
+
+        /// <summary>True when the current transmit state is encrypted.</summary>
+        public bool IsTxEncrypted
+        {
+            get => isTxEncrypted;
+            set
+            {
+                if (isTxEncrypted == value)
+                {
+                    return;
+                }
+
+                isTxEncrypted = value;
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsTxEncrypted)));
+            }
+        }
+
+        /// <summary>True when selectable encryption can be shown for this slot.</summary>
+        public bool IsEncryptionSelectable
+        {
+            get => isEncryptionSelectable;
+            set
+            {
+                if (isEncryptionSelectable == value)
+                {
+                    return;
+                }
+
+                isEncryptionSelectable = value;
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsEncryptionSelectable)));
+            }
+        }
+
+        /// <summary>True when the slot's FNE system is unavailable.</summary>
+        public bool FneConnectionWarningVisible
+        {
+            get => fneConnectionWarningVisible;
+            set
+            {
+                if (fneConnectionWarningVisible == value)
+                {
+                    return;
+                }
+
+                fneConnectionWarningVisible = value;
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(FneConnectionWarningVisible)));
+            }
+        }
+
+        /// <summary>The FNE warning text shown for the slot.</summary>
+        public string FneConnectionWarningToolTip
+        {
+            get => fneConnectionWarningToolTip;
+            set
+            {
+                var normalized = value ?? string.Empty;
+                if (string.Equals(fneConnectionWarningToolTip, normalized, StringComparison.Ordinal))
+                {
+                    return;
+                }
+
+                fneConnectionWarningToolTip = normalized;
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(FneConnectionWarningToolTip)));
+            }
+        }
 
         /// <summary>
         /// The talkgroup assigned to this slot; <c>NO TALKGROUP</c> until
