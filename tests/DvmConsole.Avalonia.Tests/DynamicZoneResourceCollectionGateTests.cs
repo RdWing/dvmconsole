@@ -26,6 +26,32 @@ namespace DvmConsole.Avalonia.Tests
         }
 
         [Fact]
+        public void EveryZoneChannelCountFromZeroThrough256_IsRepresentedExactly()
+        {
+            for (var count = 0; count <= 256; count++)
+            {
+                var channels = Enumerable.Range(1, count)
+                    .Select(i => Channel($"CH {i}", "System A", (1000 + i).ToString()))
+                    .ToArray();
+                var vm = CreateVm(Zone($"Count {count}", channels));
+
+                Assert.Equal(count, vm.Channels.Count);
+                Assert.Equal(
+                    Enumerable.Range(1, count).Select(i => $"CH {i}"),
+                    vm.Channels.Select(channel => channel.ChannelName));
+                Assert.Equal(
+                    Enumerable.Range(1, count),
+                    vm.Channels.Select(channel => channel.Number));
+
+                if (count > 0)
+                {
+                    Assert.Equal("CHANNEL 01", vm.Channels[0].Label);
+                    Assert.Equal($"CHANNEL {count:00}", vm.Channels[count - 1].Label);
+                }
+            }
+        }
+
+        [Fact]
         public void OneChannelZone_PreservesCodeplugOrderAndIdentity()
         {
             var vm = CreateVm(
