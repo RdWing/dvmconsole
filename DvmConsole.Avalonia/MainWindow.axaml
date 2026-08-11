@@ -199,6 +199,11 @@
                         <TextBlock Classes="muted" Text="• Global hotkey fallback ready" />
                         <TextBlock Classes="muted" Text="• File dialogs available" />
                     </StackPanel>
+
+                    <TextBlock Classes="muted"
+                               Text="{Binding TarViewerStatusMessage}"
+                               IsVisible="{Binding TarViewerStatusMessage, Converter={x:Static conv:StringConverters.IsNotNullOrEmpty}}"
+                               TextWrapping="Wrap" />
                 </StackPanel>
             </Border>
 

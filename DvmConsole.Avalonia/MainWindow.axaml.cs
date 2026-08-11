@@ -94,6 +94,10 @@ namespace DvmConsole.Avalonia
         /// </summary>
         private readonly TransmitTargetResolver? transmitTargetResolver = null;
 
+        private readonly TarRecorder? tarRecorder;
+        private readonly IAudioWaveFilePlayer? tarWaveFilePlayer;
+        private TarViewerWindow? tarViewerWindow;
+
         public MainWindow()
             : this(null, null)
         {
@@ -215,9 +219,13 @@ namespace DvmConsole.Avalonia
             CallHistoryStore? callHistory = null,
             AliasResolver? aliasResolver = null,
             TarSettingsPersistence? tarPersistence = null,
-            PttSettingsPersistence? pttPersistence = null)
+            PttSettingsPersistence? pttPersistence = null,
+            TarRecorder? tarRecorder = null,
+            IAudioWaveFilePlayer? tarWaveFilePlayer = null)
         {
             InitializeComponent();
+            this.tarRecorder = tarRecorder;
+            this.tarWaveFilePlayer = tarWaveFilePlayer;
             DataContext = new MainWindowViewModel(systems, catalog, hotkeys, persistence, vocoderStatus, codeplug, callHistory, tarPersistence, pttPersistence);
 
             // Compose the transmit-target resolver over the codeplug so
@@ -453,6 +461,20 @@ namespace DvmConsole.Avalonia
         internal IFileDialogService FileDialogService { get; set; } = NoopFileDialogService.Instance;
 
         /// <summary>
+        /// Host-owned file-manager reveal adapter for the TAR Viewer.
+        /// Headless construction keeps a safe no-op fallback; App replaces
+        /// it with the desktop adapter during production composition.
+        /// </summary>
+        internal IFileRevealService TarFileRevealService { get; set; } = NoopFileRevealService.Instance;
+
+        /// <summary>
+        /// Host-owned confirmation adapter for destructive TAR Viewer actions.
+        /// Headless construction keeps a deny-by-default fallback; App replaces
+        /// it with the Avalonia modal adapter during production composition.
+        /// </summary>
+        internal IConfirmationService TarConfirmationService { get; set; } = NoopConfirmationService.Instance;
+
+        /// <summary>
         /// Opens the TAR configuration dialog with this window as its
         /// owner. The dialog is constructed over the composed TAR
         /// configuration view-model and this window's
@@ -473,6 +495,58 @@ namespace DvmConsole.Avalonia
 
             var dialog = new TarConfigurationWindow(tarConfiguration, FileDialogService);
             _ = dialog.ShowDialog(this);
+        }
+
+        /// <summary>
+        /// Opens one modeless TAR Viewer instance owned by this dashboard.
+        /// The recorder and WAVE player are shared application dependencies;
+        /// reveal and confirmation stay injected shell adapters. Missing
+        /// required dependencies are reported in the dashboard instead of
+        /// silently disabling or failing the menu action.
+        /// </summary>
+        internal void OpenTarViewer()
+        {
+            if (tarRecorder is null || tarWaveFilePlayer is null)
+            {
+                string missing = tarRecorder is null && tarWaveFilePlayer is null
+                    ? "recorder and WAVE player"
+                    : tarRecorder is null
+                        ? "recorder"
+                        : "WAVE player";
+                if (DataContext is MainWindowViewModel viewModel)
+                {
+                    viewModel.TarViewerStatusMessage =
+                        $"TAR Viewer unavailable: {missing} capability is not attached.";
+                }
+
+                return;
+            }
+
+            if (tarViewerWindow is { } existing)
+            {
+                existing.Activate();
+                return;
+            }
+
+            var viewer = new TarViewerWindow(
+                new TarViewerViewModel(tarRecorder),
+                tarWaveFilePlayer,
+                TarFileRevealService,
+                TarConfirmationService);
+            tarViewerWindow = viewer;
+            viewer.Closed += (_, _) =>
+            {
+                if (ReferenceEquals(tarViewerWindow, viewer))
+                {
+                    tarViewerWindow = null;
+                }
+            };
+            if (DataContext is MainWindowViewModel statusViewModel)
+            {
+                statusViewModel.TarViewerStatusMessage = string.Empty;
+            }
+
+            viewer.Show(this);
         }
 
         /// <summary>
@@ -682,6 +756,10 @@ namespace DvmConsole.Avalonia
         /// </summary>
         private void OnWindowClosed(object? sender, EventArgs e)
         {
+            tarViewerWindow?.Close();
+            tarViewerWindow = null;
+            tarRecorder?.StopAllSessions(DateTime.UtcNow);
+
             if (macAudioDeviceCatalog is { } macCatalog)
             {
                 macCatalog.DevicesChanged -= OnAudioDevicesChanged;

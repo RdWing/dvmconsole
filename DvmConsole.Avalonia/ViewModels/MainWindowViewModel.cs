@@ -118,6 +118,30 @@ namespace DvmConsole.Avalonia.ViewModels
             }
         }
 
+        private string tarViewerStatusMessage = string.Empty;
+
+        /// <summary>
+        /// Shell-visible TAR Viewer composition status. The MainWindow writes
+        /// an explanatory message when a required runtime dependency is absent;
+        /// successful viewer creation clears it.
+        /// </summary>
+        public string TarViewerStatusMessage
+        {
+            get => tarViewerStatusMessage;
+            set
+            {
+                if (tarViewerStatusMessage == value)
+                {
+                    return;
+                }
+
+                tarViewerStatusMessage = value;
+                PropertyChanged?.Invoke(
+                    this,
+                    new PropertyChangedEventArgs(nameof(TarViewerStatusMessage)));
+            }
+        }
+
         /// <summary>
         /// The PTT capability slice composed from the injected hotkey
         /// service, or null when no service was provided. Get-only and

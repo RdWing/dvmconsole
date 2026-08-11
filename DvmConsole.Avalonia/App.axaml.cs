@@ -195,6 +195,68 @@ namespace DvmConsole.Avalonia
         }
 
         /// <summary>
+        /// Creates the one application TAR recorder from the normalized
+        /// persisted section. The persistence adapter owns load normalization;
+        /// this composition layer only supplies the shared fallback root and
+        /// the WPF-compatible resource-key, talkgroup-id, then channel-name
+        /// lookup order used by recording and viewer operations.
+        /// </summary>
+        internal static TarRecorder CreateTarRecorder(
+            TarSettingsPersistence persistence,
+            string defaultRecordingRoot)
+        {
+            if (persistence is null)
+            {
+                throw new System.ArgumentNullException(nameof(persistence));
+            }
+
+            var section = new UserSettingsTarSection();
+            bool loaded;
+            try
+            {
+                loaded = persistence.TryLoad(out section);
+            }
+            catch
+            {
+                loaded = false;
+                section = new UserSettingsTarSection();
+            }
+
+            if (!loaded)
+            {
+                section.TarRecordingsRootPath = defaultRecordingRoot;
+            }
+
+            var configs = section.TarChannelConfigs
+                ?? new Dictionary<string, TarChannelConfig>(StringComparer.OrdinalIgnoreCase);
+            return new TarRecorder(
+                section.TarRecordingsRootPath,
+                defaultRecordingRoot,
+                (resourceKey, channelName, talkgroupId) =>
+                {
+                    if (!string.IsNullOrWhiteSpace(resourceKey)
+                        && configs.TryGetValue(resourceKey, out TarChannelConfig? config))
+                    {
+                        return config;
+                    }
+
+                    if (!string.IsNullOrWhiteSpace(talkgroupId)
+                        && configs.TryGetValue(talkgroupId, out config))
+                    {
+                        return config;
+                    }
+
+                    if (!string.IsNullOrWhiteSpace(channelName)
+                        && configs.TryGetValue(channelName, out config))
+                    {
+                        return config;
+                    }
+
+                    return new TarChannelConfig();
+                });
+        }
+
+        /// <summary>
         /// Adds the native "About" menu item that opens the About
         /// dialog on the main window. The item is inserted into the
         /// first top-level submenu (the App menu) ahead of its
@@ -220,6 +282,7 @@ namespace DvmConsole.Avalonia
                 };
 
                 NativeMenuItem tarItem = CreateTarConfigurationMenuItem(mainWindow);
+                NativeMenuItem tarViewerItem = CreateTarViewerMenuItem(mainWindow);
 
                 NativeMenuItem? appItem = menu.Items
                     .OfType<NativeMenuItem>()
@@ -227,9 +290,10 @@ namespace DvmConsole.Avalonia
                 if (appItem?.Menu is { } appMenu && appMenu.Items.Count > 0)
                 {
                     // Insert ahead of the trailing item (Quit): About,
-                    // then TAR Configuration, then Quit.
+                    // TAR Configuration, TAR Viewer, then Quit.
                     appMenu.Items.Insert(appMenu.Items.Count - 1, aboutItem);
                     appMenu.Items.Insert(appMenu.Items.Count - 1, tarItem);
+                    appMenu.Items.Insert(appMenu.Items.Count - 1, tarViewerItem);
 
                     if (appMenu.Items
                         .OfType<NativeMenuItem>()
@@ -244,6 +308,7 @@ namespace DvmConsole.Avalonia
                 {
                     menu.Items.Add(aboutItem);
                     menu.Items.Add(tarItem);
+                    menu.Items.Add(tarViewerItem);
                 }
             }
             catch
@@ -277,6 +342,19 @@ namespace DvmConsole.Avalonia
             return item;
         }
 
+        /// <summary>
+        /// Creates the native TAR Viewer menu item. It remains available on
+        /// hosts where the required audio capability is absent so the main
+        /// dashboard can show the precise missing dependency instead of
+        /// silently hiding a planned capability.
+        /// </summary>
+        internal static NativeMenuItem CreateTarViewerMenuItem(MainWindow? mainWindow)
+        {
+            var item = new NativeMenuItem("TAR Viewer");
+            item.Click += (_, _) => mainWindow?.OpenTarViewer();
+            return item;
+        }
+
         public override void OnFrameworkInitializationCompleted()
         {
             if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
@@ -294,10 +372,26 @@ namespace DvmConsole.Avalonia
                 // asked to update and preserves every unrelated property
                 // value-for-value, so the audio and TAR settings coexist
                 // in the same settings file without clobbering each other.
-                var settingsStore = new SettingsSectionStore(new DefaultFileSystemPaths().SettingsFilePath);
+                var fileSystemPaths = new DefaultFileSystemPaths();
+                var settingsStore = new SettingsSectionStore(fileSystemPaths.SettingsFilePath);
                 var persistence = new AudioSettingsPersistence(settingsStore);
                 var tarPersistence = new TarSettingsPersistence(settingsStore);
                 var pttPersistence = new PttSettingsPersistence(settingsStore);
+                var tarRecorder = CreateTarRecorder(tarPersistence, fileSystemPaths.DefaultTarRecordingsPath);
+                IAudioWaveFilePlayer? tarWaveFilePlayer = null;
+                try
+                {
+                    tarWaveFilePlayer = streams?.CreateWaveFilePlayer();
+                }
+                catch (AudioDeviceException)
+                {
+                    // The viewer reports the missing capability in the
+                    // dashboard; startup remains usable on this host.
+                }
+                catch (PlatformNotSupportedException)
+                {
+                    // Same visible degradation for an unavailable host API.
+                }
                 // Packaged macOS .app: register the bundle resolver for
                 // future DllImport-based libvocoder loads in the Platform
                 // assembly. The startup readiness probe maps and loads the
@@ -374,9 +468,13 @@ namespace DvmConsole.Avalonia
                     callHistory,
                     aliasResolver,
                     tarPersistence,
-                    pttPersistence);
+                    pttPersistence,
+                    tarRecorder,
+                    tarWaveFilePlayer);
                 mainWindow.FileDialogService =
                     new AvaloniaFileDialogService(mainWindow.StorageProvider);
+                mainWindow.TarFileRevealService = new DesktopFileRevealService();
+                mainWindow.TarConfirmationService = new AvaloniaConfirmationService();
                 desktop.MainWindow = mainWindow;
 
                 // Native "About" menu item: opens the About dialog on
