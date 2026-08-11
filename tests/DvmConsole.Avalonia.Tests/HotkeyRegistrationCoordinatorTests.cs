@@ -22,6 +22,7 @@ namespace DvmConsole.Avalonia.Tests
         {
             public readonly List<string> Calls = new();
             public bool RegisterResultIsAlreadyRegistered;
+            public HotkeyRegistrationStatus RegisterStatus { get; set; }
             public int DisposeCount { get; private set; }
 
             public event EventHandler<HotkeyEventArgs>? HotkeyPressed;
@@ -37,7 +38,7 @@ namespace DvmConsole.Avalonia.Tests
                 return Task.FromResult(new HotkeyRegistrationResult(
                     RegisterResultIsAlreadyRegistered
                         ? HotkeyRegistrationStatus.AlreadyRegistered
-                        : HotkeyRegistrationStatus.Registered,
+                        : RegisterStatus,
                     gesture));
             }
 
@@ -207,6 +208,57 @@ namespace DvmConsole.Avalonia.Tests
             await WaitForAsync(() => coordinator.Idle);
 
             Assert.Equal(new[] { "REGISTER:F9, Control" }, service.Calls);
+            coordinator.Dispose();
+        }
+
+        [Theory]
+        [InlineData(HotkeyRegistrationStatus.Registered)]
+        [InlineData(HotkeyRegistrationStatus.AlreadyRegistered)]
+        [InlineData(HotkeyRegistrationStatus.PermissionDenied)]
+        [InlineData(HotkeyRegistrationStatus.Unsupported)]
+        public async Task Coordinator_RegistrationAttempt_ReportsResultOnce(
+            HotkeyRegistrationStatus expectedStatus)
+        {
+            var service = new RecordingHotkeyService
+            {
+                RegisterStatus = expectedStatus,
+            };
+            var ptt = CreatePtt(service);
+            var statuses = new List<(HotkeyRegistrationStatus Status, HotkeyGesture Gesture)>();
+            var coordinator = new HotkeyRegistrationCoordinator(service, ptt);
+            coordinator.RegistrationStatusChanged += (status, gesture) =>
+                statuses.Add((status, gesture));
+
+            ptt.SetHotkey(GestureF9);
+            await WaitForAsync(() => coordinator.Idle);
+
+            Assert.Equal(new[] { (expectedStatus, GestureF9) }, statuses);
+            coordinator.Dispose();
+            Assert.Equal(new[] { (expectedStatus, GestureF9) }, statuses);
+        }
+
+        [Fact]
+        public async Task Coordinator_RegistrationFailureStatus_DoesNotRetryDuplicate()
+        {
+            var service = new RecordingHotkeyService
+            {
+                RegisterStatus = HotkeyRegistrationStatus.PermissionDenied,
+            };
+            var ptt = CreatePtt(service);
+            var statuses = new List<(HotkeyRegistrationStatus Status, HotkeyGesture Gesture)>();
+            var coordinator = new HotkeyRegistrationCoordinator(service, ptt);
+            coordinator.RegistrationStatusChanged += (status, gesture) =>
+                statuses.Add((status, gesture));
+
+            ptt.SetHotkey(GestureF9);
+            await WaitForAsync(() => coordinator.Idle);
+            ptt.SetHotkey(GestureF9);
+            await WaitForAsync(() => coordinator.Idle);
+
+            Assert.Equal(new[] { "REGISTER:F9, Control" }, service.Calls);
+            Assert.Equal(
+                new[] { (HotkeyRegistrationStatus.PermissionDenied, GestureF9) },
+                statuses);
             coordinator.Dispose();
         }
 

@@ -38,11 +38,10 @@ namespace DvmConsole.Avalonia.Hotkeys
     ///
     /// Error policy: the synchronous event handler never throws; any
     /// exception thrown by RegisterAsync/UnregisterAsync is caught and
-    /// dropped — registration failures (exceptions or a
-    /// <see cref="HotkeyRegistrationStatus.PermissionDenied"/> /
-    /// <see cref="HotkeyRegistrationStatus.Unsupported"/> outcome) are
-    /// non-fatal and never retried. The tracked-gesture mirror updates
-    /// to the last REQUESTED gesture regardless of the registration
+    /// dropped — registration failures remain non-fatal and never retried.
+    /// Completed registration attempts report their typed outcome through
+    /// <see cref="RegistrationStatusChanged"/>. The tracked-gesture mirror
+    /// updates to the last REQUESTED gesture regardless of the registration
     /// outcome, so a duplicate request for the same gesture never
     /// re-registers — a retry is never automatic.
     ///
@@ -76,6 +75,12 @@ namespace DvmConsole.Avalonia.Hotkeys
         private bool disposed;
 
         /// <summary>
+        /// Reports the outcome of each completed registration attempt.
+        /// Dispose-time unregisters and duplicate requests are silent.
+        /// </summary>
+        public event Action<HotkeyRegistrationStatus, HotkeyGesture>? RegistrationStatusChanged;
+
+        /// <summary>
         /// Creates the coordinator, subscribes to
         /// <see cref="PttCapabilityViewModel.HotkeyChangeRequested"/>, and — when a
         /// hotkey is already configured on the view-model — immediately reconciles
@@ -83,13 +88,23 @@ namespace DvmConsole.Avalonia.Hotkeys
         /// </summary>
         /// <param name="hotkeys">The platform global-hotkey service to register and unregister on; borrowed, not owned — the App disposes it (see class doc).</param>
         /// <param name="ptt">The PTT capability view-model to observe.</param>
+        /// <param name="statusHandler">
+        /// Optional status callback attached before a hydrated hotkey is
+        /// reconciled, so startup failures cannot be missed by the shell.
+        /// </param>
         /// <exception cref="ArgumentNullException">When either argument is null.</exception>
         public HotkeyRegistrationCoordinator(
             IGlobalHotkeyService hotkeys,
-            PttCapabilityViewModel ptt)
+            PttCapabilityViewModel ptt,
+            Action<HotkeyRegistrationStatus, HotkeyGesture>? statusHandler = null)
         {
             this.hotkeys = hotkeys ?? throw new ArgumentNullException(nameof(hotkeys));
             this.ptt = ptt ?? throw new ArgumentNullException(nameof(ptt));
+
+            if (statusHandler is not null)
+            {
+                RegistrationStatusChanged += statusHandler;
+            }
 
             ptt.HotkeyChangeRequested += OnHotkeyChangeRequested;
 
@@ -309,7 +324,7 @@ namespace DvmConsole.Avalonia.Hotkeys
 
             if (target is { } newGesture && newGesture != previous)
             {
-                Task registerTask;
+                Task<HotkeyRegistrationResult> registerTask;
 
                 lock (gate)
                 {
@@ -331,14 +346,33 @@ namespace DvmConsole.Avalonia.Hotkeys
                     registered = newGesture;
                 }
 
+                HotkeyRegistrationResult result;
                 try
                 {
-                    await registerTask;
+                    result = await registerTask;
                 }
                 catch
                 {
                     // Documented: registration failures are non-fatal; the
                     // exception is dropped and the attempt is never retried.
+                    return;
+                }
+
+                lock (gate)
+                {
+                    if (disposed)
+                    {
+                        return;
+                    }
+                }
+
+                try
+                {
+                    RegistrationStatusChanged?.Invoke(result.Status, result.Gesture);
+                }
+                catch
+                {
+                    // A status observer must never break reconciliation.
                 }
             }
         }

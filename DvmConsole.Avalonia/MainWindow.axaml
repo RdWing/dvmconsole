@@ -508,6 +508,11 @@
                                                IsVisible="{Binding HotkeyCapture.IsCapturing}" />
                                 </StackPanel>
 
+                                <TextBlock Classes="muted"
+                                           Text="{Binding PttHotkeyFeedback}"
+                                           IsVisible="{Binding PttHotkeyFeedback, Converter={x:Static conv:StringConverters.IsNotNullOrEmpty}}"
+                                           TextWrapping="Wrap" />
+
                                 <Button Classes="ptt-button"
                                         Classes.engaged="{Binding Ptt.IsEngaged}"
                                         Content="PUSH TO TALK"

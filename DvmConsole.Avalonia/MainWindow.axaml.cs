@@ -9,6 +9,7 @@ using Avalonia.Interactivity;
 using Avalonia.Threading;
 using dvmconsole;
 using DvmConsole.Avalonia.Dialogs;
+using DvmConsole.Avalonia.Hotkeys;
 using DvmConsole.Avalonia.Input;
 using DvmConsole.Avalonia.Persistence;
 using DvmConsole.Avalonia.Services;
@@ -117,6 +118,8 @@ namespace DvmConsole.Avalonia
         private readonly TarRecordingCoordinator? tarRecordingCoordinator;
         private readonly IAudioWaveFilePlayer? tarWaveFilePlayer;
         private readonly TarViewerColumnSettingsPersistence? tarViewerColumnPersistence;
+        private readonly IGlobalHotkeyService? hotkeys;
+        private readonly HotkeyRegistrationCoordinator? hotkeyRegistrationCoordinator;
         private TarViewerWindow? tarViewerWindow;
 
         public MainWindow()
@@ -246,6 +249,7 @@ namespace DvmConsole.Avalonia
             TarViewerColumnSettingsPersistence? tarViewerColumnPersistence = null)
         {
             InitializeComponent();
+            this.hotkeys = hotkeys;
             this.tarRecorder = tarRecorder;
             this.tarRecordingCoordinator = tarRecorder is null ? null : new TarRecordingCoordinator(tarRecorder);
             this.tarWaveFilePlayer = tarWaveFilePlayer;
@@ -275,6 +279,14 @@ namespace DvmConsole.Avalonia
                 fneConnectionBridge = new FneConnectionServiceBridge(fneConnectionService, viewModel.FneConnections);
                 fneConnectionBridge.Attach();
                 AttachReceiveProjection(viewModel);
+
+                if (hotkeys is not null && viewModel.Ptt is { } ptt)
+                {
+                    hotkeyRegistrationCoordinator = new HotkeyRegistrationCoordinator(
+                        hotkeys,
+                        ptt,
+                        OnHotkeyRegistrationStatusChanged);
+                }
             }
 
             // Compose the receive glue independently of audio. Call
@@ -887,6 +899,21 @@ namespace DvmConsole.Avalonia
             });
 
         /// <summary>
+        /// Relays a coordinator registration result onto the UI thread so
+        /// the view-model remains free of dispatcher and service concerns.
+        /// </summary>
+        private void OnHotkeyRegistrationStatusChanged(
+            HotkeyRegistrationStatus status,
+            HotkeyGesture gesture)
+            => Dispatcher.UIThread.Post(() =>
+            {
+                if (DataContext is MainWindowViewModel vm)
+                {
+                    vm.ReportPttHotkeyStatus(status, gesture);
+                }
+            });
+
+        /// <summary>
         /// Drives the PTT key-up watchdog once per timer tick: probes
         /// the currently configured hotkey gesture's physical key state
         /// through the injected reader and forwards the result to the
@@ -930,6 +957,13 @@ namespace DvmConsole.Avalonia
         /// </summary>
         private void OnWindowClosed(object? sender, EventArgs e)
         {
+            if (hotkeys is not null)
+            {
+                hotkeys.HotkeyPressed -= OnHotkeyPressed;
+            }
+
+            hotkeyRegistrationCoordinator?.Dispose();
+
             tarViewerWindow?.Close();
             tarViewerWindow = null;
             tarRetentionTimer?.Stop();

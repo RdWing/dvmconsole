@@ -45,6 +45,12 @@ namespace DvmConsole.Avalonia.ViewModels
 
         private const string TarSaveFailedFeedbackText = "TAR settings save failed.";
 
+        private const string PttHotkeyPermissionFeedbackText =
+            "Global hotkey permission required.";
+
+        private const string PttHotkeyUnavailableFeedbackText =
+            "Global hotkey unavailable on this host.";
+
         private readonly SelectedChannelsManager<ChannelSlotViewModel> selectedChannelsManager;
 
         private readonly AudioSettingsPersistence? audioPersistence;
@@ -67,6 +73,8 @@ namespace DvmConsole.Avalonia.ViewModels
         private string audioSaveFeedback = string.Empty;
 
         private string tarSaveFeedback = string.Empty;
+
+        private string pttHotkeyFeedback = string.Empty;
 
         private IReadOnlyCollection<ChannelSlotViewModel> selectedChannels =
             Array.Empty<ChannelSlotViewModel>();
@@ -103,6 +111,13 @@ namespace DvmConsole.Avalonia.ViewModels
         /// keep this permanently empty and never subscribe.
         /// </summary>
         public string AudioSaveFeedback => audioSaveFeedback;
+
+        /// <summary>
+        /// Shell-visible global-hotkey registration feedback. Permission and
+        /// unsupported outcomes expose fixed neutral text; a successful or
+        /// already-registered outcome clears stale feedback. Change-only.
+        /// </summary>
+        public string PttHotkeyFeedback => pttHotkeyFeedback;
 
         private string? audioStatusMessage;
 
@@ -974,6 +989,33 @@ namespace DvmConsole.Avalonia.ViewModels
             PropertyChanged?.Invoke(
                 this,
                 new PropertyChangedEventArgs(nameof(AudioSaveFeedback)));
+        }
+
+        /// <summary>
+        /// Receives a coordinator registration outcome from the shell. The
+        /// coordinator remains headless; this method owns only the passive
+        /// text projection used by the PTT capability panel.
+        /// </summary>
+        public void ReportPttHotkeyStatus(
+            HotkeyRegistrationStatus status,
+            HotkeyGesture gesture)
+        {
+            var feedback = status switch
+            {
+                HotkeyRegistrationStatus.PermissionDenied => PttHotkeyPermissionFeedbackText,
+                HotkeyRegistrationStatus.Unsupported => PttHotkeyUnavailableFeedbackText,
+                _ => string.Empty,
+            };
+
+            if (pttHotkeyFeedback == feedback)
+            {
+                return;
+            }
+
+            pttHotkeyFeedback = feedback;
+            PropertyChanged?.Invoke(
+                this,
+                new PropertyChangedEventArgs(nameof(PttHotkeyFeedback)));
         }
 
         private void OnPttSaveRequested(
