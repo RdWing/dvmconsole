@@ -440,6 +440,14 @@ namespace DvmConsole.Avalonia
             }
         }
 
+        public void AttachRestorePersistence(RestoreSettingsPersistence restorePersistence)
+        {
+            if (DataContext is MainWindowViewModel viewModel)
+            {
+                viewModel.AttachRestorePersistence(restorePersistence);
+            }
+        }
+
         private void AttachReceiveProjection(MainWindowViewModel viewModel)
         {
             receiveProjectionViewModel = viewModel;
