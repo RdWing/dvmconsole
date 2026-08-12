@@ -372,7 +372,10 @@ namespace DvmConsole.Avalonia
                     transmittedPcmObserver: tarRecordingCoordinator,
                     resolveMonitorEnabled: audioViewModel.IsMonitorEnabled,
                     resolveTalkgroupOutputDevice: audioViewModel.ResolveMonitorOutputDevice,
-                    resolveTalkgroupVolume: audioViewModel.ResolveMonitorVolume);
+                    resolveTalkgroupVolume: audioViewModel.ResolveMonitorVolume,
+                    resolveSpeakerOutputEnabled: _ => !(
+                        audioViewModel.Preferences?.MuteRxAudioWhileTransmitting == true
+                        && audioViewModel.Ptt?.IsEngaged == true));
 
                 if (audioViewModel.Ptt is { } ptt)
                 {
@@ -1079,8 +1082,13 @@ namespace DvmConsole.Avalonia
                     return;
                 }
 
-                var inputDeviceId = (DataContext as MainWindowViewModel)?.AudioSettings?.SelectedInputId
+                var viewModel = DataContext as MainWindowViewModel;
+                var inputDeviceId = viewModel?.AudioSettings?.SelectedInputId
                     ?? AudioDeviceId.Default;
+                if (viewModel?.Preferences?.MuteRxAudioWhileTransmitting == true)
+                {
+                    router.ClearAllTalkgroupBuffers();
+                }
                 foreach (var target in targets)
                 {
                     tarRecordingCoordinator?.TryStartTransmit(
@@ -1089,11 +1097,40 @@ namespace DvmConsole.Avalonia
                         DateTime.UtcNow,
                         out _);
                 }
-                _ = router.BeginTransmitAsync(targets, inputDeviceId, CancellationToken.None);
+                _ = BeginTransmitAndPlayPermitToneAsync(
+                    router,
+                    targets,
+                    inputDeviceId,
+                    viewModel?.Preferences?.TalkPermitTone == true);
             }
             else
             {
                 _ = EndTransmitAndStopRecordingAsync(router);
+            }
+        }
+
+        private static async Task BeginTransmitAndPlayPermitToneAsync(
+            TalkgroupAudioRouter router,
+            IReadOnlyList<TransmitTarget> targets,
+            AudioDeviceId inputDeviceId,
+            bool playPermitTone)
+        {
+            try
+            {
+                await router.BeginTransmitAsync(
+                    targets,
+                    inputDeviceId,
+                    CancellationToken.None).ConfigureAwait(false);
+                if (playPermitTone)
+                {
+                    await router.PlayLocalPcmAsync(
+                        TonePcmGenerator.GenerateTalkPermitTone()).ConfigureAwait(false);
+                }
+            }
+            catch (Exception exception)
+            {
+                System.Diagnostics.Debug.WriteLine(
+                    $"PTT audio start failed: {exception.Message}");
             }
         }
 

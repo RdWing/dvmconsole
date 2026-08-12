@@ -177,6 +177,7 @@ namespace DvmConsole.Platform.Audio
         private readonly IVoiceTrafficSender _sender;
         private readonly Func<AudioDeviceId> _resolveOutputDevice;
         private readonly Func<string, bool> _resolveMonitorEnabled;
+        private readonly Func<string, bool> _resolveSpeakerOutputEnabled;
         private readonly Func<string, AudioDeviceId> _resolveTalkgroupOutputDevice;
         private readonly Func<string, float> _resolveTalkgroupVolume;
         private readonly IDecodedPcmObserver? _decodedPcmObserver;
@@ -272,6 +273,12 @@ namespace DvmConsole.Platform.Audio
         /// resolver preserves the legacy behavior and enables monitor
         /// playback for every routed resource.
         /// </param>
+        /// <param name="resolveSpeakerOutputEnabled">
+        /// Optional per-resource speaker-write resolver. A null resolver
+        /// allows speaker writes whenever a monitor pipeline exists. A false
+        /// result suppresses only the speaker write; decoded observers and
+        /// transmit/network paths remain untouched.
+        /// </param>
         /// <param name="resolveTalkgroupOutputDevice">
         /// Optional per-resource output resolver. A null resolver falls back
         /// to <paramref name="resolveOutputDevice"/>.
@@ -307,7 +314,8 @@ namespace DvmConsole.Platform.Audio
             ITransmittedPcmObserver? transmittedPcmObserver = null,
             Func<string, bool>? resolveMonitorEnabled = null,
             Func<string, AudioDeviceId>? resolveTalkgroupOutputDevice = null,
-            Func<string, float>? resolveTalkgroupVolume = null)
+            Func<string, float>? resolveTalkgroupVolume = null,
+            Func<string, bool>? resolveSpeakerOutputEnabled = null)
         {
             _factory = streams ?? throw new ArgumentNullException(nameof(streams));
             _decoder = decoder ?? throw new ArgumentNullException(nameof(decoder));
@@ -316,6 +324,7 @@ namespace DvmConsole.Platform.Audio
             _resolveOutputDevice = resolveOutputDevice
                 ?? throw new ArgumentNullException(nameof(resolveOutputDevice));
             _resolveMonitorEnabled = resolveMonitorEnabled ?? (_ => true);
+            _resolveSpeakerOutputEnabled = resolveSpeakerOutputEnabled ?? (_ => true);
             _resolveTalkgroupOutputDevice = resolveTalkgroupOutputDevice
                 ?? (_ => _resolveOutputDevice());
             _resolveTalkgroupVolume = resolveTalkgroupVolume ?? (_ => 1.0f);
@@ -361,6 +370,27 @@ namespace DvmConsole.Platform.Audio
                         entry.Value.ReleaseHandle?.Dispose();
                         entry.Value.ReleaseHandle = null;
                     }
+                }
+            }
+        }
+
+        /// <summary>
+        /// Clears every live receive monitor's speaker backlog without
+        /// ending decoded observation, TAR, or call-history lifecycles.
+        /// Used when RX playback is muted at transmit start.
+        /// </summary>
+        public void ClearAllTalkgroupBuffers()
+        {
+            if (Volatile.Read(ref _disposed) != 0)
+            {
+                return;
+            }
+
+            lock (_routeGate)
+            {
+                foreach (var state in _talkgroups.Values)
+                {
+                    state.Pipeline?.ClearBuffer();
                 }
             }
         }
@@ -537,7 +567,10 @@ namespace DvmConsole.Platform.Audio
                             $"Decoded PCM observer failed for {talkgroupKey}: {exception.Message}");
                     }
 
-                    pipelineForFrame?.WritePcm(pcm);
+                    if (_resolveSpeakerOutputEnabled(talkgroupKey))
+                    {
+                        pipelineForFrame?.WritePcm(pcm);
+                    }
                 }
             }
         }
@@ -950,6 +983,67 @@ namespace DvmConsole.Platform.Audio
                         for (var i = 0; i < P25EndTduCount; i++)
                         {
                             _sender.SendP25Tdu(entry.Target, entry.StreamIdCounter, grantDemand: false);
+                        }
+                    }
+                }
+            }
+        }
+
+        /// <summary>
+        /// Plays a short local PCM buffer through the resolved speaker output.
+        /// This method never opens capture, sends traffic, or observes TAR
+        /// audio. The router stops and disposes only the temporary output;
+        /// the router-owned stream factory remains alive. Device failures
+        /// are best-effort and do not break PTT.
+        /// </summary>
+        public async Task PlayLocalPcmAsync(ReadOnlyMemory<byte> pcm)
+        {
+            if (pcm.Length == 0 || Volatile.Read(ref _disposed) != 0)
+            {
+                return;
+            }
+
+            IAudioOutput? output = null;
+            try
+            {
+                output = _factory.CreateOutput(_resolveOutputDevice(), AudioPcm.Console);
+                var result = output.Write(pcm);
+                if (result.Status == AudioWriteStatus.Accepted)
+                {
+                    var duration = TimeSpan.FromSeconds(
+                        (double)pcm.Length / AudioPcm.Console.BytesPerSecond);
+                    await Task.Delay(duration).ConfigureAwait(false);
+                }
+            }
+            catch (Exception exception)
+            {
+                System.Diagnostics.Debug.WriteLine(
+                    $"Local PCM playback unavailable: {exception.Message}");
+            }
+            finally
+            {
+                if (output is not null)
+                {
+                    try
+                    {
+                        await output.StopAsync().ConfigureAwait(false);
+                    }
+                    catch (Exception exception)
+                    {
+                        System.Diagnostics.Debug.WriteLine(
+                            $"Local PCM output stop failed: {exception.Message}");
+                    }
+
+                    if (output is IAsyncDisposable disposable)
+                    {
+                        try
+                        {
+                            await disposable.DisposeAsync().ConfigureAwait(false);
+                        }
+                        catch (Exception exception)
+                        {
+                            System.Diagnostics.Debug.WriteLine(
+                                $"Local PCM output dispose failed: {exception.Message}");
                         }
                     }
                 }

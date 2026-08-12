@@ -177,6 +177,16 @@ namespace DvmConsole.Platform.Audio
         }
 
         /// <summary>
+        /// Discards buffered speaker audio without ending the monitor
+        /// pipeline. Receive observation remains owned by the router.
+        /// </summary>
+        public void ClearBuffer()
+        {
+            _bufferedBytes = 0;
+            Volatile.Read(ref _output)?.ClearBuffer();
+        }
+
+        /// <summary>
         /// Decodes one 20 ms voice frame through the injected decoder seam and
         /// writes the resulting 160 16-bit PCM samples (320 bytes little-endian)
         /// to the playback stream. A frame the decoder rejects is silently

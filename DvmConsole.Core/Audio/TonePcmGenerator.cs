@@ -62,6 +62,42 @@ namespace dvmconsole
         }
 
         /// <summary>
+        /// Generates the local WPF-compatible talk-permit tone: 1200 Hz,
+        /// 50 ms, 20 percent amplitude, with a 10 ms linear fade at each
+        /// edge. The result is local-only PCM; transport and playback stay
+        /// owned by the consuming audio layer.
+        /// </summary>
+        public static byte[] GenerateTalkPermitTone()
+        {
+            const double frequency = 1200.0;
+            const int durationMilliseconds = 50;
+            const double amplitude = 0.20;
+
+            int sampleCount = SampleRate * durationMilliseconds / 1000;
+            int fadeSamples = SampleRate * 10 / 1000;
+            byte[] buffer = new byte[sampleCount * 2];
+
+            for (int i = 0; i < sampleCount; i++)
+            {
+                double envelope = 1.0;
+                if (i < fadeSamples)
+                    envelope = (double)i / fadeSamples;
+                else if (i >= sampleCount - fadeSamples)
+                    envelope = (double)(sampleCount - i - 1) / fadeSamples;
+
+                short sampleValue = (short)(
+                    Math.Sin(2 * Math.PI * frequency * i / SampleRate)
+                    * amplitude
+                    * envelope
+                    * short.MaxValue);
+                buffer[i * 2] = (byte)(sampleValue & 0xFF);
+                buffer[i * 2 + 1] = (byte)((sampleValue >> 8) & 0xFF);
+            }
+
+            return buffer;
+        }
+
+        /// <summary>
         /// Generate two sine waves mixed together at the specified frequencies and duration.
         /// </summary>
         /// <param name="lowFrequency">Low group frequency in Hz</param>
