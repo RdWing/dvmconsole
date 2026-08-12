@@ -299,6 +299,7 @@ namespace DvmConsole.Avalonia
                 NativeMenuItem tarItem = CreateTarConfigurationMenuItem(mainWindow);
                 NativeMenuItem tarViewerItem = CreateTarViewerMenuItem(mainWindow);
                 NativeMenuItem groupsItem = CreatePatchGroupsMenuItem(mainWindow);
+                NativeMenuItem tonesItem = CreateAlertToneManagerMenuItem(mainWindow);
 
                 NativeMenuItem? appItem = menu.Items
                     .OfType<NativeMenuItem>()
@@ -310,6 +311,7 @@ namespace DvmConsole.Avalonia
                 if (settingsItem?.Menu is { } settingsMenu)
                 {
                     settingsMenu.Items.Insert(0, groupsItem);
+                    settingsMenu.Items.Insert(1, tonesItem);
                 }
                 if (appItem?.Menu is { } appMenu && appMenu.Items.Count > 0)
                 {
@@ -391,6 +393,25 @@ namespace DvmConsole.Avalonia
             return item;
         }
 
+        /// <summary>
+        /// Creates the native Tones submenu. Native menu click events are
+        /// composed here because they are not XAML-bindable on this target.
+        /// </summary>
+        internal static NativeMenuItem CreateAlertToneManagerMenuItem(MainWindow? mainWindow)
+        {
+            var tones = new NativeMenuItem("Tones")
+            {
+                Menu = new NativeMenu(),
+            };
+            var manage = new NativeMenuItem("Manage Custom Alert Tones")
+            {
+                IsEnabled = mainWindow is not null,
+            };
+            manage.Click += (_, _) => mainWindow?.OpenAlertToneManager();
+            tones.Menu.Items.Add(manage);
+            return tones;
+        }
+
         public override void OnFrameworkInitializationCompleted()
         {
             if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
@@ -417,6 +438,7 @@ namespace DvmConsole.Avalonia
                 var restorePersistence = new RestoreSettingsPersistence(settingsStore);
                 var layoutPersistence = new LayoutSettingsPersistence(settingsStore);
                 var groupsPersistence = new GroupSettingsPersistence(settingsStore);
+                var alertPersistence = new AlertSettingsPersistence(settingsStore);
                 var tarRecorder = CreateTarRecorder(tarPersistence, fileSystemPaths.DefaultTarRecordingsPath);
                 var tarViewerColumnPersistence =
                     new TarViewerColumnSettingsPersistence(settingsStore);
@@ -518,6 +540,7 @@ namespace DvmConsole.Avalonia
                 mainWindow.AttachGroupsPersistence(groupsPersistence);
                 mainWindow.AttachRestorePersistence(restorePersistence);
                 mainWindow.AttachLayoutPersistence(layoutPersistence);
+                mainWindow.AttachAlertSettingsPersistence(alertPersistence);
                 mainWindow.FileDialogService =
                     new AvaloniaFileDialogService(mainWindow.StorageProvider);
                 mainWindow.TarFileRevealService = new DesktopFileRevealService();

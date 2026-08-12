@@ -1,0 +1,93 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:DvmConsole.Avalonia.ViewModels"
+        x:Class="DvmConsole.Avalonia.Views.AlertToneManagerWindow"
+        x:ClassModifier="internal"
+        x:DataType="vm:AlertToneManagerViewModel"
+        Title="Alert Tone Manager"
+        Width="900"
+        Height="560"
+        MinWidth="720"
+        MinHeight="420"
+        WindowStartupLocation="CenterOwner"
+        Background="#0B1114"
+        Foreground="#EFF7F5">
+
+    <Window.Styles>
+        <Style Selector="TextBlock.kicker">
+            <Setter Property="FontFamily" Value="Inter" />
+            <Setter Property="FontSize" Value="11" />
+            <Setter Property="FontWeight" Value="Bold" />
+            <Setter Property="Foreground" Value="#5FE1D2" />
+            <Setter Property="LetterSpacing" Value="2" />
+        </Style>
+        <Style Selector="TextBlock.muted">
+            <Setter Property="Foreground" Value="#9CB2B3" />
+        </Style>
+        <Style Selector="Border.panel">
+            <Setter Property="Background" Value="#111B1F" />
+            <Setter Property="BorderBrush" Value="#24373A" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="8" />
+        </Style>
+    </Window.Styles>
+
+    <Grid Margin="20" RowDefinitions="Auto,16,*,16,Auto">
+        <StackPanel Grid.Row="0" Spacing="4">
+            <TextBlock Classes="kicker" Text="CUSTOM ALERT TONES" />
+            <TextBlock FontSize="22" FontWeight="SemiBold" Text="Manage custom alert tones" />
+            <TextBlock Classes="muted"
+                       Text="Add, remove, rename, and assign alert-tone files to a dashboard tab." />
+        </StackPanel>
+
+        <Border Grid.Row="2" Classes="panel" Padding="12">
+            <Grid RowDefinitions="Auto,12,*,Auto" RowSpacing="8">
+                <Grid ColumnDefinitions="180,*,180,120,Auto" ColumnSpacing="10">
+                    <TextBlock Classes="muted" Text="NAME" VerticalAlignment="Center" />
+                    <TextBlock Grid.Column="1" Classes="muted" Text="FILE" VerticalAlignment="Center" />
+                    <TextBlock Grid.Column="2" Classes="muted" Text="TAB" VerticalAlignment="Center" />
+                    <TextBlock Grid.Column="3" Classes="muted" Text="AVAILABILITY" VerticalAlignment="Center" />
+                    <TextBlock Grid.Column="4" Classes="muted" Text="ACTION" VerticalAlignment="Center" />
+                </Grid>
+
+                <ScrollViewer Grid.Row="2" HorizontalScrollBarVisibility="Disabled">
+                    <ItemsControl ItemsSource="{Binding AlertTones}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate x:DataType="vm:AlertToneManagerViewModel+AlertToneItem">
+                                <Grid ColumnDefinitions="180,*,180,120,Auto"
+                                      ColumnSpacing="10"
+                                      Margin="0,4">
+                                    <TextBox Text="{Binding DisplayName, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                             VerticalContentAlignment="Center" />
+                                    <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8">
+                                        <TextBlock Text="{Binding FilePath}"
+                                                   TextTrimming="CharacterEllipsis"
+                                                   VerticalAlignment="Center" />
+                                        <Button Content="Browse" Click="Browse_Click" />
+                                    </StackPanel>
+                                    <ComboBox Grid.Column="2"
+                                              ItemsSource="{Binding $parent[Window].DataContext.AvailableTabs}"
+                                              SelectedItem="{Binding TabName, Mode=TwoWay}" />
+                                    <TextBlock Grid.Column="3"
+                                               Text="{Binding IsAvailable, StringFormat={}{0}}"
+                                               VerticalAlignment="Center" />
+                                    <Button Grid.Column="4" Content="Delete" Click="Delete_Click" />
+                                </Grid>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </ScrollViewer>
+
+                <TextBlock Grid.Row="3"
+                           Classes="muted"
+                           Text="Missing files remain configured and are marked unavailable." />
+            </Grid>
+        </Border>
+
+        <StackPanel Grid.Row="4" Orientation="Horizontal" HorizontalAlignment="Right" Spacing="10">
+            <Button Content="Add WAV files" Click="Add_Click" />
+            <Button Content="Close" Click="Close_Click" />
+            <Button Content="Save" Click="Save_Click" />
+        </StackPanel>
+    </Grid>
+</Window>

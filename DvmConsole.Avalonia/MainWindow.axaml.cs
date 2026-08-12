@@ -162,6 +162,8 @@ namespace DvmConsole.Avalonia
         private bool layoutHydrated;
         private TarViewerWindow? tarViewerWindow;
         private PatchGroupsWindow? patchGroupsWindow;
+        private AlertToneManagerWindow? alertToneManagerWindow;
+        private AlertSettingsPersistence? alertSettingsPersistence;
 
         public MainWindow()
             : this(null, null)
@@ -557,6 +559,12 @@ namespace DvmConsole.Avalonia
             layoutHydrated = true;
         }
 
+        public void AttachAlertSettingsPersistence(AlertSettingsPersistence persistence)
+        {
+            ArgumentNullException.ThrowIfNull(persistence);
+            alertSettingsPersistence ??= persistence;
+        }
+
         private void AttachReceiveProjection(MainWindowViewModel viewModel)
         {
             receiveProjectionViewModel = viewModel;
@@ -808,6 +816,151 @@ namespace DvmConsole.Avalonia
 
             var dialog = new TarConfigurationWindow(tarConfiguration, FileDialogService);
             _ = dialog.ShowDialog(this);
+        }
+
+        /// <summary>
+        /// Opens one modeless alert-tone manager over the shared alert settings
+        /// section. The VM performs managed normalization only; this shell
+        /// owns file availability, persistence, and dialog adapters.
+        /// </summary>
+        internal void OpenAlertToneManager()
+        {
+            if (alertToneManagerWindow is not null
+                || alertSettingsPersistence is not { } persistence)
+            {
+                return;
+            }
+
+            if (!persistence.TryLoad(out UserSettingsAlertSection section))
+            {
+                section = new UserSettingsAlertSection();
+            }
+
+            var configs = section.AlertTones is { Count: > 0 }
+                ? section.AlertTones
+                : (section.AlertToneFilePaths ?? new List<string>())
+                    .Where(path => !string.IsNullOrWhiteSpace(path))
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .Select(path => new UserSettingsAlertToneConfig
+                    {
+                        Id = Guid.NewGuid().ToString("N"),
+                        DisplayName = GetAlertToneDisplayName(path),
+                        FilePath = path,
+                        TabName = section.AlertToneTabs.TryGetValue(path, out string? tab)
+                            ? tab
+                            : string.Empty,
+                        Position = section.AlertTonePositions.TryGetValue(
+                                path,
+                                out UserSettingsLayoutPosition? position)
+                            ? position
+                            : new UserSettingsLayoutPosition { X = 20, Y = 20 },
+                    })
+                    .ToList();
+
+            var manager = new AlertToneManagerViewModel(
+                configs,
+                Array.Empty<string>(),
+                path =>
+                {
+                    try
+                    {
+                        return System.IO.File.Exists(path);
+                    }
+                    catch
+                    {
+                        return false;
+                    }
+                });
+            Action<IReadOnlyList<UserSettingsAlertToneConfig>> saveRequested =
+                snapshot => SaveAlertToneSection(persistence, snapshot);
+            manager.SaveRequested += saveRequested;
+
+            var window = new AlertToneManagerWindow(
+                manager,
+                FileDialogService,
+                TarConfirmationService);
+            alertToneManagerWindow = window;
+            window.Closed += (_, _) =>
+            {
+                manager.SaveRequested -= saveRequested;
+                if (ReferenceEquals(alertToneManagerWindow, window))
+                {
+                    alertToneManagerWindow = null;
+                }
+            };
+            window.Show(this);
+        }
+
+        private static void SaveAlertToneSection(
+            AlertSettingsPersistence persistence,
+            IReadOnlyList<UserSettingsAlertToneConfig> configs)
+        {
+            try
+            {
+                if (!persistence.TryLoad(out UserSettingsAlertSection section))
+                {
+                    section = new UserSettingsAlertSection();
+                }
+
+                section.AlertTones = configs
+                    .Where(config => config is not null
+                        && !string.IsNullOrWhiteSpace(config.FilePath))
+                    .Select(CloneAlertToneConfig)
+                    .ToList();
+                section.AlertToneFilePaths = section.AlertTones
+                    .Select(config => config.FilePath)
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .ToList();
+                section.AlertTonePositions = section.AlertTones
+                    .GroupBy(config => config.FilePath, StringComparer.OrdinalIgnoreCase)
+                    .ToDictionary(
+                        group => group.Key,
+                        group => ClonePosition(group.Last().Position),
+                        StringComparer.OrdinalIgnoreCase);
+                section.AlertToneTabs = section.AlertTones
+                    .GroupBy(config => config.FilePath, StringComparer.OrdinalIgnoreCase)
+                    .ToDictionary(
+                        group => group.Key,
+                        group => group.Last().TabName ?? string.Empty,
+                        StringComparer.OrdinalIgnoreCase);
+                persistence.Save(section);
+            }
+            catch (Exception exception)
+            {
+                System.Diagnostics.Debug.WriteLine(
+                    $"Alert tone settings save failed: {exception.Message}");
+            }
+        }
+
+        private static UserSettingsAlertToneConfig CloneAlertToneConfig(
+            UserSettingsAlertToneConfig config)
+            => new()
+            {
+                Id = string.IsNullOrWhiteSpace(config.Id)
+                    ? Guid.NewGuid().ToString("N")
+                    : config.Id,
+                DisplayName = string.IsNullOrWhiteSpace(config.DisplayName)
+                    ? GetAlertToneDisplayName(config.FilePath)
+                    : config.DisplayName.Trim(),
+                FilePath = config.FilePath.Trim(),
+                TabName = string.IsNullOrWhiteSpace(config.TabName)
+                    ? "Tab 1"
+                    : config.TabName.Trim(),
+                Position = ClonePosition(config.Position),
+            };
+
+        private static UserSettingsLayoutPosition ClonePosition(
+            UserSettingsLayoutPosition? position)
+            => new()
+            {
+                X = position?.X ?? 20,
+                Y = position?.Y ?? 20,
+            };
+
+        private static string GetAlertToneDisplayName(string path)
+        {
+            string fileName = System.IO.Path.GetFileNameWithoutExtension(path);
+            return string.IsNullOrWhiteSpace(fileName) ? "Alert Tone" : fileName;
         }
 
         /// <summary>
@@ -1171,6 +1324,8 @@ namespace DvmConsole.Avalonia
 
             patchGroupsWindow?.Close();
             patchGroupsWindow = null;
+            alertToneManagerWindow?.Close();
+            alertToneManagerWindow = null;
             tarViewerWindow?.Close();
             tarViewerWindow = null;
             tarRetentionTimer?.Stop();
