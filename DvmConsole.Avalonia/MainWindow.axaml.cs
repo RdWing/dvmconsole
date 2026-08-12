@@ -163,6 +163,7 @@ namespace DvmConsole.Avalonia
         private TarViewerWindow? tarViewerWindow;
         private PatchGroupsWindow? patchGroupsWindow;
         private AlertToneManagerWindow? alertToneManagerWindow;
+        private TonePresetManagerWindow? tonePresetManagerWindow;
         private AlertSettingsPersistence? alertSettingsPersistence;
         private IAudioWaveFileInspector? alertTonePreviewInspector;
         private IAudioWaveFilePlayer? alertTonePreviewPlayer;
@@ -977,6 +978,140 @@ namespace DvmConsole.Avalonia
         }
 
         /// <summary>
+        /// Opens one modeless generated-tone preset manager. The window and
+        /// view-model emit request-only preview/send payloads; this shell owns
+        /// persistence and target projection, while real playback/transmit
+        /// dispatch remains a later gate.
+        /// </summary>
+        internal void OpenTonePresetManager()
+        {
+            if (tonePresetManagerWindow is { } existing)
+            {
+                existing.Activate();
+                return;
+            }
+
+            if (alertSettingsPersistence is not { } persistence)
+            {
+                return;
+            }
+
+            if (!persistence.TryLoad(out UserSettingsAlertSection section))
+            {
+                section = new UserSettingsAlertSection();
+            }
+
+            var manager = new TonePresetManagerViewModel(
+                section.TonePresets ?? new List<UserSettingsTonePresetConfig>(),
+                BuildTonePresetTargets());
+            Action<IReadOnlyList<UserSettingsTonePresetConfig>> saveRequested =
+                snapshot => SaveTonePresetSection(persistence, snapshot);
+            Action<TonePresetRequest> previewRequested =
+                request => System.Diagnostics.Debug.WriteLine(
+                    $"Tone preset preview requested: {request.PresetId} ({request.Pcm.Length} bytes)");
+            Action<TonePresetRequest> sendRequested =
+                request => System.Diagnostics.Debug.WriteLine(
+                    $"Tone preset send requested: {request.PresetId} -> {request.TargetResourceKey}");
+            manager.SaveRequested += saveRequested;
+            manager.PreviewRequested += previewRequested;
+            manager.SendRequested += sendRequested;
+
+            var window = new TonePresetManagerWindow(manager);
+            tonePresetManagerWindow = window;
+            window.Closed += (_, _) =>
+            {
+                manager.SaveRequested -= saveRequested;
+                manager.PreviewRequested -= previewRequested;
+                manager.SendRequested -= sendRequested;
+                if (ReferenceEquals(tonePresetManagerWindow, window))
+                {
+                    tonePresetManagerWindow = null;
+                }
+            };
+            window.Show(this);
+        }
+
+        private IReadOnlyList<TonePresetTarget> BuildTonePresetTargets()
+        {
+            if (codeplug?.Zones is not { } zones)
+            {
+                return Array.Empty<TonePresetTarget>();
+            }
+
+            return zones
+                .Where(zone => zone?.Channels is not null)
+                .SelectMany(zone => zone!.Channels!)
+                .Where(channel => channel is not null
+                    && !channel.RxOnly
+                    && channel.GetChannelMode() != Codeplug.ChannelMode.NXDN
+                    && !string.IsNullOrWhiteSpace(channel.System)
+                    && !string.IsNullOrWhiteSpace(channel.Tgid))
+                .GroupBy(channel => ResourceIdentity.Build(channel.System, channel.Tgid), StringComparer.OrdinalIgnoreCase)
+                .Select(group =>
+                {
+                    Codeplug.Channel channel = group.First();
+                    string system = channel.System?.Trim() ?? string.Empty;
+                    string tgid = channel.Tgid?.Trim() ?? string.Empty;
+                    return new TonePresetTarget(
+                        group.Key,
+                        $"{channel.Name?.Trim()} ({system} TG {tgid})");
+                })
+                .OrderBy(target => target.DisplayName, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+        }
+
+        private static void SaveTonePresetSection(
+            AlertSettingsPersistence persistence,
+            IReadOnlyList<UserSettingsTonePresetConfig> configs)
+        {
+            try
+            {
+                if (!persistence.TryLoad(out UserSettingsAlertSection section))
+                {
+                    section = new UserSettingsAlertSection();
+                }
+
+                section.TonePresets = (configs ?? Array.Empty<UserSettingsTonePresetConfig>())
+                    .Where(config => config is not null)
+                    .Select(CloneTonePresetConfig)
+                    .ToList();
+                persistence.Save(section);
+            }
+            catch (Exception exception)
+            {
+                System.Diagnostics.Debug.WriteLine(
+                    $"Tone preset settings save failed: {exception.Message}");
+            }
+        }
+
+        private static UserSettingsTonePresetConfig CloneTonePresetConfig(
+            UserSettingsTonePresetConfig config)
+        {
+            var clone = new UserSettingsTonePresetConfig
+            {
+                Id = string.IsNullOrWhiteSpace(config.Id)
+                    ? Guid.NewGuid().ToString("N")
+                    : config.Id.Trim(),
+                DisplayName = string.IsNullOrWhiteSpace(config.DisplayName)
+                    ? "Tone Preset"
+                    : config.DisplayName.Trim(),
+                TargetResourceKey = config.TargetResourceKey?.Trim() ?? string.Empty,
+            };
+            clone.Steps = (config.Steps ?? new List<UserSettingsTonePresetStep>())
+                .Where(step => step is not null)
+                .Select(step => new UserSettingsTonePresetStep
+                {
+                    Kind = string.Equals(step.Kind, "hold", StringComparison.OrdinalIgnoreCase)
+                        ? "hold"
+                        : "tone",
+                    FrequencyHz = step.FrequencyHz,
+                    DurationSeconds = step.DurationSeconds,
+                })
+                .ToList();
+            return clone;
+        }
+
+        /// <summary>
         /// Opens one modeless TAR Viewer instance owned by this dashboard.
         /// The recorder and WAVE player are shared application dependencies;
         /// reveal and confirmation stay injected shell adapters. Missing
@@ -1339,6 +1474,8 @@ namespace DvmConsole.Avalonia
             patchGroupsWindow = null;
             alertToneManagerWindow?.Close();
             alertToneManagerWindow = null;
+            tonePresetManagerWindow?.Close();
+            tonePresetManagerWindow = null;
             tarViewerWindow?.Close();
             tarViewerWindow = null;
             tarRetentionTimer?.Stop();

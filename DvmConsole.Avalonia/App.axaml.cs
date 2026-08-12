@@ -409,6 +409,12 @@ namespace DvmConsole.Avalonia
             };
             manage.Click += (_, _) => mainWindow?.OpenAlertToneManager();
             tones.Menu.Items.Add(manage);
+            var presets = new NativeMenuItem("Manage Tone Presets")
+            {
+                IsEnabled = mainWindow is not null,
+            };
+            presets.Click += (_, _) => mainWindow?.OpenTonePresetManager();
+            tones.Menu.Items.Add(presets);
             return tones;
         }
 
