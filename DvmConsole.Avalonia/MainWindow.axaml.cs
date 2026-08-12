@@ -76,9 +76,17 @@ namespace DvmConsole.Avalonia
         /// Routes received FNE voice frames into the talkgroup audio
         /// router; null while no audio router is composed or after the
         /// window closes. Frames arriving after close are dropped by
-        /// the glue's disposed state.
+        /// dropped by the glue's disposed state.
         /// </summary>
         private FneReceiveGlue? fneReceiveGlue = null;
+
+        /// <summary>
+        /// Composes Core PatchManager with classified receive metadata and
+        /// decoded PCM. The coordinator owns only receive-forward state;
+        /// null keeps the runtime patch path dormant when no codeplug was
+        /// loaded.
+        /// </summary>
+        private readonly PatchForwardingCoordinator? patchForwardingCoordinator;
 
         /// <summary>
         /// Tracks classified receive state independently of the receive
@@ -311,6 +319,17 @@ namespace DvmConsole.Avalonia
             fneReceiveGlue = new FneReceiveGlue(
                 (key, frame, mode) => talkgroupAudioRouter?.RouteVoiceFrame(key, frame, mode));
 
+            if (codeplug is not null)
+            {
+                patchForwardingCoordinator = new PatchForwardingCoordinator(
+                    codeplug,
+                    voiceEncoder ?? new NullVoiceFrameEncoder(),
+                    voiceSender ?? new StubVoiceTrafficSender(),
+                    groupsMembershipContextKey,
+                    downstreamObserver: tarRecordingCoordinator,
+                    isSystemConnected: IsFneSystemAvailable);
+            }
+
             if (fnecoreTransportFactory is { } receiveFactory)
             {
                 receiveFactory.OnCreated += adapter =>
@@ -339,6 +358,7 @@ namespace DvmConsole.Avalonia
                 {
                     var alias = aliasResolver?.Resolve(metadata.SystemName, metadata.SrcId);
                     receiveProjection?.Observe(metadata, alias, DateTimeOffset.UtcNow);
+                    patchForwardingCoordinator?.HandleReceiveFrame(metadata);
                     var channelName = receiveChannelResolver?.Resolve(
                         metadata.SystemName, metadata.DstId, metadata.Slot);
                     tarRecordingCoordinator?.HandleReceiveFrame(
@@ -381,7 +401,7 @@ namespace DvmConsole.Avalonia
                     encoder,
                     sender,
                     () => audioViewModel.AudioSettings?.SelectedOutputId ?? AudioDeviceId.Default,
-                    decodedPcmObserver: tarRecordingCoordinator,
+                    decodedPcmObserver: (IDecodedPcmObserver?)patchForwardingCoordinator ?? tarRecordingCoordinator,
                     transmittedPcmObserver: tarRecordingCoordinator,
                     resolveMonitorEnabled: audioViewModel.IsMonitorEnabled,
                     resolveTalkgroupOutputDevice: audioViewModel.ResolveMonitorOutputDevice,
@@ -544,6 +564,13 @@ namespace DvmConsole.Avalonia
                     : "FNE disconnected";
             receiveProjection?.SetFneConnectionWarning(system.SystemName, connected, detail);
         }
+
+        private bool IsFneSystemAvailable(string systemName)
+            => fneConnectionService?.GetSnapshot(systemName) is
+            {
+                IsConnected: true,
+                IsStarted: true,
+            };
 
         private void OnReceiveProjectionTimerTick(object? sender, EventArgs e)
             => receiveProjection?.SweepIdle(DateTimeOffset.UtcNow);
@@ -830,6 +857,7 @@ namespace DvmConsole.Avalonia
             {
                 try
                 {
+                    patchForwardingCoordinator?.ApplySavedMemberships(section);
                     groupsPersistence.Save(section);
                 }
                 catch (Exception exception)
@@ -1129,6 +1157,7 @@ namespace DvmConsole.Avalonia
             receiveProjectionViewModel = null;
 
             fneConnectionBridge?.Dispose();
+            patchForwardingCoordinator?.Dispose();
             fneConnectionService?.Dispose();
             fneReceiveGlue?.Dispose();
 
@@ -1368,6 +1397,7 @@ namespace DvmConsole.Avalonia
         private void OnTalkgroupStreamEnded(string key, VoiceMode mode)
         {
             receiveProjection?.Clear(key);
+            patchForwardingCoordinator?.HandleStreamEnded(key, mode);
             tarRecordingCoordinator?.EndReceive(key, mode, DateTime.UtcNow);
         }
 
