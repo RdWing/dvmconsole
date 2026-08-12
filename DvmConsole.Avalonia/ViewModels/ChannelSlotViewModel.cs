@@ -236,6 +236,7 @@ namespace DvmConsole.Avalonia.ViewModels
 
                 isPatchGroupMember = value;
                 PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsPatchGroupMember)));
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(GroupIndicatorText)));
                 PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(GroupIndicatorToolTip)));
             }
         }
@@ -253,6 +254,7 @@ namespace DvmConsole.Avalonia.ViewModels
 
                 isPatchGroupActive = value;
                 PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsPatchGroupActive)));
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(GroupIndicatorText)));
                 PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(GroupIndicatorToolTip)));
             }
         }
@@ -270,9 +272,22 @@ namespace DvmConsole.Avalonia.ViewModels
 
                 isMultiSelectMember = value;
                 PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsMultiSelectMember)));
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(GroupIndicatorText)));
                 PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(GroupIndicatorToolTip)));
             }
         }
+
+        /// <summary>
+        /// Short WPF-priority group badge text for the dashboard card. Multi-select
+        /// membership wins over patch membership; an enabled patch is distinguished
+        /// from a retained-but-disabled patch.
+        /// </summary>
+        public string GroupIndicatorText =>
+            isMultiSelectMember
+                ? "MSEL"
+                : isPatchGroupMember
+                    ? isPatchGroupActive ? "PATCH ON" : "PATCH"
+                    : string.Empty;
 
         /// <summary>True when page-select is active for this resource.</summary>
         public bool PageState

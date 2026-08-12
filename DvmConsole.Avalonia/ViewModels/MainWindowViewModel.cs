@@ -87,6 +87,17 @@ namespace DvmConsole.Avalonia.ViewModels
         private readonly Dictionary<string, double> channelVolumes =
             new(StringComparer.OrdinalIgnoreCase);
 
+        private readonly IReadOnlyList<Codeplug.Group> codeplugGroups;
+
+        private readonly Dictionary<string, bool> groupPatchMemberships =
+            new(StringComparer.OrdinalIgnoreCase);
+
+        private readonly Dictionary<string, bool> groupMultiSelectMemberships =
+            new(StringComparer.OrdinalIgnoreCase);
+
+        private readonly Dictionary<string, bool> groupActivePatchMemberships =
+            new(StringComparer.OrdinalIgnoreCase);
+
         private bool projectingAudioState;
 
         private string audioSaveFeedback = string.Empty;
@@ -247,7 +258,68 @@ namespace DvmConsole.Avalonia.ViewModels
         }
 
         /// <summary>
-        /// Attaches the optional restore-selection persistence after shell
+        /// Applies a group section already owned by the shell. Saving remains
+        /// outside the dashboard view-model.
+        /// </summary>
+        public void ApplyGroupsSection(
+            UserSettingsGroupSection? section,
+            string? membershipContextKey,
+            bool retainPatchStateOnStartup)
+        {
+            groupPatchMemberships.Clear();
+            groupMultiSelectMemberships.Clear();
+            groupActivePatchMemberships.Clear();
+
+            string context = membershipContextKey ?? string.Empty;
+            Dictionary<string, List<PatchTalkgroupMember>> memberships =
+                FindGroupContext(section?.PatchGroupMemberships, context);
+            Dictionary<string, bool> enabledStates =
+                FindGroupContext(section?.PatchGroupEnabledStates, context);
+            HashSet<string> patchGroups = new(
+                codeplugGroups.Where(group => group.IsPatchGroup()).Select(group => group.Name),
+                StringComparer.OrdinalIgnoreCase);
+            HashSet<string> multiSelectGroups = new(
+                codeplugGroups.Where(group => group.IsMultiselectGroup()).Select(group => group.Name),
+                StringComparer.OrdinalIgnoreCase);
+
+            foreach (var pair in memberships)
+            {
+                bool isPatch = patchGroups.Contains(pair.Key);
+                bool isMultiSelect = multiSelectGroups.Contains(pair.Key);
+                bool isActive = isPatch
+                    && retainPatchStateOnStartup
+                    && enabledStates.TryGetValue(pair.Key, out bool enabled)
+                    && enabled;
+
+                foreach (PatchTalkgroupMember? member in pair.Value ?? new List<PatchTalkgroupMember>())
+                {
+                    if (member is null
+                        || string.IsNullOrWhiteSpace(member.SystemName)
+                        || string.IsNullOrWhiteSpace(member.Tgid))
+                    {
+                        continue;
+                    }
+
+                    string key = ResourceIdentity.Build(member.SystemName, member.Tgid);
+                    if (isPatch)
+                    {
+                        groupPatchMemberships[key] = true;
+                        if (isActive)
+                        {
+                            groupActivePatchMemberships[key] = true;
+                        }
+                    }
+
+                    if (isMultiSelect)
+                    {
+                        groupMultiSelectMemberships[key] = true;
+                    }
+                }
+            }
+
+            ProjectGroupIndicators();
+        }
+
         /// construction. Hydration runs only after the channel collection and
         /// operator preferences exist; hydration suppresses all selection and
         /// primary save callbacks so attaching a file never writes it.
@@ -703,6 +775,9 @@ namespace DvmConsole.Avalonia.ViewModels
             this.pttPersistence = pttPersistence;
 
             this.preferencesPersistence = preferencesPersistence;
+
+            codeplugGroups = codeplug?.Groups?.Where(group => group is not null).ToList()
+                ?? new List<Codeplug.Group>();
 
             FneConnections = new FneConnectionManagerViewModel(systems);
             FneConnections.PropertyChanged += OnFneConnectionManagerChanged;
@@ -1888,6 +1963,7 @@ namespace DvmConsole.Avalonia.ViewModels
 
                 channels = rebuilt;
                 ProjectTarIndicators();
+                ProjectGroupIndicators();
             }
             finally
             {
@@ -1955,6 +2031,56 @@ namespace DvmConsole.Avalonia.ViewModels
                 slot.TarRecordingEnabled =
                     FindTarItem(slot.ResourceKey)?.Enabled ?? false;
             }
+        }
+
+        /// <summary>
+        /// Projects persisted patch and multi-select identity maps onto every
+        /// current-zone slot. The slot setters are change-only and the
+        /// ChannelSlotViewModel computes WPF priority for the visible badge.
+        /// </summary>
+        private void ProjectGroupIndicators()
+        {
+            foreach (ChannelSlotViewModel slot in Channels)
+            {
+                string key = slot.ResourceKey?.Trim() ?? string.Empty;
+                slot.IsPatchGroupMember = key.Length > 0 && groupPatchMemberships.ContainsKey(key);
+                slot.IsPatchGroupActive = key.Length > 0 && groupActivePatchMemberships.ContainsKey(key);
+                slot.IsMultiSelectMember = key.Length > 0 && groupMultiSelectMemberships.ContainsKey(key);
+            }
+        }
+
+        private static Dictionary<string, List<PatchTalkgroupMember>> FindGroupContext(
+            Dictionary<string, Dictionary<string, List<PatchTalkgroupMember>>>? contexts,
+            string context)
+        {
+            foreach (var pair in contexts ?? new Dictionary<string, Dictionary<string, List<PatchTalkgroupMember>>>())
+            {
+                if (string.Equals(pair.Key, context, StringComparison.OrdinalIgnoreCase))
+                {
+                    return new Dictionary<string, List<PatchTalkgroupMember>>(
+                        pair.Value ?? new Dictionary<string, List<PatchTalkgroupMember>>(),
+                        StringComparer.OrdinalIgnoreCase);
+                }
+            }
+
+            return new Dictionary<string, List<PatchTalkgroupMember>>(StringComparer.OrdinalIgnoreCase);
+        }
+
+        private static Dictionary<string, bool> FindGroupContext(
+            Dictionary<string, Dictionary<string, bool>>? contexts,
+            string context)
+        {
+            foreach (var pair in contexts ?? new Dictionary<string, Dictionary<string, bool>>())
+            {
+                if (string.Equals(pair.Key, context, StringComparison.OrdinalIgnoreCase))
+                {
+                    return new Dictionary<string, bool>(
+                        pair.Value ?? new Dictionary<string, bool>(),
+                        StringComparer.OrdinalIgnoreCase);
+                }
+            }
+
+            return new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
         }
 
         /// <summary>

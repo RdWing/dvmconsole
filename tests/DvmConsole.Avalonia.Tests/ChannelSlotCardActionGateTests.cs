@@ -41,10 +41,13 @@ namespace DvmConsole.Avalonia.Tests
                 new[]
                 {
                     nameof(ChannelSlotViewModel.IsPatchGroupMember),
+                    nameof(ChannelSlotViewModel.GroupIndicatorText),
                     nameof(ChannelSlotViewModel.GroupIndicatorToolTip),
                     nameof(ChannelSlotViewModel.IsPatchGroupActive),
+                    nameof(ChannelSlotViewModel.GroupIndicatorText),
                     nameof(ChannelSlotViewModel.GroupIndicatorToolTip),
                     nameof(ChannelSlotViewModel.IsMultiSelectMember),
+                    nameof(ChannelSlotViewModel.GroupIndicatorText),
                     nameof(ChannelSlotViewModel.GroupIndicatorToolTip),
                     nameof(ChannelSlotViewModel.PageState),
                     nameof(ChannelSlotViewModel.HoldState),

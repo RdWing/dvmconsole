@@ -529,7 +529,33 @@ namespace DvmConsole.Avalonia
         public void AttachGroupsPersistence(GroupSettingsPersistence persistence)
         {
             ArgumentNullException.ThrowIfNull(persistence);
-            groupsPersistence ??= persistence;
+            if (groupsPersistence is not null)
+            {
+                return;
+            }
+
+            groupsPersistence = persistence;
+            if (DataContext is MainWindowViewModel viewModel)
+            {
+                UserSettingsGroupSection section = new();
+                try
+                {
+                    if (persistence.TryLoad(out UserSettingsGroupSection loaded))
+                    {
+                        section = loaded;
+                    }
+                }
+                catch (Exception exception)
+                {
+                    System.Diagnostics.Debug.WriteLine(
+                        $"Groups settings load failed: {exception.Message}");
+                }
+
+                viewModel.ApplyGroupsSection(
+                    section,
+                    groupsMembershipContextKey,
+                    viewModel.Preferences?.RetainPatchStateOnStartup == true);
+            }
         }
 
         public void AttachRestorePersistence(RestoreSettingsPersistence restorePersistence)
@@ -1206,6 +1232,10 @@ namespace DvmConsole.Avalonia
             {
                 try
                 {
+                    viewModel.ApplyGroupsSection(
+                        section,
+                        groupsMembershipContextKey,
+                        viewModel.Preferences?.RetainPatchStateOnStartup == true);
                     patchForwardingCoordinator?.ApplySavedMemberships(section);
                     groupsPersistence.Save(section);
                 }

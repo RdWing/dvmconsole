@@ -78,6 +78,12 @@
             <Setter Property="FontSize" Value="14" />
             <Setter Property="FontWeight" Value="SemiBold" />
         </Style>
+        <Style Selector="TextBlock.group-indicator">
+            <Setter Property="FontFamily" Value="Inter" />
+            <Setter Property="FontSize" Value="11" />
+            <Setter Property="FontWeight" Value="Bold" />
+            <Setter Property="Foreground" Value="#F3B562" />
+        </Style>
         <Style Selector="Border.panel">
             <Setter Property="Background" Value="#111B1F" />
             <Setter Property="BorderBrush" Value="#24373A" />
@@ -302,6 +308,10 @@
                                                      Width="8" Height="8"
                                                      VerticalAlignment="Center" />
                                         </Grid>
+                                        <TextBlock Classes="group-indicator"
+                                                   Text="{Binding GroupIndicatorText}"
+                                                   ToolTip.Tip="{Binding GroupIndicatorToolTip}"
+                                                   IsVisible="{Binding GroupIndicatorText, Converter={x:Static conv:StringConverters.IsNotNullOrEmpty}}" />
                                         <StackPanel Spacing="4">
                                             <TextBlock Classes="data-label" Text="CHANNEL" />
                                             <TextBlock Classes="data-value" Text="{Binding ChannelName}"
