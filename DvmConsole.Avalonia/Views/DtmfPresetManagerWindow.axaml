@@ -1,0 +1,141 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:DvmConsole.Avalonia.ViewModels"
+        x:Class="DvmConsole.Avalonia.Views.DtmfPresetManagerWindow"
+        x:ClassModifier="internal"
+        x:DataType="vm:DtmfPresetManagerViewModel"
+        Title="DTMF Presets"
+        Width="980"
+        Height="620"
+        MinWidth="760"
+        MinHeight="480"
+        WindowStartupLocation="CenterOwner"
+        Background="#0B1114"
+        Foreground="#EFF7F5">
+
+    <Window.Styles>
+        <Style Selector="TextBlock.kicker">
+            <Setter Property="FontFamily" Value="Inter" />
+            <Setter Property="FontSize" Value="11" />
+            <Setter Property="FontWeight" Value="Bold" />
+            <Setter Property="Foreground" Value="#5FE1D2" />
+            <Setter Property="LetterSpacing" Value="2" />
+        </Style>
+        <Style Selector="TextBlock.muted">
+            <Setter Property="Foreground" Value="#9CB2B3" />
+        </Style>
+        <Style Selector="Border.panel">
+            <Setter Property="Background" Value="#111B1F" />
+            <Setter Property="BorderBrush" Value="#24373A" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="8" />
+        </Style>
+    </Window.Styles>
+
+    <Grid Margin="20" RowDefinitions="Auto,16,*,16,Auto">
+        <StackPanel Grid.Row="0" Spacing="4">
+            <TextBlock Classes="kicker" Text="DIGIT COMMANDS" />
+            <TextBlock FontSize="22" FontWeight="SemiBold" Text="Manage DTMF presets" />
+            <TextBlock Classes="muted"
+                       Text="Build ordered DTMF digit and hold steps for a selected resource." />
+        </StackPanel>
+
+        <Grid Grid.Row="2" ColumnDefinitions="250,16,*">
+            <Border Grid.Column="0" Classes="panel" Padding="10">
+                <Grid RowDefinitions="Auto,*,Auto" RowSpacing="10">
+                    <TextBlock Classes="kicker" Text="PRESETS" />
+                    <ListBox Grid.Row="1"
+                             ItemsSource="{Binding Presets}"
+                             SelectedItem="{Binding SelectedPreset, Mode=TwoWay}">
+                        <ListBox.ItemTemplate>
+                            <DataTemplate x:DataType="vm:DtmfPresetManagerViewModel+DtmfPresetItem">
+                                <Grid Margin="4" ColumnDefinitions="*,Auto">
+                                    <TextBlock Text="{Binding DisplayName}"
+                                               TextTrimming="CharacterEllipsis" />
+                                    <TextBlock Grid.Column="1"
+                                               Classes="muted"
+                                               Text="{Binding Steps.Count, StringFormat={}{0}}"
+                                               Margin="8,0,0,0" />
+                                </Grid>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+                    <StackPanel Grid.Row="2" Orientation="Horizontal" Spacing="8">
+                        <Button Content="Add" Click="AddPreset_Click" />
+                        <Button Content="Delete" Click="DeletePreset_Click" />
+                    </StackPanel>
+                </Grid>
+            </Border>
+
+            <Border Grid.Column="2" Classes="panel" Padding="16">
+                <Grid RowDefinitions="Auto,12,*,12,Auto" RowSpacing="8">
+                    <Grid ColumnDefinitions="*,260" ColumnSpacing="16">
+                        <TextBox Text="{Binding SelectedPreset.DisplayName, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                 Watermark="Preset name"
+                                 VerticalContentAlignment="Center" />
+                        <ComboBox Grid.Column="1"
+                                  ItemsSource="{Binding Targets}"
+                                  SelectedItem="{Binding SelectedTarget, Mode=TwoWay}"
+                                  PlaceholderText="Select target">
+                            <ComboBox.ItemTemplate>
+                                <DataTemplate x:DataType="vm:DtmfPresetTarget">
+                                    <TextBlock Text="{Binding DisplayName}" />
+                                </DataTemplate>
+                            </ComboBox.ItemTemplate>
+                        </ComboBox>
+                    </Grid>
+
+                    <Border Grid.Row="2" Classes="panel" Padding="10">
+                        <Grid RowDefinitions="Auto,*,Auto" RowSpacing="8">
+                            <Grid ColumnDefinitions="90,*,Auto,Auto,Auto,Auto" ColumnSpacing="8">
+                                <TextBlock Classes="muted" Text="DIGIT / HOLD" />
+                                <TextBlock Grid.Column="1" Classes="muted" Text="DURATION (SEC)" />
+                                <TextBlock Grid.Column="2" Classes="muted" Text="" />
+                                <TextBlock Grid.Column="3" Classes="muted" Text="" />
+                                <TextBlock Grid.Column="4" Classes="muted" Text="" />
+                            </Grid>
+                            <ScrollViewer Grid.Row="1" HorizontalScrollBarVisibility="Disabled">
+                                <ItemsControl ItemsSource="{Binding SelectedPreset.Steps}">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate x:DataType="vm:DtmfPresetManagerViewModel+DtmfPresetStepItem">
+                                            <Grid Margin="0,3" ColumnDefinitions="90,*,Auto,Auto,Auto,Auto" ColumnSpacing="8">
+                                                <ComboBox ItemsSource="{Binding $parent[Window].DataContext.StepKinds}"
+                                                          SelectedItem="{Binding Kind, Mode=TwoWay}" />
+                                                <TextBox Grid.Column="1"
+                                                         Text="{Binding DigitDisplay, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                                         Watermark="Digit or hold" />
+                                                <NumericUpDown Grid.Column="2"
+                                                               Value="{Binding DurationSeconds, Mode=TwoWay}"
+                                                               Minimum="0"
+                                                               Maximum="10"
+                                                               Increment="0.25" />
+                                                <Button Grid.Column="3" Content="Up" Click="MoveUp_Click" />
+                                                <Button Grid.Column="4" Content="Down" Click="MoveDown_Click" />
+                                                <Button Grid.Column="5" Content="Delete" Click="DeleteStep_Click" />
+                                            </Grid>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                            </ScrollViewer>
+                            <StackPanel Grid.Row="2" Orientation="Horizontal" Spacing="8">
+                                <Button Content="Add Digit" Click="AddDigit_Click" />
+                                <Button Content="Add Hold" Click="AddHold_Click" />
+                            </StackPanel>
+                        </Grid>
+                    </Border>
+
+                    <TextBlock Grid.Row="4"
+                               x:Name="StatusTextBlock"
+                               Classes="muted" />
+                </Grid>
+            </Border>
+        </Grid>
+
+        <StackPanel Grid.Row="4" Orientation="Horizontal" HorizontalAlignment="Right" Spacing="10">
+            <Button Content="Preview" Click="Preview_Click" />
+            <Button Content="Send" Click="Send_Click" />
+            <Button Content="Close" Click="Close_Click" />
+            <Button Content="Save" Click="Save_Click" />
+        </StackPanel>
+    </Grid>
+</Window>

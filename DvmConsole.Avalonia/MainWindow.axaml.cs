@@ -164,6 +164,7 @@ namespace DvmConsole.Avalonia
         private PatchGroupsWindow? patchGroupsWindow;
         private AlertToneManagerWindow? alertToneManagerWindow;
         private TonePresetManagerWindow? tonePresetManagerWindow;
+        private DtmfPresetManagerWindow? dtmfPresetManagerWindow;
         private AlertSettingsPersistence? alertSettingsPersistence;
         private IAudioWaveFileInspector? alertTonePreviewInspector;
         private IAudioWaveFilePlayer? alertTonePreviewPlayer;
@@ -1138,6 +1139,117 @@ namespace DvmConsole.Avalonia
         }
 
         /// <summary>
+        /// Opens one modeless DTMF preset manager. The view model emits
+        /// request-only PCM payloads; this shell owns persistence and target
+        /// projection while real preview/transmit dispatch remains Gate 5.5.
+        /// </summary>
+        internal void OpenDtmfPresetManager()
+        {
+            if (dtmfPresetManagerWindow is { } existing)
+            {
+                existing.Activate();
+                return;
+            }
+
+            if (alertSettingsPersistence is not { } persistence)
+            {
+                return;
+            }
+
+            if (!persistence.TryLoad(out UserSettingsAlertSection section))
+            {
+                section = new UserSettingsAlertSection();
+            }
+
+            var manager = new DtmfPresetManagerViewModel(
+                section.DtmfPresets ?? new List<UserSettingsDtmfPresetConfig>(),
+                BuildDtmfPresetTargets());
+            Action<IReadOnlyList<UserSettingsDtmfPresetConfig>> saveRequested =
+                snapshot => SaveDtmfPresetSection(persistence, snapshot);
+            Action<DtmfPresetRequest> previewRequested =
+                request => System.Diagnostics.Debug.WriteLine(
+                    $"DTMF preset preview requested: {request.PresetId} ({request.Pcm.Length} bytes)");
+            Action<DtmfPresetRequest> sendRequested =
+                request => System.Diagnostics.Debug.WriteLine(
+                    $"DTMF preset send requested: {request.PresetId} -> {request.TargetResourceKey}");
+            manager.SaveRequested += saveRequested;
+            manager.PreviewRequested += previewRequested;
+            manager.SendRequested += sendRequested;
+
+            var window = new DtmfPresetManagerWindow(manager);
+            dtmfPresetManagerWindow = window;
+            window.Closed += (_, _) =>
+            {
+                manager.SaveRequested -= saveRequested;
+                manager.PreviewRequested -= previewRequested;
+                manager.SendRequested -= sendRequested;
+                if (ReferenceEquals(dtmfPresetManagerWindow, window))
+                {
+                    dtmfPresetManagerWindow = null;
+                }
+            };
+            window.Show(this);
+        }
+
+        private IReadOnlyList<DtmfPresetTarget> BuildDtmfPresetTargets()
+            => BuildTonePresetTargets()
+                .Select(target => new DtmfPresetTarget(target.Key, target.DisplayName))
+                .ToList();
+
+        private static void SaveDtmfPresetSection(
+            AlertSettingsPersistence persistence,
+            IReadOnlyList<UserSettingsDtmfPresetConfig> configs)
+        {
+            try
+            {
+                if (!persistence.TryLoad(out UserSettingsAlertSection section))
+                {
+                    section = new UserSettingsAlertSection();
+                }
+
+                section.DtmfPresets = (configs ?? Array.Empty<UserSettingsDtmfPresetConfig>())
+                    .Where(config => config is not null)
+                    .Select(CloneDtmfPresetConfig)
+                    .ToList();
+                persistence.Save(section);
+            }
+            catch (Exception exception)
+            {
+                System.Diagnostics.Debug.WriteLine(
+                    $"DTMF preset settings save failed: {exception.Message}");
+            }
+        }
+
+        private static UserSettingsDtmfPresetConfig CloneDtmfPresetConfig(
+            UserSettingsDtmfPresetConfig config)
+        {
+            var clone = new UserSettingsDtmfPresetConfig
+            {
+                Id = string.IsNullOrWhiteSpace(config.Id)
+                    ? Guid.NewGuid().ToString("N")
+                    : config.Id.Trim(),
+                DisplayName = string.IsNullOrWhiteSpace(config.DisplayName)
+                    ? "DTMF Preset"
+                    : config.DisplayName.Trim(),
+                TargetResourceKey = config.TargetResourceKey?.Trim() ?? string.Empty,
+            };
+            clone.Steps = (config.Steps ?? new List<UserSettingsDtmfPresetStep>())
+                .Where(step => step is not null)
+                .Select(step => new UserSettingsDtmfPresetStep
+                {
+                    Kind = string.Equals(step.Kind, "hold", StringComparison.OrdinalIgnoreCase)
+                        ? "hold"
+                        : "digit",
+                    Digit = string.Equals(step.Kind, "hold", StringComparison.OrdinalIgnoreCase)
+                        ? string.Empty
+                        : step.Digit?.Trim().ToUpperInvariant() ?? "1",
+                    DurationSeconds = step.DurationSeconds,
+                })
+                .ToList();
+            return clone;
+        }
+
+        /// <summary>
         /// Opens one modeless TAR Viewer instance owned by this dashboard.
         /// The recorder and WAVE player are shared application dependencies;
         /// reveal and confirmation stay injected shell adapters. Missing
@@ -1506,6 +1618,8 @@ namespace DvmConsole.Avalonia
             alertToneManagerWindow = null;
             tonePresetManagerWindow?.Close();
             tonePresetManagerWindow = null;
+            dtmfPresetManagerWindow?.Close();
+            dtmfPresetManagerWindow = null;
             tarViewerWindow?.Close();
             tarViewerWindow = null;
             tarRetentionTimer?.Stop();

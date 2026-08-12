@@ -415,6 +415,12 @@ namespace DvmConsole.Avalonia
             };
             presets.Click += (_, _) => mainWindow?.OpenTonePresetManager();
             tones.Menu.Items.Add(presets);
+            var dtmfPresets = new NativeMenuItem("Manage DTMF Presets")
+            {
+                IsEnabled = mainWindow is not null,
+            };
+            dtmfPresets.Click += (_, _) => mainWindow?.OpenDtmfPresetManager();
+            tones.Menu.Items.Add(dtmfPresets);
             return tones;
         }
 
