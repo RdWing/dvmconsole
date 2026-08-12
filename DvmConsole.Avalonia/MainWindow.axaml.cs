@@ -118,12 +118,21 @@ namespace DvmConsole.Avalonia
         private readonly TarRecordingCoordinator? tarRecordingCoordinator;
         private readonly IAudioWaveFilePlayer? tarWaveFilePlayer;
         private readonly TarViewerColumnSettingsPersistence? tarViewerColumnPersistence;
+        private readonly Codeplug? codeplug;
+        private GroupSettingsPersistence? groupsPersistence;
+        private readonly string groupsMembershipContextKey =
+            System.IO.Path.GetFullPath(
+                System.IO.Path.Combine(
+                    Environment.CurrentDirectory,
+                    "configs",
+                    "codeplug.yml"));
         private readonly IGlobalHotkeyService? hotkeys;
         private readonly HotkeyRegistrationCoordinator? hotkeyRegistrationCoordinator;
         private LayoutSettingsPersistence? layoutPersistence;
         private UserSettingsLayoutSection? layoutSection;
         private bool layoutHydrated;
         private TarViewerWindow? tarViewerWindow;
+        private PatchGroupsWindow? patchGroupsWindow;
 
         public MainWindow()
             : this(null, null)
@@ -253,6 +262,7 @@ namespace DvmConsole.Avalonia
         {
             InitializeComponent();
             this.hotkeys = hotkeys;
+            this.codeplug = codeplug;
             this.tarRecorder = tarRecorder;
             this.tarRecordingCoordinator = tarRecorder is null ? null : new TarRecordingCoordinator(tarRecorder);
             this.tarWaveFilePlayer = tarWaveFilePlayer;
@@ -441,6 +451,16 @@ namespace DvmConsole.Avalonia
             {
                 viewModel.AttachPreferencesPersistence(preferencesPersistence);
             }
+        }
+
+        /// <summary>
+        /// Attaches the shared groups settings adapter after construction,
+        /// preserving the existing MainWindow constructor ABI.
+        /// </summary>
+        public void AttachGroupsPersistence(GroupSettingsPersistence persistence)
+        {
+            ArgumentNullException.ThrowIfNull(persistence);
+            groupsPersistence ??= persistence;
         }
 
         public void AttachRestorePersistence(RestoreSettingsPersistence restorePersistence)
@@ -771,6 +791,68 @@ namespace DvmConsole.Avalonia
             viewer.Show(this);
         }
 
+        /// <summary>
+        /// Opens the owner-bound Groups editor when a normalized codeplug and
+        /// the shared groups settings adapter are available. The editor owns
+        /// only presentation and request emission; this shell owns the save
+        /// request and deliberately leaves PTT/runtime requests unhandled for
+        /// the later runtime-routing gate.
+        /// </summary>
+        internal void OpenPatchGroups()
+        {
+            if (patchGroupsWindow is { } existing)
+            {
+                existing.Activate();
+                return;
+            }
+
+            if (codeplug is null
+                || groupsPersistence is null
+                || DataContext is not MainWindowViewModel viewModel
+                || codeplug.Groups is not { Count: > 0 } definitions)
+            {
+                return;
+            }
+
+            var channels = (codeplug.Zones ?? new List<Codeplug.Zone>())
+                .Where(zone => zone?.Channels is not null)
+                .SelectMany(zone => zone!.Channels!)
+                .Where(channel => channel is not null)
+                .ToList();
+            var editor = new PatchGroupsViewModel(
+                definitions,
+                channels,
+                groupsPersistence,
+                membershipContextKey: groupsMembershipContextKey,
+                retainPatchStateOnStartup: viewModel.Preferences?.RetainPatchStateOnStartup == true);
+
+            Action<UserSettingsGroupSection> saveRequested = section =>
+            {
+                try
+                {
+                    groupsPersistence.Save(section);
+                }
+                catch (Exception exception)
+                {
+                    System.Diagnostics.Debug.WriteLine(
+                        $"Groups settings save failed: {exception.Message}");
+                }
+            };
+            editor.SaveRequested += saveRequested;
+
+            var window = new PatchGroupsWindow(editor);
+            patchGroupsWindow = window;
+            window.Closed += (_, _) =>
+            {
+                editor.SaveRequested -= saveRequested;
+                if (ReferenceEquals(patchGroupsWindow, window))
+                {
+                    patchGroupsWindow = null;
+                }
+            };
+            window.Show(this);
+        }
+
         private void SelectAllChannels_Click(object? sender, RoutedEventArgs e)
         {
             if (DataContext is MainWindowViewModel viewModel)
@@ -1010,6 +1092,8 @@ namespace DvmConsole.Avalonia
 
             hotkeyRegistrationCoordinator?.Dispose();
 
+            patchGroupsWindow?.Close();
+            patchGroupsWindow = null;
             tarViewerWindow?.Close();
             tarViewerWindow = null;
             tarRetentionTimer?.Stop();

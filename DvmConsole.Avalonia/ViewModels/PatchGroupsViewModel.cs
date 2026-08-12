@@ -122,12 +122,41 @@ namespace DvmConsole.Avalonia.ViewModels
             public string Tgid { get; }
         }
 
+        /// <summary>
+        /// A valid current codeplug channel offered by the editor's add-member
+        /// picker. The editor keeps the identity separate from persisted rows
+        /// so unknown or stale settings values never become selectable.
+        /// </summary>
+        public sealed class AvailableMemberState
+        {
+            internal AvailableMemberState(string channelName, string systemName, string tgid)
+            {
+                ChannelName = channelName;
+                SystemName = systemName;
+                Tgid = tgid;
+            }
+
+            public string ChannelName { get; }
+
+            public string SystemName { get; }
+
+            public string Tgid { get; }
+
+            public string DisplayName =>
+                string.IsNullOrWhiteSpace(ChannelName)
+                    ? $"{SystemName} / {Tgid}"
+                    : $"{ChannelName} — {SystemName} / {Tgid}";
+        }
+
         private readonly IReadOnlyList<Codeplug.Channel> channels;
         private readonly GroupSettingsPersistence? persistence;
         private readonly string membershipContextKey;
         private readonly bool retainPatchStateOnStartup;
         private UserSettingsGroupSection loadedSection;
         private readonly List<GroupState> groups;
+        private GroupState? selectedGroup;
+        private AvailableMemberState? selectedMember;
+        private MemberState? selectedMemberRow;
 
         /// <summary>
         /// Builds editor rows from the supplied codeplug definitions and
@@ -147,10 +176,80 @@ namespace DvmConsole.Avalonia.ViewModels
             loadedSection = LoadSection();
             groups = BuildGroups(definitions, loadedSection);
             Groups = new ReadOnlyCollection<GroupState>(groups);
+            AvailableMembers = new ReadOnlyCollection<AvailableMemberState>(
+                this.channels
+                    .Select(channel => new AvailableMemberState(
+                        channel.Name ?? string.Empty,
+                        (channel.System ?? string.Empty).Trim(),
+                        (channel.Tgid ?? string.Empty).Trim()))
+                    .Where(member => member.SystemName.Length > 0 && member.Tgid.Length > 0)
+                    .GroupBy(member => $"{member.SystemName}\u001f{member.Tgid}", StringComparer.OrdinalIgnoreCase)
+                    .Select(group => group.First())
+                    .ToList());
+            SelectedGroup = Groups.FirstOrDefault();
         }
 
         /// <summary>Groups in codeplug order.</summary>
         public IReadOnlyList<GroupState> Groups { get; }
+
+        /// <summary>Valid current channels available to add to a group.</summary>
+        public IReadOnlyList<AvailableMemberState> AvailableMembers { get; }
+
+        /// <summary>The group currently shown by the owner-bound editor.</summary>
+        public GroupState? SelectedGroup
+        {
+            get => selectedGroup;
+            set
+            {
+                if (ReferenceEquals(selectedGroup, value))
+                {
+                    return;
+                }
+
+                selectedGroup = value is not null && Groups.Contains(value) ? value : null;
+                selectedMember = null;
+                selectedMemberRow = null;
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SelectedGroup)));
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SelectedMember)));
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SelectedMemberRow)));
+            }
+        }
+
+        /// <summary>The current channel selected in the add-member picker.</summary>
+        public AvailableMemberState? SelectedMember
+        {
+            get => selectedMember;
+            set
+            {
+                if (ReferenceEquals(selectedMember, value))
+                {
+                    return;
+                }
+
+                selectedMember = value is not null && AvailableMembers.Contains(value) ? value : null;
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SelectedMember)));
+            }
+        }
+
+        /// <summary>The ordered member row selected in the current group.</summary>
+        public MemberState? SelectedMemberRow
+        {
+            get => selectedMemberRow;
+            set
+            {
+                if (ReferenceEquals(selectedMemberRow, value))
+                {
+                    return;
+                }
+
+                selectedMemberRow = value is not null
+                    && selectedGroup is not null
+                    && selectedGroup.Members.Contains(value)
+                    ? value
+                    : null;
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SelectedMemberRow)));
+            }
+        }
 
         /// <summary>True when any group is currently being edited.</summary>
         public bool IsAnyGroupEditing => groups.Any(group => group.IsEditing);

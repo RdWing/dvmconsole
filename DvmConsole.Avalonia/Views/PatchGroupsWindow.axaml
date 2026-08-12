@@ -1,0 +1,148 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:DvmConsole.Avalonia.ViewModels"
+        x:Class="DvmConsole.Avalonia.Views.PatchGroupsWindow"
+        x:ClassModifier="internal"
+        x:DataType="vm:PatchGroupsViewModel"
+        Title="Patch Groups"
+        Width="920"
+        Height="620"
+        MinWidth="760"
+        MinHeight="480"
+        WindowStartupLocation="CenterOwner"
+        Background="#0B1114"
+        Foreground="#EFF7F5">
+
+    <Window.Styles>
+        <Style Selector="TextBlock.kicker">
+            <Setter Property="FontFamily" Value="Inter" />
+            <Setter Property="FontSize" Value="11" />
+            <Setter Property="FontWeight" Value="Bold" />
+            <Setter Property="Foreground" Value="#5FE1D2" />
+            <Setter Property="LetterSpacing" Value="2" />
+        </Style>
+        <Style Selector="TextBlock.muted">
+            <Setter Property="Foreground" Value="#9CB2B3" />
+        </Style>
+        <Style Selector="Border.panel">
+            <Setter Property="Background" Value="#111B1F" />
+            <Setter Property="BorderBrush" Value="#24373A" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="8" />
+        </Style>
+    </Window.Styles>
+
+    <Grid Margin="20" RowDefinitions="Auto,16,*,16,Auto">
+        <StackPanel Grid.Row="0" Spacing="4">
+            <TextBlock Classes="kicker" Text="GROUPS AND PATCHES" />
+            <TextBlock FontSize="22" FontWeight="SemiBold" Text="Patch groups" />
+            <TextBlock Classes="muted"
+                       Text="Edit ordered memberships and request group PTT. Runtime patch routing remains owned by the later PatchManager gate." />
+        </StackPanel>
+
+        <Grid Grid.Row="2" ColumnDefinitions="260,16,*">
+            <Border Grid.Column="0" Classes="panel" Padding="10">
+                <Grid RowDefinitions="Auto,*,Auto" RowSpacing="10">
+                    <TextBlock Classes="data-label" Text="GROUPS" />
+                    <ListBox Grid.Row="1"
+                             ItemsSource="{Binding Groups}"
+                             SelectedItem="{Binding SelectedGroup, Mode=TwoWay}"
+                             SelectionChanged="Group_SelectionChanged">
+                        <ListBox.ItemTemplate>
+                            <DataTemplate x:DataType="vm:PatchGroupsViewModel+GroupState">
+                                <Grid ColumnDefinitions="*,Auto" Margin="4">
+                                    <StackPanel Spacing="2">
+                                        <TextBlock Text="{Binding Name}" />
+                                        <TextBlock Classes="muted" FontSize="11" Text="{Binding GroupType}" />
+                                    </StackPanel>
+                                    <TextBlock Grid.Column="1"
+                                               Classes="muted"
+                                               Text="{Binding Members.Count, StringFormat={}{0}}"
+                                               VerticalAlignment="Center" />
+                                </Grid>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+                    <TextBlock Grid.Row="2"
+                               Classes="muted"
+                               Text="{Binding IsAnyGroupEditing, StringFormat=Editing: {0}}" />
+                </Grid>
+            </Border>
+
+            <Border Grid.Column="2" Classes="panel" Padding="16">
+                <Grid RowDefinitions="Auto,Auto,*,Auto" RowSpacing="12">
+                    <Grid ColumnDefinitions="*,Auto">
+                        <StackPanel Spacing="3">
+                            <TextBlock Classes="kicker" Text="SELECTED GROUP" />
+                            <TextBlock FontSize="18"
+                                       FontWeight="SemiBold"
+                                       Text="{Binding SelectedGroup.Name}" />
+                            <TextBlock Classes="muted" Text="{Binding SelectedGroup.GroupType}" />
+                        </StackPanel>
+                        <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8">
+                            <Button Content="Edit" Click="Edit_Click" />
+                            <Button Content="Done" Click="Done_Click" />
+                            <Button Content="PTT" Click="Ptt_Click" />
+                        </StackPanel>
+                    </Grid>
+
+                    <Grid Grid.Row="1" ColumnDefinitions="*,Auto,Auto" ColumnSpacing="12">
+                        <ComboBox x:Name="MemberPicker"
+                                  ItemsSource="{Binding AvailableMembers}"
+                                  SelectedItem="{Binding SelectedMember, Mode=TwoWay}">
+                            <ComboBox.ItemTemplate>
+                                <DataTemplate x:DataType="vm:PatchGroupsViewModel+AvailableMemberState">
+                                    <TextBlock Text="{Binding DisplayName}" />
+                                </DataTemplate>
+                            </ComboBox.ItemTemplate>
+                        </ComboBox>
+                        <Button Grid.Column="1" Content="Add member" Click="AddMember_Click" />
+                        <Button Grid.Column="2" Content="Remove" Click="RemoveMember_Click" />
+                    </Grid>
+
+                    <ListBox Grid.Row="2"
+                             ItemsSource="{Binding SelectedGroup.Members}"
+                             SelectedItem="{Binding SelectedMemberRow, Mode=TwoWay}">
+                        <ListBox.ItemTemplate>
+                            <DataTemplate x:DataType="vm:PatchGroupsViewModel+MemberState">
+                                <Grid ColumnDefinitions="*,Auto,Auto" Margin="4">
+                                    <StackPanel Spacing="2">
+                                        <TextBlock Text="{Binding ChannelName}" />
+                                        <StackPanel Orientation="Horizontal" Spacing="4">
+                                            <TextBlock Classes="muted" FontSize="11" Text="{Binding SystemName}" />
+                                            <TextBlock Classes="muted" FontSize="11" Text="/" />
+                                            <TextBlock Classes="muted" FontSize="11" Text="{Binding Tgid}" />
+                                        </StackPanel>
+                                    </StackPanel>
+                                    <Button Grid.Column="1" Content="Up" Tag="up" Click="MoveMember_Click" />
+                                    <Button Grid.Column="2" Content="Down" Tag="down" Click="MoveMember_Click" />
+                                </Grid>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+
+                    <Grid Grid.Row="3" ColumnDefinitions="*,Auto,Auto" ColumnSpacing="14">
+                        <TextBlock Classes="muted"
+                                   Text="{Binding SelectedGroup.IsPttActive, StringFormat=PTT active: {0}}"
+                                   VerticalAlignment="Center" />
+                        <CheckBox Grid.Column="1"
+                                  Content="One-way"
+                                  IsVisible="{Binding SelectedGroup.IsPatchGroup}"
+                                  IsChecked="{Binding SelectedGroup.IsOneWay}"
+                                  Click="OneWay_Click" />
+                        <CheckBox Grid.Column="2"
+                                  Content="Enabled"
+                                  IsVisible="{Binding SelectedGroup.IsPatchGroup}"
+                                  IsChecked="{Binding SelectedGroup.IsEnabled}"
+                                  Click="Enabled_Click" />
+                    </Grid>
+                </Grid>
+            </Border>
+        </Grid>
+
+        <StackPanel Grid.Row="4" Orientation="Horizontal" HorizontalAlignment="Right" Spacing="10">
+            <Button Content="Save" Click="Save_Click" />
+            <Button Content="Close" Click="Close_Click" />
+        </StackPanel>
+    </Grid>
+</Window>

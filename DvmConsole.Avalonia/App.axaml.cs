@@ -298,10 +298,19 @@ namespace DvmConsole.Avalonia
 
                 NativeMenuItem tarItem = CreateTarConfigurationMenuItem(mainWindow);
                 NativeMenuItem tarViewerItem = CreateTarViewerMenuItem(mainWindow);
+                NativeMenuItem groupsItem = CreatePatchGroupsMenuItem(mainWindow);
 
                 NativeMenuItem? appItem = menu.Items
                     .OfType<NativeMenuItem>()
                     .FirstOrDefault(item => item.Menu is { });
+                NativeMenuItem? settingsItem = menu.Items
+                    .OfType<NativeMenuItem>()
+                    .FirstOrDefault(item => item.Header is string header
+                        && string.Equals(header, "Settings", StringComparison.Ordinal));
+                if (settingsItem?.Menu is { } settingsMenu)
+                {
+                    settingsMenu.Items.Insert(0, groupsItem);
+                }
                 if (appItem?.Menu is { } appMenu && appMenu.Items.Count > 0)
                 {
                     // Insert ahead of the trailing item (Quit): About,
@@ -370,6 +379,18 @@ namespace DvmConsole.Avalonia
             return item;
         }
 
+        /// <summary>
+        /// Creates the native Groups menu item. It is inserted into the
+        /// Settings submenu after the main window exists because Avalonia
+        /// native menu events are not XAML-bindable on this target.
+        /// </summary>
+        internal static NativeMenuItem CreatePatchGroupsMenuItem(MainWindow? mainWindow)
+        {
+            var item = new NativeMenuItem("Patch Groups");
+            item.Click += (_, _) => mainWindow?.OpenPatchGroups();
+            return item;
+        }
+
         public override void OnFrameworkInitializationCompleted()
         {
             if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
@@ -395,6 +416,7 @@ namespace DvmConsole.Avalonia
                 var preferencesPersistence = new PreferencesSettingsPersistence(settingsStore);
                 var restorePersistence = new RestoreSettingsPersistence(settingsStore);
                 var layoutPersistence = new LayoutSettingsPersistence(settingsStore);
+                var groupsPersistence = new GroupSettingsPersistence(settingsStore);
                 var tarRecorder = CreateTarRecorder(tarPersistence, fileSystemPaths.DefaultTarRecordingsPath);
                 var tarViewerColumnPersistence =
                     new TarViewerColumnSettingsPersistence(settingsStore);
@@ -493,6 +515,7 @@ namespace DvmConsole.Avalonia
                     tarWaveFilePlayer,
                     tarViewerColumnPersistence);
                 mainWindow.AttachPreferencesPersistence(preferencesPersistence);
+                mainWindow.AttachGroupsPersistence(groupsPersistence);
                 mainWindow.AttachRestorePersistence(restorePersistence);
                 mainWindow.AttachLayoutPersistence(layoutPersistence);
                 mainWindow.FileDialogService =
