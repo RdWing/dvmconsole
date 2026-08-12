@@ -277,6 +277,12 @@
                     </ComboBox>
                     <Button Content="SELECT / CLEAR ALL"
                             Click="SelectAllChannels_Click" />
+                    <Button Content="ALERT 1"
+                            Click="AlertTone1_Click" />
+                    <Button Content="ALERT 2"
+                            Click="AlertTone2_Click" />
+                    <Button Content="ALERT 3"
+                            Click="AlertTone3_Click" />
                 </StackPanel>
 
                 <Border Grid.Row="2" Classes="panel" Padding="14">
@@ -367,6 +373,14 @@
                                                    Text="RX ONLY"
                                                    IsVisible="{Binding IsRxOnly}" />
                                         <TextBlock Classes="muted" Text="{Binding Status}" />
+                                        <StackPanel Orientation="Horizontal" Spacing="6">
+                                            <Button Content="PAGE"
+                                                    Click="PageSelect_Click"
+                                                    IsEnabled="{Binding IsSelected}" />
+                                            <Button Content="MARK"
+                                                    Click="Marker_Click"
+                                                    IsEnabled="{Binding IsSelected}" />
+                                        </StackPanel>
                                     </StackPanel>
                                 </Border>
                             </DataTemplate>

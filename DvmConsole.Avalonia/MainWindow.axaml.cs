@@ -132,6 +132,13 @@ namespace DvmConsole.Avalonia
         /// </summary>
         private TalkgroupAudioRouter? talkgroupAudioRouter = null;
 
+        /// <summary>
+        /// Shell-owned generated/file tone dispatch lifecycle. The coordinator
+        /// snapshots targets and applies collision/availability guards before
+        /// handing PCM to the router.
+        /// </summary>
+        private ToneDispatchRuntimeCoordinator? toneDispatchCoordinator;
+
         /// <summary>Concrete macOS catalog subscribed for capture recovery.</summary>
         private MacAudioDeviceCatalog? macAudioDeviceCatalog = null;
 
@@ -447,6 +454,27 @@ namespace DvmConsole.Avalonia
                 talkgroupAudioRouter.CaptureEnded += OnCaptureEnded;
                 talkgroupAudioRouter.MonitorStreamEnded += OnMonitorStreamEnded;
                 talkgroupAudioRouter.TalkgroupStreamEnded += OnTalkgroupStreamEnded;
+
+                toneDispatchCoordinator = new ToneDispatchRuntimeCoordinator(
+                    ResolveToneDispatchTargets,
+                    targets => targets.All(target => IsFneSystemAvailable(target.SystemName)),
+                    () => audioViewModel.Ptt?.IsEngaged == true
+                        || Volatile.Read(ref dashboardTransmitActive) != 0
+                        || patchPttRuntimeCoordinator?.IsTransmitActive == true,
+                    (targets, pcm, sendStartSignal, cancellationToken) =>
+                        talkgroupAudioRouter.TransmitPcmAsync(
+                            targets,
+                            pcm,
+                            sendStartSignal,
+                            cancellationToken),
+                    status => Dispatcher.UIThread.Post(() =>
+                    {
+                        if (DataContext is MainWindowViewModel statusViewModel)
+                        {
+                            statusViewModel.AudioStatusMessage = status;
+                        }
+                    }),
+                    (pcm, cancellationToken) => talkgroupAudioRouter.PlayLocalPcmAsync(pcm));
 
                 if (transmitTargetResolver is { } resolver)
                 {
@@ -1034,11 +1062,9 @@ namespace DvmConsole.Avalonia
             Action<IReadOnlyList<UserSettingsTonePresetConfig>> saveRequested =
                 snapshot => SaveTonePresetSection(persistence, snapshot);
             Action<TonePresetRequest> previewRequested =
-                request => System.Diagnostics.Debug.WriteLine(
-                    $"Tone preset preview requested: {request.PresetId} ({request.Pcm.Length} bytes)");
+                request => _ = PreviewGeneratedToneAsync(request.Pcm);
             Action<TonePresetRequest> sendRequested =
-                request => System.Diagnostics.Debug.WriteLine(
-                    $"Tone preset send requested: {request.PresetId} -> {request.TargetResourceKey}");
+                request => _ = SendGeneratedToneAsync(request.TargetResourceKey, request.Pcm);
             manager.SaveRequested += saveRequested;
             manager.PreviewRequested += previewRequested;
             manager.SendRequested += sendRequested;
@@ -1167,11 +1193,9 @@ namespace DvmConsole.Avalonia
             Action<IReadOnlyList<UserSettingsDtmfPresetConfig>> saveRequested =
                 snapshot => SaveDtmfPresetSection(persistence, snapshot);
             Action<DtmfPresetRequest> previewRequested =
-                request => System.Diagnostics.Debug.WriteLine(
-                    $"DTMF preset preview requested: {request.PresetId} ({request.Pcm.Length} bytes)");
+                request => _ = PreviewGeneratedToneAsync(request.Pcm);
             Action<DtmfPresetRequest> sendRequested =
-                request => System.Diagnostics.Debug.WriteLine(
-                    $"DTMF preset send requested: {request.PresetId} -> {request.TargetResourceKey}");
+                request => _ = SendGeneratedToneAsync(request.TargetResourceKey, request.Pcm);
             manager.SaveRequested += saveRequested;
             manager.PreviewRequested += previewRequested;
             manager.SendRequested += sendRequested;
@@ -1195,6 +1219,58 @@ namespace DvmConsole.Avalonia
             => BuildTonePresetTargets()
                 .Select(target => new DtmfPresetTarget(target.Key, target.DisplayName))
                 .ToList();
+
+        private async Task PreviewGeneratedToneAsync(byte[] pcm)
+        {
+            if (toneDispatchCoordinator is not { } coordinator)
+            {
+                return;
+            }
+
+            await coordinator.PreviewGeneratedPcmAsync(pcm, CancellationToken.None)
+                .ConfigureAwait(false);
+        }
+
+        private async Task SendGeneratedToneAsync(string targetResourceKey, byte[] pcm)
+        {
+            if (toneDispatchCoordinator is not { } coordinator)
+            {
+                return;
+            }
+
+            var targets = ResolvePresetTarget(targetResourceKey);
+            await coordinator.SendGeneratedPcmAsync(
+                    pcm,
+                    sendStartSignal: true,
+                    cancellationToken: CancellationToken.None,
+                    targetSnapshot: targets)
+                .ConfigureAwait(false);
+        }
+
+        private IReadOnlyList<TransmitTarget> ResolvePresetTarget(string targetResourceKey)
+        {
+            if (transmitTargetResolver is not { } resolver)
+            {
+                return Array.Empty<TransmitTarget>();
+            }
+
+            var key = targetResourceKey?.Trim() ?? string.Empty;
+            if (key.Length > 0)
+            {
+                int separator = key.IndexOf('|');
+                if (separator > 0)
+                {
+                    var target = resolver.ResolveTalkgroup(
+                        key[..separator],
+                        key[(separator + 1)..]);
+                    return target is { } resolved
+                        ? new[] { resolved }
+                        : Array.Empty<TransmitTarget>();
+                }
+            }
+
+            return ResolveToneDispatchTargets();
+        }
 
         private static void SaveDtmfPresetSection(
             AlertSettingsPersistence persistence,
@@ -1379,6 +1455,49 @@ namespace DvmConsole.Avalonia
             {
                 viewModel.ToggleSelectAllCurrentZone();
             }
+        }
+
+        private void PageSelect_Click(object? sender, RoutedEventArgs e)
+        {
+            if (sender is Button { DataContext: ChannelSlotViewModel slot })
+            {
+                slot.RequestPageSelect();
+            }
+        }
+
+        private void Marker_Click(object? sender, RoutedEventArgs e)
+        {
+            if (sender is Button { DataContext: ChannelSlotViewModel slot })
+            {
+                slot.RequestMarker();
+            }
+        }
+
+        private void AlertTone1_Click(object? sender, RoutedEventArgs e)
+            => SendAlertToolbarTone("alert1.wav");
+
+        private void AlertTone2_Click(object? sender, RoutedEventArgs e)
+            => SendAlertToolbarTone("alert2.wav");
+
+        private void AlertTone3_Click(object? sender, RoutedEventArgs e)
+            => SendAlertToolbarTone("alert3.wav");
+
+        private void SendAlertToolbarTone(string fileName)
+        {
+            if (toneDispatchCoordinator is not { } coordinator)
+            {
+                return;
+            }
+
+            string path = System.IO.Path.Combine(
+                AppContext.BaseDirectory,
+                "Audio",
+                fileName);
+            _ = coordinator.ReadAndSendWaveFileAsync(
+                path,
+                sendStartSignal: true,
+                CancellationToken.None,
+                ResolveToneDispatchTargets());
         }
 
         /// <summary>
@@ -1709,6 +1828,12 @@ namespace DvmConsole.Avalonia
         {
             try
             {
+                if (toneDispatchCoordinator is { } toneDispatch)
+                {
+                    await toneDispatch.DisposeAsync().ConfigureAwait(false);
+                    toneDispatchCoordinator = null;
+                }
+
                 if (patchPttRuntimeCoordinator is { } patchPtt)
                 {
                     await patchPtt.DisposeAsync().ConfigureAwait(false);
@@ -1974,6 +2099,39 @@ namespace DvmConsole.Avalonia
                 ? resolver.Resolve(name) is { } fallback
                     ? new[] { fallback }
                     : Array.Empty<TransmitTarget>()
+                : Array.Empty<TransmitTarget>();
+        }
+
+        private IReadOnlyList<TransmitTarget> ResolveToneDispatchTargets()
+        {
+            if (transmitTargetResolver is not { } resolver
+                || DataContext is not MainWindowViewModel viewModel)
+            {
+                return Array.Empty<TransmitTarget>();
+            }
+
+            var selectedSlots = viewModel.SelectedChannels
+                .Where(slot => slot.IsSelected && !slot.IsRxOnly)
+                .ToList();
+
+            var pageSelectedTargets = resolver.ResolveAll(
+                selectedSlots
+                    .Where(slot => slot.PageState)
+                    .Select(slot => slot.ChannelName));
+            if (pageSelectedTargets.Count > 0)
+            {
+                return pageSelectedTargets;
+            }
+
+            var targets = resolver.ResolveAll(selectedSlots.Select(slot => slot.ChannelName));
+            if (targets.Count > 0)
+            {
+                return targets;
+            }
+
+            return viewModel.PrimaryChannel?.ChannelName is { } primary
+                && resolver.Resolve(primary) is { } fallback
+                ? new[] { fallback }
                 : Array.Empty<TransmitTarget>();
         }
 

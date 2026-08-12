@@ -31,6 +31,9 @@
 
   <ItemGroup>
     <AvaloniaResource Include="Assets\**" />
+    <Content Include="..\dvmconsole\Audio\alert1.wav" Link="Audio\alert1.wav" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="..\dvmconsole\Audio\alert2.wav" Link="Audio\alert2.wav" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="..\dvmconsole\Audio\alert3.wav" Link="Audio\alert3.wav" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
   <ItemGroup>
