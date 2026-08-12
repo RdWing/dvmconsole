@@ -139,6 +139,23 @@ namespace DvmConsole.Avalonia.Services
         }
 
         /// <summary>
+        /// Returns whether the Core patch engine currently owns an outbound
+        /// forward for the supplied member identity. Patch PTT uses this
+        /// query to avoid sending microphone traffic concurrently to a
+        /// receive-forward leg for the same target.
+        /// </summary>
+        public bool IsForwardTargetActive(string? systemName, string? tgid)
+        {
+            lock (syncRoot)
+            {
+                return !disposed
+                    && patchManager.IsForwardTargetActive(
+                        systemName ?? string.Empty,
+                        tgid ?? string.Empty);
+            }
+        }
+
+        /// <summary>
         /// Feeds classified receive metadata into the Core call lifecycle.
         /// Terminators and idle ends are both idempotent at the coordinator
         /// boundary.

@@ -196,6 +196,33 @@ namespace DvmConsole.Avalonia.Tests
         }
 
         [Fact]
+        public void ResolveTalkgroup_UsesSystemAndTgidIdentity()
+        {
+            var resolver = new TransmitTargetResolver(MakeCodeplug());
+
+            var target = resolver.ResolveTalkgroup(" repeater 1 ", "31002");
+
+            Assert.NotNull(target);
+            Assert.Equal("Repeater 1", target!.Value.SystemName);
+            Assert.Equal("31002", target.Value.TalkgroupId);
+            Assert.Equal((byte)2, target.Value.Slot);
+            Assert.Equal(VoiceMode.P25, target.Value.Mode);
+            Assert.Equal(1000001u, target.Value.SourceId);
+        }
+
+        [Fact]
+        public void ResolveTalkgroup_RejectsRxOnlyUnknownAndMalformedMembers()
+        {
+            var codeplug = MakeCodeplug();
+            codeplug.Systems[0].Rid = "not-a-number";
+            var resolver = new TransmitTargetResolver(codeplug);
+
+            Assert.Null(resolver.ResolveTalkgroup("Repeater 1", "31001"));
+            Assert.Null(resolver.ResolveTalkgroup("No Such System", "31001"));
+            Assert.Null(resolver.ResolveTalkgroup("Repeater 1", ""));
+        }
+
+        [Fact]
         public void Resolve_ModeCaseInsensitive()
         {
             var codeplug = MakeCodeplug();

@@ -112,6 +112,56 @@ namespace DvmConsole.Avalonia.Services
         }
 
         /// <summary>
+        /// Resolves a patch membership identity onto the first matching
+        /// transmit-capable codeplug channel. Patch memberships persist
+        /// system/TGID identities rather than display names, so this path is
+        /// deliberately independent of the selected zone and channel label.
+        /// </summary>
+        public TransmitTarget? ResolveTalkgroup(string? systemName, string? talkgroupId)
+        {
+            if (string.IsNullOrWhiteSpace(systemName)
+                || string.IsNullOrWhiteSpace(talkgroupId)
+                || codeplug.Zones is null
+                || codeplug.Systems is null)
+            {
+                return null;
+            }
+
+            var system = codeplug.Systems.FirstOrDefault(candidate =>
+                candidate is not null
+                && string.Equals(candidate.Name?.Trim(), systemName.Trim(), StringComparison.OrdinalIgnoreCase));
+            if (system is null || !uint.TryParse(system.Rid, out var sourceId))
+            {
+                return null;
+            }
+
+            var channel = codeplug.Zones
+                .SelectMany(zone => zone?.Channels ?? Enumerable.Empty<Codeplug.Channel>())
+                .FirstOrDefault(candidate =>
+                    candidate is not null
+                    && !candidate.RxOnly
+                    && string.Equals(candidate.System?.Trim(), system.Name?.Trim(), StringComparison.OrdinalIgnoreCase)
+                    && string.Equals(candidate.Tgid?.Trim(), talkgroupId.Trim(), StringComparison.Ordinal));
+            if (channel is null || !uint.TryParse(channel.Tgid, out _))
+            {
+                return null;
+            }
+
+            var mode = channel.GetChannelMode();
+            if (mode == Codeplug.ChannelMode.NXDN)
+            {
+                return null;
+            }
+
+            return new TransmitTarget(
+                system.Name,
+                channel.Tgid,
+                (byte)channel.Slot,
+                mode == Codeplug.ChannelMode.P25 ? VoiceMode.P25 : VoiceMode.Dmr,
+                sourceId);
+        }
+
+        /// <summary>
         /// Recovers the codeplug channel name for a resolved target without
         /// changing the Platform target record shape.
         /// </summary>

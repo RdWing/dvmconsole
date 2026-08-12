@@ -17,8 +17,11 @@ namespace DvmConsole.Avalonia.Tests
             var source = File.ReadAllText(SourcePath());
 
             Assert.Contains("resolveSpeakerOutputEnabled:", source);
-            Assert.Contains("audioViewModel.Preferences?.MuteRxAudioWhileTransmitting == true", source);
-            Assert.Contains("audioViewModel.Ptt?.IsEngaged == true", source);
+            Assert.Contains("private bool ShouldMuteRxPlayback()", source);
+            Assert.Contains("viewModel.Preferences?.MuteRxAudioWhileTransmitting != true", source);
+            Assert.Contains("viewModel.Ptt?.IsEngaged == true", source);
+            Assert.Contains("Volatile.Read(ref dashboardTransmitActive) != 0", source);
+            Assert.Contains("patchPttRuntimeCoordinator?.IsTransmitActive == true", source);
             Assert.Contains("router.ClearAllTalkgroupBuffers();", source);
             Assert.Contains("TonePcmGenerator.GenerateTalkPermitTone()", source);
             Assert.Contains("router.PlayLocalPcmAsync", source);

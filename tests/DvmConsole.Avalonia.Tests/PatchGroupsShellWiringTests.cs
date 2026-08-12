@@ -94,10 +94,14 @@ namespace DvmConsole.Avalonia.Tests
             Assert.Contains("new PatchGroupsWindow", source);
             Assert.Contains("Show(this)", source);
             Assert.Contains("SaveRequested +=", source);
+            Assert.Contains("PttRequested +=", source);
+            Assert.Contains("OnPatchPttRequested", source);
+            Assert.Contains("patchPttRuntimeCoordinator", source);
             Assert.Contains("GroupSettingsPersistence", source);
             Assert.Contains("groupsPersistence.Save", source);
             Assert.Contains("membershipContextKey: groupsMembershipContextKey", source);
             Assert.Contains("patchGroupsWindow?.Close();", source);
+            Assert.Contains("patchPtt.DisposeAsync()", source);
             Assert.DoesNotContain("PatchManager", source.Substring(
                 source.IndexOf("OpenPatchGroups", StringComparison.Ordinal)));
         }

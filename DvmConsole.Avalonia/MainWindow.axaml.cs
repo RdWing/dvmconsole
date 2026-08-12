@@ -89,6 +89,27 @@ namespace DvmConsole.Avalonia
         private readonly PatchForwardingCoordinator? patchForwardingCoordinator;
 
         /// <summary>
+        /// Owns the separate patch/multi-select PTT request lifecycle. This
+        /// state is deliberately not shared with receive-side patch
+        /// forwarding; both paths may use the same audio router, but their
+        /// target snapshots and stream lifecycles are independent.
+        /// </summary>
+        private PatchPttRuntimeCoordinator? patchPttRuntimeCoordinator;
+
+        /// <summary>
+        /// Dashboard PTT remains active until the router's awaited end
+        /// completes. This is separate from the view-model engagement flag,
+        /// which changes at the UI release edge before audio teardown.
+        /// </summary>
+        private int dashboardTransmitActive;
+
+        /// <summary>
+        /// Suppresses the synthetic dashboard release emitted while a normal
+        /// PTT gesture is rejected because a patch capture is active.
+        /// </summary>
+        private bool rejectDashboardPttRelease;
+
+        /// <summary>
         /// Tracks classified receive state independently of the receive
         /// thread and projects it onto the current channel slot instances.
         /// </summary>
@@ -406,9 +427,7 @@ namespace DvmConsole.Avalonia
                     resolveMonitorEnabled: audioViewModel.IsMonitorEnabled,
                     resolveTalkgroupOutputDevice: audioViewModel.ResolveMonitorOutputDevice,
                     resolveTalkgroupVolume: audioViewModel.ResolveMonitorVolume,
-                    resolveSpeakerOutputEnabled: _ => !(
-                        audioViewModel.Preferences?.MuteRxAudioWhileTransmitting == true
-                        && audioViewModel.Ptt?.IsEngaged == true));
+                    resolveSpeakerOutputEnabled: _ => !ShouldMuteRxPlayback());
 
                 if (audioViewModel.Ptt is { } ptt)
                 {
@@ -422,6 +441,31 @@ namespace DvmConsole.Avalonia
                 talkgroupAudioRouter.CaptureEnded += OnCaptureEnded;
                 talkgroupAudioRouter.MonitorStreamEnded += OnMonitorStreamEnded;
                 talkgroupAudioRouter.TalkgroupStreamEnded += OnTalkgroupStreamEnded;
+
+                if (transmitTargetResolver is { } resolver)
+                {
+                    patchPttRuntimeCoordinator = new PatchPttRuntimeCoordinator(
+                        resolver,
+                        targets => BeginPatchTransmitAsync(
+                            talkgroupAudioRouter,
+                            targets,
+                            audioViewModel),
+                        () => EndTransmitAndStopRecordingAsync(talkgroupAudioRouter),
+                        routerTargets => talkgroupAudioRouter.ClearAllTalkgroupBuffers(),
+                        () => audioViewModel.Ptt?.IsEngaged != true
+                            && Volatile.Read(ref dashboardTransmitActive) == 0,
+                        target => IsFneSystemAvailable(target.SystemName),
+                        status => Dispatcher.UIThread.Post(() =>
+                        {
+                            if (DataContext is MainWindowViewModel statusViewModel)
+                            {
+                                statusViewModel.AudioStatusMessage = status;
+                            }
+                        }),
+                        target => patchForwardingCoordinator?.IsForwardTargetActive(
+                            target.SystemName,
+                            target.TalkgroupId) == true);
+                }
 
                 if (catalog is MacAudioDeviceCatalog macCatalog)
                 {
@@ -822,8 +866,8 @@ namespace DvmConsole.Avalonia
         /// Opens the owner-bound Groups editor when a normalized codeplug and
         /// the shared groups settings adapter are available. The editor owns
         /// only presentation and request emission; this shell owns the save
-        /// request and deliberately leaves PTT/runtime requests unhandled for
-        /// the later runtime-routing gate.
+        /// request and forwards PTT/runtime requests to the coordinator
+        /// composed by the owner window.
         /// </summary>
         internal void OpenPatchGroups()
         {
@@ -853,6 +897,10 @@ namespace DvmConsole.Avalonia
                 membershipContextKey: groupsMembershipContextKey,
                 retainPatchStateOnStartup: viewModel.Preferences?.RetainPatchStateOnStartup == true);
 
+            Action<string, bool, IReadOnlyList<PatchTalkgroupMember>> pttRequested =
+                (groupName, isActive, members) => OnPatchPttRequested(groupName, isActive, members);
+            editor.PttRequested += pttRequested;
+
             Action<UserSettingsGroupSection> saveRequested = section =>
             {
                 try
@@ -873,6 +921,7 @@ namespace DvmConsole.Avalonia
             window.Closed += (_, _) =>
             {
                 editor.SaveRequested -= saveRequested;
+                editor.PttRequested -= pttRequested;
                 if (ReferenceEquals(patchGroupsWindow, window))
                 {
                     patchGroupsWindow = null;
@@ -1211,6 +1260,12 @@ namespace DvmConsole.Avalonia
         {
             try
             {
+                if (patchPttRuntimeCoordinator is { } patchPtt)
+                {
+                    await patchPtt.DisposeAsync().ConfigureAwait(false);
+                    patchPttRuntimeCoordinator = null;
+                }
+
                 await router.DisposeAsync().ConfigureAwait(false);
             }
             finally
@@ -1223,6 +1278,82 @@ namespace DvmConsole.Avalonia
         private void OnAudioDevicesChanged(object? sender, EventArgs e)
         {
             Dispatcher.UIThread.Post(() => _ = talkgroupAudioRouter?.RequestCaptureRestartAsync());
+        }
+
+        private void OnPatchPttRequested(
+            string groupName,
+            bool isActive,
+            IReadOnlyList<PatchTalkgroupMember> members)
+        {
+            _ = HandlePatchPttRequestAsync(groupName, isActive, members);
+        }
+
+        private async Task HandlePatchPttRequestAsync(
+            string groupName,
+            bool isActive,
+            IReadOnlyList<PatchTalkgroupMember> members)
+        {
+            if (patchPttRuntimeCoordinator is not { } coordinator)
+            {
+                return;
+            }
+
+            try
+            {
+                await coordinator.HandleRequestAsync(groupName, isActive, members)
+                    .ConfigureAwait(false);
+            }
+            catch (Exception exception)
+            {
+                System.Diagnostics.Debug.WriteLine(
+                    $"Patch PTT request failed: {exception.Message}");
+            }
+        }
+
+        private async Task BeginPatchTransmitAsync(
+            TalkgroupAudioRouter router,
+            IReadOnlyList<TransmitTarget> targets,
+            MainWindowViewModel viewModel)
+        {
+            try
+            {
+                foreach (var target in targets)
+                {
+                    tarRecordingCoordinator?.TryStartTransmit(
+                        target,
+                        transmitTargetResolver?.ResolveChannelName(target) ?? target.TalkgroupId,
+                        DateTime.UtcNow,
+                        out _);
+                }
+
+                await router.BeginTransmitAsync(
+                    targets,
+                    viewModel.AudioSettings?.SelectedInputId ?? AudioDeviceId.Default,
+                    CancellationToken.None).ConfigureAwait(false);
+                if (viewModel.Preferences?.TalkPermitTone == true)
+                {
+                    await router.PlayLocalPcmAsync(
+                        TonePcmGenerator.GenerateTalkPermitTone()).ConfigureAwait(false);
+                }
+            }
+            catch
+            {
+                tarRecordingCoordinator?.StopAllTransmit(DateTime.UtcNow);
+                throw;
+            }
+        }
+
+        private bool ShouldMuteRxPlayback()
+        {
+            if (DataContext is not MainWindowViewModel viewModel
+                || viewModel.Preferences?.MuteRxAudioWhileTransmitting != true)
+            {
+                return false;
+            }
+
+            return viewModel.Ptt?.IsEngaged == true
+                || Volatile.Read(ref dashboardTransmitActive) != 0
+                || patchPttRuntimeCoordinator?.IsTransmitActive == true;
         }
 
         /// <summary>
@@ -1250,17 +1381,42 @@ namespace DvmConsole.Avalonia
                 return;
             }
 
+            var viewModel = DataContext as MainWindowViewModel;
+
             if (isDown)
             {
+                if (patchPttRuntimeCoordinator?.IsTransmitActive == true)
+                {
+                    rejectDashboardPttRelease = true;
+                    if (viewModel?.Ptt is { } activePtt)
+                    {
+                        if (activePtt.ToggleMode)
+                        {
+                            activePtt.PttPointerDown();
+                        }
+                        else
+                        {
+                            activePtt.PttPointerUp();
+                        }
+                    }
+
+                    if (viewModel is not null)
+                    {
+                        viewModel.AudioStatusMessage = "PTT blocked: patch PTT is active.";
+                    }
+
+                    return;
+                }
+
                 var targets = ResolveTransmitTargets();
                 if (targets.Count == 0)
                 {
                     return;
                 }
 
-                var viewModel = DataContext as MainWindowViewModel;
                 var inputDeviceId = viewModel?.AudioSettings?.SelectedInputId
                     ?? AudioDeviceId.Default;
+                Interlocked.Exchange(ref dashboardTransmitActive, 1);
                 if (viewModel?.Preferences?.MuteRxAudioWhileTransmitting == true)
                 {
                     router.ClearAllTalkgroupBuffers();
@@ -1281,11 +1437,17 @@ namespace DvmConsole.Avalonia
             }
             else
             {
+                if (rejectDashboardPttRelease)
+                {
+                    rejectDashboardPttRelease = false;
+                    return;
+                }
+
                 _ = EndTransmitAndStopRecordingAsync(router);
             }
         }
 
-        private static async Task BeginTransmitAndPlayPermitToneAsync(
+        private async Task BeginTransmitAndPlayPermitToneAsync(
             TalkgroupAudioRouter router,
             IReadOnlyList<TransmitTarget> targets,
             AudioDeviceId inputDeviceId,
@@ -1297,16 +1459,20 @@ namespace DvmConsole.Avalonia
                     targets,
                     inputDeviceId,
                     CancellationToken.None).ConfigureAwait(false);
-                if (playPermitTone)
-                {
-                    await router.PlayLocalPcmAsync(
-                        TonePcmGenerator.GenerateTalkPermitTone()).ConfigureAwait(false);
-                }
             }
             catch (Exception exception)
             {
+                Interlocked.Exchange(ref dashboardTransmitActive, 0);
+                tarRecordingCoordinator?.StopAllTransmit(DateTime.UtcNow);
                 System.Diagnostics.Debug.WriteLine(
                     $"PTT audio start failed: {exception.Message}");
+                return;
+            }
+
+            if (playPermitTone)
+            {
+                await router.PlayLocalPcmAsync(
+                    TonePcmGenerator.GenerateTalkPermitTone()).ConfigureAwait(false);
             }
         }
 
@@ -1318,6 +1484,7 @@ namespace DvmConsole.Avalonia
             }
             finally
             {
+                Interlocked.Exchange(ref dashboardTransmitActive, 0);
                 tarRecordingCoordinator?.StopAllTransmit(DateTime.UtcNow);
             }
         }
