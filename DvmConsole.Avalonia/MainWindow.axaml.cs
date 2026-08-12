@@ -164,6 +164,8 @@ namespace DvmConsole.Avalonia
         private PatchGroupsWindow? patchGroupsWindow;
         private AlertToneManagerWindow? alertToneManagerWindow;
         private AlertSettingsPersistence? alertSettingsPersistence;
+        private IAudioWaveFileInspector? alertTonePreviewInspector;
+        private IAudioWaveFilePlayer? alertTonePreviewPlayer;
 
         public MainWindow()
             : this(null, null)
@@ -565,6 +567,15 @@ namespace DvmConsole.Avalonia
             alertSettingsPersistence ??= persistence;
         }
 
+        public void AttachAlertTonePreview(
+            IAudioWaveFileInspector inspector,
+            IAudioWaveFilePlayer? player)
+        {
+            ArgumentNullException.ThrowIfNull(inspector);
+            alertTonePreviewInspector ??= inspector;
+            alertTonePreviewPlayer ??= player;
+        }
+
         private void AttachReceiveProjection(MainWindowViewModel viewModel)
         {
             receiveProjectionViewModel = viewModel;
@@ -878,7 +889,9 @@ namespace DvmConsole.Avalonia
             var window = new AlertToneManagerWindow(
                 manager,
                 FileDialogService,
-                TarConfirmationService);
+                TarConfirmationService,
+                alertTonePreviewInspector,
+                alertTonePreviewPlayer);
             alertToneManagerWindow = window;
             window.Closed += (_, _) =>
             {

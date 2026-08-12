@@ -71,21 +71,27 @@
                                     <TextBlock Grid.Column="3"
                                                Text="{Binding IsAvailable, StringFormat={}{0}}"
                                                VerticalAlignment="Center" />
-                                    <Button Grid.Column="4" Content="Delete" Click="Delete_Click" />
+                                    <StackPanel Grid.Column="4" Orientation="Horizontal" Spacing="6">
+                                        <Button Content="Preview" Click="Preview_Click" />
+                                        <Button Content="Delete" Click="Delete_Click" />
+                                    </StackPanel>
                                 </Grid>
                             </DataTemplate>
                         </ItemsControl.ItemTemplate>
                     </ItemsControl>
                 </ScrollViewer>
 
-                <TextBlock Grid.Row="3"
-                           Classes="muted"
-                           Text="Missing files remain configured and are marked unavailable." />
+                <StackPanel Grid.Row="3" Spacing="4">
+                    <TextBlock x:Name="StatusTextBlock" Classes="muted" />
+                    <TextBlock Classes="muted"
+                               Text="Missing files remain configured and are marked unavailable." />
+                </StackPanel>
             </Grid>
         </Border>
 
         <StackPanel Grid.Row="4" Orientation="Horizontal" HorizontalAlignment="Right" Spacing="10">
             <Button Content="Add WAV files" Click="Add_Click" />
+            <Button Content="Stop Preview" Click="Stop_Click" />
             <Button Content="Close" Click="Close_Click" />
             <Button Content="Save" Click="Save_Click" />
         </StackPanel>

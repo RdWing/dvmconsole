@@ -442,10 +442,13 @@ namespace DvmConsole.Avalonia
                 var tarRecorder = CreateTarRecorder(tarPersistence, fileSystemPaths.DefaultTarRecordingsPath);
                 var tarViewerColumnPersistence =
                     new TarViewerColumnSettingsPersistence(settingsStore);
+                var alertWaveFileInspector = new WaveFileInspector();
                 IAudioWaveFilePlayer? tarWaveFilePlayer = null;
+                IAudioWaveFilePlayer? alertWaveFilePlayer = null;
                 try
                 {
                     tarWaveFilePlayer = streams?.CreateWaveFilePlayer();
+                    alertWaveFilePlayer = streams?.CreateWaveFilePlayer();
                 }
                 catch (AudioDeviceException)
                 {
@@ -541,6 +544,7 @@ namespace DvmConsole.Avalonia
                 mainWindow.AttachRestorePersistence(restorePersistence);
                 mainWindow.AttachLayoutPersistence(layoutPersistence);
                 mainWindow.AttachAlertSettingsPersistence(alertPersistence);
+                mainWindow.AttachAlertTonePreview(alertWaveFileInspector, alertWaveFilePlayer);
                 mainWindow.FileDialogService =
                     new AvaloniaFileDialogService(mainWindow.StorageProvider);
                 mainWindow.TarFileRevealService = new DesktopFileRevealService();
