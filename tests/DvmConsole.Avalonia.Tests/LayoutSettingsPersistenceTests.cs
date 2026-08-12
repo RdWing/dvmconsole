@@ -56,6 +56,7 @@ namespace DvmConsole.Avalonia.Tests
                 WindowHeight = 900,
                 CanvasWidth = 1180,
                 CanvasHeight = 840,
+                KeepWindowOnTop = true,
                 UserBackgroundImage = null
             };
 
@@ -67,6 +68,7 @@ namespace DvmConsole.Avalonia.Tests
             Assert.Equal(900d, actual.WindowHeight);
             Assert.Equal(1180d, actual.CanvasWidth);
             Assert.Equal(840d, actual.CanvasHeight);
+            Assert.True(actual.KeepWindowOnTop);
             Assert.Null(actual.UserBackgroundImage);
             Assert.Equal(12.5, actual.ChannelPositions["SYS|Dispatch"].X);
             Assert.Equal(34.75, actual.ChannelPositions["SYS|Dispatch"].Y);

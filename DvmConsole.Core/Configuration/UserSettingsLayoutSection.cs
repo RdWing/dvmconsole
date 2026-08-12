@@ -42,6 +42,11 @@ namespace dvmconsole
         public Dictionary<string, UserSettingsLayoutPosition> WebStreamPositions { get; set; } = new Dictionary<string, UserSettingsLayoutPosition>();
 
         /// <summary>
+        /// Flag indicating whether the console window stays above other windows.
+        /// </summary>
+        public bool KeepWindowOnTop { get; set; } = false;
+
+        /// <summary>
         /// Flag indicating window maximized state.
         /// </summary>
         public bool Maximized { get; set; } = false;

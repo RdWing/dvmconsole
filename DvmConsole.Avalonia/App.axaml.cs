@@ -394,6 +394,7 @@ namespace DvmConsole.Avalonia
                 var pttPersistence = new PttSettingsPersistence(settingsStore);
                 var preferencesPersistence = new PreferencesSettingsPersistence(settingsStore);
                 var restorePersistence = new RestoreSettingsPersistence(settingsStore);
+                var layoutPersistence = new LayoutSettingsPersistence(settingsStore);
                 var tarRecorder = CreateTarRecorder(tarPersistence, fileSystemPaths.DefaultTarRecordingsPath);
                 var tarViewerColumnPersistence =
                     new TarViewerColumnSettingsPersistence(settingsStore);
@@ -493,6 +494,7 @@ namespace DvmConsole.Avalonia
                     tarViewerColumnPersistence);
                 mainWindow.AttachPreferencesPersistence(preferencesPersistence);
                 mainWindow.AttachRestorePersistence(restorePersistence);
+                mainWindow.AttachLayoutPersistence(layoutPersistence);
                 mainWindow.FileDialogService =
                     new AvaloniaFileDialogService(mainWindow.StorageProvider);
                 mainWindow.TarFileRevealService = new DesktopFileRevealService();

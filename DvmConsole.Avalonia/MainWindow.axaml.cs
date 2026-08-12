@@ -120,6 +120,9 @@ namespace DvmConsole.Avalonia
         private readonly TarViewerColumnSettingsPersistence? tarViewerColumnPersistence;
         private readonly IGlobalHotkeyService? hotkeys;
         private readonly HotkeyRegistrationCoordinator? hotkeyRegistrationCoordinator;
+        private LayoutSettingsPersistence? layoutPersistence;
+        private UserSettingsLayoutSection? layoutSection;
+        private bool layoutHydrated;
         private TarViewerWindow? tarViewerWindow;
 
         public MainWindow()
@@ -446,6 +449,28 @@ namespace DvmConsole.Avalonia
             {
                 viewModel.AttachRestorePersistence(restorePersistence);
             }
+        }
+
+        public void AttachLayoutPersistence(LayoutSettingsPersistence layoutPersistence)
+        {
+            if (layoutPersistence is null || layoutHydrated)
+            {
+                return;
+            }
+
+            this.layoutPersistence = layoutPersistence;
+            layoutPersistence.TryLoad(out UserSettingsLayoutSection section);
+            layoutSection = section;
+
+            Width = section.WindowWidth;
+            Height = section.WindowHeight;
+            Topmost = section.KeepWindowOnTop;
+            if (section.Maximized)
+            {
+                WindowState = WindowState.Maximized;
+            }
+
+            layoutHydrated = true;
         }
 
         private void AttachReceiveProjection(MainWindowViewModel viewModel)
@@ -976,6 +1001,8 @@ namespace DvmConsole.Avalonia
         /// </summary>
         private void OnWindowClosed(object? sender, EventArgs e)
         {
+            SaveLayoutSettings();
+
             if (hotkeys is not null)
             {
                 hotkeys.HotkeyPressed -= OnHotkeyPressed;
@@ -1036,6 +1063,34 @@ namespace DvmConsole.Avalonia
             {
                 tarRecordingCoordinator?.StopAllTransmit(DateTime.UtcNow);
                 tarRecordingCoordinator?.Dispose();
+            }
+        }
+
+        private void SaveLayoutSettings()
+        {
+            if (!layoutHydrated
+                || layoutPersistence is null
+                || layoutSection is null)
+            {
+                return;
+            }
+
+            layoutSection.WindowWidth = Width;
+            layoutSection.WindowHeight = Height;
+            layoutSection.Maximized = WindowState == WindowState.Maximized;
+            layoutSection.KeepWindowOnTop = Topmost;
+            try
+            {
+                layoutPersistence.Save(layoutSection);
+            }
+            catch (Exception exception)
+            {
+                System.Diagnostics.Debug.WriteLine(
+                    $"Layout settings save failed: {exception.Message}");
+            }
+            finally
+            {
+                layoutHydrated = false;
             }
         }
 

@@ -35,6 +35,7 @@ namespace DvmConsole.Core.Tests
                     nameof(UserSettingsLayoutSection.CanvasHeight),
                     nameof(UserSettingsLayoutSection.CanvasWidth),
                     nameof(UserSettingsLayoutSection.ChannelPositions),
+                    nameof(UserSettingsLayoutSection.KeepWindowOnTop),
                     nameof(UserSettingsLayoutSection.Maximized),
                     nameof(UserSettingsLayoutSection.SystemStatusPositions),
                     nameof(UserSettingsLayoutSection.UserBackgroundImage),
@@ -49,11 +50,12 @@ namespace DvmConsole.Core.Tests
             Assert.Equal(typeof(double), properties[2].PropertyType);
             Assert.Equal(typeof(Dictionary<string, UserSettingsLayoutPosition>), properties[3].PropertyType);
             Assert.Equal(typeof(bool), properties[4].PropertyType);
-            Assert.Equal(typeof(Dictionary<string, UserSettingsLayoutPosition>), properties[5].PropertyType);
-            Assert.Equal(typeof(string), properties[6].PropertyType);
-            Assert.Equal(typeof(Dictionary<string, UserSettingsLayoutPosition>), properties[7].PropertyType);
-            Assert.Equal(typeof(double), properties[8].PropertyType);
+            Assert.Equal(typeof(bool), properties[5].PropertyType);
+            Assert.Equal(typeof(Dictionary<string, UserSettingsLayoutPosition>), properties[6].PropertyType);
+            Assert.Equal(typeof(string), properties[7].PropertyType);
+            Assert.Equal(typeof(Dictionary<string, UserSettingsLayoutPosition>), properties[8].PropertyType);
             Assert.Equal(typeof(double), properties[9].PropertyType);
+            Assert.Equal(typeof(double), properties[10].PropertyType);
             Assert.All(properties, property =>
             {
                 Assert.NotNull(property.GetMethod);
@@ -94,6 +96,7 @@ namespace DvmConsole.Core.Tests
             Assert.Equal(700d, section.WindowHeight);
             Assert.Equal(875d, section.CanvasWidth);
             Assert.Equal(700d, section.CanvasHeight);
+            Assert.False(section.KeepWindowOnTop);
             Assert.False(section.Maximized);
             Assert.Null(section.UserBackgroundImage);
         }
@@ -123,6 +126,7 @@ namespace DvmConsole.Core.Tests
                 WindowHeight = 900,
                 CanvasWidth = 1180,
                 CanvasHeight = 840,
+                KeepWindowOnTop = true,
                 Maximized = true,
                 UserBackgroundImage = "/tmp/background.png"
             };
@@ -130,7 +134,7 @@ namespace DvmConsole.Core.Tests
             string json = JsonConvert.SerializeObject(section, Formatting.Indented);
             var objectValue = JObject.Parse(json);
 
-            Assert.Equal(10, objectValue.Properties().Count());
+            Assert.Equal(11, objectValue.Properties().Count());
             Assert.NotNull(objectValue[nameof(UserSettingsLayoutSection.ChannelPositions)]);
             Assert.NotNull(objectValue[nameof(UserSettingsLayoutSection.SystemStatusPositions)]);
             Assert.NotNull(objectValue[nameof(UserSettingsLayoutSection.AlertTonePositions)]);
@@ -139,6 +143,7 @@ namespace DvmConsole.Core.Tests
             Assert.NotNull(objectValue[nameof(UserSettingsLayoutSection.WindowHeight)]);
             Assert.NotNull(objectValue[nameof(UserSettingsLayoutSection.CanvasWidth)]);
             Assert.NotNull(objectValue[nameof(UserSettingsLayoutSection.CanvasHeight)]);
+            Assert.NotNull(objectValue[nameof(UserSettingsLayoutSection.KeepWindowOnTop)]);
             Assert.NotNull(objectValue[nameof(UserSettingsLayoutSection.Maximized)]);
             Assert.NotNull(objectValue[nameof(UserSettingsLayoutSection.UserBackgroundImage)]);
             Assert.Null(objectValue["$type"]);
@@ -149,6 +154,7 @@ namespace DvmConsole.Core.Tests
             Assert.NotNull(loaded);
             Assert.Equal(1200d, loaded!.WindowWidth);
             Assert.Equal(900d, loaded.WindowHeight);
+            Assert.True(loaded.KeepWindowOnTop);
             Assert.True(loaded.Maximized);
             Assert.Equal("/tmp/background.png", loaded.UserBackgroundImage);
             Assert.Equal(12.5, loaded.ChannelPositions["System|100"].X);
