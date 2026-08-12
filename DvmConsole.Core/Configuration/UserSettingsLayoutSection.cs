@@ -47,6 +47,12 @@ namespace dvmconsole
         public bool KeepWindowOnTop { get; set; } = false;
 
         /// <summary>
+        /// WPF SettingsManager.LockWidgets layout-editing preference.
+        /// Runtime widget application belongs to the later shell-controls gate.
+        /// </summary>
+        public bool LockWidgets { get; set; } = true;
+
+        /// <summary>
         /// Flag indicating window maximized state.
         /// </summary>
         public bool Maximized { get; set; } = false;

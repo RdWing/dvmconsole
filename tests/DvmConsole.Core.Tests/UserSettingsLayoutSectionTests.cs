@@ -36,6 +36,7 @@ namespace DvmConsole.Core.Tests
                     nameof(UserSettingsLayoutSection.CanvasWidth),
                     nameof(UserSettingsLayoutSection.ChannelPositions),
                     nameof(UserSettingsLayoutSection.KeepWindowOnTop),
+                    nameof(UserSettingsLayoutSection.LockWidgets),
                     nameof(UserSettingsLayoutSection.Maximized),
                     nameof(UserSettingsLayoutSection.ShowAlertTones),
                     nameof(UserSettingsLayoutSection.ShowChannels),
@@ -57,11 +58,12 @@ namespace DvmConsole.Core.Tests
             Assert.Equal(typeof(bool), properties[6].PropertyType);
             Assert.Equal(typeof(bool), properties[7].PropertyType);
             Assert.Equal(typeof(bool), properties[8].PropertyType);
-            Assert.Equal(typeof(Dictionary<string, UserSettingsLayoutPosition>), properties[9].PropertyType);
-            Assert.Equal(typeof(string), properties[10].PropertyType);
-            Assert.Equal(typeof(Dictionary<string, UserSettingsLayoutPosition>), properties[11].PropertyType);
-            Assert.Equal(typeof(double), properties[12].PropertyType);
+            Assert.Equal(typeof(bool), properties[9].PropertyType);
+            Assert.Equal(typeof(Dictionary<string, UserSettingsLayoutPosition>), properties[10].PropertyType);
+            Assert.Equal(typeof(string), properties[11].PropertyType);
+            Assert.Equal(typeof(Dictionary<string, UserSettingsLayoutPosition>), properties[12].PropertyType);
             Assert.Equal(typeof(double), properties[13].PropertyType);
+            Assert.Equal(typeof(double), properties[14].PropertyType);
             Assert.All(properties, property =>
             {
                 Assert.NotNull(property.GetMethod);
@@ -103,6 +105,7 @@ namespace DvmConsole.Core.Tests
             Assert.Equal(875d, section.CanvasWidth);
             Assert.Equal(700d, section.CanvasHeight);
             Assert.False(section.KeepWindowOnTop);
+            Assert.True(section.LockWidgets);
             Assert.False(section.Maximized);
             Assert.True(section.ShowAlertTones);
             Assert.True(section.ShowChannels);
@@ -136,6 +139,7 @@ namespace DvmConsole.Core.Tests
                 CanvasWidth = 1180,
                 CanvasHeight = 840,
                 KeepWindowOnTop = true,
+                LockWidgets = false,
                 Maximized = true,
                 ShowAlertTones = false,
                 ShowChannels = false,
@@ -146,7 +150,7 @@ namespace DvmConsole.Core.Tests
             string json = JsonConvert.SerializeObject(section, Formatting.Indented);
             var objectValue = JObject.Parse(json);
 
-            Assert.Equal(14, objectValue.Properties().Count());
+            Assert.Equal(15, objectValue.Properties().Count());
             Assert.NotNull(objectValue[nameof(UserSettingsLayoutSection.ChannelPositions)]);
             Assert.NotNull(objectValue[nameof(UserSettingsLayoutSection.SystemStatusPositions)]);
             Assert.NotNull(objectValue[nameof(UserSettingsLayoutSection.AlertTonePositions)]);
@@ -156,6 +160,7 @@ namespace DvmConsole.Core.Tests
             Assert.NotNull(objectValue[nameof(UserSettingsLayoutSection.CanvasWidth)]);
             Assert.NotNull(objectValue[nameof(UserSettingsLayoutSection.CanvasHeight)]);
             Assert.NotNull(objectValue[nameof(UserSettingsLayoutSection.KeepWindowOnTop)]);
+            Assert.NotNull(objectValue[nameof(UserSettingsLayoutSection.LockWidgets)]);
             Assert.NotNull(objectValue[nameof(UserSettingsLayoutSection.Maximized)]);
             Assert.NotNull(objectValue[nameof(UserSettingsLayoutSection.ShowAlertTones)]);
             Assert.NotNull(objectValue[nameof(UserSettingsLayoutSection.ShowChannels)]);
@@ -170,6 +175,7 @@ namespace DvmConsole.Core.Tests
             Assert.Equal(1200d, loaded!.WindowWidth);
             Assert.Equal(900d, loaded.WindowHeight);
             Assert.True(loaded.KeepWindowOnTop);
+            Assert.False(loaded.LockWidgets);
             Assert.True(loaded.Maximized);
             Assert.False(loaded.ShowAlertTones);
             Assert.False(loaded.ShowChannels);

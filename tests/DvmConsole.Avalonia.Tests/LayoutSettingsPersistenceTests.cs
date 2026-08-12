@@ -57,6 +57,7 @@ namespace DvmConsole.Avalonia.Tests
                 CanvasWidth = 1180,
                 CanvasHeight = 840,
                 KeepWindowOnTop = true,
+                LockWidgets = false,
                 ShowAlertTones = false,
                 ShowChannels = false,
                 ShowSystemStatus = false,
@@ -72,6 +73,7 @@ namespace DvmConsole.Avalonia.Tests
             Assert.Equal(1180d, actual.CanvasWidth);
             Assert.Equal(840d, actual.CanvasHeight);
             Assert.True(actual.KeepWindowOnTop);
+            Assert.False(actual.LockWidgets);
             Assert.False(actual.ShowAlertTones);
             Assert.False(actual.ShowChannels);
             Assert.False(actual.ShowSystemStatus);
@@ -123,6 +125,7 @@ namespace DvmConsole.Avalonia.Tests
             Assert.False(missing.Maximized);
             Assert.Equal(875d, missing.WindowWidth);
             Assert.Equal(700d, missing.WindowHeight);
+            Assert.True(missing.LockWidgets);
             Assert.True(missing.ShowAlertTones);
             Assert.True(missing.ShowChannels);
             Assert.True(missing.ShowSystemStatus);
@@ -134,6 +137,7 @@ namespace DvmConsole.Avalonia.Tests
             Assert.False(malformed.Maximized);
             Assert.Equal(875d, malformed.WindowWidth);
             Assert.Equal(700d, malformed.WindowHeight);
+            Assert.True(malformed.LockWidgets);
             Assert.True(malformed.ShowAlertTones);
             Assert.True(malformed.ShowChannels);
             Assert.True(malformed.ShowSystemStatus);
