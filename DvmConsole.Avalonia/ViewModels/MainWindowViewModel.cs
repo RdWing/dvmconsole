@@ -65,6 +65,19 @@ namespace DvmConsole.Avalonia.ViewModels
 
         private PreferencesSettingsPersistence? preferencesPersistence;
 
+        private RestoreSettingsPersistence? restorePersistence;
+
+        private readonly Dictionary<string, bool> selectableEncryptionStates =
+            new(StringComparer.OrdinalIgnoreCase);
+
+        private readonly List<string> pendingRestoreSelectedResourceKeys = new();
+
+        private string? pendingRestorePrimaryResourceKey;
+
+        private bool restoreSelectionApplied;
+
+        private bool restoringSelectionState;
+
         private readonly Dictionary<string, int> channelOutputDevices =
             new(StringComparer.OrdinalIgnoreCase);
 
@@ -230,6 +243,70 @@ namespace DvmConsole.Avalonia.ViewModels
                 new PropertyChangedEventArgs(nameof(Preferences)));
             Preferences.PropertyChanged += OnPreferencesChanged;
             Preferences.SaveRequested += OnPreferencesSaveRequested;
+            ApplyRestoreSelectionIfReady();
+        }
+
+        /// <summary>
+        /// Attaches the optional restore-selection persistence after shell
+        /// construction. Hydration runs only after the channel collection and
+        /// operator preferences exist; hydration suppresses all selection and
+        /// primary save callbacks so attaching a file never writes it.
+        /// </summary>
+        public void AttachRestorePersistence(RestoreSettingsPersistence persistence)
+        {
+            ArgumentNullException.ThrowIfNull(persistence);
+            if (restorePersistence is not null)
+            {
+                return;
+            }
+
+            restorePersistence = persistence;
+            UserSettingsRestoreSection section = new();
+            try
+            {
+                if (persistence.TryLoad(out UserSettingsRestoreSection loaded))
+                {
+                    section = loaded;
+                }
+            }
+            catch
+            {
+                // Degrade to the empty restore section; persistence must not
+                // break dashboard construction or hydration.
+            }
+
+            pendingRestoreSelectedResourceKeys.Clear();
+            foreach (var key in section.SelectedChannels ?? new List<string>())
+            {
+                var normalized = NormalizeMonitorResourceKey(key);
+                if (normalized.Length > 0
+                    && !pendingRestoreSelectedResourceKeys.Contains(
+                        normalized,
+                        StringComparer.OrdinalIgnoreCase))
+                {
+                    pendingRestoreSelectedResourceKeys.Add(normalized);
+                }
+            }
+
+            pendingRestorePrimaryResourceKey = NormalizeMonitorResourceKey(section.PrimaryResourceKey);
+            selectableEncryptionStates.Clear();
+            foreach (var pair in section.SelectableEncryptionStates
+                ?? new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase))
+            {
+                var normalized = NormalizeMonitorResourceKey(pair.Key);
+                if (normalized.Length > 0)
+                {
+                    selectableEncryptionStates[normalized] = pair.Value;
+                }
+            }
+
+            foreach (var slot in channels)
+            {
+                slot.SelectableEncryptionRequested += OnSelectableEncryptionRequested;
+            }
+
+            ApplyRestoreEncryptionToCurrentChannels();
+            ApplyRestoreSelectionIfReady();
         }
 
         /// <summary>
@@ -1267,6 +1344,125 @@ namespace DvmConsole.Avalonia.ViewModels
             }
         }
 
+        private void ApplyRestoreEncryptionToCurrentChannels()
+        {
+            foreach (var slot in channels)
+            {
+                if (slot.IsEncryptionSelectable
+                    && !string.IsNullOrWhiteSpace(slot.ResourceKey)
+                    && selectableEncryptionStates.TryGetValue(
+                        slot.ResourceKey.Trim(),
+                        out var encrypted))
+                {
+                    slot.IsTxEncrypted = encrypted;
+                }
+            }
+        }
+
+        private void ApplyRestoreSelectionIfReady()
+        {
+            if (restorePersistence is null
+                || Preferences is null
+                || restoreSelectionApplied)
+            {
+                return;
+            }
+
+            restoreSelectionApplied = true;
+            restoringSelectionState = true;
+            try
+            {
+                ApplyRestoreEncryptionToCurrentChannels();
+                if (!Preferences.RestoreSelectedChannelsOnStartup)
+                {
+                    return;
+                }
+
+                foreach (var resourceKey in pendingRestoreSelectedResourceKeys)
+                {
+                    var slot = channels.FirstOrDefault(candidate =>
+                        string.Equals(
+                            candidate.ResourceKey,
+                            resourceKey,
+                            StringComparison.OrdinalIgnoreCase));
+                    if (slot is not null)
+                    {
+                        selectedChannelsManager.AddSelectedChannel(slot);
+                    }
+                }
+
+                var primary = channels.FirstOrDefault(candidate =>
+                    candidate.IsSelected
+                    && string.Equals(
+                        candidate.ResourceKey,
+                        pendingRestorePrimaryResourceKey,
+                        StringComparison.OrdinalIgnoreCase));
+                if (primary is not null)
+                {
+                    selectedChannelsManager.SetPrimaryChannel(primary);
+                }
+            }
+            finally
+            {
+                restoringSelectionState = false;
+            }
+        }
+
+        private void PersistRestoreSelectionState()
+        {
+            if (restorePersistence is null || restoringSelectionState)
+            {
+                return;
+            }
+
+            try
+            {
+                if (!restorePersistence.TryLoad(out UserSettingsRestoreSection section))
+                {
+                    section = new UserSettingsRestoreSection();
+                }
+
+                if (Preferences?.RestoreSelectedChannelsOnStartup == true)
+                {
+                    section.SelectedChannels = SelectedChannels
+                        .Select(slot => slot.ResourceKey?.Trim())
+                        .Where(key => !string.IsNullOrWhiteSpace(key))
+                        .Select(key => key!)
+                        .Distinct(StringComparer.OrdinalIgnoreCase)
+                        .ToList();
+                    section.PrimaryResourceKey = PrimaryChannel?.IsSelected == true
+                        ? PrimaryChannel.ResourceKey?.Trim()
+                        : null;
+                }
+                else
+                {
+                    section.SelectedChannels = new List<string>();
+                    section.PrimaryResourceKey = null;
+                }
+
+                section.SelectableEncryptionStates = new Dictionary<string, bool>(
+                    selectableEncryptionStates,
+                    StringComparer.OrdinalIgnoreCase);
+                restorePersistence.Save(section);
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine(
+                    $"Restore settings persistence failed: {ex}");
+            }
+        }
+
+        private void OnSelectableEncryptionRequested(ChannelSlotViewModel slot)
+        {
+            if (restorePersistence is null || string.IsNullOrWhiteSpace(slot.ResourceKey))
+            {
+                return;
+            }
+
+            selectableEncryptionStates[slot.ResourceKey.Trim()] = slot.IsTxEncrypted;
+            PersistRestoreSelectionState();
+        }
+
         /// <summary>
         /// Replaces the connection state wholesale. Nonblank label and
         /// detail strings are preserved verbatim, including surrounding
@@ -1653,6 +1849,7 @@ namespace DvmConsole.Avalonia.ViewModels
             foreach (var oldSlot in channels)
             {
                 oldSlot.PropertyChanged -= OnChannelSlotPropertyChanged;
+                oldSlot.SelectableEncryptionRequested -= OnSelectableEncryptionRequested;
             }
 
             projectingAudioState = true;
@@ -1677,12 +1874,14 @@ namespace DvmConsole.Avalonia.ViewModels
                             channel.CardSize,
                             channel.ResourceColor);
                         slot.IsEncryptionSelectable = CanSelectEncryption(channel);
+                        slot.IsTxEncrypted = ResolveTxEncryption(channel, slot.ResourceKey);
                         slot.Volume = ResolveMonitorVolume(slot.ResourceKey);
                         var outputOptions = BuildMonitorOutputOptions(slot.ResourceKey);
                         slot.SetMonitorOutputDevices(
                             outputOptions,
                             FindConfiguredMonitorOutputOption(slot.ResourceKey, outputOptions));
                         slot.PropertyChanged += OnChannelSlotPropertyChanged;
+                        slot.SelectableEncryptionRequested += OnSelectableEncryptionRequested;
                         rebuilt.Add(slot);
                     }
                 }
@@ -1709,6 +1908,24 @@ namespace DvmConsole.Avalonia.ViewModels
             return string.Equals(channel.Mode?.Trim(), "P25", StringComparison.OrdinalIgnoreCase)
                 && channel.SelectableEncryption
                 && channel.HasEncryptionConfig();
+        }
+
+        private bool ResolveTxEncryption(Codeplug.Channel channel, string? resourceKey)
+        {
+            if (!channel.HasEncryptionConfig())
+            {
+                return false;
+            }
+
+            if (!CanSelectEncryption(channel))
+            {
+                return true;
+            }
+
+            return !string.IsNullOrWhiteSpace(resourceKey)
+                && selectableEncryptionStates.TryGetValue(resourceKey.Trim(), out var encrypted)
+                ? encrypted
+                : true;
         }
 
         /// <summary>
@@ -1823,6 +2040,7 @@ namespace DvmConsole.Avalonia.ViewModels
         {
             SelectedChannels = selectedChannelsManager.GetSelectedChannels();
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SelectedChannels)));
+            PersistRestoreSelectionState();
         }
 
         private void OnPrimaryChannelChanged()
@@ -1840,6 +2058,7 @@ namespace DvmConsole.Avalonia.ViewModels
 
             PrimaryChannel = current;
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(PrimaryChannel)));
+            PersistRestoreSelectionState();
         }
     }
 }
