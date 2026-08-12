@@ -57,6 +57,9 @@ namespace DvmConsole.Avalonia.Tests
                 CanvasWidth = 1180,
                 CanvasHeight = 840,
                 KeepWindowOnTop = true,
+                ShowAlertTones = false,
+                ShowChannels = false,
+                ShowSystemStatus = false,
                 UserBackgroundImage = null
             };
 
@@ -69,6 +72,9 @@ namespace DvmConsole.Avalonia.Tests
             Assert.Equal(1180d, actual.CanvasWidth);
             Assert.Equal(840d, actual.CanvasHeight);
             Assert.True(actual.KeepWindowOnTop);
+            Assert.False(actual.ShowAlertTones);
+            Assert.False(actual.ShowChannels);
+            Assert.False(actual.ShowSystemStatus);
             Assert.Null(actual.UserBackgroundImage);
             Assert.Equal(12.5, actual.ChannelPositions["SYS|Dispatch"].X);
             Assert.Equal(34.75, actual.ChannelPositions["SYS|Dispatch"].Y);
@@ -117,6 +123,9 @@ namespace DvmConsole.Avalonia.Tests
             Assert.False(missing.Maximized);
             Assert.Equal(875d, missing.WindowWidth);
             Assert.Equal(700d, missing.WindowHeight);
+            Assert.True(missing.ShowAlertTones);
+            Assert.True(missing.ShowChannels);
+            Assert.True(missing.ShowSystemStatus);
             Assert.Null(missing.UserBackgroundImage);
             Assert.Empty(missing.ChannelPositions);
 
@@ -125,6 +134,9 @@ namespace DvmConsole.Avalonia.Tests
             Assert.False(malformed.Maximized);
             Assert.Equal(875d, malformed.WindowWidth);
             Assert.Equal(700d, malformed.WindowHeight);
+            Assert.True(malformed.ShowAlertTones);
+            Assert.True(malformed.ShowChannels);
+            Assert.True(malformed.ShowSystemStatus);
             Assert.Null(malformed.UserBackgroundImage);
         }
 

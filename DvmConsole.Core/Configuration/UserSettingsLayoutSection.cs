@@ -72,6 +72,24 @@ namespace dvmconsole
         public double CanvasHeight { get; set; } = 700;
 
         /// <summary>
+        /// WPF SettingsManager.ShowSystemStatus widget-visibility preference.
+        /// Runtime widget application belongs to the later shell-controls gate.
+        /// </summary>
+        public bool ShowSystemStatus { get; set; } = true;
+
+        /// <summary>
+        /// WPF SettingsManager.ShowChannels widget-visibility preference.
+        /// Runtime widget application belongs to the later shell-controls gate.
+        /// </summary>
+        public bool ShowChannels { get; set; } = true;
+
+        /// <summary>
+        /// WPF SettingsManager.ShowAlertTones widget-visibility preference.
+        /// Runtime widget application belongs to the later shell-controls gate.
+        /// </summary>
+        public bool ShowAlertTones { get; set; } = true;
+
+        /// <summary>
         /// Full path to a user defined background image.
         /// </summary>
         public string UserBackgroundImage { get; set; } = null;

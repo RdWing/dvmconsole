@@ -12,9 +12,9 @@ namespace DvmConsole.Avalonia.Persistence
     /// WPF-compatible defaults and values, so this adapter performs no
     /// normalization or key mapping of its own.
     /// <para>
-    /// Headless only: startup window-restore and close-window save wiring
-    /// (including the WPF <c>Maximized</c> flag and window position maps)
-    /// is a later shell gate, not part of this adapter.
+    /// The adapter remains headless: the Avalonia shell owns startup window
+    /// hydration and close-window save ordering. Runtime application of the
+    /// WPF widget-visibility fields remains a later shell-controls gate.
     /// </para>
     /// </summary>
     public sealed class LayoutSettingsPersistence

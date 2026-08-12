@@ -37,6 +37,9 @@ namespace DvmConsole.Core.Tests
                     nameof(UserSettingsLayoutSection.ChannelPositions),
                     nameof(UserSettingsLayoutSection.KeepWindowOnTop),
                     nameof(UserSettingsLayoutSection.Maximized),
+                    nameof(UserSettingsLayoutSection.ShowAlertTones),
+                    nameof(UserSettingsLayoutSection.ShowChannels),
+                    nameof(UserSettingsLayoutSection.ShowSystemStatus),
                     nameof(UserSettingsLayoutSection.SystemStatusPositions),
                     nameof(UserSettingsLayoutSection.UserBackgroundImage),
                     nameof(UserSettingsLayoutSection.WebStreamPositions),
@@ -51,11 +54,14 @@ namespace DvmConsole.Core.Tests
             Assert.Equal(typeof(Dictionary<string, UserSettingsLayoutPosition>), properties[3].PropertyType);
             Assert.Equal(typeof(bool), properties[4].PropertyType);
             Assert.Equal(typeof(bool), properties[5].PropertyType);
-            Assert.Equal(typeof(Dictionary<string, UserSettingsLayoutPosition>), properties[6].PropertyType);
-            Assert.Equal(typeof(string), properties[7].PropertyType);
-            Assert.Equal(typeof(Dictionary<string, UserSettingsLayoutPosition>), properties[8].PropertyType);
-            Assert.Equal(typeof(double), properties[9].PropertyType);
-            Assert.Equal(typeof(double), properties[10].PropertyType);
+            Assert.Equal(typeof(bool), properties[6].PropertyType);
+            Assert.Equal(typeof(bool), properties[7].PropertyType);
+            Assert.Equal(typeof(bool), properties[8].PropertyType);
+            Assert.Equal(typeof(Dictionary<string, UserSettingsLayoutPosition>), properties[9].PropertyType);
+            Assert.Equal(typeof(string), properties[10].PropertyType);
+            Assert.Equal(typeof(Dictionary<string, UserSettingsLayoutPosition>), properties[11].PropertyType);
+            Assert.Equal(typeof(double), properties[12].PropertyType);
+            Assert.Equal(typeof(double), properties[13].PropertyType);
             Assert.All(properties, property =>
             {
                 Assert.NotNull(property.GetMethod);
@@ -98,6 +104,9 @@ namespace DvmConsole.Core.Tests
             Assert.Equal(700d, section.CanvasHeight);
             Assert.False(section.KeepWindowOnTop);
             Assert.False(section.Maximized);
+            Assert.True(section.ShowAlertTones);
+            Assert.True(section.ShowChannels);
+            Assert.True(section.ShowSystemStatus);
             Assert.Null(section.UserBackgroundImage);
         }
 
@@ -128,13 +137,16 @@ namespace DvmConsole.Core.Tests
                 CanvasHeight = 840,
                 KeepWindowOnTop = true,
                 Maximized = true,
+                ShowAlertTones = false,
+                ShowChannels = false,
+                ShowSystemStatus = false,
                 UserBackgroundImage = "/tmp/background.png"
             };
 
             string json = JsonConvert.SerializeObject(section, Formatting.Indented);
             var objectValue = JObject.Parse(json);
 
-            Assert.Equal(11, objectValue.Properties().Count());
+            Assert.Equal(14, objectValue.Properties().Count());
             Assert.NotNull(objectValue[nameof(UserSettingsLayoutSection.ChannelPositions)]);
             Assert.NotNull(objectValue[nameof(UserSettingsLayoutSection.SystemStatusPositions)]);
             Assert.NotNull(objectValue[nameof(UserSettingsLayoutSection.AlertTonePositions)]);
@@ -145,6 +157,9 @@ namespace DvmConsole.Core.Tests
             Assert.NotNull(objectValue[nameof(UserSettingsLayoutSection.CanvasHeight)]);
             Assert.NotNull(objectValue[nameof(UserSettingsLayoutSection.KeepWindowOnTop)]);
             Assert.NotNull(objectValue[nameof(UserSettingsLayoutSection.Maximized)]);
+            Assert.NotNull(objectValue[nameof(UserSettingsLayoutSection.ShowAlertTones)]);
+            Assert.NotNull(objectValue[nameof(UserSettingsLayoutSection.ShowChannels)]);
+            Assert.NotNull(objectValue[nameof(UserSettingsLayoutSection.ShowSystemStatus)]);
             Assert.NotNull(objectValue[nameof(UserSettingsLayoutSection.UserBackgroundImage)]);
             Assert.Null(objectValue["$type"]);
             Assert.DoesNotContain("channelPositions", json);
@@ -156,6 +171,9 @@ namespace DvmConsole.Core.Tests
             Assert.Equal(900d, loaded.WindowHeight);
             Assert.True(loaded.KeepWindowOnTop);
             Assert.True(loaded.Maximized);
+            Assert.False(loaded.ShowAlertTones);
+            Assert.False(loaded.ShowChannels);
+            Assert.False(loaded.ShowSystemStatus);
             Assert.Equal("/tmp/background.png", loaded.UserBackgroundImage);
             Assert.Equal(12.5, loaded.ChannelPositions["System|100"].X);
             Assert.Equal(34.75, loaded.ChannelPositions["System|100"].Y);
