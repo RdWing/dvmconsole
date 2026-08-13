@@ -15,4 +15,8 @@
     <RepositoryType>git</RepositoryType>
   </PropertyGroup>
 
+  <ItemGroup>
+    <PackageReference Include="NLayer" Version="2.0.1" />
+  </ItemGroup>
+
 </Project>

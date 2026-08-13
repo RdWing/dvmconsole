@@ -26,4 +26,8 @@
     <ProjectReference Include="..\..\DvmConsole.Platform\DvmConsole.Platform.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <Content Include="Fixtures\*.mp3" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>

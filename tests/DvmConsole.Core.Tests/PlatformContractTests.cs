@@ -1346,9 +1346,8 @@ namespace DvmConsole.Core.Tests
             }
 
             /// <summary>
-            /// The platform assembly is dependency-free: it references only
-            /// framework assemblies, so the abstraction layer stays portable
-            /// across the WPF, Avalonia and macOS shells.
+            /// The platform assembly references framework assemblies plus the
+            /// selected managed MP3 decoder dependency used by Gate 6.2.
             /// </summary>
             [Fact]
             public void Assembly_ReferencesOnlyFrameworkAssemblies()
@@ -1363,7 +1362,8 @@ namespace DvmConsole.Core.Tests
                     {
                         var name = reference.Name ?? string.Empty;
                         Assert.True(
-                            name == "mscorlib"
+                            name == "NLayer"
+                                || name == "mscorlib"
                                 || name == "netstandard"
                                 || name.StartsWith("System", StringComparison.Ordinal),
                             $"Unexpected non-framework assembly reference: {name}");
