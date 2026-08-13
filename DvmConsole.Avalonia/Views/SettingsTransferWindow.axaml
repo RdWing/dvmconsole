@@ -1,0 +1,128 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:DvmConsole.Avalonia.ViewModels"
+        x:Class="DvmConsole.Avalonia.Views.SettingsTransferWindow"
+        x:ClassModifier="internal"
+        x:DataType="vm:SettingsTransferViewModel"
+        Title="Import / Export Settings"
+        Width="760"
+        Height="620"
+        MinWidth="620"
+        MinHeight="480"
+        ShowInTaskbar="False"
+        WindowStartupLocation="CenterOwner"
+        Background="#0B1114"
+        Foreground="#EFF7F5">
+    <Window.Styles>
+        <Style Selector="TextBlock.muted">
+            <Setter Property="Foreground" Value="#8EA3A3" />
+        </Style>
+        <Style Selector="TextBlock.kicker">
+            <Setter Property="Foreground" Value="#5FE1D2" />
+            <Setter Property="FontSize" Value="11" />
+            <Setter Property="FontWeight" Value="Bold" />
+            <Setter Property="LetterSpacing" Value="2" />
+        </Style>
+        <Style Selector="Border.panel">
+            <Setter Property="Background" Value="#111B1F" />
+            <Setter Property="BorderBrush" Value="#24373A" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="8" />
+        </Style>
+        <Style Selector="Button.action">
+            <Setter Property="Padding" Value="12,8" />
+            <Setter Property="Background" Value="#1A262B" />
+            <Setter Property="BorderBrush" Value="#2A4548" />
+            <Setter Property="Foreground" Value="#EFF7F5" />
+        </Style>
+    </Window.Styles>
+
+    <Grid Margin="22" RowDefinitions="Auto,14,*,14,Auto,12,Auto">
+        <StackPanel Grid.Row="0" Spacing="4">
+            <TextBlock Classes="kicker" Text="PROFILE // SETTINGS" />
+            <TextBlock FontSize="24"
+                       FontWeight="Bold"
+                       Text="Import and Export Settings" />
+            <TextBlock Classes="muted"
+                       TextWrapping="Wrap"
+                       Text="Move selected non-secret console settings between profiles. Importing replaces only the selected categories and refreshes the active runtime." />
+        </StackPanel>
+
+        <Border Grid.Row="2" Classes="panel" Padding="14">
+            <Grid RowDefinitions="Auto,*,Auto" RowSpacing="10">
+                <Grid Grid.Row="0" ColumnDefinitions="*,Auto,Auto">
+                    <TextBlock FontWeight="SemiBold"
+                               VerticalAlignment="Center"
+                               Text="Categories" />
+                    <Button Grid.Column="1"
+                            Classes="action"
+                            Content="Select None"
+                            Margin="8,0,0,0"
+                            Click="SelectNone_Click" />
+                    <Button Grid.Column="2"
+                            Classes="action"
+                            Content="Select All"
+                            Margin="8,0,0,0"
+                            Click="SelectAll_Click" />
+                </Grid>
+
+                <ScrollViewer Grid.Row="1">
+                    <ItemsControl ItemsSource="{Binding Categories}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate x:DataType="vm:SettingsTransferCategoryItem">
+                                <Border BorderBrush="#24373A"
+                                        BorderThickness="0,0,0,1"
+                                        Padding="4,10">
+                                    <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="10">
+                                        <CheckBox IsChecked="{Binding IsSelected, Mode=TwoWay}"
+                                                  VerticalAlignment="Top" />
+                                        <StackPanel Grid.Column="1" Spacing="2">
+                                            <TextBlock FontWeight="SemiBold"
+                                                       Text="{Binding DisplayName}" />
+                                            <TextBlock Classes="muted"
+                                                       TextWrapping="Wrap"
+                                                       Text="{Binding Description}" />
+                                        </StackPanel>
+                                        <TextBlock Grid.Column="2"
+                                                   Classes="muted"
+                                                   VerticalAlignment="Top"
+                                                   Text="{Binding Id}" />
+                                    </Grid>
+                                </Border>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </ScrollViewer>
+
+                <TextBlock Grid.Row="2"
+                           Classes="muted"
+                           TextWrapping="Wrap"
+                           Text="Secrets, credentials, and unknown settings fields are never included in a transfer." />
+            </Grid>
+        </Border>
+
+        <TextBlock Grid.Row="4"
+                   x:Name="StatusTextBlock"
+                   Classes="muted"
+                   TextWrapping="Wrap" />
+
+        <Grid Grid.Row="6" ColumnDefinitions="Auto,*,Auto,Auto,Auto" ColumnSpacing="8">
+            <Button Grid.Column="0"
+                    Classes="action"
+                    Content="Close"
+                    Click="Close_Click" />
+            <Button Grid.Column="2"
+                    Classes="action"
+                    Content="Reset Settings"
+                    Click="Reset_Click" />
+            <Button Grid.Column="3"
+                    Classes="action"
+                    Content="Import"
+                    Click="Import_Click" />
+            <Button Grid.Column="4"
+                    Classes="action"
+                    Content="Export"
+                    Click="Export_Click" />
+        </Grid>
+    </Grid>
+</Window>

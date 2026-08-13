@@ -328,6 +328,7 @@ namespace DvmConsole.Avalonia
                 {
                     settingsMenu.Items.Insert(0, groupsItem);
                     settingsMenu.Items.Insert(1, tonesItem);
+                    settingsMenu.Items.Insert(2, CreateSettingsTransferMenuItem(mainWindow));
                 }
                 if (appItem?.Menu is { } appMenu && appMenu.Items.Count > 0)
                 {
@@ -440,6 +441,21 @@ namespace DvmConsole.Avalonia
             return tones;
         }
 
+        /// <summary>
+        /// Creates the native settings-transfer menu item. The settings
+        /// dialog is owned by the main window and remains inert when no
+        /// dashboard is available.
+        /// </summary>
+        internal static NativeMenuItem CreateSettingsTransferMenuItem(MainWindow? mainWindow)
+        {
+            var item = new NativeMenuItem("Import / Export Settings")
+            {
+                IsEnabled = mainWindow is not null,
+            };
+            item.Click += (_, _) => mainWindow?.OpenSettingsTransfer();
+            return item;
+        }
+
         private static MainWindow CreateComposedMainWindow(
             IClassicDesktopStyleApplicationLifetime desktop,
             Codeplug? codeplug,
@@ -465,6 +481,8 @@ namespace DvmConsole.Avalonia
             var layoutPersistence = new LayoutSettingsPersistence(settingsStore);
             var groupsPersistence = new GroupSettingsPersistence(settingsStore);
             var alertPersistence = new AlertSettingsPersistence(settingsStore);
+            var settingsTransferService =
+                new SettingsTransferService(fileSystemPaths.SettingsFilePath);
             var tarRecorder = CreateTarRecorder(tarPersistence, fileSystemPaths.DefaultTarRecordingsPath);
             var tarViewerColumnPersistence =
                 new TarViewerColumnSettingsPersistence(settingsStore);
@@ -526,6 +544,7 @@ namespace DvmConsole.Avalonia
             mainWindow.AttachWebStreamPersistence(restorePersistence, layoutPersistence);
             mainWindow.AttachAlertSettingsPersistence(alertPersistence);
             mainWindow.AttachAlertTonePreview(alertWaveFileInspector, alertWaveFilePlayer);
+            mainWindow.AttachSettingsTransfer(settingsTransferService);
             mainWindow.FileDialogService =
                 new AvaloniaFileDialogService(mainWindow.StorageProvider);
             mainWindow.TarFileRevealService = new DesktopFileRevealService();

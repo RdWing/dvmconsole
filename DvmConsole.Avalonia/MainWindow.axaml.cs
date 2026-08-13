@@ -179,6 +179,8 @@ namespace DvmConsole.Avalonia
         private TonePresetManagerWindow? tonePresetManagerWindow;
         private DtmfPresetManagerWindow? dtmfPresetManagerWindow;
         private AlertSettingsPersistence? alertSettingsPersistence;
+        private SettingsTransferService? settingsTransferService;
+        private SettingsTransferWindow? settingsTransferWindow;
         private IAudioWaveFileInspector? alertTonePreviewInspector;
         private IAudioWaveFilePlayer? alertTonePreviewPlayer;
         private readonly AudioSettingsPersistence? audioSettingsPersistence;
@@ -196,6 +198,7 @@ namespace DvmConsole.Avalonia
         private CodeplugReloadCoordinator? codeplugReloadCoordinator;
         private string codeplugPath = string.Empty;
         private string? pendingCodeplugPath;
+        private bool suppressRuntimeSettingsPersistence;
         private bool runtimeActivated;
 
         public MainWindow()
@@ -898,6 +901,16 @@ namespace DvmConsole.Avalonia
             alertSettingsPersistence ??= persistence;
         }
 
+        /// <summary>
+        /// Attaches the settings-transfer service bound to the same settings
+        /// file used by every section adapter in the composition root.
+        /// </summary>
+        public void AttachSettingsTransfer(SettingsTransferService service)
+        {
+            ArgumentNullException.ThrowIfNull(service);
+            settingsTransferService ??= service;
+        }
+
         public void AttachAlertTonePreview(
             IAudioWaveFileInspector inspector,
             IAudioWaveFilePlayer? player)
@@ -1154,6 +1167,66 @@ namespace DvmConsole.Avalonia
 
             var dialog = new TarConfigurationWindow(tarConfiguration, FileDialogService);
             _ = dialog.ShowDialog(this);
+        }
+
+        /// <summary>
+        /// Opens the settings-transfer dialog over the shared transfer service.
+        /// A successful import or reset re-runs the current codeplug candidate
+        /// through the existing stop/install lifecycle exactly once.
+        /// </summary>
+        internal void OpenSettingsTransfer()
+        {
+            if (settingsTransferWindow is not null
+                || settingsTransferService is not { } service)
+            {
+                return;
+            }
+
+            if (DataContext is not MainWindowViewModel)
+            {
+                return;
+            }
+
+            Func<Task> reloadRuntimeAsync = ReloadCurrentRuntimeAsync;
+            var viewModel = new SettingsTransferViewModel(service);
+            var window = new SettingsTransferWindow(
+                viewModel,
+                FileDialogService,
+                TarConfirmationService,
+                reloadRuntimeAsync);
+            settingsTransferWindow = window;
+            window.Closed += (_, _) =>
+            {
+                if (ReferenceEquals(settingsTransferWindow, window))
+                {
+                    settingsTransferWindow = null;
+                }
+            };
+            _ = window.ShowDialog(this);
+        }
+
+        private async Task ReloadCurrentRuntimeAsync()
+        {
+            if (codeplugReloadCoordinator is null
+                || string.IsNullOrWhiteSpace(codeplugPath))
+            {
+                return;
+            }
+
+            pendingCodeplugPath = codeplugPath;
+            bool previous = suppressRuntimeSettingsPersistence;
+            suppressRuntimeSettingsPersistence = true;
+            try
+            {
+                await codeplugReloadCoordinator.ReloadAsync(
+                    codeplugPath,
+                    CancellationToken.None);
+            }
+            finally
+            {
+                suppressRuntimeSettingsPersistence = previous;
+                pendingCodeplugPath = null;
+            }
         }
 
         /// <summary>
@@ -2046,8 +2119,11 @@ namespace DvmConsole.Avalonia
         {
             try
             {
-                SaveWebStreamSettings();
-                SaveLayoutSettings();
+                if (!suppressRuntimeSettingsPersistence)
+                {
+                    SaveWebStreamSettings();
+                    SaveLayoutSettings();
+                }
 
             if (hotkeys is not null)
             {
