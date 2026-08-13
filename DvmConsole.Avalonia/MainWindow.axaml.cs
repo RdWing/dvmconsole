@@ -175,6 +175,14 @@ namespace DvmConsole.Avalonia
         private AlertSettingsPersistence? alertSettingsPersistence;
         private IAudioWaveFileInspector? alertTonePreviewInspector;
         private IAudioWaveFilePlayer? alertTonePreviewPlayer;
+        private readonly AudioSettingsPersistence? audioSettingsPersistence;
+        private readonly IAudioStreamFactory? audioStreamFactory;
+        private IWebStreamSourceFactory? webStreamSourceFactory;
+        private RestoreSettingsPersistence? restoreSettingsPersistence;
+        private WebStreamShellViewModel? webStreamShell;
+        private WebStreamShellItemViewModel? draggedWebStream;
+        private global::Avalonia.Point webStreamDragStart;
+        private WebStreamShellPosition webStreamPositionStart;
 
         public MainWindow()
             : this(null, null)
@@ -304,6 +312,8 @@ namespace DvmConsole.Avalonia
         {
             InitializeComponent();
             this.hotkeys = hotkeys;
+            audioSettingsPersistence = persistence;
+            audioStreamFactory = audioStreams;
             this.codeplug = codeplug;
             this.tarRecorder = tarRecorder;
             this.tarRecordingCoordinator = tarRecorder is null ? null : new TarRecordingCoordinator(tarRecorder);
@@ -589,10 +599,18 @@ namespace DvmConsole.Avalonia
 
         public void AttachRestorePersistence(RestoreSettingsPersistence restorePersistence)
         {
+            this.restoreSettingsPersistence = restorePersistence;
             if (DataContext is MainWindowViewModel viewModel)
             {
                 viewModel.AttachRestorePersistence(restorePersistence);
             }
+        }
+
+        /// <summary>Attaches the shared web-stream source factory.</summary>
+        public void AttachWebStreamSourceFactory(IWebStreamSourceFactory sourceFactory)
+        {
+            ArgumentNullException.ThrowIfNull(sourceFactory);
+            webStreamSourceFactory ??= sourceFactory;
         }
 
         public void AttachLayoutPersistence(LayoutSettingsPersistence layoutPersistence)
@@ -615,6 +633,56 @@ namespace DvmConsole.Avalonia
             }
 
             layoutHydrated = true;
+        }
+
+        /// <summary>
+        /// Composes the configured web-stream shell after restore and layout
+        /// sections have been hydrated. Source and audio factories are borrowed
+        /// shared owners; each item owns only its coordinator and per-run output.
+        /// </summary>
+        public void AttachWebStreamPersistence(
+            RestoreSettingsPersistence restorePersistence,
+            LayoutSettingsPersistence layoutPersistence)
+        {
+            if (webStreamShell is not null
+                || DataContext is not MainWindowViewModel viewModel)
+            {
+                return;
+            }
+
+            UserSettingsRestoreSection restoreSection = new();
+            UserSettingsAudioSection audioSection = new();
+            try
+            {
+                restorePersistence.TryLoad(out restoreSection);
+                audioSettingsPersistence?.TryLoad(out audioSection);
+            }
+            catch (Exception exception)
+            {
+                System.Diagnostics.Debug.WriteLine(
+                    $"Web-stream settings load failed: {exception.Message}");
+            }
+
+            var definitions = (codeplug?.Zones ?? new List<Codeplug.Zone>())
+                .SelectMany(zone => (zone?.WebStreams ?? new List<Codeplug.WebStream>())
+                    .Select(stream => new WebStreamShellDefinition(stream, zone?.Name ?? string.Empty)))
+                .ToList();
+            var positions = this.layoutSection?.WebStreamPositions
+                ?? new Dictionary<string, UserSettingsLayoutPosition>(StringComparer.OrdinalIgnoreCase);
+            webStreamShell = new WebStreamShellViewModel(
+                definitions,
+                viewModel.Preferences?.RestoreSelectedChannelsOnStartup == true,
+                restoreSection.SelectedWebStreams,
+                audioSection.WebStreamVolumes,
+                positions,
+                webStreamSourceFactory,
+                audioStreamFactory,
+                () => viewModel.AudioSettings?.SelectedOutputId ?? AudioDeviceId.Default,
+                action => Dispatcher.UIThread.Post(action));
+            viewModel.AttachWebStreams(webStreamShell);
+            _ = ObserveAsync(
+                webStreamShell.StartRestoredAsync(),
+                "Web-stream restore startup failed");
         }
 
         public void AttachAlertSettingsPersistence(AlertSettingsPersistence persistence)
@@ -1597,6 +1665,48 @@ namespace DvmConsole.Avalonia
             }
         }
 
+        private void WebStreamToggle_Click(object? sender, RoutedEventArgs e)
+        {
+            if (sender is Button { DataContext: WebStreamShellItemViewModel item })
+                _ = item.ToggleAsync();
+        }
+
+        private void WebStreamCard_PointerPressed(object? sender, PointerPressedEventArgs e)
+        {
+            if (sender is not Border { DataContext: WebStreamShellItemViewModel item } card
+                || e.Properties.PointerUpdateKind != PointerUpdateKind.LeftButtonPressed
+                || !ReferenceEquals(e.Source, card))
+            {
+                return;
+            }
+
+            draggedWebStream = item;
+            webStreamDragStart = e.GetPosition(this);
+            webStreamPositionStart = item.Position;
+            e.Pointer.Capture(card);
+        }
+
+        private void WebStreamCard_PointerMoved(object? sender, PointerEventArgs e)
+        {
+            if (draggedWebStream is not { } item
+                || sender is not Border { DataContext: WebStreamShellItemViewModel senderItem }
+                || !ReferenceEquals(item, senderItem))
+            {
+                return;
+            }
+
+            var current = e.GetPosition(this);
+            item.SetPosition(
+                webStreamPositionStart.X + current.X - webStreamDragStart.X,
+                webStreamPositionStart.Y + current.Y - webStreamDragStart.Y);
+        }
+
+        private void WebStreamCard_PointerReleased(object? sender, PointerReleasedEventArgs e)
+        {
+            e.Pointer.Capture(null);
+            draggedWebStream = null;
+        }
+
         /// <summary>
         /// Thin click wiring for the FNE system-card Start/Stop toggle
         /// button. Resolves the row from the sender button's data
@@ -1722,6 +1832,7 @@ namespace DvmConsole.Avalonia
         /// </summary>
         private void OnWindowClosed(object? sender, EventArgs e)
         {
+            SaveWebStreamSettings();
             SaveLayoutSettings();
 
             if (hotkeys is not null)
@@ -1787,12 +1898,118 @@ namespace DvmConsole.Avalonia
 
             if (talkgroupAudioRouter is { } router)
             {
-                _ = DisposeRouterAndFlushRecordingsAsync(router);
+                _ = ObserveAsync(
+                    DisposeWebStreamsThenRouterAsync(router),
+                    "Web-stream/router shutdown failed");
             }
             else
             {
-                tarRecordingCoordinator?.StopAllTransmit(DateTime.UtcNow);
-                tarRecordingCoordinator?.Dispose();
+                _ = ObserveAsync(
+                    DisposeWebStreamsAsync(),
+                    "Web-stream shutdown failed");
+            }
+        }
+
+        private void SaveWebStreamSettings()
+        {
+            if (webStreamShell is not { } shell)
+                return;
+
+            var snapshot = shell.Snapshot();
+            if (restoreSettingsPersistence is { } restorePersistence)
+            {
+                try
+                {
+                    if (!restorePersistence.TryLoad(out UserSettingsRestoreSection section))
+                        section = new UserSettingsRestoreSection();
+
+                    section.SelectedWebStreams =
+                        DataContext is MainWindowViewModel viewModel
+                        && viewModel.Preferences?.RestoreSelectedChannelsOnStartup == true
+                            ? snapshot.SelectedNames.ToList()
+                            : new List<string>();
+                    restorePersistence.Save(section);
+                }
+                catch (Exception exception)
+                {
+                    System.Diagnostics.Debug.WriteLine(
+                        $"Web-stream restore save failed: {exception.Message}");
+                }
+            }
+
+            if (audioSettingsPersistence is { } audioPersistence)
+            {
+                try
+                {
+                    if (!audioPersistence.TryLoad(out UserSettingsAudioSection section))
+                        section = new UserSettingsAudioSection();
+                    section.WebStreamVolumes = new Dictionary<string, double>(
+                        snapshot.Volumes,
+                        StringComparer.OrdinalIgnoreCase);
+                    audioPersistence.Save(section);
+                }
+                catch (Exception exception)
+                {
+                    System.Diagnostics.Debug.WriteLine(
+                        $"Web-stream volume save failed: {exception.Message}");
+                }
+            }
+
+            if (layoutSection is { } layout)
+            {
+                layout.WebStreamPositions = new Dictionary<string, UserSettingsLayoutPosition>(
+                    snapshot.Positions,
+                    StringComparer.OrdinalIgnoreCase);
+            }
+        }
+
+        private async Task DisposeWebStreamsThenRouterAsync(TalkgroupAudioRouter router)
+        {
+            try
+            {
+                await DisposeWebStreamsAsync().ConfigureAwait(false);
+            }
+            finally
+            {
+                await DisposeRouterAndFlushRecordingsAsync(router).ConfigureAwait(false);
+            }
+        }
+
+        private async Task DisposeWebStreamsAsync()
+        {
+            try
+            {
+                if (webStreamShell is { } shell)
+                {
+                    await shell.DisposeAsync().ConfigureAwait(false);
+                    webStreamShell = null;
+                }
+            }
+            finally
+            {
+                if (webStreamSourceFactory is { } sourceFactory)
+                {
+                    sourceFactory.Dispose();
+                    webStreamSourceFactory = null;
+                }
+                if (talkgroupAudioRouter is null)
+                {
+                    tarRecordingCoordinator?.StopAllTransmit(DateTime.UtcNow);
+                    tarRecordingCoordinator?.Dispose();
+                }
+            }
+        }
+
+        private static async Task ObserveAsync(Task operation, string description)
+        {
+            try
+            {
+                await operation.ConfigureAwait(false);
+            }
+            catch (Exception exception)
+            {
+                System.Diagnostics.Debug.WriteLine(
+                    $"{description}: {exception}");
             }
         }
 

@@ -15,7 +15,7 @@ namespace DvmConsole.Core.Tests
     public sealed class UserSettingsAudioSectionTests
     {
         [Fact]
-        public void Type_IsPublicSealedCoreDto_WithExactlySixMutablePascalCaseProperties()
+        public void Type_IsPublicSealedCoreDto_WithExactlySevenMutablePascalCaseProperties()
         {
             var type = typeof(UserSettingsAudioSection);
 
@@ -36,7 +36,8 @@ namespace DvmConsole.Core.Tests
                     nameof(UserSettingsAudioSection.ChannelOutputDeviceKeys),
                     nameof(UserSettingsAudioSection.ChannelOutputDevices),
                     nameof(UserSettingsAudioSection.ChannelVolumes),
-                    nameof(UserSettingsAudioSection.MasterOutputDeviceKey)
+                    nameof(UserSettingsAudioSection.MasterOutputDeviceKey),
+                    nameof(UserSettingsAudioSection.WebStreamVolumes)
                 },
                 properties.Select(property => property.Name));
             Assert.Equal(typeof(bool), properties[0].PropertyType);
@@ -45,6 +46,7 @@ namespace DvmConsole.Core.Tests
             Assert.Equal(typeof(Dictionary<string, int>), properties[3].PropertyType);
             Assert.Equal(typeof(Dictionary<string, double>), properties[4].PropertyType);
             Assert.Equal(typeof(string), properties[5].PropertyType);
+            Assert.Equal(typeof(Dictionary<string, double>), properties[6].PropertyType);
             Assert.All(properties, property =>
             {
                 Assert.NotNull(property.GetMethod);
@@ -64,7 +66,7 @@ namespace DvmConsole.Core.Tests
         }
 
         [Fact]
-        public void Serialization_EmitsExactlyTheSixPascalCaseKeys_WithNoTypeMetadata()
+        public void Serialization_EmitsExactlyTheSevenPascalCaseKeys_WithNoTypeMetadata()
         {
             var section = new UserSettingsAudioSection
             {
@@ -76,13 +78,14 @@ namespace DvmConsole.Core.Tests
             string json = JsonConvert.SerializeObject(section, Formatting.Indented);
             var objectValue = JObject.Parse(json);
 
-            Assert.Equal(6, objectValue.Properties().Count());
+            Assert.Equal(7, objectValue.Properties().Count());
             Assert.NotNull(objectValue[nameof(UserSettingsAudioSection.AudioInputDeviceKey)]);
             Assert.NotNull(objectValue[nameof(UserSettingsAudioSection.MasterOutputDeviceKey)]);
             Assert.NotNull(objectValue[nameof(UserSettingsAudioSection.AudioInputAgcEnabled)]);
             Assert.NotNull(objectValue[nameof(UserSettingsAudioSection.ChannelOutputDevices)]);
             Assert.NotNull(objectValue[nameof(UserSettingsAudioSection.ChannelOutputDeviceKeys)]);
             Assert.NotNull(objectValue[nameof(UserSettingsAudioSection.ChannelVolumes)]);
+            Assert.NotNull(objectValue[nameof(UserSettingsAudioSection.WebStreamVolumes)]);
             Assert.Null(objectValue["$type"]);
             Assert.Contains(Environment.NewLine, json);
             Assert.DoesNotContain("audioInputDeviceKey", json);

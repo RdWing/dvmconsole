@@ -111,6 +111,79 @@ namespace DvmConsole.Avalonia.Tests
         }
 
         [Fact]
+        public async Task ExternalStartCancellation_PublishesOffAndInactiveState()
+        {
+            var sourceFactory = new FakeSourceFactory();
+            var audioFactory = new FakeAudioStreamFactory();
+            var coordinator = CreateCoordinator(sourceFactory, audioFactory);
+            var states = new List<WebStreamPlaybackState>();
+            coordinator.StateChanged += states.Add;
+            using var cancellation = new CancellationTokenSource();
+
+            var run = coordinator.StartAsync(cancellation.Token);
+            await sourceFactory.Source!.Started.Task.WaitAsync(TimeSpan.FromSeconds(1));
+            sourceFactory.Source.Emit(new byte[] { 0x34, 0x12 });
+            Assert.Equal("RX", coordinator.StatusText);
+
+            cancellation.Cancel();
+            await run;
+
+            Assert.Equal("Off", coordinator.StatusText);
+            Assert.False(coordinator.IsActive);
+            Assert.False(coordinator.IsReceiving);
+            Assert.Contains(states, state =>
+                state.StatusText == "Off"
+                && !state.IsActive
+                && !state.IsReceiving);
+
+            await coordinator.DisposeAsync();
+        }
+
+        [Fact]
+        public async Task StopThenStart_CreatesAFreshRun()
+        {
+            var sourceFactory = new FakeSourceFactory();
+            var audioFactory = new FakeAudioStreamFactory();
+            var coordinator = CreateCoordinator(sourceFactory, audioFactory);
+
+            var firstRun = coordinator.StartAsync();
+            await sourceFactory.Source!.Started.Task.WaitAsync(TimeSpan.FromSeconds(1));
+            await coordinator.StopAsync();
+            await firstRun;
+
+            var firstSource = sourceFactory.Source;
+            var secondRun = coordinator.StartAsync();
+            await sourceFactory.Source!.Started.Task.WaitAsync(TimeSpan.FromSeconds(1));
+
+            Assert.NotSame(firstSource, sourceFactory.Source);
+            Assert.True(coordinator.IsActive);
+
+            await coordinator.StopAsync();
+            await secondRun;
+            await coordinator.DisposeAsync();
+        }
+
+        [Fact]
+        public async Task OutputStartFailure_AllowsAFreshStart()
+        {
+            var sourceFactory = new FakeSourceFactory();
+            var audioFactory = new FakeAudioStreamFactory { ThrowOnCreateOutput = true };
+            var coordinator = CreateCoordinator(sourceFactory, audioFactory);
+
+            await coordinator.StartAsync();
+            Assert.Equal("Down", coordinator.StatusText);
+
+            audioFactory.ThrowOnCreateOutput = false;
+            var run = coordinator.StartAsync();
+            await sourceFactory.Source!.Started.Task.WaitAsync(TimeSpan.FromSeconds(1));
+            Assert.True(coordinator.IsActive);
+
+            await coordinator.StopAsync();
+            await run;
+            await coordinator.DisposeAsync();
+        }
+
+        [Fact]
         public async Task StopAsync_FromStateChangedCallback_DoesNotSelfJoin()
         {
             var sourceFactory = new FakeSourceFactory();
@@ -355,6 +428,7 @@ namespace DvmConsole.Avalonia.Tests
             {
                 this.onPcm = onPcm;
                 this.onProgress = onProgress;
+                cancellationToken.Register(() => completion.TrySetCanceled(cancellationToken));
                 Started.TrySetResult(true);
                 if (autoConnect)
                     onProgress?.Invoke(new WebStreamSourceProgress(WebStreamSourceProgressKind.Connected, 1));

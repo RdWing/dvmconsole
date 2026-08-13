@@ -303,14 +303,16 @@ namespace DvmConsole.Avalonia.Services
                 {
                     lock (run.SessionGate)
                     {
-                        if (IsStopRequested())
+                        if ((IsStopRequested() || runCancellation.IsCancellationRequested)
+                            && Volatile.Read(ref run.TerminalFailure) == 0)
                             run.Session.Stop();
                     }
 
                     await DisposeSourceOnceAsync(run).ConfigureAwait(false);
                     await StopPipelineOnceAsync(run).ConfigureAwait(false);
 
-                    if (IsStopRequested())
+                    if ((IsStopRequested() || runCancellation.IsCancellationRequested)
+                        && Volatile.Read(ref run.TerminalFailure) == 0)
                         PublishState(run);
                 }
 
@@ -320,6 +322,8 @@ namespace DvmConsole.Avalonia.Services
                     {
                         _runTask = null;
                         _runCancellation = null;
+                        _run = null;
+                        _started = false;
                     }
                 }
 

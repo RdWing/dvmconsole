@@ -252,7 +252,7 @@
                 </StackPanel>
             </Border>
 
-            <Grid Grid.Column="2" RowDefinitions="Auto,Auto,Auto,*" RowSpacing="16">
+            <Grid Grid.Column="2" RowDefinitions="Auto,Auto,Auto,Auto,*" RowSpacing="16">
                 <Grid ColumnDefinitions="*,Auto">
                     <StackPanel Spacing="4">
                         <TextBlock Classes="kicker" Text="CHANNEL GRID" />
@@ -388,7 +388,73 @@
                     </ItemsControl>
                 </Border>
 
-                <Grid Grid.Row="3" ColumnDefinitions="*,16,*,16,*">
+                <Border Grid.Row="3"
+                        Classes="panel"
+                        Padding="14"
+                        IsVisible="{Binding WebStreams, Converter={x:Static conv:ObjectConverters.IsNotNull}}">
+                    <StackPanel Spacing="10">
+                        <Grid ColumnDefinitions="*,Auto">
+                            <StackPanel Spacing="3">
+                                <TextBlock Classes="kicker" Text="WEB STREAMS" />
+                                <TextBlock FontSize="18" FontWeight="SemiBold" Text="Live feeds" />
+                            </StackPanel>
+                            <TextBlock Grid.Column="1"
+                                       Classes="muted"
+                                       Text="{Binding WebStreams.Items.Count, StringFormat={}{0} configured}"
+                                       VerticalAlignment="Bottom" />
+                        </Grid>
+                        <ScrollViewer HorizontalScrollBarVisibility="Auto"
+                                      VerticalScrollBarVisibility="Disabled">
+                            <ItemsControl ItemsSource="{Binding WebStreams.Items}">
+                                <ItemsControl.ItemsPanel>
+                                    <ItemsPanelTemplate>
+                                        <Canvas MinHeight="120" />
+                                    </ItemsPanelTemplate>
+                                </ItemsControl.ItemsPanel>
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate x:DataType="vm:WebStreamShellItemViewModel">
+                                        <Border Classes="channel-card"
+                                                Width="280"
+                                                Padding="12"
+                                                Canvas.Left="{Binding Position.X}"
+                                                Canvas.Top="{Binding Position.Y}"
+                                                PointerPressed="WebStreamCard_PointerPressed"
+                                                PointerMoved="WebStreamCard_PointerMoved"
+                                                PointerReleased="WebStreamCard_PointerReleased">
+                                            <StackPanel Spacing="8">
+                                                <Grid ColumnDefinitions="*,Auto">
+                                                    <TextBlock Classes="data-value"
+                                                               Text="{Binding DisplayName}"
+                                                               TextTrimming="CharacterEllipsis" />
+                                                    <TextBlock Grid.Column="1"
+                                                               Classes="muted"
+                                                               Text="{Binding StatusText}" />
+                                                </Grid>
+                                                <TextBlock Classes="muted"
+                                                           Text="{Binding StreamUrl}"
+                                                           TextTrimming="CharacterEllipsis" />
+                                                <Slider Minimum="0"
+                                                        Maximum="4"
+                                                        TickFrequency="0.1"
+                                                        Value="{Binding Volume, Mode=TwoWay}" />
+                                                <Grid ColumnDefinitions="*,Auto">
+                                                    <TextBlock Classes="muted"
+                                                               Text="{Binding PositionKey}" />
+                                                    <Button Grid.Column="1"
+                                                            Content="{Binding ToggleButtonText}"
+                                                            Click="WebStreamToggle_Click"
+                                                            IsEnabled="{Binding CanPlay}" />
+                                                </Grid>
+                                            </StackPanel>
+                                        </Border>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </ScrollViewer>
+                    </StackPanel>
+                </Border>
+
+                <Grid Grid.Row="4" ColumnDefinitions="*,16,*,16,*">
                     <Border Classes="panel" Padding="18">
                         <StackPanel Spacing="14">
                             <TextBlock Classes="kicker" Text="AUDIO PATH" />

@@ -35,11 +35,13 @@ namespace DvmConsole.Core.Tests
                     nameof(UserSettingsRestoreSection.PrimaryResourceKey),
                     nameof(UserSettingsRestoreSection.SelectableEncryptionStates),
                     nameof(UserSettingsRestoreSection.SelectedChannels),
+                    nameof(UserSettingsRestoreSection.SelectedWebStreams),
                 },
                 properties.Select(property => property.Name));
             Assert.Equal(typeof(string), properties[0].PropertyType);
             Assert.Equal(typeof(Dictionary<string, bool>), properties[1].PropertyType);
             Assert.Equal(typeof(List<string>), properties[2].PropertyType);
+            Assert.Equal(typeof(List<string>), properties[3].PropertyType);
             Assert.All(properties, property => Assert.True(property.SetMethod!.IsPublic));
         }
 
@@ -50,6 +52,7 @@ namespace DvmConsole.Core.Tests
 
             Assert.Null(section.PrimaryResourceKey);
             Assert.Empty(section.SelectedChannels);
+            Assert.Empty(section.SelectedWebStreams);
             Assert.Empty(section.SelectableEncryptionStates);
         }
 
@@ -70,7 +73,7 @@ namespace DvmConsole.Core.Tests
             string json = JsonConvert.SerializeObject(section, Formatting.Indented);
             var objectValue = JObject.Parse(json);
 
-            Assert.Equal(3, objectValue.Properties().Count());
+            Assert.Equal(4, objectValue.Properties().Count());
             Assert.Equal(2, objectValue[nameof(UserSettingsRestoreSection.SelectedChannels)]!.Count());
             Assert.Equal(
                 "System 1|31001",
@@ -83,6 +86,7 @@ namespace DvmConsole.Core.Tests
 
             Assert.NotNull(loaded);
             Assert.Equal(section.SelectedChannels, loaded!.SelectedChannels);
+            Assert.Equal(section.SelectedWebStreams, loaded.SelectedWebStreams);
             Assert.Equal(section.PrimaryResourceKey, loaded.PrimaryResourceKey);
             Assert.Equal(section.SelectableEncryptionStates, loaded.SelectableEncryptionStates);
         }

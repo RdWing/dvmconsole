@@ -234,6 +234,26 @@ namespace DvmConsole.Avalonia.ViewModels
         public OperatorPreferencesViewModel? Preferences { get; private set; }
 
         /// <summary>
+        /// Configured web-stream shell items, or null until the window
+        /// composes the optional stream-source and persistence boundary.
+        /// </summary>
+        public WebStreamShellViewModel? WebStreams { get; private set; }
+
+        /// <summary>
+        /// Attaches the shell-owned web-stream collection after the window
+        /// has composed its shared factories and settings adapters.
+        /// </summary>
+        public void AttachWebStreams(WebStreamShellViewModel webStreams)
+        {
+            ArgumentNullException.ThrowIfNull(webStreams);
+            if (WebStreams is not null)
+                return;
+
+            WebStreams = webStreams;
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(WebStreams)));
+        }
+
+        /// <summary>
         /// Attaches the shared operator-preferences persistence adapter after
         /// shell construction. This preserves the existing MainWindow
         /// constructor's TAR/viewer parameter order while keeping hydration
@@ -1160,15 +1180,23 @@ namespace DvmConsole.Avalonia.ViewModels
 
             try
             {
-                audioPersistence.Save(new UserSettingsAudioSection
+                if (!audioPersistence.TryLoad(out UserSettingsAudioSection section))
+                    section = new UserSettingsAudioSection();
+
+                section.AudioInputDeviceKey = AudioSettingsPersistence.ToSettingsKey(inputId);
+                section.MasterOutputDeviceKey = AudioSettingsPersistence.ToSettingsKey(outputId);
+                section.AudioInputAgcEnabled = agcEnabled;
+                section.ChannelOutputDevices = new Dictionary<string, int>(channelOutputDevices, StringComparer.OrdinalIgnoreCase);
+                section.ChannelOutputDeviceKeys = new Dictionary<string, string>(channelOutputDeviceKeys, StringComparer.OrdinalIgnoreCase);
+                section.ChannelVolumes = new Dictionary<string, double>(channelVolumes, StringComparer.OrdinalIgnoreCase);
+                if (WebStreams is { } webStreams)
                 {
-                    AudioInputDeviceKey = AudioSettingsPersistence.ToSettingsKey(inputId),
-                    MasterOutputDeviceKey = AudioSettingsPersistence.ToSettingsKey(outputId),
-                    AudioInputAgcEnabled = agcEnabled,
-                    ChannelOutputDevices = new Dictionary<string, int>(channelOutputDevices, StringComparer.OrdinalIgnoreCase),
-                    ChannelOutputDeviceKeys = new Dictionary<string, string>(channelOutputDeviceKeys, StringComparer.OrdinalIgnoreCase),
-                    ChannelVolumes = new Dictionary<string, double>(channelVolumes, StringComparer.OrdinalIgnoreCase),
-                });
+                    section.WebStreamVolumes = new Dictionary<string, double>(
+                        webStreams.Snapshot().Volumes,
+                        StringComparer.OrdinalIgnoreCase);
+                }
+
+                audioPersistence.Save(section);
             }
             catch (Exception ex)
             {
@@ -1508,11 +1536,17 @@ namespace DvmConsole.Avalonia.ViewModels
                     section.PrimaryResourceKey = PrimaryChannel?.IsSelected == true
                         ? PrimaryChannel.ResourceKey?.Trim()
                         : null;
+
+                    if (WebStreams is { } webStreams)
+                    {
+                        section.SelectedWebStreams = webStreams.Snapshot().SelectedNames.ToList();
+                    }
                 }
                 else
                 {
                     section.SelectedChannels = new List<string>();
                     section.PrimaryResourceKey = null;
+                    section.SelectedWebStreams = new List<string>();
                 }
 
                 section.SelectableEncryptionStates = new Dictionary<string, bool>(

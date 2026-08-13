@@ -27,6 +27,12 @@ namespace dvmconsole
         public List<string> SelectedChannels { get; set; } = new();
 
         /// <summary>
+        /// WPF SettingsManager.SelectedWebStreams: configured stream names
+        /// selected at the previous shutdown.
+        /// </summary>
+        public List<string> SelectedWebStreams { get; set; } = new();
+
+        /// <summary>
         /// Avalonia's persisted primary resource extension; WPF has no separate
         /// primary key, but retaining it avoids losing the dashboard role.
         /// </summary>

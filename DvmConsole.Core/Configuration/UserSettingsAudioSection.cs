@@ -58,5 +58,10 @@ namespace dvmconsole
         /// audio runtime; this DTO preserves the persisted value verbatim.
         /// </summary>
         public Dictionary<string, double> ChannelVolumes { get; set; } = new();
+
+        /// <summary>
+        /// WPF SettingsManager.WebStreamVolumes keyed by stream name.
+        /// </summary>
+        public Dictionary<string, double> WebStreamVolumes { get; set; } = new();
     }
 }

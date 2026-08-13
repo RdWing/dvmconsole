@@ -435,6 +435,7 @@ namespace DvmConsole.Avalonia
                 var streams = catalog is MacAudioDeviceCatalog macCatalog
                     ? new MacAudioStreamFactory(macCatalog)
                     : null;
+                var webStreamSourceFactory = new WebStreamSourceFactory();
                 var hotkeys = CreateGlobalHotkeyService();
                 // One shared settings store backs both persistence
                 // adapters: the Core store saves only the section it is
@@ -551,10 +552,12 @@ namespace DvmConsole.Avalonia
                     tarRecorder,
                     tarWaveFilePlayer,
                     tarViewerColumnPersistence);
+                mainWindow.AttachWebStreamSourceFactory(webStreamSourceFactory);
                 mainWindow.AttachPreferencesPersistence(preferencesPersistence);
                 mainWindow.AttachGroupsPersistence(groupsPersistence);
                 mainWindow.AttachRestorePersistence(restorePersistence);
                 mainWindow.AttachLayoutPersistence(layoutPersistence);
+                mainWindow.AttachWebStreamPersistence(restorePersistence, layoutPersistence);
                 mainWindow.AttachAlertSettingsPersistence(alertPersistence);
                 mainWindow.AttachAlertTonePreview(alertWaveFileInspector, alertWaveFilePlayer);
                 mainWindow.FileDialogService =
