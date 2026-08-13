@@ -6,9 +6,11 @@ The Digital Voice Modem Desktop Dispatch Console ("DDC") is a WPF desktop applic
 
 ## Building
 
-This project utilizes a standard Visual Studio solution for its build system.
-
-The DDC software requires the library dependencies listed below. Generally, the software attempts to be as portable as possible and as library-free as possible. A basic Visual Studio install, with .NET is usually all that is needed to compile.
+The original DDC is a WPF application built from the Visual Studio solution.
+The macOS desktop port is the Avalonia shell in `DvmConsole.Avalonia` and is
+built with the .NET 8 SDK. See
+[`dvmconsole/Docs/Getting Started/02-Building.md`](dvmconsole/Docs/Getting%20Started/02-Building.md)
+for complete Windows and macOS instructions.
 
 ### Dependencies
 
@@ -21,6 +23,41 @@ The DDC software requires the library dependencies listed below. Generally, the 
 3. Open the "dvmconsole.sln" with Visual Studio.
 4. Select "x86" as the CPU type.
 5. Compile.
+
+### macOS Avalonia build and bundle
+
+From a macOS checkout with the .NET 8 SDK:
+
+```sh
+dotnet publish DvmConsole.Avalonia/DvmConsole.Avalonia.csproj \
+  -c Release -r osx-arm64 --self-contained
+packaging/macos/build-app.sh \
+  -p DvmConsole.Avalonia/bin/Release/net8.0/osx-arm64/publish \
+  -o dist/DvmConsole.app
+open dist/DvmConsole.app
+```
+
+Use `osx-x64` for an Intel/Rosetta bundle. The bundle is unsigned and
+unnotarized unless the later signing pipeline is run on the user's Mac. The
+native `libvocoder.dylib` is optional for assembling a development bundle but
+required for vocoder-backed voice operation; build it with
+`packaging/macos/build-vocoder.sh` and pass `-v` to `build-app.sh`.
+
+On first launch, macOS may require Microphone permission for audio capture and
+Accessibility plus Input Monitoring permission for the global PTT hotkey.
+Grant those permissions in System Settings > Privacy & Security; the app does
+not bypass TCC or silently prompt for Accessibility/Input Monitoring.
+
+The packaged app uses the macOS application-data path under
+`~/Library/Application Support/DVMProject/dvmconsole/` for `UserSettings.json`
+and the first startup candidate for `codeplug.yml`. If that candidate is
+absent, startup falls back to `Environment.CurrentDirectory/configs/codeplug.yml`;
+use File → Open Codeplug to select another file. System alias files are read
+from the configured `Codeplug.System.AliasPath` (whose current default is
+`./alias.yml`) and are not silently relocated. Debug Logs are a bounded
+in-memory buffer; use Save to persist a selected snapshot. See
+`dvmconsole/Docs/Porting/macOS Feature Matrix.md` for implemented areas,
+host-dependent verification and known limitations.
 
 Please note that while x64 CPU types are supported, the dvmvocoder library must be compiled separately for that architecture.
 

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 #nullable enable
 using System;
+using System.Runtime.InteropServices;
 
 namespace DvmConsole.Avalonia.ViewModels
 {
@@ -39,6 +40,12 @@ namespace DvmConsole.Avalonia.ViewModels
         private const string RepositoryLink = "https://github.com/RdWing/dvmconsole";
 
         /// <summary>
+        /// The documentation tree published with the upstream release line.
+        /// </summary>
+        public const string DocumentationLink =
+            "https://github.com/DVMProject/dvmconsole/tree/r01a02_dev/dvmconsole/Docs";
+
+        /// <summary>
         /// Creates the view model from the assembly version and the
         /// informational version (e.g. "R01A02+2919e2e...").
         /// </summary>
@@ -46,12 +53,19 @@ namespace DvmConsole.Avalonia.ViewModels
             string productName,
             string productSubtitle,
             Version? assemblyVersion,
-            string? informationalVersion = null)
+            string? informationalVersion = null,
+            string? nativeReadiness = null)
         {
             ProductName = productName;
             ProductSubtitle = productSubtitle;
             ReleaseVersion = FormatReleaseVersion(assemblyVersion);
             ShortHash = ExtractShortHash(informationalVersion, ReleaseVersion);
+            RuntimeLine = $"{RuntimeInformation.FrameworkDescription} · "
+                + $"{RuntimeInformation.OSDescription} · "
+                + $"{RuntimeInformation.ProcessArchitecture}";
+            NativeReadinessLine = string.IsNullOrWhiteSpace(nativeReadiness)
+                ? "Not checked"
+                : nativeReadiness;
         }
 
         /// <summary>
@@ -87,6 +101,18 @@ namespace DvmConsole.Avalonia.ViewModels
         public string ShortHash { get; }
 
         /// <summary>
+        /// The managed runtime, operating system and process architecture
+        /// reported by the packaged process.
+        /// </summary>
+        public string RuntimeLine { get; }
+
+        /// <summary>
+        /// Startup native-vocoder readiness, or "Not checked" when the
+        /// view-model is constructed outside the application composition root.
+        /// </summary>
+        public string NativeReadinessLine { get; }
+
+        /// <summary>
         /// The combined version line, e.g. "R01A02 (abcdef1)".
         /// </summary>
         public string VersionLine => $"{ReleaseVersion} ({ShortHash})";
@@ -105,6 +131,11 @@ namespace DvmConsole.Avalonia.ViewModels
         /// The source repository URL.
         /// </summary>
         public string RepositoryUrl => RepositoryLink;
+
+        /// <summary>
+        /// The external documentation URL used by packaged builds.
+        /// </summary>
+        public string DocumentationUrl => DocumentationLink;
 
         /// <summary>
         /// Formats the RxxAyy release from the assembly version (WPF

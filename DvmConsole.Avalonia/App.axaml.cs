@@ -21,6 +21,7 @@ using DvmConsole.Platform.Hotkeys;
 using DvmConsole.Platform.Hotkeys.Mac;
 using DvmConsole.Platform.Native;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 
 namespace DvmConsole.Avalonia
@@ -295,7 +296,8 @@ namespace DvmConsole.Avalonia
                 var aboutItem = new NativeMenuItem("About");
                 aboutItem.Click += (_, _) =>
                 {
-                    var about = new AboutWindow();
+                    string? nativeReadiness = (mainWindow.DataContext as MainWindowViewModel)?.VocoderStatus;
+                    var about = new AboutWindow(nativeReadiness);
                     about.ShowDialog(mainWindow);
                 };
 
@@ -304,6 +306,7 @@ namespace DvmConsole.Avalonia
                 NativeMenuItem groupsItem = CreatePatchGroupsMenuItem(mainWindow);
                 NativeMenuItem tonesItem = CreateAlertToneManagerMenuItem(mainWindow);
                 NativeMenuItem debugLogItem = CreateDebugLogMenuItem(mainWindow);
+                NativeMenuItem documentationItem = CreateDocumentationMenuItem();
 
                 NativeMenuItem? fileItem = menu.Items
                     .OfType<NativeMenuItem>()
@@ -353,6 +356,13 @@ namespace DvmConsole.Avalonia
                         && string.Equals(header, "Debug Logs", StringComparison.Ordinal)))
                 {
                     helpMenu.Items.Add(debugLogItem);
+                }
+                if (helpItem.Menu is { } documentationMenu
+                    && !documentationMenu.Items.OfType<NativeMenuItem>().Any(item =>
+                        item.Header is string header
+                        && string.Equals(header, "Documentation", StringComparison.Ordinal)))
+                {
+                    documentationMenu.Items.Add(documentationItem);
                 }
                 if (appItem?.Menu is { } appMenu && appMenu.Items.Count > 0)
                 {
@@ -492,6 +502,34 @@ namespace DvmConsole.Avalonia
             };
             item.Click += (_, _) => mainWindow?.OpenDebugLog();
             return item;
+        }
+
+        /// <summary>
+        /// Creates the native Help → Documentation entry. Packaged builds use
+        /// the host browser rather than assuming the repository checkout is
+        /// present beside the application bundle.
+        /// </summary>
+        internal static NativeMenuItem CreateDocumentationMenuItem()
+        {
+            var item = new NativeMenuItem("Documentation");
+            item.Click += (_, _) => OpenExternalUrl(AboutWindowViewModel.DocumentationLink);
+            return item;
+        }
+
+        private static void OpenExternalUrl(string url)
+        {
+            try
+            {
+                Process.Start(new ProcessStartInfo
+                {
+                    FileName = url,
+                    UseShellExecute = true,
+                });
+            }
+            catch
+            {
+                // A missing host browser must not crash the application.
+            }
         }
 
         private static IEnumerable<string> GetDiagnosticSensitiveValues(Codeplug? codeplug)

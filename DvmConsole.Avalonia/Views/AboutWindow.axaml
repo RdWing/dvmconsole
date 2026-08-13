@@ -40,6 +40,12 @@
                            FontWeight="SemiBold" />
                 <TextBlock Text="{Binding VersionLine}"
                            FontFamily="Inter" />
+                <TextBlock Text="{Binding RuntimeLine}"
+                           FontFamily="Inter"
+                           TextWrapping="Wrap" />
+                <TextBlock Text="{Binding NativeReadinessLine}"
+                           FontFamily="Inter"
+                           TextWrapping="Wrap" />
                 <Rectangle Height="1"
                            Fill="#24373A" />
                 <TextBlock Text="License"
@@ -59,6 +65,8 @@
                     HorizontalAlignment="Right">
             <Button Content="Repository"
                     Click="Repository_OnClick" />
+            <Button Content="Documentation"
+                    Click="Documentation_OnClick" />
             <Button Content="Close"
                     Click="Close_OnClick" />
         </StackPanel>

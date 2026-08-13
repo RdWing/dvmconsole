@@ -18,23 +18,29 @@ namespace DvmConsole.Avalonia.Views
     public partial class AboutWindow : Window
     {
         public AboutWindow()
+            : this(null)
+        {
+        }
+
+        public AboutWindow(string? nativeReadiness)
         {
             InitializeComponent();
-            DataContext = CreateViewModel();
+            DataContext = CreateViewModel(nativeReadiness);
         }
 
         /// <summary>
         /// Builds the about view model from the executing assembly
         /// (WPF AboutWindow.LoadVersionInfo parity).
         /// </summary>
-        private static AboutWindowViewModel CreateViewModel()
+        private static AboutWindowViewModel CreateViewModel(string? nativeReadiness)
         {
             Assembly assembly = Assembly.GetExecutingAssembly();
             return new AboutWindowViewModel(
                 "Digital Voice Modem",
                 "Desktop Dispatch Console",
                 assembly.GetName().Version,
-                assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion);
+                assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion,
+                nativeReadiness);
         }
 
         private void License_OnClick(object? sender, RoutedEventArgs e)
@@ -50,6 +56,14 @@ namespace DvmConsole.Avalonia.Views
             if (DataContext is AboutWindowViewModel viewModel)
             {
                 OpenUrl(viewModel.RepositoryUrl);
+            }
+        }
+
+        private void Documentation_OnClick(object? sender, RoutedEventArgs e)
+        {
+            if (DataContext is AboutWindowViewModel viewModel)
+            {
+                OpenUrl(viewModel.DocumentationUrl);
             }
         }
 

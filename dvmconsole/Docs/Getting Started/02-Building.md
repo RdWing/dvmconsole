@@ -1,6 +1,8 @@
 # Building
 
-This page explains how to build the Digital Voice Modem Desktop Dispatch Console from source.
+This page explains how to build the Digital Voice Modem Desktop Dispatch
+Console from source. The original Windows client is WPF; the macOS desktop
+client is the Avalonia shell in `DvmConsole.Avalonia`.
 
 Most developers should use Visual Studio with the .NET desktop workload.
 
@@ -22,7 +24,13 @@ Git is required to clone the repository and submodules.
 
 ## Windows
 
-The console is a WPF application and is intended to build and run on Windows.
+The WPF console is intended to build and run on Windows.
+
+## macOS Avalonia prerequisites
+
+Install the .NET 8 SDK, Xcode Command Line Tools and Git. The native vocoder
+build additionally needs CMake. macOS packaging supports Apple Silicon
+(`osx-arm64`) and Intel/Rosetta (`osx-x64`).
 
 ---
 
@@ -79,6 +87,64 @@ The app targets .NET for Windows and includes WPF UI resources, audio assets, an
 
 ---
 
+# Build the macOS Avalonia client
+
+Run these commands from the repository root on macOS:
+
+```bash
+dotnet publish DvmConsole.Avalonia/DvmConsole.Avalonia.csproj \
+  -c Release -r osx-arm64 --self-contained
+
+packaging/macos/build-app.sh \
+  -p DvmConsole.Avalonia/bin/Release/net8.0/osx-arm64/publish \
+  -o dist/DvmConsole.app
+```
+
+For Intel or Rosetta, replace `osx-arm64` with `osx-x64`. To include the native
+vocoder, build it first and pass the resulting dylib:
+
+```bash
+packaging/macos/build-vocoder.sh
+packaging/macos/build-app.sh \
+  -p DvmConsole.Avalonia/bin/Release/net8.0/osx-arm64/publish \
+  -o dist/DvmConsole.app \
+  -v artifacts/vocoder/osx-arm64/libvocoder.dylib
+```
+
+`build-app.sh` creates an unsigned, unnotarized development `.app`. It does
+not sign, notarize or download the vocoder. See `packaging/macos/README.md`
+for the full option and verification reference.
+
+## macOS permissions and runtime paths
+
+At runtime, grant **Microphone** permission when macOS asks for audio capture.
+The global PTT hotkey requires **Accessibility** and **Input Monitoring** in
+System Settings > Privacy & Security. The app reports permission-required and
+does not bypass TCC. A clean-account permission transition still requires
+macOS host validation; Linux builds cannot prove it.
+
+The default application-data root for `UserSettings.json` is:
+
+```text
+~/Library/Application Support/DVMProject/dvmconsole/
+```
+
+Startup first checks `<application-data>/codeplug.yml`. If it is absent, the
+current shell falls back to `Environment.CurrentDirectory/configs/codeplug.yml`;
+use File → Open Codeplug for an explicit packaged-app path. System alias files
+are loaded from the configured `Codeplug.System.AliasPath` (default `./alias.yml`)
+and are not automatically remapped into Application Support. Debug Logs are a
+bounded in-memory `LogBuffer`; Save writes a user-selected snapshot. TAR
+recordings default below the user's Documents folder. A fully self-contained
+packaged deployment must therefore provide explicit codeplug/alias paths rather
+than assuming the repository checkout is present.
+
+The app's Help menu opens the published documentation in the host browser;
+the bundle does not embed a Markdown renderer. The About dialog reports the
+release/hash, runtime/architecture and native-vocoder readiness.
+
+---
+
 # Run
 
 Run from Visual Studio with:
@@ -105,13 +171,16 @@ dvmconsole\bin\x64\Debug\net8.0-windows7.0\
 
 # Documentation Files
 
-The built-in documentation viewer reads markdown files from:
+The WPF documentation viewer reads markdown files from:
 
 ```
 dvmconsole\Docs
 ```
 
-The project file copies these docs into the build output. If new markdown files are added, make sure they are included as content in the project file so they appear in the in-app Documentation window.
+The Avalonia packaged shell uses the external documentation opener, so it does
+not require the repository's Markdown files at runtime. Keep new documentation
+tracked in this tree and update the macOS feature matrix when a parity gate
+changes the operator surface.
 
 ---
 
