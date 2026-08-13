@@ -100,18 +100,21 @@ namespace DvmConsole.Avalonia
         /// diagnostic on failure (which also keeps its existing debug
         /// output sink). The check itself never throws.
         /// </summary>
-        internal static VocoderReadinessResult CheckVocoderReadiness()
+        internal static VocoderReadinessResult CheckVocoderReadiness(
+            DiagnosticLogSink? diagnosticSink = null)
         {
             var result = new VocoderReadiness(new NativeLibraryProbe()).Check();
 
             if (result.IsReady)
             {
                 System.Console.WriteLine("libvocoder ready");
+                diagnosticSink?.Write("libvocoder ready");
             }
             else if (result.Diagnostic is { } diagnostic)
             {
                 System.Diagnostics.Debug.WriteLine(diagnostic);
                 System.Console.WriteLine(diagnostic);
+                diagnosticSink?.Write(diagnostic);
             }
 
             System.Console.Out.Flush();
@@ -300,6 +303,7 @@ namespace DvmConsole.Avalonia
                 NativeMenuItem tarViewerItem = CreateTarViewerMenuItem(mainWindow);
                 NativeMenuItem groupsItem = CreatePatchGroupsMenuItem(mainWindow);
                 NativeMenuItem tonesItem = CreateAlertToneManagerMenuItem(mainWindow);
+                NativeMenuItem debugLogItem = CreateDebugLogMenuItem(mainWindow);
 
                 NativeMenuItem? fileItem = menu.Items
                     .OfType<NativeMenuItem>()
@@ -329,6 +333,26 @@ namespace DvmConsole.Avalonia
                     settingsMenu.Items.Insert(0, groupsItem);
                     settingsMenu.Items.Insert(1, tonesItem);
                     settingsMenu.Items.Insert(2, CreateSettingsTransferMenuItem(mainWindow));
+                }
+
+                NativeMenuItem? helpItem = menu.Items
+                    .OfType<NativeMenuItem>()
+                    .FirstOrDefault(item => item.Header is string header
+                        && string.Equals(header, "Help", StringComparison.Ordinal));
+                if (helpItem is null)
+                {
+                    helpItem = new NativeMenuItem("Help")
+                    {
+                        Menu = new NativeMenu(),
+                    };
+                    menu.Items.Add(helpItem);
+                }
+                if (helpItem.Menu is { } helpMenu
+                    && !helpMenu.Items.OfType<NativeMenuItem>().Any(item =>
+                        item.Header is string header
+                        && string.Equals(header, "Debug Logs", StringComparison.Ordinal)))
+                {
+                    helpMenu.Items.Add(debugLogItem);
                 }
                 if (appItem?.Menu is { } appMenu && appMenu.Items.Count > 0)
                 {
@@ -456,12 +480,54 @@ namespace DvmConsole.Avalonia
             return item;
         }
 
+        /// <summary>
+        /// Creates the native Help → Debug Logs entry. Native menu events are
+        /// composed here because they are not XAML-bindable on this target.
+        /// </summary>
+        internal static NativeMenuItem CreateDebugLogMenuItem(MainWindow? mainWindow)
+        {
+            var item = new NativeMenuItem("Debug Logs")
+            {
+                IsEnabled = mainWindow is not null,
+            };
+            item.Click += (_, _) => mainWindow?.OpenDebugLog();
+            return item;
+        }
+
+        private static IEnumerable<string> GetDiagnosticSensitiveValues(Codeplug? codeplug)
+        {
+            foreach (Codeplug.System system in codeplug?.Systems ?? new List<Codeplug.System>())
+            {
+                yield return system.Password;
+                yield return system.PresharedKey;
+            }
+
+            foreach (Codeplug.Zone zone in codeplug?.Zones ?? new List<Codeplug.Zone>())
+            {
+                foreach (Codeplug.WebStream stream in zone.WebStreams ?? new List<Codeplug.WebStream>())
+                {
+                    yield return stream.AuthPassword;
+                }
+            }
+        }
+
+        private static DiagnosticLogSink CreateDiagnosticLogSink(
+            Codeplug? codeplug,
+            LogBuffer? buffer = null)
+        {
+            return new DiagnosticLogSink(
+                buffer ?? new LogBuffer(),
+                GetDiagnosticSensitiveValues(codeplug));
+        }
+
         private static MainWindow CreateComposedMainWindow(
             IClassicDesktopStyleApplicationLifetime desktop,
             Codeplug? codeplug,
             string codeplugPath,
-            bool deferRuntimeActivation = false)
+            bool deferRuntimeActivation = false,
+            LogBuffer? diagnosticBuffer = null)
         {
+            var diagnosticSink = CreateDiagnosticLogSink(codeplug, diagnosticBuffer);
             var catalog = CreateAudioDeviceCatalog();
             var streams = catalog is MacAudioDeviceCatalog macCatalog
                 ? new MacAudioStreamFactory(macCatalog)
@@ -504,7 +570,7 @@ namespace DvmConsole.Avalonia
             }
 
             MacBundleLibraryResolver.Register(typeof(NativeLibraryProbe).Assembly);
-            var vocoderStatus = CheckVocoderReadiness();
+            var vocoderStatus = CheckVocoderReadiness(diagnosticSink);
             var callHistory = codeplug is null
                 ? null
                 : CreateCallHistoryStore(codeplug);
@@ -513,6 +579,7 @@ namespace DvmConsole.Avalonia
                 ? new LibVocoderVoiceCodec(new LibVocoderNative())
                 : null;
             var fnecoreTransportFactory = new FnecoreTransportFactory();
+            fnecoreTransportFactory.DiagnosticWriter = diagnosticSink.Write;
 
             var mainWindow = new MainWindow(
                 catalog,
@@ -545,6 +612,7 @@ namespace DvmConsole.Avalonia
             mainWindow.AttachAlertSettingsPersistence(alertPersistence);
             mainWindow.AttachAlertTonePreview(alertWaveFileInspector, alertWaveFilePlayer);
             mainWindow.AttachSettingsTransfer(settingsTransferService);
+            mainWindow.AttachDiagnosticLogSink(diagnosticSink);
             mainWindow.FileDialogService =
                 new AvaloniaFileDialogService(mainWindow.StorageProvider);
             mainWindow.TarFileRevealService = new DesktopFileRevealService();
@@ -555,7 +623,8 @@ namespace DvmConsole.Avalonia
                         desktop,
                         nextCodeplug,
                         nextPath,
-                        deferRuntimeActivation: true),
+                        deferRuntimeActivation: true,
+                        diagnosticSink.Buffer),
                 async (current, candidate) =>
                 {
                     await current.DisposeRuntimeAsync().ConfigureAwait(false);
@@ -588,19 +657,23 @@ namespace DvmConsole.Avalonia
             if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
             {
                 var defaultCodeplugPath = ResolveDefaultCodeplugPath(new DefaultFileSystemPaths());
+                var diagnosticBuffer = new LogBuffer();
+                using var startupDiagnosticSink = new DiagnosticLogSink(diagnosticBuffer);
                 var loadResult = CodeplugLoader.LoadFromFile(defaultCodeplugPath);
                 if (!loadResult.Succeeded)
                 {
-                    System.Console.WriteLine(
-                        "codeplug unavailable: "
-                        + (loadResult.ErrorMessage ?? "load failed"));
+                    string diagnostic = "codeplug unavailable: "
+                        + (loadResult.ErrorMessage ?? "load failed");
+                    startupDiagnosticSink.Write(diagnostic);
+                    System.Console.WriteLine(diagnostic);
                     System.Console.Out.Flush();
                 }
 
                 var mainWindow = CreateComposedMainWindow(
                     desktop,
                     loadResult.Codeplug,
-                    defaultCodeplugPath);
+                    defaultCodeplugPath,
+                    diagnosticBuffer: diagnosticBuffer);
                 desktop.MainWindow = mainWindow;
                 mainWindow.Show();
 

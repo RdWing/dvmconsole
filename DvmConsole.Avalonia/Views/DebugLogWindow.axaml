@@ -1,0 +1,81 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:DvmConsole.Avalonia.ViewModels"
+        x:Class="DvmConsole.Avalonia.Views.DebugLogWindow"
+        x:ClassModifier="internal"
+        x:DataType="vm:DebugLogViewModel"
+        Title="Debug Logs"
+        Width="900"
+        Height="560"
+        MinWidth="720"
+        MinHeight="420"
+        ShowInTaskbar="False"
+        WindowStartupLocation="CenterOwner"
+        Background="#0B1114"
+        Foreground="#EFF7F5">
+    <Window.Styles>
+        <Style Selector="TextBlock.muted">
+            <Setter Property="Foreground" Value="#8EA3A3" />
+        </Style>
+        <Style Selector="TextBlock.status">
+            <Setter Property="Foreground" Value="#8EA3A3" />
+        </Style>
+        <Style Selector="Button.action">
+            <Setter Property="Padding" Value="12,8" />
+            <Setter Property="Background" Value="#1A262B" />
+            <Setter Property="BorderBrush" Value="#2A4548" />
+            <Setter Property="Foreground" Value="#EFF7F5" />
+        </Style>
+    </Window.Styles>
+
+    <Grid Margin="22" RowDefinitions="Auto,14,*,14,Auto">
+        <Grid Grid.Row="0" ColumnDefinitions="*,Auto" ColumnSpacing="12">
+            <StackPanel Spacing="4">
+                <TextBlock FontSize="11"
+                           FontWeight="Bold"
+                           Foreground="#5FE1D2"
+                           Text="DIAGNOSTICS // LIVE" />
+                <TextBlock FontSize="24"
+                           FontWeight="Bold"
+                           Text="Debug Logs" />
+                <TextBlock Classes="muted"
+                           Text="The bounded recent-log view contains up to 500 rendered diagnostic lines." />
+            </StackPanel>
+            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Bottom">
+                <Button Classes="action" Content="Copy" Click="Copy_Click" />
+                <Button Classes="action" Content="Save" Click="Save_Click" />
+                <Button Classes="action" Content="Clear" Click="Clear_Click" />
+            </StackPanel>
+        </Grid>
+
+        <Border Grid.Row="2"
+                Padding="1"
+                CornerRadius="8"
+                Background="#111B1F"
+                BorderBrush="#24373A"
+                BorderThickness="1">
+            <ScrollViewer Focusable="False"
+                          HorizontalScrollBarVisibility="Auto"
+                          VerticalScrollBarVisibility="Auto">
+                <ItemsControl ItemsSource="{Binding Lines}"
+                              Focusable="False"
+                              Background="#111B1F"
+                              Padding="12"
+                              FontFamily="Consolas"
+                              FontSize="12" />
+            </ScrollViewer>
+        </Border>
+
+        <Grid Grid.Row="4" ColumnDefinitions="*,Auto" ColumnSpacing="12">
+            <TextBlock x:Name="StatusTextBlock"
+                       Classes="status"
+                       VerticalAlignment="Center"
+                       Text="Ready"
+                       TextWrapping="Wrap" />
+            <Button Grid.Column="1"
+                    Classes="action"
+                    Content="Close"
+                    Click="Close_Click" />
+        </Grid>
+    </Grid>
+</Window>

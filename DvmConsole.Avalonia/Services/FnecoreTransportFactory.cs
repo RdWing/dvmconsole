@@ -5,6 +5,7 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using dvmconsole;
 using DvmConsole.Core.Networking;
+using fnecore;
 
 namespace DvmConsole.Avalonia.Services
 {
@@ -38,6 +39,25 @@ namespace DvmConsole.Avalonia.Services
         /// </summary>
         public Action<FnecorePeerAdapter>? OnCreated { get; set; }
 
+        /// <summary>
+        /// Optional FNE logger callback copied onto every adapter before it
+        /// is published through <see cref="OnCreated"/>. The callback is
+        /// owned by the shell and may redact secrets at its boundary.
+        /// </summary>
+        public Action<LogLevel, string>? DiagnosticWriter { get; set; }
+
+        /// <summary>
+        /// Detaches the shell-owned logger from this factory and its adapters.
+        /// </summary>
+        public void ClearDiagnosticWriter()
+        {
+            DiagnosticWriter = null;
+            foreach (FnecorePeerAdapter adapter in adapters.Values)
+            {
+                adapter.ClearDiagnosticWriter();
+            }
+        }
+
         /// <inheritdoc />
         public IFneTransport Create(Codeplug.System system)
         {
@@ -52,6 +72,11 @@ namespace DvmConsole.Avalonia.Services
             }
 
             var adapter = new FnecorePeerAdapter(system);
+            if (DiagnosticWriter is { } diagnosticWriter)
+            {
+                adapter.SetDiagnosticWriter(diagnosticWriter);
+            }
+
             adapters[system.Name] = adapter;
             OnCreated?.Invoke(adapter);
             return adapter;

@@ -181,6 +181,8 @@ namespace DvmConsole.Avalonia
         private AlertSettingsPersistence? alertSettingsPersistence;
         private SettingsTransferService? settingsTransferService;
         private SettingsTransferWindow? settingsTransferWindow;
+        private DiagnosticLogSink? diagnosticLogSink;
+        private DebugLogWindow? debugLogWindow;
         private IAudioWaveFileInspector? alertTonePreviewInspector;
         private IAudioWaveFilePlayer? alertTonePreviewPlayer;
         private readonly AudioSettingsPersistence? audioSettingsPersistence;
@@ -902,9 +904,19 @@ namespace DvmConsole.Avalonia
         }
 
         /// <summary>
-        /// Attaches the settings-transfer service bound to the same settings
-        /// file used by every section adapter in the composition root.
+        /// Attaches the app-lifetime diagnostic sink after construction so
+        /// legacy constructor shapes remain unchanged. The sink is shared by
+        /// the FNE factory, audio router, and debug-log viewer.
         /// </summary>
+        internal void AttachDiagnosticLogSink(DiagnosticLogSink sink)
+        {
+            diagnosticLogSink ??= sink ?? throw new ArgumentNullException(nameof(sink));
+            if (talkgroupAudioRouter is not null)
+            {
+                talkgroupAudioRouter.DiagnosticWriter = diagnosticLogSink.Write;
+            }
+        }
+
         public void AttachSettingsTransfer(SettingsTransferService service)
         {
             ArgumentNullException.ThrowIfNull(service);
@@ -1203,6 +1215,34 @@ namespace DvmConsole.Avalonia
                 }
             };
             _ = window.ShowDialog(this);
+        }
+
+        /// <summary>
+        /// Opens one modeless debug-log viewer over the app-lifetime buffer.
+        /// Re-entry activates the existing window instead of creating a
+        /// second subscription to the shared buffer.
+        /// </summary>
+        internal void OpenDebugLog()
+        {
+            if (debugLogWindow is { } existing)
+            {
+                existing.Activate();
+                return;
+            }
+
+            if (diagnosticLogSink is not { } sink)
+                return;
+
+            var window = new DebugLogWindow(
+                new DebugLogViewModel(sink.Buffer),
+                FileDialogService);
+            debugLogWindow = window;
+            window.Closed += (_, _) =>
+            {
+                if (ReferenceEquals(debugLogWindow, window))
+                    debugLogWindow = null;
+            };
+            window.Show(this);
         }
 
         private async Task ReloadCurrentRuntimeAsync()
@@ -2197,6 +2237,16 @@ namespace DvmConsole.Avalonia
             }
             finally
             {
+                debugLogWindow?.Close();
+                debugLogWindow = null;
+
+                if (ownsRuntimeServices && diagnosticLogSink is { } diagnosticSink)
+                {
+                    fnecoreTransportFactory?.ClearDiagnosticWriter();
+                    diagnosticSink.Dispose();
+                    diagnosticLogSink = null;
+                }
+
                 if (ownsRuntimeServices && hotkeys is not null)
                 {
                     hotkeys.Dispose();

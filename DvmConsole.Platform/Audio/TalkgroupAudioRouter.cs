@@ -213,6 +213,13 @@ namespace DvmConsole.Platform.Audio
         private bool _captureRestartInProgress;
 
         /// <summary>
+        /// Optional diagnostic callback supplied by the portable shell. The
+        /// Platform project remains independent of Core and keeps its existing
+        /// debugger sink when no callback is composed.
+        /// </summary>
+        public Action<string>? DiagnosticWriter { get; set; }
+
+        /// <summary>
         /// One-shot retry armed when a capture is lost again inside the
         /// throttle window (the replug burst can exhaust the HAL events).
         /// Guarded by <see cref="_transmitGate"/>; nulled by its own
@@ -506,7 +513,7 @@ namespace DvmConsole.Platform.Audio
                         // observer boundary below must still run when the
                         // selected output is unavailable; retry monitor
                         // creation on the next received frame.
-                        System.Diagnostics.Debug.WriteLine(
+                        WriteDiagnostic(
                             $"Talkgroup monitor unavailable for {talkgroupKey}; observing without playback: {exception.Message}");
                     }
 
@@ -563,7 +570,7 @@ namespace DvmConsole.Platform.Audio
                     {
                         // Observation is additive; a TAR/patch subscriber
                         // must never break receive routing or local audio.
-                        System.Diagnostics.Debug.WriteLine(
+                        WriteDiagnostic(
                             $"Decoded PCM observer failed for {talkgroupKey}: {exception.Message}");
                     }
 
@@ -710,7 +717,7 @@ namespace DvmConsole.Platform.Audio
                     }
                     catch (AudioDeviceException exception)
                     {
-                        System.Diagnostics.Debug.WriteLine(
+                        WriteDiagnostic(
                             $"PTT local monitor unavailable; transmitting without loopback: {exception.Message}");
                         monitor = null;
                     }
@@ -881,7 +888,7 @@ namespace DvmConsole.Platform.Audio
             }
             catch (Exception exception)
             {
-                System.Diagnostics.Debug.WriteLine(
+                WriteDiagnostic(
                     $"PTT capture restart unavailable; waiting for the next device change: {exception}");
                 return false;
             }
@@ -1017,7 +1024,7 @@ namespace DvmConsole.Platform.Audio
             }
             catch (Exception exception)
             {
-                System.Diagnostics.Debug.WriteLine(
+                WriteDiagnostic(
                     $"Local PCM playback unavailable: {exception.Message}");
             }
             finally
@@ -1030,7 +1037,7 @@ namespace DvmConsole.Platform.Audio
                     }
                     catch (Exception exception)
                     {
-                        System.Diagnostics.Debug.WriteLine(
+                        WriteDiagnostic(
                             $"Local PCM output stop failed: {exception.Message}");
                     }
 
@@ -1042,7 +1049,7 @@ namespace DvmConsole.Platform.Audio
                         }
                         catch (Exception exception)
                         {
-                            System.Diagnostics.Debug.WriteLine(
+                            WriteDiagnostic(
                                 $"Local PCM output dispose failed: {exception.Message}");
                         }
                     }
@@ -1472,7 +1479,7 @@ namespace DvmConsole.Platform.Audio
                 }
                 catch (Exception exception)
                 {
-                    System.Diagnostics.Debug.WriteLine(
+                    WriteDiagnostic(
                         $"Transmitted PCM observer failed for {entry.Target.SystemName}: {exception.Message}");
                 }
 
@@ -1490,6 +1497,24 @@ namespace DvmConsole.Platform.Audio
             }
 
             return Task.CompletedTask;
+        }
+
+        private void WriteDiagnostic(string message)
+        {
+            try
+            {
+                if (DiagnosticWriter is { } writer)
+                {
+                    writer(message);
+                    return;
+                }
+            }
+            catch
+            {
+                // Diagnostics must never break the audio path.
+            }
+
+            System.Diagnostics.Debug.WriteLine(message);
         }
 
         /// <summary>

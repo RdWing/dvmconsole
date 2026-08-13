@@ -163,6 +163,25 @@ namespace DvmConsole.Avalonia.Services
         }
 
         /// <summary>
+        /// Replaces fnecore's logger for this peer. The callback is installed
+        /// before the adapter is published by the transport factory, so all
+        /// subsequent FNE diagnostics use the shell-owned sink.
+        /// </summary>
+        public void SetDiagnosticWriter(Action<LogLevel, string> writer)
+        {
+            ArgumentNullException.ThrowIfNull(writer);
+            fne.Logger = writer;
+        }
+
+        /// <summary>
+        /// Detaches the shell-owned logger before runtime teardown.
+        /// </summary>
+        public void ClearDiagnosticWriter()
+        {
+            fne.Logger = (_, _) => { };
+        }
+
+        /// <summary>
         /// Builds the <see cref="FnePeer"/> exactly like WPF
         /// PeerSystem.Create (PeerSystem.cs:52-104): address/port from
         /// the system (IP literal or DNS-resolved hostname), preshared
@@ -312,6 +331,7 @@ namespace DvmConsole.Avalonia.Services
             }
 
             disposed = true;
+            ClearDiagnosticWriter();
 
             background(() =>
             {
