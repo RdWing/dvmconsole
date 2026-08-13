@@ -63,6 +63,17 @@ namespace DvmConsole.Platform.Audio
         UnsupportedFormat,
     }
 
+    public enum WebStreamSourceProgressKind
+    {
+        Connecting,
+        Retry,
+        Connected,
+    }
+
+    public sealed record WebStreamSourceProgress(
+        WebStreamSourceProgressKind Kind,
+        int Attempt);
+
     /// <summary>
     /// Terminal state for a web-stream source run. PCM has already been delivered
     /// through the callback when the result reports a failed or cancelled run.
@@ -122,6 +133,12 @@ namespace DvmConsole.Platform.Audio
         public Task<WebStreamSourceResult> StartAsync(
             Action<ReadOnlyMemory<byte>> onPcm,
             CancellationToken cancellationToken)
+            => StartAsync(onPcm, cancellationToken, null);
+
+        public Task<WebStreamSourceResult> StartAsync(
+            Action<ReadOnlyMemory<byte>> onPcm,
+            CancellationToken cancellationToken,
+            Action<WebStreamSourceProgress>? onProgress)
         {
             if (onPcm is null)
                 throw new ArgumentNullException(nameof(onPcm));
@@ -142,12 +159,13 @@ namespace DvmConsole.Platform.Audio
                 _stopRequested = false;
             }
 
-            _ = CompleteRunAsync(onPcm, runCancellation, completion);
+            _ = CompleteRunAsync(onPcm, onProgress, runCancellation, completion);
             return completion.Task;
         }
 
         private async Task CompleteRunAsync(
             Action<ReadOnlyMemory<byte>> onPcm,
+            Action<WebStreamSourceProgress>? onProgress,
             CancellationTokenSource runCancellation,
             TaskCompletionSource<WebStreamSourceResult> completion)
         {
@@ -155,7 +173,7 @@ namespace DvmConsole.Platform.Audio
             Exception? failure = null;
             try
             {
-                result = await RunAsync(onPcm, runCancellation.Token).ConfigureAwait(false);
+                result = await RunAsync(onPcm, onProgress, runCancellation.Token).ConfigureAwait(false);
             }
             catch (Exception exception)
             {
@@ -220,6 +238,7 @@ namespace DvmConsole.Platform.Audio
 
         private async Task<WebStreamSourceResult> RunAsync(
             Action<ReadOnlyMemory<byte>> onPcm,
+            Action<WebStreamSourceProgress>? onProgress,
             CancellationToken cancellationToken)
         {
             string? lastFailure = null;
@@ -231,7 +250,13 @@ namespace DvmConsole.Platform.Audio
 
                 try
                 {
-                    var outcome = await RunAttemptAsync(onPcm, cancellationToken).ConfigureAwait(false);
+                    PublishProgress(onProgress, new WebStreamSourceProgress(
+                        attempt == 1
+                            ? WebStreamSourceProgressKind.Connecting
+                            : WebStreamSourceProgressKind.Retry,
+                        attempt));
+                    var outcome = await RunAttemptAsync(onPcm, onProgress, attempt, cancellationToken)
+                        .ConfigureAwait(false);
                     if (outcome == AttemptOutcome.Completed)
                     {
                         lastFailure = "The stream ended.";
@@ -272,6 +297,8 @@ namespace DvmConsole.Platform.Audio
 
         private async Task<AttemptOutcome> RunAttemptAsync(
             Action<ReadOnlyMemory<byte>> onPcm,
+            Action<WebStreamSourceProgress>? onProgress,
+            int attempt,
             CancellationToken cancellationToken)
         {
             using var request = new HttpRequestMessage(HttpMethod.Get, _options.Url);
@@ -281,6 +308,9 @@ namespace DvmConsole.Platform.Audio
                 HttpCompletionOption.ResponseHeadersRead,
                 cancellationToken).ConfigureAwait(false);
             response.EnsureSuccessStatusCode();
+            PublishProgress(onProgress, new WebStreamSourceProgress(
+                WebStreamSourceProgressKind.Connected,
+                attempt));
 
             await using var responseStream = await response.Content
                 .ReadAsStreamAsync(cancellationToken)
@@ -438,6 +468,20 @@ namespace DvmConsole.Platform.Audio
             => exception is InvalidDataException
                 ? WebStreamSourceFailureReason.UnsupportedFormat
                 : WebStreamSourceFailureReason.Transport;
+
+        private static void PublishProgress(
+            Action<WebStreamSourceProgress>? onProgress,
+            WebStreamSourceProgress progress)
+        {
+            try
+            {
+                onProgress?.Invoke(progress);
+            }
+            catch
+            {
+                // Progress observers must not fault the transport or decoder.
+            }
+        }
 
         private void ThrowIfDisposed()
         {

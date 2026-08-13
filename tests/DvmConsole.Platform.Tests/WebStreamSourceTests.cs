@@ -3,6 +3,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Threading;
@@ -65,6 +66,47 @@ namespace DvmConsole.Platform.Tests
 
             Assert.Equal(WebStreamSourceStopReason.Failed, result.StopReason);
             Assert.Equal(3, handler.Requests.Count);
+        }
+
+        [Fact]
+        public async Task StartAsync_ReportsConnectionProgressForEachAttempt()
+        {
+            var requestNumber = 0;
+            var handler = new ScriptedHandler((_, _) =>
+            {
+                requestNumber++;
+                if (requestNumber < 3)
+                    throw new HttpRequestException("connection failed");
+
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new ByteArrayContent(SampleMp3),
+                };
+            });
+            using var client = new HttpClient(handler);
+            await using var source = new WebStreamSource(
+                new WebStreamSourceOptions(
+                    "https://radio.example.test/feed",
+                    retryDelay: TimeSpan.Zero),
+                client);
+            var progress = new List<WebStreamSourceProgress>();
+
+            var result = await source.StartAsync(
+                _ => { },
+                CancellationToken.None,
+                progress.Add);
+
+            Assert.Equal(WebStreamSourceStopReason.Failed, result.StopReason);
+            Assert.Equal(
+                new[]
+                {
+                    WebStreamSourceProgressKind.Connecting,
+                    WebStreamSourceProgressKind.Retry,
+                    WebStreamSourceProgressKind.Retry,
+                    WebStreamSourceProgressKind.Connected,
+                },
+                progress.Select(item => item.Kind));
+            Assert.Equal(new[] { 1, 2, 3, 3 }, progress.Select(item => item.Attempt));
         }
 
         [Fact]
