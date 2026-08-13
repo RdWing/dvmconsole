@@ -1,13 +1,17 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 #nullable enable
+using System;
 using System.Collections.Generic;
 using System.ComponentModel;
+using System.IO;
+using System.Threading;
 using System.Threading.Tasks;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Threading;
 using dvmconsole;
+using DvmConsole.Avalonia.Audio;
 using DvmConsole.Avalonia.Dialogs;
 using DvmConsole.Avalonia.Hotkeys;
 using DvmConsole.Avalonia.Input;
@@ -15,6 +19,7 @@ using DvmConsole.Avalonia.Persistence;
 using DvmConsole.Avalonia.Services;
 using DvmConsole.Avalonia.ViewModels;
 using DvmConsole.Avalonia.Views;
+using DvmConsole.Core.Configuration;
 using DvmConsole.Core.Networking;
 using DvmConsole.Platform.Audio;
 using DvmConsole.Platform.Audio.Mac;
@@ -37,13 +42,13 @@ namespace DvmConsole.Avalonia
         /// The single 250 ms PTT key-up watchdog timer; null while no
         /// key-state reader was supplied or after the window closes.
         /// </summary>
-        private readonly DispatcherTimer? watchdogTimer = null;
+        private DispatcherTimer? watchdogTimer = null;
 
         /// <summary>
         /// Hourly TAR retention maintenance timer; null when recording is
         /// not composed or after the window closes.
         /// </summary>
-        private readonly DispatcherTimer? tarRetentionTimer = null;
+        private DispatcherTimer? tarRetentionTimer = null;
 
         /// <summary>
         /// Headless FNE connection service composed by this window
@@ -163,6 +168,7 @@ namespace DvmConsole.Avalonia
                     "configs",
                     "codeplug.yml"));
         private readonly IGlobalHotkeyService? hotkeys;
+        private readonly bool ownsRuntimeServices;
         private readonly HotkeyRegistrationCoordinator? hotkeyRegistrationCoordinator;
         private LayoutSettingsPersistence? layoutPersistence;
         private UserSettingsLayoutSection? layoutSection;
@@ -183,6 +189,14 @@ namespace DvmConsole.Avalonia
         private WebStreamShellItemViewModel? draggedWebStream;
         private global::Avalonia.Point webStreamDragStart;
         private WebStreamShellPosition webStreamPositionStart;
+        private readonly object runtimeDisposeGate = new();
+        private Task? runtimeDisposeTask;
+        private Func<Codeplug, string, MainWindow>? createCodeplugWindow;
+        private Func<MainWindow, MainWindow, Task>? installCodeplugWindow;
+        private CodeplugReloadCoordinator? codeplugReloadCoordinator;
+        private string codeplugPath = string.Empty;
+        private string? pendingCodeplugPath;
+        private bool runtimeActivated;
 
         public MainWindow()
             : this(null, null)
@@ -309,11 +323,60 @@ namespace DvmConsole.Avalonia
             TarRecorder? tarRecorder = null,
             IAudioWaveFilePlayer? tarWaveFilePlayer = null,
             TarViewerColumnSettingsPersistence? tarViewerColumnPersistence = null)
+            : this(
+                catalog,
+                hotkeys,
+                keyStateReader,
+                persistence,
+                vocoderStatus,
+                audioStreams,
+                systems,
+                voiceDecoder,
+                voiceEncoder,
+                voiceSender,
+                transportFactory,
+                codeplug,
+                callHistory,
+                aliasResolver,
+                tarPersistence,
+                pttPersistence,
+                tarRecorder,
+                tarWaveFilePlayer,
+                tarViewerColumnPersistence,
+                deferRuntimeActivation: false,
+                ownsRuntimeServices: false)
+        {
+        }
+
+        internal MainWindow(
+            IAudioDeviceCatalog? catalog,
+            IGlobalHotkeyService? hotkeys,
+            IKeyboardKeyStateReader? keyStateReader,
+            AudioSettingsPersistence? persistence,
+            VocoderReadinessResult? vocoderStatus,
+            IAudioStreamFactory? audioStreams,
+            IReadOnlyList<Codeplug.System>? systems,
+            IVoiceFrameDecoder? voiceDecoder,
+            IVoiceFrameEncoder? voiceEncoder,
+            IVoiceTrafficSender? voiceSender,
+            IFneTransportFactory? transportFactory,
+            Codeplug? codeplug,
+            CallHistoryStore? callHistory,
+            AliasResolver? aliasResolver,
+            TarSettingsPersistence? tarPersistence,
+            PttSettingsPersistence? pttPersistence,
+            TarRecorder? tarRecorder,
+            IAudioWaveFilePlayer? tarWaveFilePlayer,
+            TarViewerColumnSettingsPersistence? tarViewerColumnPersistence,
+            bool deferRuntimeActivation,
+            bool ownsRuntimeServices)
         {
             InitializeComponent();
             this.hotkeys = hotkeys;
+            this.ownsRuntimeServices = ownsRuntimeServices;
             audioSettingsPersistence = persistence;
             audioStreamFactory = audioStreams;
+            macAudioDeviceCatalog = catalog as MacAudioDeviceCatalog;
             this.codeplug = codeplug;
             this.tarRecorder = tarRecorder;
             this.tarRecordingCoordinator = tarRecorder is null ? null : new TarRecordingCoordinator(tarRecorder);
@@ -511,14 +574,52 @@ namespace DvmConsole.Avalonia
                             target.TalkgroupId) == true);
                 }
 
-                if (catalog is MacAudioDeviceCatalog macCatalog)
-                {
-                    macAudioDeviceCatalog = macCatalog;
-                    macCatalog.DevicesChanged += OnAudioDevicesChanged;
-                }
             }
 
-            if (tarRecordingCoordinator is { } recordingCoordinator)
+            if (DataContext is MainWindowViewModel viewModelWithSettings
+                && viewModelWithSettings.AudioSettings is { } settings)
+            {
+                settings.PropertyChanged += AudioSettings_PropertyChanged;
+            }
+
+            Closed += OnWindowClosed;
+            this.keyStateReader = keyStateReader;
+
+            if (!deferRuntimeActivation)
+            {
+                ActivateRuntime();
+            }
+        }
+
+        /// <summary>
+        /// Starts the timers, event subscriptions, and restored stream work
+        /// that make a composed window live. Reload candidates are composed
+        /// deferred and activate only after the previous runtime has stopped.
+        /// </summary>
+        internal void ActivateRuntime()
+        {
+            if (runtimeActivated)
+            {
+                return;
+            }
+
+            runtimeActivated = true;
+
+            if (receiveProjection is not null && receiveProjectionTimer is null)
+            {
+                var timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
+                timer.Tick += OnReceiveProjectionTimerTick;
+                timer.Start();
+                receiveProjectionTimer = timer;
+            }
+
+            if (macAudioDeviceCatalog is { } macCatalog)
+            {
+                macCatalog.DevicesChanged += OnAudioDevicesChanged;
+            }
+
+            if (tarRecordingCoordinator is { } recordingCoordinator
+                && tarRetentionTimer is null)
             {
                 recordingCoordinator.RunRetentionMaintenance();
                 var timer = new DispatcherTimer { Interval = TimeSpan.FromHours(1) };
@@ -532,25 +633,25 @@ namespace DvmConsole.Avalonia
                 hotkeys.HotkeyPressed += OnHotkeyPressed;
             }
 
-            if (DataContext is MainWindowViewModel viewModelWithSettings
-                && viewModelWithSettings.AudioSettings is { } settings)
+            if (DataContext is MainWindowViewModel viewModel
+                && viewModel.AudioSettings is { } settings)
             {
-                settings.PropertyChanged += AudioSettings_PropertyChanged;
                 ApplyAudioSelections();
             }
 
-            Closed += OnWindowClosed;
-
-            if (keyStateReader is null)
+            if (keyStateReader is not null && watchdogTimer is null)
             {
-                return;
+                watchdogTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(250) };
+                watchdogTimer.Tick += OnWatchdogTick;
+                watchdogTimer.Start();
             }
 
-            this.keyStateReader = keyStateReader;
-
-            watchdogTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(250) };
-            watchdogTimer.Tick += OnWatchdogTick;
-            watchdogTimer.Start();
+            if (webStreamShell is not null)
+            {
+                _ = ObserveAsync(
+                    webStreamShell.StartRestoredAsync(),
+                    "Web-stream restore startup failed");
+            }
         }
 
         public void AttachPreferencesPersistence(PreferencesSettingsPersistence preferencesPersistence)
@@ -611,6 +712,109 @@ namespace DvmConsole.Avalonia
         {
             ArgumentNullException.ThrowIfNull(sourceFactory);
             webStreamSourceFactory ??= sourceFactory;
+        }
+
+        /// <summary>
+        /// Configures the shell-owned codeplug reload boundary. Candidate
+        /// construction happens after parsing but before this window's runtime
+        /// is stopped; installation is invoked only after awaited teardown.
+        /// </summary>
+        internal void ConfigureCodeplugReload(
+            Func<Codeplug, string, MainWindow> createWindow,
+            Func<MainWindow, MainWindow, Task> installWindow,
+            string initialCodeplugPath)
+        {
+            createCodeplugWindow = createWindow
+                ?? throw new ArgumentNullException(nameof(createWindow));
+            installCodeplugWindow = installWindow
+                ?? throw new ArgumentNullException(nameof(installWindow));
+            codeplugPath = initialCodeplugPath ?? string.Empty;
+
+            MainWindow? candidate = null;
+            codeplugReloadCoordinator = new CodeplugReloadCoordinator(
+                CodeplugLoader.LoadFromFile,
+                DisposeRuntimeAsync,
+                async loadedCodeplug =>
+                {
+                    if (candidate is null)
+                    {
+                        throw new InvalidOperationException(
+                            "Codeplug reload candidate was not prepared.");
+                    }
+
+                    await installCodeplugWindow(this, candidate).ConfigureAwait(false);
+                    candidate = null;
+                },
+                status => SetCodeplugStatus(status),
+                loadedCodeplug =>
+                {
+                    candidate = createCodeplugWindow(
+                        loadedCodeplug,
+                        pendingCodeplugPath ?? codeplugPath);
+                    return Task.CompletedTask;
+                },
+                async () =>
+                {
+                    if (candidate is not null)
+                    {
+                        await candidate.DisposeRuntimeAsync().ConfigureAwait(false);
+                        candidate = null;
+                    }
+                });
+        }
+
+        /// <summary>Opens the platform file picker and reloads one codeplug.</summary>
+        internal async Task OpenCodeplugAsync()
+        {
+            if (codeplugReloadCoordinator is null)
+            {
+                return;
+            }
+
+            string? initialDirectory = string.IsNullOrWhiteSpace(codeplugPath)
+                ? null
+                : Path.GetDirectoryName(codeplugPath);
+            FileDialogResult result = await FileDialogService.OpenFileAsync(
+                new OpenFileRequest(
+                    "Open Codeplug",
+                    new[]
+                    {
+                        new DvmConsole.Platform.Dialogs.FileDialogFilter(
+                            "Codeplug files",
+                            new[] { "*.yml", "*.yaml" }),
+                    },
+                    false,
+                    initialDirectory),
+                CancellationToken.None).ConfigureAwait(true);
+
+            if (result.Cancelled || string.IsNullOrWhiteSpace(result.Selected))
+            {
+                return;
+            }
+
+            string selectedPath = result.Selected;
+            pendingCodeplugPath = selectedPath;
+            try
+            {
+                if (await codeplugReloadCoordinator.ReloadAsync(
+                        selectedPath,
+                        CancellationToken.None).ConfigureAwait(true))
+                {
+                    codeplugPath = selectedPath;
+                }
+            }
+            finally
+            {
+                pendingCodeplugPath = null;
+            }
+        }
+
+        private void SetCodeplugStatus(string status)
+        {
+            if (DataContext is MainWindowViewModel viewModel)
+            {
+                viewModel.CodeplugStatusMessage = status;
+            }
         }
 
         public void AttachLayoutPersistence(LayoutSettingsPersistence layoutPersistence)
@@ -680,9 +884,12 @@ namespace DvmConsole.Avalonia
                 () => viewModel.AudioSettings?.SelectedOutputId ?? AudioDeviceId.Default,
                 action => Dispatcher.UIThread.Post(action));
             viewModel.AttachWebStreams(webStreamShell);
-            _ = ObserveAsync(
-                webStreamShell.StartRestoredAsync(),
-                "Web-stream restore startup failed");
+            if (runtimeActivated)
+            {
+                _ = ObserveAsync(
+                    webStreamShell.StartRestoredAsync(),
+                    "Web-stream restore startup failed");
+            }
         }
 
         public void AttachAlertSettingsPersistence(AlertSettingsPersistence persistence)
@@ -715,10 +922,6 @@ namespace DvmConsole.Avalonia
                 ApplyFneConnectionWarning(system);
             }
 
-            var timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
-            timer.Tick += OnReceiveProjectionTimerTick;
-            timer.Start();
-            receiveProjectionTimer = timer;
             receiveProjection.Reproject();
         }
 
@@ -1830,10 +2033,21 @@ namespace DvmConsole.Avalonia
         /// the shared factory. All disposals are idempotent, so a
         /// repeated close event is harmless.
         /// </summary>
-        private void OnWindowClosed(object? sender, EventArgs e)
+        internal Task DisposeRuntimeAsync()
         {
-            SaveWebStreamSettings();
-            SaveLayoutSettings();
+            lock (runtimeDisposeGate)
+            {
+                runtimeDisposeTask ??= DisposeRuntimeCoreAsync();
+                return runtimeDisposeTask;
+            }
+        }
+
+        private async Task DisposeRuntimeCoreAsync()
+        {
+            try
+            {
+                SaveWebStreamSettings();
+                SaveLayoutSettings();
 
             if (hotkeys is not null)
             {
@@ -1896,18 +2110,35 @@ namespace DvmConsole.Avalonia
                 audioViewModel.ChannelOutputDeviceChanged -= OnChannelOutputDeviceChanged;
             }
 
-            if (talkgroupAudioRouter is { } router)
-            {
-                _ = ObserveAsync(
-                    DisposeWebStreamsThenRouterAsync(router),
-                    "Web-stream/router shutdown failed");
+                if (talkgroupAudioRouter is { } router)
+                {
+                    await DisposeWebStreamsThenRouterAsync(router).ConfigureAwait(false);
+                }
+                else
+                {
+                    await DisposeWebStreamsAsync().ConfigureAwait(false);
+                }
             }
-            else
+            finally
             {
-                _ = ObserveAsync(
-                    DisposeWebStreamsAsync(),
-                    "Web-stream shutdown failed");
+                if (ownsRuntimeServices && hotkeys is not null)
+                {
+                    hotkeys.Dispose();
+                }
+
+                if (ownsRuntimeServices && macAudioDeviceCatalog is not null)
+                {
+                    await macAudioDeviceCatalog.DisposeAsync().ConfigureAwait(false);
+                    macAudioDeviceCatalog = null;
+                }
             }
+        }
+
+        private void OnWindowClosed(object? sender, EventArgs e)
+        {
+            _ = ObserveAsync(
+                DisposeRuntimeAsync(),
+                "Window runtime shutdown failed");
         }
 
         private void SaveWebStreamSettings()
@@ -2068,7 +2299,15 @@ namespace DvmConsole.Avalonia
 
         private void OnAudioDevicesChanged(object? sender, EventArgs e)
         {
-            Dispatcher.UIThread.Post(() => _ = talkgroupAudioRouter?.RequestCaptureRestartAsync());
+            Dispatcher.UIThread.Post(() =>
+            {
+                if (DataContext is MainWindowViewModel viewModel)
+                {
+                    viewModel.AudioSettings?.Refresh();
+                }
+
+                _ = talkgroupAudioRouter?.RequestCaptureRestartAsync();
+            });
         }
 
         private void OnPatchPttRequested(

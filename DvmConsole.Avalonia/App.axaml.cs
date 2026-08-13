@@ -41,7 +41,7 @@ namespace DvmConsole.Avalonia
         /// runtime conditions and degrade to no audio settings rather
         /// than failing the application.
         /// </summary>
-        private static IAudioDeviceCatalog? CreateAudioDeviceCatalog()
+        internal static IAudioDeviceCatalog? CreateAudioDeviceCatalog()
         {
             if (!PlatformInfo.IsMacOS)
             {
@@ -76,7 +76,7 @@ namespace DvmConsole.Avalonia
         /// disposal is handled by a later concrete factory/lifecycle
         /// slice.
         /// </summary>
-        private static IGlobalHotkeyService CreateGlobalHotkeyService()
+        internal static IGlobalHotkeyService CreateGlobalHotkeyService()
             => PlatformInfo.IsMacOS
                 ? new MacGlobalHotkeyService(new CoreGraphicsEventTap(), new MacPermissionProbe())
                 : new UnavailableGlobalHotkeyService();
@@ -87,7 +87,7 @@ namespace DvmConsole.Avalonia
         /// every other host where the watchdog stays dormant. The
         /// application owns the reader for its whole lifetime.
         /// </summary>
-        private static IKeyboardKeyStateReader? CreateKeyStateReader()
+        internal static IKeyboardKeyStateReader? CreateKeyStateReader()
             => PlatformInfo.IsMacOS ? new MacKeyStateReader() : null;
 
         /// <summary>
@@ -100,7 +100,7 @@ namespace DvmConsole.Avalonia
         /// diagnostic on failure (which also keeps its existing debug
         /// output sink). The check itself never throws.
         /// </summary>
-        private static VocoderReadinessResult CheckVocoderReadiness()
+        internal static VocoderReadinessResult CheckVocoderReadiness()
         {
             var result = new VocoderReadiness(new NativeLibraryProbe()).Check();
 
@@ -279,7 +279,7 @@ namespace DvmConsole.Avalonia
         /// shape the item is appended to the top-level menu. Failures
         /// degrade to no menu item, never to a startup crash.
         /// </summary>
-        private static void AddAboutMenuItem(MainWindow mainWindow)
+        internal static void AddAboutMenuItem(MainWindow mainWindow)
         {
             try
             {
@@ -300,6 +300,22 @@ namespace DvmConsole.Avalonia
                 NativeMenuItem tarViewerItem = CreateTarViewerMenuItem(mainWindow);
                 NativeMenuItem groupsItem = CreatePatchGroupsMenuItem(mainWindow);
                 NativeMenuItem tonesItem = CreateAlertToneManagerMenuItem(mainWindow);
+
+                NativeMenuItem? fileItem = menu.Items
+                    .OfType<NativeMenuItem>()
+                    .FirstOrDefault(item => item.Header is string header
+                        && string.Equals(header, "File", StringComparison.Ordinal));
+                if (fileItem?.Menu is { } fileMenu)
+                {
+                    NativeMenuItem? openItem = fileMenu.Items
+                        .OfType<NativeMenuItem>()
+                        .FirstOrDefault(item => item.Header is string header
+                            && string.Equals(header, "Open Codeplug", StringComparison.Ordinal));
+                    if (openItem is not null)
+                    {
+                        openItem.Click += (_, _) => _ = mainWindow.OpenCodeplugAsync();
+                    }
+                }
 
                 NativeMenuItem? appItem = menu.Items
                     .OfType<NativeMenuItem>()
@@ -424,162 +440,155 @@ namespace DvmConsole.Avalonia
             return tones;
         }
 
+        private static MainWindow CreateComposedMainWindow(
+            IClassicDesktopStyleApplicationLifetime desktop,
+            Codeplug? codeplug,
+            string codeplugPath,
+            bool deferRuntimeActivation = false)
+        {
+            var catalog = CreateAudioDeviceCatalog();
+            var streams = catalog is MacAudioDeviceCatalog macCatalog
+                ? new MacAudioStreamFactory(macCatalog)
+                : null;
+            var webStreamSourceFactory = new WebStreamSourceFactory();
+            var hotkeys = CreateGlobalHotkeyService();
+            // One shared settings store backs all section adapters. Each
+            // adapter merges only its own DTO section, preserving unrelated
+            // settings during both startup and codeplug replacement.
+            var fileSystemPaths = new DefaultFileSystemPaths();
+            var settingsStore = new SettingsSectionStore(fileSystemPaths.SettingsFilePath);
+            var persistence = new AudioSettingsPersistence(settingsStore);
+            var tarPersistence = new TarSettingsPersistence(settingsStore);
+            var pttPersistence = new PttSettingsPersistence(settingsStore);
+            var preferencesPersistence = new PreferencesSettingsPersistence(settingsStore);
+            var restorePersistence = new RestoreSettingsPersistence(settingsStore);
+            var layoutPersistence = new LayoutSettingsPersistence(settingsStore);
+            var groupsPersistence = new GroupSettingsPersistence(settingsStore);
+            var alertPersistence = new AlertSettingsPersistence(settingsStore);
+            var tarRecorder = CreateTarRecorder(tarPersistence, fileSystemPaths.DefaultTarRecordingsPath);
+            var tarViewerColumnPersistence =
+                new TarViewerColumnSettingsPersistence(settingsStore);
+            var alertWaveFileInspector = new WaveFileInspector();
+            IAudioWaveFilePlayer? tarWaveFilePlayer = null;
+            IAudioWaveFilePlayer? alertWaveFilePlayer = null;
+            try
+            {
+                tarWaveFilePlayer = streams?.CreateWaveFilePlayer();
+                alertWaveFilePlayer = streams?.CreateWaveFilePlayer();
+            }
+            catch (AudioDeviceException)
+            {
+                // The dashboard reports unavailable audio capabilities.
+            }
+            catch (PlatformNotSupportedException)
+            {
+                // The dashboard reports unavailable audio capabilities.
+            }
+
+            MacBundleLibraryResolver.Register(typeof(NativeLibraryProbe).Assembly);
+            var vocoderStatus = CheckVocoderReadiness();
+            var callHistory = codeplug is null
+                ? null
+                : CreateCallHistoryStore(codeplug);
+            var aliasResolver = BuildAliasResolver(codeplug);
+            LibVocoderVoiceCodec? voiceCodec = vocoderStatus.IsReady
+                ? new LibVocoderVoiceCodec(new LibVocoderNative())
+                : null;
+            var fnecoreTransportFactory = new FnecoreTransportFactory();
+
+            var mainWindow = new MainWindow(
+                catalog,
+                hotkeys,
+                CreateKeyStateReader(),
+                persistence,
+                vocoderStatus,
+                streams,
+                codeplug?.Systems,
+                (IVoiceFrameDecoder?)voiceCodec ?? new NullVoiceFrameDecoder(),
+                (IVoiceFrameEncoder?)voiceCodec ?? new NullVoiceFrameEncoder(),
+                new FnecoreVoiceTrafficSender(fnecoreTransportFactory.ResolveAdapter),
+                fnecoreTransportFactory,
+                codeplug,
+                callHistory,
+                aliasResolver,
+                tarPersistence,
+                pttPersistence,
+                tarRecorder,
+                tarWaveFilePlayer,
+                tarViewerColumnPersistence,
+                deferRuntimeActivation,
+                ownsRuntimeServices: true);
+            mainWindow.AttachWebStreamSourceFactory(webStreamSourceFactory);
+            mainWindow.AttachPreferencesPersistence(preferencesPersistence);
+            mainWindow.AttachGroupsPersistence(groupsPersistence);
+            mainWindow.AttachRestorePersistence(restorePersistence);
+            mainWindow.AttachLayoutPersistence(layoutPersistence);
+            mainWindow.AttachWebStreamPersistence(restorePersistence, layoutPersistence);
+            mainWindow.AttachAlertSettingsPersistence(alertPersistence);
+            mainWindow.AttachAlertTonePreview(alertWaveFileInspector, alertWaveFilePlayer);
+            mainWindow.FileDialogService =
+                new AvaloniaFileDialogService(mainWindow.StorageProvider);
+            mainWindow.TarFileRevealService = new DesktopFileRevealService();
+            mainWindow.TarConfirmationService = new AvaloniaConfirmationService();
+            mainWindow.ConfigureCodeplugReload(
+                (nextCodeplug, nextPath) =>
+                    CreateComposedMainWindow(
+                        desktop,
+                        nextCodeplug,
+                        nextPath,
+                        deferRuntimeActivation: true),
+                async (current, candidate) =>
+                {
+                    await current.DisposeRuntimeAsync().ConfigureAwait(false);
+                    candidate.ActivateRuntime();
+                    candidate.Show();
+                    desktop.MainWindow = candidate;
+                    current.Close();
+                },
+                codeplugPath);
+            AddAboutMenuItem(mainWindow);
+            return mainWindow;
+        }
+
+        private static string ResolveDefaultCodeplugPath(DefaultFileSystemPaths paths)
+        {
+            string platformPath = Path.Combine(
+                paths.ApplicationDataRootPath,
+                "codeplug.yml");
+            string checkoutPath = Path.Combine(
+                Environment.CurrentDirectory,
+                "configs",
+                "codeplug.yml");
+            return File.Exists(platformPath) || !File.Exists(checkoutPath)
+                ? platformPath
+                : checkoutPath;
+        }
+
         public override void OnFrameworkInitializationCompleted()
         {
             if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
             {
-                var catalog = CreateAudioDeviceCatalog();
-                // The catalog is not owned by the factory (MacAudioStreamFactory
-                // catalog-constructor does not dispose it); the MainWindow owns
-                // the factory and disposes the audio pipelines on close.
-                var streams = catalog is MacAudioDeviceCatalog macCatalog
-                    ? new MacAudioStreamFactory(macCatalog)
-                    : null;
-                var webStreamSourceFactory = new WebStreamSourceFactory();
-                var hotkeys = CreateGlobalHotkeyService();
-                // One shared settings store backs both persistence
-                // adapters: the Core store saves only the section it is
-                // asked to update and preserves every unrelated property
-                // value-for-value, so the audio and TAR settings coexist
-                // in the same settings file without clobbering each other.
-                var fileSystemPaths = new DefaultFileSystemPaths();
-                var settingsStore = new SettingsSectionStore(fileSystemPaths.SettingsFilePath);
-                var persistence = new AudioSettingsPersistence(settingsStore);
-                var tarPersistence = new TarSettingsPersistence(settingsStore);
-                var pttPersistence = new PttSettingsPersistence(settingsStore);
-                var preferencesPersistence = new PreferencesSettingsPersistence(settingsStore);
-                var restorePersistence = new RestoreSettingsPersistence(settingsStore);
-                var layoutPersistence = new LayoutSettingsPersistence(settingsStore);
-                var groupsPersistence = new GroupSettingsPersistence(settingsStore);
-                var alertPersistence = new AlertSettingsPersistence(settingsStore);
-                var tarRecorder = CreateTarRecorder(tarPersistence, fileSystemPaths.DefaultTarRecordingsPath);
-                var tarViewerColumnPersistence =
-                    new TarViewerColumnSettingsPersistence(settingsStore);
-                var alertWaveFileInspector = new WaveFileInspector();
-                IAudioWaveFilePlayer? tarWaveFilePlayer = null;
-                IAudioWaveFilePlayer? alertWaveFilePlayer = null;
-                try
-                {
-                    tarWaveFilePlayer = streams?.CreateWaveFilePlayer();
-                    alertWaveFilePlayer = streams?.CreateWaveFilePlayer();
-                }
-                catch (AudioDeviceException)
-                {
-                    // The viewer reports the missing capability in the
-                    // dashboard; startup remains usable on this host.
-                }
-                catch (PlatformNotSupportedException)
-                {
-                    // Same visible degradation for an unavailable host API.
-                }
-                // Packaged macOS .app: register the bundle resolver for
-                // future DllImport-based libvocoder loads in the Platform
-                // assembly. The startup readiness probe maps and loads the
-                // bundle candidate explicitly, since its assembly-aware
-                // TryLoad path does not invoke the DllImportResolver.
-                // No-op on every other host and in un-packaged runs.
-                MacBundleLibraryResolver.Register(typeof(NativeLibraryProbe).Assembly);
-                var vocoderStatus = CheckVocoderReadiness();
-
-                // Load the codeplug from the repo-convention path and
-                // seed the FNE slice with its real systems. A missing or
-                // unreadable codeplug degrades to no systems (the FNE
-                // manager and service stay empty) rather than failing
-                // startup; the diagnostic mirrors the vocoder-readiness
-                // stdout pattern so headless logs observe it. The load
-                // itself never throws.
-                var codeplug = CodeplugLoader.LoadFromFile(
-                    Path.Combine(System.Environment.CurrentDirectory, "configs", "codeplug.yml"));
-                if (!codeplug.Succeeded)
+                var defaultCodeplugPath = ResolveDefaultCodeplugPath(new DefaultFileSystemPaths());
+                var loadResult = CodeplugLoader.LoadFromFile(defaultCodeplugPath);
+                if (!loadResult.Succeeded)
                 {
                     System.Console.WriteLine(
-                        "codeplug unavailable: " + (codeplug.ErrorMessage ?? "load failed"));
+                        "codeplug unavailable: "
+                        + (loadResult.ErrorMessage ?? "load failed"));
                     System.Console.Out.Flush();
                 }
 
-                // Compose the call-history store only when the codeplug
-                // loaded: the store records received calls, resolving
-                // their targets to codeplug channel names. A null
-                // codeplug keeps the slice dormant (a null store, and
-                // the panel shows its muted "not attached" state).
-                var callHistory = codeplug.Codeplug is null
-                    ? null
-                    : CreateCallHistoryStore(codeplug.Codeplug);
-
-                // Load per-system alias files (WPF-parity) and compose
-                // the alias resolver over them so call-history entries
-                // carry the subscriber alias for their (system, source
-                // id). A null codeplug yields a null resolver — no
-                // aliases anywhere; inline aliases survive a missing or
-                // unreadable external alias file. Never throws.
-                var aliasResolver = BuildAliasResolver(codeplug.Codeplug);
-
-                // Compose the real dual-mode libvocoder adapter when the
-                // startup readiness probe found the library; otherwise
-                // keep the null codec pair so the router stays fully
-                // wired while decoding/encoding is inert. The fnecore
-                // traffic sender resolves each transmit target's live
-                // adapter through the transport factory shared with the
-                // FNE slice, so PTT traffic flows once the system's
-                // connection is started.
-                LibVocoderVoiceCodec? voiceCodec = vocoderStatus.IsReady
-                    ? new LibVocoderVoiceCodec(new LibVocoderNative())
-                    : null;
-
-                // The transport factory is shared by the FNE slice and
-                // the voice traffic sender: the connection service
-                // creates adapters through it (registered per system
-                // name) and the sender resolves them at transmit time.
-                var fnecoreTransportFactory = new FnecoreTransportFactory();
-
-                var mainWindow = new MainWindow(
-                    catalog,
-                    hotkeys,
-                    CreateKeyStateReader(),
-                    persistence,
-                    vocoderStatus,
-                    streams,
-                    codeplug.Codeplug?.Systems,
-                    (IVoiceFrameDecoder?)voiceCodec ?? new NullVoiceFrameDecoder(),
-                    (IVoiceFrameEncoder?)voiceCodec ?? new NullVoiceFrameEncoder(),
-                    new FnecoreVoiceTrafficSender(fnecoreTransportFactory.ResolveAdapter),
-                    fnecoreTransportFactory,
-                    codeplug.Codeplug,
-                    callHistory,
-                    aliasResolver,
-                    tarPersistence,
-                    pttPersistence,
-                    tarRecorder,
-                    tarWaveFilePlayer,
-                    tarViewerColumnPersistence);
-                mainWindow.AttachWebStreamSourceFactory(webStreamSourceFactory);
-                mainWindow.AttachPreferencesPersistence(preferencesPersistence);
-                mainWindow.AttachGroupsPersistence(groupsPersistence);
-                mainWindow.AttachRestorePersistence(restorePersistence);
-                mainWindow.AttachLayoutPersistence(layoutPersistence);
-                mainWindow.AttachWebStreamPersistence(restorePersistence, layoutPersistence);
-                mainWindow.AttachAlertSettingsPersistence(alertPersistence);
-                mainWindow.AttachAlertTonePreview(alertWaveFileInspector, alertWaveFilePlayer);
-                mainWindow.FileDialogService =
-                    new AvaloniaFileDialogService(mainWindow.StorageProvider);
-                mainWindow.TarFileRevealService = new DesktopFileRevealService();
-                mainWindow.TarConfirmationService = new AvaloniaConfirmationService();
+                var mainWindow = CreateComposedMainWindow(
+                    desktop,
+                    loadResult.Codeplug,
+                    defaultCodeplugPath);
                 desktop.MainWindow = mainWindow;
+                mainWindow.Show();
 
                 // Native "About" menu item: opens the About dialog on
                 // the main window. Kept in the shell so the About slice
                 // stays self-contained; an unexpected menu structure
                 // degrades to no item rather than failing startup.
-                AddAboutMenuItem(mainWindow);
-
-                if (catalog is MacAudioDeviceCatalog mac)
-                {
-                    // The catalog raises DevicesChanged from a CoreAudio
-                    // callback thread; marshal the refresh to the UI
-                    // thread before touching the view-model.
-                    mac.DevicesChanged += (_, _) => Dispatcher.UIThread.Post(() =>
-                        (mainWindow.DataContext as MainWindowViewModel)?.AudioSettings?.Refresh());
-                }
             }
 
             base.OnFrameworkInitializationCompleted();

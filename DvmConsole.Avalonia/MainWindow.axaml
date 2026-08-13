@@ -31,6 +31,11 @@
                                     IsChecked="{Binding Preferences.RestoreSelectedChannelsOnStartup, Mode=TwoWay}" />
                 </NativeMenu>
             </NativeMenuItem>
+            <NativeMenuItem Header="File">
+                <NativeMenu>
+                    <NativeMenuItem Header="Open Codeplug" />
+                </NativeMenu>
+            </NativeMenuItem>
             <NativeMenuItem Header="View">
                 <NativeMenu>
                     <NativeMenuItem Header="Dark Mode"
@@ -248,6 +253,10 @@
                     <TextBlock Classes="muted"
                                Text="{Binding PreferencesSaveFeedback}"
                                IsVisible="{Binding PreferencesSaveFeedback, Converter={x:Static conv:StringConverters.IsNotNullOrEmpty}}"
+                               TextWrapping="Wrap" />
+                    <TextBlock Classes="muted"
+                               Text="{Binding CodeplugStatusMessage}"
+                               IsVisible="{Binding CodeplugStatusMessage, Converter={x:Static conv:StringConverters.IsNotNullOrEmpty}}"
                                TextWrapping="Wrap" />
                 </StackPanel>
             </Border>

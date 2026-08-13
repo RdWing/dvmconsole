@@ -160,6 +160,29 @@ namespace DvmConsole.Avalonia.ViewModels
 
         private string? audioStatusMessage;
 
+        private string codeplugStatusMessage = string.Empty;
+
+        /// <summary>
+        /// Shell-visible codeplug load/reload feedback. Failed parses leave the
+        /// current runtime untouched and publish their diagnostic here.
+        /// </summary>
+        public string CodeplugStatusMessage
+        {
+            get => codeplugStatusMessage;
+            set
+            {
+                if (codeplugStatusMessage == value)
+                {
+                    return;
+                }
+
+                codeplugStatusMessage = value;
+                PropertyChanged?.Invoke(
+                    this,
+                    new PropertyChangedEventArgs(nameof(CodeplugStatusMessage)));
+            }
+        }
+
         /// <summary>
         /// Shell-visible audio status line written by the window when the
         /// talkgroup audio router reports a capture end or a monitor
