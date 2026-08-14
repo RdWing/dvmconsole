@@ -101,6 +101,37 @@ public sealed class FneConnection : IAsyncDisposable
         }
     }
 
+    /// <summary>
+    /// Sends one protocol payload through the active FNE traffic channel.
+    /// Protocol-specific packet construction stays in the media layer while
+    /// this service owns connection state and the legacy transport adapter.
+    /// </summary>
+    public void SendTraffic(
+        FneTrafficProtocol protocol,
+        ReadOnlySpan<byte> payload,
+        ushort packetSequence,
+        uint streamId)
+    {
+        FnePeer current;
+        lock (sync)
+        {
+            current = peer ?? throw new InvalidOperationException("The FNE connection is not started.");
+            if (status.State != FneConnectionState.Connected)
+                throw new InvalidOperationException($"The FNE connection is not ready for traffic ({status.State}).");
+        }
+
+        var opcode = protocol switch
+        {
+            FneTrafficProtocol.Dmr => new Tuple<byte, byte>(Constants.NET_FUNC_PROTOCOL, Constants.NET_PROTOCOL_SUBFUNC_DMR),
+            FneTrafficProtocol.P25 => new Tuple<byte, byte>(Constants.NET_FUNC_PROTOCOL, Constants.NET_PROTOCOL_SUBFUNC_P25),
+            FneTrafficProtocol.Nxdn => new Tuple<byte, byte>(Constants.NET_FUNC_PROTOCOL, Constants.NET_PROTOCOL_SUBFUNC_NXDN),
+            FneTrafficProtocol.Analog => new Tuple<byte, byte>(Constants.NET_FUNC_PROTOCOL, Constants.NET_PROTOCOL_SUBFUNC_ANALOG),
+            _ => throw new ArgumentOutOfRangeException(nameof(protocol))
+        };
+
+        current.SendMasterTraffic(opcode, payload.ToArray(), packetSequence, streamId);
+    }
+
     public async Task StartAsync(CancellationToken cancellationToken = default)
     {
         lock (sync)

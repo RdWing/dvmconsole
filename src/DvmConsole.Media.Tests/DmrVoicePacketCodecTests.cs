@@ -24,6 +24,31 @@ public sealed class DmrVoicePacketCodecTests
     }
 
     [Fact]
+    public void CreatesDmrVoicePacketThatRoundTripsAmbeLayout()
+    {
+        byte[] ambe = Enumerable.Range(0, DmrVoicePacketCodec.AmbeBytes)
+            .Select(value => (byte)value)
+            .ToArray();
+
+        byte[] packet = DmrVoicePacketCodec.CreateVoicePacket(
+            sourceId: 0x010203,
+            destinationId: 0xA0B0C0,
+            slot: 1,
+            voiceSync: false,
+            embeddedSequence: 3,
+            frameSequence: 7,
+            ambe);
+
+        Assert.Equal(DmrVoicePacketCodec.PacketBytes, packet.Length);
+        Assert.Equal("DMRD", System.Text.Encoding.ASCII.GetString(packet, 0, 4));
+        Assert.Equal((byte)7, packet[4]);
+        Assert.Equal(new byte[] { 0x01, 0x02, 0x03 }, packet[5..8]);
+        Assert.Equal(new byte[] { 0xA0, 0xB0, 0xC0 }, packet[8..11]);
+        Assert.Equal((byte)0x83, packet[15]);
+        Assert.Equal(ambe, DmrVoicePacketCodec.ExtractAmbe(packet));
+    }
+
+    [Fact]
     public async Task DmrSessionDecodesThreeCodewordsToPlaybackFrames()
     {
         var vocoder = new FakeVocoderSession();
