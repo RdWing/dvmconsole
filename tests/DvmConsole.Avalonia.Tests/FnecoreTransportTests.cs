@@ -84,13 +84,13 @@ namespace DvmConsole.Avalonia.Tests
                 => Sent.Add((opcode, payload, seq, streamId));
         }
 
-        private static Codeplug.System MakeSystem(string name = "Test Sys")
+        private static Codeplug.System MakeSystem(string name = "Test Sys", int port = 62031)
             => new Codeplug.System
             {
                 Name = name,
                 Identity = "Console 1",
                 Address = "127.0.0.1",
-                Port = 62031,
+                Port = port,
                 PeerId = 1000001,
                 Password = "pw",
                 Encrypted = false,
@@ -403,6 +403,7 @@ namespace DvmConsole.Avalonia.Tests
                 var header = new RtpFNEHeader();
                 Assert.True(header.Decode(datagram), "datagram must carry a decodable RTP/FNE header");
                 Assert.Equal(Constants.NET_FUNC_RPTL, header.Function);
+                Assert.NotEqual(0U, header.StreamID);
 
                 // Payload: "RPTL" tag + peer id (4 bytes each), after the
                 // 12-byte RTP header, the 4-byte RTP extension header, and
@@ -417,6 +418,40 @@ namespace DvmConsole.Avalonia.Tests
             {
                 master.Close();
             }
+        }
+
+        [Fact]
+        public async Task Adapter_Ping_UsesTheSameNonzeroConnectionStreamId()
+        {
+            using var master = new System.Net.Sockets.UdpClient(
+                new System.Net.IPEndPoint(System.Net.IPAddress.Loopback, 0));
+            int port = ((System.Net.IPEndPoint)master.Client.LocalEndPoint!).Port;
+            var system = MakeSystem(port: port);
+            var spy = new BackgroundSpy();
+            var adapter = new FnecorePeerAdapter(system, spy.Background);
+
+            adapter.Connect();
+            spy.RunAll();
+
+            var loginReceive = master.ReceiveAsync();
+            var loginCompleted = await Task.WhenAny(loginReceive, Task.Delay(5000));
+            Assert.Same(loginReceive, loginCompleted);
+            var loginDatagram = await loginReceive;
+            var loginHeader = new RtpFNEHeader();
+            Assert.True(loginHeader.Decode(loginDatagram.Buffer));
+            Assert.NotEqual(0U, loginHeader.StreamID);
+
+            adapter.Ping();
+
+            var pingReceive = master.ReceiveAsync();
+            var pingCompleted = await Task.WhenAny(pingReceive, Task.Delay(5000));
+            Assert.Same(pingReceive, pingCompleted);
+            var pingDatagram = await pingReceive;
+            var pingHeader = new RtpFNEHeader();
+            Assert.True(pingHeader.Decode(pingDatagram.Buffer));
+            Assert.Equal(Constants.NET_FUNC_PING, pingHeader.Function);
+            Assert.NotEqual(0U, pingHeader.StreamID);
+            Assert.Equal(loginHeader.StreamID, pingHeader.StreamID);
         }
 
         [Fact]

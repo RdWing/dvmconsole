@@ -57,6 +57,10 @@ namespace DvmConsole.Avalonia.Services
 
         private readonly Action<Action> background;
 
+        // The adapter skips fnecore's maintenance loop, so it owns the
+        // connection stream ID used by the manual login and Core heartbeat.
+        private volatile uint connectionStreamId;
+
         // Volatile: read from the deferred Connect background action
         // (thread-pool) while written from Dispose on the caller thread.
         private volatile bool disposed;
@@ -243,6 +247,18 @@ namespace DvmConsole.Avalonia.Services
             return peer;
         }
 
+        private static uint CreateConnectionStreamId()
+        {
+            uint streamId;
+            do
+            {
+                streamId = FneBase.CreateStreamID();
+            }
+            while (streamId == 0);
+
+            return streamId;
+        }
+
         /// <inheritdoc />
         public void Connect()
         {
@@ -263,6 +279,7 @@ namespace DvmConsole.Avalonia.Services
                     if (!fne.IsStarted)
                     {
                         fne.StartWithoutMaintainence();
+                        connectionStreamId = CreateConnectionStreamId();
 
                         // fnecore sends NET_FUNC_RPTL only from its
                         // maintenance loop (FnePeer.cs:1508-1511), which
@@ -275,7 +292,11 @@ namespace DvmConsole.Avalonia.Services
                         byte[] res = new byte[8];
                         FneUtils.StringToBytes(Constants.TAG_REPEATER_LOGIN, res, 0, 4);
                         FneUtils.WriteBytes(fne.PeerId, ref res, 4);
-                        fne.SendMasterTraffic(FneBase.CreateOpcode(Constants.NET_FUNC_RPTL), res);
+                        fne.SendMasterTraffic(
+                            FneBase.CreateOpcode(Constants.NET_FUNC_RPTL),
+                            res,
+                            fne.pktSeq(),
+                            connectionStreamId);
                     }
                 }
                 catch
@@ -319,7 +340,8 @@ namespace DvmConsole.Avalonia.Services
             fne.SendMasterTraffic(
                 FneBase.CreateOpcode(Constants.NET_FUNC_PING, Constants.NET_SUBFUNC_NOP),
                 new byte[1],
-                Constants.RtpCallEndSeq);
+                Constants.RtpCallEndSeq,
+                connectionStreamId);
         }
 
         /// <inheritdoc />
