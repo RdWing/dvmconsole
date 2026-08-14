@@ -29,6 +29,7 @@ using DvmConsole.Platform.Audio.Mac;
 using DvmConsole.Platform.Dialogs;
 using DvmConsole.Platform.Hotkeys;
 using DvmConsole.Platform.Native;
+using fnecore;
 
 namespace DvmConsole.Avalonia
 {
@@ -615,6 +616,9 @@ namespace DvmConsole.Avalonia
             }
 
             runtimeActivated = true;
+            diagnosticLogSink?.WriteApplication(
+                LogLevel.INFO,
+                "application runtime activated");
 
             if (receiveProjection is not null && receiveProjectionTimer is null)
             {
@@ -723,8 +727,7 @@ namespace DvmConsole.Avalonia
                 }
                 catch (Exception exception)
                 {
-                    System.Diagnostics.Debug.WriteLine(
-                        $"Groups settings load failed: {exception.Message}");
+                    WriteApplicationException("Groups settings load failed", exception);
                 }
 
                 viewModel.ApplyGroupsSection(
@@ -913,8 +916,7 @@ namespace DvmConsole.Avalonia
             }
             catch (Exception exception)
             {
-                System.Diagnostics.Debug.WriteLine(
-                    $"Web-stream settings load failed: {exception.Message}");
+                WriteApplicationException("Web-stream settings load failed", exception);
             }
 
             var definitions = (codeplug?.Zones ?? new List<Codeplug.Zone>())
@@ -1367,8 +1369,7 @@ namespace DvmConsole.Avalonia
             }
             catch (Exception exception)
             {
-                System.Diagnostics.Debug.WriteLine(
-                    $"User background selection failed: {exception.Message}");
+                WriteApplicationException("User background selection failed", exception);
             }
         }
 
@@ -1490,8 +1491,7 @@ namespace DvmConsole.Avalonia
                 }
                 catch (Exception exception)
                 {
-                    System.Diagnostics.Debug.WriteLine(
-                        $"User background could not be loaded: {exception.Message}");
+                    WriteApplicationException("User background could not be loaded", exception);
                 }
             }
 
@@ -1606,7 +1606,7 @@ namespace DvmConsole.Avalonia
             window.Show(this);
         }
 
-        private static void SaveAlertToneSection(
+        private void SaveAlertToneSection(
             AlertSettingsPersistence persistence,
             IReadOnlyList<UserSettingsAlertToneConfig> configs)
         {
@@ -1642,8 +1642,7 @@ namespace DvmConsole.Avalonia
             }
             catch (Exception exception)
             {
-                System.Diagnostics.Debug.WriteLine(
-                    $"Alert tone settings save failed: {exception.Message}");
+                WriteApplicationException("Alert tone settings save failed", exception);
             }
         }
 
@@ -1759,7 +1758,7 @@ namespace DvmConsole.Avalonia
                 .ToList();
         }
 
-        private static void SaveTonePresetSection(
+        private void SaveTonePresetSection(
             AlertSettingsPersistence persistence,
             IReadOnlyList<UserSettingsTonePresetConfig> configs)
         {
@@ -1778,8 +1777,7 @@ namespace DvmConsole.Avalonia
             }
             catch (Exception exception)
             {
-                System.Diagnostics.Debug.WriteLine(
-                    $"Tone preset settings save failed: {exception.Message}");
+                WriteApplicationException("Tone preset settings save failed", exception);
             }
         }
 
@@ -1918,7 +1916,7 @@ namespace DvmConsole.Avalonia
             return ResolveToneDispatchTargets();
         }
 
-        private static void SaveDtmfPresetSection(
+        private void SaveDtmfPresetSection(
             AlertSettingsPersistence persistence,
             IReadOnlyList<UserSettingsDtmfPresetConfig> configs)
         {
@@ -1937,8 +1935,7 @@ namespace DvmConsole.Avalonia
             }
             catch (Exception exception)
             {
-                System.Diagnostics.Debug.WriteLine(
-                    $"DTMF preset settings save failed: {exception.Message}");
+                WriteApplicationException("DTMF preset settings save failed", exception);
             }
         }
 
@@ -2075,8 +2072,7 @@ namespace DvmConsole.Avalonia
                 }
                 catch (Exception exception)
                 {
-                    System.Diagnostics.Debug.WriteLine(
-                        $"Groups settings save failed: {exception.Message}");
+                    WriteApplicationException("Groups settings save failed", exception);
                 }
             };
             editor.SaveRequested += saveRequested;
@@ -2398,8 +2394,7 @@ namespace DvmConsole.Avalonia
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine(
-                    $"PTT key-state probe failed; watchdog tick skipped: {ex}");
+                WriteApplicationException("PTT key-state probe failed; watchdog tick skipped", ex);
             }
         }
 
@@ -2513,7 +2508,6 @@ namespace DvmConsole.Avalonia
                 if (ownsRuntimeServices && diagnosticLogSink is { } diagnosticSink)
                 {
                     fnecoreTransportFactory?.ClearDiagnosticWriter();
-                    diagnosticSink.Dispose();
                     diagnosticLogSink = null;
                 }
 
@@ -2562,8 +2556,7 @@ namespace DvmConsole.Avalonia
                 }
                 catch (Exception exception)
                 {
-                    System.Diagnostics.Debug.WriteLine(
-                        $"Web-stream restore save failed: {exception.Message}");
+                    WriteApplicationException("Web-stream restore save failed", exception);
                 }
             }
 
@@ -2580,8 +2573,7 @@ namespace DvmConsole.Avalonia
                 }
                 catch (Exception exception)
                 {
-                    System.Diagnostics.Debug.WriteLine(
-                        $"Web-stream volume save failed: {exception.Message}");
+                    WriteApplicationException("Web-stream volume save failed", exception);
                 }
             }
 
@@ -2630,7 +2622,7 @@ namespace DvmConsole.Avalonia
             }
         }
 
-        private static async Task ObserveAsync(Task operation, string description)
+        private async Task ObserveAsync(Task operation, string description)
         {
             try
             {
@@ -2638,9 +2630,16 @@ namespace DvmConsole.Avalonia
             }
             catch (Exception exception)
             {
-                System.Diagnostics.Debug.WriteLine(
-                    $"{description}: {exception}");
+                WriteApplicationException(description, exception);
             }
+        }
+
+        private void WriteApplicationException(string context, Exception exception)
+        {
+            if (diagnosticLogSink is { } sink)
+                sink.WriteException(LogLevel.ERROR, context, exception);
+            else
+                System.Diagnostics.Debug.WriteLine($"{context}: {exception}");
         }
 
         private void SaveLayoutSettings()
@@ -2679,8 +2678,7 @@ namespace DvmConsole.Avalonia
             }
             catch (Exception exception)
             {
-                System.Diagnostics.Debug.WriteLine(
-                    $"Layout settings save failed: {exception.Message}");
+                WriteApplicationException("Layout settings save failed", exception);
             }
         }
 
@@ -2747,8 +2745,7 @@ namespace DvmConsole.Avalonia
             }
             catch (Exception exception)
             {
-                System.Diagnostics.Debug.WriteLine(
-                    $"Patch PTT request failed: {exception.Message}");
+                WriteApplicationException("Patch PTT request failed", exception);
             }
         }
 
@@ -2906,8 +2903,7 @@ namespace DvmConsole.Avalonia
             {
                 Interlocked.Exchange(ref dashboardTransmitActive, 0);
                 tarRecordingCoordinator?.StopAllTransmit(DateTime.UtcNow);
-                System.Diagnostics.Debug.WriteLine(
-                    $"PTT audio start failed: {exception.Message}");
+                WriteApplicationException("PTT audio start failed", exception);
                 return;
             }
 

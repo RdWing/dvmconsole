@@ -20,7 +20,10 @@ namespace DvmConsole.Avalonia.Views
     internal partial class DebugLogWindow : Window
     {
         private readonly IFileDialogService fileDialogService;
-        private bool detached;
+        private readonly object updateSync = new object();
+        private string? pendingLine;
+        private bool updatePosted;
+        private volatile bool detached;
 
         public DebugLogWindow(
             DebugLogViewModel viewModel,
@@ -42,11 +45,40 @@ namespace DvmConsole.Avalonia.Views
             if (detached)
                 return;
 
-            global::Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+            lock (updateSync)
             {
-                if (!detached)
-                    ViewModel?.AppendLine(line);
-            });
+                pendingLine = line;
+                if (updatePosted)
+                    return;
+
+                updatePosted = true;
+            }
+
+            global::Avalonia.Threading.Dispatcher.UIThread.Post(DrainPendingLogLine);
+        }
+
+        private void DrainPendingLogLine()
+        {
+            string? line;
+            lock (updateSync)
+            {
+                line = pendingLine;
+                pendingLine = null;
+                updatePosted = false;
+            }
+
+            if (!detached && line is not null)
+                ViewModel?.AppendLine(line);
+
+            lock (updateSync)
+            {
+                if (detached || pendingLine is null || updatePosted)
+                    return;
+
+                updatePosted = true;
+            }
+
+            global::Avalonia.Threading.Dispatcher.UIThread.Post(DrainPendingLogLine);
         }
 
         private async void Copy_Click(object? sender, RoutedEventArgs e)
@@ -120,6 +152,12 @@ namespace DvmConsole.Avalonia.Views
                 return;
 
             detached = true;
+            lock (updateSync)
+            {
+                pendingLine = null;
+                updatePosted = false;
+            }
+
             if (ViewModel is { } viewModel)
                 viewModel.Buffer.LogLineWritten -= OnLogLineWritten;
             Closed -= OnClosed;

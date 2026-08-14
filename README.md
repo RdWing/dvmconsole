@@ -54,8 +54,17 @@ and the first startup candidate for `codeplug.yml`. If that candidate is
 absent, startup falls back to `Environment.CurrentDirectory/configs/codeplug.yml`;
 use File → Open Codeplug to select another file. System alias files are read
 from the configured `Codeplug.System.AliasPath` (whose current default is
-`./alias.yml`) and are not silently relocated. Debug Logs are a bounded
-in-memory buffer; use Save to persist a selected snapshot. See
+`./alias.yml`) and are not silently relocated. Debug Logs show a bounded recent
+in-memory buffer, while the full redacted diagnostic stream is appended to
+`DvmConsole.log` in that same application-data directory. The file records
+both application (`[APP]`) and fnecore (`[FNE]`) events, including managed
+exception details when the runtime reports them. For a bounded FNE diagnostic
+run, set `DVMCONSOLE_FNE_RAW_PACKET_TRACE=1` to include packet hex dumps and
+`DVMCONSOLE_FNE_TRAFFIC_LOGGING=0` to disable decoded traffic summaries;
+these are enabled by default for diagnostics, while raw tracing remains
+off by default because it is high-volume.
+`DVMCONSOLE_FNE_LOG_LEVEL` controls fnecore's inclusive threshold and defaults
+to `FATAL`, which retains all fnecore levels. See
 `dvmconsole/Docs/Porting/macOS Feature Matrix.md` for implemented areas,
 host-dependent verification and known limitations.
 

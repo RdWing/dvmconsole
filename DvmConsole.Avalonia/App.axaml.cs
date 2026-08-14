@@ -28,6 +28,8 @@ namespace DvmConsole.Avalonia
 {
     public partial class App : Application
     {
+        private ApplicationDiagnostics? applicationDiagnostics;
+
         public override void Initialize()
         {
             AvaloniaXamlLoader.Load(this);
@@ -593,11 +595,13 @@ namespace DvmConsole.Avalonia
 
         private static DiagnosticLogSink CreateDiagnosticLogSink(
             Codeplug? codeplug,
-            LogBuffer? buffer = null)
+            LogBuffer? buffer = null,
+            string? filePath = null)
         {
             return new DiagnosticLogSink(
                 buffer ?? new LogBuffer(),
-                GetDiagnosticSensitiveValues(codeplug));
+                GetDiagnosticSensitiveValues(codeplug),
+                filePath);
         }
 
         private static MainWindow CreateComposedMainWindow(
@@ -605,9 +609,10 @@ namespace DvmConsole.Avalonia
             Codeplug? codeplug,
             string codeplugPath,
             bool deferRuntimeActivation = false,
-            LogBuffer? diagnosticBuffer = null)
+            DiagnosticLogSink? diagnosticSink = null)
         {
-            var diagnosticSink = CreateDiagnosticLogSink(codeplug, diagnosticBuffer);
+            diagnosticSink ??= CreateDiagnosticLogSink(codeplug);
+            diagnosticSink.ReplaceSensitiveValues(GetDiagnosticSensitiveValues(codeplug));
             var catalog = CreateAudioDeviceCatalog();
             var streams = catalog is MacAudioDeviceCatalog macCatalog
                 ? new MacAudioStreamFactory(macCatalog)
@@ -659,7 +664,16 @@ namespace DvmConsole.Avalonia
                 ? new LibVocoderVoiceCodec(new LibVocoderNative())
                 : null;
             var fnecoreTransportFactory = new FnecoreTransportFactory();
+            var fneLoggingOptions = FneLoggingOptions.FromEnvironment();
+            fnecoreTransportFactory.FneLogLevel = fneLoggingOptions.LogLevel;
+            fnecoreTransportFactory.FneRawPacketTrace = fneLoggingOptions.RawPacketTrace;
+            fnecoreTransportFactory.FneTrafficLogging = fneLoggingOptions.TrafficLogging;
             fnecoreTransportFactory.DiagnosticWriter = diagnosticSink.Write;
+            diagnosticSink.WriteApplication(
+                fnecore.LogLevel.INFO,
+                $"FNE diagnostics configured: level={fneLoggingOptions.LogLevel}, "
+                    + $"rawPacketTrace={fneLoggingOptions.RawPacketTrace}, "
+                    + $"trafficLogging={fneLoggingOptions.TrafficLogging}");
 
             var mainWindow = new MainWindow(
                 catalog,
@@ -704,7 +718,7 @@ namespace DvmConsole.Avalonia
                         nextCodeplug,
                         nextPath,
                         deferRuntimeActivation: true,
-                        diagnosticSink.Buffer),
+                        diagnosticSink),
                 async (current, candidate) =>
                 {
                     await current.DisposeRuntimeAsync().ConfigureAwait(false);
@@ -738,13 +752,26 @@ namespace DvmConsole.Avalonia
             {
                 var defaultCodeplugPath = ResolveDefaultCodeplugPath(new DefaultFileSystemPaths());
                 var diagnosticBuffer = new LogBuffer();
-                using var startupDiagnosticSink = new DiagnosticLogSink(diagnosticBuffer);
+                var fileSystemPaths = new DefaultFileSystemPaths();
+                var diagnosticLogPath = Path.Combine(
+                    fileSystemPaths.TraceLogDirectoryPath,
+                    "DvmConsole.log");
+                var diagnosticSink = CreateDiagnosticLogSink(
+                    null,
+                    diagnosticBuffer,
+                    diagnosticLogPath);
+                applicationDiagnostics = new ApplicationDiagnostics(diagnosticSink);
+                applicationDiagnostics.Install();
+                diagnosticSink.WriteApplication(
+                    fnecore.LogLevel.INFO,
+                    $"DvmConsole startup; diagnostics file={diagnosticLogPath}");
                 var loadResult = CodeplugLoader.LoadFromFile(defaultCodeplugPath);
+                diagnosticSink.AddSensitiveValues(GetDiagnosticSensitiveValues(loadResult.Codeplug));
                 if (!loadResult.Succeeded)
                 {
                     string diagnostic = "codeplug unavailable: "
                         + (loadResult.ErrorMessage ?? "load failed");
-                    startupDiagnosticSink.Write(diagnostic);
+                    diagnosticSink.WriteApplication(fnecore.LogLevel.ERROR, diagnostic);
                     System.Console.WriteLine(diagnostic);
                     System.Console.Out.Flush();
                 }
@@ -753,9 +780,15 @@ namespace DvmConsole.Avalonia
                     desktop,
                     loadResult.Codeplug,
                     defaultCodeplugPath,
-                    diagnosticBuffer: diagnosticBuffer);
+                    diagnosticSink: diagnosticSink);
                 desktop.MainWindow = mainWindow;
                 mainWindow.Show();
+                desktop.Exit += (_, _) =>
+                {
+                    applicationDiagnostics?.Dispose();
+                    applicationDiagnostics = null;
+                    diagnosticSink.Dispose();
+                };
 
                 // Native "About" menu item: opens the About dialog on
                 // the main window. Kept in the shell so the About slice

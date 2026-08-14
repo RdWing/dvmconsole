@@ -40,6 +40,9 @@ namespace DvmConsole.Avalonia.Tests
             Assert.Contains("SetTextAsync", codeBehind);
             Assert.Contains("FileDialogService", codeBehind);
             Assert.Contains("LogLineWritten", codeBehind);
+            Assert.Contains("pendingLine", codeBehind);
+            Assert.Contains("updatePosted", codeBehind);
+            Assert.Contains("DrainPendingLogLine", codeBehind);
             Assert.Contains("Closed", codeBehind);
         }
 
@@ -56,7 +59,8 @@ namespace DvmConsole.Avalonia.Tests
             Assert.Contains("new DebugLogViewModel", windowSource);
             Assert.Contains("new DebugLogWindow", windowSource);
             Assert.Contains("debugLogWindow?.Close()", windowSource);
-            Assert.Contains("diagnosticSink.Dispose()", windowSource);
+            Assert.Contains("fnecoreTransportFactory?.ClearDiagnosticWriter()", windowSource);
+            Assert.DoesNotContain("diagnosticSink.Dispose()", windowSource);
         }
 
         [Fact]

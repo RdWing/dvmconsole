@@ -3,6 +3,7 @@
 using System;
 using System.Net;
 using System.Reflection;
+using System.Threading;
 using System.Threading.Tasks;
 using dvmconsole;
 using DvmConsole.Avalonia.ViewModels;
@@ -56,6 +57,9 @@ namespace DvmConsole.Avalonia.Services
                 Assembly.GetExecutingAssembly().GetName().Version);
 
         private readonly Action<Action> background;
+        private readonly object lifecycleSync = new object();
+        private readonly Action<FnePeer> startPeer;
+        private Action<LogLevel, string>? diagnosticWriter;
 
         // The adapter skips fnecore's maintenance loop, so it owns the
         // connection stream ID used by the manual login and Core heartbeat.
@@ -64,6 +68,8 @@ namespace DvmConsole.Avalonia.Services
         // Volatile: read from the deferred Connect background action
         // (thread-pool) while written from Dispose on the caller thread.
         private volatile bool disposed;
+        private int stopStarted;
+        private int disconnectSignaled;
 
         /// <summary>
         /// Raised for every validated DMR receive event (voice and
@@ -106,10 +112,32 @@ namespace DvmConsole.Avalonia.Services
         /// </summary>
         /// <param name="system">The configured FNE system.</param>
         /// <param name="background">The deferral seam; defaults to <see cref="Task.Run"/>.</param>
-        public FnecorePeerAdapter(Codeplug.System system, Action<Action>? background = null)
-            : base(CreatePeer(system, SoftwareIdentityValue))
+        public FnecorePeerAdapter(
+            Codeplug.System system,
+            Action<Action>? background = null,
+            LogLevel logLevel = LogLevel.FATAL,
+            bool rawPacketTrace = false,
+            bool trafficLogging = false)
+            : this(system, background, logLevel, rawPacketTrace, trafficLogging, null)
+        {
+        }
+
+        internal FnecorePeerAdapter(
+            Codeplug.System system,
+            Action<Action>? background,
+            LogLevel logLevel,
+            bool rawPacketTrace,
+            bool trafficLogging,
+            Action<FnePeer>? startPeer)
+            : base(CreatePeer(
+                system,
+                SoftwareIdentityValue,
+                logLevel,
+                rawPacketTrace,
+                trafficLogging), logLevel)
         {
             this.background = background ?? (action => Task.Run(action));
+            this.startPeer = startPeer ?? StartPeer;
             ConfiguredSystemName = system?.Name ?? string.Empty;
             SoftwareIdentity = SoftwareIdentityValue;
 
@@ -120,15 +148,7 @@ namespace DvmConsole.Avalonia.Services
             // must never see an exception thrown by a subscriber.
             fne.PeerDisconnected += _ =>
             {
-                try
-                {
-                    PeerDisconnected?.Invoke();
-                }
-                catch
-                {
-                    // Subscriber exceptions are swallowed at the adapter
-                    // boundary — the adapter is the isolation fence.
-                }
+                NotifyPeerDisconnected();
             };
 
             // Translate incoming PONG frames into PingAcknowledged. The
@@ -174,6 +194,7 @@ namespace DvmConsole.Avalonia.Services
         public void SetDiagnosticWriter(Action<LogLevel, string> writer)
         {
             ArgumentNullException.ThrowIfNull(writer);
+            diagnosticWriter = writer;
             fne.Logger = writer;
         }
 
@@ -182,6 +203,7 @@ namespace DvmConsole.Avalonia.Services
         /// </summary>
         public void ClearDiagnosticWriter()
         {
+            diagnosticWriter = null;
             fne.Logger = (_, _) => { };
         }
 
@@ -196,7 +218,12 @@ namespace DvmConsole.Avalonia.Services
         /// </summary>
         /// <param name="system">The configured FNE system.</param>
         /// <returns>The configured, unstarted peer.</returns>
-        private static FnePeer CreatePeer(Codeplug.System system, string softwareIdentity)
+        private static FnePeer CreatePeer(
+            Codeplug.System system,
+            string softwareIdentity,
+            LogLevel logLevel,
+            bool rawPacketTrace,
+            bool trafficLogging)
         {
             if (system is null)
             {
@@ -224,7 +251,14 @@ namespace DvmConsole.Avalonia.Services
 
             string? key = system.Encrypted ? system.PresharedKey : null;
 
-            FnePeer peer = new FnePeer("DVMCONSOLE", system.PeerId, endpoint, key);
+            FnePeer peer = new FnePeer(
+                "DVMCONSOLE",
+                system.PeerId,
+                endpoint,
+                key,
+                trafficLogging);
+            peer.LogLevel = logLevel;
+            peer.RawPacketTrace = rawPacketTrace;
 
             if (string.IsNullOrEmpty(system.Identity))
             {
@@ -264,46 +298,39 @@ namespace DvmConsole.Avalonia.Services
         {
             background(() =>
             {
-                // The deferred Start must not run after teardown: a peer
-                // started post-Dispose would leak its listen threads and
-                // the UDP socket with no heartbeat owner.
-                if (disposed)
-                {
-                    return;
-                }
+                Exception? failure = null;
 
-                try
+                lock (lifecycleSync)
                 {
-                    // StartWithoutMaintainence: the Core service owns the
-                    // heartbeat through Ping() (WPF parity).
-                    if (!fne.IsStarted)
+                    // The deferred Start must not run after teardown: a peer
+                    // started post-Dispose would leak its listen threads and
+                    // the UDP socket with no heartbeat owner.
+                    if (disposed || Volatile.Read(ref stopStarted) != 0)
                     {
-                        fne.StartWithoutMaintainence();
-                        connectionStreamId = CreateConnectionStreamId();
+                        return;
+                    }
 
-                        // fnecore sends NET_FUNC_RPTL only from its
-                        // maintenance loop (FnePeer.cs:1508-1511), which
-                        // the adapter deliberately skips — the Core
-                        // service owns the heartbeat. Replicate the
-                        // login request here, once per Connect, or a
-                        // real FNE connection hangs in WAITING_LOGIN
-                        // forever. (The maintenance loop's ping remains
-                        // the Core service's job once RUNNING.)
-                        byte[] res = new byte[8];
-                        FneUtils.StringToBytes(Constants.TAG_REPEATER_LOGIN, res, 0, 4);
-                        FneUtils.WriteBytes(fne.PeerId, ref res, 4);
-                        fne.SendMasterTraffic(
-                            FneBase.CreateOpcode(Constants.NET_FUNC_RPTL),
-                            res,
-                            fne.pktSeq(),
-                            connectionStreamId);
+                    try
+                    {
+                        startPeer(fne);
+                    }
+                    catch (Exception exception)
+                    {
+                        // A peer has already started its receive loops when
+                        // the manual login send fails. Stop that partial peer
+                        // before reporting failure; otherwise its UDP loop
+                        // can spin forever and leave the Core row busy.
+                        failure = exception;
+                        WriteDiagnostic(LogLevel.ERROR, $"FNE connect start failed: {exception}");
+                        StopPeer();
                     }
                 }
-                catch
+
+                // Invoke subscribers outside lifecycleSync. The Core service
+                // tears down and disposes this adapter from the callback.
+                if (failure is not null)
                 {
-                    // The login completes asynchronously via fnecore's
-                    // own ACK path; a failed start is surfaced through
-                    // PeerDisconnected, never thrown into the caller.
+                    NotifyPeerDisconnected();
                 }
             });
         }
@@ -313,19 +340,9 @@ namespace DvmConsole.Avalonia.Services
         {
             background(() =>
             {
-                try
+                lock (lifecycleSync)
                 {
-                    // Stop blocks on a dead network — that is why the
-                    // teardown is backgrounded.
-                    if (fne.IsStarted)
-                    {
-                        fne.Stop();
-                    }
-                }
-                catch
-                {
-                    // Teardown is best-effort; connection loss is
-                    // surfaced through PeerDisconnected.
+                    StopPeer();
                 }
             });
         }
@@ -342,33 +359,103 @@ namespace DvmConsole.Avalonia.Services
                 new byte[1],
                 Constants.RtpCallEndSeq,
                 connectionStreamId);
+            WriteDiagnostic(LogLevel.DEBUG, $"FNE ping sent on stream {connectionStreamId}");
+        }
+
+        private void WriteDiagnostic(LogLevel level, string message)
+        {
+            diagnosticWriter?.Invoke(level, $"({ConfiguredSystemName}) {message}");
         }
 
         /// <inheritdoc />
         public void Dispose()
         {
-            if (disposed)
+            lock (lifecycleSync)
             {
-                return;
+                if (disposed)
+                {
+                    return;
+                }
+
+                disposed = true;
             }
 
-            disposed = true;
             ClearDiagnosticWriter();
 
             background(() =>
             {
-                try
+                lock (lifecycleSync)
                 {
-                    if (fne.IsStarted)
-                    {
-                        fne.Stop();
-                    }
-                }
-                catch
-                {
-                    // Best-effort teardown; never throw from dispose.
+                    StopPeer();
                 }
             });
+        }
+
+        private void StartPeer(FnePeer peer)
+        {
+            // StartWithoutMaintainence: the Core service owns the
+            // heartbeat through Ping() (WPF parity).
+            if (peer.IsStarted)
+            {
+                return;
+            }
+
+            peer.StartWithoutMaintainence();
+            connectionStreamId = CreateConnectionStreamId();
+
+            // fnecore sends NET_FUNC_RPTL only from its maintenance loop,
+            // which this adapter deliberately skips. Replicate the login
+            // once per Connect with the same nonzero stream ID used by the
+            // Core-owned heartbeat.
+            byte[] res = new byte[8];
+            FneUtils.StringToBytes(Constants.TAG_REPEATER_LOGIN, res, 0, 4);
+            FneUtils.WriteBytes(peer.PeerId, ref res, 4);
+            peer.SendMasterTraffic(
+                FneBase.CreateOpcode(Constants.NET_FUNC_RPTL),
+                res,
+                peer.pktSeq(),
+                connectionStreamId);
+        }
+
+        private void StopPeer()
+        {
+            if (Interlocked.Exchange(ref stopStarted, 1) != 0)
+            {
+                return;
+            }
+
+            try
+            {
+                if (fne.IsStarted)
+                {
+                    fne.Stop();
+                }
+            }
+            catch (Exception exception)
+            {
+                // Teardown is best-effort; preserve the original startup or
+                // disconnect failure and never throw from a lifecycle action.
+                WriteDiagnostic(LogLevel.WARNING, $"FNE disconnect failed: {exception}");
+            }
+        }
+
+        private void NotifyPeerDisconnected()
+        {
+            if (Interlocked.Exchange(ref disconnectSignaled, 1) != 0)
+            {
+                return;
+            }
+
+            WriteDiagnostic(LogLevel.WARNING, "FNE peer disconnected");
+            try
+            {
+                PeerDisconnected?.Invoke();
+            }
+            catch
+            {
+                // Subscriber exceptions are swallowed at the adapter
+                // boundary — the adapter is the isolation fence.
+            }
         }
 
         /* ------------------------------------------------------------------
@@ -439,6 +526,7 @@ namespace DvmConsole.Avalonia.Services
             // Fired from fnecore's async void ListenTraffic (MST_ACK case,
             // FnePeer.cs:1213): a throwing subscriber must not crash the
             // process — isolate like every other subscriber invocation.
+            WriteDiagnostic(LogLevel.INFO, $"FNE peer connected; peer ID {e.PeerId}");
             try
             {
                 peerConnectedHandlers?.Invoke();

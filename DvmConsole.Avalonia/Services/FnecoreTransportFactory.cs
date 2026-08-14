@@ -47,6 +47,18 @@ namespace DvmConsole.Avalonia.Services
         public Action<LogLevel, string>? DiagnosticWriter { get; set; }
 
         /// <summary>
+        /// fnecore's inclusive maximum log level. FATAL captures every
+        /// fnecore level because the library filters with level &lt;= threshold.
+        /// </summary>
+        public LogLevel FneLogLevel { get; set; } = LogLevel.FATAL;
+
+        /// <summary>Enables fnecore raw packet hex dumps when true.</summary>
+        public bool FneRawPacketTrace { get; set; }
+
+        /// <summary>Enables decoded DMR/P25/NXDN traffic summaries when true.</summary>
+        public bool FneTrafficLogging { get; set; }
+
+        /// <summary>
         /// Detaches the shell-owned logger from this factory and its adapters.
         /// </summary>
         public void ClearDiagnosticWriter()
@@ -71,7 +83,11 @@ namespace DvmConsole.Avalonia.Services
                 throw new ArgumentException("system name", nameof(system));
             }
 
-            var adapter = new FnecorePeerAdapter(system);
+            var adapter = new FnecorePeerAdapter(
+                system,
+                logLevel: FneLogLevel,
+                rawPacketTrace: FneRawPacketTrace,
+                trafficLogging: FneTrafficLogging);
             if (DiagnosticWriter is { } diagnosticWriter)
             {
                 adapter.SetDiagnosticWriter(diagnosticWriter);

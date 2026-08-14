@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 #nullable enable
 using System;
+using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Threading.Tasks;
@@ -62,6 +63,67 @@ namespace DvmConsole.Avalonia.Tests
         }
 
         [Fact]
+        public void Sink_PersistsRedactedLinesWithSourceAndTimestamp()
+        {
+            string directory = Path.Combine(Path.GetTempPath(), "dvmconsole-log-tests", Guid.NewGuid().ToString("N"));
+            string path = Path.Combine(directory, "DvmConsole.log");
+            try
+            {
+                var buffer = new LogBuffer();
+                using var sink = new DiagnosticLogSink(buffer, new[] { "secret" }, path);
+
+                sink.WriteApplication(LogLevel.INFO, "application started with secret");
+                sink.Write(LogLevel.WARNING, "fne warning");
+
+                string text = File.ReadAllText(path);
+                Assert.Contains("[APP] INFO application started with [REDACTED]", text);
+                Assert.Contains("[FNE] WARNING fne warning", text);
+                Assert.DoesNotContain("secret", text);
+                Assert.Contains("T", text); // ISO-8601 UTC timestamp prefix
+            }
+            finally
+            {
+                if (Directory.Exists(directory))
+                    Directory.Delete(directory, recursive: true);
+            }
+        }
+
+        [Fact]
+        public void Sink_WriteExceptionIncludesTypeAndStackWithoutLeakingSecrets()
+        {
+            var buffer = new LogBuffer();
+            using var sink = new DiagnosticLogSink(buffer, new[] { "secret" });
+
+            sink.WriteException(
+                LogLevel.ERROR,
+                "background operation failed",
+                new InvalidOperationException("secret"));
+
+            string text = string.Join("\n", buffer.GetRecentLines());
+            Assert.Contains("ERROR background operation failed", text);
+            Assert.Contains("InvalidOperationException", text);
+            Assert.Contains("[REDACTED]", text);
+            Assert.DoesNotContain("secret", text);
+        }
+
+        [Fact]
+        public void ApplicationDiagnostics_RecordsManagedFailures()
+        {
+            var buffer = new LogBuffer();
+            using var sink = new DiagnosticLogSink(buffer, new[] { "secret" });
+            using var diagnostics = new ApplicationDiagnostics(sink);
+
+            diagnostics.RecordUnhandledException(
+                "unhandled test failure",
+                new InvalidOperationException("secret"));
+
+            string text = string.Join("\n", buffer.GetRecentLines());
+            Assert.Contains("FATAL unhandled test failure", text);
+            Assert.Contains("InvalidOperationException", text);
+            Assert.DoesNotContain("secret", text);
+        }
+
+        [Fact]
         public void Factory_ClearDiagnosticWriterDetachesAdapterLogger()
         {
             var buffer = new LogBuffer();
@@ -81,6 +143,28 @@ namespace DvmConsole.Avalonia.Tests
             peer.Logger(fnecore.LogLevel.INFO, "after detach");
 
             Assert.Empty(buffer.GetRecentLines());
+            adapter.Dispose();
+        }
+
+        [Fact]
+        public void Factory_PropagatesFneDiagnosticOptionsToPeer()
+        {
+            var factory = new FnecoreTransportFactory
+            {
+                FneLogLevel = LogLevel.FATAL,
+                FneRawPacketTrace = true,
+                FneTrafficLogging = true,
+            };
+            var adapter = (FnecorePeerAdapter)factory.Create(MakeSystem());
+
+            FieldInfo fneField = typeof(fnecore.FneSystemBase).GetField(
+                "fne",
+                BindingFlags.Instance | BindingFlags.NonPublic)!;
+            var peer = (fnecore.FnePeer)fneField.GetValue(adapter)!;
+
+            Assert.Equal(LogLevel.FATAL, peer.LogLevel);
+            Assert.True(peer.RawPacketTrace);
+            Assert.True(peer.TrafficLogging);
             adapter.Dispose();
         }
 
