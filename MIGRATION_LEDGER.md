@@ -24,7 +24,7 @@ Rebuild the `r01a02_dev` desktop dispatch console for Apple Silicon macOS while 
 | M4 | Software vocoder backend | Complete | `libvocoder` loads and encode/decode vectors pass on Apple Silicon with tracked tests. |
 | M5 | Audio and platform services | In progress | Platform-neutral audio devices, capture, routing, and PTT contracts exist; macOS CoreAudio, Windows NAudio, and a manual PTT source are implemented, while keyboard/hardware PTT adapters remain. |
 | M6 | Avalonia application shell | In progress | Shared Avalonia shell starts on the desktop target, shows codeplug-derived system/channel status, and exposes explicit live FNE connect/disconnect status; feature parity remains. |
-| M7 | Feature migration | In progress | Platform-neutral FNE traffic, DMR RX packet extraction, and PCM/vocoder frame boundaries exist; TX routing, P25/NXDN/analog media, patching, tones, TAR, settings, and history remain. |
+| M7 | Feature migration | In progress | Platform-neutral FNE traffic, DMR RX packet extraction/selection, and PCM/vocoder frame boundaries exist; desktop device/channel wiring, TX routing, P25/NXDN/analog media, patching, tones, TAR, settings, and history remain. |
 | M8 | Packaging and integration handoff | In progress | Reproducible unsigned framework-dependent macOS and Windows publish paths exist; signing, installer packaging, and integration handoff remain. |
 
 ## Working assumptions
@@ -59,6 +59,7 @@ Rebuild the `r01a02_dev` desktop dispatch console for Apple Silicon macOS while 
 - Added a lifecycle-safe manual PTT source with transition tests as the host-controlled foundation for future keyboard and hardware PTT adapters.
 - Added a reproducible desktop publishing script and publishing guide. It builds framework-dependent `osx-arm64` and `win-x64` outputs and places the macOS CoreAudio shim beside the macOS managed output.
 - Added the first end-to-end DMR RX media slice: the legacy 55-byte DMR FNE voice-packet layout is mapped to three AMBE codewords, decoded through the software-vocoder boundary, and written to the platform-neutral playback boundary. Non-voice frames are ignored; P25 DFSI reconstruction and call/channel selection remain deliberately above this reusable session.
+- Added reusable DMR receive selection and routing: destination ID, zero-based FNE timeslot, and voice frame type are matched before decode, and selected packet processing is serialized for one playback path.
 - Re-ran the supplied live FNE probe after attaching the traffic boundary; the system reached `Connected` in five seconds and exited successfully after clean shutdown.
 - Retried the supplied live FNE codeplug after macOS Local Network permission was granted. The endpoint `10.10.10.55:62031` exchanged traffic, completed login/authentication, reached `Connected`, and shut down cleanly. The probe now preserves the observed-connected result after shutdown and exits successfully; diagnostic packet tracing is opt-in and sanitized.
 - Verified three configuration tests, four FNE protocol tests, the bootstrap against `configs/codeplug.example.yml`, the full solution with `/m:1`, and the native vocoder smoke harness.
@@ -95,6 +96,7 @@ Rebuild the `r01a02_dev` desktop dispatch console for Apple Silicon macOS while 
 | `4711b33` | Record the full-solution verification baseline. |
 | `730a165` | Record CoreAudio and live-FNE milestones. |
 | `9b46790` | DMR RX packet extraction, software-vocoder decode, playback session, and focused media tests. |
+| `c13ecb8` | DMR receive channel selection and serialized playback routing. |
 
 ## Verification log
 
@@ -122,7 +124,7 @@ Rebuild the `r01a02_dev` desktop dispatch console for Apple Silicon macOS while 
 | Windows audio runtime | Not run on Windows hardware; compile verification passed on macOS |
 | Desktop publish script | Passed framework-dependent `osx-arm64` and `win-x64` publishes; macOS output includes `libdvmaudio.dylib` |
 | Final solution test run before media slice | 26 passed: Core 3, FNE 4, Vocoder 6, Audio 8, FNE client 5 (native vocoder included) |
-| Media test project | 3 passed: packet layout extraction, three-codeword decode/playback, and non-voice filtering |
+| Media test project | 5 passed: packet layout extraction, three-codeword decode/playback, non-voice filtering, channel selection, and routed playback |
 | Final solution test run after media slice | 29 passed: Core 3, FNE 4, Vocoder 6, Audio 8, FNE client 5, Media 3 (native vocoder included) |
 | Final solution build after media slice | Passed all 16 solution projects with `/m:1`; 0 warnings and 0 errors |
 | Bootstrap example validation | Passed: 1 system and 3 zones loaded from `configs/codeplug.example.yml` |
