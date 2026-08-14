@@ -129,6 +129,11 @@ mkdir -p "$(dirname "$manifest")"
     printf 'dotnet=%s\n' "$(dotnet --version)"
     printf 'fnecore_sha256=%s\n' "$(hash_file "${bundle_dir}/fnecore.dll")"
     printf 'avalonia_sha256=%s\n' "$(hash_file "${bundle_dir}/DvmConsole.Avalonia.dll")"
+    if [ -n "$vocoder_path" ]; then
+        printf 'vocoder_sha256=%s\n' "$(hash_file "$vocoder_path")"
+    else
+        printf 'vocoder_sha256=none\n'
+    fi
 } > "$manifest"
 
 printf 'Verified bundle assemblies match publish output.\n'
