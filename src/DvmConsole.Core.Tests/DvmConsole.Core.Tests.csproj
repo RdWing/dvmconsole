@@ -16,5 +16,7 @@
   <ItemGroup>
     <ProjectReference Include="../DvmConsole.Core/DvmConsole.Core.csproj" />
     <None Include="../../configs/codeplug.example.yml" Link="TestData/codeplug.example.yml" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../configs/keys.example.clear" Link="TestData/keys.example.clear" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../configs/alias.example.yml" Link="TestData/alias.example.yml" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

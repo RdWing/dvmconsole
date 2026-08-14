@@ -31,4 +31,18 @@ public sealed class ConfigurationLoaderTests
             Path.Combine(Path.GetDirectoryName(path)!, "keys.clear"),
             resolved);
     }
+
+    [Fact]
+    public void LoadsLegacyKeyAndAliasFiles()
+    {
+        string testData = Path.Combine(AppContext.BaseDirectory, "TestData");
+
+        KeyContainer keys = KeyFileLoader.Load(Path.Combine(testData, "keys.example.clear"));
+        List<RadioAlias> aliases = AliasFileLoader.Load(Path.Combine(testData, "alias.example.yml"));
+
+        Assert.Equal(2, keys.Keys.Count);
+        Assert.Equal((ushort)1, keys.Keys[0].KeyId);
+        Assert.Single(aliases);
+        Assert.Equal("Radio 1", AliasFileLoader.FindAlias(aliases, 1));
+    }
 }
