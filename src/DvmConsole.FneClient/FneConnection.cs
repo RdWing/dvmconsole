@@ -1,4 +1,5 @@
 using System.Net;
+using System.Net.Sockets;
 using DvmConsole.Core.Configuration;
 using fnecore;
 
@@ -150,6 +151,14 @@ public sealed class FneConnection : IAsyncDisposable
         {
             await Task.Run(current.Stop, cancellationToken).ConfigureAwait(false);
             Publish(FneConnectionState.Disconnected, "Stopped");
+        }
+        catch (ObjectDisposedException)
+        {
+            Publish(FneConnectionState.Disconnected, "Stopped");
+        }
+        catch (SocketException exception)
+        {
+            Publish(FneConnectionState.Disconnected, $"Stopped; close packet was not sent: {exception.SocketErrorCode}");
         }
         catch (InvalidOperationException)
         {

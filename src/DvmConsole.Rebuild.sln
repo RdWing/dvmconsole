@@ -27,6 +27,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DvmConsole.FneClient", "Dvm
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DvmConsole.FneClient.Tests", "DvmConsole.FneClient.Tests\DvmConsole.FneClient.Tests.csproj", "{8BEA5A9C-9E26-4EF4-B5B7-AC3EDB70A2DA}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DvmConsole.FneProbe", "DvmConsole.FneProbe\DvmConsole.FneProbe.csproj", "{B8B1C2C7-07C6-4AB0-B506-659B7F0CE4C3}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -84,5 +86,9 @@ Global
 		{8BEA5A9C-9E26-4EF4-B5B7-AC3EDB70A2DA}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{8BEA5A9C-9E26-4EF4-B5B7-AC3EDB70A2DA}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{8BEA5A9C-9E26-4EF4-B5B7-AC3EDB70A2DA}.Release|Any CPU.Build.0 = Release|Any CPU
+		{B8B1C2C7-07C6-4AB0-B506-659B7F0CE4C3}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{B8B1C2C7-07C6-4AB0-B506-659B7F0CE4C3}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{B8B1C2C7-07C6-4AB0-B506-659B7F0CE4C3}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{B8B1C2C7-07C6-4AB0-B506-659B7F0CE4C3}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 EndGlobal
