@@ -29,6 +29,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DvmConsole.FneClient.Tests"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DvmConsole.FneProbe", "DvmConsole.FneProbe\DvmConsole.FneProbe.csproj", "{B8B1C2C7-07C6-4AB0-B506-659B7F0CE4C3}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DvmConsole.AudioProbe", "DvmConsole.AudioProbe\DvmConsole.AudioProbe.csproj", "{AA5D7AC4-3E60-4F86-B8DD-D28D68CCB7F7}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -90,5 +92,9 @@ Global
 		{B8B1C2C7-07C6-4AB0-B506-659B7F0CE4C3}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{B8B1C2C7-07C6-4AB0-B506-659B7F0CE4C3}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{B8B1C2C7-07C6-4AB0-B506-659B7F0CE4C3}.Release|Any CPU.Build.0 = Release|Any CPU
+		{AA5D7AC4-3E60-4F86-B8DD-D28D68CCB7F7}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{AA5D7AC4-3E60-4F86-B8DD-D28D68CCB7F7}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{AA5D7AC4-3E60-4F86-B8DD-D28D68CCB7F7}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{AA5D7AC4-3E60-4F86-B8DD-D28D68CCB7F7}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 EndGlobal
