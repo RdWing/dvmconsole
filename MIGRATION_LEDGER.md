@@ -22,7 +22,7 @@ Rebuild the `r01a02_dev` desktop dispatch console for Apple Silicon macOS while 
 | M2 | Configuration/core extraction | Complete | Codeplug, key, and alias models/loaders are covered by tests. |
 | M3 | FNE core modernization | Complete | FNE protocol source builds against .NET 8 with offline smoke tests. |
 | M4 | Software vocoder backend | Complete | `libvocoder` loads and encode/decode vectors pass on Apple Silicon with tracked tests. |
-| M5 | Audio and platform services | In progress | Platform-neutral audio devices, capture, routing, and PTT contracts exist; native backends remain. |
+| M5 | Audio and platform services | In progress | Platform-neutral audio devices, capture, routing, and PTT contracts exist; the macOS CoreAudio backend is working, while Windows audio and PTT backends remain. |
 | M6 | Avalonia application shell | In progress | Shared Avalonia shell starts on the desktop target and shows codeplug-derived system/channel status; live FNE status is not connected yet. |
 | M7 | Feature migration | Pending | RX/TX, patching, tones, TAR, settings, and history reach parity. |
 | M8 | Packaging and integration handoff | Pending | Signed macOS artifact, Windows artifact, docs, and integration notes exist. |
@@ -51,6 +51,9 @@ Rebuild the `r01a02_dev` desktop dispatch console for Apple Silicon macOS while 
 - Added the first Avalonia desktop shell for the shared `net8.0` desktop target. It loads a codeplug, shows systems/zones/channels, and labels FNE connections offline until the connection service is migrated.
 - Added an explicit FNE client lifecycle service that maps legacy system configuration, resolves endpoints, configures `fnecore.FnePeer`, and publishes disconnected/starting/authentication/configuration/connected/faulted status states without auto-connecting.
 - Added a bounded `DvmConsole.FneProbe` utility for explicit live testing; it does not run from the desktop app and redacts credentials/raw packets from output.
+- Added an Apple Silicon CoreAudio/AudioUnit native shim, managed audio backend, streaming PCM rate converter, and `DvmConsole.AudioProbe`; device enumeration and a two-second default input/output stream test pass on this Mac.
+- Added deterministic PCM rate-converter tests, bringing the audio test count to six, and kept the native audio library outside the managed solution build so Windows remains buildable while its backend is pending.
+- Retried the supplied live FNE codeplug after macOS Local Network permission was granted. The endpoint `10.10.10.55:62031` exchanged traffic, completed login/authentication, reached `Connected`, and shut down cleanly. The probe now preserves the observed-connected result after shutdown and exits successfully; diagnostic packet tracing is opt-in and sanitized.
 - Verified three configuration tests, four FNE protocol tests, the bootstrap against `configs/codeplug.example.yml`, the full solution with `/m:1`, and the native vocoder smoke harness.
 - Recorded the FNE wrapper's .NET 8 compatibility warnings as follow-up modernization debt; the original `fnecore` source remains unchanged.
 
@@ -67,6 +70,10 @@ Rebuild the `r01a02_dev` desktop dispatch console for Apple Silicon macOS while 
 | `7364d22` | Initial Avalonia macOS/Windows desktop shell. |
 | `0fd5f7b` | Explicit FNE connection lifecycle service and offline tests. |
 | `e752a65` | Bounded live-FNE probe, testing documentation, and clean socket shutdown handling. |
+| `83c727f` | Record the first bounded live-FNE probe result. |
+| `321d059` | Record the pre-CoreAudio rebuild verification baseline. |
+| `6223429` | Apple Silicon CoreAudio/AudioUnit backend, rate conversion, and stream probe. |
+| `f1b3944` | Opt-in FNE diagnostics, stable connected-state reporting, and live-probe success tracking. |
 
 ## Verification log
 
@@ -80,13 +87,17 @@ Rebuild the `r01a02_dev` desktop dispatch console for Apple Silicon macOS while 
 | FNE protocol tests | 4 passed on Apple Silicon; legacy compatibility warnings remain |
 | Software vocoder tests | 4 passed on Apple Silicon with `DVMVOCODER_LIBRARY=/private/tmp/dvmvocoder-build/libvocoder.dylib` |
 | Audio framing tests | 3 passed on Apple Silicon |
+| PCM rate-converter tests | 6 passed on Apple Silicon |
+| Native macOS audio shim | Passed CMake arm64 build; device enumeration passed for input/output devices |
+| macOS audio stream probe | Passed default input/output stream test; captured 16,043 target-rate PCM samples over two seconds |
 | Rebuild solution after audio boundary | Passed with `dotnet build src/DvmConsole.Rebuild.sln --no-restore /m:1` (14 legacy FNE warnings) |
 | Avalonia desktop shell | Built cleanly; launch check remained running as expected until the test process was interrupted |
 | FNE connection service tests | 4 passed without opening a network connection |
 | Rebuild solution after FNE client | Passed with `dotnet build src/DvmConsole.Rebuild.sln --no-restore /m:1` (14 legacy FNE warnings) |
 | Live FNE probe | Supplied private testing codeplug validated; 1 system reached `WaitingForLogin`, no `Connected` state in 10 seconds; clean shutdown, expected nonzero result |
-| Final solution test run | 18 passed: Core 3, FNE 4, Vocoder 4, Audio 3, FNE client 4 (native vocoder included) |
-| Final solution build | Passed all 13 solution projects with `/m:1`; 0 warnings in the final incremental build |
+| Live FNE probe after Local Network permission | Passed: 1 system exchanged traffic with `10.10.10.55:62031`, reached `Connected` within 10 seconds, shut down cleanly, and returned exit code 0 |
+| Final solution test run | 21 passed: Core 3, FNE 4, Vocoder 4, Audio 6, FNE client 4 (native vocoder included) |
+| Final solution build | Passed all 14 solution projects with `/m:1`; 0 warnings in the final incremental build |
 | Bootstrap example validation | Passed: 1 system and 3 zones loaded from `configs/codeplug.example.yml` |
 | Rebuild solution | Passed with `dotnet build src/DvmConsole.Rebuild.sln --no-restore /m:1` |
 | Bootstrap config validation | Passed with `configs/codeplug.example.yml` |
