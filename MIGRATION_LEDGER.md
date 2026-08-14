@@ -85,6 +85,9 @@ Rebuild the `r01a02_dev` desktop dispatch console for Apple Silicon macOS while 
 | FNE connection service tests | 4 passed without opening a network connection |
 | Rebuild solution after FNE client | Passed with `dotnet build src/DvmConsole.Rebuild.sln --no-restore /m:1` (14 legacy FNE warnings) |
 | Live FNE probe | Supplied private testing codeplug validated; 1 system reached `WaitingForLogin`, no `Connected` state in 10 seconds; clean shutdown, expected nonzero result |
+| Final solution test run | 18 passed: Core 3, FNE 4, Vocoder 4, Audio 3, FNE client 4 (native vocoder included) |
+| Final solution build | Passed all 13 solution projects with `/m:1`; 0 warnings in the final incremental build |
+| Bootstrap example validation | Passed: 1 system and 3 zones loaded from `configs/codeplug.example.yml` |
 | Rebuild solution | Passed with `dotnet build src/DvmConsole.Rebuild.sln --no-restore /m:1` |
 | Bootstrap config validation | Passed with `configs/codeplug.example.yml` |
 | Live testing config | Present locally and ignored by Git |
