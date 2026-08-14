@@ -21,6 +21,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DvmConsole.Audio", "DvmCons
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DvmConsole.Audio.Tests", "DvmConsole.Audio.Tests\DvmConsole.Audio.Tests.csproj", "{C0E5A7DF-BF1F-4C07-A522-FA4C2EE4A1D2}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DvmConsole.Desktop", "DvmConsole.Desktop\DvmConsole.Desktop.csproj", "{F6AC260B-27DE-470C-A3D6-7D3DC278B930}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -66,5 +68,9 @@ Global
 		{C0E5A7DF-BF1F-4C07-A522-FA4C2EE4A1D2}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{C0E5A7DF-BF1F-4C07-A522-FA4C2EE4A1D2}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{C0E5A7DF-BF1F-4C07-A522-FA4C2EE4A1D2}.Release|Any CPU.Build.0 = Release|Any CPU
+		{F6AC260B-27DE-470C-A3D6-7D3DC278B930}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{F6AC260B-27DE-470C-A3D6-7D3DC278B930}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{F6AC260B-27DE-470C-A3D6-7D3DC278B930}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{F6AC260B-27DE-470C-A3D6-7D3DC278B930}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 EndGlobal
