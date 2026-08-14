@@ -33,12 +33,14 @@ public sealed class SoftwareVocoderBackend : IVocoderBackend
     private sealed class SoftwareVocoderSession : IVocoderSession
     {
         private readonly NativeVocoderApi api;
+        private readonly VocoderMode mode;
         private IntPtr encoderHandle;
         private IntPtr decoderHandle;
 
         public SoftwareVocoderSession(NativeVocoderApi api, VocoderMode mode)
         {
             this.api = api;
+            this.mode = mode;
             encoderHandle = api.CreateEncoder((int)mode);
             decoderHandle = api.CreateDecoder((int)mode);
             if (encoderHandle == IntPtr.Zero || decoderHandle == IntPtr.Zero)
@@ -48,12 +50,13 @@ public sealed class SoftwareVocoderBackend : IVocoderBackend
                 if (decoderHandle != IntPtr.Zero)
                     api.DeleteDecoder(decoderHandle);
 
-                throw new InvalidOperationException($"Unable to create a {mode} vocoder encoder.");
+                throw new InvalidOperationException($"Unable to create a {mode} vocoder session.");
             }
         }
 
         public int Encode(ReadOnlySpan<short> samples, Span<byte> codeword)
         {
+            ValidateFrame(samples.Length, codeword.Length);
             short[] sampleArray = samples.ToArray();
             byte[] codewordArray = new byte[codeword.Length];
             api.Encode(encoderHandle, sampleArray, codewordArray);
@@ -63,11 +66,22 @@ public sealed class SoftwareVocoderBackend : IVocoderBackend
 
         public int Decode(ReadOnlySpan<byte> codeword, Span<short> samples)
         {
+            ValidateFrame(samples.Length, codeword.Length);
             byte[] codewordArray = codeword.ToArray();
             short[] sampleArray = new short[samples.Length];
             int errors = api.Decode(decoderHandle, codewordArray, sampleArray);
             sampleArray.AsSpan().CopyTo(samples);
             return errors;
+        }
+
+        private void ValidateFrame(int sampleCount, int codewordLength)
+        {
+            if (sampleCount != VocoderFrameSizes.PcmSamplesPerFrame)
+                throw new ArgumentException($"A vocoder frame requires {VocoderFrameSizes.PcmSamplesPerFrame} PCM samples.", nameof(sampleCount));
+
+            int expectedCodewordLength = VocoderFrameSizes.CodewordBytes(mode);
+            if (codewordLength != expectedCodewordLength)
+                throw new ArgumentException($"A {mode} vocoder codeword must be {expectedCodewordLength} bytes.", nameof(codewordLength));
         }
 
         public void Dispose()

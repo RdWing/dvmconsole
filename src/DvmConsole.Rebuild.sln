@@ -15,6 +15,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DvmConsole.Core.Tests", "Dv
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DvmConsole.Fne.Tests", "DvmConsole.Fne.Tests\DvmConsole.Fne.Tests.csproj", "{2F23D4B2-0F79-4AC5-8A1D-1F7A8AFBD4A0}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DvmConsole.Vocoder.Tests", "DvmConsole.Vocoder.Tests\DvmConsole.Vocoder.Tests.csproj", "{B0B6F7D5-5DBE-4B3B-9BA4-2A79552B5D3D}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -48,5 +50,9 @@ Global
 		{2F23D4B2-0F79-4AC5-8A1D-1F7A8AFBD4A0}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{2F23D4B2-0F79-4AC5-8A1D-1F7A8AFBD4A0}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{2F23D4B2-0F79-4AC5-8A1D-1F7A8AFBD4A0}.Release|Any CPU.Build.0 = Release|Any CPU
+		{B0B6F7D5-5DBE-4B3B-9BA4-2A79552B5D3D}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{B0B6F7D5-5DBE-4B3B-9BA4-2A79552B5D3D}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{B0B6F7D5-5DBE-4B3B-9BA4-2A79552B5D3D}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{B0B6F7D5-5DBE-4B3B-9BA4-2A79552B5D3D}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 EndGlobal

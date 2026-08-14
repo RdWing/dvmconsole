@@ -6,6 +6,21 @@ public enum VocoderMode
     P25Imbe = 1
 }
 
+public static class VocoderFrameSizes
+{
+    public const int PcmSamplesPerFrame = 160;
+
+    public static int CodewordBytes(VocoderMode mode)
+    {
+        return mode switch
+        {
+            VocoderMode.DmrAmbe => 9,
+            VocoderMode.P25Imbe => 11,
+            _ => throw new ArgumentOutOfRangeException(nameof(mode), mode, "Unsupported vocoder mode.")
+        };
+    }
+}
+
 public interface IVocoderBackend : IDisposable
 {
     string Name { get; }
