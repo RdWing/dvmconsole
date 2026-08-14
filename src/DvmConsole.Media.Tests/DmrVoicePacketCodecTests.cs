@@ -78,6 +78,49 @@ public sealed class DmrVoicePacketCodecTests
         Assert.Empty(playback.Frames);
     }
 
+    [Fact]
+    public void SelectorMatchesOnlyTheConfiguredDmrVoiceStream()
+    {
+        var selector = new DmrTrafficSelector(destinationId: 100, slot: 1);
+
+        Assert.True(selector.Matches(CreateTraffic(100, 1, "VOICE")));
+        Assert.True(selector.Matches(CreateTraffic(100, 1, "VOICE_SYNC")));
+        Assert.False(selector.Matches(CreateTraffic(101, 1, "VOICE")));
+        Assert.False(selector.Matches(CreateTraffic(100, 0, "VOICE")));
+        Assert.False(selector.Matches(CreateTraffic(100, 1, "TERMINATOR")));
+    }
+
+    [Fact]
+    public async Task RouterDecodesOnlySelectedTraffic()
+    {
+        var vocoder = new FakeVocoderSession();
+        var playback = new FakePlayback();
+        await using var router = new DmrRxAudioRouter(new DmrTrafficSelector(100, 1), vocoder, playback);
+
+        Assert.Equal(0, await router.ProcessAsync(CreateTraffic(101, 1, "VOICE")));
+        Assert.Equal(0, router.FramesDecoded);
+
+        Assert.Equal(0, await router.ProcessAsync(CreateTraffic(100, 1, "VOICE")));
+        Assert.Equal(3, router.FramesDecoded);
+        Assert.Equal(3, playback.Frames.Count);
+    }
+
+    private static FneTrafficFrame CreateTraffic(uint destinationId, byte slot, string frameType)
+    {
+        return new FneTrafficFrame(
+            FneTrafficProtocol.Dmr,
+            1,
+            2,
+            destinationId,
+            slot,
+            "GROUP",
+            frameType,
+            frameType,
+            1,
+            99,
+            new byte[DmrVoicePacketCodec.PacketBytes]);
+    }
+
     private sealed class FakeVocoderSession : IVocoderSession
     {
         public int DecodeCalls { get; private set; }
