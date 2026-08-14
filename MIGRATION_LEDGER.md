@@ -19,9 +19,9 @@ Rebuild the `r01a02_dev` desktop dispatch console for Apple Silicon macOS while 
 |---|---|---|---|
 | M0 | Repository and ledger setup | Complete | Dedicated branch and checked-in ledger exist. |
 | M1 | Cross-platform solution skeleton | Complete | New projects build without changing the legacy WPF project. |
-| M2 | Configuration/core extraction | In progress | Codeplug models and loading are covered by tests. |
-| M3 | FNE core modernization | Pending | FNE protocol source builds against .NET 8 with smoke tests. |
-| M4 | Software vocoder backend | Pending | `libvocoder` loads and encode/decode vectors pass on Apple Silicon. |
+| M2 | Configuration/core extraction | Complete | Codeplug, key, and alias models/loaders are covered by tests. |
+| M3 | FNE core modernization | Complete | FNE protocol source builds against .NET 8 with offline smoke tests. |
+| M4 | Software vocoder backend | In progress | `libvocoder` loads and encode/decode vectors pass on Apple Silicon; tracked smoke coverage remains. |
 | M5 | Audio and platform services | Pending | macOS audio devices, capture, routing, and PTT abstractions work. |
 | M6 | Avalonia application shell | Pending | macOS and Windows shells start and show connection status. |
 | M7 | Feature migration | Pending | RX/TX, patching, tones, TAR, settings, and history reach parity. |
@@ -44,7 +44,10 @@ Rebuild the `r01a02_dev` desktop dispatch console for Apple Silicon macOS while 
 - Added the first .NET 8 projects: configuration core, vocoder abstraction, source-based FNE wrapper, bootstrap app, and core tests.
 - Added `src/DvmConsole.Rebuild.sln` as the rebuild entry point.
 - Reserved `configs/codeplug_testing.yml` for explicit live-FNE/live-codeplug validation; it is not used by automated tests.
-- Verified two configuration tests, the bootstrap against `configs/codeplug.example.yml`, the full solution with `/m:1`, and the native vocoder smoke harness.
+- Extracted the legacy key-file and radio-alias loaders into the cross-platform core and covered them with repository fixtures.
+- Added offline FNE protocol tests for RTP headers, FNE extension headers, fragmentation/reassembly, and opcode construction.
+- Verified three configuration tests, four FNE protocol tests, the bootstrap against `configs/codeplug.example.yml`, the full solution with `/m:1`, and the native vocoder smoke harness.
+- Recorded the FNE wrapper's .NET 8 compatibility warnings as follow-up modernization debt; the original `fnecore` source remains unchanged.
 
 ## Commit ledger
 
@@ -52,6 +55,8 @@ Rebuild the `r01a02_dev` desktop dispatch console for Apple Silicon macOS while 
 |---|---|
 | `7dc3cc3` | Initial branch and migration ledger. |
 | `d298080` | Cross-platform .NET 8 project skeleton and configuration/vocoder boundaries. |
+| `056870b` | Legacy key and alias loading extracted into the cross-platform core. |
+| `6142c29` | Offline FNE protocol test project and solution integration. |
 
 ## Verification log
 
@@ -61,7 +66,8 @@ Rebuild the `r01a02_dev` desktop dispatch console for Apple Silicon macOS while 
 | .NET SDK | 9.0.300; .NET 8 SDK also installed |
 | Native vocoder CMake build | Passed in temporary verification build |
 | Native vocoder .NET smoke test | Passed on Apple Silicon; 0 decode errors |
-| Core configuration tests | 2 passed |
+| Core configuration tests | 3 passed |
+| FNE protocol tests | 4 passed on Apple Silicon; legacy compatibility warnings remain |
 | Rebuild solution | Passed with `dotnet build src/DvmConsole.Rebuild.sln --no-restore /m:1` |
 | Bootstrap config validation | Passed with `configs/codeplug.example.yml` |
 | Live testing config | Present locally and ignored by Git |
