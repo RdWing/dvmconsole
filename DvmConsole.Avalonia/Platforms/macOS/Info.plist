@@ -51,6 +51,8 @@
 	<true/>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>DVM Console uses the microphone to capture and monitor digital voice dispatch audio.</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>DVM Console uses the local network to connect to configured FNE devices and exchange digital voice traffic.</string>
 	<key>NSHumanReadableCopyright</key>
 	<string>Copyright (c) 2025 Caleb, K4PHP and DVMProject (https://github.com/dvmproject) Authors.</string>
 </dict>
