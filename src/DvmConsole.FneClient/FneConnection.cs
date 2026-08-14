@@ -81,6 +81,7 @@ public sealed class FneConnection : IAsyncDisposable
     }
 
     public event EventHandler<FneConnectionStatus>? StatusChanged;
+    public event EventHandler<FneTrafficFrame>? TrafficReceived;
 
     public FneConnectionStatus Status
     {
@@ -176,6 +177,7 @@ public sealed class FneConnection : IAsyncDisposable
         monitorCancellation?.Dispose();
         current.PeerConnected -= HandlePeerConnected;
         current.PeerDisconnected = null;
+        DetachTrafficHandlers(current);
 
         try
         {
@@ -223,12 +225,93 @@ public sealed class FneConnection : IAsyncDisposable
         created.Logger = HandlePeerLog;
         created.PeerConnected += HandlePeerConnected;
         created.PeerDisconnected = _ => Publish(FneConnectionState.WaitingForLogin, "FNE peer disconnected; waiting to reconnect");
+        created.DMRDataReceived += HandleDmrDataReceived;
+        created.P25DataReceived += HandleP25DataReceived;
+        created.NXDNDataReceived += HandleNxdnDataReceived;
+        created.AnalogDataReceived += HandleAnalogDataReceived;
         return created;
     }
 
     private void HandlePeerConnected(object? sender, PeerConnectedEvent args)
     {
         Publish(FneConnectionState.Connected, "FNE peer connected");
+    }
+
+    private void HandleDmrDataReceived(object? sender, DMRDataReceivedEvent args)
+    {
+        PublishTraffic(new FneTrafficFrame(
+            FneTrafficProtocol.Dmr,
+            args.PeerId,
+            args.SrcId,
+            args.DstId,
+            args.Slot,
+            args.CallType.ToString(),
+            args.FrameType.ToString(),
+            args.DataType.ToString(),
+            args.PacketSequence,
+            args.StreamId,
+            args.Data));
+    }
+
+    private void HandleP25DataReceived(object? sender, P25DataReceivedEvent args)
+    {
+        PublishTraffic(new FneTrafficFrame(
+            FneTrafficProtocol.P25,
+            args.PeerId,
+            args.SrcId,
+            args.DstId,
+            null,
+            args.CallType.ToString(),
+            args.FrameType.ToString(),
+            args.DUID.ToString(),
+            args.PacketSequence,
+            args.StreamId,
+            args.Data));
+    }
+
+    private void HandleNxdnDataReceived(object? sender, NXDNDataReceivedEvent args)
+    {
+        PublishTraffic(new FneTrafficFrame(
+            FneTrafficProtocol.Nxdn,
+            args.PeerId,
+            args.SrcId,
+            args.DstId,
+            null,
+            args.CallType.ToString(),
+            args.FrameType.ToString(),
+            args.MessageType.ToString(),
+            args.PacketSequence,
+            args.StreamId,
+            args.Data));
+    }
+
+    private void HandleAnalogDataReceived(object? sender, AnalogDataReceivedEvent args)
+    {
+        PublishTraffic(new FneTrafficFrame(
+            FneTrafficProtocol.Analog,
+            args.PeerId,
+            args.SrcId,
+            args.DstId,
+            null,
+            args.CallType.ToString(),
+            args.FrameType.ToString(),
+            args.AudioFrameType.ToString(),
+            args.PacketSequence,
+            args.StreamId,
+            args.Data));
+    }
+
+    private void PublishTraffic(FneTrafficFrame frame)
+    {
+        TrafficReceived?.Invoke(this, frame);
+    }
+
+    private void DetachTrafficHandlers(FnePeer current)
+    {
+        current.DMRDataReceived -= HandleDmrDataReceived;
+        current.P25DataReceived -= HandleP25DataReceived;
+        current.NXDNDataReceived -= HandleNxdnDataReceived;
+        current.AnalogDataReceived -= HandleAnalogDataReceived;
     }
 
     private void HandlePeerLog(LogLevel level, string message)

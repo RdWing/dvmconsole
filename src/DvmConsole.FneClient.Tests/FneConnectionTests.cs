@@ -64,4 +64,29 @@ public sealed class FneConnectionTests
     {
         Assert.Contains(FneConnectionState.Connected, Enum.GetValues<FneConnectionState>());
     }
+
+    [Fact]
+    public void TrafficFrameOwnsPayloadAndKeepsProtocolMetadata()
+    {
+        byte[] payload = { 1, 2, 3 };
+        var frame = new FneTrafficFrame(
+            FneTrafficProtocol.Dmr,
+            10,
+            20,
+            30,
+            2,
+            "GROUP",
+            "VOICE",
+            "BURST",
+            4,
+            5,
+            payload);
+
+        payload[0] = 99;
+
+        Assert.Equal(FneTrafficProtocol.Dmr, frame.Protocol);
+        Assert.Equal((byte)2, frame.Slot);
+        Assert.Equal((byte)1, frame.Payload[0]);
+        Assert.Equal((uint)5, frame.StreamId);
+    }
 }
