@@ -27,6 +27,12 @@ public sealed record FneConnectionOptions(
     bool Encrypted,
     string? PresharedKey)
 {
+    /// <summary>
+    /// Enables sanitized diagnostic callbacks used by the bounded live probe.
+    /// Raw packet contents are never exposed by the rebuild client.
+    /// </summary>
+    public bool EnableDiagnostics { get; init; }
+
     public static FneConnectionOptions FromConfiguration(SystemConfiguration configuration)
     {
         ArgumentNullException.ThrowIfNull(configuration);
@@ -65,6 +71,8 @@ public sealed class FneConnection : IAsyncDisposable
     private readonly object sync = new();
     private FnePeer? peer;
     private FneConnectionStatus status;
+    private CancellationTokenSource? stateMonitorCancellation;
+    private Task? stateMonitorTask;
 
     public FneConnection(FneConnectionOptions options)
     {
@@ -113,6 +121,7 @@ public sealed class FneConnection : IAsyncDisposable
                 peer = candidate;
 
             candidate.Start();
+            StartStateMonitor(candidate);
             Publish(FneConnectionState.WaitingForLogin, "FNE network services started; waiting for login");
         }
         catch (Exception exception)
@@ -123,6 +132,8 @@ public sealed class FneConnection : IAsyncDisposable
                     peer = null;
             }
 
+            StopStateMonitor();
+
             Publish(FneConnectionState.Faulted, exception.Message);
             throw;
         }
@@ -131,10 +142,16 @@ public sealed class FneConnection : IAsyncDisposable
     public async Task StopAsync(CancellationToken cancellationToken = default)
     {
         FnePeer? current;
+        CancellationTokenSource? monitorCancellation;
+        Task? monitorTask;
         lock (sync)
         {
             current = peer;
             peer = null;
+            monitorCancellation = stateMonitorCancellation;
+            monitorTask = stateMonitorTask;
+            stateMonitorCancellation = null;
+            stateMonitorTask = null;
         }
 
         if (current is null)
@@ -144,6 +161,19 @@ public sealed class FneConnection : IAsyncDisposable
         }
 
         Publish(FneConnectionState.Stopping, "Stopping FNE network services");
+        monitorCancellation?.Cancel();
+        if (monitorTask is not null)
+        {
+            try
+            {
+                await monitorTask.ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                // Expected during shutdown.
+            }
+        }
+        monitorCancellation?.Dispose();
         current.PeerConnected -= HandlePeerConnected;
         current.PeerDisconnected = null;
 
@@ -175,6 +205,9 @@ public sealed class FneConnection : IAsyncDisposable
     {
         var created = new FnePeer("DVMCONSOLE", options.PeerId, endpoint, options.PresharedKey);
         created.Passphrase = options.Password;
+        created.PingTime = 5;
+        created.LogLevel = options.EnableDiagnostics ? LogLevel.DEBUG : LogLevel.INFO;
+        created.RawPacketTrace = options.EnableDiagnostics;
         created.Information = new PeerInformation
         {
             PeerID = options.PeerId,
@@ -187,11 +220,7 @@ public sealed class FneConnection : IAsyncDisposable
                 Identity = options.Identity
             }
         };
-        created.Logger = (level, message) =>
-        {
-            if (level is LogLevel.ERROR or LogLevel.FATAL)
-                Publish(FneConnectionState.Faulted, message);
-        };
+        created.Logger = HandlePeerLog;
         created.PeerConnected += HandlePeerConnected;
         created.PeerDisconnected = _ => Publish(FneConnectionState.WaitingForLogin, "FNE peer disconnected; waiting to reconnect");
         return created;
@@ -200,6 +229,109 @@ public sealed class FneConnection : IAsyncDisposable
     private void HandlePeerConnected(object? sender, PeerConnectedEvent args)
     {
         Publish(FneConnectionState.Connected, "FNE peer connected");
+    }
+
+    private void HandlePeerLog(LogLevel level, string message)
+    {
+        if (message.Contains("Sending login request", StringComparison.OrdinalIgnoreCase))
+        {
+            Publish(FneConnectionState.WaitingForLogin, "FNE login request sent");
+            return;
+        }
+
+        if (message.Contains("Network Sent", StringComparison.OrdinalIgnoreCase))
+        {
+            Publish(Status.State, "FNE traffic packet sent");
+            return;
+        }
+
+        if (message.Contains("Network Received", StringComparison.OrdinalIgnoreCase))
+        {
+            Publish(Status.State, "FNE traffic packet received");
+            return;
+        }
+
+        if (message.Contains("login ACK received", StringComparison.OrdinalIgnoreCase))
+        {
+            Publish(FneConnectionState.Authenticating, "FNE login acknowledgement received");
+            return;
+        }
+
+        if (message.Contains("master NAK", StringComparison.OrdinalIgnoreCase))
+        {
+            Publish(FneConnectionState.Faulted, "FNE master rejected the connection");
+            return;
+        }
+
+        if (message.Contains("SOCKET ERROR", StringComparison.OrdinalIgnoreCase) ||
+            message.Contains("Not connected or lost connection", StringComparison.OrdinalIgnoreCase))
+        {
+            Publish(FneConnectionState.Faulted, "FNE socket error or connection loss");
+            return;
+        }
+
+        if (level is LogLevel.ERROR or LogLevel.FATAL)
+            Publish(FneConnectionState.Faulted, "FNE protocol error");
+    }
+
+    private void StartStateMonitor(FnePeer current)
+    {
+        var cancellation = new CancellationTokenSource();
+        lock (sync)
+        {
+            stateMonitorCancellation = cancellation;
+            stateMonitorTask = MonitorPeerStateAsync(current, cancellation.Token);
+        }
+    }
+
+    private void StopStateMonitor()
+    {
+        CancellationTokenSource? cancellation;
+        lock (sync)
+        {
+            cancellation = stateMonitorCancellation;
+            stateMonitorCancellation = null;
+            stateMonitorTask = null;
+        }
+
+        cancellation?.Cancel();
+        cancellation?.Dispose();
+    }
+
+    private async Task MonitorPeerStateAsync(FnePeer current, CancellationToken cancellationToken)
+    {
+        using var timer = new PeriodicTimer(TimeSpan.FromMilliseconds(250));
+        FneConnectionState? lastState = null;
+
+        try
+        {
+            while (await timer.WaitForNextTickAsync(cancellationToken).ConfigureAwait(false))
+            {
+                FneConnectionState nextState = current.Information?.State switch
+                {
+                    ConnectionState.WAITING_AUTHORISATION => FneConnectionState.Authenticating,
+                    ConnectionState.WAITING_CONFIG => FneConnectionState.Configuring,
+                    ConnectionState.RUNNING => FneConnectionState.Connected,
+                    _ => FneConnectionState.WaitingForLogin
+                };
+
+                if (nextState == lastState)
+                    continue;
+
+                lastState = nextState;
+                Publish(nextState, nextState switch
+                {
+                    FneConnectionState.Authenticating => "FNE login accepted; waiting for authorization",
+                    FneConnectionState.Configuring => "FNE authorization accepted; sending configuration",
+                    FneConnectionState.Connected => "FNE peer connected",
+                    _ => "Waiting for FNE login acknowledgement"
+                });
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // Expected during shutdown.
+        }
     }
 
     private async Task<IPEndPoint> ResolveEndpointAsync(CancellationToken cancellationToken)

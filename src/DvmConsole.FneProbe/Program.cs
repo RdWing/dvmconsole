@@ -31,11 +31,16 @@ internal static class Program
 
         var connections = configuration.Systems
             .Select(FneConnectionOptions.FromConfiguration)
+            .Select(options => options with { EnableDiagnostics = true })
             .Select(options => new FneConnection(options))
             .ToArray();
 
         foreach (FneConnection connection in connections)
             connection.StatusChanged += HandleStatusChanged;
+
+        bool reachedConnected = false;
+        foreach (FneConnection connection in connections)
+            connection.StatusChanged += (_, status) => reachedConnected |= status.State == FneConnectionState.Connected;
 
         Console.WriteLine($"Starting {connections.Length} live FNE connection(s) for {durationSeconds} seconds.");
         foreach (FneConnection connection in connections)
@@ -67,7 +72,7 @@ internal static class Program
         foreach (FneConnection connection in connections)
             connection.StatusChanged -= HandleStatusChanged;
 
-        return connections.Any(connection => connection.Status.State == FneConnectionState.Connected) ? 0 : 1;
+        return reachedConnected ? 0 : 1;
     }
 
     private static void HandleStatusChanged(object? sender, FneConnectionStatus status)
