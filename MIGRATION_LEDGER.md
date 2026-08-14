@@ -51,7 +51,7 @@ Rebuild the `r01a02_dev` desktop dispatch console for Apple Silicon macOS while 
 | Commit | Purpose |
 |---|---|
 | `7dc3cc3` | Initial branch and migration ledger. |
-| _pending_ | Cross-platform .NET 8 project skeleton and configuration/vocoder boundaries. |
+| `d298080` | Cross-platform .NET 8 project skeleton and configuration/vocoder boundaries. |
 
 ## Verification log
 
@@ -64,4 +64,5 @@ Rebuild the `r01a02_dev` desktop dispatch console for Apple Silicon macOS while 
 | Core configuration tests | 2 passed |
 | Rebuild solution | Passed with `dotnet build src/DvmConsole.Rebuild.sln --no-restore /m:1` |
 | Bootstrap config validation | Passed with `configs/codeplug.example.yml` |
+| Live testing config | Present locally and ignored by Git |
 | Legacy application build on macOS | Not attempted; WPF is Windows-only |
