@@ -6,6 +6,9 @@
 * baseline never depends on a listener or external networking.
 */
 using System.Net;
+using System.Net.Sockets;
+using System.Reflection;
+using System.Threading.Tasks;
 using fnecore;
 using Xunit;
 
@@ -79,6 +82,30 @@ namespace FneCore.Tests
             receiver.SetPresharedKey(new byte[32]);
             receiver.SetPresharedKey(null);
             receiver.SetPresharedKey(new byte[16]);
+        }
+
+        [Fact]
+        public async Task UdpReceiver_Send_RecreatesShutdownSocketAndRetries()
+        {
+            using var master = new UdpClient(new IPEndPoint(IPAddress.Loopback, 0));
+            var endpoint = (IPEndPoint)master.Client.LocalEndPoint!;
+            var receiver = new UdpReceiver();
+            receiver.Connect(endpoint);
+
+            var clientField = typeof(UdpBase).GetField(
+                "client",
+                BindingFlags.Instance | BindingFlags.NonPublic)!;
+            var client = (UdpClient)clientField.GetValue(receiver)!;
+            client.Client.Shutdown(SocketShutdown.Both);
+
+            receiver.Send(new UdpFrame
+            {
+                Endpoint = endpoint,
+                Message = new byte[] { 0x01, 0x02, 0x03 }
+            });
+
+            var received = await master.ReceiveAsync().WaitAsync(TimeSpan.FromSeconds(2));
+            Assert.Equal(new byte[] { 0x01, 0x02, 0x03 }, received.Buffer);
         }
     }
 }
