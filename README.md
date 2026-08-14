@@ -26,22 +26,27 @@ for complete Windows and macOS instructions.
 
 ### macOS Avalonia build and bundle
 
-From a macOS checkout with the .NET 8 SDK:
+From a macOS checkout with the .NET 8 SDK, use the freshness-checked wrapper:
 
 ```sh
-dotnet publish DvmConsole.Avalonia/DvmConsole.Avalonia.csproj \
-  -c Release -r osx-arm64 --self-contained
-packaging/macos/build-app.sh \
-  -p DvmConsole.Avalonia/bin/Release/net8.0/osx-arm64/publish \
-  -o dist/DvmConsole.app
-open dist/DvmConsole.app
+packaging/macos/publish-app.sh \
+  -r osx-arm64 \
+  -o artifacts/macos/osx-arm64/DvmConsole.app
+open artifacts/macos/osx-arm64/DvmConsole.app
 ```
 
-Use `osx-x64` for an Intel/Rosetta bundle. The bundle is unsigned and
-unnotarized unless the later signing pipeline is run on the user's Mac. The
-native `libvocoder.dylib` is optional for assembling a development bundle but
-required for vocoder-backed voice operation; build it with
-`packaging/macos/build-vocoder.sh` and pass `-v` to `build-app.sh`.
+Use `-r osx-x64` for an Intel/Rosetta bundle. The wrapper cleans only
+RID-specific generated output, records the parent/fnecore SHAs in the bundle
+manifest, and verifies that the bundled managed assemblies match the exact
+publish output. The lower-level `dotnet publish` plus
+`packaging/macos/build-app.sh` sequence is available for packaging experiments
+but does not perform those freshness checks.
+
+The bundle is unsigned and unnotarized unless the later signing pipeline is
+run on the user's Mac. The native `libvocoder.dylib` is optional for
+assembling a development bundle but required for vocoder-backed voice
+operation; build it with `packaging/macos/build-vocoder.sh` and pass `-v` to
+`publish-app.sh`.
 
 On first launch, macOS may require Microphone permission for audio capture and
 Accessibility plus Input Monitoring permission for the global PTT hotkey.

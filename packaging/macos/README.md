@@ -9,6 +9,7 @@ packaging for the Avalonia shell (`DvmConsole.Avalonia`): it produces an
 | File | Purpose |
 | --- | --- |
 | `build-app.sh` | Assembles `<name>.app` (Contents/MacOS, Contents/Resources, Contents/Frameworks) from a publish directory. Unsigned, no notarization, no code signing of any kind. |
+| `publish-app.sh` | Cleans the selected RID's generated Release outputs, publishes the Avalonia shell, assembles the bundle, and verifies the bundled `fnecore.dll` and `DvmConsole.Avalonia.dll` match the publish output. |
 | `build-vocoder.sh` | Reproducible macOS gate: obtains the pinned dvmvocoder commit (`dvmvocoder.lock`) and builds unsigned `libvocoder.dylib` for arm64 + x86_64. |
 | `dvmvocoder.lock` | Pin file: upstream URL + exact commit for `build-vocoder.sh`. |
 | `../` + `../../DvmConsole.Avalonia/Platforms/macOS/Info.plist` | Bundle metadata template with `@DVM_*@` substitution tokens (see below). |
@@ -37,18 +38,32 @@ only copied into `Contents/Frameworks` when the caller supplies it — see
 
 ## Publish
 
-Run from the repository root (the csproj already declares
-`RuntimeIdentifiers` `osx-arm64;osx-x64`):
+Use the wrapper after changing the parent repository or the fnecore
+submodule. It removes only generated Release output for the selected RID,
+publishes from the exact parent/fnecore gitlink, assembles the app, and writes
+an ignored `Contents/Resources/build-manifest.txt` containing the source SHAs
+and assembly hashes:
 
 ```sh
-# Apple Silicon
-dotnet publish DvmConsole.Avalonia/DvmConsole.Avalonia.csproj -c Release -r osx-arm64 --self-contained
+# Apple Silicon (default; output under ignored artifacts/)
+packaging/macos/publish-app.sh -r osx-arm64 -o artifacts/macos/osx-arm64/DvmConsole.app
 
-# Intel
-dotnet publish DvmConsole.Avalonia/DvmConsole.Avalonia.csproj -c Release -r osx-x64 --self-contained
+# Intel/Rosetta
+packaging/macos/publish-app.sh -r osx-x64 -o artifacts/macos/osx-x64/DvmConsole.app
 ```
 
-Output lands in `DvmConsole.Avalonia/bin/Release/net8.0/<rid>/publish/`.
+The wrapper refuses tracked parent changes, a dirty fnecore checkout, or a
+parent gitlink that does not match the checked-out fnecore `HEAD`. This is
+intentional: a successful build must identify the source tree that produced
+the bundle. Do not rely on a pre-existing RID-specific `publish/` directory
+after updating the submodule.
+
+For a framework-dependent development bundle, add
+`--framework-dependent`. Pass `-v artifacts/vocoder/osx-arm64/libvocoder.dylib`
+when the native vocoder has been built.
+
+The lower-level `dotnet publish` plus `build-app.sh` commands remain useful
+for packaging experiments, but they do not perform the freshness checks above.
 
 ## Assemble the .app
 
