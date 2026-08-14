@@ -190,6 +190,7 @@ namespace DvmConsole.Avalonia
         private AlertToneManagerWindow? alertToneManagerWindow;
         private TonePresetManagerWindow? tonePresetManagerWindow;
         private DtmfPresetManagerWindow? dtmfPresetManagerWindow;
+        private QuickCallWindow? quickCallWindow;
         private AlertSettingsPersistence? alertSettingsPersistence;
         private SettingsTransferService? settingsTransferService;
         private SettingsTransferWindow? settingsTransferWindow;
@@ -1567,6 +1568,66 @@ namespace DvmConsole.Avalonia
                     subscriberCommandWindow = null;
             };
             _ = dialog.ShowDialog(this);
+        }
+
+        internal bool CanOpenQuickCall
+            => toneDispatchCoordinator is not null;
+
+        internal void OpenManualQuickCall()
+        {
+            if (quickCallWindow is { } existing)
+            {
+                existing.Activate();
+                return;
+            }
+
+            var dialog = new QuickCallWindow(new QuickCallViewModel());
+            quickCallWindow = dialog;
+            Action<QuickCallRequest> sendRequested = request =>
+                _ = SendQuickCallAsync(request);
+            dialog.SendRequested += sendRequested;
+            dialog.Closed += (_, _) =>
+            {
+                dialog.SendRequested -= sendRequested;
+                if (ReferenceEquals(quickCallWindow, dialog))
+                    quickCallWindow = null;
+            };
+            _ = dialog.ShowDialog(this);
+        }
+
+        private async Task SendQuickCallAsync(QuickCallRequest request)
+        {
+            if (toneDispatchCoordinator is not { } coordinator)
+                return;
+
+            var pageSlots = ResolveQuickCallPageSlots();
+            var targets = transmitTargetResolver is { } resolver
+                ? resolver.ResolveAll(pageSlots.Select(slot => slot.ChannelName))
+                : Array.Empty<TransmitTarget>();
+            bool sent = await coordinator.SendGeneratedPcmAsync(
+                    request.Pcm,
+                    request.SendStartSignal,
+                    CancellationToken.None,
+                    targets)
+                .ConfigureAwait(false);
+            if (!sent || !request.ClearPageStateAfterSend)
+                return;
+
+            Dispatcher.UIThread.Post(() =>
+            {
+                foreach (ChannelSlotViewModel slot in pageSlots)
+                    slot.PageState = false;
+            });
+        }
+
+        private IReadOnlyList<ChannelSlotViewModel> ResolveQuickCallPageSlots()
+        {
+            if (DataContext is not MainWindowViewModel viewModel)
+                return Array.Empty<ChannelSlotViewModel>();
+
+            return viewModel.SelectedChannels
+                .Where(slot => slot.IsSelected && slot.PageState && !slot.IsRxOnly)
+                .ToArray();
         }
 
         internal static bool ResolveKeepWindowOnTop(

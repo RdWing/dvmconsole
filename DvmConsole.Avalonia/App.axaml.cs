@@ -312,6 +312,7 @@ namespace DvmConsole.Avalonia
                 NativeMenuItem documentationItem = CreateDocumentationMenuItem();
                 NativeMenuItem shellControlsItem = CreateShellControlsMenuItem(mainWindow);
                 NativeMenuItem subscriberCommandsItem = CreateSubscriberCommandsMenuItem(mainWindow);
+                NativeMenuItem quickCallItem = CreateQuickCallMenuItem(mainWindow);
 
                 NativeMenuItem? fileItem = menu.Items
                     .OfType<NativeMenuItem>()
@@ -358,6 +359,15 @@ namespace DvmConsole.Avalonia
                 {
                     menu.Items.Add(subscriberCommandsItem);
                     BindSubscriberCommandEnablement(subscriberCommandsItem, mainWindow);
+                }
+
+                NativeMenuItem commandsHost = commandsItem ?? subscriberCommandsItem;
+                if (commandsHost.Menu is { } commandsMenu
+                    && !commandsMenu.Items.OfType<NativeMenuItem>().Any(item =>
+                        item.Header is string header
+                        && string.Equals(header, "Quick Call II", StringComparison.Ordinal)))
+                {
+                    commandsMenu.Items.Add(quickCallItem);
                 }
 
                 NativeMenuItem? helpItem = menu.Items
@@ -552,6 +562,20 @@ namespace DvmConsole.Avalonia
                 SubscriberCommandKind.Uninhibit,
                 enabled);
 
+            return item;
+        }
+
+        /// <summary>
+        /// Creates the manual QuickCall II action. Target selection happens
+        /// at send time from the page-state snapshot, not when the menu opens.
+        /// </summary>
+        internal static NativeMenuItem CreateQuickCallMenuItem(MainWindow? mainWindow)
+        {
+            var item = new NativeMenuItem("Quick Call II")
+            {
+                IsEnabled = mainWindow?.CanOpenQuickCall == true,
+            };
+            item.Click += (_, _) => mainWindow?.OpenManualQuickCall();
             return item;
         }
 

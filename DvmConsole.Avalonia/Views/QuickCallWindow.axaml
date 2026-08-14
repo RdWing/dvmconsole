@@ -1,0 +1,42 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:DvmConsole.Avalonia.ViewModels"
+        x:Class="DvmConsole.Avalonia.Views.QuickCallWindow"
+        x:DataType="vm:QuickCallViewModel"
+        Title="QuickCall II Page"
+        Width="390"
+        Height="240"
+        MinWidth="360"
+        MinHeight="220"
+        WindowStartupLocation="CenterOwner">
+    <Border Padding="22" Background="#0B1114">
+        <Grid RowDefinitions="Auto,Auto,Auto,Auto,Auto,*" ColumnDefinitions="Auto,*" RowSpacing="12" ColumnSpacing="14">
+            <TextBlock Grid.Row="0" Grid.ColumnSpan="2"
+                       Classes="title"
+                       Text="QuickCall II Page" />
+            <TextBlock Grid.Row="1" Grid.ColumnSpan="2"
+                       Classes="subtitle"
+                       Text="Enter the A and B tone frequencies for the selected page resources." />
+
+            <TextBlock Grid.Row="2" Grid.Column="0" VerticalAlignment="Center" Text="A Tone:" />
+            <TextBox Grid.Row="2" Grid.Column="1"
+                     Text="{Binding ToneA, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                     Watermark="Frequency in Hz" />
+            <TextBlock Grid.Row="3" Grid.Column="0" VerticalAlignment="Center" Text="B Tone:" />
+            <TextBox Grid.Row="3" Grid.Column="1"
+                     Text="{Binding ToneB, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                     Watermark="Frequency in Hz" />
+
+            <TextBlock Grid.Row="4" Grid.ColumnSpan="2"
+                       Foreground="#FFB4AB"
+                       Text="{Binding ValidationMessage}" />
+            <StackPanel Grid.Row="5" Grid.ColumnSpan="2"
+                        Orientation="Horizontal"
+                        HorizontalAlignment="Right"
+                        Spacing="10">
+                <Button Content="Cancel" Click="Cancel_Click" />
+                <Button Content="Send" Click="Send_Click" IsDefault="True" />
+            </StackPanel>
+        </Grid>
+    </Border>
+</Window>
