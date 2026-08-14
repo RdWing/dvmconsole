@@ -68,6 +68,7 @@ artifacts/
 
 # Local live-FNE configuration; may contain credentials and private endpoints.
 configs/codeplug_testing.yml
+artifacts/
 
 # ASP.NET Scaffolding
 ScaffoldingReadMe.txt
