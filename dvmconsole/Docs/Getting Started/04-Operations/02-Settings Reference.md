@@ -124,6 +124,15 @@ Prompts for a key and stores it as the global PTT shortcut.
 
 # View Menu
 
+## Avalonia/macOS shell note
+
+In the Avalonia shell, FNE connection rows and Call History are in-window
+surfaces. Use the System panel to start, stop, or restart configured FNE rows;
+use the Call History filter to match channel, system, alias, source RID, or
+destination TGID. The Settings → Shell Controls submenu exposes the remaining
+shell actions described below. These actions use the shared Core settings
+sections and do not create a second settings file.
+
 ## Select User Background
 
 Chooses a custom background image for the main console.
@@ -146,7 +155,9 @@ Resizes the channel display area to the current window.
 
 ## Snap Call History To Window
 
-Keeps the Call History window aligned next to the main console when shown.
+This separate WPF window-placement action is not exposed in the Avalonia shell.
+Avalonia keeps Call History as an inline dashboard surface and provides its
+filter through the Call History panel; there is no separate window to snap.
 
 ## Groups
 
@@ -155,6 +166,9 @@ Opens the Groups window.
 ## Always on Top
 
 Keeps the console above other windows.
+
+On macOS this is desktop-window behavior and must be verified in an Aqua host
+session; Linux tests only verify the managed property/persistence wiring.
 
 ---
 

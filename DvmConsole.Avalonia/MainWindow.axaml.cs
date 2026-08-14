@@ -9,6 +9,9 @@ using System.Threading.Tasks;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Interactivity;
+using Avalonia.Media;
+using Avalonia.Media.Imaging;
+using Avalonia.Styling;
 using Avalonia.Threading;
 using dvmconsole;
 using DvmConsole.Avalonia.Audio;
@@ -183,6 +186,9 @@ namespace DvmConsole.Avalonia
         private SettingsTransferWindow? settingsTransferWindow;
         private DiagnosticLogSink? diagnosticLogSink;
         private DebugLogWindow? debugLogWindow;
+        private WidgetSelectionWindow? widgetSelectionWindow;
+        private string? userBackgroundPath;
+        private Bitmap? userBackgroundBitmap;
         private IAudioWaveFileInspector? alertTonePreviewInspector;
         private IAudioWaveFilePlayer? alertTonePreviewPlayer;
         private readonly AudioSettingsPersistence? audioSettingsPersistence;
@@ -664,6 +670,31 @@ namespace DvmConsole.Avalonia
             if (DataContext is MainWindowViewModel viewModel)
             {
                 viewModel.AttachPreferencesPersistence(preferencesPersistence);
+                if (viewModel.Preferences is { } preferences)
+                {
+                    preferences.PropertyChanged += OnShellPreferencesChanged;
+                    ApplyTheme(preferences.DarkMode);
+                    Topmost = preferences.KeepWindowOnTop || Topmost;
+                }
+            }
+        }
+
+        private void OnShellPreferencesChanged(object? sender, PropertyChangedEventArgs e)
+        {
+            if (sender is not OperatorPreferencesViewModel preferences)
+                return;
+
+            if (e.PropertyName == nameof(OperatorPreferencesViewModel.DarkMode))
+                ApplyTheme(preferences.DarkMode);
+
+            if (e.PropertyName == nameof(OperatorPreferencesViewModel.KeepWindowOnTop))
+            {
+                Topmost = preferences.KeepWindowOnTop;
+                if (layoutSection is not null)
+                {
+                    layoutSection.KeepWindowOnTop = Topmost;
+                    SaveLayoutSection();
+                }
             }
         }
 
@@ -833,9 +864,23 @@ namespace DvmConsole.Avalonia
             layoutPersistence.TryLoad(out UserSettingsLayoutSection section);
             layoutSection = section;
 
+            if (DataContext is MainWindowViewModel viewModel)
+            {
+                viewModel.SetWidgetVisibility(
+                    section.ShowSystemStatus,
+                    section.ShowChannels,
+                    section.ShowAlertTones);
+            }
+
             Width = section.WindowWidth;
             Height = section.WindowHeight;
-            Topmost = section.KeepWindowOnTop;
+            bool? preferenceKeepWindowOnTop =
+                (DataContext as MainWindowViewModel)?.Preferences?.KeepWindowOnTop;
+            Topmost = ResolveKeepWindowOnTop(
+                preferenceKeepWindowOnTop,
+                section.KeepWindowOnTop);
+            section.KeepWindowOnTop = Topmost;
+            ApplyBackground(section.UserBackgroundImage);
             if (section.Maximized)
             {
                 WindowState = WindowState.Maximized;
@@ -1243,6 +1288,223 @@ namespace DvmConsole.Avalonia
                     debugLogWindow = null;
             };
             window.Show(this);
+        }
+
+        internal void ToggleSelectAllCurrentZone()
+        {
+            if (DataContext is MainWindowViewModel viewModel)
+                viewModel.ToggleSelectAllCurrentZone();
+        }
+
+        internal void OpenCallHistory()
+        {
+            CallHistoryFilterTextBox.Focus();
+        }
+
+        internal void OpenWidgetSelection()
+        {
+            if (widgetSelectionWindow is { } existing)
+            {
+                existing.Activate();
+                return;
+            }
+
+            if (DataContext is not MainWindowViewModel viewModel)
+                return;
+
+            var dialog = new WidgetSelectionWindow(
+                viewModel.ShowSystemStatus,
+                viewModel.ShowChannels,
+                viewModel.ShowAlertTones);
+            widgetSelectionWindow = dialog;
+            dialog.SaveRequested += (showSystemStatus, showChannels, showAlertTones) =>
+            {
+                viewModel.SetWidgetVisibility(showSystemStatus, showChannels, showAlertTones);
+                if (layoutSection is not null)
+                {
+                    layoutSection.ShowSystemStatus = showSystemStatus;
+                    layoutSection.ShowChannels = showChannels;
+                    layoutSection.ShowAlertTones = showAlertTones;
+                    SaveLayoutSection();
+                }
+            };
+            dialog.Closed += (_, _) =>
+            {
+                if (ReferenceEquals(widgetSelectionWindow, dialog))
+                    widgetSelectionWindow = null;
+            };
+            dialog.Show(this);
+        }
+
+        internal async void OpenUserBackgroundAsync()
+        {
+            try
+            {
+                FileDialogResult result = await FileDialogService.OpenFileAsync(
+                    new OpenFileRequest(
+                        "Select User Background",
+                        new[]
+                        {
+                            new DvmConsole.Platform.Dialogs.FileDialogFilter(
+                                "Image files", new[] { "*.png", "*.jpg", "*.jpeg", "*.webp" }),
+                        },
+                        false,
+                        null),
+                    CancellationToken.None);
+                if (result.Cancelled || string.IsNullOrWhiteSpace(result.Selected))
+                    return;
+
+                bool applied = ApplyBackground(result.Selected);
+                if (layoutSection is not null)
+                {
+                    layoutSection.UserBackgroundImage = applied ? result.Selected : null;
+                    SaveLayoutSection();
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                // Picker cancellation is a normal outcome.
+            }
+            catch (Exception exception)
+            {
+                System.Diagnostics.Debug.WriteLine(
+                    $"User background selection failed: {exception.Message}");
+            }
+        }
+
+        internal async void ResetSettings()
+        {
+            bool confirmed = await TarConfirmationService.ConfirmAsync(
+                this,
+                new ConfirmationRequest(
+                    "Reset Settings",
+                    "Reset console settings? The defaults take effect after restart."),
+                CancellationToken.None);
+            if (confirmed)
+                settingsTransferService?.Reset();
+        }
+
+        internal void ResetLayout()
+        {
+            if (layoutSection is null)
+                return;
+
+            layoutSection.ChannelPositions.Clear();
+            layoutSection.SystemStatusPositions.Clear();
+            layoutSection.AlertTonePositions.Clear();
+            layoutSection.WebStreamPositions.Clear();
+            layoutSection.CanvasWidth = Width;
+            layoutSection.CanvasHeight = Height;
+            SaveLayoutSection();
+        }
+
+        internal void FitLayoutToWindow()
+        {
+            if (layoutSection is null)
+                return;
+
+            layoutSection.CanvasWidth = Width;
+            layoutSection.CanvasHeight = Height;
+            SaveLayoutSection();
+        }
+
+        internal void SetWidgetLayoutLocked()
+        {
+            if (layoutSection is null)
+                return;
+
+            layoutSection.LockWidgets = !layoutSection.LockWidgets;
+            SaveLayoutSection();
+            if (layoutSection.LockWidgets)
+            {
+                draggedWebStream = null;
+                FneConnectionsPanel.Focus();
+            }
+        }
+
+        internal void ToggleKeepWindowOnTop()
+        {
+            Topmost = !Topmost;
+            if (DataContext is MainWindowViewModel viewModel
+                && viewModel.Preferences is { } preferences)
+            {
+                preferences.KeepWindowOnTop = Topmost;
+            }
+            if (layoutSection is not null)
+            {
+                layoutSection.KeepWindowOnTop = Topmost;
+                SaveLayoutSection();
+            }
+        }
+
+        internal void OpenFneConnectionManager()
+        {
+            if (DataContext is MainWindowViewModel viewModel
+                && !viewModel.ShowSystemStatus)
+            {
+                viewModel.SetWidgetVisibility(
+                    showSystemStatus: true,
+                    showChannels: viewModel.ShowChannels,
+                    showAlertTones: viewModel.ShowAlertTones);
+                if (layoutSection is not null)
+                {
+                    layoutSection.ShowSystemStatus = true;
+                    SaveLayoutSection();
+                }
+            }
+
+            FneConnectionsPanel.Focus();
+        }
+
+        internal static bool ResolveKeepWindowOnTop(
+            bool? preferenceValue,
+            bool layoutValue)
+            => preferenceValue ?? layoutValue;
+
+        private void ApplyTheme(bool darkMode)
+        {
+            RequestedThemeVariant = darkMode ? ThemeVariant.Dark : ThemeVariant.Light;
+            if (string.IsNullOrWhiteSpace(userBackgroundPath))
+            {
+                Background = new SolidColorBrush(
+                    Color.Parse(darkMode ? "#0B1114" : "#F3F6F7"));
+            }
+        }
+
+        private bool ApplyBackground(string? path)
+        {
+            if (!string.IsNullOrWhiteSpace(path) && File.Exists(path))
+            {
+                try
+                {
+                    var bitmap = new Bitmap(path);
+                    var previousBitmap = userBackgroundBitmap;
+                    userBackgroundBitmap = bitmap;
+                    userBackgroundPath = path;
+                    Background = new ImageBrush(bitmap)
+                    {
+                        Stretch = Stretch.UniformToFill,
+                    };
+                    previousBitmap?.Dispose();
+                    return true;
+                }
+                catch (Exception exception)
+                {
+                    System.Diagnostics.Debug.WriteLine(
+                        $"User background could not be loaded: {exception.Message}");
+                }
+            }
+
+            userBackgroundBitmap?.Dispose();
+            userBackgroundBitmap = null;
+            userBackgroundPath = null;
+            if (layoutSection is not null)
+                layoutSection.UserBackgroundImage = null;
+
+            bool darkMode = (DataContext as MainWindowViewModel)?.Preferences?.DarkMode == true;
+            Background = new SolidColorBrush(
+                Color.Parse(darkMode ? "#0B1114" : "#F3F6F7"));
+            return false;
         }
 
         private async Task ReloadCurrentRuntimeAsync()
@@ -1991,7 +2253,8 @@ namespace DvmConsole.Avalonia
         {
             if (sender is not Border { DataContext: WebStreamShellItemViewModel item } card
                 || e.Properties.PointerUpdateKind != PointerUpdateKind.LeftButtonPressed
-                || !ReferenceEquals(e.Source, card))
+                || !ReferenceEquals(e.Source, card)
+                || layoutSection?.LockWidgets == true)
             {
                 return;
             }
@@ -2004,6 +2267,13 @@ namespace DvmConsole.Avalonia
 
         private void WebStreamCard_PointerMoved(object? sender, PointerEventArgs e)
         {
+            if (layoutSection?.LockWidgets == true)
+            {
+                e.Pointer.Capture(null);
+                draggedWebStream = null;
+                return;
+            }
+
             if (draggedWebStream is not { } item
                 || sender is not Border { DataContext: WebStreamShellItemViewModel senderItem }
                 || !ReferenceEquals(item, senderItem))
@@ -2257,6 +2527,9 @@ namespace DvmConsole.Avalonia
                     await macAudioDeviceCatalog.DisposeAsync().ConfigureAwait(false);
                     macAudioDeviceCatalog = null;
                 }
+
+                userBackgroundBitmap?.Dispose();
+                userBackgroundBitmap = null;
             }
         }
 
@@ -2383,6 +2656,23 @@ namespace DvmConsole.Avalonia
             layoutSection.WindowHeight = Height;
             layoutSection.Maximized = WindowState == WindowState.Maximized;
             layoutSection.KeepWindowOnTop = Topmost;
+            SaveLayoutSection();
+            layoutHydrated = false;
+        }
+
+        private void SaveLayoutSection()
+        {
+            if (!layoutHydrated
+                || layoutPersistence is null
+                || layoutSection is null)
+            {
+                return;
+            }
+
+            layoutSection.WindowWidth = Width;
+            layoutSection.WindowHeight = Height;
+            layoutSection.Maximized = WindowState == WindowState.Maximized;
+            layoutSection.KeepWindowOnTop = Topmost;
             try
             {
                 layoutPersistence.Save(layoutSection);
@@ -2391,10 +2681,6 @@ namespace DvmConsole.Avalonia
             {
                 System.Diagnostics.Debug.WriteLine(
                     $"Layout settings save failed: {exception.Message}");
-            }
-            finally
-            {
-                layoutHydrated = false;
             }
         }
 

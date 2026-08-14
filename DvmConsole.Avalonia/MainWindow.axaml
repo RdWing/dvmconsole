@@ -8,8 +8,8 @@
         Title="DVM Console"
         Width="1180" Height="760"
         MinWidth="920" MinHeight="680"
-        Background="#0B1114"
-        Foreground="#EFF7F5"
+        Background="#F3F7F7"
+        Foreground="#0B1114"
         WindowStartupLocation="CenterScreen"
         KeyDown="Window_KeyDown">
 
@@ -66,6 +66,7 @@
             <Setter Property="FontFamily" Value="Inter" />
             <Setter Property="FontSize" Value="30" />
             <Setter Property="FontWeight" Value="Bold" />
+            <Setter Property="Foreground" Value="#0B1114" />
         </Style>
         <Style Selector="TextBlock.muted">
             <Setter Property="FontFamily" Value="Inter" />
@@ -95,11 +96,41 @@
             <Setter Property="BorderThickness" Value="1" />
             <Setter Property="CornerRadius" Value="8" />
         </Style>
+        <Style Selector="Border.panel TextBlock">
+            <Setter Property="Foreground" Value="#EFF7F5" />
+        </Style>
+        <Style Selector="Border.panel TextBlock.kicker">
+            <Setter Property="Foreground" Value="#5FE1D2" />
+        </Style>
+        <Style Selector="Border.panel TextBlock.data-label">
+            <Setter Property="Foreground" Value="#8EA3A3" />
+        </Style>
+        <Style Selector="Border.panel TextBlock.muted">
+            <Setter Property="Foreground" Value="#8EA3A3" />
+        </Style>
+        <Style Selector="Border.panel TextBlock.group-indicator">
+            <Setter Property="Foreground" Value="#F3B562" />
+        </Style>
         <Style Selector="Border.channel-card">
             <Setter Property="Background" Value="#142126" />
             <Setter Property="BorderBrush" Value="#2A4548" />
             <Setter Property="BorderThickness" Value="1" />
             <Setter Property="CornerRadius" Value="6" />
+        </Style>
+        <Style Selector="Border.channel-card TextBlock">
+            <Setter Property="Foreground" Value="#EFF7F5" />
+        </Style>
+        <Style Selector="Border.channel-card TextBlock.kicker">
+            <Setter Property="Foreground" Value="#5FE1D2" />
+        </Style>
+        <Style Selector="Border.channel-card TextBlock.data-label">
+            <Setter Property="Foreground" Value="#8EA3A3" />
+        </Style>
+        <Style Selector="Border.channel-card TextBlock.muted">
+            <Setter Property="Foreground" Value="#8EA3A3" />
+        </Style>
+        <Style Selector="Border.channel-card TextBlock.group-indicator">
+            <Setter Property="Foreground" Value="#F3B562" />
         </Style>
         <Style Selector="Border.channel-card.selected">
             <Setter Property="BorderBrush" Value="#4E8A8C" />
@@ -189,7 +220,12 @@
         </Border>
 
         <Grid ColumnDefinitions="220,16,*">
-            <Border Grid.Column="0" Classes="panel" Padding="18">
+            <Border x:Name="FneConnectionsPanel"
+                    Grid.Column="0"
+                    Classes="panel"
+                    Padding="18"
+                    Focusable="True"
+                    IsVisible="{Binding ShowSystemStatus}">
                 <StackPanel Spacing="16">
                     <StackPanel Spacing="5">
                         <TextBlock Classes="kicker" Text="SYSTEM" />
@@ -199,6 +235,10 @@
                     <TextBlock Classes="muted"
                                Text="No systems configured"
                                IsVisible="{Binding FneConnections.HasNoSystems}" />
+                    <TextBlock Classes="muted"
+                               Text="Open a codeplug from File to configure the console."
+                               IsVisible="{Binding FneConnections.HasNoSystems}"
+                               TextWrapping="Wrap" />
 
                     <ItemsControl ItemsSource="{Binding FneConnections.Systems}"
                                   IsVisible="{Binding FneConnections.HasSystems}">
@@ -261,7 +301,10 @@
                 </StackPanel>
             </Border>
 
-            <Grid Grid.Column="2" RowDefinitions="Auto,Auto,Auto,Auto,*" RowSpacing="16">
+            <ScrollViewer Grid.Column="2"
+                          VerticalScrollBarVisibility="Auto"
+                          HorizontalScrollBarVisibility="Disabled">
+                <Grid RowDefinitions="Auto,Auto,Auto,Auto,Auto" RowSpacing="16">
                 <Grid ColumnDefinitions="*,Auto">
                     <StackPanel Spacing="4">
                         <TextBlock Classes="kicker" Text="CHANNEL GRID" />
@@ -273,28 +316,36 @@
                                VerticalAlignment="Bottom" />
                 </Grid>
 
-                <StackPanel Grid.Row="1" Orientation="Horizontal" Spacing="10">
-                    <ComboBox ItemsSource="{Binding Zones}"
-                              SelectedItem="{Binding SelectedZone, Mode=TwoWay}"
-                              HorizontalAlignment="Left"
-                              MinWidth="280">
-                        <ComboBox.ItemTemplate>
-                            <DataTemplate x:DataType="vm:ZoneViewModel">
-                                <TextBlock Text="{Binding Name}" />
-                            </DataTemplate>
-                        </ComboBox.ItemTemplate>
-                    </ComboBox>
-                    <Button Content="SELECT / CLEAR ALL"
-                            Click="SelectAllChannels_Click" />
-                    <Button Content="ALERT 1"
-                            Click="AlertTone1_Click" />
-                    <Button Content="ALERT 2"
-                            Click="AlertTone2_Click" />
-                    <Button Content="ALERT 3"
-                            Click="AlertTone3_Click" />
+                <StackPanel Grid.Row="1" Spacing="10">
+                    <StackPanel Orientation="Horizontal" Spacing="10"
+                                IsVisible="{Binding ShowChannels}">
+                        <ComboBox ItemsSource="{Binding Zones}"
+                                  SelectedItem="{Binding SelectedZone, Mode=TwoWay}"
+                                  HorizontalAlignment="Left"
+                                  MinWidth="280">
+                            <ComboBox.ItemTemplate>
+                                <DataTemplate x:DataType="vm:ZoneViewModel">
+                                    <TextBlock Text="{Binding Name}" />
+                                </DataTemplate>
+                            </ComboBox.ItemTemplate>
+                        </ComboBox>
+                        <Button Content="SELECT / CLEAR ALL"
+                                Click="SelectAllChannels_Click" />
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal"
+                                Spacing="10"
+                                IsVisible="{Binding ShowAlertTones}">
+                        <Button Content="ALERT 1"
+                                Click="AlertTone1_Click" />
+                        <Button Content="ALERT 2"
+                                Click="AlertTone2_Click" />
+                        <Button Content="ALERT 3"
+                                Click="AlertTone3_Click" />
+                    </StackPanel>
                 </StackPanel>
 
-                <Border Grid.Row="2" Classes="panel" Padding="14">
+                <Border Grid.Row="2" Classes="panel" Padding="14"
+                        IsVisible="{Binding ShowChannels}">
                     <ItemsControl ItemsSource="{Binding Channels}">
                         <ItemsControl.ItemsPanel>
                             <ItemsPanelTemplate>
@@ -308,8 +359,7 @@
                                         Classes.primary="{Binding IsPrimary}"
                                         PointerPressed="ChannelCard_PointerPressed"
                                         Width="{Binding CardWidth}"
-                                        Height="{Binding CardHeight}"
-                                        ClipToBounds="True"
+                                        MinHeight="{Binding CardHeight}"
                                         Background="{Binding IdleBrush}"
                                         Margin="0,0,12,12"
                                         Padding="14">
@@ -331,6 +381,9 @@
                                             <TextBlock Classes="data-label" Text="CHANNEL" />
                                             <TextBlock Classes="data-value" Text="{Binding ChannelName}"
                                                        IsVisible="{Binding ChannelName, Converter={x:Static conv:StringConverters.IsNotNullOrEmpty}}" />
+                                            <TextBlock Classes="muted"
+                                                       Text="No channel assigned"
+                                                       IsVisible="{Binding ChannelName, Converter={x:Static conv:StringConverters.IsNullOrEmpty}}" />
                                         </StackPanel>
                                         <Grid ColumnDefinitions="*,*" ColumnSpacing="12">
                                             <StackPanel Spacing="4">
@@ -539,6 +592,9 @@
 
                             <StackPanel Spacing="12"
                                         IsVisible="{Binding CallHistory, Converter={x:Static conv:ObjectConverters.IsNotNull}}">
+                            <TextBox x:Name="CallHistoryFilterTextBox"
+                                     Watermark="Filter channel, alias, system, RID, or TGID"
+                                     Text="{Binding CallHistory.FilterText, Mode=TwoWay}" />
                                 <Grid ColumnDefinitions="78,*,*,62,62">
                                     <TextBlock Classes="data-label" Text="TIMESTAMP" />
                                     <TextBlock Grid.Column="1" Classes="data-label" Text="CHANNEL" />
@@ -548,7 +604,7 @@
                                 </Grid>
 
                                 <ScrollViewer MaxHeight="260" HorizontalScrollBarVisibility="Disabled">
-                                    <ItemsControl ItemsSource="{Binding CallHistory.Rows}">
+                                    <ItemsControl ItemsSource="{Binding CallHistory.VisibleRows}">
                                         <ItemsControl.ItemTemplate>
                                             <DataTemplate x:DataType="svc:CallHistoryEntry">
                                                 <Grid ColumnDefinitions="78,*,*,62,62" Margin="0,3,0,3">
@@ -655,7 +711,8 @@
                         </StackPanel>
                     </Border>
                 </Grid>
-            </Grid>
+                </Grid>
+            </ScrollViewer>
         </Grid>
     </DockPanel>
 </Window>

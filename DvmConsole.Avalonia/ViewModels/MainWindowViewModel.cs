@@ -108,6 +108,12 @@ namespace DvmConsole.Avalonia.ViewModels
 
         private string preferencesSaveFeedback = string.Empty;
 
+        private bool showSystemStatus = true;
+
+        private bool showChannels = true;
+
+        private bool showAlertTones = true;
+
         private IReadOnlyCollection<ChannelSlotViewModel> selectedChannels =
             Array.Empty<ChannelSlotViewModel>();
 
@@ -157,6 +163,51 @@ namespace DvmConsole.Avalonia.ViewModels
         /// property raises change-only notifications.
         /// </summary>
         public string PreferencesSaveFeedback => preferencesSaveFeedback;
+
+        /// <summary>Whether the system-status shell panel is visible.</summary>
+        public bool ShowSystemStatus
+        {
+            get => showSystemStatus;
+            private set => SetWidgetVisibilityValue(ref showSystemStatus, value, nameof(ShowSystemStatus));
+        }
+
+        /// <summary>Whether the channel-grid shell panel is visible.</summary>
+        public bool ShowChannels
+        {
+            get => showChannels;
+            private set => SetWidgetVisibilityValue(ref showChannels, value, nameof(ShowChannels));
+        }
+
+        /// <summary>Whether the alert-tone toolbar widgets are visible.</summary>
+        public bool ShowAlertTones
+        {
+            get => showAlertTones;
+            private set => SetWidgetVisibilityValue(ref showAlertTones, value, nameof(ShowAlertTones));
+        }
+
+        /// <summary>
+        /// Applies the three WPF-compatible widget visibility flags. The
+        /// view-model owns only observable state; persistence remains in the
+        /// shell's layout section adapter.
+        /// </summary>
+        public void SetWidgetVisibility(
+            bool showSystemStatus,
+            bool showChannels,
+            bool showAlertTones)
+        {
+            ShowSystemStatus = showSystemStatus;
+            ShowChannels = showChannels;
+            ShowAlertTones = showAlertTones;
+        }
+
+        private void SetWidgetVisibilityValue(ref bool field, bool value, string propertyName)
+        {
+            if (field == value)
+                return;
+
+            field = value;
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
+        }
 
         private string? audioStatusMessage;
 

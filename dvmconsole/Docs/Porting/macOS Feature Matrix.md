@@ -20,6 +20,12 @@ and unnotarized until the later signing pipeline runs on a Mac.
 | Settings transfer/reset | Implemented | Settings transfer window supports category selection and merge-preserving import/export; reset remains confirmation-gated where exposed. |
 | Debug Logs | Implemented | Help → Debug Logs opens the bounded viewer with copy, save, clear, secret redaction and scrollbars. |
 | About and documentation | Implemented | App → About reports release/hash, runtime/OS/architecture and native-vocoder readiness. Help → Documentation opens the published documentation tree in the host browser. |
+| Gate 7.5 shell controls | Implemented, host-dependent where noted | The Avalonia shell exposes select/clear-all for the active zone, an in-window call-history filter, widget visibility selection, theme/background selection, confirmation-gated settings reset, persisted layout reset/fit/lock, and always-on-top. FNE status/start/stop/restart remains in the main window's System panel; the shell menu reveals/focuses that existing surface rather than creating a duplicate manager window. |
+| Call-history filter | Implemented | The filter matches channel name, system, alias, source RID, and destination TGID without mutating the bounded session-only store. |
+| WPF Call History window snapping | Approved exception | Avalonia keeps Call History inline in the dashboard, so the separate WPF window-placement action has no target window. |
+| Widget visibility | Implemented | System status, channel display, and alert-tone toolbar visibility load/save through the existing layout section; defaults remain visible. |
+| Theme/background | Implemented, host-dependent for picker | Dark/light theme state and a user-selected image are applied by the Avalonia shell and persisted. File-picker behavior requires a macOS host run. |
+| WPF draggable layout editor | Approved deviation | The current Avalonia dashboard renders channel cards in a managed grid rather than a WPF draggable Canvas. Reset/fit/lock preserve and update the persisted layout contract; there is no unported per-card drag editor to claim. |
 | CoreAudio input/output | Implemented, host-dependent | macOS CoreAudio adapters are composed at startup; device loss/replug behavior requires host validation. |
 | Vocoder loading | Implemented, host-dependent | Packaged bundles resolve `Contents/Frameworks/libvocoder.dylib`; missing native exports are reported as unavailable. |
 | FNE connection and voice | Implemented, host-dependent | Managed transport and voice seams are composed; real DMR/P25 RX/TX still require a controlled macOS/FNE fixture. |
@@ -55,6 +61,9 @@ explicit codeplug and alias paths if the repository checkout is not present.
 - Linux CI cannot prove CoreAudio, TCC prompts, microphone capture, browser
   launch, FNE radio reception, or radio audibility. Report wire-side results
   separately from unverified radio reception.
+- Gate 7.5 menu actions that open the native file picker or apply desktop window
+  behavior (background selection, focus, always-on-top) require macOS Aqua-host
+  evidence. Linux build/test results prove managed composition only.
 - Unsigned bundles may be blocked by Gatekeeper. Clear quarantine for local
   development only, or use Finder's Open flow; production signing is a later
   packaging gate.

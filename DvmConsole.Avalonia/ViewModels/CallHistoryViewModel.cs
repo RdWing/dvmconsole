@@ -2,6 +2,8 @@
 #nullable enable
 using System;
 using System.Collections.ObjectModel;
+using System.ComponentModel;
+using System.Linq;
 using DvmConsole.Avalonia.Services;
 
 namespace DvmConsole.Avalonia.ViewModels
@@ -15,8 +17,10 @@ namespace DvmConsole.Avalonia.ViewModels
     /// marshaling itself. Rows are immutable <see cref="CallHistoryEntry"/>
     /// instances, so there is no per-row property-change plumbing.
     /// </summary>
-    public sealed class CallHistoryViewModel
+    public sealed class CallHistoryViewModel : INotifyPropertyChanged
     {
+        private string filterText = string.Empty;
+
         /// <summary>
         /// Creates the call-history slice over the given store.
         /// </summary>
@@ -39,6 +43,30 @@ namespace DvmConsole.Avalonia.ViewModels
         public ObservableCollection<CallHistoryEntry> Rows { get; } = new();
 
         /// <summary>
+        /// Case-insensitive filter applied to channel, alias, system, RID,
+        /// and talkgroup values. An empty value shows every row.
+        /// </summary>
+        public string FilterText
+        {
+            get => filterText;
+            set
+            {
+                value ??= string.Empty;
+                if (string.Equals(filterText, value, StringComparison.Ordinal))
+                    return;
+
+                filterText = value;
+                RefreshVisibleRows();
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(FilterText)));
+            }
+        }
+
+        /// <summary>Rows matching <see cref="FilterText"/>, newest first.</summary>
+        public ObservableCollection<CallHistoryEntry> VisibleRows { get; } = new();
+
+        public event PropertyChangedEventHandler? PropertyChanged;
+
+        /// <summary>
         /// Wholesale resync of <see cref="Rows"/> from
         /// <see cref="CallHistoryStore.Entries"/>: clears and re-adds
         /// every entry in store order. UI-thread only (the shell posts
@@ -52,6 +80,32 @@ namespace DvmConsole.Avalonia.ViewModels
             {
                 Rows.Add(entry);
             }
+
+            RefreshVisibleRows();
+        }
+
+        private void RefreshVisibleRows()
+        {
+            VisibleRows.Clear();
+            string filter = FilterText.Trim();
+            foreach (var entry in Rows.Where(entry => Matches(entry, filter)))
+            {
+                VisibleRows.Add(entry);
+            }
+        }
+
+        private static bool Matches(CallHistoryEntry entry, string filter)
+        {
+            if (filter.Length == 0)
+                return true;
+
+            return string.Join(" ",
+                entry.ChannelName,
+                entry.SystemName,
+                entry.Alias,
+                entry.SrcId,
+                entry.DstId)
+                .Contains(filter, StringComparison.OrdinalIgnoreCase);
         }
     }
 }

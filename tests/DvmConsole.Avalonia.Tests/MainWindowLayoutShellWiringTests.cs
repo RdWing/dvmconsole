@@ -69,7 +69,10 @@ namespace DvmConsole.Avalonia.Tests
             Assert.Contains("layoutSection = section", source);
             Assert.Contains("Width = section.WindowWidth", source);
             Assert.Contains("Height = section.WindowHeight", source);
-            Assert.Contains("Topmost = section.KeepWindowOnTop", source);
+            Assert.Contains("Topmost = ResolveKeepWindowOnTop(", source);
+            Assert.Contains("preferenceKeepWindowOnTop", source);
+            Assert.Contains("section.KeepWindowOnTop", source);
+            Assert.Contains("=> preferenceValue ?? layoutValue", source);
             Assert.Contains("WindowState.Maximized", source);
             Assert.Contains("OnWindowClosed", source);
             Assert.Contains("layoutHydrated", source);

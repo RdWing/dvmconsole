@@ -307,6 +307,7 @@ namespace DvmConsole.Avalonia
                 NativeMenuItem tonesItem = CreateAlertToneManagerMenuItem(mainWindow);
                 NativeMenuItem debugLogItem = CreateDebugLogMenuItem(mainWindow);
                 NativeMenuItem documentationItem = CreateDocumentationMenuItem();
+                NativeMenuItem shellControlsItem = CreateShellControlsMenuItem(mainWindow);
 
                 NativeMenuItem? fileItem = menu.Items
                     .OfType<NativeMenuItem>()
@@ -336,6 +337,7 @@ namespace DvmConsole.Avalonia
                     settingsMenu.Items.Insert(0, groupsItem);
                     settingsMenu.Items.Insert(1, tonesItem);
                     settingsMenu.Items.Insert(2, CreateSettingsTransferMenuItem(mainWindow));
+                    settingsMenu.Items.Insert(3, shellControlsItem);
                 }
 
                 NativeMenuItem? helpItem = menu.Items
@@ -488,6 +490,46 @@ namespace DvmConsole.Avalonia
             };
             item.Click += (_, _) => mainWindow?.OpenSettingsTransfer();
             return item;
+        }
+
+        /// <summary>
+        /// Creates the native submenu for the remaining WPF shell actions.
+        /// FNE and call history already live in the dashboard; their entries
+        /// focus those existing surfaces instead of creating duplicate
+        /// view-models or windows.
+        /// </summary>
+        internal static NativeMenuItem CreateShellControlsMenuItem(MainWindow? mainWindow)
+        {
+            var item = new NativeMenuItem("Shell Controls")
+            {
+                IsEnabled = mainWindow is not null,
+                Menu = new NativeMenu(),
+            };
+
+            AddShellAction(item.Menu, "Select/Clear All Current Zone", mainWindow is null ? null : (Action)mainWindow.ToggleSelectAllCurrentZone);
+            AddShellAction(item.Menu, "Call History", mainWindow is null ? null : (Action)mainWindow.OpenCallHistory);
+            AddShellAction(item.Menu, "Select Widgets to Display", mainWindow is null ? null : (Action)mainWindow.OpenWidgetSelection);
+            AddShellAction(item.Menu, "Select User Background", mainWindow is null ? null : (Action)mainWindow.OpenUserBackgroundAsync);
+            AddShellAction(item.Menu, "Reset Settings", mainWindow is null ? null : (Action)mainWindow.ResetSettings);
+            AddShellAction(item.Menu, "Reset Tab Layout", mainWindow is null ? null : (Action)mainWindow.ResetLayout);
+            AddShellAction(item.Menu, "Fit Channel Display to Window Size", mainWindow is null ? null : (Action)mainWindow.FitLayoutToWindow);
+            AddShellAction(item.Menu, "Lock Widgets", mainWindow is null ? null : (Action)mainWindow.SetWidgetLayoutLocked);
+            AddShellAction(item.Menu, "Always on Top", mainWindow is null ? null : (Action)mainWindow.ToggleKeepWindowOnTop);
+            AddShellAction(item.Menu, "FNE Connection Manager", mainWindow is null ? null : (Action)mainWindow.OpenFneConnectionManager);
+            return item;
+        }
+
+        private static void AddShellAction(NativeMenu menu, string header, Action? action)
+        {
+            var item = new NativeMenuItem(header)
+            {
+                IsEnabled = action is not null,
+            };
+            if (action is not null)
+            {
+                item.Click += (_, _) => action();
+            }
+            menu.Items.Add(item);
         }
 
         /// <summary>

@@ -59,6 +59,21 @@ in-memory buffer; use Save to persist a selected snapshot. See
 `dvmconsole/Docs/Porting/macOS Feature Matrix.md` for implemented areas,
 host-dependent verification and known limitations.
 
+### Avalonia shell controls
+
+The Avalonia/macOS shell keeps FNE connection status and call history in the
+main dashboard. Call History has a session-only filter for channel, system,
+alias, source RID, and destination TGID. Settings → Shell Controls provides
+active-zone select/clear-all, widget visibility, user background selection,
+confirmation-gated settings reset, persisted layout reset/fit/lock, and
+always-on-top.
+
+The current Avalonia dashboard uses a managed channel grid rather than the WPF
+draggable Canvas. Layout actions therefore update the persisted layout contract
+and shell/window state; they are not evidence of a per-card drag editor. Native
+file-picker, Aqua window, TCC, CoreAudio, vocoder, FNE/radio, and browser-launch
+behavior still require separate macOS host evidence.
+
 Please note that while x64 CPU types are supported, the dvmvocoder library must be compiled separately for that architecture.
 
 ## dvmconsole Configuration

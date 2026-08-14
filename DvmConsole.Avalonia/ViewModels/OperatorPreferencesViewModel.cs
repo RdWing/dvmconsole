@@ -14,9 +14,8 @@ namespace DvmConsole.Avalonia.ViewModels
     /// for the owning dashboard view-model to persist.
     /// </summary>
     /// <remarks>
-    /// This slice does not apply permit-tone, RX-mute, selection-restore,
-    /// theme, or always-on-top behavior. Those runtime consumers belong to
-    /// later preference gates.
+    /// The shell consumes the theme and always-on-top values; the remaining
+    /// preference consumers stay behind their existing request-only seams.
     /// </remarks>
     public sealed class OperatorPreferencesViewModel : INotifyPropertyChanged
     {

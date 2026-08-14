@@ -48,7 +48,6 @@ namespace dvmconsole
 
         /// <summary>
         /// WPF SettingsManager.LockWidgets layout-editing preference.
-        /// Runtime widget application belongs to the later shell-controls gate.
         /// </summary>
         public bool LockWidgets { get; set; } = true;
 
@@ -79,19 +78,16 @@ namespace dvmconsole
 
         /// <summary>
         /// WPF SettingsManager.ShowSystemStatus widget-visibility preference.
-        /// Runtime widget application belongs to the later shell-controls gate.
         /// </summary>
         public bool ShowSystemStatus { get; set; } = true;
 
         /// <summary>
         /// WPF SettingsManager.ShowChannels widget-visibility preference.
-        /// Runtime widget application belongs to the later shell-controls gate.
         /// </summary>
         public bool ShowChannels { get; set; } = true;
 
         /// <summary>
         /// WPF SettingsManager.ShowAlertTones widget-visibility preference.
-        /// Runtime widget application belongs to the later shell-controls gate.
         /// </summary>
         public bool ShowAlertTones { get; set; } = true;
 

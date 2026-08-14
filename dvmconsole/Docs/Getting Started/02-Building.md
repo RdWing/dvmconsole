@@ -143,6 +143,30 @@ The app's Help menu opens the published documentation in the host browser;
 the bundle does not embed a Markdown renderer. The About dialog reports the
 release/hash, runtime/architecture and native-vocoder readiness.
 
+## Avalonia shell controls
+
+The Gate 7.5 Avalonia shell keeps FNE status and call history in the main
+dashboard. The System panel exposes configured FNE rows and their start/stop/
+restart actions. The Call History panel exposes a filter for channel, system,
+alias, source RID, and destination TGID; filtering does not alter the bounded
+session-only store.
+
+The Settings → Shell Controls submenu exposes:
+
+- select/clear all channels in the active zone;
+- select which system, channel, and alert-tone widgets are visible;
+- choose a user background image;
+- reset settings (confirmation-gated and applied after restart);
+- reset or fit the persisted layout contract;
+- lock the persisted widget-layout state; and
+- toggle always-on-top.
+
+The Avalonia dashboard currently uses a managed grid for channel cards rather
+than the WPF draggable Canvas. Therefore reset/fit/lock update the persisted
+layout state and shell focus/window state; they do not claim per-card drag
+editing. File-picker and desktop-window behavior must be validated on macOS,
+not inferred from Linux builds.
+
 ---
 
 # Run

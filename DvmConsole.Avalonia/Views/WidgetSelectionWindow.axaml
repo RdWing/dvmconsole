@@ -1,0 +1,22 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="DvmConsole.Avalonia.Views.WidgetSelectionWindow"
+        Title="Select Widgets to Display"
+        Width="420"
+        SizeToContent="Height"
+        CanResize="False"
+        ShowInTaskbar="False"
+        WindowStartupLocation="CenterOwner"
+        Background="#0B1114"
+        Foreground="#EFF7F5">
+    <StackPanel Margin="24" Spacing="16">
+        <TextBlock FontSize="22" FontWeight="Bold" Text="Select Widgets to Display" />
+        <CheckBox x:Name="ShowSystemStatusCheckBox" Content="System status / FNE connections" />
+        <CheckBox x:Name="ShowChannelsCheckBox" Content="Channel display" />
+        <CheckBox x:Name="ShowAlertTonesCheckBox" Content="Alert tones" />
+        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Spacing="10">
+            <Button Content="Cancel" Click="Cancel_Click" />
+            <Button Content="Apply" Click="Apply_Click" />
+        </StackPanel>
+    </StackPanel>
+</Window>

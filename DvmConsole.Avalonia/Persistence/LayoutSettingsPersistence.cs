@@ -14,7 +14,7 @@ namespace DvmConsole.Avalonia.Persistence
     /// <para>
     /// The adapter remains headless: the Avalonia shell owns startup window
     /// hydration and close-window save ordering. Runtime application of the
-    /// WPF widget-visibility fields remains a later shell-controls gate.
+    /// WPF widget-visibility fields after hydration.
     /// </para>
     /// </summary>
     public sealed class LayoutSettingsPersistence
