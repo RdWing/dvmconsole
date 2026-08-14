@@ -89,6 +89,25 @@ namespace DvmConsole.Avalonia.Tests
         }
 
         [Fact]
+        public void ChannelPtt_RequiresAssignedTransmitCapableChannel()
+        {
+            var slot = new ChannelSlotViewModel(1, "CHANNEL 01");
+            var changed = new List<string?>();
+            slot.PropertyChanged += (_, args) => changed.Add(args.PropertyName);
+
+            Assert.False(slot.CanChannelPtt);
+
+            slot.Reassign("Channel 1", "100", isRxOnly: false);
+            Assert.True(slot.CanChannelPtt);
+            Assert.Contains(nameof(ChannelSlotViewModel.CanChannelPtt), changed);
+
+            changed.Clear();
+            slot.Reassign("Channel 1", "100", isRxOnly: true);
+            Assert.False(slot.CanChannelPtt);
+            Assert.Contains(nameof(ChannelSlotViewModel.CanChannelPtt), changed);
+        }
+
+        [Fact]
         public void RequestActions_UseWpfGuardsToggleStateAndRaiseSlotPayload()
         {
             var slot = new ChannelSlotViewModel(1, "CHANNEL 01");

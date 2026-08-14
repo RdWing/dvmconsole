@@ -117,6 +117,13 @@ namespace DvmConsole.Avalonia.ViewModels
         /// <summary>True when this resource is eligible for PTT.</summary>
         public bool IsPttEnabled => !isRxOnly;
 
+        /// <summary>
+        /// True when the card has an assigned, transmit-capable channel.
+        /// This presentation guard is separate from the legacy
+        /// <see cref="IsPttEnabled"/> compatibility property.
+        /// </summary>
+        public bool CanChannelPtt => IsPttEnabled && !string.IsNullOrWhiteSpace(channelName);
+
         /// <summary>The configured resource-card size.</summary>
         public ChannelCardSize CardSize => cardSize;
 
@@ -652,6 +659,7 @@ namespace DvmConsole.Avalonia.ViewModels
             if (channelNameChanged)
             {
                 PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ChannelName)));
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CanChannelPtt)));
             }
 
             if (talkgroupChanged)
@@ -673,6 +681,7 @@ namespace DvmConsole.Avalonia.ViewModels
             {
                 PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsRxOnly)));
                 PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsPttEnabled)));
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CanChannelPtt)));
             }
 
             if (cardSizeChanged)

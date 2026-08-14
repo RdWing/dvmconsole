@@ -191,6 +191,7 @@ namespace DvmConsole.Platform.Tests
             /// exception; the setting is consumed on first use.
             /// </summary>
             public Exception? StartExceptionOnCreate;
+            public AudioWriteStatus? NextOutputWriteStatus;
 
             public IAudioInput CreateInput(AudioDeviceId deviceId, PcmFormat format)
             {
@@ -211,7 +212,11 @@ namespace DvmConsole.Platform.Tests
             {
                 var output = new FakeAudioOutput(
                     new AudioDeviceInfo(deviceId, AudioDeviceDirection.Output, "Fake Output"),
-                    format);
+                    format)
+                {
+                    NextWriteStatus = NextOutputWriteStatus ?? AudioWriteStatus.Accepted,
+                };
+                NextOutputWriteStatus = null;
                 Outputs.Add(output);
                 return output;
             }
@@ -485,6 +490,28 @@ namespace DvmConsole.Platform.Tests
             router.RouteVoiceFrame("SYS1/TG1", new byte[27], VoiceMode.Dmr);
             Assert.Equal(9, observer.FrameCount);
             Assert.Single(factory.Outputs);
+        }
+
+        [Fact]
+        public void RouteVoiceFrame_NonAcceptedMonitorWrite_IsReportedWithoutBreakingDecode()
+        {
+            var factory = new FakeAudioStreamFactory();
+            var diagnostics = new List<string>();
+            var router = CreateRouter(
+                factory,
+                new FakeVoiceFrameDecoder(),
+                new FakeVoiceFrameEncoder(),
+                new RecordingTrafficSender(),
+                new ManualScheduler());
+            router.DiagnosticWriter = diagnostics.Add;
+
+            factory.NextOutputWriteStatus = AudioWriteStatus.BufferOverflow;
+            router.RouteVoiceFrame("SYS1/TG1", new byte[27], VoiceMode.Dmr);
+
+            Assert.Empty(Assert.Single(factory.Outputs).Writes);
+            Assert.Equal(3, diagnostics.Count);
+            Assert.All(diagnostics, message =>
+                Assert.Contains("Talkgroup monitor write rejected", message));
         }
 
         [Fact]

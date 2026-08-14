@@ -442,6 +442,12 @@
                                             <Button Content="MARK"
                                                     Click="Marker_Click"
                                                     IsEnabled="{Binding IsSelected}" />
+                                            <Button Content="PTT"
+                                                    Classes="ptt-button"
+                                                    IsEnabled="{Binding CanChannelPtt}"
+                                                    PointerPressed="ChannelPttButton_PointerPressed"
+                                                    PointerReleased="ChannelPttButton_PointerReleased"
+                                                    PointerCaptureLost="ChannelPttButton_PointerCaptureLost" />
                                         </StackPanel>
                                     </StackPanel>
                                 </Border>

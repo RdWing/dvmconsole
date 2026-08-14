@@ -106,6 +106,14 @@ namespace DvmConsole.Avalonia
         private PatchPttRuntimeCoordinator? patchPttRuntimeCoordinator;
 
         /// <summary>
+        /// Owns the independent momentary PTT lifecycle for one channel card.
+        /// It is separate from dashboard/all-channel PTT and patch-group PTT;
+        /// all three paths share the router's single capture through explicit
+        /// collision guards.
+        /// </summary>
+        private ChannelPttRuntimeCoordinator? channelPttRuntimeCoordinator;
+
+        /// <summary>
         /// Dashboard PTT remains active until the router's awaited end
         /// completes. This is separate from the view-model engagement flag,
         /// which changes at the UI release edge before audio teardown.
@@ -584,6 +592,29 @@ namespace DvmConsole.Avalonia
                         target => patchForwardingCoordinator?.IsForwardTargetActive(
                             target.SystemName,
                             target.TalkgroupId) == true);
+                }
+
+                if (transmitTargetResolver is { } channelResolver)
+                {
+                    channelPttRuntimeCoordinator = new ChannelPttRuntimeCoordinator(
+                        channelResolver,
+                        targets => BeginChannelTransmitAsync(
+                            talkgroupAudioRouter,
+                            targets,
+                            audioViewModel),
+                        () => EndChannelTransmitAsync(talkgroupAudioRouter),
+                        targets => talkgroupAudioRouter.ClearAllTalkgroupBuffers(),
+                        () => audioViewModel.Ptt?.IsEngaged != true
+                            && Volatile.Read(ref dashboardTransmitActive) == 0
+                            && patchPttRuntimeCoordinator?.IsTransmitActive != true,
+                        target => IsFneSystemAvailable(target.SystemName),
+                        status => Dispatcher.UIThread.Post(() =>
+                        {
+                            if (DataContext is MainWindowViewModel statusViewModel)
+                            {
+                                statusViewModel.AudioStatusMessage = status;
+                            }
+                        }));
                 }
 
             }
@@ -2179,6 +2210,86 @@ namespace DvmConsole.Avalonia
         }
 
         /// <summary>
+        /// Starts the independent momentary PTT lifecycle for the channel-card
+        /// button that received the pointer press. Pointer capture is held by
+        /// the button so release outside the card still reaches the release
+        /// path; the coordinator resolves only this slot's target.
+        /// </summary>
+        private void ChannelPttButton_PointerPressed(object? sender, PointerPressedEventArgs e)
+        {
+            if (!PttButtonPointerInterpreter.TryGetPttPointerAction(
+                    e.Properties.PointerUpdateKind,
+                    out var isDown)
+                || !isDown
+                || sender is not Button { DataContext: ChannelSlotViewModel slot } button)
+            {
+                return;
+            }
+
+            e.Pointer.Capture(button);
+            _ = HandleChannelPttDownAsync(slot);
+        }
+
+        /// <summary>Releases the active card capture on a left-button release.</summary>
+        private void ChannelPttButton_PointerReleased(object? sender, PointerReleasedEventArgs e)
+        {
+            if (!PttButtonPointerInterpreter.TryGetPttPointerAction(
+                    e.Properties.PointerUpdateKind,
+                    out var isDown)
+                || isDown)
+            {
+                return;
+            }
+
+            e.Pointer.Capture(null);
+            _ = HandleChannelPttUpAsync();
+        }
+
+        /// <summary>
+        /// Pointer capture loss is an unconditional release. The coordinator
+        /// makes the redundant release idempotent and keeps the card visual
+        /// asserted until router teardown has completed.
+        /// </summary>
+        private void ChannelPttButton_PointerCaptureLost(object? sender, PointerCaptureLostEventArgs e)
+            => _ = HandleChannelPttUpAsync();
+
+        private async Task HandleChannelPttDownAsync(ChannelSlotViewModel slot)
+        {
+            if (channelPttRuntimeCoordinator is not { } coordinator)
+            {
+                return;
+            }
+
+            try
+            {
+                await channelPttRuntimeCoordinator.HandlePointerDownAsync(slot)
+                    .ConfigureAwait(false);
+            }
+            catch (Exception exception)
+            {
+                WriteApplicationException("Channel PTT request failed", exception);
+            }
+        }
+
+        private async Task HandleChannelPttUpAsync()
+        {
+            if (channelPttRuntimeCoordinator is not { } coordinator)
+            {
+                return;
+            }
+
+            try
+            {
+                await channelPttRuntimeCoordinator.HandlePointerUpAsync()
+                    .ConfigureAwait(false);
+            }
+            catch (Exception exception)
+            {
+                WriteApplicationException("Channel PTT release failed", exception);
+            }
+        }
+
+        /// <summary>
         /// Thin pointer-press wiring for the dashboard PUSH TO TALK button.
         /// Translates the pointer update through
         /// <see cref="PttButtonPointerInterpreter.TryGetPttPointerAction"/>
@@ -2692,6 +2803,12 @@ namespace DvmConsole.Avalonia
                     toneDispatchCoordinator = null;
                 }
 
+                if (channelPttRuntimeCoordinator is { } channelPtt)
+                {
+                    await channelPttRuntimeCoordinator.DisposeAsync().ConfigureAwait(false);
+                    channelPttRuntimeCoordinator = null;
+                }
+
                 if (patchPttRuntimeCoordinator is { } patchPtt)
                 {
                     await patchPtt.DisposeAsync().ConfigureAwait(false);
@@ -2749,6 +2866,62 @@ namespace DvmConsole.Avalonia
             }
         }
 
+        private async Task BeginChannelTransmitAsync(
+            TalkgroupAudioRouter router,
+            IReadOnlyList<TransmitTarget> targets,
+            MainWindowViewModel viewModel)
+        {
+            if (targets.Count != 1)
+            {
+                throw new InvalidOperationException("Channel PTT requires exactly one transmit target.");
+            }
+
+            var target = targets[0];
+            try
+            {
+                tarRecordingCoordinator?.TryStartTransmit(
+                    target,
+                    transmitTargetResolver?.ResolveChannelName(target) ?? target.TalkgroupId,
+                    DateTime.UtcNow,
+                    out _);
+
+                await router.BeginTransmitAsync(
+                    targets,
+                    viewModel.AudioSettings?.SelectedInputId ?? AudioDeviceId.Default,
+                    CancellationToken.None).ConfigureAwait(false);
+
+                if (viewModel.Preferences?.TalkPermitTone == true)
+                {
+                    try
+                    {
+                        await router.PlayLocalPcmAsync(
+                            TonePcmGenerator.GenerateTalkPermitTone()).ConfigureAwait(false);
+                    }
+                    catch (Exception exception)
+                    {
+                        WriteApplicationException("Channel PTT permit tone failed", exception);
+                    }
+                }
+            }
+            catch
+            {
+                tarRecordingCoordinator?.StopAllTransmit(DateTime.UtcNow);
+                throw;
+            }
+        }
+
+        private async Task EndChannelTransmitAsync(TalkgroupAudioRouter router)
+        {
+            try
+            {
+                await router.EndTransmitAsync().ConfigureAwait(false);
+            }
+            finally
+            {
+                tarRecordingCoordinator?.StopAllTransmit(DateTime.UtcNow);
+            }
+        }
+
         private async Task BeginPatchTransmitAsync(
             TalkgroupAudioRouter router,
             IReadOnlyList<TransmitTarget> targets,
@@ -2792,7 +2965,8 @@ namespace DvmConsole.Avalonia
 
             return viewModel.Ptt?.IsEngaged == true
                 || Volatile.Read(ref dashboardTransmitActive) != 0
-                || patchPttRuntimeCoordinator?.IsTransmitActive == true;
+                || patchPttRuntimeCoordinator?.IsTransmitActive == true
+                || channelPttRuntimeCoordinator?.IsTransmitActive == true;
         }
 
         /// <summary>

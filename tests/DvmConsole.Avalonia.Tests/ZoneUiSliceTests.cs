@@ -296,7 +296,14 @@ namespace DvmConsole.Avalonia.Tests
             ((INotifyPropertyChanged)slot).PropertyChanged += (s, e) => seen.Add(e.PropertyName!);
 
             slot.Reassign("CH 1 DMR", "31001");
-            Assert.Equal(new[] { nameof(ChannelSlotViewModel.ChannelName), nameof(ChannelSlotViewModel.Talkgroup) }, seen);
+            Assert.Equal(
+                new[]
+                {
+                    nameof(ChannelSlotViewModel.ChannelName),
+                    nameof(ChannelSlotViewModel.CanChannelPtt),
+                    nameof(ChannelSlotViewModel.Talkgroup),
+                },
+                seen);
 
             // Same values: no notifications.
             seen.Clear();

@@ -574,9 +574,16 @@ namespace DvmConsole.Platform.Audio
                             $"Decoded PCM observer failed for {talkgroupKey}: {exception.Message}");
                     }
 
-                    if (_resolveSpeakerOutputEnabled(talkgroupKey))
+                    if (_resolveSpeakerOutputEnabled(talkgroupKey)
+                        && pipelineForFrame is { } monitorPipeline)
                     {
-                        pipelineForFrame?.WritePcm(pcm);
+                        var writeResult = monitorPipeline.WritePcm(pcm);
+                        if (writeResult.Status != AudioWriteStatus.Accepted)
+                        {
+                            WriteDiagnostic(
+                                $"Talkgroup monitor write rejected for {talkgroupKey}: "
+                                + $"{writeResult.Status}, buffered={writeResult.BufferedBytes}");
+                        }
                     }
                 }
             }
