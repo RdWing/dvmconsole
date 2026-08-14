@@ -22,7 +22,7 @@ Rebuild the `r01a02_dev` desktop dispatch console for Apple Silicon macOS while 
 | M2 | Configuration/core extraction | Complete | Codeplug, key, and alias models/loaders are covered by tests. |
 | M3 | FNE core modernization | Complete | FNE protocol source builds against .NET 8 with offline smoke tests. |
 | M4 | Software vocoder backend | Complete | `libvocoder` loads and encode/decode vectors pass on Apple Silicon with tracked tests. |
-| M5 | Audio and platform services | Pending | macOS audio devices, capture, routing, and PTT abstractions work. |
+| M5 | Audio and platform services | In progress | Platform-neutral audio devices, capture, routing, and PTT contracts exist; native backends remain. |
 | M6 | Avalonia application shell | Pending | macOS and Windows shells start and show connection status. |
 | M7 | Feature migration | Pending | RX/TX, patching, tones, TAR, settings, and history reach parity. |
 | M8 | Packaging and integration handoff | Pending | Signed macOS artifact, Windows artifact, docs, and integration notes exist. |
@@ -47,6 +47,7 @@ Rebuild the `r01a02_dev` desktop dispatch console for Apple Silicon macOS while 
 - Extracted the legacy key-file and radio-alias loaders into the cross-platform core and covered them with repository fixtures.
 - Added offline FNE protocol tests for RTP headers, FNE extension headers, fragmentation/reassembly, and opcode construction.
 - Added tracked software-vocoder frame validation and native encode/decode tests for DMR AMBE and P25 IMBE; documented the external `dvmvocoder` build.
+- Added platform-neutral audio contracts for device enumeration, PCM capture/playback, PTT state, and a tested assembler for arbitrary callback sizes to 160-sample vocoder frames.
 - Verified three configuration tests, four FNE protocol tests, the bootstrap against `configs/codeplug.example.yml`, the full solution with `/m:1`, and the native vocoder smoke harness.
 - Recorded the FNE wrapper's .NET 8 compatibility warnings as follow-up modernization debt; the original `fnecore` source remains unchanged.
 
@@ -59,6 +60,7 @@ Rebuild the `r01a02_dev` desktop dispatch console for Apple Silicon macOS while 
 | `056870b` | Legacy key and alias loading extracted into the cross-platform core. |
 | `6142c29` | Offline FNE protocol test project and solution integration. |
 | `808d66a` | Software-vocoder frame validation, native tests, and build documentation. |
+| `dc4da04` | Platform-neutral audio contracts and PCM frame assembler. |
 
 ## Verification log
 
@@ -71,6 +73,8 @@ Rebuild the `r01a02_dev` desktop dispatch console for Apple Silicon macOS while 
 | Core configuration tests | 3 passed |
 | FNE protocol tests | 4 passed on Apple Silicon; legacy compatibility warnings remain |
 | Software vocoder tests | 4 passed on Apple Silicon with `DVMVOCODER_LIBRARY=/private/tmp/dvmvocoder-build/libvocoder.dylib` |
+| Audio framing tests | 3 passed on Apple Silicon |
+| Rebuild solution after audio boundary | Passed with `dotnet build src/DvmConsole.Rebuild.sln --no-restore /m:1` (14 legacy FNE warnings) |
 | Rebuild solution | Passed with `dotnet build src/DvmConsole.Rebuild.sln --no-restore /m:1` |
 | Bootstrap config validation | Passed with `configs/codeplug.example.yml` |
 | Live testing config | Present locally and ignored by Git |
