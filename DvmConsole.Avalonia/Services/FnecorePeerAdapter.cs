@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 #nullable enable
 using System;
+using System.Globalization;
 using System.Linq;
 using System.Net;
 using System.Reflection;
@@ -13,6 +14,7 @@ using fnecore;
 using fnecore.DMR;
 using fnecore.NXDN;
 using fnecore.P25;
+using fnecore.P25.LC.TSBK;
 
 namespace DvmConsole.Avalonia.Services
 {
@@ -32,7 +34,7 @@ namespace DvmConsole.Avalonia.Services
     /// <see cref="DmrFrameReceived"/> / <see cref="P25FrameReceived"/>
     /// for the shell glue; this adapter never routes audio itself.
     /// </summary>
-    public sealed class FnecorePeerAdapter : FneSystemBase, IFneTransport, IFneTalkgroupStatusProvider
+    public sealed class FnecorePeerAdapter : FneSystemBase, IFneTransport, IFneTalkgroupStatusProvider, ISubscriberCommandTransport
     {
         /// <summary>
         /// The configured codeplug system name, mirroring WPF
@@ -566,6 +568,61 @@ namespace DvmConsole.Avalonia.Services
                     query,
                     Array.Empty<TalkgroupRule>());
             }
+        }
+
+        /// <inheritdoc />
+        public Task SendAsync(
+            SubscriberCommandRequest request,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            uint sourceId = uint.Parse(request.SourceId, CultureInfo.InvariantCulture);
+            uint destinationId = uint.Parse(request.DestinationId, CultureInfo.InvariantCulture);
+            var callData = new RemoteCallData
+            {
+                SrcId = sourceId,
+                DstId = destinationId,
+                LCO = P25Defines.TSBK_IOSP_CALL_ALRT,
+            };
+            byte[] tsbk = new byte[P25Defines.P25_TSBK_LENGTH_BYTES];
+
+            switch (request.Kind)
+            {
+                case SubscriberCommandKind.Page:
+                    new IOSP_CALL_ALRT(destinationId, sourceId).Encode(ref tsbk);
+                    break;
+
+                case SubscriberCommandKind.RadioCheck:
+                    callData.LCO = P25Defines.TSBK_IOSP_EXT_FNCT;
+                    new IOSP_EXT_FNCT(
+                        (ushort)ExtendedFunction.CHECK,
+                        sourceId,
+                        destinationId).Encode(ref tsbk);
+                    break;
+
+                case SubscriberCommandKind.Inhibit:
+                    callData.LCO = P25Defines.TSBK_IOSP_EXT_FNCT;
+                    new IOSP_EXT_FNCT(
+                        (ushort)ExtendedFunction.INHIBIT,
+                        P25Defines.WUID_FNE,
+                        destinationId).Encode(ref tsbk);
+                    break;
+
+                case SubscriberCommandKind.Uninhibit:
+                    callData.LCO = P25Defines.TSBK_IOSP_EXT_FNCT;
+                    new IOSP_EXT_FNCT(
+                        (ushort)ExtendedFunction.UNINHIBIT,
+                        P25Defines.WUID_FNE,
+                        destinationId).Encode(ref tsbk);
+                    break;
+
+                default:
+                    throw new ArgumentOutOfRangeException(nameof(request.Kind));
+            }
+
+            SendP25TSBK(callData, tsbk);
+            return Task.CompletedTask;
         }
 
         /* ------------------------------------------------------------------
