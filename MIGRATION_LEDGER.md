@@ -49,6 +49,7 @@ Rebuild the `r01a02_dev` desktop dispatch console for Apple Silicon macOS while 
 - Added tracked software-vocoder frame validation and native encode/decode tests for DMR AMBE and P25 IMBE; documented the external `dvmvocoder` build.
 - Added platform-neutral audio contracts for device enumeration, PCM capture/playback, PTT state, and a tested assembler for arbitrary callback sizes to 160-sample vocoder frames.
 - Added the first Avalonia desktop shell for the shared `net8.0` desktop target. It loads a codeplug, shows systems/zones/channels, and labels FNE connections offline until the connection service is migrated.
+- Added an explicit FNE client lifecycle service that maps legacy system configuration, resolves endpoints, configures `fnecore.FnePeer`, and publishes disconnected/starting/authentication/configuration/connected/faulted status states without auto-connecting.
 - Verified three configuration tests, four FNE protocol tests, the bootstrap against `configs/codeplug.example.yml`, the full solution with `/m:1`, and the native vocoder smoke harness.
 - Recorded the FNE wrapper's .NET 8 compatibility warnings as follow-up modernization debt; the original `fnecore` source remains unchanged.
 
@@ -63,6 +64,7 @@ Rebuild the `r01a02_dev` desktop dispatch console for Apple Silicon macOS while 
 | `808d66a` | Software-vocoder frame validation, native tests, and build documentation. |
 | `dc4da04` | Platform-neutral audio contracts and PCM frame assembler. |
 | `7364d22` | Initial Avalonia macOS/Windows desktop shell. |
+| `0fd5f7b` | Explicit FNE connection lifecycle service and offline tests. |
 
 ## Verification log
 
@@ -78,6 +80,7 @@ Rebuild the `r01a02_dev` desktop dispatch console for Apple Silicon macOS while 
 | Audio framing tests | 3 passed on Apple Silicon |
 | Rebuild solution after audio boundary | Passed with `dotnet build src/DvmConsole.Rebuild.sln --no-restore /m:1` (14 legacy FNE warnings) |
 | Avalonia desktop shell | Built cleanly; launch check remained running as expected until the test process was interrupted |
+| FNE connection service tests | 4 passed without opening a network connection |
 | Rebuild solution | Passed with `dotnet build src/DvmConsole.Rebuild.sln --no-restore /m:1` |
 | Bootstrap config validation | Passed with `configs/codeplug.example.yml` |
 | Live testing config | Present locally and ignored by Git |
