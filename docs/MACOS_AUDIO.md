@@ -33,3 +33,8 @@ The first implementation targets the console voice format: 8 kHz, mono,
 managed adapter converts to or from the requested voice rate, so common 48 kHz
 devices can feed the 8 kHz vocoder boundary. macOS may request microphone
 permission when capture is first used.
+
+The Windows path is kept behind the same contracts through
+`WindowsAudioBackend`, using NAudio's WinMM event adapters for input and
+output. `AudioBackendFactory.CreateDefault()` selects CoreAudio on macOS and
+the NAudio backend on Windows; no Windows audio code is loaded on macOS.
