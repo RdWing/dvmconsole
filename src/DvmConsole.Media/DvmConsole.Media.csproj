@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <RootNamespace>DvmConsole.Media</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../DvmConsole.Audio/DvmConsole.Audio.csproj" />
+    <ProjectReference Include="../DvmConsole.FneClient/DvmConsole.FneClient.csproj" />
+    <ProjectReference Include="../DvmConsole.Vocoder/DvmConsole.Vocoder.csproj" />
+  </ItemGroup>
+</Project>
