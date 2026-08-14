@@ -22,10 +22,10 @@ Rebuild the `r01a02_dev` desktop dispatch console for Apple Silicon macOS while 
 | M2 | Configuration/core extraction | Complete | Codeplug, key, and alias models/loaders are covered by tests. |
 | M3 | FNE core modernization | Complete | FNE protocol source builds against .NET 8 with offline smoke tests. |
 | M4 | Software vocoder backend | Complete | `libvocoder` loads and encode/decode vectors pass on Apple Silicon with tracked tests. |
-| M5 | Audio and platform services | In progress | Platform-neutral audio devices, capture, routing, and PTT contracts exist; macOS CoreAudio and a Windows NAudio backend are implemented, while PTT remains. |
+| M5 | Audio and platform services | In progress | Platform-neutral audio devices, capture, routing, and PTT contracts exist; macOS CoreAudio, Windows NAudio, and a manual PTT source are implemented, while keyboard/hardware PTT adapters remain. |
 | M6 | Avalonia application shell | In progress | Shared Avalonia shell starts on the desktop target, shows codeplug-derived system/channel status, and exposes explicit live FNE connect/disconnect status; feature parity remains. |
 | M7 | Feature migration | In progress | Platform-neutral FNE traffic and PCM/vocoder frame boundaries exist; RX/TX routing, patching, tones, TAR, settings, and history remain. |
-| M8 | Packaging and integration handoff | Pending | Signed macOS artifact, Windows artifact, docs, and integration notes exist. |
+| M8 | Packaging and integration handoff | In progress | Reproducible unsigned framework-dependent macOS and Windows publish paths exist; signing, installer packaging, and integration handoff remain. |
 
 ## Working assumptions
 
@@ -56,6 +56,8 @@ Rebuild the `r01a02_dev` desktop dispatch console for Apple Silicon macOS while 
 - Wired the Avalonia shell to the FNE lifecycle service with explicit Connect/Disconnect commands, per-system status updates, UI-thread dispatch, and clean window-shutdown disposal; startup remains idle until the operator connects.
 - Added the Windows NAudio/WinMM audio implementation and runtime backend factory. It compiles with the cross-platform solution, but a physical Windows audio-device run remains outstanding.
 - Added a copied, platform-neutral FNE traffic event boundary for DMR, P25, NXDN, and analog frames, plus streaming PCM-to-vocoder and vocoder-to-PCM processors for the next RX/TX routing stage.
+- Added a lifecycle-safe manual PTT source with transition tests as the host-controlled foundation for future keyboard and hardware PTT adapters.
+- Added a reproducible desktop publishing script and publishing guide. It builds framework-dependent `osx-arm64` and `win-x64` outputs and places the macOS CoreAudio shim beside the macOS managed output.
 - Re-ran the supplied live FNE probe after attaching the traffic boundary; the system reached `Connected` in five seconds and exited successfully after clean shutdown.
 - Retried the supplied live FNE codeplug after macOS Local Network permission was granted. The endpoint `10.10.10.55:62031` exchanged traffic, completed login/authentication, reached `Connected`, and shut down cleanly. The probe now preserves the observed-connected result after shutdown and exits successfully; diagnostic packet tracing is opt-in and sanitized.
 - Verified three configuration tests, four FNE protocol tests, the bootstrap against `configs/codeplug.example.yml`, the full solution with `/m:1`, and the native vocoder smoke harness.
@@ -82,6 +84,8 @@ Rebuild the `r01a02_dev` desktop dispatch console for Apple Silicon macOS while 
 | `4cff086` | Windows NAudio/WinMM audio backend and runtime backend factory. |
 | `b0ab7f8` | Platform-neutral DMR/P25/NXDN/analog FNE traffic event boundary. |
 | `e9d0646` | Streaming PCM/vocoder frame encoder and decoder pipeline. |
+| `caca017` | Manual PTT source lifecycle and transition tests. |
+| `4420bd0` | Reproducible Apple Silicon/Windows desktop publishing script and guide. |
 
 ## Verification log
 
@@ -107,7 +111,8 @@ Rebuild the `r01a02_dev` desktop dispatch console for Apple Silicon macOS while 
 | Live FNE probe after traffic boundary | Passed: 1 system reached `Connected` within five seconds with traffic subscriptions attached, shut down cleanly, and returned exit code 0 |
 | Avalonia shell startup | Passed: launched with `configs/codeplug.example.yml` and remained running until intentionally interrupted |
 | Windows audio runtime | Not run on Windows hardware; compile verification passed on macOS |
-| Final solution test run | 24 passed: Core 3, FNE 4, Vocoder 6, Audio 6, FNE client 5 (native vocoder included) |
+| Desktop publish script | Passed framework-dependent `osx-arm64` and `win-x64` publishes; macOS output includes `libdvmaudio.dylib` |
+| Final solution test run | 26 passed: Core 3, FNE 4, Vocoder 6, Audio 8, FNE client 5 (native vocoder included) |
 | Final solution build | Passed all 14 solution projects with `/m:1`; 0 warnings in the final incremental build |
 | Bootstrap example validation | Passed: 1 system and 3 zones loaded from `configs/codeplug.example.yml` |
 | Rebuild solution | Passed with `dotnet build src/DvmConsole.Rebuild.sln --no-restore /m:1` |
