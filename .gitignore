@@ -63,6 +63,12 @@ project.lock.json
 project.fragment.lock.json
 artifacts/
 
+# macOS metadata
+.DS_Store
+
+# Local live-FNE configuration; may contain credentials and private endpoints.
+configs/codeplug_testing.yml
+
 # ASP.NET Scaffolding
 ScaffoldingReadMe.txt
 

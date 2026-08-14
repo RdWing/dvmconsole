@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+    <Deterministic>false</Deterministic>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <RootNamespace>fnecore</RootNamespace>
+    <AssemblyName>DvmConsole.Fne</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="../../fnecore/**/*.cs" Exclude="../../fnecore/obj/**/*.cs;../../fnecore/bin/**/*.cs" />
+    <PackageReference Include="SharpZipLib" Version="1.4.2" />
+  </ItemGroup>
+</Project>
