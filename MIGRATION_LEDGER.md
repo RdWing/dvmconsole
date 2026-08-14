@@ -81,6 +81,7 @@ Rebuild the `r01a02_dev` desktop dispatch console for Apple Silicon macOS while 
 | Rebuild solution after audio boundary | Passed with `dotnet build src/DvmConsole.Rebuild.sln --no-restore /m:1` (14 legacy FNE warnings) |
 | Avalonia desktop shell | Built cleanly; launch check remained running as expected until the test process was interrupted |
 | FNE connection service tests | 4 passed without opening a network connection |
+| Rebuild solution after FNE client | Passed with `dotnet build src/DvmConsole.Rebuild.sln --no-restore /m:1` (14 legacy FNE warnings) |
 | Rebuild solution | Passed with `dotnet build src/DvmConsole.Rebuild.sln --no-restore /m:1` |
 | Bootstrap config validation | Passed with `configs/codeplug.example.yml` |
 | Live testing config | Present locally and ignored by Git |
