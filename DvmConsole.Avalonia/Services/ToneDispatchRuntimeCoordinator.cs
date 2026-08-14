@@ -86,7 +86,7 @@ namespace DvmConsole.Avalonia.Services
 
             if (!areTargetsAvailable(targets))
             {
-                reportStatus?.Invoke("Tone dispatch blocked: selected target is unavailable.");
+                reportStatus?.Invoke("Target TG unavailable on FNE");
                 return false;
             }
 

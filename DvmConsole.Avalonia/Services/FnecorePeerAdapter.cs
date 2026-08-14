@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 #nullable enable
 using System;
+using System.Linq;
 using System.Net;
 using System.Reflection;
 using System.Threading;
@@ -31,7 +32,7 @@ namespace DvmConsole.Avalonia.Services
     /// <see cref="DmrFrameReceived"/> / <see cref="P25FrameReceived"/>
     /// for the shell glue; this adapter never routes audio itself.
     /// </summary>
-    public sealed class FnecorePeerAdapter : FneSystemBase, IFneTransport
+    public sealed class FnecorePeerAdapter : FneSystemBase, IFneTransport, IFneTalkgroupStatusProvider
     {
         /// <summary>
         /// The configured codeplug system name, mirroring WPF
@@ -543,6 +544,28 @@ namespace DvmConsole.Avalonia.Services
         protected override void KeyResponse(object sender, KeyResponseEvent e)
         {
             // Key responses are not surfaced by this slice.
+        }
+
+        /// <inheritdoc />
+        public TalkgroupAvailability QueryTalkgroupAvailability(TalkgroupQuery query)
+        {
+            try
+            {
+                var rules = fne.AnnouncedTGs?
+                    .Select(entry => new TalkgroupRule(entry.ID, entry.Slot, entry.Invalid))
+                    .ToArray()
+                    ?? Array.Empty<TalkgroupRule>();
+                return TalkgroupAvailabilityEvaluator.Evaluate(query, rules);
+            }
+            catch (InvalidOperationException)
+            {
+                // fnecore updates announced rules from its receive thread.
+                // A concurrent mutation is treated as not-ready rather than
+                // allowing a target that was not observed consistently.
+                return TalkgroupAvailabilityEvaluator.Evaluate(
+                    query,
+                    Array.Empty<TalkgroupRule>());
+            }
         }
 
         /* ------------------------------------------------------------------

@@ -550,7 +550,7 @@ namespace DvmConsole.Avalonia
 
                 toneDispatchCoordinator = new ToneDispatchRuntimeCoordinator(
                     ResolveToneDispatchTargets,
-                    targets => targets.All(target => IsFneSystemAvailable(target.SystemName)),
+                    targets => targets.All(IsTransmitTargetAvailable),
                     () => audioViewModel.Ptt?.IsEngaged == true
                         || Volatile.Read(ref dashboardTransmitActive) != 0
                         || patchPttRuntimeCoordinator?.IsTransmitActive == true,
@@ -581,7 +581,7 @@ namespace DvmConsole.Avalonia
                         routerTargets => talkgroupAudioRouter.ClearAllTalkgroupBuffers(),
                         () => audioViewModel.Ptt?.IsEngaged != true
                             && Volatile.Read(ref dashboardTransmitActive) == 0,
-                        target => IsFneSystemAvailable(target.SystemName),
+                        target => IsTransmitTargetAvailable(target),
                         status => Dispatcher.UIThread.Post(() =>
                         {
                             if (DataContext is MainWindowViewModel statusViewModel)
@@ -607,7 +607,7 @@ namespace DvmConsole.Avalonia
                         () => audioViewModel.Ptt?.IsEngaged != true
                             && Volatile.Read(ref dashboardTransmitActive) == 0
                             && patchPttRuntimeCoordinator?.IsTransmitActive != true,
-                        target => IsFneSystemAvailable(target.SystemName),
+                        target => IsTransmitTargetAvailable(target),
                         status => Dispatcher.UIThread.Post(() =>
                         {
                             if (DataContext is MainWindowViewModel statusViewModel)
@@ -1064,6 +1064,33 @@ namespace DvmConsole.Avalonia
                 IsConnected: true,
                 IsStarted: true,
             };
+
+        private bool IsTransmitTargetAvailable(TransmitTarget target)
+        {
+            if (!IsFneSystemAvailable(target.SystemName))
+            {
+                return false;
+            }
+
+            if (fnecoreTransportFactory?.ResolveAdapter(target.SystemName)
+                is not IFneTalkgroupStatusProvider provider)
+            {
+                // Compatibility/fake transports do not expose announced
+                // rules yet; connection validation remains their only gate.
+                return true;
+            }
+
+            if (!uint.TryParse(target.TalkgroupId, out uint talkgroupId))
+            {
+                return false;
+            }
+
+            var query = new TalkgroupQuery(
+                talkgroupId,
+                target.Slot,
+                target.Mode == VoiceMode.P25 ? TalkgroupMode.P25 : TalkgroupMode.Dmr);
+            return provider.QueryTalkgroupAvailability(query).IsAvailable;
+        }
 
         private void OnReceiveProjectionTimerTick(object? sender, EventArgs e)
             => receiveProjection?.SweepIdle(DateTimeOffset.UtcNow);
@@ -2189,7 +2216,7 @@ namespace DvmConsole.Avalonia
                 return;
             }
 
-            if (sender is not Border card)
+            if (sender is not Border card || e.Source is Button)
             {
                 return;
             }
@@ -3027,26 +3054,39 @@ namespace DvmConsole.Avalonia
                     return;
                 }
 
-                var inputDeviceId = viewModel?.AudioSettings?.SelectedInputId
-                    ?? AudioDeviceId.Default;
-                Interlocked.Exchange(ref dashboardTransmitActive, 1);
-                if (viewModel?.Preferences?.MuteRxAudioWhileTransmitting == true)
+                var unavailableTarget = targets.FirstOrDefault(
+                    target => !IsTransmitTargetAvailable(target));
+                if (string.IsNullOrWhiteSpace(unavailableTarget.SystemName))
                 {
-                    router.ClearAllTalkgroupBuffers();
+                    var inputDeviceId = viewModel?.AudioSettings?.SelectedInputId
+                        ?? AudioDeviceId.Default;
+                    Interlocked.Exchange(ref dashboardTransmitActive, 1);
+                    if (viewModel?.Preferences?.MuteRxAudioWhileTransmitting == true)
+                    {
+                        router.ClearAllTalkgroupBuffers();
+                    }
+                    foreach (var target in targets)
+                    {
+                        tarRecordingCoordinator?.TryStartTransmit(
+                            target,
+                            transmitTargetResolver?.ResolveChannelName(target) ?? target.TalkgroupId,
+                            DateTime.UtcNow,
+                            out _);
+                    }
+                    _ = BeginTransmitAndPlayPermitToneAsync(
+                        router,
+                        targets,
+                        inputDeviceId,
+                        viewModel?.Preferences?.TalkPermitTone == true);
+                    return;
                 }
-                foreach (var target in targets)
+
+                viewModel?.Ptt?.CancelEngagement();
+                if (viewModel is not null)
                 {
-                    tarRecordingCoordinator?.TryStartTransmit(
-                        target,
-                        transmitTargetResolver?.ResolveChannelName(target) ?? target.TalkgroupId,
-                        DateTime.UtcNow,
-                        out _);
+                    viewModel.AudioStatusMessage = "Target TG unavailable on FNE";
                 }
-                _ = BeginTransmitAndPlayPermitToneAsync(
-                    router,
-                    targets,
-                    inputDeviceId,
-                    viewModel?.Preferences?.TalkPermitTone == true);
+                return;
             }
             else
             {

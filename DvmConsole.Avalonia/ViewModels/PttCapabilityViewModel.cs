@@ -244,6 +244,13 @@ namespace DvmConsole.Avalonia.ViewModels
             }
         }
 
+        internal void CancelEngagement()
+        {
+            hotkeyDownLatched = false;
+            engagedFromToggle = false;
+            Release();
+        }
+
         /// <summary>
         /// Routes a hotkey event from the shell. Acts only when a
         /// gesture is configured and equals the incoming one: momentary
