@@ -196,6 +196,8 @@ namespace DvmConsole.Avalonia
         private DiagnosticLogSink? diagnosticLogSink;
         private DebugLogWindow? debugLogWindow;
         private WidgetSelectionWindow? widgetSelectionWindow;
+        private SubscriberCommandService? subscriberCommandService;
+        private SubscriberCommandWindow? subscriberCommandWindow;
         private string? userBackgroundPath;
         private Bitmap? userBackgroundBitmap;
         private IAudioWaveFileInspector? alertTonePreviewInspector;
@@ -427,6 +429,14 @@ namespace DvmConsole.Avalonia
                 fneConnectionBridge = new FneConnectionServiceBridge(fneConnectionService, viewModel.FneConnections);
                 fneConnectionBridge.Attach();
                 AttachReceiveProjection(viewModel);
+
+                if (fnecoreTransportFactory is { } commandFactory)
+                {
+                    subscriberCommandService = new SubscriberCommandService(
+                        IsFneSystemAvailable,
+                        systemName => commandFactory.ResolveAdapter(systemName),
+                        TimeSpan.FromSeconds(10));
+                }
 
                 if (hotkeys is not null && viewModel.Ptt is { } ptt)
                 {
@@ -1513,6 +1523,50 @@ namespace DvmConsole.Avalonia
             }
 
             FneConnectionsPanel.Focus();
+        }
+
+        internal bool CanOpenSubscriberCommands
+            => subscriberCommandService is not null
+                && codeplug?.Systems is { Count: > 0 }
+                && DataContext is MainWindowViewModel viewModel
+                && viewModel.FneConnections.AnyConnected;
+
+        internal void OpenSubscriberCommand(SubscriberCommandKind commandKind)
+        {
+            if (subscriberCommandService is not { } service
+                || codeplug?.Systems is not { } systems
+                || systems.Count == 0)
+            {
+                return;
+            }
+
+            if (subscriberCommandWindow is { } existing)
+            {
+                existing.Activate();
+                return;
+            }
+
+            string title = commandKind switch
+            {
+                SubscriberCommandKind.Page => "Page Subscriber",
+                SubscriberCommandKind.RadioCheck => "Radio Check Subscriber",
+                SubscriberCommandKind.Inhibit => "Inhibit Subscriber",
+                SubscriberCommandKind.Uninhibit => "Uninhibit Subscriber",
+                _ => "Subscriber Command",
+            };
+            var viewModel = new SubscriberCommandViewModel(
+                systems,
+                commandKind,
+                "subscriber-command-window",
+                service.ExecuteAsync);
+            var dialog = new SubscriberCommandWindow(viewModel, title);
+            subscriberCommandWindow = dialog;
+            dialog.Closed += (_, _) =>
+            {
+                if (ReferenceEquals(subscriberCommandWindow, dialog))
+                    subscriberCommandWindow = null;
+            };
+            _ = dialog.ShowDialog(this);
         }
 
         internal static bool ResolveKeepWindowOnTop(

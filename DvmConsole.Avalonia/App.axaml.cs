@@ -13,6 +13,7 @@ using DvmConsole.Avalonia.Services;
 using DvmConsole.Avalonia.ViewModels;
 using DvmConsole.Avalonia.Views;
 using DvmConsole.Core.Configuration;
+using DvmConsole.Core.Networking;
 using DvmConsole.Platform;
 using DvmConsole.Platform.Audio;
 using DvmConsole.Platform.Audio.Mac;
@@ -310,6 +311,7 @@ namespace DvmConsole.Avalonia
                 NativeMenuItem debugLogItem = CreateDebugLogMenuItem(mainWindow);
                 NativeMenuItem documentationItem = CreateDocumentationMenuItem();
                 NativeMenuItem shellControlsItem = CreateShellControlsMenuItem(mainWindow);
+                NativeMenuItem subscriberCommandsItem = CreateSubscriberCommandsMenuItem(mainWindow);
 
                 NativeMenuItem? fileItem = menu.Items
                     .OfType<NativeMenuItem>()
@@ -340,6 +342,22 @@ namespace DvmConsole.Avalonia
                     settingsMenu.Items.Insert(1, tonesItem);
                     settingsMenu.Items.Insert(2, CreateSettingsTransferMenuItem(mainWindow));
                     settingsMenu.Items.Insert(3, shellControlsItem);
+                }
+
+                NativeMenuItem? commandsItem = menu.Items
+                    .OfType<NativeMenuItem>()
+                    .FirstOrDefault(item => item.Header is string header
+                        && string.Equals(header, "Commands", StringComparison.Ordinal));
+                if (commandsItem is not null)
+                {
+                    commandsItem.Menu = subscriberCommandsItem.Menu;
+                    commandsItem.IsEnabled = subscriberCommandsItem.IsEnabled;
+                    BindSubscriberCommandEnablement(commandsItem, mainWindow);
+                }
+                else
+                {
+                    menu.Items.Add(subscriberCommandsItem);
+                    BindSubscriberCommandEnablement(subscriberCommandsItem, mainWindow);
                 }
 
                 NativeMenuItem? helpItem = menu.Items
@@ -492,6 +510,87 @@ namespace DvmConsole.Avalonia
             };
             item.Click += (_, _) => mainWindow?.OpenSettingsTransfer();
             return item;
+        }
+
+        /// <summary>
+        /// Creates the native subscriber-command submenu. The four entries
+        /// mirror the WPF Page, Radio Check, Inhibit, and Uninhibit actions;
+        /// they stay disabled until a live fnecore-backed command service and
+        /// at least one configured codeplug system are composed.
+        /// </summary>
+        internal static NativeMenuItem CreateSubscriberCommandsMenuItem(MainWindow? mainWindow)
+        {
+            bool enabled = mainWindow?.CanOpenSubscriberCommands == true;
+            var item = new NativeMenuItem("Commands")
+            {
+                IsEnabled = enabled,
+                Menu = new NativeMenu(),
+            };
+
+            AddSubscriberCommandAction(
+                item.Menu,
+                "Page Subscriber",
+                mainWindow,
+                SubscriberCommandKind.Page,
+                enabled);
+            AddSubscriberCommandAction(
+                item.Menu,
+                "Radio Check Subscriber",
+                mainWindow,
+                SubscriberCommandKind.RadioCheck,
+                enabled);
+            AddSubscriberCommandAction(
+                item.Menu,
+                "Inhibit Subscriber",
+                mainWindow,
+                SubscriberCommandKind.Inhibit,
+                enabled);
+            AddSubscriberCommandAction(
+                item.Menu,
+                "Uninhibit Subscriber",
+                mainWindow,
+                SubscriberCommandKind.Uninhibit,
+                enabled);
+
+            return item;
+        }
+
+        private static void BindSubscriberCommandEnablement(
+            NativeMenuItem item,
+            MainWindow? mainWindow)
+        {
+            if (mainWindow?.DataContext is not MainWindowViewModel viewModel)
+                return;
+
+            viewModel.FneConnections.PropertyChanged += (_, args) =>
+            {
+                if (args.PropertyName is not nameof(FneConnectionManagerViewModel.AnyConnected))
+                    return;
+
+                bool currentEnabled = mainWindow.CanOpenSubscriberCommands;
+                item.IsEnabled = currentEnabled;
+                if (item.Menu is not { } menu)
+                    return;
+
+                foreach (NativeMenuItem child in menu.Items.OfType<NativeMenuItem>())
+                    child.IsEnabled = currentEnabled;
+            };
+        }
+
+        private static void AddSubscriberCommandAction(
+            NativeMenu menu,
+            string header,
+            MainWindow? mainWindow,
+            SubscriberCommandKind commandKind,
+            bool enabled)
+        {
+            var item = new NativeMenuItem(header)
+            {
+                IsEnabled = enabled,
+            };
+            if (enabled)
+                item.Click += (_, _) => mainWindow!.OpenSubscriberCommand(commandKind);
+            menu.Items.Add(item);
         }
 
         /// <summary>

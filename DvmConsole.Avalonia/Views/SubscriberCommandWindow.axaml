@@ -1,0 +1,98 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:DvmConsole.Avalonia.ViewModels"
+        x:Class="DvmConsole.Avalonia.Views.SubscriberCommandWindow"
+        x:ClassModifier="internal"
+        x:DataType="vm:SubscriberCommandViewModel"
+        Title="Subscriber Command"
+        Width="430"
+        Height="300"
+        MinWidth="380"
+        MinHeight="260"
+        ShowInTaskbar="False"
+        WindowStartupLocation="CenterOwner"
+        Background="#0B1114"
+        Foreground="#EFF7F5">
+    <Window.Styles>
+        <Style Selector="TextBlock.muted">
+            <Setter Property="Foreground" Value="#8EA3A3" />
+        </Style>
+        <Style Selector="TextBlock.kicker">
+            <Setter Property="Foreground" Value="#5FE1D2" />
+            <Setter Property="FontSize" Value="11" />
+            <Setter Property="FontWeight" Value="Bold" />
+            <Setter Property="LetterSpacing" Value="2" />
+        </Style>
+        <Style Selector="Border.panel">
+            <Setter Property="Background" Value="#111B1F" />
+            <Setter Property="BorderBrush" Value="#24373A" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="8" />
+        </Style>
+        <Style Selector="Button.action">
+            <Setter Property="Padding" Value="12,8" />
+            <Setter Property="Background" Value="#1A262B" />
+            <Setter Property="BorderBrush" Value="#2A4548" />
+            <Setter Property="Foreground" Value="#EFF7F5" />
+        </Style>
+    </Window.Styles>
+
+    <Grid Margin="22" RowDefinitions="Auto,14,*,14,Auto,12,Auto">
+        <StackPanel Grid.Row="0" Spacing="4">
+            <TextBlock Classes="kicker" Text="P25 // SUBSCRIBER COMMAND" />
+            <TextBlock FontSize="24"
+                       FontWeight="Bold"
+                       Text="Choose a subscriber" />
+            <TextBlock Classes="muted"
+                       TextWrapping="Wrap"
+                       Text="Commands are sent only through a connected P25 FNE adapter." />
+        </StackPanel>
+
+        <Border Grid.Row="2" Classes="panel" Padding="14">
+            <Grid RowDefinitions="Auto,12,Auto" ColumnDefinitions="110,*" RowSpacing="8">
+                <TextBlock Grid.Row="0"
+                           Classes="muted"
+                           VerticalAlignment="Center"
+                           Text="System" />
+                <ComboBox Grid.Row="0"
+                          Grid.Column="1"
+                          ItemsSource="{Binding Systems}"
+                          SelectedItem="{Binding SelectedSystemOption, Mode=TwoWay}">
+                    <ComboBox.ItemTemplate>
+                        <DataTemplate x:DataType="vm:SubscriberCommandSystemOption">
+                            <TextBlock Text="{Binding Name}" />
+                        </DataTemplate>
+                    </ComboBox.ItemTemplate>
+                </ComboBox>
+
+                <TextBlock Grid.Row="2"
+                           Classes="muted"
+                           VerticalAlignment="Center"
+                           Text="Radio ID" />
+                <TextBox Grid.Row="2"
+                         Grid.Column="1"
+                         Text="{Binding DestinationId, Mode=TwoWay}"
+                         Watermark="Destination RID"
+                         MaxLength="8" />
+            </Grid>
+        </Border>
+
+        <TextBlock Grid.Row="4"
+                   Classes="muted"
+                   TextWrapping="Wrap"
+                   Text="{Binding StatusMessage}" />
+
+        <Grid Grid.Row="6" ColumnDefinitions="Auto,*,Auto" ColumnSpacing="8">
+            <Button Grid.Column="0"
+                    Classes="action"
+                    Content="Cancel"
+                    Click="Cancel_Click" />
+            <Button Grid.Column="2"
+                    x:Name="SubmitButton"
+                    Classes="action"
+                    Content="Send"
+                    IsEnabled="{Binding CanSubmit}"
+                    Click="Submit_Click" />
+        </Grid>
+    </Grid>
+</Window>

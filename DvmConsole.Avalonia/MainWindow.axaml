@@ -36,6 +36,9 @@
                     <NativeMenuItem Header="Open Codeplug" />
                 </NativeMenu>
             </NativeMenuItem>
+            <NativeMenuItem Header="Commands">
+                <NativeMenu />
+            </NativeMenuItem>
             <NativeMenuItem Header="View">
                 <NativeMenu>
                     <NativeMenuItem Header="Dark Mode"
