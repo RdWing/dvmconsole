@@ -23,6 +23,10 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DvmConsole.Audio.Tests", "D
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DvmConsole.Desktop", "DvmConsole.Desktop\DvmConsole.Desktop.csproj", "{F6AC260B-27DE-470C-A3D6-7D3DC278B930}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DvmConsole.FneClient", "DvmConsole.FneClient\DvmConsole.FneClient.csproj", "{4DD8C48B-3F91-4FD4-AF11-FED7D3D2E742}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DvmConsole.FneClient.Tests", "DvmConsole.FneClient.Tests\DvmConsole.FneClient.Tests.csproj", "{8BEA5A9C-9E26-4EF4-B5B7-AC3EDB70A2DA}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -72,5 +76,13 @@ Global
 		{F6AC260B-27DE-470C-A3D6-7D3DC278B930}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{F6AC260B-27DE-470C-A3D6-7D3DC278B930}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{F6AC260B-27DE-470C-A3D6-7D3DC278B930}.Release|Any CPU.Build.0 = Release|Any CPU
+		{4DD8C48B-3F91-4FD4-AF11-FED7D3D2E742}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{4DD8C48B-3F91-4FD4-AF11-FED7D3D2E742}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{4DD8C48B-3F91-4FD4-AF11-FED7D3D2E742}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{4DD8C48B-3F91-4FD4-AF11-FED7D3D2E742}.Release|Any CPU.Build.0 = Release|Any CPU
+		{8BEA5A9C-9E26-4EF4-B5B7-AC3EDB70A2DA}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{8BEA5A9C-9E26-4EF4-B5B7-AC3EDB70A2DA}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{8BEA5A9C-9E26-4EF4-B5B7-AC3EDB70A2DA}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{8BEA5A9C-9E26-4EF4-B5B7-AC3EDB70A2DA}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 EndGlobal
