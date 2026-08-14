@@ -342,30 +342,28 @@ namespace DvmConsole.Core.Networking
         }
 
         /// <summary>
-        /// Runs one heartbeat tick: pings the transport and, when the
-        /// acknowledgement was not observed, counts a miss. Two
-        /// consecutive misses time the connection out.
+        /// Runs one heartbeat tick. The acknowledgement flag belongs to
+        /// the preceding interval: receive callbacks arrive on the
+        /// transport's receive thread and may race this timer callback.
+        /// The transport ping is deliberately invoked outside state.Sync;
+        /// otherwise the receive callback cannot acquire the lock to
+        /// record a valid acknowledgement before this method checks it.
+        /// Two consecutive intervals without an acknowledgement time the
+        /// connection out.
         /// </summary>
         private void OnHeartbeatTick(ConnectionState state)
         {
+            IFneTransport? transport;
+            bool timeout;
+
             lock (state.Sync)
             {
-                if (disposed || !state.IsConnected || state.Transport is not { } transport)
+                if (disposed || !state.IsConnected || state.Transport is not { } currentTransport)
                 {
                     return;
                 }
 
-                state.AckObserved = false;
-
-                try
-                {
-                    transport.Ping();
-                }
-                catch
-                {
-                    // A throwing keepalive counts as a missed ping.
-                }
-
+                transport = currentTransport;
                 if (state.AckObserved)
                 {
                     state.MissedPings = 0;
@@ -373,30 +371,62 @@ namespace DvmConsole.Core.Networking
                 else
                 {
                     state.MissedPings++;
-                    if (state.MissedPings >= 2)
-                    {
-                        // Two consecutive ticks without an
-                        // acknowledgement: the peer is presumed gone.
-                        CancelHeartbeat(state);
-                        TeardownTransport(state);
-                        state.IsConnected = false;
-                        state.IsBusy = false;
-                        state.IsStarted = false;
-                        Publish(state);
-                        return;
-                    }
                 }
 
-                // A synchronously raised PeerDisconnected from Ping()
-                // tears the transport down reentrantly mid-tick; never
-                // schedule a heartbeat for a state that is no longer
-                // connected.
-                if (!state.IsConnected)
+                // Consume only the acknowledgement for the interval just
+                // completed. A PONG arriving after this point belongs to
+                // the ping sent below and will be observed by the next tick.
+                state.AckObserved = false;
+                timeout = state.MissedPings >= 2;
+
+                if (!timeout)
+                {
+                    ScheduleHeartbeat(state);
+                }
+            }
+
+            try
+            {
+                // Never call transport code while state.Sync is held. The
+                // real PONG callback runs on fnecore's receive thread.
+                transport.Ping();
+            }
+            catch
+            {
+                // A throwing keepalive is observed as a missing
+                // acknowledgement on the next interval.
+            }
+
+            if (!timeout)
+            {
+                return;
+            }
+
+            lock (state.Sync)
+            {
+                // The current ping can acknowledge synchronously or before
+                // this lock is reacquired. Preserve a live connection in
+                // that case; otherwise tear down the same transport that
+                // supplied the two-missed-interval result.
+                if (disposed || !state.IsConnected || !ReferenceEquals(state.Transport, transport))
                 {
                     return;
                 }
 
-                ScheduleHeartbeat(state);
+                if (state.AckObserved)
+                {
+                    state.MissedPings = 0;
+                    state.AckObserved = false;
+                    ScheduleHeartbeat(state);
+                    return;
+                }
+
+                CancelHeartbeat(state);
+                TeardownTransport(state);
+                state.IsConnected = false;
+                state.IsBusy = false;
+                state.IsStarted = false;
+                Publish(state);
             }
         }
 

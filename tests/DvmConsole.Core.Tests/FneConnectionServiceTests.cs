@@ -62,6 +62,8 @@ namespace DvmConsole.Core.Tests
         {
             public bool ThrowOnConnect;
             public bool AckOnPing;
+            public Func<int, Task>? AckOnPingAsync;
+            public Action<int>? AcknowledgementObserved;
             public int ConnectCount;
             public int DisconnectCount;
             public int PingCount;
@@ -85,7 +87,23 @@ namespace DvmConsole.Core.Tests
             public void Ping()
             {
                 PingCount++;
-                if (AckOnPing)
+                if (AckOnPingAsync is { } acknowledgeAsync)
+                {
+                    var pingNumber = PingCount;
+                    _ = Task.Run(async () =>
+                    {
+                        await acknowledgeAsync(pingNumber).ConfigureAwait(false);
+                        try
+                        {
+                            PingAcknowledged?.Invoke();
+                        }
+                        finally
+                        {
+                            AcknowledgementObserved?.Invoke(pingNumber);
+                        }
+                    });
+                }
+                else if (AckOnPing)
                 {
                     PingAcknowledged?.Invoke();
                 }
@@ -399,6 +417,71 @@ namespace DvmConsole.Core.Tests
             Assert.True(service.GetSnapshot("Alpha")!.IsConnected);
             Assert.Equal(5, factory["Alpha"].PingCount);
             Assert.Equal(0, factory["Alpha"].DisconnectCount);
+        }
+
+        [Fact]
+        public async Task Heartbeat_CrossThreadAcknowledgements_DoNotTimeoutConnectedPeer()
+        {
+            var factory = new RecordingTransportFactory();
+            var scheduler = new ManualScheduler();
+            var firstPingStarted = new TaskCompletionSource<bool>(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            var secondPingStarted = new TaskCompletionSource<bool>(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            var firstAcknowledgement = new TaskCompletionSource<bool>(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            var secondAcknowledgement = new TaskCompletionSource<bool>(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            var firstAckRaised = new TaskCompletionSource<bool>(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            var secondAckRaised = new TaskCompletionSource<bool>(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+
+            factory.CreateHook = () => new FakeFneTransport
+            {
+                AckOnPingAsync = async pingNumber =>
+                {
+                    var started = pingNumber == 1 ? firstPingStarted : secondPingStarted;
+                    var acknowledgement = pingNumber == 1
+                        ? firstAcknowledgement
+                        : secondAcknowledgement;
+                    started.TrySetResult(true);
+                    await acknowledgement.Task.ConfigureAwait(false);
+                },
+                AcknowledgementObserved = pingNumber =>
+                {
+                    if (pingNumber == 1)
+                    {
+                        firstAckRaised.TrySetResult(true);
+                    }
+                    else
+                    {
+                        secondAckRaised.TrySetResult(true);
+                    }
+                },
+            };
+
+            var service = CreateService(new[] { System() }, factory, scheduler);
+            service.Start("Alpha");
+            factory["Alpha"].RaiseConnected();
+
+            var firstTick = Task.Run(scheduler.Elapse);
+            await firstPingStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            await firstTick.WaitAsync(TimeSpan.FromSeconds(5));
+            firstAcknowledgement.TrySetResult(true);
+            await firstAckRaised.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+            var secondTick = Task.Run(scheduler.Elapse);
+            await secondPingStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            await secondTick.WaitAsync(TimeSpan.FromSeconds(5));
+            secondAcknowledgement.TrySetResult(true);
+            await secondAckRaised.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+            Assert.True(service.GetSnapshot("Alpha")!.IsConnected);
+            Assert.Equal(2, factory["Alpha"].PingCount);
+            Assert.Equal(0, factory["Alpha"].DisconnectCount);
+
+            service.Dispose();
         }
 
         /* ------------------------------------------------------------------
