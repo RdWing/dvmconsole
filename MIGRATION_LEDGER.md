@@ -24,7 +24,7 @@ Rebuild the `r01a02_dev` desktop dispatch console for Apple Silicon macOS while 
 | M4 | Software vocoder backend | Complete | `libvocoder` loads and encode/decode vectors pass on Apple Silicon with tracked tests. |
 | M5 | Audio and platform services | In progress | Platform-neutral audio devices, capture, routing, and PTT contracts exist; macOS CoreAudio, Windows NAudio, and a manual PTT source are implemented, while keyboard/hardware PTT adapters remain. |
 | M6 | Avalonia application shell | In progress | Shared Avalonia shell starts on the desktop target, shows codeplug-derived system/channel status, and exposes explicit live FNE connect/disconnect status; feature parity remains. |
-| M7 | Feature migration | In progress | Platform-neutral FNE traffic, DMR/P25 RX packet extraction/selection, and PCM/vocoder frame boundaries exist; desktop device/channel wiring, TX routing, P25 security, NXDN/analog media, patching, tones, TAR, settings, and history remain. |
+| M7 | Feature migration | In progress | Platform-neutral FNE traffic, DMR/P25 RX packet extraction/selection, a DMR wire-packet builder, and PCM/vocoder frame boundaries exist; desktop device/channel wiring, complete TX call sequencing, P25 security, NXDN/analog media, patching, tones, TAR, settings, and history remain. |
 | M8 | Packaging and integration handoff | In progress | Reproducible unsigned framework-dependent macOS and Windows publish paths exist; signing, installer packaging, and integration handoff remain. |
 
 ## Working assumptions
@@ -61,6 +61,7 @@ Rebuild the `r01a02_dev` desktop dispatch console for Apple Silicon macOS while 
 - Added the first end-to-end DMR RX media slice: the legacy 55-byte DMR FNE voice-packet layout is mapped to three AMBE codewords, decoded through the software-vocoder boundary, and written to the platform-neutral playback boundary. Non-voice frames are ignored; P25 DFSI reconstruction and call/channel selection remain deliberately above this reusable session.
 - Added reusable DMR receive selection and routing: destination ID, zero-based FNE timeslot, and voice frame type are matched before decode, and selected packet processing is serialized for one playback path.
 - Added P25 DFSI receive decoding for complete LDU1/LDU2 packets: the nine IMBE codewords are reconstructed from records `0x62–0x6A` and `0x6B–0x73`, selected by talkgroup, and sent through the software-vocoder playback boundary. Key management/decryption is explicitly deferred so encrypted traffic is not silently treated as clear audio.
+- Added the first outbound traffic seam: DMR AMBE codewords can be mapped back into a tested 55-byte voice packet, and `FneConnection.SendTraffic` now owns protocol-opcode dispatch without exposing transport construction to the desktop layer. DMR link-control headers, packet sequencing, terminators, and PTT orchestration remain outstanding.
 - Re-ran the supplied live FNE probe after attaching the traffic boundary; the system reached `Connected` in five seconds and exited successfully after clean shutdown.
 - Retried the supplied live FNE codeplug after macOS Local Network permission was granted. The endpoint `10.10.10.55:62031` exchanged traffic, completed login/authentication, reached `Connected`, and shut down cleanly. The probe now preserves the observed-connected result after shutdown and exits successfully; diagnostic packet tracing is opt-in and sanitized.
 - Verified three configuration tests, four FNE protocol tests, the bootstrap against `configs/codeplug.example.yml`, the full solution with `/m:1`, and the native vocoder smoke harness.
@@ -99,6 +100,7 @@ Rebuild the `r01a02_dev` desktop dispatch console for Apple Silicon macOS while 
 | `9b46790` | DMR RX packet extraction, software-vocoder decode, playback session, and focused media tests. |
 | `c13ecb8` | DMR receive channel selection and serialized playback routing. |
 | `46443d3` | P25 DFSI LDU reconstruction, IMBE extraction, and clear receive playback tests. |
+| `7ab68f3` | DMR AMBE wire-packet builder and protocol-neutral FNE send boundary. |
 
 ## Verification log
 
@@ -126,7 +128,7 @@ Rebuild the `r01a02_dev` desktop dispatch console for Apple Silicon macOS while 
 | Windows audio runtime | Not run on Windows hardware; compile verification passed on macOS |
 | Desktop publish script | Passed framework-dependent `osx-arm64` and `win-x64` publishes; macOS output includes `libdvmaudio.dylib` |
 | Final solution test run before media slice | 26 passed: Core 3, FNE 4, Vocoder 6, Audio 8, FNE client 5 (native vocoder included) |
-| Media test project | 8 passed: DMR packet/decode/routing coverage plus P25 LDU1/LDU2 extraction and nine-frame playback |
+| Media test project | 9 passed: DMR packet/decode/routing/round-trip coverage plus P25 LDU1/LDU2 extraction and nine-frame playback |
 | Final solution test run after media slice | 29 passed: Core 3, FNE 4, Vocoder 6, Audio 8, FNE client 5, Media 3 (native vocoder included) |
 | Final solution build after media slice | Passed all 16 solution projects with `/m:1`; 0 warnings and 0 errors |
 | Bootstrap example validation | Passed: 1 system and 3 zones loaded from `configs/codeplug.example.yml` |
