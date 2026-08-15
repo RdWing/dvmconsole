@@ -2647,6 +2647,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         List<ChannelViewModel> activeAudioChannels = [];
         List<ChannelViewModel> activePatchSourceChannels = [];
         bool callHistoryChanged = false;
+        bool matchedAnyChannel = false;
         bool? protocolEncrypted = TryResolveProtocolEncryption(traffic);
         foreach (SystemViewModel configuredSystem in Systems)
         {
@@ -2657,6 +2658,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
                 bool matched = channel.TryApplyTraffic(system.Name, traffic);
                 if (!matched)
                     continue;
+                matchedAnyChannel = true;
 
                 patchForwarding.ObserveTraffic(channel, traffic);
                 if (patchSourceDecode.IsActive(channel))
@@ -2699,6 +2701,13 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             }
         }
 
+        if (!matchedAnyChannel &&
+            traffic.Protocol == FneTrafficProtocol.Dmr &&
+            IsDmrTerminator(traffic))
+        {
+            system.RecordNonCallDmrTerminator();
+        }
+
         foreach (ChannelViewModel channel in activeAudioChannels)
             _ = Task.Run(() => ProcessAudioAsync(channel, traffic));
         foreach (ChannelViewModel channel in activePatchSourceChannels)
@@ -2728,6 +2737,12 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         }
 
         return null;
+    }
+
+    private static bool IsDmrTerminator(FneTrafficFrame traffic)
+    {
+        return traffic.FrameType.Equals("TERMINATOR", StringComparison.OrdinalIgnoreCase) ||
+            traffic.Subtype.Equals("TERMINATOR_WITH_LC", StringComparison.OrdinalIgnoreCase);
     }
 
     private async Task StartAudioAsync(ChannelViewModel channel)
@@ -4079,6 +4094,7 @@ public sealed class SystemViewModel : INotifyPropertyChanged, IAsyncDisposable
     private long receivedPacketBytes;
     private long sentPacketCount;
     private long sentPacketBytes;
+    private long nonCallDmrTerminatorCount;
     private string lastPacketText = "No media packets received.";
 
     public SystemViewModel(
@@ -4114,7 +4130,10 @@ public sealed class SystemViewModel : INotifyPropertyChanged, IAsyncDisposable
     public bool IsConnected => connection.Status.State == FneConnectionState.Connected;
     public string SystemTabText => $"{Name} {(ConnectionStatus.StartsWith("Connected:", StringComparison.OrdinalIgnoreCase) ? "●" : "○")}";
     public string PacketDiagnosticsText
-        => $"RX {receivedPacketCount:N0} packets / {receivedPacketBytes:N0} bytes · TX {sentPacketCount:N0} packets / {sentPacketBytes:N0} bytes";
+        => $"RX {receivedPacketCount:N0} packets / {receivedPacketBytes:N0} bytes · TX {sentPacketCount:N0} packets / {sentPacketBytes:N0} bytes" +
+            (nonCallDmrTerminatorCount > 0
+                ? $" · non-call DMR terminators {nonCallDmrTerminatorCount:N0}"
+                : string.Empty);
     public string LastPacketText => lastPacketText;
     public string ConnectionStatus
     {
@@ -4183,6 +4202,12 @@ public sealed class SystemViewModel : INotifyPropertyChanged, IAsyncDisposable
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(LastPacketText)));
     }
 
+    internal void RecordNonCallDmrTerminator()
+    {
+        nonCallDmrTerminatorCount++;
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(PacketDiagnosticsText)));
+    }
+
     public async ValueTask DisposeAsync()
     {
         connection.StatusChanged -= HandleConnectionStatus;
@@ -4213,6 +4238,7 @@ public sealed class SystemViewModel : INotifyPropertyChanged, IAsyncDisposable
         receivedPacketBytes = 0;
         sentPacketCount = 0;
         sentPacketBytes = 0;
+        nonCallDmrTerminatorCount = 0;
         lastPacketText = "No media packets received.";
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(PacketDiagnosticsText)));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(LastPacketText)));

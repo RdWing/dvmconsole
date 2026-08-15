@@ -229,8 +229,21 @@ public sealed class SystemViewModelTests
                 4,
                 78,
                 new byte[DvmConsole.Media.DmrVoicePacketCodec.PacketBytes]));
+            viewModel.ProcessTraffic(system, new FneTrafficFrame(
+                FneTrafficProtocol.Dmr,
+                1,
+                42,
+                999,
+                1,
+                "GROUP",
+                "DATA_SYNC",
+                "TERMINATOR_WITH_LC",
+                5,
+                999,
+                new byte[DvmConsole.Media.DmrVoicePacketCodec.PacketBytes]));
 
             Assert.Equal(2, viewModel.CallHistory.Count);
+            Assert.Contains("non-call DMR terminators 1", system.PacketDiagnosticsText);
             Assert.Equal((uint)78, viewModel.CallHistory[0].StreamId);
             Assert.False(viewModel.CallHistory[0].IsActive);
             Assert.NotNull(viewModel.CallHistory[0].Duration);
