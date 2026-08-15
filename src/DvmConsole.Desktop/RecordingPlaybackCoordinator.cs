@@ -12,6 +12,7 @@ public sealed class RecordingPlaybackCoordinator : IAsyncDisposable
     private readonly SemaphoreSlim gate = new(1, 1);
     private readonly Func<IAudioBackend> createAudioBackend;
     private readonly Func<string?> getOutputDeviceId;
+    private readonly Action<Exception>? faultHandler;
     private IAudioBackend? audioBackend;
     private PlaybackSession? activeSession;
     private string? currentPath;
@@ -19,10 +20,12 @@ public sealed class RecordingPlaybackCoordinator : IAsyncDisposable
 
     public RecordingPlaybackCoordinator(
         Func<IAudioBackend> createAudioBackend,
-        Func<string?> getOutputDeviceId)
+        Func<string?> getOutputDeviceId,
+        Action<Exception>? faultHandler = null)
     {
         this.createAudioBackend = createAudioBackend ?? throw new ArgumentNullException(nameof(createAudioBackend));
         this.getOutputDeviceId = getOutputDeviceId ?? throw new ArgumentNullException(nameof(getOutputDeviceId));
+        this.faultHandler = faultHandler;
     }
 
     public bool IsPlaying(string? path = null)
@@ -142,6 +145,7 @@ public sealed class RecordingPlaybackCoordinator : IAsyncDisposable
 
     private async Task RunAsync(PlaybackSession session)
     {
+        Exception? failure = null;
         try
         {
             short[] input = new short[1600];
@@ -165,24 +169,41 @@ public sealed class RecordingPlaybackCoordinator : IAsyncDisposable
         {
             // Expected when an operator stops playback or the application closes.
         }
+        catch (Exception exception)
+        {
+            failure = exception;
+        }
         finally
         {
             try
             {
                 await session.Playback.FlushAsync().ConfigureAwait(false);
             }
-            finally
+            catch (Exception exception)
+            {
+                failure ??= exception;
+            }
+
+            try
             {
                 await session.DisposeResourcesAsync().ConfigureAwait(false);
-                lock (this)
+            }
+            catch (Exception exception)
+            {
+                failure ??= exception;
+            }
+
+            lock (this)
+            {
+                if (ReferenceEquals(activeSession, session))
                 {
-                    if (ReferenceEquals(activeSession, session))
-                    {
-                        activeSession = null;
-                        currentPath = null;
-                    }
+                    activeSession = null;
+                    currentPath = null;
                 }
             }
+
+            if (failure is not null)
+                faultHandler?.Invoke(failure);
         }
     }
 

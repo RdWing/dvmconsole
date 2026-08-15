@@ -1069,7 +1069,8 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             ShouldRecordSource);
         recordingPlayback = new RecordingPlaybackCoordinator(
             () => AudioBackendFactory.CreateDefault(Environment.GetEnvironmentVariable("DVM_AUDIO_LIBRARY")),
-            () => userSettings.AudioOutputDeviceId);
+            () => userSettings.AudioOutputDeviceId,
+            HandleRecordingPlaybackFaulted);
         audioCoordinator = new ChannelReceiveAudioCoordinator(
             p25KeyResolver,
             HandleDecodedSamples,
@@ -2994,6 +2995,12 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             channel.SetRecordingEnabled(false);
             AudioStatusText = $"TAR recording stopped: {exception.Message}";
         });
+    }
+
+    private void HandleRecordingPlaybackFaulted(Exception exception)
+    {
+        Dispatcher.UIThread.Post(() =>
+            AudioStatusText = $"Recording playback stopped: {exception.Message}");
     }
 
     private void RefreshRecordings()
