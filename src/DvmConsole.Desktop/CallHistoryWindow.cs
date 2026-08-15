@@ -16,6 +16,7 @@ namespace DvmConsole.Desktop;
 public sealed class CallHistoryWindow : Window
 {
     private readonly MainWindowViewModel viewModel;
+    private bool snapToWindow;
 
     public CallHistoryWindow(MainWindowViewModel viewModel)
     {
@@ -146,6 +147,20 @@ public sealed class CallHistoryWindow : Window
         Closed += (_, _) => SavePlacement();
     }
 
+    public void SetSnapToWindow(bool enabled, MainWindow owner)
+    {
+        ArgumentNullException.ThrowIfNull(owner);
+        snapToWindow = enabled;
+        if (!enabled)
+            return;
+
+        WindowStartupLocation = WindowStartupLocation.Manual;
+        Position = new PixelPoint(
+            owner.Position.X + (int)Math.Round(owner.Bounds.Width) + 5,
+            owner.Position.Y);
+        Height = Math.Max(MinHeight, owner.Bounds.Height);
+    }
+
     private async void HandleExportClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
     {
         if (!StorageProvider.CanSave)
@@ -173,6 +188,8 @@ public sealed class CallHistoryWindow : Window
 
     private void SavePlacement()
     {
+        if (snapToWindow)
+            return;
         viewModel.SaveCallHistoryWindowPlacement(new WindowPlacementSetting
         {
             Left = Position.X,

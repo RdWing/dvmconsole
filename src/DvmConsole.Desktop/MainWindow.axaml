@@ -102,6 +102,7 @@
             <Separator />
             <MenuItem Header="Call History window…" Click="HandleOpenCallHistoryClick" />
             <MenuItem Header="Dock Call History in sidebar" IsChecked="{Binding ShowCallHistoryPane, Mode=TwoWay}" ToggleType="CheckBox" />
+            <MenuItem Header="Snap detached Call History" IsChecked="{Binding SnapCallHistoryToWindow, Mode=TwoWay}" ToggleType="CheckBox" />
             <MenuItem Header="Call History tools…" Tag="History" Click="HandleOpenOperatorToolsClick" />
             <MenuItem Header="Groups…" Tag="Groups" Click="HandleOpenOperatorToolsClick" />
             <MenuItem Header="Debug Logs…" Click="HandleOpenDebugLogsClick" />

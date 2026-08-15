@@ -43,6 +43,7 @@ public sealed partial class MainWindow : Window
             channel => viewModel.StartChannelTransmitAsync(channel),
             channel => viewModel.StopChannelTransmitAsync(channel));
         DataContext = viewModel;
+        viewModel.PropertyChanged += HandleViewModelPropertyChanged;
         AddHandler(InputElement.KeyDownEvent, HandleKeyDown, RoutingStrategies.Tunnel);
         AddHandler(InputElement.KeyUpEvent, HandleKeyUp, RoutingStrategies.Tunnel);
         AddHandler(InputElement.PointerPressedEvent, HandlePttPointerPressed, RoutingStrategies.Tunnel, true);
@@ -51,8 +52,11 @@ public sealed partial class MainWindow : Window
         RefreshRecentCodeplugMenu();
         RefreshNamedSettingsProfileMenus();
         Opened += async (_, _) => await viewModel.StartKeyboardPttAsync().ConfigureAwait(false);
+        PositionChanged += (_, _) => SnapCallHistoryWindowIfNeeded();
+        SizeChanged += (_, _) => SnapCallHistoryWindowIfNeeded();
         Closed += async (_, _) =>
         {
+            viewModel.PropertyChanged -= HandleViewModelPropertyChanged;
             callHistoryWindow?.Close();
             await viewModel.DisposeAsync().ConfigureAwait(false);
         };
@@ -606,7 +610,21 @@ public sealed partial class MainWindow : Window
 
         if (!callHistoryWindow.IsVisible)
             callHistoryWindow.Show(this);
+        SnapCallHistoryWindowIfNeeded();
         callHistoryWindow.Activate();
+    }
+
+    private void HandleViewModelPropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(MainWindowViewModel.SnapCallHistoryToWindow))
+            SnapCallHistoryWindowIfNeeded();
+    }
+
+    private void SnapCallHistoryWindowIfNeeded()
+    {
+        if (callHistoryWindow is null || !callHistoryWindow.IsVisible)
+            return;
+        callHistoryWindow.SetSnapToWindow(viewModel.SnapCallHistoryToWindow, this);
     }
 
     private async void HandleOpenOperatorToolsClick(object? sender, RoutedEventArgs e)
@@ -1197,6 +1215,19 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         }
     }
 
+    public bool SnapCallHistoryToWindow
+    {
+        get => userSettings.SnapCallHistoryToWindow;
+        set
+        {
+            if (userSettings.SnapCallHistoryToWindow == value)
+                return;
+            userSettings.SnapCallHistoryToWindow = value;
+            PersistUserSettings();
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SnapCallHistoryToWindow)));
+        }
+    }
+
     public bool ShowSystemStatus
     {
         get => userSettings.ShowSystemStatus;
@@ -1305,6 +1336,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         userSettings.ShowAlertTones = true;
         userSettings.LockWidgets = true;
         userSettings.ShowCallHistoryPane = true;
+        userSettings.SnapCallHistoryToWindow = false;
         userSettings.CallHistoryWindowPlacement = new WindowPlacementSetting();
         PersistUserSettings();
         foreach (string propertyName in new[]
@@ -1314,7 +1346,8 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
                      nameof(ShowAlertTones),
                      nameof(LockWidgets),
                      nameof(CanResizeLayout),
-                     nameof(ShowCallHistoryPane)
+                     nameof(ShowCallHistoryPane),
+                     nameof(SnapCallHistoryToWindow)
                  })
         {
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));

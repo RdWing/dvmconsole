@@ -80,6 +80,7 @@ public sealed class UserSettings
     public List<string> SelectedWebStreams { get; set; } = [];
     public Dictionary<string, bool> TransmitEncryptionStates { get; set; } = new(StringComparer.OrdinalIgnoreCase);
     public bool ShowCallHistoryPane { get; set; } = true;
+    public bool SnapCallHistoryToWindow { get; set; }
     public WindowPlacementSetting CallHistoryWindowPlacement { get; set; } = new();
 }
 
@@ -443,7 +444,8 @@ public sealed class UserSettingsStore
         if (settings.TalkPermitTone || settings.ConnectionChimes || settings.DarkMode ||
             settings.TogglePttMode || !string.Equals(settings.GlobalPttKey, "Space", StringComparison.OrdinalIgnoreCase) ||
             !settings.ShowSystemStatus || !settings.ShowChannels || !settings.ShowAlertTones ||
-            !settings.LockWidgets || !settings.ShowCallHistoryPane || settings.UserBackgroundImage is not null)
+            !settings.LockWidgets || !settings.ShowCallHistoryPane || settings.SnapCallHistoryToWindow ||
+            settings.UserBackgroundImage is not null)
         {
             sections.Add("General");
         }
@@ -504,6 +506,7 @@ public sealed class UserSettingsStore
             target.LockWidgets = source.LockWidgets;
             target.UserBackgroundImage = source.UserBackgroundImage;
             target.ShowCallHistoryPane = source.ShowCallHistoryPane;
+            target.SnapCallHistoryToWindow = source.SnapCallHistoryToWindow;
             target.CallHistoryWindowPlacement = new WindowPlacementSetting
             {
                 Left = source.CallHistoryWindowPlacement.Left,

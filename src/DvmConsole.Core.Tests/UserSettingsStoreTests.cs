@@ -34,6 +34,7 @@ public sealed class UserSettingsStoreTests
             store.Save(new UserSettings
             {
                 ShowCallHistoryPane = false,
+                SnapCallHistoryToWindow = true,
                 CallHistoryWindowPlacement = new WindowPlacementSetting
                 {
                     Left = double.NaN,
@@ -46,6 +47,7 @@ public sealed class UserSettingsStoreTests
             UserSettings loaded = store.Load();
 
             Assert.False(loaded.ShowCallHistoryPane);
+            Assert.True(loaded.SnapCallHistoryToWindow);
             Assert.Null(loaded.CallHistoryWindowPlacement.Left);
             Assert.Equal(42, loaded.CallHistoryWindowPlacement.Top);
             Assert.Equal(400, loaded.CallHistoryWindowPlacement.Width);
