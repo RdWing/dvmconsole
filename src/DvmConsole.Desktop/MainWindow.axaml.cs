@@ -3190,8 +3190,6 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
                 Dispatcher.UIThread.Post(() =>
                     AudioStatusText = $"RX {channel.Name}: {diagnostics.SummaryText} (audio continues)");
             }
-            callRecordings.ObserveTraffic(channel, traffic);
-            RefreshRecordings();
         }
         catch (Exception exception)
         {
@@ -3212,6 +3210,14 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
                 AudioStatusText = $"RX audio stopped: {exception.Message}";
             });
             await Task.Run(() => audioCoordinator.StopAsync(channel)).ConfigureAwait(false);
+        }
+        finally
+        {
+            // A terminator must close TAR even when the output device failed
+            // while decoding the same frame; recording lifecycle is separate
+            // from playback recovery.
+            callRecordings.ObserveTraffic(channel, traffic);
+            RefreshRecordings();
         }
     }
 
