@@ -59,9 +59,13 @@ namespace DvmConsole.Core.Networking
             if (rules is null || rules.Count == 0)
             {
                 return new TalkgroupAvailability(
-                    IsAvailable: false,
+                    // Match the WPF peer behavior: an FNE that has not
+                    // announced rules yet must not disable a valid channel.
+                    // Once announcements arrive, explicit invalid/TG/slot
+                    // rules below become authoritative.
+                    IsAvailable: true,
                     IsKnown: false,
-                    "no announced TG rules received yet");
+                    "no announced TG rules received yet; allowing transmit");
             }
 
             var matches = rules

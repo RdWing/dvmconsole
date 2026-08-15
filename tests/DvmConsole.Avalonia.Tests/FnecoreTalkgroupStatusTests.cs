@@ -12,7 +12,7 @@ namespace DvmConsole.Avalonia.Tests
     public sealed class FnecoreTalkgroupStatusTests
     {
         [Fact]
-        public void AdapterExposesFailClosedAvailabilityBeforeAnnouncements()
+        public void AdapterExposesFailOpenAvailabilityBeforeAnnouncements()
         {
             var adapter = new FnecorePeerAdapter(
                 MakeSystem(),
@@ -26,7 +26,7 @@ namespace DvmConsole.Avalonia.Tests
             var result = provider.QueryTalkgroupAvailability(
                 new TalkgroupQuery(31001, slot: 1, TalkgroupMode.Dmr));
 
-            Assert.False(result.IsAvailable);
+            Assert.True(result.IsAvailable);
             Assert.False(result.IsKnown);
             adapter.Dispose();
         }

@@ -10,7 +10,7 @@ namespace DvmConsole.Core.Tests
     public sealed class TalkgroupAvailabilityTests
     {
         [Fact]
-        public void EmptyAnnouncementsAreUnavailableUntilRulesArrive()
+        public void EmptyAnnouncementsFailOpenUntilRulesArrive()
         {
             var query = new TalkgroupQuery(31001, slot: 1, TalkgroupMode.Dmr);
 
@@ -18,7 +18,7 @@ namespace DvmConsole.Core.Tests
                 query,
                 Array.Empty<TalkgroupRule>());
 
-            Assert.False(result.IsAvailable);
+            Assert.True(result.IsAvailable);
             Assert.False(result.IsKnown);
             Assert.Contains("no announced", result.Description, StringComparison.OrdinalIgnoreCase);
         }
