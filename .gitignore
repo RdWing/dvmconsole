@@ -408,5 +408,8 @@ FodyWeavers.xsd
 # .NET CLI local cache
 .dotnet-cli/
 
+# Local migration notes
+MIGRATION_LEDGER.md
+
 # VS telemetry/session junk
 *.trn
