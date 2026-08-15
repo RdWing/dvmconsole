@@ -46,6 +46,7 @@ public sealed class SystemViewModelTests
             await using MainWindowViewModel viewModel = MainWindowViewModel.Load(path, new UserSettingsStore(settingsPath));
 
             Assert.Equal(["Alpha", "Beta"], viewModel.Systems.Select(system => system.Name));
+            Assert.Equal(["Alpha Console", "Beta Console"], viewModel.Systems.Select(system => system.Identity));
             Assert.Equal(2, viewModel.Systems.Count);
             Assert.Equal(
                 ["Alpha Dispatch", "Alpha Operations", "Alpha Emergency"],

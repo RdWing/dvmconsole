@@ -1,5 +1,6 @@
 using DvmConsole.Core.Configuration;
 using DvmConsole.FneClient;
+using System.Net;
 using Xunit;
 
 namespace DvmConsole.FneClient.Tests;
@@ -33,6 +34,27 @@ public sealed class FneConnectionTests
         Assert.Equal("password", options.Password);
         Assert.Equal(system.PresharedKey, options.PresharedKey);
         Assert.Null(options.KmfPresharedKey);
+    }
+
+    [Fact]
+    public async Task CreatedPeerCarriesConfiguredIdentityIntoFneInformation()
+    {
+        var options = new FneConnectionOptions(
+            "Test FNE",
+            "TYF_OP1",
+            "127.0.0.1",
+            62031,
+            1000001,
+            "password",
+            false,
+            null);
+        await using var connection = new FneConnection(options);
+
+        fnecore.FnePeer peer = connection.CreatePeer(new IPEndPoint(IPAddress.Loopback, 62031));
+
+        Assert.Equal("TYF_OP1", peer.Information.Details.Identity);
+        Assert.Equal(options.PeerId, peer.Information.PeerID);
+        Assert.Equal(fnecore.ConnectionState.WAITING_LOGIN, peer.Information.State);
     }
 
     [Fact]

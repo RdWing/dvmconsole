@@ -35,12 +35,36 @@ public sealed class DmrTxCallSessionTests
         Assert.Equal(1, session.Process(new short[480]));
         session.End();
 
-        Assert.Equal(3, packets.Count);
+        Assert.Equal(8, packets.Count);
         Assert.Equal((ushort)1, packets[1].Sequence);
         Assert.Equal((byte)0x10, packets[1].Payload[15]);
-        Assert.Equal((ushort)2, packets[2].Sequence);
-        Assert.Equal((byte)0x22, packets[2].Payload[15]);
+        Assert.Equal(
+            new byte[] { 0x01, 0x02, 0x03, 0x04, 0x05 },
+            packets.Skip(2).Take(5).Select(packet => packet.Payload[15]));
+        Assert.Equal((ushort)7, packets[^1].Sequence);
+        Assert.Equal((byte)0x22, packets[^1].Payload[15]);
         Assert.True(session.IsEnded);
+    }
+
+    [Fact]
+    public void FlushesPartialPcmAndAmbeBeforeCompletingSuperframe()
+    {
+        var packets = new List<byte[]>();
+        using var session = new DmrTxCallSession(
+            sourceId: 1,
+            destinationId: 2,
+            slot: 0,
+            streamId: 3,
+            vocoder: new FakeVocoderSession(),
+            send: (payload, _, _) => packets.Add(payload.ToArray()));
+
+        session.Start();
+        Assert.Equal(0, session.Process(new short[200]));
+        session.End();
+
+        Assert.Equal(8, packets.Count);
+        Assert.Equal((byte)0x10, packets[1][15]);
+        Assert.Equal((byte)0x22, packets[^1][15]);
     }
 
     [Fact]

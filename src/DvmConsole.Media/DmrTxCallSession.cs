@@ -108,6 +108,7 @@ public sealed class DmrTxCallSession : IDisposable
         if (ended)
             return;
 
+        audio.CompleteSuperframe();
         byte[] terminator = DmrVoicePacketCodec.CreateTerminatorPacket(
             sourceId,
             destinationId,

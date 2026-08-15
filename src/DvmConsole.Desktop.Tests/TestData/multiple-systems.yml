@@ -1,10 +1,12 @@
 systems:
   - name: "Alpha"
+    identity: "Alpha Console"
     address: "127.0.0.1"
     port: 62031
     peerId: 1000001
     rid: "1001"
   - name: "Beta"
+    identity: "Beta Console"
     address: "127.0.0.2"
     port: 62032
     peerId: 1000002

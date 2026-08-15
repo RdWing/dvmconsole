@@ -6,6 +6,7 @@ using Avalonia.Platform.Storage;
 using Avalonia.Controls;
 using Avalonia.Styling;
 using Avalonia.Threading;
+using Avalonia.VisualTree;
 using DvmConsole.Audio;
 using DvmConsole.Core.Configuration;
 using DvmConsole.Core.Runtime;
@@ -24,6 +25,7 @@ namespace DvmConsole.Desktop;
 public sealed partial class MainWindow : Window
 {
     private MainWindowViewModel viewModel;
+    private readonly PressAndHoldPttController cardPtt;
 
     public MainWindow() : this(null)
     {
@@ -33,9 +35,15 @@ public sealed partial class MainWindow : Window
     {
         InitializeComponent();
         viewModel = MainWindowViewModel.Load(configurationPath);
+        cardPtt = new PressAndHoldPttController(
+            channel => viewModel.StartChannelTransmitAsync(channel),
+            channel => viewModel.StopChannelTransmitAsync(channel));
         DataContext = viewModel;
         AddHandler(InputElement.KeyDownEvent, HandleKeyDown, RoutingStrategies.Tunnel);
         AddHandler(InputElement.KeyUpEvent, HandleKeyUp, RoutingStrategies.Tunnel);
+        AddHandler(InputElement.PointerPressedEvent, HandlePttPointerPressed, RoutingStrategies.Tunnel, true);
+        AddHandler(InputElement.PointerReleasedEvent, HandlePttPointerReleased, RoutingStrategies.Tunnel, true);
+        AddHandler(InputElement.PointerCaptureLostEvent, HandlePttPointerCaptureLost, RoutingStrategies.Bubble, true);
         Opened += async (_, _) => await viewModel.StartKeyboardPttAsync().ConfigureAwait(false);
         Closed += async (_, _) => await viewModel.DisposeAsync().ConfigureAwait(false);
     }
@@ -55,7 +63,8 @@ public sealed partial class MainWindow : Window
 
     private async void HandlePttPointerPressed(object? sender, PointerPressedEventArgs e)
     {
-        if (sender is not Button { DataContext: ChannelViewModel channel } button ||
+        Button? button = FindPttButton(e.Source);
+        if (button?.DataContext is not ChannelViewModel channel ||
             !e.GetCurrentPoint(button).Properties.IsLeftButtonPressed)
         {
             return;
@@ -63,23 +72,35 @@ public sealed partial class MainWindow : Window
 
         e.Handled = true;
         e.Pointer.Capture(button);
-        await viewModel.StartChannelTransmitAsync(channel);
+        await cardPtt.PressAsync(channel);
     }
 
     private async void HandlePttPointerReleased(object? sender, PointerReleasedEventArgs e)
     {
-        if (sender is not Button { DataContext: ChannelViewModel channel } button)
+        Button? button = e.Pointer.Captured as Button ?? FindPttButton(e.Source);
+        if (button?.DataContext is not ChannelViewModel channel || !button.Classes.Contains("ptt"))
             return;
 
         e.Handled = true;
         e.Pointer.Capture(null);
-        await viewModel.StopChannelTransmitAsync(channel);
+        await cardPtt.ReleaseAsync(channel);
     }
 
     private async void HandlePttPointerCaptureLost(object? sender, PointerCaptureLostEventArgs e)
     {
-        if (sender is Button { DataContext: ChannelViewModel channel })
-            await viewModel.StopChannelTransmitAsync(channel);
+        Button? button = FindPttButton(e.Source);
+        if (button?.DataContext is ChannelViewModel channel)
+            await cardPtt.ReleaseAsync(channel);
+    }
+
+    private static Button? FindPttButton(object? source)
+    {
+        for (Visual? visual = source as Visual; visual is not null; visual = visual.GetVisualParent())
+        {
+            if (visual is Button button && button.Classes.Contains("ptt"))
+                return button;
+        }
+        return null;
     }
 
     private async void HandleOpenCodeplugClick(object? sender, RoutedEventArgs e)
@@ -2810,6 +2831,7 @@ public sealed class SystemViewModel : INotifyPropertyChanged, IAsyncDisposable
     public IReadOnlyList<ChannelViewModel> Channels { get; }
     public IReadOnlyList<ZoneViewModel> Zones { get; }
     public uint? SourceId => options.SourceId;
+    public string Identity => options.Identity;
     public bool IsConnected => connection.Status.State == FneConnectionState.Connected;
     public string ConnectionStatus
     {

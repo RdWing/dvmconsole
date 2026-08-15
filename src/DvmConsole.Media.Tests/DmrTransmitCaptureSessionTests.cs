@@ -35,7 +35,7 @@ public sealed class DmrTransmitCaptureSessionTests
 
         Assert.False(session.IsRunning);
         Assert.False(capture.IsRunning);
-        Assert.Equal(3, packets.Count);
+        Assert.Equal(8, packets.Count);
         Assert.Equal((byte)0x22, packets[^1].Payload[15]);
     }
 

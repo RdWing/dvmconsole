@@ -10,6 +10,7 @@ namespace DvmConsole.Media;
 /// </summary>
 public sealed class DmrTxAudioSession : IDisposable
 {
+    private const int CodewordsPerPacket = DmrVoicePacketCodec.CodewordsPerPacket;
     private readonly uint sourceId;
     private readonly uint destinationId;
     private readonly byte slot;
@@ -20,6 +21,7 @@ public sealed class DmrTxAudioSession : IDisposable
     private readonly EmbeddedData? embeddedData;
     private readonly List<byte> pendingAmbe = [];
     private byte embeddedSequence;
+    private int pendingPcmSamples;
     private bool disposed;
 
     public DmrTxAudioSession(
@@ -90,7 +92,30 @@ public sealed class DmrTxAudioSession : IDisposable
     {
         ObjectDisposedException.ThrowIf(disposed, this);
         int packetsBefore = PacketsSent;
+        pendingPcmSamples = (pendingPcmSamples + samples.Length) % VocoderFrameSizes.PcmSamplesPerFrame;
         encoder.Process(samples, EmitCodeword);
+        return PacketsSent - packetsBefore;
+    }
+
+    /// <summary>
+    /// Pads a released call with encoded silence so no partial PCM/AMBE packet
+    /// is discarded and the current six-burst DMR superframe is completed
+    /// before its terminator is emitted.
+    /// </summary>
+    internal int CompleteSuperframe()
+    {
+        ObjectDisposedException.ThrowIf(disposed, this);
+        int packetsBefore = PacketsSent;
+
+        if (pendingPcmSamples > 0)
+            Process(new short[VocoderFrameSizes.PcmSamplesPerFrame - pendingPcmSamples]);
+
+        while (pendingAmbe.Count > 0)
+            Process(new short[VocoderFrameSizes.PcmSamplesPerFrame]);
+
+        while (embeddedSequence != 0)
+            Process(new short[VocoderFrameSizes.PcmSamplesPerFrame * CodewordsPerPacket]);
+
         return PacketsSent - packetsBefore;
     }
 
@@ -100,6 +125,7 @@ public sealed class DmrTxAudioSession : IDisposable
             return;
         encoder.Dispose();
         pendingAmbe.Clear();
+        pendingPcmSamples = 0;
         disposed = true;
     }
 

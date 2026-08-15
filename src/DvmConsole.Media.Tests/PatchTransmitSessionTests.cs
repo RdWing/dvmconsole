@@ -42,7 +42,7 @@ public sealed class PatchTransmitSessionTests
         Assert.Equal(1, session.Process(new short[480]));
         session.End();
 
-        Assert.Equal(3, packets.Count);
+        Assert.Equal(8, packets.Count);
         Assert.Throws<NotSupportedException>(() => new PatchTransmitSession(
             new ChannelRuntimeDefinition("NXDN", "Beta", "nxdn", 200, 0),
             42,

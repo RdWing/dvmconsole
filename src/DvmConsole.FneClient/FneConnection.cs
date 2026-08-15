@@ -307,24 +307,24 @@ public sealed class FneConnection : IAsyncDisposable
         await StopAsync().ConfigureAwait(false);
     }
 
-    private FnePeer CreatePeer(IPEndPoint endpoint)
+    internal FnePeer CreatePeer(IPEndPoint endpoint)
     {
         var created = new FnePeer("DVMCONSOLE", options.PeerId, endpoint, options.PresharedKey);
         created.Passphrase = options.Password;
         created.PingTime = 5;
         created.LogLevel = options.EnableDiagnostics ? LogLevel.DEBUG : LogLevel.INFO;
         created.RawPacketTrace = options.EnableDiagnostics;
-        created.Information = new PeerInformation
+        // Preserve the constructor-owned PeerInformation instance. Newer
+        // fnecore revisions retain connection state on this object while the
+        // RPTC payload reads the configured identity from its Details member.
+        created.Information.PeerID = options.PeerId;
+        created.Information.State = ConnectionState.WAITING_LOGIN;
+        created.Information.Details = new PeerDetails
         {
-            PeerID = options.PeerId,
-            State = ConnectionState.WAITING_LOGIN,
-            Details = new PeerDetails
-            {
-                ConventionalPeer = true,
-                PeerClass = PeerConnectionClass.PEER_CONN_CLASS_CONSOLE,
-                Software = "CONSOLE_REBUILD",
-                Identity = options.Identity
-            }
+            ConventionalPeer = true,
+            PeerClass = PeerConnectionClass.PEER_CONN_CLASS_CONSOLE,
+            Software = "CONSOLE_REBUILD",
+            Identity = options.Identity
         };
         created.Logger = HandlePeerLog;
         if (!string.IsNullOrWhiteSpace(options.KmfPresharedKey))
