@@ -165,6 +165,7 @@ public sealed class DmrVoicePacketCodecTests
             new byte[10]);
         Assert.Equal(0, await session.ProcessAsync(malformed));
         Assert.Equal(0, session.FramesDecoded);
+        Assert.Equal(1, session.MalformedPackets);
 
         Assert.Equal(0, await session.ProcessAsync(CreateTraffic(100, 1, "VOICE", packetSequence: 2)));
         Assert.Equal(3, session.FramesDecoded);

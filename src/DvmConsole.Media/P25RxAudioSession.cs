@@ -33,6 +33,7 @@ public sealed class P25RxAudioSession : IAsyncDisposable
     }
 
     public int FramesDecoded { get; private set; }
+    public long MalformedPackets { get; private set; }
     public long LostPackets => sequenceTracker.LostPackets;
     public long DuplicateOrLatePackets => sequenceTracker.DuplicateOrLatePackets;
 
@@ -47,7 +48,10 @@ public sealed class P25RxAudioSession : IAsyncDisposable
 
         byte[] imbe = new byte[P25DfsiFrameCodec.ImbeBytes];
         if (!P25DfsiFrameCodec.TryExtractImbe(traffic, imbe))
+        {
+            MalformedPackets++;
             return 0;
+        }
 
         bool ldu1 = traffic.Subtype.Equals("LDU1", StringComparison.OrdinalIgnoreCase);
         bool hasEncryptionMetadata = P25DfsiFrameCodec.TryExtractEncryptionMetadata(

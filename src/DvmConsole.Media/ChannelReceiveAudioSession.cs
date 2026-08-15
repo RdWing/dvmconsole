@@ -70,6 +70,16 @@ public sealed class ChannelReceiveAudioSession : IAsyncDisposable
 
     public int FramesDecoded => dmrRouter?.FramesDecoded ?? p25Session?.FramesDecoded ?? nxdnSession?.FramesDecoded ?? analogSession?.FramesDecoded ?? 0;
 
+    public long MalformedPackets
+        => dmrRouter?.MalformedPackets ?? p25Session?.MalformedPackets ?? nxdnSession?.MalformedPackets ?? analogSession?.MalformedPackets ?? 0;
+
+    public long LostPackets => dmrRouter?.LostPackets ?? p25Session?.LostPackets ?? 0;
+
+    public long DuplicateOrLatePackets => dmrRouter?.DuplicateOrLatePackets ?? p25Session?.DuplicateOrLatePackets ?? 0;
+
+    public ReceiveAudioDiagnostics GetDiagnostics()
+        => new(FramesDecoded, LostPackets, DuplicateOrLatePackets, MalformedPackets);
+
     public void SetGain(double gain)
     {
         if (playback is IAudioGainControl gainControl)

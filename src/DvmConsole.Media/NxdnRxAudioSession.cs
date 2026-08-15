@@ -27,6 +27,7 @@ public sealed class NxdnRxAudioSession : IAsyncDisposable
     }
 
     public int FramesDecoded { get; private set; }
+    public long MalformedPackets { get; private set; }
 
     public async ValueTask<int> ProcessAsync(
         FneTrafficFrame traffic,
@@ -37,7 +38,12 @@ public sealed class NxdnRxAudioSession : IAsyncDisposable
         if (!selector.Matches(traffic))
             return 0;
 
-        byte[] frame = NxdnVoicePacketCodec.ExtractFrame(traffic.Payload);
+        byte[] frame = new byte[NxdnVoicePacketCodec.FrameBytes];
+        if (!NxdnVoicePacketCodec.TryExtractFrame(traffic.Payload, frame))
+        {
+            MalformedPackets++;
+            return 0;
+        }
         short[] samples = new short[VocoderFrameSizes.PcmSamplesPerFrame];
         int errors = vocoder.Decode(frame, samples);
         await playback.WriteAsync(samples, cancellationToken).ConfigureAwait(false);

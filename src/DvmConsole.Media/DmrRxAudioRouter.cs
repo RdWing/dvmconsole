@@ -27,6 +27,7 @@ public sealed class DmrRxAudioRouter : IAsyncDisposable
     }
 
     public int FramesDecoded => session.FramesDecoded;
+    public long MalformedPackets => session.MalformedPackets;
     public long LostPackets => sequenceTracker.LostPackets;
     public long DuplicateOrLatePackets => sequenceTracker.DuplicateOrLatePackets;
 

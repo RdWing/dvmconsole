@@ -2980,6 +2980,12 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         try
         {
             await audioCoordinator.ProcessAsync(channel, traffic).ConfigureAwait(false);
+            ReceiveAudioDiagnostics diagnostics = audioCoordinator.GetDiagnostics(channel);
+            if (diagnostics.HasIssues)
+            {
+                Dispatcher.UIThread.Post(() =>
+                    AudioStatusText = $"RX {channel.Name}: {diagnostics.SummaryText} (audio continues)");
+            }
             callRecordings.ObserveTraffic(channel, traffic);
             RefreshRecordings();
         }

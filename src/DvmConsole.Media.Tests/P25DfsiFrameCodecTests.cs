@@ -93,6 +93,7 @@ public sealed class P25DfsiFrameCodecTests
             0,
             await session.ProcessAsync(CreateTraffic("LDU1", new byte[P25DfsiFrameCodec.HeaderBytes])));
         Assert.Equal(0, session.FramesDecoded);
+        Assert.Equal(1, session.MalformedPackets);
 
         Assert.Equal(0, await session.ProcessAsync(CreateTraffic("LDU1", CreatePayload(0x62), packetSequence: 2)));
         Assert.Equal(9, session.FramesDecoded);

@@ -21,6 +21,7 @@ public sealed class DmrRxAudioSession : IAsyncDisposable
     }
 
     public int FramesDecoded { get; private set; }
+    public long MalformedPackets { get; private set; }
 
     public async ValueTask<int> ProcessAsync(FneTrafficFrame traffic, CancellationToken cancellationToken = default)
     {
@@ -34,7 +35,10 @@ public sealed class DmrRxAudioSession : IAsyncDisposable
 
         byte[] ambe = new byte[DmrVoicePacketCodec.AmbeBytes];
         if (!DmrVoicePacketCodec.TryExtractAmbe(traffic.Payload, ambe))
+        {
+            MalformedPackets++;
             return 0;
+        }
         int errors = 0;
         for (int index = 0; index < DmrVoicePacketCodec.CodewordsPerPacket; index++)
         {

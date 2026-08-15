@@ -19,6 +19,7 @@ public sealed class AnalogRxAudioSession : IAsyncDisposable
     }
 
     public int FramesDecoded { get; private set; }
+    public long MalformedPackets { get; private set; }
 
     public async ValueTask<int> ProcessAsync(FneTrafficFrame traffic, CancellationToken cancellationToken = default)
     {
@@ -27,7 +28,14 @@ public sealed class AnalogRxAudioSession : IAsyncDisposable
         if (!selector.Matches(traffic))
             return 0;
 
-        await playback.WriteAsync(AnalogVoicePacketCodec.ExtractPcm(traffic.Payload), cancellationToken).ConfigureAwait(false);
+        short[] samples = new short[AnalogVoicePacketCodec.SamplesPerPacket];
+        if (!AnalogVoicePacketCodec.TryExtractPcm(traffic.Payload, samples))
+        {
+            MalformedPackets++;
+            return 0;
+        }
+
+        await playback.WriteAsync(samples, cancellationToken).ConfigureAwait(false);
         FramesDecoded++;
         return 0;
     }

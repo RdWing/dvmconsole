@@ -85,6 +85,14 @@ public sealed class ChannelReceiveAudioCoordinator : IAsyncDisposable
         return Array.IndexOf(activeChannels, channel) >= 0;
     }
 
+    public ReceiveAudioDiagnostics GetDiagnostics(ChannelViewModel channel)
+    {
+        ArgumentNullException.ThrowIfNull(channel);
+        return sessions.TryGetValue(channel, out ChannelReceiveAudioSession? session)
+            ? session.GetDiagnostics()
+            : new ReceiveAudioDiagnostics(0, 0, 0, 0);
+    }
+
     public async Task StartAsync(ChannelViewModel channel, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(channel);

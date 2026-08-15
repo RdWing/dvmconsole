@@ -73,6 +73,77 @@ public sealed class ChannelReceiveAudioSessionTests
     }
 
     [Fact]
+    public async Task DropsMalformedAnalogFramesAndRecoversOnTheNextFrame()
+    {
+        var definition = new ChannelRuntimeDefinition("Analog", "System 1", "analog", 100, 0);
+        var playback = new FakePlayback();
+        await using var session = new ChannelReceiveAudioSession(definition, null, playback);
+
+        Assert.Equal(0, await session.ProcessAsync(new FneTrafficFrame(
+            FneTrafficProtocol.Analog,
+            1,
+            2,
+            100,
+            null,
+            "GROUP",
+            "VOICE",
+            "VOICE",
+            1,
+            99,
+            new byte[10])));
+        Assert.Equal(1, session.MalformedPackets);
+        Assert.Empty(playback.Frames);
+
+        Assert.Equal(0, await session.ProcessAsync(CreateAnalogTraffic()));
+        Assert.Equal(1, session.FramesDecoded);
+        Assert.Single(playback.Frames);
+    }
+
+    [Fact]
+    public async Task DropsMalformedNxdnFramesAndRecoversOnTheNextFrame()
+    {
+        var vocoder = new FakeNxdnVocoderSession();
+        var playback = new FakePlayback();
+        var definition = new ChannelRuntimeDefinition("NXDN", "System 1", "nxdn", 100, 0);
+        await using var session = new ChannelReceiveAudioSession(
+            definition,
+            vocoder: null,
+            playback,
+            nxdnVocoder: vocoder);
+
+        Assert.Equal(0, await session.ProcessAsync(new FneTrafficFrame(
+            FneTrafficProtocol.Nxdn,
+            1,
+            2,
+            100,
+            null,
+            "GROUP",
+            "VOICE",
+            "VCALL",
+            1,
+            99,
+            new byte[10])));
+        Assert.Equal(1, session.MalformedPackets);
+        Assert.Empty(playback.Frames);
+
+        Assert.Equal(0, await session.ProcessAsync(CreateNxdnTraffic()));
+        Assert.Equal(1, session.FramesDecoded);
+        Assert.Single(playback.Frames);
+    }
+
+    [Fact]
+    public void ReceiveDiagnosticsSummarizeQualityCounters()
+    {
+        var clean = new ReceiveAudioDiagnostics(9, 0, 0, 0);
+        Assert.False(clean.HasIssues);
+        Assert.Equal("9 decoded frames", clean.SummaryText);
+
+        var degraded = new ReceiveAudioDiagnostics(90, 2, 1, 3);
+        Assert.True(degraded.HasIssues);
+        Assert.Equal("lost 2, late/duplicate 1, malformed 3", degraded.SummaryText);
+    }
+
+    [Fact]
     public void KeepsNxdnReceiveFailClosedUntilAnNxdnVocoderExists()
     {
         var definition = new ChannelRuntimeDefinition("NXDN", "System 1", "nxdn", 100, 0);
