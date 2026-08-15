@@ -40,6 +40,10 @@ public sealed class P25RxAudioSession : IAsyncDisposable
         if (!selector.Matches(traffic))
             return 0;
 
+        byte[] imbe = new byte[P25DfsiFrameCodec.ImbeBytes];
+        if (!P25DfsiFrameCodec.TryExtractImbe(traffic, imbe))
+            return 0;
+
         bool ldu1 = traffic.Subtype.Equals("LDU1", StringComparison.OrdinalIgnoreCase);
         bool hasEncryptionMetadata = P25DfsiFrameCodec.TryExtractEncryptionMetadata(
             traffic,
@@ -57,7 +61,6 @@ public sealed class P25RxAudioSession : IAsyncDisposable
                 $"P25 encrypted LDU2 for key 0x{encryptionMetadata.KeyId:X} arrived without an active LDU1 key stream.");
         }
 
-        byte[] imbe = P25DfsiFrameCodec.ExtractImbe(traffic);
         int errors = 0;
         for (int index = 0; index < P25DfsiFrameCodec.CodewordsPerLdu; index++)
         {

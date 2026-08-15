@@ -145,6 +145,33 @@ public sealed class DmrVoicePacketCodecTests
     }
 
     [Fact]
+    public async Task DmrSessionIgnoresMalformedVoiceAndRecoversOnNextPacket()
+    {
+        var vocoder = new FakeVocoderSession();
+        var playback = new FakePlayback();
+        await using var session = new DmrRxAudioSession(vocoder, playback);
+
+        FneTrafficFrame malformed = new(
+            FneTrafficProtocol.Dmr,
+            1,
+            2,
+            100,
+            1,
+            "GROUP",
+            "VOICE",
+            "VOICE",
+            1,
+            99,
+            new byte[10]);
+        Assert.Equal(0, await session.ProcessAsync(malformed));
+        Assert.Equal(0, session.FramesDecoded);
+
+        Assert.Equal(0, await session.ProcessAsync(CreateTraffic(100, 1, "VOICE")));
+        Assert.Equal(3, session.FramesDecoded);
+        Assert.Equal(3, playback.Frames.Count);
+    }
+
+    [Fact]
     public void SelectorMatchesOnlyTheConfiguredDmrVoiceStream()
     {
         var selector = new DmrTrafficSelector(destinationId: 100, slot: 1);

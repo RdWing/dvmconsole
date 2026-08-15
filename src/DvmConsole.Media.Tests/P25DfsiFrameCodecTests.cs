@@ -83,6 +83,23 @@ public sealed class P25DfsiFrameCodecTests
     }
 
     [Fact]
+    public async Task P25SessionIgnoresMalformedLduAndRecoversOnNextLdu()
+    {
+        var vocoder = new FakeVocoderSession();
+        var playback = new FakePlayback();
+        await using var session = new P25RxAudioSession(new P25TrafficSelector(100), vocoder, playback);
+
+        Assert.Equal(
+            0,
+            await session.ProcessAsync(CreateTraffic("LDU1", new byte[P25DfsiFrameCodec.HeaderBytes])));
+        Assert.Equal(0, session.FramesDecoded);
+
+        Assert.Equal(0, await session.ProcessAsync(CreateTraffic("LDU1", CreatePayload(0x62))));
+        Assert.Equal(9, session.FramesDecoded);
+        Assert.Equal(9, playback.Frames.Count);
+    }
+
+    [Fact]
     public async Task P25SessionDecryptsEncryptedLdu1WithConfiguredKey()
     {
         const ushort keyId = 0x50;

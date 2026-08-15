@@ -32,7 +32,9 @@ public sealed class DmrRxAudioSession : IAsyncDisposable
             !traffic.FrameType.Equals("VOICE_SYNC", StringComparison.OrdinalIgnoreCase))
             return 0;
 
-        byte[] ambe = DmrVoicePacketCodec.ExtractAmbe(traffic.Payload);
+        byte[] ambe = new byte[DmrVoicePacketCodec.AmbeBytes];
+        if (!DmrVoicePacketCodec.TryExtractAmbe(traffic.Payload, ambe))
+            return 0;
         int errors = 0;
         for (int index = 0; index < DmrVoicePacketCodec.CodewordsPerPacket; index++)
         {
