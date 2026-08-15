@@ -1805,6 +1805,13 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         : $"RX focus: {selectedChannel.Name}. Global PTT: {GlobalPttKeyText}.";
 
     public IReadOnlyList<SystemViewModel> Systems { get; }
+    public IReadOnlyList<KeyStatusItemViewModel> KeyStatusItems
+        => Systems
+            .SelectMany(system => system.Channels)
+            .Where(channel => channel.Definition.IsEncrypted)
+            .Select(channel => KeyStatusItemViewModel.From(channel, p25KeyRing))
+            .ToArray();
+    public bool HasNoKeyStatusItems => KeyStatusItems.Count == 0;
     public IReadOnlyList<ZoneViewModel> Zones { get; }
     public IReadOnlyList<string> PatchGroupNames => patchForwarding.GroupNames;
     public IReadOnlyList<PatchGroupEditorViewModel> PatchGroups { get; }
@@ -2875,6 +2882,8 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             p25KeyRing.AddOrReplace(response.AlgorithmId, response.KeyId, response.KeyMaterial.Span);
             foreach (ChannelViewModel channel in Systems.SelectMany(candidate => candidate.Channels))
                 channel.RefreshEncryptionState();
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(KeyStatusItems)));
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(HasNoKeyStatusItems)));
             StatusText = $"{system.Name}: P25 key material received.";
             _ = SyncPatchSourceDecodeAsync();
         }
