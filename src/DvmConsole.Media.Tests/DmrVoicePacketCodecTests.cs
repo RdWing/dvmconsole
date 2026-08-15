@@ -2,6 +2,7 @@ using DvmConsole.Audio;
 using DvmConsole.FneClient;
 using DvmConsole.Media;
 using DvmConsole.Vocoder;
+using fnecore.DMR;
 using Xunit;
 
 namespace DvmConsole.Media.Tests;
@@ -47,6 +48,28 @@ public sealed class DmrVoicePacketCodecTests
         Assert.Equal(new byte[] { 0xA0, 0xB0, 0xC0 }, packet[8..11]);
         Assert.Equal((byte)0x83, packet[15]);
         Assert.Equal(ambe, DmrVoicePacketCodec.ExtractAmbe(packet));
+    }
+
+    [Fact]
+    public void ExtractsProtocolEncryptionFromPrivacyIndicatorHeader()
+    {
+        byte[] frame = new byte[DmrVoicePacketCodec.FrameBytes];
+        var privacy = new PrivacyLC
+        {
+            AlgId = 3,
+            KId = 0x55,
+            Group = true,
+            DstId = 100
+        };
+        FullLC.EncodePI(privacy, ref frame);
+        byte[] packet = new byte[DmrVoicePacketCodec.PacketBytes];
+        frame.CopyTo(packet, DmrVoicePacketCodec.HeaderBytes);
+
+        Assert.True(DmrVoicePacketCodec.TryExtractEncryptionMetadata(
+            packet,
+            out DmrVoicePacketCodec.DmrEncryptionMetadata metadata));
+        Assert.Equal((byte)3, metadata.AlgorithmId);
+        Assert.Equal((byte)0x55, metadata.KeyId);
     }
 
     [Theory]

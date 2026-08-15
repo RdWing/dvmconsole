@@ -17,6 +17,8 @@ public static class DmrVoicePacketCodec
     public const int AmbeBytes = CodewordBytes * CodewordsPerPacket;
     public const ushort RtpCallEndSequence = ushort.MaxValue;
 
+    public readonly record struct DmrEncryptionMetadata(byte AlgorithmId, byte KeyId);
+
     public static bool TryExtractAmbe(ReadOnlySpan<byte> packet, Span<byte> ambe)
     {
         if (packet.Length < PacketBytes || ambe.Length < AmbeBytes)
@@ -35,6 +37,40 @@ public static class DmrVoicePacketCodec
         if (!TryExtractAmbe(packet, ambe))
             throw new ArgumentException("The DMR packet does not contain a complete voice frame.", nameof(packet));
         return ambe;
+    }
+
+    /// <summary>
+    /// Reads the DMR privacy indicator link-control header from a complete
+    /// DMR network packet. The FNE payload contains the 33-byte BPTC frame
+    /// after the 20-byte network header; malformed or CRC-invalid PI frames
+    /// are treated as unknown rather than as clear traffic.
+    /// </summary>
+    public static bool TryExtractEncryptionMetadata(
+        ReadOnlySpan<byte> packet,
+        out DmrEncryptionMetadata metadata)
+    {
+        metadata = default;
+        if (packet.Length < PacketBytes)
+            return false;
+
+        try
+        {
+            byte[] frame = packet.Slice(HeaderBytes, FrameBytes).ToArray();
+            PrivacyLC? privacy = FullLC.DecodePI(frame);
+            if (privacy is null)
+                return false;
+
+            metadata = new DmrEncryptionMetadata(privacy.AlgId, (byte)privacy.KId);
+            return true;
+        }
+        catch (ArgumentException)
+        {
+            return false;
+        }
+        catch (IndexOutOfRangeException)
+        {
+            return false;
+        }
     }
 
     /// <summary>

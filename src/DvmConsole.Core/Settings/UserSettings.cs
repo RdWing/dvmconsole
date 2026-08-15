@@ -4,6 +4,18 @@ using System.Text.Json.Serialization;
 namespace DvmConsole.Core.Settings;
 
 /// <summary>
+/// Portable placement for a modeless operator window. Coordinates are
+/// optional because a display topology can change between launches.
+/// </summary>
+public sealed class WindowPlacementSetting
+{
+    public double? Left { get; set; }
+    public double? Top { get; set; }
+    public double Width { get; set; } = 560;
+    public double Height { get; set; } = 500;
+}
+
+/// <summary>
 /// Small, portable subset of operator state that is safe to persist outside a
 /// codeplug. Protocol credentials and encryption keys remain codeplug-owned.
 /// </summary>
@@ -52,6 +64,8 @@ public sealed class UserSettings
     public bool RestoreSelectedChannelsOnStartup { get; set; } = true;
     public List<string> SelectedWebStreams { get; set; } = [];
     public Dictionary<string, bool> TransmitEncryptionStates { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+    public bool ShowCallHistoryPane { get; set; } = true;
+    public WindowPlacementSetting CallHistoryWindowPlacement { get; set; } = new();
 }
 
 /// <summary>
@@ -102,6 +116,7 @@ public sealed class UserSettingsStore
             UserSettings settings = JsonSerializer.Deserialize<UserSettings>(File.ReadAllText(Path), SerializerOptions)
                 ?? new UserSettings();
             settings.TransmitEncryptionStates ??= new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
+            settings.CallHistoryWindowPlacement = NormalizeWindowPlacement(settings.CallHistoryWindowPlacement);
             settings.GlobalPttKey = NormalizeGlobalPttKey(settings.GlobalPttKey);
             settings.TransmitSelectedChannelKeys = NormalizeNames(settings.TransmitSelectedChannelKeys);
             NormalizeAudioInputSettings(settings);
@@ -195,6 +210,7 @@ public sealed class UserSettingsStore
 
         settings.DtmfPresets = NormalizeDtmfPresets(settings.DtmfPresets);
         settings.TonePresets = NormalizeTonePresets(settings.TonePresets);
+        settings.CallHistoryWindowPlacement = NormalizeWindowPlacement(settings.CallHistoryWindowPlacement);
         NormalizeAudioInputSettings(settings);
         settings.AudioInputPresetName = settings.AudioInputPresetName?.Trim() ?? string.Empty;
         settings.AudioInputPresets = NormalizeAudioInputPresets(settings.AudioInputPresets);
@@ -388,6 +404,18 @@ public sealed class UserSettingsStore
 
     private static double NormalizeChannelVolume(double volume)
         => double.IsFinite(volume) ? Math.Clamp(volume, 0, 4) : 1.0;
+
+    private static WindowPlacementSetting NormalizeWindowPlacement(WindowPlacementSetting? placement)
+    {
+        placement ??= new WindowPlacementSetting();
+        return new WindowPlacementSetting
+        {
+            Left = placement.Left is double left && double.IsFinite(left) ? left : null,
+            Top = placement.Top is double top && double.IsFinite(top) ? top : null,
+            Width = NormalizeBounded(placement.Width, 560, 400, 1800),
+            Height = NormalizeBounded(placement.Height, 500, 300, 1400)
+        };
+    }
 
     private static List<DtmfPresetSetting> NormalizeDtmfPresets(IEnumerable<DtmfPresetSetting>? presets)
     {

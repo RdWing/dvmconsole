@@ -2,7 +2,9 @@ using DvmConsole.Core.Settings;
 using DvmConsole.Core.Runtime;
 using DvmConsole.Desktop;
 using DvmConsole.FneClient;
+using DvmConsole.Media;
 using System.Globalization;
+using fnecore.DMR;
 using Xunit;
 
 namespace DvmConsole.Desktop.Tests;
@@ -242,6 +244,103 @@ public sealed class SystemViewModelTests
         }
         finally
         {
+            CleanupSettingsPath(settingsPath);
+        }
+    }
+
+    [Fact]
+    public async Task DerivesCallHistoryEncryptionFromP25AndDmrProtocolMetadata()
+    {
+        string directory = Path.Combine(Path.GetTempPath(), "dvmconsole-codeplug-tests", Guid.NewGuid().ToString("N"));
+        string codeplugPath = Path.Combine(directory, "codeplug.yml");
+        string settingsPath = CreateSettingsPath();
+        Directory.CreateDirectory(directory);
+
+        try
+        {
+            await File.WriteAllTextAsync(codeplugPath, """
+                keyFile: "missing-keys.clear"
+                systems:
+                  - name: "Alpha"
+                    identity: "Alpha Console"
+                    address: "127.0.0.1"
+                    port: 62031
+                    peerId: 1000001
+                    rid: "1001"
+                zones:
+                  - name: "Dispatch"
+                    channels:
+                      - name: "Secure P25"
+                        system: "Alpha"
+                        tgid: "102"
+                        mode: "p25"
+                        keyId: "0x50"
+                        algo: "aes"
+                      - name: "DMR Dispatch"
+                        system: "Alpha"
+                        tgid: "101"
+                        mode: "dmr"
+                        slot: 1
+                """);
+
+            await using MainWindowViewModel viewModel = MainWindowViewModel.Load(
+                codeplugPath,
+                new UserSettingsStore(settingsPath));
+            SystemViewModel system = Assert.Single(viewModel.Systems);
+
+            viewModel.ProcessTraffic(system, new FneTrafficFrame(
+                FneTrafficProtocol.P25,
+                1,
+                42,
+                102,
+                null,
+                "GROUP",
+                "VOICE",
+                "LDU1",
+                1,
+                80,
+                P25DfsiFrameCodec.CreateLdu1Payload(42, 102, new byte[P25DfsiFrameCodec.ImbeBytes])));
+
+            Assert.False(Assert.Single(viewModel.CallHistory).Encrypted);
+
+            viewModel.ProcessTraffic(system, new FneTrafficFrame(
+                FneTrafficProtocol.Dmr,
+                1,
+                42,
+                101,
+                0,
+                "GROUP",
+                "VOICE",
+                "VOICE",
+                1,
+                81,
+                new byte[DmrVoicePacketCodec.PacketBytes]));
+
+            byte[] dmrFrame = new byte[DmrVoicePacketCodec.FrameBytes];
+            var privacy = new PrivacyLC { AlgId = 3, KId = 0x55, Group = true, DstId = 101 };
+            FullLC.EncodePI(privacy, ref dmrFrame);
+            byte[] dmrPacket = new byte[DmrVoicePacketCodec.PacketBytes];
+            dmrFrame.CopyTo(dmrPacket, DmrVoicePacketCodec.HeaderBytes);
+            viewModel.ProcessTraffic(system, new FneTrafficFrame(
+                FneTrafficProtocol.Dmr,
+                1,
+                42,
+                101,
+                0,
+                "GROUP",
+                "DATA_SYNC",
+                "VOICE_PI_HEADER",
+                2,
+                81,
+                dmrPacket));
+
+            Assert.Equal(2, viewModel.CallHistory.Count);
+            Assert.True(viewModel.CallHistory.Single(entry => entry.Protocol == FneTrafficProtocol.Dmr).Encrypted);
+        }
+        finally
+        {
+            if (Directory.Exists(directory))
+                Directory.Delete(directory, recursive: true);
             CleanupSettingsPath(settingsPath);
         }
     }

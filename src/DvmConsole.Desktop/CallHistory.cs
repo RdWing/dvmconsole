@@ -10,6 +10,7 @@ namespace DvmConsole.Desktop;
 public sealed class CallHistoryEntry : INotifyPropertyChanged
 {
     private DateTimeOffset? endTimestamp;
+    private bool encrypted;
 
     public CallHistoryEntry(
         DateTimeOffset timestamp,
@@ -30,7 +31,7 @@ public sealed class CallHistoryEntry : INotifyPropertyChanged
         Protocol = protocol;
         StreamId = streamId;
         CallerText = string.IsNullOrWhiteSpace(callerText) ? sourceId.ToString() : callerText.Trim();
-        Encrypted = encrypted;
+        this.encrypted = encrypted;
     }
 
     public event PropertyChangedEventHandler? PropertyChanged;
@@ -43,7 +44,7 @@ public sealed class CallHistoryEntry : INotifyPropertyChanged
     public FneTrafficProtocol Protocol { get; }
     public uint StreamId { get; }
     public string CallerText { get; }
-    public bool Encrypted { get; }
+    public bool Encrypted => encrypted;
     public string TimestampText => Timestamp.ToLocalTime().ToString("HH:mm:ss");
     public string ProtocolText => Protocol.ToString().ToUpperInvariant();
     public string RouteText => $"{CallerText} → TG {DestinationId}";
@@ -64,6 +65,17 @@ public sealed class CallHistoryEntry : INotifyPropertyChanged
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsActive)));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(Duration)));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(DurationText)));
+    }
+
+    public bool UpdateEncryption(bool value)
+    {
+        if (encrypted == value)
+            return false;
+
+        encrypted = value;
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(Encrypted)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(EncryptionText)));
+        return true;
     }
 }
 
@@ -108,6 +120,20 @@ public sealed class CallHistoryStore
             return false;
         entry.Complete(timestamp);
         return true;
+    }
+
+    public bool UpdateEncryption(
+        string systemName,
+        FneTrafficProtocol protocol,
+        uint streamId,
+        bool encrypted)
+    {
+        CallHistoryEntry? entry = Entries.FirstOrDefault(candidate =>
+            candidate.IsActive &&
+            candidate.StreamId == streamId &&
+            candidate.Protocol == protocol &&
+            candidate.SystemName.Equals(systemName, StringComparison.OrdinalIgnoreCase));
+        return entry?.UpdateEncryption(encrypted) == true;
     }
 
     public void Clear() => Entries.Clear();

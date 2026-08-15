@@ -25,6 +25,39 @@ public sealed class UserSettingsStoreTests
     }
 
     [Fact]
+    public void NormalizesCallHistoryPaneAndWindowPlacement()
+    {
+        string path = CreatePath();
+        try
+        {
+            var store = new UserSettingsStore(path);
+            store.Save(new UserSettings
+            {
+                ShowCallHistoryPane = false,
+                CallHistoryWindowPlacement = new WindowPlacementSetting
+                {
+                    Left = double.NaN,
+                    Top = 42,
+                    Width = 100,
+                    Height = 5000
+                }
+            });
+
+            UserSettings loaded = store.Load();
+
+            Assert.False(loaded.ShowCallHistoryPane);
+            Assert.Null(loaded.CallHistoryWindowPlacement.Left);
+            Assert.Equal(42, loaded.CallHistoryWindowPlacement.Top);
+            Assert.Equal(400, loaded.CallHistoryWindowPlacement.Width);
+            Assert.Equal(1400, loaded.CallHistoryWindowPlacement.Height);
+        }
+        finally
+        {
+            Cleanup(path);
+        }
+    }
+
+    [Fact]
     public void SettingsRoundTripThroughAnAtomicJsonFile()
     {
         string path = CreatePath();

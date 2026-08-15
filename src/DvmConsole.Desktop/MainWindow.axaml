@@ -84,7 +84,9 @@
           </MenuItem>
           <MenuItem Header="View">
             <MenuItem Header="Dark mode" IsChecked="{Binding DarkMode, Mode=TwoWay}" ToggleType="CheckBox" />
-            <MenuItem Header="Call History…" Tag="History" Click="HandleOpenOperatorToolsClick" />
+            <MenuItem Header="Call History window…" Click="HandleOpenCallHistoryClick" />
+            <MenuItem Header="Dock Call History in sidebar" IsChecked="{Binding ShowCallHistoryPane, Mode=TwoWay}" ToggleType="CheckBox" />
+            <MenuItem Header="Call History tools…" Tag="History" Click="HandleOpenOperatorToolsClick" />
             <MenuItem Header="Groups…" Tag="Groups" Click="HandleOpenOperatorToolsClick" />
             <MenuItem Header="Debug Logs…" Click="HandleOpenDebugLogsClick" />
             <Separator />
@@ -107,7 +109,7 @@
       </DockPanel>
     </Border>
 
-    <Grid Grid.Row="1" ColumnDefinitions="*,4,250">
+    <Grid Grid.Row="1" ColumnDefinitions="*,4,Auto">
       <Border Grid.Column="0" Background="#0D1116" Padding="10,12,8,8">
         <Grid RowDefinitions="Auto,Auto,*">
           <DockPanel Margin="0,0,0,8">
@@ -171,7 +173,7 @@
         </Grid>
       </Border>
       <GridSplitter Grid.Column="1" Background="#25313D" ResizeDirection="Columns" />
-      <Border Grid.Column="2" Background="#151C25" Padding="8,10">
+      <Border Grid.Column="2" Width="250" Background="#151C25" Padding="8,10" IsVisible="{Binding ShowCallHistoryPane}">
         <Grid RowDefinitions="Auto,*">
           <TextBlock FontSize="13" FontWeight="SemiBold" Text="Activity" />
           <ScrollViewer Grid.Row="1" Margin="0,8,0,0">

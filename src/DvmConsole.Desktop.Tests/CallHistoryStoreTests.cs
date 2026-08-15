@@ -41,6 +41,19 @@ public sealed class CallHistoryStoreTests
         Assert.False(store.Complete("Other", FneTrafficProtocol.Dmr, 42, DateTimeOffset.UtcNow));
     }
 
+    [Fact]
+    public void UpdatesEncryptionWhenProtocolMetadataArrivesLater()
+    {
+        var store = new CallHistoryStore();
+        CallHistoryEntry entry = CreateEntry(42);
+        store.Add(entry);
+
+        Assert.True(store.UpdateEncryption("System 1", FneTrafficProtocol.Dmr, 42, encrypted: true));
+        Assert.True(entry.Encrypted);
+        Assert.Equal("Encrypted", entry.EncryptionText);
+        Assert.False(store.UpdateEncryption("System 1", FneTrafficProtocol.Dmr, 42, encrypted: true));
+    }
+
     private static CallHistoryEntry CreateEntry(uint streamId)
     {
         return new CallHistoryEntry(

@@ -20,6 +20,7 @@ using System.Diagnostics;
 using System.Globalization;
 using System.Runtime.CompilerServices;
 using System.Windows.Input;
+using fnecore.P25;
 
 namespace DvmConsole.Desktop;
 
@@ -27,6 +28,7 @@ public sealed partial class MainWindow : Window
 {
     private MainWindowViewModel viewModel;
     private readonly PressAndHoldPttController cardPtt;
+    private CallHistoryWindow? callHistoryWindow;
 
     public MainWindow() : this(null)
     {
@@ -46,7 +48,11 @@ public sealed partial class MainWindow : Window
         AddHandler(InputElement.PointerReleasedEvent, HandlePttPointerReleased, RoutingStrategies.Tunnel, true);
         AddHandler(InputElement.PointerCaptureLostEvent, HandlePttPointerCaptureLost, RoutingStrategies.Bubble, true);
         Opened += async (_, _) => await viewModel.StartKeyboardPttAsync().ConfigureAwait(false);
-        Closed += async (_, _) => await viewModel.DisposeAsync().ConfigureAwait(false);
+        Closed += async (_, _) =>
+        {
+            callHistoryWindow?.Close();
+            await viewModel.DisposeAsync().ConfigureAwait(false);
+        };
     }
 
     private async void HandleChannelPointerPressed(object? sender, PointerPressedEventArgs e)
@@ -346,6 +352,19 @@ public sealed partial class MainWindow : Window
     {
         var window = new DebugLogWindow(viewModel);
         await window.ShowDialog(this);
+    }
+
+    private void HandleOpenCallHistoryClick(object? sender, RoutedEventArgs e)
+    {
+        if (callHistoryWindow is null)
+        {
+            callHistoryWindow = new CallHistoryWindow(viewModel);
+            callHistoryWindow.Closed += (_, _) => callHistoryWindow = null;
+        }
+
+        if (!callHistoryWindow.IsVisible)
+            callHistoryWindow.Show(this);
+        callHistoryWindow.Activate();
     }
 
     private async void HandleOpenOperatorToolsClick(object? sender, RoutedEventArgs e)
@@ -866,6 +885,44 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     public bool IsCodeplugLoaded => Systems.Count > 0;
 
     public string? CurrentCodeplugPath => userSettings.LastCodeplugPath;
+
+    public bool ShowCallHistoryPane
+    {
+        get => userSettings.ShowCallHistoryPane;
+        set
+        {
+            if (userSettings.ShowCallHistoryPane == value)
+                return;
+            userSettings.ShowCallHistoryPane = value;
+            PersistUserSettings();
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ShowCallHistoryPane)));
+        }
+    }
+
+    public WindowPlacementSetting GetCallHistoryWindowPlacement()
+    {
+        WindowPlacementSetting placement = userSettings.CallHistoryWindowPlacement;
+        return new WindowPlacementSetting
+        {
+            Left = placement.Left,
+            Top = placement.Top,
+            Width = placement.Width,
+            Height = placement.Height
+        };
+    }
+
+    public void SaveCallHistoryWindowPlacement(WindowPlacementSetting placement)
+    {
+        ArgumentNullException.ThrowIfNull(placement);
+        userSettings.CallHistoryWindowPlacement = new WindowPlacementSetting
+        {
+            Left = placement.Left,
+            Top = placement.Top,
+            Width = placement.Width,
+            Height = placement.Height
+        };
+        PersistUserSettings();
+    }
 
     public void ExportSettings(string path)
         => userSettingsStore.Export(userSettings, path);
@@ -2206,6 +2263,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         List<ChannelViewModel> activeAudioChannels = [];
         List<ChannelViewModel> activePatchSourceChannels = [];
         bool callHistoryChanged = false;
+        bool? protocolEncrypted = TryResolveProtocolEncryption(traffic);
         foreach (SystemViewModel configuredSystem in Systems)
         {
             foreach (ChannelViewModel channel in configuredSystem.Channels)
@@ -2239,8 +2297,17 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
                         traffic.Protocol,
                         traffic.StreamId,
                         channel.LastCallerText,
-                        channel.Definition.IsEncrypted));
+                        protocolEncrypted ?? channel.Definition.IsEncrypted));
                     callHistoryChanged = true;
+                }
+
+                if (protocolEncrypted is bool encrypted)
+                {
+                    callHistoryChanged = callHistory.UpdateEncryption(
+                        system.Name,
+                        traffic.Protocol,
+                        traffic.StreamId,
+                        encrypted) || callHistoryChanged;
                 }
 
                 if (audioCoordinator.IsActive(channel))
@@ -2254,6 +2321,29 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             EnqueuePatchSource(channel, traffic);
         if (callHistoryChanged)
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(FilteredCallHistory)));
+    }
+
+    private static bool? TryResolveProtocolEncryption(FneTrafficFrame traffic)
+    {
+        if (traffic.Protocol == FneTrafficProtocol.P25 &&
+            P25DfsiFrameCodec.TryExtractEncryptionMetadata(
+                traffic,
+                out P25DfsiFrameCodec.P25EncryptionMetadata p25Metadata))
+        {
+            return p25Metadata.AlgorithmId != P25Defines.P25_ALGO_UNENCRYPT;
+        }
+
+        if (traffic.Protocol == FneTrafficProtocol.Dmr &&
+            traffic.FrameType.Equals("DATA_SYNC", StringComparison.OrdinalIgnoreCase) &&
+            traffic.Subtype.Equals("VOICE_PI_HEADER", StringComparison.OrdinalIgnoreCase) &&
+            DmrVoicePacketCodec.TryExtractEncryptionMetadata(
+                traffic.Payload,
+                out DmrVoicePacketCodec.DmrEncryptionMetadata dmrMetadata))
+        {
+            return dmrMetadata.AlgorithmId != 0;
+        }
+
+        return null;
     }
 
     private async Task StartAudioAsync(ChannelViewModel channel)
@@ -3786,6 +3876,15 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
             return true;
         }
 
+        if (IsDmrPrivacyHeader(traffic))
+        {
+            return runtime.State == ChannelRuntimeState.Receiving &&
+                runtime.StreamId == traffic.StreamId &&
+                runtime.SourceId == traffic.SourceId &&
+                runtime.Definition.DestinationId == traffic.DestinationId &&
+                runtime.Definition.Slot == traffic.Slot;
+        }
+
         if (traffic.DestinationId != runtime.Definition.DestinationId)
             return false;
 
@@ -3853,6 +3952,13 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
             FneTrafficProtocol.Analog => traffic.Subtype.Equals("TERMINATOR", StringComparison.OrdinalIgnoreCase),
             _ => false
         };
+    }
+
+    private static bool IsDmrPrivacyHeader(FneTrafficFrame traffic)
+    {
+        return traffic.Protocol == FneTrafficProtocol.Dmr &&
+            traffic.FrameType.Equals("DATA_SYNC", StringComparison.OrdinalIgnoreCase) &&
+            traffic.Subtype.Equals("VOICE_PI_HEADER", StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool IsVoiceFrame(string frameType)
