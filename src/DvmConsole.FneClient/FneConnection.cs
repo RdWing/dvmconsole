@@ -112,6 +112,7 @@ public sealed class FneConnection : IAsyncDisposable
 {
     private readonly FneConnectionOptions options;
     private readonly object sync = new();
+    private readonly SemaphoreSlim lifecycle = new(1, 1);
     private FnePeer? peer;
     private FneConnectionStatus status;
     private CancellationTokenSource? stateMonitorCancellation;
@@ -270,6 +271,39 @@ public sealed class FneConnection : IAsyncDisposable
 
     public async Task StartAsync(CancellationToken cancellationToken = default)
     {
+        await lifecycle.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            await StartCoreAsync(cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            lifecycle.Release();
+        }
+    }
+
+    /// <summary>
+    /// Starts the connection, replacing a retained peer after a fault or
+    /// transport loss. This is the operation used by the desktop Connect
+    /// command when the status is no longer Connected.
+    /// </summary>
+    public async Task StartOrReconnectAsync(CancellationToken cancellationToken = default)
+    {
+        await lifecycle.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            if (Peer is not null)
+                await StopCoreAsync(cancellationToken).ConfigureAwait(false);
+            await StartCoreAsync(cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            lifecycle.Release();
+        }
+    }
+
+    private async Task StartCoreAsync(CancellationToken cancellationToken)
+    {
         lock (sync)
         {
             if (peer is not null)
@@ -308,6 +342,19 @@ public sealed class FneConnection : IAsyncDisposable
     }
 
     public async Task StopAsync(CancellationToken cancellationToken = default)
+    {
+        await lifecycle.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            await StopCoreAsync(cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            lifecycle.Release();
+        }
+    }
+
+    private async Task StopCoreAsync(CancellationToken cancellationToken)
     {
         FnePeer? current;
         CancellationTokenSource? monitorCancellation;

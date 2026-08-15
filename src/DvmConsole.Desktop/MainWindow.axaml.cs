@@ -3975,7 +3975,7 @@ public sealed class SystemViewModel : INotifyPropertyChanged, IAsyncDisposable
         }
     }
 
-    public Task StartAsync(CancellationToken cancellationToken = default) => connection.StartAsync(cancellationToken);
+    public Task StartAsync(CancellationToken cancellationToken = default) => connection.StartOrReconnectAsync(cancellationToken);
     public async Task StopAsync(CancellationToken cancellationToken = default)
     {
         await connection.StopAsync(cancellationToken).ConfigureAwait(false);

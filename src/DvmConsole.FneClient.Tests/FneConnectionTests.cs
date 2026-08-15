@@ -133,6 +133,20 @@ public sealed class FneConnectionTests
     }
 
     [Fact]
+    public async Task ReconnectHonorsCancellationBeforeOpeningNetworkSocket()
+    {
+        var options = new FneConnectionOptions("Test", "Test", "127.0.0.1", 62031, 1, null, false, null);
+        await using var connection = new FneConnection(options);
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            connection.StartOrReconnectAsync(cancellation.Token));
+        Assert.Null(connection.Peer);
+        Assert.Equal(FneConnectionState.Disconnected, connection.Status.State);
+    }
+
+    [Fact]
     public async Task RejectsP25KeyRequestBeforeConnectionStarts()
     {
         var options = new FneConnectionOptions("Test", "Test", "127.0.0.1", 62031, 1, null, false, null)
