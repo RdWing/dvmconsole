@@ -49,7 +49,7 @@
 
     <Grid Grid.Row="1" ColumnDefinitions="*,4,250">
       <Border Grid.Column="0" Background="#0D1116" Padding="10,12,8,8">
-        <Grid RowDefinitions="Auto,*">
+        <Grid RowDefinitions="Auto,Auto,*">
           <DockPanel Margin="0,0,0,8">
             <Button DockPanel.Dock="Right" Content="{Binding ConnectionButtonText}" Command="{Binding ConnectionCommand}" />
             <StackPanel Orientation="Horizontal" Spacing="9" VerticalAlignment="Center">
@@ -58,7 +58,19 @@
             </StackPanel>
           </DockPanel>
 
-          <TabControl Grid.Row="1" ItemsSource="{Binding Systems}" SelectedItem="{Binding SelectedSystem, Mode=TwoWay}">
+          <Grid Grid.Row="1" ColumnDefinitions="Auto,210,Auto,210,*" ColumnSpacing="7" Margin="0,0,0,6">
+            <TextBlock Classes="eyebrow" Text="Input" VerticalAlignment="Center" />
+            <ComboBox Grid.Column="1" ItemsSource="{Binding AudioInputDevices}" SelectedItem="{Binding SelectedAudioInputDevice, Mode=TwoWay}">
+              <ComboBox.ItemTemplate><DataTemplate x:DataType="local:AudioDeviceOptionViewModel"><TextBlock Text="{Binding DisplayName}" /></DataTemplate></ComboBox.ItemTemplate>
+            </ComboBox>
+            <TextBlock Grid.Column="2" Classes="eyebrow" Text="Output" VerticalAlignment="Center" />
+            <ComboBox Grid.Column="3" ItemsSource="{Binding AudioOutputDevices}" SelectedItem="{Binding SelectedAudioOutputDevice, Mode=TwoWay}">
+              <ComboBox.ItemTemplate><DataTemplate x:DataType="local:AudioDeviceOptionViewModel"><TextBlock Text="{Binding DisplayName}" /></DataTemplate></ComboBox.ItemTemplate>
+            </ComboBox>
+            <Button Grid.Column="4" Content="Refresh devices" Command="{Binding RefreshAudioDevicesCommand}" HorizontalAlignment="Left" />
+          </Grid>
+
+          <TabControl Grid.Row="2" ItemsSource="{Binding Systems}" SelectedItem="{Binding SelectedSystem, Mode=TwoWay}">
             <TabControl.ItemTemplate><DataTemplate x:DataType="local:SystemViewModel"><TextBlock Text="{Binding Name}" /></DataTemplate></TabControl.ItemTemplate>
             <TabControl.ContentTemplate>
               <DataTemplate x:DataType="local:SystemViewModel">
@@ -82,8 +94,8 @@
                                   <Grid ColumnDefinitions="*,Auto"><StackPanel Spacing="1"><TextBlock FontWeight="Bold" FontSize="14" Text="{Binding Name}" /><TextBlock Classes="eyebrow" Text="{Binding TalkgroupText}" /></StackPanel><TextBlock Grid.Column="1" Classes="eyebrow" Text="{Binding ModeText}" /></Grid>
                                   <StackPanel Grid.Row="1" Spacing="2"><TextBlock Classes="eyebrow" Text="Last caller" /><TextBlock FontSize="11" Text="{Binding LastCallerText}" TextTrimming="CharacterEllipsis" /></StackPanel>
                                   <ProgressBar Grid.Row="2" Classes="receive-level" Height="4" Minimum="0" Maximum="100" Value="{Binding ReceiveLevel}" />
-                                  <Grid Grid.Row="3" ColumnDefinitions="Auto,*" ColumnSpacing="7"><TextBlock Classes="eyebrow" Text="{Binding ReceiveStatusText}" VerticalAlignment="Center" /><Slider Grid.Column="1" Minimum="0" Maximum="2" Value="{Binding Volume, Mode=TwoWay}" VerticalAlignment="Center" /></Grid>
-                                  <Button Grid.Row="4" Classes="ptt" Content="{Binding PttButtonText}" Command="{Binding PttCommand}" IsEnabled="{Binding CanTransmit}" />
+                                  <Slider Grid.Row="3" Minimum="0" Maximum="2" Value="{Binding Volume, Mode=TwoWay}" VerticalAlignment="Center" />
+                                  <Button Grid.Row="4" Classes="ptt" Content="{Binding PttButtonText}" IsEnabled="{Binding CanTransmit}" PointerPressed="HandlePttPointerPressed" PointerReleased="HandlePttPointerReleased" />
                                 </Grid>
                               </Border>
                             </DataTemplate>
@@ -116,6 +128,6 @@
         </Grid>
       </Border>
     </Grid>
-    <Border Grid.Row="2" Background="#1A2028" Padding="8,5"><DockPanel><TextBlock Classes="eyebrow" Text="{Binding StatusText}" TextTrimming="CharacterEllipsis" /><TextBlock DockPanel.Dock="Right" Classes="eyebrow" Text="{Binding AudioStatusText}" TextTrimming="CharacterEllipsis" /></DockPanel></Border>
+    <Border Grid.Row="2" Background="#1A2028" Padding="8,5"><Grid ColumnDefinitions="*,*,*"><TextBlock Classes="eyebrow" Text="{Binding StatusText}" TextTrimming="CharacterEllipsis" /><TextBlock Grid.Column="1" Classes="eyebrow" Text="{Binding AudioStatusText}" TextTrimming="CharacterEllipsis" TextAlignment="Center" /><TextBlock Grid.Column="2" Classes="eyebrow" Text="{Binding TransmitStatusText}" TextTrimming="CharacterEllipsis" TextAlignment="Right" /></Grid></Border>
   </Grid>
 </Window>
