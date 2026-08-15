@@ -149,6 +149,9 @@ public sealed partial class OperatorToolsWindow : Window
     private void HandleClearRecordingFiltersClick(object? sender, RoutedEventArgs e)
         => viewModel.ClearRecordingFilters();
 
+    private void HandleResetRecordingColumnsClick(object? sender, RoutedEventArgs e)
+        => viewModel.ResetRecordingColumns();
+
     private void HandleApplyRecordingRootClick(object? sender, RoutedEventArgs e)
         => viewModel.ApplyRecordingRoot();
 

@@ -983,6 +983,16 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     private string recordingAliasFilterText = string.Empty;
     private DateTimeOffset? recordingStartDateFilter;
     private DateTimeOffset? recordingEndDateFilter;
+    private bool recordingTimeColumnVisible = true;
+    private bool recordingDurationColumnVisible = true;
+    private bool recordingChannelColumnVisible = true;
+    private bool recordingTalkgroupColumnVisible = true;
+    private bool recordingSourceIdColumnVisible = true;
+    private bool recordingAliasColumnVisible = true;
+    private bool recordingDirectionColumnVisible;
+    private bool recordingProtocolColumnVisible;
+    private bool recordingSystemColumnVisible;
+    private bool recordingEncryptionColumnVisible;
     private string clockText = string.Empty;
     private string debugLogFilterText = string.Empty;
     private string debugLogSeverityFilter = "All";
@@ -1965,6 +1975,80 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         set => SetRecordingDateFilter(ref recordingEndDateFilter, value, nameof(RecordingEndDateFilter));
     }
 
+    public bool ShowRecordingTimeColumn
+    {
+        get => recordingTimeColumnVisible;
+        set => SetRecordingColumnVisibility(ref recordingTimeColumnVisible, value, nameof(ShowRecordingTimeColumn));
+    }
+
+    public bool ShowRecordingDurationColumn
+    {
+        get => recordingDurationColumnVisible;
+        set => SetRecordingColumnVisibility(ref recordingDurationColumnVisible, value, nameof(ShowRecordingDurationColumn));
+    }
+
+    public bool ShowRecordingChannelColumn
+    {
+        get => recordingChannelColumnVisible;
+        set => SetRecordingColumnVisibility(ref recordingChannelColumnVisible, value, nameof(ShowRecordingChannelColumn));
+    }
+
+    public bool ShowRecordingTalkgroupColumn
+    {
+        get => recordingTalkgroupColumnVisible;
+        set => SetRecordingColumnVisibility(ref recordingTalkgroupColumnVisible, value, nameof(ShowRecordingTalkgroupColumn));
+    }
+
+    public bool ShowRecordingSourceIdColumn
+    {
+        get => recordingSourceIdColumnVisible;
+        set => SetRecordingColumnVisibility(ref recordingSourceIdColumnVisible, value, nameof(ShowRecordingSourceIdColumn));
+    }
+
+    public bool ShowRecordingAliasColumn
+    {
+        get => recordingAliasColumnVisible;
+        set => SetRecordingColumnVisibility(ref recordingAliasColumnVisible, value, nameof(ShowRecordingAliasColumn));
+    }
+
+    public bool ShowRecordingDirectionColumn
+    {
+        get => recordingDirectionColumnVisible;
+        set => SetRecordingColumnVisibility(ref recordingDirectionColumnVisible, value, nameof(ShowRecordingDirectionColumn));
+    }
+
+    public bool ShowRecordingProtocolColumn
+    {
+        get => recordingProtocolColumnVisible;
+        set => SetRecordingColumnVisibility(ref recordingProtocolColumnVisible, value, nameof(ShowRecordingProtocolColumn));
+    }
+
+    public bool ShowRecordingSystemColumn
+    {
+        get => recordingSystemColumnVisible;
+        set => SetRecordingColumnVisibility(ref recordingSystemColumnVisible, value, nameof(ShowRecordingSystemColumn));
+    }
+
+    public bool ShowRecordingEncryptionColumn
+    {
+        get => recordingEncryptionColumnVisible;
+        set => SetRecordingColumnVisibility(ref recordingEncryptionColumnVisible, value, nameof(ShowRecordingEncryptionColumn));
+    }
+
+    public void ResetRecordingColumns()
+    {
+        ShowRecordingTimeColumn = true;
+        ShowRecordingDurationColumn = true;
+        ShowRecordingChannelColumn = true;
+        ShowRecordingTalkgroupColumn = true;
+        ShowRecordingSourceIdColumn = true;
+        ShowRecordingAliasColumn = true;
+        ShowRecordingDirectionColumn = false;
+        ShowRecordingProtocolColumn = false;
+        ShowRecordingSystemColumn = false;
+        ShowRecordingEncryptionColumn = false;
+    }
+
     public void ClearRecordingFilters()
     {
         RecordingFilterText = string.Empty;
@@ -2027,6 +2111,14 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         field = normalized;
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(FilteredRecordings)));
+    }
+
+    private void SetRecordingColumnVisibility(ref bool field, bool value, string propertyName)
+    {
+        if (field == value)
+            return;
+        field = value;
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
     }
 
     private void SetRecordingFilter(

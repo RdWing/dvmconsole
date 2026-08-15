@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json.Serialization;
 
 namespace DvmConsole.Desktop;
@@ -60,6 +61,21 @@ public sealed class CallRecordingMetadata
     public string AliasText => string.IsNullOrWhiteSpace(SubscriberAlias)
         ? string.Empty
         : $"alias {SubscriberAlias}";
+
+    [JsonIgnore]
+    public string TalkgroupText => TalkgroupId?.ToString(CultureInfo.InvariantCulture) ?? string.Empty;
+
+    [JsonIgnore]
+    public string SubscriberText => SubscriberId?.ToString(CultureInfo.InvariantCulture) ?? string.Empty;
+
+    [JsonIgnore]
+    public string EncryptionText => !IsEncrypted
+        ? "Clear"
+        : string.IsNullOrWhiteSpace(EncryptionAlgorithm)
+            ? "Encrypted"
+            : string.IsNullOrWhiteSpace(EncryptionKeyId)
+                ? EncryptionAlgorithm
+                : $"{EncryptionAlgorithm} / {EncryptionKeyId}";
 
     [JsonIgnore]
     public string AudioAnalysisText

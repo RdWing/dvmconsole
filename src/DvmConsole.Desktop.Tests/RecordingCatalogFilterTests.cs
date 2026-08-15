@@ -40,4 +40,24 @@ public sealed class RecordingCatalogFilterTests
         Assert.False(new RecordingCatalogFilter(StartDate: new DateTimeOffset(2026, 8, 16, 0, 0, 0, TimeSpan.Zero)).Matches(metadata));
         Assert.False(new RecordingCatalogFilter(EndDate: new DateTimeOffset(2026, 8, 14, 0, 0, 0, TimeSpan.Zero)).Matches(metadata));
     }
+
+    [Fact]
+    public void ExposesLegacyTarColumnDiagnostics()
+    {
+        var metadata = new CallRecordingMetadata
+        {
+            Protocol = "P25",
+            TalkgroupId = 101,
+            SubscriberId = 42,
+            SubscriberAlias = "Medic 42",
+            IsEncrypted = true,
+            EncryptionAlgorithm = "AES",
+            EncryptionKeyId = "0042"
+        };
+
+        Assert.Equal("101", metadata.TalkgroupText);
+        Assert.Equal("42", metadata.SubscriberText);
+        Assert.Equal("AES / 0042", metadata.EncryptionText);
+        Assert.Contains("alias Medic 42", metadata.DetailText, StringComparison.Ordinal);
+    }
 }

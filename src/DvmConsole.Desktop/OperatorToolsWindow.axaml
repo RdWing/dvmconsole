@@ -153,6 +153,24 @@
                 <DatePicker SelectedDate="{Binding RecordingEndDateFilter, Mode=TwoWay}" />
               </StackPanel>
             </Grid>
+            <Expander Header="Visible recording fields" x:CompileBindings="False">
+              <StackPanel Spacing="6" Margin="0,6,0,0">
+                <TextBlock Classes="caption" Text="Choose which metadata fields are shown on each recording card. The defaults match the legacy TAR viewer." TextWrapping="Wrap" />
+                <WrapPanel Orientation="Horizontal" ItemSpacing="12" LineSpacing="4">
+                  <CheckBox Content="Time" IsChecked="{Binding ShowRecordingTimeColumn, Mode=TwoWay}" />
+                  <CheckBox Content="Duration" IsChecked="{Binding ShowRecordingDurationColumn, Mode=TwoWay}" />
+                  <CheckBox Content="Channel" IsChecked="{Binding ShowRecordingChannelColumn, Mode=TwoWay}" />
+                  <CheckBox Content="Talkgroup" IsChecked="{Binding ShowRecordingTalkgroupColumn, Mode=TwoWay}" />
+                  <CheckBox Content="Source ID" IsChecked="{Binding ShowRecordingSourceIdColumn, Mode=TwoWay}" />
+                  <CheckBox Content="Alias" IsChecked="{Binding ShowRecordingAliasColumn, Mode=TwoWay}" />
+                  <CheckBox Content="Direction" IsChecked="{Binding ShowRecordingDirectionColumn, Mode=TwoWay}" />
+                  <CheckBox Content="Protocol" IsChecked="{Binding ShowRecordingProtocolColumn, Mode=TwoWay}" />
+                  <CheckBox Content="System" IsChecked="{Binding ShowRecordingSystemColumn, Mode=TwoWay}" />
+                  <CheckBox Content="Encryption" IsChecked="{Binding ShowRecordingEncryptionColumn, Mode=TwoWay}" />
+                </WrapPanel>
+                <Button Content="Restore default fields" HorizontalAlignment="Left" Click="HandleResetRecordingColumnsClick" />
+              </StackPanel>
+            </Expander>
             <TextBlock FontWeight="SemiBold" Text="Channel recording configuration" />
             <ItemsControl ItemsSource="{Binding Systems}">
               <ItemsControl.ItemTemplate>
@@ -186,10 +204,29 @@
                 <DataTemplate x:DataType="local:CallRecordingMetadata">
                   <Border Classes="panel">
                     <Grid RowDefinitions="Auto,Auto" ColumnDefinitions="*,Auto,Auto,Auto,Auto" ColumnSpacing="8">
-                      <StackPanel>
-                        <TextBlock Text="{Binding ChannelName}" FontWeight="SemiBold" />
-                        <TextBlock Classes="caption" Text="{Binding SummaryText}" />
-                        <TextBlock Classes="caption" Text="{Binding DetailText}" TextTrimming="CharacterEllipsis" />
+                      <StackPanel Spacing="4">
+                        <WrapPanel Orientation="Horizontal" ItemSpacing="12" LineSpacing="2">
+                          <TextBlock IsVisible="{Binding $parent[Window].((local:MainWindowViewModel)DataContext).ShowRecordingTimeColumn}" Classes="caption" Text="{Binding TimestampText}" />
+                          <TextBlock IsVisible="{Binding $parent[Window].((local:MainWindowViewModel)DataContext).ShowRecordingDurationColumn}" Classes="caption" Text="{Binding DurationText}" />
+                          <TextBlock IsVisible="{Binding $parent[Window].((local:MainWindowViewModel)DataContext).ShowRecordingChannelColumn}" FontWeight="SemiBold" Text="{Binding ChannelName}" />
+                          <StackPanel IsVisible="{Binding $parent[Window].((local:MainWindowViewModel)DataContext).ShowRecordingTalkgroupColumn}" Orientation="Horizontal" Spacing="2">
+                            <TextBlock Classes="caption" Text="TG" />
+                            <TextBlock Classes="caption" Text="{Binding TalkgroupText}" />
+                          </StackPanel>
+                          <StackPanel IsVisible="{Binding $parent[Window].((local:MainWindowViewModel)DataContext).ShowRecordingSourceIdColumn}" Orientation="Horizontal" Spacing="2">
+                            <TextBlock Classes="caption" Text="RID" />
+                            <TextBlock Classes="caption" Text="{Binding SubscriberText}" />
+                          </StackPanel>
+                          <StackPanel IsVisible="{Binding $parent[Window].((local:MainWindowViewModel)DataContext).ShowRecordingAliasColumn}" Orientation="Horizontal" Spacing="2">
+                            <TextBlock Classes="caption" Text="alias" />
+                            <TextBlock Classes="caption" Text="{Binding SubscriberAlias}" />
+                          </StackPanel>
+                          <TextBlock IsVisible="{Binding $parent[Window].((local:MainWindowViewModel)DataContext).ShowRecordingDirectionColumn}" Classes="caption" Text="{Binding Direction}" />
+                          <TextBlock IsVisible="{Binding $parent[Window].((local:MainWindowViewModel)DataContext).ShowRecordingProtocolColumn}" Classes="caption" Text="{Binding Protocol}" />
+                          <TextBlock IsVisible="{Binding $parent[Window].((local:MainWindowViewModel)DataContext).ShowRecordingSystemColumn}" Classes="caption" Text="{Binding SystemName}" />
+                          <TextBlock IsVisible="{Binding $parent[Window].((local:MainWindowViewModel)DataContext).ShowRecordingEncryptionColumn}" Classes="caption" Text="{Binding EncryptionText}" />
+                        </WrapPanel>
+                        <TextBlock Classes="caption" Text="{Binding FileName}" TextTrimming="CharacterEllipsis" />
                       </StackPanel>
                       <Button Grid.Column="1" Content="Play" Tag="{Binding}" Click="HandlePlayRecordingClick" />
                       <Button Grid.Column="2" Content="Stop" Click="HandleStopRecordingClick" />
