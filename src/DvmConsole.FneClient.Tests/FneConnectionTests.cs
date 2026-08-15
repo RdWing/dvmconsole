@@ -116,6 +116,20 @@ public sealed class FneConnectionTests
     }
 
     [Fact]
+    public async Task RejectsP25SubscriberCommandBeforeConnectionStarts()
+    {
+        var options = new FneConnectionOptions("Test", "Test", "127.0.0.1", 62031, 1, null, false, null)
+        {
+            SourceId = 1001
+        };
+        await using var connection = new FneConnection(options);
+
+        Assert.Throws<InvalidOperationException>(() => connection.SendP25SubscriberCommand(
+            P25SubscriberCommand.RadioCheck,
+            2002));
+    }
+
+    [Fact]
     public async Task RejectsUnsupportedP25KeyRequest()
     {
         await using var connection = new FneConnection(new FneConnectionOptions("Test", "Test", "127.0.0.1", 62031, 1, null, false, null));

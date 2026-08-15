@@ -54,6 +54,12 @@
             </MenuItem>
           </MenuItem>
           <MenuItem Header="Commands">
+            <MenuItem Header="Page Subscriber…" Tag="CallAlert" Click="HandleSubscriberCommandClick" />
+            <MenuItem Header="Radio Check Subscriber…" Tag="RadioCheck" Click="HandleSubscriberCommandClick" />
+            <Separator />
+            <MenuItem Header="Inhibit Subscriber…" Tag="Inhibit" Click="HandleSubscriberCommandClick" />
+            <MenuItem Header="Uninhibit Subscriber…" Tag="Uninhibit" Click="HandleSubscriberCommandClick" />
+            <Separator />
             <MenuItem Header="Tones">
               <MenuItem Header="QCII / alert tones" Tag="Tones" Click="HandleOpenOperatorToolsClick" />
               <MenuItem Header="DTMF" Tag="Tones" Click="HandleOpenOperatorToolsClick" />
@@ -166,17 +172,34 @@
       <GridSplitter Grid.Column="1" Background="#25313D" ResizeDirection="Columns" />
       <Border Grid.Column="2" Background="#151C25" Padding="8,10">
         <Grid RowDefinitions="Auto,*">
-          <TextBlock FontSize="13" FontWeight="SemiBold" Text="Call History" />
+          <TextBlock FontSize="13" FontWeight="SemiBold" Text="Activity" />
           <ScrollViewer Grid.Row="1" Margin="0,8,0,0">
-            <ItemsControl ItemsSource="{Binding CallHistory}">
-              <ItemsControl.ItemTemplate>
-                <DataTemplate x:DataType="local:CallHistoryEntry">
-                  <Border Background="#1C2530" BorderBrush="#293847" BorderThickness="1" CornerRadius="6" Padding="7" Margin="0,0,0,6">
-                    <Grid RowDefinitions="Auto,Auto,Auto" ColumnDefinitions="*,Auto"><TextBlock FontSize="12" FontWeight="SemiBold" Text="{Binding ChannelName}" /><TextBlock Grid.Column="1" Classes="eyebrow" Text="{Binding TimestampText}" /><TextBlock Grid.Row="1" Classes="eyebrow" Text="{Binding RouteText}" TextTrimming="CharacterEllipsis" /><TextBlock Grid.Row="1" Grid.Column="1" Classes="eyebrow" Text="{Binding ProtocolText}" /><TextBlock Grid.Row="2" Classes="eyebrow" Text="{Binding EncryptionText}" /><TextBlock Grid.Row="2" Grid.Column="1" Classes="eyebrow" Text="{Binding DurationText}" /></Grid>
-                  </Border>
-                </DataTemplate>
-              </ItemsControl.ItemTemplate>
-            </ItemsControl>
+            <StackPanel Spacing="14">
+              <StackPanel Spacing="6">
+                <TextBlock Classes="eyebrow" Text="Call History" />
+                <ItemsControl ItemsSource="{Binding CallHistory}">
+                  <ItemsControl.ItemTemplate>
+                    <DataTemplate x:DataType="local:CallHistoryEntry">
+                      <Border Background="#1C2530" BorderBrush="#293847" BorderThickness="1" CornerRadius="6" Padding="7" Margin="0,0,0,6">
+                        <Grid RowDefinitions="Auto,Auto,Auto" ColumnDefinitions="*,Auto"><TextBlock FontSize="12" FontWeight="SemiBold" Text="{Binding ChannelName}" /><TextBlock Grid.Column="1" Classes="eyebrow" Text="{Binding TimestampText}" /><TextBlock Grid.Row="1" Classes="eyebrow" Text="{Binding RouteText}" TextTrimming="CharacterEllipsis" /><TextBlock Grid.Row="1" Grid.Column="1" Classes="eyebrow" Text="{Binding ProtocolText}" /><TextBlock Grid.Row="2" Classes="eyebrow" Text="{Binding EncryptionText}" /><TextBlock Grid.Row="2" Grid.Column="1" Classes="eyebrow" Text="{Binding DurationText}" /></Grid>
+                      </Border>
+                    </DataTemplate>
+                  </ItemsControl.ItemTemplate>
+                </ItemsControl>
+              </StackPanel>
+              <StackPanel Spacing="6">
+                <TextBlock Classes="eyebrow" Text="Subscriber Command Audit" />
+                <ItemsControl ItemsSource="{Binding SubscriberCommandAudit}">
+                  <ItemsControl.ItemTemplate>
+                    <DataTemplate x:DataType="local:SubscriberCommandAuditEntry">
+                      <Border Background="#1C2530" BorderBrush="#293847" BorderThickness="1" CornerRadius="6" Padding="7" Margin="0,0,0,6">
+                        <TextBlock Classes="eyebrow" Text="{Binding Summary}" TextWrapping="Wrap" />
+                      </Border>
+                    </DataTemplate>
+                  </ItemsControl.ItemTemplate>
+                </ItemsControl>
+              </StackPanel>
+            </StackPanel>
           </ScrollViewer>
         </Grid>
       </Border>

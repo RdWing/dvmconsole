@@ -329,6 +329,18 @@ public sealed partial class MainWindow : Window
     private async void HandleTestTalkPermitToneClick(object? sender, RoutedEventArgs e)
         => await viewModel.TestTalkPermitToneAsync();
 
+    private async void HandleSubscriberCommandClick(object? sender, RoutedEventArgs e)
+    {
+        if (sender is not MenuItem { Tag: string value } ||
+            !Enum.TryParse(value, ignoreCase: true, out P25SubscriberCommand command))
+        {
+            return;
+        }
+
+        var window = new SubscriberCommandWindow(viewModel, command);
+        await window.ShowDialog(this);
+    }
+
     private async void HandleOpenOperatorToolsClick(object? sender, RoutedEventArgs e)
     {
         if (sender is not MenuItem { Tag: string value } ||
@@ -590,6 +602,7 @@ public sealed partial class MainWindow : Window
 
 public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposable
 {
+    private const int MaximumSubscriberCommandAuditEntries = 50;
     private readonly ChannelReceiveAudioCoordinator audioCoordinator;
     private readonly UserSettingsStore userSettingsStore;
     private readonly UserSettings userSettings;
@@ -608,6 +621,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     private readonly ObservableCollection<AudioInputPresetViewModel> audioInputPresets = [];
     private readonly ObservableCollection<AudioDeviceOptionViewModel> audioInputDevices = [];
     private readonly ObservableCollection<AudioDeviceOptionViewModel> audioOutputDevices = [];
+    private readonly ObservableCollection<SubscriberCommandAuditEntry> subscriberCommandAudit = [];
     private readonly ObservableCollection<WebStreamViewModel> webStreams = [];
     private readonly WebStreamPlaybackCoordinator webStreamPlayback;
     private readonly object patchSourceWorkSync = new();
@@ -738,6 +752,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         AudioInputPresets = new ReadOnlyObservableCollection<AudioInputPresetViewModel>(audioInputPresets);
         AudioInputDevices = new ReadOnlyObservableCollection<AudioDeviceOptionViewModel>(audioInputDevices);
         AudioOutputDevices = new ReadOnlyObservableCollection<AudioDeviceOptionViewModel>(audioOutputDevices);
+        SubscriberCommandAudit = new ReadOnlyObservableCollection<SubscriberCommandAuditEntry>(subscriberCommandAudit);
         WebStreams = new ReadOnlyObservableCollection<WebStreamViewModel>(webStreams);
         foreach (WebStreamViewModel stream in Zones.SelectMany(zone => zone.WebStreams))
         {
@@ -1136,6 +1151,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     public ReadOnlyObservableCollection<AudioInputPresetViewModel> AudioInputPresets { get; }
     public ReadOnlyObservableCollection<AudioDeviceOptionViewModel> AudioInputDevices { get; }
     public ReadOnlyObservableCollection<AudioDeviceOptionViewModel> AudioOutputDevices { get; }
+    public ReadOnlyObservableCollection<SubscriberCommandAuditEntry> SubscriberCommandAudit { get; }
     public ReadOnlyObservableCollection<WebStreamViewModel> WebStreams { get; }
     public System.Collections.ObjectModel.ReadOnlyObservableCollection<CallHistoryEntry> CallHistory { get; }
     public ReadOnlyObservableCollection<CallRecordingMetadata> Recordings { get; }
@@ -1156,6 +1172,55 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     public IBrush ConnectionBrush => SelectedSystem?.IsConnected == true
         ? new SolidColorBrush(Color.Parse("#00C86A"))
         : new SolidColorBrush(Color.Parse("#7B8794"));
+
+    public bool TrySendSubscriberCommand(
+        SystemViewModel system,
+        P25SubscriberCommand command,
+        string? destinationText,
+        out string message)
+    {
+        ArgumentNullException.ThrowIfNull(system);
+
+        if (!P25SubscriberCommandCodec.TryParseSubscriberId(destinationText, out uint destinationId))
+        {
+            message = "Enter a P25 subscriber RID from 1 to 16777215.";
+            RecordSubscriberCommandAudit(system.Name, command, 0, false, message);
+            StatusText = message;
+            return false;
+        }
+
+        if (!system.IsConnected)
+        {
+            message = $"{system.Name} is not connected to an FNE.";
+            RecordSubscriberCommandAudit(system.Name, command, destinationId, false, message);
+            StatusText = message;
+            return false;
+        }
+
+        if (system.SourceId is not uint sourceId || !P25SubscriberCommandCodec.IsValidSubscriberId(sourceId))
+        {
+            message = $"{system.Name} does not have a configured source RID.";
+            RecordSubscriberCommandAudit(system.Name, command, destinationId, false, message);
+            StatusText = message;
+            return false;
+        }
+
+        try
+        {
+            system.SendP25SubscriberCommand(command, destinationId);
+            message = "Sent; acknowledgement decoding is pending.";
+            RecordSubscriberCommandAudit(system.Name, command, destinationId, true, message);
+            StatusText = $"{system.Name}: {CommandName(command)} to RID {destinationId} sent.";
+            return true;
+        }
+        catch (Exception exception)
+        {
+            message = $"Unable to send command: {exception.Message}";
+            RecordSubscriberCommandAudit(system.Name, command, destinationId, false, message);
+            StatusText = $"{system.Name}: {message}";
+            return false;
+        }
+    }
 
     public bool RetainPatchStateOnStartup
     {
@@ -2855,6 +2920,35 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SystemStatusText)));
     }
 
+    private void RecordSubscriberCommandAudit(
+        string systemName,
+        P25SubscriberCommand command,
+        uint destinationId,
+        bool succeeded,
+        string detail)
+    {
+        if (subscriberCommandAudit.Count >= MaximumSubscriberCommandAuditEntries)
+            subscriberCommandAudit.RemoveAt(subscriberCommandAudit.Count - 1);
+
+        subscriberCommandAudit.Insert(0, new SubscriberCommandAuditEntry(
+            DateTimeOffset.UtcNow,
+            systemName,
+            command,
+            destinationId,
+            succeeded,
+            detail));
+    }
+
+    private static string CommandName(P25SubscriberCommand command)
+        => command switch
+        {
+            P25SubscriberCommand.CallAlert => "Page",
+            P25SubscriberCommand.RadioCheck => "Radio check",
+            P25SubscriberCommand.Inhibit => "Inhibit",
+            P25SubscriberCommand.Uninhibit => "Uninhibit",
+            _ => command.ToString()
+        };
+
     private void SetField<T>(ref T field, T value, [CallerMemberName] string? propertyName = null)
     {
         if (EqualityComparer<T>.Default.Equals(field, value))
@@ -3142,6 +3236,9 @@ public sealed class SystemViewModel : INotifyPropertyChanged, IAsyncDisposable
             throw;
         }
     }
+
+    public void SendP25SubscriberCommand(P25SubscriberCommand command, uint destinationId)
+        => connection.SendP25SubscriberCommand(command, destinationId);
 
     public void ApplyStatus(FneConnectionStatus status)
     {

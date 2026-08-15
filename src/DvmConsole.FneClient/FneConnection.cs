@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Sockets;
 using DvmConsole.Core.Configuration;
 using fnecore;
+using fnecore.EDAC;
 using fnecore.P25;
 using fnecore.P25.KMM;
 
@@ -202,6 +203,61 @@ public sealed class FneConnection : IAsyncDisposable
 
             current.SendMasterKeyRequest(algorithmId, keyId, sourceId);
         }
+    }
+
+    public void SendP25SubscriberCommand(P25SubscriberCommand command, uint destinationId)
+    {
+        FnePeer current;
+        uint sourceId;
+        lock (sync)
+        {
+            current = peer ?? throw new InvalidOperationException("The FNE connection is not started.");
+            if (status.State != FneConnectionState.Connected)
+                throw new InvalidOperationException($"The FNE connection is not ready for subscriber commands ({status.State}).");
+            sourceId = options.SourceId ?? throw new InvalidOperationException("A source ID is required for P25 subscriber commands.");
+        }
+
+        P25SubscriberCommandMessage message = P25SubscriberCommandCodec.Build(command, sourceId, destinationId);
+        var callData = new RemoteCallData
+        {
+            SrcId = sourceId,
+            DstId = destinationId,
+            LCO = message.LinkControlOpcode
+        };
+
+        // FneSystemBase owns this helper in the legacy WPF application, but
+        // FnePeer intentionally exposes only raw traffic. Keep the same
+        // TSDU framing here rather than adding a desktop-specific API to
+        // fnecore.
+        byte[] payload = new byte[200];
+        FneUtils.StringToBytes(Constants.TAG_P25_DATA, payload, 0, Constants.TAG_P25_DATA.Length);
+        payload[4] = callData.LCO;
+        FneUtils.Write3Bytes(callData.SrcId, ref payload, 5);
+        FneUtils.Write3Bytes(callData.DstId, ref payload, 8);
+        payload[11] = 0;
+        payload[12] = 0;
+        payload[14] = 0;
+        payload[15] = callData.MFId;
+        payload[16] = 0;
+        payload[17] = 0;
+        payload[18] = 0;
+        payload[20] = callData.LSD1;
+        payload[21] = callData.LSD2;
+        payload[22] = (byte)P25DUID.TSDU;
+
+        var trellis = new Trellis();
+        byte[] tsbkTrellis = new byte[P25Defines.P25_TSBK_FEC_LENGTH_BYTES];
+        trellis.Encode12(message.Tsbk, ref tsbkTrellis);
+        byte[] raw = new byte[P25Defines.P25_TSDU_FRAME_LENGTH_BYTES];
+        P25Interleaver.Encode(tsbkTrellis, ref raw, 114, 318);
+        Buffer.BlockCopy(raw, 0, payload, 24, raw.Length);
+        payload[23] = (byte)(24 + raw.Length);
+
+        current.SendMasterTraffic(
+            FneBase.CreateOpcode(Constants.NET_FUNC_PROTOCOL, Constants.NET_PROTOCOL_SUBFUNC_P25),
+            payload,
+            current.pktSeq(true),
+            callData.TxStreamID);
     }
 
     public async Task StartAsync(CancellationToken cancellationToken = default)

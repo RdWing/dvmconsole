@@ -123,6 +123,50 @@ public sealed class SystemViewModelTests
     }
 
     [Fact]
+    public async Task SubscriberCommandValidationAuditsAndBoundsFailures()
+    {
+        string path = Path.Combine(AppContext.BaseDirectory, "TestData", "multiple-systems.yml");
+        string settingsPath = CreateSettingsPath();
+
+        try
+        {
+            await using MainWindowViewModel viewModel = MainWindowViewModel.Load(path, new UserSettingsStore(settingsPath));
+            SystemViewModel system = viewModel.Systems[0];
+
+            Assert.False(viewModel.TrySendSubscriberCommand(
+                system,
+                P25SubscriberCommand.CallAlert,
+                "0",
+                out string invalidMessage));
+            Assert.Contains("1 to 16777215", invalidMessage);
+            Assert.False(viewModel.TrySendSubscriberCommand(
+                system,
+                P25SubscriberCommand.RadioCheck,
+                "2002",
+                out string disconnectedMessage));
+            Assert.Contains("not connected", disconnectedMessage);
+
+            for (uint destinationId = 1; destinationId <= 60; destinationId++)
+            {
+                Assert.False(viewModel.TrySendSubscriberCommand(
+                    system,
+                    P25SubscriberCommand.Inhibit,
+                    destinationId.ToString(CultureInfo.InvariantCulture),
+                    out _));
+            }
+
+            Assert.Equal(50, viewModel.SubscriberCommandAudit.Count);
+            Assert.Equal((uint)60, viewModel.SubscriberCommandAudit[0].DestinationId);
+            Assert.Equal((uint)11, viewModel.SubscriberCommandAudit[^1].DestinationId);
+            Assert.All(viewModel.SubscriberCommandAudit, entry => Assert.False(entry.Succeeded));
+        }
+        finally
+        {
+            CleanupSettingsPath(settingsPath);
+        }
+    }
+
+    [Fact]
     public async Task RecordsOneHistoryEntryPerNewVoiceStream()
     {
         string path = Path.Combine(AppContext.BaseDirectory, "TestData", "multiple-systems.yml");
