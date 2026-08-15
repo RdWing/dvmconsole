@@ -271,6 +271,87 @@ public sealed class P25DfsiFrameCodecTests
     }
 
     [Fact]
+    public async Task P25SessionMaintainsEncryptedDecodeAcrossMultipleLduPairs()
+    {
+        const ushort keyId = 0x50;
+        const byte algorithmId = P25Defines.P25_ALGO_AES;
+        byte[] key = Enumerable.Range(1, 32).Select(static value => (byte)value).ToArray();
+        byte[] messageIndicator = Enumerable.Range(0x10, 9).Select(static value => (byte)value).ToArray();
+        var resolver = new P25KeyRing(new KeyContainer
+        {
+            Keys =
+            [
+                new KeyEntry
+                {
+                    KeyId = keyId,
+                    AlgId = algorithmId,
+                    Key = Convert.ToHexString(key)
+                }
+            ]
+        });
+        var vocoder = new FakeVocoderSession();
+        await using var session = new P25RxAudioSession(
+            new P25TrafficSelector(100),
+            vocoder,
+            new FakePlayback(),
+            resolver);
+
+        var expectedCodewords = new List<byte[]>();
+        for (int pair = 0; pair < 4; pair++)
+        {
+            byte[] nextMessageIndicator = Enumerable.Range(0x30 + pair * 9, 9)
+                .Select(static value => (byte)value)
+                .ToArray();
+            byte[] clearLdu1 = Enumerable.Range(pair * 36 + 1, P25DfsiFrameCodec.ImbeBytes)
+                .Select(static value => (byte)value)
+                .ToArray();
+            byte[] clearLdu2 = Enumerable.Range(pair * 36 + 101, P25DfsiFrameCodec.ImbeBytes)
+                .Select(static value => (byte)value)
+                .ToArray();
+
+            var encryptor = new P25Crypto();
+            encryptor.SetKey(keyId, algorithmId, key);
+            Assert.True(encryptor.Prepare(algorithmId, keyId, messageIndicator));
+            byte[] encryptedLdu1 = ProcessLdu(encryptor, clearLdu1, P25DUID.LDU1);
+            byte[] encryptedLdu2 = ProcessLdu(encryptor, clearLdu2, P25DUID.LDU2);
+
+            byte[] ldu1Payload = P25DfsiFrameCodec.CreateLdu1Payload(99, 100, encryptedLdu1);
+            ldu1Payload[P25DfsiFrameCodec.RecordLengthOffset] = (byte)P25DfsiFrameCodec.ClearLduPayloadLength;
+            ldu1Payload[180] = P25Defines.P25_FT_HDU_VALID;
+            ldu1Payload[181] = algorithmId;
+            ldu1Payload[182] = (byte)(keyId >> 8);
+            ldu1Payload[183] = (byte)keyId;
+            messageIndicator.CopyTo(ldu1Payload, 184);
+
+            byte[] ldu2Payload = P25DfsiFrameCodec.CreateLdu2Payload(99, 100, encryptedLdu2);
+            nextMessageIndicator.AsSpan(0, 3).CopyTo(ldu2Payload.AsSpan(61, 3));
+            nextMessageIndicator.AsSpan(3, 3).CopyTo(ldu2Payload.AsSpan(78, 3));
+            nextMessageIndicator.AsSpan(6, 3).CopyTo(ldu2Payload.AsSpan(95, 3));
+            ldu2Payload[112] = algorithmId;
+            ldu2Payload[113] = (byte)(keyId >> 8);
+            ldu2Payload[114] = (byte)keyId;
+
+            Assert.Equal(0, await session.ProcessAsync(CreateTraffic(
+                "LDU1",
+                ldu1Payload,
+                packetSequence: (ushort)(pair * 2 + 1))));
+            Assert.Equal(0, await session.ProcessAsync(CreateTraffic(
+                "LDU2",
+                ldu2Payload,
+                packetSequence: (ushort)(pair * 2 + 2))));
+
+            expectedCodewords.AddRange(SplitCodewords(clearLdu1));
+            expectedCodewords.AddRange(SplitCodewords(clearLdu2));
+            messageIndicator = nextMessageIndicator;
+        }
+
+        Assert.Equal(72, session.FramesDecoded);
+        Assert.Equal(expectedCodewords.Count, vocoder.Codewords.Count);
+        for (int index = 0; index < expectedCodewords.Count; index++)
+            Assert.Equal(expectedCodewords[index], vocoder.Codewords[index]);
+    }
+
+    [Fact]
     public async Task P25SessionDropsDuplicateLduWithoutAdvancingCryptoOrAudio()
     {
         var vocoder = new FakeVocoderSession();
@@ -349,6 +430,16 @@ public sealed class P25DfsiFrameCodecTests
         }
 
         return encrypted;
+    }
+
+    private static IEnumerable<byte[]> SplitCodewords(byte[] imbe)
+    {
+        for (int index = 0; index < P25DfsiFrameCodec.CodewordsPerLdu; index++)
+        {
+            yield return imbe
+                .AsSpan(index * P25DfsiFrameCodec.CodewordBytes, P25DfsiFrameCodec.CodewordBytes)
+                .ToArray();
+        }
     }
 
     private sealed class FakeVocoderSession : IVocoderSession
