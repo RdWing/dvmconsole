@@ -163,6 +163,7 @@ public sealed class UserSettingsStoreTests
             UserSettings loaded = store.Load();
 
             Assert.Equal("/tmp/codeplug.yml", loaded.LastCodeplugPath);
+            Assert.Equal(UserSettings.CurrentSchemaVersion, loaded.SchemaVersion);
             Assert.Equal(["/tmp/one.yml", "/tmp/two.yml"], loaded.RecentCodeplugPaths);
             Assert.Equal("System 1", loaded.LastSelectedSystemName);
             Assert.Equal("System 1\u001FDispatch", loaded.LastSelectedChannelKey);

@@ -21,8 +21,10 @@ public sealed class WindowPlacementSetting
 /// </summary>
 public sealed class UserSettings
 {
+    public const int CurrentSchemaVersion = 1;
     public const int MaximumToolbarClocks = 8;
     public const int MaximumRecentCodeplugs = 8;
+    public int SchemaVersion { get; set; } = CurrentSchemaVersion;
     public string? LastCodeplugPath { get; set; }
     public List<string> RecentCodeplugPaths { get; set; } = [];
     public string? LastSelectedSystemName { get; set; }
@@ -229,6 +231,8 @@ public sealed class UserSettingsStore
     {
         ArgumentNullException.ThrowIfNull(settings);
 
+        if (settings.SchemaVersion <= 0)
+            settings.SchemaVersion = UserSettings.CurrentSchemaVersion;
         settings.DtmfPresets = NormalizeDtmfPresets(settings.DtmfPresets);
         settings.TonePresets = NormalizeTonePresets(settings.TonePresets);
         settings.CallHistoryWindowPlacement = NormalizeWindowPlacement(settings.CallHistoryWindowPlacement);

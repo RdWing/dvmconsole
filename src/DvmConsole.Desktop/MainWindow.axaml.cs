@@ -1001,6 +1001,12 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
 
     public string? CurrentCodeplugPath => userSettings.LastCodeplugPath;
 
+    public string SettingsVersionText => userSettings.SchemaVersion == UserSettings.CurrentSchemaVersion
+        ? $"Profile format v{userSettings.SchemaVersion}"
+        : userSettings.SchemaVersion > UserSettings.CurrentSchemaVersion
+            ? $"Profile format v{userSettings.SchemaVersion} (newer than this build)"
+            : $"Profile format v{userSettings.SchemaVersion} (legacy)";
+
     public ReadOnlyObservableCollection<string> RecentCodeplugPaths { get; }
 
     public bool HasCodeplugDiagnostics => !IsCodeplugLoaded || codeplugDiagnosticsText.Contains('\n');
