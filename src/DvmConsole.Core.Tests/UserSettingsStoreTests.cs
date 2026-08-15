@@ -89,6 +89,15 @@ public sealed class UserSettingsStoreTests
                         HighGainDb = 3
                     }
                 ],
+                ToolbarClocks =
+                [
+                    new ToolbarClockSetting
+                    {
+                        Enabled = true,
+                        UtcOffsetHours = 5,
+                        ColorHex = "#0D47A1"
+                    }
+                ],
                 MuteRxAudioWhileTransmitting = false,
                 TalkPermitTone = true,
                 ConnectionChimes = true,
@@ -181,6 +190,9 @@ public sealed class UserSettingsStoreTests
             Assert.Equal(-2, microphonePreset.LowGainDb);
             Assert.Equal(1, microphonePreset.MidGainDb);
             Assert.Equal(3, microphonePreset.HighGainDb);
+            Assert.True(loaded.ToolbarClocks[0].Enabled);
+            Assert.Equal(5, loaded.ToolbarClocks[0].UtcOffsetHours);
+            Assert.Equal("#0D47A1", loaded.ToolbarClocks[0].ColorHex);
             Assert.False(loaded.MuteRxAudioWhileTransmitting);
             Assert.True(loaded.TalkPermitTone);
             Assert.True(loaded.ConnectionChimes);

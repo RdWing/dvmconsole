@@ -33,4 +33,22 @@ public sealed class ToolbarClockViewModelTests
         Assert.False(clock.TryGetUtcOffset(out _));
         Assert.Equal("UTC?", clock.TimeZoneLabel);
     }
+
+    [Fact]
+    public void PersistsAndNormalizesToolbarClockColors()
+    {
+        var clock = new ToolbarClockViewModel(1, new ToolbarClockSetting
+        {
+            Enabled = true,
+            ColorHex = "#0D47A1"
+        });
+
+        Assert.Equal("#0D47A1", clock.ColorHex);
+        Assert.Equal("Blue", clock.ColorLabel);
+        Assert.Equal("#0D47A1", clock.ToSetting().ColorHex);
+
+        clock.ColorHex = "not-a-palette-color";
+        Assert.Equal(ToolbarClockColorPalette.DefaultColorHex, clock.ColorHex);
+        Assert.Equal("Neutral", clock.ColorLabel);
+    }
 }

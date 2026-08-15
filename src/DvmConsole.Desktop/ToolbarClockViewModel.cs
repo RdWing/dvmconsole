@@ -6,11 +6,28 @@ using DvmConsole.Core.Settings;
 
 namespace DvmConsole.Desktop;
 
+public sealed record ToolbarClockColorOption(string Label, string ColorHex)
+{
+    public IBrush ColorBrush => new SolidColorBrush(Color.Parse(ColorHex));
+}
+
 public sealed class ToolbarClockViewModel : INotifyPropertyChanged
 {
+    private static readonly IReadOnlyList<ToolbarClockColorOption> colorOptions =
+    [
+        new("Neutral", "#3A3A3A"),
+        new("Blue", "#0D47A1"),
+        new("Green", "#1B5E20"),
+        new("Amber", "#B26A00"),
+        new("Red", "#8E2424"),
+        new("Purple", "#5E35B1"),
+        new("Teal", "#00695C"),
+        new("Slate", "#37474F")
+    ];
     private bool enabled;
     private string utcOffsetText;
     private string timeText = string.Empty;
+    private string colorHex = ToolbarClockColorPalette.DefaultColorHex;
 
     public ToolbarClockViewModel(int slotNumber, ToolbarClockSetting setting)
     {
@@ -20,12 +37,15 @@ public sealed class ToolbarClockViewModel : INotifyPropertyChanged
         SlotNumber = slotNumber;
         enabled = setting.Enabled;
         utcOffsetText = setting.UtcOffsetHours.ToString(CultureInfo.InvariantCulture);
+        colorHex = ToolbarClockColorPalette.Normalize(setting.ColorHex);
     }
 
     public event PropertyChangedEventHandler? PropertyChanged;
 
     public int SlotNumber { get; }
     public string SlotLabel => $"Clock {SlotNumber}";
+
+    public IReadOnlyList<ToolbarClockColorOption> ColorOptions => colorOptions;
 
     public bool Enabled
     {
@@ -53,8 +73,39 @@ public sealed class ToolbarClockViewModel : INotifyPropertyChanged
 
     public string TimeText => timeText;
 
+    public string ColorHex
+    {
+        get => colorHex;
+        set
+        {
+            string normalized = ToolbarClockColorPalette.Normalize(value);
+            if (string.Equals(colorHex, normalized, StringComparison.OrdinalIgnoreCase))
+                return;
+            colorHex = normalized;
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ColorHex)));
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SelectedColorOption)));
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ColorLabel)));
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ColorBrush)));
+        }
+    }
+
+    public ToolbarClockColorOption SelectedColorOption
+    {
+        get => colorOptions.First(option => option.ColorHex.Equals(ColorHex, StringComparison.OrdinalIgnoreCase));
+        set
+        {
+            ArgumentNullException.ThrowIfNull(value);
+            ColorHex = value.ColorHex;
+        }
+    }
+
+    public string ColorLabel
+        => colorOptions.First(option => option.ColorHex.Equals(ColorHex, StringComparison.OrdinalIgnoreCase)).Label;
+
+    public IBrush ColorBrush => new SolidColorBrush(Color.Parse(ColorHex));
+
     public IBrush BackgroundBrush => new SolidColorBrush(Color.Parse(
-        Enabled ? "#243B53" : "#1A222D"));
+        Enabled ? ColorHex : "#1A222D"));
 
     public bool TryGetUtcOffset(out int offsetHours)
     {
@@ -81,7 +132,8 @@ public sealed class ToolbarClockViewModel : INotifyPropertyChanged
         => new()
         {
             Enabled = Enabled,
-            UtcOffsetHours = TryGetUtcOffset(out int offsetHours) ? offsetHours : 0
+            UtcOffsetHours = TryGetUtcOffset(out int offsetHours) ? offsetHours : 0,
+            ColorHex = ColorHex
         };
 
     private static string FormatUtcOffsetLabel(int offsetHours)

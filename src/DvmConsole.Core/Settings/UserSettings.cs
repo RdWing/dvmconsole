@@ -375,6 +375,7 @@ public sealed class UserSettingsStore
         settings.DtmfPresets = NormalizeDtmfPresets(settings.DtmfPresets);
         settings.TonePresets = NormalizeTonePresets(settings.TonePresets);
         settings.CallHistoryWindowPlacement = NormalizeWindowPlacement(settings.CallHistoryWindowPlacement);
+        settings.ToolbarClocks = NormalizeToolbarClocks(settings.ToolbarClocks);
         NormalizeAudioInputSettings(settings);
         settings.RecentCodeplugPaths = NormalizeRecentCodeplugPaths(settings.RecentCodeplugPaths);
         settings.AudioInputPresetName = settings.AudioInputPresetName?.Trim() ?? string.Empty;
@@ -727,7 +728,8 @@ public sealed class UserSettingsStore
             .Select(clock => new ToolbarClockSetting
             {
                 Enabled = clock?.Enabled == true,
-                UtcOffsetHours = Math.Clamp(clock?.UtcOffsetHours ?? 0, -12, 14)
+                UtcOffsetHours = Math.Clamp(clock?.UtcOffsetHours ?? 0, -12, 14),
+                ColorHex = ToolbarClockColorPalette.Normalize(clock?.ColorHex)
             })
             .ToList();
         while (normalized.Count < UserSettings.MaximumToolbarClocks)
