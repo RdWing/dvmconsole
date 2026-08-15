@@ -77,6 +77,12 @@ public sealed partial class OperatorToolsWindow : Window
     private async void HandleSendQuickCallClick(object? sender, RoutedEventArgs e)
         => await viewModel.SendQuickCallAsync();
 
+    private void HandleSaveToolbarClocksClick(object? sender, RoutedEventArgs e)
+        => viewModel.SaveToolbarClocks();
+
+    private void HandleResetLayoutClick(object? sender, RoutedEventArgs e)
+        => viewModel.ResetLayout();
+
     private async void HandleImportAlertToneClick(object? sender, RoutedEventArgs e)
     {
         if (!StorageProvider.CanOpen)

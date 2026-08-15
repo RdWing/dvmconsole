@@ -2,6 +2,7 @@ using Avalonia;
 using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Media;
+using Avalonia.Media.Imaging;
 using Avalonia.Platform.Storage;
 using Avalonia.Controls;
 using Avalonia.Styling;
@@ -163,6 +164,38 @@ public sealed partial class MainWindow : Window
 
         await ReplaceViewModelAsync(replacement);
     }
+
+    private async void HandleSelectBackgroundClick(object? sender, RoutedEventArgs e)
+    {
+        if (!StorageProvider.CanOpen)
+            return;
+
+        IReadOnlyList<IStorageFile> files = await StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
+        {
+            Title = "Select user background",
+            AllowMultiple = false,
+            FileTypeFilter =
+            [
+                new FilePickerFileType("Images")
+                {
+                    Patterns = ["*.png", "*.jpg", "*.jpeg", "*.bmp", "*.webp"],
+                    MimeTypes = ["image/png", "image/jpeg", "image/bmp", "image/webp"]
+                }
+            ]
+        });
+        if (files.Count == 0)
+            return;
+
+        string? path = files[0].TryGetLocalPath();
+        if (!string.IsNullOrWhiteSpace(path))
+            viewModel.SetUserBackground(path);
+    }
+
+    private void HandleClearBackgroundClick(object? sender, RoutedEventArgs e)
+        => viewModel.ClearUserBackground();
+
+    private void HandleResetLayoutClick(object? sender, RoutedEventArgs e)
+        => viewModel.ResetLayout();
 
     private async void HandleImportSettingsClick(object? sender, RoutedEventArgs e)
     {
@@ -657,6 +690,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     private readonly ObservableCollection<DtmfPresetViewModel> dtmfPresets = [];
     private readonly ObservableCollection<TonePresetViewModel> tonePresets = [];
     private readonly ObservableCollection<AlertToneViewModel> alertTones = [];
+    private readonly ObservableCollection<ToolbarClockViewModel> toolbarClocks = [];
     private readonly ObservableCollection<AudioInputPresetViewModel> audioInputPresets = [];
     private readonly ObservableCollection<AudioDeviceOptionViewModel> audioInputDevices = [];
     private readonly ObservableCollection<AudioDeviceOptionViewModel> audioOutputDevices = [];
@@ -670,6 +704,8 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     private PatchGroupEditorViewModel? activeMultiSelectGroup;
     private readonly CallRecordingManager callRecordings;
     private readonly DispatcherTimer clockTimer;
+    private Bitmap? userBackgroundBitmap;
+    private IBrush mainBackgroundBrush = new SolidColorBrush(Color.Parse("#0D1116"));
     private string statusText;
     private string audioStatusText = "RX audio disabled.";
     private string transmitStatusText = "PTT idle.";
@@ -712,6 +748,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         this.statusText = statusText;
         this.userSettingsStore = userSettingsStore ?? new UserSettingsStore(UserSettingsStore.DefaultPath);
         userSettings = this.userSettingsStore.Load();
+        LoadUserBackground(userSettings.UserBackgroundImage);
         ApplyTheme(userSettings.DarkMode);
         keyboardPtt = new KeyboardPttSource(ParseGlobalPttKey(userSettings.GlobalPttKey))
         {
@@ -755,6 +792,14 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             tonePresets.Add(new TonePresetViewModel(preset));
         foreach (AlertToneSetting tone in userSettings.AlertTones)
             alertTones.Add(new AlertToneViewModel(tone));
+        List<ToolbarClockSetting> configuredClocks = (userSettings.ToolbarClocks ?? [])
+            .Take(UserSettings.MaximumToolbarClocks)
+            .ToList();
+        while (configuredClocks.Count < UserSettings.MaximumToolbarClocks)
+            configuredClocks.Add(new ToolbarClockSetting());
+        for (int index = 0; index < configuredClocks.Count; index++)
+            toolbarClocks.Add(new ToolbarClockViewModel(index + 1, configuredClocks[index]));
+        RefreshClock();
         foreach (AudioInputPresetSetting preset in userSettings.AudioInputPresets)
             audioInputPresets.Add(new AudioInputPresetViewModel(preset));
         p25KeyRing = p25KeyResolver as P25KeyRing;
@@ -800,6 +845,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         DtmfPresets = new ReadOnlyObservableCollection<DtmfPresetViewModel>(dtmfPresets);
         TonePresets = new ReadOnlyObservableCollection<TonePresetViewModel>(tonePresets);
         AlertTones = new ReadOnlyObservableCollection<AlertToneViewModel>(alertTones);
+        ToolbarClocks = new ReadOnlyObservableCollection<ToolbarClockViewModel>(toolbarClocks);
         AudioInputPresets = new ReadOnlyObservableCollection<AudioInputPresetViewModel>(audioInputPresets);
         AudioInputDevices = new ReadOnlyObservableCollection<AudioDeviceOptionViewModel>(audioInputDevices);
         AudioOutputDevices = new ReadOnlyObservableCollection<AudioDeviceOptionViewModel>(audioOutputDevices);
@@ -918,6 +964,132 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             PersistUserSettings();
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ShowCallHistoryPane)));
         }
+    }
+
+    public bool ShowSystemStatus
+    {
+        get => userSettings.ShowSystemStatus;
+        set
+        {
+            if (userSettings.ShowSystemStatus == value)
+                return;
+            userSettings.ShowSystemStatus = value;
+            PersistUserSettings();
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ShowSystemStatus)));
+        }
+    }
+
+    public bool ShowChannels
+    {
+        get => userSettings.ShowChannels;
+        set
+        {
+            if (userSettings.ShowChannels == value)
+                return;
+            userSettings.ShowChannels = value;
+            PersistUserSettings();
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ShowChannels)));
+        }
+    }
+
+    public bool ShowAlertTones
+    {
+        get => userSettings.ShowAlertTones;
+        set
+        {
+            if (userSettings.ShowAlertTones == value)
+                return;
+            userSettings.ShowAlertTones = value;
+            PersistUserSettings();
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ShowAlertTones)));
+        }
+    }
+
+    public bool LockWidgets
+    {
+        get => userSettings.LockWidgets;
+        set
+        {
+            if (userSettings.LockWidgets == value)
+                return;
+            userSettings.LockWidgets = value;
+            PersistUserSettings();
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(LockWidgets)));
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CanResizeLayout)));
+        }
+    }
+
+    public IBrush MainBackgroundBrush => mainBackgroundBrush;
+
+    public bool CanResizeLayout => !userSettings.LockWidgets;
+
+    public string? UserBackgroundImage => userSettings.UserBackgroundImage;
+
+    public bool SetUserBackground(string path)
+    {
+        try
+        {
+            string fullPath = Path.GetFullPath(path);
+            if (!File.Exists(fullPath))
+                throw new FileNotFoundException("The background image was not found.", fullPath);
+
+            Bitmap bitmap = new(fullPath);
+            userBackgroundBitmap?.Dispose();
+            userBackgroundBitmap = bitmap;
+            mainBackgroundBrush = new ImageBrush(bitmap)
+            {
+                Stretch = Stretch.UniformToFill,
+                Opacity = 0.22
+            };
+            userSettings.UserBackgroundImage = fullPath;
+            PersistUserSettings();
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(MainBackgroundBrush)));
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(UserBackgroundImage)));
+            StatusText = $"Background loaded: {Path.GetFileName(fullPath)}.";
+            return true;
+        }
+        catch (Exception exception)
+        {
+            StatusText = $"Background unavailable: {exception.Message}";
+            return false;
+        }
+    }
+
+    public void ClearUserBackground()
+    {
+        userBackgroundBitmap?.Dispose();
+        userBackgroundBitmap = null;
+        mainBackgroundBrush = new SolidColorBrush(Color.Parse("#0D1116"));
+        userSettings.UserBackgroundImage = null;
+        PersistUserSettings();
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(MainBackgroundBrush)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(UserBackgroundImage)));
+        StatusText = "User background cleared.";
+    }
+
+    public void ResetLayout()
+    {
+        userSettings.ShowSystemStatus = true;
+        userSettings.ShowChannels = true;
+        userSettings.ShowAlertTones = true;
+        userSettings.LockWidgets = true;
+        userSettings.ShowCallHistoryPane = true;
+        userSettings.CallHistoryWindowPlacement = new WindowPlacementSetting();
+        PersistUserSettings();
+        foreach (string propertyName in new[]
+                 {
+                     nameof(ShowSystemStatus),
+                     nameof(ShowChannels),
+                     nameof(ShowAlertTones),
+                     nameof(LockWidgets),
+                     nameof(CanResizeLayout),
+                     nameof(ShowCallHistoryPane)
+                 })
+        {
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
+        }
+
+        StatusText = "Widget layout reset to the default Avalonia grid.";
     }
 
     public WindowPlacementSetting GetCallHistoryWindowPlacement()
@@ -1168,6 +1340,26 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         }
     }
 
+    public bool SaveToolbarClocks()
+    {
+        List<ToolbarClockSetting> settings = [];
+        foreach (ToolbarClockViewModel clock in toolbarClocks)
+        {
+            if (!clock.TryGetUtcOffset(out _))
+            {
+                StatusText = $"{clock.SlotLabel} must use a UTC offset from -12 to +14.";
+                return false;
+            }
+            settings.Add(clock.ToSetting());
+        }
+
+        userSettings.ToolbarClocks = settings;
+        PersistUserSettings();
+        RefreshClock();
+        StatusText = $"Saved {settings.Count(clock => clock.Enabled)} toolbar clock(s).";
+        return true;
+    }
+
     public bool KeepWindowOnTop
     {
         get => userSettings.KeepWindowOnTop;
@@ -1259,6 +1451,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     public ReadOnlyObservableCollection<DtmfPresetViewModel> DtmfPresets { get; }
     public ReadOnlyObservableCollection<TonePresetViewModel> TonePresets { get; }
     public ReadOnlyObservableCollection<AlertToneViewModel> AlertTones { get; }
+    public ReadOnlyObservableCollection<ToolbarClockViewModel> ToolbarClocks { get; }
     public ReadOnlyObservableCollection<AudioInputPresetViewModel> AudioInputPresets { get; }
     public ReadOnlyObservableCollection<AudioDeviceOptionViewModel> AudioInputDevices { get; }
     public ReadOnlyObservableCollection<AudioDeviceOptionViewModel> AudioOutputDevices { get; }
@@ -1825,6 +2018,8 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         await audioCoordinator.DisposeAsync().ConfigureAwait(false);
         await webStreamPlayback.DisposeAsync().ConfigureAwait(false);
         callRecordings.Dispose();
+        userBackgroundBitmap?.Dispose();
+        userBackgroundBitmap = null;
         foreach (SystemViewModel system in Systems)
         {
             system.KeyResponseReceived -= HandleSystemKeyResponse;
@@ -3376,6 +3571,27 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
     }
 
+    private void LoadUserBackground(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
+            return;
+
+        try
+        {
+            userBackgroundBitmap = new Bitmap(path);
+            mainBackgroundBrush = new ImageBrush(userBackgroundBitmap)
+            {
+                Stretch = Stretch.UniformToFill,
+                Opacity = 0.22
+            };
+        }
+        catch
+        {
+            userBackgroundBitmap = null;
+            mainBackgroundBrush = new SolidColorBrush(Color.Parse("#0D1116"));
+        }
+    }
+
     private void HandleClockTick(object? sender, EventArgs e)
     {
         RefreshClock();
@@ -3420,6 +3636,9 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             ref clockText,
             FormatClock(DateTime.Now, userSettings.ClockUse24HourTime, userSettings.ClockShowSeconds),
             nameof(ClockText));
+        DateTimeOffset utcNow = DateTimeOffset.UtcNow;
+        foreach (ToolbarClockViewModel clock in toolbarClocks)
+            clock.Update(utcNow, userSettings.ClockUse24HourTime, userSettings.ClockShowSeconds);
     }
 
     internal static string FormatClock(DateTime value, bool use24HourTime, bool showSeconds)

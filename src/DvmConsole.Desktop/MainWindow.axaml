@@ -84,6 +84,15 @@
           </MenuItem>
           <MenuItem Header="View">
             <MenuItem Header="Dark mode" IsChecked="{Binding DarkMode, Mode=TwoWay}" ToggleType="CheckBox" />
+            <MenuItem Header="Select user background…" Click="HandleSelectBackgroundClick" />
+            <MenuItem Header="Clear user background" Click="HandleClearBackgroundClick" />
+            <Separator />
+            <MenuItem Header="Show system status" IsChecked="{Binding ShowSystemStatus, Mode=TwoWay}" ToggleType="CheckBox" />
+            <MenuItem Header="Show channel widgets" IsChecked="{Binding ShowChannels, Mode=TwoWay}" ToggleType="CheckBox" />
+            <MenuItem Header="Show alert buttons" IsChecked="{Binding ShowAlertTones, Mode=TwoWay}" ToggleType="CheckBox" />
+            <MenuItem Header="Lock widgets" IsChecked="{Binding LockWidgets, Mode=TwoWay}" ToggleType="CheckBox" />
+            <MenuItem Header="Reset widget layout" Click="HandleResetLayoutClick" />
+            <Separator />
             <MenuItem Header="Call History window…" Click="HandleOpenCallHistoryClick" />
             <MenuItem Header="Dock Call History in sidebar" IsChecked="{Binding ShowCallHistoryPane, Mode=TwoWay}" ToggleType="CheckBox" />
             <MenuItem Header="Call History tools…" Tag="History" Click="HandleOpenOperatorToolsClick" />
@@ -106,19 +115,23 @@
           </MenuItem>
         </Menu>
         <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" Spacing="10" VerticalAlignment="Center">
-          <ItemsControl ItemsSource="{Binding AlertTones}">
+          <ItemsControl ItemsSource="{Binding ToolbarClocks}">
+            <ItemsControl.ItemsPanel><ItemsPanelTemplate><StackPanel Orientation="Horizontal" Spacing="4" /></ItemsPanelTemplate></ItemsControl.ItemsPanel>
+            <ItemsControl.ItemTemplate><DataTemplate x:DataType="local:ToolbarClockViewModel"><Border IsVisible="{Binding Enabled}" Background="{Binding BackgroundBrush}" BorderBrush="#3A4654" BorderThickness="1" CornerRadius="4" Padding="5,2"><StackPanel><TextBlock Classes="eyebrow" Text="{Binding TimeZoneLabel}" HorizontalAlignment="Center" /><TextBlock Classes="muted" FontSize="11" Text="{Binding TimeText}" HorizontalAlignment="Center" /></StackPanel></Border></DataTemplate></ItemsControl.ItemTemplate>
+          </ItemsControl>
+          <ItemsControl ItemsSource="{Binding AlertTones}" IsVisible="{Binding ShowAlertTones}">
             <ItemsControl.ItemsPanel><ItemsPanelTemplate><StackPanel Orientation="Horizontal" Spacing="4" /></ItemsPanelTemplate></ItemsControl.ItemsPanel>
             <ItemsControl.ItemTemplate><DataTemplate x:DataType="local:AlertToneViewModel"><Button Content="{Binding Name}" Tag="{Binding}" ToolTip.Tip="Send alert asset to PAGE-armed or selected transmit targets" Padding="6,3" Click="HandleToolbarAlertToneClick" /></DataTemplate></ItemsControl.ItemTemplate>
           </ItemsControl>
-          <TextBlock Classes="muted" FontSize="11" Text="{Binding ClockText}" /><TextBlock Classes="muted" FontSize="11" Text="{Binding SystemStatusText}" />
+          <StackPanel Orientation="Horizontal" Spacing="10" IsVisible="{Binding ShowSystemStatus}"><TextBlock Classes="muted" FontSize="11" Text="{Binding ClockText}" /><TextBlock Classes="muted" FontSize="11" Text="{Binding SystemStatusText}" /></StackPanel>
         </StackPanel>
       </DockPanel>
     </Border>
 
     <Grid Grid.Row="1" ColumnDefinitions="*,4,Auto">
-      <Border Grid.Column="0" Background="#0D1116" Padding="10,12,8,8">
+      <Border Grid.Column="0" Background="{Binding MainBackgroundBrush}" Padding="10,12,8,8">
         <Grid RowDefinitions="Auto,Auto,*">
-          <DockPanel Margin="0,0,0,8">
+          <DockPanel Margin="0,0,0,8" IsVisible="{Binding ShowSystemStatus}">
             <Button DockPanel.Dock="Right" Content="{Binding ConnectionButtonText}" Command="{Binding ConnectionCommand}" />
             <StackPanel Orientation="Horizontal" Spacing="9" VerticalAlignment="Center">
               <Ellipse Width="10" Height="10" Fill="{Binding ConnectionBrush}" />
@@ -138,7 +151,7 @@
             <Button Grid.Column="4" Content="Refresh devices" Command="{Binding RefreshAudioDevicesCommand}" HorizontalAlignment="Left" />
           </Grid>
 
-          <TabControl Grid.Row="2" ItemsSource="{Binding Systems}" SelectedItem="{Binding SelectedSystem, Mode=TwoWay}">
+          <TabControl Grid.Row="2" ItemsSource="{Binding Systems}" SelectedItem="{Binding SelectedSystem, Mode=TwoWay}" IsVisible="{Binding ShowChannels}">
             <TabControl.ItemTemplate><DataTemplate x:DataType="local:SystemViewModel"><TextBlock Text="{Binding Name}" /></DataTemplate></TabControl.ItemTemplate>
             <TabControl.ContentTemplate>
               <DataTemplate x:DataType="local:SystemViewModel">
@@ -178,7 +191,7 @@
           </TabControl>
         </Grid>
       </Border>
-      <GridSplitter Grid.Column="1" Background="#25313D" ResizeDirection="Columns" />
+      <GridSplitter Grid.Column="1" Background="#25313D" ResizeDirection="Columns" IsEnabled="{Binding CanResizeLayout}" />
       <Border Grid.Column="2" Width="250" Background="#151C25" Padding="8,10" IsVisible="{Binding ShowCallHistoryPane}">
         <Grid RowDefinitions="Auto,*">
           <TextBlock FontSize="13" FontWeight="SemiBold" Text="Activity" />

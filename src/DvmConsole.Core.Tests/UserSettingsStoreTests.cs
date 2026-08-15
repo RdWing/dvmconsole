@@ -94,6 +94,11 @@ public sealed class UserSettingsStoreTests
                 ClockUse24HourTime = false,
                 ClockShowSeconds = false,
                 KeepWindowOnTop = true,
+                ShowSystemStatus = false,
+                ShowChannels = false,
+                ShowAlertTones = false,
+                LockWidgets = false,
+                UserBackgroundImage = " /tmp/background.png ",
                 TogglePttMode = true,
                 GlobalPttKey = " f12 ",
                 TransmitSelectedChannelKeys = [" System 1\u001FDispatch ", "system 1\u001Fdispatch"],
@@ -107,6 +112,10 @@ public sealed class UserSettingsStoreTests
                 TonePresets =
                 [
                     new TonePresetSetting { Name = " Alert ", FrequencyHz = 1200, DurationSeconds = 2.5 }
+                ],
+                AlertTones =
+                [
+                    new AlertToneSetting { Name = " Evacuate ", FilePath = " /tmp/evacuate.wav " }
                 ],
                 RecordingRetentionDays = 14,
                 ChannelVolumes = new Dictionary<string, double>
@@ -174,6 +183,11 @@ public sealed class UserSettingsStoreTests
             Assert.False(loaded.ClockUse24HourTime);
             Assert.False(loaded.ClockShowSeconds);
             Assert.True(loaded.KeepWindowOnTop);
+            Assert.False(loaded.ShowSystemStatus);
+            Assert.False(loaded.ShowChannels);
+            Assert.False(loaded.ShowAlertTones);
+            Assert.False(loaded.LockWidgets);
+            Assert.Equal("/tmp/background.png", loaded.UserBackgroundImage);
             Assert.True(loaded.TogglePttMode);
             Assert.Equal("F12", loaded.GlobalPttKey);
             Assert.Equal(["System 1\u001FDispatch"], loaded.TransmitSelectedChannelKeys);
@@ -187,6 +201,9 @@ public sealed class UserSettingsStoreTests
             Assert.Equal(1200, loaded.TonePresets[0].FrequencyHz);
             Assert.Equal(2.5, loaded.TonePresets[0].DurationSeconds);
             Assert.Single(loaded.TonePresets[0].Steps);
+            AlertToneSetting alertTone = Assert.Single(loaded.AlertTones);
+            Assert.Equal("Evacuate", alertTone.Name);
+            Assert.Equal("/tmp/evacuate.wav", alertTone.FilePath);
             Assert.Equal(1.5, loaded.ChannelVolumes["System 1\u001FDispatch"]);
             Assert.Equal("speaker-2", loaded.ChannelOutputDeviceIds["System 1\u001FDispatch"]);
             Assert.Equal(1.25, loaded.WebStreamVolumes["News"]);

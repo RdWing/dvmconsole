@@ -21,6 +21,7 @@ public sealed class WindowPlacementSetting
 /// </summary>
 public sealed class UserSettings
 {
+    public const int MaximumToolbarClocks = 8;
     public string? LastCodeplugPath { get; set; }
     public string? LastSelectedSystemName { get; set; }
     public string? LastSelectedChannelKey { get; set; }
@@ -38,7 +39,13 @@ public sealed class UserSettings
     public bool DarkMode { get; set; }
     public bool ClockUse24HourTime { get; set; } = true;
     public bool ClockShowSeconds { get; set; } = true;
+    public List<ToolbarClockSetting> ToolbarClocks { get; set; } = [];
     public bool KeepWindowOnTop { get; set; }
+    public bool ShowSystemStatus { get; set; } = true;
+    public bool ShowChannels { get; set; } = true;
+    public bool ShowAlertTones { get; set; } = true;
+    public bool LockWidgets { get; set; } = true;
+    public string? UserBackgroundImage { get; set; }
     public bool TogglePttMode { get; set; }
     /// <summary>
     /// Portable name of the key that activates global PTT.  The desktop host
@@ -121,6 +128,10 @@ public sealed class UserSettingsStore
             settings.TransmitEncryptionStates ??= new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
             settings.CallHistoryWindowPlacement = NormalizeWindowPlacement(settings.CallHistoryWindowPlacement);
             settings.GlobalPttKey = NormalizeGlobalPttKey(settings.GlobalPttKey);
+            settings.UserBackgroundImage = string.IsNullOrWhiteSpace(settings.UserBackgroundImage)
+                ? null
+                : settings.UserBackgroundImage.Trim();
+            settings.ToolbarClocks = NormalizeToolbarClocks(settings.ToolbarClocks);
             settings.TransmitSelectedChannelKeys = NormalizeNames(settings.TransmitSelectedChannelKeys);
             NormalizeAudioInputSettings(settings);
             settings.AudioInputPresetName = settings.AudioInputPresetName?.Trim() ?? string.Empty;
@@ -410,6 +421,21 @@ public sealed class UserSettingsStore
 
     private static double NormalizeChannelVolume(double volume)
         => double.IsFinite(volume) ? Math.Clamp(volume, 0, 4) : 1.0;
+
+    private static List<ToolbarClockSetting> NormalizeToolbarClocks(IEnumerable<ToolbarClockSetting>? clocks)
+    {
+        List<ToolbarClockSetting> normalized = (clocks ?? [])
+            .Take(UserSettings.MaximumToolbarClocks)
+            .Select(clock => new ToolbarClockSetting
+            {
+                Enabled = clock?.Enabled == true,
+                UtcOffsetHours = Math.Clamp(clock?.UtcOffsetHours ?? 0, -12, 14)
+            })
+            .ToList();
+        while (normalized.Count < UserSettings.MaximumToolbarClocks)
+            normalized.Add(new ToolbarClockSetting());
+        return normalized;
+    }
 
     private static WindowPlacementSetting NormalizeWindowPlacement(WindowPlacementSetting? placement)
     {
