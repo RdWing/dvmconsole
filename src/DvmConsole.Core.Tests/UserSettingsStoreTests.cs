@@ -269,7 +269,7 @@ public sealed class UserSettingsStoreTests
             Assert.Equal(1.25, loaded.WebStreamVolumes["News"]);
             Assert.Equal("web-stream-output-1", loaded.WebStreamOutputDeviceIds["News"]);
             Assert.Equal(14, loaded.RecordingRetentionDays);
-            Assert.Equal("/tmp/recordings", loaded.RecordingRootPath);
+            Assert.Equal(Path.GetFullPath("/tmp/recordings"), loaded.RecordingRootPath);
             Assert.Equal([42u], loaded.RecordingIgnoredSubscriberIds["System 1\u001FDispatch"]);
             Assert.Equal(2, loaded.PatchGroupMemberships["Dispatch"].Count);
             Assert.True(loaded.PatchGroupModes["Dispatch"]);
