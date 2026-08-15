@@ -1,6 +1,7 @@
 # Alert Tones
 
-The console supports built-in and custom alert tones.
+The console supports three built-in legacy alert tones, custom alert audio,
+generated tones, DTMF, and QCII paging.
 
 Alert tones are used for operator alerting workflows such as page/alert tones and channel hold tone behavior.
 
@@ -8,7 +9,14 @@ Alert tones are used for operator alerting workflows such as page/alert tones an
 
 # Sending Alert Tones
 
-Toolbar alert tone buttons send configured alert audio to the appropriate selected or primary resource depending on the current workflow.
+The toolbar buttons **ALERT 1**, **ALERT 2**, and **ALERT 3** send the original
+DVMConsole `alert1.wav`, `alert2.wav`, and `alert3.wav` assets. They are
+different tones, not shortcuts to the QCII or DTMF tools.
+
+Arm `ALERT` on every resource that should carry Alert 1 through 3, custom alert
+audio, generated tones, tone presets, or DTMF. Arm `PAGE` on every resource
+that should carry a QCII page. Sending uses all armed resources in the selected
+route; it does not silently choose the last channel clicked.
 
 Alert tone transmit still uses the configured resource, system, talkgroup, mode, and validation rules.
 
@@ -25,7 +33,7 @@ Target TG unavailable on FNE
 Open from:
 
 ```
-Settings > Alerts > Manage Alert Tones
+Commands > Tones > QCII, DTMF, and Alerts
 ```
 
 The Alert Tone Manager allows operators or admins to:
@@ -46,14 +54,9 @@ Changes are saved through the normal settings system.
 
 Alert tone audio files must be compatible with the console audio pipeline.
 
-The console validates alert tone files when sending and expects:
-
-- PCM
-- 16-bit
-- mono
-- 8000 Hz
-
-If a file does not match, the console displays an error.
+The console accepts PCM WAV or MPEG audio up to 30 seconds and converts it to
+the 8 kHz mono transmit path. If a file cannot be decoded, the console displays
+an error without keying an `ALERT` resource.
 
 ---
 
@@ -80,7 +83,8 @@ This keeps custom tones near the resources operators use with them.
 
 # Operational Notes
 
-- Alert tone playback is local and transmitted over the selected target path when sent.
+- Alert tone audio is transmitted to all `ALERT`-armed resources when sent.
+- QCII page audio is transmitted to all `PAGE`-armed resources.
 - Alert tone sends do not bypass talkgroup validation.
 - If an alert tone is renamed, the display name shown in the UI updates and persists after restart.
 - If the backing file is replaced, verify the new file uses the required audio format.

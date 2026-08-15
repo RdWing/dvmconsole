@@ -12,6 +12,17 @@ Selected resources are monitored locally. If a receiving resource is deselected 
 
 Use **Select All/Unselect All** from the toolbar to quickly toggle selected resources.
 
+Each transmit-capable card has three independent routing selectors:
+
+- `TX` includes the resource in global or multi-channel voice PTT.
+- `PAGE` includes the resource when a QCII page is sent.
+- `ALERT` includes the resource when DTMF, a generated tone, a tone preset, or an alert audio file is sent.
+
+Purple indicates an armed selector. Gray indicates that selector is not armed.
+The selectors do not use check marks, and moving the pointer over an armed
+selector does not change its state. Click the selector to arm or disarm only
+that routing path.
+
 ---
 
 # Resource Card Sizes

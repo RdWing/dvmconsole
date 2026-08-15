@@ -20,6 +20,16 @@ if [[ "$RID" == "osx-arm64" ]]; then
     cmake --build "$AUDIO_BUILD_DIR" --config "$CONFIGURATION"
 fi
 
+mkdir -p "$OUTPUT_DIR"
+case "$RID" in
+    osx-arm64)
+        rm -f "$OUTPUT_DIR/libvocoder.dylib"
+        ;;
+    win-x64)
+        rm -f "$OUTPUT_DIR/libvocoder.dll"
+        ;;
+esac
+
 dotnet restore "$PROJECT" --runtime "$RID" --ignore-failed-sources -p:NuGetAudit=false --verbosity minimal
 dotnet publish "$PROJECT" \
     --configuration "$CONFIGURATION" \
@@ -60,3 +70,4 @@ else
 fi
 
 printf 'Published %s to %s\n' "$RID" "$OUTPUT_DIR"
+"$ROOT_DIR/scripts/verify-publish.sh" "$RID" "$OUTPUT_DIR"

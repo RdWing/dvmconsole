@@ -28,6 +28,33 @@ public sealed class SystemViewModelTests
     }
 
     [Fact]
+    public async Task PageAndAlertSelectorsResolveEveryArmedChannelIndependently()
+    {
+        string codeplugPath = Path.Combine(AppContext.BaseDirectory, "TestData", "multiple-systems.yml");
+        string settingsPath = CreateSettingsPath();
+        try
+        {
+            await using MainWindowViewModel viewModel = MainWindowViewModel.Load(
+                codeplugPath,
+                new UserSettingsStore(settingsPath));
+            ChannelViewModel[] channels = viewModel.Systems.SelectMany(system => system.Channels).Take(3).ToArray();
+            channels[0].SetPageSelected(true);
+            channels[1].SetPageSelected(true);
+            channels[1].SetAlertSelected(true);
+            channels[2].SetAlertSelected(true);
+
+            Assert.Equal(channels[..2], viewModel.ResolvePageToneChannels());
+            Assert.Equal(channels[1..], viewModel.ResolveGeneratedToneChannels());
+            Assert.Equal(["ALERT 1", "ALERT 2", "ALERT 3"], viewModel.BuiltInAlertTones.Select(tone => tone.Name));
+            Assert.All(viewModel.BuiltInAlertTones, tone => Assert.True(File.Exists(tone.FilePath)));
+        }
+        finally
+        {
+            CleanupSettingsPath(settingsPath);
+        }
+    }
+
+    [Fact]
     public async Task InvalidCodeplugReportsFailureWithoutReplacingLastKnownPath()
     {
         string settingsPath = CreateSettingsPath();

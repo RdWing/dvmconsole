@@ -822,6 +822,27 @@ public sealed partial class MainWindow : Window
         button.BorderBrush = channel.PageSelectionBorderBrush;
     }
 
+    private void HandleAlertSelectionClick(object? sender, RoutedEventArgs e)
+    {
+        if (sender is Button { DataContext: ChannelViewModel channel } button)
+        {
+            viewModel.ToggleChannelAlertSelection(channel);
+            ApplyAlertSelectionButtonBrush(button, channel);
+        }
+    }
+
+    private static void HandleAlertSelectionPointerEntered(object? sender, PointerEventArgs e)
+    {
+        if (sender is Button { DataContext: ChannelViewModel channel } button)
+            ApplyAlertSelectionButtonBrush(button, channel);
+    }
+
+    private static void ApplyAlertSelectionButtonBrush(Button button, ChannelViewModel channel)
+    {
+        button.Background = channel.AlertSelectionBrush;
+        button.BorderBrush = channel.AlertSelectionBorderBrush;
+    }
+
     private void HandleToggleAllTransmitSelectionClick(object? sender, RoutedEventArgs e)
         => viewModel.ToggleAllTransmitSelection();
 
@@ -1063,6 +1084,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     private readonly ObservableCollection<DtmfPresetViewModel> dtmfPresets = [];
     private readonly ObservableCollection<TonePresetViewModel> tonePresets = [];
     private readonly ObservableCollection<AlertToneViewModel> alertTones = [];
+    private readonly ObservableCollection<AlertToneViewModel> builtInAlertTones = [];
     private readonly ObservableCollection<ToolbarClockViewModel> toolbarClocks = [];
     private readonly ObservableCollection<AudioInputPresetViewModel> audioInputPresets = [];
     private readonly ObservableCollection<AudioDeviceOptionViewModel> audioInputDevices = [];
@@ -1196,6 +1218,14 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             tonePresets.Add(new TonePresetViewModel(preset));
         foreach (AlertToneSetting tone in userSettings.AlertTones)
             alertTones.Add(new AlertToneViewModel(tone));
+        for (int number = 1; number <= 3; number++)
+        {
+            builtInAlertTones.Add(new AlertToneViewModel(new AlertToneSetting
+            {
+                Name = $"ALERT {number}",
+                FilePath = Path.Combine(AppContext.BaseDirectory, "Audio", $"alert{number}.wav")
+            }));
+        }
         List<ToolbarClockSetting> configuredClocks = (userSettings.ToolbarClocks ?? [])
             .Take(UserSettings.MaximumToolbarClocks)
             .ToList();
@@ -1258,6 +1288,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         DtmfPresets = new ReadOnlyObservableCollection<DtmfPresetViewModel>(dtmfPresets);
         TonePresets = new ReadOnlyObservableCollection<TonePresetViewModel>(tonePresets);
         AlertTones = new ReadOnlyObservableCollection<AlertToneViewModel>(alertTones);
+        BuiltInAlertTones = new ReadOnlyObservableCollection<AlertToneViewModel>(builtInAlertTones);
         ToolbarClocks = new ReadOnlyObservableCollection<ToolbarClockViewModel>(toolbarClocks);
         AudioInputPresets = new ReadOnlyObservableCollection<AudioInputPresetViewModel>(audioInputPresets);
         AudioInputDevices = new ReadOnlyObservableCollection<AudioDeviceOptionViewModel>(audioInputDevices);
@@ -2003,6 +2034,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     public ReadOnlyObservableCollection<DtmfPresetViewModel> DtmfPresets { get; }
     public ReadOnlyObservableCollection<TonePresetViewModel> TonePresets { get; }
     public ReadOnlyObservableCollection<AlertToneViewModel> AlertTones { get; }
+    public ReadOnlyObservableCollection<AlertToneViewModel> BuiltInAlertTones { get; }
     public ReadOnlyObservableCollection<ToolbarClockViewModel> ToolbarClocks { get; }
     public ReadOnlyObservableCollection<AudioInputPresetViewModel> AudioInputPresets { get; }
     public ReadOnlyObservableCollection<AudioDeviceOptionViewModel> AudioInputDevices { get; }
@@ -2688,6 +2720,22 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         TransmitStatusText = channel.IsPageSelected
             ? $"{channel.Name} armed for QCII paging."
             : $"{channel.Name} removed from QCII paging.";
+    }
+
+    public void ToggleChannelAlertSelection(ChannelViewModel channel)
+    {
+        ArgumentNullException.ThrowIfNull(channel);
+        if (!channel.CanTransmit)
+        {
+            TransmitStatusText = $"{channel.Name} cannot be selected for alerts.";
+            return;
+        }
+
+        channel.SetAlertSelected(!channel.IsAlertSelected);
+        RaiseGeneratedAudioCanExecuteChanged();
+        TransmitStatusText = channel.IsAlertSelected
+            ? $"{channel.Name} armed for DTMF and alert tones."
+            : $"{channel.Name} removed from alert-tone targeting.";
     }
 
     public async Task SetGlobalPttKeyAsync(KeyboardPttKey key)
@@ -4322,10 +4370,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             return;
         }
 
-        ChannelViewModel[] pageTargets = Systems
-            .SelectMany(system => system.Channels)
-            .Where(channel => channel.IsPageSelected)
-            .ToArray();
+        ChannelViewModel[] pageTargets = ResolvePageToneChannels();
         if (pageTargets.Length == 0)
         {
             TransmitStatusText = "Arm PAGE on one or more channel cards before sending QCII.";
@@ -4400,16 +4445,11 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         try
         {
             short[] samples = await PcmAudioFileLoader.LoadAsync(tone.FilePath).ConfigureAwait(false);
-            ChannelViewModel[] pageTargets = Systems
-                .SelectMany(system => system.Channels)
-                .Where(channel => channel.IsPageSelected)
-                .ToArray();
+            ChannelViewModel[] alertTargets = ResolveGeneratedToneChannels();
             await SendGeneratedToneAsync(
                 samples,
                 $"Alert asset '{tone.Name}'",
-                pageTargets.Length > 0 ? pageTargets : null).ConfigureAwait(false);
-            foreach (ChannelViewModel channel in pageTargets)
-                channel.SetPageSelected(false);
+                alertTargets).ConfigureAwait(false);
         }
         catch (Exception exception)
         {
@@ -4490,7 +4530,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     {
         ChannelViewModel[] channels = explicitTargets?.ToArray() ?? ResolveGeneratedToneChannels();
         if (channels.Length == 0)
-            throw new InvalidOperationException("Select a channel before sending generated audio.");
+            throw new InvalidOperationException("Arm ALERT on one or more channel cards before sending DTMF or alert audio.");
 
         TransmitTarget[] targets = channels
             .Distinct()
@@ -4517,9 +4557,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         try
         {
             await toneTransmitCoordinator.SendAsync(targets, samples);
-            string targetText = targets.Length == 1
-                ? targets[0].Channel.Name
-                : $"{targets.Length} selected channels";
+            string targetText = FormatToneTargetText(targets.Select(target => target.Channel));
             TransmitStatusText = $"{label} sent on {targetText}.";
         }
         finally
@@ -4529,16 +4567,26 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         }
     }
 
-    private ChannelViewModel[] ResolveGeneratedToneChannels()
-    {
-        ChannelViewModel[] selectedTransmitChannels = Systems
+    internal ChannelViewModel[] ResolveGeneratedToneChannels()
+        => Systems
             .SelectMany(system => system.Channels)
-            .Where(channel => channel.IsTransmitSelected)
+            .Where(channel => channel.IsAlertSelected)
+            .Distinct()
             .ToArray();
-        if (selectedTransmitChannels.Length > 0)
-            return selectedTransmitChannels;
 
-        return selectedChannel is null ? [] : [selectedChannel];
+    internal ChannelViewModel[] ResolvePageToneChannels()
+        => Systems
+            .SelectMany(system => system.Channels)
+            .Where(channel => channel.IsPageSelected)
+            .Distinct()
+            .ToArray();
+
+    private static string FormatToneTargetText(IEnumerable<ChannelViewModel> channels)
+    {
+        string[] names = channels.Select(channel => channel.Name).Distinct().ToArray();
+        return names.Length <= 4
+            ? string.Join(", ", names)
+            : $"{names.Length} ALERT/PAGE-selected channels";
     }
 
     private void RaiseGeneratedAudioCanExecuteChanged()
@@ -5419,6 +5467,7 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
     private bool transmitEnabled;
     private bool transmitSelected;
     private bool pageSelected;
+    private bool alertSelected;
     private bool transmitBusy;
     private bool transmitEncrypted;
     private bool recordingEnabled;
@@ -5515,6 +5564,7 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
     public bool IsTransmitting => transmitEnabled;
     public bool IsTransmitSelected => transmitSelected;
     public bool IsPageSelected => pageSelected;
+    public bool IsAlertSelected => alertSelected;
     public bool IsTransmitEncrypted => transmitEncrypted;
     public bool IsRecordingEnabled => recordingEnabled;
     public string RecordButtonText => recordingEnabled ? "Stop recording" : "Record";
@@ -5593,8 +5643,9 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
             _ => false
         };
     public string PttButtonText => transmitEnabled ? "Release" : "PTT";
-    public string TransmitSelectionText => transmitSelected ? "TX ✓" : "TX";
-    public string PageSelectionText => pageSelected ? "PAGE ✓" : "PAGE";
+    public string TransmitSelectionText => "TX";
+    public string PageSelectionText => "PAGE";
+    public string AlertSelectionText => "ALERT";
     public IBrush TransmitSelectionBrush => new SolidColorBrush(Color.Parse(
         transmitSelected
             ? darkMode ? "#694BB0" : "#D7C9F2"
@@ -5610,6 +5661,14 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
     public IBrush PageSelectionBorderBrush => new SolidColorBrush(Color.Parse(
         pageSelected
             ? darkMode ? "#F0A15C" : "#A95C26"
+            : darkMode ? "#3A4555" : "#8996A3"));
+    public IBrush AlertSelectionBrush => new SolidColorBrush(Color.Parse(
+        alertSelected
+            ? darkMode ? "#8A3D68" : "#F0C7DE"
+            : darkMode ? "#242938" : "#E8EDF3"));
+    public IBrush AlertSelectionBorderBrush => new SolidColorBrush(Color.Parse(
+        alertSelected
+            ? darkMode ? "#E58BBC" : "#A84479"
             : darkMode ? "#3A4555" : "#8996A3"));
     public ICommand AudioCommand { get; private set; }
     public ICommand PttCommand { get; private set; }
@@ -5809,6 +5868,17 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(PageSelectionBorderBrush)));
     }
 
+    public void SetAlertSelected(bool selected)
+    {
+        if (alertSelected == selected)
+            return;
+        alertSelected = selected;
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsAlertSelected)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(AlertSelectionText)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(AlertSelectionBrush)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(AlertSelectionBorderBrush)));
+    }
+
     public void RestoreTransmitSelection(bool selected) => SetTransmitSelected(selected);
 
     public void SetWidgetPosition(double x, double y)
@@ -5839,6 +5909,8 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(TransmitSelectionBorderBrush)));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(PageSelectionBrush)));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(PageSelectionBorderBrush)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(AlertSelectionBrush)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(AlertSelectionBorderBrush)));
     }
 
     public bool TryApplyTraffic(string systemName, FneTrafficFrame traffic)

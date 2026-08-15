@@ -88,6 +88,11 @@ output. Test it with:
 open /tmp/DVMConsole.app
 ```
 
+Do not rename or move files inside `DVMConsole.app`. The managed assemblies,
+native libraries, documentation, and `Audio/alert1.wav` through
+`Audio/alert3.wav` are loaded relative to the bundled executable. The verifier
+and packager fail if any required alert asset is missing.
+
 4. The bundle launches the bundled `DvmConsole.Desktop` executable and does not
 depend on `dotnet` being installed. The old `dotnet DvmConsole.Desktop.dll`
 command is only a development launch path.
@@ -146,6 +151,35 @@ verified publish directory:
   -OutputArchive C:\Temp\dvmconsole-win-x64.zip
 ```
 
+The PowerShell publisher and packager verify that the application apphost and
+native vocoder are Windows x64 PE files. They also require the three built-in
+alert assets. Extract the entire ZIP before testing; copying only the `.exe`
+does not produce a runnable installation.
+
+## Release acceptance
+
+Before handing an archive to end users, test the extracted package on the
+matching operating system. Do not use the development output under `bin/` as a
+release package.
+
+1. Start the extracted application by double-clicking `DVMConsole.app` or
+`DvmConsole.Desktop.exe`.
+2. Open a non-private test codeplug and connect to a test FNE.
+3. Select the intended input and output devices under **Audio > Audio
+Settings**.
+4. Confirm receive audio, card PTT, global PTT, the talk permit tone, and
+recording playback through the selected output device.
+5. Arm two resources for `PAGE` and send a QCII page, then arm two resources
+for `ALERT` and send Alert 1, Alert 2, Alert 3, and a DTMF sequence.
+6. Close and reopen the application and confirm settings and widget positions
+are restored.
+
+The application uses the same managed console, FNE, vocoder, and media logic
+on macOS and Windows. Audio device access and global keyboard capture use
+platform-specific backends, so both operating systems require this acceptance
+test. A successful cross-publish on macOS is not a substitute for running the
+Windows package on Windows hardware.
+
 ## Native libraries and optional media support
 
 The publisher places `libvocoder.dylib` or `libvocoder.dll` beside the
@@ -164,8 +198,9 @@ or user settings. Keep those files outside distributable application folders.
 
 The `Avalonia rebuild` workflow runs the complete managed solution test suite
 on Apple Silicon macOS and Windows x64, publishes self-contained apphosts,
-verifies native-library placement and test-material exclusion, and uploads
-unsigned outputs for seven days. CI permits a UI-only artifact when no native
-vocoder is provisioned; a release package intended for radio operation must
-publish with the matching native vocoder library. Windows radio, microphone,
-and speaker hardware validation remains an operator test step.
+verifies apphost architecture, required alert assets, native-library placement,
+and test-material exclusion, and uploads unsigned outputs for seven days. CI
+permits a UI-only artifact when no native vocoder is provisioned; a release
+package intended for radio operation must publish with the matching native
+vocoder library. Windows radio, microphone, speaker, and global-hotkey hardware
+validation remains an operator test step.

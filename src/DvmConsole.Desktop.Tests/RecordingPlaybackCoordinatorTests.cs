@@ -30,6 +30,7 @@ public sealed class RecordingPlaybackCoordinatorTests
                 Assert.Equal("alternate", backend.LastOutputDeviceId);
                 Assert.Single(backend.AlternatePlayback.Frames);
                 Assert.Equal((short)1200, backend.AlternatePlayback.Frames[0][0]);
+                Assert.True(backend.AlternatePlayback.DrainCalled);
                 Assert.True(backend.AlternatePlayback.IsDisposed);
             }
 
@@ -171,6 +172,7 @@ public sealed class RecordingPlaybackCoordinatorTests
         public bool IsDisposed { get; private set; }
         public bool BlockWrites { get; set; }
         public Exception? WriteFailure { get; set; }
+        public bool DrainCalled { get; private set; }
         public PcmAudioFormat Format { get; } = PcmAudioFormat.Voice8KhzMono16Bit;
 
         public ValueTask WriteAsync(ReadOnlyMemory<short> samples, CancellationToken cancellationToken = default)
@@ -186,6 +188,13 @@ public sealed class RecordingPlaybackCoordinatorTests
 
         public ValueTask FlushAsync(CancellationToken cancellationToken = default)
             => ValueTask.CompletedTask;
+
+        public ValueTask<int?> DrainAsync(CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            DrainCalled = true;
+            return ValueTask.FromResult<int?>(Frames.Sum(frame => frame.Length));
+        }
 
         public ValueTask DisposeAsync()
         {

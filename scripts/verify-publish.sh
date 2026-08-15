@@ -28,6 +28,9 @@ required_files=(
     DvmConsole.Desktop.dll
     DvmConsole.Desktop.deps.json
     DvmConsole.Desktop.runtimeconfig.json
+    Audio/alert1.wav
+    Audio/alert2.wav
+    Audio/alert3.wav
 )
 
 for file_name in "${required_files[@]}"; do

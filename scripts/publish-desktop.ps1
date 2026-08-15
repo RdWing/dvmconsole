@@ -17,12 +17,41 @@ $ErrorActionPreference = "Stop"
 $RootDirectory = Split-Path -Parent $PSScriptRoot
 $Project = Join-Path $RootDirectory "src/DvmConsole.Desktop/DvmConsole.Desktop.csproj"
 
+function Assert-X64PeFile([string] $Path) {
+    $Stream = [IO.File]::OpenRead($Path)
+    try {
+        $Reader = [IO.BinaryReader]::new($Stream)
+        if ($Stream.Length -lt 64 -or $Reader.ReadUInt16() -ne 0x5A4D) {
+            throw "File is not a Windows PE executable: $Path"
+        }
+
+        $Stream.Position = 0x3C
+        $PeOffset = $Reader.ReadInt32()
+        if ($PeOffset -lt 0 -or $PeOffset + 6 -gt $Stream.Length) {
+            throw "File has an invalid Windows PE header: $Path"
+        }
+
+        $Stream.Position = $PeOffset
+        if ($Reader.ReadUInt32() -ne 0x00004550 -or $Reader.ReadUInt16() -ne 0x8664) {
+            throw "File is not a Windows x64 PE executable: $Path"
+        }
+    }
+    finally {
+        $Stream.Dispose()
+    }
+}
+
 if ([string]::IsNullOrWhiteSpace($OutputDirectory)) {
     $OutputDirectory = Join-Path $RootDirectory "artifacts/$Runtime"
 }
 
 if ($env:DVM_ALLOW_MISSING_VOCODER -eq "1") {
     $AllowMissingVocoder = $true
+}
+
+$ExistingVocoder = Join-Path $OutputDirectory "libvocoder.dll"
+if (Test-Path -LiteralPath $ExistingVocoder -PathType Leaf) {
+    Remove-Item -LiteralPath $ExistingVocoder -Force
 }
 
 dotnet restore $Project --runtime $Runtime --ignore-failed-sources -p:NuGetAudit=false --verbosity minimal
@@ -55,13 +84,21 @@ $RequiredFiles = @(
     "DvmConsole.Desktop.exe",
     "DvmConsole.Desktop.dll",
     "DvmConsole.Desktop.deps.json",
-    "DvmConsole.Desktop.runtimeconfig.json"
+    "DvmConsole.Desktop.runtimeconfig.json",
+    "Audio/alert1.wav",
+    "Audio/alert2.wav",
+    "Audio/alert3.wav"
 )
 foreach ($FileName in $RequiredFiles) {
     $Path = Join-Path $OutputDirectory $FileName
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
         throw "Published output is missing required file: $Path"
     }
+}
+
+Assert-X64PeFile (Join-Path $OutputDirectory "DvmConsole.Desktop.exe")
+if (Test-Path -LiteralPath (Join-Path $OutputDirectory "libvocoder.dll") -PathType Leaf) {
+    Assert-X64PeFile (Join-Path $OutputDirectory "libvocoder.dll")
 }
 
 $PrivateCodeplug = Get-ChildItem -LiteralPath $OutputDirectory -Recurse -File -ErrorAction SilentlyContinue |

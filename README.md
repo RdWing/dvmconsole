@@ -54,49 +54,46 @@ test suite includes native encode/decode integration tests.
 
 ## End User Packages
 
-The publishing scripts produce self-contained applications. The .NET SDK and
-.NET Desktop Runtime are not required on the destination computer.
+Release ZIP files contain self-contained applications. The .NET SDK and .NET
+Desktop Runtime are not required on the destination computer. Always extract
+the complete ZIP before starting DVMConsole; neither platform can run the
+application correctly from inside the archive.
 
 ### Apple Silicon macOS
 
-1. Publish the application with a matching `libvocoder.dylib`.
-
-```sh
-DVMVOCODER_LIBRARY=/full/path/to/libvocoder.dylib \
-  scripts/publish-desktop.sh osx-arm64 /tmp/dvmconsole-osx-arm64
-
-scripts/package-desktop.sh osx-arm64 \
-  /tmp/dvmconsole-osx-arm64 /tmp/dvmconsole-osx-arm64.zip
-```
-
-2. Distribute `DVMConsole.app` or the ZIP created by the packaging command.
-The `.app` is created beside the ZIP. If the ZIP is used, extract it before
-launching the application.
-
-3. Start `DVMConsole.app`. If macOS prevents the application from opening,
-use the **Open** option from the Finder context menu. The package is unsigned.
-
+1. Download the `dvmconsole-osx-arm64-<version>.zip` release file. This build
+requires an Apple Silicon Mac.
+2. Double-click the ZIP in Finder, then move the extracted `DVMConsole.app` to
+`Applications`. Do not move files out of the application bundle.
+3. The application is currently unsigned. On first launch, control-click
+`DVMConsole.app`, choose **Open**, then confirm **Open**. macOS may request
+microphone permission when PTT is first used and Accessibility or Input
+Monitoring permission when global PTT is enabled.
 4. Use **Open Codeplug** within the application to load `codeplug.yml`.
+
+If the application opens and immediately closes, copy
+`~/Library/Application Support/DVMProject/dvmconsole/LastCrash.log` before
+starting it again and include that file with the problem report.
 
 ### Windows x64
 
-1. Publish the application with a matching `libvocoder.dll`.
-
-```powershell
-$env:DVMVOCODER_LIBRARY = "C:\full\path\to\libvocoder.dll"
-.\scripts\publish-desktop.ps1 -Runtime win-x64 -OutputDirectory C:\Temp\dvmconsole-win-x64
-.\scripts\package-desktop.ps1 `
-  -PublishDirectory C:\Temp\dvmconsole-win-x64 `
-  -OutputArchive C:\Temp\dvmconsole-win-x64.zip
-```
-
-2. Distribute the ZIP created by the packaging command. Extract the ZIP as a
-folder before launching the application. Do not copy only the `.exe`; the
-application requires the adjacent managed assemblies and native libraries.
-
-3. Start `DvmConsole.Desktop.exe`.
-
+1. Download the `dvmconsole-win-x64-<version>.zip` release file and choose
+**Extract All** in File Explorer.
+2. Keep the extracted folder together. Do not copy only
+`DvmConsole.Desktop.exe`; the adjacent assemblies, `Audio` directory, and
+native libraries are required.
+3. Start `DvmConsole.Desktop.exe`. If Microsoft Defender SmartScreen warns
+about the unsigned build, use **More info**, verify the publisher/source, and
+choose **Run anyway** only if the archive came from the project release.
 4. Use **Open Codeplug** within the application to load `codeplug.yml`.
+
+If the application closes unexpectedly, copy
+`%APPDATA%\DVMProject\dvmconsole\LastCrash.log` before starting it again and
+include that file with the problem report.
+
+Maintainers creating these packages should follow [Desktop building and
+publishing](docs/PUBLISHING.md). A radio-capable release must include the
+matching native vocoder; UI-only CI artifacts are not end-user releases.
 
 ## Documentation
 

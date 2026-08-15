@@ -145,6 +145,7 @@ public sealed class RecordingPlaybackCoordinator : IAsyncDisposable
     private async Task RunAsync(PlaybackSession session)
     {
         Exception? failure = null;
+        bool completedNaturally = false;
         try
         {
             short[] input = new short[1600];
@@ -163,6 +164,7 @@ public sealed class RecordingPlaybackCoordinator : IAsyncDisposable
                     await session.Playback.WriteAsync(output, session.Cancellation.Token).ConfigureAwait(false);
                 }
             }
+            completedNaturally = true;
         }
         catch (OperationCanceledException) when (session.Cancellation.IsCancellationRequested)
         {
@@ -176,7 +178,10 @@ public sealed class RecordingPlaybackCoordinator : IAsyncDisposable
         {
             try
             {
-                await session.Playback.FlushAsync().ConfigureAwait(false);
+                if (completedNaturally && failure is null)
+                    await session.Playback.DrainAsync().ConfigureAwait(false);
+                else
+                    await session.Playback.FlushAsync().ConfigureAwait(false);
             }
             catch (Exception exception)
             {

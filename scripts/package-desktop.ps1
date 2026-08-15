@@ -14,6 +14,30 @@ param(
 $ErrorActionPreference = "Stop"
 $RootDirectory = Split-Path -Parent $PSScriptRoot
 
+function Assert-X64PeFile([string] $Path) {
+    $Stream = [IO.File]::OpenRead($Path)
+    try {
+        $Reader = [IO.BinaryReader]::new($Stream)
+        if ($Stream.Length -lt 64 -or $Reader.ReadUInt16() -ne 0x5A4D) {
+            throw "File is not a Windows PE executable: $Path"
+        }
+
+        $Stream.Position = 0x3C
+        $PeOffset = $Reader.ReadInt32()
+        if ($PeOffset -lt 0 -or $PeOffset + 6 -gt $Stream.Length) {
+            throw "File has an invalid Windows PE header: $Path"
+        }
+
+        $Stream.Position = $PeOffset
+        if ($Reader.ReadUInt32() -ne 0x00004550 -or $Reader.ReadUInt16() -ne 0x8664) {
+            throw "File is not a Windows x64 PE executable: $Path"
+        }
+    }
+    finally {
+        $Stream.Dispose()
+    }
+}
+
 if ([string]::IsNullOrWhiteSpace($OutputArchive)) {
     $OutputArchive = Join-Path $RootDirectory "artifacts/dvmconsole-$Runtime.zip"
 }
@@ -29,15 +53,23 @@ foreach ($FileName in @(
     "DvmConsole.Desktop.exe",
     "DvmConsole.Desktop.dll",
     "DvmConsole.Desktop.deps.json",
-    "DvmConsole.Desktop.runtimeconfig.json"
+    "DvmConsole.Desktop.runtimeconfig.json",
+    "Audio/alert1.wav",
+    "Audio/alert2.wav",
+    "Audio/alert3.wav"
 )) {
     if (-not (Test-Path -LiteralPath (Join-Path $PublishDirectory $FileName) -PathType Leaf)) {
         throw "Published output is missing required file: $FileName"
     }
 }
 
+Assert-X64PeFile (Join-Path $PublishDirectory "DvmConsole.Desktop.exe")
+
 if (-not (Test-Path -LiteralPath (Join-Path $PublishDirectory "libvocoder.dll") -PathType Leaf) -and -not $AllowMissingVocoder) {
     throw "Published output is missing libvocoder.dll. Set DVMVOCODER_LIBRARY before publishing or pass -AllowMissingVocoder for a UI-only artifact."
+}
+if (Test-Path -LiteralPath (Join-Path $PublishDirectory "libvocoder.dll") -PathType Leaf) {
+    Assert-X64PeFile (Join-Path $PublishDirectory "libvocoder.dll")
 }
 
 $PrivateCodeplug = Get-ChildItem -LiteralPath $PublishDirectory -Recurse -File -ErrorAction SilentlyContinue |

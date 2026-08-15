@@ -277,7 +277,7 @@ public sealed class ChannelViewModelTests
 
         Assert.Equal(background, Assert.IsType<SolidColorBrush>(channel.CardBackgroundBrush).Color);
         Assert.Equal(border, Assert.IsType<SolidColorBrush>(channel.CardBorderBrush).Color);
-        Assert.Equal("TX ✓", channel.TransmitSelectionText);
+        Assert.Equal("TX", channel.TransmitSelectionText);
     }
 
     [Fact]
@@ -314,12 +314,33 @@ public sealed class ChannelViewModelTests
 
         Assert.True(channel.IsPageSelected);
         Assert.False(channel.IsTransmitSelected);
-        Assert.Equal("PAGE ✓", channel.PageSelectionText);
+        Assert.Equal("PAGE", channel.PageSelectionText);
 
         channel.SetPageSelected(false);
 
         Assert.False(channel.IsPageSelected);
         Assert.Equal("PAGE", channel.PageSelectionText);
+    }
+
+    [Fact]
+    public void AlertSelectionIsIndependentAndUsesColorInsteadOfACheckmark()
+    {
+        var channel = new ChannelViewModel(new ChannelConfiguration
+        {
+            Name = "Dispatch",
+            System = "System 1",
+            Tgid = "99",
+            Mode = "p25"
+        });
+        Color idle = Assert.IsType<SolidColorBrush>(channel.AlertSelectionBrush).Color;
+
+        channel.SetAlertSelected(true);
+
+        Assert.True(channel.IsAlertSelected);
+        Assert.False(channel.IsPageSelected);
+        Assert.False(channel.IsTransmitSelected);
+        Assert.Equal("ALERT", channel.AlertSelectionText);
+        Assert.NotEqual(idle, Assert.IsType<SolidColorBrush>(channel.AlertSelectionBrush).Color);
     }
 
     [Fact]
