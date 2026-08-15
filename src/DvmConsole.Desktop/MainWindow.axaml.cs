@@ -2893,8 +2893,13 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         UpdateChannelAudioLevel(channel, samples, ChannelAudioDirection.Receive);
     }
 
-    private void HandleTransmitSamples(ChannelViewModel channel, ReadOnlyMemory<short> samples)
+    private void HandleTransmitSamples(
+        ChannelViewModel channel,
+        uint streamId,
+        uint sourceId,
+        ReadOnlyMemory<short> samples)
     {
+        callRecordings.WriteTransmitSamples(channel, streamId, sourceId, samples);
         UpdateChannelAudioLevel(channel, samples, ChannelAudioDirection.Transmit);
     }
 
@@ -3299,7 +3304,11 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         catch (Exception exception)
         {
             foreach (ChannelViewModel channel in channels)
+            {
                 channel.SetTransmitEnabled(false);
+                callRecordings.StopTransmit(channel);
+            }
+            RefreshRecordings();
             await RestoreSuspendedAudioAsync();
             TransmitStatusText = $"PTT unavailable: {exception.Message}";
         }
@@ -3317,7 +3326,11 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         finally
         {
             foreach (ChannelViewModel channel in channels)
+            {
                 channel.SetTransmitEnabled(false);
+                callRecordings.StopTransmit(channel);
+            }
+            RefreshRecordings();
             await RestoreSuspendedAudioAsync();
             TransmitStatusText = "PTT idle.";
         }
@@ -4131,6 +4144,12 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             catch
             {
                 // The original fault is already reported to the operator.
+            }
+            finally
+            {
+                foreach (ChannelViewModel channel in channels)
+                    callRecordings.StopTransmit(channel);
+                RefreshRecordings();
             }
             await RestoreSuspendedAudioAsync().ConfigureAwait(false);
         });

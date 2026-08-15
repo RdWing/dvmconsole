@@ -14,7 +14,7 @@ public sealed record TransmitTarget(ChannelViewModel Channel, SystemViewModel Sy
 public sealed class ChannelTransmitCoordinator : IAsyncDisposable
 {
     private readonly IP25KeyResolver? p25KeyResolver;
-    private readonly Action<ChannelViewModel, ReadOnlyMemory<short>>? samplesObserver;
+    private readonly Action<ChannelViewModel, uint, uint, ReadOnlyMemory<short>>? samplesObserver;
     private readonly SemaphoreSlim gate = new(1, 1);
     private IAudioBackend? audioBackend;
     private IVocoderBackend? vocoderBackend;
@@ -31,7 +31,7 @@ public sealed class ChannelTransmitCoordinator : IAsyncDisposable
     public ChannelTransmitCoordinator(
         IP25KeyResolver? p25KeyResolver = null,
         AudioInputProcessingOptions? audioInputOptions = null,
-        Action<ChannelViewModel, ReadOnlyMemory<short>>? samplesObserver = null)
+        Action<ChannelViewModel, uint, uint, ReadOnlyMemory<short>>? samplesObserver = null)
     {
         this.p25KeyResolver = p25KeyResolver;
         this.audioInputOptions = (audioInputOptions ?? new AudioInputProcessingOptions()).Normalize();
@@ -89,7 +89,12 @@ public sealed class ChannelTransmitCoordinator : IAsyncDisposable
                     capture.SamplesAvailable += (_, args) =>
                     {
                         foreach (TransmitTarget target in requested)
-                            samplesObserver(target.Channel, args.Samples);
+                        {
+                            ActiveTransmit? entry = created.FirstOrDefault(
+                                candidate => ReferenceEquals(candidate.Channel, target.Channel));
+                            if (entry is not null)
+                                samplesObserver(target.Channel, entry.StreamId, entry.SourceId, args.Samples);
+                        }
                     };
                 }
                 createdSharedCapture = new SharedAudioCapture(capture);
@@ -148,7 +153,7 @@ public sealed class ChannelTransmitCoordinator : IAsyncDisposable
                     }
 
                     session.Faulted += HandleSessionFaulted;
-                    created.Add(new ActiveTransmit(target.Channel, streamId, session));
+                    created.Add(new ActiveTransmit(target.Channel, streamId, sourceId, session));
                 }
 
                 foreach (ActiveTransmit entry in created)
@@ -300,5 +305,9 @@ public sealed class ChannelTransmitCoordinator : IAsyncDisposable
         return P25TxEncryptionOptions.CreateRandom(algorithmId, keyId, key);
     }
 
-    private sealed record ActiveTransmit(ChannelViewModel Channel, uint StreamId, ITransmitCaptureSession Session);
+    private sealed record ActiveTransmit(
+        ChannelViewModel Channel,
+        uint StreamId,
+        uint SourceId,
+        ITransmitCaptureSession Session);
 }

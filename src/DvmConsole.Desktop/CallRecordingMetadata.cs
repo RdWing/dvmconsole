@@ -3,7 +3,7 @@ using System.Text.Json.Serialization;
 namespace DvmConsole.Desktop;
 
 /// <summary>
-/// Portable metadata written beside each completed receive recording.
+/// Portable metadata written beside each completed receive or console transmit recording.
 /// Encryption identifiers are descriptive only; key material is never stored.
 /// </summary>
 public sealed class CallRecordingMetadata
@@ -53,7 +53,7 @@ public sealed class CallRecordingMetadata
     public string SummaryText => $"{SystemName} · {Protocol} · {TimestampText}";
 
     [JsonIgnore]
-    public string DetailText => $"{RouteText} · {DurationText} · {AudioAnalysisText} · {FileName}";
+    public string DetailText => $"{Direction} · {RecordingSourceType} · {RouteText} · {DurationText} · {AudioAnalysisText} · {FileName}";
 
     [JsonIgnore]
     public string AudioAnalysisText

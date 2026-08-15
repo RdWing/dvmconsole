@@ -127,6 +127,42 @@ public sealed class CallRecordingManagerTests
     }
 
     [Fact]
+    public void StartsAndFinalizesConsoleTransmitRecordingWithDirectionMetadata()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "dvmconsole-recording-tests", Guid.NewGuid().ToString("N"));
+        var channel = new ChannelViewModel(new ChannelConfiguration
+        {
+            Name = "Dispatch",
+            System = "System 1",
+            Tgid = "99",
+            Mode = "analog"
+        });
+        using var manager = new CallRecordingManager(root);
+        channel.SetRecordingEnabled(true);
+
+        try
+        {
+            manager.WriteTransmitSamples(channel, streamId: 44, sourceId: 7, new short[] { 100, -100 });
+            Assert.Single(manager.ActivePaths);
+
+            manager.StopChannel(channel);
+
+            CallRecordingMetadata metadata = manager.LoadRecordings().Single();
+            Assert.Equal("TX", metadata.Direction);
+            Assert.Equal("ConsoleTx", metadata.RecordingSourceType);
+            Assert.Equal((uint)7, metadata.SubscriberId);
+            Assert.Equal((uint)44, metadata.StreamId);
+            Assert.EndsWith("_TX.wav", metadata.FileName, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("TX · ConsoleTx", metadata.DetailText, StringComparison.Ordinal);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
     public void IgnoredSourceDoesNotStartRecording()
     {
         string root = Path.Combine(Path.GetTempPath(), "dvmconsole-recording-tests", Guid.NewGuid().ToString("N"));

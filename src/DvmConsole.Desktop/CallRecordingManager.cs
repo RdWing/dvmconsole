@@ -7,9 +7,9 @@ using System.Text.Json;
 namespace DvmConsole.Desktop;
 
 /// <summary>
-/// Owns per-channel call recordings fed by decoded PCM. A recording starts on
-/// the first decoded frame for an active stream and is finalized on its
-/// terminator, channel stop, or application shutdown.
+/// Owns per-channel receive and console-transmit recordings fed by PCM. A
+/// recording starts on the first frame for an active stream and is finalized
+/// on its terminator, call stop, channel stop, or application shutdown.
 /// </summary>
 public sealed class CallRecordingManager : IDisposable
 {
@@ -26,6 +26,7 @@ public sealed class CallRecordingManager : IDisposable
     private readonly Func<ChannelViewModel, uint, bool> shouldRecordSource;
     private int retentionDays;
     private readonly Dictionary<ChannelViewModel, ActiveRecording> active = [];
+    private readonly Dictionary<ChannelViewModel, ActiveRecording> activeTransmit = [];
     private bool disposed;
 
     public CallRecordingManager(
@@ -60,7 +61,10 @@ public sealed class CallRecordingManager : IDisposable
         get
         {
             lock (sync)
-                return active.Values.Select(recording => recording.Writer.Path).ToArray();
+                return active.Values
+                    .Concat(activeTransmit.Values)
+                    .Select(recording => recording.Writer.Path)
+                    .ToArray();
         }
     }
 
@@ -96,7 +100,7 @@ public sealed class CallRecordingManager : IDisposable
 
         lock (sync)
         {
-            if (active.Count > 0)
+            if (active.Count > 0 || activeTransmit.Count > 0)
             {
                 errorMessage = "Stop active recordings before changing the recording folder.";
                 return false;
@@ -258,7 +262,9 @@ public sealed class CallRecordingManager : IDisposable
                         streamId,
                         DateTimeOffset.UtcNow,
                         sourceId == 0 ? null : sourceId,
-                        new PcmWavFileWriter(CreateRecordingPath(channel, streamId), PcmAudioFormat.Voice8KhzMono16Bit));
+                        "RX",
+                        "InboundRadio",
+                        new PcmWavFileWriter(CreateRecordingPath(channel, streamId, "RX"), PcmAudioFormat.Voice8KhzMono16Bit));
                     active[channel] = recording;
                 }
 
@@ -267,6 +273,45 @@ public sealed class CallRecordingManager : IDisposable
             catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or InvalidOperationException)
             {
                 CloseCore(channel);
+                faultHandler?.Invoke(channel, exception);
+            }
+        }
+    }
+
+    public void WriteTransmitSamples(
+        ChannelViewModel channel,
+        uint streamId,
+        uint sourceId,
+        ReadOnlyMemory<short> samples)
+    {
+        ArgumentNullException.ThrowIfNull(channel);
+        if (samples.IsEmpty || !channel.IsRecordingEnabled || streamId == 0)
+            return;
+
+        lock (sync)
+        {
+            ObjectDisposedException.ThrowIf(disposed, this);
+            try
+            {
+                if (!activeTransmit.TryGetValue(channel, out ActiveRecording? recording) ||
+                    recording.StreamId != streamId)
+                {
+                    CloseTransmitCore(channel);
+                    recording = new ActiveRecording(
+                        streamId,
+                        DateTimeOffset.UtcNow,
+                        sourceId == 0 ? null : sourceId,
+                        "TX",
+                        "ConsoleTx",
+                        new PcmWavFileWriter(CreateRecordingPath(channel, streamId, "TX"), PcmAudioFormat.Voice8KhzMono16Bit));
+                    activeTransmit[channel] = recording;
+                }
+
+                recording.Writer.Write(samples.Span);
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or InvalidOperationException)
+            {
+                CloseTransmitCore(channel);
                 faultHandler?.Invoke(channel, exception);
             }
         }
@@ -290,7 +335,17 @@ public sealed class CallRecordingManager : IDisposable
     {
         ArgumentNullException.ThrowIfNull(channel);
         lock (sync)
+        {
             CloseCore(channel);
+            CloseTransmitCore(channel);
+        }
+    }
+
+    public void StopTransmit(ChannelViewModel channel)
+    {
+        ArgumentNullException.ThrowIfNull(channel);
+        lock (sync)
+            CloseTransmitCore(channel);
     }
 
     public void Dispose()
@@ -300,22 +355,28 @@ public sealed class CallRecordingManager : IDisposable
             if (disposed)
                 return;
 
-            foreach (ChannelViewModel channel in active.Keys.ToArray())
+            foreach (ChannelViewModel channel in active.Keys.Concat(activeTransmit.Keys).Distinct().ToArray())
+            {
                 CloseCore(channel);
+                CloseTransmitCore(channel);
+            }
             disposed = true;
         }
     }
 
-    private string CreateRecordingPath(ChannelViewModel channel, uint streamId)
+    private string CreateRecordingPath(ChannelViewModel channel, uint streamId, string direction)
     {
         DateTimeOffset now = DateTimeOffset.Now;
         string dateFolder = now.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+        string directionSuffix = direction.Equals("RX", StringComparison.OrdinalIgnoreCase)
+            ? string.Empty
+            : $"_{SanitizeSegment(direction)}";
         string filename = string.Join(
             "_",
             now.ToString("HHmmssfff", CultureInfo.InvariantCulture),
             SanitizeSegment(channel.Definition.SystemName),
             SanitizeSegment(channel.Name),
-            streamId.ToString(CultureInfo.InvariantCulture));
+            streamId.ToString(CultureInfo.InvariantCulture)) + directionSuffix;
         string directory = System.IO.Path.Combine(rootPath, dateFolder, SanitizeSegment(channel.Definition.SystemName));
         Directory.CreateDirectory(directory);
 
@@ -352,6 +413,8 @@ public sealed class CallRecordingManager : IDisposable
         CallRecordingMetadata metadata = new()
         {
             Protocol = channel.Definition.Mode.ToUpperInvariant(),
+            Direction = recording.Direction,
+            RecordingSourceType = recording.RecordingSourceType,
             UtcStartTime = recording.UtcStartTime,
             UtcEndTime = end,
             DurationMs = (long)Math.Round(
@@ -427,5 +490,26 @@ public sealed class CallRecordingManager : IDisposable
         uint StreamId,
         DateTimeOffset UtcStartTime,
         uint? SourceId,
+        string Direction,
+        string RecordingSourceType,
         PcmWavFileWriter Writer);
+
+    private void CloseTransmitCore(ChannelViewModel channel)
+    {
+        if (!activeTransmit.Remove(channel, out ActiveRecording? recording))
+            return;
+
+        try
+        {
+            recording.Writer.Dispose();
+            PcmWavTrimResult trim = PcmWavSilenceTrimmer.TrimFile(
+                recording.Writer.Path,
+                recording.Writer.Format);
+            WriteMetadata(channel, recording, trim);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or InvalidOperationException or JsonException)
+        {
+            faultHandler?.Invoke(channel, exception);
+        }
+    }
 }
