@@ -195,11 +195,17 @@ or user settings. Keep those files outside distributable application folders.
 
 ## CI validation
 
-The `Avalonia rebuild` workflow runs the complete managed solution test suite
-on Apple Silicon macOS and Windows x64, publishes self-contained apphosts,
-verifies apphost architecture, native-library placement, and test-material
-exclusion, and uploads unsigned outputs for seven days. CI
-permits a UI-only artifact when no native vocoder is provisioned; a release
-package intended for radio operation must publish with the matching native
-vocoder library. Windows radio, microphone, speaker, and global-hotkey hardware
-validation remains an operator test step.
+The `Avalonia rebuild` workflow runs the complete solution test suite on Apple
+Silicon macOS and Windows x64. Each runner checks out a pinned revision of
+`DVMProject/dvmvocoder`, builds the native library for the target architecture,
+runs its encode/decode integration tests, and includes that library in the
+package. The workflow publishes self-contained apphosts, verifies apphost and
+native-library architecture, checks for excluded test material, and uploads
+unsigned packages for seven days.
+
+FFmpeg remains optional. If it is unavailable on a runner, the additional OGG
+decoder test is reported as skipped; WAV and MP3 support and the complete radio
+package are still built and tested.
+
+Windows radio, microphone, speaker, and global-hotkey hardware validation
+remains an operator test step.

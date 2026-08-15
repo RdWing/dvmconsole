@@ -92,8 +92,9 @@ If the application closes unexpectedly, copy
 include that file with the problem report.
 
 Maintainers creating these packages should follow [Desktop building and
-publishing](docs/PUBLISHING.md). A radio-capable release must include the
-matching native vocoder; UI-only CI artifacts are not end-user releases.
+publishing](docs/PUBLISHING.md). The `Avalonia rebuild` GitHub Actions workflow
+builds a pinned native vocoder for each target and includes it in the unsigned
+macOS and Windows test packages.
 
 ## Documentation
 

@@ -40,7 +40,7 @@ Run the native verification tests by providing the built library explicitly:
 ```sh
 DVMVOCODER_LIBRARY=/path/to/libvocoder.dylib \
   dotnet test src/DvmConsole.Vocoder.Tests/DvmConsole.Vocoder.Tests.csproj \
-  --no-restore /p:UseSharedCompilation=false
+  --no-restore -p:UseSharedCompilation=false
 ```
 
 `VocoderMode` preserves the legacy DMR AMBE and P25 IMBE modes. A future

@@ -71,7 +71,7 @@ dotnet publish $Project `
     --self-contained true `
     --no-restore `
     --output $OutputDirectory `
-    /p:UseAppHost=true
+    -p:UseAppHost=true
 if ($LASTEXITCODE -ne 0) {
     throw "dotnet publish failed with exit code $LASTEXITCODE."
 }

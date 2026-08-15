@@ -1,6 +1,5 @@
 using DvmConsole.Vocoder;
 using Xunit;
-using Xunit.Sdk;
 
 namespace DvmConsole.Vocoder.Tests;
 
@@ -15,14 +14,12 @@ public sealed class SoftwareVocoderTests
         Assert.Equal(expectedCodewordBytes, VocoderFrameSizes.CodewordBytes(mode));
     }
 
-    [Theory]
+    [NativeVocoderTheory]
     [InlineData(VocoderMode.DmrAmbe)]
     [InlineData(VocoderMode.P25Imbe)]
     public void EncodesAndDecodesWhenNativeLibraryIsProvided(VocoderMode mode)
     {
-        string? libraryPath = Environment.GetEnvironmentVariable("DVMVOCODER_LIBRARY");
-        if (string.IsNullOrWhiteSpace(libraryPath) || !File.Exists(libraryPath))
-            throw SkipException.ForSkip("Set DVMVOCODER_LIBRARY to run the native software vocoder test.");
+        string libraryPath = Environment.GetEnvironmentVariable("DVMVOCODER_LIBRARY")!;
 
         short[] samples = Enumerable.Range(0, VocoderFrameSizes.PcmSamplesPerFrame)
             .Select(index => (short)(Math.Sin(index * 0.15) * 12000))
@@ -36,5 +33,15 @@ public sealed class SoftwareVocoderTests
         Assert.Equal(codeword.Length, session.Encode(samples, codeword));
         Assert.Equal(0, session.Decode(codeword, decodedSamples));
         Assert.Contains(decodedSamples, sample => sample != 0);
+    }
+}
+
+public sealed class NativeVocoderTheoryAttribute : TheoryAttribute
+{
+    public NativeVocoderTheoryAttribute()
+    {
+        string? libraryPath = Environment.GetEnvironmentVariable("DVMVOCODER_LIBRARY");
+        if (string.IsNullOrWhiteSpace(libraryPath) || !File.Exists(libraryPath))
+            Skip = "Set DVMVOCODER_LIBRARY to run the native software vocoder test.";
     }
 }

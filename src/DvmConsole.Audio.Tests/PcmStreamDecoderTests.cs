@@ -1,6 +1,5 @@
 using DvmConsole.Audio;
 using Xunit;
-using Xunit.Sdk;
 
 namespace DvmConsole.Audio.Tests;
 
@@ -33,12 +32,10 @@ public sealed class PcmStreamDecoderTests
             PcmStreamDecoder.OpenAsync(new MemoryStream("OggSnot-supported"u8.ToArray())));
     }
 
-    [Fact]
+    [FfmpegFact]
     public async Task UsesOptionalFfmpegDecoderForOggAudio()
     {
-        string? ffmpeg = FindFfmpeg();
-        if (ffmpeg is null)
-            throw SkipException.ForSkip("Set DVM_FFMPEG or install ffmpeg to run the optional decoder test.");
+        string ffmpeg = FindFfmpeg()!;
 
         await using var reader = await PcmStreamDecoder.OpenAsync(
             new MemoryStream(Convert.FromBase64String(SampleOggBase64)),
@@ -52,10 +49,10 @@ public sealed class PcmStreamDecoderTests
         Assert.Contains(samples[..count], sample => sample != 0);
     }
 
-    private static string? FindFfmpeg()
+    internal static string? FindFfmpeg()
     {
         string? configured = Environment.GetEnvironmentVariable("DVM_FFMPEG");
-        if (!string.IsNullOrWhiteSpace(configured))
+        if (!string.IsNullOrWhiteSpace(configured) && File.Exists(configured))
             return configured;
 
         foreach (string directory in (Environment.GetEnvironmentVariable("PATH") ?? string.Empty)
@@ -67,5 +64,14 @@ public sealed class PcmStreamDecoderTests
         }
 
         return null;
+    }
+}
+
+public sealed class FfmpegFactAttribute : FactAttribute
+{
+    public FfmpegFactAttribute()
+    {
+        if (PcmStreamDecoderTests.FindFfmpeg() is null)
+            Skip = "Set DVM_FFMPEG or install ffmpeg to run the optional decoder test.";
     }
 }

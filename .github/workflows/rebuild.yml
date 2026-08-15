@@ -15,8 +15,6 @@ jobs:
   test-and-publish:
     name: ${{ matrix.os }} / ${{ matrix.rid }}
     runs-on: ${{ matrix.os }}
-    env:
-      DVM_ALLOW_MISSING_VOCODER: "1"
     strategy:
       fail-fast: false
       matrix:
@@ -37,13 +35,37 @@ jobs:
         with:
           dotnet-version: 8.0.x
 
+      - name: Check out pinned dvmvocoder source
+        uses: actions/checkout@v4
+        with:
+          repository: DVMProject/dvmvocoder
+          ref: 80ec5b66c0cfeff7b3f9ea9e1a8249f2b3ac3767
+          path: .native/dvmvocoder
+
+      - name: Build native software vocoder
+        shell: pwsh
+        run: |
+          $buildDirectory = Join-Path $env:RUNNER_TEMP "dvmvocoder-build"
+          if ("${{ matrix.rid }}" -eq "osx-arm64") {
+            cmake -S .native/dvmvocoder -B $buildDirectory -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES=arm64
+            $library = Join-Path $buildDirectory "libvocoder.dylib"
+          } else {
+            cmake -S .native/dvmvocoder -B $buildDirectory -A x64
+            $library = Join-Path $buildDirectory "Release/libvocoder.dll"
+          }
+          if ($LASTEXITCODE -ne 0) { throw "dvmvocoder configure failed with exit code $LASTEXITCODE." }
+          cmake --build $buildDirectory --config Release
+          if ($LASTEXITCODE -ne 0) { throw "dvmvocoder build failed with exit code $LASTEXITCODE." }
+          if (-not (Test-Path -LiteralPath $library -PathType Leaf)) { throw "Native vocoder output was not found at $library." }
+          "DVMVOCODER_LIBRARY=$library" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
       - name: Restore rebuild solution
         shell: bash
         run: dotnet restore src/DvmConsole.Rebuild.sln --ignore-failed-sources -p:NuGetAudit=false --verbosity minimal
 
       - name: Run rebuild solution tests
         shell: bash
-        run: dotnet test src/DvmConsole.Rebuild.sln --no-restore --configuration Release /p:UseSharedCompilation=false --logger "trx;LogFileName=${{ matrix.rid }}.trx"
+        run: dotnet test src/DvmConsole.Rebuild.sln --no-restore --configuration Release -p:UseSharedCompilation=false --logger "trx;LogFileName=${{ matrix.rid }}.trx"
 
       - name: Publish unsigned desktop output
         shell: bash

@@ -38,7 +38,7 @@ dotnet publish "$PROJECT" \
     --self-contained true \
     --no-restore \
     --output "$OUTPUT_DIR" \
-    /p:UseAppHost=true
+    -p:UseAppHost=true
 
 if [[ "$RID" == "osx-arm64" ]]; then
     cp "$AUDIO_BUILD_DIR/libdvmaudio.dylib" "$OUTPUT_DIR/libdvmaudio.dylib"
