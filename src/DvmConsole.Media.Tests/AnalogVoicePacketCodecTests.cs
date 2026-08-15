@@ -20,7 +20,7 @@ public sealed class AnalogVoicePacketCodecTests
 
         short[] samples = AnalogVoicePacketCodec.ExtractPcm(packet);
 
-        Assert.Equal(344, packet.Length);
+        Assert.Equal((int)fnecore.Constants.AnalogPacketLength, packet.Length);
         Assert.Equal("ANOD", System.Text.Encoding.ASCII.GetString(packet, 0, 4));
         Assert.Equal(0x01, packet[AnalogVoicePacketCodec.SourceIdOffset]);
         Assert.Equal(0x0C, packet[AnalogVoicePacketCodec.DestinationIdOffset + 2]);

@@ -11,17 +11,17 @@ public enum AnalogAudioFrameType : byte
 
 /// <summary>
 /// Encodes and extracts the G.711 μ-law audio carried by an FNE analog packet.
-/// The dvmhost wire layout is a 20-byte header, a 320-byte audio region whose
-/// first 160 bytes contain μ-law samples, and a four-byte trailer.
+/// The wire length follows the published fnecore analog packet constant. The
+/// packet's first 160 bytes of audio carry the μ-law samples.
 /// </summary>
 public static class AnalogVoicePacketCodec
 {
     public const int HeaderBytes = 20;
     public const int SamplesPerPacket = 160;
     public const int EncodedAudioBytes = SamplesPerPacket;
-    public const int AudioBytes = SamplesPerPacket * sizeof(short);
     public const int TrailerBytes = 4;
-    public const int PacketBytes = HeaderBytes + AudioBytes + TrailerBytes;
+    public const int PacketBytes = (int)fnecore.Constants.AnalogPacketLength;
+    public const int AudioBytes = PacketBytes - HeaderBytes - TrailerBytes;
     public const string PacketTag = "ANOD";
     public const int SourceIdOffset = 5;
     public const int DestinationIdOffset = 8;
