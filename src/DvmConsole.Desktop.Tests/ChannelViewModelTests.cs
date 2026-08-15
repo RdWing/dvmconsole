@@ -4,6 +4,7 @@ using DvmConsole.Desktop;
 using DvmConsole.FneClient;
 using DvmConsole.Media;
 using fnecore.P25;
+using Avalonia.Media;
 using Xunit;
 
 namespace DvmConsole.Desktop.Tests;
@@ -131,6 +132,63 @@ public sealed class ChannelViewModelTests
     }
 
     [Fact]
+    public void P25TduCanCloseActiveStreamWhenTerminatorOmitsDestination()
+    {
+        var channel = new ChannelViewModel(new ChannelConfiguration
+        {
+            Name = "Dispatch",
+            System = "System 1",
+            Tgid = "99",
+            Mode = "p25"
+        });
+
+        Assert.True(channel.TryApplyTraffic("System 1", CreateTraffic(
+            FneTrafficProtocol.P25, 42, 99, null, "VOICE", "LDU1", 7)));
+        Assert.True(channel.TryApplyTraffic("System 1", CreateTraffic(
+            FneTrafficProtocol.P25, 42, 0, null, "DATA_SYNC", "TDU", 7)));
+
+        Assert.Equal(ChannelRuntimeState.Idle, channel.State);
+    }
+
+    [Fact]
+    public void StaleReceiveStateExpiresWithoutATerminator()
+    {
+        var channel = new ChannelViewModel(new ChannelConfiguration
+        {
+            Name = "Dispatch",
+            System = "System 1",
+            Tgid = "99",
+            Mode = "p25"
+        });
+        Assert.True(channel.TryApplyTraffic("System 1", CreateTraffic(
+            FneTrafficProtocol.P25, 42, 99, null, "VOICE", "LDU1", 7)));
+
+        Assert.True(channel.TryExpireReceiveState(DateTimeOffset.UtcNow.AddSeconds(3), TimeSpan.FromSeconds(2)));
+        Assert.Equal(ChannelRuntimeState.Idle, channel.State);
+    }
+
+    [Fact]
+    public void SelectingGlobalTransmitDoesNotChangeCardStatusColors()
+    {
+        var channel = new ChannelViewModel(new ChannelConfiguration
+        {
+            Name = "Dispatch",
+            System = "System 1",
+            Tgid = "99",
+            Mode = "dmr",
+            Slot = 1
+        });
+        Color background = Assert.IsType<SolidColorBrush>(channel.CardBackgroundBrush).Color;
+        Color border = Assert.IsType<SolidColorBrush>(channel.CardBorderBrush).Color;
+
+        channel.SetTransmitSelected(true);
+
+        Assert.Equal(background, Assert.IsType<SolidColorBrush>(channel.CardBackgroundBrush).Color);
+        Assert.Equal(border, Assert.IsType<SolidColorBrush>(channel.CardBorderBrush).Color);
+        Assert.Equal("TX ✓", channel.TransmitSelectionText);
+    }
+
+    [Fact]
     public void StaleTerminatorCannotCloseAnotherActiveStream()
     {
         var channel = new ChannelViewModel(new ChannelConfiguration
@@ -183,6 +241,23 @@ public sealed class ChannelViewModelTests
         });
 
         Assert.False(channel.CanTransmit);
+    }
+
+    [Fact]
+    public void ClearDmrPttIsEnabledWithoutAnnouncedTalkgroupRules()
+    {
+        var channel = new ChannelViewModel(new ChannelConfiguration
+        {
+            Name = "DMR Dispatch",
+            System = "System 1",
+            Tgid = "9990",
+            Mode = "dmr",
+            Slot = 1
+        });
+
+        // Announced FNE talkgroup rules are deliberately not part of channel
+        // transmit eligibility. Only explicit codeplug RX-only policy applies.
+        Assert.True(channel.CanTransmit);
     }
 
     [Fact]
