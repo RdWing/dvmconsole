@@ -166,7 +166,7 @@ public sealed class DmrVoicePacketCodecTests
         Assert.Equal(0, await session.ProcessAsync(malformed));
         Assert.Equal(0, session.FramesDecoded);
 
-        Assert.Equal(0, await session.ProcessAsync(CreateTraffic(100, 1, "VOICE")));
+        Assert.Equal(0, await session.ProcessAsync(CreateTraffic(100, 1, "VOICE", packetSequence: 2)));
         Assert.Equal(3, session.FramesDecoded);
         Assert.Equal(3, playback.Frames.Count);
     }
@@ -198,7 +198,43 @@ public sealed class DmrVoicePacketCodecTests
         Assert.Equal(3, playback.Frames.Count);
     }
 
-    private static FneTrafficFrame CreateTraffic(uint destinationId, byte slot, string frameType)
+    [Fact]
+    public async Task RouterDropsDuplicateLateAndCountsSkippedPackets()
+    {
+        var vocoder = new FakeVocoderSession();
+        var playback = new FakePlayback();
+        await using var router = new DmrRxAudioRouter(new DmrTrafficSelector(100, 1), vocoder, playback);
+
+        Assert.Equal(0, await router.ProcessAsync(CreateTraffic(100, 1, "VOICE", packetSequence: 10)));
+        Assert.Equal(0, await router.ProcessAsync(CreateTraffic(100, 1, "VOICE", packetSequence: 12)));
+        Assert.Equal(0, await router.ProcessAsync(CreateTraffic(100, 1, "VOICE", packetSequence: 11)));
+
+        Assert.Equal(1, router.LostPackets);
+        Assert.Equal(1, router.DuplicateOrLatePackets);
+        Assert.Equal(6, router.FramesDecoded);
+    }
+
+    [Fact]
+    public async Task RouterResetsSequenceOnNewStreamAndHandlesWrap()
+    {
+        var vocoder = new FakeVocoderSession();
+        var playback = new FakePlayback();
+        await using var router = new DmrRxAudioRouter(new DmrTrafficSelector(100, 1), vocoder, playback);
+
+        Assert.Equal(0, await router.ProcessAsync(CreateTraffic(100, 1, "VOICE", packetSequence: ushort.MaxValue - 1, streamId: 99)));
+        Assert.Equal(0, await router.ProcessAsync(CreateTraffic(100, 1, "VOICE", packetSequence: 0, streamId: 99)));
+        Assert.Equal(0, await router.ProcessAsync(CreateTraffic(100, 1, "VOICE", packetSequence: 0, streamId: 100)));
+
+        Assert.Equal(0, router.LostPackets);
+        Assert.Equal(9, router.FramesDecoded);
+    }
+
+    private static FneTrafficFrame CreateTraffic(
+        uint destinationId,
+        byte slot,
+        string frameType,
+        ushort packetSequence = 1,
+        uint streamId = 99)
     {
         return new FneTrafficFrame(
             FneTrafficProtocol.Dmr,
@@ -209,8 +245,8 @@ public sealed class DmrVoicePacketCodecTests
             "GROUP",
             frameType,
             frameType,
-            1,
-            99,
+            packetSequence,
+            streamId,
             new byte[DmrVoicePacketCodec.PacketBytes]);
     }
 

@@ -9,15 +9,18 @@ namespace DvmConsole.Media;
 /// </summary>
 public sealed class AudioMixer : IAsyncDisposable
 {
+    private const int MaximumBufferedFrames = 100;
     private readonly IAudioPlayback output;
     private readonly object sync = new();
     private readonly Dictionary<int, ChannelBuffer> channels = [];
     private readonly CancellationTokenSource cancellation = new();
     private readonly Task pump;
     private readonly int frameSamples;
+    private readonly int maximumBufferedSamples;
     private int nextChannelId;
     private bool disposed;
     private Exception? failure;
+    private long droppedSamples;
 
     public AudioMixer(IAudioPlayback output)
     {
@@ -26,10 +29,22 @@ public sealed class AudioMixer : IAsyncDisposable
             throw new NotSupportedException("Audio mixing currently supports mono 16-bit PCM only.");
 
         frameSamples = Math.Max(1, output.Format.SampleRate / 50);
+        maximumBufferedSamples = checked(frameSamples * MaximumBufferedFrames);
         pump = PumpAsync(cancellation.Token);
     }
 
     public PcmAudioFormat Format => output.Format;
+
+    public int MaximumBufferedSamples => maximumBufferedSamples;
+
+    public long DroppedSamples
+    {
+        get
+        {
+            lock (sync)
+                return droppedSamples;
+        }
+    }
 
     public IAudioPlayback OpenChannel()
     {
@@ -126,7 +141,22 @@ public sealed class AudioMixer : IAsyncDisposable
             if (channel.Disposed || !channels.ContainsKey(channel.Id))
                 throw new ObjectDisposedException(nameof(IAudioPlayback));
 
-            foreach (short sample in samples.Span)
+            ReadOnlySpan<short> incoming = samples.Span;
+            int keepStart = Math.Max(0, incoming.Length - maximumBufferedSamples);
+            int existingToDrop = Math.Min(
+                channel.Samples.Count,
+                Math.Max(0, channel.Samples.Count + incoming.Length - maximumBufferedSamples));
+            for (int index = 0; index < existingToDrop; index++)
+                channel.Samples.Dequeue();
+
+            int discarded = existingToDrop + keepStart;
+            if (discarded > 0)
+            {
+                channel.DroppedSamples += discarded;
+                droppedSamples += discarded;
+            }
+
+            foreach (short sample in incoming[keepStart..])
                 channel.Samples.Enqueue(sample);
         }
     }
@@ -164,6 +194,7 @@ public sealed class AudioMixer : IAsyncDisposable
         public int Id { get; } = id;
         public Queue<short> Samples { get; } = [];
         public double Gain { get; set; } = 1.0;
+        public int DroppedSamples { get; set; }
         public bool Disposed { get; set; }
     }
 

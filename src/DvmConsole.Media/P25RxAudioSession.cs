@@ -16,6 +16,7 @@ public sealed class P25RxAudioSession : IAsyncDisposable
     private readonly VoiceFrameDecoder decoder;
     private readonly IAudioPlayback playback;
     private readonly IP25KeyResolver? keyResolver;
+    private readonly VoicePacketSequenceTracker sequenceTracker = new();
     private P25CryptoState? cryptoState;
     private bool disposed;
 
@@ -32,12 +33,16 @@ public sealed class P25RxAudioSession : IAsyncDisposable
     }
 
     public int FramesDecoded { get; private set; }
+    public long LostPackets => sequenceTracker.LostPackets;
+    public long DuplicateOrLatePackets => sequenceTracker.DuplicateOrLatePackets;
 
     public async ValueTask<int> ProcessAsync(FneTrafficFrame traffic, CancellationToken cancellationToken = default)
     {
         ObjectDisposedException.ThrowIf(disposed, this);
         ArgumentNullException.ThrowIfNull(traffic);
         if (!selector.Matches(traffic))
+            return 0;
+        if (!sequenceTracker.TryAccept(traffic.StreamId, traffic.PacketSequence))
             return 0;
 
         byte[] imbe = new byte[P25DfsiFrameCodec.ImbeBytes];

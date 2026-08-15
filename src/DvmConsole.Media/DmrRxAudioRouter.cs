@@ -13,6 +13,7 @@ public sealed class DmrRxAudioRouter : IAsyncDisposable
 {
     private readonly DmrTrafficSelector selector;
     private readonly DmrRxAudioSession session;
+    private readonly VoicePacketSequenceTracker sequenceTracker = new();
     private readonly SemaphoreSlim processing = new(1, 1);
     private bool disposed;
 
@@ -26,6 +27,8 @@ public sealed class DmrRxAudioRouter : IAsyncDisposable
     }
 
     public int FramesDecoded => session.FramesDecoded;
+    public long LostPackets => sequenceTracker.LostPackets;
+    public long DuplicateOrLatePackets => sequenceTracker.DuplicateOrLatePackets;
 
     public async ValueTask<int> ProcessAsync(
         FneTrafficFrame traffic,
@@ -39,6 +42,8 @@ public sealed class DmrRxAudioRouter : IAsyncDisposable
         await processing.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
+            if (!sequenceTracker.TryAccept(traffic.StreamId, traffic.PacketSequence))
+                return 0;
             return await session.ProcessAsync(traffic, cancellationToken).ConfigureAwait(false);
         }
         finally

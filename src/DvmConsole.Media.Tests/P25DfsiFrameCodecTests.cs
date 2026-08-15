@@ -94,7 +94,7 @@ public sealed class P25DfsiFrameCodecTests
             await session.ProcessAsync(CreateTraffic("LDU1", new byte[P25DfsiFrameCodec.HeaderBytes])));
         Assert.Equal(0, session.FramesDecoded);
 
-        Assert.Equal(0, await session.ProcessAsync(CreateTraffic("LDU1", CreatePayload(0x62))));
+        Assert.Equal(0, await session.ProcessAsync(CreateTraffic("LDU1", CreatePayload(0x62), packetSequence: 2)));
         Assert.Equal(9, session.FramesDecoded);
         Assert.Equal(9, playback.Frames.Count);
     }
@@ -241,7 +241,7 @@ public sealed class P25DfsiFrameCodecTests
             resolver);
 
         Assert.Equal(0, await session.ProcessAsync(CreateTraffic("LDU1", ldu1Payload)));
-        Assert.Equal(0, await session.ProcessAsync(CreateTraffic("LDU2", ldu2Payload)));
+        Assert.Equal(0, await session.ProcessAsync(CreateTraffic("LDU2", ldu2Payload, packetSequence: 2)));
 
         Assert.Equal(18, vocoder.Codewords.Count);
         for (int index = 0; index < 9; index++)
@@ -252,7 +252,23 @@ public sealed class P25DfsiFrameCodecTests
         }
     }
 
-    private static FneTrafficFrame CreateTraffic(string subtype, byte[] payload)
+    [Fact]
+    public async Task P25SessionDropsDuplicateLduWithoutAdvancingCryptoOrAudio()
+    {
+        var vocoder = new FakeVocoderSession();
+        var playback = new FakePlayback();
+        await using var session = new P25RxAudioSession(new P25TrafficSelector(100), vocoder, playback);
+        byte[] payload = CreatePayload(0x62);
+
+        Assert.Equal(0, await session.ProcessAsync(CreateTraffic("LDU1", payload, packetSequence: 20)));
+        Assert.Equal(0, await session.ProcessAsync(CreateTraffic("LDU1", payload, packetSequence: 20)));
+
+        Assert.Equal(9, session.FramesDecoded);
+        Assert.Equal(1, session.DuplicateOrLatePackets);
+        Assert.Equal(9, playback.Frames.Count);
+    }
+
+    private static FneTrafficFrame CreateTraffic(string subtype, byte[] payload, ushort packetSequence = 1, uint streamId = 99)
     {
         return new FneTrafficFrame(
             FneTrafficProtocol.P25,
@@ -263,8 +279,8 @@ public sealed class P25DfsiFrameCodecTests
             "GROUP",
             "VOICE",
             subtype,
-            1,
-            99,
+            packetSequence,
+            streamId,
             payload);
     }
 

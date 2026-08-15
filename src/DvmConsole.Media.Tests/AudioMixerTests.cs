@@ -58,6 +58,25 @@ public sealed class AudioMixerTests
         Assert.Equal((short)10_000, output.Frames[0][0]);
     }
 
+    [Fact]
+    public async Task BoundsSustainedBacklogAndRetainsNewestSamples()
+    {
+        var output = new FakePlayback();
+        await using var mixer = new AudioMixer(output);
+        await using IAudioPlayback channel = mixer.OpenChannel();
+        short[] samples = Enumerable.Range(0, mixer.MaximumBufferedSamples + 160)
+            .Select(value => (short)(value % short.MaxValue))
+            .ToArray();
+
+        await channel.WriteAsync(samples);
+        await WaitForAsync(() => mixer.DroppedSamples > 0);
+        await WaitForAsync(() => output.Frames.Count > 0);
+
+        Assert.True(mixer.DroppedSamples > 0);
+        Assert.True(mixer.DroppedSamples <= samples.Length);
+        Assert.Equal((short)160, output.Frames[0][0]);
+    }
+
     private static short[] CreateSamples(short value)
     {
         var samples = new short[160];
