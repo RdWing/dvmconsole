@@ -107,7 +107,7 @@ namespace DvmConsole.Avalonia.Services
 
                 if (!IsTargetAvailable(resolved))
                 {
-                    Report("Target TG unavailable on FNE");
+                    Report("Channel PTT unavailable: FNE target is not connected.");
                     return;
                 }
 

@@ -9,13 +9,15 @@ namespace DvmConsole.Avalonia.Tests
     public sealed class Gate81TalkgroupAvailabilityWiringTests
     {
         [Fact]
-        public void ShellUsesTargetAvailabilityBeforeEveryTransmitEntryPoint()
+        public void ShellUsesConnectionAvailabilityBeforeEveryTransmitEntryPoint()
         {
             var source = File.ReadAllText(SourcePath("MainWindow.axaml.cs"));
 
             Assert.True(Count(source, "IsTransmitTargetAvailable") >= 5);
-            Assert.Contains("viewModel?.Ptt?.CancelEngagement()", source);
-            Assert.Contains("Target TG unavailable on FNE", source);
+            Assert.Contains("IsFneSystemAvailable(target.SystemName)", source);
+            Assert.DoesNotContain("IFneTalkgroupStatusProvider provider", source);
+            Assert.DoesNotContain("QueryTalkgroupAvailability(query)", source);
+            Assert.DoesNotContain("Target TG unavailable on FNE", source);
             Assert.Contains("targets.All(IsTransmitTargetAvailable)", source);
             Assert.Contains("target => IsTransmitTargetAvailable(target)", source);
         }

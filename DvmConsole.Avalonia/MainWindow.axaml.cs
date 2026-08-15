@@ -1087,31 +1087,7 @@ namespace DvmConsole.Avalonia
             };
 
         private bool IsTransmitTargetAvailable(TransmitTarget target)
-        {
-            if (!IsFneSystemAvailable(target.SystemName))
-            {
-                return false;
-            }
-
-            if (fnecoreTransportFactory?.ResolveAdapter(target.SystemName)
-                is not IFneTalkgroupStatusProvider provider)
-            {
-                // Compatibility/fake transports do not expose announced
-                // rules yet; connection validation remains their only gate.
-                return true;
-            }
-
-            if (!uint.TryParse(target.TalkgroupId, out uint talkgroupId))
-            {
-                return false;
-            }
-
-            var query = new TalkgroupQuery(
-                talkgroupId,
-                target.Slot,
-                target.Mode == VoiceMode.P25 ? TalkgroupMode.P25 : TalkgroupMode.Dmr);
-            return provider.QueryTalkgroupAvailability(query).IsAvailable;
-        }
+            => IsFneSystemAvailable(target.SystemName);
 
         private void OnReceiveProjectionTimerTick(object? sender, EventArgs e)
             => receiveProjection?.SweepIdle(DateTimeOffset.UtcNow);
@@ -3308,36 +3284,37 @@ namespace DvmConsole.Avalonia
 
                 var unavailableTarget = targets.FirstOrDefault(
                     target => !IsTransmitTargetAvailable(target));
-                if (string.IsNullOrWhiteSpace(unavailableTarget.SystemName))
+                if (!string.IsNullOrWhiteSpace(unavailableTarget.SystemName))
                 {
-                    var inputDeviceId = viewModel?.AudioSettings?.SelectedInputId
-                        ?? AudioDeviceId.Default;
-                    Interlocked.Exchange(ref dashboardTransmitActive, 1);
-                    if (viewModel?.Preferences?.MuteRxAudioWhileTransmitting == true)
+                    viewModel?.Ptt?.CancelEngagement();
+                    if (viewModel is not null)
                     {
-                        router.ClearAllTalkgroupBuffers();
+                        viewModel.AudioStatusMessage = "PTT unavailable: FNE system is disconnected.";
                     }
-                    foreach (var target in targets)
-                    {
-                        tarRecordingCoordinator?.TryStartTransmit(
-                            target,
-                            transmitTargetResolver?.ResolveChannelName(target) ?? target.TalkgroupId,
-                            DateTime.UtcNow,
-                            out _);
-                    }
-                    _ = BeginTransmitAndPlayPermitToneAsync(
-                        router,
-                        targets,
-                        inputDeviceId,
-                        viewModel?.Preferences?.TalkPermitTone == true);
+
                     return;
                 }
 
-                viewModel?.Ptt?.CancelEngagement();
-                if (viewModel is not null)
+                var inputDeviceId = viewModel?.AudioSettings?.SelectedInputId
+                    ?? AudioDeviceId.Default;
+                Interlocked.Exchange(ref dashboardTransmitActive, 1);
+                if (viewModel?.Preferences?.MuteRxAudioWhileTransmitting == true)
                 {
-                    viewModel.AudioStatusMessage = "Target TG unavailable on FNE";
+                    router.ClearAllTalkgroupBuffers();
                 }
+                foreach (var target in targets)
+                {
+                    tarRecordingCoordinator?.TryStartTransmit(
+                        target,
+                        transmitTargetResolver?.ResolveChannelName(target) ?? target.TalkgroupId,
+                        DateTime.UtcNow,
+                        out _);
+                }
+                _ = BeginTransmitAndPlayPermitToneAsync(
+                    router,
+                    targets,
+                    inputDeviceId,
+                    viewModel?.Preferences?.TalkPermitTone == true);
                 return;
             }
             else
