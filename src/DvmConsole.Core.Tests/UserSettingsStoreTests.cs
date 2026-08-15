@@ -496,6 +496,8 @@ public sealed class UserSettingsStoreTests
 
             Assert.Throws<ArgumentException>(() => store.SaveNamedProfile("../outside", new UserSettings()));
             Assert.Throws<ArgumentException>(() => store.PreviewNamedProfile("../outside"));
+            Assert.Throws<ArgumentException>(() => store.SaveNamedProfile("Shift:Night", new UserSettings()));
+            Assert.Throws<ArgumentException>(() => store.SaveNamedProfile("CON", new UserSettings()));
         }
         finally
         {

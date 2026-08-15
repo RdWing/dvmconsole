@@ -408,8 +408,12 @@ public sealed class UserSettingsStore
             normalized.Length > 64 ||
             normalized.Any(char.IsControl) ||
             normalized.IndexOfAny(System.IO.Path.GetInvalidFileNameChars()) >= 0 ||
+            normalized.Contains(':') ||
             normalized.Contains(System.IO.Path.DirectorySeparatorChar) ||
-            normalized.Contains(System.IO.Path.AltDirectorySeparatorChar))
+            normalized.Contains(System.IO.Path.AltDirectorySeparatorChar) ||
+            normalized.EndsWith('.') ||
+            normalized.EndsWith(' ') ||
+            IsReservedWindowsProfileName(normalized))
         {
             throw new ArgumentException(
                 "Profile names must be 1-64 characters and cannot contain path separators or control characters.",
@@ -417,6 +421,19 @@ public sealed class UserSettingsStore
         }
 
         return normalized;
+    }
+
+    private static bool IsReservedWindowsProfileName(string profileName)
+    {
+        string stem = profileName.Split('.')[0];
+        return stem.Equals("CON", StringComparison.OrdinalIgnoreCase) ||
+            stem.Equals("PRN", StringComparison.OrdinalIgnoreCase) ||
+            stem.Equals("AUX", StringComparison.OrdinalIgnoreCase) ||
+            stem.Equals("NUL", StringComparison.OrdinalIgnoreCase) ||
+            (stem.Length == 4 &&
+             (stem.StartsWith("COM", StringComparison.OrdinalIgnoreCase) ||
+              stem.StartsWith("LPT", StringComparison.OrdinalIgnoreCase)) &&
+             stem[3] is >= '1' and <= '9');
     }
 
     private static SettingsImportPreview CreatePreview(string source, UserSettings settings)
