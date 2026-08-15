@@ -717,6 +717,12 @@ public sealed partial class MainWindow : Window
         callHistoryWindow.Activate();
     }
 
+    private void HandleActivityDoubleTapped(object? sender, TappedEventArgs e)
+    {
+        HandleOpenCallHistoryClick(sender, e);
+        e.Handled = true;
+    }
+
     private void HandleViewModelPropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
         if (e.PropertyName == nameof(MainWindowViewModel.SnapCallHistoryToWindow))
@@ -1538,13 +1544,15 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(UiSmallFontSize)));
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(UiCompactFontSize)));
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(UiHeadingFontSize)));
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ChannelCardHeight)));
         }
     }
 
     public string UiFontSizeText => $"Text size: {UiFontSize:0}";
-    public double UiSmallFontSize => Math.Max(12, UiFontSize - 2);
-    public double UiCompactFontSize => Math.Max(11, UiFontSize - 3);
+    public double UiSmallFontSize => UiFontSize - 2;
+    public double UiCompactFontSize => UiFontSize - 3;
     public double UiHeadingFontSize => UiFontSize + 4;
+    public double ChannelCardHeight => 126 + ((UiFontSize - 14) * 4);
 
     public double UiScale
     {
@@ -4587,12 +4595,12 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         ArgumentNullException.ThrowIfNull(tone);
         try
         {
-            short[] samples = await PcmAudioFileLoader.LoadAsync(tone.FilePath).ConfigureAwait(false);
+            short[] samples = await PcmAudioFileLoader.LoadAsync(tone.FilePath);
             ChannelViewModel[] alertTargets = ResolveGeneratedToneChannels();
             await SendGeneratedToneAsync(
                 samples,
                 $"Alert asset '{tone.Name}'",
-                alertTargets).ConfigureAwait(false);
+                alertTargets);
         }
         catch (Exception exception)
         {
@@ -4609,7 +4617,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             await SendGeneratedToneAsync(
                 samples,
                 tone.Name,
-                ResolveGeneratedToneChannels()).ConfigureAwait(false);
+                ResolveGeneratedToneChannels());
         }
         catch (Exception exception)
         {
@@ -4722,7 +4730,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         }
         finally
         {
-            await RestoreSuspendedAudioAsync().ConfigureAwait(false);
+            await RestoreSuspendedAudioAsync();
             RaiseGeneratedAudioCanExecuteChanged();
         }
     }
@@ -4970,11 +4978,11 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             foreach (ChannelViewModel channel in zone.Channels)
             {
                 channel.SetWidgetPosition(x, y);
-                x += channel.CardWidth + 16;
+                x += channel.CardWidth + 10;
                 if (x + channel.CardWidth > 900)
                 {
                     x = 0;
-                    y += 160;
+                    y += 136;
                 }
             }
         }
@@ -5572,7 +5580,7 @@ public sealed class ZoneViewModel : INotifyPropertyChanged
     public IBrush TabBrush => CreateBrush(TabColor, darkMode ? "#151D26" : "#E8EDF3");
     public IBrush TabTextBrush => CreateBrush(TabTextColor, darkMode ? "#DCE3EB" : "#18212B");
     public double WidgetCanvasWidth => Math.Max(1, Channels.Count == 0 ? 0 : Channels.Max(channel => channel.WidgetX + channel.CardWidth + 12));
-    public double WidgetCanvasHeight => Math.Max(1, Channels.Count == 0 ? 0 : Channels.Max(channel => channel.WidgetY + 154));
+    public double WidgetCanvasHeight => Math.Max(1, Channels.Count == 0 ? 0 : Channels.Max(channel => channel.WidgetY + 160));
 
     public void SetDarkMode(bool enabled)
     {
@@ -5674,9 +5682,9 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
     public double AudioLevel => audioLevel;
     public double CardWidth => (configuration.CardSize ?? "normal").Trim().ToLowerInvariant() switch
     {
-        "small" => 195,
-        "large" => 370,
-        _ => 255
+        "small" => 180,
+        "large" => 330,
+        _ => 235
     };
     public double WidgetX => widgetX;
     public double WidgetY => widgetY;

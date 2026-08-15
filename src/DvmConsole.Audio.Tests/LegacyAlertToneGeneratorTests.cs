@@ -11,7 +11,7 @@ public sealed class LegacyAlertToneGeneratorTests
         short[] samples = LegacyAlertToneGenerator.Generate(LegacyAlertTone.Alert1);
 
         Assert.Equal(24_000, samples.Length);
-        Assert.InRange(EstimateFrequency(samples), 1003.9, 1004.1);
+        Assert.InRange(EstimateFrequency(samples), 999.9, 1000.1);
         Assert.InRange(samples.Max(), (short)1840, (short)1850);
         Assert.InRange(samples.Min(), (short)-1850, (short)-1840);
     }
@@ -24,6 +24,7 @@ public sealed class LegacyAlertToneGeneratorTests
         Assert.Equal(28_000, samples.Length);
         for (int step = 0; step < 14; step++)
         {
+            Assert.Equal((short)0, samples[step * 2000]);
             double expected = step % 2 == 0 ? 1500 : 800;
             Assert.InRange(
                 EstimateFrequency(samples[(step * 2000)..((step + 1) * 2000)]),
@@ -42,7 +43,7 @@ public sealed class LegacyAlertToneGeneratorTests
         {
             short[] segment = samples[(step * 2000)..((step + 1) * 2000)];
             if (step % 2 == 0)
-                Assert.InRange(EstimateFrequency(segment), 1003.9, 1004.1);
+                Assert.InRange(EstimateFrequency(segment), 999.9, 1000.1);
             else
                 Assert.All(segment, sample => Assert.Equal((short)0, sample));
         }
@@ -55,7 +56,7 @@ public sealed class LegacyAlertToneGeneratorTests
 
         Assert.Equal(24_000, samples.Length);
         Assert.InRange(samples.Max(), (short)11_460, (short)11_475);
-        Assert.InRange(EstimateFrequency(samples), 1003.9, 1004.1);
+        Assert.InRange(EstimateFrequency(samples), 999.9, 1000.1);
     }
 
     private static double EstimateFrequency(ReadOnlySpan<short> samples)

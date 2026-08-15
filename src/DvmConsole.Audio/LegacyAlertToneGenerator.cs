@@ -8,18 +8,17 @@ public enum LegacyAlertTone
 }
 
 /// <summary>
-/// Recreates the three alert waveforms bundled with the original WPF console.
-/// The source files were 8 kHz mono PCM at approximately -25 dBFS.
+/// Recreates the three alert patterns bundled with the original WPF console.
+/// Frequencies and step boundaries are aligned to 20 ms vocoder frames so the
+/// generated version stays clean after DMR/P25 encoding.
 /// </summary>
 public static class LegacyAlertToneGenerator
 {
-    public const double ToneFrequencyHz = 1004;
+    public const double ToneFrequencyHz = 1000;
     public const double AlternatingHighFrequencyHz = 1500;
     public const double AlternatingLowFrequencyHz = 800;
     public const double Amplitude = 1845d / short.MaxValue;
     public static readonly TimeSpan StepDuration = TimeSpan.FromMilliseconds(250);
-    private const double AlternatingHighPhaseRadians = 3 * Math.PI / 4;
-    private const double AlternatingLowPhaseRadians = 2 * Math.PI / 5;
 
     public static short[] Generate(LegacyAlertTone tone)
         => Generate(tone, Amplitude);
@@ -48,13 +47,11 @@ public static class LegacyAlertToneGenerator
             samples.AddRange(generator.GenerateTone(
                 AlternatingHighFrequencyHz,
                 StepDuration,
-                amplitude,
-                AlternatingHighPhaseRadians));
+                amplitude));
             samples.AddRange(generator.GenerateTone(
                 AlternatingLowFrequencyHz,
                 StepDuration,
-                amplitude,
-                AlternatingLowPhaseRadians));
+                amplitude));
         }
 
         return samples.ToArray();

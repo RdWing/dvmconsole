@@ -18,8 +18,8 @@
   <Grid RowDefinitions="*,Auto">
     <TabControl x:Name="ToolTabs" Margin="10">
       <TabItem Header="Audio">
-        <ScrollViewer Padding="10">
-          <StackPanel Spacing="12">
+        <ScrollViewer Padding="10,10,10,24">
+          <StackPanel Spacing="12" Margin="0,0,0,4">
             <TextBlock Classes="heading" Text="Audio Settings" />
             <Grid ColumnDefinitions="Auto,*,Auto,*" ColumnSpacing="8" RowDefinitions="Auto,Auto">
               <TextBlock Text="Input device" VerticalAlignment="Center" />
@@ -247,7 +247,7 @@
       </TabItem>
 
       <TabItem Header="History">
-        <ScrollViewer Padding="10"><StackPanel Spacing="10"><Grid ColumnDefinitions="*,260,Auto,Auto" ColumnSpacing="8"><TextBlock Classes="heading" Text="Event History" /><TextBox Grid.Column="1" Watermark="Filter system, channel, RID, protocol" Text="{Binding CallHistoryFilterText, Mode=TwoWay}" /><Button Grid.Column="2" Content="Export CSV…" Click="HandleExportCallHistoryClick" /><Button Grid.Column="3" Content="Clear" Click="HandleClearCallHistoryClick" /></Grid><ItemsControl ItemsSource="{Binding FilteredCallHistory}"><ItemsControl.ItemTemplate><DataTemplate x:DataType="local:CallHistoryEntry"><Border Classes="panel"><Grid ColumnDefinitions="110,*,120,100,100,Auto" ColumnSpacing="8"><TextBlock Text="{Binding TimestampText}" /><StackPanel Grid.Column="1"><TextBlock FontWeight="SemiBold" Text="{Binding DisplayChannelText}" /><TextBlock Classes="caption" Text="{Binding RouteText}" /></StackPanel><TextBlock Grid.Column="2" Text="{Binding SystemName}" /><TextBlock Grid.Column="3" Text="{Binding EncryptionText}" /><TextBlock Grid.Column="4" Text="{Binding DurationText}" /><Button Grid.Column="5" Content="Play" Tag="{Binding}" IsVisible="{Binding HasRecording}" ToolTip.Tip="Play TAR recording" Click="HandlePlayCallHistoryRecordingClick" /></Grid></Border></DataTemplate></ItemsControl.ItemTemplate></ItemsControl></StackPanel></ScrollViewer>
+        <ScrollViewer Padding="10"><StackPanel Spacing="10"><Grid ColumnDefinitions="*,260,Auto,Auto" ColumnSpacing="8"><TextBlock Classes="heading" Text="Event History" /><TextBox Grid.Column="1" Watermark="Filter system, channel, RID, protocol" Text="{Binding CallHistoryFilterText, Mode=TwoWay}" /><Button Grid.Column="2" Content="Export CSV…" Click="HandleExportCallHistoryClick" /><Button Grid.Column="3" Content="Clear" Click="HandleClearCallHistoryClick" /></Grid><ItemsControl ItemsSource="{Binding FilteredCallHistory}"><ItemsControl.ItemTemplate><DataTemplate x:DataType="local:CallHistoryEntry"><Border Classes="panel"><Grid ColumnDefinitions="110,*,Auto,120,100,100" ColumnSpacing="8"><TextBlock Text="{Binding TimestampText}" /><StackPanel Grid.Column="1"><TextBlock FontWeight="SemiBold" Text="{Binding DisplayChannelText}" /><TextBlock Classes="caption" Text="{Binding RouteText}" /></StackPanel><Button Grid.Column="2" Content="Play" Tag="{Binding}" IsVisible="{Binding HasRecording}" ToolTip.Tip="Play TAR recording" Click="HandlePlayCallHistoryRecordingClick" /><TextBlock Grid.Column="3" Text="{Binding SystemName}" /><TextBlock Grid.Column="4" Text="{Binding EncryptionText}" /><TextBlock Grid.Column="5" Text="{Binding DurationText}" /></Grid></Border></DataTemplate></ItemsControl.ItemTemplate></ItemsControl></StackPanel></ScrollViewer>
       </TabItem>
 
       <TabItem Header="Groups">

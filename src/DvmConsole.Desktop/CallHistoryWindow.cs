@@ -56,7 +56,7 @@ public sealed class CallHistoryWindow : Window
                 {
                     var row = new Grid
                     {
-                        ColumnDefinitions = new ColumnDefinitions("110,*,120,100,100,Auto"),
+                        ColumnDefinitions = new ColumnDefinitions("110,*,Auto,120,100,100"),
                         ColumnSpacing = 8
                     };
                     var timestamp = new TextBlock { Text = entry.TimestampText };
@@ -89,10 +89,10 @@ public sealed class CallHistoryWindow : Window
                     row.Children.Add(duration);
                     row.Children.Add(play);
                     Grid.SetColumn(channel, 1);
-                    Grid.SetColumn(system, 2);
-                    Grid.SetColumn(encryption, 3);
-                    Grid.SetColumn(duration, 4);
-                    Grid.SetColumn(play, 5);
+                    Grid.SetColumn(play, 2);
+                    Grid.SetColumn(system, 3);
+                    Grid.SetColumn(encryption, 4);
+                    Grid.SetColumn(duration, 5);
                     return new Border
                     {
                         BorderBrush = new SolidColorBrush(Color.Parse("#3A4654")),
