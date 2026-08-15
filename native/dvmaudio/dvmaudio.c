@@ -340,6 +340,22 @@ DvmAudioStream *dvm_audio_stream_create(
     if (AudioUnitSetProperty(stream->unit, kAudioUnitProperty_StreamFormat, format_scope, format_element, &format, sizeof(format)) != noErr)
         goto fail;
 
+    // HAL normally performs the conversion to the requested voice format,
+    // but some device/driver combinations retain their native client rate.
+    // Report the accepted format, not an assumed rate, so managed capture or
+    // playback applies exactly one conversion when it is actually required.
+    UInt32 format_size = sizeof(format);
+    if (AudioUnitGetProperty(
+            stream->unit,
+            kAudioUnitProperty_StreamFormat,
+            format_scope,
+            format_element,
+            &format,
+            &format_size) != noErr ||
+        format.mSampleRate <= 0)
+        goto fail;
+    stream->sample_rate = (uint32_t)format.mSampleRate;
+
     AURenderCallbackStruct callback = {
         stream->input ? input_callback : output_callback,
         stream};

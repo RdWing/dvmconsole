@@ -28,6 +28,12 @@ public sealed class UserSettings
     public bool ClockShowSeconds { get; set; } = true;
     public bool KeepWindowOnTop { get; set; }
     public bool TogglePttMode { get; set; }
+    /// <summary>
+    /// Portable name of the key that activates global PTT.  The desktop host
+    /// maps this to its platform key enum so Core remains UI-independent.
+    /// </summary>
+    public string GlobalPttKey { get; set; } = "Space";
+    public List<string> TransmitSelectedChannelKeys { get; set; } = [];
     public string LastDtmfDigits { get; set; } = "123";
     public double ToneFrequencyHz { get; set; } = 1000;
     public double ToneDurationSeconds { get; set; } = 1.0;
@@ -96,6 +102,8 @@ public sealed class UserSettingsStore
             UserSettings settings = JsonSerializer.Deserialize<UserSettings>(File.ReadAllText(Path), SerializerOptions)
                 ?? new UserSettings();
             settings.TransmitEncryptionStates ??= new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
+            settings.GlobalPttKey = NormalizeGlobalPttKey(settings.GlobalPttKey);
+            settings.TransmitSelectedChannelKeys = NormalizeNames(settings.TransmitSelectedChannelKeys);
             NormalizeAudioInputSettings(settings);
             settings.AudioInputPresetName = settings.AudioInputPresetName?.Trim() ?? string.Empty;
             settings.AudioInputPresets = NormalizeAudioInputPresets(settings.AudioInputPresets);
@@ -194,6 +202,8 @@ public sealed class UserSettingsStore
         settings.WebStreamOutputDeviceIds = NormalizeChannelOutputDevices(settings.WebStreamOutputDeviceIds);
         settings.WebStreamVolumes = NormalizeWebStreamVolumes(settings.WebStreamVolumes);
         settings.SelectedWebStreams = NormalizeNames(settings.SelectedWebStreams);
+        settings.GlobalPttKey = NormalizeGlobalPttKey(settings.GlobalPttKey);
+        settings.TransmitSelectedChannelKeys = NormalizeNames(settings.TransmitSelectedChannelKeys);
 
         string? directory = System.IO.Path.GetDirectoryName(Path);
         if (!string.IsNullOrWhiteSpace(directory))
@@ -233,6 +243,20 @@ public sealed class UserSettingsStore
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .OrderBy(name => name, StringComparer.OrdinalIgnoreCase)
             .ToList();
+    }
+
+    private static string NormalizeGlobalPttKey(string? key)
+    {
+        string candidate = key?.Trim() ?? string.Empty;
+        return candidate.Equals("Space", StringComparison.OrdinalIgnoreCase) ||
+               (candidate.Length is 2 or 3 && candidate.StartsWith("F", StringComparison.OrdinalIgnoreCase) &&
+                int.TryParse(candidate[1..], out int functionKey) && functionKey is >= 1 and <= 12)
+            ? candidate.ToUpperInvariant() switch
+            {
+                "SPACE" => "Space",
+                var value => value
+            }
+            : "Space";
     }
 
     private static void NormalizeAudioInputSettings(UserSettings settings)

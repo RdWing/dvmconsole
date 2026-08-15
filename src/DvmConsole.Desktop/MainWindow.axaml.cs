@@ -61,9 +61,9 @@ public sealed partial class MainWindow : Window
             return;
         }
 
+        e.Handled = true;
         e.Pointer.Capture(button);
         await viewModel.StartChannelTransmitAsync(channel);
-        e.Handled = true;
     }
 
     private async void HandlePttPointerReleased(object? sender, PointerReleasedEventArgs e)
@@ -71,9 +71,15 @@ public sealed partial class MainWindow : Window
         if (sender is not Button { DataContext: ChannelViewModel channel } button)
             return;
 
+        e.Handled = true;
         e.Pointer.Capture(null);
         await viewModel.StopChannelTransmitAsync(channel);
-        e.Handled = true;
+    }
+
+    private async void HandlePttPointerCaptureLost(object? sender, PointerCaptureLostEventArgs e)
+    {
+        if (sender is Button { DataContext: ChannelViewModel channel })
+            await viewModel.StopChannelTransmitAsync(channel);
     }
 
     private async void HandleOpenCodeplugClick(object? sender, RoutedEventArgs e)
@@ -109,6 +115,20 @@ public sealed partial class MainWindow : Window
 
     private async void HandleDisableAllReceiveClick(object? sender, RoutedEventArgs e)
         => await viewModel.DisableAllReceiveAsync();
+
+    private void HandleTransmitSelectionClick(object? sender, RoutedEventArgs e)
+    {
+        if (sender is Button { DataContext: ChannelViewModel channel })
+            viewModel.ToggleChannelTransmitSelection(channel);
+    }
+
+    private async void HandleGlobalPttKeyClick(object? sender, RoutedEventArgs e)
+    {
+        if (sender is not MenuItem { Tag: string value } ||
+            !Enum.TryParse(value, ignoreCase: true, out KeyboardPttKey key))
+            return;
+        await viewModel.SetGlobalPttKeyAsync(key);
+    }
 
     private void HandleExitClick(object? sender, RoutedEventArgs e) => Close();
 
@@ -303,7 +323,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     private readonly PatchForwardingCoordinator patchForwarding;
     private readonly PatchSourceDecodeCoordinator patchSourceDecode;
     private readonly P25KeyRing? p25KeyRing;
-    private readonly KeyboardPttSource keyboardPtt = new();
+    private KeyboardPttSource keyboardPtt;
     private readonly SerialPttSource? serialPtt;
     private readonly CallHistoryStore callHistory = new();
     private readonly ObservableCollection<CallRecordingMetadata> recordingEntries = [];
@@ -356,7 +376,10 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         this.userSettingsStore = userSettingsStore ?? new UserSettingsStore(UserSettingsStore.DefaultPath);
         userSettings = this.userSettingsStore.Load();
         ApplyTheme(userSettings.DarkMode);
-        keyboardPtt.ToggleMode = userSettings.TogglePttMode;
+        keyboardPtt = new KeyboardPttSource(ParseGlobalPttKey(userSettings.GlobalPttKey))
+        {
+            ToggleMode = userSettings.TogglePttMode
+        };
         string? serialPttPort = Environment.GetEnvironmentVariable("DVM_PTT_SERIAL_PORT");
         if (!string.IsNullOrWhiteSpace(serialPttPort))
         {
@@ -484,6 +507,9 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
                     : []);
             channel.ConfigureAudio(StartAudioAsync, StopAudioAsync);
             channel.ConfigureTransmit(StartTransmitAsync, StopTransmitAsync);
+            channel.RestoreTransmitSelection(userSettings.TransmitSelectedChannelKeys.Contains(
+                channel.SettingsKey,
+                StringComparer.OrdinalIgnoreCase));
         }
 
         foreach (SystemViewModel system in Systems)
@@ -735,6 +761,8 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         }
     }
 
+    public string GlobalPttKeyText => keyboardPtt.ActivationKey.ToString();
+
     public bool RestoreSelectedChannelsOnStartup
     {
         get => userSettings.RestoreSelectedChannelsOnStartup;
@@ -769,8 +797,8 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     }
 
     public string SelectionStatusText => selectedChannel is null
-        ? "Select a channel card to target keyboard PTT."
-        : $"Selected: {selectedChannel.Name}. Hold Space for PTT.";
+        ? $"Choose TX on one or more cards, then hold {GlobalPttKeyText}."
+        : $"RX focus: {selectedChannel.Name}. Global PTT: {GlobalPttKeyText}.";
 
     public IReadOnlyList<SystemViewModel> Systems { get; }
     public IReadOnlyList<ZoneViewModel> Zones { get; }
@@ -946,6 +974,46 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         RaiseGeneratedAudioCanExecuteChanged();
     }
 
+    public void ToggleChannelTransmitSelection(ChannelViewModel channel)
+    {
+        ArgumentNullException.ThrowIfNull(channel);
+        if (!channel.CanTransmit)
+        {
+            TransmitStatusText = $"{channel.Name} cannot be selected for TX.";
+            return;
+        }
+
+        channel.SetTransmitSelected(!channel.IsTransmitSelected);
+        userSettings.TransmitSelectedChannelKeys = Systems
+            .SelectMany(system => system.Channels)
+            .Where(candidate => candidate.IsTransmitSelected)
+            .Select(candidate => candidate.SettingsKey)
+            .ToList();
+        PersistUserSettings();
+        TransmitStatusText = channel.IsTransmitSelected
+            ? $"{channel.Name} selected for global TX."
+            : $"{channel.Name} removed from global TX.";
+    }
+
+    public async Task SetGlobalPttKeyAsync(KeyboardPttKey key)
+    {
+        if (keyboardPtt.ActivationKey == key)
+            return;
+        if (keyboardPtt.IsPressed)
+            await HandleKeyboardPttStateChangedAsync(false).ConfigureAwait(false);
+
+        keyboardPtt.StateChanged -= HandleKeyboardPttStateChanged;
+        await keyboardPtt.DisposeAsync().ConfigureAwait(false);
+        keyboardPtt = new KeyboardPttSource(key) { ToggleMode = userSettings.TogglePttMode };
+        keyboardPtt.StateChanged += HandleKeyboardPttStateChanged;
+        await keyboardPtt.StartAsync().ConfigureAwait(false);
+        userSettings.GlobalPttKey = key.ToString();
+        PersistUserSettings();
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(GlobalPttKeyText)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SelectionStatusText)));
+        TransmitStatusText = $"Global PTT key set to {key}.";
+    }
+
     public async Task ToggleChannelReceiveAsync(ChannelViewModel channel)
     {
         ArgumentNullException.ThrowIfNull(channel);
@@ -1004,15 +1072,11 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
 
     public bool HandleKeyboardPttDown(KeyboardPttKey key)
     {
-        if (selectedChannel is null)
-            return false;
         return keyboardPtt.HandleKeyDown(key);
     }
 
     public bool HandleKeyboardPttUp(KeyboardPttKey key)
     {
-        if (selectedChannel is null)
-            return false;
         return keyboardPtt.HandleKeyUp(key);
     }
 
@@ -1689,11 +1753,26 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
 
     private async Task StartTransmitAsync(ChannelViewModel channel)
     {
-        SystemViewModel? system = Systems.FirstOrDefault(candidate =>
-            candidate.Name.Equals(channel.Definition.SystemName, StringComparison.OrdinalIgnoreCase));
-        if (system is null)
+        await StartTransmitAsync([channel]).ConfigureAwait(false);
+    }
+
+    private async Task StartTransmitAsync(IReadOnlyCollection<ChannelViewModel> channels)
+    {
+        if (channels.Count == 0 || transmitCoordinator.ActiveChannel is not null)
+            return;
+
+        TransmitTarget[] targets = channels
+            .Select(channel => new TransmitTarget(
+                channel,
+                Systems.FirstOrDefault(candidate => candidate.Name.Equals(
+                    channel.Definition.SystemName,
+                    StringComparison.OrdinalIgnoreCase))!))
+            .ToArray();
+        ChannelViewModel? missingSystemChannel = targets
+            .FirstOrDefault(target => target.System is null)?.Channel;
+        if (missingSystemChannel is not null)
         {
-            TransmitStatusText = $"PTT unavailable: system '{channel.Definition.SystemName}' was not found.";
+            TransmitStatusText = $"PTT unavailable: system '{missingSystemChannel.Definition.SystemName}' was not found.";
             return;
         }
 
@@ -1711,21 +1790,28 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
                 AudioStatusText = "RX audio disabled while transmitting.";
             }
 
-            await Task.Run(() => transmitCoordinator.StartAsync(channel, system));
-            channel.SetTransmitEnabled(true, transmitCoordinator.ActiveStreamId);
-            TransmitStatusText = $"Transmitting on {channel.Name}.";
+            await Task.Run(() => transmitCoordinator.StartAsync(targets));
+            foreach (ChannelViewModel channel in transmitCoordinator.ActiveChannels)
+                channel.SetTransmitEnabled(true, transmitCoordinator.GetActiveStreamId(channel));
+            TransmitStatusText = transmitCoordinator.ActiveChannels.Count == 1
+                ? $"Transmitting on {transmitCoordinator.ActiveChannel!.Name}."
+                : $"Transmitting on {transmitCoordinator.ActiveChannels.Count} selected channels.";
             if (TalkPermitTone)
                 _ = PlayTalkPermitToneAsync();
         }
         catch (Exception exception)
         {
-            channel.SetTransmitEnabled(false);
+            foreach (ChannelViewModel channel in channels)
+                channel.SetTransmitEnabled(false);
             await RestoreSuspendedAudioAsync();
             TransmitStatusText = $"PTT unavailable: {exception.Message}";
         }
     }
 
     private async Task StopTransmitAsync(ChannelViewModel channel)
+        => await StopTransmitAsync([channel]).ConfigureAwait(false);
+
+    private async Task StopTransmitAsync(IReadOnlyCollection<ChannelViewModel> channels)
     {
         try
         {
@@ -1733,7 +1819,8 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         }
         finally
         {
-            channel.SetTransmitEnabled(false);
+            foreach (ChannelViewModel channel in channels)
+                channel.SetTransmitEnabled(false);
             await RestoreSuspendedAudioAsync();
             TransmitStatusText = "PTT idle.";
         }
@@ -2325,20 +2412,26 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     {
         if (pressed)
         {
-            ChannelViewModel? target = selectedChannel;
-            if (target is null)
+            ChannelViewModel[] targets = Systems
+                .SelectMany(system => system.Channels)
+                .Where(channel => channel.IsTransmitSelected)
+                .ToArray();
+            if (targets.Length == 0)
+            {
+                TransmitStatusText = $"Choose TX on one or more cards before using {GlobalPttKeyText}.";
                 return;
+            }
             if (transmitCoordinator.ActiveChannel is not null)
                 return;
 
-            await StartTransmitAsync(target).ConfigureAwait(false);
-            if (!AnyPttSourcePressed && ReferenceEquals(target, transmitCoordinator.ActiveChannel))
-                await StopTransmitAsync(target).ConfigureAwait(false);
+            await StartTransmitAsync(targets).ConfigureAwait(false);
+            if (!AnyPttSourcePressed && transmitCoordinator.ActiveChannel is not null)
+                await StopTransmitAsync(transmitCoordinator.ActiveChannels).ConfigureAwait(false);
             return;
         }
 
-        ChannelViewModel? active = transmitCoordinator.ActiveChannel;
-        if (active is not null)
+        ChannelViewModel[] active = transmitCoordinator.ActiveChannels.ToArray();
+        if (active.Length > 0)
             await StopTransmitAsync(active).ConfigureAwait(false);
     }
 
@@ -2353,12 +2446,18 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             : 9_600;
     }
 
+    private static KeyboardPttKey ParseGlobalPttKey(string? value)
+        => Enum.TryParse(value, ignoreCase: true, out KeyboardPttKey key)
+            ? key
+            : KeyboardPttKey.Space;
+
     private void HandleTransmitFaulted(object? sender, Exception exception)
     {
-        ChannelViewModel? channel = transmitCoordinator.ActiveChannel;
+        ChannelViewModel[] channels = transmitCoordinator.ActiveChannels.ToArray();
         Dispatcher.UIThread.Post(() =>
         {
-            channel?.SetTransmitEnabled(false);
+            foreach (ChannelViewModel channel in channels)
+                channel.SetTransmitEnabled(false);
             TransmitStatusText = $"Transmission stopped: {exception.Message}";
         });
         _ = Task.Run(async () =>
@@ -2718,6 +2817,7 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
     private bool audioEnabled;
     private bool audioBusy;
     private bool transmitEnabled;
+    private bool transmitSelected;
     private bool transmitBusy;
     private bool transmitEncrypted;
     private bool recordingEnabled;
@@ -2766,6 +2866,7 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
     {
         ChannelRuntimeState.Receiving => new SolidColorBrush(Color.Parse("#008A3A")),
         ChannelRuntimeState.Transmitting => new SolidColorBrush(Color.Parse("#0B6B9C")),
+        _ when transmitSelected => new SolidColorBrush(Color.Parse("#2B253C")),
         _ when audioEnabled => new SolidColorBrush(Color.Parse("#1B2B22")),
         _ => new SolidColorBrush(Color.Parse("#151D26"))
     };
@@ -2773,6 +2874,7 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
     {
         ChannelRuntimeState.Receiving => new SolidColorBrush(Color.Parse("#00C86A")),
         ChannelRuntimeState.Transmitting => new SolidColorBrush(Color.Parse("#2497D3")),
+        _ when transmitSelected => new SolidColorBrush(Color.Parse("#9A78E8")),
         _ when audioEnabled => new SolidColorBrush(Color.Parse("#4E8060")),
         _ => CreateBrush(configuration.ResourceColor, "#2A3A4B")
     };
@@ -2797,6 +2899,7 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
     public bool IsAudioEnabled => audioEnabled;
     public string AudioButtonText => audioEnabled ? "Stop audio" : "Listen";
     public bool IsTransmitting => transmitEnabled;
+    public bool IsTransmitSelected => transmitSelected;
     public bool IsTransmitEncrypted => transmitEncrypted;
     public bool IsRecordingEnabled => recordingEnabled;
     public string RecordButtonText => recordingEnabled ? "Stop recording" : "Record";
@@ -2858,6 +2961,7 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
             _ => false
         };
     public string PttButtonText => transmitEnabled ? "Release" : "PTT";
+    public string TransmitSelectionText => transmitSelected ? "TX selected" : "TX";
     public ICommand AudioCommand { get; private set; }
     public ICommand PttCommand { get; private set; }
     public ICommand EncryptionCommand { get; }
@@ -2979,6 +3083,19 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(PttButtonText)));
         (EncryptionCommand as AsyncRelayCommand)?.RaiseCanExecuteChanged();
     }
+
+    public void SetTransmitSelected(bool selected)
+    {
+        if (transmitSelected == selected)
+            return;
+        transmitSelected = selected;
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsTransmitSelected)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(TransmitSelectionText)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CardBackgroundBrush)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CardBorderBrush)));
+    }
+
+    public void RestoreTransmitSelection(bool selected) => SetTransmitSelected(selected);
 
     public bool TryApplyTraffic(string systemName, FneTrafficFrame traffic)
     {

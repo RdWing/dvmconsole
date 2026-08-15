@@ -5,11 +5,11 @@ using DvmConsole.Vocoder;
 
 namespace DvmConsole.Desktop;
 
+public sealed record TransmitTarget(ChannelViewModel Channel, SystemViewModel System);
+
 /// <summary>
-/// Lazily owns one explicit transmit capture path. No input device, vocoder, or
-/// network traffic is opened until the operator presses PTT. Analog calls use
-/// the dvmhost-compatible μ-law packetizer and intentionally do not allocate a
-/// vocoder session.
+/// Lazily owns explicit transmit calls. Direct PTT starts one target; global
+/// PTT may start several targets, all fed by one microphone capture stream.
 /// </summary>
 public sealed class ChannelTransmitCoordinator : IAsyncDisposable
 {
@@ -17,15 +17,15 @@ public sealed class ChannelTransmitCoordinator : IAsyncDisposable
     private readonly SemaphoreSlim gate = new(1, 1);
     private IAudioBackend? audioBackend;
     private IVocoderBackend? vocoderBackend;
-    private ITransmitCaptureSession? session;
-    private ChannelViewModel? activeChannel;
-    private uint activeStreamId;
+    private SharedAudioCapture? sharedCapture;
+    private readonly List<ActiveTransmit> active = [];
     private bool disposed;
     private AudioInputProcessingOptions audioInputOptions;
 
     public event EventHandler<Exception>? Faulted;
-    public ChannelViewModel? ActiveChannel => activeChannel;
-    public uint ActiveStreamId => activeStreamId;
+    public ChannelViewModel? ActiveChannel => active.FirstOrDefault()?.Channel;
+    public IReadOnlyList<ChannelViewModel> ActiveChannels => active.Select(entry => entry.Channel).ToArray();
+    public uint ActiveStreamId => active.FirstOrDefault()?.StreamId ?? 0;
 
     public ChannelTransmitCoordinator(
         IP25KeyResolver? p25KeyResolver = null,
@@ -41,109 +41,120 @@ public sealed class ChannelTransmitCoordinator : IAsyncDisposable
         audioInputOptions = options.Normalize();
     }
 
-    public async Task StartAsync(ChannelViewModel channel, SystemViewModel system)
+    public uint GetActiveStreamId(ChannelViewModel channel)
     {
         ArgumentNullException.ThrowIfNull(channel);
-        ArgumentNullException.ThrowIfNull(system);
+        return active.FirstOrDefault(entry => ReferenceEquals(entry.Channel, channel))?.StreamId ?? 0;
+    }
+
+    public Task StartAsync(ChannelViewModel channel, SystemViewModel system)
+        => StartAsync([new TransmitTarget(channel, system)]);
+
+    public async Task StartAsync(IEnumerable<TransmitTarget> targets)
+    {
+        ArgumentNullException.ThrowIfNull(targets);
         ObjectDisposedException.ThrowIf(disposed, this);
+        TransmitTarget[] requested = targets
+            .Where(target => target.Channel is not null && target.System is not null)
+            .GroupBy(target => target.Channel)
+            .Select(group => group.First())
+            .ToArray();
+        if (requested.Length == 0)
+            throw new InvalidOperationException("Select at least one transmit-capable channel.");
 
         await gate.WaitAsync().ConfigureAwait(false);
         try
         {
-            if (!channel.CanTransmit)
-                throw new InvalidOperationException("Only clear, non-RX-only DMR/P25/analog channels can transmit in this slice.");
-            if (!system.IsConnected)
-                throw new InvalidOperationException($"The FNE system '{system.Name}' is not connected.");
-            if (system.SourceId is not uint sourceId)
-                throw new InvalidOperationException($"The FNE system '{system.Name}' has no valid transmit RID.");
-
+            ValidateTargets(requested);
             await StopCoreAsync().ConfigureAwait(false);
 
             IAudioBackend? createdAudioBackend = null;
             IVocoderBackend? createdVocoderBackend = null;
-            ITransmitCaptureSession? createdSession = null;
+            SharedAudioCapture? createdSharedCapture = null;
+            var created = new List<ActiveTransmit>();
             try
             {
                 createdAudioBackend = AudioBackendFactory.CreateDefault(Environment.GetEnvironmentVariable("DVM_AUDIO_LIBRARY"));
                 AudioDeviceInfo input = SelectInput(
                     createdAudioBackend.EnumerateDevices(AudioDirection.Input),
                     audioInputOptions.DeviceId);
-                IAudioCapture capture = new ProcessedAudioCapture(
+                var capture = new ProcessedAudioCapture(
                     createdAudioBackend.OpenCapture(input, PcmAudioFormat.Voice8KhzMono16Bit),
                     audioInputOptions);
+                createdSharedCapture = new SharedAudioCapture(capture);
 
-                bool isDmr = channel.Definition.Mode == "dmr";
-                bool isAnalog = channel.Definition.Mode == "analog";
-                P25TxEncryptionOptions? encryption = !isDmr && !isAnalog
-                    ? CreateP25EncryptionOptions(channel)
-                    : null;
-                if (!isAnalog)
+                if (requested.Any(target => target.Channel.Definition.Mode != "analog"))
                     createdVocoderBackend = new SoftwareVocoderBackend(Environment.GetEnvironmentVariable("DVMVOCODER_LIBRARY"));
 
-                uint streamId = system.CreateStreamId();
-                Action<ReadOnlyMemory<byte>, ushort, uint> send = (payload, sequence, stream) => system.SendTraffic(
-                    isDmr
-                        ? FneTrafficProtocol.Dmr
-                        : isAnalog
-                            ? FneTrafficProtocol.Analog
-                            : FneTrafficProtocol.P25,
-                    payload.Span,
-                    sequence,
-                    stream);
-                if (isAnalog)
+                foreach (TransmitTarget target in requested)
                 {
-                    createdSession = new AnalogTransmitCaptureSession(
-                        capture,
-                        sourceId,
-                        channel.Definition.DestinationId,
-                        streamId,
-                        send);
-                }
-                else
-                {
-                    if (createdVocoderBackend is null)
-                        throw new InvalidOperationException("A vocoder backend is required for digital transmit.");
+                    bool isDmr = target.Channel.Definition.Mode == "dmr";
+                    bool isAnalog = target.Channel.Definition.Mode == "analog";
+                    uint sourceId = target.System.SourceId!.Value;
+                    uint streamId = target.System.CreateStreamId();
+                    SharedAudioCapture.Lease lease = createdSharedCapture.CreateLease();
+                    Action<ReadOnlyMemory<byte>, ushort, uint> send = (payload, sequence, stream) => target.System.SendTraffic(
+                        isDmr
+                            ? FneTrafficProtocol.Dmr
+                            : isAnalog
+                                ? FneTrafficProtocol.Analog
+                                : FneTrafficProtocol.P25,
+                        payload.Span,
+                        sequence,
+                        stream);
 
-                    IVocoderSession vocoder = createdVocoderBackend.CreateSession(
-                        isDmr ? VocoderMode.DmrAmbe : VocoderMode.P25Imbe);
-                    createdSession = isDmr
-                        ? new DmrTransmitCaptureSession(
-                            capture,
-                            vocoder,
+                    ITransmitCaptureSession session;
+                    if (isAnalog)
+                    {
+                        session = new AnalogTransmitCaptureSession(
+                            lease,
                             sourceId,
-                            channel.Definition.DestinationId,
-                            channel.Definition.Slot,
+                            target.Channel.Definition.DestinationId,
                             streamId,
-                            send)
-                        : new P25TransmitCaptureSession(
-                            capture,
-                            vocoder,
-                            sourceId,
-                            channel.Definition.DestinationId,
-                            streamId,
-                            send,
-                            encryption);
-                }
-                createdSession.Faulted += HandleSessionFaulted;
+                            send);
+                    }
+                    else
+                    {
+                        IVocoderSession vocoder = createdVocoderBackend!.CreateSession(
+                            isDmr ? VocoderMode.DmrAmbe : VocoderMode.P25Imbe);
+                        session = isDmr
+                            ? new DmrTransmitCaptureSession(
+                                lease,
+                                vocoder,
+                                sourceId,
+                                target.Channel.Definition.DestinationId,
+                                target.Channel.Definition.Slot,
+                                streamId,
+                                send)
+                            : new P25TransmitCaptureSession(
+                                lease,
+                                vocoder,
+                                sourceId,
+                                target.Channel.Definition.DestinationId,
+                                streamId,
+                                send,
+                                CreateP25EncryptionOptions(target.Channel));
+                    }
 
-                await createdSession.StartAsync().ConfigureAwait(false);
+                    session.Faulted += HandleSessionFaulted;
+                    created.Add(new ActiveTransmit(target.Channel, streamId, session));
+                }
+
+                foreach (ActiveTransmit entry in created)
+                    await entry.Session.StartAsync().ConfigureAwait(false);
+
                 audioBackend = createdAudioBackend;
                 vocoderBackend = createdVocoderBackend;
-                session = createdSession;
-                activeChannel = channel;
-                activeStreamId = streamId;
+                sharedCapture = createdSharedCapture;
+                active.AddRange(created);
             }
             catch
             {
-                if (createdSession is not null)
-                {
-                    createdSession.Faulted -= HandleSessionFaulted;
-                    await createdSession.DisposeAsync().ConfigureAwait(false);
-                }
-
+                await DisposeEntriesAsync(created).ConfigureAwait(false);
+                if (createdSharedCapture is not null)
+                    await createdSharedCapture.DisposeAsync().ConfigureAwait(false);
                 createdVocoderBackend?.Dispose();
                 createdAudioBackend?.Dispose();
-
                 throw;
             }
         }
@@ -171,7 +182,6 @@ public sealed class ChannelTransmitCoordinator : IAsyncDisposable
     {
         if (disposed)
             return;
-
         await gate.WaitAsync().ConfigureAwait(false);
         try
         {
@@ -185,48 +195,81 @@ public sealed class ChannelTransmitCoordinator : IAsyncDisposable
         }
     }
 
+    private static void ValidateTargets(IEnumerable<TransmitTarget> targets)
+    {
+        foreach (TransmitTarget target in targets)
+        {
+            if (!target.Channel.CanTransmit)
+                throw new InvalidOperationException($"{target.Channel.Name} is RX-only or cannot transmit with its configured encryption.");
+            if (!target.System.Channels.Contains(target.Channel))
+                throw new InvalidOperationException($"{target.Channel.Name} does not belong to FNE system '{target.System.Name}'.");
+            if (!target.System.IsConnected)
+                throw new InvalidOperationException($"The FNE system '{target.System.Name}' is not connected.");
+            if (target.System.SourceId is not uint sourceId || sourceId == 0)
+                throw new InvalidOperationException($"The FNE system '{target.System.Name}' has no valid transmit RID.");
+        }
+    }
+
     private async Task StopCoreAsync()
     {
-        ITransmitCaptureSession? currentSession = session;
-        session = null;
-        activeChannel = null;
-        activeStreamId = 0;
-
+        ActiveTransmit[] current = active.ToArray();
+        active.Clear();
         Exception? failure = null;
-        if (currentSession is not null)
+        try
         {
-            currentSession.Faulted -= HandleSessionFaulted;
+            await DisposeEntriesAsync(current).ConfigureAwait(false);
+        }
+        catch (Exception exception)
+        {
+            failure = exception;
+        }
+
+        if (sharedCapture is not null)
+        {
             try
             {
-                await currentSession.DisposeAsync().ConfigureAwait(false);
+                await sharedCapture.DisposeAsync().ConfigureAwait(false);
             }
             catch (Exception exception)
             {
-                failure = exception;
+                failure ??= exception;
             }
+            sharedCapture = null;
         }
-
         vocoderBackend?.Dispose();
         vocoderBackend = null;
         audioBackend?.Dispose();
         audioBackend = null;
-
         if (failure is not null)
             throw failure;
     }
 
-    private void HandleSessionFaulted(object? sender, Exception exception)
+    private async Task DisposeEntriesAsync(IEnumerable<ActiveTransmit> entries)
     {
-        Faulted?.Invoke(this, exception);
+        Exception? failure = null;
+        foreach (ActiveTransmit entry in entries.Reverse())
+        {
+            entry.Session.Faulted -= HandleSessionFaulted;
+            try
+            {
+                await entry.Session.DisposeAsync().ConfigureAwait(false);
+            }
+            catch (Exception exception)
+            {
+                failure ??= exception;
+            }
+        }
+        if (failure is not null)
+            throw failure;
     }
 
+    private void HandleSessionFaulted(object? sender, Exception exception) => Faulted?.Invoke(this, exception);
+
     private static AudioDeviceInfo SelectInput(IReadOnlyList<AudioDeviceInfo> devices, string deviceId)
-    {
-        return devices.FirstOrDefault(device => device.Id.Equals(deviceId, StringComparison.OrdinalIgnoreCase))
+        => devices.FirstOrDefault(device => device.Id.Equals(deviceId, StringComparison.OrdinalIgnoreCase))
             ?? devices.FirstOrDefault(device => device.IsDefault)
             ?? devices.FirstOrDefault()
             ?? throw new InvalidOperationException("No audio input device is available.");
-    }
 
     private P25TxEncryptionOptions? CreateP25EncryptionOptions(ChannelViewModel channel)
     {
@@ -240,7 +283,8 @@ public sealed class ChannelTransmitCoordinator : IAsyncDisposable
             throw new NotSupportedException(
                 $"P25 encrypted transmit requires a configured key for {channel.Definition.EncryptionAlgorithm}/{channel.Definition.EncryptionKeyId}.");
         }
-
         return P25TxEncryptionOptions.CreateRandom(algorithmId, keyId, key);
     }
+
+    private sealed record ActiveTransmit(ChannelViewModel Channel, uint StreamId, ITransmitCaptureSession Session);
 }
