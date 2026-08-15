@@ -48,6 +48,8 @@ if [[ -n "$VOCODER_LIBRARY" ]]; then
     esac
 
     cp "$VOCODER_LIBRARY" "$OUTPUT_DIR/$VOCODER_OUTPUT"
+else
+    printf 'Warning: no native vocoder was copied; DMR/P25 voice will be unavailable.\n' >&2
 fi
 
 printf 'Published %s to %s\n' "$RID" "$OUTPUT_DIR"

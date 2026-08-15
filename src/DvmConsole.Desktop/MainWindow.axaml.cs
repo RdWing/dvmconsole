@@ -195,12 +195,6 @@ public sealed partial class MainWindow : Window
         await dialog.ShowDialog(this);
     }
 
-    private async void HandleEnableSelectedReceiveClick(object? sender, RoutedEventArgs e)
-        => await viewModel.EnableSelectedReceiveAsync();
-
-    private async void HandleDisableSelectedReceiveClick(object? sender, RoutedEventArgs e)
-        => await viewModel.DisableSelectedReceiveAsync();
-
     private async void HandleDisableAllReceiveClick(object? sender, RoutedEventArgs e)
         => await viewModel.DisableAllReceiveAsync();
 
@@ -1115,20 +1109,6 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             await StartAudioAsync(channel).ConfigureAwait(false);
     }
 
-    public async Task EnableSelectedReceiveAsync()
-    {
-        if (selectedChannel is null || selectedChannel.IsAudioEnabled)
-            return;
-        await StartAudioAsync(selectedChannel).ConfigureAwait(false);
-    }
-
-    public async Task DisableSelectedReceiveAsync()
-    {
-        if (selectedChannel is null || !selectedChannel.IsAudioEnabled)
-            return;
-        await StopAudioAsync(selectedChannel).ConfigureAwait(false);
-    }
-
     public async Task DisableAllReceiveAsync()
     {
         ChannelViewModel[] activeChannels = Systems
@@ -1196,10 +1176,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         {
             ConsoleConfiguration configuration = ConfigurationLoader.Load(configurationPath);
             IReadOnlyList<string> errors = ConfigurationLoader.Validate(configuration);
-            P25KeyRing p25KeyRing = string.IsNullOrWhiteSpace(configuration.KeyFile)
-                ? new P25KeyRing(new KeyContainer())
-                : new P25KeyRing(KeyFileLoader.Load(
-                    ConfigurationLoader.ResolvePath(configuration, configuration.KeyFile)));
+            P25KeyRing p25KeyRing = LoadP25KeyRing(configuration, out string? keyWarning);
             IReadOnlyList<ZoneViewModel> zones = configuration.Zones.Select(zone => new ZoneViewModel(
                 zone.Name,
                 zone.Channels.Select(channel => new ChannelViewModel(
@@ -1214,6 +1191,8 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             string status = errors.Count == 0
                 ? $"Loaded {configuration.Systems.Count} system(s) and {configuration.Zones.Count} zone(s). Connections are idle until Connect is pressed."
                 : $"Configuration has {errors.Count} validation error(s):\n• {string.Join("\n• ", errors)}";
+            if (!string.IsNullOrWhiteSpace(keyWarning))
+                status = $"{status}\n{keyWarning}";
 
             var viewModel = new MainWindowViewModel(
                 status,
@@ -1237,6 +1216,26 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
                 [],
                 userSettingsStore: userSettingsStore,
                 groupDefinitions: []);
+        }
+    }
+
+    private static P25KeyRing LoadP25KeyRing(
+        ConsoleConfiguration configuration,
+        out string? warning)
+    {
+        warning = null;
+        if (string.IsNullOrWhiteSpace(configuration.KeyFile))
+            return new P25KeyRing(new KeyContainer());
+
+        try
+        {
+            return new P25KeyRing(KeyFileLoader.Load(
+                ConfigurationLoader.ResolvePath(configuration, configuration.KeyFile)));
+        }
+        catch (Exception exception) when (exception is IOException or InvalidDataException or FormatException or YamlDotNet.Core.YamlException)
+        {
+            warning = $"Encryption keys unavailable: {exception.Message} Encrypted P25 channels are disabled.";
+            return new P25KeyRing(new KeyContainer());
         }
     }
 
@@ -1904,7 +1903,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
                 ? $"Transmitting on {transmitCoordinator.ActiveChannel!.Name}."
                 : $"Transmitting on {transmitCoordinator.ActiveChannels.Count} selected channels.";
             if (TalkPermitTone)
-                _ = PlayTalkPermitToneAsync();
+                await PlayTalkPermitToneAsync().ConfigureAwait(false);
         }
         catch (Exception exception)
         {

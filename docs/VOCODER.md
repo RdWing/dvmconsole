@@ -17,6 +17,24 @@ cmake -S dvmvocoder -B dvmvocoder-build -DCMAKE_BUILD_TYPE=Release
 cmake --build dvmvocoder-build --config Release
 ```
 
+On macOS this requires Xcode Command Line Tools and produces a dynamic library
+named `libvocoder.dylib`. On Windows, run the same commands from a Developer
+PowerShell with the Visual Studio C++ workload installed; multi-configuration
+generators normally place `libvocoder.dll` under the build directory's
+`Release` folder. Use the actual generated path for `DVMVOCODER_LIBRARY`.
+
+For local application development, point the runtime at that library:
+
+```sh
+# macOS
+export DVMVOCODER_LIBRARY=/full/path/to/libvocoder.dylib
+```
+
+```powershell
+# Windows
+$env:DVMVOCODER_LIBRARY = "C:\full\path\to\libvocoder.dll"
+```
+
 Run the native verification tests by providing the built library explicitly:
 
 ```sh

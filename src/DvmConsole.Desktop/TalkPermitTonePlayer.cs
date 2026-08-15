@@ -9,6 +9,8 @@ namespace DvmConsole.Desktop;
 /// </summary>
 public sealed class TalkPermitTonePlayer : IAsyncDisposable
 {
+    private static readonly TimeSpan ToneDuration = TimeSpan.FromMilliseconds(80);
+    private static readonly TimeSpan PlaybackDrainTime = TimeSpan.FromMilliseconds(30);
     private readonly Func<IAudioBackend> createAudioBackend;
     private readonly Func<string?> getOutputDeviceId;
     private readonly SemaphoreSlim gate = new(1, 1);
@@ -37,10 +39,14 @@ public sealed class TalkPermitTonePlayer : IAsyncDisposable
                 PcmAudioFormat.Voice8KhzMono16Bit);
             short[] samples = new PcmToneGenerator().GenerateTone(
                 frequency: 1200,
-                duration: TimeSpan.FromMilliseconds(50),
-                amplitude: 0.20);
+                duration: ToneDuration,
+                amplitude: 0.25);
             await playback.WriteAsync(samples, cancellationToken).ConfigureAwait(false);
-            await playback.FlushAsync(cancellationToken).ConfigureAwait(false);
+            // Playback writes are buffered on both supported backends. Flush is
+            // intentionally not used here because it means "discard queued
+            // audio" for the Windows backend. Keep the stream alive long
+            // enough for the short tone to reach the device before disposal.
+            await Task.Delay(ToneDuration + PlaybackDrainTime, cancellationToken).ConfigureAwait(false);
         }
         finally
         {

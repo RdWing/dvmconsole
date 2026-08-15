@@ -17,9 +17,10 @@ public sealed class TalkPermitTonePlayerTests
 
         Assert.Equal("alternate", backend.LastOutputDeviceId);
         short[] samples = Assert.Single(backend.Playback.Frames);
-        Assert.Equal(400, samples.Length);
+        Assert.Equal(640, samples.Length);
         Assert.Contains(samples, sample => sample != 0);
-        Assert.InRange(samples.Max(), 5_000, 7_000);
+        Assert.InRange(samples.Max(), 7_000, 9_000);
+        Assert.False(backend.Playback.WasFlushed);
         Assert.True(backend.Playback.IsDisposed);
         Assert.True(backend.IsDisposed);
     }
@@ -55,6 +56,7 @@ public sealed class TalkPermitTonePlayerTests
     {
         public List<short[]> Frames { get; } = [];
         public bool IsDisposed { get; private set; }
+        public bool WasFlushed { get; private set; }
         public PcmAudioFormat Format { get; } = PcmAudioFormat.Voice8KhzMono16Bit;
 
         public ValueTask WriteAsync(ReadOnlyMemory<short> samples, CancellationToken cancellationToken = default)
@@ -65,7 +67,11 @@ public sealed class TalkPermitTonePlayerTests
         }
 
         public ValueTask FlushAsync(CancellationToken cancellationToken = default)
-            => ValueTask.CompletedTask;
+        {
+            WasFlushed = true;
+            Frames.Clear();
+            return ValueTask.CompletedTask;
+        }
 
         public ValueTask DisposeAsync()
         {

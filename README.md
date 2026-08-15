@@ -1,6 +1,6 @@
 # Digital Voice Modem Desktop Dispatch Console
 
-The Digital Voice Modem Desktop Dispatch Console ("DDC") is a WPF desktop application that operates similarly to a traditional dispatch console, allowing DVM users to monitor multiple talkgroups on a DVM FNE from a single application.
+The Digital Voice Modem Desktop Dispatch Console ("DDC") is a desktop application that operates similarly to a traditional dispatch console, allowing DVM users to monitor multiple talkgroups on a DVM FNE from a single application. The `avalonia_v2` branch contains the cross-platform Avalonia rebuild for Apple Silicon macOS and Windows x64; the original WPF application remains in the repository as the feature and behavior reference.
 
 ![Dark Mode Console](./repo/Screenshot-3.png)
 
@@ -14,44 +14,45 @@ Older FNE builds are not recommended and may behave unpredictably with this cons
 
 Codeplugs created for R01A00 should be reviewed before use with R02A00. There have been major changes to resource configuration.
 
-## Building
+## Building the Avalonia application
 
-This project uses a standard Visual Studio solution for its build system.
+Install Git, the .NET 8 SDK, CMake, and a platform C/C++ toolchain, then clone
+the repository and initialize its FNE submodule:
 
-### Requirements
-
-- Windows 10 or newer
-- Visual Studio 2026 with the .NET desktop development workload
-- .NET SDK capable of building .NET 8 Windows desktop projects
-- Git with submodule support
-- dvmvocoder (`libvocoder.DLL`): https://github.com/DVMProject/dvmvocoder
-
-The console project currently targets `net8.0-windows7.0` and is configured for `x86`.
-
-### Clone
-
-```powershell
-git clone --recursive https://github.com/DVMProject/dvmconsole.git
+```sh
+git clone --recurse-submodules https://github.com/RdWing/dvmconsole.git
 cd dvmconsole
+git checkout avalonia_v2
+git submodule update --init --recursive
+dotnet restore src/DvmConsole.Rebuild.sln
+dotnet build src/DvmConsole.Rebuild.sln
 ```
 
-### Build With Visual Studio
+Use `src/DvmConsole.Rebuild.sln` for the Avalonia application. The root
+`dvmconsole.sln` is the original Windows-only WPF solution.
 
-Open `dvmconsole.sln` in Visual Studio 2026 and build the `dvmconsole` project.
+Digital voice requires a matching native `dvmvocoder` library. macOS also
+requires the included CoreAudio shim; the macOS publishing script builds that
+shim automatically. Complete platform-specific prerequisites, development
+launch commands, native-library setup, and packaging commands are in
+[Desktop building and publishing](docs/PUBLISHING.md) and
+[Software vocoder](docs/VOCODER.md).
+Set `DVMVOCODER_LIBRARY` before running the complete solution test suite,
+because it includes native encode/decode integration tests.
 
-Use the included solution configuration. The default project platform is `x86`.
+Publish Apple Silicon macOS from a shell:
 
-### Build From PowerShell
+```sh
+DVMVOCODER_LIBRARY=/full/path/to/libvocoder.dylib \
+  scripts/publish-desktop.sh osx-arm64 /tmp/dvmconsole-osx-arm64
+```
+
+Publish Windows x64 from PowerShell:
 
 ```powershell
-dotnet build .\dvmconsole.sln
+$env:DVMVOCODER_LIBRARY = "C:\full\path\to\libvocoder.dll"
+.\scripts\publish-desktop.ps1 -Runtime win-x64 -OutputDirectory C:\Temp\dvmconsole-win-x64
 ```
-
-### Runtime Note
-
-`libvocoder.DLL` must be present next to the built console executable. If it is missing, the console will stop at startup and display an error.
-
-If building for a different CPU architecture, `libvocoder.DLL` must be built for that same architecture.
 
 ## Documentation
 

@@ -33,9 +33,6 @@
             <MenuItem Header="Exit" Click="HandleExitClick" />
           </MenuItem>
           <MenuItem Header="Channels">
-            <MenuItem Header="Enable receive on selected card" Click="HandleEnableSelectedReceiveClick" />
-            <MenuItem Header="Disable receive on selected card" Click="HandleDisableSelectedReceiveClick" />
-            <Separator />
             <MenuItem Header="Disable all receive" Click="HandleDisableAllReceiveClick" />
             <Separator />
             <MenuItem Header="Global PTT key">

@@ -36,6 +36,57 @@ public sealed class SystemViewModelTests
     }
 
     [Fact]
+    public async Task MissingEncryptionKeyFileDoesNotRejectOtherwiseValidCodeplug()
+    {
+        string directory = Path.Combine(Path.GetTempPath(), "dvmconsole-codeplug-tests", Guid.NewGuid().ToString("N"));
+        string codeplugPath = Path.Combine(directory, "codeplug.yml");
+        string settingsPath = CreateSettingsPath();
+        Directory.CreateDirectory(directory);
+
+        try
+        {
+            await File.WriteAllTextAsync(codeplugPath, """
+                keyFile: "missing-keys.clear"
+                systems:
+                  - name: "Secure System"
+                    identity: "Secure Console"
+                    address: "127.0.0.1"
+                    port: 62031
+                    peerId: 1000001
+                    rid: "1001"
+                zones:
+                  - name: "Dispatch"
+                    channels:
+                      - name: "Selectable Secure"
+                        system: "Secure System"
+                        tgid: "101"
+                        mode: "p25"
+                        keyId: "0x50"
+                        algo: "aes"
+                        selectable_encryption: true
+                """);
+
+            var store = new UserSettingsStore(settingsPath);
+            await using MainWindowViewModel viewModel = MainWindowViewModel.Load(codeplugPath, store);
+
+            ChannelViewModel channel = Assert.Single(Assert.Single(viewModel.Systems).Channels);
+            Assert.True(viewModel.IsCodeplugLoaded);
+            Assert.Contains("Encryption keys unavailable:", viewModel.StatusText);
+            Assert.Contains("Encrypted P25 channels are disabled.", viewModel.StatusText);
+            Assert.False(channel.CanListen);
+            Assert.False(channel.CanTransmit);
+            Assert.False(channel.CanToggleEncryption);
+            Assert.Equal(codeplugPath, store.Load().LastCodeplugPath);
+        }
+        finally
+        {
+            if (Directory.Exists(directory))
+                Directory.Delete(directory, recursive: true);
+            CleanupSettingsPath(settingsPath);
+        }
+    }
+
+    [Fact]
     public async Task LoadsVariableSystemTabsFromCodeplugSystems()
     {
         string path = Path.Combine(AppContext.BaseDirectory, "TestData", "multiple-systems.yml");
