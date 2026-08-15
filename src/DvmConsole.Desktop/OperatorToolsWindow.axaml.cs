@@ -180,10 +180,19 @@ public sealed partial class OperatorToolsWindow : Window
             viewModel.OpenRecording(metadata);
     }
 
-    private void HandleDeleteRecordingClick(object? sender, RoutedEventArgs e)
+    private async void HandlePlayRecordingClick(object? sender, RoutedEventArgs e)
     {
         if (sender is Button { Tag: CallRecordingMetadata metadata })
-            viewModel.DeleteRecording(metadata);
+            await viewModel.PlayRecordingAsync(metadata);
+    }
+
+    private async void HandleStopRecordingClick(object? sender, RoutedEventArgs e)
+        => await viewModel.StopRecordingPlaybackAsync();
+
+    private async void HandleDeleteRecordingClick(object? sender, RoutedEventArgs e)
+    {
+        if (sender is Button { Tag: CallRecordingMetadata metadata })
+            await viewModel.DeleteRecordingAsync(metadata);
     }
 
     private void HandleApplyPatchGroupClick(object? sender, RoutedEventArgs e)

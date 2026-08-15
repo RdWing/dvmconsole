@@ -779,8 +779,23 @@ public sealed partial class MainWindow : Window
         if (sender is Button { Tag: CallRecordingMetadata metadata } &&
             DataContext is MainWindowViewModel viewModel)
         {
-            viewModel.DeleteRecording(metadata);
+            _ = viewModel.DeleteRecordingAsync(metadata);
         }
+    }
+
+    private async void HandlePlayRecordingClick(object? sender, RoutedEventArgs e)
+    {
+        if (sender is Button { Tag: CallRecordingMetadata metadata } &&
+            DataContext is MainWindowViewModel viewModel)
+        {
+            await viewModel.PlayRecordingAsync(metadata);
+        }
+    }
+
+    private async void HandleStopRecordingClick(object? sender, RoutedEventArgs e)
+    {
+        if (DataContext is MainWindowViewModel viewModel)
+            await viewModel.StopRecordingPlaybackAsync();
     }
 
     private void HandleSaveIgnoredSubscribersClick(object? sender, RoutedEventArgs e)
@@ -933,6 +948,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     private ChannelViewModel[] suspendedAudioChannels = [];
     private PatchGroupEditorViewModel? activeMultiSelectGroup;
     private readonly CallRecordingManager callRecordings;
+    private readonly RecordingPlaybackCoordinator recordingPlayback;
     private readonly DispatcherTimer clockTimer;
     private Bitmap? userBackgroundBitmap;
     private IBrush mainBackgroundBrush = new SolidColorBrush(Color.Parse("#0D1116"));
@@ -1051,6 +1067,9 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             HandleRecordingFaulted,
             userSettings.RecordingRetentionDays,
             ShouldRecordSource);
+        recordingPlayback = new RecordingPlaybackCoordinator(
+            () => AudioBackendFactory.CreateDefault(Environment.GetEnvironmentVariable("DVM_AUDIO_LIBRARY")),
+            () => userSettings.AudioOutputDeviceId);
         audioCoordinator = new ChannelReceiveAudioCoordinator(
             p25KeyResolver,
             HandleDecodedSamples,
@@ -2097,9 +2116,42 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         }
     }
 
-    public void DeleteRecording(CallRecordingMetadata metadata)
+    public async Task PlayRecordingAsync(CallRecordingMetadata metadata)
     {
         ArgumentNullException.ThrowIfNull(metadata);
+        if (!callRecordings.TryGetRecordingPath(metadata, out string recordingPath))
+        {
+            AudioStatusText = "The selected recording file is no longer available.";
+            RefreshRecordings();
+            return;
+        }
+
+        try
+        {
+            await recordingPlayback.StartAsync(recordingPath).ConfigureAwait(false);
+            AudioStatusText = $"Playing recording: {metadata.FileName}";
+        }
+        catch (Exception exception) when (exception is IOException or InvalidDataException or InvalidOperationException or NotSupportedException)
+        {
+            AudioStatusText = $"Unable to play recording: {exception.Message}";
+        }
+    }
+
+    public async Task StopRecordingPlaybackAsync()
+    {
+        await recordingPlayback.StopAsync().ConfigureAwait(false);
+        AudioStatusText = "Recording playback stopped.";
+    }
+
+    public async Task DeleteRecordingAsync(CallRecordingMetadata metadata)
+    {
+        ArgumentNullException.ThrowIfNull(metadata);
+        if (callRecordings.TryGetRecordingPath(metadata, out string recordingPath) &&
+            recordingPlayback.IsPlaying(recordingPath))
+        {
+            await recordingPlayback.StopAsync().ConfigureAwait(false);
+        }
+
         if (!callRecordings.DeleteRecording(metadata))
         {
             AudioStatusText = "The selected recording could not be deleted.";
@@ -2458,6 +2510,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         await transmitCoordinator.DisposeAsync().ConfigureAwait(false);
         await audioCoordinator.DisposeAsync().ConfigureAwait(false);
         await webStreamPlayback.DisposeAsync().ConfigureAwait(false);
+        await recordingPlayback.DisposeAsync().ConfigureAwait(false);
         callRecordings.Dispose();
         userBackgroundBitmap?.Dispose();
         userBackgroundBitmap = null;
