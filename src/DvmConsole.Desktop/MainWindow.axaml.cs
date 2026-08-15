@@ -53,6 +53,29 @@ public sealed partial class MainWindow : Window
         }
     }
 
+    private async void HandlePttPointerPressed(object? sender, PointerPressedEventArgs e)
+    {
+        if (sender is not Button { DataContext: ChannelViewModel channel } button ||
+            !e.GetCurrentPoint(button).Properties.IsLeftButtonPressed)
+        {
+            return;
+        }
+
+        e.Pointer.Capture(button);
+        await viewModel.StartChannelTransmitAsync(channel);
+        e.Handled = true;
+    }
+
+    private async void HandlePttPointerReleased(object? sender, PointerReleasedEventArgs e)
+    {
+        if (sender is not Button { DataContext: ChannelViewModel channel } button)
+            return;
+
+        e.Pointer.Capture(null);
+        await viewModel.StopChannelTransmitAsync(channel);
+        e.Handled = true;
+    }
+
     private async void HandleOpenCodeplugClick(object? sender, RoutedEventArgs e)
     {
         IReadOnlyList<IStorageFile> files = await StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
@@ -287,6 +310,8 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     private readonly ObservableCollection<DtmfPresetViewModel> dtmfPresets = [];
     private readonly ObservableCollection<TonePresetViewModel> tonePresets = [];
     private readonly ObservableCollection<AudioInputPresetViewModel> audioInputPresets = [];
+    private readonly ObservableCollection<AudioDeviceOptionViewModel> audioInputDevices = [];
+    private readonly ObservableCollection<AudioDeviceOptionViewModel> audioOutputDevices = [];
     private readonly ObservableCollection<WebStreamViewModel> webStreams = [];
     private readonly WebStreamPlaybackCoordinator webStreamPlayback;
     private readonly object patchSourceWorkSync = new();
@@ -315,6 +340,8 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     private bool busy;
     private ChannelViewModel? selectedChannel;
     private SystemViewModel? selectedSystem;
+    private AudioDeviceOptionViewModel? selectedAudioInputDevice;
+    private AudioDeviceOptionViewModel? selectedAudioOutputDevice;
 
     private MainWindowViewModel(
         string statusText,
@@ -409,6 +436,8 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         DtmfPresets = new ReadOnlyObservableCollection<DtmfPresetViewModel>(dtmfPresets);
         TonePresets = new ReadOnlyObservableCollection<TonePresetViewModel>(tonePresets);
         AudioInputPresets = new ReadOnlyObservableCollection<AudioInputPresetViewModel>(audioInputPresets);
+        AudioInputDevices = new ReadOnlyObservableCollection<AudioDeviceOptionViewModel>(audioInputDevices);
+        AudioOutputDevices = new ReadOnlyObservableCollection<AudioDeviceOptionViewModel>(audioOutputDevices);
         WebStreams = new ReadOnlyObservableCollection<WebStreamViewModel>(webStreams);
         foreach (WebStreamViewModel stream in Zones.SelectMany(zone => zone.WebStreams))
         {
@@ -487,6 +516,8 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         SaveTonePresetCommand = new RelayCommand(SaveTonePreset);
         ApplyAudioInputSettingsCommand = new RelayCommand(ApplyAudioInputSettings);
         ApplyRecordingRetentionCommand = new RelayCommand(ApplyRecordingRetention);
+        RefreshAudioDevicesCommand = new RelayCommand(RefreshAudioDevices);
+        RefreshAudioDevices();
         transmitCoordinator.Faulted += HandleTransmitFaulted;
         keyboardPtt.StateChanged += HandleKeyboardPttStateChanged;
         if (serialPtt is not null)
@@ -541,6 +572,34 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     {
         get => audioOutputDeviceIdText;
         set => SetField(ref audioOutputDeviceIdText, value ?? string.Empty);
+    }
+
+    public AudioDeviceOptionViewModel? SelectedAudioInputDevice
+    {
+        get => selectedAudioInputDevice;
+        set
+        {
+            if (ReferenceEquals(selectedAudioInputDevice, value))
+                return;
+            selectedAudioInputDevice = value;
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SelectedAudioInputDevice)));
+            if (value is not null)
+                ApplySelectedAudioDevices();
+        }
+    }
+
+    public AudioDeviceOptionViewModel? SelectedAudioOutputDevice
+    {
+        get => selectedAudioOutputDevice;
+        set
+        {
+            if (ReferenceEquals(selectedAudioOutputDevice, value))
+                return;
+            selectedAudioOutputDevice = value;
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SelectedAudioOutputDevice)));
+            if (value is not null)
+                ApplySelectedAudioDevices();
+        }
     }
 
     public string AudioInputGainText
@@ -720,6 +779,8 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     public ReadOnlyObservableCollection<DtmfPresetViewModel> DtmfPresets { get; }
     public ReadOnlyObservableCollection<TonePresetViewModel> TonePresets { get; }
     public ReadOnlyObservableCollection<AudioInputPresetViewModel> AudioInputPresets { get; }
+    public ReadOnlyObservableCollection<AudioDeviceOptionViewModel> AudioInputDevices { get; }
+    public ReadOnlyObservableCollection<AudioDeviceOptionViewModel> AudioOutputDevices { get; }
     public ReadOnlyObservableCollection<WebStreamViewModel> WebStreams { get; }
     public System.Collections.ObjectModel.ReadOnlyObservableCollection<CallHistoryEntry> CallHistory { get; }
     public ReadOnlyObservableCollection<CallRecordingMetadata> Recordings { get; }
@@ -731,6 +792,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     public ICommand SaveTonePresetCommand { get; }
     public ICommand ApplyAudioInputSettingsCommand { get; }
     public ICommand ApplyRecordingRetentionCommand { get; }
+    public ICommand RefreshAudioDevicesCommand { get; }
     public ICommand ConnectionCommand => SelectedSystem?.IsConnected == true ? DisconnectCommand : ConnectCommand;
     public string ConnectionButtonText => SelectedSystem?.IsConnected == true ? "Disconnect" : "Connect";
     public string ConnectionPillText => SelectedSystem?.IsConnected == true ? "CONNECTED" : "OFFLINE";
@@ -916,6 +978,28 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             .ToArray();
         foreach (ChannelViewModel channel in activeChannels)
             await StopAudioAsync(channel).ConfigureAwait(false);
+    }
+
+    public async Task StartChannelTransmitAsync(ChannelViewModel channel)
+    {
+        ArgumentNullException.ThrowIfNull(channel);
+        SelectChannel(channel);
+        if (channel.IsTransmitting)
+            return;
+        if (!channel.CanTransmit)
+        {
+            TransmitStatusText = $"PTT unavailable for {channel.Name}: the channel is RX-only or its encryption key is unavailable.";
+            return;
+        }
+        await StartTransmitAsync(channel).ConfigureAwait(false);
+    }
+
+    public async Task StopChannelTransmitAsync(ChannelViewModel channel)
+    {
+        ArgumentNullException.ThrowIfNull(channel);
+        if (!channel.IsTransmitting)
+            return;
+        await StopTransmitAsync(channel).ConfigureAwait(false);
     }
 
     public bool HandleKeyboardPttDown(KeyboardPttKey key)
@@ -1874,6 +1958,75 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         AudioStatusText = "Audio device and microphone settings saved; device routes apply to the next audio session and PTT call.";
     }
 
+    public void RefreshAudioDevices()
+    {
+        try
+        {
+            using IAudioBackend backend = AudioBackendFactory.CreateDefault(
+                Environment.GetEnvironmentVariable("DVM_AUDIO_LIBRARY"));
+            IReadOnlyList<AudioDeviceInfo> inputs = backend.EnumerateDevices(AudioDirection.Input);
+            IReadOnlyList<AudioDeviceInfo> outputs = backend.EnumerateDevices(AudioDirection.Output);
+
+            ReplaceAudioDeviceOptions(audioInputDevices, inputs);
+            ReplaceAudioDeviceOptions(audioOutputDevices, outputs);
+            selectedAudioInputDevice = ResolveAudioDeviceOption(audioInputDevices, AudioInputDeviceIdText);
+            selectedAudioOutputDevice = ResolveAudioDeviceOption(audioOutputDevices, AudioOutputDeviceIdText);
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SelectedAudioInputDevice)));
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SelectedAudioOutputDevice)));
+        }
+        catch (Exception exception) when (exception is InvalidOperationException or IOException or DllNotFoundException or PlatformNotSupportedException)
+        {
+            audioInputDevices.Clear();
+            audioOutputDevices.Clear();
+            selectedAudioInputDevice = null;
+            selectedAudioOutputDevice = null;
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SelectedAudioInputDevice)));
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SelectedAudioOutputDevice)));
+            AudioStatusText = $"Audio device list unavailable: {exception.Message}";
+        }
+    }
+
+    private void ApplySelectedAudioDevices()
+    {
+        if (selectedAudioInputDevice is null || selectedAudioOutputDevice is null)
+            return;
+
+        AudioInputDeviceIdText = selectedAudioInputDevice.Id;
+        AudioOutputDeviceIdText = selectedAudioOutputDevice.Id;
+        userSettings.AudioInputDeviceId = selectedAudioInputDevice.Id;
+        userSettings.AudioOutputDeviceId = selectedAudioOutputDevice.Id;
+        transmitCoordinator.UpdateAudioInputOptions(new AudioInputProcessingOptions
+        {
+            DeviceId = selectedAudioInputDevice.Id,
+            AgcEnabled = userSettings.AudioInputAgcEnabled,
+            Gain = userSettings.AudioInputGain,
+            LowGainDb = userSettings.AudioInputEqLowGainDb,
+            MidGainDb = userSettings.AudioInputEqMidGainDb,
+            HighGainDb = userSettings.AudioInputEqHighGainDb
+        });
+        PersistUserSettings();
+        AudioStatusText = "Audio devices selected; restart an active receive channel before its output route changes.";
+    }
+
+    private static void ReplaceAudioDeviceOptions(
+        ObservableCollection<AudioDeviceOptionViewModel> target,
+        IReadOnlyList<AudioDeviceInfo> devices)
+    {
+        target.Clear();
+        foreach (AudioDeviceInfo device in devices)
+            target.Add(new AudioDeviceOptionViewModel(device.Id, device.Name, device.IsDefault));
+    }
+
+    private static AudioDeviceOptionViewModel? ResolveAudioDeviceOption(
+        IEnumerable<AudioDeviceOptionViewModel> devices,
+        string? requestedId)
+    {
+        return devices.FirstOrDefault(device => !string.IsNullOrWhiteSpace(requestedId) &&
+                                                 device.Id.Equals(requestedId, StringComparison.OrdinalIgnoreCase))
+               ?? devices.FirstOrDefault(device => device.IsDefault)
+               ?? devices.FirstOrDefault();
+    }
+
     private void PersistAudioInputPresetState()
     {
         userSettings.AudioInputPresetName = AudioInputPresetNameText.Trim();
@@ -2547,6 +2700,11 @@ public sealed record ZoneViewModel(
     }
 }
 
+public sealed record AudioDeviceOptionViewModel(string Id, string Name, bool IsDefault)
+{
+    public string DisplayName => IsDefault ? $"{Name} (default)" : Name;
+}
+
 public sealed class ChannelViewModel : INotifyPropertyChanged
 {
     private readonly ChannelConfiguration configuration;
@@ -2608,9 +2766,16 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
     {
         ChannelRuntimeState.Receiving => new SolidColorBrush(Color.Parse("#008A3A")),
         ChannelRuntimeState.Transmitting => new SolidColorBrush(Color.Parse("#0B6B9C")),
+        _ when audioEnabled => new SolidColorBrush(Color.Parse("#1B2B22")),
         _ => new SolidColorBrush(Color.Parse("#151D26"))
     };
-    public IBrush CardBorderBrush => CreateBrush(configuration.ResourceColor, "#2A3A4B");
+    public IBrush CardBorderBrush => runtime.State switch
+    {
+        ChannelRuntimeState.Receiving => new SolidColorBrush(Color.Parse("#00C86A")),
+        ChannelRuntimeState.Transmitting => new SolidColorBrush(Color.Parse("#2497D3")),
+        _ when audioEnabled => new SolidColorBrush(Color.Parse("#4E8060")),
+        _ => CreateBrush(configuration.ResourceColor, "#2A3A4B")
+    };
     public string StateText
     {
         get
@@ -2631,7 +2796,7 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
     public ChannelRuntimeDefinition Definition => runtime.Definition;
     public bool IsAudioEnabled => audioEnabled;
     public string AudioButtonText => audioEnabled ? "Stop audio" : "Listen";
-    public string ReceiveStatusText => audioEnabled ? "RX enabled" : "Click to listen";
+    public bool IsTransmitting => transmitEnabled;
     public bool IsTransmitEncrypted => transmitEncrypted;
     public bool IsRecordingEnabled => recordingEnabled;
     public string RecordButtonText => recordingEnabled ? "Stop recording" : "Record";
@@ -2787,7 +2952,8 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
         audioEnabled = enabled;
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsAudioEnabled)));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(AudioButtonText)));
-        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ReceiveStatusText)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CardBackgroundBrush)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CardBorderBrush)));
     }
 
     public void SetTransmitEnabled(bool enabled, uint streamId = 0)
@@ -2809,6 +2975,7 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
             return;
         }
         transmitEnabled = enabled;
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsTransmitting)));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(PttButtonText)));
         (EncryptionCommand as AsyncRelayCommand)?.RaiseCanExecuteChanged();
     }
@@ -2825,6 +2992,9 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
         {
             return false;
         }
+
+        if (runtime.State == ChannelRuntimeState.Transmitting)
+            return false;
 
         if (IsTerminator(traffic))
         {
@@ -2964,6 +3134,7 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(LastCallerText)));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ReceiveLevel)));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CardBackgroundBrush)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CardBorderBrush)));
     }
 
     private static IBrush CreateBrush(string? color, string fallback)
