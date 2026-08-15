@@ -91,10 +91,11 @@ namespace DvmConsole.Platform.Audio
         /// </summary>
         private sealed class TargetEntry
         {
-            public TargetEntry(TransmitTarget target, int codewordsPerUnit)
+            public TargetEntry(TransmitTarget target, int codewordsPerUnit, uint streamId)
             {
                 Target = target;
                 CodewordsPerUnit = codewordsPerUnit;
+                StreamId = streamId;
             }
 
             public TransmitTarget Target { get; }
@@ -105,8 +106,12 @@ namespace DvmConsole.Platform.Audio
             /// <summary>Pending codewords awaiting a complete unit.</summary>
             public List<byte[]> PendingCodewords { get; } = new List<byte[]>();
 
-            /// <summary>Monotonically increasing per-frame stream id.</summary>
-            public uint StreamIdCounter;
+            /// <summary>
+            /// The transmit stream id, allocated once per transmit session
+            /// per target (WPF parity: TxStreamId = NewStreamId() at PTT
+            /// press, reused by every frame and the terminator).
+            /// </summary>
+            public uint StreamId;
 
             /// <summary>Per-frame sequence number within this transmit.</summary>
             public int SeqNo;
@@ -212,6 +217,14 @@ namespace DvmConsole.Platform.Audio
         private MonitorAudioPipeline? _txMonitorPipeline;
         private DateTime? _lastCaptureRestart;
         private bool _captureRestartInProgress;
+
+        /// <summary>
+        /// Monotonic per-router stream-id allocator (WPF NewStreamId
+        /// parity: each transmit session allocates one nonzero stream id
+        /// per target, reused by every frame of that transmit). Guarded
+        /// by <see cref="_transmitGate"/>.
+        /// </summary>
+        private uint _nextStreamId = 1;
 
         /// <summary>
         /// Optional diagnostic callback supplied by the portable shell. The
@@ -723,7 +736,8 @@ namespace DvmConsole.Platform.Audio
                     {
                         entries.Add(new TargetEntry(
                             target,
-                            target.Mode == VoiceMode.Dmr ? 3 : 9));
+                            target.Mode == VoiceMode.Dmr ? 3 : 9,
+                            _nextStreamId++));
                     }
 
                     var session = new TransmitSession(inputDeviceId, entries);
@@ -1021,13 +1035,13 @@ namespace DvmConsole.Platform.Audio
                 {
                     if (entry.Target.Mode == VoiceMode.Dmr)
                     {
-                        _sender.SendDmrTerminator(entry.Target, entry.StreamIdCounter, entry.SeqNo);
+                        _sender.SendDmrTerminator(entry.Target, entry.StreamId, entry.SeqNo);
                     }
                     else
                     {
                         for (var i = 0; i < P25EndTduCount; i++)
                         {
-                            _sender.SendP25Tdu(entry.Target, entry.StreamIdCounter, grantDemand: false);
+                            _sender.SendP25Tdu(entry.Target, entry.StreamId, grantDemand: false);
                         }
                     }
                 }
@@ -1199,7 +1213,8 @@ namespace DvmConsole.Platform.Audio
                 {
                     entries.Add(new TargetEntry(
                         target,
-                        target.Mode == VoiceMode.Dmr ? 3 : 9));
+                        target.Mode == VoiceMode.Dmr ? 3 : 9,
+                        _nextStreamId++));
                 }
 
                 session = new TransmitSession(AudioDeviceId.Default, entries);
@@ -1276,13 +1291,13 @@ namespace DvmConsole.Platform.Audio
                     {
                         if (entry.Target.Mode == VoiceMode.Dmr)
                         {
-                            _sender.SendDmrTerminator(entry.Target, entry.StreamIdCounter, entry.SeqNo);
+                            _sender.SendDmrTerminator(entry.Target, entry.StreamId, entry.SeqNo);
                         }
                         else
                         {
                             for (var i = 0; i < P25EndTduCount; i++)
                             {
-                                _sender.SendP25Tdu(entry.Target, entry.StreamIdCounter, grantDemand: false);
+                                _sender.SendP25Tdu(entry.Target, entry.StreamId, grantDemand: false);
                             }
                         }
                     }
@@ -1640,7 +1655,7 @@ namespace DvmConsole.Platform.Audio
                         entry.PendingCodewords.GetRange(0, entry.CodewordsPerUnit));
                     entry.PendingCodewords.RemoveRange(0, entry.CodewordsPerUnit);
 
-                    var streamId = ++entry.StreamIdCounter;
+                    var streamId = entry.StreamId;
                     var seqNo = entry.SeqNo++;
 
                     if (entry.Target.Mode == VoiceMode.Dmr)

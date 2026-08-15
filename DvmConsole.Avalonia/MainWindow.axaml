@@ -460,6 +460,14 @@
                                                     PointerReleased="ChannelPttButton_PointerReleased"
                                                     PointerCaptureLost="ChannelPttButton_PointerCaptureLost" />
                                         </StackPanel>
+                                        <StackPanel Orientation="Horizontal" Spacing="6">
+                                            <TextBlock Classes="data-label"
+                                                       Text="GLOBAL PTT"
+                                                       VerticalAlignment="Center" />
+                                            <ToggleSwitch IsChecked="{Binding IsGlobalPttEnabled, Mode=TwoWay}"
+                                                          OffContent=""
+                                                          OnContent="" />
+                                        </StackPanel>
                                     </StackPanel>
                                 </Border>
                             </DataTemplate>

@@ -223,7 +223,7 @@ namespace DvmConsole.Platform.Tests
             Assert.Empty(sender.DmrFrames);
             var terminator = Assert.Single(sender.DmrTerminators);
             Assert.Equal(DmrTarget, terminator.Target);
-            Assert.Equal(0u, terminator.StreamId);
+            Assert.Equal(1u, terminator.StreamId);
             Assert.Equal(0, terminator.NextSeq);
         }
 

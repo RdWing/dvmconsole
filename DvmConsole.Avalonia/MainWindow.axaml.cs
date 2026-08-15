@@ -2521,9 +2521,12 @@ namespace DvmConsole.Avalonia
                 return false;
             }
 
-            if (viewModel.PrimaryChannel is { } primary && !primary.IsPttEnabled)
+            if (viewModel.PrimaryChannel is { } primary
+                && (!primary.IsPttEnabled || !primary.IsGlobalPttEnabled))
             {
-                viewModel.AudioStatusMessage = "PTT unavailable: the primary channel is receive-only.";
+                viewModel.AudioStatusMessage = primary.IsGlobalPttEnabled
+                    ? "PTT unavailable: the primary channel is receive-only."
+                    : "PTT unavailable: the primary channel is disabled for global PTT.";
                 return false;
             }
 
@@ -2539,7 +2542,7 @@ namespace DvmConsole.Avalonia
                 var hasSelectedTransmitChannel = false;
                 foreach (var slot in viewModel.SelectedChannels)
                 {
-                    if (slot.IsPttEnabled)
+                    if (slot is { IsPttEnabled: true, IsGlobalPttEnabled: true })
                     {
                         hasSelectedTransmitChannel = true;
                         break;

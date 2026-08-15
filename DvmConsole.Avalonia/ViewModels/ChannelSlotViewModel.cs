@@ -45,6 +45,7 @@ namespace DvmConsole.Avalonia.ViewModels
 
         private bool isSelected;
         private bool isPrimary;
+        private bool isGlobalPttEnabled = true;
         private double volume = 1.0;
         private IReadOnlyList<AudioDeviceOptionViewModel> monitorOutputDevices =
             Array.Empty<AudioDeviceOptionViewModel>();
@@ -438,6 +439,28 @@ namespace DvmConsole.Avalonia.ViewModels
 
                 isPrimary = value;
                 PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsPrimary)));
+            }
+        }
+
+        /// <summary>
+        /// True when this card participates in the GLOBAL PTT (dashboard
+        /// button and hotkey). Each card's own PTT button is independent
+        /// of this flag: disabling global-PTT participation never disables
+        /// the card's own momentary PTT. Defaults to enabled. Raises
+        /// <see cref="PropertyChanged"/> only when the value changes.
+        /// </summary>
+        public bool IsGlobalPttEnabled
+        {
+            get => isGlobalPttEnabled;
+            set
+            {
+                if (isGlobalPttEnabled == value)
+                {
+                    return;
+                }
+
+                isGlobalPttEnabled = value;
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsGlobalPttEnabled)));
             }
         }
 

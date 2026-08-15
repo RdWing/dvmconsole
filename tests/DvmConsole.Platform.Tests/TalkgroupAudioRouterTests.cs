@@ -858,8 +858,63 @@ namespace DvmConsole.Platform.Tests
             Assert.Equal(2, sender.DmrFrames.Count);
             Assert.Equal((DmrTarget, 1u, 0),
                 (sender.DmrFrames[0].Target, sender.DmrFrames[0].StreamId, sender.DmrFrames[0].Seq));
-            Assert.Equal((DmrTarget2, 1u, 0),
+            Assert.Equal((DmrTarget2, 2u, 0),
                 (sender.DmrFrames[1].Target, sender.DmrFrames[1].StreamId, sender.DmrFrames[1].Seq));
+
+            await router.EndTransmitAsync();
+        }
+
+        [Fact]
+        public async Task BeginTransmit_Dmr_MultipleBlocks_ShareOneStreamIdPerTarget()
+        {
+            var factory = new FakeAudioStreamFactory();
+            var encoder = new FakeVoiceFrameEncoder { CodewordLength = 9 };
+            var sender = new RecordingTrafficSender();
+            var router = CreateRouter(
+                factory, new FakeVoiceFrameDecoder(), encoder, sender, new ManualScheduler());
+
+            await BeginTransmitTargetsAsync(router, new[] { DmrTarget });
+            await factory.Inputs[0].OnData!(new byte[1600]);
+            await factory.Inputs[0].OnData!(new byte[1600]);
+            await factory.Inputs[0].OnData!(new byte[1600]);
+
+            Assert.True(sender.DmrFrames.Count >= 2);
+            Assert.All(sender.DmrFrames, f => Assert.Equal(DmrTarget, f.Target));
+            // WPF parity: one stream id per transmit (TxStreamId allocated
+            // once at PTT press); the sequence advances per frame.
+            Assert.All(sender.DmrFrames, f => Assert.Equal(sender.DmrFrames[0].StreamId, f.StreamId));
+            for (var i = 1; i < sender.DmrFrames.Count; i++)
+            {
+                Assert.Equal(sender.DmrFrames[i - 1].Seq + 1, sender.DmrFrames[i].Seq);
+            }
+
+            await router.EndTransmitAsync();
+        }
+
+        [Fact]
+        public async Task BeginTransmit_P25_MultipleBlocks_ShareOneStreamId()
+        {
+            var factory = new FakeAudioStreamFactory();
+            var encoder = new FakeVoiceFrameEncoder { CodewordLength = 11 };
+            var sender = new RecordingTrafficSender();
+            var router = CreateRouter(
+                factory, new FakeVoiceFrameDecoder(), encoder, sender, new ManualScheduler());
+            var target = new TransmitTarget("System 1", "31002", 1, VoiceMode.P25, 1001);
+
+            await BeginTransmitTargetsAsync(router, new[] { target });
+            for (var b = 0; b < 4; b++)
+            {
+                await factory.Inputs[0].OnData!(new byte[1600]);
+            }
+
+            Assert.True(sender.P25Ldus.Count >= 2);
+            Assert.All(sender.P25Ldus, l => Assert.Equal(target, l.Target));
+            // WPF parity: one stream id per transmit; LDU1/LDU2 alternate by seq parity.
+            Assert.All(sender.P25Ldus, l => Assert.Equal(sender.P25Ldus[0].StreamId, l.StreamId));
+            for (var i = 1; i < sender.P25Ldus.Count; i++)
+            {
+                Assert.Equal(sender.P25Ldus[i - 1].Seq + 1, sender.P25Ldus[i].Seq);
+            }
 
             await router.EndTransmitAsync();
         }
@@ -960,7 +1015,7 @@ namespace DvmConsole.Platform.Tests
             Assert.All(sender.P25Tdus.Where(signal => !signal.GrantDemand), signal =>
             {
                 Assert.Equal(target, signal.Target);
-                Assert.Equal(0u, signal.StreamId);
+                Assert.Equal(1u, signal.StreamId);
                 Assert.False(signal.GrantDemand);
             });
         }
@@ -1107,10 +1162,10 @@ namespace DvmConsole.Platform.Tests
 
             await factory.Inputs[1].OnData!(new byte[1600]);
             Assert.Equal(3, sender.DmrFrames.Count);
-            Assert.Equal(2u, sender.DmrFrames[1].StreamId);
+            Assert.Equal(sender.DmrFrames[0].StreamId, sender.DmrFrames[1].StreamId);
             Assert.Equal(1, sender.DmrFrames[1].Seq);
             Assert.Equal(DmrTarget, sender.DmrFrames[1].Target);
-            Assert.Equal(3u, sender.DmrFrames[2].StreamId);
+            Assert.Equal(sender.DmrFrames[0].StreamId, sender.DmrFrames[2].StreamId);
             Assert.Equal(2, sender.DmrFrames[2].Seq);
 
             await router.EndTransmitAsync();

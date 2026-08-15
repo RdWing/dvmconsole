@@ -497,6 +497,70 @@ namespace DvmConsole.Avalonia.Tests
         }
 
         [Fact]
+        public void PointerDown_AllChannels_SkipsGlobalPttDisabledCards()
+        {
+            var enabled = Slot(1);
+            var disabled = Slot(2);
+            disabled.IsGlobalPttEnabled = false;
+            var (_, vm) = Create(primary: () => null, selected: () => new[] { enabled, disabled });
+            vm.AllChannels = true;
+            var requests = TrackPttRequests(vm);
+
+            vm.PttPointerDown();
+
+            Assert.True(enabled.PttEngaged);
+            Assert.False(disabled.PttEngaged);
+            Assert.True(vm.IsEngaged);
+            Assert.Equal(new[] { true }, requests.ToArray());
+        }
+
+        [Fact]
+        public void PointerDown_AllChannels_AllDisabled_NoTarget_NoOp()
+        {
+            var disabled = Slot(1);
+            disabled.IsGlobalPttEnabled = false;
+            var (_, vm) = Create(primary: () => null, selected: () => new[] { disabled });
+            vm.AllChannels = true;
+            var requests = TrackPttRequests(vm);
+
+            vm.PttPointerDown();
+
+            Assert.False(disabled.PttEngaged);
+            Assert.False(vm.IsEngaged);
+            Assert.Empty(requests);
+        }
+
+        [Fact]
+        public void PointerDown_PrimaryDisabledForGlobalPtt_Blocks()
+        {
+            var primary = Slot(1);
+            primary.IsGlobalPttEnabled = false;
+            var (_, vm) = Create(primary: () => primary, selected: () => new[] { primary });
+            vm.AllChannels = true;
+            var requests = TrackPttRequests(vm);
+
+            vm.PttPointerDown();
+
+            Assert.False(primary.PttEngaged);
+            Assert.False(vm.IsEngaged);
+            Assert.Empty(requests);
+        }
+
+        [Fact]
+        public void IsGlobalPttEnabled_DefaultTrue_NotifiesOnChange()
+        {
+            var slot = Slot(1);
+
+            Assert.True(slot.IsGlobalPttEnabled);
+
+            var changes = Track(slot);
+            slot.IsGlobalPttEnabled = false;
+
+            Assert.False(slot.IsGlobalPttEnabled);
+            Assert.Contains(nameof(ChannelSlotViewModel.IsGlobalPttEnabled), changes);
+        }
+
+        [Fact]
         public void EngagedTargets_ExposesPressSnapshot_AndClearsAfterRelease()
         {
             var first = Slot(1);

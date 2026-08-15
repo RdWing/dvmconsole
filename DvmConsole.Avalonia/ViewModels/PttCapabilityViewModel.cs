@@ -405,7 +405,9 @@ namespace DvmConsole.Avalonia.ViewModels
             var primary = primaryChannel();
             if (primary is not null)
             {
-                return primary.IsPttEnabled ? new[] { primary } : null;
+                return primary is { IsPttEnabled: true, IsGlobalPttEnabled: true }
+                    ? new[] { primary }
+                    : null;
             }
 
             if (!allChannels)
@@ -416,7 +418,7 @@ namespace DvmConsole.Avalonia.ViewModels
             var targets = new List<ChannelSlotViewModel>();
             foreach (var slot in selectedChannels())
             {
-                if (slot is { IsPttEnabled: true } && !targets.Contains(slot))
+                if (slot is { IsPttEnabled: true, IsGlobalPttEnabled: true } && !targets.Contains(slot))
                 {
                     targets.Add(slot);
                 }
