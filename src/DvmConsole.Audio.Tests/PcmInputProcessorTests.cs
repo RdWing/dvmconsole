@@ -1,0 +1,60 @@
+using DvmConsole.Audio;
+using Xunit;
+
+namespace DvmConsole.Audio.Tests;
+
+public sealed class PcmInputProcessorTests
+{
+    [Fact]
+    public void AppliesConfiguredGainAndKeepsSamplesBounded()
+    {
+        var processor = new PcmInputProcessor(new AudioInputProcessingOptions
+        {
+            Gain = 2,
+            LowGainDb = 0,
+            MidGainDb = 0,
+            HighGainDb = 0
+        });
+        short[] output = new short[320];
+
+        processor.Process(Enumerable.Repeat((short)6000, output.Length).ToArray(), output);
+
+        Assert.Contains(output, sample => sample != 0);
+        Assert.All(output, sample => Assert.InRange(sample, short.MinValue, short.MaxValue));
+        Assert.True(output[^1] > 6000);
+    }
+
+    [Fact]
+    public void OptionalAgcRaisesQuietInputWithoutChangingSilence()
+    {
+        var processor = new PcmInputProcessor(new AudioInputProcessingOptions { AgcEnabled = true });
+        short[] quietInput = Enumerable.Repeat((short)100, 320).ToArray();
+        short[] quietOutput = new short[quietInput.Length];
+        short[] silenceOutput = new short[quietInput.Length];
+
+        processor.Process(quietInput, quietOutput);
+        processor.Process(new short[quietInput.Length], silenceOutput);
+
+        Assert.Contains(quietOutput, sample => Math.Abs(sample) > 100);
+        Assert.All(silenceOutput, sample => Assert.Equal((short)0, sample));
+    }
+
+    [Fact]
+    public void NormalizesDeviceAndProcessingBounds()
+    {
+        AudioInputProcessingOptions normalized = new AudioInputProcessingOptions
+        {
+            DeviceId = "  microphone-1 ",
+            Gain = 100,
+            LowGainDb = -100,
+            MidGainDb = double.NaN,
+            HighGainDb = 100
+        }.Normalize();
+
+        Assert.Equal("microphone-1", normalized.DeviceId);
+        Assert.Equal(3, normalized.Gain);
+        Assert.Equal(-12, normalized.LowGainDb);
+        Assert.Equal(0, normalized.MidGainDb);
+        Assert.Equal(12, normalized.HighGainDb);
+    }
+}

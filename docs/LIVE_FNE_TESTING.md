@@ -11,7 +11,7 @@ dotnet build src/DvmConsole.FneProbe/DvmConsole.FneProbe.csproj \
   --no-restore /p:UseSharedCompilation=false
 
 dotnet run --project src/DvmConsole.FneProbe/DvmConsole.FneProbe.csproj -- \
-  /Users/jchang/Documents/codex_projects/dvnconsole/configs/codeplug_testing.yml 10
+  /Users/jchang/Documents/codex_projects/dvmconsole/configs/codeplug_testing.yml 10
 ```
 
 The probe prints system names and connection states only. It does not print

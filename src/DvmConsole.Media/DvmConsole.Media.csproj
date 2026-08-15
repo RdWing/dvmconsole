@@ -9,6 +9,8 @@
 
   <ItemGroup>
     <ProjectReference Include="../DvmConsole.Audio/DvmConsole.Audio.csproj" />
+    <ProjectReference Include="../DvmConsole.Core/DvmConsole.Core.csproj" />
+    <ProjectReference Include="../DvmConsole.Fne/DvmConsole.Fne.csproj" />
     <ProjectReference Include="../DvmConsole.FneClient/DvmConsole.FneClient.csproj" />
     <ProjectReference Include="../DvmConsole.Vocoder/DvmConsole.Vocoder.csproj" />
   </ItemGroup>

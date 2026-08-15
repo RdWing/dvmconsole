@@ -24,6 +24,7 @@ public static class ConfigurationLoader
 
         configuration.SourcePath = fullPath;
         Normalize(configuration);
+        LoadOptionalAliases(configuration);
         return configuration;
     }
 
@@ -51,6 +52,7 @@ public static class ConfigurationLoader
         }
 
         var channelNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var webStreamNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (ZoneConfiguration zone in configuration.Zones)
         {
             if (string.IsNullOrWhiteSpace(zone.Name))
@@ -58,16 +60,39 @@ public static class ConfigurationLoader
 
             foreach (ChannelConfiguration channel in zone.Channels)
             {
+                string channelName = channel.Name?.Trim() ?? string.Empty;
+                string channelSystem = channel.System?.Trim() ?? string.Empty;
                 if (string.IsNullOrWhiteSpace(channel.Name))
                     errors.Add($"Zone '{zone.Name}' contains a channel without a name.");
-                else if (!channelNames.Add(channel.Name))
-                    errors.Add($"Channel name '{channel.Name}' is duplicated.");
+                else if (!channelNames.Add($"{channelSystem}\u001F{channelName}"))
+                    errors.Add($"Channel name '{channel.Name}' is duplicated in system '{channel.System}'.");
 
-                if (!systemNames.Contains(channel.System))
+                if (!systemNames.Contains(channelSystem))
                     errors.Add($"Channel '{channel.Name}' references unknown system '{channel.System}'.");
 
-                if (channel.Mode is not ("dmr" or "p25" or "nxdn"))
+                if (channel.Mode is not ("dmr" or "p25" or "nxdn" or "analog"))
                     errors.Add($"Channel '{channel.Name}' has unsupported mode '{channel.Mode}'.");
+
+                if (!uint.TryParse(channel.Tgid, out uint destinationId) || destinationId == 0)
+                    errors.Add($"Channel '{channel.Name}' must have a non-zero numeric destination ID.");
+
+                if (channel.Mode == "dmr" && channel.Slot is < 1 or > 2)
+                    errors.Add($"DMR channel '{channel.Name}' must use slot 1 or 2.");
+            }
+
+            foreach (WebStreamConfiguration stream in zone.WebStreams ?? [])
+            {
+                if (string.IsNullOrWhiteSpace(stream.Name))
+                    errors.Add($"Zone '{zone.Name}' contains a web stream without a name.");
+                else if (!webStreamNames.Add(stream.Name.Trim()))
+                    errors.Add($"Web stream name '{stream.Name}' is duplicated.");
+
+                if (!Uri.TryCreate(stream.Url, UriKind.Absolute, out Uri? uri) ||
+                    (!uri.Scheme.Equals(Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase) &&
+                     !uri.Scheme.Equals(Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase)))
+                {
+                    errors.Add($"Web stream '{stream.Name}' must use an absolute HTTP or HTTPS URL.");
+                }
             }
         }
 
@@ -95,6 +120,7 @@ public static class ConfigurationLoader
         configuration.Zones ??= [];
         configuration.Groups ??= [];
         configuration.LegacyPatchGroups ??= [];
+        configuration.NormalizeGroups();
 
         foreach (SystemConfiguration system in configuration.Systems)
         {
@@ -107,6 +133,16 @@ public static class ConfigurationLoader
         {
             zone.Channels ??= [];
             zone.WebStreams ??= [];
+        }
+    }
+
+    private static void LoadOptionalAliases(ConsoleConfiguration configuration)
+    {
+        foreach (SystemConfiguration system in configuration.Systems)
+        {
+            string aliasPath = ResolvePath(configuration, system.AliasPath);
+            if (File.Exists(aliasPath))
+                system.RidAlias = AliasFileLoader.Load(aliasPath);
         }
     }
 }

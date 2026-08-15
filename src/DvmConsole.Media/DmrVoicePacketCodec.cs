@@ -1,3 +1,5 @@
+using fnecore.DMR;
+
 namespace DvmConsole.Media;
 
 /// <summary>
@@ -13,6 +15,7 @@ public static class DmrVoicePacketCodec
     public const int CodewordBytes = 9;
     public const int CodewordsPerPacket = 3;
     public const int AmbeBytes = CodewordBytes * CodewordsPerPacket;
+    public const ushort RtpCallEndSequence = ushort.MaxValue;
 
     public static bool TryExtractAmbe(ReadOnlySpan<byte> packet, Span<byte> ambe)
     {
@@ -46,7 +49,8 @@ public static class DmrVoicePacketCodec
         bool voiceSync,
         byte embeddedSequence,
         byte frameSequence,
-        ReadOnlySpan<byte> ambe)
+        ReadOnlySpan<byte> ambe,
+        EmbeddedData? embeddedData = null)
     {
         if (sourceId > 0xFFFFFF)
             throw new ArgumentOutOfRangeException(nameof(sourceId));
@@ -59,6 +63,81 @@ public static class DmrVoicePacketCodec
         if (ambe.Length < AmbeBytes)
             throw new ArgumentException($"AMBE data must contain {AmbeBytes} bytes.", nameof(ambe));
 
+        byte[] packet = CreatePacketHeader(sourceId, destinationId, slot, frameSequence);
+        packet[15] |= voiceSync ? (byte)0x10 : embeddedSequence;
+
+        byte[] frame = new byte[FrameBytes];
+        ambe[..13].CopyTo(frame);
+        frame[13] = (byte)(ambe[13] & 0xF0);
+        frame[19] = (byte)(ambe[13] & 0x0F);
+        ambe[14..].CopyTo(frame.AsSpan(20, 13));
+
+        if (!voiceSync && embeddedData is not null)
+        {
+            byte lcss = embeddedData.GetData(ref frame, embeddedSequence);
+            new EMB { ColorCode = 0, LCSS = lcss }.Encode(ref frame);
+        }
+
+        frame.CopyTo(packet.AsSpan(HeaderBytes));
+        return packet;
+    }
+
+    /// <summary>
+    /// Creates the DMR voice link-control header that starts a group call.
+    /// </summary>
+    public static byte[] CreateVoiceLcHeaderPacket(
+        uint sourceId,
+        uint destinationId,
+        byte slot,
+        byte frameSequence)
+    {
+        return CreateControlPacket(sourceId, destinationId, slot, frameSequence, DMRDataType.VOICE_LC_HEADER);
+    }
+
+    /// <summary>
+    /// Creates the DMR terminator with link-control that ends a group call.
+    /// </summary>
+    public static byte[] CreateTerminatorPacket(
+        uint sourceId,
+        uint destinationId,
+        byte slot,
+        byte frameSequence)
+    {
+        return CreateControlPacket(sourceId, destinationId, slot, frameSequence, DMRDataType.TERMINATOR_WITH_LC);
+    }
+
+    private static byte[] CreateControlPacket(
+        uint sourceId,
+        uint destinationId,
+        byte slot,
+        byte frameSequence,
+        DMRDataType dataType)
+    {
+        if (sourceId == 0 || sourceId > 0xFFFFFF)
+            throw new ArgumentOutOfRangeException(nameof(sourceId));
+        if (destinationId == 0 || destinationId > 0xFFFFFF)
+            throw new ArgumentOutOfRangeException(nameof(destinationId));
+        if (slot > 1)
+            throw new ArgumentOutOfRangeException(nameof(slot));
+
+        byte[] packet = CreatePacketHeader(sourceId, destinationId, slot, frameSequence);
+        packet[15] |= (byte)(0x20 | (byte)dataType);
+
+        byte[] frame = new byte[FrameBytes];
+        new SlotType { ColorCode = 0, DataType = (byte)dataType }.GetData(ref frame);
+        var lc = new LC
+        {
+            FLCO = (byte)DMRFLCO.FLCO_GROUP,
+            SrcId = sourceId,
+            DstId = destinationId
+        };
+        FullLC.Encode(lc, ref frame, dataType);
+        frame.CopyTo(packet.AsSpan(HeaderBytes));
+        return packet;
+    }
+
+    private static byte[] CreatePacketHeader(uint sourceId, uint destinationId, byte slot, byte frameSequence)
+    {
         byte[] packet = new byte[PacketBytes];
         packet[0] = (byte)'D';
         packet[1] = (byte)'M';
@@ -67,13 +146,8 @@ public static class DmrVoicePacketCodec
         packet[4] = frameSequence;
         WriteThreeBytes(packet, 5, sourceId);
         WriteThreeBytes(packet, 8, destinationId);
-        packet[15] = (byte)(slot == 1 ? 0x80 : 0x00);
-        packet[15] |= voiceSync ? (byte)0x10 : embeddedSequence;
-
-        ambe[..13].CopyTo(packet.AsSpan(HeaderBytes, 13));
-        packet[HeaderBytes + 13] = (byte)(ambe[13] & 0xF0);
-        packet[HeaderBytes + 19] = (byte)(ambe[13] & 0x0F);
-        ambe[14..].CopyTo(packet.AsSpan(HeaderBytes + 20, 13));
+        // FNE uses zero-based slots: slot 0 sets the high bit, slot 1 clears it.
+        packet[15] = (byte)(slot == 0 ? 0x80 : 0x00);
         return packet;
     }
 

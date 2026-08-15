@@ -25,9 +25,38 @@ public sealed class ConsoleConfiguration
     [YamlIgnore]
     public string? SourcePath { get; internal set; }
 
+    /// <summary>
+    /// Resolves current and legacy group keys using the same merge semantics as
+    /// the WPF codeplug loader. The current key wins when names overlap.
+    /// </summary>
     public IEnumerable<GroupConfiguration> EffectiveGroups()
+        => ResolveGroups(Groups, LegacyPatchGroups);
+
+    public void NormalizeGroups()
     {
-        return Groups.Count > 0 ? Groups : LegacyPatchGroups;
+        Groups = ResolveGroups(Groups, LegacyPatchGroups).ToList();
+        LegacyPatchGroups = [];
+    }
+
+    private static IEnumerable<GroupConfiguration> ResolveGroups(
+        IEnumerable<GroupConfiguration>? current,
+        IEnumerable<GroupConfiguration>? legacy)
+    {
+        return (current ?? Enumerable.Empty<GroupConfiguration>())
+            .Concat(legacy ?? Enumerable.Empty<GroupConfiguration>())
+            .Where(group => group is not null)
+            .GroupBy(group => (group.Name ?? string.Empty).Trim(), StringComparer.OrdinalIgnoreCase)
+            .Select(group =>
+            {
+                GroupConfiguration first = group.First();
+                return new GroupConfiguration
+                {
+                    Name = (first.Name ?? string.Empty).Trim(),
+                    Type = string.IsNullOrWhiteSpace(first.Type)
+                        ? "patch"
+                        : first.Type.Trim().ToLowerInvariant()
+                };
+            });
     }
 }
 
@@ -39,6 +68,11 @@ public sealed class SystemConfiguration
     public int Port { get; set; }
     public string? Password { get; set; }
     public string? PresharedKey { get; set; }
+    /// <summary>
+    /// Optional KMF key used only by FNE KMM peer-encrypted key responses. It
+    /// is intentionally separate from the FNE transport preshared key.
+    /// </summary>
+    public string? KmfPresharedKey { get; set; }
     public bool Encrypted { get; set; }
     public uint PeerId { get; set; }
     public string Rid { get; set; } = string.Empty;
@@ -63,6 +97,12 @@ public sealed class GroupConfiguration
 {
     public string Name { get; set; } = string.Empty;
     public string Type { get; set; } = "patch";
+
+    public bool IsPatchGroup()
+        => !string.Equals(Type?.Trim(), "multiselect", StringComparison.OrdinalIgnoreCase);
+
+    public bool IsMultiselectGroup()
+        => string.Equals(Type?.Trim(), "multiselect", StringComparison.OrdinalIgnoreCase);
 }
 
 public sealed class ChannelConfiguration

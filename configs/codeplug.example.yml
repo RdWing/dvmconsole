@@ -47,6 +47,10 @@ systems:
     encrypted: false
     # Preshared FNE encryption key
     presharedKey: "123ABC1234"
+    # Optional separate KMF key for peer-encrypted P25 KMM responses.
+    # Never reuse presharedKey implicitly; leave unset unless the FNE/KMF
+    # deployment explicitly supplies this secret.
+    #kmfPresharedKey: "Full/Length/KMF/Secret"
     # Path to Radio Alias file for this system
     #aliasPath: "Full/Path/To/alias.yml"
     
@@ -66,16 +70,18 @@ groups:
 patchSourceIdPassthrough: false
 
 #
-# Zones (each zone becomes a tab)
+# Zones group codeplug channels. The Avalonia rebuild presents one tab per
+# configured system and places every system-linked channel in that system tab.
+# A variable number of systems and channels is supported.
 #
 zones:
-    # Textual name of the zone (this becomes the tab name)
+    # Textual name for the source channel group
   - name: "Primary"
     # Background color of the tab in the tab bar, in hex
     tabColor: "#E57373"
      # Text color of the tab label in the tab bar, in hex
     tabTextColor: "#000000"
-    # List of channels in this zone/tab
+    # List of channels in this zone; each channel is assigned to a system below
     channels:
         # Textual name of channel
       - name: "Channel 1"
@@ -115,7 +121,7 @@ zones:
     # Stream position, volume, and output routing are saved by stream name.
     web_streams:
       - name: "Stream 1"
-        # Direct audio stream URL. The stream must be playable by Windows Media Foundation.
+        # Direct HTTP(S) audio stream URL. WAV and MP3 are built in; set DVM_FFMPEG for other formats.
         url: "https://streams.example.local/stream-1"
         # Optional HTTP Basic Auth credentials for protected streams.
         # These are stored in the codeplug, so protect access to the file.

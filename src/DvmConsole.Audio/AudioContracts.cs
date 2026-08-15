@@ -64,6 +64,11 @@ public interface IAudioPlayback : IAsyncDisposable
     ValueTask FlushAsync(CancellationToken cancellationToken = default);
 }
 
+public interface IAudioGainControl
+{
+    double Gain { get; set; }
+}
+
 public interface IPttSource : IAsyncDisposable
 {
     event EventHandler<bool>? StateChanged;

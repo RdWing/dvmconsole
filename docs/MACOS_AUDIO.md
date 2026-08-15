@@ -38,3 +38,17 @@ The Windows path is kept behind the same contracts through
 `WindowsAudioBackend`, using NAudio's WinMM event adapters for input and
 output. `AudioBackendFactory.CreateDefault()` selects CoreAudio on macOS and
 the NAudio backend on Windows; no Windows audio code is loaded on macOS.
+
+## Hardware PTT
+
+`SerialPttSource` provides a cross-platform adapter for USB serial
+footswitches and small controllers. Configure the device to emit one line per
+state change using `on`/`1`/`pressed` for transmit and `off`/`0`/`released` for
+receive. The adapter releases PTT on EOF, stop, or a read fault. Its stream
+factory overload is available for host-specific serial transports and tests;
+the direct constructor uses `System.IO.Ports` on both macOS and Windows.
+
+The Avalonia host enables the adapter when `DVM_PTT_SERIAL_PORT` is set and
+accepts an optional positive `DVM_PTT_SERIAL_BAUD` value (default `9600`).
+Keyboard and serial sources are combined fail-safe: releasing either source
+does not stop an active call while the other source remains pressed.
