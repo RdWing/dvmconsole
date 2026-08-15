@@ -2,6 +2,7 @@ using Avalonia;
 using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Media;
+using Avalonia.Platform.Storage;
 using Avalonia.Controls;
 using Avalonia.Styling;
 using Avalonia.Threading;
@@ -22,6 +23,8 @@ namespace DvmConsole.Desktop;
 
 public sealed partial class MainWindow : Window
 {
+    private MainWindowViewModel viewModel;
+
     public MainWindow() : this(null)
     {
     }
@@ -29,7 +32,7 @@ public sealed partial class MainWindow : Window
     public MainWindow(string? configurationPath)
     {
         InitializeComponent();
-        var viewModel = MainWindowViewModel.Load(configurationPath);
+        viewModel = MainWindowViewModel.Load(configurationPath);
         DataContext = viewModel;
         AddHandler(InputElement.KeyDownEvent, HandleKeyDown, RoutingStrategies.Tunnel);
         AddHandler(InputElement.KeyUpEvent, HandleKeyUp, RoutingStrategies.Tunnel);
@@ -37,15 +40,54 @@ public sealed partial class MainWindow : Window
         Closed += async (_, _) => await viewModel.DisposeAsync().ConfigureAwait(false);
     }
 
-    private void HandleChannelPointerPressed(object? sender, PointerPressedEventArgs e)
+    private async void HandleChannelPointerPressed(object? sender, PointerPressedEventArgs e)
     {
+        if (e.Source is Button or Slider)
+            return;
+
         if (sender is Control { DataContext: ChannelViewModel channel } control &&
             DataContext is MainWindowViewModel viewModel)
         {
-            viewModel.SelectChannel(channel);
+            await viewModel.ToggleChannelReceiveAsync(channel);
             control.Focus();
         }
     }
+
+    private async void HandleOpenCodeplugClick(object? sender, RoutedEventArgs e)
+    {
+        IReadOnlyList<IStorageFile> files = await StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
+        {
+            Title = "Open Codeplug",
+            AllowMultiple = false,
+            FileTypeFilter =
+            [
+                new FilePickerFileType("Codeplug YAML")
+                {
+                    Patterns = ["*.yml", "*.yaml"]
+                }
+            ]
+        });
+        if (files.Count == 0 || !files[0].Path.IsFile)
+            return;
+
+        MainWindowViewModel previous = viewModel;
+        var replacement = MainWindowViewModel.Load(files[0].Path.LocalPath);
+        viewModel = replacement;
+        DataContext = replacement;
+        await previous.DisposeAsync();
+        await replacement.StartKeyboardPttAsync();
+    }
+
+    private async void HandleEnableSelectedReceiveClick(object? sender, RoutedEventArgs e)
+        => await viewModel.EnableSelectedReceiveAsync();
+
+    private async void HandleDisableSelectedReceiveClick(object? sender, RoutedEventArgs e)
+        => await viewModel.DisableSelectedReceiveAsync();
+
+    private async void HandleDisableAllReceiveClick(object? sender, RoutedEventArgs e)
+        => await viewModel.DisableAllReceiveAsync();
+
+    private void HandleExitClick(object? sender, RoutedEventArgs e) => Close();
 
     private void HandleKeyDown(object? sender, KeyEventArgs e)
     {
@@ -840,6 +882,40 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SelectionStatusText)));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SelectedSystem)));
         RaiseGeneratedAudioCanExecuteChanged();
+    }
+
+    public async Task ToggleChannelReceiveAsync(ChannelViewModel channel)
+    {
+        ArgumentNullException.ThrowIfNull(channel);
+        SelectChannel(channel);
+        if (channel.IsAudioEnabled)
+            await StopAudioAsync(channel).ConfigureAwait(false);
+        else
+            await StartAudioAsync(channel).ConfigureAwait(false);
+    }
+
+    public async Task EnableSelectedReceiveAsync()
+    {
+        if (selectedChannel is null || selectedChannel.IsAudioEnabled)
+            return;
+        await StartAudioAsync(selectedChannel).ConfigureAwait(false);
+    }
+
+    public async Task DisableSelectedReceiveAsync()
+    {
+        if (selectedChannel is null || !selectedChannel.IsAudioEnabled)
+            return;
+        await StopAudioAsync(selectedChannel).ConfigureAwait(false);
+    }
+
+    public async Task DisableAllReceiveAsync()
+    {
+        ChannelViewModel[] activeChannels = Systems
+            .SelectMany(system => system.Channels)
+            .Where(channel => channel.IsAudioEnabled)
+            .ToArray();
+        foreach (ChannelViewModel channel in activeChannels)
+            await StopAudioAsync(channel).ConfigureAwait(false);
     }
 
     public bool HandleKeyboardPttDown(KeyboardPttKey key)
@@ -2555,6 +2631,7 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
     public ChannelRuntimeDefinition Definition => runtime.Definition;
     public bool IsAudioEnabled => audioEnabled;
     public string AudioButtonText => audioEnabled ? "Stop audio" : "Listen";
+    public string ReceiveStatusText => audioEnabled ? "RX enabled" : "Click to listen";
     public bool IsTransmitEncrypted => transmitEncrypted;
     public bool IsRecordingEnabled => recordingEnabled;
     public string RecordButtonText => recordingEnabled ? "Stop recording" : "Record";
@@ -2710,6 +2787,7 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
         audioEnabled = enabled;
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsAudioEnabled)));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(AudioButtonText)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ReceiveStatusText)));
     }
 
     public void SetTransmitEnabled(bool enabled, uint streamId = 0)
@@ -2748,7 +2826,7 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
             return false;
         }
 
-        if (IsTerminator(traffic.FrameType))
+        if (IsTerminator(traffic))
         {
             if (runtime.StreamId != traffic.StreamId)
                 return false;
@@ -2791,9 +2869,21 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
         };
     }
 
-    private static bool IsTerminator(string frameType)
+    private static bool IsTerminator(FneTrafficFrame traffic)
     {
-        return frameType.Equals("TERMINATOR", StringComparison.OrdinalIgnoreCase);
+        if (traffic.FrameType.Equals("TERMINATOR", StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        return traffic.Protocol switch
+        {
+            FneTrafficProtocol.Dmr => traffic.Subtype.Equals(
+                "TERMINATOR_WITH_LC",
+                StringComparison.OrdinalIgnoreCase),
+            FneTrafficProtocol.P25 => traffic.Subtype.Equals("TDU", StringComparison.OrdinalIgnoreCase) ||
+                                       traffic.Subtype.Equals("TDULC", StringComparison.OrdinalIgnoreCase),
+            FneTrafficProtocol.Analog => traffic.Subtype.Equals("TERMINATOR", StringComparison.OrdinalIgnoreCase),
+            _ => false
+        };
     }
 
     private static bool IsVoiceFrame(string frameType)
