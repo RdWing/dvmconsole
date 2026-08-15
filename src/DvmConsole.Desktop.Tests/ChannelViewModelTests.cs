@@ -281,6 +281,25 @@ public sealed class ChannelViewModelTests
     }
 
     [Fact]
+    public void ActiveCardTextRemainsReadableInLightTheme()
+    {
+        var channel = new ChannelViewModel(new ChannelConfiguration
+        {
+            Name = "Dispatch",
+            System = "System 1",
+            Tgid = "99",
+            Mode = "dmr",
+            Slot = 1
+        });
+
+        Assert.Equal(Color.Parse("#18212B"), Assert.IsType<SolidColorBrush>(channel.CardTextBrush).Color);
+
+        channel.SetTransmitEnabled(true, 7);
+
+        Assert.Equal(Color.Parse("#FFFFFF"), Assert.IsType<SolidColorBrush>(channel.CardTextBrush).Color);
+    }
+
+    [Fact]
     public void PageSelectionIsIndependentFromGlobalTransmitSelection()
     {
         var channel = new ChannelViewModel(new ChannelConfiguration

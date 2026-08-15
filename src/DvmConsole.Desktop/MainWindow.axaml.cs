@@ -1242,6 +1242,8 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         RestoreChannelWidgetLayout();
         foreach (ChannelViewModel channel in Systems.SelectMany(system => system.Channels).Distinct())
             channel.SetDarkMode(userSettings.DarkMode);
+        foreach (ZoneViewModel zone in Zones)
+            zone.SetDarkMode(userSettings.DarkMode);
         GroupConfiguration[] configuredGroups = (groupDefinitions ?? []).ToArray();
         patchForwarding = new PatchForwardingCoordinator(Systems, p25KeyResolver)
         {
@@ -1833,6 +1835,8 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             ApplyTheme(value);
             foreach (ChannelViewModel channel in Systems.SelectMany(system => system.Channels).Distinct())
                 channel.SetDarkMode(value);
+            foreach (ZoneViewModel zone in Zones)
+                zone.SetDarkMode(value);
             if (userBackgroundBitmap is null)
             {
                 mainBackgroundBrush = CreateShellBackgroundBrush(value);
@@ -3757,9 +3761,17 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             .Select(channel => (channel, transmitCoordinator.GetActiveStreamId(channel)))
             .Where(entry => entry.Item2 != 0)
             .ToArray();
+        Exception? stopFailure = null;
         try
         {
             await Task.Run(() => transmitCoordinator.StopAsync());
+        }
+        catch (Exception exception)
+        {
+            // A failed audio-device stop or final FNE terminator must release
+            // the UI call state without escaping through an async-void PTT
+            // pointer/key callback and terminating the desktop process.
+            stopFailure = exception;
         }
         finally
         {
@@ -3781,8 +3793,17 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             if (activeStreams.Length > 0)
                 PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(FilteredCallHistory)));
             RefreshRecordings();
-            await RestoreSuspendedAudioAsync();
-            TransmitStatusText = "PTT idle.";
+            try
+            {
+                await RestoreSuspendedAudioAsync();
+            }
+            catch (Exception exception)
+            {
+                stopFailure ??= exception;
+            }
+            TransmitStatusText = stopFailure is null
+                ? "PTT idle."
+                : $"Transmission stopped safely after an error: {stopFailure.Message}";
         }
     }
 
@@ -4628,7 +4649,15 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
                     Dispatcher.UIThread.Post(() => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(FilteredCallHistory))));
                 RefreshRecordings();
             }
-            await RestoreSuspendedAudioAsync().ConfigureAwait(false);
+            try
+            {
+                await RestoreSuspendedAudioAsync().ConfigureAwait(false);
+            }
+            catch (Exception cleanupException)
+            {
+                Dispatcher.UIThread.Post(() =>
+                    TransmitStatusText = $"Transmission stopped; audio recovery failed: {cleanupException.Message}");
+            }
         });
     }
 
@@ -4816,7 +4845,19 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
                 ["MutedTextBrush"] = "#B7C0C9",
                 ["ButtonBackgroundBrush"] = "#1A222D",
                 ["ButtonHoverBrush"] = "#253446",
-                ["ControlBorderBrush"] = "#273443"
+                ["ControlBorderBrush"] = "#273443",
+                ["PttBackgroundBrush"] = "#17202B",
+                ["SelectorBackgroundBrush"] = "#242938",
+                ["TabTextBrush"] = "#AEB9C5",
+                ["SelectedTabTextBrush"] = "#F4F7FA",
+                ["SidebarBackgroundBrush"] = "#151C25",
+                ["ActivityBackgroundBrush"] = "#1C2530",
+                ["StatusBarBackgroundBrush"] = "#1A2028",
+                ["SplitterBrush"] = "#25313D",
+                ["ClockTextBrush"] = "#FFFFFF",
+                ["ClockBorderBrush"] = "#3A4654",
+                ["WarningBackgroundBrush"] = "#332A1A",
+                ["WarningBorderBrush"] = "#7A5C28"
             }
             : new Dictionary<string, string>
             {
@@ -4824,10 +4865,22 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
                 ["ShellHeaderBrush"] = "#E4E8EC",
                 ["PrimaryTextBrush"] = "#18212B",
                 ["CardBackgroundBrush"] = "#FFFFFF",
-                ["MutedTextBrush"] = "#68727D",
+                ["MutedTextBrush"] = "#4D5965",
                 ["ButtonBackgroundBrush"] = "#FFFFFF",
                 ["ButtonHoverBrush"] = "#DDE5ED",
-                ["ControlBorderBrush"] = "#AAB5C0"
+                ["ControlBorderBrush"] = "#8996A3",
+                ["PttBackgroundBrush"] = "#E2E8EF",
+                ["SelectorBackgroundBrush"] = "#E8EDF3",
+                ["TabTextBrush"] = "#40505F",
+                ["SelectedTabTextBrush"] = "#111820",
+                ["SidebarBackgroundBrush"] = "#E9EEF3",
+                ["ActivityBackgroundBrush"] = "#FFFFFF",
+                ["StatusBarBackgroundBrush"] = "#E1E7ED",
+                ["SplitterBrush"] = "#8996A3",
+                ["ClockTextBrush"] = "#FFFFFF",
+                ["ClockBorderBrush"] = "#65717D",
+                ["WarningBackgroundBrush"] = "#FFF4D6",
+                ["WarningBorderBrush"] = "#B47B18"
             };
         foreach (KeyValuePair<string, string> entry in colors)
             application.Resources[entry.Key] = new SolidColorBrush(Color.Parse(entry.Value));
@@ -5284,6 +5337,8 @@ public sealed class SystemViewModel : INotifyPropertyChanged, IAsyncDisposable
 
 public sealed class ZoneViewModel : INotifyPropertyChanged
 {
+    private bool darkMode;
+
     public ZoneViewModel(
         string name,
         IReadOnlyList<ChannelViewModel> channels,
@@ -5306,10 +5361,19 @@ public sealed class ZoneViewModel : INotifyPropertyChanged
     public IReadOnlyList<WebStreamViewModel> WebStreams { get; }
     public string? TabColor { get; }
     public string? TabTextColor { get; }
-    public IBrush TabBrush => CreateBrush(TabColor, "#151D26");
-    public IBrush TabTextBrush => CreateBrush(TabTextColor, "#DCE3EB");
+    public IBrush TabBrush => CreateBrush(TabColor, darkMode ? "#151D26" : "#E8EDF3");
+    public IBrush TabTextBrush => CreateBrush(TabTextColor, darkMode ? "#DCE3EB" : "#18212B");
     public double WidgetCanvasWidth => Math.Max(1_150, Channels.Count == 0 ? 0 : Channels.Max(channel => channel.WidgetX + channel.CardWidth + 20));
     public double WidgetCanvasHeight => Math.Max(520, Channels.Count == 0 ? 0 : Channels.Max(channel => channel.WidgetY + 260));
+
+    public void SetDarkMode(bool enabled)
+    {
+        if (darkMode == enabled)
+            return;
+        darkMode = enabled;
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(TabBrush)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(TabTextBrush)));
+    }
 
     private void HandleChannelPropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
@@ -5420,6 +5484,10 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
         _ when audioEnabled => new SolidColorBrush(Color.Parse("#4E8060")),
         _ => CreateBrush(configuration.ResourceColor, darkMode ? "#2A3A4B" : "#9BA8B5")
     };
+    public IBrush CardTextBrush => new SolidColorBrush(Color.Parse(
+        runtime.State is ChannelRuntimeState.Receiving or ChannelRuntimeState.Transmitting
+            ? "#FFFFFF"
+            : darkMode ? "#DCE3EB" : "#18212B"));
     public string StateText
     {
         get
@@ -5528,13 +5596,21 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
     public string TransmitSelectionText => transmitSelected ? "TX ✓" : "TX";
     public string PageSelectionText => pageSelected ? "PAGE ✓" : "PAGE";
     public IBrush TransmitSelectionBrush => new SolidColorBrush(Color.Parse(
-        transmitSelected ? "#694BB0" : "#242938"));
+        transmitSelected
+            ? darkMode ? "#694BB0" : "#D7C9F2"
+            : darkMode ? "#242938" : "#E8EDF3"));
     public IBrush TransmitSelectionBorderBrush => new SolidColorBrush(Color.Parse(
-        transmitSelected ? "#B69AF4" : "#3A4555"));
+        transmitSelected
+            ? darkMode ? "#B69AF4" : "#7655B8"
+            : darkMode ? "#3A4555" : "#8996A3"));
     public IBrush PageSelectionBrush => new SolidColorBrush(Color.Parse(
-        pageSelected ? "#A15B2A" : "#242938"));
+        pageSelected
+            ? darkMode ? "#A15B2A" : "#F2D1B8"
+            : darkMode ? "#242938" : "#E8EDF3"));
     public IBrush PageSelectionBorderBrush => new SolidColorBrush(Color.Parse(
-        pageSelected ? "#F0A15C" : "#3A4555"));
+        pageSelected
+            ? darkMode ? "#F0A15C" : "#A95C26"
+            : darkMode ? "#3A4555" : "#8996A3"));
     public ICommand AudioCommand { get; private set; }
     public ICommand PttCommand { get; private set; }
     public ICommand EncryptionCommand { get; }
@@ -5758,6 +5834,11 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
         darkMode = enabled;
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CardBackgroundBrush)));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CardBorderBrush)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CardTextBrush)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(TransmitSelectionBrush)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(TransmitSelectionBorderBrush)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(PageSelectionBrush)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(PageSelectionBorderBrush)));
     }
 
     public bool TryApplyTraffic(string systemName, FneTrafficFrame traffic)
@@ -5956,6 +6037,7 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(LastCallerText)));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CardBackgroundBrush)));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CardBorderBrush)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CardTextBrush)));
     }
 
     private static IBrush CreateBrush(string? color, string fallback)

@@ -1,5 +1,6 @@
 using DvmConsole.Core.Settings;
 using DvmConsole.Desktop;
+using Avalonia.Media;
 using Xunit;
 
 namespace DvmConsole.Desktop.Tests;
@@ -65,5 +66,23 @@ public sealed class ToolbarClockViewModelTests
         clock.ColorHex = "not-a-palette-color";
         Assert.Equal(ToolbarClockColorPalette.DefaultColorHex, clock.ColorHex);
         Assert.Equal("Neutral", clock.ColorLabel);
+    }
+
+    [Fact]
+    public void ChangingSelectedColorImmediatelyRefreshesVisibleBackground()
+    {
+        var clock = new ToolbarClockViewModel(1, new ToolbarClockSetting
+        {
+            Enabled = true,
+            ColorHex = "#3A3A3A"
+        });
+        var changed = new List<string?>();
+        clock.PropertyChanged += (_, args) => changed.Add(args.PropertyName);
+
+        clock.SelectedColorOption = clock.ColorOptions.Single(option => option.Label == "Purple");
+
+        Assert.Equal("#5E35B1", clock.ColorHex);
+        Assert.Contains(nameof(ToolbarClockViewModel.BackgroundBrush), changed);
+        Assert.Equal(Color.Parse("#5E35B1"), Assert.IsType<SolidColorBrush>(clock.BackgroundBrush).Color);
     }
 }

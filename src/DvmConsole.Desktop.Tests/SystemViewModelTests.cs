@@ -1,4 +1,5 @@
 using DvmConsole.Audio;
+using Avalonia.Media;
 using DvmConsole.Core.Settings;
 using DvmConsole.Core.Runtime;
 using DvmConsole.Desktop;
@@ -12,6 +13,20 @@ namespace DvmConsole.Desktop.Tests;
 
 public sealed class SystemViewModelTests
 {
+    [Fact]
+    public void DefaultZoneColorsRemainReadableInBothThemes()
+    {
+        var zone = new ZoneViewModel("Dispatch", [], []);
+
+        Assert.Equal(Color.Parse("#E8EDF3"), Assert.IsType<SolidColorBrush>(zone.TabBrush).Color);
+        Assert.Equal(Color.Parse("#18212B"), Assert.IsType<SolidColorBrush>(zone.TabTextBrush).Color);
+
+        zone.SetDarkMode(true);
+
+        Assert.Equal(Color.Parse("#151D26"), Assert.IsType<SolidColorBrush>(zone.TabBrush).Color);
+        Assert.Equal(Color.Parse("#DCE3EB"), Assert.IsType<SolidColorBrush>(zone.TabTextBrush).Color);
+    }
+
     [Fact]
     public async Task InvalidCodeplugReportsFailureWithoutReplacingLastKnownPath()
     {

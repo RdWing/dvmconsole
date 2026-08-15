@@ -9,10 +9,22 @@
           <SolidColorBrush x:Key="ShellHeaderBrush" Color="#E4E8EC" />
           <SolidColorBrush x:Key="PrimaryTextBrush" Color="#18212B" />
           <SolidColorBrush x:Key="CardBackgroundBrush" Color="#FFFFFF" />
-          <SolidColorBrush x:Key="MutedTextBrush" Color="#68727D" />
+          <SolidColorBrush x:Key="MutedTextBrush" Color="#4D5965" />
           <SolidColorBrush x:Key="ButtonBackgroundBrush" Color="#FFFFFF" />
           <SolidColorBrush x:Key="ButtonHoverBrush" Color="#DDE5ED" />
-          <SolidColorBrush x:Key="ControlBorderBrush" Color="#AAB5C0" />
+          <SolidColorBrush x:Key="ControlBorderBrush" Color="#8996A3" />
+          <SolidColorBrush x:Key="PttBackgroundBrush" Color="#E2E8EF" />
+          <SolidColorBrush x:Key="SelectorBackgroundBrush" Color="#E8EDF3" />
+          <SolidColorBrush x:Key="TabTextBrush" Color="#40505F" />
+          <SolidColorBrush x:Key="SelectedTabTextBrush" Color="#111820" />
+          <SolidColorBrush x:Key="SidebarBackgroundBrush" Color="#E9EEF3" />
+          <SolidColorBrush x:Key="ActivityBackgroundBrush" Color="#FFFFFF" />
+          <SolidColorBrush x:Key="StatusBarBackgroundBrush" Color="#E1E7ED" />
+          <SolidColorBrush x:Key="SplitterBrush" Color="#8996A3" />
+          <SolidColorBrush x:Key="ClockTextBrush" Color="#FFFFFF" />
+          <SolidColorBrush x:Key="ClockBorderBrush" Color="#65717D" />
+          <SolidColorBrush x:Key="WarningBackgroundBrush" Color="#FFF4D6" />
+          <SolidColorBrush x:Key="WarningBorderBrush" Color="#B47B18" />
         </ResourceDictionary>
         <ResourceDictionary x:Key="Dark">
           <SolidColorBrush x:Key="ShellBackgroundBrush" Color="#0D1116" />
@@ -23,6 +35,18 @@
           <SolidColorBrush x:Key="ButtonBackgroundBrush" Color="#1A222D" />
           <SolidColorBrush x:Key="ButtonHoverBrush" Color="#253446" />
           <SolidColorBrush x:Key="ControlBorderBrush" Color="#273443" />
+          <SolidColorBrush x:Key="PttBackgroundBrush" Color="#17202B" />
+          <SolidColorBrush x:Key="SelectorBackgroundBrush" Color="#242938" />
+          <SolidColorBrush x:Key="TabTextBrush" Color="#AEB9C5" />
+          <SolidColorBrush x:Key="SelectedTabTextBrush" Color="#F4F7FA" />
+          <SolidColorBrush x:Key="SidebarBackgroundBrush" Color="#151C25" />
+          <SolidColorBrush x:Key="ActivityBackgroundBrush" Color="#1C2530" />
+          <SolidColorBrush x:Key="StatusBarBackgroundBrush" Color="#1A2028" />
+          <SolidColorBrush x:Key="SplitterBrush" Color="#25313D" />
+          <SolidColorBrush x:Key="ClockTextBrush" Color="#FFFFFF" />
+          <SolidColorBrush x:Key="ClockBorderBrush" Color="#3A4654" />
+          <SolidColorBrush x:Key="WarningBackgroundBrush" Color="#332A1A" />
+          <SolidColorBrush x:Key="WarningBorderBrush" Color="#7A5C28" />
         </ResourceDictionary>
       </ResourceDictionary.ThemeDictionaries>
     </ResourceDictionary>

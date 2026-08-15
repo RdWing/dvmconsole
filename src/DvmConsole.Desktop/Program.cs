@@ -7,9 +7,18 @@ internal static class Program
     [STAThread]
     public static void Main(string[] args)
     {
-        App.SmokeWindows = args.Contains("--smoke-windows", StringComparer.Ordinal);
-        App.ConfigurationPath = args.FirstOrDefault(argument => !argument.StartsWith("-", StringComparison.Ordinal));
-        BuildAvaloniaApp().StartWithClassicDesktopLifetime(args);
+        DesktopCrashLog.Install();
+        try
+        {
+            App.SmokeWindows = args.Contains("--smoke-windows", StringComparer.Ordinal);
+            App.ConfigurationPath = args.FirstOrDefault(argument => !argument.StartsWith("-", StringComparison.Ordinal));
+            BuildAvaloniaApp().StartWithClassicDesktopLifetime(args);
+        }
+        catch (Exception exception)
+        {
+            DesktopCrashLog.Write("Desktop main loop", exception);
+            throw;
+        }
     }
 
     public static AppBuilder BuildAvaloniaApp()

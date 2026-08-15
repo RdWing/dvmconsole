@@ -97,6 +97,13 @@ command is only a development launch path.
 permission the first time PTT is used. Grant Accessibility or Input Monitoring
 access to the application if global Space/F-key PTT is required.
 
+If the application closes without displaying an error, collect the local
+`LastCrash.log` before restarting it. On macOS it is stored under
+`~/Library/Application Support/DVMProject/dvmconsole/`; on Windows it is stored
+under `%APPDATA%\DVMProject\dvmconsole\`. The file contains the most recent
+unhandled managed exception and does not contain the codeplug or encryption
+keys.
+
 The desktop also attempts OS-global Space/F-key PTT on macOS and Windows. On
 macOS, grant the packaged application Accessibility or Input Monitoring access
 if global PTT is required. If permission is unavailable, PTT falls back to

@@ -112,6 +112,7 @@ public sealed class ToolbarClockViewModel : INotifyPropertyChanged
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SelectedColorOption)));
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ColorLabel)));
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ColorBrush)));
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(BackgroundBrush)));
         }
     }
 
