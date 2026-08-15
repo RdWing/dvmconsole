@@ -207,9 +207,11 @@ public sealed class UserSettingsStoreTests
 
             UserSettings loaded = store.Load();
 
-            Assert.Equal("/tmp/codeplug.yml", loaded.LastCodeplugPath);
+            Assert.Equal(Path.GetFullPath("/tmp/codeplug.yml"), loaded.LastCodeplugPath);
             Assert.Equal(UserSettings.CurrentSchemaVersion, loaded.SchemaVersion);
-            Assert.Equal(["/tmp/one.yml", "/tmp/two.yml"], loaded.RecentCodeplugPaths);
+            Assert.Equal(
+                [Path.GetFullPath("/tmp/one.yml"), Path.GetFullPath("/tmp/two.yml")],
+                loaded.RecentCodeplugPaths);
             Assert.Equal("System 1", loaded.LastSelectedSystemName);
             Assert.Equal("System 1\u001FDispatch", loaded.LastSelectedChannelKey);
             Assert.Equal("microphone-1", loaded.AudioInputDeviceId);
@@ -245,7 +247,7 @@ public sealed class UserSettingsStoreTests
             WidgetPositionSetting widgetPosition = Assert.Single(loaded.ChannelWidgetPositions).Value;
             Assert.Equal(125, widgetPosition.X);
             Assert.Equal(240, widgetPosition.Y);
-            Assert.Equal("/tmp/background.png", loaded.UserBackgroundImage);
+            Assert.Equal(Path.GetFullPath("/tmp/background.png"), loaded.UserBackgroundImage);
             Assert.True(loaded.TogglePttMode);
             Assert.Equal("F12", loaded.GlobalPttKey);
             Assert.Equal(["System 1\u001FDispatch"], loaded.TransmitSelectedChannelKeys);
@@ -261,13 +263,13 @@ public sealed class UserSettingsStoreTests
             Assert.Single(loaded.TonePresets[0].Steps);
             AlertToneSetting alertTone = Assert.Single(loaded.AlertTones);
             Assert.Equal("Evacuate", alertTone.Name);
-            Assert.Equal("/tmp/evacuate.wav", alertTone.FilePath);
+            Assert.Equal(Path.GetFullPath("/tmp/evacuate.wav"), alertTone.FilePath);
             Assert.Equal(1.5, loaded.ChannelVolumes["System 1\u001FDispatch"]);
             Assert.Equal("speaker-2", loaded.ChannelOutputDeviceIds["System 1\u001FDispatch"]);
             Assert.Equal(1.25, loaded.WebStreamVolumes["News"]);
             Assert.Equal("web-stream-output-1", loaded.WebStreamOutputDeviceIds["News"]);
             Assert.Equal(14, loaded.RecordingRetentionDays);
-            Assert.Equal("/tmp/recordings", loaded.RecordingRootPath);
+            Assert.Equal(Path.GetFullPath("/tmp/recordings"), loaded.RecordingRootPath);
             Assert.Equal([42u], loaded.RecordingIgnoredSubscriberIds["System 1\u001FDispatch"]);
             Assert.Equal(2, loaded.PatchGroupMemberships["Dispatch"].Count);
             Assert.True(loaded.PatchGroupModes["Dispatch"]);
