@@ -43,6 +43,39 @@ public sealed class RecordingPlaybackCoordinatorTests
         }
     }
 
+    [Fact]
+    public async Task StopCancelsAnActivePlaybackSession()
+    {
+        string path = Path.Combine(
+            Path.GetTempPath(),
+            "dvmconsole-recording-playback-tests",
+            Guid.NewGuid().ToString("N"),
+            "call.wav");
+        var backend = new FakeAudioBackend { BlockWrites = true };
+        try
+        {
+            using (var writer = new PcmWavFileWriter(path, PcmAudioFormat.Voice8KhzMono16Bit))
+                writer.Write(Enumerable.Repeat<short>(1200, 1600).ToArray());
+
+            await using var coordinator = new RecordingPlaybackCoordinator(
+                () => backend,
+                () => "output");
+            await coordinator.StartAsync(path);
+            await WaitForAsync(() => coordinator.IsPlaying());
+
+            await coordinator.StopAsync();
+
+            Assert.False(coordinator.IsPlaying());
+            Assert.True(backend.Playback.IsDisposed);
+        }
+        finally
+        {
+            string? directory = Path.GetDirectoryName(path);
+            if (Directory.Exists(directory))
+                Directory.Delete(directory, recursive: true);
+        }
+    }
+
     private static async Task WaitForAsync(Func<bool> condition)
     {
         for (int attempt = 0; attempt < 100 && !condition(); attempt++)
@@ -54,6 +87,7 @@ public sealed class RecordingPlaybackCoordinatorTests
     {
         public FakePlayback Playback { get; } = new();
         public FakePlayback AlternatePlayback { get; } = new();
+        public bool BlockWrites { get; init; }
         public string? LastOutputDeviceId { get; private set; }
         public bool IsDisposed { get; private set; }
         public string Name => "fake";
@@ -72,6 +106,8 @@ public sealed class RecordingPlaybackCoordinatorTests
         public IAudioPlayback OpenPlayback(AudioDeviceInfo device, PcmAudioFormat format)
         {
             LastOutputDeviceId = device.Id;
+            if (BlockWrites)
+                Playback.BlockWrites = true;
             return device.Id == "alternate" ? AlternatePlayback : Playback;
         }
 
@@ -82,11 +118,14 @@ public sealed class RecordingPlaybackCoordinatorTests
     {
         public List<short[]> Frames { get; } = [];
         public bool IsDisposed { get; private set; }
+        public bool BlockWrites { get; set; }
         public PcmAudioFormat Format { get; } = PcmAudioFormat.Voice8KhzMono16Bit;
 
         public ValueTask WriteAsync(ReadOnlyMemory<short> samples, CancellationToken cancellationToken = default)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            if (BlockWrites)
+                return new ValueTask(Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken));
             Frames.Add(samples.ToArray());
             return ValueTask.CompletedTask;
         }
