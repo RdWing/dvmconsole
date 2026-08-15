@@ -442,6 +442,12 @@ public sealed partial class MainWindow : Window
             viewModel.ToggleChannelPageSelection(channel);
     }
 
+    private async void HandleToolbarAlertToneClick(object? sender, RoutedEventArgs e)
+    {
+        if (sender is Button { Tag: AlertToneViewModel tone })
+            await viewModel.SendAlertToneAsync(tone);
+    }
+
     private async void HandleGlobalPttKeyClick(object? sender, RoutedEventArgs e)
     {
         if (sender is not MenuItem { Tag: string value } ||
@@ -3095,7 +3101,16 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         try
         {
             short[] samples = await PcmAudioFileLoader.LoadAsync(tone.FilePath).ConfigureAwait(false);
-            await SendGeneratedToneAsync(samples, $"Alert asset '{tone.Name}'").ConfigureAwait(false);
+            ChannelViewModel[] pageTargets = Systems
+                .SelectMany(system => system.Channels)
+                .Where(channel => channel.IsPageSelected)
+                .ToArray();
+            await SendGeneratedToneAsync(
+                samples,
+                $"Alert asset '{tone.Name}'",
+                pageTargets.Length > 0 ? pageTargets : null).ConfigureAwait(false);
+            foreach (ChannelViewModel channel in pageTargets)
+                channel.SetPageSelected(false);
         }
         catch (Exception exception)
         {
