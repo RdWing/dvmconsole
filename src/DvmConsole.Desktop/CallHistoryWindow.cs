@@ -23,7 +23,7 @@ public sealed class CallHistoryWindow : Window
         this.viewModel = viewModel ?? throw new ArgumentNullException(nameof(viewModel));
         WindowPlacementSetting placement = viewModel.GetCallHistoryWindowPlacement();
 
-        Title = "Call History";
+        Title = "Event History";
         Width = placement.Width;
         Height = placement.Height;
         MinWidth = 560;
@@ -62,7 +62,7 @@ public sealed class CallHistoryWindow : Window
                     {
                         Children =
                         {
-                            new TextBlock { Text = entry.ChannelName, FontWeight = FontWeight.SemiBold },
+                            new TextBlock { Text = entry.DisplayChannelText, FontWeight = FontWeight.SemiBold },
                             new TextBlock { Text = entry.RouteText, FontSize = 11, Opacity = 0.72 }
                         }
                     };
@@ -100,7 +100,7 @@ public sealed class CallHistoryWindow : Window
             ColumnSpacing = 8,
             Children =
             {
-                new TextBlock { Text = "Call history", VerticalAlignment = VerticalAlignment.Center },
+                new TextBlock { Text = "Event history", VerticalAlignment = VerticalAlignment.Center },
                 filterInput,
                 clearButton,
                 exportButton,
@@ -168,7 +168,7 @@ public sealed class CallHistoryWindow : Window
 
         IStorageFile? file = await StorageProvider.SaveFilePickerAsync(new FilePickerSaveOptions
         {
-            Title = "Export Call History",
+            Title = "Export Event History",
             SuggestedFileName = "dvmconsole-call-history.csv",
             DefaultExtension = "csv",
             FileTypeChoices =

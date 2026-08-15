@@ -1469,7 +1469,28 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     {
         callHistory.Clear();
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(FilteredCallHistory)));
-        StatusText = "Call history cleared.";
+        StatusText = "Activity history cleared.";
+    }
+
+    public void AddEventHistory(
+        string source,
+        string message,
+        string? ridText = null,
+        string? tgidText = null)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(source);
+        ArgumentException.ThrowIfNullOrWhiteSpace(message);
+
+        void Apply()
+        {
+            callHistory.AddEvent(DateTimeOffset.Now, source, message, ridText, tgidText);
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(FilteredCallHistory)));
+        }
+
+        if (Dispatcher.UIThread.CheckAccess())
+            Apply();
+        else
+            Dispatcher.UIThread.Post(Apply);
     }
 
     public void ExportCallHistory(string path)
@@ -1489,15 +1510,15 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             Csv(entry.EndTimestamp?.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture) ?? string.Empty),
             Csv(entry.Duration?.TotalSeconds.ToString("0.###", CultureInfo.InvariantCulture) ?? string.Empty),
             Csv(entry.SystemName),
-            Csv(entry.ChannelName),
-            entry.SourceId.ToString(CultureInfo.InvariantCulture),
+            Csv(entry.DisplayChannelText),
+            Csv(entry.DisplaySourceText),
             Csv(entry.CallerText),
-            entry.DestinationId.ToString(CultureInfo.InvariantCulture),
+            Csv(entry.DisplayDestinationText),
             Csv(entry.ProtocolText),
             Csv(entry.EncryptionText),
             entry.StreamId.ToString(CultureInfo.InvariantCulture))));
         File.WriteAllLines(fullPath, lines);
-        StatusText = $"Exported {CallHistory.Count} call-history entr{(CallHistory.Count == 1 ? "y" : "ies")}.";
+        StatusText = $"Exported {CallHistory.Count} activity-history entr{(CallHistory.Count == 1 ? "y" : "ies")}.";
     }
 
     private static string Csv(string value)
@@ -1835,10 +1856,11 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
 
                 string filter = CallHistoryFilterText.Trim();
                 return entry.SystemName.Contains(filter, StringComparison.OrdinalIgnoreCase) ||
-                    entry.ChannelName.Contains(filter, StringComparison.OrdinalIgnoreCase) ||
+                    entry.DisplayChannelText.Contains(filter, StringComparison.OrdinalIgnoreCase) ||
+                    entry.EventMessage.Contains(filter, StringComparison.OrdinalIgnoreCase) ||
                     entry.CallerText.Contains(filter, StringComparison.OrdinalIgnoreCase) ||
-                    entry.SourceId.ToString(CultureInfo.InvariantCulture).Contains(filter, StringComparison.OrdinalIgnoreCase) ||
-                    entry.DestinationId.ToString(CultureInfo.InvariantCulture).Contains(filter, StringComparison.OrdinalIgnoreCase) ||
+                    entry.DisplaySourceText.Contains(filter, StringComparison.OrdinalIgnoreCase) ||
+                    entry.DisplayDestinationText.Contains(filter, StringComparison.OrdinalIgnoreCase) ||
                     entry.StreamId.ToString(CultureInfo.InvariantCulture).Contains(filter, StringComparison.OrdinalIgnoreCase) ||
                     entry.ProtocolText.Contains(filter, StringComparison.OrdinalIgnoreCase) ||
                     entry.EncryptionText.Contains(filter, StringComparison.OrdinalIgnoreCase);
@@ -2793,6 +2815,15 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             bool stateChanged = !lastConnectionChimeStates.TryGetValue(system.Name, out FneConnectionState previousState) ||
                 previousState != status.State;
             lastConnectionChimeStates[system.Name] = status.State;
+            if (stateChanged && status.State is FneConnectionState.Connected or FneConnectionState.Disconnected or FneConnectionState.Faulted)
+            {
+                string stateText = status.State.ToString().ToLowerInvariant();
+                AddEventHistory(
+                    "FNE",
+                    $"{system.Name} {stateText}",
+                    system.SourceId?.ToString(CultureInfo.InvariantCulture),
+                    system.Endpoint);
+            }
             if (stateChanged && (status.State is FneConnectionState.Connected or FneConnectionState.Faulted))
                 _ = PlayConnectionChimeAsync(system.Name, status.State);
             RaiseGeneratedAudioCanExecuteChanged();
@@ -3495,6 +3526,21 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             await Task.Run(() => transmitCoordinator.StartAsync(targets));
             foreach (ChannelViewModel channel in transmitCoordinator.ActiveChannels)
                 channel.SetTransmitEnabled(true, transmitCoordinator.GetActiveStreamId(channel));
+            foreach (ChannelViewModel channel in transmitCoordinator.ActiveChannels)
+            {
+                TransmitTarget target = targets.First(candidate => ReferenceEquals(candidate.Channel, channel));
+                callHistory.AddConsoleTransmission(
+                    DateTimeOffset.Now,
+                    target.System.Name,
+                    channel.Name,
+                    target.System.SourceId ?? 0,
+                    channel.Definition.DestinationId,
+                    ProtocolFor(channel),
+                    transmitCoordinator.GetActiveStreamId(channel),
+                    callerText: "Console",
+                    encrypted: channel.Definition.IsEncrypted);
+            }
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(FilteredCallHistory)));
             TransmitStatusText = transmitCoordinator.ActiveChannels.Count == 1
                 ? $"Transmitting on {transmitCoordinator.ActiveChannel!.Name}."
                 : $"Transmitting on {transmitCoordinator.ActiveChannels.Count} selected channels.";
@@ -3519,6 +3565,10 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
 
     private async Task StopTransmitAsync(IReadOnlyCollection<ChannelViewModel> channels)
     {
+        (ChannelViewModel Channel, uint StreamId)[] activeStreams = channels
+            .Select(channel => (channel, transmitCoordinator.GetActiveStreamId(channel)))
+            .Where(entry => entry.Item2 != 0)
+            .ToArray();
         try
         {
             await Task.Run(() => transmitCoordinator.StopAsync());
@@ -3530,6 +3580,18 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
                 channel.SetTransmitEnabled(false);
                 callRecordings.StopTransmit(channel);
             }
+            foreach ((ChannelViewModel channel, uint streamId) in activeStreams)
+            {
+                SystemViewModel? system = Systems.FirstOrDefault(candidate => candidate.Channels.Contains(channel));
+                if (system is not null)
+                    callHistory.CompleteConsoleTransmission(
+                        system.Name,
+                        ProtocolFor(channel),
+                        streamId,
+                        DateTimeOffset.Now);
+            }
+            if (activeStreams.Length > 0)
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(FilteredCallHistory)));
             RefreshRecordings();
             await RestoreSuspendedAudioAsync();
             TransmitStatusText = "PTT idle.";
@@ -4276,6 +4338,15 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         (SendToneCommand as AsyncRelayCommand)?.RaiseCanExecuteChanged();
     }
 
+    private static FneTrafficProtocol ProtocolFor(ChannelViewModel channel)
+        => channel.Definition.Mode switch
+        {
+            "dmr" => FneTrafficProtocol.Dmr,
+            "p25" => FneTrafficProtocol.P25,
+            "nxdn" => FneTrafficProtocol.Nxdn,
+            _ => FneTrafficProtocol.Analog
+        };
+
     private void HandleKeyboardPttStateChanged(object? sender, bool pressed)
     {
         _ = HandleKeyboardPttStateChangedAsync(pressed);
@@ -4327,6 +4398,10 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     private void HandleTransmitFaulted(object? sender, Exception exception)
     {
         ChannelViewModel[] channels = transmitCoordinator.ActiveChannels.ToArray();
+        (ChannelViewModel Channel, uint StreamId)[] activeStreams = channels
+            .Select(channel => (channel, transmitCoordinator.GetActiveStreamId(channel)))
+            .Where(entry => entry.Item2 != 0)
+            .ToArray();
         Dispatcher.UIThread.Post(() =>
         {
             foreach (ChannelViewModel channel in channels)
@@ -4347,8 +4422,19 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             }
             finally
             {
-                foreach (ChannelViewModel channel in channels)
+                foreach ((ChannelViewModel channel, uint streamId) in activeStreams)
+                {
                     callRecordings.StopTransmit(channel);
+                    SystemViewModel? system = Systems.FirstOrDefault(candidate => candidate.Channels.Contains(channel));
+                    if (system is not null)
+                        callHistory.CompleteConsoleTransmission(
+                            system.Name,
+                            ProtocolFor(channel),
+                            streamId,
+                            DateTimeOffset.Now);
+                }
+                if (activeStreams.Length > 0)
+                    Dispatcher.UIThread.Post(() => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(FilteredCallHistory))));
                 RefreshRecordings();
             }
             await RestoreSuspendedAudioAsync().ConfigureAwait(false);

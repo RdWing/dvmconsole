@@ -13,6 +13,12 @@ public sealed class CallHistoryEntry : INotifyPropertyChanged
     private bool encrypted;
     private byte? encryptionAlgorithmId;
     private ushort? encryptionKeyId;
+    private readonly bool isEvent;
+    private readonly bool isConsoleTransmission;
+    private readonly string eventSource;
+    private readonly string eventMessage;
+    private readonly string eventRidText;
+    private readonly string eventTgidText;
 
     public CallHistoryEntry(
         DateTimeOffset timestamp,
@@ -23,7 +29,13 @@ public sealed class CallHistoryEntry : INotifyPropertyChanged
         FneTrafficProtocol protocol,
         uint streamId,
         string? callerText = null,
-        bool encrypted = false)
+        bool encrypted = false,
+        bool isEvent = false,
+        bool isConsoleTransmission = false,
+        string? eventSource = null,
+        string? eventMessage = null,
+        string? eventRidText = null,
+        string? eventTgidText = null)
     {
         Timestamp = timestamp;
         SystemName = systemName;
@@ -34,6 +46,12 @@ public sealed class CallHistoryEntry : INotifyPropertyChanged
         StreamId = streamId;
         CallerText = string.IsNullOrWhiteSpace(callerText) ? sourceId.ToString() : callerText.Trim();
         this.encrypted = encrypted;
+        this.isEvent = isEvent;
+        this.isConsoleTransmission = isConsoleTransmission;
+        this.eventSource = eventSource?.Trim() ?? string.Empty;
+        this.eventMessage = eventMessage?.Trim() ?? string.Empty;
+        this.eventRidText = eventRidText?.Trim() ?? string.Empty;
+        this.eventTgidText = eventTgidText?.Trim() ?? string.Empty;
     }
 
     public event PropertyChangedEventHandler? PropertyChanged;
@@ -46,22 +64,33 @@ public sealed class CallHistoryEntry : INotifyPropertyChanged
     public FneTrafficProtocol Protocol { get; }
     public uint StreamId { get; }
     public string CallerText { get; }
-    public bool Encrypted => encrypted;
+    public bool IsEvent => isEvent;
+    public bool IsConsoleTransmission => isConsoleTransmission;
+    public string EventSource => eventSource;
+    public string EventMessage => eventMessage;
+    public string EventRidText => eventRidText;
+    public string EventTgidText => eventTgidText;
+    public bool Encrypted => !IsEvent && encrypted;
     public string TimestampText => Timestamp.ToLocalTime().ToString("HH:mm:ss");
-    public string ProtocolText => Protocol.ToString().ToUpperInvariant();
-    public string RouteText => $"{CallerText} → TG {DestinationId}";
-    public string StreamText => $"{ProtocolText} · stream {StreamId}";
-    public bool IsActive => endTimestamp is null;
-    public TimeSpan? Duration => endTimestamp - Timestamp;
+    public string ProtocolText => IsEvent ? "EVENT" : Protocol.ToString().ToUpperInvariant();
+    public string DisplayChannelText => IsEvent ? EventSource : ChannelName;
+    public string DisplaySourceText => IsEvent ? EventRidText : SourceId.ToString();
+    public string DisplayDestinationText => IsEvent ? EventTgidText : DestinationId.ToString();
+    public string RouteText => IsEvent ? EventMessage : $"{CallerText} → TG {DestinationId}";
+    public string StreamText => IsEvent ? "Event" : $"{ProtocolText} · stream {StreamId}";
+    public bool IsActive => !IsEvent && endTimestamp is null;
+    public TimeSpan? Duration => IsEvent ? null : endTimestamp - Timestamp;
     public string DurationText => Duration is TimeSpan duration
         ? $"{duration.TotalSeconds:0.0}s"
-        : "Active";
+        : IsEvent ? "—" : "Active";
     public byte? EncryptionAlgorithmId => encryptionAlgorithmId;
     public ushort? EncryptionKeyId => encryptionKeyId;
     public string EncryptionText
     {
         get
         {
+            if (IsEvent)
+                return "—";
             if (!Encrypted)
                 return "Clear";
             if (encryptionAlgorithmId is not byte algorithmId || encryptionKeyId is not ushort keyId)
@@ -69,6 +98,55 @@ public sealed class CallHistoryEntry : INotifyPropertyChanged
             return $"Encrypted (alg 0x{algorithmId:X2}, key 0x{keyId:X})";
         }
     }
+
+    public static CallHistoryEntry CreateEvent(
+        DateTimeOffset timestamp,
+        string source,
+        string message,
+        string? ridText = null,
+        string? tgidText = null)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(source);
+        ArgumentException.ThrowIfNullOrWhiteSpace(message);
+
+        string normalizedSource = source.Trim();
+        return new CallHistoryEntry(
+            timestamp,
+            normalizedSource,
+            normalizedSource,
+            0,
+            0,
+            FneTrafficProtocol.Dmr,
+            0,
+            callerText: message,
+            isEvent: true,
+            eventSource: normalizedSource,
+            eventMessage: message,
+            eventRidText: ridText,
+            eventTgidText: tgidText);
+    }
+
+    public static CallHistoryEntry CreateConsoleTransmission(
+        DateTimeOffset timestamp,
+        string systemName,
+        string channelName,
+        uint sourceId,
+        uint destinationId,
+        FneTrafficProtocol protocol,
+        uint streamId,
+        string? callerText = null,
+        bool encrypted = false)
+        => new(
+            timestamp,
+            systemName,
+            channelName,
+            sourceId,
+            destinationId,
+            protocol,
+            streamId,
+            callerText,
+            encrypted,
+            isConsoleTransmission: true);
 
     public void Complete(DateTimeOffset timestamp)
     {
@@ -136,6 +214,7 @@ public sealed class CallHistoryStore
     {
         CallHistoryEntry? entry = Entries.FirstOrDefault(candidate =>
             candidate.IsActive &&
+            !candidate.IsConsoleTransmission &&
             candidate.StreamId == streamId &&
             candidate.Protocol == protocol &&
             candidate.SystemName.Equals(systemName, StringComparison.OrdinalIgnoreCase));
@@ -162,10 +241,58 @@ public sealed class CallHistoryStore
     {
         CallHistoryEntry? entry = Entries.FirstOrDefault(candidate =>
             candidate.IsActive &&
+            !candidate.IsConsoleTransmission &&
             candidate.StreamId == streamId &&
             candidate.Protocol == protocol &&
             candidate.SystemName.Equals(systemName, StringComparison.OrdinalIgnoreCase));
         return entry?.UpdateEncryption(encrypted, algorithmId, keyId) == true;
+    }
+
+    public void AddEvent(
+        DateTimeOffset timestamp,
+        string source,
+        string message,
+        string? ridText = null,
+        string? tgidText = null)
+        => Add(CallHistoryEntry.CreateEvent(timestamp, source, message, ridText, tgidText));
+
+    public void AddConsoleTransmission(
+        DateTimeOffset timestamp,
+        string systemName,
+        string channelName,
+        uint sourceId,
+        uint destinationId,
+        FneTrafficProtocol protocol,
+        uint streamId,
+        string? callerText = null,
+        bool encrypted = false)
+        => Add(CallHistoryEntry.CreateConsoleTransmission(
+            timestamp,
+            systemName,
+            channelName,
+            sourceId,
+            destinationId,
+            protocol,
+            streamId,
+            callerText,
+            encrypted));
+
+    public bool CompleteConsoleTransmission(
+        string systemName,
+        FneTrafficProtocol protocol,
+        uint streamId,
+        DateTimeOffset timestamp)
+    {
+        CallHistoryEntry? entry = Entries.FirstOrDefault(candidate =>
+            candidate.IsActive &&
+            candidate.IsConsoleTransmission &&
+            candidate.StreamId == streamId &&
+            candidate.Protocol == protocol &&
+            candidate.SystemName.Equals(systemName, StringComparison.OrdinalIgnoreCase));
+        if (entry is null)
+            return false;
+        entry.Complete(timestamp);
+        return true;
     }
 
     public void Clear() => Entries.Clear();

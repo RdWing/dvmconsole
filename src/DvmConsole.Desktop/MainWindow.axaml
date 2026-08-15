@@ -101,9 +101,9 @@
             <MenuItem Header="Lock widgets" IsChecked="{Binding LockWidgets, Mode=TwoWay}" ToggleType="CheckBox" />
             <MenuItem Header="Reset widget layout" Click="HandleResetLayoutClick" />
             <Separator />
-            <MenuItem Header="Call History window…" Click="HandleOpenCallHistoryClick" />
-            <MenuItem Header="Dock Call History in sidebar" IsChecked="{Binding ShowCallHistoryPane, Mode=TwoWay}" ToggleType="CheckBox" />
-            <MenuItem Header="Snap detached Call History" IsChecked="{Binding SnapCallHistoryToWindow, Mode=TwoWay}" ToggleType="CheckBox" />
+            <MenuItem Header="Event History window…" Click="HandleOpenCallHistoryClick" />
+            <MenuItem Header="Dock Event History in sidebar" IsChecked="{Binding ShowCallHistoryPane, Mode=TwoWay}" ToggleType="CheckBox" />
+            <MenuItem Header="Snap detached Event History" IsChecked="{Binding SnapCallHistoryToWindow, Mode=TwoWay}" ToggleType="CheckBox" />
             <MenuItem Header="Call History tools…" Tag="History" Click="HandleOpenOperatorToolsClick" />
             <MenuItem Header="Groups…" Tag="Groups" Click="HandleOpenOperatorToolsClick" />
             <MenuItem Header="Debug Logs…" Click="HandleOpenDebugLogsClick" />
@@ -219,12 +219,12 @@
           <ScrollViewer Grid.Row="1" Margin="0,8,0,0">
             <StackPanel Spacing="14">
               <StackPanel Spacing="6">
-                <TextBlock Classes="eyebrow" Text="Call History" />
+                <TextBlock Classes="eyebrow" Text="Event History" />
                 <ItemsControl ItemsSource="{Binding FilteredCallHistory}">
                   <ItemsControl.ItemTemplate>
                     <DataTemplate x:DataType="local:CallHistoryEntry">
                       <Border Background="#1C2530" BorderBrush="#293847" BorderThickness="1" CornerRadius="6" Padding="7" Margin="0,0,0,6">
-                        <Grid RowDefinitions="Auto,Auto,Auto" ColumnDefinitions="*,Auto"><TextBlock FontSize="12" FontWeight="SemiBold" Text="{Binding ChannelName}" /><TextBlock Grid.Column="1" Classes="eyebrow" Text="{Binding TimestampText}" /><TextBlock Grid.Row="1" Classes="eyebrow" Text="{Binding RouteText}" TextTrimming="CharacterEllipsis" /><TextBlock Grid.Row="1" Grid.Column="1" Classes="eyebrow" Text="{Binding ProtocolText}" /><TextBlock Grid.Row="2" Classes="eyebrow" Text="{Binding EncryptionText}" /><TextBlock Grid.Row="2" Grid.Column="1" Classes="eyebrow" Text="{Binding DurationText}" /></Grid>
+                        <Grid RowDefinitions="Auto,Auto,Auto" ColumnDefinitions="*,Auto"><TextBlock FontSize="12" FontWeight="SemiBold" Text="{Binding DisplayChannelText}" /><TextBlock Grid.Column="1" Classes="eyebrow" Text="{Binding TimestampText}" /><TextBlock Grid.Row="1" Classes="eyebrow" Text="{Binding RouteText}" TextTrimming="CharacterEllipsis" /><TextBlock Grid.Row="1" Grid.Column="1" Classes="eyebrow" Text="{Binding ProtocolText}" /><TextBlock Grid.Row="2" Classes="eyebrow" Text="{Binding EncryptionText}" /><TextBlock Grid.Row="2" Grid.Column="1" Classes="eyebrow" Text="{Binding DurationText}" /></Grid>
                       </Border>
                     </DataTemplate>
                   </ItemsControl.ItemTemplate>

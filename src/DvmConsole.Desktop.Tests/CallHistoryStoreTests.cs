@@ -74,6 +74,55 @@ public sealed class CallHistoryStoreTests
         Assert.Equal("Encrypted (alg 0x81, key 0x50)", entry.EncryptionText);
     }
 
+    [Fact]
+    public void StoresEventRowsWithoutTreatingThemAsActiveCalls()
+    {
+        var store = new CallHistoryStore();
+
+        store.AddEvent(
+            DateTimeOffset.UnixEpoch,
+            "FNE",
+            "Alpha connected",
+            ridText: "3100",
+            tgidText: "127.0.0.1:62031");
+
+        CallHistoryEntry entry = Assert.Single(store.Entries);
+        Assert.True(entry.IsEvent);
+        Assert.False(entry.IsActive);
+        Assert.Equal("FNE", entry.DisplayChannelText);
+        Assert.Equal("Alpha connected", entry.RouteText);
+        Assert.Equal("3100", entry.DisplaySourceText);
+        Assert.Equal("127.0.0.1:62031", entry.DisplayDestinationText);
+        Assert.Equal("EVENT", entry.ProtocolText);
+        Assert.Equal("—", entry.DurationText);
+        Assert.False(store.Complete("FNE", FneTrafficProtocol.Dmr, 0, DateTimeOffset.UtcNow));
+    }
+
+    [Fact]
+    public void CompletesConsoleTransmissionSeparatelyFromReceiveCalls()
+    {
+        var store = new CallHistoryStore();
+        store.AddConsoleTransmission(
+            DateTimeOffset.UnixEpoch,
+            "System 1",
+            "Dispatch",
+            42,
+            100,
+            FneTrafficProtocol.Dmr,
+            77,
+            callerText: "Console");
+
+        CallHistoryEntry entry = Assert.Single(store.Entries);
+        Assert.True(entry.IsConsoleTransmission);
+        Assert.True(store.CompleteConsoleTransmission(
+            "System 1",
+            FneTrafficProtocol.Dmr,
+            77,
+            DateTimeOffset.UnixEpoch.AddSeconds(1.5)));
+        Assert.False(entry.IsActive);
+        Assert.Equal("1.5s", entry.DurationText);
+    }
+
     private static CallHistoryEntry CreateEntry(uint streamId)
     {
         return new CallHistoryEntry(
