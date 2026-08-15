@@ -43,8 +43,16 @@ public sealed class P25RxAudioSession : IAsyncDisposable
         ArgumentNullException.ThrowIfNull(traffic);
         if (!selector.Matches(traffic))
             return 0;
+        long lostBefore = sequenceTracker.LostPackets;
         if (!sequenceTracker.TryAccept(traffic.StreamId, traffic.PacketSequence))
             return 0;
+        if (sequenceTracker.LostPackets > lostBefore)
+        {
+            // An encrypted P25 keystream cannot be safely advanced across a
+            // missing LDU. Wait for a fresh LDU1 rather than emitting
+            // plausible-looking but incorrectly decrypted audio.
+            cryptoState = null;
+        }
 
         byte[] imbe = new byte[P25DfsiFrameCodec.ImbeBytes];
         if (!P25DfsiFrameCodec.TryExtractImbe(traffic, imbe))

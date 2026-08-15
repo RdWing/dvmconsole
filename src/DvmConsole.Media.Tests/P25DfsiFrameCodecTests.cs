@@ -101,6 +101,23 @@ public sealed class P25DfsiFrameCodecTests
     }
 
     [Fact]
+    public async Task P25SessionCountsLossAcrossASustainedClearCall()
+    {
+        var vocoder = new FakeVocoderSession();
+        var playback = new FakePlayback();
+        await using var session = new P25RxAudioSession(new P25TrafficSelector(100), vocoder, playback);
+
+        Assert.Equal(0, await session.ProcessAsync(CreateTraffic("LDU1", CreatePayload(0x62), packetSequence: 100)));
+        Assert.Equal(0, await session.ProcessAsync(CreateTraffic("LDU2", CreatePayload(0x6B), packetSequence: 102)));
+        Assert.Equal(1, session.LostPackets);
+        Assert.Equal(18, session.FramesDecoded);
+
+        Assert.Equal(0, await session.ProcessAsync(CreateTraffic("LDU1", CreatePayload(0x62), packetSequence: 104)));
+        Assert.Equal(2, session.LostPackets);
+        Assert.Equal(27, session.FramesDecoded);
+    }
+
+    [Fact]
     public async Task P25SessionDecryptsEncryptedLdu1WithConfiguredKey()
     {
         const ushort keyId = 0x50;
