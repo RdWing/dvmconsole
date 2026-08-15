@@ -4112,6 +4112,7 @@ public sealed class SystemViewModel : INotifyPropertyChanged, IAsyncDisposable
     public uint? SourceId => options.SourceId;
     public string Identity => options.Identity;
     public bool IsConnected => connection.Status.State == FneConnectionState.Connected;
+    public string SystemTabText => $"{Name} {(ConnectionStatus.StartsWith("Connected:", StringComparison.OrdinalIgnoreCase) ? "●" : "○")}";
     public string PacketDiagnosticsText
         => $"RX {receivedPacketCount:N0} packets / {receivedPacketBytes:N0} bytes · TX {sentPacketCount:N0} packets / {sentPacketBytes:N0} bytes";
     public string LastPacketText => lastPacketText;
@@ -4125,6 +4126,7 @@ public sealed class SystemViewModel : INotifyPropertyChanged, IAsyncDisposable
             connectionStatus = value;
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ConnectionStatus)));
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsConnected)));
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SystemTabText)));
         }
     }
 

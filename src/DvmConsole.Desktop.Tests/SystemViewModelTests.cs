@@ -442,10 +442,18 @@ public sealed class SystemViewModelTests
             system.RecordTraffic(traffic);
 
             Assert.Equal("RX 1 packets / 3 bytes · TX 0 packets / 0 bytes", system.PacketDiagnosticsText);
+            Assert.Equal("Test ○", system.SystemTabText);
             Assert.Contains("P25 GROUP/VOICE", system.LastPacketText);
             Assert.Contains("seq 7", system.LastPacketText);
             Assert.Contains("stream 42", system.LastPacketText);
             Assert.Contains("1001→2002", system.LastPacketText);
+
+            system.ApplyStatus(new FneConnectionStatus(
+                "Test",
+                FneConnectionState.Connected,
+                "FNE peer connected",
+                DateTimeOffset.UtcNow));
+            Assert.Equal("Test ●", system.SystemTabText);
         }
         finally
         {

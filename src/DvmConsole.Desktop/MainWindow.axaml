@@ -160,7 +160,7 @@
           </Border>
 
           <TabControl Grid.Row="3" ItemsSource="{Binding Systems}" SelectedItem="{Binding SelectedSystem, Mode=TwoWay}" IsVisible="{Binding ShowChannels}">
-            <TabControl.ItemTemplate><DataTemplate x:DataType="local:SystemViewModel"><TextBlock Text="{Binding Name}" /></DataTemplate></TabControl.ItemTemplate>
+            <TabControl.ItemTemplate><DataTemplate x:DataType="local:SystemViewModel"><TextBlock Text="{Binding SystemTabText}" /></DataTemplate></TabControl.ItemTemplate>
             <TabControl.ContentTemplate>
               <DataTemplate x:DataType="local:SystemViewModel">
                 <TabControl Classes="zone-tabs" ItemsSource="{Binding Zones}">
