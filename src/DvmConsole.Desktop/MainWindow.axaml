@@ -23,9 +23,25 @@
     <Border Background="#1A2028" Padding="6,0">
       <DockPanel LastChildFill="False">
         <Menu Background="Transparent" Foreground="#E8EDF3">
-          <MenuItem Header="File"><MenuItem Header="Connect" Command="{Binding ConnectCommand}" /><MenuItem Header="Disconnect" Command="{Binding DisconnectCommand}" /></MenuItem>
+          <MenuItem Header="File">
+            <MenuItem Header="Open Codeplug…" Click="HandleOpenCodeplugClick" />
+            <Separator />
+            <MenuItem Header="Connect" Command="{Binding ConnectCommand}" />
+            <MenuItem Header="Disconnect" Command="{Binding DisconnectCommand}" />
+            <Separator />
+            <MenuItem Header="Exit" Click="HandleExitClick" />
+          </MenuItem>
+          <MenuItem Header="Channels">
+            <MenuItem Header="Enable receive on selected card" Click="HandleEnableSelectedReceiveClick" />
+            <MenuItem Header="Disable receive on selected card" Click="HandleDisableSelectedReceiveClick" />
+            <Separator />
+            <MenuItem Header="Disable all receive" Click="HandleDisableAllReceiveClick" />
+          </MenuItem>
+          <MenuItem Header="Audio">
+            <MenuItem Header="Mute RX while transmitting" IsChecked="{Binding MuteRxAudioWhileTransmitting, Mode=TwoWay}" ToggleType="CheckBox" />
+            <MenuItem Header="Talk permit tone" IsChecked="{Binding TalkPermitTone, Mode=TwoWay}" ToggleType="CheckBox" />
+          </MenuItem>
           <MenuItem Header="View"><MenuItem Header="Dark mode" IsChecked="{Binding DarkMode, Mode=TwoWay}" ToggleType="CheckBox" /><MenuItem Header="Keep window on top" IsChecked="{Binding KeepWindowOnTop, Mode=TwoWay}" ToggleType="CheckBox" /></MenuItem>
-          <MenuItem Header="Channels" /><MenuItem Header="Audio" />
         </Menu>
         <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" Spacing="14" VerticalAlignment="Center"><TextBlock Classes="muted" FontSize="11" Text="{Binding ClockText}" /><TextBlock Classes="muted" FontSize="11" Text="{Binding SystemStatusText}" /></StackPanel>
       </DockPanel>
@@ -66,7 +82,7 @@
                                   <Grid ColumnDefinitions="*,Auto"><StackPanel Spacing="1"><TextBlock FontWeight="Bold" FontSize="14" Text="{Binding Name}" /><TextBlock Classes="eyebrow" Text="{Binding TalkgroupText}" /></StackPanel><TextBlock Grid.Column="1" Classes="eyebrow" Text="{Binding ModeText}" /></Grid>
                                   <StackPanel Grid.Row="1" Spacing="2"><TextBlock Classes="eyebrow" Text="Last caller" /><TextBlock FontSize="11" Text="{Binding LastCallerText}" TextTrimming="CharacterEllipsis" /></StackPanel>
                                   <ProgressBar Grid.Row="2" Classes="receive-level" Height="4" Minimum="0" Maximum="100" Value="{Binding ReceiveLevel}" />
-                                  <Grid Grid.Row="3" ColumnDefinitions="Auto,*" ColumnSpacing="7"><Button Content="{Binding AudioButtonText}" Command="{Binding AudioCommand}" Padding="8,4" /><Slider Grid.Column="1" Minimum="0" Maximum="2" Value="{Binding Volume, Mode=TwoWay}" VerticalAlignment="Center" /></Grid>
+                                  <Grid Grid.Row="3" ColumnDefinitions="Auto,*" ColumnSpacing="7"><TextBlock Classes="eyebrow" Text="{Binding ReceiveStatusText}" VerticalAlignment="Center" /><Slider Grid.Column="1" Minimum="0" Maximum="2" Value="{Binding Volume, Mode=TwoWay}" VerticalAlignment="Center" /></Grid>
                                   <Button Grid.Row="4" Classes="ptt" Content="{Binding PttButtonText}" Command="{Binding PttCommand}" IsEnabled="{Binding CanTransmit}" />
                                 </Grid>
                               </Border>

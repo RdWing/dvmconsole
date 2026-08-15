@@ -92,6 +92,45 @@ public sealed class ChannelViewModelTests
     }
 
     [Fact]
+    public void DmrDataSyncTerminatorWithLinkControlReturnsTheActiveChannelToIdle()
+    {
+        var channel = new ChannelViewModel(new ChannelConfiguration
+        {
+            Name = "Dispatch",
+            System = "System 1",
+            Tgid = "99",
+            Mode = "dmr",
+            Slot = 2
+        });
+
+        Assert.True(channel.TryApplyTraffic("System 1", CreateTraffic(
+            FneTrafficProtocol.Dmr, 42, 99, 1, "VOICE", "VOICE", 7)));
+        Assert.True(channel.TryApplyTraffic("System 1", CreateTraffic(
+            FneTrafficProtocol.Dmr, 42, 99, 1, "DATA_SYNC", "TERMINATOR_WITH_LC", 7)));
+
+        Assert.Equal(ChannelRuntimeState.Idle, channel.State);
+    }
+
+    [Fact]
+    public void P25TduReturnsTheActiveChannelToIdle()
+    {
+        var channel = new ChannelViewModel(new ChannelConfiguration
+        {
+            Name = "Dispatch",
+            System = "System 1",
+            Tgid = "99",
+            Mode = "p25"
+        });
+
+        Assert.True(channel.TryApplyTraffic("System 1", CreateTraffic(
+            FneTrafficProtocol.P25, 42, 99, null, "VOICE", "LDU1", 7)));
+        Assert.True(channel.TryApplyTraffic("System 1", CreateTraffic(
+            FneTrafficProtocol.P25, 42, 99, null, "DATA_SYNC", "TDU", 7)));
+
+        Assert.Equal(ChannelRuntimeState.Idle, channel.State);
+    }
+
+    [Fact]
     public void StaleTerminatorCannotCloseAnotherActiveStream()
     {
         var channel = new ChannelViewModel(new ChannelConfiguration
