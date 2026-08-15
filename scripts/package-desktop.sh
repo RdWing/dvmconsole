@@ -47,14 +47,25 @@ if [[ "$RID" == "osx-arm64" ]]; then
     fi
 
     APP_PATH="$STAGING_DIR/DVMConsole.app"
-    mkdir -p "$APP_PATH/Contents/MacOS" "$APP_PATH/Contents/Resources/publish"
+    mkdir -p "$APP_PATH/Contents/MacOS" "$APP_PATH/Contents/Resources"
     cp "$ROOT_DIR/packaging/macos/Info.plist" "$APP_PATH/Contents/Info.plist"
     plutil -lint "$APP_PATH/Contents/Info.plist" >/dev/null
     /usr/libexec/PlistBuddy -c 'Print :NSMicrophoneUsageDescription' "$APP_PATH/Contents/Info.plist" >/dev/null
-    cp "$ROOT_DIR/packaging/macos/DvmConsoleLauncher" "$APP_PATH/Contents/MacOS/DvmConsoleLauncher"
-    chmod 755 "$APP_PATH/Contents/MacOS/DvmConsoleLauncher"
-    cp -R "$PUBLISH_DIR"/. "$APP_PATH/Contents/Resources/publish/"
-    chmod 755 "$APP_PATH/Contents/Resources/publish/DvmConsole.Desktop"
+    # LaunchServices must start the real Cocoa/.NET apphost directly. A shell
+    # wrapper that execs an apphost from Resources works in Terminal but exits
+    # or aborts when Finder owns the application lifecycle.
+    cp -R "$PUBLISH_DIR"/. "$APP_PATH/Contents/MacOS/"
+    chmod 755 "$APP_PATH/Contents/MacOS/DvmConsole.Desktop"
+    bundle_executable=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$APP_PATH/Contents/Info.plist")
+    if [[ "$bundle_executable" != "DvmConsole.Desktop" || ! -x "$APP_PATH/Contents/MacOS/$bundle_executable" ]]; then
+        printf 'macOS bundle does not launch the real apphost from Contents/MacOS.\n' >&2
+        exit 12
+    fi
+    bundle_apphost_description=$(/usr/bin/file "$APP_PATH/Contents/MacOS/$bundle_executable")
+    if [[ "$bundle_apphost_description" != *arm64* ]]; then
+        printf 'macOS bundle executable is not arm64: %s\n' "$bundle_apphost_description" >&2
+        exit 12
+    fi
     rm -rf "$APP_OUTPUT"
     cp -R "$APP_PATH" "$APP_OUTPUT"
     PACKAGE_ROOT="$APP_PATH"

@@ -5,7 +5,7 @@
   <key>CFBundleDisplayName</key>
   <string>DVMConsole</string>
   <key>CFBundleExecutable</key>
-  <string>DvmConsoleLauncher</string>
+  <string>DvmConsole.Desktop</string>
   <key>CFBundleIdentifier</key>
   <string>org.dvmproject.dvmconsole</string>
   <key>CFBundleInfoDictionaryVersion</key>
