@@ -21,6 +21,7 @@ if [[ "$RID" == "osx-arm64" ]]; then
 fi
 
 mkdir -p "$OUTPUT_DIR"
+rm -f "$OUTPUT_DIR/Audio/alert1.wav" "$OUTPUT_DIR/Audio/alert2.wav" "$OUTPUT_DIR/Audio/alert3.wav"
 case "$RID" in
     osx-arm64)
         rm -f "$OUTPUT_DIR/libvocoder.dylib"

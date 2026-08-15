@@ -135,7 +135,7 @@
           <StackPanel Orientation="Horizontal" Spacing="4" IsVisible="{Binding ShowAlertTones}">
             <ItemsControl ItemsSource="{Binding BuiltInAlertTones}">
               <ItemsControl.ItemsPanel><ItemsPanelTemplate><StackPanel Orientation="Horizontal" Spacing="4" /></ItemsPanelTemplate></ItemsControl.ItemsPanel>
-              <ItemsControl.ItemTemplate><DataTemplate x:DataType="local:AlertToneViewModel"><Button Content="{Binding Name}" Tag="{Binding}" ToolTip.Tip="Send this legacy alert tone to ALERT-armed channels" Padding="6,3" Click="HandleToolbarAlertToneClick" /></DataTemplate></ItemsControl.ItemTemplate>
+              <ItemsControl.ItemTemplate><DataTemplate x:DataType="local:BuiltInAlertToneViewModel"><Button Content="{Binding Name}" Tag="{Binding}" ToolTip.Tip="Generate this legacy alert pattern on ALERT-armed channels" Padding="6,3" Click="HandleToolbarAlertToneClick" /></DataTemplate></ItemsControl.ItemTemplate>
             </ItemsControl>
           </StackPanel>
           <StackPanel Orientation="Horizontal" Spacing="10" IsVisible="{Binding ShowSystemStatus}"><TextBlock Classes="muted" FontSize="11" Text="{Binding ClockText}" /><TextBlock Classes="muted" FontSize="11" Text="{Binding SystemStatusText}" /></StackPanel>

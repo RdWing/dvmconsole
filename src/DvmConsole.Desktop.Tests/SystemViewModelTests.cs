@@ -46,7 +46,9 @@ public sealed class SystemViewModelTests
             Assert.Equal(channels[..2], viewModel.ResolvePageToneChannels());
             Assert.Equal(channels[1..], viewModel.ResolveGeneratedToneChannels());
             Assert.Equal(["ALERT 1", "ALERT 2", "ALERT 3"], viewModel.BuiltInAlertTones.Select(tone => tone.Name));
-            Assert.All(viewModel.BuiltInAlertTones, tone => Assert.True(File.Exists(tone.FilePath)));
+            Assert.Equal(
+                [LegacyAlertTone.Alert1, LegacyAlertTone.Alert2, LegacyAlertTone.Alert3],
+                viewModel.BuiltInAlertTones.Select(tone => tone.Tone));
         }
         finally
         {

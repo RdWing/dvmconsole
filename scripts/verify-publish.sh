@@ -28,14 +28,18 @@ required_files=(
     DvmConsole.Desktop.dll
     DvmConsole.Desktop.deps.json
     DvmConsole.Desktop.runtimeconfig.json
-    Audio/alert1.wav
-    Audio/alert2.wav
-    Audio/alert3.wav
 )
 
 for file_name in "${required_files[@]}"; do
     if [[ ! -f "$OUTPUT_DIR/$file_name" ]]; then
         printf 'Missing required publish file: %s\n' "$OUTPUT_DIR/$file_name" >&2
+        exit 4
+    fi
+done
+
+for legacy_alert in alert1.wav alert2.wav alert3.wav; do
+    if [[ -e "$OUTPUT_DIR/Audio/$legacy_alert" ]]; then
+        printf 'Publish contains obsolete generated-alert asset: %s\n' "$OUTPUT_DIR/Audio/$legacy_alert" >&2
         exit 4
     fi
 done

@@ -1,4 +1,5 @@
 using DvmConsole.Core.Settings;
+using DvmConsole.Audio;
 
 namespace DvmConsole.Desktop;
 
@@ -23,4 +24,16 @@ public sealed class AlertToneViewModel
             Name = Name,
             FilePath = FilePath
         };
+}
+
+public sealed class BuiltInAlertToneViewModel
+{
+    public BuiltInAlertToneViewModel(LegacyAlertTone tone)
+    {
+        Tone = tone;
+        Name = $"ALERT {(int)tone}";
+    }
+
+    public LegacyAlertTone Tone { get; }
+    public string Name { get; }
 }

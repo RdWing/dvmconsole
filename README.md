@@ -80,8 +80,8 @@ starting it again and include that file with the problem report.
 1. Download the `dvmconsole-win-x64-<version>.zip` release file and choose
 **Extract All** in File Explorer.
 2. Keep the extracted folder together. Do not copy only
-`DvmConsole.Desktop.exe`; the adjacent assemblies, `Audio` directory, and
-native libraries are required.
+`DvmConsole.Desktop.exe`; the adjacent assemblies and native libraries are
+required.
 3. Start `DvmConsole.Desktop.exe`. If Microsoft Defender SmartScreen warns
 about the unsigned build, use **More info**, verify the publisher/source, and
 choose **Run anyway** only if the archive came from the project release.

@@ -9,9 +9,15 @@ Alert tones are used for operator alerting workflows such as page/alert tones an
 
 # Sending Alert Tones
 
-The toolbar buttons **ALERT 1**, **ALERT 2**, and **ALERT 3** send the original
-DVMConsole `alert1.wav`, `alert2.wav`, and `alert3.wav` assets. They are
-different tones, not shortcuts to the QCII or DTMF tools.
+The toolbar buttons **ALERT 1**, **ALERT 2**, and **ALERT 3** recreate the
+original DVMConsole alert patterns with the console tone generator. They do not
+depend on external WAV files and are not shortcuts to the QCII or DTMF tools.
+
+- **ALERT 1:** continuous 1004 Hz for 3 seconds.
+- **ALERT 2:** alternating 1500 Hz and 800 Hz every 250 milliseconds for seven cycles.
+- **ALERT 3:** eight 250-millisecond bursts of 1004 Hz, separated by 250 milliseconds of silence.
+
+The generated level matches the original files at approximately -25 dBFS.
 
 Arm `ALERT` on every resource that should carry Alert 1 through 3, custom alert
 audio, generated tones, tone presets, or DTMF. Arm `PAGE` on every resource

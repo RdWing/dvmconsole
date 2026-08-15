@@ -23,15 +23,18 @@ public sealed class PcmToneGenerator
     public short[] GenerateTone(
         double frequency,
         TimeSpan duration,
-        double amplitude = 0.5)
+        double amplitude = 0.5,
+        double phaseRadians = 0)
     {
         ValidateTone(frequency, duration, amplitude);
+        if (!double.IsFinite(phaseRadians))
+            throw new ArgumentOutOfRangeException(nameof(phaseRadians));
         int sampleCount = GetSampleCount(duration);
         short[] samples = new short[sampleCount];
         for (int index = 0; index < samples.Length; index++)
         {
             double time = (double)index / Format.SampleRate;
-            samples[index] = ToSample(Math.Sin(2 * Math.PI * frequency * time) * amplitude);
+            samples[index] = ToSample(Math.Sin((2 * Math.PI * frequency * time) + phaseRadians) * amplitude);
         }
 
         return samples;

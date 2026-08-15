@@ -53,13 +53,17 @@ foreach ($FileName in @(
     "DvmConsole.Desktop.exe",
     "DvmConsole.Desktop.dll",
     "DvmConsole.Desktop.deps.json",
-    "DvmConsole.Desktop.runtimeconfig.json",
-    "Audio/alert1.wav",
-    "Audio/alert2.wav",
-    "Audio/alert3.wav"
+    "DvmConsole.Desktop.runtimeconfig.json"
 )) {
     if (-not (Test-Path -LiteralPath (Join-Path $PublishDirectory $FileName) -PathType Leaf)) {
         throw "Published output is missing required file: $FileName"
+    }
+}
+
+foreach ($LegacyAlert in @("alert1.wav", "alert2.wav", "alert3.wav")) {
+    $LegacyAlertPath = Join-Path $PublishDirectory "Audio/$LegacyAlert"
+    if (Test-Path -LiteralPath $LegacyAlertPath) {
+        throw "Published output contains obsolete generated-alert asset: $LegacyAlertPath"
     }
 }
 

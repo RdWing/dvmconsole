@@ -848,8 +848,8 @@ public sealed partial class MainWindow : Window
 
     private async void HandleToolbarAlertToneClick(object? sender, RoutedEventArgs e)
     {
-        if (sender is Button { Tag: AlertToneViewModel tone })
-            await viewModel.SendAlertToneAsync(tone);
+        if (sender is Button { Tag: BuiltInAlertToneViewModel tone })
+            await viewModel.SendBuiltInAlertToneAsync(tone);
     }
 
     private void HandleToolbarToneToolsClick(object? sender, RoutedEventArgs e)
@@ -1084,7 +1084,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     private readonly ObservableCollection<DtmfPresetViewModel> dtmfPresets = [];
     private readonly ObservableCollection<TonePresetViewModel> tonePresets = [];
     private readonly ObservableCollection<AlertToneViewModel> alertTones = [];
-    private readonly ObservableCollection<AlertToneViewModel> builtInAlertTones = [];
+    private readonly ObservableCollection<BuiltInAlertToneViewModel> builtInAlertTones = [];
     private readonly ObservableCollection<ToolbarClockViewModel> toolbarClocks = [];
     private readonly ObservableCollection<AudioInputPresetViewModel> audioInputPresets = [];
     private readonly ObservableCollection<AudioDeviceOptionViewModel> audioInputDevices = [];
@@ -1218,14 +1218,9 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             tonePresets.Add(new TonePresetViewModel(preset));
         foreach (AlertToneSetting tone in userSettings.AlertTones)
             alertTones.Add(new AlertToneViewModel(tone));
-        for (int number = 1; number <= 3; number++)
-        {
-            builtInAlertTones.Add(new AlertToneViewModel(new AlertToneSetting
-            {
-                Name = $"ALERT {number}",
-                FilePath = Path.Combine(AppContext.BaseDirectory, "Audio", $"alert{number}.wav")
-            }));
-        }
+        builtInAlertTones.Add(new BuiltInAlertToneViewModel(LegacyAlertTone.Alert1));
+        builtInAlertTones.Add(new BuiltInAlertToneViewModel(LegacyAlertTone.Alert2));
+        builtInAlertTones.Add(new BuiltInAlertToneViewModel(LegacyAlertTone.Alert3));
         List<ToolbarClockSetting> configuredClocks = (userSettings.ToolbarClocks ?? [])
             .Take(UserSettings.MaximumToolbarClocks)
             .ToList();
@@ -1288,7 +1283,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         DtmfPresets = new ReadOnlyObservableCollection<DtmfPresetViewModel>(dtmfPresets);
         TonePresets = new ReadOnlyObservableCollection<TonePresetViewModel>(tonePresets);
         AlertTones = new ReadOnlyObservableCollection<AlertToneViewModel>(alertTones);
-        BuiltInAlertTones = new ReadOnlyObservableCollection<AlertToneViewModel>(builtInAlertTones);
+        BuiltInAlertTones = new ReadOnlyObservableCollection<BuiltInAlertToneViewModel>(builtInAlertTones);
         ToolbarClocks = new ReadOnlyObservableCollection<ToolbarClockViewModel>(toolbarClocks);
         AudioInputPresets = new ReadOnlyObservableCollection<AudioInputPresetViewModel>(audioInputPresets);
         AudioInputDevices = new ReadOnlyObservableCollection<AudioDeviceOptionViewModel>(audioInputDevices);
@@ -2034,7 +2029,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     public ReadOnlyObservableCollection<DtmfPresetViewModel> DtmfPresets { get; }
     public ReadOnlyObservableCollection<TonePresetViewModel> TonePresets { get; }
     public ReadOnlyObservableCollection<AlertToneViewModel> AlertTones { get; }
-    public ReadOnlyObservableCollection<AlertToneViewModel> BuiltInAlertTones { get; }
+    public ReadOnlyObservableCollection<BuiltInAlertToneViewModel> BuiltInAlertTones { get; }
     public ReadOnlyObservableCollection<ToolbarClockViewModel> ToolbarClocks { get; }
     public ReadOnlyObservableCollection<AudioInputPresetViewModel> AudioInputPresets { get; }
     public ReadOnlyObservableCollection<AudioDeviceOptionViewModel> AudioInputDevices { get; }
@@ -4454,6 +4449,23 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         catch (Exception exception)
         {
             TransmitStatusText = $"Alert asset unavailable: {exception.Message}";
+        }
+    }
+
+    public async Task SendBuiltInAlertToneAsync(BuiltInAlertToneViewModel tone)
+    {
+        ArgumentNullException.ThrowIfNull(tone);
+        try
+        {
+            short[] samples = LegacyAlertToneGenerator.Generate(tone.Tone);
+            await SendGeneratedToneAsync(
+                samples,
+                tone.Name,
+                ResolveGeneratedToneChannels()).ConfigureAwait(false);
+        }
+        catch (Exception exception)
+        {
+            TransmitStatusText = $"{tone.Name} unavailable: {exception.Message}";
         }
     }
 

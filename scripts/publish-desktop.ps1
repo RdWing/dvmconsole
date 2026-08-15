@@ -53,6 +53,12 @@ $ExistingVocoder = Join-Path $OutputDirectory "libvocoder.dll"
 if (Test-Path -LiteralPath $ExistingVocoder -PathType Leaf) {
     Remove-Item -LiteralPath $ExistingVocoder -Force
 }
+foreach ($LegacyAlert in @("alert1.wav", "alert2.wav", "alert3.wav")) {
+    $LegacyAlertPath = Join-Path $OutputDirectory "Audio/$LegacyAlert"
+    if (Test-Path -LiteralPath $LegacyAlertPath -PathType Leaf) {
+        Remove-Item -LiteralPath $LegacyAlertPath -Force
+    }
+}
 
 dotnet restore $Project --runtime $Runtime --ignore-failed-sources -p:NuGetAudit=false --verbosity minimal
 if ($LASTEXITCODE -ne 0) {
@@ -84,15 +90,19 @@ $RequiredFiles = @(
     "DvmConsole.Desktop.exe",
     "DvmConsole.Desktop.dll",
     "DvmConsole.Desktop.deps.json",
-    "DvmConsole.Desktop.runtimeconfig.json",
-    "Audio/alert1.wav",
-    "Audio/alert2.wav",
-    "Audio/alert3.wav"
+    "DvmConsole.Desktop.runtimeconfig.json"
 )
 foreach ($FileName in $RequiredFiles) {
     $Path = Join-Path $OutputDirectory $FileName
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
         throw "Published output is missing required file: $Path"
+    }
+}
+
+foreach ($LegacyAlert in @("alert1.wav", "alert2.wav", "alert3.wav")) {
+    $LegacyAlertPath = Join-Path $OutputDirectory "Audio/$LegacyAlert"
+    if (Test-Path -LiteralPath $LegacyAlertPath) {
+        throw "Published output contains obsolete generated-alert asset: $LegacyAlertPath"
     }
 }
 

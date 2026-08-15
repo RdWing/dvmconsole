@@ -89,9 +89,9 @@ open /tmp/DVMConsole.app
 ```
 
 Do not rename or move files inside `DVMConsole.app`. The managed assemblies,
-native libraries, documentation, and `Audio/alert1.wav` through
-`Audio/alert3.wav` are loaded relative to the bundled executable. The verifier
-and packager fail if any required alert asset is missing.
+native libraries, and documentation are loaded relative to the bundled
+executable. Alert 1 through Alert 3 are generated in memory and do not require
+external WAV assets.
 
 4. The bundle launches the bundled `DvmConsole.Desktop` executable and does not
 depend on `dotnet` being installed. The old `dotnet DvmConsole.Desktop.dll`
@@ -152,9 +152,8 @@ verified publish directory:
 ```
 
 The PowerShell publisher and packager verify that the application apphost and
-native vocoder are Windows x64 PE files. They also require the three built-in
-alert assets. Extract the entire ZIP before testing; copying only the `.exe`
-does not produce a runnable installation.
+native vocoder are Windows x64 PE files. Extract the entire ZIP before testing;
+copying only the `.exe` does not produce a runnable installation.
 
 ## Release acceptance
 
@@ -198,8 +197,8 @@ or user settings. Keep those files outside distributable application folders.
 
 The `Avalonia rebuild` workflow runs the complete managed solution test suite
 on Apple Silicon macOS and Windows x64, publishes self-contained apphosts,
-verifies apphost architecture, required alert assets, native-library placement,
-and test-material exclusion, and uploads unsigned outputs for seven days. CI
+verifies apphost architecture, native-library placement, and test-material
+exclusion, and uploads unsigned outputs for seven days. CI
 permits a UI-only artifact when no native vocoder is provisioned; a release
 package intended for radio operation must publish with the matching native
 vocoder library. Windows radio, microphone, speaker, and global-hotkey hardware
