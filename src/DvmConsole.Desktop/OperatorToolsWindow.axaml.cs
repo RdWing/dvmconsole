@@ -134,6 +134,12 @@ public sealed partial class OperatorToolsWindow : Window
             viewModel.SaveWebStreamOutputDevice(stream);
     }
 
+    private void HandleSaveOutputDeviceClick(object? sender, RoutedEventArgs e)
+    {
+        if (sender is Button { Tag: ChannelViewModel channel })
+            viewModel.SaveChannelOutputDevice(channel);
+    }
+
     private void HandleSaveIgnoredSubscribersClick(object? sender, RoutedEventArgs e)
     {
         if (sender is Button { Tag: ChannelViewModel channel })

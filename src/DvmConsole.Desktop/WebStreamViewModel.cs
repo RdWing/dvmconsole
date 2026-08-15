@@ -16,6 +16,7 @@ public sealed class WebStreamViewModel : INotifyPropertyChanged
     private double volume = 1.0;
     private string outputDeviceIdText = string.Empty;
     private string statusText = "Off";
+    private IReadOnlyList<AudioDeviceOptionViewModel> outputDeviceOptions = [];
 
     public WebStreamViewModel(WebStreamConfiguration configuration)
     {
@@ -52,6 +53,16 @@ public sealed class WebStreamViewModel : INotifyPropertyChanged
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(OutputDeviceIdText)));
         }
     }
+    public IReadOnlyList<AudioDeviceOptionViewModel> OutputDeviceOptions => outputDeviceOptions;
+    public AudioDeviceOptionViewModel? SelectedOutputDevice
+    {
+        get => ResolveOutputDevice();
+        set
+        {
+            if (value is not null)
+                OutputDeviceIdText = value.Id;
+        }
+    }
     public double Volume
     {
         get => volume;
@@ -83,6 +94,16 @@ public sealed class WebStreamViewModel : INotifyPropertyChanged
 
     public void RestoreOutputDeviceId(string? value)
         => OutputDeviceIdText = value ?? string.Empty;
+
+    public void SetOutputDeviceOptions(IReadOnlyList<AudioDeviceOptionViewModel> options)
+    {
+        outputDeviceOptions = options ?? [];
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(OutputDeviceOptions)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SelectedOutputDevice)));
+    }
+
+    public void RefreshOutputDeviceSelection()
+        => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SelectedOutputDevice)));
 
     internal void SetPlaybackState(
         bool active,
@@ -124,5 +145,14 @@ public sealed class WebStreamViewModel : INotifyPropertyChanged
             busy = false;
             (ToggleCommand as AsyncRelayCommand)?.RaiseCanExecuteChanged();
         }
+    }
+
+    private AudioDeviceOptionViewModel? ResolveOutputDevice()
+    {
+        return outputDeviceOptions.FirstOrDefault(device =>
+                   !string.IsNullOrWhiteSpace(OutputDeviceIdText) &&
+                   device.Id.Equals(OutputDeviceIdText, StringComparison.OrdinalIgnoreCase)) ??
+               outputDeviceOptions.FirstOrDefault(device => device.IsDefault) ??
+               outputDeviceOptions.FirstOrDefault();
     }
 }

@@ -58,6 +58,35 @@
                 </ItemsControl>
               </StackPanel>
             </Border>
+
+            <Border Classes="panel">
+              <StackPanel Spacing="8">
+                <TextBlock FontWeight="SemiBold" Text="Per-channel output routes" />
+                <TextBlock Classes="caption" Text="Choose a discovered output device for each receive channel. System default removes a channel-specific override." TextWrapping="Wrap" />
+                <ItemsControl ItemsSource="{Binding Systems}">
+                  <ItemsControl.ItemTemplate>
+                    <DataTemplate x:DataType="local:SystemViewModel">
+                      <StackPanel Spacing="4">
+                        <TextBlock FontWeight="SemiBold" Text="{Binding Name}" />
+                        <ItemsControl ItemsSource="{Binding Channels}">
+                          <ItemsControl.ItemTemplate>
+                            <DataTemplate x:DataType="local:ChannelViewModel">
+                              <Grid ColumnDefinitions="*,220,Auto" ColumnSpacing="8" Margin="0,2">
+                                <TextBlock Text="{Binding Name}" VerticalAlignment="Center" />
+                                <ComboBox Grid.Column="1" ItemsSource="{Binding OutputDeviceOptions}" SelectedItem="{Binding SelectedOutputDevice, Mode=TwoWay}">
+                                  <ComboBox.ItemTemplate><DataTemplate x:DataType="local:AudioDeviceOptionViewModel"><TextBlock Text="{Binding DisplayName}" /></DataTemplate></ComboBox.ItemTemplate>
+                                </ComboBox>
+                                <Button Grid.Column="2" Content="Save route" Tag="{Binding}" Click="HandleSaveOutputDeviceClick" />
+                              </Grid>
+                            </DataTemplate>
+                          </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                      </StackPanel>
+                    </DataTemplate>
+                  </ItemsControl.ItemTemplate>
+                </ItemsControl>
+              </StackPanel>
+            </Border>
           </StackPanel>
         </ScrollViewer>
       </TabItem>
@@ -76,7 +105,7 @@
       </TabItem>
 
       <TabItem Header="Streams">
-        <ScrollViewer Padding="10"><StackPanel Spacing="10"><TextBlock Classes="heading" Text="Web Streams" /><ItemsControl ItemsSource="{Binding WebStreams}"><ItemsControl.ItemTemplate><DataTemplate x:DataType="local:WebStreamViewModel"><Border Classes="panel"><Grid RowDefinitions="Auto,Auto" ColumnDefinitions="*,Auto" RowSpacing="8"><StackPanel><TextBlock FontWeight="SemiBold" Text="{Binding Name}" /><TextBlock Classes="caption" Text="{Binding StatusText}" /></StackPanel><Button Grid.Column="1" Content="{Binding ToggleButtonText}" Command="{Binding ToggleCommand}" /><Grid Grid.Row="1" Grid.ColumnSpan="2" ColumnDefinitions="Auto,180,Auto,*,Auto" ColumnSpacing="8"><TextBlock Text="Volume" VerticalAlignment="Center" /><Slider Grid.Column="1" Minimum="0" Maximum="2" Value="{Binding Volume, Mode=TwoWay}" /><TextBlock Grid.Column="2" Text="Output ID" VerticalAlignment="Center" /><TextBox Grid.Column="3" Text="{Binding OutputDeviceIdText, Mode=TwoWay}" /><Button Grid.Column="4" Content="Save route" Tag="{Binding}" Click="HandleSaveWebStreamOutputDeviceClick" /></Grid></Grid></Border></DataTemplate></ItemsControl.ItemTemplate></ItemsControl><TextBlock Classes="caption" Text="Streams are loaded from the active codeplug." /></StackPanel></ScrollViewer>
+        <ScrollViewer Padding="10"><StackPanel Spacing="10"><TextBlock Classes="heading" Text="Web Streams" /><ItemsControl ItemsSource="{Binding WebStreams}"><ItemsControl.ItemTemplate><DataTemplate x:DataType="local:WebStreamViewModel"><Border Classes="panel"><Grid RowDefinitions="Auto,Auto" ColumnDefinitions="*,Auto" RowSpacing="8"><StackPanel><TextBlock FontWeight="SemiBold" Text="{Binding Name}" /><TextBlock Classes="caption" Text="{Binding StatusText}" /></StackPanel><Button Grid.Column="1" Content="{Binding ToggleButtonText}" Command="{Binding ToggleCommand}" /><Grid Grid.Row="1" Grid.ColumnSpan="2" ColumnDefinitions="Auto,180,Auto,220,Auto" ColumnSpacing="8"><TextBlock Text="Volume" VerticalAlignment="Center" /><Slider Grid.Column="1" Minimum="0" Maximum="2" Value="{Binding Volume, Mode=TwoWay}" /><TextBlock Grid.Column="2" Text="Output" VerticalAlignment="Center" /><ComboBox Grid.Column="3" ItemsSource="{Binding OutputDeviceOptions}" SelectedItem="{Binding SelectedOutputDevice, Mode=TwoWay}"><ComboBox.ItemTemplate><DataTemplate x:DataType="local:AudioDeviceOptionViewModel"><TextBlock Text="{Binding DisplayName}" /></DataTemplate></ComboBox.ItemTemplate></ComboBox><Button Grid.Column="4" Content="Save route" Tag="{Binding}" Click="HandleSaveWebStreamOutputDeviceClick" /></Grid></Grid></Border></DataTemplate></ItemsControl.ItemTemplate></ItemsControl><TextBlock Classes="caption" Text="Streams are loaded from the active codeplug." /></StackPanel></ScrollViewer>
       </TabItem>
 
       <TabItem Header="Recorder">

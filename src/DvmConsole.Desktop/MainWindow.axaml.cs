@@ -1089,6 +1089,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         WebStreams = new ReadOnlyObservableCollection<WebStreamViewModel>(webStreams);
         foreach (WebStreamViewModel stream in Zones.SelectMany(zone => zone.WebStreams))
         {
+            stream.SetOutputDeviceOptions(AudioOutputDevices);
             stream.SetInitialVolume(
                 userSettings.WebStreamVolumes.TryGetValue(stream.Name, out double savedVolume)
                     ? savedVolume
@@ -1107,6 +1108,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         RefreshRecordingsCore();
         foreach (ChannelViewModel channel in Systems.SelectMany(system => system.Channels))
         {
+            channel.SetOutputDeviceOptions(AudioOutputDevices);
             if (channel.Definition.SelectableEncryption &&
                 userSettings.TransmitEncryptionStates.TryGetValue(channel.SettingsKey, out bool savedEncryptionState))
             {
@@ -3395,6 +3397,10 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
 
             ReplaceAudioDeviceOptions(audioInputDevices, inputs);
             ReplaceAudioDeviceOptions(audioOutputDevices, outputs);
+            foreach (WebStreamViewModel stream in webStreams)
+                stream.RefreshOutputDeviceSelection();
+            foreach (ChannelViewModel channel in Systems.SelectMany(system => system.Channels))
+                channel.RefreshOutputDeviceSelection();
             selectedAudioInputDevice = ResolveAudioDeviceOption(audioInputDevices, AudioInputDeviceIdText);
             selectedAudioOutputDevice = ResolveAudioDeviceOption(audioOutputDevices, AudioOutputDeviceIdText);
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SelectedAudioInputDevice)));
@@ -3404,6 +3410,10 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         {
             audioInputDevices.Clear();
             audioOutputDevices.Clear();
+            foreach (WebStreamViewModel stream in webStreams)
+                stream.RefreshOutputDeviceSelection();
+            foreach (ChannelViewModel channel in Systems.SelectMany(system => system.Channels))
+                channel.RefreshOutputDeviceSelection();
             selectedAudioInputDevice = null;
             selectedAudioOutputDevice = null;
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SelectedAudioInputDevice)));
@@ -3439,8 +3449,13 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         IReadOnlyList<AudioDeviceInfo> devices)
     {
         target.Clear();
+        target.Add(new AudioDeviceOptionViewModel("default", "System default", true));
         foreach (AudioDeviceInfo device in devices)
+        {
+            if (device.Id.Equals("default", StringComparison.OrdinalIgnoreCase))
+                continue;
             target.Add(new AudioDeviceOptionViewModel(device.Id, device.Name, device.IsDefault));
+        }
     }
 
     private static AudioDeviceOptionViewModel? ResolveAudioDeviceOption(
@@ -4584,6 +4599,7 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
     private double volume = 1.0;
     private string ignoredSubscriberIdsText = string.Empty;
     private string outputDeviceIdText = string.Empty;
+    private IReadOnlyList<AudioDeviceOptionViewModel> outputDeviceOptions = [];
 
     public ChannelViewModel(
         ChannelConfiguration configuration,
@@ -4676,6 +4692,16 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
                 return;
             outputDeviceIdText = normalized;
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(OutputDeviceIdText)));
+        }
+    }
+    public IReadOnlyList<AudioDeviceOptionViewModel> OutputDeviceOptions => outputDeviceOptions;
+    public AudioDeviceOptionViewModel? SelectedOutputDevice
+    {
+        get => ResolveOutputDevice();
+        set
+        {
+            if (value is not null)
+                OutputDeviceIdText = value.Id;
         }
     }
     public string IgnoredSubscriberIdsText
@@ -4802,6 +4828,25 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
 
     public void RestoreOutputDeviceId(string? deviceId)
         => OutputDeviceIdText = deviceId?.Trim() ?? string.Empty;
+
+    public void SetOutputDeviceOptions(IReadOnlyList<AudioDeviceOptionViewModel> options)
+    {
+        outputDeviceOptions = options ?? [];
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(OutputDeviceOptions)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SelectedOutputDevice)));
+    }
+
+    public void RefreshOutputDeviceSelection()
+        => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SelectedOutputDevice)));
+
+    private AudioDeviceOptionViewModel? ResolveOutputDevice()
+    {
+        return outputDeviceOptions.FirstOrDefault(device =>
+                   !string.IsNullOrWhiteSpace(OutputDeviceIdText) &&
+                   device.Id.Equals(OutputDeviceIdText, StringComparison.OrdinalIgnoreCase)) ??
+               outputDeviceOptions.FirstOrDefault(device => device.IsDefault) ??
+               outputDeviceOptions.FirstOrDefault();
+    }
 
     private void SetVolume(double value, bool raiseChanged)
     {
