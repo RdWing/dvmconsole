@@ -418,6 +418,42 @@ public sealed class SystemViewModelTests
     }
 
     [Fact]
+    public async Task ConnectionDiagnosticsTrackMediaPacketCountsAndMetadata()
+    {
+        var system = new SystemViewModel(
+            new FneConnectionOptions("Test", "Console", "127.0.0.1", 62031, 1, null, false, null),
+            "Test",
+            "127.0.0.1:62031");
+        var traffic = new FneTrafficFrame(
+            FneTrafficProtocol.P25,
+            1,
+            1001,
+            2002,
+            null,
+            "GROUP",
+            "VOICE",
+            "LDU1",
+            7,
+            42,
+            new byte[] { 1, 2, 3 });
+
+        try
+        {
+            system.RecordTraffic(traffic);
+
+            Assert.Equal("RX 1 packets / 3 bytes · TX 0 packets / 0 bytes", system.PacketDiagnosticsText);
+            Assert.Contains("P25 GROUP/VOICE", system.LastPacketText);
+            Assert.Contains("seq 7", system.LastPacketText);
+            Assert.Contains("stream 42", system.LastPacketText);
+            Assert.Contains("1001→2002", system.LastPacketText);
+        }
+        finally
+        {
+            await system.DisposeAsync();
+        }
+    }
+
+    [Fact]
     public async Task SavesUsesAndDeletesMicrophonePresets()
     {
         string codeplugPath = Path.Combine(AppContext.BaseDirectory, "TestData", "multiple-systems.yml");

@@ -2562,6 +2562,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     {
         ArgumentNullException.ThrowIfNull(system);
         ArgumentNullException.ThrowIfNull(traffic);
+        system.RecordTraffic(traffic);
 
         List<ChannelViewModel> activeAudioChannels = [];
         List<ChannelViewModel> activePatchSourceChannels = [];
@@ -3994,6 +3995,11 @@ public sealed class SystemViewModel : INotifyPropertyChanged, IAsyncDisposable
     private readonly FneConnectionOptions options;
     private string connectionStatus = "Disconnected";
     private readonly HashSet<(byte AlgorithmId, ushort KeyId)> requestedP25Keys = [];
+    private long receivedPacketCount;
+    private long receivedPacketBytes;
+    private long sentPacketCount;
+    private long sentPacketBytes;
+    private string lastPacketText = "No media packets received.";
 
     public SystemViewModel(
         FneConnectionOptions options,
@@ -4026,6 +4032,9 @@ public sealed class SystemViewModel : INotifyPropertyChanged, IAsyncDisposable
     public uint? SourceId => options.SourceId;
     public string Identity => options.Identity;
     public bool IsConnected => connection.Status.State == FneConnectionState.Connected;
+    public string PacketDiagnosticsText
+        => $"RX {receivedPacketCount:N0} packets / {receivedPacketBytes:N0} bytes · TX {sentPacketCount:N0} packets / {sentPacketBytes:N0} bytes";
+    public string LastPacketText => lastPacketText;
     public string ConnectionStatus
     {
         get => connectionStatus;
@@ -4039,7 +4048,11 @@ public sealed class SystemViewModel : INotifyPropertyChanged, IAsyncDisposable
         }
     }
 
-    public Task StartAsync(CancellationToken cancellationToken = default) => connection.StartOrReconnectAsync(cancellationToken);
+    public async Task StartAsync(CancellationToken cancellationToken = default)
+    {
+        ResetPacketDiagnostics();
+        await connection.StartOrReconnectAsync(cancellationToken).ConfigureAwait(false);
+    }
     public async Task StopAsync(CancellationToken cancellationToken = default)
     {
         await connection.StopAsync(cancellationToken).ConfigureAwait(false);
@@ -4047,7 +4060,12 @@ public sealed class SystemViewModel : INotifyPropertyChanged, IAsyncDisposable
     }
     public uint CreateStreamId() => connection.CreateStreamId();
     public void SendTraffic(FneTrafficProtocol protocol, ReadOnlySpan<byte> payload, ushort packetSequence, uint streamId)
-        => connection.SendTraffic(protocol, payload, packetSequence, streamId);
+    {
+        connection.SendTraffic(protocol, payload, packetSequence, streamId);
+        sentPacketCount++;
+        sentPacketBytes += payload.Length;
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(PacketDiagnosticsText)));
+    }
 
     public void RequestP25Key(byte algorithmId, ushort keyId)
     {
@@ -4073,6 +4091,16 @@ public sealed class SystemViewModel : INotifyPropertyChanged, IAsyncDisposable
         ConnectionStatus = $"{status.State}: {status.Message}";
     }
 
+    internal void RecordTraffic(FneTrafficFrame traffic)
+    {
+        ArgumentNullException.ThrowIfNull(traffic);
+        receivedPacketCount++;
+        receivedPacketBytes += traffic.Payload.Length;
+        lastPacketText = $"{traffic.Protocol.ToString().ToUpperInvariant()} {traffic.CallType}/{traffic.FrameType} · seq {traffic.PacketSequence} · stream {traffic.StreamId} · {traffic.SourceId}→{traffic.DestinationId}";
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(PacketDiagnosticsText)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(LastPacketText)));
+    }
+
     public async ValueTask DisposeAsync()
     {
         connection.StatusChanged -= HandleConnectionStatus;
@@ -4095,6 +4123,17 @@ public sealed class SystemViewModel : INotifyPropertyChanged, IAsyncDisposable
     private void HandleTrafficReceived(object? sender, FneTrafficFrame traffic)
     {
         TrafficReceived?.Invoke(this, traffic);
+    }
+
+    private void ResetPacketDiagnostics()
+    {
+        receivedPacketCount = 0;
+        receivedPacketBytes = 0;
+        sentPacketCount = 0;
+        sentPacketBytes = 0;
+        lastPacketText = "No media packets received.";
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(PacketDiagnosticsText)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(LastPacketText)));
     }
 
     private void HandleKeyResponse(object? sender, FneKeyResponse response)
