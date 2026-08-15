@@ -24,7 +24,7 @@ public sealed class DmrTxCallSessionTests
         var headerPacket = Assert.Single(packets);
         Assert.Equal((ushort)0, headerPacket.Sequence);
         Assert.Equal((uint)77, headerPacket.Stream);
-        Assert.Equal((byte)0xA2, headerPacket.Payload[15]);
+        Assert.Equal((byte)0x22, headerPacket.Payload[15]);
 
         LC headerLc = Assert.IsType<LC>(FullLC.Decode(
             headerPacket.Payload[20..],
@@ -37,9 +37,9 @@ public sealed class DmrTxCallSessionTests
 
         Assert.Equal(3, packets.Count);
         Assert.Equal((ushort)1, packets[1].Sequence);
-        Assert.Equal((byte)0x90, packets[1].Payload[15]);
+        Assert.Equal((byte)0x10, packets[1].Payload[15]);
         Assert.Equal((ushort)2, packets[2].Sequence);
-        Assert.Equal((byte)0xA2, packets[2].Payload[15]);
+        Assert.Equal((byte)0x22, packets[2].Payload[15]);
         Assert.True(session.IsEnded);
     }
 

@@ -36,7 +36,7 @@ public sealed class DmrTransmitCaptureSessionTests
         Assert.False(session.IsRunning);
         Assert.False(capture.IsRunning);
         Assert.Equal(3, packets.Count);
-        Assert.Equal((byte)0xA2, packets[^1].Payload[15]);
+        Assert.Equal((byte)0x22, packets[^1].Payload[15]);
     }
 
     private sealed class FakeCapture : IAudioCapture

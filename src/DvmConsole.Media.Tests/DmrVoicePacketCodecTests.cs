@@ -45,8 +45,25 @@ public sealed class DmrVoicePacketCodecTests
         Assert.Equal((byte)7, packet[4]);
         Assert.Equal(new byte[] { 0x01, 0x02, 0x03 }, packet[5..8]);
         Assert.Equal(new byte[] { 0xA0, 0xB0, 0xC0 }, packet[8..11]);
-        Assert.Equal((byte)0x03, packet[15]);
+        Assert.Equal((byte)0x83, packet[15]);
         Assert.Equal(ambe, DmrVoicePacketCodec.ExtractAmbe(packet));
+    }
+
+    [Theory]
+    [InlineData((byte)0, (byte)0x10)]
+    [InlineData((byte)1, (byte)0x90)]
+    public void EncodesZeroBasedSlotInDmrNetworkHeader(byte slot, byte expectedHeader)
+    {
+        byte[] packet = DmrVoicePacketCodec.CreateVoicePacket(
+            sourceId: 1,
+            destinationId: 2,
+            slot,
+            voiceSync: true,
+            embeddedSequence: 0,
+            frameSequence: 0,
+            new byte[DmrVoicePacketCodec.AmbeBytes]);
+
+        Assert.Equal(expectedHeader, packet[15]);
     }
 
     [Fact]
