@@ -127,6 +127,34 @@ public sealed class SystemViewModelTests
     }
 
     [Fact]
+    public async Task TogglesAllTransmitCapableChannelsInTheSelectedSystem()
+    {
+        string path = Path.Combine(AppContext.BaseDirectory, "TestData", "multiple-systems.yml");
+        string settingsPath = CreateSettingsPath();
+
+        try
+        {
+            await using MainWindowViewModel viewModel = MainWindowViewModel.Load(path, new UserSettingsStore(settingsPath));
+            viewModel.SelectedSystem = viewModel.Systems[0];
+
+            viewModel.ToggleAllTransmitSelection();
+
+            Assert.All(viewModel.Systems[0].Channels, channel => Assert.True(channel.IsTransmitSelected));
+            Assert.All(viewModel.Systems[1].Channels, channel => Assert.False(channel.IsTransmitSelected));
+            Assert.Contains("3 transmit-capable", viewModel.TransmitStatusText);
+
+            viewModel.ToggleAllTransmitSelection();
+
+            Assert.All(viewModel.Systems[0].Channels, channel => Assert.False(channel.IsTransmitSelected));
+            Assert.Equal("Cleared global TX selection.", viewModel.TransmitStatusText);
+        }
+        finally
+        {
+            CleanupSettingsPath(settingsPath);
+        }
+    }
+
+    [Fact]
     public async Task SubscriberCommandValidationAuditsAndBoundsFailures()
     {
         string path = Path.Combine(AppContext.BaseDirectory, "TestData", "multiple-systems.yml");

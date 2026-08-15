@@ -100,6 +100,7 @@
             <MenuItem Header="Show alert buttons" IsChecked="{Binding ShowAlertTones, Mode=TwoWay}" ToggleType="CheckBox" />
             <MenuItem Header="Lock widgets" IsChecked="{Binding LockWidgets, Mode=TwoWay}" ToggleType="CheckBox" />
             <MenuItem Header="Reset widget layout" Click="HandleResetLayoutClick" />
+            <MenuItem Header="Select/unselect all TX channels" Click="HandleToggleAllTransmitSelectionClick" />
             <Separator />
             <MenuItem Header="Event History window…" Click="HandleOpenCallHistoryClick" />
             <MenuItem Header="Dock Event History in sidebar" IsChecked="{Binding ShowCallHistoryPane, Mode=TwoWay}" ToggleType="CheckBox" />

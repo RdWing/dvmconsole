@@ -702,6 +702,9 @@ public sealed partial class MainWindow : Window
             viewModel.ToggleChannelPageSelection(channel);
     }
 
+    private void HandleToggleAllTransmitSelectionClick(object? sender, RoutedEventArgs e)
+        => viewModel.ToggleAllTransmitSelection();
+
     private async void HandleToolbarAlertToneClick(object? sender, RoutedEventArgs e)
     {
         if (sender is Button { Tag: AlertToneViewModel tone })
@@ -2483,6 +2486,32 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         TransmitStatusText = channel.IsTransmitSelected
             ? $"{channel.Name} selected for global TX."
             : $"{channel.Name} removed from global TX.";
+    }
+
+    public void ToggleAllTransmitSelection()
+    {
+        ChannelViewModel[] candidates = (SelectedSystem?.Channels ?? Systems.SelectMany(system => system.Channels))
+            .Where(channel => channel.CanTransmit)
+            .ToArray();
+        if (candidates.Length == 0)
+        {
+            TransmitStatusText = "No transmit-capable channels are available in the selected system.";
+            return;
+        }
+
+        bool select = candidates.Any(channel => !channel.IsTransmitSelected);
+        foreach (ChannelViewModel channel in candidates)
+            channel.SetTransmitSelected(select);
+
+        userSettings.TransmitSelectedChannelKeys = Systems
+            .SelectMany(system => system.Channels)
+            .Where(channel => channel.IsTransmitSelected)
+            .Select(channel => channel.SettingsKey)
+            .ToList();
+        PersistUserSettings();
+        TransmitStatusText = select
+            ? $"Selected {candidates.Length} transmit-capable channel(s) for global TX."
+            : "Cleared global TX selection.";
     }
 
     public void ToggleChannelPageSelection(ChannelViewModel channel)
