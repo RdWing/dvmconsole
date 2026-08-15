@@ -78,6 +78,21 @@ public sealed class CallRecordingMetadata
                 : $"{EncryptionAlgorithm} / {EncryptionKeyId}";
 
     [JsonIgnore]
+    public string TechnicalDetailsText
+    {
+        get
+        {
+            string format = SampleRate > 0 && BitsPerSample > 0 && ChannelCount > 0
+                ? $"{SampleRate:N0} Hz · {BitsPerSample}-bit · {ChannelCount} ch"
+                : "format n/a";
+            string size = FileSizeBytes >= 0
+                ? $"{FileSizeBytes:N0} B"
+                : "size n/a";
+            return $"{AudioAnalysisText} · {format} · {size}";
+        }
+    }
+
+    [JsonIgnore]
     public string AudioAnalysisText
     {
         get

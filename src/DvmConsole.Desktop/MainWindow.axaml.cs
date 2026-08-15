@@ -993,6 +993,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     private bool recordingProtocolColumnVisible;
     private bool recordingSystemColumnVisible;
     private bool recordingEncryptionColumnVisible;
+    private bool recordingDiagnosticsColumnVisible = true;
     private string clockText = string.Empty;
     private string debugLogFilterText = string.Empty;
     private string debugLogSeverityFilter = "All";
@@ -2035,6 +2036,12 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         set => SetRecordingColumnVisibility(ref recordingEncryptionColumnVisible, value, nameof(ShowRecordingEncryptionColumn));
     }
 
+    public bool ShowRecordingDiagnosticsColumn
+    {
+        get => recordingDiagnosticsColumnVisible;
+        set => SetRecordingColumnVisibility(ref recordingDiagnosticsColumnVisible, value, nameof(ShowRecordingDiagnosticsColumn));
+    }
+
     public void ResetRecordingColumns()
     {
         ShowRecordingTimeColumn = true;
@@ -2047,6 +2054,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         ShowRecordingProtocolColumn = false;
         ShowRecordingSystemColumn = false;
         ShowRecordingEncryptionColumn = false;
+        ShowRecordingDiagnosticsColumn = true;
     }
 
     public void ClearRecordingFilters()

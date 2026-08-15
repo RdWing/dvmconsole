@@ -167,6 +167,7 @@
                   <CheckBox Content="Protocol" IsChecked="{Binding ShowRecordingProtocolColumn, Mode=TwoWay}" />
                   <CheckBox Content="System" IsChecked="{Binding ShowRecordingSystemColumn, Mode=TwoWay}" />
                   <CheckBox Content="Encryption" IsChecked="{Binding ShowRecordingEncryptionColumn, Mode=TwoWay}" />
+                  <CheckBox Content="Audio diagnostics" IsChecked="{Binding ShowRecordingDiagnosticsColumn, Mode=TwoWay}" />
                 </WrapPanel>
                 <Button Content="Restore default fields" HorizontalAlignment="Left" Click="HandleResetRecordingColumnsClick" />
               </StackPanel>
@@ -226,6 +227,7 @@
                           <TextBlock IsVisible="{Binding $parent[Window].((local:MainWindowViewModel)DataContext).ShowRecordingSystemColumn}" Classes="caption" Text="{Binding SystemName}" />
                           <TextBlock IsVisible="{Binding $parent[Window].((local:MainWindowViewModel)DataContext).ShowRecordingEncryptionColumn}" Classes="caption" Text="{Binding EncryptionText}" />
                         </WrapPanel>
+                        <TextBlock IsVisible="{Binding $parent[Window].((local:MainWindowViewModel)DataContext).ShowRecordingDiagnosticsColumn}" Classes="caption" Text="{Binding TechnicalDetailsText}" TextTrimming="CharacterEllipsis" />
                         <TextBlock Classes="caption" Text="{Binding FileName}" TextTrimming="CharacterEllipsis" />
                       </StackPanel>
                       <Button Grid.Column="1" Content="Play" Tag="{Binding}" Click="HandlePlayRecordingClick" />
