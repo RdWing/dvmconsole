@@ -74,8 +74,12 @@ public sealed class P25RxAudioSession : IAsyncDisposable
                  hasEncryptionMetadata &&
                  encryptionMetadata.AlgorithmId != P25Defines.P25_ALGO_UNENCRYPT)
         {
-            throw new NotSupportedException(
-                $"P25 encrypted LDU2 for key 0x{encryptionMetadata.KeyId:X} arrived without an active LDU1 key stream.");
+            // A lost or malformed LDU1 makes the encrypted LDU2 unsafe to
+            // decode. Drop only this frame and wait for the next LDU1 so a
+            // sustained call can recover without tearing down the audio
+            // session or emitting plausible-looking garbage.
+            MalformedPackets++;
+            return 0;
         }
 
         int errors = 0;

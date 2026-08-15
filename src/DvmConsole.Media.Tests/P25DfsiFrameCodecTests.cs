@@ -118,6 +118,42 @@ public sealed class P25DfsiFrameCodecTests
     }
 
     [Fact]
+    public async Task P25SessionDropsEncryptedLdu2WithoutLdu1AndRecoversOnNextLdu1()
+    {
+        const ushort keyId = 0x50;
+        const byte algorithmId = P25Defines.P25_ALGO_AES;
+        byte[] ldu2Payload = P25DfsiFrameCodec.CreateLdu2Payload(
+            99,
+            100,
+            new byte[P25DfsiFrameCodec.ImbeBytes]);
+        ldu2Payload[112] = algorithmId;
+        ldu2Payload[113] = (byte)(keyId >> 8);
+        ldu2Payload[114] = (byte)keyId;
+
+        var vocoder = new FakeVocoderSession();
+        var playback = new FakePlayback();
+        await using var session = new P25RxAudioSession(
+            new P25TrafficSelector(100),
+            vocoder,
+            playback,
+            new P25KeyRing(new KeyContainer()));
+
+        Assert.Equal(0, await session.ProcessAsync(CreateTraffic(
+            "LDU2",
+            ldu2Payload,
+            packetSequence: 1)));
+        Assert.Equal(1, session.MalformedPackets);
+        Assert.Empty(playback.Frames);
+
+        Assert.Equal(0, await session.ProcessAsync(CreateTraffic(
+            "LDU1",
+            CreatePayload(0x62),
+            packetSequence: 2)));
+        Assert.Equal(9, session.FramesDecoded);
+        Assert.Equal(9, playback.Frames.Count);
+    }
+
+    [Fact]
     public async Task P25SessionDecryptsEncryptedLdu1WithConfiguredKey()
     {
         const ushort keyId = 0x50;
