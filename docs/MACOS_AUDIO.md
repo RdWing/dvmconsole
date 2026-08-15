@@ -28,6 +28,19 @@ DVM_AUDIO_LIBRARY=/tmp/dvmaudio-build/libdvmaudio.dylib \
   --stream-test 2
 ```
 
+Exercise the talk-permit tone path and wait for queued playback to drain. Pass
+an optional CoreAudio output device ID to select a specific output:
+
+```sh
+DVM_AUDIO_LIBRARY=/tmp/dvmaudio-build/libdvmaudio.dylib \
+  dotnet run --project src/DvmConsole.AudioProbe/DvmConsole.AudioProbe.csproj --no-restore -- \
+  --permit-tone [device-id]
+```
+
+The probe reports the resolved output device plus queued and consumed sample
+counts. The desktop menu uses the same drain contract for the local permit
+tone.
+
 The first implementation targets the console voice format: 8 kHz, mono,
 16-bit PCM. The native stream uses the device's nominal CoreAudio rate and the
 managed adapter converts to or from the requested voice rate, so common 48 kHz

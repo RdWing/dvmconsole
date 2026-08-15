@@ -29,6 +29,7 @@ int32_t dvm_audio_stream_stop(DvmAudioStream *stream);
 int32_t dvm_audio_stream_get_sample_rate(DvmAudioStream *stream);
 int32_t dvm_audio_stream_read(DvmAudioStream *stream, int16_t *samples, uint32_t capacity);
 int32_t dvm_audio_stream_write(DvmAudioStream *stream, const int16_t *samples, uint32_t count);
+uint32_t dvm_audio_stream_queued_samples(DvmAudioStream *stream);
 void dvm_audio_stream_destroy(DvmAudioStream *stream);
 
 #ifdef __cplusplus

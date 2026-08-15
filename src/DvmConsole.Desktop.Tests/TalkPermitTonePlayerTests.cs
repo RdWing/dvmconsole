@@ -10,7 +10,8 @@ public sealed class TalkPermitTonePlayerTests
     public async Task PlaysShortLocalToneOnRequestedOutput()
     {
         var backend = new FakeAudioBackend();
-        await using (var player = new TalkPermitTonePlayer(() => backend, () => "alternate"))
+        var player = new TalkPermitTonePlayer(() => backend, () => "alternate");
+        await using (player)
         {
             AudioDeviceInfo output = await player.PlayAsync();
             await player.PlayAsync();
@@ -18,6 +19,8 @@ public sealed class TalkPermitTonePlayerTests
             Assert.Equal("alternate", output.Id);
             Assert.Equal(1, backend.OpenPlaybackCount);
             Assert.False(backend.Playback.IsDisposed);
+            Assert.Equal(960, player.LastQueuedSamples);
+            Assert.Equal(960, player.LastConsumedSamples);
         }
 
         Assert.Equal("alternate", backend.LastOutputDeviceId);
@@ -28,6 +31,7 @@ public sealed class TalkPermitTonePlayerTests
         Assert.InRange(samples.Max(), 12_000, 14_000);
         Assert.Equal(0, samples[0]);
         Assert.False(backend.Playback.WasFlushed);
+        Assert.Equal(2, backend.Playback.DrainCount);
         Assert.True(backend.Playback.IsDisposed);
         Assert.True(backend.IsDisposed);
     }
@@ -66,12 +70,17 @@ public sealed class TalkPermitTonePlayerTests
         public List<short[]> Frames { get; } = [];
         public bool IsDisposed { get; private set; }
         public bool WasFlushed { get; private set; }
+        public int DrainCount { get; private set; }
+        public int QueuedSampleCount { get; private set; }
+        public int? QueuedSamples => QueuedSampleCount;
         public PcmAudioFormat Format { get; } = PcmAudioFormat.Voice8KhzMono16Bit;
 
         public ValueTask WriteAsync(ReadOnlyMemory<short> samples, CancellationToken cancellationToken = default)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            Frames.Add(samples.ToArray());
+            short[] frame = samples.ToArray();
+            Frames.Add(frame);
+            QueuedSampleCount += frame.Length;
             return ValueTask.CompletedTask;
         }
 
@@ -80,6 +89,15 @@ public sealed class TalkPermitTonePlayerTests
             WasFlushed = true;
             Frames.Clear();
             return ValueTask.CompletedTask;
+        }
+
+        public ValueTask<int?> DrainAsync(CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            DrainCount++;
+            int consumed = QueuedSampleCount;
+            QueuedSampleCount = 0;
+            return ValueTask.FromResult<int?>(consumed);
         }
 
         public ValueTask DisposeAsync()

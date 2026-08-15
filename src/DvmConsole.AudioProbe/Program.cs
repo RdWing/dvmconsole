@@ -17,6 +17,8 @@ internal static class Program
             using var backend = new MacCoreAudioBackend();
             if (args.FirstOrDefault() is "--stream-test")
                 return await RunStreamTestAsync(backend, args.ElementAtOrDefault(1)).ConfigureAwait(false);
+            if (args.FirstOrDefault() is "--permit-tone")
+                return await RunPermitToneAsync(backend, args.ElementAtOrDefault(1)).ConfigureAwait(false);
 
             foreach (AudioDirection direction in Enum.GetValues<AudioDirection>())
             {
@@ -56,5 +58,45 @@ internal static class Program
 
         Console.WriteLine($"Audio stream test completed; captured {capturedSamples} PCM samples.");
         return 0;
+    }
+
+    private static async Task<int> RunPermitToneAsync(MacCoreAudioBackend backend, string? requestedDeviceId)
+    {
+        AudioDeviceInfo output = ResolveOutputDevice(backend, requestedDeviceId);
+        await using IAudioPlayback playback = backend.OpenPlayback(output, PcmAudioFormat.Voice8KhzMono16Bit);
+        short[] samples = new PcmToneGenerator().GenerateTone(
+            frequency: 1200,
+            duration: TimeSpan.FromMilliseconds(120),
+            amplitude: 0.40);
+        ApplyFade(samples, PcmAudioFormat.Voice8KhzMono16Bit.SampleRate / 100);
+
+        await playback.WriteAsync(samples).ConfigureAwait(false);
+        int? queuedSamples = playback.QueuedSamples;
+        int? consumedSamples = await playback.DrainAsync().ConfigureAwait(false);
+        Console.WriteLine($"Permit tone completed on {output.Id}: {output.Name}; queued {queuedSamples?.ToString() ?? "unknown"} / consumed {consumedSamples?.ToString() ?? "unknown"} samples.");
+        return 0;
+    }
+
+    private static AudioDeviceInfo ResolveOutputDevice(MacCoreAudioBackend backend, string? requestedDeviceId)
+    {
+        IReadOnlyList<AudioDeviceInfo> devices = backend.EnumerateDevices(AudioDirection.Output);
+        return devices.FirstOrDefault(device =>
+                   !string.IsNullOrWhiteSpace(requestedDeviceId) &&
+                   device.Id.Equals(requestedDeviceId, StringComparison.OrdinalIgnoreCase))
+               ?? devices.FirstOrDefault(device => device.IsDefault)
+               ?? devices.FirstOrDefault()
+               ?? throw new InvalidOperationException("No audio output device is available for the permit-tone probe.");
+    }
+
+    private static void ApplyFade(short[] samples, int fadeSamples)
+    {
+        int boundedFade = Math.Min(Math.Max(0, fadeSamples), samples.Length / 2);
+        for (int index = 0; index < boundedFade; index++)
+        {
+            double scale = (double)index / boundedFade;
+            samples[index] = (short)Math.Round(samples[index] * scale);
+            int tail = samples.Length - index - 1;
+            samples[tail] = (short)Math.Round(samples[tail] * scale);
+        }
     }
 }

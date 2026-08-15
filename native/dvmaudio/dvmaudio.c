@@ -217,6 +217,15 @@ static uint32_t ring_pop(DvmAudioStream *stream, int16_t *samples, uint32_t capa
     return count;
 }
 
+static uint32_t ring_count(DvmAudioStream *stream)
+{
+    uint32_t read = atomic_load_explicit(&stream->read_index, memory_order_acquire);
+    uint32_t write = atomic_load_explicit(&stream->write_index, memory_order_acquire);
+    return write >= read
+        ? write - read
+        : stream->ring_capacity - read + write;
+}
+
 static OSStatus input_callback(
     void *ref_con,
     AudioUnitRenderActionFlags *action_flags,
@@ -443,6 +452,13 @@ int32_t dvm_audio_stream_write(DvmAudioStream *stream, const int16_t *samples, u
         return -1;
     ring_push(stream, samples, count);
     return (int32_t)count;
+}
+
+uint32_t dvm_audio_stream_queued_samples(DvmAudioStream *stream)
+{
+    if (stream == NULL)
+        return 0;
+    return ring_count(stream);
 }
 
 void dvm_audio_stream_destroy(DvmAudioStream *stream)

@@ -193,6 +193,7 @@ public sealed class WindowsAudioBackend : IAudioBackend
         }
 
         public PcmAudioFormat Format { get; }
+        public int? QueuedSamples => buffer.BufferedBytes / sizeof(short);
 
         public ValueTask WriteAsync(ReadOnlyMemory<short> samples, CancellationToken cancellationToken = default)
         {
@@ -212,6 +213,26 @@ public sealed class WindowsAudioBackend : IAudioBackend
             cancellationToken.ThrowIfCancellationRequested();
             buffer.ClearBuffer();
             return ValueTask.CompletedTask;
+        }
+
+        public async ValueTask<int?> DrainAsync(CancellationToken cancellationToken = default)
+        {
+            ObjectDisposedException.ThrowIf(disposed, this);
+            cancellationToken.ThrowIfCancellationRequested();
+            int initialSamples = QueuedSamples ?? 0;
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            timeout.CancelAfter(TimeSpan.FromSeconds(5));
+            try
+            {
+                while (buffer.BufferedBytes > 0)
+                    await Task.Delay(5, timeout.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+            {
+                throw new TimeoutException("Windows audio playback did not drain within five seconds.");
+            }
+
+            return initialSamples - (QueuedSamples ?? 0);
         }
 
         public ValueTask DisposeAsync()

@@ -2731,7 +2731,13 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         {
             AudioDeviceInfo output = await talkPermitTonePlayer.PlayAsync().ConfigureAwait(false);
             if (reportSuccess)
-                AudioStatusText = $"Talk permit tone sent to {output.Name}.";
+            {
+                string drainText = talkPermitTonePlayer.LastQueuedSamples is int queued &&
+                                    talkPermitTonePlayer.LastConsumedSamples is int consumed
+                    ? $" queued {queued} / consumed {consumed} samples"
+                    : string.Empty;
+                AudioStatusText = $"Talk permit tone sent to {output.Name}.{drainText}";
+            }
         }
         catch (Exception exception)
         {

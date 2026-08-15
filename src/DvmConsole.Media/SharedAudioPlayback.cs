@@ -17,12 +17,16 @@ public sealed class SharedAudioPlayback : IAudioPlayback
     }
 
     public PcmAudioFormat Format => inner.Format;
+    public int? QueuedSamples => inner.QueuedSamples;
 
     public ValueTask WriteAsync(ReadOnlyMemory<short> samples, CancellationToken cancellationToken = default)
         => inner.WriteAsync(samples, cancellationToken);
 
     public ValueTask FlushAsync(CancellationToken cancellationToken = default)
         => inner.FlushAsync(cancellationToken);
+
+    public ValueTask<int?> DrainAsync(CancellationToken cancellationToken = default)
+        => inner.DrainAsync(cancellationToken);
 
     public ValueTask DisposeAsync() => ValueTask.CompletedTask;
 }

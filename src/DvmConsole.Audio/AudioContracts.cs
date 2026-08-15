@@ -60,8 +60,11 @@ public interface IAudioCapture : IAsyncDisposable
 public interface IAudioPlayback : IAsyncDisposable
 {
     PcmAudioFormat Format { get; }
+    int? QueuedSamples => null;
     ValueTask WriteAsync(ReadOnlyMemory<short> samples, CancellationToken cancellationToken = default);
     ValueTask FlushAsync(CancellationToken cancellationToken = default);
+    ValueTask<int?> DrainAsync(CancellationToken cancellationToken = default)
+        => ValueTask.FromResult<int?>(null);
 }
 
 public interface IAudioGainControl

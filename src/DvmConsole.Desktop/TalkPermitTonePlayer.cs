@@ -26,6 +26,9 @@ public sealed class TalkPermitTonePlayer : IAsyncDisposable
         this.getOutputDeviceId = getOutputDeviceId ?? throw new ArgumentNullException(nameof(getOutputDeviceId));
     }
 
+    public int? LastQueuedSamples { get; private set; }
+    public int? LastConsumedSamples { get; private set; }
+
     public async Task<AudioDeviceInfo> PlayAsync(CancellationToken cancellationToken = default)
     {
         ObjectDisposedException.ThrowIf(disposed, this);
@@ -49,9 +52,8 @@ public sealed class TalkPermitTonePlayer : IAsyncDisposable
                 amplitude: 0.40);
             ApplyFade(samples, PcmAudioFormat.Voice8KhzMono16Bit.SampleRate / 100);
             await playback.WriteAsync(samples, cancellationToken).ConfigureAwait(false);
-            // Keep the playback stream alive between presses. Both platform
-            // backends queue writes asynchronously; disposing a newly opened
-            // stream immediately can truncate the complete indication.
+            LastQueuedSamples = playback.QueuedSamples;
+            LastConsumedSamples = await playback.DrainAsync(cancellationToken).ConfigureAwait(false);
             return output;
         }
         finally

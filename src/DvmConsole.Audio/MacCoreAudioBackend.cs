@@ -177,6 +177,7 @@ public sealed class MacCoreAudioBackend : IAudioBackend
         }
 
         public PcmAudioFormat Format { get; }
+        public int? QueuedSamples => checked((int)api.GetQueuedSamples(stream));
 
         public async ValueTask WriteAsync(ReadOnlyMemory<short> samples, CancellationToken cancellationToken = default)
         {
@@ -198,6 +199,26 @@ public sealed class MacCoreAudioBackend : IAudioBackend
         {
             cancellationToken.ThrowIfCancellationRequested();
             return ValueTask.CompletedTask;
+        }
+
+        public async ValueTask<int?> DrainAsync(CancellationToken cancellationToken = default)
+        {
+            ObjectDisposedException.ThrowIf(disposed, this);
+            cancellationToken.ThrowIfCancellationRequested();
+            int initialSamples = QueuedSamples ?? 0;
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            timeout.CancelAfter(TimeSpan.FromSeconds(5));
+            try
+            {
+                while ((QueuedSamples ?? 0) > 0)
+                    await Task.Delay(5, timeout.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+            {
+                throw new TimeoutException("macOS audio playback did not drain within five seconds.");
+            }
+
+            return initialSamples - (QueuedSamples ?? 0);
         }
 
         public ValueTask DisposeAsync()
@@ -228,6 +249,7 @@ public sealed class MacCoreAudioBackend : IAudioBackend
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate int GetSampleRateDelegate(IntPtr stream);
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate int StreamReadDelegate(IntPtr stream, [Out] short[] samples, int capacity);
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate int StreamWriteDelegate(IntPtr stream, short[] samples, int count);
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate uint StreamQueuedSamplesDelegate(IntPtr stream);
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate void DestroyStreamDelegate(IntPtr stream);
 
         private readonly IntPtr handle;
@@ -239,6 +261,7 @@ public sealed class MacCoreAudioBackend : IAudioBackend
         private readonly GetSampleRateDelegate getSampleRate;
         private readonly StreamReadDelegate readStream;
         private readonly StreamWriteDelegate writeStream;
+        private readonly StreamQueuedSamplesDelegate queuedSamples;
         private readonly DestroyStreamDelegate destroyStream;
 
         private NativeCoreAudioApi(IntPtr handle)
@@ -252,6 +275,7 @@ public sealed class MacCoreAudioBackend : IAudioBackend
             getSampleRate = Get<GetSampleRateDelegate>("dvm_audio_stream_get_sample_rate");
             readStream = Get<StreamReadDelegate>("dvm_audio_stream_read");
             writeStream = Get<StreamWriteDelegate>("dvm_audio_stream_write");
+            queuedSamples = Get<StreamQueuedSamplesDelegate>("dvm_audio_stream_queued_samples");
             destroyStream = Get<DestroyStreamDelegate>("dvm_audio_stream_destroy");
         }
 
@@ -283,6 +307,7 @@ public sealed class MacCoreAudioBackend : IAudioBackend
         public int GetSampleRate(IntPtr stream) => getSampleRate(stream);
         public int ReadStream(IntPtr stream, short[] samples, int capacity) => readStream(stream, samples, capacity);
         public int WriteStream(IntPtr stream, short[] samples, int count) => writeStream(stream, samples, count);
+        public uint GetQueuedSamples(IntPtr stream) => queuedSamples(stream);
         public void DestroyStream(IntPtr stream) => destroyStream(stream);
         public void Dispose() => NativeLibrary.Free(handle);
 
