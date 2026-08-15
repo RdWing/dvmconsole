@@ -232,6 +232,13 @@ public sealed class SystemViewModelTests
             Assert.NotNull(viewModel.CallHistory[0].Duration);
             Assert.Equal((uint)77, viewModel.CallHistory[1].StreamId);
             Assert.Equal("Alpha Dispatch", viewModel.CallHistory[1].ChannelName);
+
+            viewModel.CallHistoryFilterText = "Alpha Dispatch";
+            Assert.Equal(2, viewModel.FilteredCallHistory.Count);
+            viewModel.CallHistoryFilterText = "78";
+            Assert.Single(viewModel.FilteredCallHistory);
+            viewModel.CallHistoryFilterText = "not present";
+            Assert.Empty(viewModel.FilteredCallHistory);
         }
         finally
         {

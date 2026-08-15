@@ -178,7 +178,7 @@
             <StackPanel Spacing="14">
               <StackPanel Spacing="6">
                 <TextBlock Classes="eyebrow" Text="Call History" />
-                <ItemsControl ItemsSource="{Binding CallHistory}">
+                <ItemsControl ItemsSource="{Binding FilteredCallHistory}">
                   <ItemsControl.ItemTemplate>
                     <DataTemplate x:DataType="local:CallHistoryEntry">
                       <Border Background="#1C2530" BorderBrush="#293847" BorderThickness="1" CornerRadius="6" Padding="7" Margin="0,0,0,6">

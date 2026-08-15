@@ -657,6 +657,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     private string clockText = string.Empty;
     private string debugLogFilterText = string.Empty;
     private string debugLogSeverityFilter = "All";
+    private string callHistoryFilterText = string.Empty;
     private bool busy;
     private ChannelViewModel? selectedChannel;
     private SystemViewModel? selectedSystem;
@@ -878,6 +879,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     public void ClearCallHistory()
     {
         callHistory.Clear();
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(FilteredCallHistory)));
         StatusText = "Call history cleared.";
     }
 
@@ -1167,6 +1169,24 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     public ReadOnlyObservableCollection<DebugLogEntry> DebugLogEntries { get; }
     public ReadOnlyObservableCollection<WebStreamViewModel> WebStreams { get; }
     public System.Collections.ObjectModel.ReadOnlyObservableCollection<CallHistoryEntry> CallHistory { get; }
+    public IReadOnlyList<CallHistoryEntry> FilteredCallHistory
+        => CallHistory
+            .Where(entry =>
+            {
+                if (string.IsNullOrWhiteSpace(CallHistoryFilterText))
+                    return true;
+
+                string filter = CallHistoryFilterText.Trim();
+                return entry.SystemName.Contains(filter, StringComparison.OrdinalIgnoreCase) ||
+                    entry.ChannelName.Contains(filter, StringComparison.OrdinalIgnoreCase) ||
+                    entry.CallerText.Contains(filter, StringComparison.OrdinalIgnoreCase) ||
+                    entry.SourceId.ToString(CultureInfo.InvariantCulture).Contains(filter, StringComparison.OrdinalIgnoreCase) ||
+                    entry.DestinationId.ToString(CultureInfo.InvariantCulture).Contains(filter, StringComparison.OrdinalIgnoreCase) ||
+                    entry.StreamId.ToString(CultureInfo.InvariantCulture).Contains(filter, StringComparison.OrdinalIgnoreCase) ||
+                    entry.ProtocolText.Contains(filter, StringComparison.OrdinalIgnoreCase) ||
+                    entry.EncryptionText.Contains(filter, StringComparison.OrdinalIgnoreCase);
+            })
+            .ToArray();
     public ReadOnlyObservableCollection<CallRecordingMetadata> Recordings { get; }
     public ICommand ConnectCommand { get; }
     public ICommand DisconnectCommand { get; }
@@ -1215,6 +1235,20 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             debugLogSeverityFilter = normalized;
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(DebugLogSeverityFilter)));
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(FilteredDebugLogs)));
+        }
+    }
+
+    public string CallHistoryFilterText
+    {
+        get => callHistoryFilterText;
+        set
+        {
+            string normalized = value ?? string.Empty;
+            if (callHistoryFilterText == normalized)
+                return;
+            callHistoryFilterText = normalized;
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CallHistoryFilterText)));
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(FilteredCallHistory)));
         }
     }
 
@@ -2171,6 +2205,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
 
         List<ChannelViewModel> activeAudioChannels = [];
         List<ChannelViewModel> activePatchSourceChannels = [];
+        bool callHistoryChanged = false;
         foreach (SystemViewModel configuredSystem in Systems)
         {
             foreach (ChannelViewModel channel in configuredSystem.Channels)
@@ -2187,11 +2222,11 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
 
                 if (sameActiveStream && channel.State != ChannelRuntimeState.Receiving)
                 {
-                    callHistory.Complete(
+                    callHistoryChanged = callHistory.Complete(
                         system.Name,
                         traffic.Protocol,
                         traffic.StreamId,
-                        DateTimeOffset.Now);
+                        DateTimeOffset.Now) || callHistoryChanged;
                 }
                 else if (!sameActiveStream)
                 {
@@ -2205,6 +2240,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
                         traffic.StreamId,
                         channel.LastCallerText,
                         channel.Definition.IsEncrypted));
+                    callHistoryChanged = true;
                 }
 
                 if (audioCoordinator.IsActive(channel))
@@ -2216,6 +2252,8 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             _ = Task.Run(() => ProcessAudioAsync(channel, traffic));
         foreach (ChannelViewModel channel in activePatchSourceChannels)
             EnqueuePatchSource(channel, traffic);
+        if (callHistoryChanged)
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(FilteredCallHistory)));
     }
 
     private async Task StartAudioAsync(ChannelViewModel channel)
@@ -3061,6 +3099,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     private void ExpireStaleReceiveStates(DateTimeOffset now)
     {
         bool recordingStateChanged = false;
+        bool callHistoryChanged = false;
         foreach (ChannelViewModel channel in Systems.SelectMany(system => system.Channels))
         {
             uint? activeStreamId = channel.StreamId;
@@ -3068,7 +3107,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
                 continue;
             if (activeStreamId is uint streamId)
             {
-                callHistory.Complete(
+                callHistoryChanged = callHistory.Complete(
                     channel.Definition.SystemName,
                     channel.Definition.Mode switch
                     {
@@ -3078,13 +3117,15 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
                         _ => FneTrafficProtocol.Analog
                     },
                     streamId,
-                    now);
+                    now) || callHistoryChanged;
             }
             callRecordings.StopChannel(channel);
             recordingStateChanged = true;
         }
         if (recordingStateChanged)
             RefreshRecordings();
+        if (callHistoryChanged)
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(FilteredCallHistory)));
     }
 
     private void RefreshClock()
