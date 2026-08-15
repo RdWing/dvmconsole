@@ -108,6 +108,11 @@ public sealed class UserSettingsStore
 
     public string Path { get; }
 
+    public string ProfilesDirectoryPath
+        => System.IO.Path.Combine(
+            System.IO.Path.GetDirectoryName(Path) ?? AppContext.BaseDirectory,
+            "Profiles");
+
     public static string DefaultPath
     {
         get
@@ -231,21 +236,7 @@ public sealed class UserSettingsStore
     {
         ArgumentNullException.ThrowIfNull(settings);
 
-        if (settings.SchemaVersion <= 0)
-            settings.SchemaVersion = UserSettings.CurrentSchemaVersion;
-        settings.DtmfPresets = NormalizeDtmfPresets(settings.DtmfPresets);
-        settings.TonePresets = NormalizeTonePresets(settings.TonePresets);
-        settings.CallHistoryWindowPlacement = NormalizeWindowPlacement(settings.CallHistoryWindowPlacement);
-        NormalizeAudioInputSettings(settings);
-        settings.RecentCodeplugPaths = NormalizeRecentCodeplugPaths(settings.RecentCodeplugPaths);
-        settings.AudioInputPresetName = settings.AudioInputPresetName?.Trim() ?? string.Empty;
-        settings.AudioInputPresets = NormalizeAudioInputPresets(settings.AudioInputPresets);
-        settings.ChannelOutputDeviceIds = NormalizeChannelOutputDevices(settings.ChannelOutputDeviceIds);
-        settings.WebStreamOutputDeviceIds = NormalizeChannelOutputDevices(settings.WebStreamOutputDeviceIds);
-        settings.WebStreamVolumes = NormalizeWebStreamVolumes(settings.WebStreamVolumes);
-        settings.SelectedWebStreams = NormalizeNames(settings.SelectedWebStreams);
-        settings.GlobalPttKey = NormalizeGlobalPttKey(settings.GlobalPttKey);
-        settings.TransmitSelectedChannelKeys = NormalizeNames(settings.TransmitSelectedChannelKeys);
+        NormalizeSettingsForWrite(settings);
 
         string? directory = System.IO.Path.GetDirectoryName(Path);
         if (!string.IsNullOrWhiteSpace(directory))
@@ -283,14 +274,86 @@ public sealed class UserSettingsStore
         File.Copy(Path, destination, overwrite: true);
     }
 
-    public UserSettings Import(string sourcePath)
+    public SettingsImportPreview PreviewImport(string sourcePath)
+    {
+        string source = ResolveSettingsFilePath(sourcePath);
+        UserSettings settings = ReadSettingsFile(source);
+        return CreatePreview(source, settings);
+    }
+
+    public SettingsImportPreview PreviewNamedProfile(string profileName)
+        => PreviewImport(GetNamedProfilePath(profileName));
+
+    public IReadOnlyList<string> ListNamedProfiles()
+    {
+        if (!Directory.Exists(ProfilesDirectoryPath))
+            return [];
+
+        return Directory.EnumerateFiles(ProfilesDirectoryPath, "*.json", SearchOption.TopDirectoryOnly)
+            .Select(file => System.IO.Path.GetFileNameWithoutExtension(file))
+            .Where(name => !string.IsNullOrWhiteSpace(name))
+            .OrderBy(name => name, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+    }
+
+    public void SaveNamedProfile(string profileName, UserSettings settings)
+    {
+        ArgumentNullException.ThrowIfNull(settings);
+        string profilePath = GetNamedProfilePath(profileName);
+        new UserSettingsStore(profilePath).Save(settings);
+    }
+
+    public UserSettings LoadNamedProfile(string profileName)
+    {
+        string path = GetNamedProfilePath(profileName);
+        if (!File.Exists(path))
+            throw new FileNotFoundException("Named settings profile not found.", path);
+        return new UserSettingsStore(path).Load();
+    }
+
+    public UserSettings ImportNamedProfile(
+        string profileName,
+        SettingsImportScope scope = SettingsImportScope.OperatorState)
+        => Import(GetNamedProfilePath(profileName), scope);
+
+    public void DeleteNamedProfile(string profileName)
+    {
+        string profilePath = GetNamedProfilePath(profileName);
+        if (File.Exists(profilePath))
+            File.Delete(profilePath);
+    }
+
+    public UserSettings Import(
+        string sourcePath,
+        SettingsImportScope scope = SettingsImportScope.All)
+    {
+        string source = ResolveSettingsFilePath(sourcePath);
+        UserSettings imported = ReadSettingsFile(source);
+        if (scope == SettingsImportScope.All)
+        {
+            Save(imported);
+            return Load();
+        }
+
+        UserSettings current = Load();
+        MergeSettings(current, imported, scope);
+        Save(current);
+        return Load();
+    }
+
+    private static string ResolveSettingsFilePath(string sourcePath)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(sourcePath);
         string source = System.IO.Path.GetFullPath(sourcePath);
         if (!File.Exists(source))
             throw new FileNotFoundException("Settings file not found.", source);
+        return source;
+    }
 
+    private static UserSettings ReadSettingsFile(string source)
+    {
         UserSettings imported;
+
         try
         {
             imported = JsonSerializer.Deserialize<UserSettings>(File.ReadAllText(source), SerializerOptions)
@@ -301,14 +364,196 @@ public sealed class UserSettingsStore
             throw new InvalidDataException("The settings file is not valid DVM Console JSON.", exception);
         }
 
-        Save(imported);
-        return Load();
+        NormalizeSettingsForWrite(imported);
+        return imported;
+    }
+
+    private static void NormalizeSettingsForWrite(UserSettings settings)
+    {
+        if (settings.SchemaVersion <= 0)
+            settings.SchemaVersion = UserSettings.CurrentSchemaVersion;
+        settings.DtmfPresets = NormalizeDtmfPresets(settings.DtmfPresets);
+        settings.TonePresets = NormalizeTonePresets(settings.TonePresets);
+        settings.CallHistoryWindowPlacement = NormalizeWindowPlacement(settings.CallHistoryWindowPlacement);
+        NormalizeAudioInputSettings(settings);
+        settings.RecentCodeplugPaths = NormalizeRecentCodeplugPaths(settings.RecentCodeplugPaths);
+        settings.AudioInputPresetName = settings.AudioInputPresetName?.Trim() ?? string.Empty;
+        settings.AudioInputPresets = NormalizeAudioInputPresets(settings.AudioInputPresets);
+        settings.ChannelOutputDeviceIds = NormalizeChannelOutputDevices(settings.ChannelOutputDeviceIds);
+        settings.WebStreamOutputDeviceIds = NormalizeChannelOutputDevices(settings.WebStreamOutputDeviceIds);
+        settings.WebStreamVolumes = NormalizeWebStreamVolumes(settings.WebStreamVolumes);
+        settings.SelectedWebStreams = NormalizeNames(settings.SelectedWebStreams);
+        settings.GlobalPttKey = NormalizeGlobalPttKey(settings.GlobalPttKey);
+        settings.TransmitSelectedChannelKeys = NormalizeNames(settings.TransmitSelectedChannelKeys);
     }
 
     public void Reset()
     {
         if (File.Exists(Path))
             File.Delete(Path);
+    }
+
+    private string GetNamedProfilePath(string profileName)
+    {
+        string normalized = NormalizeProfileName(profileName);
+        Directory.CreateDirectory(ProfilesDirectoryPath);
+        return System.IO.Path.Combine(ProfilesDirectoryPath, $"{normalized}.json");
+    }
+
+    private static string NormalizeProfileName(string profileName)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(profileName);
+        string normalized = profileName.Trim();
+        if (normalized is "." or ".." ||
+            normalized.Length > 64 ||
+            normalized.Any(char.IsControl) ||
+            normalized.IndexOfAny(System.IO.Path.GetInvalidFileNameChars()) >= 0 ||
+            normalized.Contains(System.IO.Path.DirectorySeparatorChar) ||
+            normalized.Contains(System.IO.Path.AltDirectorySeparatorChar))
+        {
+            throw new ArgumentException(
+                "Profile names must be 1-64 characters and cannot contain path separators or control characters.",
+                nameof(profileName));
+        }
+
+        return normalized;
+    }
+
+    private static SettingsImportPreview CreatePreview(string source, UserSettings settings)
+    {
+        var sections = new List<string>();
+        if (settings.TalkPermitTone || settings.ConnectionChimes || settings.DarkMode ||
+            settings.TogglePttMode || !string.Equals(settings.GlobalPttKey, "Space", StringComparison.OrdinalIgnoreCase) ||
+            !settings.ShowSystemStatus || !settings.ShowChannels || !settings.ShowAlertTones ||
+            !settings.LockWidgets || !settings.ShowCallHistoryPane || settings.UserBackgroundImage is not null)
+        {
+            sections.Add("General");
+        }
+
+        if (!string.Equals(settings.AudioInputDeviceId, "default", StringComparison.OrdinalIgnoreCase) ||
+            !string.Equals(settings.AudioOutputDeviceId, "default", StringComparison.OrdinalIgnoreCase) ||
+            settings.AudioInputAgcEnabled || settings.AudioInputPresets.Count > 0 ||
+            settings.ChannelVolumes.Count > 0 || settings.ChannelOutputDeviceIds.Count > 0 ||
+            settings.WebStreamOutputDeviceIds.Count > 0 || settings.WebStreamVolumes.Count > 0)
+        {
+            sections.Add("Audio");
+        }
+
+        if (settings.DtmfPresets.Count > 0 || settings.TonePresets.Count > 0 || settings.AlertTones.Count > 0 ||
+            !string.Equals(settings.LastDtmfDigits, "123", StringComparison.Ordinal) ||
+            settings.ToneFrequencyHz != 1000 || settings.ToneDurationSeconds != 1.0)
+        {
+            sections.Add("Presets");
+        }
+
+        if (settings.RecordingRetentionDays != 7 || settings.RecordingIgnoredSubscriberIds.Count > 0 ||
+            settings.PatchGroupMemberships.Count > 0 || settings.PatchGroupModes.Count > 0 ||
+            settings.PatchGroupEnabledStates.Count > 0 || settings.RetainPatchStateOnStartup)
+        {
+            sections.Add("Recording/patch");
+        }
+
+        if (!string.IsNullOrWhiteSpace(settings.LastCodeplugPath) || settings.RecentCodeplugPaths.Count > 0 ||
+            !string.IsNullOrWhiteSpace(settings.LastSelectedSystemName) ||
+            !string.IsNullOrWhiteSpace(settings.LastSelectedChannelKey) ||
+            settings.TransmitSelectedChannelKeys.Count > 0 || settings.SelectedWebStreams.Count > 0 ||
+            settings.TransmitEncryptionStates.Count > 0)
+        {
+            sections.Add("Session");
+        }
+
+        return new SettingsImportPreview(source, settings.SchemaVersion, settings.LastCodeplugPath, sections);
+    }
+
+    private static void MergeSettings(UserSettings target, UserSettings source, SettingsImportScope scope)
+    {
+        target.SchemaVersion = Math.Max(target.SchemaVersion, source.SchemaVersion);
+
+        if ((scope & SettingsImportScope.General) != 0)
+        {
+            target.TogglePttMode = source.TogglePttMode;
+            target.GlobalPttKey = source.GlobalPttKey;
+            target.TalkPermitTone = source.TalkPermitTone;
+            target.ConnectionChimes = source.ConnectionChimes;
+            target.DarkMode = source.DarkMode;
+            target.ClockUse24HourTime = source.ClockUse24HourTime;
+            target.ClockShowSeconds = source.ClockShowSeconds;
+            target.ToolbarClocks = source.ToolbarClocks.ToList();
+            target.KeepWindowOnTop = source.KeepWindowOnTop;
+            target.ShowSystemStatus = source.ShowSystemStatus;
+            target.ShowChannels = source.ShowChannels;
+            target.ShowAlertTones = source.ShowAlertTones;
+            target.LockWidgets = source.LockWidgets;
+            target.UserBackgroundImage = source.UserBackgroundImage;
+            target.ShowCallHistoryPane = source.ShowCallHistoryPane;
+            target.CallHistoryWindowPlacement = new WindowPlacementSetting
+            {
+                Left = source.CallHistoryWindowPlacement.Left,
+                Top = source.CallHistoryWindowPlacement.Top,
+                Width = source.CallHistoryWindowPlacement.Width,
+                Height = source.CallHistoryWindowPlacement.Height
+            };
+        }
+
+        if ((scope & SettingsImportScope.Audio) != 0)
+        {
+            target.AudioInputDeviceId = source.AudioInputDeviceId;
+            target.AudioOutputDeviceId = source.AudioOutputDeviceId;
+            target.AudioInputAgcEnabled = source.AudioInputAgcEnabled;
+            target.AudioInputGain = source.AudioInputGain;
+            target.AudioInputEqLowGainDb = source.AudioInputEqLowGainDb;
+            target.AudioInputEqMidGainDb = source.AudioInputEqMidGainDb;
+            target.AudioInputEqHighGainDb = source.AudioInputEqHighGainDb;
+            target.AudioInputPresetName = source.AudioInputPresetName;
+            target.AudioInputPresets = source.AudioInputPresets.ToList();
+            target.MuteRxAudioWhileTransmitting = source.MuteRxAudioWhileTransmitting;
+            target.ChannelVolumes = new Dictionary<string, double>(source.ChannelVolumes, StringComparer.OrdinalIgnoreCase);
+            target.ChannelOutputDeviceIds = new Dictionary<string, string>(source.ChannelOutputDeviceIds, StringComparer.OrdinalIgnoreCase);
+            target.WebStreamOutputDeviceIds = new Dictionary<string, string>(source.WebStreamOutputDeviceIds, StringComparer.OrdinalIgnoreCase);
+            target.WebStreamVolumes = new Dictionary<string, double>(source.WebStreamVolumes, StringComparer.OrdinalIgnoreCase);
+        }
+
+        if ((scope & SettingsImportScope.Presets) != 0)
+        {
+            target.LastDtmfDigits = source.LastDtmfDigits;
+            target.ToneFrequencyHz = source.ToneFrequencyHz;
+            target.ToneDurationSeconds = source.ToneDurationSeconds;
+            target.QuickCallToneAFrequencyHz = source.QuickCallToneAFrequencyHz;
+            target.QuickCallToneBFrequencyHz = source.QuickCallToneBFrequencyHz;
+            target.DtmfPresets = source.DtmfPresets.ToList();
+            target.TonePresets = source.TonePresets.ToList();
+            target.AlertTones = source.AlertTones.ToList();
+        }
+
+        if ((scope & SettingsImportScope.RecordingAndPatch) != 0)
+        {
+            target.RecordingRetentionDays = source.RecordingRetentionDays;
+            target.RecordingIgnoredSubscriberIds = source.RecordingIgnoredSubscriberIds
+                .ToDictionary(entry => entry.Key, entry => entry.Value.ToList(), StringComparer.OrdinalIgnoreCase);
+            target.PatchGroupMemberships = source.PatchGroupMemberships
+                .ToDictionary(
+                    entry => entry.Key,
+                    entry => entry.Value.Select(member => new PatchMemberSetting
+                    {
+                        SystemName = member.SystemName,
+                        DestinationId = member.DestinationId
+                    }).ToList(),
+                    StringComparer.OrdinalIgnoreCase);
+            target.PatchGroupModes = new Dictionary<string, bool>(source.PatchGroupModes, StringComparer.OrdinalIgnoreCase);
+            target.PatchGroupEnabledStates = new Dictionary<string, bool>(source.PatchGroupEnabledStates, StringComparer.OrdinalIgnoreCase);
+            target.RetainPatchStateOnStartup = source.RetainPatchStateOnStartup;
+        }
+
+        if ((scope & SettingsImportScope.Session) != 0)
+        {
+            target.LastCodeplugPath = source.LastCodeplugPath;
+            target.RecentCodeplugPaths = source.RecentCodeplugPaths.ToList();
+            target.LastSelectedSystemName = source.LastSelectedSystemName;
+            target.LastSelectedChannelKey = source.LastSelectedChannelKey;
+            target.TransmitSelectedChannelKeys = source.TransmitSelectedChannelKeys.ToList();
+            target.SelectedWebStreams = source.SelectedWebStreams.ToList();
+            target.TransmitEncryptionStates = new Dictionary<string, bool>(source.TransmitEncryptionStates, StringComparer.OrdinalIgnoreCase);
+        }
     }
 
     private static Dictionary<string, bool> NormalizeGroupStates(Dictionary<string, bool>? states)

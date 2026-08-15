@@ -435,6 +435,74 @@ public sealed class UserSettingsStoreTests
         }
     }
 
+    [Fact]
+    public void NamedProfilesRoundTripAndSelectiveImportPreservesSession()
+    {
+        string path = CreatePath();
+        string importPath = Path.Combine(Path.GetDirectoryName(path)!, "imported-profile.json");
+        try
+        {
+            var store = new UserSettingsStore(path);
+            var profile = new UserSettings
+            {
+                TalkPermitTone = true,
+                AudioOutputDeviceId = "profile-output",
+                LastCodeplugPath = "/tmp/profile.yml",
+                DtmfPresets = [new DtmfPresetSetting { Name = "Night" }]
+            };
+            store.SaveNamedProfile("Night Shift", profile);
+
+            Assert.Equal(["Night Shift"], store.ListNamedProfiles());
+            Assert.True(store.LoadNamedProfile("Night Shift").TalkPermitTone);
+
+            var importStore = new UserSettingsStore(importPath);
+            importStore.Save(profile);
+            SettingsImportPreview preview = store.PreviewImport(importPath);
+
+            Assert.Equal(UserSettings.CurrentSchemaVersion, preview.SchemaVersion);
+            Assert.Equal("/tmp/profile.yml", preview.LastCodeplugPath);
+            Assert.Contains("General", preview.PopulatedSections);
+            Assert.Contains("Audio", preview.PopulatedSections);
+            Assert.Contains("Presets", preview.PopulatedSections);
+
+            store.Save(new UserSettings
+            {
+                AudioOutputDeviceId = "current-output",
+                LastCodeplugPath = "/tmp/current.yml"
+            });
+            store.Import(importPath, SettingsImportScope.OperatorState);
+            UserSettings merged = store.Load();
+
+            Assert.True(merged.TalkPermitTone);
+            Assert.Equal("profile-output", merged.AudioOutputDeviceId);
+            Assert.Equal("/tmp/current.yml", merged.LastCodeplugPath);
+
+            store.DeleteNamedProfile("Night Shift");
+            Assert.Empty(store.ListNamedProfiles());
+        }
+        finally
+        {
+            Cleanup(path);
+        }
+    }
+
+    [Fact]
+    public void NamedProfileNamesCannotEscapeProfilesDirectory()
+    {
+        string path = CreatePath();
+        try
+        {
+            var store = new UserSettingsStore(path);
+
+            Assert.Throws<ArgumentException>(() => store.SaveNamedProfile("../outside", new UserSettings()));
+            Assert.Throws<ArgumentException>(() => store.PreviewNamedProfile("../outside"));
+        }
+        finally
+        {
+            Cleanup(path);
+        }
+    }
+
     private static string CreatePath()
     {
         return Path.Combine(Path.GetTempPath(), "dvmconsole-settings-tests", $"{Guid.NewGuid():N}", "UserSettings.json");

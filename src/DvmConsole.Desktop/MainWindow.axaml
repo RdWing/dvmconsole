@@ -30,6 +30,12 @@
             <MenuItem Header="Import Settings…" Click="HandleImportSettingsClick" />
             <MenuItem Header="Export Settings…" Click="HandleExportSettingsClick" />
             <Separator />
+            <MenuItem Header="Settings Profiles">
+              <MenuItem Header="Save current profile…" Click="HandleSaveSettingsProfileClick" />
+              <MenuItem Header="Load profile" x:Name="namedSettingsProfileLoadMenu" />
+              <MenuItem Header="Delete profile" x:Name="namedSettingsProfileDeleteMenu" />
+            </MenuItem>
+            <Separator />
             <MenuItem Header="Connect" Command="{Binding ConnectCommand}" />
             <MenuItem Header="Disconnect" Command="{Binding DisconnectCommand}" />
             <Separator />

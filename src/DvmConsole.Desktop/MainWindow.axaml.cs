@@ -49,6 +49,7 @@ public sealed partial class MainWindow : Window
         AddHandler(InputElement.PointerReleasedEvent, HandlePttPointerReleased, RoutingStrategies.Tunnel, true);
         AddHandler(InputElement.PointerCaptureLostEvent, HandlePttPointerCaptureLost, RoutingStrategies.Bubble, true);
         RefreshRecentCodeplugMenu();
+        RefreshNamedSettingsProfileMenus();
         Opened += async (_, _) => await viewModel.StartKeyboardPttAsync().ConfigureAwait(false);
         Closed += async (_, _) =>
         {
@@ -205,6 +206,45 @@ public sealed partial class MainWindow : Window
         recentCodeplugsMenu.IsEnabled = true;
     }
 
+    private void RefreshNamedSettingsProfileMenus()
+    {
+        RefreshNamedSettingsProfileMenu(
+            namedSettingsProfileLoadMenu,
+            "No saved profiles",
+            HandleLoadNamedSettingsProfileClick);
+        RefreshNamedSettingsProfileMenu(
+            namedSettingsProfileDeleteMenu,
+            "No saved profiles",
+            HandleDeleteNamedSettingsProfileClick);
+    }
+
+    private void RefreshNamedSettingsProfileMenu(
+        MenuItem menu,
+        string emptyHeader,
+        EventHandler<RoutedEventArgs> clickHandler)
+    {
+        menu.Items.Clear();
+        if (viewModel.NamedSettingsProfiles.Count == 0)
+        {
+            menu.Items.Add(new MenuItem { Header = emptyHeader, IsEnabled = false });
+            menu.IsEnabled = false;
+            return;
+        }
+
+        foreach (string profileName in viewModel.NamedSettingsProfiles)
+        {
+            var item = new MenuItem
+            {
+                Header = profileName,
+                Tag = profileName
+            };
+            item.Click += clickHandler;
+            menu.Items.Add(item);
+        }
+
+        menu.IsEnabled = true;
+    }
+
     private async void HandleSelectBackgroundClick(object? sender, RoutedEventArgs e)
     {
         if (!StorageProvider.CanOpen)
@@ -274,6 +314,88 @@ public sealed partial class MainWindow : Window
         }
     }
 
+    private async void HandleSaveSettingsProfileClick(object? sender, RoutedEventArgs e)
+    {
+        string? profileName = await PromptForTextAsync(
+            "Save settings profile",
+            "Enter a name for the current operator settings profile.",
+            "Save");
+        if (profileName is null)
+            return;
+
+        try
+        {
+            viewModel.SaveNamedSettingsProfile(profileName);
+            RefreshNamedSettingsProfileMenus();
+            await ShowInformationAsync("Settings profile saved", $"Saved profile '{profileName}'.");
+        }
+        catch (Exception exception) when (exception is ArgumentException or IOException or UnauthorizedAccessException)
+        {
+            await ShowInformationAsync("Unable to save settings profile", exception.Message);
+        }
+    }
+
+    private async void HandleLoadNamedSettingsProfileClick(object? sender, RoutedEventArgs e)
+    {
+        if (sender is not MenuItem { Tag: string profileName })
+            return;
+
+        SettingsImportPreview preview;
+        try
+        {
+            preview = viewModel.PreviewNamedSettingsProfile(profileName);
+        }
+        catch (Exception exception) when (exception is ArgumentException or IOException or InvalidDataException or UnauthorizedAccessException)
+        {
+            await ShowInformationAsync("Unable to preview settings profile", exception.Message);
+            RefreshNamedSettingsProfileMenus();
+            return;
+        }
+
+        if (!await ConfirmAsync(
+                "Load settings profile",
+                $"{preview.SummaryText}\n\nApply operator settings from '{profileName}'? The active codeplug and current channel selection will remain unchanged.",
+                "Apply"))
+        {
+            return;
+        }
+
+        string? activeCodeplugPath = viewModel.CurrentCodeplugPath;
+        try
+        {
+            viewModel.ImportNamedSettingsProfile(profileName, SettingsImportScope.OperatorState);
+            await ReplaceViewModelAsync(MainWindowViewModel.Load(activeCodeplugPath));
+            await ShowInformationAsync("Settings profile loaded", $"Applied operator settings from '{profileName}'.");
+        }
+        catch (Exception exception) when (exception is ArgumentException or IOException or InvalidDataException or UnauthorizedAccessException)
+        {
+            await ShowInformationAsync("Unable to load settings profile", exception.Message);
+            RefreshNamedSettingsProfileMenus();
+        }
+    }
+
+    private async void HandleDeleteNamedSettingsProfileClick(object? sender, RoutedEventArgs e)
+    {
+        if (sender is not MenuItem { Tag: string profileName } ||
+            !await ConfirmAsync(
+                "Delete settings profile",
+                $"Delete the saved operator settings profile '{profileName}'?",
+                "Delete"))
+        {
+            return;
+        }
+
+        try
+        {
+            viewModel.DeleteNamedSettingsProfile(profileName);
+            RefreshNamedSettingsProfileMenus();
+        }
+        catch (Exception exception) when (exception is ArgumentException or IOException or UnauthorizedAccessException)
+        {
+            await ShowInformationAsync("Unable to delete settings profile", exception.Message);
+        }
+    }
+
     private async void HandleExportSettingsClick(object? sender, RoutedEventArgs e)
     {
         if (!StorageProvider.CanSave)
@@ -324,15 +446,16 @@ public sealed partial class MainWindow : Window
         viewModel = replacement;
         DataContext = replacement;
         RefreshRecentCodeplugMenu();
+        RefreshNamedSettingsProfileMenus();
         await previous.DisposeAsync();
         await replacement.StartKeyboardPttAsync();
     }
 
-    private async Task<bool> ConfirmAsync(string title, string message)
+    private async Task<bool> ConfirmAsync(string title, string message, string confirmLabel = "Reset")
     {
         bool confirmed = false;
         var cancelButton = new Button { Content = "Cancel", MinWidth = 88 };
-        var confirmButton = new Button { Content = "Reset", MinWidth = 88 };
+        var confirmButton = new Button { Content = confirmLabel, MinWidth = 88 };
         var dialog = new Window
         {
             Title = title,
@@ -361,6 +484,51 @@ public sealed partial class MainWindow : Window
         confirmButton.Click += (_, _) => { confirmed = true; dialog.Close(); };
         await dialog.ShowDialog(this);
         return confirmed;
+    }
+
+    private async Task<string?> PromptForTextAsync(string title, string message, string confirmLabel)
+    {
+        bool confirmed = false;
+        var input = new TextBox { Watermark = "Profile name", MinWidth = 320 };
+        var cancelButton = new Button { Content = "Cancel", MinWidth = 88 };
+        var confirmButton = new Button { Content = confirmLabel, MinWidth = 88 };
+        var dialog = new Window
+        {
+            Title = title,
+            Width = 500,
+            MinHeight = 240,
+            CanResize = false,
+            WindowStartupLocation = WindowStartupLocation.CenterOwner,
+            Content = new StackPanel
+            {
+                Margin = new Thickness(20),
+                Spacing = 14,
+                Children =
+                {
+                    new TextBlock { Text = message, TextWrapping = TextWrapping.Wrap },
+                    input,
+                    new StackPanel
+                    {
+                        Orientation = Avalonia.Layout.Orientation.Horizontal,
+                        HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Right,
+                        Spacing = 8,
+                        Children = { cancelButton, confirmButton }
+                    }
+                }
+            }
+        };
+        cancelButton.Click += (_, _) => dialog.Close();
+        confirmButton.Click += (_, _) =>
+        {
+            if (!string.IsNullOrWhiteSpace(input.Text))
+            {
+                confirmed = true;
+                dialog.Close();
+            }
+        };
+        dialog.Opened += (_, _) => input.Focus();
+        await dialog.ShowDialog(this);
+        return confirmed ? input.Text?.Trim() : null;
     }
 
     private static FilePickerFileType SettingsFileType { get; } = new("DVM Console Settings")
@@ -1010,6 +1178,8 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
 
     public ReadOnlyObservableCollection<string> RecentCodeplugPaths { get; }
 
+    public IReadOnlyList<string> NamedSettingsProfiles => userSettingsStore.ListNamedProfiles();
+
     public bool HasCodeplugDiagnostics => !IsCodeplugLoaded || codeplugDiagnosticsText.Contains('\n');
 
     public string CodeplugDiagnosticsText => codeplugDiagnosticsText;
@@ -1181,8 +1351,36 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     public void ExportSettings(string path)
         => userSettingsStore.Export(userSettings, path);
 
-    public void ImportSettings(string path)
-        => userSettingsStore.Import(path);
+    public SettingsImportPreview PreviewSettingsImport(string path)
+        => userSettingsStore.PreviewImport(path);
+
+    public SettingsImportPreview PreviewNamedSettingsProfile(string profileName)
+        => userSettingsStore.PreviewNamedProfile(profileName);
+
+    public void ImportSettings(string path, SettingsImportScope scope = SettingsImportScope.All)
+        => userSettingsStore.Import(path, scope);
+
+    public void SaveNamedSettingsProfile(string profileName)
+    {
+        userSettingsStore.SaveNamedProfile(profileName, userSettings);
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(NamedSettingsProfiles)));
+        StatusText = $"Settings profile '{profileName.Trim()}' saved.";
+    }
+
+    public void ImportNamedSettingsProfile(
+        string profileName,
+        SettingsImportScope scope = SettingsImportScope.OperatorState)
+    {
+        userSettingsStore.ImportNamedProfile(profileName, scope);
+        StatusText = $"Settings profile '{profileName.Trim()}' imported.";
+    }
+
+    public void DeleteNamedSettingsProfile(string profileName)
+    {
+        userSettingsStore.DeleteNamedProfile(profileName);
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(NamedSettingsProfiles)));
+        StatusText = $"Settings profile '{profileName.Trim()}' deleted.";
+    }
 
     public void ResetSettings()
         => userSettingsStore.Reset();
