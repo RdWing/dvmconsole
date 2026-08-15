@@ -26,6 +26,8 @@
         <Menu Background="Transparent" Foreground="#E8EDF3">
           <MenuItem Header="File">
             <MenuItem Header="Open Codeplug…" Click="HandleOpenCodeplugClick" />
+            <MenuItem Header="Import Settings…" Click="HandleImportSettingsClick" />
+            <MenuItem Header="Export Settings…" Click="HandleExportSettingsClick" />
             <Separator />
             <MenuItem Header="Connect" Command="{Binding ConnectCommand}" />
             <MenuItem Header="Disconnect" Command="{Binding DisconnectCommand}" />
@@ -50,13 +52,49 @@
               <MenuItem Header="F11" Tag="F11" Click="HandleGlobalPttKeyClick" />
               <MenuItem Header="F12" Tag="F12" Click="HandleGlobalPttKeyClick" />
             </MenuItem>
-            <MenuItem Header="Toggle global PTT" IsChecked="{Binding TogglePttMode, Mode=TwoWay}" ToggleType="CheckBox" />
+          </MenuItem>
+          <MenuItem Header="Commands">
+            <MenuItem Header="Tones">
+              <MenuItem Header="QCII / alert tones" Tag="Tones" Click="HandleOpenOperatorToolsClick" />
+              <MenuItem Header="DTMF" Tag="Tones" Click="HandleOpenOperatorToolsClick" />
+            </MenuItem>
+          </MenuItem>
+          <MenuItem Header="Settings">
+            <MenuItem Header="Toggle push-to-talk mode" IsChecked="{Binding TogglePttMode, Mode=TwoWay}" ToggleType="CheckBox" />
+            <MenuItem Header="Talk permit tone" IsChecked="{Binding TalkPermitTone, Mode=TwoWay}" ToggleType="CheckBox" />
+            <MenuItem Header="Mute RX while transmitting" IsChecked="{Binding MuteRxAudioWhileTransmitting, Mode=TwoWay}" ToggleType="CheckBox" />
+            <MenuItem Header="Retain patch state on startup" IsChecked="{Binding RetainPatchStateOnStartup, Mode=TwoWay}" ToggleType="CheckBox" />
+            <MenuItem Header="Restore selected channels on startup" IsChecked="{Binding RestoreSelectedChannelsOnStartup, Mode=TwoWay}" ToggleType="CheckBox" />
+            <Separator />
+            <MenuItem Header="Clock settings…" Tag="General" Click="HandleOpenOperatorToolsClick" />
+            <MenuItem Header="Audio settings…" Tag="Audio" Click="HandleOpenOperatorToolsClick" />
+            <MenuItem Header="Reset settings…" Click="HandleResetSettingsClick" />
+            <MenuItem Header="All console settings…" Tag="General" Click="HandleOpenOperatorToolsClick" />
           </MenuItem>
           <MenuItem Header="Audio">
-            <MenuItem Header="Mute RX while transmitting" IsChecked="{Binding MuteRxAudioWhileTransmitting, Mode=TwoWay}" ToggleType="CheckBox" />
-            <MenuItem Header="Talk permit tone" IsChecked="{Binding TalkPermitTone, Mode=TwoWay}" ToggleType="CheckBox" />
+            <MenuItem Header="Audio settings…" Tag="Audio" Click="HandleOpenOperatorToolsClick" />
+            <MenuItem Header="Test talk permit tone" Click="HandleTestTalkPermitToneClick" />
+            <MenuItem Header="Web streams…" Tag="Streams" Click="HandleOpenOperatorToolsClick" />
           </MenuItem>
-          <MenuItem Header="View"><MenuItem Header="Dark mode" IsChecked="{Binding DarkMode, Mode=TwoWay}" ToggleType="CheckBox" /><MenuItem Header="Keep window on top" IsChecked="{Binding KeepWindowOnTop, Mode=TwoWay}" ToggleType="CheckBox" /></MenuItem>
+          <MenuItem Header="View">
+            <MenuItem Header="Dark mode" IsChecked="{Binding DarkMode, Mode=TwoWay}" ToggleType="CheckBox" />
+            <MenuItem Header="Call History…" Tag="History" Click="HandleOpenOperatorToolsClick" />
+            <MenuItem Header="Groups…" Tag="Groups" Click="HandleOpenOperatorToolsClick" />
+            <Separator />
+            <MenuItem Header="Keep window on top" IsChecked="{Binding KeepWindowOnTop, Mode=TwoWay}" ToggleType="CheckBox" />
+          </MenuItem>
+          <MenuItem Header="Tools">
+            <MenuItem Header="Talkgroup Audio Recorder">
+              <MenuItem Header="Viewer…" Tag="Recorder" Click="HandleOpenOperatorToolsClick" />
+              <MenuItem Header="Configuration…" Tag="Recorder" Click="HandleOpenOperatorToolsClick" />
+            </MenuItem>
+            <MenuItem Header="FNE Connection Manager…" Tag="Connections" Click="HandleOpenOperatorToolsClick" />
+            <MenuItem Header="Encryption Key Status…" Tag="Connections" Click="HandleOpenOperatorToolsClick" />
+          </MenuItem>
+          <MenuItem Header="Help">
+            <MenuItem Header="Documentation" Click="HandleDocumentationClick" />
+            <MenuItem Header="About" Click="HandleAboutClick" />
+          </MenuItem>
         </Menu>
         <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" Spacing="14" VerticalAlignment="Center"><TextBlock Classes="muted" FontSize="11" Text="{Binding ClockText}" /><TextBlock Classes="muted" FontSize="11" Text="{Binding SystemStatusText}" /></StackPanel>
       </DockPanel>
@@ -134,7 +172,7 @@
               <ItemsControl.ItemTemplate>
                 <DataTemplate x:DataType="local:CallHistoryEntry">
                   <Border Background="#1C2530" BorderBrush="#293847" BorderThickness="1" CornerRadius="6" Padding="7" Margin="0,0,0,6">
-                    <Grid RowDefinitions="Auto,Auto" ColumnDefinitions="*,Auto"><TextBlock FontSize="12" FontWeight="SemiBold" Text="{Binding ChannelName}" /><TextBlock Grid.Column="1" Classes="eyebrow" Text="{Binding TimestampText}" /><TextBlock Grid.Row="1" Classes="eyebrow" Text="{Binding RouteText}" TextTrimming="CharacterEllipsis" /><TextBlock Grid.Row="1" Grid.Column="1" Classes="eyebrow" Text="{Binding ProtocolText}" /></Grid>
+                    <Grid RowDefinitions="Auto,Auto,Auto" ColumnDefinitions="*,Auto"><TextBlock FontSize="12" FontWeight="SemiBold" Text="{Binding ChannelName}" /><TextBlock Grid.Column="1" Classes="eyebrow" Text="{Binding TimestampText}" /><TextBlock Grid.Row="1" Classes="eyebrow" Text="{Binding RouteText}" TextTrimming="CharacterEllipsis" /><TextBlock Grid.Row="1" Grid.Column="1" Classes="eyebrow" Text="{Binding ProtocolText}" /><TextBlock Grid.Row="2" Classes="eyebrow" Text="{Binding EncryptionText}" /><TextBlock Grid.Row="2" Grid.Column="1" Classes="eyebrow" Text="{Binding DurationText}" /></Grid>
                   </Border>
                 </DataTemplate>
               </ItemsControl.ItemTemplate>

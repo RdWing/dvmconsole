@@ -21,6 +21,26 @@ public sealed class CallHistoryStoreTests
         Assert.Equal([third, second], store.Entries);
     }
 
+    [Fact]
+    public void CompletesMatchingActiveStreamWithDuration()
+    {
+        var store = new CallHistoryStore();
+        CallHistoryEntry entry = CreateEntry(42);
+        store.Add(entry);
+
+        bool completed = store.Complete(
+            "System 1",
+            FneTrafficProtocol.Dmr,
+            42,
+            DateTimeOffset.UnixEpoch.AddSeconds(2.25));
+
+        Assert.True(completed);
+        Assert.False(entry.IsActive);
+        Assert.Equal(TimeSpan.FromSeconds(2.25), entry.Duration);
+        Assert.Equal("2.3s", entry.DurationText);
+        Assert.False(store.Complete("Other", FneTrafficProtocol.Dmr, 42, DateTimeOffset.UtcNow));
+    }
+
     private static CallHistoryEntry CreateEntry(uint streamId)
     {
         return new CallHistoryEntry(

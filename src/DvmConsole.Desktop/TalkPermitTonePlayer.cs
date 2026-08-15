@@ -9,12 +9,13 @@ namespace DvmConsole.Desktop;
 /// </summary>
 public sealed class TalkPermitTonePlayer : IAsyncDisposable
 {
-    private static readonly TimeSpan ToneDuration = TimeSpan.FromMilliseconds(80);
-    private static readonly TimeSpan PlaybackDrainTime = TimeSpan.FromMilliseconds(30);
+    private static readonly TimeSpan ToneDuration = TimeSpan.FromMilliseconds(120);
     private readonly Func<IAudioBackend> createAudioBackend;
     private readonly Func<string?> getOutputDeviceId;
     private readonly SemaphoreSlim gate = new(1, 1);
     private IAudioBackend? audioBackend;
+    private IAudioPlayback? playback;
+    private string? playbackDeviceId;
     private bool disposed;
 
     public TalkPermitTonePlayer(
@@ -25,7 +26,7 @@ public sealed class TalkPermitTonePlayer : IAsyncDisposable
         this.getOutputDeviceId = getOutputDeviceId ?? throw new ArgumentNullException(nameof(getOutputDeviceId));
     }
 
-    public async Task PlayAsync(CancellationToken cancellationToken = default)
+    public async Task<AudioDeviceInfo> PlayAsync(CancellationToken cancellationToken = default)
     {
         ObjectDisposedException.ThrowIf(disposed, this);
         await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
@@ -34,19 +35,24 @@ public sealed class TalkPermitTonePlayer : IAsyncDisposable
             ObjectDisposedException.ThrowIf(disposed, this);
             IAudioBackend backend = audioBackend ??= createAudioBackend();
             AudioDeviceInfo output = ResolveOutputDevice(backend, getOutputDeviceId());
-            await using IAudioPlayback playback = backend.OpenPlayback(
-                output,
-                PcmAudioFormat.Voice8KhzMono16Bit);
+            if (playback is null || !string.Equals(playbackDeviceId, output.Id, StringComparison.OrdinalIgnoreCase))
+            {
+                if (playback is not null)
+                    await playback.DisposeAsync().ConfigureAwait(false);
+                playback = backend.OpenPlayback(output, PcmAudioFormat.Voice8KhzMono16Bit);
+                playbackDeviceId = output.Id;
+            }
+
             short[] samples = new PcmToneGenerator().GenerateTone(
                 frequency: 1200,
                 duration: ToneDuration,
-                amplitude: 0.25);
+                amplitude: 0.40);
+            ApplyFade(samples, PcmAudioFormat.Voice8KhzMono16Bit.SampleRate / 100);
             await playback.WriteAsync(samples, cancellationToken).ConfigureAwait(false);
-            // Playback writes are buffered on both supported backends. Flush is
-            // intentionally not used here because it means "discard queued
-            // audio" for the Windows backend. Keep the stream alive long
-            // enough for the short tone to reach the device before disposal.
-            await Task.Delay(ToneDuration + PlaybackDrainTime, cancellationToken).ConfigureAwait(false);
+            // Keep the playback stream alive between presses. Both platform
+            // backends queue writes asynchronously; disposing a newly opened
+            // stream immediately can truncate the complete indication.
+            return output;
         }
         finally
         {
@@ -62,6 +68,10 @@ public sealed class TalkPermitTonePlayer : IAsyncDisposable
             if (disposed)
                 return;
             disposed = true;
+            if (playback is not null)
+                await playback.DisposeAsync().ConfigureAwait(false);
+            playback = null;
+            playbackDeviceId = null;
             audioBackend?.Dispose();
             audioBackend = null;
         }
@@ -69,6 +79,18 @@ public sealed class TalkPermitTonePlayer : IAsyncDisposable
         {
             gate.Release();
             gate.Dispose();
+        }
+    }
+
+    private static void ApplyFade(short[] samples, int fadeSamples)
+    {
+        int boundedFade = Math.Min(Math.Max(0, fadeSamples), samples.Length / 2);
+        for (int index = 0; index < boundedFade; index++)
+        {
+            double scale = (double)index / boundedFade;
+            samples[index] = (short)Math.Round(samples[index] * scale);
+            int tail = samples.Length - index - 1;
+            samples[tail] = (short)Math.Round(samples[tail] * scale);
         }
     }
 

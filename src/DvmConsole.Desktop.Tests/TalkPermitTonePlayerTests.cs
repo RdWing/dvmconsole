@@ -12,14 +12,21 @@ public sealed class TalkPermitTonePlayerTests
         var backend = new FakeAudioBackend();
         await using (var player = new TalkPermitTonePlayer(() => backend, () => "alternate"))
         {
+            AudioDeviceInfo output = await player.PlayAsync();
             await player.PlayAsync();
+
+            Assert.Equal("alternate", output.Id);
+            Assert.Equal(1, backend.OpenPlaybackCount);
+            Assert.False(backend.Playback.IsDisposed);
         }
 
         Assert.Equal("alternate", backend.LastOutputDeviceId);
-        short[] samples = Assert.Single(backend.Playback.Frames);
-        Assert.Equal(640, samples.Length);
+        Assert.Equal(2, backend.Playback.Frames.Count);
+        short[] samples = backend.Playback.Frames[0];
+        Assert.Equal(960, samples.Length);
         Assert.Contains(samples, sample => sample != 0);
-        Assert.InRange(samples.Max(), 7_000, 9_000);
+        Assert.InRange(samples.Max(), 12_000, 14_000);
+        Assert.Equal(0, samples[0]);
         Assert.False(backend.Playback.WasFlushed);
         Assert.True(backend.Playback.IsDisposed);
         Assert.True(backend.IsDisposed);
@@ -29,6 +36,7 @@ public sealed class TalkPermitTonePlayerTests
     {
         public FakePlayback Playback { get; } = new();
         public string? LastOutputDeviceId { get; private set; }
+        public int OpenPlaybackCount { get; private set; }
         public bool IsDisposed { get; private set; }
         public string Name => "fake";
 
@@ -46,6 +54,7 @@ public sealed class TalkPermitTonePlayerTests
         public IAudioPlayback OpenPlayback(AudioDeviceInfo device, PcmAudioFormat format)
         {
             LastOutputDeviceId = device.Id;
+            OpenPlaybackCount++;
             return Playback;
         }
 

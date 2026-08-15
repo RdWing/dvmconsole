@@ -222,6 +222,53 @@ public sealed class UserSettingsStore
         }
     }
 
+    public void Export(UserSettings settings, string destinationPath)
+    {
+        ArgumentNullException.ThrowIfNull(settings);
+        ArgumentException.ThrowIfNullOrWhiteSpace(destinationPath);
+
+        string destination = System.IO.Path.GetFullPath(destinationPath);
+        if (destination.Equals(Path, StringComparison.OrdinalIgnoreCase))
+        {
+            Save(settings);
+            return;
+        }
+
+        Save(settings);
+        string? directory = System.IO.Path.GetDirectoryName(destination);
+        if (!string.IsNullOrWhiteSpace(directory))
+            Directory.CreateDirectory(directory);
+        File.Copy(Path, destination, overwrite: true);
+    }
+
+    public UserSettings Import(string sourcePath)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(sourcePath);
+        string source = System.IO.Path.GetFullPath(sourcePath);
+        if (!File.Exists(source))
+            throw new FileNotFoundException("Settings file not found.", source);
+
+        UserSettings imported;
+        try
+        {
+            imported = JsonSerializer.Deserialize<UserSettings>(File.ReadAllText(source), SerializerOptions)
+                ?? throw new InvalidDataException("The settings file did not contain a settings object.");
+        }
+        catch (JsonException exception)
+        {
+            throw new InvalidDataException("The settings file is not valid DVM Console JSON.", exception);
+        }
+
+        Save(imported);
+        return Load();
+    }
+
+    public void Reset()
+    {
+        if (File.Exists(Path))
+            File.Delete(Path);
+    }
+
     private static Dictionary<string, bool> NormalizeGroupStates(Dictionary<string, bool>? states)
     {
         var normalized = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);

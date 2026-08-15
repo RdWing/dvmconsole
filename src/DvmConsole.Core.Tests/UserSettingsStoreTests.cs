@@ -198,6 +198,68 @@ public sealed class UserSettingsStoreTests
     }
 
     [Fact]
+    public void ExportsImportsAndResetsPortableSettings()
+    {
+        string path = CreatePath();
+        string exportPath = Path.Combine(Path.GetDirectoryName(path)!, "exported.json");
+        string importedPath = Path.Combine(Path.GetDirectoryName(path)!, "imported.json");
+        try
+        {
+            var store = new UserSettingsStore(path);
+            store.Export(new UserSettings
+            {
+                LastCodeplugPath = "/tmp/original.yml",
+                TalkPermitTone = true,
+                GlobalPttKey = "F4"
+            }, exportPath);
+
+            Assert.True(File.Exists(exportPath));
+            Assert.True(store.Load().TalkPermitTone);
+
+            File.WriteAllText(importedPath, """
+                {
+                  "lastCodeplugPath": "/tmp/imported.yml",
+                  "talkPermitTone": false,
+                  "globalPttKey": "f9"
+                }
+                """);
+            UserSettings imported = store.Import(importedPath);
+
+            Assert.Equal("/tmp/imported.yml", imported.LastCodeplugPath);
+            Assert.False(imported.TalkPermitTone);
+            Assert.Equal("F9", imported.GlobalPttKey);
+
+            store.Reset();
+            Assert.False(File.Exists(path));
+            Assert.Null(store.Load().LastCodeplugPath);
+        }
+        finally
+        {
+            Cleanup(path);
+        }
+    }
+
+    [Fact]
+    public void ImportRejectsMalformedSettingsWithoutReplacingCurrentProfile()
+    {
+        string path = CreatePath();
+        string importPath = Path.Combine(Path.GetDirectoryName(path)!, "malformed.json");
+        try
+        {
+            var store = new UserSettingsStore(path);
+            store.Save(new UserSettings { GlobalPttKey = "F3" });
+            File.WriteAllText(importPath, "{ not json");
+
+            Assert.Throws<InvalidDataException>(() => store.Import(importPath));
+            Assert.Equal("F3", store.Load().GlobalPttKey);
+        }
+        finally
+        {
+            Cleanup(path);
+        }
+    }
+
+    [Fact]
     public void NormalizesMalformedAudioPresetsOnLoad()
     {
         string path = CreatePath();

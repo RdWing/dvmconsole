@@ -169,9 +169,23 @@ public sealed class SystemViewModelTests
                 3,
                 78,
                 new byte[DvmConsole.Media.DmrVoicePacketCodec.PacketBytes]));
+            viewModel.ProcessTraffic(system, new FneTrafficFrame(
+                FneTrafficProtocol.Dmr,
+                1,
+                42,
+                101,
+                0,
+                "GROUP",
+                "TERMINATOR",
+                "TERMINATOR_WITH_LC",
+                4,
+                78,
+                new byte[DvmConsole.Media.DmrVoicePacketCodec.PacketBytes]));
 
             Assert.Equal(2, viewModel.CallHistory.Count);
             Assert.Equal((uint)78, viewModel.CallHistory[0].StreamId);
+            Assert.False(viewModel.CallHistory[0].IsActive);
+            Assert.NotNull(viewModel.CallHistory[0].Duration);
             Assert.Equal((uint)77, viewModel.CallHistory[1].StreamId);
             Assert.Equal("Alpha Dispatch", viewModel.CallHistory[1].ChannelName);
         }

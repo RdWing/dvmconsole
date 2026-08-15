@@ -154,12 +154,140 @@ public sealed partial class MainWindow : Window
             return;
         }
 
+        await ReplaceViewModelAsync(replacement);
+    }
+
+    private async void HandleImportSettingsClick(object? sender, RoutedEventArgs e)
+    {
+        if (!StorageProvider.CanOpen)
+        {
+            await ShowInformationAsync("Import settings", "This platform did not provide an available file picker.");
+            return;
+        }
+
+        IReadOnlyList<IStorageFile> files = await StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
+        {
+            Title = "Import DVM Console Settings",
+            AllowMultiple = false,
+            FileTypeFilter = [SettingsFileType]
+        });
+        if (files.Count == 0)
+            return;
+
+        string? path = files[0].TryGetLocalPath();
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            await ShowInformationAsync("Import settings", "The selected settings file does not have a local filesystem path.");
+            return;
+        }
+
+        try
+        {
+            string? activeCodeplugPath = viewModel.CurrentCodeplugPath;
+            viewModel.ImportSettings(path);
+            await ReplaceViewModelAsync(MainWindowViewModel.Load(activeCodeplugPath));
+            await ShowInformationAsync("Settings imported", "The imported profile has been applied to the current console.");
+        }
+        catch (Exception exception) when (exception is IOException or InvalidDataException or UnauthorizedAccessException)
+        {
+            await ShowInformationAsync("Unable to import settings", exception.Message);
+        }
+    }
+
+    private async void HandleExportSettingsClick(object? sender, RoutedEventArgs e)
+    {
+        if (!StorageProvider.CanSave)
+        {
+            await ShowInformationAsync("Export settings", "This platform did not provide an available save picker.");
+            return;
+        }
+
+        IStorageFile? file = await StorageProvider.SaveFilePickerAsync(new FilePickerSaveOptions
+        {
+            Title = "Export DVM Console Settings",
+            SuggestedFileName = "dvmconsole-settings.json",
+            DefaultExtension = "json",
+            FileTypeChoices = [SettingsFileType]
+        });
+        string? path = file?.TryGetLocalPath();
+        if (string.IsNullOrWhiteSpace(path))
+            return;
+
+        try
+        {
+            viewModel.ExportSettings(path);
+            await ShowInformationAsync("Settings exported", $"Settings were exported to:\n{path}");
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            await ShowInformationAsync("Unable to export settings", exception.Message);
+        }
+    }
+
+    private async void HandleResetSettingsClick(object? sender, RoutedEventArgs e)
+    {
+        if (!await ConfirmAsync(
+                "Reset settings",
+                "Reset all operator settings, presets, routes, selections, and layout preferences? The active codeplug itself will not be changed."))
+        {
+            return;
+        }
+
+        string? activeCodeplugPath = viewModel.CurrentCodeplugPath;
+        viewModel.ResetSettings();
+        await ReplaceViewModelAsync(MainWindowViewModel.Load(activeCodeplugPath));
+    }
+
+    private async Task ReplaceViewModelAsync(MainWindowViewModel replacement)
+    {
         MainWindowViewModel previous = viewModel;
         viewModel = replacement;
         DataContext = replacement;
         await previous.DisposeAsync();
         await replacement.StartKeyboardPttAsync();
     }
+
+    private async Task<bool> ConfirmAsync(string title, string message)
+    {
+        bool confirmed = false;
+        var cancelButton = new Button { Content = "Cancel", MinWidth = 88 };
+        var confirmButton = new Button { Content = "Reset", MinWidth = 88 };
+        var dialog = new Window
+        {
+            Title = title,
+            Width = 500,
+            MinHeight = 220,
+            CanResize = false,
+            WindowStartupLocation = WindowStartupLocation.CenterOwner,
+            Content = new StackPanel
+            {
+                Margin = new Thickness(20),
+                Spacing = 18,
+                Children =
+                {
+                    new TextBlock { Text = message, TextWrapping = TextWrapping.Wrap },
+                    new StackPanel
+                    {
+                        Orientation = Avalonia.Layout.Orientation.Horizontal,
+                        HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Right,
+                        Spacing = 8,
+                        Children = { cancelButton, confirmButton }
+                    }
+                }
+            }
+        };
+        cancelButton.Click += (_, _) => dialog.Close();
+        confirmButton.Click += (_, _) => { confirmed = true; dialog.Close(); };
+        await dialog.ShowDialog(this);
+        return confirmed;
+    }
+
+    private static FilePickerFileType SettingsFileType { get; } = new("DVM Console Settings")
+    {
+        Patterns = ["*.json"],
+        MimeTypes = ["application/json", "text/json"],
+        AppleUniformTypeIdentifiers = ["public.json"]
+    };
 
     private async Task ShowCodeplugErrorAsync(string message)
     {
@@ -197,6 +325,72 @@ public sealed partial class MainWindow : Window
 
     private async void HandleDisableAllReceiveClick(object? sender, RoutedEventArgs e)
         => await viewModel.DisableAllReceiveAsync();
+
+    private async void HandleTestTalkPermitToneClick(object? sender, RoutedEventArgs e)
+        => await viewModel.TestTalkPermitToneAsync();
+
+    private async void HandleOpenOperatorToolsClick(object? sender, RoutedEventArgs e)
+    {
+        if (sender is not MenuItem { Tag: string value } ||
+            !Enum.TryParse(value, ignoreCase: true, out OperatorToolSection section))
+        {
+            return;
+        }
+
+        var window = new OperatorToolsWindow(viewModel, section);
+        await window.ShowDialog(this);
+    }
+
+    private void HandleDocumentationClick(object? sender, RoutedEventArgs e)
+    {
+        try
+        {
+            Process.Start(new ProcessStartInfo
+            {
+                FileName = "https://github.com/RdWing/dvmconsole/tree/avalonia_v2/docs",
+                UseShellExecute = true
+            });
+        }
+        catch (Exception exception)
+        {
+            _ = ShowInformationAsync("Documentation unavailable", exception.Message);
+        }
+    }
+
+    private async void HandleAboutClick(object? sender, RoutedEventArgs e)
+        => await ShowInformationAsync(
+            "About DVM Console",
+            "DVM Console Avalonia v2\n\nCross-platform DVM FNE dispatch console for macOS and Windows.\n\nThis software must not be used for public-safety or life-safety critical applications.");
+
+    private async Task ShowInformationAsync(string title, string message)
+    {
+        var closeButton = new Button
+        {
+            Content = "OK",
+            HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Right,
+            MinWidth = 80
+        };
+        var dialog = new Window
+        {
+            Title = title,
+            Width = 500,
+            MinHeight = 210,
+            CanResize = false,
+            WindowStartupLocation = WindowStartupLocation.CenterOwner,
+            Content = new StackPanel
+            {
+                Margin = new Thickness(20),
+                Spacing = 18,
+                Children =
+                {
+                    new TextBlock { Text = message, TextWrapping = TextWrapping.Wrap },
+                    closeButton
+                }
+            }
+        };
+        closeButton.Click += (_, _) => dialog.Close();
+        await dialog.ShowDialog(this);
+    }
 
     private void HandleTransmitSelectionClick(object? sender, RoutedEventArgs e)
     {
@@ -642,6 +836,54 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     }
 
     public bool IsCodeplugLoaded => Systems.Count > 0;
+
+    public string? CurrentCodeplugPath => userSettings.LastCodeplugPath;
+
+    public void ExportSettings(string path)
+        => userSettingsStore.Export(userSettings, path);
+
+    public void ImportSettings(string path)
+        => userSettingsStore.Import(path);
+
+    public void ResetSettings()
+        => userSettingsStore.Reset();
+
+    public void ClearCallHistory()
+    {
+        callHistory.Clear();
+        StatusText = "Call history cleared.";
+    }
+
+    public void ExportCallHistory(string path)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+        string fullPath = Path.GetFullPath(path);
+        string? directory = Path.GetDirectoryName(fullPath);
+        if (!string.IsNullOrWhiteSpace(directory))
+            Directory.CreateDirectory(directory);
+
+        var lines = new List<string>
+        {
+            "Start,End,DurationSeconds,System,Channel,SourceId,Caller,Talkgroup,Protocol,Encryption,StreamId"
+        };
+        lines.AddRange(CallHistory.Select(entry => string.Join(",",
+            Csv(entry.Timestamp.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture)),
+            Csv(entry.EndTimestamp?.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture) ?? string.Empty),
+            Csv(entry.Duration?.TotalSeconds.ToString("0.###", CultureInfo.InvariantCulture) ?? string.Empty),
+            Csv(entry.SystemName),
+            Csv(entry.ChannelName),
+            entry.SourceId.ToString(CultureInfo.InvariantCulture),
+            Csv(entry.CallerText),
+            entry.DestinationId.ToString(CultureInfo.InvariantCulture),
+            Csv(entry.ProtocolText),
+            Csv(entry.EncryptionText),
+            entry.StreamId.ToString(CultureInfo.InvariantCulture))));
+        File.WriteAllLines(fullPath, lines);
+        StatusText = $"Exported {CallHistory.Count} call-history entr{(CallHistory.Count == 1 ? "y" : "ies")}.";
+    }
+
+    private static string Csv(string value)
+        => $"\"{value.Replace("\"", "\"\"")}\"";
 
     public string AudioStatusText
     {
@@ -1783,7 +2025,15 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
                 if (patchSourceDecode.IsActive(channel))
                     activePatchSourceChannels.Add(channel);
 
-                if (!sameActiveStream)
+                if (sameActiveStream && channel.State != ChannelRuntimeState.Receiving)
+                {
+                    callHistory.Complete(
+                        system.Name,
+                        traffic.Protocol,
+                        traffic.StreamId,
+                        DateTimeOffset.Now);
+                }
+                else if (!sameActiveStream)
                 {
                     callHistory.Add(new CallHistoryEntry(
                         DateTimeOffset.Now,
@@ -1792,7 +2042,9 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
                         traffic.SourceId,
                         traffic.DestinationId,
                         traffic.Protocol,
-                        traffic.StreamId));
+                        traffic.StreamId,
+                        channel.LastCallerText,
+                        channel.Definition.IsEncrypted));
                 }
 
                 if (audioCoordinator.IsActive(channel))
@@ -1903,7 +2155,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
                 ? $"Transmitting on {transmitCoordinator.ActiveChannel!.Name}."
                 : $"Transmitting on {transmitCoordinator.ActiveChannels.Count} selected channels.";
             if (TalkPermitTone)
-                await PlayTalkPermitToneAsync().ConfigureAwait(false);
+                await PlayTalkPermitToneAsync(reportSuccess: false).ConfigureAwait(false);
         }
         catch (Exception exception)
         {
@@ -1932,11 +2184,16 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         }
     }
 
-    private async Task PlayTalkPermitToneAsync()
+    public async Task TestTalkPermitToneAsync()
+        => await PlayTalkPermitToneAsync(reportSuccess: true).ConfigureAwait(false);
+
+    private async Task PlayTalkPermitToneAsync(bool reportSuccess)
     {
         try
         {
-            await talkPermitTonePlayer.PlayAsync().ConfigureAwait(false);
+            AudioDeviceInfo output = await talkPermitTonePlayer.PlayAsync().ConfigureAwait(false);
+            if (reportSuccess)
+                AudioStatusText = $"Talk permit tone sent to {output.Name}.";
         }
         catch (Exception exception)
         {
@@ -2617,8 +2874,23 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         bool recordingStateChanged = false;
         foreach (ChannelViewModel channel in Systems.SelectMany(system => system.Channels))
         {
+            uint? activeStreamId = channel.StreamId;
             if (!channel.TryExpireReceiveState(now, TimeSpan.FromSeconds(2)))
                 continue;
+            if (activeStreamId is uint streamId)
+            {
+                callHistory.Complete(
+                    channel.Definition.SystemName,
+                    channel.Definition.Mode switch
+                    {
+                        "dmr" => FneTrafficProtocol.Dmr,
+                        "p25" => FneTrafficProtocol.P25,
+                        "nxdn" => FneTrafficProtocol.Nxdn,
+                        _ => FneTrafficProtocol.Analog
+                    },
+                    streamId,
+                    now);
+            }
             callRecordings.StopChannel(channel);
             recordingStateChanged = true;
         }
@@ -3063,6 +3335,13 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
         (p25KeyResolver?.CanResolve(
             runtime.Definition.EncryptionAlgorithm,
             runtime.Definition.EncryptionKeyId) ?? false);
+    public string EncryptionStatusText => !runtime.Definition.IsEncrypted
+        ? "Clear"
+        : p25KeyResolver?.CanResolve(
+            runtime.Definition.EncryptionAlgorithm,
+            runtime.Definition.EncryptionKeyId) == true
+            ? "Key available"
+            : "Key unavailable";
     public string EncryptionButtonText => transmitEncrypted ? "Secure" : "Clear";
     public bool CanListen => runtime.Definition.Mode switch
     {
