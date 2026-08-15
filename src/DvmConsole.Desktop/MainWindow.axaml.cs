@@ -1,6 +1,7 @@
 using Avalonia;
 using Avalonia.Input;
 using Avalonia.Interactivity;
+using Avalonia.Media;
 using Avalonia.Controls;
 using Avalonia.Styling;
 using Avalonia.Threading;
@@ -688,6 +689,14 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     public ICommand SaveTonePresetCommand { get; }
     public ICommand ApplyAudioInputSettingsCommand { get; }
     public ICommand ApplyRecordingRetentionCommand { get; }
+    public ICommand ConnectionCommand => SelectedSystem?.IsConnected == true ? DisconnectCommand : ConnectCommand;
+    public string ConnectionButtonText => SelectedSystem?.IsConnected == true ? "Disconnect" : "Connect";
+    public string ConnectionPillText => SelectedSystem?.IsConnected == true ? "CONNECTED" : "OFFLINE";
+    public string SelectedSystemName => SelectedSystem?.Name ?? "No system";
+    public string SystemStatusText => SelectedSystem?.ConnectionStatus ?? "No configured system";
+    public IBrush ConnectionBrush => SelectedSystem?.IsConnected == true
+        ? new SolidColorBrush(Color.Parse("#00C86A"))
+        : new SolidColorBrush(Color.Parse("#7B8794"));
 
     public bool RetainPatchStateOnStartup
     {
@@ -792,6 +801,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             userSettings.LastSelectedSystemName = value?.Name;
             PersistUserSettings();
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SelectedSystem)));
+            NotifyConnectionPresentationChanged();
             RaiseGeneratedAudioCanExecuteChanged();
         }
     }
@@ -883,7 +893,9 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
                     configuration.Systems
                         .FirstOrDefault(system => system.Name.Equals(channel.System, StringComparison.OrdinalIgnoreCase))
                         ?.RidAlias)).ToArray(),
-                zone.WebStreams.Select(stream => new WebStreamViewModel(stream)).ToArray())).ToArray();
+                zone.WebStreams.Select(stream => new WebStreamViewModel(stream)).ToArray(),
+                zone.TabColor,
+                zone.TabTextColor)).ToArray();
             string status = errors.Count == 0
                 ? $"Loaded {configuration.Systems.Count} system(s) and {configuration.Zones.Count} zone(s). Connections are idle until Connect is pressed."
                 : $"Configuration has {errors.Count} validation error(s).";
@@ -928,13 +940,29 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             channels.Add(channel);
         }
 
-        return configuration.Systems.Select(system => new SystemViewModel(
-            FneConnectionOptions.FromConfiguration(system),
-            system.Name,
-            $"{system.Address}:{system.Port}",
-            channelsBySystem.TryGetValue(system.Name, out List<ChannelViewModel>? channels)
-                ? channels
-                : [])).ToArray();
+        return configuration.Systems.Select(system =>
+        {
+            IReadOnlyList<ZoneViewModel> systemZones = zones
+                .Select(zone => new ZoneViewModel(
+                    zone.Name,
+                    zone.Channels.Where(channel => channel.Definition.SystemName.Equals(
+                        system.Name,
+                        StringComparison.OrdinalIgnoreCase)).ToArray(),
+                    zone.WebStreams,
+                    zone.TabColor,
+                    zone.TabTextColor))
+                .Where(zone => zone.Channels.Count > 0)
+                .ToArray();
+
+            return new SystemViewModel(
+                FneConnectionOptions.FromConfiguration(system),
+                system.Name,
+                $"{system.Address}:{system.Port}",
+                channelsBySystem.TryGetValue(system.Name, out List<ChannelViewModel>? channels)
+                    ? channels
+                    : [],
+                systemZones);
+        }).ToArray();
     }
 
     public async ValueTask DisposeAsync()
@@ -1029,6 +1057,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         {
             system.ApplyStatus(status);
             StatusText = $"{system.Name}: {status.State} — {status.Message}";
+            NotifyConnectionPresentationChanged();
             if (status.State == FneConnectionState.Connected)
                 RequestMissingP25Keys(system);
             RaiseGeneratedAudioCanExecuteChanged();
@@ -2125,6 +2154,16 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         RaiseGeneratedAudioCanExecuteChanged();
     }
 
+    private void NotifyConnectionPresentationChanged()
+    {
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ConnectionCommand)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ConnectionButtonText)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ConnectionPillText)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ConnectionBrush)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SelectedSystemName)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SystemStatusText)));
+    }
+
     private void SetField<T>(ref T field, T value, [CallerMemberName] string? propertyName = null)
     {
         if (EqualityComparer<T>.Default.Equals(field, value))
@@ -2316,13 +2355,15 @@ public sealed class SystemViewModel : INotifyPropertyChanged, IAsyncDisposable
         FneConnectionOptions options,
         string name,
         string endpoint,
-        IEnumerable<ChannelViewModel>? channels = null)
+        IEnumerable<ChannelViewModel>? channels = null,
+        IEnumerable<ZoneViewModel>? zones = null)
     {
         this.options = options ?? throw new ArgumentNullException(nameof(options));
         connection = new FneConnection(this.options);
         Name = name;
         Endpoint = endpoint;
         Channels = channels?.ToArray() ?? [];
+        Zones = zones?.ToArray() ?? [];
         connection.StatusChanged += HandleConnectionStatus;
         connection.TrafficReceived += HandleTrafficReceived;
         connection.KeyResponseReceived += HandleKeyResponse;
@@ -2335,6 +2376,7 @@ public sealed class SystemViewModel : INotifyPropertyChanged, IAsyncDisposable
     public string Name { get; }
     public string Endpoint { get; }
     public IReadOnlyList<ChannelViewModel> Channels { get; }
+    public IReadOnlyList<ZoneViewModel> Zones { get; }
     public uint? SourceId => options.SourceId;
     public bool IsConnected => connection.Status.State == FneConnectionState.Connected;
     public string ConnectionStatus
@@ -2408,10 +2450,30 @@ public sealed class SystemViewModel : INotifyPropertyChanged, IAsyncDisposable
 public sealed record ZoneViewModel(
     string Name,
     IReadOnlyList<ChannelViewModel> Channels,
-    IReadOnlyList<WebStreamViewModel> WebStreams);
+    IReadOnlyList<WebStreamViewModel> WebStreams,
+    string? TabColor = null,
+    string? TabTextColor = null)
+{
+    public IBrush TabBrush => CreateBrush(TabColor, "#151D26");
+    public IBrush TabTextBrush => CreateBrush(TabTextColor, "#DCE3EB");
+
+    private static IBrush CreateBrush(string? color, string fallback)
+    {
+        try
+        {
+            return new SolidColorBrush(Color.Parse(
+                string.IsNullOrWhiteSpace(color) ? fallback : color.Trim()));
+        }
+        catch (FormatException)
+        {
+            return new SolidColorBrush(Color.Parse(fallback));
+        }
+    }
+}
 
 public sealed class ChannelViewModel : INotifyPropertyChanged
 {
+    private readonly ChannelConfiguration configuration;
     private readonly ChannelRuntime runtime;
     private readonly IP25KeyResolver? p25KeyResolver;
     private readonly IReadOnlyList<RadioAlias> aliases;
@@ -2425,6 +2487,7 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
     private bool transmitBusy;
     private bool transmitEncrypted;
     private bool recordingEnabled;
+    private string lastCallerText = "--";
     private double volume = 1.0;
     private string ignoredSubscriberIdsText = string.Empty;
     private string outputDeviceIdText = string.Empty;
@@ -2435,6 +2498,7 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
         IEnumerable<RadioAlias>? aliases = null)
     {
         ArgumentNullException.ThrowIfNull(configuration);
+        this.configuration = configuration;
         this.p25KeyResolver = p25KeyResolver;
         this.aliases = aliases?.ToArray() ?? [];
         runtime = new ChannelRuntime(ChannelRuntimeDefinition.FromConfiguration(configuration));
@@ -2454,7 +2518,23 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
     public string Name => runtime.Definition.Name;
     public string SettingsKey => $"{runtime.Definition.SystemName}\u001F{runtime.Definition.Name}";
     public string ModeText => runtime.Definition.Mode.ToUpperInvariant();
+    public string TalkgroupText => $"TG {runtime.Definition.DestinationId}";
     public string DestinationText => $"{runtime.Definition.SystemName} / TGID {runtime.Definition.DestinationId}";
+    public string LastCallerText => lastCallerText;
+    public double ReceiveLevel => runtime.State == ChannelRuntimeState.Receiving ? 100 : 0;
+    public double CardWidth => (configuration.CardSize ?? "normal").Trim().ToLowerInvariant() switch
+    {
+        "small" => 220,
+        "large" => 450,
+        _ => 285
+    };
+    public IBrush CardBackgroundBrush => runtime.State switch
+    {
+        ChannelRuntimeState.Receiving => new SolidColorBrush(Color.Parse("#008A3A")),
+        ChannelRuntimeState.Transmitting => new SolidColorBrush(Color.Parse("#0B6B9C")),
+        _ => new SolidColorBrush(Color.Parse("#151D26"))
+    };
+    public IBrush CardBorderBrush => CreateBrush(configuration.ResourceColor, "#2A3A4B");
     public string StateText
     {
         get
@@ -2788,7 +2868,25 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
 
     private void HandleRuntimePropertyChanged(object? sender, PropertyChangedEventArgs args)
     {
+        if (runtime.State == ChannelRuntimeState.Receiving)
+            lastCallerText = StateText;
         PropertyChanged?.Invoke(this, args);
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(LastCallerText)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ReceiveLevel)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CardBackgroundBrush)));
+    }
+
+    private static IBrush CreateBrush(string? color, string fallback)
+    {
+        try
+        {
+            return new SolidColorBrush(Color.Parse(
+                string.IsNullOrWhiteSpace(color) ? fallback : color.Trim()));
+        }
+        catch (FormatException)
+        {
+            return new SolidColorBrush(Color.Parse(fallback));
+        }
     }
 }
 

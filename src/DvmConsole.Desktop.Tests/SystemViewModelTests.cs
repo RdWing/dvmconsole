@@ -29,6 +29,11 @@ public sealed class SystemViewModelTests
             Assert.Equal(["Beta Dispatch", "Beta Operations"], viewModel.Systems[1].Channels.Select(channel => channel.Name));
             Assert.Equal(["P25", "DMR"], viewModel.Systems[1].Channels.Select(channel => channel.ModeText));
             Assert.Equal([201u, 202u], viewModel.Systems[1].Channels.Select(channel => channel.Definition.DestinationId));
+            Assert.Equal(["Dispatch", "Operations"], viewModel.Systems[0].Zones.Select(zone => zone.Name));
+            Assert.Equal(["Alpha Dispatch", "Alpha Operations"], viewModel.Systems[0].Zones[0].Channels.Select(channel => channel.Name));
+            Assert.Equal(["Alpha Emergency"], viewModel.Systems[0].Zones[1].Channels.Select(channel => channel.Name));
+            Assert.Equal(["Dispatch", "Operations"], viewModel.Systems[1].Zones.Select(zone => zone.Name));
+            Assert.Equal("TG 101", viewModel.Systems[0].Zones[0].Channels[0].TalkgroupText);
             Assert.Single(viewModel.PatchGroups);
             Assert.Equal("Dispatch Patch", viewModel.PatchGroups[0].Name);
             Assert.Equal(5, viewModel.PatchGroups[0].Members.Count);

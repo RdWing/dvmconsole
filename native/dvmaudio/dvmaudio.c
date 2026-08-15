@@ -66,19 +66,6 @@ static AudioDeviceID default_device(int32_t input)
     return device;
 }
 
-static uint32_t nominal_sample_rate(AudioDeviceID device)
-{
-    AudioObjectPropertyAddress address = {
-        kAudioDevicePropertyNominalSampleRate,
-        kAudioObjectPropertyScopeGlobal,
-        kAudioObjectPropertyElementMain};
-    Float64 sample_rate = 0;
-    UInt32 size = sizeof(sample_rate);
-    if (AudioObjectGetPropertyData(device, &address, 0, NULL, &size, &sample_rate) != noErr || sample_rate <= 0)
-        return 0;
-    return (uint32_t)sample_rate;
-}
-
 int32_t dvm_audio_get_device_count(int32_t input, int32_t *count)
 {
     if (count == NULL)
@@ -306,13 +293,17 @@ DvmAudioStream *dvm_audio_stream_create(
         return NULL;
 
     AudioDeviceID audio_device = (AudioDeviceID)device_id;
-    uint32_t native_sample_rate = nominal_sample_rate(audio_device);
     DvmAudioStream *stream = (DvmAudioStream *)calloc(1, sizeof(DvmAudioStream));
     if (stream == NULL)
         return NULL;
 
     stream->input = input != 0;
-    stream->sample_rate = native_sample_rate > 0 ? native_sample_rate : (uint32_t)sample_rate;
+    // The Audio Unit is explicitly configured below for the requested PCM
+    // format.  Report that stream format to the managed host as well: using
+    // the hardware's nominal rate here made the host resample 8 kHz voice
+    // audio a second time before it was written to this already-converted
+    // Audio Unit.
+    stream->sample_rate = (uint32_t)sample_rate;
     stream->ring_capacity = stream->sample_rate * DVM_AUDIO_RING_SECONDS + 1;
     stream->ring = (int16_t *)calloc(stream->ring_capacity, sizeof(int16_t));
     if (stream->ring == NULL) {
