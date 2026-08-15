@@ -272,7 +272,44 @@ public sealed class ChannelReceiveAudioCoordinatorTests
         Assert.True(backend.AlternatePlayback.IsDisposed);
     }
 
-    private static FneTrafficFrame CreateTraffic(uint destinationId, byte slot)
+    [Fact]
+    public async Task RecreatesTheAudioRouteAfterAPlaybackDeviceFailure()
+    {
+        var firstBackend = new RecoveringAudioBackend(failWrites: true);
+        var replacementBackend = new RecoveringAudioBackend(failWrites: false);
+        int backendIndex = 0;
+        await using var coordinator = new ChannelReceiveAudioCoordinator(
+            () => backendIndex++ == 0 ? firstBackend : replacementBackend,
+            () => new FakeVocoderBackend());
+        var channel = new ChannelViewModel(new ChannelConfiguration
+        {
+            Name = "Dispatch",
+            System = "System 1",
+            Tgid = "100",
+            Mode = "dmr",
+            Slot = 1
+        });
+
+        await coordinator.StartAsync(channel);
+        await coordinator.ProcessAsync(channel, CreateTraffic(100, 0));
+        await WaitForAsync(() => firstBackend.Playback.WriteAttempts > 0);
+
+        await Assert.ThrowsAsync<IOException>(() => coordinator.ProcessAsync(
+            channel,
+            CreateTraffic(100, 0, packetSequence: 2)));
+
+        Assert.True(await coordinator.TryRecoverAsync(channel));
+        Assert.True(coordinator.IsActive(channel));
+        await coordinator.ProcessAsync(channel, CreateTraffic(100, 0, streamId: 100));
+        await WaitForAsync(() => replacementBackend.Playback.Frames.Count > 0);
+        Assert.Equal(160, replacementBackend.Playback.Frames[0].Length);
+    }
+
+    private static FneTrafficFrame CreateTraffic(
+        uint destinationId,
+        byte slot,
+        ushort packetSequence = 1,
+        uint streamId = 99)
     {
         return new FneTrafficFrame(
             FneTrafficProtocol.Dmr,
@@ -283,8 +320,8 @@ public sealed class ChannelReceiveAudioCoordinatorTests
             callType: "GROUP",
             frameType: "VOICE",
             subtype: "VOICE",
-            packetSequence: 1,
-            streamId: 99,
+            packetSequence,
+            streamId,
             payload: new byte[DmrVoicePacketCodec.PacketBytes]);
     }
 
@@ -355,6 +392,26 @@ public sealed class ChannelReceiveAudioCoordinatorTests
         public void Dispose() => IsDisposed = true;
     }
 
+    private sealed class RecoveringAudioBackend(bool failWrites) : IAudioBackend
+    {
+        public RecoveringPlayback Playback { get; } = new(failWrites);
+        public bool IsDisposed { get; private set; }
+        public string Name => "recovering-fake";
+
+        public IReadOnlyList<AudioDeviceInfo> EnumerateDevices(AudioDirection direction)
+            => direction == AudioDirection.Output
+                ? [new AudioDeviceInfo("output", "Recovering output", direction, true)]
+                : [new AudioDeviceInfo("input", "Recovering input", direction, true)];
+
+        public IAudioCapture OpenCapture(AudioDeviceInfo device, PcmAudioFormat format)
+            => throw new NotSupportedException();
+
+        public IAudioPlayback OpenPlayback(AudioDeviceInfo device, PcmAudioFormat format)
+            => Playback;
+
+        public void Dispose() => IsDisposed = true;
+    }
+
     private sealed class FakePlayback : IAudioPlayback
     {
         public List<short[]> Frames { get; } = [];
@@ -375,6 +432,28 @@ public sealed class ChannelReceiveAudioCoordinatorTests
             IsDisposed = true;
             return ValueTask.CompletedTask;
         }
+    }
+
+    private sealed class RecoveringPlayback(bool failWrites) : IAudioPlayback
+    {
+        public List<short[]> Frames { get; } = [];
+        public int WriteAttempts { get; private set; }
+        public PcmAudioFormat Format { get; } = PcmAudioFormat.Voice8KhzMono16Bit;
+
+        public ValueTask WriteAsync(ReadOnlyMemory<short> samples, CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            WriteAttempts++;
+            if (failWrites)
+                throw new IOException("The output audio device was removed.");
+            Frames.Add(samples.ToArray());
+            return ValueTask.CompletedTask;
+        }
+
+        public ValueTask FlushAsync(CancellationToken cancellationToken = default)
+            => ValueTask.CompletedTask;
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 
     private sealed class FakeVocoderBackend : IVocoderBackend

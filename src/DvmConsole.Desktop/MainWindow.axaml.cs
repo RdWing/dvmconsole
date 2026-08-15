@@ -2991,6 +2991,17 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         }
         catch (Exception exception)
         {
+            if (IsAudioDeviceFailure(exception) &&
+                await audioCoordinator.TryRecoverAsync(channel).ConfigureAwait(false))
+            {
+                Dispatcher.UIThread.Post(() =>
+                {
+                    channel.SetAudioEnabled(true);
+                    AudioStatusText = $"RX audio restarted for {channel.Name} after an output-device interruption.";
+                });
+                return;
+            }
+
             Dispatcher.UIThread.Post(() =>
             {
                 channel.SetAudioEnabled(false);
@@ -2998,6 +3009,26 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             });
             await Task.Run(() => audioCoordinator.StopAsync(channel)).ConfigureAwait(false);
         }
+    }
+
+    private static bool IsAudioDeviceFailure(Exception exception)
+    {
+        for (Exception? current = exception; current is not null; current = current.InnerException)
+        {
+            if (current is IOException or ObjectDisposedException)
+                return true;
+
+            if (current is InvalidOperationException &&
+                (current.Message.Contains("audio", StringComparison.OrdinalIgnoreCase) ||
+                 current.Message.Contains("playback", StringComparison.OrdinalIgnoreCase) ||
+                 current.Message.Contains("device", StringComparison.OrdinalIgnoreCase) ||
+                 current.Message.Contains("stream", StringComparison.OrdinalIgnoreCase)))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private async Task StartTransmitAsync(ChannelViewModel channel)

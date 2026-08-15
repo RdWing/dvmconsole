@@ -93,6 +93,45 @@ public sealed class ChannelReceiveAudioCoordinator : IAsyncDisposable
             : new ReceiveAudioDiagnostics(0, 0, 0, 0);
     }
 
+    /// <summary>
+    /// Recreates the selected channel's audio route and receive session after
+    /// a platform playback device disappears. The bounded operation returns
+    /// false when the replacement device/backend cannot be opened, leaving the
+    /// channel stopped for an explicit operator retry.
+    /// </summary>
+    public async Task<bool> TryRecoverAsync(
+        ChannelViewModel channel,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(channel);
+        if (!IsActive(channel))
+            return false;
+
+        try
+        {
+            await StopAsync(channel, cancellationToken).ConfigureAwait(false);
+            await StartAsync(channel, cancellationToken).ConfigureAwait(false);
+            return true;
+        }
+        catch
+        {
+            if (IsActive(channel))
+            {
+                try
+                {
+                    await StopAsync(channel, cancellationToken).ConfigureAwait(false);
+                }
+                catch
+                {
+                    // The failed recovery is already surfaced to the caller;
+                    // keep cleanup best-effort and require an explicit retry.
+                }
+            }
+
+            return false;
+        }
+    }
+
     public async Task StartAsync(ChannelViewModel channel, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(channel);
