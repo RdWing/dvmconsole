@@ -2,6 +2,8 @@ using System.Net;
 using System.Net.Sockets;
 using DvmConsole.Core.Configuration;
 using fnecore;
+using fnecore.P25;
+using fnecore.P25.KMM;
 
 namespace DvmConsole.FneClient;
 
@@ -28,6 +30,19 @@ public sealed record FneConnectionOptions(
     string? PresharedKey)
 {
     /// <summary>
+    /// Radio/source ID used for outbound voice traffic. It is optional so
+    /// connections without a transmit RID can still be used for receive-only
+    /// monitoring.
+    /// </summary>
+    public uint? SourceId { get; init; }
+
+    /// <summary>
+    /// Optional KMF key used only to decrypt peer-encrypted P25 KMM responses.
+    /// It is never inferred from the FNE transport preshared key.
+    /// </summary>
+    public string? KmfPresharedKey { get; init; }
+
+    /// <summary>
     /// Enables sanitized diagnostic callbacks used by the bounded live probe.
     /// Raw packet contents are never exposed by the rebuild client.
     /// </summary>
@@ -44,6 +59,12 @@ public sealed record FneConnectionOptions(
         if (configuration.Port is < 1 or > 65535)
             throw new ArgumentOutOfRangeException(nameof(configuration), "FNE system port must be between 1 and 65535.");
 
+        uint? sourceId = uint.TryParse(configuration.Rid, out uint parsedSourceId) &&
+            parsedSourceId > 0 &&
+            parsedSourceId <= 0xFFFFFF
+            ? parsedSourceId
+            : null;
+
         return new FneConnectionOptions(
             configuration.Name.Trim(),
             string.IsNullOrWhiteSpace(configuration.Identity) ? configuration.PeerId.ToString() : configuration.Identity.Trim(),
@@ -52,7 +73,11 @@ public sealed record FneConnectionOptions(
             configuration.PeerId,
             configuration.Password,
             configuration.Encrypted,
-            configuration.Encrypted ? configuration.PresharedKey : null);
+            configuration.Encrypted ? configuration.PresharedKey : null)
+        {
+            SourceId = sourceId,
+            KmfPresharedKey = configuration.KmfPresharedKey
+        };
     }
 }
 
@@ -61,6 +86,16 @@ public sealed record FneConnectionStatus(
     FneConnectionState State,
     string Message,
     DateTimeOffset ChangedAt);
+
+/// <summary>
+/// Sanitized P25 key response. Raw KMM frames and transport payloads are not
+/// exposed to the desktop or media layers.
+/// </summary>
+public sealed record FneKeyResponse(
+    string SystemName,
+    byte AlgorithmId,
+    ushort KeyId,
+    ReadOnlyMemory<byte> KeyMaterial);
 
 /// <summary>
 /// Owns one cross-platform FNE peer lifecycle. It does not start until StartAsync is called.
@@ -82,6 +117,7 @@ public sealed class FneConnection : IAsyncDisposable
 
     public event EventHandler<FneConnectionStatus>? StatusChanged;
     public event EventHandler<FneTrafficFrame>? TrafficReceived;
+    public event EventHandler<FneKeyResponse>? KeyResponseReceived;
 
     public FneConnectionStatus Status
     {
@@ -99,6 +135,18 @@ public sealed class FneConnection : IAsyncDisposable
             lock (sync)
                 return peer;
         }
+    }
+
+    public uint CreateStreamId()
+    {
+        uint streamId;
+        do
+        {
+            streamId = FneBase.CreateStreamID();
+        }
+        while (streamId == 0);
+
+        return streamId;
     }
 
     /// <summary>
@@ -130,6 +178,30 @@ public sealed class FneConnection : IAsyncDisposable
         };
 
         current.SendMasterTraffic(opcode, payload.ToArray(), packetSequence, streamId);
+    }
+
+    /// <summary>
+    /// Requests one P25 key from the connected FNE. The response is accepted
+    /// only through the sanitized key callback below.
+    /// </summary>
+    public void RequestP25Key(byte algorithmId, ushort keyId)
+    {
+        if (!IsSupportedP25Algorithm(algorithmId))
+            throw new ArgumentOutOfRangeException(nameof(algorithmId), "Unsupported P25 encryption algorithm.");
+        if (keyId == 0)
+            throw new ArgumentOutOfRangeException(nameof(keyId), "P25 key ID must be non-zero.");
+
+        FnePeer current;
+        lock (sync)
+        {
+            current = peer ?? throw new InvalidOperationException("The FNE connection is not started.");
+            if (status.State != FneConnectionState.Connected)
+                throw new InvalidOperationException($"The FNE connection is not ready for key management ({status.State}).");
+            if (options.SourceId is not uint sourceId)
+                throw new InvalidOperationException("A source ID is required for P25 key management.");
+
+            current.SendMasterKeyRequest(algorithmId, keyId, sourceId);
+        }
     }
 
     public async Task StartAsync(CancellationToken cancellationToken = default)
@@ -207,6 +279,7 @@ public sealed class FneConnection : IAsyncDisposable
         }
         monitorCancellation?.Dispose();
         current.PeerConnected -= HandlePeerConnected;
+        current.KeyResponse -= HandleKeyResponse;
         current.PeerDisconnected = null;
         DetachTrafficHandlers(current);
 
@@ -254,7 +327,10 @@ public sealed class FneConnection : IAsyncDisposable
             }
         };
         created.Logger = HandlePeerLog;
+        if (!string.IsNullOrWhiteSpace(options.KmfPresharedKey))
+            created.SetKMFPresharedKey(options.KmfPresharedKey);
         created.PeerConnected += HandlePeerConnected;
+        created.KeyResponse += HandleKeyResponse;
         created.PeerDisconnected = _ => Publish(FneConnectionState.WaitingForLogin, "FNE peer disconnected; waiting to reconnect");
         created.DMRDataReceived += HandleDmrDataReceived;
         created.P25DataReceived += HandleP25DataReceived;
@@ -266,6 +342,43 @@ public sealed class FneConnection : IAsyncDisposable
     private void HandlePeerConnected(object? sender, PeerConnectedEvent args)
     {
         Publish(FneConnectionState.Connected, "FNE peer connected");
+    }
+
+    private void HandleKeyResponse(object? sender, KeyResponseEvent args)
+    {
+        if (args.MessageId != (byte)KmmMessageType.MODIFY_KEY_CMD || args.KmmKey is null)
+            return;
+
+        bool peerEncrypted = args.KmmKey.DecryptInfoFmt == P25Defines.KMM_DECRYPT_PEER_ENC;
+        if (args.KmmKey.DecryptInfoFmt is not (P25Defines.KMM_DECRYPT_INSTRUCTION_NONE or P25Defines.KMM_DECRYPT_INSTRUCTION_MI) &&
+            (!peerEncrypted || string.IsNullOrWhiteSpace(options.KmfPresharedKey)))
+        {
+            // Peer-encrypted KMM requires an explicitly configured KMF secret;
+            // do not treat the FNE transport preshared key as that secret.
+            return;
+        }
+
+        byte algorithmId = args.KmmKey.KeysetItem?.AlgId ?? 0;
+        if (algorithmId == 0)
+            algorithmId = args.KmmKey.AlgId;
+        if (!IsSupportedP25Algorithm(algorithmId))
+            return;
+
+        foreach (KeyItem key in args.KmmKey.KeysetItem?.Keys ?? [])
+        {
+            if (key.KeyId == 0)
+                continue;
+
+            byte[] material = key.GetKey();
+            if (material.Length == 0)
+                continue;
+
+            KeyResponseReceived?.Invoke(this, new FneKeyResponse(
+                options.Name,
+                algorithmId,
+                key.KeyId,
+                material));
+        }
     }
 
     private void HandleDmrDataReceived(object? sender, DMRDataReceivedEvent args)
@@ -339,10 +452,18 @@ public sealed class FneConnection : IAsyncDisposable
 
     private void DetachTrafficHandlers(FnePeer current)
     {
+        current.KeyResponse -= HandleKeyResponse;
         current.DMRDataReceived -= HandleDmrDataReceived;
         current.P25DataReceived -= HandleP25DataReceived;
         current.NXDNDataReceived -= HandleNxdnDataReceived;
         current.AnalogDataReceived -= HandleAnalogDataReceived;
+    }
+
+    private static bool IsSupportedP25Algorithm(byte algorithmId)
+    {
+        return algorithmId is P25Defines.P25_ALGO_AES or
+            P25Defines.P25_ALGO_DES or
+            P25Defines.P25_ALGO_ARC4;
     }
 
     private void HandlePeerLog(LogLevel level, string message)

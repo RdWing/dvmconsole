@@ -6,6 +6,7 @@ PROJECT="$ROOT_DIR/src/DvmConsole.Desktop/DvmConsole.Desktop.csproj"
 RID="${1:-osx-arm64}"
 OUTPUT_DIR="${2:-$ROOT_DIR/artifacts/$RID}"
 CONFIGURATION="${CONFIGURATION:-Release}"
+VOCODER_LIBRARY="${DVMVOCODER_LIBRARY:-}"
 
 if [[ "$RID" != "osx-arm64" && "$RID" != "win-x64" ]]; then
     printf 'Supported runtime identifiers: osx-arm64, win-x64\n' >&2
@@ -29,6 +30,24 @@ dotnet publish "$PROJECT" \
 
 if [[ "$RID" == "osx-arm64" ]]; then
     cp "$AUDIO_BUILD_DIR/libdvmaudio.dylib" "$OUTPUT_DIR/libdvmaudio.dylib"
+fi
+
+if [[ -n "$VOCODER_LIBRARY" ]]; then
+    if [[ ! -f "$VOCODER_LIBRARY" ]]; then
+        printf 'DVMVOCODER_LIBRARY does not point to a file: %s\n' "$VOCODER_LIBRARY" >&2
+        exit 3
+    fi
+
+    case "$RID" in
+        osx-arm64)
+            VOCODER_OUTPUT="libvocoder.dylib"
+            ;;
+        win-x64)
+            VOCODER_OUTPUT="libvocoder.dll"
+            ;;
+    esac
+
+    cp "$VOCODER_LIBRARY" "$OUTPUT_DIR/$VOCODER_OUTPUT"
 fi
 
 printf 'Published %s to %s\n' "$RID" "$OUTPUT_DIR"

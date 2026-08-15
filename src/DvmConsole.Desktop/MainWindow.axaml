@@ -1,18 +1,25 @@
 <Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:local="using:DvmConsole.Desktop"
         x:Class="DvmConsole.Desktop.MainWindow"
+        x:DataType="local:MainWindowViewModel"
         Title="DVM Console"
         Width="1100"
         Height="700"
         MinWidth="800"
-        MinHeight="500">
+        MinHeight="500"
+        Topmost="{Binding KeepWindowOnTop, Mode=TwoWay}">
   <Grid ColumnDefinitions="260,*" RowDefinitions="Auto,*">
     <Border Grid.ColumnSpan="2" Background="#20252B" Padding="18,12">
       <DockPanel>
-        <TextBlock DockPanel.Dock="Right"
-                   Foreground="#AAB4BE"
-                   Text="Cross-platform rebuild"
-                   VerticalAlignment="Center" />
+        <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" Spacing="18">
+          <TextBlock Foreground="#D9E0E7"
+                     Text="{Binding ClockText}"
+                     VerticalAlignment="Center" />
+          <TextBlock Foreground="#AAB4BE"
+                     Text="Cross-platform rebuild"
+                     VerticalAlignment="Center" />
+        </StackPanel>
         <TextBlock Foreground="White"
                    FontSize="22"
                    FontWeight="SemiBold"
@@ -20,11 +27,200 @@
       </DockPanel>
     </Border>
 
-    <Border Grid.Row="1" Background="#F1F3F5" Padding="16">
+    <Border Grid.Row="1" Background="{DynamicResource ShellBackgroundBrush}" Padding="16">
       <ScrollViewer>
         <StackPanel Spacing="14">
           <TextBlock FontSize="16" FontWeight="SemiBold" Text="Status" />
           <TextBlock Text="{Binding StatusText}" TextWrapping="Wrap" />
+          <TextBlock Text="{Binding AudioStatusText}" TextWrapping="Wrap" Foreground="#5E35B1" />
+          <TextBlock Text="{Binding TransmitStatusText}" TextWrapping="Wrap" Foreground="#C62828" />
+          <TextBlock Text="{Binding SelectionStatusText}" TextWrapping="Wrap" Foreground="#455A64" />
+          <CheckBox Content="Dark mode"
+                    IsChecked="{Binding DarkMode, Mode=TwoWay}" />
+          <TextBlock FontSize="12" FontWeight="SemiBold" Text="Toolbar clock" />
+          <StackPanel Orientation="Horizontal" Spacing="8">
+            <CheckBox Content="24-hour time"
+                      IsChecked="{Binding ClockUse24HourTime, Mode=TwoWay}" />
+            <CheckBox Content="Show seconds"
+                      IsChecked="{Binding ClockShowSeconds, Mode=TwoWay}" />
+          </StackPanel>
+          <CheckBox Content="Keep window on top"
+                    IsChecked="{Binding KeepWindowOnTop, Mode=TwoWay}" />
+          <CheckBox Content="Toggle keyboard PTT"
+                    IsChecked="{Binding TogglePttMode, Mode=TwoWay}" />
+          <Separator />
+          <TextBlock FontSize="16" FontWeight="SemiBold" Text="Generated audio" />
+          <TextBlock FontSize="11" Text="Sends on the selected connected channel." TextWrapping="Wrap" />
+          <StackPanel Orientation="Horizontal" Spacing="6">
+            <TextBox Width="120"
+                     Watermark="123#"
+                     Text="{Binding DtmfDigits, Mode=TwoWay}" />
+            <Button Content="Send DTMF" Command="{Binding SendDtmfCommand}" />
+          </StackPanel>
+          <StackPanel Orientation="Horizontal" Spacing="6">
+            <TextBox Width="72"
+                     Watermark="1000"
+                     Text="{Binding ToneFrequencyText, Mode=TwoWay}" />
+            <TextBox Width="58"
+                     Watermark="1.0"
+                     Text="{Binding ToneDurationText, Mode=TwoWay}" />
+            <Button Content="Send tone" Command="{Binding SendToneCommand}" />
+          </StackPanel>
+          <TextBlock FontSize="12" FontWeight="SemiBold" Text="Microphone input" />
+          <TextBox Watermark="default input device ID"
+                   Text="{Binding AudioInputDeviceIdText, Mode=TwoWay}" />
+          <TextBox Watermark="default output device ID"
+                   Text="{Binding AudioOutputDeviceIdText, Mode=TwoWay}" />
+          <StackPanel Orientation="Horizontal" Spacing="6">
+            <TextBox Width="58"
+                     Watermark="gain"
+                     Text="{Binding AudioInputGainText, Mode=TwoWay}" />
+            <TextBox Width="58"
+                     Watermark="low dB"
+                     Text="{Binding AudioInputLowGainText, Mode=TwoWay}" />
+            <TextBox Width="58"
+                     Watermark="mid dB"
+                     Text="{Binding AudioInputMidGainText, Mode=TwoWay}" />
+            <TextBox Width="58"
+                     Watermark="high dB"
+                     Text="{Binding AudioInputHighGainText, Mode=TwoWay}" />
+          </StackPanel>
+          <StackPanel Orientation="Horizontal" Spacing="6">
+            <CheckBox Content="AGC" IsChecked="{Binding AudioInputAgcEnabled, Mode=TwoWay}" />
+            <CheckBox Content="Mute RX on PTT" IsChecked="{Binding MuteRxAudioWhileTransmitting, Mode=TwoWay}" />
+            <Button Content="Apply mic" Command="{Binding ApplyAudioInputSettingsCommand}" />
+          </StackPanel>
+          <CheckBox Content="Talk permit tone"
+                    IsChecked="{Binding TalkPermitTone, Mode=TwoWay}" />
+          <TextBlock FontSize="12" FontWeight="SemiBold" Text="Microphone presets" />
+          <StackPanel Orientation="Horizontal" Spacing="6">
+            <TextBox Width="120"
+                     Watermark="Preset name"
+                     Text="{Binding AudioInputPresetNameText, Mode=TwoWay}" />
+            <Button Content="Save" Click="HandleSaveAudioInputPresetClick" />
+          </StackPanel>
+          <ItemsControl ItemsSource="{Binding AudioInputPresets}">
+            <ItemsControl.ItemTemplate>
+              <DataTemplate x:DataType="local:AudioInputPresetViewModel">
+                <StackPanel Orientation="Horizontal" Spacing="4" Margin="0,0,0,3">
+                  <TextBlock Width="170"
+                             VerticalAlignment="Center"
+                             Text="{Binding DisplayText}"
+                             TextTrimming="CharacterEllipsis" />
+                  <Button Content="Use" Tag="{Binding}" Click="HandleUseAudioInputPresetClick" />
+                  <Button Content="Delete" Tag="{Binding}" Click="HandleDeleteAudioInputPresetClick" />
+                </StackPanel>
+              </DataTemplate>
+            </ItemsControl.ItemTemplate>
+          </ItemsControl>
+          <TextBlock FontSize="12" FontWeight="SemiBold" Text="Web streams (WAV / MP3 / optional FFmpeg)" />
+          <CheckBox Content="Restore selected channel and web streams on startup"
+                    IsChecked="{Binding RestoreSelectedChannelsOnStartup, Mode=TwoWay}" />
+          <ItemsControl ItemsSource="{Binding WebStreams}">
+            <ItemsControl.ItemTemplate>
+              <DataTemplate x:DataType="local:WebStreamViewModel">
+                <Border Background="{DynamicResource CardBackgroundBrush}" CornerRadius="4" Padding="8" Margin="0,0,0,6">
+                  <StackPanel Spacing="4">
+                    <TextBlock FontWeight="SemiBold" Text="{Binding Name}" />
+                    <TextBlock FontSize="10" Foreground="{DynamicResource MutedTextBrush}" Text="{Binding Url}" TextWrapping="Wrap" />
+                    <TextBlock FontSize="11" Text="{Binding StatusText}" />
+                    <StackPanel Orientation="Horizontal" Spacing="6">
+                      <TextBox Width="150"
+                               Watermark="output device ID (default)"
+                               Text="{Binding OutputDeviceIdText, Mode=TwoWay}" />
+                      <Button Content="Save"
+                              Tag="{Binding}"
+                              Click="HandleSaveWebStreamOutputDeviceClick" />
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal" Spacing="6">
+                      <Slider Width="112"
+                              Minimum="0"
+                              Maximum="4"
+                              Value="{Binding Volume, Mode=TwoWay}" />
+                      <Button Content="{Binding ToggleButtonText}" Command="{Binding ToggleCommand}" />
+                    </StackPanel>
+                  </StackPanel>
+                </Border>
+              </DataTemplate>
+            </ItemsControl.ItemTemplate>
+          </ItemsControl>
+          <TextBlock FontSize="12" FontWeight="SemiBold" Text="DTMF presets" />
+          <StackPanel Orientation="Horizontal" Spacing="6">
+            <TextBox Width="120"
+                     Watermark="Preset name"
+                     Text="{Binding DtmfPresetName, Mode=TwoWay}" />
+            <Button Content="Save" Command="{Binding SaveDtmfPresetCommand}" />
+          </StackPanel>
+          <ItemsControl ItemsSource="{Binding DtmfPresets}">
+            <ItemsControl.ItemTemplate>
+              <DataTemplate x:DataType="local:DtmfPresetViewModel">
+                <StackPanel Orientation="Horizontal" Spacing="4" Margin="0,0,0,3">
+                  <TextBlock Width="150" VerticalAlignment="Center" Text="{Binding DisplayText}" TextTrimming="CharacterEllipsis" />
+                  <Button Content="Use" Tag="{Binding}" Click="HandleUseDtmfPresetClick" />
+                  <Button Content="Send" Tag="{Binding}" Click="HandleSendDtmfPresetClick" />
+                  <Button Content="Delete" Tag="{Binding}" Click="HandleDeleteDtmfPresetClick" />
+                </StackPanel>
+              </DataTemplate>
+            </ItemsControl.ItemTemplate>
+          </ItemsControl>
+          <TextBlock FontSize="12" FontWeight="SemiBold" Text="Tone presets" />
+          <StackPanel Orientation="Horizontal" Spacing="6">
+            <TextBox Width="120"
+                     Watermark="Preset name"
+                     Text="{Binding TonePresetName, Mode=TwoWay}" />
+            <Button Content="Save" Command="{Binding SaveTonePresetCommand}" />
+          </StackPanel>
+          <ItemsControl ItemsSource="{Binding TonePresets}">
+            <ItemsControl.ItemTemplate>
+              <DataTemplate x:DataType="local:TonePresetViewModel">
+                <StackPanel Orientation="Horizontal" Spacing="4" Margin="0,0,0,3">
+                  <TextBlock Width="150" VerticalAlignment="Center" Text="{Binding DisplayText}" TextTrimming="CharacterEllipsis" />
+                  <Button Content="Use" Tag="{Binding}" Click="HandleUseTonePresetClick" />
+                  <Button Content="Send" Tag="{Binding}" Click="HandleSendTonePresetClick" />
+                  <Button Content="Delete" Tag="{Binding}" Click="HandleDeleteTonePresetClick" />
+                </StackPanel>
+              </DataTemplate>
+            </ItemsControl.ItemTemplate>
+          </ItemsControl>
+          <TextBlock FontSize="12" FontWeight="SemiBold" Text="TAR retention" />
+          <StackPanel Orientation="Horizontal" Spacing="6">
+            <TextBox Width="58"
+                     Watermark="7"
+                     Text="{Binding RecordingRetentionDaysText, Mode=TwoWay}" />
+            <TextBlock VerticalAlignment="Center" Text="days (0 disables)" />
+            <Button Content="Apply" Command="{Binding ApplyRecordingRetentionCommand}" />
+          </StackPanel>
+          <Separator />
+          <TextBlock FontSize="16" FontWeight="SemiBold" Text="Patch groups" />
+          <CheckBox Content="Retain enabled patch state on startup"
+                    IsChecked="{Binding RetainPatchStateOnStartup, Mode=TwoWay}" />
+          <ItemsControl ItemsSource="{Binding PatchGroups}">
+            <ItemsControl.ItemTemplate>
+              <DataTemplate x:DataType="local:PatchGroupEditorViewModel">
+                  <Border Background="{DynamicResource CardBackgroundBrush}" CornerRadius="4" Padding="8" Margin="0,0,0,8">
+                  <StackPanel Spacing="4">
+                    <TextBlock FontWeight="SemiBold" Text="{Binding Name}" />
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                      <CheckBox Content="Enabled" IsChecked="{Binding IsEnabled, Mode=TwoWay}" />
+                      <CheckBox Content="One-way" IsChecked="{Binding IsOneWay, Mode=TwoWay}" />
+                    </StackPanel>
+                    <ItemsControl ItemsSource="{Binding Members}">
+                      <ItemsControl.ItemTemplate>
+                        <DataTemplate x:DataType="local:PatchMemberEditorViewModel">
+                          <CheckBox Content="{Binding DisplayName}"
+                                    IsChecked="{Binding IsMember, Mode=TwoWay}"
+                                    IsEnabled="{Binding CanTransmit}" />
+                        </DataTemplate>
+                      </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                    <Button Content="Apply patch group"
+                            Tag="{Binding}"
+                            Click="HandleApplyPatchGroupClick" />
+                  </StackPanel>
+                </Border>
+              </DataTemplate>
+            </ItemsControl.ItemTemplate>
+          </ItemsControl>
           <StackPanel Orientation="Horizontal" Spacing="8">
             <Button Content="Connect" Command="{Binding ConnectCommand}" />
             <Button Content="Disconnect" Command="{Binding DisconnectCommand}" />
@@ -33,12 +229,53 @@
           <TextBlock FontSize="16" FontWeight="SemiBold" Text="Systems" />
           <ItemsControl ItemsSource="{Binding Systems}">
             <ItemsControl.ItemTemplate>
-              <DataTemplate>
-                <Border Background="White" CornerRadius="4" Padding="8" Margin="0,0,0,8">
+              <DataTemplate x:DataType="local:SystemViewModel">
+                  <Border Background="{DynamicResource CardBackgroundBrush}" CornerRadius="4" Padding="8" Margin="0,0,0,8">
                   <StackPanel Spacing="3">
                     <TextBlock FontWeight="SemiBold" Text="{Binding Name}" />
                     <TextBlock FontSize="12" Text="{Binding Endpoint}" />
                     <TextBlock FontSize="12" Foreground="#986B00" Text="{Binding ConnectionStatus}" />
+                  </StackPanel>
+                </Border>
+              </DataTemplate>
+            </ItemsControl.ItemTemplate>
+          </ItemsControl>
+          <Separator />
+          <TextBlock FontSize="16" FontWeight="SemiBold" Text="Recordings" />
+          <ItemsControl ItemsSource="{Binding Recordings}">
+            <ItemsControl.ItemTemplate>
+              <DataTemplate x:DataType="local:CallRecordingMetadata">
+                <Border Background="{DynamicResource CardBackgroundBrush}" CornerRadius="4" Padding="8" Margin="0,0,0,8">
+                  <StackPanel Spacing="3">
+                    <TextBlock FontWeight="SemiBold" Text="{Binding ChannelName}" />
+                    <TextBlock FontSize="12" Text="{Binding SystemName}" />
+                    <TextBlock FontSize="12" Text="{Binding RouteText}" />
+                    <TextBlock FontSize="12" Foreground="{DynamicResource MutedTextBrush}" Text="{Binding Protocol}" />
+                    <TextBlock FontSize="11" Foreground="{DynamicResource MutedTextBrush}" Text="{Binding TimestampText}" />
+                    <TextBlock FontSize="11" Foreground="{DynamicResource MutedTextBrush}" Text="{Binding DurationText}" />
+                    <Button Content="Open recording"
+                            Tag="{Binding}"
+                            Click="HandleOpenRecordingClick" />
+                    <Button Content="Delete recording"
+                            Tag="{Binding}"
+                            Click="HandleDeleteRecordingClick" />
+                  </StackPanel>
+                </Border>
+              </DataTemplate>
+            </ItemsControl.ItemTemplate>
+          </ItemsControl>
+          <Separator />
+          <TextBlock FontSize="16" FontWeight="SemiBold" Text="Recent calls" />
+          <ItemsControl ItemsSource="{Binding CallHistory}">
+            <ItemsControl.ItemTemplate>
+              <DataTemplate x:DataType="local:CallHistoryEntry">
+                  <Border Background="{DynamicResource CardBackgroundBrush}" CornerRadius="4" Padding="8" Margin="0,0,0,8">
+                  <StackPanel Spacing="3">
+                    <TextBlock FontWeight="SemiBold" Text="{Binding ChannelName}" />
+                    <TextBlock FontSize="12" Text="{Binding SystemName}" />
+                    <TextBlock FontSize="12" Text="{Binding RouteText}" />
+                    <TextBlock FontSize="12" Foreground="{DynamicResource MutedTextBrush}" Text="{Binding StreamText}" />
+                    <TextBlock FontSize="11" Foreground="{DynamicResource MutedTextBrush}" Text="{Binding TimestampText}" />
                   </StackPanel>
                 </Border>
               </DataTemplate>
@@ -49,14 +286,14 @@
     </Border>
 
     <Border Grid.Row="1" Grid.Column="1" Padding="16">
-      <TabControl ItemsSource="{Binding Zones}">
+      <TabControl ItemsSource="{Binding Systems}" SelectedItem="{Binding SelectedSystem, Mode=TwoWay}">
         <TabControl.ItemTemplate>
-          <DataTemplate>
+          <DataTemplate x:DataType="local:SystemViewModel">
             <TextBlock Text="{Binding Name}" />
           </DataTemplate>
         </TabControl.ItemTemplate>
         <TabControl.ContentTemplate>
-          <DataTemplate>
+          <DataTemplate x:DataType="local:SystemViewModel">
             <ScrollViewer Padding="4,16">
               <ItemsControl ItemsSource="{Binding Channels}">
                 <ItemsControl.ItemsPanel>
@@ -65,18 +302,56 @@
                   </ItemsPanelTemplate>
                 </ItemsControl.ItemsPanel>
                 <ItemsControl.ItemTemplate>
-                  <DataTemplate>
+                  <DataTemplate x:DataType="local:ChannelViewModel">
                     <Border BorderBrush="#CCD2D8"
                             BorderThickness="1"
                             CornerRadius="6"
                             Padding="14"
                             Margin="0,0,12,12"
-                            Width="240">
+                            Width="240"
+                            Focusable="True"
+                            PointerPressed="HandleChannelPointerPressed">
                       <StackPanel Spacing="6">
                         <TextBlock FontSize="16" FontWeight="SemiBold" Text="{Binding Name}" />
                         <TextBlock Text="{Binding ModeText}" />
-                        <TextBlock Foreground="#68727D" Text="{Binding DestinationText}" />
-                        <Button Content="PTT" HorizontalAlignment="Left" IsEnabled="False" />
+                        <TextBlock Foreground="{DynamicResource MutedTextBrush}" Text="{Binding DestinationText}" />
+                        <TextBlock Foreground="#2E7D32" Text="{Binding StateText}" />
+                        <StackPanel Orientation="Horizontal" Spacing="6">
+                          <TextBlock FontSize="11" Text="RX volume" VerticalAlignment="Center" />
+                          <Slider Width="112"
+                                  Minimum="0"
+                                  Maximum="2"
+                                  Value="{Binding Volume, Mode=TwoWay}" />
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" Spacing="6">
+                          <TextBox Width="140"
+                                   Watermark="output device ID (default)"
+                                   Text="{Binding OutputDeviceIdText, Mode=TwoWay}" />
+                          <Button Content="Save"
+                                  Tag="{Binding}"
+                                  Click="HandleSaveOutputDeviceClick" />
+                        </StackPanel>
+                        <TextBlock FontSize="11" Text="Do not record subscriber IDs" />
+                        <StackPanel Orientation="Horizontal" Spacing="6">
+                          <TextBox Width="140"
+                                   Watermark="42, 1001"
+                                   Text="{Binding IgnoredSubscriberIdsText, Mode=TwoWay}" />
+                          <Button Content="Save"
+                                  Tag="{Binding}"
+                                  Click="HandleSaveIgnoredSubscribersClick" />
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                          <Button Content="{Binding AudioButtonText}" Command="{Binding AudioCommand}" />
+                          <Button Content="{Binding EncryptionButtonText}"
+                                  Command="{Binding EncryptionCommand}"
+                                  IsVisible="{Binding CanToggleEncryption}" />
+                          <Button Content="{Binding RecordButtonText}"
+                                  Command="{Binding RecordingCommand}"
+                                  IsEnabled="{Binding CanRecord}" />
+                          <Button Content="{Binding PttButtonText}"
+                                  Command="{Binding PttCommand}"
+                                  IsEnabled="{Binding CanTransmit}" />
+                        </StackPanel>
                       </StackPanel>
                     </Border>
                   </DataTemplate>

@@ -1,0 +1,516 @@
+using System.Net.Http.Headers;
+using System.Text;
+using DvmConsole.Audio;
+using DvmConsole.Core.Configuration;
+
+namespace DvmConsole.Desktop;
+
+/// <summary>
+/// Plays configured HTTP(S) streams through the portable PCM audio boundary.
+/// Supported sources include uncompressed PCM WAV and MPEG/MP3. Additional
+/// formats can opt into the explicit FFmpeg process adapter through
+/// <c>DVM_FFMPEG</c>; no platform-specific media framework is assumed.
+/// </summary>
+public sealed class WebStreamPlaybackCoordinator : IAsyncDisposable
+{
+    private readonly SemaphoreSlim gate = new(1, 1);
+    private readonly Dictionary<WebStreamViewModel, PlaybackSession> sessions = [];
+    private readonly Func<IAudioBackend> createAudioBackend;
+    private readonly Func<string?> getOutputDeviceId;
+    private readonly Func<WebStreamViewModel, string?>? getStreamOutputDeviceId;
+    private readonly Func<WebStreamConfiguration, CancellationToken, Task<Stream>> openStream;
+    private readonly Func<Stream, CancellationToken, Task<IAudioPcmStreamReader>> createDecoder;
+    private IAudioBackend? audioBackend;
+    private bool disposed;
+
+    public WebStreamPlaybackCoordinator()
+        : this(
+            () => AudioBackendFactory.CreateDefault(Environment.GetEnvironmentVariable("DVM_AUDIO_LIBRARY")),
+            () => "default")
+    {
+    }
+
+    public WebStreamPlaybackCoordinator(
+        Func<IAudioBackend> createAudioBackend,
+        Func<string?> getOutputDeviceId,
+        Func<WebStreamConfiguration, CancellationToken, Task<Stream>>? openStream = null,
+        Func<Stream, CancellationToken, Task<IAudioPcmStreamReader>>? createDecoder = null,
+        Func<WebStreamViewModel, string?>? getStreamOutputDeviceId = null)
+    {
+        this.createAudioBackend = createAudioBackend ?? throw new ArgumentNullException(nameof(createAudioBackend));
+        this.getOutputDeviceId = getOutputDeviceId ?? throw new ArgumentNullException(nameof(getOutputDeviceId));
+        this.getStreamOutputDeviceId = getStreamOutputDeviceId;
+        this.openStream = openStream ?? OpenHttpStreamAsync;
+        this.createDecoder = createDecoder ?? PcmStreamDecoder.OpenAsync;
+    }
+
+    public IReadOnlyList<WebStreamViewModel> ActiveStreams
+    {
+        get
+        {
+            lock (sessions)
+                return sessions.Keys.ToArray();
+        }
+    }
+
+    public bool IsActive(WebStreamViewModel stream)
+    {
+        ArgumentNullException.ThrowIfNull(stream);
+        lock (sessions)
+            return sessions.ContainsKey(stream);
+    }
+
+    public async Task StartAsync(WebStreamViewModel stream, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(stream);
+        ObjectDisposedException.ThrowIf(disposed, this);
+
+        await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            if (sessions.ContainsKey(stream))
+                return;
+
+            stream.SetPlaybackState(true, true, false, false, "Connecting…");
+            IAudioBackend? createdBackend = null;
+            Stream? source = null;
+            IAudioPcmStreamReader? reader = null;
+            IAudioPlayback? playback = null;
+            try
+            {
+                IAudioBackend backend = audioBackend ??= createdBackend = createAudioBackend();
+                AudioDeviceInfo output = ResolveOutputDevice(
+                    backend,
+                    getStreamOutputDeviceId?.Invoke(stream) ?? getOutputDeviceId());
+                source = await openStream(ToConfiguration(stream), cancellationToken).ConfigureAwait(false);
+                reader = await createDecoder(source, cancellationToken).ConfigureAwait(false);
+                source = null;
+                playback = backend.OpenPlayback(output, PcmAudioFormat.Voice8KhzMono16Bit);
+
+                var session = new PlaybackSession(
+                    reader,
+                    new GainAudioPlayback(playback),
+                    reader.SampleRate == PcmAudioFormat.Voice8KhzMono16Bit.SampleRate
+                        ? null
+                        : new PcmRateConverter(reader.SampleRate, PcmAudioFormat.Voice8KhzMono16Bit.SampleRate));
+                session.Playback.Gain = stream.Volume;
+                reader = null;
+                playback = null;
+                lock (sessions)
+                    sessions.Add(stream, session);
+                session.RunTask = RunAsync(stream, session);
+                stream.SetPlaybackState(true, false, false, false, "Connected; waiting for audio");
+            }
+            catch (Exception exception)
+            {
+                await DisposeIfCreatedAsync(playback, reader, source).ConfigureAwait(false);
+                bool noActiveSessions;
+                lock (sessions)
+                    noActiveSessions = sessions.Count == 0;
+                if (createdBackend is not null && noActiveSessions)
+                {
+                    audioBackend = null;
+                    createdBackend.Dispose();
+                }
+
+                stream.SetPlaybackState(false, false, false, true, CreateFailureStatus(exception));
+            }
+        }
+        finally
+        {
+            gate.Release();
+        }
+    }
+
+    public async Task StopAsync(WebStreamViewModel stream, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(stream);
+        PlaybackSession? session = null;
+        await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            lock (sessions)
+            {
+                if (sessions.Remove(stream, out session))
+                    stream.SetPlaybackState(false, false, false, false, "Stopping…");
+            }
+        }
+        finally
+        {
+            gate.Release();
+        }
+
+        if (session is not null)
+            await session.StopAsync(cancellationToken).ConfigureAwait(false);
+        if (session is not null)
+            stream.SetPlaybackState(false, false, false, false, "Off");
+    }
+
+    public void SetVolume(WebStreamViewModel stream, double volume)
+    {
+        ArgumentNullException.ThrowIfNull(stream);
+        lock (sessions)
+        {
+            if (sessions.TryGetValue(stream, out PlaybackSession? session))
+                session.Playback.Gain = NormalizeVolume(volume);
+        }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        PlaybackSession[] oldSessions;
+        await gate.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            if (disposed)
+                return;
+            disposed = true;
+            lock (sessions)
+            {
+                oldSessions = sessions.Values.ToArray();
+                sessions.Clear();
+            }
+        }
+        finally
+        {
+            gate.Release();
+        }
+
+        Exception? failure = null;
+        foreach (PlaybackSession session in oldSessions)
+        {
+            try
+            {
+                await session.StopAsync().ConfigureAwait(false);
+            }
+            catch (Exception exception)
+            {
+                failure ??= exception;
+            }
+        }
+
+        IAudioBackend? oldBackend = audioBackend;
+        audioBackend = null;
+        oldBackend?.Dispose();
+        gate.Dispose();
+        if (failure is not null)
+            throw failure;
+    }
+
+    private async Task RunAsync(WebStreamViewModel stream, PlaybackSession session)
+    {
+        Exception? failure = null;
+        bool received = false;
+        bool canceled = false;
+        short[] input = new short[1600];
+        try
+        {
+            while (true)
+            {
+                int sampleCount = await session.Reader.ReadSamplesAsync(
+                    input,
+                    session.Cancellation.Token).ConfigureAwait(false);
+                if (sampleCount == 0)
+                    break;
+
+                short[] output = session.RateConverter?.Convert(input.AsSpan(0, sampleCount))
+                    ?? input.AsSpan(0, sampleCount).ToArray();
+                if (output.Length == 0)
+                    continue;
+                await session.Playback.WriteAsync(output, session.Cancellation.Token).ConfigureAwait(false);
+                if (!received)
+                {
+                    received = true;
+                    stream.SetPlaybackState(true, false, true, false, "Receiving");
+                }
+            }
+        }
+        catch (OperationCanceledException) when (session.Cancellation.IsCancellationRequested)
+        {
+            // Expected when an operator stops the stream or the window closes.
+        }
+        catch (Exception exception)
+        {
+            failure = exception;
+        }
+        finally
+        {
+            canceled = session.Cancellation.IsCancellationRequested;
+            try
+            {
+                await session.Playback.FlushAsync().ConfigureAwait(false);
+            }
+            catch (Exception exception)
+            {
+                failure ??= exception;
+            }
+
+            await session.DisposeResourcesAsync().ConfigureAwait(false);
+            await RemoveCompletedAsync(stream, session).ConfigureAwait(false);
+
+            if (failure is not null)
+                stream.SetPlaybackState(false, false, false, true, CreateFailureStatus(failure));
+            else if (!canceled)
+                stream.SetPlaybackState(false, false, false, false, "Ended");
+        }
+    }
+
+    private async Task RemoveCompletedAsync(WebStreamViewModel stream, PlaybackSession session)
+    {
+        await gate.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            lock (sessions)
+            {
+                if (sessions.TryGetValue(stream, out PlaybackSession? current) && ReferenceEquals(current, session))
+                    sessions.Remove(stream);
+            }
+        }
+        finally
+        {
+            gate.Release();
+        }
+    }
+
+    private static AudioDeviceInfo ResolveOutputDevice(IAudioBackend backend, string? requestedDeviceId)
+    {
+        IReadOnlyList<AudioDeviceInfo> devices = backend.EnumerateDevices(AudioDirection.Output);
+        return devices.FirstOrDefault(device =>
+                   !string.IsNullOrWhiteSpace(requestedDeviceId) &&
+                   !requestedDeviceId.Equals("default", StringComparison.OrdinalIgnoreCase) &&
+                   device.Id.Equals(requestedDeviceId, StringComparison.OrdinalIgnoreCase))
+               ?? devices.FirstOrDefault(device => device.IsDefault)
+               ?? devices.FirstOrDefault()
+               ?? throw new InvalidOperationException("No audio output device is available.");
+    }
+
+    private static WebStreamConfiguration ToConfiguration(WebStreamViewModel stream)
+        => new()
+        {
+            Name = stream.Name,
+            Url = stream.Url,
+            AuthUsername = stream.AuthUsername,
+            AuthPassword = stream.AuthPassword
+        };
+
+    private static double NormalizeVolume(double volume)
+        => double.IsFinite(volume) ? Math.Clamp(volume, 0, 4) : 1.0;
+
+    private static string CreateFailureStatus(Exception exception)
+        => exception is NotSupportedException
+            ? $"Unsupported: {exception.Message}"
+            : $"Failed: {exception.Message}";
+
+    private static async Task DisposeIfCreatedAsync(
+        IAudioPlayback? playback,
+        IAudioPcmStreamReader? reader,
+        Stream? source)
+    {
+        if (playback is not null)
+            await playback.DisposeAsync().ConfigureAwait(false);
+        if (reader is not null)
+            await reader.DisposeAsync().ConfigureAwait(false);
+        if (source is not null)
+            await source.DisposeAsync().ConfigureAwait(false);
+    }
+
+    private static async Task<Stream> OpenHttpStreamAsync(
+        WebStreamConfiguration configuration,
+        CancellationToken cancellationToken)
+    {
+        if (!Uri.TryCreate(configuration.Url, UriKind.Absolute, out Uri? uri) ||
+            (!uri.Scheme.Equals(Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase) &&
+             !uri.Scheme.Equals(Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase)))
+        {
+            throw new InvalidDataException("The web stream URL must be an absolute HTTP or HTTPS URL.");
+        }
+
+        var client = new HttpClient();
+        var request = new HttpRequestMessage(HttpMethod.Get, uri);
+        if (!string.IsNullOrWhiteSpace(configuration.AuthUsername))
+        {
+            string credentials = Convert.ToBase64String(Encoding.UTF8.GetBytes(
+                $"{configuration.AuthUsername}:{configuration.AuthPassword ?? string.Empty}"));
+            request.Headers.Authorization = new AuthenticationHeaderValue("Basic", credentials);
+        }
+
+        HttpResponseMessage? response = null;
+        try
+        {
+            response = await client.SendAsync(
+                request,
+                HttpCompletionOption.ResponseHeadersRead,
+                cancellationToken).ConfigureAwait(false);
+            response.EnsureSuccessStatusCode();
+            Stream content = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
+            request.Dispose();
+            return new HttpResponseStream(client, response, content);
+        }
+        catch
+        {
+            request.Dispose();
+            response?.Dispose();
+            client.Dispose();
+            throw;
+        }
+    }
+
+    private sealed class PlaybackSession(
+        IAudioPcmStreamReader reader,
+        GainAudioPlayback playback,
+        PcmRateConverter? rateConverter)
+    {
+        public IAudioPcmStreamReader Reader { get; } = reader;
+        public GainAudioPlayback Playback { get; } = playback;
+        public PcmRateConverter? RateConverter { get; } = rateConverter;
+        public CancellationTokenSource Cancellation { get; } = new();
+        public Task? RunTask { get; set; }
+
+        public async Task StopAsync(CancellationToken cancellationToken = default)
+        {
+            try
+            {
+                Cancellation.Cancel();
+            }
+            catch (ObjectDisposedException)
+            {
+                // The stream may have completed and disposed its cancellation source
+                // just before the operator requested Stop.
+            }
+            Task? task = RunTask;
+            if (task is not null)
+                await task.WaitAsync(cancellationToken).ConfigureAwait(false);
+            else
+                await DisposeResourcesAsync().ConfigureAwait(false);
+        }
+
+        public async Task DisposeResourcesAsync()
+        {
+            try
+            {
+                await Playback.DisposeAsync().ConfigureAwait(false);
+            }
+            finally
+            {
+                try
+                {
+                    await Reader.DisposeAsync().ConfigureAwait(false);
+                }
+                finally
+                {
+                    Cancellation.Dispose();
+                }
+            }
+        }
+    }
+
+    private sealed class GainAudioPlayback(IAudioPlayback inner) : IAudioPlayback, IAudioGainControl
+    {
+        private readonly object sync = new();
+        private bool disposed;
+        private double gain = 1.0;
+
+        public PcmAudioFormat Format => inner.Format;
+
+        public double Gain
+        {
+            get
+            {
+                lock (sync)
+                    return gain;
+            }
+            set
+            {
+                if (!double.IsFinite(value) || value is < 0 or > 4)
+                    throw new ArgumentOutOfRangeException(nameof(value), "Audio gain must be between 0 and 4.");
+                lock (sync)
+                {
+                    ObjectDisposedException.ThrowIf(disposed, this);
+                    gain = value;
+                }
+            }
+        }
+
+        public ValueTask WriteAsync(ReadOnlyMemory<short> samples, CancellationToken cancellationToken = default)
+        {
+            ObjectDisposedException.ThrowIf(disposed, this);
+            double currentGain;
+            lock (sync)
+                currentGain = gain;
+            if (Math.Abs(currentGain - 1.0) < 0.0001)
+                return inner.WriteAsync(samples, cancellationToken);
+
+            var scaled = new short[samples.Length];
+            for (int index = 0; index < scaled.Length; index++)
+            {
+                int value = (int)Math.Round(samples.Span[index] * currentGain, MidpointRounding.AwayFromZero);
+                scaled[index] = (short)Math.Clamp(value, short.MinValue, short.MaxValue);
+            }
+
+            return inner.WriteAsync(scaled, cancellationToken);
+        }
+
+        public ValueTask FlushAsync(CancellationToken cancellationToken = default)
+            => inner.FlushAsync(cancellationToken);
+
+        public async ValueTask DisposeAsync()
+        {
+            bool shouldDispose;
+            lock (sync)
+            {
+                shouldDispose = !disposed;
+                disposed = true;
+            }
+
+            if (shouldDispose)
+                await inner.DisposeAsync().ConfigureAwait(false);
+        }
+    }
+
+    private sealed class HttpResponseStream(
+        HttpClient client,
+        HttpResponseMessage response,
+        Stream inner) : Stream
+    {
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+            {
+                inner.Dispose();
+                response.Dispose();
+                client.Dispose();
+            }
+            base.Dispose(disposing);
+        }
+
+        public override async ValueTask DisposeAsync()
+        {
+            await inner.DisposeAsync().ConfigureAwait(false);
+            response.Dispose();
+            client.Dispose();
+            GC.SuppressFinalize(this);
+        }
+
+        public override bool CanRead => inner.CanRead;
+        public override bool CanSeek => inner.CanSeek;
+        public override bool CanWrite => false;
+        public override long Length => inner.Length;
+        public override long Position { get => inner.Position; set => inner.Position = value; }
+        public override void Flush() => inner.Flush();
+        public override Task FlushAsync(CancellationToken cancellationToken) => inner.FlushAsync(cancellationToken);
+        public override int Read(byte[] buffer, int offset, int count) => inner.Read(buffer, offset, count);
+        public override int Read(Span<byte> buffer) => inner.Read(buffer);
+        public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
+            => inner.ReadAsync(buffer, offset, count, cancellationToken);
+        public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+            => inner.ReadAsync(buffer, cancellationToken);
+        public override long Seek(long offset, SeekOrigin origin) => inner.Seek(offset, origin);
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        public override void Write(ReadOnlySpan<byte> buffer) => throw new NotSupportedException();
+        public override Task WriteAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
+            => throw new NotSupportedException();
+        public override ValueTask WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken cancellationToken = default)
+            => throw new NotSupportedException();
+    }
+}

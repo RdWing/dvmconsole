@@ -16,6 +16,7 @@ public sealed class FneConnectionTests
             Address = "127.0.0.1",
             Port = 62031,
             PeerId = 1000001,
+            Rid = "1001",
             Password = "password",
             Encrypted = true,
             PresharedKey = "00112233445566778899AABBCCDDEEFF"
@@ -28,8 +29,29 @@ public sealed class FneConnectionTests
         Assert.Equal("127.0.0.1", options.Address);
         Assert.Equal(62031, options.Port);
         Assert.Equal((uint)1000001, options.PeerId);
+        Assert.Equal((uint)1001, options.SourceId);
         Assert.Equal("password", options.Password);
         Assert.Equal(system.PresharedKey, options.PresharedKey);
+        Assert.Null(options.KmfPresharedKey);
+    }
+
+    [Fact]
+    public void KeepsKmfKeySeparateFromTransportKey()
+    {
+        var system = new SystemConfiguration
+        {
+            Name = "KMM FNE",
+            Address = "127.0.0.1",
+            Port = 62031,
+            PresharedKey = "transport",
+            Encrypted = true,
+            KmfPresharedKey = "kmf"
+        };
+
+        FneConnectionOptions options = FneConnectionOptions.FromConfiguration(system);
+
+        Assert.Equal("transport", options.PresharedKey);
+        Assert.Equal("kmf", options.KmfPresharedKey);
     }
 
     [Fact]
@@ -57,6 +79,26 @@ public sealed class FneConnectionTests
 
         Assert.Equal(FneConnectionState.Disconnected, connection.Status.State);
         Assert.Null(connection.Peer);
+    }
+
+    [Fact]
+    public async Task RejectsP25KeyRequestBeforeConnectionStarts()
+    {
+        var options = new FneConnectionOptions("Test", "Test", "127.0.0.1", 62031, 1, null, false, null)
+        {
+            SourceId = 1001
+        };
+        await using var connection = new FneConnection(options);
+
+        Assert.Throws<InvalidOperationException>(() => connection.RequestP25Key(fnecore.P25.P25Defines.P25_ALGO_AES, 0x50));
+    }
+
+    [Fact]
+    public async Task RejectsUnsupportedP25KeyRequest()
+    {
+        await using var connection = new FneConnection(new FneConnectionOptions("Test", "Test", "127.0.0.1", 62031, 1, null, false, null));
+
+        Assert.Throws<ArgumentOutOfRangeException>(() => connection.RequestP25Key(0x12, 0x50));
     }
 
     [Fact]

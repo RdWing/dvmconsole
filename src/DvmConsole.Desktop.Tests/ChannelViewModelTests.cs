@@ -1,0 +1,357 @@
+using DvmConsole.Core.Configuration;
+using DvmConsole.Core.Runtime;
+using DvmConsole.Desktop;
+using DvmConsole.FneClient;
+using DvmConsole.Media;
+using fnecore.P25;
+using Xunit;
+
+namespace DvmConsole.Desktop.Tests;
+
+public sealed class ChannelViewModelTests
+{
+    [Fact]
+    public void MatchingDmrVoiceTrafficUpdatesChannelRuntime()
+    {
+        var channel = new ChannelViewModel(new ChannelConfiguration
+        {
+            Name = "Dispatch",
+            System = "System 1",
+            Tgid = "99",
+            Mode = "dmr",
+            Slot = 2
+        });
+
+        bool applied = channel.TryApplyTraffic(
+            "System 1",
+            CreateTraffic(FneTrafficProtocol.Dmr, 42, 99, 1, "VOICE", "VOICE", 7));
+
+        Assert.True(applied);
+        Assert.Equal(ChannelRuntimeState.Receiving, channel.State);
+        Assert.Equal("Receiving from 42 (stream 7)", channel.StateText);
+    }
+
+    [Fact]
+    public void DisplaysConfiguredRadioAliasAlongsideSourceRid()
+    {
+        var channel = new ChannelViewModel(
+            new ChannelConfiguration
+            {
+                Name = "Dispatch",
+                System = "System 1",
+                Tgid = "99",
+                Mode = "analog"
+            },
+            aliases: [new RadioAlias { Alias = "Unit 42", Rid = 42 }]);
+
+        Assert.True(channel.TryApplyTraffic(
+            "System 1",
+            CreateTraffic(FneTrafficProtocol.Analog, 42, 99, null, "VOICE", "VOICE", 7)));
+
+        Assert.Equal("Receiving from Unit 42 (42) (stream 7)", channel.StateText);
+    }
+
+    [Fact]
+    public void DmrTrafficFromWrongSystemDestinationSlotOrFrameIsIgnored()
+    {
+        var channel = new ChannelViewModel(new ChannelConfiguration
+        {
+            Name = "Dispatch",
+            System = "System 1",
+            Tgid = "99",
+            Mode = "dmr",
+            Slot = 2
+        });
+
+        Assert.False(channel.TryApplyTraffic("System 2", CreateTraffic(FneTrafficProtocol.Dmr, 42, 99, 1, "VOICE", "VOICE", 7)));
+        Assert.False(channel.TryApplyTraffic("System 1", CreateTraffic(FneTrafficProtocol.Dmr, 42, 100, 1, "VOICE", "VOICE", 7)));
+        Assert.False(channel.TryApplyTraffic("System 1", CreateTraffic(FneTrafficProtocol.Dmr, 42, 99, 0, "VOICE", "VOICE", 7)));
+        Assert.False(channel.TryApplyTraffic("System 1", CreateTraffic(FneTrafficProtocol.Dmr, 42, 99, 1, "TERMINATOR", "TERMINATOR", 7)));
+        Assert.Equal(ChannelRuntimeState.Idle, channel.State);
+    }
+
+    [Fact]
+    public void MatchingTerminatorReturnsTheActiveChannelToIdle()
+    {
+        var channel = new ChannelViewModel(new ChannelConfiguration
+        {
+            Name = "Dispatch",
+            System = "System 1",
+            Tgid = "99",
+            Mode = "dmr",
+            Slot = 2
+        });
+
+        Assert.True(channel.TryApplyTraffic("System 1", CreateTraffic(FneTrafficProtocol.Dmr, 42, 99, 1, "VOICE", "VOICE", 7)));
+        Assert.Equal(ChannelRuntimeState.Receiving, channel.State);
+
+        Assert.True(channel.TryApplyTraffic("System 1", CreateTraffic(FneTrafficProtocol.Dmr, 42, 99, 1, "TERMINATOR", "TERMINATOR", 7)));
+
+        Assert.Equal(ChannelRuntimeState.Idle, channel.State);
+        Assert.Null(channel.StreamId);
+    }
+
+    [Fact]
+    public void StaleTerminatorCannotCloseAnotherActiveStream()
+    {
+        var channel = new ChannelViewModel(new ChannelConfiguration
+        {
+            Name = "Dispatch",
+            System = "System 1",
+            Tgid = "99",
+            Mode = "p25"
+        });
+
+        Assert.True(channel.TryApplyTraffic("System 1", CreateTraffic(FneTrafficProtocol.P25, 42, 99, null, "VOICE", "LDU1", 8)));
+
+        Assert.False(channel.TryApplyTraffic("System 1", CreateTraffic(FneTrafficProtocol.P25, 42, 99, null, "TERMINATOR", "TDU", 7)));
+
+        Assert.Equal(ChannelRuntimeState.Receiving, channel.State);
+        Assert.Equal((uint)8, channel.StreamId);
+    }
+
+    [Fact]
+    public void MatchingP25LduTrafficUpdatesChannelRuntime()
+    {
+        var channel = new ChannelViewModel(new ChannelConfiguration
+        {
+            Name = "P25 Dispatch",
+            System = "System 1",
+            Tgid = "101",
+            Mode = "p25"
+        });
+
+        bool applied = channel.TryApplyTraffic(
+            "System 1",
+            CreateTraffic(FneTrafficProtocol.P25, 77, 101, null, "VOICE", "LDU2", 9));
+
+        Assert.True(applied);
+        Assert.Equal(ChannelRuntimeState.Receiving, channel.State);
+        Assert.Equal("Receiving from 77 (stream 9)", channel.StateText);
+    }
+
+    [Fact]
+    public void RxOnlyDmrChannelCannotTransmit()
+    {
+        var channel = new ChannelViewModel(new ChannelConfiguration
+        {
+            Name = "Receive only",
+            System = "System 1",
+            Tgid = "99",
+            Mode = "dmr",
+            Slot = 1,
+            RxOnly = true
+        });
+
+        Assert.False(channel.CanTransmit);
+    }
+
+    [Fact]
+    public void ClearP25ChannelCanTransmit()
+    {
+        var channel = new ChannelViewModel(new ChannelConfiguration
+        {
+            Name = "Clear P25",
+            System = "System 1",
+            Tgid = "101",
+            Mode = "p25",
+            Algo = "none"
+        });
+
+        Assert.True(channel.CanTransmit);
+        Assert.True(channel.CanListen);
+    }
+
+    [Fact]
+    public void AnalogChannelCanListenAndTransmitWithoutEncryption()
+    {
+        var channel = new ChannelViewModel(new ChannelConfiguration
+        {
+            Name = "Analog Dispatch",
+            System = "System 1",
+            Tgid = "101",
+            Mode = "analog"
+        });
+
+        Assert.True(channel.CanListen);
+        Assert.True(channel.CanTransmit);
+    }
+
+    [Fact]
+    public void EncryptedOrUnknownChannelsCannotTransmit()
+    {
+        var encryptedP25 = new ChannelViewModel(new ChannelConfiguration
+        {
+            Name = "Encrypted P25",
+            System = "System 1",
+            Tgid = "101",
+            Mode = "p25",
+            Algo = "aes"
+        });
+        var encryptedDmr = new ChannelViewModel(new ChannelConfiguration
+        {
+            Name = "Encrypted DMR",
+            System = "System 1",
+            Tgid = "102",
+            Mode = "dmr",
+            Slot = 1,
+            Algo = "unsupported"
+        });
+
+        Assert.False(encryptedP25.CanTransmit);
+        Assert.False(encryptedDmr.CanTransmit);
+        Assert.False(encryptedP25.CanListen);
+        Assert.False(encryptedDmr.CanListen);
+    }
+
+    [Fact]
+    public void EncryptedP25CanListenWhenTheConfiguredKeyResolves()
+    {
+        var keyRing = new P25KeyRing(new KeyContainer
+        {
+            Keys =
+            [
+                new KeyEntry
+                {
+                    KeyId = 0x50,
+                    AlgId = P25Defines.P25_ALGO_AES,
+                    Key = "00112233445566778899AABBCCDDEEFF"
+                }
+            ]
+        });
+        var channel = new ChannelViewModel(new ChannelConfiguration
+        {
+            Name = "Encrypted P25",
+            System = "System 1",
+            Tgid = "101",
+            Mode = "p25",
+            Algo = "aes",
+            KeyId = "0x50",
+            SelectableEncryption = true
+        }, keyRing);
+
+        Assert.True(channel.CanListen);
+        Assert.True(channel.CanTransmit);
+        Assert.True(channel.CanToggleEncryption);
+        Assert.True(channel.IsTransmitEncrypted);
+
+        channel.EncryptionCommand.Execute(null);
+
+        Assert.False(channel.IsTransmitEncrypted);
+        Assert.Equal("Clear", channel.EncryptionButtonText);
+        Assert.True(channel.CanTransmit);
+    }
+
+    [Fact]
+    public void EncryptedP25RefreshesCapabilitiesAfterRuntimeKeyArrival()
+    {
+        var keyRing = new P25KeyRing(new KeyContainer());
+        var channel = new ChannelViewModel(new ChannelConfiguration
+        {
+            Name = "Runtime-key P25",
+            System = "System 1",
+            Tgid = "101",
+            Mode = "p25",
+            Algo = "aes",
+            KeyId = "0x50"
+        }, keyRing);
+
+        Assert.False(channel.CanListen);
+        Assert.False(channel.CanTransmit);
+
+        keyRing.AddOrReplace(P25Defines.P25_ALGO_AES, 0x50, Convert.FromHexString("00112233445566778899AABBCCDDEEFF"));
+        channel.RefreshEncryptionState();
+
+        Assert.True(channel.CanListen);
+        Assert.True(channel.CanTransmit);
+    }
+
+    [Fact]
+    public void SelectableClearP25UsesClearDefinitionForGeneratedTransmit()
+    {
+        var keyRing = new P25KeyRing(new KeyContainer
+        {
+            Keys =
+            [
+                new KeyEntry
+                {
+                    KeyId = 0x50,
+                    AlgId = P25Defines.P25_ALGO_AES,
+                    Key = "00112233445566778899AABBCCDDEEFF"
+                }
+            ]
+        });
+        var channel = new ChannelViewModel(new ChannelConfiguration
+        {
+            Name = "Selectable P25",
+            System = "System 1",
+            Tgid = "101",
+            Mode = "p25",
+            Algo = "aes",
+            KeyId = "0x50",
+            SelectableEncryption = true
+        }, keyRing);
+
+        channel.RestoreTransmitEncryption(false);
+        ChannelRuntimeDefinition clearDefinition = ChannelTransmitDefinitionFactory.Create(channel);
+
+        Assert.False(clearDefinition.IsEncrypted);
+        Assert.Null(ChannelTransmitDefinitionFactory.CreateEncryptionOptions(channel, clearDefinition, keyRing));
+    }
+
+    [Fact]
+    public void RestoresSelectableEncryptionStateWithoutChangingCodeplugPolicy()
+    {
+        var keyRing = new P25KeyRing(new KeyContainer
+        {
+            Keys =
+            [
+                new KeyEntry
+                {
+                    KeyId = 0x50,
+                    AlgId = P25Defines.P25_ALGO_AES,
+                    Key = "00112233445566778899AABBCCDDEEFF"
+                }
+            ]
+        });
+        var channel = new ChannelViewModel(new ChannelConfiguration
+        {
+            Name = "Selectable P25",
+            System = "System 1",
+            Tgid = "101",
+            Mode = "p25",
+            Algo = "aes",
+            KeyId = "0x50",
+            SelectableEncryption = true
+        }, keyRing);
+
+        channel.RestoreTransmitEncryption(false);
+
+        Assert.False(channel.IsTransmitEncrypted);
+        Assert.True(channel.CanTransmit);
+        Assert.True(channel.CanToggleEncryption);
+    }
+
+    private static FneTrafficFrame CreateTraffic(
+        FneTrafficProtocol protocol,
+        uint sourceId,
+        uint destinationId,
+        byte? slot,
+        string frameType,
+        string subtype,
+        uint streamId)
+    {
+        return new FneTrafficFrame(
+            protocol,
+            peerId: 1,
+            sourceId,
+            destinationId,
+            slot,
+            callType: "GROUP",
+            frameType,
+            subtype,
+            packetSequence: 1,
+            streamId,
+            payload: []);
+    }
+}

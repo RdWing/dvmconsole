@@ -28,3 +28,9 @@ DVMVOCODER_LIBRARY=/path/to/libvocoder.dylib \
 `VocoderMode` preserves the legacy DMR AMBE and P25 IMBE modes. A future
 `AMBE.DLL` implementation should be added as another `IVocoderBackend`; the
 application core should not call vendor-specific native entry points directly.
+
+NXDN is kept separate from those two modes. Its 48-byte NXDD payload is passed
+only to an explicitly injected `INxdnVocoderBackend` through the receive
+coordinator. The default desktop construction does not provide one and fails
+closed until a real FEC/AMBE+2 implementation is supplied; an unavailable
+backend never causes audio infrastructure to open.
