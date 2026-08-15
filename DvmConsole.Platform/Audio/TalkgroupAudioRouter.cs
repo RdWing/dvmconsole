@@ -654,11 +654,13 @@ namespace DvmConsole.Platform.Audio
         /// completed no-op: no capture, no loopback monitor, no session
         /// state. The local monitor degrades to absent when its output
         /// device is unavailable; the transmit itself is unaffected. When
-        /// the capture stream cannot start (the typed
+        /// capture stream cannot start (the typed
         /// <see cref="AudioDeviceException"/> when the input device is
         /// unavailable), the loopback monitor created for the attempt is
         /// stopped, no transmit state is committed and the original
-        /// exception propagates to the caller.
+        /// exception propagates to the caller. A P25 target receives one
+        /// grant-demand TDU with stream id 0 after capture starts and before
+        /// any captured voice; DMR has no call-start signal.
         /// </summary>
         /// <param name="targets">The transmit targets, in fan-out order.</param>
         /// <param name="inputDeviceId">Device to capture microphone audio from.</param>
@@ -753,6 +755,19 @@ namespace DvmConsole.Platform.Audio
                     _session = session;
                     _capturePipeline = capture;
                     _txMonitorPipeline = monitor;
+
+                    // WPF PTT parity: a P25 press starts the call with one
+                    // grant-demand TDU before any voice LDU. Keep stream id
+                    // zero for this control packet; the first voice LDU
+                    // receives the session's first live stream id from the
+                    // per-target accumulator.
+                    foreach (var entry in session.Targets)
+                    {
+                        if (entry.Target.Mode == VoiceMode.P25)
+                        {
+                            _sender.SendP25Tdu(entry.Target, streamId: 0, grantDemand: true);
+                        }
+                    }
 
                     ObserveEndAsync(endTask, session);
                 }

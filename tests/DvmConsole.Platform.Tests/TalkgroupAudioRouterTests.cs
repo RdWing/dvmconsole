@@ -821,6 +821,29 @@ namespace DvmConsole.Platform.Tests
         }
 
         [Fact]
+        public async Task BeginTransmit_P25_SendsGrantDemandBeforeCapture()
+        {
+            var factory = new FakeAudioStreamFactory();
+            var sender = new RecordingTrafficSender();
+            var router = CreateRouter(
+                factory,
+                new FakeVoiceFrameDecoder(),
+                new FakeVoiceFrameEncoder { CodewordLength = 11 },
+                sender,
+                new ManualScheduler());
+            var target = new TransmitTarget("System 1", "31002", 1, VoiceMode.P25, 1001);
+
+            await router.BeginTransmitAsync(target, AudioDeviceId.Default, CancellationToken.None);
+
+            var start = Assert.Single(sender.P25Tdus);
+            Assert.Equal(target, start.Target);
+            Assert.Equal(0u, start.StreamId);
+            Assert.True(start.GrantDemand);
+
+            await router.EndTransmitAsync();
+        }
+
+        [Fact]
         public async Task BeginTransmit_MultipleDmrTargets_FansOutIndependentFrames()
         {
             var factory = new FakeAudioStreamFactory();
@@ -930,8 +953,11 @@ namespace DvmConsole.Platform.Tests
             await router.BeginTransmitAsync(target, AudioDeviceId.Default, CancellationToken.None);
             await router.EndTransmitAsync();
 
-            Assert.Equal(4, sender.P25Tdus.Count);
-            Assert.All(sender.P25Tdus, signal =>
+            Assert.Equal(5, sender.P25Tdus.Count);
+            var start = Assert.Single(sender.P25Tdus.Where(signal => signal.GrantDemand));
+            Assert.Equal(target, start.Target);
+            Assert.Equal(0u, start.StreamId);
+            Assert.All(sender.P25Tdus.Where(signal => !signal.GrantDemand), signal =>
             {
                 Assert.Equal(target, signal.Target);
                 Assert.Equal(0u, signal.StreamId);
@@ -953,7 +979,9 @@ namespace DvmConsole.Platform.Tests
 
             Assert.Single(sender.DmrTerminators);
             Assert.Equal(DmrTarget, sender.DmrTerminators[0].Target);
-            Assert.Equal(4, sender.P25Tdus.Count);
+            Assert.Equal(5, sender.P25Tdus.Count);
+            Assert.Single(sender.P25Tdus.Where(signal => signal.GrantDemand));
+            Assert.Equal(4, sender.P25Tdus.Count(signal => !signal.GrantDemand));
             Assert.All(sender.P25Tdus, signal => Assert.Equal(p25, signal.Target));
         }
 
