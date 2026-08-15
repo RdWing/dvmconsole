@@ -124,6 +124,7 @@ public static class P25DfsiFrameCodec
         WriteRecord(payload, 128, 17, 0x68, imbe[66..77], 5, null);
         WriteRecord(payload, 145, 17, 0x69, imbe[77..88], 5, null);
         WriteRecord(payload, 162, 16, 0x6A, imbe[88..99], 4, null);
+        WriteClearEncryptionHeader(payload);
         return payload;
     }
 
@@ -163,6 +164,10 @@ public static class P25DfsiFrameCodec
         WriteRecord(payload, 128, 17, 0x71, imbe[66..77], 5, null);
         WriteRecord(payload, 145, 17, 0x72, imbe[77..88], 5, null);
         WriteRecord(payload, 162, 16, 0x73, imbe[88..99], 4, null);
+        // Clear P25 still carries an explicit UNENCRYPT algorithm in the
+        // encryption-sync fields. Zero is not a valid clear algorithm ID.
+        payload[112] = P25Defines.P25_ALGO_UNENCRYPT;
+        WriteClearEncryptionHeader(payload);
         return payload;
     }
 
@@ -304,6 +309,15 @@ public static class P25DfsiFrameCodec
         payload[182] = (byte)(metadata.KeyId >> 8);
         payload[183] = (byte)metadata.KeyId;
         metadata.MessageIndicator.AsSpan(0, P25Defines.P25_MI_LENGTH).CopyTo(payload.AsSpan(184, P25Defines.P25_MI_LENGTH));
+    }
+
+    private static void WriteClearEncryptionHeader(byte[] payload)
+    {
+        // Match fnecore's clear CryptoParams contract: HDU metadata is valid,
+        // but the algorithm explicitly identifies unencrypted voice.
+        payload[14] |= 0x08;
+        payload[180] = P25Defines.P25_FT_HDU_VALID;
+        payload[181] = P25Defines.P25_ALGO_UNENCRYPT;
     }
 
     private static void ValidateIdentifiers(uint sourceId, uint destinationId)
