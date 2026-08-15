@@ -4846,6 +4846,12 @@ public sealed class SystemViewModel : INotifyPropertyChanged, IAsyncDisposable
         await connection.StopAsync(cancellationToken).ConfigureAwait(false);
         requestedP25Keys.Clear();
     }
+
+    public async Task RestartAsync(CancellationToken cancellationToken = default)
+    {
+        await StopAsync(cancellationToken).ConfigureAwait(false);
+        await StartAsync(cancellationToken).ConfigureAwait(false);
+    }
     public uint CreateStreamId() => connection.CreateStreamId();
     public void SendTraffic(FneTrafficProtocol protocol, ReadOnlySpan<byte> payload, ushort packetSequence, uint streamId)
     {

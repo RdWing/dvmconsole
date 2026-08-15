@@ -249,6 +249,12 @@ public sealed partial class OperatorToolsWindow : Window
             await system.StopAsync();
     }
 
+    private async void HandleRestartSystemClick(object? sender, RoutedEventArgs e)
+    {
+        if (sender is Button { Tag: SystemViewModel system })
+            await system.RestartAsync();
+    }
+
     private void HandleCloseClick(object? sender, RoutedEventArgs e) => Close();
 }
 
