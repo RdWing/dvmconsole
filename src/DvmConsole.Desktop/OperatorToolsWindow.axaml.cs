@@ -146,6 +146,9 @@ public sealed partial class OperatorToolsWindow : Window
             viewModel.TrySaveRecordingIgnoredSubscribers(channel);
     }
 
+    private void HandleClearRecordingFiltersClick(object? sender, RoutedEventArgs e)
+        => viewModel.ClearRecordingFilters();
+
     private void HandleOpenRecordingClick(object? sender, RoutedEventArgs e)
     {
         if (sender is Button { Tag: CallRecordingMetadata metadata })

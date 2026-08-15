@@ -956,6 +956,13 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     private string tonePresetName = string.Empty;
     private string alertToneNameText = string.Empty;
     private string recordingRetentionDaysText = string.Empty;
+    private string recordingDirectionFilter = "All";
+    private string recordingProtocolFilter = "All";
+    private string recordingEncryptionFilter = "All";
+    private string recordingSystemFilterText = string.Empty;
+    private string recordingChannelFilterText = string.Empty;
+    private string recordingTalkgroupFilterText = string.Empty;
+    private string recordingSubscriberFilterText = string.Empty;
     private string clockText = string.Empty;
     private string debugLogFilterText = string.Empty;
     private string debugLogSeverityFilter = "All";
@@ -1863,23 +1870,92 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         }
     }
 
+    public IReadOnlyList<string> RecordingDirectionFilters { get; } = ["All", "RX", "TX"];
+    public IReadOnlyList<string> RecordingProtocolFilters { get; } = ["All", "DMR", "P25", "ANALOG", "NXDN"];
+    public IReadOnlyList<string> RecordingEncryptionFilters { get; } = ["All", "Clear", "Encrypted"];
+
+    public string RecordingDirectionFilter
+    {
+        get => recordingDirectionFilter;
+        set => SetRecordingFilter(ref recordingDirectionFilter, value, nameof(RecordingDirectionFilter));
+    }
+
+    public string RecordingProtocolFilter
+    {
+        get => recordingProtocolFilter;
+        set => SetRecordingFilter(ref recordingProtocolFilter, value, nameof(RecordingProtocolFilter));
+    }
+
+    public string RecordingEncryptionFilter
+    {
+        get => recordingEncryptionFilter;
+        set => SetRecordingFilter(ref recordingEncryptionFilter, value, nameof(RecordingEncryptionFilter));
+    }
+
+    public string RecordingSystemFilterText
+    {
+        get => recordingSystemFilterText;
+        set => SetRecordingFilter(ref recordingSystemFilterText, value, nameof(RecordingSystemFilterText), allowEmpty: true);
+    }
+
+    public string RecordingChannelFilterText
+    {
+        get => recordingChannelFilterText;
+        set => SetRecordingFilter(ref recordingChannelFilterText, value, nameof(RecordingChannelFilterText), allowEmpty: true);
+    }
+
+    public string RecordingTalkgroupFilterText
+    {
+        get => recordingTalkgroupFilterText;
+        set => SetRecordingFilter(ref recordingTalkgroupFilterText, value, nameof(RecordingTalkgroupFilterText), allowEmpty: true);
+    }
+
+    public string RecordingSubscriberFilterText
+    {
+        get => recordingSubscriberFilterText;
+        set => SetRecordingFilter(ref recordingSubscriberFilterText, value, nameof(RecordingSubscriberFilterText), allowEmpty: true);
+    }
+
+    public void ClearRecordingFilters()
+    {
+        RecordingFilterText = string.Empty;
+        RecordingDirectionFilter = "All";
+        RecordingProtocolFilter = "All";
+        RecordingEncryptionFilter = "All";
+        RecordingSystemFilterText = string.Empty;
+        RecordingChannelFilterText = string.Empty;
+        RecordingTalkgroupFilterText = string.Empty;
+        RecordingSubscriberFilterText = string.Empty;
+    }
+
     public IReadOnlyList<CallRecordingMetadata> FilteredRecordings
         => Recordings
-            .Where(metadata =>
-            {
-                if (string.IsNullOrWhiteSpace(RecordingFilterText))
-                    return true;
-
-                string filter = RecordingFilterText.Trim();
-                return metadata.SystemName.Contains(filter, StringComparison.OrdinalIgnoreCase) ||
-                    metadata.ChannelName.Contains(filter, StringComparison.OrdinalIgnoreCase) ||
-                    metadata.Protocol.Contains(filter, StringComparison.OrdinalIgnoreCase) ||
-                    metadata.FileName.Contains(filter, StringComparison.OrdinalIgnoreCase) ||
-                    metadata.RouteText.Contains(filter, StringComparison.OrdinalIgnoreCase) ||
-                    metadata.SubscriberId?.ToString(CultureInfo.InvariantCulture).Contains(filter, StringComparison.OrdinalIgnoreCase) == true ||
-                    metadata.TalkgroupId?.ToString(CultureInfo.InvariantCulture).Contains(filter, StringComparison.OrdinalIgnoreCase) == true;
-            })
+            .Where(metadata => new RecordingCatalogFilter(
+                RecordingFilterText,
+                RecordingDirectionFilter,
+                RecordingProtocolFilter,
+                RecordingEncryptionFilter,
+                RecordingSystemFilterText,
+                RecordingChannelFilterText,
+                RecordingTalkgroupFilterText,
+                RecordingSubscriberFilterText).Matches(metadata))
             .ToArray();
+
+    private void SetRecordingFilter(
+        ref string field,
+        string? value,
+        string propertyName,
+        bool allowEmpty = false)
+    {
+        string normalized = string.IsNullOrWhiteSpace(value)
+            ? (allowEmpty ? string.Empty : "All")
+            : value.Trim();
+        if (field.Equals(normalized, StringComparison.Ordinal))
+            return;
+        field = normalized;
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(FilteredRecordings)));
+    }
 
     public void ClearDebugLogs()
     {
