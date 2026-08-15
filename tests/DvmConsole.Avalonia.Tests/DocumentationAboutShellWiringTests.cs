@@ -86,13 +86,13 @@ namespace DvmConsole.Avalonia.Tests
             Assert.Contains(
                 "&& string.Equals(header, \"Documentation\", StringComparison.Ordinal)",
                 appSource);
-            Assert.Contains("helpMenu.Items.Add(documentationItem)", appSource);
+            Assert.Contains("helpMenu.Items.Add(CreateDocumentationMenuItem())", appSource);
             Assert.Contains("existingDocumentation", appSource);
             int debugIndex = appSource.IndexOf(
-                "helpMenu.Items.Add(debugLogItem)",
+                "helpMenu.Items.Add(CreateDebugLogMenuItem(mainWindow))",
                 StringComparison.Ordinal);
             int documentationIndex = appSource.IndexOf(
-                "helpMenu.Items.Add(documentationItem)",
+                "helpMenu.Items.Add(CreateDocumentationMenuItem())",
                 StringComparison.Ordinal);
             Assert.True(debugIndex >= 0, "The Help menu must retain Debug Logs insertion.");
             Assert.True(
@@ -110,10 +110,9 @@ namespace DvmConsole.Avalonia.Tests
             string xaml = FileText("DvmConsole.Avalonia/MainWindow.axaml");
 
             Assert.Contains("<NativeMenuItem Header=\"Help\">", xaml);
-            Assert.Contains("<NativeMenuItem Header=\"Help\">\n                <NativeMenu />", xaml);
-            Assert.DoesNotContain("Header=\"Debug Logs\"", xaml);
-            Assert.DoesNotContain("Header=\"Documentation\"", xaml);
-            Assert.DoesNotContain("Header=\"About\"", xaml);
+            Assert.Contains("<NativeMenuItem Header=\"Debug Logs\" />", xaml);
+            Assert.Contains("<NativeMenuItem Header=\"Documentation\" />", xaml);
+            Assert.Contains("<NativeMenuItem Header=\"About\" />", xaml);
         }
 
         [Fact]

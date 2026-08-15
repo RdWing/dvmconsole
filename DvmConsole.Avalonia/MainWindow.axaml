@@ -50,7 +50,11 @@
                 </NativeMenu>
             </NativeMenuItem>
             <NativeMenuItem Header="Help">
-                <NativeMenu />
+                <NativeMenu>
+                    <NativeMenuItem Header="Debug Logs" />
+                    <NativeMenuItem Header="Documentation" />
+                    <NativeMenuItem Header="About" />
+                </NativeMenu>
             </NativeMenuItem>
             <NativeMenuItem Header="App">
                 <NativeMenu>

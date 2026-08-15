@@ -26,6 +26,7 @@ namespace DvmConsole.Avalonia.Tests
 
             Assert.Contains("x:DataType=\"vm:DebugLogViewModel\"", xaml);
             Assert.Contains("Title=\"Debug Logs\"", xaml);
+            Assert.Contains("Live FNECore and DVM Console diagnostics", xaml);
             Assert.Contains("Content=\"Copy\"", xaml);
             Assert.Contains("Content=\"Save\"", xaml);
             Assert.Contains("Content=\"Clear\"", xaml);
@@ -61,6 +62,13 @@ namespace DvmConsole.Avalonia.Tests
             Assert.Contains("debugLogWindow?.Close()", windowSource);
             Assert.Contains("fnecoreTransportFactory?.ClearDiagnosticWriter()", windowSource);
             Assert.DoesNotContain("diagnosticSink.Dispose()", windowSource);
+
+            int helpWiringIndex = appSource.IndexOf("WireHelpMenu(menu, mainWindow)", StringComparison.Ordinal);
+            int settingsCompositionIndex = appSource.IndexOf("settingsMenu.Items.Insert", StringComparison.Ordinal);
+            Assert.True(helpWiringIndex >= 0, "Help wiring must be explicit.");
+            Assert.True(
+                helpWiringIndex < settingsCompositionIndex,
+                "Help wiring must run before unrelated shell-menu composition.");
         }
 
         [Fact]
@@ -90,6 +98,20 @@ namespace DvmConsole.Avalonia.Tests
             Assert.DoesNotContain(password, text);
             Assert.DoesNotContain(key, text);
             Assert.Contains("[REDACTED]", text);
+        }
+
+        [Fact]
+        public void DebugLogViewerSharesOneBufferForFneAndApplicationDiagnostics()
+        {
+            var buffer = new LogBuffer();
+            using var sink = new DiagnosticLogSink(buffer);
+            sink.WriteApplication(fnecore.LogLevel.INFO, "application troubleshooting detail");
+            sink.Write(fnecore.LogLevel.INFO, "fne emitted detail");
+
+            var viewModel = new DebugLogViewModel(buffer);
+
+            Assert.Contains(viewModel.Lines, line => line.Contains("application troubleshooting detail", StringComparison.Ordinal));
+            Assert.Contains(viewModel.Lines, line => line.Contains("fne emitted detail", StringComparison.Ordinal));
         }
 
         private static string FileText(string relativePath)

@@ -296,14 +296,18 @@ namespace DvmConsole.Avalonia
                     return;
                 }
 
+                // Wire Help first. The native macOS exporter can publish the
+                // menu before later shell-menu composition finishes; Help is
+                // the diagnostic escape hatch and must not depend on any
+                // unrelated menu mutation succeeding.
+                WireHelpMenu(menu, mainWindow);
+
                 var aboutItem = CreateAboutMenuItem(mainWindow);
 
                 NativeMenuItem tarItem = CreateTarConfigurationMenuItem(mainWindow);
                 NativeMenuItem tarViewerItem = CreateTarViewerMenuItem(mainWindow);
                 NativeMenuItem groupsItem = CreatePatchGroupsMenuItem(mainWindow);
                 NativeMenuItem tonesItem = CreateAlertToneManagerMenuItem(mainWindow);
-                NativeMenuItem debugLogItem = CreateDebugLogMenuItem(mainWindow);
-                NativeMenuItem documentationItem = CreateDocumentationMenuItem();
                 NativeMenuItem shellControlsItem = CreateShellControlsMenuItem(mainWindow);
                 NativeMenuItem subscriberCommandsItem = CreateSubscriberCommandsMenuItem(mainWindow);
                 NativeMenuItem quickCallItem = CreateQuickCallMenuItem(mainWindow);
@@ -365,61 +369,6 @@ namespace DvmConsole.Avalonia
                     commandsMenu.Items.Add(quickCallItem);
                 }
 
-                NativeMenuItem? helpItem = menu.Items
-                    .OfType<NativeMenuItem>()
-                    .FirstOrDefault(item => item.Header is string header
-                        && string.Equals(header, "Help", StringComparison.Ordinal));
-                if (helpItem is null)
-                {
-                    helpItem = new NativeMenuItem("Help")
-                    {
-                        Menu = new NativeMenu(),
-                    };
-                    menu.Items.Add(helpItem);
-                }
-                if (helpItem.Menu is { } helpMenu)
-                {
-                    NativeMenuItem? existingDebugLog = helpMenu.Items
-                        .OfType<NativeMenuItem>()
-                        .FirstOrDefault(item => item.Header is string header
-                            && string.Equals(header, "Debug Logs", StringComparison.Ordinal));
-                    if (existingDebugLog is null)
-                    {
-                        helpMenu.Items.Add(debugLogItem);
-                    }
-                    else
-                    {
-                        existingDebugLog.IsEnabled = debugLogItem.IsEnabled;
-                        existingDebugLog.Click += (_, _) => mainWindow.OpenDebugLog();
-                    }
-
-                    NativeMenuItem? existingDocumentation = helpMenu.Items
-                        .OfType<NativeMenuItem>()
-                        .FirstOrDefault(item => item.Header is string header
-                            && string.Equals(header, "Documentation", StringComparison.Ordinal));
-                    if (existingDocumentation is null)
-                    {
-                        helpMenu.Items.Add(documentationItem);
-                    }
-                    else
-                    {
-                        existingDocumentation.Click += (_, _) =>
-                            OpenExternalUrl(AboutWindowViewModel.DocumentationLink);
-                    }
-
-                    NativeMenuItem? existingAbout = helpMenu.Items
-                        .OfType<NativeMenuItem>()
-                        .FirstOrDefault(item => item.Header is string header
-                            && string.Equals(header, "About", StringComparison.Ordinal));
-                    if (existingAbout is null)
-                    {
-                        helpMenu.Items.Add(CreateAboutMenuItem(mainWindow));
-                    }
-                    else
-                    {
-                        WireAboutMenuItem(existingAbout, mainWindow);
-                    }
-                }
                 if (appItem?.Menu is { } appMenu && appMenu.Items.Count > 0)
                 {
                     // Insert ahead of the trailing item (Quit): About,
@@ -693,6 +642,66 @@ namespace DvmConsole.Avalonia
             };
             item.Click += (_, _) => mainWindow?.OpenDebugLog();
             return item;
+        }
+
+        private static void WireHelpMenu(NativeMenu menu, MainWindow mainWindow)
+        {
+            NativeMenuItem? helpItem = menu.Items
+                .OfType<NativeMenuItem>()
+                .FirstOrDefault(item => item.Header is string header
+                    && string.Equals(header, "Help", StringComparison.Ordinal));
+            if (helpItem is null)
+            {
+                helpItem = new NativeMenuItem("Help")
+                {
+                    Menu = new NativeMenu(),
+                };
+                menu.Items.Add(helpItem);
+            }
+
+            if (helpItem.Menu is not { } helpMenu)
+                return;
+
+            NativeMenuItem? existingDebugLog = helpMenu.Items
+                .OfType<NativeMenuItem>()
+                .FirstOrDefault(item => item.Header is string header
+                    && string.Equals(header, "Debug Logs", StringComparison.Ordinal));
+            if (existingDebugLog is null)
+            {
+                helpMenu.Items.Add(CreateDebugLogMenuItem(mainWindow));
+            }
+            else
+            {
+                existingDebugLog.IsEnabled = true;
+                existingDebugLog.Click += (_, _) => mainWindow.OpenDebugLog();
+            }
+
+            NativeMenuItem? existingDocumentation = helpMenu.Items
+                .OfType<NativeMenuItem>()
+                .FirstOrDefault(item => item.Header is string header
+                    && string.Equals(header, "Documentation", StringComparison.Ordinal));
+            if (existingDocumentation is null)
+            {
+                helpMenu.Items.Add(CreateDocumentationMenuItem());
+            }
+            else
+            {
+                existingDocumentation.Click += (_, _) =>
+                    OpenExternalUrl(AboutWindowViewModel.DocumentationLink);
+            }
+
+            NativeMenuItem? existingAbout = helpMenu.Items
+                .OfType<NativeMenuItem>()
+                .FirstOrDefault(item => item.Header is string header
+                    && string.Equals(header, "About", StringComparison.Ordinal));
+            if (existingAbout is null)
+            {
+                helpMenu.Items.Add(CreateAboutMenuItem(mainWindow));
+            }
+            else
+            {
+                WireAboutMenuItem(existingAbout, mainWindow);
+            }
         }
 
         private static NativeMenuItem CreateAboutMenuItem(MainWindow mainWindow)
