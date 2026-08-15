@@ -67,6 +67,7 @@ public sealed class UserSettingsStoreTests
             store.Save(new UserSettings
             {
                 LastCodeplugPath = "/tmp/codeplug.yml",
+                RecentCodeplugPaths = [" /tmp/one.yml ", "/tmp/ONE.yml", "/tmp/two.yml"],
                 LastSelectedSystemName = "System 1",
                 LastSelectedChannelKey = "System 1\u001FDispatch",
                 AudioInputDeviceId = " microphone-1 ",
@@ -161,6 +162,7 @@ public sealed class UserSettingsStoreTests
             UserSettings loaded = store.Load();
 
             Assert.Equal("/tmp/codeplug.yml", loaded.LastCodeplugPath);
+            Assert.Equal(["/tmp/one.yml", "/tmp/two.yml"], loaded.RecentCodeplugPaths);
             Assert.Equal("System 1", loaded.LastSelectedSystemName);
             Assert.Equal("System 1\u001FDispatch", loaded.LastSelectedChannelKey);
             Assert.Equal("microphone-1", loaded.AudioInputDeviceId);

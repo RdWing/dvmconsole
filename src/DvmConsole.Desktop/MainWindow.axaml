@@ -26,6 +26,7 @@
         <Menu Background="Transparent" Foreground="#E8EDF3">
           <MenuItem Header="File">
             <MenuItem Header="Open Codeplug…" Click="HandleOpenCodeplugClick" />
+            <MenuItem Header="Open Recent" x:Name="recentCodeplugsMenu" />
             <MenuItem Header="Import Settings…" Click="HandleImportSettingsClick" />
             <MenuItem Header="Export Settings…" Click="HandleExportSettingsClick" />
             <Separator />
@@ -130,7 +131,7 @@
 
     <Grid Grid.Row="1" ColumnDefinitions="*,4,Auto">
       <Border Grid.Column="0" Background="{Binding MainBackgroundBrush}" Padding="10,12,8,8">
-        <Grid RowDefinitions="Auto,Auto,*">
+        <Grid RowDefinitions="Auto,Auto,Auto,*">
           <DockPanel Margin="0,0,0,8" IsVisible="{Binding ShowSystemStatus}">
             <Button DockPanel.Dock="Right" Content="{Binding ConnectionButtonText}" Command="{Binding ConnectionCommand}" />
             <StackPanel Orientation="Horizontal" Spacing="9" VerticalAlignment="Center">
@@ -151,7 +152,14 @@
             <Button Grid.Column="4" Content="Refresh devices" Command="{Binding RefreshAudioDevicesCommand}" HorizontalAlignment="Left" />
           </Grid>
 
-          <TabControl Grid.Row="2" ItemsSource="{Binding Systems}" SelectedItem="{Binding SelectedSystem, Mode=TwoWay}" IsVisible="{Binding ShowChannels}">
+          <Border Grid.Row="2" IsVisible="{Binding HasCodeplugDiagnostics}" Background="#332A1A" BorderBrush="#7A5C28" BorderThickness="1" CornerRadius="5" Padding="10,8" Margin="0,0,0,8">
+            <StackPanel Spacing="4">
+              <TextBlock FontWeight="SemiBold" Text="Codeplug diagnostics" />
+              <TextBlock Classes="muted" Text="{Binding CodeplugDiagnosticsText}" TextWrapping="Wrap" />
+            </StackPanel>
+          </Border>
+
+          <TabControl Grid.Row="3" ItemsSource="{Binding Systems}" SelectedItem="{Binding SelectedSystem, Mode=TwoWay}" IsVisible="{Binding ShowChannels}">
             <TabControl.ItemTemplate><DataTemplate x:DataType="local:SystemViewModel"><TextBlock Text="{Binding Name}" /></DataTemplate></TabControl.ItemTemplate>
             <TabControl.ContentTemplate>
               <DataTemplate x:DataType="local:SystemViewModel">

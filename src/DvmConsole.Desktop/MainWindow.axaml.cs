@@ -48,6 +48,7 @@ public sealed partial class MainWindow : Window
         AddHandler(InputElement.PointerPressedEvent, HandlePttPointerPressed, RoutingStrategies.Tunnel, true);
         AddHandler(InputElement.PointerReleasedEvent, HandlePttPointerReleased, RoutingStrategies.Tunnel, true);
         AddHandler(InputElement.PointerCaptureLostEvent, HandlePttPointerCaptureLost, RoutingStrategies.Bubble, true);
+        RefreshRecentCodeplugMenu();
         Opened += async (_, _) => await viewModel.StartKeyboardPttAsync().ConfigureAwait(false);
         Closed += async (_, _) =>
         {
@@ -153,6 +154,17 @@ public sealed partial class MainWindow : Window
             return;
         }
 
+        await OpenCodeplugAsync(path);
+    }
+
+    private async void HandleOpenRecentCodeplugClick(object? sender, RoutedEventArgs e)
+    {
+        if (sender is MenuItem { Tag: string path })
+            await OpenCodeplugAsync(path);
+    }
+
+    private async Task OpenCodeplugAsync(string path)
+    {
         var replacement = MainWindowViewModel.Load(path);
         if (!replacement.IsCodeplugLoaded)
         {
@@ -163,6 +175,34 @@ public sealed partial class MainWindow : Window
         }
 
         await ReplaceViewModelAsync(replacement);
+    }
+
+    private void RefreshRecentCodeplugMenu()
+    {
+        recentCodeplugsMenu.Items.Clear();
+        if (viewModel.RecentCodeplugPaths.Count == 0)
+        {
+            recentCodeplugsMenu.Items.Add(new MenuItem
+            {
+                Header = "No recent codeplugs",
+                IsEnabled = false
+            });
+            recentCodeplugsMenu.IsEnabled = false;
+            return;
+        }
+
+        foreach (string path in viewModel.RecentCodeplugPaths)
+        {
+            var item = new MenuItem
+            {
+                Header = path,
+                Tag = path
+            };
+            item.Click += HandleOpenRecentCodeplugClick;
+            recentCodeplugsMenu.Items.Add(item);
+        }
+
+        recentCodeplugsMenu.IsEnabled = true;
     }
 
     private async void HandleSelectBackgroundClick(object? sender, RoutedEventArgs e)
@@ -283,6 +323,7 @@ public sealed partial class MainWindow : Window
         MainWindowViewModel previous = viewModel;
         viewModel = replacement;
         DataContext = replacement;
+        RefreshRecentCodeplugMenu();
         await previous.DisposeAsync();
         await replacement.StartKeyboardPttAsync();
     }
@@ -677,6 +718,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     private readonly ChannelReceiveAudioCoordinator audioCoordinator;
     private readonly UserSettingsStore userSettingsStore;
     private readonly UserSettings userSettings;
+    private readonly string codeplugDiagnosticsText;
     private readonly ChannelTransmitCoordinator transmitCoordinator;
     private readonly ToneTransmitCoordinator toneTransmitCoordinator;
     private readonly TalkPermitTonePlayer talkPermitTonePlayer;
@@ -696,6 +738,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     private readonly ObservableCollection<AudioDeviceOptionViewModel> audioOutputDevices = [];
     private readonly ObservableCollection<SubscriberCommandAuditEntry> subscriberCommandAudit = [];
     private readonly ObservableCollection<DebugLogEntry> debugLogEntries = [];
+    private readonly ObservableCollection<string> recentCodeplugPaths = [];
     private readonly ObservableCollection<WebStreamViewModel> webStreams = [];
     private readonly WebStreamPlaybackCoordinator webStreamPlayback;
     private readonly object patchSourceWorkSync = new();
@@ -746,8 +789,11 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         bool patchSourceIdPassthrough = false)
     {
         this.statusText = statusText;
+        codeplugDiagnosticsText = statusText;
         this.userSettingsStore = userSettingsStore ?? new UserSettingsStore(UserSettingsStore.DefaultPath);
         userSettings = this.userSettingsStore.Load();
+        foreach (string path in userSettings.RecentCodeplugPaths.Take(UserSettings.MaximumRecentCodeplugs))
+            recentCodeplugPaths.Add(path);
         LoadUserBackground(userSettings.UserBackgroundImage);
         ApplyTheme(userSettings.DarkMode);
         keyboardPtt = new KeyboardPttSource(ParseGlobalPttKey(userSettings.GlobalPttKey))
@@ -851,6 +897,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         AudioOutputDevices = new ReadOnlyObservableCollection<AudioDeviceOptionViewModel>(audioOutputDevices);
         SubscriberCommandAudit = new ReadOnlyObservableCollection<SubscriberCommandAuditEntry>(subscriberCommandAudit);
         DebugLogEntries = new ReadOnlyObservableCollection<DebugLogEntry>(debugLogEntries);
+        RecentCodeplugPaths = new ReadOnlyObservableCollection<string>(recentCodeplugPaths);
         WebStreams = new ReadOnlyObservableCollection<WebStreamViewModel>(webStreams);
         foreach (WebStreamViewModel stream in Zones.SelectMany(zone => zone.WebStreams))
         {
@@ -952,6 +999,12 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     public bool IsCodeplugLoaded => Systems.Count > 0;
 
     public string? CurrentCodeplugPath => userSettings.LastCodeplugPath;
+
+    public ReadOnlyObservableCollection<string> RecentCodeplugPaths { get; }
+
+    public bool HasCodeplugDiagnostics => !IsCodeplugLoaded || codeplugDiagnosticsText.Contains('\n');
+
+    public string CodeplugDiagnosticsText => codeplugDiagnosticsText;
 
     public bool ShowCallHistoryPane
     {
@@ -3904,7 +3957,18 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
 
     private void RecordLoadedCodeplug(string path)
     {
-        userSettings.LastCodeplugPath = path;
+        string normalizedPath = Path.GetFullPath(path);
+        userSettings.LastCodeplugPath = normalizedPath;
+        userSettings.RecentCodeplugPaths = new[] { normalizedPath }
+            .Concat(userSettings.RecentCodeplugPaths ?? [])
+            .Where(candidate => !string.IsNullOrWhiteSpace(candidate))
+            .Select(candidate => Path.GetFullPath(candidate.Trim()))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Take(UserSettings.MaximumRecentCodeplugs)
+            .ToList();
+        recentCodeplugPaths.Clear();
+        foreach (string recentPath in userSettings.RecentCodeplugPaths)
+            recentCodeplugPaths.Add(recentPath);
         if (selectedChannel is not null &&
             !Systems.SelectMany(system => system.Channels).Contains(selectedChannel))
         {

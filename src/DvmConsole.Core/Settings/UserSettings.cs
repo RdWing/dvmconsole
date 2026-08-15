@@ -22,7 +22,9 @@ public sealed class WindowPlacementSetting
 public sealed class UserSettings
 {
     public const int MaximumToolbarClocks = 8;
+    public const int MaximumRecentCodeplugs = 8;
     public string? LastCodeplugPath { get; set; }
+    public List<string> RecentCodeplugPaths { get; set; } = [];
     public string? LastSelectedSystemName { get; set; }
     public string? LastSelectedChannelKey { get; set; }
     public string AudioInputDeviceId { get; set; } = "default";
@@ -131,6 +133,7 @@ public sealed class UserSettingsStore
             settings.UserBackgroundImage = string.IsNullOrWhiteSpace(settings.UserBackgroundImage)
                 ? null
                 : settings.UserBackgroundImage.Trim();
+            settings.RecentCodeplugPaths = NormalizeRecentCodeplugPaths(settings.RecentCodeplugPaths);
             settings.ToolbarClocks = NormalizeToolbarClocks(settings.ToolbarClocks);
             settings.TransmitSelectedChannelKeys = NormalizeNames(settings.TransmitSelectedChannelKeys);
             NormalizeAudioInputSettings(settings);
@@ -229,6 +232,7 @@ public sealed class UserSettingsStore
         settings.TonePresets = NormalizeTonePresets(settings.TonePresets);
         settings.CallHistoryWindowPlacement = NormalizeWindowPlacement(settings.CallHistoryWindowPlacement);
         NormalizeAudioInputSettings(settings);
+        settings.RecentCodeplugPaths = NormalizeRecentCodeplugPaths(settings.RecentCodeplugPaths);
         settings.AudioInputPresetName = settings.AudioInputPresetName?.Trim() ?? string.Empty;
         settings.AudioInputPresets = NormalizeAudioInputPresets(settings.AudioInputPresets);
         settings.ChannelOutputDeviceIds = NormalizeChannelOutputDevices(settings.ChannelOutputDeviceIds);
@@ -323,6 +327,33 @@ public sealed class UserSettingsStore
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .OrderBy(name => name, StringComparer.OrdinalIgnoreCase)
             .ToList();
+    }
+
+    private static List<string> NormalizeRecentCodeplugPaths(IEnumerable<string>? paths)
+    {
+        var normalized = new List<string>();
+        foreach (string? value in paths ?? [])
+        {
+            string path = value?.Trim() ?? string.Empty;
+            if (path.Length == 0)
+                continue;
+
+            try
+            {
+                path = System.IO.Path.GetFullPath(path);
+            }
+            catch (ArgumentException)
+            {
+                continue;
+            }
+
+            if (!normalized.Contains(path, StringComparer.OrdinalIgnoreCase))
+                normalized.Add(path);
+            if (normalized.Count == UserSettings.MaximumRecentCodeplugs)
+                break;
+        }
+
+        return normalized;
     }
 
     private static string NormalizeGlobalPttKey(string? key)

@@ -395,6 +395,29 @@ public sealed class SystemViewModelTests
     }
 
     [Fact]
+    public async Task SuccessfulLoadsMaintainBoundedRecentCodeplugHistory()
+    {
+        string codeplugPath = Path.Combine(AppContext.BaseDirectory, "TestData", "multiple-systems.yml");
+        string otherPath = Path.Combine(Path.GetTempPath(), "dvmconsole-other-codeplug.yml");
+        string settingsPath = CreateSettingsPath();
+        var store = new UserSettingsStore(settingsPath);
+        store.Save(new UserSettings { RecentCodeplugPaths = [otherPath, codeplugPath] });
+
+        try
+        {
+            await using MainWindowViewModel viewModel = MainWindowViewModel.Load(codeplugPath, store);
+
+            Assert.Equal([Path.GetFullPath(codeplugPath), Path.GetFullPath(otherPath)], viewModel.RecentCodeplugPaths);
+            Assert.Equal(viewModel.RecentCodeplugPaths, store.Load().RecentCodeplugPaths);
+            Assert.False(viewModel.HasCodeplugDiagnostics);
+        }
+        finally
+        {
+            CleanupSettingsPath(settingsPath);
+        }
+    }
+
+    [Fact]
     public async Task SavesUsesAndDeletesMicrophonePresets()
     {
         string codeplugPath = Path.Combine(AppContext.BaseDirectory, "TestData", "multiple-systems.yml");
