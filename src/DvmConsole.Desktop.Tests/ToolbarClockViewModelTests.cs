@@ -35,6 +35,21 @@ public sealed class ToolbarClockViewModelTests
     }
 
     [Fact]
+    public void SelectsBoundedUtcOffsetFromOperatorOptions()
+    {
+        var clock = new ToolbarClockViewModel(1, new ToolbarClockSetting
+        {
+            UtcOffsetHours = -7
+        });
+
+        Assert.Equal("UTC-07", clock.SelectedUtcOffsetOption?.Label);
+        clock.SelectedUtcOffsetOption = clock.UtcOffsetOptions.Single(option => option.OffsetHours == 14);
+
+        Assert.Equal("14", clock.UtcOffsetText);
+        Assert.Equal("UTC+14", clock.TimeZoneLabel);
+    }
+
+    [Fact]
     public void PersistsAndNormalizesToolbarClockColors()
     {
         var clock = new ToolbarClockViewModel(1, new ToolbarClockSetting

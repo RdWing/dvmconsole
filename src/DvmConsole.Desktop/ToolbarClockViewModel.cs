@@ -11,8 +11,16 @@ public sealed record ToolbarClockColorOption(string Label, string ColorHex)
     public IBrush ColorBrush => new SolidColorBrush(Color.Parse(ColorHex));
 }
 
+public sealed record ToolbarClockUtcOffsetOption(int OffsetHours, string Label);
+
 public sealed class ToolbarClockViewModel : INotifyPropertyChanged
 {
+    private static readonly IReadOnlyList<ToolbarClockUtcOffsetOption> utcOffsetOptions =
+        Enumerable.Range(-12, 27)
+            .Select(offset => new ToolbarClockUtcOffsetOption(
+                offset,
+                $"UTC{(offset >= 0 ? "+" : "-")}{Math.Abs(offset):00}"))
+            .ToArray();
     private static readonly IReadOnlyList<ToolbarClockColorOption> colorOptions =
     [
         new("Neutral", "#3A3A3A"),
@@ -47,6 +55,8 @@ public sealed class ToolbarClockViewModel : INotifyPropertyChanged
 
     public IReadOnlyList<ToolbarClockColorOption> ColorOptions => colorOptions;
 
+    public IReadOnlyList<ToolbarClockUtcOffsetOption> UtcOffsetOptions => utcOffsetOptions;
+
     public bool Enabled
     {
         get => enabled;
@@ -64,6 +74,22 @@ public sealed class ToolbarClockViewModel : INotifyPropertyChanged
     {
         get => utcOffsetText;
         set => SetField(ref utcOffsetText, value ?? string.Empty);
+    }
+
+    public ToolbarClockUtcOffsetOption? SelectedUtcOffsetOption
+    {
+        get
+        {
+            return TryGetUtcOffset(out int offsetHours)
+                ? utcOffsetOptions.FirstOrDefault(option => option.OffsetHours == offsetHours)
+                : null;
+        }
+        set
+        {
+            if (value is null)
+                return;
+            UtcOffsetText = value.OffsetHours.ToString(CultureInfo.InvariantCulture);
+        }
     }
 
     public string TimeZoneLabel
@@ -146,6 +172,9 @@ public sealed class ToolbarClockViewModel : INotifyPropertyChanged
         field = value;
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
         if (propertyName == nameof(UtcOffsetText))
+        {
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(TimeZoneLabel)));
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SelectedUtcOffsetOption)));
+        }
     }
 }
