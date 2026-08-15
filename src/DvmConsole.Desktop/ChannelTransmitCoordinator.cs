@@ -203,6 +203,9 @@ public sealed class ChannelTransmitCoordinator : IAsyncDisposable
                 throw new InvalidOperationException($"{target.Channel.Name} is RX-only or cannot transmit with its configured encryption.");
             if (!target.System.Channels.Contains(target.Channel))
                 throw new InvalidOperationException($"{target.Channel.Name} does not belong to FNE system '{target.System.Name}'.");
+            // DMR transmission is intentionally fail-open with respect to the
+            // master's announced talkgroup table. AnnouncedTGs is advisory for
+            // this console; a missing/deactivated entry must not disable PTT.
             if (!target.System.IsConnected)
                 throw new InvalidOperationException($"The FNE system '{target.System.Name}' is not connected.");
             if (target.System.SourceId is not uint sourceId || sourceId == 0)

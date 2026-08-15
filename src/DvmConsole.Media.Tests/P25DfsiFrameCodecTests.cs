@@ -24,6 +24,31 @@ public sealed class P25DfsiFrameCodecTests
         Assert.Equal(P25Defines.P25_ALGO_UNENCRYPT, ldu2[181]);
     }
 
+    [Fact]
+    public async Task ZeroedLegacyClearHduMetadataDoesNotDisableReceiveAudio()
+    {
+        byte[] payload = P25DfsiFrameCodec.CreateLdu1Payload(
+            99,
+            100,
+            new byte[P25DfsiFrameCodec.ImbeBytes]);
+        payload[180] = P25Defines.P25_FT_HDU_VALID;
+        payload[181] = 0;
+        payload[182] = 0;
+        payload[183] = 0;
+        var vocoder = new FakeVocoderSession();
+        var playback = new FakePlayback();
+        await using var session = new P25RxAudioSession(
+            new P25TrafficSelector(100),
+            vocoder,
+            playback);
+
+        int errors = await session.ProcessAsync(CreateTraffic("LDU1", payload));
+
+        Assert.Equal(0, errors);
+        Assert.Equal(9, vocoder.Codewords.Count);
+        Assert.Equal(9, playback.Frames.Count);
+    }
+
     [Theory]
     [InlineData("LDU1", 0x62)]
     [InlineData("LDU2", 0x6B)]

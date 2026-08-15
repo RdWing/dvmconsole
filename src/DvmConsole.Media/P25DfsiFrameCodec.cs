@@ -80,9 +80,16 @@ public static class P25DfsiFrameCodec
             if (payload.Length < 193 || payload[180] != 0x01)
                 return false;
 
+            byte algorithmId = payload[181];
+            ushort keyId = (ushort)((payload[182] << 8) | payload[183]);
+            // Older and third-party FNE peers sometimes emit an HDU-valid
+            // clear header with zeroed crypto fields. The legacy console
+            // normalizes algorithm 0/key 0 to the P25 UNENCRYPT value.
+            if (algorithmId == 0 && keyId == 0)
+                algorithmId = P25Defines.P25_ALGO_UNENCRYPT;
             metadata = new P25EncryptionMetadata(
-                payload[181],
-                (ushort)((payload[182] << 8) | payload[183]),
+                algorithmId,
+                keyId,
                 payload.Slice(184, 9).ToArray());
             return true;
         }
@@ -94,9 +101,13 @@ public static class P25DfsiFrameCodec
         payload.Slice(61, 3).CopyTo(messageIndicator.AsSpan(0, 3));
         payload.Slice(78, 3).CopyTo(messageIndicator.AsSpan(3, 3));
         payload.Slice(95, 3).CopyTo(messageIndicator.AsSpan(6, 3));
+        byte ldu2AlgorithmId = payload[112];
+        ushort ldu2KeyId = (ushort)((payload[113] << 8) | payload[114]);
+        if (ldu2AlgorithmId == 0 && ldu2KeyId == 0)
+            ldu2AlgorithmId = P25Defines.P25_ALGO_UNENCRYPT;
         metadata = new P25EncryptionMetadata(
-            payload[112],
-            (ushort)((payload[113] << 8) | payload[114]),
+            ldu2AlgorithmId,
+            ldu2KeyId,
             messageIndicator);
         return true;
     }

@@ -2500,7 +2500,25 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
     }
 
-    private void HandleClockTick(object? sender, EventArgs e) => RefreshClock();
+    private void HandleClockTick(object? sender, EventArgs e)
+    {
+        RefreshClock();
+        ExpireStaleReceiveStates(DateTimeOffset.UtcNow);
+    }
+
+    private void ExpireStaleReceiveStates(DateTimeOffset now)
+    {
+        bool recordingStateChanged = false;
+        foreach (ChannelViewModel channel in Systems.SelectMany(system => system.Channels))
+        {
+            if (!channel.TryExpireReceiveState(now, TimeSpan.FromSeconds(2)))
+                continue;
+            callRecordings.StopChannel(channel);
+            recordingStateChanged = true;
+        }
+        if (recordingStateChanged)
+            RefreshRecordings();
+    }
 
     private void RefreshClock()
     {
@@ -2866,7 +2884,6 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
     {
         ChannelRuntimeState.Receiving => new SolidColorBrush(Color.Parse("#008A3A")),
         ChannelRuntimeState.Transmitting => new SolidColorBrush(Color.Parse("#0B6B9C")),
-        _ when transmitSelected => new SolidColorBrush(Color.Parse("#2B253C")),
         _ when audioEnabled => new SolidColorBrush(Color.Parse("#1B2B22")),
         _ => new SolidColorBrush(Color.Parse("#151D26"))
     };
@@ -2874,7 +2891,6 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
     {
         ChannelRuntimeState.Receiving => new SolidColorBrush(Color.Parse("#00C86A")),
         ChannelRuntimeState.Transmitting => new SolidColorBrush(Color.Parse("#2497D3")),
-        _ when transmitSelected => new SolidColorBrush(Color.Parse("#9A78E8")),
         _ when audioEnabled => new SolidColorBrush(Color.Parse("#4E8060")),
         _ => CreateBrush(configuration.ResourceColor, "#2A3A4B")
     };
@@ -2961,7 +2977,11 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
             _ => false
         };
     public string PttButtonText => transmitEnabled ? "Release" : "PTT";
-    public string TransmitSelectionText => transmitSelected ? "TX selected" : "TX";
+    public string TransmitSelectionText => transmitSelected ? "TX ✓" : "TX";
+    public IBrush TransmitSelectionBrush => new SolidColorBrush(Color.Parse(
+        transmitSelected ? "#694BB0" : "#242938"));
+    public IBrush TransmitSelectionBorderBrush => new SolidColorBrush(Color.Parse(
+        transmitSelected ? "#B69AF4" : "#3A4555"));
     public ICommand AudioCommand { get; private set; }
     public ICommand PttCommand { get; private set; }
     public ICommand EncryptionCommand { get; }
@@ -3091,8 +3111,8 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
         transmitSelected = selected;
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsTransmitSelected)));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(TransmitSelectionText)));
-        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CardBackgroundBrush)));
-        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CardBorderBrush)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(TransmitSelectionBrush)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(TransmitSelectionBorderBrush)));
     }
 
     public void RestoreTransmitSelection(bool selected) => SetTransmitSelected(selected);
@@ -3103,7 +3123,6 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
         ArgumentNullException.ThrowIfNull(traffic);
 
         if (!runtime.Definition.SystemName.Equals(systemName, StringComparison.OrdinalIgnoreCase) ||
-            traffic.DestinationId != runtime.Definition.DestinationId ||
             !MatchesProtocol(traffic.Protocol) ||
             traffic.StreamId == 0)
         {
@@ -3122,10 +3141,28 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
             return true;
         }
 
+        if (traffic.DestinationId != runtime.Definition.DestinationId)
+            return false;
+
         if (!MatchesVoiceTraffic(traffic) || traffic.SourceId == 0)
             return false;
 
         runtime.MarkReceiving(traffic.SourceId, traffic.StreamId);
+        return true;
+    }
+
+    public bool TryExpireReceiveState(DateTimeOffset now, TimeSpan timeout)
+    {
+        if (timeout <= TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(nameof(timeout));
+        if (runtime.State != ChannelRuntimeState.Receiving ||
+            runtime.LastActivity is not DateTimeOffset lastActivity ||
+            now - lastActivity <= timeout)
+        {
+            return false;
+        }
+
+        runtime.MarkIdle(now);
         return true;
     }
 
