@@ -230,6 +230,38 @@ public sealed class DmrVoicePacketCodecTests
         Assert.Equal(9, router.FramesDecoded);
     }
 
+    [Fact]
+    public async Task RouterProcessesSustainedCallAcrossReservedSequenceBoundary()
+    {
+        const int packetCount = 1_024;
+        var vocoder = new FakeVocoderSession();
+        var playback = new FakePlayback();
+        await using var router = new DmrRxAudioRouter(new DmrTrafficSelector(100, 1), vocoder, playback);
+
+        for (int index = 0; index < packetCount; index++)
+        {
+            // 0xFFFF is reserved for the DMR call-end marker. The media
+            // sequence therefore wraps from 0xFFFE directly to zero.
+            ushort packetSequence = index switch
+            {
+                0 => 0xFFFD,
+                1 => 0xFFFE,
+                _ => checked((ushort)(index - 2))
+            };
+            Assert.Equal(0, await router.ProcessAsync(CreateTraffic(
+                100,
+                1,
+                "VOICE",
+                packetSequence: packetSequence,
+                streamId: 0x1234)));
+        }
+
+        Assert.Equal(0, router.LostPackets);
+        Assert.Equal(0, router.DuplicateOrLatePackets);
+        Assert.Equal(packetCount * DmrVoicePacketCodec.CodewordsPerPacket, router.FramesDecoded);
+        Assert.Equal(router.FramesDecoded, playback.Frames.Count);
+    }
+
     private static FneTrafficFrame CreateTraffic(
         uint destinationId,
         byte slot,
