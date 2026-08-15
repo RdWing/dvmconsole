@@ -54,6 +54,26 @@ public sealed class CallHistoryStoreTests
         Assert.False(store.UpdateEncryption("System 1", FneTrafficProtocol.Dmr, 42, encrypted: true));
     }
 
+    [Fact]
+    public void IncludesProtocolEncryptionIdentifiersWhenAvailable()
+    {
+        var store = new CallHistoryStore();
+        CallHistoryEntry entry = CreateEntry(42);
+        store.Add(entry);
+
+        Assert.True(store.UpdateEncryption(
+            "System 1",
+            FneTrafficProtocol.Dmr,
+            42,
+            encrypted: true,
+            algorithmId: 0x81,
+            keyId: 0x0050));
+
+        Assert.Equal((byte)0x81, entry.EncryptionAlgorithmId);
+        Assert.Equal((ushort)0x0050, entry.EncryptionKeyId);
+        Assert.Equal("Encrypted (alg 0x81, key 0x50)", entry.EncryptionText);
+    }
+
     private static CallHistoryEntry CreateEntry(uint streamId)
     {
         return new CallHistoryEntry(

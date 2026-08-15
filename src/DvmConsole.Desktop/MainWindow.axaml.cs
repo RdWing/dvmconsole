@@ -2879,7 +2879,8 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         List<ChannelViewModel> activePatchSourceChannels = [];
         bool callHistoryChanged = false;
         bool matchedAnyChannel = false;
-        bool? protocolEncrypted = TryResolveProtocolEncryption(traffic);
+        ProtocolEncryptionMetadata? protocolEncryption = TryResolveProtocolEncryption(traffic);
+        bool? protocolEncrypted = protocolEncryption?.Encrypted;
         foreach (SystemViewModel configuredSystem in Systems)
         {
             foreach (ChannelViewModel channel in configuredSystem.Channels)
@@ -2924,7 +2925,9 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
                         system.Name,
                         traffic.Protocol,
                         traffic.StreamId,
-                        encrypted) || callHistoryChanged;
+                        encrypted,
+                        protocolEncryption?.AlgorithmId,
+                        protocolEncryption?.KeyId) || callHistoryChanged;
                 }
 
                 if (audioCoordinator.IsActive(channel))
@@ -2947,14 +2950,17 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(FilteredCallHistory)));
     }
 
-    private static bool? TryResolveProtocolEncryption(FneTrafficFrame traffic)
+    private static ProtocolEncryptionMetadata? TryResolveProtocolEncryption(FneTrafficFrame traffic)
     {
         if (traffic.Protocol == FneTrafficProtocol.P25 &&
             P25DfsiFrameCodec.TryExtractEncryptionMetadata(
                 traffic,
                 out P25DfsiFrameCodec.P25EncryptionMetadata p25Metadata))
         {
-            return p25Metadata.AlgorithmId != P25Defines.P25_ALGO_UNENCRYPT;
+            return new ProtocolEncryptionMetadata(
+                p25Metadata.AlgorithmId != P25Defines.P25_ALGO_UNENCRYPT,
+                p25Metadata.AlgorithmId,
+                p25Metadata.KeyId);
         }
 
         if (traffic.Protocol == FneTrafficProtocol.Dmr &&
@@ -2964,11 +2970,19 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
                 traffic.Payload,
                 out DmrVoicePacketCodec.DmrEncryptionMetadata dmrMetadata))
         {
-            return dmrMetadata.AlgorithmId != 0;
+            return new ProtocolEncryptionMetadata(
+                dmrMetadata.AlgorithmId != 0,
+                dmrMetadata.AlgorithmId,
+                dmrMetadata.KeyId);
         }
 
         return null;
     }
+
+    private readonly record struct ProtocolEncryptionMetadata(
+        bool Encrypted,
+        byte AlgorithmId,
+        ushort KeyId);
 
     private static bool IsDmrTerminator(FneTrafficFrame traffic)
     {

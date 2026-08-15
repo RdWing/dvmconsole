@@ -11,6 +11,8 @@ public sealed class CallHistoryEntry : INotifyPropertyChanged
 {
     private DateTimeOffset? endTimestamp;
     private bool encrypted;
+    private byte? encryptionAlgorithmId;
+    private ushort? encryptionKeyId;
 
     public CallHistoryEntry(
         DateTimeOffset timestamp,
@@ -54,7 +56,19 @@ public sealed class CallHistoryEntry : INotifyPropertyChanged
     public string DurationText => Duration is TimeSpan duration
         ? $"{duration.TotalSeconds:0.0}s"
         : "Active";
-    public string EncryptionText => Encrypted ? "Encrypted" : "Clear";
+    public byte? EncryptionAlgorithmId => encryptionAlgorithmId;
+    public ushort? EncryptionKeyId => encryptionKeyId;
+    public string EncryptionText
+    {
+        get
+        {
+            if (!Encrypted)
+                return "Clear";
+            if (encryptionAlgorithmId is not byte algorithmId || encryptionKeyId is not ushort keyId)
+                return "Encrypted";
+            return $"Encrypted (alg 0x{algorithmId:X2}, key 0x{keyId:X})";
+        }
+    }
 
     public void Complete(DateTimeOffset timestamp)
     {
@@ -68,12 +82,21 @@ public sealed class CallHistoryEntry : INotifyPropertyChanged
     }
 
     public bool UpdateEncryption(bool value)
+        => UpdateEncryption(value, null, null);
+
+    public bool UpdateEncryption(bool value, byte? algorithmId, ushort? keyId)
     {
-        if (encrypted == value)
+        if (encrypted == value &&
+            encryptionAlgorithmId == algorithmId &&
+            encryptionKeyId == keyId)
             return false;
 
         encrypted = value;
+        encryptionAlgorithmId = value ? algorithmId : null;
+        encryptionKeyId = value ? keyId : null;
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(Encrypted)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(EncryptionAlgorithmId)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(EncryptionKeyId)));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(EncryptionText)));
         return true;
     }
@@ -127,13 +150,22 @@ public sealed class CallHistoryStore
         FneTrafficProtocol protocol,
         uint streamId,
         bool encrypted)
+        => UpdateEncryption(systemName, protocol, streamId, encrypted, null, null);
+
+    public bool UpdateEncryption(
+        string systemName,
+        FneTrafficProtocol protocol,
+        uint streamId,
+        bool encrypted,
+        byte? algorithmId,
+        ushort? keyId)
     {
         CallHistoryEntry? entry = Entries.FirstOrDefault(candidate =>
             candidate.IsActive &&
             candidate.StreamId == streamId &&
             candidate.Protocol == protocol &&
             candidate.SystemName.Equals(systemName, StringComparison.OrdinalIgnoreCase));
-        return entry?.UpdateEncryption(encrypted) == true;
+        return entry?.UpdateEncryption(encrypted, algorithmId, keyId) == true;
     }
 
     public void Clear() => Entries.Clear();
