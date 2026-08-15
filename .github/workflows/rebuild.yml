@@ -1,0 +1,71 @@
+name: Avalonia rebuild
+
+on:
+  push:
+    branches:
+      - avalonia_v2
+  pull_request:
+    branches:
+      - avalonia_v2
+
+permissions:
+  contents: read
+
+jobs:
+  test-and-publish:
+    name: ${{ matrix.os }} / ${{ matrix.rid }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            rid: osx-arm64
+          - os: windows-latest
+            rid: win-x64
+
+    steps:
+      - name: Check out source and fnecore
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Set up .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Restore rebuild solution
+        shell: bash
+        run: dotnet restore src/DvmConsole.Rebuild.sln --ignore-failed-sources -p:NuGetAudit=false --verbosity minimal
+
+      - name: Run rebuild solution tests
+        shell: bash
+        run: dotnet test src/DvmConsole.Rebuild.sln --no-restore --configuration Release /p:UseSharedCompilation=false --logger "trx;LogFileName=${{ matrix.rid }}.trx"
+
+      - name: Publish unsigned desktop output
+        shell: bash
+        env:
+          CONFIGURATION: Release
+        run: scripts/publish-desktop.sh "${{ matrix.rid }}" "$RUNNER_TEMP/dvmconsole-publish/${{ matrix.rid }}"
+
+      - name: Verify published output
+        shell: bash
+        run: scripts/verify-publish.sh "${{ matrix.rid }}" "$RUNNER_TEMP/dvmconsole-publish/${{ matrix.rid }}"
+
+      - name: Upload unsigned publish artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dvmconsole-${{ matrix.rid }}
+          path: ${{ runner.temp }}/dvmconsole-publish/${{ matrix.rid }}
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-${{ matrix.rid }}
+          path: ${{ github.workspace }}/**/*.trx
+          if-no-files-found: warn
+          retention-days: 7

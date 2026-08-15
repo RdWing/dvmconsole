@@ -87,3 +87,13 @@ formats, install a compatible FFmpeg executable on the target machine and set
 
 Neither publishing script copies a codeplug, alias file, encryption key file,
 or user settings. Keep those files outside distributable application folders.
+
+## CI validation
+
+The `Avalonia rebuild` workflow runs the complete managed solution test suite
+on Apple Silicon macOS and Windows x64, publishes both supported runtime
+identifiers, verifies native-library placement and test-material exclusion,
+and uploads unsigned outputs for seven days. Native vocoder integration tests
+remain skipped in CI unless a separately provisioned `DVMVOCODER_LIBRARY` is
+available; Windows radio, microphone, and speaker hardware validation remains
+an operator test step.
