@@ -26,6 +26,21 @@ When enabled, the console plays a short local tone when transmit begins.
 
 This is local operator feedback only.
 
+## Connection Chimes
+
+Connection chimes are enabled by default. Disable this setting if the operator
+does not want local audible feedback when an FNE connects or disconnects.
+
+## Interface Size
+
+Open **Settings > All console settings** and use the Appearance controls to
+adjust the console display.
+
+- **Text size** changes the inherited application font size.
+- **Interface scale** scales the complete main console and Console Tools UI.
+
+Both settings apply immediately and are saved for the next launch.
+
 ## Mute RX Audio While Transmitting
 
 When enabled, local RX speaker playback is muted while the console is transmitting.

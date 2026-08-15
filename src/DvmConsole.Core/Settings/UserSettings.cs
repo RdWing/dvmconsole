@@ -49,8 +49,10 @@ public sealed class UserSettings
     public List<AudioInputPresetSetting> AudioInputPresets { get; set; } = [];
     public bool MuteRxAudioWhileTransmitting { get; set; } = true;
     public bool TalkPermitTone { get; set; }
-    public bool ConnectionChimes { get; set; }
+    public bool ConnectionChimes { get; set; } = true;
     public bool DarkMode { get; set; }
+    public double UiFontSize { get; set; } = 14;
+    public double UiScale { get; set; } = 1.0;
     public bool ClockUse24HourTime { get; set; } = true;
     public bool ClockShowSeconds { get; set; } = true;
     public List<ToolbarClockSetting> ToolbarClocks { get; set; } = [];
@@ -155,6 +157,7 @@ public sealed class UserSettingsStore
                 : settings.UserBackgroundImage.Trim();
             settings.RecentCodeplugPaths = NormalizeRecentCodeplugPaths(settings.RecentCodeplugPaths);
             settings.ToolbarClocks = NormalizeToolbarClocks(settings.ToolbarClocks);
+            NormalizeUiSettings(settings);
             settings.TransmitSelectedChannelKeys = NormalizeNames(settings.TransmitSelectedChannelKeys);
             settings.ChannelWidgetPositions = NormalizeWidgetPositions(settings.ChannelWidgetPositions);
             NormalizeAudioInputSettings(settings);
@@ -390,6 +393,7 @@ public sealed class UserSettingsStore
         settings.TonePresets = NormalizeTonePresets(settings.TonePresets);
         settings.CallHistoryWindowPlacement = NormalizeWindowPlacement(settings.CallHistoryWindowPlacement);
         settings.ToolbarClocks = NormalizeToolbarClocks(settings.ToolbarClocks);
+        NormalizeUiSettings(settings);
         NormalizeAudioInputSettings(settings);
         settings.RecentCodeplugPaths = NormalizeRecentCodeplugPaths(settings.RecentCodeplugPaths);
         settings.AudioInputPresetName = settings.AudioInputPresetName?.Trim() ?? string.Empty;
@@ -456,7 +460,8 @@ public sealed class UserSettingsStore
     private static SettingsImportPreview CreatePreview(string source, UserSettings settings)
     {
         var sections = new List<string>();
-        if (settings.TalkPermitTone || settings.ConnectionChimes || settings.DarkMode ||
+        if (settings.TalkPermitTone || !settings.ConnectionChimes || settings.DarkMode ||
+            settings.UiFontSize != 14 || settings.UiScale != 1.0 ||
             settings.TogglePttMode || !string.Equals(settings.GlobalPttKey, "Space", StringComparison.OrdinalIgnoreCase) ||
             !settings.ShowSystemStatus || !settings.ShowChannels || !settings.ShowAlertTones ||
             !settings.LockWidgets || settings.ChannelWidgetPositions.Count > 0 ||
@@ -513,6 +518,8 @@ public sealed class UserSettingsStore
             target.TalkPermitTone = source.TalkPermitTone;
             target.ConnectionChimes = source.ConnectionChimes;
             target.DarkMode = source.DarkMode;
+            target.UiFontSize = source.UiFontSize;
+            target.UiScale = source.UiScale;
             target.ClockUse24HourTime = source.ClockUse24HourTime;
             target.ClockShowSeconds = source.ClockShowSeconds;
             target.ToolbarClocks = source.ToolbarClocks.ToList();
@@ -699,6 +706,12 @@ public sealed class UserSettingsStore
         settings.AudioInputEqLowGainDb = NormalizeBounded(settings.AudioInputEqLowGainDb, 0, -12, 12);
         settings.AudioInputEqMidGainDb = NormalizeBounded(settings.AudioInputEqMidGainDb, 0, -12, 12);
         settings.AudioInputEqHighGainDb = NormalizeBounded(settings.AudioInputEqHighGainDb, 0, -12, 12);
+    }
+
+    private static void NormalizeUiSettings(UserSettings settings)
+    {
+        settings.UiFontSize = NormalizeBounded(settings.UiFontSize, 14, 11, 20);
+        settings.UiScale = NormalizeBounded(settings.UiScale, 1.0, 0.75, 1.5);
     }
 
     private static List<AudioInputPresetSetting> NormalizeAudioInputPresets(

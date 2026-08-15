@@ -1,6 +1,8 @@
 using Avalonia.Controls;
+using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Platform.Storage;
+using DvmConsole.Audio;
 using DvmConsole.Media;
 
 namespace DvmConsole.Desktop;
@@ -24,6 +26,29 @@ public sealed partial class OperatorToolsWindow : Window
         ToolTabs = tabs;
         DataContext = viewModel;
         tabs.SelectedIndex = (int)section;
+        AddHandler(InputElement.KeyDownEvent, HandleKeyDown, RoutingStrategies.Tunnel);
+        AddHandler(InputElement.KeyUpEvent, HandleKeyUp, RoutingStrategies.Tunnel);
+    }
+
+    public void SelectSection(OperatorToolSection section)
+        => ToolTabs.SelectedIndex = (int)section;
+
+    private void HandleKeyDown(object? sender, KeyEventArgs e)
+    {
+        if (MainWindow.TryMapPttKey(e.Key, out KeyboardPttKey key))
+        {
+            bool handled = viewModel.HandleKeyboardPttDown(key);
+            e.Handled = handled || viewModel.IsConfiguredPttKey(key);
+        }
+    }
+
+    private void HandleKeyUp(object? sender, KeyEventArgs e)
+    {
+        if (MainWindow.TryMapPttKey(e.Key, out KeyboardPttKey key))
+        {
+            bool handled = viewModel.HandleKeyboardPttUp(key);
+            e.Handled = handled || viewModel.IsConfiguredPttKey(key);
+        }
     }
 
     private void InitializeComponent()

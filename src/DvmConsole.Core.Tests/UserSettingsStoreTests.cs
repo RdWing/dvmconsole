@@ -17,6 +17,9 @@ public sealed class UserSettingsStoreTests
 
             Assert.Null(settings.LastCodeplugPath);
             Assert.Null(settings.LastSelectedChannelKey);
+            Assert.True(settings.ConnectionChimes);
+            Assert.Equal(14, settings.UiFontSize);
+            Assert.Equal(1.0, settings.UiScale);
         }
         finally
         {
@@ -52,6 +55,30 @@ public sealed class UserSettingsStoreTests
             Assert.Equal(42, loaded.CallHistoryWindowPlacement.Top);
             Assert.Equal(400, loaded.CallHistoryWindowPlacement.Width);
             Assert.Equal(1400, loaded.CallHistoryWindowPlacement.Height);
+        }
+        finally
+        {
+            Cleanup(path);
+        }
+    }
+
+    [Fact]
+    public void NormalizesInterfaceSizing()
+    {
+        string path = CreatePath();
+        try
+        {
+            var store = new UserSettingsStore(path);
+            store.Save(new UserSettings
+            {
+                UiFontSize = 100,
+                UiScale = 0.1
+            });
+
+            UserSettings loaded = store.Load();
+
+            Assert.Equal(20, loaded.UiFontSize);
+            Assert.Equal(0.75, loaded.UiScale);
         }
         finally
         {
@@ -103,6 +130,8 @@ public sealed class UserSettingsStoreTests
                 MuteRxAudioWhileTransmitting = false,
                 TalkPermitTone = true,
                 ConnectionChimes = true,
+                UiFontSize = 16,
+                UiScale = 1.2,
                 DarkMode = true,
                 ClockUse24HourTime = false,
                 ClockShowSeconds = false,
@@ -203,6 +232,8 @@ public sealed class UserSettingsStoreTests
             Assert.False(loaded.MuteRxAudioWhileTransmitting);
             Assert.True(loaded.TalkPermitTone);
             Assert.True(loaded.ConnectionChimes);
+            Assert.Equal(16, loaded.UiFontSize);
+            Assert.Equal(1.2, loaded.UiScale);
             Assert.True(loaded.DarkMode);
             Assert.False(loaded.ClockUse24HourTime);
             Assert.False(loaded.ClockShowSeconds);

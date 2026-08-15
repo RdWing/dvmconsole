@@ -5,6 +5,7 @@ using Avalonia.Media;
 using Avalonia.Media.Imaging;
 using Avalonia.Platform.Storage;
 using Avalonia.Controls;
+using Avalonia.Controls.Primitives;
 using Avalonia.Styling;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
@@ -30,6 +31,9 @@ public sealed partial class MainWindow : Window
     private MainWindowViewModel viewModel;
     private readonly PressAndHoldPttController cardPtt;
     private CallHistoryWindow? callHistoryWindow;
+    private OperatorToolsWindow? operatorToolsWindow;
+    private readonly List<DispatcherTimer> scrollBarTimers = [];
+    private readonly HashSet<ScrollViewer> configuredScrollViewers = [];
     private Control? draggedChannelCard;
     private ChannelViewModel? draggedChannel;
     private Point dragPointerOrigin;
@@ -65,13 +69,22 @@ public sealed partial class MainWindow : Window
         AddHandler(InputElement.PointerCaptureLostEvent, HandlePttPointerCaptureLost, RoutingStrategies.Bubble, true);
         RefreshRecentCodeplugMenu();
         RefreshNamedSettingsProfileMenus();
-        Opened += async (_, _) => await viewModel.StartKeyboardPttAsync().ConfigureAwait(false);
+        Opened += async (_, _) =>
+        {
+            ConfigureTransientChannelScrollBars();
+            ConfigureTransientScrollBars(activityScrollViewer);
+            await viewModel.StartKeyboardPttAsync().ConfigureAwait(false);
+        };
+        LayoutUpdated += (_, _) => ConfigureTransientChannelScrollBars();
         PositionChanged += (_, _) => SnapCallHistoryWindowIfNeeded();
         SizeChanged += (_, _) => SnapCallHistoryWindowIfNeeded();
         Closed += async (_, _) =>
         {
             viewModel.PropertyChanged -= HandleViewModelPropertyChanged;
             callHistoryWindow?.Close();
+            operatorToolsWindow?.Close();
+            foreach (DispatcherTimer timer in scrollBarTimers)
+                timer.Stop();
             await viewModel.DisposeAsync().ConfigureAwait(false);
         };
     }
@@ -717,7 +730,7 @@ public sealed partial class MainWindow : Window
         callHistoryWindow.SetSnapToWindow(viewModel.SnapCallHistoryToWindow, this);
     }
 
-    private async void HandleOpenOperatorToolsClick(object? sender, RoutedEventArgs e)
+    private void HandleOpenOperatorToolsClick(object? sender, RoutedEventArgs e)
     {
         if (sender is not MenuItem { Tag: string value } ||
             !Enum.TryParse(value, ignoreCase: true, out OperatorToolSection section))
@@ -725,8 +738,17 @@ public sealed partial class MainWindow : Window
             return;
         }
 
-        var window = new OperatorToolsWindow(viewModel, section);
-        await window.ShowDialog(this);
+        if (operatorToolsWindow is null)
+        {
+            operatorToolsWindow = new OperatorToolsWindow(viewModel, section);
+            operatorToolsWindow.Closed += (_, _) => operatorToolsWindow = null;
+            operatorToolsWindow.Show(this);
+        }
+        else
+        {
+            operatorToolsWindow.SelectSection(section);
+            operatorToolsWindow.Activate();
+        }
     }
 
     private void HandleDocumentationClick(object? sender, RoutedEventArgs e)
@@ -888,7 +910,7 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private static bool TryMapPttKey(Key key, out KeyboardPttKey pttKey)
+    internal static bool TryMapPttKey(Key key, out KeyboardPttKey pttKey)
     {
         pttKey = key switch
         {
@@ -908,6 +930,45 @@ public sealed partial class MainWindow : Window
             _ => default
         };
         return key is Key.Space or (>= Key.F1 and <= Key.F12);
+    }
+
+    private void ConfigureTransientScrollBars(ScrollViewer? viewer)
+    {
+        if (viewer is null || !configuredScrollViewers.Add(viewer))
+            return;
+
+        var timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(700) };
+        timer.Tick += (_, _) =>
+        {
+            timer.Stop();
+            SetScrollBarOpacity(viewer, 0);
+        };
+        viewer.ScrollChanged += (_, _) =>
+        {
+            SetScrollBarOpacity(viewer, 1);
+            timer.Stop();
+            timer.Start();
+        };
+        scrollBarTimers.Add(timer);
+        Dispatcher.UIThread.Post(
+            () => SetScrollBarOpacity(viewer, 0),
+            DispatcherPriority.Loaded);
+    }
+
+    private void ConfigureTransientChannelScrollBars()
+    {
+        foreach (ScrollViewer viewer in this.GetVisualDescendants()
+                     .OfType<ScrollViewer>()
+                     .Where(viewer => viewer.Name == "channelScrollViewer"))
+        {
+            ConfigureTransientScrollBars(viewer);
+        }
+    }
+
+    private static void SetScrollBarOpacity(ScrollViewer viewer, double opacity)
+    {
+        foreach (ScrollBar scrollBar in viewer.GetVisualDescendants().OfType<ScrollBar>())
+            scrollBar.Opacity = opacity;
     }
 
     private void InitializeComponent()
@@ -1157,6 +1218,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     private SystemViewModel? selectedSystem;
     private AudioDeviceOptionViewModel? selectedAudioInputDevice;
     private AudioDeviceOptionViewModel? selectedAudioOutputDevice;
+    private readonly ScaleTransform uiScaleTransform;
 
     private MainWindowViewModel(
         string statusText,
@@ -1171,6 +1233,11 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         codeplugDiagnosticsText = statusText;
         this.userSettingsStore = userSettingsStore ?? new UserSettingsStore(UserSettingsStore.DefaultPath);
         userSettings = this.userSettingsStore.Load();
+        uiScaleTransform = new ScaleTransform
+        {
+            ScaleX = userSettings.UiScale,
+            ScaleY = userSettings.UiScale
+        };
         foreach (string path in userSettings.RecentCodeplugPaths.Take(UserSettings.MaximumRecentCodeplugs))
             recentCodeplugPaths.Add(path);
         LoadUserBackground(userSettings.UserBackgroundImage);
@@ -1447,6 +1514,43 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ShowSystemStatus)));
         }
     }
+
+    public double UiFontSize
+    {
+        get => userSettings.UiFontSize;
+        set
+        {
+            double normalized = Math.Clamp(value, 11, 20);
+            if (Math.Abs(userSettings.UiFontSize - normalized) < 0.001)
+                return;
+            userSettings.UiFontSize = normalized;
+            PersistUserSettings();
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(UiFontSize)));
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(UiFontSizeText)));
+        }
+    }
+
+    public string UiFontSizeText => $"Text size: {UiFontSize:0}";
+
+    public double UiScale
+    {
+        get => userSettings.UiScale;
+        set
+        {
+            double normalized = Math.Clamp(value, 0.75, 1.5);
+            if (Math.Abs(userSettings.UiScale - normalized) < 0.001)
+                return;
+            userSettings.UiScale = normalized;
+            uiScaleTransform.ScaleX = normalized;
+            uiScaleTransform.ScaleY = normalized;
+            PersistUserSettings();
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(UiScale)));
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(UiScaleText)));
+        }
+    }
+
+    public string UiScaleText => $"Interface scale: {UiScale * 100:0}%";
+    public ScaleTransform UiScaleTransform => uiScaleTransform;
 
     public bool ShowChannels
     {
@@ -4822,11 +4926,11 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             foreach (ChannelViewModel channel in zone.Channels)
             {
                 channel.SetWidgetPosition(x, y);
-                x += channel.CardWidth + 20;
-                if (x + channel.CardWidth > 1_150)
+                x += channel.CardWidth + 16;
+                if (x + channel.CardWidth > 900)
                 {
                     x = 0;
-                    y += 270;
+                    y += 190;
                 }
             }
         }
@@ -5423,8 +5527,8 @@ public sealed class ZoneViewModel : INotifyPropertyChanged
     public string? TabTextColor { get; }
     public IBrush TabBrush => CreateBrush(TabColor, darkMode ? "#151D26" : "#E8EDF3");
     public IBrush TabTextBrush => CreateBrush(TabTextColor, darkMode ? "#DCE3EB" : "#18212B");
-    public double WidgetCanvasWidth => Math.Max(1_150, Channels.Count == 0 ? 0 : Channels.Max(channel => channel.WidgetX + channel.CardWidth + 20));
-    public double WidgetCanvasHeight => Math.Max(520, Channels.Count == 0 ? 0 : Channels.Max(channel => channel.WidgetY + 260));
+    public double WidgetCanvasWidth => Math.Max(1, Channels.Count == 0 ? 0 : Channels.Max(channel => channel.WidgetX + channel.CardWidth + 12));
+    public double WidgetCanvasHeight => Math.Max(1, Channels.Count == 0 ? 0 : Channels.Max(channel => channel.WidgetY + 180));
 
     public void SetDarkMode(bool enabled)
     {
@@ -5519,15 +5623,16 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
     public string Name => runtime.Definition.Name;
     public string SettingsKey => $"{runtime.Definition.SystemName}\u001F{runtime.Definition.Name}";
     public string ModeText => runtime.Definition.Mode.ToUpperInvariant();
-    public string TalkgroupText => $"TG {runtime.Definition.DestinationId}";
+    public string TalkgroupText => $"TG {runtime.Definition.DestinationId} - {ModeText}";
     public string DestinationText => $"{runtime.Definition.SystemName} / TGID {runtime.Definition.DestinationId}";
     public string LastCallerText => lastCallerText;
+    public string LastCallerDisplayText => $"Last: {lastCallerText}";
     public double AudioLevel => audioLevel;
     public double CardWidth => (configuration.CardSize ?? "normal").Trim().ToLowerInvariant() switch
     {
-        "small" => 220,
-        "large" => 450,
-        _ => 285
+        "small" => 195,
+        "large" => 370,
+        _ => 255
     };
     public double WidgetX => widgetX;
     public double WidgetY => widgetY;
@@ -5579,7 +5684,7 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
     public bool IsAlertSelected => alertSelected;
     public bool IsTransmitEncrypted => transmitEncrypted;
     public bool IsRecordingEnabled => recordingEnabled;
-    public string RecordButtonText => recordingEnabled ? "Stop recording" : "Record";
+    public string RecordButtonText => "TAR";
     public double Volume
     {
         get => volume;
@@ -5682,6 +5787,14 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
         alertSelected
             ? darkMode ? "#E58BBC" : "#A84479"
             : darkMode ? "#3A4555" : "#8996A3"));
+    public IBrush RecordingSelectionBrush => new SolidColorBrush(Color.Parse(
+        recordingEnabled
+            ? darkMode ? "#8A3A3A" : "#F2CCCC"
+            : darkMode ? "#242938" : "#E8EDF3"));
+    public IBrush RecordingSelectionBorderBrush => new SolidColorBrush(Color.Parse(
+        recordingEnabled
+            ? darkMode ? "#E58A8A" : "#A84343"
+            : darkMode ? "#3A4555" : "#8996A3"));
     public ICommand AudioCommand { get; private set; }
     public ICommand PttCommand { get; private set; }
     public ICommand EncryptionCommand { get; }
@@ -5739,6 +5852,8 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
         recordingEnabled = enabled;
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsRecordingEnabled)));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(RecordButtonText)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(RecordingSelectionBrush)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(RecordingSelectionBorderBrush)));
         RecordingStateChanged?.Invoke(this, enabled);
         (RecordingCommand as AsyncRelayCommand)?.RaiseCanExecuteChanged();
     }
@@ -5923,6 +6038,8 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(PageSelectionBorderBrush)));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(AlertSelectionBrush)));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(AlertSelectionBorderBrush)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(RecordingSelectionBrush)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(RecordingSelectionBorderBrush)));
     }
 
     public bool TryApplyTraffic(string systemName, FneTrafficFrame traffic)
@@ -6119,6 +6236,7 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
         }
         PropertyChanged?.Invoke(this, args);
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(LastCallerText)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(LastCallerDisplayText)));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CardBackgroundBrush)));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CardBorderBrush)));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CardTextBrush)));

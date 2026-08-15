@@ -23,6 +23,13 @@ The selectors do not use check marks, and moving the pointer over an armed
 selector does not change its state. Click the selector to arm or disarm only
 that routing path.
 
+The `TAR` button occupies the same control row. It enables or disables local
+Talkgroup Audio Recorder capture for that resource. Receive monitoring itself
+is controlled by clicking the card, so there is no separate listen button.
+
+The talkgroup and protocol are shown together as `TG 9990 - DMR` or
+`TG 9990 - P25`.
+
 ---
 
 # Resource Card Sizes
@@ -70,6 +77,10 @@ If the resource does not show **SELECT**, encryption behavior is fixed by the co
 Global PTT keys the current primary selected channel.
 
 If no primary channel is available, legacy all-channel global PTT behavior is not exposed in the menu. Use multi-select groups instead when an operator needs to transmit to multiple resources.
+
+The global PTT key remains active while the modeless **Console Tools** window
+has focus. Console Tools can stay open while the operator selects resources or
+uses other controls in the main window.
 
 ---
 

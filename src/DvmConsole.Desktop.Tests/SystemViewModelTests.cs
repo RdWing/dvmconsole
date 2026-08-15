@@ -158,7 +158,7 @@ public sealed class SystemViewModelTests
             Assert.Equal(["Alpha Dispatch", "Alpha Operations"], viewModel.Systems[0].Zones[0].Channels.Select(channel => channel.Name));
             Assert.Equal(["Alpha Emergency"], viewModel.Systems[0].Zones[1].Channels.Select(channel => channel.Name));
             Assert.Equal(["Dispatch", "Operations"], viewModel.Systems[1].Zones.Select(zone => zone.Name));
-            Assert.Equal("TG 101", viewModel.Systems[0].Zones[0].Channels[0].TalkgroupText);
+            Assert.Equal("TG 101 - DMR", viewModel.Systems[0].Zones[0].Channels[0].TalkgroupText);
             Assert.Equal(["Dispatch Patch", "Operations Select"], viewModel.PatchGroups.Select(group => group.Name));
             PatchGroupEditorViewModel patchGroup = Assert.Single(viewModel.PatchGroups, group => group.IsPatchGroup);
             PatchGroupEditorViewModel multiSelectGroup = Assert.Single(viewModel.PatchGroups, group => group.IsMultiSelect);
@@ -564,6 +564,13 @@ public sealed class SystemViewModelTests
             Assert.True(store.Load().TalkPermitTone);
             viewModel.DarkMode = true;
             Assert.True(store.Load().DarkMode);
+            Assert.True(viewModel.ConnectionChimes);
+            viewModel.UiFontSize = 16;
+            viewModel.UiScale = 1.25;
+            Assert.Equal(16, store.Load().UiFontSize);
+            Assert.Equal(1.25, store.Load().UiScale);
+            Assert.Equal(1.25, viewModel.UiScaleTransform.ScaleX);
+            Assert.Equal(1.25, viewModel.UiScaleTransform.ScaleY);
             viewModel.AudioInputPresetNameText = " Field ";
             viewModel.AudioInputGainText = "1.25";
             viewModel.AudioInputLowGainText = "-2";
