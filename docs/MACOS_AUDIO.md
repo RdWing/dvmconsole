@@ -41,6 +41,17 @@ The probe reports the resolved output device plus queued and consumed sample
 counts. The desktop menu uses the same drain contract for the local permit
 tone.
 
+Check the macOS global-keyboard permission and lifecycle without starting the
+desktop shell:
+
+```sh
+dotnet run --project src/DvmConsole.AudioProbe/DvmConsole.AudioProbe.csproj --no-restore -- \
+  --global-ptt F12
+```
+
+The probe reports the permission/startup error directly when the terminal or
+packaged application has not been granted Accessibility or Input Monitoring.
+
 The first implementation targets the console voice format: 8 kHz, mono,
 16-bit PCM. The native stream uses the device's nominal CoreAudio rate and the
 managed adapter converts to or from the requested voice rate, so common 48 kHz

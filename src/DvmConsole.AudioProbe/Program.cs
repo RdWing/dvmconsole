@@ -14,6 +14,9 @@ internal static class Program
 
         try
         {
+            if (args.FirstOrDefault() is "--global-ptt")
+                return await RunGlobalPttAsync(args.ElementAtOrDefault(1)).ConfigureAwait(false);
+
             using var backend = new MacCoreAudioBackend();
             if (args.FirstOrDefault() is "--stream-test")
                 return await RunStreamTestAsync(backend, args.ElementAtOrDefault(1)).ConfigureAwait(false);
@@ -74,6 +77,21 @@ internal static class Program
         int? queuedSamples = playback.QueuedSamples;
         int? consumedSamples = await playback.DrainAsync().ConfigureAwait(false);
         Console.WriteLine($"Permit tone completed on {output.Id}: {output.Name}; queued {queuedSamples?.ToString() ?? "unknown"} / consumed {consumedSamples?.ToString() ?? "unknown"} samples.");
+        return 0;
+    }
+
+    private static async Task<int> RunGlobalPttAsync(string? keyArgument)
+    {
+        KeyboardPttKey key = Enum.TryParse(keyArgument, ignoreCase: true, out KeyboardPttKey parsedKey)
+            ? parsedKey
+            : KeyboardPttKey.Space;
+        await using var ptt = new GlobalKeyboardPttSource(key);
+        ptt.StateChanged += (_, pressed) => Console.WriteLine($"Global PTT {(pressed ? "pressed" : "released")}.");
+        await ptt.StartAsync().ConfigureAwait(false);
+        Console.WriteLine($"Global PTT capture started for {key}; press the key or wait for the lifecycle check.");
+        await Task.Delay(TimeSpan.FromSeconds(2)).ConfigureAwait(false);
+        await ptt.StopAsync().ConfigureAwait(false);
+        Console.WriteLine("Global PTT capture stopped cleanly.");
         return 0;
     }
 
