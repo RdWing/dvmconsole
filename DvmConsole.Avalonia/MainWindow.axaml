@@ -49,6 +49,9 @@
                                     IsChecked="{Binding Preferences.KeepWindowOnTop, Mode=TwoWay}" />
                 </NativeMenu>
             </NativeMenuItem>
+            <NativeMenuItem Header="Help">
+                <NativeMenu />
+            </NativeMenuItem>
             <NativeMenuItem Header="App">
                 <NativeMenu>
                     <NativeMenuItem Header="Quit" />

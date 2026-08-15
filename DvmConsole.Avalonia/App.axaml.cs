@@ -296,13 +296,7 @@ namespace DvmConsole.Avalonia
                     return;
                 }
 
-                var aboutItem = new NativeMenuItem("About");
-                aboutItem.Click += (_, _) =>
-                {
-                    string? nativeReadiness = (mainWindow.DataContext as MainWindowViewModel)?.VocoderStatus;
-                    var about = new AboutWindow(nativeReadiness);
-                    about.ShowDialog(mainWindow);
-                };
+                var aboutItem = CreateAboutMenuItem(mainWindow);
 
                 NativeMenuItem tarItem = CreateTarConfigurationMenuItem(mainWindow);
                 NativeMenuItem tarViewerItem = CreateTarViewerMenuItem(mainWindow);
@@ -332,7 +326,8 @@ namespace DvmConsole.Avalonia
 
                 NativeMenuItem? appItem = menu.Items
                     .OfType<NativeMenuItem>()
-                    .FirstOrDefault(item => item.Menu is { });
+                    .FirstOrDefault(item => item.Header is string header
+                        && string.Equals(header, "App", StringComparison.Ordinal));
                 NativeMenuItem? settingsItem = menu.Items
                     .OfType<NativeMenuItem>()
                     .FirstOrDefault(item => item.Header is string header
@@ -382,19 +377,48 @@ namespace DvmConsole.Avalonia
                     };
                     menu.Items.Add(helpItem);
                 }
-                if (helpItem.Menu is { } helpMenu
-                    && !helpMenu.Items.OfType<NativeMenuItem>().Any(item =>
-                        item.Header is string header
-                        && string.Equals(header, "Debug Logs", StringComparison.Ordinal)))
+                if (helpItem.Menu is { } helpMenu)
                 {
-                    helpMenu.Items.Add(debugLogItem);
-                }
-                if (helpItem.Menu is { } documentationMenu
-                    && !documentationMenu.Items.OfType<NativeMenuItem>().Any(item =>
-                        item.Header is string header
-                        && string.Equals(header, "Documentation", StringComparison.Ordinal)))
-                {
-                    documentationMenu.Items.Add(documentationItem);
+                    NativeMenuItem? existingDebugLog = helpMenu.Items
+                        .OfType<NativeMenuItem>()
+                        .FirstOrDefault(item => item.Header is string header
+                            && string.Equals(header, "Debug Logs", StringComparison.Ordinal));
+                    if (existingDebugLog is null)
+                    {
+                        helpMenu.Items.Add(debugLogItem);
+                    }
+                    else
+                    {
+                        existingDebugLog.IsEnabled = debugLogItem.IsEnabled;
+                        existingDebugLog.Click += (_, _) => mainWindow.OpenDebugLog();
+                    }
+
+                    NativeMenuItem? existingDocumentation = helpMenu.Items
+                        .OfType<NativeMenuItem>()
+                        .FirstOrDefault(item => item.Header is string header
+                            && string.Equals(header, "Documentation", StringComparison.Ordinal));
+                    if (existingDocumentation is null)
+                    {
+                        helpMenu.Items.Add(documentationItem);
+                    }
+                    else
+                    {
+                        existingDocumentation.Click += (_, _) =>
+                            OpenExternalUrl(AboutWindowViewModel.DocumentationLink);
+                    }
+
+                    NativeMenuItem? existingAbout = helpMenu.Items
+                        .OfType<NativeMenuItem>()
+                        .FirstOrDefault(item => item.Header is string header
+                            && string.Equals(header, "About", StringComparison.Ordinal));
+                    if (existingAbout is null)
+                    {
+                        helpMenu.Items.Add(CreateAboutMenuItem(mainWindow));
+                    }
+                    else
+                    {
+                        WireAboutMenuItem(existingAbout, mainWindow);
+                    }
                 }
                 if (appItem?.Menu is { } appMenu && appMenu.Items.Count > 0)
                 {
@@ -669,6 +693,23 @@ namespace DvmConsole.Avalonia
             };
             item.Click += (_, _) => mainWindow?.OpenDebugLog();
             return item;
+        }
+
+        private static NativeMenuItem CreateAboutMenuItem(MainWindow mainWindow)
+        {
+            var item = new NativeMenuItem("About");
+            WireAboutMenuItem(item, mainWindow);
+            return item;
+        }
+
+        private static void WireAboutMenuItem(NativeMenuItem item, MainWindow mainWindow)
+        {
+            item.Click += (_, _) =>
+            {
+                string? nativeReadiness = (mainWindow.DataContext as MainWindowViewModel)?.VocoderStatus;
+                var about = new AboutWindow(nativeReadiness);
+                about.ShowDialog(mainWindow);
+            };
         }
 
         /// <summary>
