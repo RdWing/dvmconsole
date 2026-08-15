@@ -10,6 +10,20 @@ namespace DvmConsole.Media.Tests;
 
 public sealed class P25DfsiFrameCodecTests
 {
+    [Fact]
+    public void ClearTransmitPayloadsCarryExplicitUnencryptedMetadata()
+    {
+        byte[] ldu1 = P25DfsiFrameCodec.CreateLdu1Payload(99, 100, new byte[P25DfsiFrameCodec.ImbeBytes]);
+        byte[] ldu2 = P25DfsiFrameCodec.CreateLdu2Payload(99, 100, new byte[P25DfsiFrameCodec.ImbeBytes]);
+
+        Assert.Equal((byte)0x08, (byte)(ldu1[14] & 0x08));
+        Assert.Equal(P25Defines.P25_FT_HDU_VALID, ldu1[180]);
+        Assert.Equal(P25Defines.P25_ALGO_UNENCRYPT, ldu1[181]);
+        Assert.Equal((byte)0x08, (byte)(ldu2[14] & 0x08));
+        Assert.Equal(P25Defines.P25_ALGO_UNENCRYPT, ldu2[112]);
+        Assert.Equal(P25Defines.P25_ALGO_UNENCRYPT, ldu2[181]);
+    }
+
     [Theory]
     [InlineData("LDU1", 0x62)]
     [InlineData("LDU2", 0x6B)]

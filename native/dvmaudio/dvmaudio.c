@@ -66,6 +66,19 @@ static AudioDeviceID default_device(int32_t input)
     return device;
 }
 
+static uint32_t nominal_sample_rate(AudioDeviceID device)
+{
+    AudioObjectPropertyAddress address = {
+        kAudioDevicePropertyNominalSampleRate,
+        kAudioObjectPropertyScopeGlobal,
+        kAudioObjectPropertyElementMain};
+    Float64 sample_rate = 0;
+    UInt32 size = sizeof(sample_rate);
+    if (AudioObjectGetPropertyData(device, &address, 0, NULL, &size, &sample_rate) != noErr || sample_rate <= 0)
+        return 0;
+    return (uint32_t)sample_rate;
+}
+
 int32_t dvm_audio_get_device_count(int32_t input, int32_t *count)
 {
     if (count == NULL)
@@ -293,17 +306,19 @@ DvmAudioStream *dvm_audio_stream_create(
         return NULL;
 
     AudioDeviceID audio_device = (AudioDeviceID)device_id;
+    uint32_t native_sample_rate = nominal_sample_rate(audio_device);
     DvmAudioStream *stream = (DvmAudioStream *)calloc(1, sizeof(DvmAudioStream));
     if (stream == NULL)
         return NULL;
 
     stream->input = input != 0;
-    // The Audio Unit is explicitly configured below for the requested PCM
-    // format.  Report that stream format to the managed host as well: using
-    // the hardware's nominal rate here made the host resample 8 kHz voice
-    // audio a second time before it was written to this already-converted
-    // Audio Unit.
-    stream->sample_rate = (uint32_t)sample_rate;
+    // The HAL input callback is clocked in hardware frames even when its
+    // client format is requested at 8 kHz. Capture at the device rate and let
+    // the managed streaming converter produce exactly 8 kHz voice PCM. Output
+    // remains at the requested client rate so playback is not converted twice.
+    stream->sample_rate = stream->input && native_sample_rate > 0
+        ? native_sample_rate
+        : (uint32_t)sample_rate;
     stream->ring_capacity = stream->sample_rate * DVM_AUDIO_RING_SECONDS + 1;
     stream->ring = (int16_t *)calloc(stream->ring_capacity, sizeof(int16_t));
     if (stream->ring == NULL) {
@@ -334,7 +349,7 @@ DvmAudioStream *dvm_audio_stream_create(
     if (AudioUnitSetProperty(stream->unit, kAudioOutputUnitProperty_CurrentDevice, kAudioUnitScope_Global, 0, &audio_device, sizeof(audio_device)) != noErr)
         goto fail;
 
-    AudioStreamBasicDescription format = pcm_format(sample_rate);
+    AudioStreamBasicDescription format = pcm_format((int32_t)stream->sample_rate);
     AudioUnitScope format_scope = stream->input ? kAudioUnitScope_Output : kAudioUnitScope_Input;
     AudioUnitElement format_element = stream->input ? 1 : 0;
     if (AudioUnitSetProperty(stream->unit, kAudioUnitProperty_StreamFormat, format_scope, format_element, &format, sizeof(format)) != noErr)

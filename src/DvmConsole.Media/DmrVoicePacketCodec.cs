@@ -121,7 +121,10 @@ public static class DmrVoicePacketCodec
             throw new ArgumentOutOfRangeException(nameof(slot));
 
         byte[] packet = CreatePacketHeader(sourceId, destinationId, slot, frameSequence);
-        packet[15] |= (byte)(0x20 | (byte)dataType);
+        // The network header carries the FNE frame type, not the DMR slot
+        // data type. Both LC headers and terminators are DATA_SYNC (0x02);
+        // the slot type inside the 33-byte DMR frame distinguishes them.
+        packet[15] |= (byte)(0x20 | (byte)fnecore.FrameType.DATA_SYNC);
 
         byte[] frame = new byte[FrameBytes];
         new SlotType { ColorCode = 0, DataType = (byte)dataType }.GetData(ref frame);
