@@ -14,6 +14,7 @@ public sealed record TransmitTarget(ChannelViewModel Channel, SystemViewModel Sy
 public sealed class ChannelTransmitCoordinator : IAsyncDisposable
 {
     private readonly IP25KeyResolver? p25KeyResolver;
+    private readonly Action<ChannelViewModel, ReadOnlyMemory<short>>? samplesObserver;
     private readonly SemaphoreSlim gate = new(1, 1);
     private IAudioBackend? audioBackend;
     private IVocoderBackend? vocoderBackend;
@@ -29,10 +30,12 @@ public sealed class ChannelTransmitCoordinator : IAsyncDisposable
 
     public ChannelTransmitCoordinator(
         IP25KeyResolver? p25KeyResolver = null,
-        AudioInputProcessingOptions? audioInputOptions = null)
+        AudioInputProcessingOptions? audioInputOptions = null,
+        Action<ChannelViewModel, ReadOnlyMemory<short>>? samplesObserver = null)
     {
         this.p25KeyResolver = p25KeyResolver;
         this.audioInputOptions = (audioInputOptions ?? new AudioInputProcessingOptions()).Normalize();
+        this.samplesObserver = samplesObserver;
     }
 
     public void UpdateAudioInputOptions(AudioInputProcessingOptions options)
@@ -81,6 +84,14 @@ public sealed class ChannelTransmitCoordinator : IAsyncDisposable
                 var capture = new ProcessedAudioCapture(
                     createdAudioBackend.OpenCapture(input, PcmAudioFormat.Voice8KhzMono16Bit),
                     audioInputOptions);
+                if (samplesObserver is not null)
+                {
+                    capture.SamplesAvailable += (_, args) =>
+                    {
+                        foreach (TransmitTarget target in requested)
+                            samplesObserver(target.Channel, args.Samples);
+                    };
+                }
                 createdSharedCapture = new SharedAudioCapture(capture);
 
                 if (requested.Any(target => target.Channel.Definition.Mode != "analog"))

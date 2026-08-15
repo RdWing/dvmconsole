@@ -437,7 +437,8 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
                 LowGainDb = userSettings.AudioInputEqLowGainDb,
                 MidGainDb = userSettings.AudioInputEqMidGainDb,
                 HighGainDb = userSettings.AudioInputEqHighGainDb
-            });
+            },
+            HandleTransmitSamples);
         toneTransmitCoordinator = new ToneTransmitCoordinator(p25KeyResolver);
         talkPermitTonePlayer = new TalkPermitTonePlayer(
             () => AudioBackendFactory.CreateDefault(Environment.GetEnvironmentVariable("DVM_AUDIO_LIBRARY")),
@@ -1535,6 +1536,21 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     {
         patchForwarding.ObserveDecodedSamples(channel, samples);
         callRecordings.WriteSamples(channel, samples);
+        UpdateChannelAudioLevel(channel, samples, ChannelAudioDirection.Receive);
+    }
+
+    private void HandleTransmitSamples(ChannelViewModel channel, ReadOnlyMemory<short> samples)
+    {
+        UpdateChannelAudioLevel(channel, samples, ChannelAudioDirection.Transmit);
+    }
+
+    private static void UpdateChannelAudioLevel(
+        ChannelViewModel channel,
+        ReadOnlyMemory<short> samples,
+        ChannelAudioDirection direction)
+    {
+        double level = ChannelAudioMeter.Calculate(samples.Span, direction);
+        Dispatcher.UIThread.Post(() => channel.SetAudioLevel(level, direction));
     }
 
     private void ObservePatchDecodedSamples(ChannelViewModel channel, ReadOnlyMemory<short> samples)
@@ -2840,6 +2856,7 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
     private bool transmitEncrypted;
     private bool recordingEnabled;
     private string lastCallerText = "--";
+    private double audioLevel;
     private double volume = 1.0;
     private string ignoredSubscriberIdsText = string.Empty;
     private string outputDeviceIdText = string.Empty;
@@ -2873,7 +2890,7 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
     public string TalkgroupText => $"TG {runtime.Definition.DestinationId}";
     public string DestinationText => $"{runtime.Definition.SystemName} / TGID {runtime.Definition.DestinationId}";
     public string LastCallerText => lastCallerText;
-    public double ReceiveLevel => runtime.State == ChannelRuntimeState.Receiving ? 100 : 0;
+    public double AudioLevel => audioLevel;
     public double CardWidth => (configuration.CardSize ?? "normal").Trim().ToLowerInvariant() switch
     {
         "small" => 220,
@@ -3078,6 +3095,23 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(AudioButtonText)));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CardBackgroundBrush)));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CardBorderBrush)));
+        if (!enabled)
+            SetAudioLevel(0);
+    }
+
+    public void SetAudioLevel(double value, ChannelAudioDirection? direction = null)
+    {
+        double normalized = double.IsFinite(value) ? Math.Clamp(value, 0, 100) : 0;
+        if ((direction == ChannelAudioDirection.Receive && runtime.State != ChannelRuntimeState.Receiving) ||
+            (direction == ChannelAudioDirection.Transmit && runtime.State != ChannelRuntimeState.Transmitting))
+        {
+            normalized = 0;
+        }
+        if (Math.Abs(audioLevel - normalized) < 0.01)
+            return;
+
+        audioLevel = normalized;
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(AudioLevel)));
     }
 
     public void SetTransmitEnabled(bool enabled, uint streamId = 0)
@@ -3282,11 +3316,19 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
 
     private void HandleRuntimePropertyChanged(object? sender, PropertyChangedEventArgs args)
     {
-        if (runtime.State == ChannelRuntimeState.Receiving)
-            lastCallerText = StateText;
+        if (runtime.State == ChannelRuntimeState.Receiving && runtime.SourceId is uint sourceId)
+        {
+            string alias = AliasFileLoader.FindAlias(aliases, sourceId).Trim();
+            lastCallerText = string.IsNullOrWhiteSpace(alias)
+                ? sourceId.ToString(CultureInfo.InvariantCulture)
+                : alias;
+        }
+        else if (runtime.State is not (ChannelRuntimeState.Receiving or ChannelRuntimeState.Transmitting))
+        {
+            SetAudioLevel(0);
+        }
         PropertyChanged?.Invoke(this, args);
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(LastCallerText)));
-        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ReceiveLevel)));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CardBackgroundBrush)));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CardBorderBrush)));
     }

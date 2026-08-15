@@ -30,6 +30,7 @@ public sealed class ChannelViewModelTests
         Assert.True(applied);
         Assert.Equal(ChannelRuntimeState.Receiving, channel.State);
         Assert.Equal("Receiving from 42 (stream 7)", channel.StateText);
+        Assert.Equal("42", channel.LastCallerText);
     }
 
     [Fact]
@@ -50,6 +51,70 @@ public sealed class ChannelViewModelTests
             CreateTraffic(FneTrafficProtocol.Analog, 42, 99, null, "VOICE", "VOICE", 7)));
 
         Assert.Equal("Receiving from Unit 42 (42) (stream 7)", channel.StateText);
+        Assert.Equal("Unit 42", channel.LastCallerText);
+    }
+
+    [Fact]
+    public void LastCallerRemainsAliasOrRidAfterCallEnds()
+    {
+        var channel = new ChannelViewModel(new ChannelConfiguration
+        {
+            Name = "Dispatch",
+            System = "System 1",
+            Tgid = "99",
+            Mode = "dmr",
+            Slot = 1
+        });
+
+        Assert.True(channel.TryApplyTraffic(
+            "System 1",
+            CreateTraffic(FneTrafficProtocol.Dmr, 890, 99, 0, "VOICE", "VOICE", 7)));
+        Assert.True(channel.TryApplyTraffic(
+            "System 1",
+            CreateTraffic(FneTrafficProtocol.Dmr, 890, 99, 0, "DATA_SYNC", "TERMINATOR_WITH_LC", 7)));
+
+        Assert.Equal("890", channel.LastCallerText);
+    }
+
+    [Fact]
+    public void AudioLevelTracksSamplesAndClearsWhenCallEnds()
+    {
+        var channel = new ChannelViewModel(new ChannelConfiguration
+        {
+            Name = "Dispatch",
+            System = "System 1",
+            Tgid = "99",
+            Mode = "p25"
+        });
+        Assert.True(channel.TryApplyTraffic(
+            "System 1",
+            CreateTraffic(FneTrafficProtocol.P25, 42, 99, null, "VOICE", "LDU1", 7)));
+
+        channel.SetAudioLevel(ChannelAudioMeter.Calculate(
+            Enumerable.Repeat((short)12000, 160).ToArray(),
+            ChannelAudioDirection.Receive),
+            ChannelAudioDirection.Receive);
+
+        Assert.InRange(channel.AudioLevel, 1, 100);
+        Assert.True(channel.TryApplyTraffic(
+            "System 1",
+            CreateTraffic(FneTrafficProtocol.P25, 42, 0, null, "DATA_SYNC", "TDU", 7)));
+        Assert.Equal(0, channel.AudioLevel);
+
+        channel.SetAudioLevel(75, ChannelAudioDirection.Receive);
+        Assert.Equal(0, channel.AudioLevel);
+    }
+
+    [Fact]
+    public void ReceiveMeterUsesMoreDisplayGainThanTransmitMeter()
+    {
+        short[] samples = Enumerable.Repeat((short)2000, 160).ToArray();
+
+        double receive = ChannelAudioMeter.Calculate(samples, ChannelAudioDirection.Receive);
+        double transmit = ChannelAudioMeter.Calculate(samples, ChannelAudioDirection.Transmit);
+
+        Assert.True(receive > transmit);
+        Assert.Equal(0, ChannelAudioMeter.Calculate([], ChannelAudioDirection.Receive));
     }
 
     [Fact]
