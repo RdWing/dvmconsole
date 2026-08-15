@@ -19,6 +19,7 @@ public sealed class CallHistoryEntry : INotifyPropertyChanged
     private readonly string eventMessage;
     private readonly string eventRidText;
     private readonly string eventTgidText;
+    private CallRecordingMetadata? recording;
 
     public CallHistoryEntry(
         DateTimeOffset timestamp,
@@ -97,6 +98,18 @@ public sealed class CallHistoryEntry : INotifyPropertyChanged
                 return "Encrypted";
             return $"Encrypted (alg 0x{algorithmId:X2}, key 0x{keyId:X})";
         }
+    }
+
+    public bool HasRecording => recording is not null;
+    public CallRecordingMetadata? Recording => recording;
+
+    public void SetRecording(CallRecordingMetadata? value)
+    {
+        if (ReferenceEquals(recording, value))
+            return;
+        recording = value;
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(Recording)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(HasRecording)));
     }
 
     public static CallHistoryEntry CreateEvent(

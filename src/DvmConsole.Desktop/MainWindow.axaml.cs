@@ -738,17 +738,21 @@ public sealed partial class MainWindow : Window
             return;
         }
 
+        OpenOperatorTools(section);
+    }
+
+    private void OpenOperatorTools(OperatorToolSection section)
+    {
         if (operatorToolsWindow is null)
         {
             operatorToolsWindow = new OperatorToolsWindow(viewModel, section);
             operatorToolsWindow.Closed += (_, _) => operatorToolsWindow = null;
-            operatorToolsWindow.Show(this);
+            operatorToolsWindow.Show();
+            return;
         }
-        else
-        {
-            operatorToolsWindow.SelectSection(section);
-            operatorToolsWindow.Activate();
-        }
+
+        operatorToolsWindow.SelectSection(section);
+        operatorToolsWindow.Activate();
     }
 
     private void HandleDocumentationClick(object? sender, RoutedEventArgs e)
@@ -875,9 +879,12 @@ public sealed partial class MainWindow : Window
     }
 
     private void HandleToolbarToneToolsClick(object? sender, RoutedEventArgs e)
+        => OpenOperatorTools(OperatorToolSection.Tones);
+
+    private async void HandlePlayCallHistoryRecordingClick(object? sender, RoutedEventArgs e)
     {
-        var window = new OperatorToolsWindow(viewModel, OperatorToolSection.Tones);
-        window.Show(this);
+        if (sender is Button { Tag: CallHistoryEntry entry })
+            await viewModel.PlayCallHistoryRecordingAsync(entry);
     }
 
     private async void HandleGlobalPttKeyClick(object? sender, RoutedEventArgs e)
@@ -1157,7 +1164,8 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     private readonly WebStreamPlaybackCoordinator webStreamPlayback;
     private readonly object patchSourceWorkSync = new();
     private readonly Dictionary<ChannelViewModel, Task> patchSourceWork = [];
-    private readonly Dictionary<string, FneConnectionState> lastConnectionChimeStates = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, FneConnectionState> lastConnectionStates = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConnectionChimeTracker connectionChimeTracker = new();
     private ChannelViewModel[] suspendedAudioChannels = [];
     private PatchGroupEditorViewModel? activeMultiSelectGroup;
     private readonly CallRecordingManager callRecordings;
@@ -1527,10 +1535,16 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             PersistUserSettings();
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(UiFontSize)));
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(UiFontSizeText)));
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(UiSmallFontSize)));
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(UiCompactFontSize)));
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(UiHeadingFontSize)));
         }
     }
 
     public string UiFontSizeText => $"Text size: {UiFontSize:0}";
+    public double UiSmallFontSize => Math.Max(12, UiFontSize - 2);
+    public double UiCompactFontSize => Math.Max(11, UiFontSize - 3);
+    public double UiHeadingFontSize => UiFontSize + 4;
 
     public double UiScale
     {
@@ -2608,6 +2622,18 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         }
     }
 
+    public async Task PlayCallHistoryRecordingAsync(CallHistoryEntry entry)
+    {
+        ArgumentNullException.ThrowIfNull(entry);
+        if (entry.Recording is not CallRecordingMetadata metadata)
+        {
+            AudioStatusText = "No TAR recording is available for this event.";
+            return;
+        }
+
+        await PlayRecordingAsync(metadata).ConfigureAwait(false);
+    }
+
     public async Task StopRecordingPlaybackAsync()
     {
         await recordingPlayback.StopAsync().ConfigureAwait(false);
@@ -3151,9 +3177,9 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             NotifyConnectionPresentationChanged();
             if (status.State == FneConnectionState.Connected)
                 RequestMissingP25Keys(system);
-            bool stateChanged = !lastConnectionChimeStates.TryGetValue(system.Name, out FneConnectionState previousState) ||
+            bool stateChanged = !lastConnectionStates.TryGetValue(system.Name, out FneConnectionState previousState) ||
                 previousState != status.State;
-            lastConnectionChimeStates[system.Name] = status.State;
+            lastConnectionStates[system.Name] = status.State;
             if (stateChanged && status.State is FneConnectionState.Connected or FneConnectionState.Disconnected or FneConnectionState.Faulted)
             {
                 string stateText = status.State.ToString().ToLowerInvariant();
@@ -3163,7 +3189,8 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
                     system.SourceId?.ToString(CultureInfo.InvariantCulture),
                     system.Endpoint);
             }
-            if (stateChanged && (status.State is FneConnectionState.Connected or FneConnectionState.Faulted))
+            bool shouldPlayChime = connectionChimeTracker.ShouldPlay(system.Name, status.State);
+            if (stateChanged && shouldPlayChime)
                 _ = PlayConnectionChimeAsync(system.Name, status.State);
             RaiseGeneratedAudioCanExecuteChanged();
         }
@@ -3594,7 +3621,24 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         recordingEntries.Clear();
         foreach (CallRecordingMetadata metadata in callRecordings.LoadRecordings())
             recordingEntries.Add(metadata);
+        foreach (CallHistoryEntry entry in callHistory.Entries)
+            entry.SetRecording(FindRecordingForHistoryEntry(entry));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(FilteredRecordings)));
+    }
+
+    private CallRecordingMetadata? FindRecordingForHistoryEntry(CallHistoryEntry entry)
+    {
+        if (entry.IsEvent || entry.StreamId == 0)
+            return null;
+
+        string direction = entry.IsConsoleTransmission ? "TX" : "RX";
+        return recordingEntries
+            .Where(metadata => metadata.StreamId == entry.StreamId &&
+                metadata.Direction.Equals(direction, StringComparison.OrdinalIgnoreCase) &&
+                metadata.SystemName.Equals(entry.SystemName, StringComparison.OrdinalIgnoreCase) &&
+                metadata.Protocol.Equals(entry.ProtocolText, StringComparison.OrdinalIgnoreCase))
+            .OrderBy(metadata => Math.Abs((metadata.UtcStartTime - entry.Timestamp).TotalMilliseconds))
+            .FirstOrDefault();
     }
 
     private void HandleSystemTraffic(SystemViewModel system, FneTrafficFrame traffic)
@@ -4382,7 +4426,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
                 normalizedDigits,
                 TimeSpan.FromMilliseconds(250),
                 TimeSpan.FromMilliseconds(50),
-                amplitude: 0.35);
+                amplitude: 0.70);
             userSettings.LastDtmfDigits = normalizedDigits;
             PersistUserSettings();
             await SendGeneratedToneAsync(samples, "DTMF");
@@ -4403,7 +4447,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
                     string.IsNullOrWhiteSpace(step.Digit) ? '1' : step.Digit[0],
                     TimeSpan.FromSeconds(step.DurationSeconds),
                     string.Equals(step.Kind, AudioPresetStepKinds.Hold, StringComparison.OrdinalIgnoreCase))),
-                amplitude: 0.35);
+                amplitude: 0.70);
             await SendGeneratedToneAsync(samples, $"DTMF preset '{preset.Name}'");
         }
         catch (Exception exception)
@@ -4561,7 +4605,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         ArgumentNullException.ThrowIfNull(tone);
         try
         {
-            short[] samples = LegacyAlertToneGenerator.Generate(tone.Tone);
+            short[] samples = LegacyAlertToneGenerator.Generate(tone.Tone, amplitude: 0.35);
             await SendGeneratedToneAsync(
                 samples,
                 tone.Name,
@@ -4930,7 +4974,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
                 if (x + channel.CardWidth > 900)
                 {
                     x = 0;
-                    y += 190;
+                    y += 160;
                 }
             }
         }
@@ -5528,7 +5572,7 @@ public sealed class ZoneViewModel : INotifyPropertyChanged
     public IBrush TabBrush => CreateBrush(TabColor, darkMode ? "#151D26" : "#E8EDF3");
     public IBrush TabTextBrush => CreateBrush(TabTextColor, darkMode ? "#DCE3EB" : "#18212B");
     public double WidgetCanvasWidth => Math.Max(1, Channels.Count == 0 ? 0 : Channels.Max(channel => channel.WidgetX + channel.CardWidth + 12));
-    public double WidgetCanvasHeight => Math.Max(1, Channels.Count == 0 ? 0 : Channels.Max(channel => channel.WidgetY + 180));
+    public double WidgetCanvasHeight => Math.Max(1, Channels.Count == 0 ? 0 : Channels.Max(channel => channel.WidgetY + 154));
 
     public void SetDarkMode(bool enabled)
     {

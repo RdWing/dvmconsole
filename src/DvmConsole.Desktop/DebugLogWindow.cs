@@ -24,6 +24,7 @@ public sealed class DebugLogWindow : Window
         WindowStartupLocation = WindowStartupLocation.CenterOwner;
         this.Bind(BackgroundProperty, new Binding(nameof(MainWindowViewModel.MainBackgroundBrush)));
         DataContext = viewModel;
+        Bind(FontSizeProperty, new Binding(nameof(MainWindowViewModel.UiFontSize)));
 
         var filterInput = new TextBox
         {
@@ -54,7 +55,6 @@ public sealed class DebugLogWindow : Window
                     Text = entry.Summary,
                     TextWrapping = TextWrapping.NoWrap,
                     FontFamily = new FontFamily("monospace"),
-                    FontSize = 12,
                     Margin = new Thickness(0, 0, 0, 5)
                 })
         };
@@ -98,7 +98,6 @@ public sealed class DebugLogWindow : Window
                 new TextBlock
                 {
                     Text = "FNE and console diagnostics",
-                    FontSize = 16,
                     FontWeight = Avalonia.Media.FontWeight.SemiBold
                 },
                 controls,

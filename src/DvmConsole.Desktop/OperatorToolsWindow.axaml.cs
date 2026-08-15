@@ -220,6 +220,12 @@ public sealed partial class OperatorToolsWindow : Window
     private async void HandleStopRecordingClick(object? sender, RoutedEventArgs e)
         => await viewModel.StopRecordingPlaybackAsync();
 
+    private async void HandlePlayCallHistoryRecordingClick(object? sender, RoutedEventArgs e)
+    {
+        if (sender is Button { Tag: CallHistoryEntry entry })
+            await viewModel.PlayCallHistoryRecordingAsync(entry);
+    }
+
     private async void HandleDeleteRecordingClick(object? sender, RoutedEventArgs e)
     {
         if (sender is Button { Tag: CallRecordingMetadata metadata })

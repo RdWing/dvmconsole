@@ -22,21 +22,24 @@ public static class LegacyAlertToneGenerator
     private const double AlternatingLowPhaseRadians = 2 * Math.PI / 5;
 
     public static short[] Generate(LegacyAlertTone tone)
+        => Generate(tone, Amplitude);
+
+    public static short[] Generate(LegacyAlertTone tone, double amplitude)
         => tone switch
         {
-            LegacyAlertTone.Alert1 => GenerateAlert1(),
-            LegacyAlertTone.Alert2 => GenerateAlert2(),
-            LegacyAlertTone.Alert3 => GenerateAlert3(),
+            LegacyAlertTone.Alert1 => GenerateAlert1(amplitude),
+            LegacyAlertTone.Alert2 => GenerateAlert2(amplitude),
+            LegacyAlertTone.Alert3 => GenerateAlert3(amplitude),
             _ => throw new ArgumentOutOfRangeException(nameof(tone))
         };
 
-    private static short[] GenerateAlert1()
+    private static short[] GenerateAlert1(double amplitude)
         => new PcmToneGenerator().GenerateTone(
             ToneFrequencyHz,
             TimeSpan.FromSeconds(3),
-            Amplitude);
+            amplitude);
 
-    private static short[] GenerateAlert2()
+    private static short[] GenerateAlert2(double amplitude)
     {
         var generator = new PcmToneGenerator();
         List<short> samples = [];
@@ -45,19 +48,19 @@ public static class LegacyAlertToneGenerator
             samples.AddRange(generator.GenerateTone(
                 AlternatingHighFrequencyHz,
                 StepDuration,
-                Amplitude,
+                amplitude,
                 AlternatingHighPhaseRadians));
             samples.AddRange(generator.GenerateTone(
                 AlternatingLowFrequencyHz,
                 StepDuration,
-                Amplitude,
+                amplitude,
                 AlternatingLowPhaseRadians));
         }
 
         return samples.ToArray();
     }
 
-    private static short[] GenerateAlert3()
+    private static short[] GenerateAlert3(double amplitude)
     {
         var generator = new PcmToneGenerator();
         List<PcmToneStep> steps = [];
@@ -68,6 +71,6 @@ public static class LegacyAlertToneGenerator
                 steps.Add(new PcmToneStep(0, StepDuration, IsHold: true));
         }
 
-        return generator.GenerateSteps(steps, Amplitude);
+        return generator.GenerateSteps(steps, amplitude);
     }
 }

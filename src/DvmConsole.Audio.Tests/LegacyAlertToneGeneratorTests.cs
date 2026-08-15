@@ -48,6 +48,16 @@ public sealed class LegacyAlertToneGeneratorTests
         }
     }
 
+    [Fact]
+    public void CanGenerateLegacyPatternAtTransmissionLevel()
+    {
+        short[] samples = LegacyAlertToneGenerator.Generate(LegacyAlertTone.Alert1, amplitude: 0.35);
+
+        Assert.Equal(24_000, samples.Length);
+        Assert.InRange(samples.Max(), (short)11_460, (short)11_475);
+        Assert.InRange(EstimateFrequency(samples), 1003.9, 1004.1);
+    }
+
     private static double EstimateFrequency(ReadOnlySpan<short> samples)
     {
         List<double> crossings = [];

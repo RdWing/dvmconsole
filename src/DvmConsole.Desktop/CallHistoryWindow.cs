@@ -30,6 +30,7 @@ public sealed class CallHistoryWindow : Window
         MinHeight = 360;
         WindowStartupLocation = WindowStartupLocation.CenterOwner;
         DataContext = viewModel;
+        Bind(FontSizeProperty, new Binding(nameof(MainWindowViewModel.UiFontSize)));
 
         if (placement.Left is double left && placement.Top is double top)
         {
@@ -55,7 +56,7 @@ public sealed class CallHistoryWindow : Window
                 {
                     var row = new Grid
                     {
-                        ColumnDefinitions = new ColumnDefinitions("110,*,120,100,100"),
+                        ColumnDefinitions = new ColumnDefinitions("110,*,120,100,100,Auto"),
                         ColumnSpacing = 8
                     };
                     var timestamp = new TextBlock { Text = entry.TimestampText };
@@ -64,21 +65,34 @@ public sealed class CallHistoryWindow : Window
                         Children =
                         {
                             new TextBlock { Text = entry.DisplayChannelText, FontWeight = FontWeight.SemiBold },
-                            new TextBlock { Text = entry.RouteText, FontSize = 11, Opacity = 0.72 }
+                            new TextBlock { Text = entry.RouteText, Opacity = 0.72 }
                         }
                     };
                     var system = new TextBlock { Text = entry.SystemName };
                     var encryption = new TextBlock { Text = entry.EncryptionText };
                     var duration = new TextBlock { Text = entry.DurationText };
+                    var play = new Button
+                    {
+                        Content = "Play",
+                        IsVisible = entry.HasRecording,
+                        VerticalAlignment = VerticalAlignment.Center
+                    };
+                    play.Bind(IsVisibleProperty, new Binding(nameof(CallHistoryEntry.HasRecording))
+                    {
+                        Source = entry
+                    });
+                    play.Click += async (_, _) => await viewModel.PlayCallHistoryRecordingAsync(entry);
                     row.Children.Add(timestamp);
                     row.Children.Add(channel);
                     row.Children.Add(system);
                     row.Children.Add(encryption);
                     row.Children.Add(duration);
+                    row.Children.Add(play);
                     Grid.SetColumn(channel, 1);
                     Grid.SetColumn(system, 2);
                     Grid.SetColumn(encryption, 3);
                     Grid.SetColumn(duration, 4);
+                    Grid.SetColumn(play, 5);
                     return new Border
                     {
                         BorderBrush = new SolidColorBrush(Color.Parse("#3A4654")),

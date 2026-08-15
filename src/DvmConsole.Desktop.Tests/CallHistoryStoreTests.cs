@@ -123,6 +123,23 @@ public sealed class CallHistoryStoreTests
         Assert.Equal("1.5s", entry.DurationText);
     }
 
+    [Fact]
+    public void ExposesAnAttachedTarRecordingToHistoryViews()
+    {
+        CallHistoryEntry entry = CreateEntry(42);
+        var metadata = new CallRecordingMetadata
+        {
+            StreamId = 42,
+            FileName = "dispatch.wav"
+        };
+
+        Assert.False(entry.HasRecording);
+        entry.SetRecording(metadata);
+
+        Assert.True(entry.HasRecording);
+        Assert.Same(metadata, entry.Recording);
+    }
+
     private static CallHistoryEntry CreateEntry(uint streamId)
     {
         return new CallHistoryEntry(

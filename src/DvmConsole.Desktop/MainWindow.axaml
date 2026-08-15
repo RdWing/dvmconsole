@@ -8,19 +8,19 @@
   <Window.Styles>
     <Style Selector="TextBlock"><Setter Property="Foreground" Value="{DynamicResource PrimaryTextBrush}" /></Style>
     <Style Selector="TextBlock.muted"><Setter Property="Foreground" Value="{DynamicResource MutedTextBrush}" /></Style>
-    <Style Selector="TextBlock.eyebrow"><Setter Property="FontSize" Value="10" /><Setter Property="Foreground" Value="{DynamicResource MutedTextBrush}" /></Style>
+    <Style Selector="TextBlock.eyebrow"><Setter Property="FontSize" Value="{Binding $parent[Window].((local:MainWindowViewModel)DataContext).UiCompactFontSize}" /><Setter Property="Foreground" Value="{DynamicResource MutedTextBrush}" /></Style>
     <Style Selector="Button"><Setter Property="Background" Value="{DynamicResource ButtonBackgroundBrush}" /><Setter Property="Foreground" Value="{DynamicResource PrimaryTextBrush}" /><Setter Property="BorderBrush" Value="{DynamicResource ControlBorderBrush}" /><Setter Property="Padding" Value="10,6" /></Style>
     <Style Selector="Button:not(.tx-select):pointerover"><Setter Property="Background" Value="{DynamicResource ButtonHoverBrush}" /></Style>
-    <Style Selector="Button.ptt"><Setter Property="HorizontalAlignment" Value="Stretch" /><Setter Property="FontWeight" Value="SemiBold" /><Setter Property="Background" Value="{DynamicResource PttBackgroundBrush}" /></Style>
+    <Style Selector="Button.ptt"><Setter Property="HorizontalAlignment" Value="Stretch" /><Setter Property="HorizontalContentAlignment" Value="Center" /><Setter Property="Padding" Value="8,4" /><Setter Property="FontWeight" Value="SemiBold" /><Setter Property="Background" Value="{DynamicResource PttBackgroundBrush}" /></Style>
     <Style Selector="Button.ptt:pressed"><Setter Property="Background" Value="#0A9B48" /></Style>
-    <Style Selector="Button.card-action"><Setter Property="Padding" Value="5,3" /><Setter Property="FontSize" Value="10" /></Style>
-    <Style Selector="Button.tx-select"><Setter Property="Padding" Value="4,2" /><Setter Property="FontSize" Value="9" /><Setter Property="Background" Value="{DynamicResource SelectorBackgroundBrush}" /></Style>
+    <Style Selector="Button.card-action"><Setter Property="Padding" Value="5,2" /><Setter Property="FontSize" Value="{Binding $parent[Window].((local:MainWindowViewModel)DataContext).UiCompactFontSize}" /></Style>
+    <Style Selector="Button.tx-select"><Setter Property="Padding" Value="4,1" /><Setter Property="FontSize" Value="{Binding $parent[Window].((local:MainWindowViewModel)DataContext).UiCompactFontSize}" /><Setter Property="Background" Value="{DynamicResource SelectorBackgroundBrush}" /></Style>
     <Style Selector="Button.status-card"><Setter Property="HorizontalAlignment" Value="Left" /><Setter Property="Background" Value="Transparent" /><Setter Property="BorderThickness" Value="0" /><Setter Property="Padding" Value="6,3" /></Style>
-    <Style Selector="TabItem"><Setter Property="Foreground" Value="{DynamicResource TabTextBrush}" /><Setter Property="Padding" Value="6,8" /><Setter Property="FontSize" Value="16" /></Style>
+    <Style Selector="TabItem"><Setter Property="Foreground" Value="{DynamicResource TabTextBrush}" /><Setter Property="Padding" Value="6,8" /><Setter Property="FontSize" Value="{Binding $parent[Window].((local:MainWindowViewModel)DataContext).UiFontSize}" /></Style>
     <Style Selector="TabItem:selected"><Setter Property="Foreground" Value="{DynamicResource SelectedTabTextBrush}" /></Style>
     <Style Selector="ScrollViewer"><Setter Property="AllowAutoHide" Value="True" /></Style>
     <Style Selector="ScrollBar"><Setter Property="AllowAutoHide" Value="True" /><Setter Property="ShowDelay" Value="0:0:0" /><Setter Property="HideDelay" Value="0:0:0.7" /></Style>
-    <Style Selector="TabControl.zone-tabs TabItem"><Setter Property="FontSize" Value="13" /><Setter Property="Padding" Value="5,6" /></Style>
+    <Style Selector="TabControl.zone-tabs TabItem"><Setter Property="FontSize" Value="{Binding $parent[Window].((local:MainWindowViewModel)DataContext).UiSmallFontSize}" /><Setter Property="Padding" Value="5,5" /></Style>
     <Style Selector="ProgressBar.receive-level /template/ Border#PART_Indicator"><Setter Property="Background" Value="#00BE5A" /></Style>
   </Window.Styles>
 
@@ -131,27 +131,28 @@
         <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" Spacing="10" VerticalAlignment="Center">
           <ItemsControl ItemsSource="{Binding ToolbarClocks}">
             <ItemsControl.ItemsPanel><ItemsPanelTemplate><StackPanel Orientation="Horizontal" Spacing="4" /></ItemsPanelTemplate></ItemsControl.ItemsPanel>
-            <ItemsControl.ItemTemplate><DataTemplate x:DataType="local:ToolbarClockViewModel"><Border IsVisible="{Binding Enabled}" Background="{Binding BackgroundBrush}" BorderBrush="{DynamicResource ClockBorderBrush}" BorderThickness="1" CornerRadius="4" Padding="5,2"><StackPanel><TextBlock Foreground="{DynamicResource ClockTextBrush}" FontSize="10" Text="{Binding TimeZoneLabel}" HorizontalAlignment="Center" /><TextBlock Foreground="{DynamicResource ClockTextBrush}" FontSize="11" Text="{Binding TimeText}" HorizontalAlignment="Center" /></StackPanel></Border></DataTemplate></ItemsControl.ItemTemplate>
+            <ItemsControl.ItemTemplate><DataTemplate x:DataType="local:ToolbarClockViewModel"><Border IsVisible="{Binding Enabled}" Background="{Binding BackgroundBrush}" BorderBrush="{DynamicResource ClockBorderBrush}" BorderThickness="1" CornerRadius="4" Padding="5,2"><StackPanel><TextBlock Foreground="{DynamicResource ClockTextBrush}" FontSize="{Binding $parent[Window].((local:MainWindowViewModel)DataContext).UiCompactFontSize}" Text="{Binding TimeZoneLabel}" HorizontalAlignment="Center" /><TextBlock Foreground="{DynamicResource ClockTextBrush}" FontSize="{Binding $parent[Window].((local:MainWindowViewModel)DataContext).UiSmallFontSize}" Text="{Binding TimeText}" HorizontalAlignment="Center" /></StackPanel></Border></DataTemplate></ItemsControl.ItemTemplate>
           </ItemsControl>
           <StackPanel Orientation="Horizontal" Spacing="4" IsVisible="{Binding ShowAlertTones}">
             <ItemsControl ItemsSource="{Binding BuiltInAlertTones}">
               <ItemsControl.ItemsPanel><ItemsPanelTemplate><StackPanel Orientation="Horizontal" Spacing="4" /></ItemsPanelTemplate></ItemsControl.ItemsPanel>
               <ItemsControl.ItemTemplate><DataTemplate x:DataType="local:BuiltInAlertToneViewModel"><Button Content="{Binding Name}" Tag="{Binding}" ToolTip.Tip="Generate this legacy alert pattern on ALERT-armed channels" Padding="6,3" Click="HandleToolbarAlertToneClick" /></DataTemplate></ItemsControl.ItemTemplate>
             </ItemsControl>
+            <Button Content="TONES" ToolTip.Tip="Open Console Tools directly to Tones and DTMF" Padding="6,3" Click="HandleToolbarToneToolsClick" />
           </StackPanel>
-          <StackPanel Orientation="Horizontal" Spacing="10" IsVisible="{Binding ShowSystemStatus}"><TextBlock Classes="muted" FontSize="11" Text="{Binding ClockText}" /><TextBlock Classes="muted" FontSize="11" Text="{Binding SystemStatusText}" /></StackPanel>
+          <StackPanel Orientation="Horizontal" Spacing="10" IsVisible="{Binding ShowSystemStatus}"><TextBlock Classes="muted" FontSize="{Binding UiSmallFontSize}" Text="{Binding ClockText}" /><TextBlock Classes="muted" FontSize="{Binding UiSmallFontSize}" Text="{Binding SystemStatusText}" /></StackPanel>
         </StackPanel>
       </DockPanel>
     </Border>
 
     <Grid Grid.Row="1" ColumnDefinitions="*,4,Auto">
-      <Border Grid.Column="0" Background="{Binding MainBackgroundBrush}" Padding="10,12,8,8">
+      <Border Grid.Column="0" Background="{Binding MainBackgroundBrush}" Padding="3,5,4,4">
         <Grid RowDefinitions="Auto,Auto,*">
           <DockPanel Margin="0,0,0,8" IsVisible="{Binding ShowSystemStatus}">
             <Button Classes="status-card" Command="{Binding ConnectionCommand}" ToolTip.Tip="Connect or disconnect the selected FNE">
               <StackPanel Orientation="Horizontal" Spacing="9" VerticalAlignment="Center">
                 <Ellipse Width="10" Height="10" Fill="{Binding ConnectionBrush}" />
-                <StackPanel Spacing="0"><TextBlock FontWeight="SemiBold" FontSize="11" Text="{Binding ConnectionPillText}" /><TextBlock Classes="eyebrow" Text="{Binding SelectedSystemName}" /></StackPanel>
+                <StackPanel Spacing="0"><TextBlock FontWeight="SemiBold" FontSize="{Binding UiSmallFontSize}" Text="{Binding ConnectionPillText}" /><TextBlock Classes="eyebrow" Text="{Binding SelectedSystemName}" /></StackPanel>
               </StackPanel>
             </Button>
           </DockPanel>
@@ -177,7 +178,7 @@
                   </TabControl.ItemTemplate>
                   <TabControl.ContentTemplate>
                     <DataTemplate x:DataType="local:ZoneViewModel">
-                      <ScrollViewer x:Name="channelScrollViewer" HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto" Padding="4,12">
+                      <ScrollViewer x:Name="channelScrollViewer" HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto" Padding="0">
                         <ItemsControl Classes="channel-canvas" ItemsSource="{Binding Channels}" Width="{Binding WidgetCanvasWidth}" Height="{Binding WidgetCanvasHeight}">
                           <ItemsControl.ItemsPanel><ItemsPanelTemplate><Canvas /></ItemsPanelTemplate></ItemsControl.ItemsPanel>
                           <ItemsControl.Styles>
@@ -188,10 +189,10 @@
                           </ItemsControl.Styles>
                           <ItemsControl.ItemTemplate>
                             <DataTemplate x:DataType="local:ChannelViewModel">
-                              <Border Classes="channel-card" Width="{Binding CardWidth}" Background="{Binding CardBackgroundBrush}" BorderBrush="{Binding CardBorderBrush}" BorderThickness="1" CornerRadius="7" Padding="8" Margin="0,0,8,8" Focusable="True" PointerPressed="HandleChannelPointerPressed" PointerMoved="HandleChannelPointerMoved" PointerReleased="HandleChannelPointerReleased" PointerCaptureLost="HandleChannelPointerCaptureLost" ToolTip.Tip="Drag to move this channel while widgets are unlocked">
-                                  <Grid RowDefinitions="Auto,Auto,Auto,Auto,Auto" RowSpacing="5">
-                                  <StackPanel Spacing="0"><TextBlock Foreground="{Binding CardTextBrush}" FontWeight="Bold" FontSize="14" Text="{Binding Name}" TextTrimming="CharacterEllipsis" /><TextBlock Foreground="{Binding CardTextBrush}" FontSize="10" Text="{Binding TalkgroupText}" /></StackPanel>
-                                  <Grid Grid.Row="1" ColumnDefinitions="*,Auto,Auto,Auto,Auto" ColumnSpacing="4"><TextBlock Foreground="{Binding CardTextBrush}" FontSize="11" Text="{Binding LastCallerDisplayText}" TextTrimming="CharacterEllipsis" VerticalAlignment="Center" /><Button Grid.Column="1" Classes="tx-select tx-multi" Content="{Binding TransmitSelectionText}" Background="{Binding TransmitSelectionBrush}" BorderBrush="{Binding TransmitSelectionBorderBrush}" IsEnabled="{Binding CanTransmit}" PointerEntered="HandleTransmitSelectionPointerEntered" Click="HandleTransmitSelectionClick" /><Button Grid.Column="2" Classes="tx-select page-select" Content="{Binding PageSelectionText}" Background="{Binding PageSelectionBrush}" BorderBrush="{Binding PageSelectionBorderBrush}" IsEnabled="{Binding CanTransmit}" PointerEntered="HandlePageSelectionPointerEntered" Click="HandlePageSelectionClick" /><Button Grid.Column="3" Classes="tx-select alert-select" Content="{Binding AlertSelectionText}" Background="{Binding AlertSelectionBrush}" BorderBrush="{Binding AlertSelectionBorderBrush}" IsEnabled="{Binding CanTransmit}" PointerEntered="HandleAlertSelectionPointerEntered" Click="HandleAlertSelectionClick" /><Button Grid.Column="4" Classes="tx-select tar-select" Content="{Binding RecordButtonText}" Background="{Binding RecordingSelectionBrush}" BorderBrush="{Binding RecordingSelectionBorderBrush}" Command="{Binding RecordingCommand}" IsEnabled="{Binding CanRecord}" ToolTip.Tip="Toggle Talkgroup Audio Recording" /></Grid>
+                              <Border Classes="channel-card" Width="{Binding CardWidth}" Background="{Binding CardBackgroundBrush}" BorderBrush="{Binding CardBorderBrush}" BorderThickness="1" CornerRadius="7" Padding="6" Margin="0,0,6,6" Focusable="True" PointerPressed="HandleChannelPointerPressed" PointerMoved="HandleChannelPointerMoved" PointerReleased="HandleChannelPointerReleased" PointerCaptureLost="HandleChannelPointerCaptureLost" ToolTip.Tip="Drag to move this channel while widgets are unlocked">
+                                  <Grid RowDefinitions="Auto,Auto,Auto,Auto,Auto" RowSpacing="3">
+                                  <StackPanel Spacing="0"><TextBlock Foreground="{Binding CardTextBrush}" FontWeight="Bold" FontSize="{Binding $parent[Window].((local:MainWindowViewModel)DataContext).UiFontSize}" Text="{Binding Name}" TextTrimming="CharacterEllipsis" /><TextBlock Foreground="{Binding CardTextBrush}" FontSize="{Binding $parent[Window].((local:MainWindowViewModel)DataContext).UiSmallFontSize}" Text="{Binding TalkgroupText}" /></StackPanel>
+                                  <Grid Grid.Row="1" ColumnDefinitions="*,Auto,Auto,Auto,Auto" ColumnSpacing="3"><TextBlock Foreground="{Binding CardTextBrush}" FontSize="{Binding $parent[Window].((local:MainWindowViewModel)DataContext).UiSmallFontSize}" Text="{Binding LastCallerDisplayText}" TextTrimming="CharacterEllipsis" VerticalAlignment="Center" /><Button Grid.Column="1" Classes="tx-select tx-multi" Content="{Binding TransmitSelectionText}" Background="{Binding TransmitSelectionBrush}" BorderBrush="{Binding TransmitSelectionBorderBrush}" IsEnabled="{Binding CanTransmit}" PointerEntered="HandleTransmitSelectionPointerEntered" Click="HandleTransmitSelectionClick" /><Button Grid.Column="2" Classes="tx-select page-select" Content="{Binding PageSelectionText}" Background="{Binding PageSelectionBrush}" BorderBrush="{Binding PageSelectionBorderBrush}" IsEnabled="{Binding CanTransmit}" PointerEntered="HandlePageSelectionPointerEntered" Click="HandlePageSelectionClick" /><Button Grid.Column="3" Classes="tx-select alert-select" Content="{Binding AlertSelectionText}" Background="{Binding AlertSelectionBrush}" BorderBrush="{Binding AlertSelectionBorderBrush}" IsEnabled="{Binding CanTransmit}" PointerEntered="HandleAlertSelectionPointerEntered" Click="HandleAlertSelectionClick" /><Button Grid.Column="4" Classes="tx-select tar-select" Content="{Binding RecordButtonText}" Background="{Binding RecordingSelectionBrush}" BorderBrush="{Binding RecordingSelectionBorderBrush}" Command="{Binding RecordingCommand}" IsEnabled="{Binding CanRecord}" ToolTip.Tip="Toggle Talkgroup Audio Recording" /></Grid>
                                   <ProgressBar Grid.Row="2" Classes="receive-level" Height="4" Minimum="0" Maximum="100" Value="{Binding AudioLevel}" />
                                   <Grid Grid.Row="3" ColumnDefinitions="*,Auto" ColumnSpacing="4"><Slider Minimum="0" Maximum="2" Value="{Binding Volume, Mode=TwoWay}" VerticalAlignment="Center" /><Button Grid.Column="1" Classes="card-action" Content="{Binding EncryptionButtonText}" Command="{Binding EncryptionCommand}" IsVisible="{Binding CanToggleEncryption}" IsEnabled="{Binding CanToggleEncryption}" /></Grid>
                                   <Button Grid.Row="4" Classes="ptt" Content="{Binding PttButtonText}" IsEnabled="{Binding CanTransmit}" />
@@ -212,7 +213,7 @@
       <GridSplitter Grid.Column="1" Background="{DynamicResource SplitterBrush}" ResizeDirection="Columns" IsEnabled="{Binding CanResizeLayout}" />
       <Border Grid.Column="2" Width="250" Background="{DynamicResource SidebarBackgroundBrush}" Padding="8,10" IsVisible="{Binding ShowCallHistoryPane}">
         <Grid RowDefinitions="Auto,*">
-          <TextBlock FontSize="13" FontWeight="SemiBold" Text="Activity" />
+          <TextBlock FontSize="{Binding UiFontSize}" FontWeight="SemiBold" Text="Activity" />
           <ScrollViewer x:Name="activityScrollViewer" Grid.Row="1" Margin="0,8,0,0" HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
             <StackPanel Spacing="14">
               <StackPanel Spacing="6">
@@ -221,7 +222,7 @@
                   <ItemsControl.ItemTemplate>
                     <DataTemplate x:DataType="local:CallHistoryEntry">
                       <Border Background="{DynamicResource ActivityBackgroundBrush}" BorderBrush="{DynamicResource ControlBorderBrush}" BorderThickness="1" CornerRadius="6" Padding="7" Margin="0,0,0,6">
-                        <Grid RowDefinitions="Auto,Auto,Auto" ColumnDefinitions="*,Auto"><TextBlock FontSize="12" FontWeight="SemiBold" Text="{Binding DisplayChannelText}" /><TextBlock Grid.Column="1" Classes="eyebrow" Text="{Binding TimestampText}" /><TextBlock Grid.Row="1" Classes="eyebrow" Text="{Binding RouteText}" TextTrimming="CharacterEllipsis" /><TextBlock Grid.Row="1" Grid.Column="1" Classes="eyebrow" Text="{Binding ProtocolText}" /><TextBlock Grid.Row="2" Classes="eyebrow" Text="{Binding EncryptionText}" /><TextBlock Grid.Row="2" Grid.Column="1" Classes="eyebrow" Text="{Binding DurationText}" /></Grid>
+                        <Grid RowDefinitions="Auto,Auto,Auto" ColumnDefinitions="*,Auto,Auto" ColumnSpacing="4"><TextBlock FontSize="{Binding $parent[Window].((local:MainWindowViewModel)DataContext).UiSmallFontSize}" FontWeight="SemiBold" Text="{Binding DisplayChannelText}" /><TextBlock Grid.Column="1" Classes="eyebrow" Text="{Binding TimestampText}" /><Button Grid.Column="2" Grid.RowSpan="3" Content="▶" Tag="{Binding}" IsVisible="{Binding HasRecording}" ToolTip.Tip="Play TAR recording" Padding="5,2" VerticalAlignment="Center" Click="HandlePlayCallHistoryRecordingClick" /><TextBlock Grid.Row="1" Classes="eyebrow" Text="{Binding RouteText}" TextTrimming="CharacterEllipsis" /><TextBlock Grid.Row="1" Grid.Column="1" Classes="eyebrow" Text="{Binding ProtocolText}" /><TextBlock Grid.Row="2" Classes="eyebrow" Text="{Binding EncryptionText}" /><TextBlock Grid.Row="2" Grid.Column="1" Classes="eyebrow" Text="{Binding DurationText}" /></Grid>
                       </Border>
                     </DataTemplate>
                   </ItemsControl.ItemTemplate>
