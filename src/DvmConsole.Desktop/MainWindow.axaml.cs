@@ -436,6 +436,12 @@ public sealed partial class MainWindow : Window
             viewModel.ToggleChannelTransmitSelection(channel);
     }
 
+    private void HandlePageSelectionClick(object? sender, RoutedEventArgs e)
+    {
+        if (sender is Button { DataContext: ChannelViewModel channel })
+            viewModel.ToggleChannelPageSelection(channel);
+    }
+
     private async void HandleGlobalPttKeyClick(object? sender, RoutedEventArgs e)
     {
         if (sender is not MenuItem { Tag: string value } ||
@@ -644,6 +650,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     private readonly ObservableCollection<CallRecordingMetadata> recordingEntries = [];
     private readonly ObservableCollection<DtmfPresetViewModel> dtmfPresets = [];
     private readonly ObservableCollection<TonePresetViewModel> tonePresets = [];
+    private readonly ObservableCollection<AlertToneViewModel> alertTones = [];
     private readonly ObservableCollection<AudioInputPresetViewModel> audioInputPresets = [];
     private readonly ObservableCollection<AudioDeviceOptionViewModel> audioInputDevices = [];
     private readonly ObservableCollection<AudioDeviceOptionViewModel> audioOutputDevices = [];
@@ -663,6 +670,8 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     private string dtmfDigits = "123";
     private string toneFrequencyText = "1000";
     private string toneDurationText = "1.0";
+    private string quickCallToneAText = "600";
+    private string quickCallToneBText = "1200";
     private string audioInputDeviceIdText = "default";
     private string audioOutputDeviceIdText = "default";
     private string audioInputGainText = "1.0";
@@ -673,6 +682,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     private string audioInputPresetNameText = string.Empty;
     private string dtmfPresetName = string.Empty;
     private string tonePresetName = string.Empty;
+    private string alertToneNameText = string.Empty;
     private string recordingRetentionDaysText = string.Empty;
     private string clockText = string.Empty;
     private string debugLogFilterText = string.Empty;
@@ -718,6 +728,8 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         dtmfDigits = userSettings.LastDtmfDigits;
         toneFrequencyText = userSettings.ToneFrequencyHz.ToString("0.###", CultureInfo.InvariantCulture);
         toneDurationText = userSettings.ToneDurationSeconds.ToString("0.###", CultureInfo.InvariantCulture);
+        quickCallToneAText = userSettings.QuickCallToneAFrequencyHz.ToString("0.###", CultureInfo.InvariantCulture);
+        quickCallToneBText = userSettings.QuickCallToneBFrequencyHz.ToString("0.###", CultureInfo.InvariantCulture);
         audioInputDeviceIdText = userSettings.AudioInputDeviceId;
         audioOutputDeviceIdText = userSettings.AudioOutputDeviceId;
         audioInputGainText = userSettings.AudioInputGain.ToString("0.###", CultureInfo.InvariantCulture);
@@ -735,6 +747,8 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             dtmfPresets.Add(new DtmfPresetViewModel(preset));
         foreach (TonePresetSetting preset in userSettings.TonePresets)
             tonePresets.Add(new TonePresetViewModel(preset));
+        foreach (AlertToneSetting tone in userSettings.AlertTones)
+            alertTones.Add(new AlertToneViewModel(tone));
         foreach (AudioInputPresetSetting preset in userSettings.AudioInputPresets)
             audioInputPresets.Add(new AudioInputPresetViewModel(preset));
         p25KeyRing = p25KeyResolver as P25KeyRing;
@@ -779,6 +793,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         Recordings = new ReadOnlyObservableCollection<CallRecordingMetadata>(recordingEntries);
         DtmfPresets = new ReadOnlyObservableCollection<DtmfPresetViewModel>(dtmfPresets);
         TonePresets = new ReadOnlyObservableCollection<TonePresetViewModel>(tonePresets);
+        AlertTones = new ReadOnlyObservableCollection<AlertToneViewModel>(alertTones);
         AudioInputPresets = new ReadOnlyObservableCollection<AudioInputPresetViewModel>(audioInputPresets);
         AudioInputDevices = new ReadOnlyObservableCollection<AudioDeviceOptionViewModel>(audioInputDevices);
         AudioOutputDevices = new ReadOnlyObservableCollection<AudioDeviceOptionViewModel>(audioOutputDevices);
@@ -1203,6 +1218,24 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         set => SetField(ref tonePresetName, value ?? string.Empty);
     }
 
+    public string QuickCallToneAText
+    {
+        get => quickCallToneAText;
+        set => SetField(ref quickCallToneAText, value ?? string.Empty);
+    }
+
+    public string QuickCallToneBText
+    {
+        get => quickCallToneBText;
+        set => SetField(ref quickCallToneBText, value ?? string.Empty);
+    }
+
+    public string AlertToneNameText
+    {
+        get => alertToneNameText;
+        set => SetField(ref alertToneNameText, value ?? string.Empty);
+    }
+
     public string RecordingRetentionDaysText
     {
         get => recordingRetentionDaysText;
@@ -1219,6 +1252,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     public IReadOnlyList<PatchGroupEditorViewModel> PatchGroups { get; }
     public ReadOnlyObservableCollection<DtmfPresetViewModel> DtmfPresets { get; }
     public ReadOnlyObservableCollection<TonePresetViewModel> TonePresets { get; }
+    public ReadOnlyObservableCollection<AlertToneViewModel> AlertTones { get; }
     public ReadOnlyObservableCollection<AudioInputPresetViewModel> AudioInputPresets { get; }
     public ReadOnlyObservableCollection<AudioDeviceOptionViewModel> AudioInputDevices { get; }
     public ReadOnlyObservableCollection<AudioDeviceOptionViewModel> AudioOutputDevices { get; }
@@ -1549,6 +1583,21 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         TransmitStatusText = channel.IsTransmitSelected
             ? $"{channel.Name} selected for global TX."
             : $"{channel.Name} removed from global TX.";
+    }
+
+    public void ToggleChannelPageSelection(ChannelViewModel channel)
+    {
+        ArgumentNullException.ThrowIfNull(channel);
+        if (!channel.CanTransmit)
+        {
+            TransmitStatusText = $"{channel.Name} cannot be selected for paging.";
+            return;
+        }
+
+        channel.SetPageSelected(!channel.IsPageSelected);
+        TransmitStatusText = channel.IsPageSelected
+            ? $"{channel.Name} armed for QCII paging."
+            : $"{channel.Name} removed from QCII paging.";
     }
 
     public async Task SetGlobalPttKeyAsync(KeyboardPttKey key)
@@ -2505,13 +2554,14 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         if (busy || toneTransmitCoordinator.IsSending || transmitCoordinator.ActiveChannel is not null)
             return false;
 
-        ChannelViewModel? channel = selectedChannel;
-        SystemViewModel? system = channel is null
-            ? null
-            : Systems.FirstOrDefault(candidate => candidate.Name.Equals(
+        ChannelViewModel[] targets = ResolveGeneratedToneChannels();
+        return targets.Length > 0 && targets.All(channel =>
+        {
+            SystemViewModel? system = Systems.FirstOrDefault(candidate => candidate.Name.Equals(
                 channel.Definition.SystemName,
                 StringComparison.OrdinalIgnoreCase));
-        return channel?.CanTransmit == true && system?.IsConnected == true;
+            return channel.CanTransmit && system?.IsConnected == true && system.SourceId is uint sourceId && sourceId != 0;
+        });
     }
 
     private void SaveDtmfPreset()
@@ -2954,6 +3004,105 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         }
     }
 
+    public async Task SendQuickCallAsync()
+    {
+        if (!QuickCallToneGenerator.TryParse(
+                QuickCallToneAText,
+                QuickCallToneBText,
+                out double toneAFrequencyHz,
+                out double toneBFrequencyHz,
+                out string? error))
+        {
+            TransmitStatusText = error!;
+            return;
+        }
+
+        ChannelViewModel[] pageTargets = Systems
+            .SelectMany(system => system.Channels)
+            .Where(channel => channel.IsPageSelected)
+            .ToArray();
+        if (pageTargets.Length == 0)
+        {
+            TransmitStatusText = "Arm PAGE on one or more channel cards before sending QCII.";
+            return;
+        }
+
+        try
+        {
+            short[] samples = QuickCallToneGenerator.Generate(toneAFrequencyHz, toneBFrequencyHz);
+            userSettings.QuickCallToneAFrequencyHz = toneAFrequencyHz;
+            userSettings.QuickCallToneBFrequencyHz = toneBFrequencyHz;
+            PersistUserSettings();
+            await SendGeneratedToneAsync(samples, "QCII page", pageTargets);
+            foreach (ChannelViewModel channel in pageTargets)
+                channel.SetPageSelected(false);
+        }
+        catch (Exception exception)
+        {
+            TransmitStatusText = $"QCII page unavailable: {exception.Message}";
+        }
+    }
+
+    public bool AddAlertTone(string path)
+    {
+        try
+        {
+            string fullPath = Path.GetFullPath(path);
+            if (!File.Exists(fullPath))
+                throw new FileNotFoundException("The alert audio file was not found.", fullPath);
+
+            string name = string.IsNullOrWhiteSpace(AlertToneNameText)
+                ? Path.GetFileNameWithoutExtension(fullPath)
+                : AlertToneNameText.Trim();
+            if (string.IsNullOrWhiteSpace(name) || name.Length > 80)
+                throw new ArgumentException("Alert tone names must contain 1–80 characters.", nameof(path));
+
+            AlertToneViewModel? existing = alertTones.FirstOrDefault(tone =>
+                tone.FilePath.Equals(fullPath, StringComparison.OrdinalIgnoreCase));
+            if (existing is not null)
+                alertTones.Remove(existing);
+            alertTones.Add(new AlertToneViewModel(new AlertToneSetting
+            {
+                Name = name,
+                FilePath = fullPath
+            }));
+            userSettings.AlertTones = alertTones.Select(tone => tone.ToSetting()).ToList();
+            PersistUserSettings();
+            AlertToneNameText = string.Empty;
+            TransmitStatusText = $"Alert asset '{name}' imported.";
+            return true;
+        }
+        catch (Exception exception)
+        {
+            TransmitStatusText = $"Alert asset unavailable: {exception.Message}";
+            return false;
+        }
+    }
+
+    public void DeleteAlertTone(AlertToneViewModel tone)
+    {
+        ArgumentNullException.ThrowIfNull(tone);
+        if (!alertTones.Remove(tone))
+            return;
+        userSettings.AlertTones = alertTones.Select(item => item.ToSetting()).ToList();
+        PersistUserSettings();
+        TransmitStatusText = $"Alert asset '{tone.Name}' removed.";
+    }
+
+    public async Task SendAlertToneAsync(AlertToneViewModel tone)
+    {
+        ArgumentNullException.ThrowIfNull(tone);
+        try
+        {
+            short[] samples = await PcmAudioFileLoader.LoadAsync(tone.FilePath).ConfigureAwait(false);
+            await SendGeneratedToneAsync(samples, $"Alert asset '{tone.Name}'").ConfigureAwait(false);
+        }
+        catch (Exception exception)
+        {
+            TransmitStatusText = $"Alert asset unavailable: {exception.Message}";
+        }
+    }
+
     private static DtmfPresetSetting ToDtmfPresetSetting(DtmfPresetViewModel preset)
         => new()
         {
@@ -3020,17 +3169,24 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         return normalized;
     }
 
-    private async Task SendGeneratedToneAsync(ReadOnlyMemory<short> samples, string label)
+    private async Task SendGeneratedToneAsync(
+        ReadOnlyMemory<short> samples,
+        string label,
+        IReadOnlyCollection<ChannelViewModel>? explicitTargets = null)
     {
-        ChannelViewModel? channel = selectedChannel;
-        if (channel is null)
+        ChannelViewModel[] channels = explicitTargets?.ToArray() ?? ResolveGeneratedToneChannels();
+        if (channels.Length == 0)
             throw new InvalidOperationException("Select a channel before sending generated audio.");
 
-        SystemViewModel? system = Systems.FirstOrDefault(candidate => candidate.Name.Equals(
-            channel.Definition.SystemName,
-            StringComparison.OrdinalIgnoreCase));
-        if (system is null)
-            throw new InvalidOperationException($"The system '{channel.Definition.SystemName}' was not found.");
+        TransmitTarget[] targets = channels
+            .Distinct()
+            .Select(channel => new TransmitTarget(
+                channel,
+                Systems.FirstOrDefault(candidate => candidate.Name.Equals(
+                    channel.Definition.SystemName,
+                    StringComparison.OrdinalIgnoreCase)) ?? throw new InvalidOperationException(
+                        $"The system '{channel.Definition.SystemName}' was not found.")))
+            .ToArray();
         if (transmitCoordinator.ActiveChannel is not null)
             throw new InvalidOperationException("Release PTT before sending generated audio.");
 
@@ -3038,14 +3194,37 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         if (receivingChannels.Length > 0)
         {
             await audioCoordinator.StopAsync();
+            suspendedAudioChannels = receivingChannels;
             foreach (ChannelViewModel receivingChannel in receivingChannels)
                 receivingChannel.SetAudioEnabled(false);
             AudioStatusText = "RX audio disabled while sending generated audio.";
         }
 
-        await toneTransmitCoordinator.SendAsync(channel, system, samples);
-        TransmitStatusText = $"{label} sent on {channel.Name}.";
-        RaiseGeneratedAudioCanExecuteChanged();
+        try
+        {
+            await toneTransmitCoordinator.SendAsync(targets, samples);
+            string targetText = targets.Length == 1
+                ? targets[0].Channel.Name
+                : $"{targets.Length} selected channels";
+            TransmitStatusText = $"{label} sent on {targetText}.";
+        }
+        finally
+        {
+            await RestoreSuspendedAudioAsync().ConfigureAwait(false);
+            RaiseGeneratedAudioCanExecuteChanged();
+        }
+    }
+
+    private ChannelViewModel[] ResolveGeneratedToneChannels()
+    {
+        ChannelViewModel[] selectedTransmitChannels = Systems
+            .SelectMany(system => system.Channels)
+            .Where(channel => channel.IsTransmitSelected)
+            .ToArray();
+        if (selectedTransmitChannels.Length > 0)
+            return selectedTransmitChannels;
+
+        return selectedChannel is null ? [] : [selectedChannel];
     }
 
     private void RaiseGeneratedAudioCanExecuteChanged()
@@ -3663,6 +3842,7 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
     private bool audioBusy;
     private bool transmitEnabled;
     private bool transmitSelected;
+    private bool pageSelected;
     private bool transmitBusy;
     private bool transmitEncrypted;
     private bool recordingEnabled;
@@ -3744,6 +3924,7 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
     public string AudioButtonText => audioEnabled ? "Stop audio" : "Listen";
     public bool IsTransmitting => transmitEnabled;
     public bool IsTransmitSelected => transmitSelected;
+    public bool IsPageSelected => pageSelected;
     public bool IsTransmitEncrypted => transmitEncrypted;
     public bool IsRecordingEnabled => recordingEnabled;
     public string RecordButtonText => recordingEnabled ? "Stop recording" : "Record";
@@ -3813,10 +3994,15 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
         };
     public string PttButtonText => transmitEnabled ? "Release" : "PTT";
     public string TransmitSelectionText => transmitSelected ? "TX ✓" : "TX";
+    public string PageSelectionText => pageSelected ? "PAGE ✓" : "PAGE";
     public IBrush TransmitSelectionBrush => new SolidColorBrush(Color.Parse(
         transmitSelected ? "#694BB0" : "#242938"));
     public IBrush TransmitSelectionBorderBrush => new SolidColorBrush(Color.Parse(
         transmitSelected ? "#B69AF4" : "#3A4555"));
+    public IBrush PageSelectionBrush => new SolidColorBrush(Color.Parse(
+        pageSelected ? "#A15B2A" : "#242938"));
+    public IBrush PageSelectionBorderBrush => new SolidColorBrush(Color.Parse(
+        pageSelected ? "#F0A15C" : "#3A4555"));
     public ICommand AudioCommand { get; private set; }
     public ICommand PttCommand { get; private set; }
     public ICommand EncryptionCommand { get; }
@@ -3965,6 +4151,17 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(TransmitSelectionText)));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(TransmitSelectionBrush)));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(TransmitSelectionBorderBrush)));
+    }
+
+    public void SetPageSelected(bool selected)
+    {
+        if (pageSelected == selected)
+            return;
+        pageSelected = selected;
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsPageSelected)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(PageSelectionText)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(PageSelectionBrush)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(PageSelectionBorderBrush)));
     }
 
     public void RestoreTransmitSelection(bool selected) => SetTransmitSelected(selected);

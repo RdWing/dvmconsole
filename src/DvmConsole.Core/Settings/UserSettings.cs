@@ -49,8 +49,11 @@ public sealed class UserSettings
     public string LastDtmfDigits { get; set; } = "123";
     public double ToneFrequencyHz { get; set; } = 1000;
     public double ToneDurationSeconds { get; set; } = 1.0;
+    public double QuickCallToneAFrequencyHz { get; set; } = 600;
+    public double QuickCallToneBFrequencyHz { get; set; } = 1200;
     public List<DtmfPresetSetting> DtmfPresets { get; set; } = [];
     public List<TonePresetSetting> TonePresets { get; set; } = [];
+    public List<AlertToneSetting> AlertTones { get; set; } = [];
     public int RecordingRetentionDays { get; set; } = 7;
     public Dictionary<string, double> ChannelVolumes { get; set; } = new(StringComparer.OrdinalIgnoreCase);
     public Dictionary<string, string> ChannelOutputDeviceIds { get; set; } = new(StringComparer.OrdinalIgnoreCase);
@@ -125,8 +128,11 @@ public sealed class UserSettingsStore
             settings.LastDtmfDigits = NormalizeDtmfDigits(settings.LastDtmfDigits);
             settings.ToneFrequencyHz = NormalizeToneFrequency(settings.ToneFrequencyHz);
             settings.ToneDurationSeconds = NormalizeToneDuration(settings.ToneDurationSeconds);
+            settings.QuickCallToneAFrequencyHz = NormalizeToneFrequency(settings.QuickCallToneAFrequencyHz, 600);
+            settings.QuickCallToneBFrequencyHz = NormalizeToneFrequency(settings.QuickCallToneBFrequencyHz, 1200);
             settings.DtmfPresets = NormalizeDtmfPresets(settings.DtmfPresets);
             settings.TonePresets = NormalizeTonePresets(settings.TonePresets);
+            settings.AlertTones = NormalizeAlertTones(settings.AlertTones);
             settings.RecordingRetentionDays = Math.Max(0, settings.RecordingRetentionDays);
             var channelVolumes = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
             foreach (KeyValuePair<string, double> entry in settings.ChannelVolumes ?? [])
@@ -396,8 +402,8 @@ public sealed class UserSettingsStore
             : "123";
     }
 
-    private static double NormalizeToneFrequency(double frequency)
-        => double.IsFinite(frequency) && frequency is >= 1 and < 4000 ? frequency : 1000;
+    private static double NormalizeToneFrequency(double frequency, double fallback = 1000)
+        => double.IsFinite(frequency) && frequency is >= 1 and < 4000 ? frequency : fallback;
 
     private static double NormalizeToneDuration(double duration)
         => double.IsFinite(duration) && duration is > 0 and <= 10 ? duration : 1.0;
@@ -472,6 +478,21 @@ public sealed class UserSettingsStore
             .Select(NormalizeTonePreset)
             .ToList();
     }
+
+    private static List<AlertToneSetting> NormalizeAlertTones(IEnumerable<AlertToneSetting>? tones)
+        => (tones ?? [])
+            .Where(tone => tone is not null && !string.IsNullOrWhiteSpace(tone.FilePath))
+            .Select(tone => new AlertToneSetting
+            {
+                Name = string.IsNullOrWhiteSpace(tone.Name)
+                    ? System.IO.Path.GetFileNameWithoutExtension(tone.FilePath.Trim())
+                    : tone.Name.Trim(),
+                FilePath = tone.FilePath.Trim()
+            })
+            .Where(tone => tone.FilePath.Length > 0)
+            .GroupBy(tone => tone.FilePath, StringComparer.OrdinalIgnoreCase)
+            .Select(group => group.First())
+            .ToList();
 
     private static TonePresetSetting NormalizeTonePreset(TonePresetSetting preset)
     {

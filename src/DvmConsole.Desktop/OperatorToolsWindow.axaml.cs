@@ -74,6 +74,48 @@ public sealed partial class OperatorToolsWindow : Window
             await viewModel.SendTonePresetAsync(preset);
     }
 
+    private async void HandleSendQuickCallClick(object? sender, RoutedEventArgs e)
+        => await viewModel.SendQuickCallAsync();
+
+    private async void HandleImportAlertToneClick(object? sender, RoutedEventArgs e)
+    {
+        if (!StorageProvider.CanOpen)
+            return;
+
+        IReadOnlyList<IStorageFile> files = await StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
+        {
+            Title = "Import alert audio",
+            AllowMultiple = false,
+            FileTypeFilter =
+            [
+                new FilePickerFileType("WAV or MPEG audio")
+                {
+                    Patterns = ["*.wav", "*.mp3", "*.mpeg", "*.mp2"],
+                    MimeTypes = ["audio/wav", "audio/x-wav", "audio/mpeg"],
+                    AppleUniformTypeIdentifiers = ["com.microsoft.waveform-audio", "public.mp3", "public.mpeg-4-audio"]
+                }
+            ]
+        });
+        if (files.Count == 0)
+            return;
+
+        string? path = files[0].TryGetLocalPath();
+        if (!string.IsNullOrWhiteSpace(path))
+            viewModel.AddAlertTone(path);
+    }
+
+    private async void HandleSendAlertToneClick(object? sender, RoutedEventArgs e)
+    {
+        if (sender is Button { Tag: AlertToneViewModel tone })
+            await viewModel.SendAlertToneAsync(tone);
+    }
+
+    private void HandleDeleteAlertToneClick(object? sender, RoutedEventArgs e)
+    {
+        if (sender is Button { Tag: AlertToneViewModel tone })
+            viewModel.DeleteAlertTone(tone);
+    }
+
     private void HandleDeleteTonePresetClick(object? sender, RoutedEventArgs e)
     {
         if (sender is Button { Tag: TonePresetViewModel preset })

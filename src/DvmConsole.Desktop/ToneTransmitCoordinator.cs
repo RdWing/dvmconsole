@@ -34,31 +34,58 @@ public sealed class ToneTransmitCoordinator : IAsyncDisposable
         SystemViewModel system,
         ReadOnlyMemory<short> samples,
         CancellationToken cancellationToken = default)
+        => await SendAsync([new TransmitTarget(channel, system)], samples, cancellationToken).ConfigureAwait(false);
+
+    public async Task SendAsync(
+        IEnumerable<TransmitTarget> targets,
+        ReadOnlyMemory<short> samples,
+        CancellationToken cancellationToken = default)
     {
-        ArgumentNullException.ThrowIfNull(channel);
-        ArgumentNullException.ThrowIfNull(system);
+        ArgumentNullException.ThrowIfNull(targets);
         if (samples.IsEmpty)
             throw new ArgumentException("Tone audio cannot be empty.", nameof(samples));
         ObjectDisposedException.ThrowIf(disposed, this);
+
+        TransmitTarget[] requested = targets
+            .GroupBy(target => target.Channel)
+            .Select(group => group.First())
+            .ToArray();
+        if (requested.Length == 0)
+            throw new InvalidOperationException("Select at least one transmit-capable channel.");
 
         await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
             ObjectDisposedException.ThrowIf(disposed, this);
-            if (!channel.CanTransmit)
-                throw new InvalidOperationException("The selected channel cannot transmit generated audio.");
-            if (!system.IsConnected)
-                throw new InvalidOperationException($"The FNE system '{system.Name}' is not connected.");
-            if (system.SourceId is not uint sourceId || sourceId == 0)
-                throw new InvalidOperationException($"The FNE system '{system.Name}' has no valid transmit RID.");
+            ValidateTargets(requested);
 
             sending = true;
-            await SendCoreAsync(channel, system, sourceId, samples, cancellationToken).ConfigureAwait(false);
+            await Task.WhenAll(requested.Select(target => SendCoreAsync(
+                target.Channel,
+                target.System,
+                target.System.SourceId!.Value,
+                samples,
+                cancellationToken))).ConfigureAwait(false);
         }
         finally
         {
             sending = false;
             gate.Release();
+        }
+    }
+
+    private static void ValidateTargets(IEnumerable<TransmitTarget> targets)
+    {
+        foreach (TransmitTarget target in targets)
+        {
+            if (!target.Channel.CanTransmit)
+                throw new InvalidOperationException($"{target.Channel.Name} cannot transmit generated audio.");
+            if (!target.System.Channels.Contains(target.Channel))
+                throw new InvalidOperationException($"{target.Channel.Name} does not belong to FNE system '{target.System.Name}'.");
+            if (!target.System.IsConnected)
+                throw new InvalidOperationException($"The FNE system '{target.System.Name}' is not connected.");
+            if (target.System.SourceId is not uint sourceId || sourceId == 0)
+                throw new InvalidOperationException($"The FNE system '{target.System.Name}' has no valid transmit RID.");
         }
     }
 

@@ -254,6 +254,29 @@ public sealed class ChannelViewModelTests
     }
 
     [Fact]
+    public void PageSelectionIsIndependentFromGlobalTransmitSelection()
+    {
+        var channel = new ChannelViewModel(new ChannelConfiguration
+        {
+            Name = "Dispatch",
+            System = "System 1",
+            Tgid = "99",
+            Mode = "analog"
+        });
+
+        channel.SetPageSelected(true);
+
+        Assert.True(channel.IsPageSelected);
+        Assert.False(channel.IsTransmitSelected);
+        Assert.Equal("PAGE ✓", channel.PageSelectionText);
+
+        channel.SetPageSelected(false);
+
+        Assert.False(channel.IsPageSelected);
+        Assert.Equal("PAGE", channel.PageSelectionText);
+    }
+
+    [Fact]
     public void StaleTerminatorCannotCloseAnotherActiveStream()
     {
         var channel = new ChannelViewModel(new ChannelConfiguration
