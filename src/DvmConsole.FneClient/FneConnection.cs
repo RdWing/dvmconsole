@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Sockets;
 using DvmConsole.Core.Configuration;
+using DvmConsole.Core.Diagnostics;
 using fnecore;
 using fnecore.EDAC;
 using fnecore.P25;
@@ -88,6 +89,12 @@ public sealed record FneConnectionStatus(
     string Message,
     DateTimeOffset ChangedAt);
 
+public sealed record FneLogEntry(
+    string SystemName,
+    DebugLogSeverity Severity,
+    string Message,
+    DateTimeOffset Timestamp);
+
 /// <summary>
 /// Sanitized P25 key response. Raw KMM frames and transport payloads are not
 /// exposed to the desktop or media layers.
@@ -117,6 +124,7 @@ public sealed class FneConnection : IAsyncDisposable
     }
 
     public event EventHandler<FneConnectionStatus>? StatusChanged;
+    public event EventHandler<FneLogEntry>? LogReceived;
     public event EventHandler<FneTrafficFrame>? TrafficReceived;
     public event EventHandler<FneKeyResponse>? KeyResponseReceived;
 
@@ -524,6 +532,12 @@ public sealed class FneConnection : IAsyncDisposable
 
     private void HandlePeerLog(LogLevel level, string message)
     {
+        LogReceived?.Invoke(this, new FneLogEntry(
+            options.Name,
+            MapLogSeverity(level),
+            DebugLogRedactor.Redact(message),
+            DateTimeOffset.UtcNow));
+
         if (message.Contains("Sending login request", StringComparison.OrdinalIgnoreCase))
         {
             Publish(FneConnectionState.WaitingForLogin, "FNE login request sent");
@@ -564,6 +578,16 @@ public sealed class FneConnection : IAsyncDisposable
         if (level is LogLevel.ERROR or LogLevel.FATAL)
             Publish(FneConnectionState.Faulted, "FNE protocol error");
     }
+
+    private static DebugLogSeverity MapLogSeverity(LogLevel level)
+        => level switch
+        {
+            LogLevel.DEBUG => DebugLogSeverity.Debug,
+            LogLevel.WARNING => DebugLogSeverity.Warning,
+            LogLevel.ERROR => DebugLogSeverity.Error,
+            LogLevel.FATAL => DebugLogSeverity.Fatal,
+            _ => DebugLogSeverity.Info
+        };
 
     private void StartStateMonitor(FnePeer current)
     {

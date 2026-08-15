@@ -58,6 +58,35 @@ public sealed class FneConnectionTests
     }
 
     [Fact]
+    public async Task PublishesRedactedPeerDiagnostics()
+    {
+        var options = new FneConnectionOptions(
+            "Test FNE",
+            "TYF_OP1",
+            "127.0.0.1",
+            62031,
+            1000001,
+            null,
+            false,
+            null)
+        {
+            EnableDiagnostics = true
+        };
+        await using var connection = new FneConnection(options);
+        fnecore.FnePeer peer = connection.CreatePeer(new IPEndPoint(IPAddress.Loopback, 62031));
+        FneLogEntry? received = null;
+        connection.LogReceived += (_, entry) => received = entry;
+
+        peer.Logger(fnecore.LogLevel.DEBUG, "Network Received (from 127.0.0.1) -- DUMP 0000: secret");
+
+        Assert.NotNull(received);
+        Assert.Equal("Test FNE", received!.SystemName);
+        Assert.Equal("DEBUG", received.Severity.ToString().ToUpperInvariant());
+        Assert.DoesNotContain("secret", received.Message);
+        Assert.Contains("payload redacted", received.Message);
+    }
+
+    [Fact]
     public void KeepsKmfKeySeparateFromTransportKey()
     {
         var system = new SystemConfiguration

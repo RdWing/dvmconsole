@@ -86,6 +86,7 @@
             <MenuItem Header="Dark mode" IsChecked="{Binding DarkMode, Mode=TwoWay}" ToggleType="CheckBox" />
             <MenuItem Header="Call History…" Tag="History" Click="HandleOpenOperatorToolsClick" />
             <MenuItem Header="Groups…" Tag="Groups" Click="HandleOpenOperatorToolsClick" />
+            <MenuItem Header="Debug Logs…" Click="HandleOpenDebugLogsClick" />
             <Separator />
             <MenuItem Header="Keep window on top" IsChecked="{Binding KeepWindowOnTop, Mode=TwoWay}" ToggleType="CheckBox" />
           </MenuItem>

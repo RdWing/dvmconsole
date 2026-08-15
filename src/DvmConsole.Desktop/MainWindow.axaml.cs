@@ -9,6 +9,7 @@ using Avalonia.Threading;
 using Avalonia.VisualTree;
 using DvmConsole.Audio;
 using DvmConsole.Core.Configuration;
+using DvmConsole.Core.Diagnostics;
 using DvmConsole.Core.Runtime;
 using DvmConsole.Core.Settings;
 using DvmConsole.FneClient;
@@ -341,6 +342,12 @@ public sealed partial class MainWindow : Window
         await window.ShowDialog(this);
     }
 
+    private async void HandleOpenDebugLogsClick(object? sender, RoutedEventArgs e)
+    {
+        var window = new DebugLogWindow(viewModel);
+        await window.ShowDialog(this);
+    }
+
     private async void HandleOpenOperatorToolsClick(object? sender, RoutedEventArgs e)
     {
         if (sender is not MenuItem { Tag: string value } ||
@@ -622,6 +629,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     private readonly ObservableCollection<AudioDeviceOptionViewModel> audioInputDevices = [];
     private readonly ObservableCollection<AudioDeviceOptionViewModel> audioOutputDevices = [];
     private readonly ObservableCollection<SubscriberCommandAuditEntry> subscriberCommandAudit = [];
+    private readonly ObservableCollection<DebugLogEntry> debugLogEntries = [];
     private readonly ObservableCollection<WebStreamViewModel> webStreams = [];
     private readonly WebStreamPlaybackCoordinator webStreamPlayback;
     private readonly object patchSourceWorkSync = new();
@@ -647,6 +655,8 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     private string tonePresetName = string.Empty;
     private string recordingRetentionDaysText = string.Empty;
     private string clockText = string.Empty;
+    private string debugLogFilterText = string.Empty;
+    private string debugLogSeverityFilter = "All";
     private bool busy;
     private ChannelViewModel? selectedChannel;
     private SystemViewModel? selectedSystem;
@@ -753,6 +763,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         AudioInputDevices = new ReadOnlyObservableCollection<AudioDeviceOptionViewModel>(audioInputDevices);
         AudioOutputDevices = new ReadOnlyObservableCollection<AudioDeviceOptionViewModel>(audioOutputDevices);
         SubscriberCommandAudit = new ReadOnlyObservableCollection<SubscriberCommandAuditEntry>(subscriberCommandAudit);
+        DebugLogEntries = new ReadOnlyObservableCollection<DebugLogEntry>(debugLogEntries);
         WebStreams = new ReadOnlyObservableCollection<WebStreamViewModel>(webStreams);
         foreach (WebStreamViewModel stream in Zones.SelectMany(zone => zone.WebStreams))
         {
@@ -807,6 +818,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         foreach (SystemViewModel system in Systems)
         {
             system.StatusChanged += (_, status) => HandleSystemStatus(system, status);
+            system.LogReceived += HandleSystemLog;
             system.TrafficReceived += (_, traffic) => HandleSystemTraffic(system, traffic);
             system.KeyResponseReceived += HandleSystemKeyResponse;
         }
@@ -1152,6 +1164,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     public ReadOnlyObservableCollection<AudioDeviceOptionViewModel> AudioInputDevices { get; }
     public ReadOnlyObservableCollection<AudioDeviceOptionViewModel> AudioOutputDevices { get; }
     public ReadOnlyObservableCollection<SubscriberCommandAuditEntry> SubscriberCommandAudit { get; }
+    public ReadOnlyObservableCollection<DebugLogEntry> DebugLogEntries { get; }
     public ReadOnlyObservableCollection<WebStreamViewModel> WebStreams { get; }
     public System.Collections.ObjectModel.ReadOnlyObservableCollection<CallHistoryEntry> CallHistory { get; }
     public ReadOnlyObservableCollection<CallRecordingMetadata> Recordings { get; }
@@ -1169,6 +1182,66 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     public string ConnectionPillText => SelectedSystem?.IsConnected == true ? "CONNECTED" : "OFFLINE";
     public string SelectedSystemName => SelectedSystem?.Name ?? "No system";
     public string SystemStatusText => SelectedSystem?.ConnectionStatus ?? "No configured system";
+    public IReadOnlyList<string> DebugLogSeverityFilters { get; } = ["All", "Debug", "Info", "Warning", "Error", "Fatal"];
+    public IReadOnlyList<DebugLogEntry> FilteredDebugLogs
+        => DebugLogEntries
+            .Where(entry =>
+                (DebugLogSeverityFilter == "All" || entry.Severity.ToString().Equals(DebugLogSeverityFilter, StringComparison.OrdinalIgnoreCase)) &&
+                (string.IsNullOrWhiteSpace(DebugLogFilterText) || entry.Summary.Contains(DebugLogFilterText, StringComparison.OrdinalIgnoreCase)))
+            .ToArray();
+
+    public string DebugLogFilterText
+    {
+        get => debugLogFilterText;
+        set
+        {
+            string normalized = value ?? string.Empty;
+            if (debugLogFilterText == normalized)
+                return;
+            debugLogFilterText = normalized;
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(DebugLogFilterText)));
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(FilteredDebugLogs)));
+        }
+    }
+
+    public string DebugLogSeverityFilter
+    {
+        get => debugLogSeverityFilter;
+        set
+        {
+            string normalized = string.IsNullOrWhiteSpace(value) ? "All" : value;
+            if (debugLogSeverityFilter == normalized)
+                return;
+            debugLogSeverityFilter = normalized;
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(DebugLogSeverityFilter)));
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(FilteredDebugLogs)));
+        }
+    }
+
+    public void ClearDebugLogs()
+    {
+        debugLogEntries.Clear();
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(FilteredDebugLogs)));
+        StatusText = "Debug log capture cleared.";
+    }
+
+    public void ExportDebugLogs(string path)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+        string fullPath = Path.GetFullPath(path);
+        string? directory = Path.GetDirectoryName(fullPath);
+        if (!string.IsNullOrWhiteSpace(directory))
+            Directory.CreateDirectory(directory);
+
+        var lines = new List<string> { "Timestamp\tSeverity\tSource\tMessage" };
+        lines.AddRange(DebugLogEntries.Select(entry => string.Join("\t",
+            entry.Timestamp.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture),
+            entry.SeverityText,
+            entry.Source,
+            DebugLogRedactor.Redact(entry.Message).Replace("\r", " ").Replace("\n", " "))));
+        File.WriteAllLines(fullPath, lines);
+        StatusText = $"Exported {DebugLogEntries.Count} redacted debug log entr{(DebugLogEntries.Count == 1 ? "y" : "ies")}.";
+    }
     public IBrush ConnectionBrush => SelectedSystem?.IsConnected == true
         ? new SolidColorBrush(Color.Parse("#00C86A"))
         : new SolidColorBrush(Color.Parse("#7B8794"));
@@ -1609,6 +1682,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         foreach (SystemViewModel system in Systems)
         {
             system.KeyResponseReceived -= HandleSystemKeyResponse;
+            system.LogReceived -= HandleSystemLog;
             await system.DisposeAsync().ConfigureAwait(false);
         }
         foreach (ChannelViewModel channel in Systems.SelectMany(system => system.Channels))
@@ -1683,6 +1757,27 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             if (status.State == FneConnectionState.Connected)
                 RequestMissingP25Keys(system);
             RaiseGeneratedAudioCanExecuteChanged();
+        }
+
+        if (Dispatcher.UIThread.CheckAccess())
+            Apply();
+        else
+            Dispatcher.UIThread.Post(Apply);
+    }
+
+    private void HandleSystemLog(object? sender, FneLogEntry entry)
+    {
+        void Apply()
+        {
+            if (debugLogEntries.Count >= 500)
+                debugLogEntries.RemoveAt(debugLogEntries.Count - 1);
+
+            debugLogEntries.Insert(0, new DebugLogEntry(
+                entry.Timestamp,
+                entry.SystemName,
+                entry.Severity,
+                entry.Message));
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(FilteredDebugLogs)));
         }
 
         if (Dispatcher.UIThread.CheckAccess())
@@ -3183,12 +3278,14 @@ public sealed class SystemViewModel : INotifyPropertyChanged, IAsyncDisposable
         Channels = channels?.ToArray() ?? [];
         Zones = zones?.ToArray() ?? [];
         connection.StatusChanged += HandleConnectionStatus;
+        connection.LogReceived += HandleLogReceived;
         connection.TrafficReceived += HandleTrafficReceived;
         connection.KeyResponseReceived += HandleKeyResponse;
     }
 
     public event PropertyChangedEventHandler? PropertyChanged;
     public event EventHandler<FneConnectionStatus>? StatusChanged;
+    public event EventHandler<FneLogEntry>? LogReceived;
     public event EventHandler<FneTrafficFrame>? TrafficReceived;
     public event EventHandler<FneKeyResponse>? KeyResponseReceived;
     public string Name { get; }
@@ -3248,6 +3345,7 @@ public sealed class SystemViewModel : INotifyPropertyChanged, IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         connection.StatusChanged -= HandleConnectionStatus;
+        connection.LogReceived -= HandleLogReceived;
         connection.TrafficReceived -= HandleTrafficReceived;
         connection.KeyResponseReceived -= HandleKeyResponse;
         await connection.DisposeAsync().ConfigureAwait(false);
@@ -3256,6 +3354,11 @@ public sealed class SystemViewModel : INotifyPropertyChanged, IAsyncDisposable
     private void HandleConnectionStatus(object? sender, FneConnectionStatus status)
     {
         StatusChanged?.Invoke(this, status);
+    }
+
+    private void HandleLogReceived(object? sender, FneLogEntry entry)
+    {
+        LogReceived?.Invoke(this, entry);
     }
 
     private void HandleTrafficReceived(object? sender, FneTrafficFrame traffic)
