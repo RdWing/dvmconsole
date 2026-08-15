@@ -12,6 +12,33 @@ namespace DvmConsole.Desktop.Tests;
 public sealed class ChannelViewModelTests
 {
     [Fact]
+    public void TransmitMutePreservesLogicalReceiveSelection()
+    {
+        var channel = new ChannelViewModel(new ChannelConfiguration
+        {
+            Name = "Dispatch",
+            System = "System 1",
+            Tgid = "99",
+            Mode = "dmr",
+            Slot = 1
+        });
+
+        channel.SetAudioEnabled(true);
+        channel.SetAudioSuspended(true);
+
+        Assert.True(channel.IsAudioEnabled);
+        Assert.True(channel.IsAudioSuspended);
+        Assert.Equal("RX muted", channel.AudioButtonText);
+        Assert.Equal("RX muted during console transmit", channel.StateText);
+
+        channel.SetAudioEnabled(true);
+
+        Assert.True(channel.IsAudioEnabled);
+        Assert.False(channel.IsAudioSuspended);
+        Assert.Equal("Stop audio", channel.AudioButtonText);
+    }
+
+    [Fact]
     public void MatchingDmrVoiceTrafficUpdatesChannelRuntime()
     {
         var channel = new ChannelViewModel(new ChannelConfiguration

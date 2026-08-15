@@ -97,7 +97,7 @@ public sealed class CallHistoryWindow : Window
         var exportButton = new Button { Content = "Export CSV…", MinWidth = 108 };
         var controls = new Grid
         {
-            RowDefinitions = new RowDefinitions("Auto,Auto"),
+            RowDefinitions = new RowDefinitions("Auto,Auto,Auto"),
             ColumnDefinitions = new ColumnDefinitions("*,Auto,Auto,Auto"),
             ColumnSpacing = 8,
             RowSpacing = 8,
@@ -116,10 +116,11 @@ public sealed class CallHistoryWindow : Window
             }
         };
         Grid.SetColumnSpan(controls.Children[0], 4);
+        Grid.SetColumnSpan(filterInput, 4);
         Grid.SetRow(filterInput, 1);
-        Grid.SetRow(clearButton, 1);
-        Grid.SetRow(exportButton, 1);
-        Grid.SetRow(closeButton, 1);
+        Grid.SetRow(clearButton, 2);
+        Grid.SetRow(exportButton, 2);
+        Grid.SetRow(closeButton, 2);
         Grid.SetColumn(clearButton, 1);
         Grid.SetColumn(exportButton, 2);
         Grid.SetColumn(closeButton, 3);

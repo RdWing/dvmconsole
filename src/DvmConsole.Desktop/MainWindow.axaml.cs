@@ -35,6 +35,8 @@ public sealed partial class MainWindow : Window
     private Point dragPointerOrigin;
     private double dragWidgetXOrigin;
     private double dragWidgetYOrigin;
+    private bool draggedChannelMoved;
+    private bool toggleReceiveAfterChannelClick;
 
     public MainWindow() : this(null)
     {
@@ -83,13 +85,15 @@ public sealed partial class MainWindow : Window
             DataContext is MainWindowViewModel viewModel)
         {
             PointerPointProperties properties = e.GetCurrentPoint(control).Properties;
-            if (properties.IsRightButtonPressed && !viewModel.LockWidgets)
+            if ((properties.IsLeftButtonPressed || properties.IsRightButtonPressed) && !viewModel.LockWidgets)
             {
                 draggedChannelCard = control;
                 draggedChannel = channel;
                 dragPointerOrigin = e.GetPosition(this);
                 dragWidgetXOrigin = channel.WidgetX;
                 dragWidgetYOrigin = channel.WidgetY;
+                draggedChannelMoved = false;
+                toggleReceiveAfterChannelClick = properties.IsLeftButtonPressed;
                 e.Pointer.Capture(control);
                 e.Handled = true;
                 control.Focus();
@@ -114,20 +118,34 @@ public sealed partial class MainWindow : Window
         }
 
         Point current = e.GetPosition(this);
+        double deltaX = current.X - dragPointerOrigin.X;
+        double deltaY = current.Y - dragPointerOrigin.Y;
+        if (!draggedChannelMoved && Math.Abs(deltaX) < 4 && Math.Abs(deltaY) < 4)
+            return;
+
+        draggedChannelMoved = true;
         const double gridSize = 10;
-        double x = Math.Max(0, Math.Round((dragWidgetXOrigin + current.X - dragPointerOrigin.X) / gridSize) * gridSize);
-        double y = Math.Max(0, Math.Round((dragWidgetYOrigin + current.Y - dragPointerOrigin.Y) / gridSize) * gridSize);
+        double x = Math.Max(0, Math.Round((dragWidgetXOrigin + deltaX) / gridSize) * gridSize);
+        double y = Math.Max(0, Math.Round((dragWidgetYOrigin + deltaY) / gridSize) * gridSize);
         viewModel.MoveChannelWidget(draggedChannel, x, y, persist: false);
         e.Handled = true;
     }
 
-    private void HandleChannelPointerReleased(object? sender, PointerReleasedEventArgs e)
+    private async void HandleChannelPointerReleased(object? sender, PointerReleasedEventArgs e)
     {
         if (draggedChannelCard is null || draggedChannel is null || !ReferenceEquals(sender, draggedChannelCard))
             return;
 
+        ChannelViewModel channel = draggedChannel;
+        bool moved = draggedChannelMoved;
+        bool toggleReceive = toggleReceiveAfterChannelClick;
         if (DataContext is MainWindowViewModel viewModel)
-            viewModel.MoveChannelWidget(draggedChannel, draggedChannel.WidgetX, draggedChannel.WidgetY, persist: true);
+        {
+            if (moved)
+                viewModel.MoveChannelWidget(channel, channel.WidgetX, channel.WidgetY, persist: true);
+            else if (toggleReceive)
+                await viewModel.ToggleChannelReceiveAsync(channel);
+        }
         e.Pointer.Capture(null);
         ClearChannelDrag();
         e.Handled = true;
@@ -143,6 +161,8 @@ public sealed partial class MainWindow : Window
     {
         draggedChannelCard = null;
         draggedChannel = null;
+        draggedChannelMoved = false;
+        toggleReceiveAfterChannelClick = false;
     }
 
     private async void HandlePttPointerPressed(object? sender, PointerPressedEventArgs e)
@@ -3687,8 +3707,8 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
                 suspendedAudioChannels = receivingChannels;
                 await Task.Run(() => audioCoordinator.StopAsync());
                 foreach (ChannelViewModel receivingChannel in receivingChannels)
-                    receivingChannel.SetAudioEnabled(false);
-                AudioStatusText = "RX audio disabled while transmitting.";
+                    receivingChannel.SetAudioSuspended(true);
+                AudioStatusText = "RX audio muted while transmitting.";
             }
 
             await Task.Run(() => transmitCoordinator.StartAsync(targets));
@@ -3795,7 +3815,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         suspendedAudioChannels = [];
         foreach (ChannelViewModel channel in channels)
         {
-            if (!channel.IsAudioEnabled)
+            if (channel.IsAudioSuspended)
                 await StartAudioAsync(channel).ConfigureAwait(false);
         }
     }
@@ -4469,8 +4489,8 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             await audioCoordinator.StopAsync();
             suspendedAudioChannels = receivingChannels;
             foreach (ChannelViewModel receivingChannel in receivingChannels)
-                receivingChannel.SetAudioEnabled(false);
-            AudioStatusText = "RX audio disabled while sending generated audio.";
+                receivingChannel.SetAudioSuspended(true);
+            AudioStatusText = "RX audio muted while sending generated audio.";
         }
 
         try
@@ -4517,7 +4537,10 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
 
     private void HandleKeyboardPttStateChanged(object? sender, bool pressed)
     {
-        _ = HandleKeyboardPttStateChangedAsync(pressed);
+        if (Dispatcher.UIThread.CheckAccess())
+            _ = HandleKeyboardPttStateChangedAsync(pressed);
+        else
+            Dispatcher.UIThread.Post(() => _ = HandleKeyboardPttStateChangedAsync(pressed));
     }
 
     private async Task HandleKeyboardPttStateChangedAsync(bool pressed)
@@ -4536,15 +4559,15 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             if (transmitCoordinator.ActiveChannel is not null)
                 return;
 
-            await StartTransmitAsync(targets).ConfigureAwait(false);
+            await StartTransmitAsync(targets);
             if (!AnyPttSourcePressed && transmitCoordinator.ActiveChannel is not null)
-                await StopTransmitAsync(transmitCoordinator.ActiveChannels).ConfigureAwait(false);
+                await StopTransmitAsync(transmitCoordinator.ActiveChannels);
             return;
         }
 
         ChannelViewModel[] active = transmitCoordinator.ActiveChannels.ToArray();
         if (active.Length > 0)
-            await StopTransmitAsync(active).ConfigureAwait(false);
+            await StopTransmitAsync(active);
     }
 
     private bool AnyPttSourcePressed
@@ -4779,8 +4802,35 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
 
     private static void ApplyTheme(bool darkMode)
     {
-        if (Application.Current is not null)
-            Application.Current.RequestedThemeVariant = darkMode ? ThemeVariant.Dark : ThemeVariant.Light;
+        if (Application.Current is not Application application)
+            return;
+
+        application.RequestedThemeVariant = darkMode ? ThemeVariant.Dark : ThemeVariant.Light;
+        IReadOnlyDictionary<string, string> colors = darkMode
+            ? new Dictionary<string, string>
+            {
+                ["ShellBackgroundBrush"] = "#0D1116",
+                ["ShellHeaderBrush"] = "#1A2028",
+                ["PrimaryTextBrush"] = "#DCE3EB",
+                ["CardBackgroundBrush"] = "#151D26",
+                ["MutedTextBrush"] = "#B7C0C9",
+                ["ButtonBackgroundBrush"] = "#1A222D",
+                ["ButtonHoverBrush"] = "#253446",
+                ["ControlBorderBrush"] = "#273443"
+            }
+            : new Dictionary<string, string>
+            {
+                ["ShellBackgroundBrush"] = "#F3F5F7",
+                ["ShellHeaderBrush"] = "#E4E8EC",
+                ["PrimaryTextBrush"] = "#18212B",
+                ["CardBackgroundBrush"] = "#FFFFFF",
+                ["MutedTextBrush"] = "#68727D",
+                ["ButtonBackgroundBrush"] = "#FFFFFF",
+                ["ButtonHoverBrush"] = "#DDE5ED",
+                ["ControlBorderBrush"] = "#AAB5C0"
+            };
+        foreach (KeyValuePair<string, string> entry in colors)
+            application.Resources[entry.Key] = new SolidColorBrush(Color.Parse(entry.Value));
     }
 
     private void PersistUserSettings()
@@ -5300,6 +5350,7 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
     private Func<ChannelViewModel, Task>? startTransmit;
     private Func<ChannelViewModel, Task>? stopTransmit;
     private bool audioEnabled;
+    private bool audioSuspended;
     private bool audioBusy;
     private bool transmitEnabled;
     private bool transmitSelected;
@@ -5373,6 +5424,9 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
     {
         get
         {
+            if (audioSuspended && runtime.State != ChannelRuntimeState.Transmitting)
+                return "RX muted during console transmit";
+
             if (runtime.State == ChannelRuntimeState.Receiving && runtime.SourceId is uint sourceId)
             {
                 string alias = AliasFileLoader.FindAlias(aliases, sourceId);
@@ -5388,7 +5442,8 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
     public uint? StreamId => runtime.StreamId;
     public ChannelRuntimeDefinition Definition => runtime.Definition;
     public bool IsAudioEnabled => audioEnabled;
-    public string AudioButtonText => audioEnabled ? "Stop audio" : "Listen";
+    public bool IsAudioSuspended => audioSuspended;
+    public string AudioButtonText => audioSuspended ? "RX muted" : audioEnabled ? "Stop audio" : "Listen";
     public bool IsTransmitting => transmitEnabled;
     public bool IsTransmitSelected => transmitSelected;
     public bool IsPageSelected => pageSelected;
@@ -5588,14 +5643,32 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
 
     public void SetAudioEnabled(bool enabled)
     {
-        if (audioEnabled == enabled)
+        bool suspensionChanged = audioSuspended;
+        audioSuspended = false;
+        if (audioEnabled == enabled && !suspensionChanged)
             return;
         audioEnabled = enabled;
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsAudioEnabled)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsAudioSuspended)));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(AudioButtonText)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(StateText)));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CardBackgroundBrush)));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CardBorderBrush)));
         if (!enabled)
+            SetAudioLevel(0);
+    }
+
+    public void SetAudioSuspended(bool suspended)
+    {
+        if (!audioEnabled || audioSuspended == suspended)
+            return;
+        audioSuspended = suspended;
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsAudioSuspended)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(AudioButtonText)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(StateText)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CardBackgroundBrush)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CardBorderBrush)));
+        if (suspended)
             SetAudioLevel(0);
     }
 

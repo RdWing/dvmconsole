@@ -22,7 +22,7 @@ public sealed class DebugLogWindow : Window
         MinWidth = 720;
         MinHeight = 420;
         WindowStartupLocation = WindowStartupLocation.CenterOwner;
-        Background = new SolidColorBrush(Color.Parse("#0D1116"));
+        this.Bind(BackgroundProperty, new Binding(nameof(MainWindowViewModel.MainBackgroundBrush)));
         DataContext = viewModel;
 
         var filterInput = new TextBox
@@ -63,10 +63,12 @@ public sealed class DebugLogWindow : Window
         var closeButton = new Button { Content = "Close", MinWidth = 88 };
         var clearButton = new Button { Content = "Clear", MinWidth = 88 };
         var exportButton = new Button { Content = "Export redacted…", MinWidth = 140 };
-        var controls = new StackPanel
+        var controls = new Grid
         {
-            Orientation = Orientation.Horizontal,
-            Spacing = 8,
+            RowDefinitions = new RowDefinitions("Auto,Auto"),
+            ColumnDefinitions = new ColumnDefinitions("Auto,110,*"),
+            ColumnSpacing = 8,
+            RowSpacing = 8,
             Children =
             {
                 new TextBlock { Text = "Severity", VerticalAlignment = VerticalAlignment.Center },
@@ -81,6 +83,10 @@ public sealed class DebugLogWindow : Window
                 }
             }
         };
+        Grid.SetColumn(severityFilter, 1);
+        Grid.SetColumn(filterInput, 2);
+        Grid.SetColumnSpan(controls.Children[3], 3);
+        Grid.SetRow(controls.Children[3], 1);
 
         var content = new Grid
         {

@@ -55,6 +55,8 @@ public sealed class FneConnectionTests
         Assert.Equal("TYF_OP1", peer.Information.Details.Identity);
         Assert.Equal(options.PeerId, peer.Information.PeerID);
         Assert.Equal(fnecore.ConnectionState.WAITING_LOGIN, peer.Information.State);
+        Assert.Equal(fnecore.LogLevel.DEBUG, peer.LogLevel);
+        Assert.False(peer.RawPacketTrace);
     }
 
     [Fact]

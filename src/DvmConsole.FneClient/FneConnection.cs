@@ -423,7 +423,10 @@ public sealed class FneConnection : IAsyncDisposable
         var created = new FnePeer("DVMCONSOLE", options.PeerId, endpoint, options.PresharedKey);
         created.Passphrase = options.Password;
         created.PingTime = 5;
-        created.LogLevel = options.EnableDiagnostics ? LogLevel.DEBUG : LogLevel.INFO;
+        // The operator debug viewer is the console's complete FNE log sink.
+        // Raw packet tracing remains separately opt-in so payload dumps are
+        // not exposed by enabling the ordinary protocol log stream.
+        created.LogLevel = LogLevel.DEBUG;
         created.RawPacketTrace = options.EnableDiagnostics;
         // Preserve the constructor-owned PeerInformation instance. Newer
         // fnecore revisions retain connection state on this object while the
