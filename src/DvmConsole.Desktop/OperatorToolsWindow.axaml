@@ -109,7 +109,99 @@
       </TabItem>
 
       <TabItem Header="Recorder">
-        <ScrollViewer Padding="10"><StackPanel Spacing="12"><TextBlock Classes="heading" Text="Talkgroup Audio Recorder" /><Border Classes="panel"><Grid ColumnDefinitions="Auto,*,Auto,Auto" ColumnSpacing="8"><TextBlock Text="Storage" VerticalAlignment="Center" /><TextBox Grid.Column="1" Text="{Binding RecordingRootPathText, Mode=TwoWay}" /><Button Grid.Column="2" Content="Browse…" Click="HandleChooseRecordingRootClick" /><Button Grid.Column="3" Content="Apply folder" Click="HandleApplyRecordingRootClick" /></Grid></Border><Grid ColumnDefinitions="Auto,90,Auto,220" RowDefinitions="Auto,Auto,Auto" ColumnSpacing="8" RowSpacing="8"><TextBlock Text="Retention days" VerticalAlignment="Center" /><TextBox Grid.Column="1" Text="{Binding RecordingRetentionDaysText, Mode=TwoWay}" /><Button Grid.Column="2" Content="Apply and prune" Command="{Binding ApplyRecordingRetentionCommand}" /><TextBox Grid.Column="3" Watermark="Search recordings" Text="{Binding RecordingFilterText, Mode=TwoWay}" /><TextBlock Grid.Row="1" Text="Direction" VerticalAlignment="Center" /><ComboBox Grid.Row="1" Grid.Column="1" ItemsSource="{Binding RecordingDirectionFilters}" SelectedItem="{Binding RecordingDirectionFilter, Mode=TwoWay}" /><TextBlock Grid.Row="1" Grid.Column="2" Text="Protocol" VerticalAlignment="Center" /><ComboBox Grid.Row="1" Grid.Column="3" ItemsSource="{Binding RecordingProtocolFilters}" SelectedItem="{Binding RecordingProtocolFilter, Mode=TwoWay}" /><TextBlock Grid.Row="2" Text="Encryption" VerticalAlignment="Center" /><ComboBox Grid.Row="2" Grid.Column="1" ItemsSource="{Binding RecordingEncryptionFilters}" SelectedItem="{Binding RecordingEncryptionFilter, Mode=TwoWay}" /><Button Grid.Row="2" Grid.Column="2" Grid.ColumnSpan="2" Content="Clear catalog filters" HorizontalAlignment="Left" Click="HandleClearRecordingFiltersClick" /></Grid><Grid ColumnDefinitions="*,*,*,*" ColumnSpacing="8"><TextBox Watermark="System" Text="{Binding RecordingSystemFilterText, Mode=TwoWay}" /><TextBox Grid.Column="1" Watermark="Channel" Text="{Binding RecordingChannelFilterText, Mode=TwoWay}" /><TextBox Grid.Column="2" Watermark="Talkgroup ID" Text="{Binding RecordingTalkgroupFilterText, Mode=TwoWay}" /><TextBox Grid.Column="3" Watermark="Subscriber ID" Text="{Binding RecordingSubscriberFilterText, Mode=TwoWay}" /></Grid><TextBlock FontWeight="SemiBold" Text="Channel recording configuration" /><ItemsControl ItemsSource="{Binding Systems}"><ItemsControl.ItemTemplate><DataTemplate x:DataType="local:SystemViewModel"><StackPanel><TextBlock FontWeight="SemiBold" Text="{Binding Name}" Margin="0,6" /><ItemsControl ItemsSource="{Binding Channels}"><ItemsControl.ItemTemplate><DataTemplate x:DataType="local:ChannelViewModel"><Border Classes="panel"><Grid ColumnDefinitions="*,Auto,220,Auto" ColumnSpacing="8"><StackPanel><TextBlock Text="{Binding Name}" /><TextBlock Classes="caption" Text="{Binding DestinationText}" /></StackPanel><Button Grid.Column="1" Content="{Binding RecordButtonText}" Command="{Binding RecordingCommand}" /><TextBox Grid.Column="2" Watermark="Ignored RIDs, comma separated" Text="{Binding IgnoredSubscriberIdsText, Mode=TwoWay}" /><Button Grid.Column="3" Content="Save ignored RIDs" Tag="{Binding}" Click="HandleSaveIgnoredSubscribersClick" /></Grid></Border></DataTemplate></ItemsControl.ItemTemplate></ItemsControl></StackPanel></DataTemplate></ItemsControl.ItemTemplate></ItemsControl><TextBlock FontWeight="SemiBold" Text="Completed recordings" /><ItemsControl ItemsSource="{Binding FilteredRecordings}"><ItemsControl.ItemTemplate><DataTemplate x:DataType="local:CallRecordingMetadata"><Border Classes="panel"><Grid RowDefinitions="Auto,Auto" ColumnDefinitions="*,Auto,Auto,Auto,Auto" ColumnSpacing="8"><StackPanel><TextBlock Text="{Binding ChannelName}" FontWeight="SemiBold" /><TextBlock Classes="caption" Text="{Binding SummaryText}" /><TextBlock Classes="caption" Text="{Binding DetailText}" TextTrimming="CharacterEllipsis" /></StackPanel><Button Grid.Column="1" Content="Play" Tag="{Binding}" Click="HandlePlayRecordingClick" /><Button Grid.Column="2" Content="Stop" Click="HandleStopRecordingClick" /><Button Grid.Column="3" Content="Open" Tag="{Binding}" Click="HandleOpenRecordingClick" /><Button Grid.Column="4" Content="Delete" Tag="{Binding}" Click="HandleDeleteRecordingClick" /></Grid></Border></DataTemplate></ItemsControl.ItemTemplate></ItemsControl></StackPanel></ScrollViewer>
+        <ScrollViewer Padding="10">
+          <StackPanel Spacing="12">
+            <TextBlock Classes="heading" Text="Talkgroup Audio Recorder" />
+            <Border Classes="panel">
+              <Grid ColumnDefinitions="Auto,*,Auto,Auto" ColumnSpacing="8">
+                <TextBlock Text="Storage" VerticalAlignment="Center" />
+                <TextBox Grid.Column="1" Text="{Binding RecordingRootPathText, Mode=TwoWay}" />
+                <Button Grid.Column="2" Content="Browse…" Click="HandleChooseRecordingRootClick" />
+                <Button Grid.Column="3" Content="Apply folder" Click="HandleApplyRecordingRootClick" />
+              </Grid>
+            </Border>
+            <Grid ColumnDefinitions="Auto,90,Auto,220" RowDefinitions="Auto,Auto,Auto" ColumnSpacing="8" RowSpacing="8">
+              <TextBlock Text="Retention days" VerticalAlignment="Center" />
+              <TextBox Grid.Column="1" Text="{Binding RecordingRetentionDaysText, Mode=TwoWay}" />
+              <Button Grid.Column="2" Content="Apply and prune" Command="{Binding ApplyRecordingRetentionCommand}" />
+              <TextBox Grid.Column="3" Watermark="Search recordings" Text="{Binding RecordingFilterText, Mode=TwoWay}" />
+              <TextBlock Grid.Row="1" Text="Direction" VerticalAlignment="Center" />
+              <ComboBox Grid.Row="1" Grid.Column="1" ItemsSource="{Binding RecordingDirectionFilters}" SelectedItem="{Binding RecordingDirectionFilter, Mode=TwoWay}" />
+              <TextBlock Grid.Row="1" Grid.Column="2" Text="Protocol" VerticalAlignment="Center" />
+              <ComboBox Grid.Row="1" Grid.Column="3" ItemsSource="{Binding RecordingProtocolFilters}" SelectedItem="{Binding RecordingProtocolFilter, Mode=TwoWay}" />
+              <TextBlock Grid.Row="2" Text="Encryption" VerticalAlignment="Center" />
+              <ComboBox Grid.Row="2" Grid.Column="1" ItemsSource="{Binding RecordingEncryptionFilters}" SelectedItem="{Binding RecordingEncryptionFilter, Mode=TwoWay}" />
+              <Button Grid.Row="2" Grid.Column="2" Grid.ColumnSpan="2" Content="Clear catalog filters" HorizontalAlignment="Left" Click="HandleClearRecordingFiltersClick" />
+            </Grid>
+            <Grid ColumnDefinitions="*,*,*,*" ColumnSpacing="8">
+              <TextBox Watermark="System" Text="{Binding RecordingSystemFilterText, Mode=TwoWay}" />
+              <TextBox Grid.Column="1" Watermark="Channel" Text="{Binding RecordingChannelFilterText, Mode=TwoWay}" />
+              <TextBox Grid.Column="2" Watermark="Talkgroup ID" Text="{Binding RecordingTalkgroupFilterText, Mode=TwoWay}" />
+              <TextBox Grid.Column="3" Watermark="Subscriber ID" Text="{Binding RecordingSubscriberFilterText, Mode=TwoWay}" />
+            </Grid>
+            <Grid ColumnDefinitions="*,*,*" ColumnSpacing="8">
+              <StackPanel Spacing="3">
+                <TextBlock Classes="caption" Text="Alias" />
+                <TextBox Text="{Binding RecordingAliasFilterText, Mode=TwoWay}" />
+              </StackPanel>
+              <StackPanel Grid.Column="1" Spacing="3">
+                <TextBlock Classes="caption" Text="Start date" />
+                <DatePicker SelectedDate="{Binding RecordingStartDateFilter, Mode=TwoWay}" />
+              </StackPanel>
+              <StackPanel Grid.Column="2" Spacing="3">
+                <TextBlock Classes="caption" Text="End date" />
+                <DatePicker SelectedDate="{Binding RecordingEndDateFilter, Mode=TwoWay}" />
+              </StackPanel>
+            </Grid>
+            <TextBlock FontWeight="SemiBold" Text="Channel recording configuration" />
+            <ItemsControl ItemsSource="{Binding Systems}">
+              <ItemsControl.ItemTemplate>
+                <DataTemplate x:DataType="local:SystemViewModel">
+                  <StackPanel>
+                    <TextBlock FontWeight="SemiBold" Text="{Binding Name}" Margin="0,6" />
+                    <ItemsControl ItemsSource="{Binding Channels}">
+                      <ItemsControl.ItemTemplate>
+                        <DataTemplate x:DataType="local:ChannelViewModel">
+                          <Border Classes="panel">
+                            <Grid ColumnDefinitions="*,Auto,220,Auto" ColumnSpacing="8">
+                              <StackPanel>
+                                <TextBlock Text="{Binding Name}" />
+                                <TextBlock Classes="caption" Text="{Binding DestinationText}" />
+                              </StackPanel>
+                              <Button Grid.Column="1" Content="{Binding RecordButtonText}" Command="{Binding RecordingCommand}" />
+                              <TextBox Grid.Column="2" Watermark="Ignored RIDs, comma separated" Text="{Binding IgnoredSubscriberIdsText, Mode=TwoWay}" />
+                              <Button Grid.Column="3" Content="Save ignored RIDs" Tag="{Binding}" Click="HandleSaveIgnoredSubscribersClick" />
+                            </Grid>
+                          </Border>
+                        </DataTemplate>
+                      </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                  </StackPanel>
+                </DataTemplate>
+              </ItemsControl.ItemTemplate>
+            </ItemsControl>
+            <TextBlock FontWeight="SemiBold" Text="Completed recordings" />
+            <ItemsControl ItemsSource="{Binding FilteredRecordings}">
+              <ItemsControl.ItemTemplate>
+                <DataTemplate x:DataType="local:CallRecordingMetadata">
+                  <Border Classes="panel">
+                    <Grid RowDefinitions="Auto,Auto" ColumnDefinitions="*,Auto,Auto,Auto,Auto" ColumnSpacing="8">
+                      <StackPanel>
+                        <TextBlock Text="{Binding ChannelName}" FontWeight="SemiBold" />
+                        <TextBlock Classes="caption" Text="{Binding SummaryText}" />
+                        <TextBlock Classes="caption" Text="{Binding DetailText}" TextTrimming="CharacterEllipsis" />
+                      </StackPanel>
+                      <Button Grid.Column="1" Content="Play" Tag="{Binding}" Click="HandlePlayRecordingClick" />
+                      <Button Grid.Column="2" Content="Stop" Click="HandleStopRecordingClick" />
+                      <Button Grid.Column="3" Content="Open" Tag="{Binding}" Click="HandleOpenRecordingClick" />
+                      <Button Grid.Column="4" Content="Delete" Tag="{Binding}" Click="HandleDeleteRecordingClick" />
+                    </Grid>
+                  </Border>
+                </DataTemplate>
+              </ItemsControl.ItemTemplate>
+            </ItemsControl>
+          </StackPanel>
+        </ScrollViewer>
       </TabItem>
 
       <TabItem Header="History">

@@ -15,7 +15,10 @@ public sealed record RecordingCatalogFilter(
     string System = "",
     string Channel = "",
     string Talkgroup = "",
-    string Subscriber = "")
+    string Subscriber = "",
+    string Alias = "",
+    DateTimeOffset? StartDate = null,
+    DateTimeOffset? EndDate = null)
 {
     public bool Matches(CallRecordingMetadata metadata)
     {
@@ -32,17 +35,27 @@ public sealed record RecordingCatalogFilter(
         if (!MatchesText(System, metadata.SystemName) ||
             !MatchesText(Channel, metadata.ChannelName) ||
             !MatchesText(Talkgroup, metadata.TalkgroupId?.ToString(CultureInfo.InvariantCulture)) ||
-            !MatchesText(Subscriber, metadata.SubscriberId?.ToString(CultureInfo.InvariantCulture)))
+            !MatchesText(Subscriber, metadata.SubscriberId?.ToString(CultureInfo.InvariantCulture)) ||
+            !MatchesText(Alias, metadata.SubscriberAlias))
         {
             return false;
         }
+
+        DateTime localDate = metadata.UtcStartTime.ToLocalTime().Date;
+        if (StartDate is DateTimeOffset startDate && localDate < startDate.Date)
+            return false;
+        if (EndDate is DateTimeOffset endDate && localDate > endDate.Date)
+            return false;
 
         return MatchesText(SearchText,
             metadata.SystemName,
             metadata.ChannelName,
             metadata.Protocol,
+            metadata.Direction,
+            metadata.RecordingSourceType,
             metadata.FileName,
             metadata.RouteText,
+            metadata.SubscriberAlias,
             metadata.SubscriberId?.ToString(CultureInfo.InvariantCulture),
             metadata.TalkgroupId?.ToString(CultureInfo.InvariantCulture));
     }

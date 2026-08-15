@@ -17,6 +17,8 @@ public sealed class RecordingCatalogFilterTests
             ChannelName = "Dispatch",
             TalkgroupId = 101,
             SubscriberId = 42,
+            SubscriberAlias = "Medic 42",
+            UtcStartTime = new DateTimeOffset(2026, 8, 15, 12, 0, 0, TimeSpan.Zero),
             FileName = "dispatch.wav"
         };
 
@@ -27,9 +29,15 @@ public sealed class RecordingCatalogFilterTests
             System: "alp",
             Channel: "patch",
             Talkgroup: "101",
-            Subscriber: "42").Matches(metadata));
+            Subscriber: "42",
+            Alias: "medic",
+            StartDate: new DateTimeOffset(2026, 8, 15, 0, 0, 0, TimeSpan.Zero),
+            EndDate: new DateTimeOffset(2026, 8, 15, 0, 0, 0, TimeSpan.Zero)).Matches(metadata));
         Assert.False(new RecordingCatalogFilter(Direction: "TX").Matches(metadata));
         Assert.False(new RecordingCatalogFilter(Encryption: "Clear").Matches(metadata));
         Assert.False(new RecordingCatalogFilter(SearchText: "missing").Matches(metadata));
+        Assert.False(new RecordingCatalogFilter(Alias: "fire").Matches(metadata));
+        Assert.False(new RecordingCatalogFilter(StartDate: new DateTimeOffset(2026, 8, 16, 0, 0, 0, TimeSpan.Zero)).Matches(metadata));
+        Assert.False(new RecordingCatalogFilter(EndDate: new DateTimeOffset(2026, 8, 14, 0, 0, 0, TimeSpan.Zero)).Matches(metadata));
     }
 }

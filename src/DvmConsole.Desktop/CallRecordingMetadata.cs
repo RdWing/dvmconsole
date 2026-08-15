@@ -31,6 +31,7 @@ public sealed class CallRecordingMetadata
     public string ChannelName { get; set; } = string.Empty;
     public uint? TalkgroupId { get; set; }
     public uint? SubscriberId { get; set; }
+    public string SubscriberAlias { get; set; } = string.Empty;
     public uint? StreamId { get; set; }
     public bool IsEncrypted { get; set; }
     public string EncryptionAlgorithm { get; set; } = string.Empty;
@@ -53,7 +54,12 @@ public sealed class CallRecordingMetadata
     public string SummaryText => $"{SystemName} · {Protocol} · {TimestampText}";
 
     [JsonIgnore]
-    public string DetailText => $"{Direction} · {RecordingSourceType} · {RouteText} · {DurationText} · {AudioAnalysisText} · {FileName}";
+    public string DetailText => $"{Direction} · {RecordingSourceType} · {RouteText} · {AliasText} · {DurationText} · {AudioAnalysisText} · {FileName}";
+
+    [JsonIgnore]
+    public string AliasText => string.IsNullOrWhiteSpace(SubscriberAlias)
+        ? string.Empty
+        : $"alias {SubscriberAlias}";
 
     [JsonIgnore]
     public string AudioAnalysisText

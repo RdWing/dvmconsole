@@ -980,6 +980,9 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     private string recordingChannelFilterText = string.Empty;
     private string recordingTalkgroupFilterText = string.Empty;
     private string recordingSubscriberFilterText = string.Empty;
+    private string recordingAliasFilterText = string.Empty;
+    private DateTimeOffset? recordingStartDateFilter;
+    private DateTimeOffset? recordingEndDateFilter;
     private string clockText = string.Empty;
     private string debugLogFilterText = string.Empty;
     private string debugLogSeverityFilter = "All";
@@ -1944,6 +1947,24 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         set => SetRecordingFilter(ref recordingSubscriberFilterText, value, nameof(RecordingSubscriberFilterText), allowEmpty: true);
     }
 
+    public string RecordingAliasFilterText
+    {
+        get => recordingAliasFilterText;
+        set => SetRecordingFilter(ref recordingAliasFilterText, value, nameof(RecordingAliasFilterText), allowEmpty: true);
+    }
+
+    public DateTimeOffset? RecordingStartDateFilter
+    {
+        get => recordingStartDateFilter;
+        set => SetRecordingDateFilter(ref recordingStartDateFilter, value, nameof(RecordingStartDateFilter));
+    }
+
+    public DateTimeOffset? RecordingEndDateFilter
+    {
+        get => recordingEndDateFilter;
+        set => SetRecordingDateFilter(ref recordingEndDateFilter, value, nameof(RecordingEndDateFilter));
+    }
+
     public void ClearRecordingFilters()
     {
         RecordingFilterText = string.Empty;
@@ -1954,6 +1975,9 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         RecordingChannelFilterText = string.Empty;
         RecordingTalkgroupFilterText = string.Empty;
         RecordingSubscriberFilterText = string.Empty;
+        RecordingAliasFilterText = string.Empty;
+        RecordingStartDateFilter = null;
+        RecordingEndDateFilter = null;
     }
 
     public bool ApplyRecordingRoot()
@@ -1984,8 +2008,26 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
                 RecordingSystemFilterText,
                 RecordingChannelFilterText,
                 RecordingTalkgroupFilterText,
-                RecordingSubscriberFilterText).Matches(metadata))
+                RecordingSubscriberFilterText,
+                RecordingAliasFilterText,
+                RecordingStartDateFilter,
+                RecordingEndDateFilter).Matches(metadata))
             .ToArray();
+
+    private void SetRecordingDateFilter(
+        ref DateTimeOffset? field,
+        DateTimeOffset? value,
+        string propertyName)
+    {
+        DateTimeOffset? normalized = value is DateTimeOffset date
+            ? new DateTimeOffset(date.Date, date.Offset)
+            : null;
+        if (field == normalized)
+            return;
+        field = normalized;
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(FilteredRecordings)));
+    }
 
     private void SetRecordingFilter(
         ref string field,

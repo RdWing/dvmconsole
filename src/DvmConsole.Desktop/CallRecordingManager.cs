@@ -435,6 +435,14 @@ public sealed class CallRecordingManager : IDisposable
             ChannelName = channel.Definition.Name,
             TalkgroupId = channel.Definition.DestinationId,
             SubscriberId = recording.SourceId,
+            SubscriberAlias = recording.Direction.Equals("RX", StringComparison.OrdinalIgnoreCase) &&
+                              recording.SourceId is uint sourceId &&
+                              !string.Equals(
+                                  channel.LastCallerText,
+                                  sourceId.ToString(CultureInfo.InvariantCulture),
+                                  StringComparison.Ordinal)
+                ? channel.LastCallerText
+                : string.Empty,
             StreamId = recording.StreamId,
             IsEncrypted = channel.Definition.IsEncrypted,
             EncryptionAlgorithm = channel.Definition.EncryptionAlgorithm,
