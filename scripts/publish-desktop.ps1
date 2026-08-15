@@ -8,7 +8,9 @@ param(
     [ValidateSet("Debug", "Release")]
     [string] $Configuration = "Release",
 
-    [string] $VocoderLibrary = $env:DVMVOCODER_LIBRARY
+    [string] $VocoderLibrary = $env:DVMVOCODER_LIBRARY,
+
+    [switch] $AllowMissingVocoder
 )
 
 $ErrorActionPreference = "Stop"
@@ -19,6 +21,10 @@ if ([string]::IsNullOrWhiteSpace($OutputDirectory)) {
     $OutputDirectory = Join-Path $RootDirectory "artifacts/$Runtime"
 }
 
+if ($env:DVM_ALLOW_MISSING_VOCODER -eq "1") {
+    $AllowMissingVocoder = $true
+}
+
 dotnet restore $Project --runtime $Runtime --ignore-failed-sources -p:NuGetAudit=false --verbosity minimal
 if ($LASTEXITCODE -ne 0) {
     throw "dotnet restore failed with exit code $LASTEXITCODE."
@@ -27,10 +33,10 @@ if ($LASTEXITCODE -ne 0) {
 dotnet publish $Project `
     --configuration $Configuration `
     --runtime $Runtime `
-    --self-contained false `
+    --self-contained true `
     --no-restore `
     --output $OutputDirectory `
-    /p:UseAppHost=false
+    /p:UseAppHost=true
 if ($LASTEXITCODE -ne 0) {
     throw "dotnet publish failed with exit code $LASTEXITCODE."
 }
@@ -41,9 +47,12 @@ if (-not [string]::IsNullOrWhiteSpace($VocoderLibrary)) {
     }
 
     Copy-Item -LiteralPath $VocoderLibrary -Destination (Join-Path $OutputDirectory "libvocoder.dll") -Force
+} elseif (-not $AllowMissingVocoder) {
+    throw "DVMVOCODER_LIBRARY is required for a working digital-voice package. Build the native vocoder, set DVMVOCODER_LIBRARY, or pass -AllowMissingVocoder for a UI-only artifact."
 }
 
 $RequiredFiles = @(
+    "DvmConsole.Desktop.exe",
     "DvmConsole.Desktop.dll",
     "DvmConsole.Desktop.deps.json",
     "DvmConsole.Desktop.runtimeconfig.json"
@@ -64,5 +73,5 @@ if ($null -ne $PrivateCodeplug) {
 
 Write-Host "Published $Runtime to $OutputDirectory"
 if ([string]::IsNullOrWhiteSpace($VocoderLibrary)) {
-    Write-Warning "No native vocoder was copied. The UI will run, but DMR/P25 voice requires libvocoder.dll beside the application."
+    Write-Warning "No native vocoder was copied. This is a UI-only artifact; DMR/P25 voice is unavailable."
 }

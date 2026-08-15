@@ -6,7 +6,9 @@ param(
     [Parameter(Mandatory = $true)]
     [string] $PublishDirectory,
 
-    [string] $OutputArchive
+    [string] $OutputArchive,
+
+    [switch] $AllowMissingVocoder
 )
 
 $ErrorActionPreference = "Stop"
@@ -18,11 +20,13 @@ if ([string]::IsNullOrWhiteSpace($OutputArchive)) {
 
 $PublishDirectory = [IO.Path]::GetFullPath($PublishDirectory)
 $OutputArchive = [IO.Path]::GetFullPath($OutputArchive)
+$AllowMissingVocoder = $AllowMissingVocoder -or ($env:DVM_ALLOW_MISSING_VOCODER -eq "1")
 if (-not (Test-Path -LiteralPath $PublishDirectory -PathType Container)) {
     throw "Publish directory does not exist: $PublishDirectory"
 }
 
 foreach ($FileName in @(
+    "DvmConsole.Desktop.exe",
     "DvmConsole.Desktop.dll",
     "DvmConsole.Desktop.deps.json",
     "DvmConsole.Desktop.runtimeconfig.json"
@@ -30,6 +34,10 @@ foreach ($FileName in @(
     if (-not (Test-Path -LiteralPath (Join-Path $PublishDirectory $FileName) -PathType Leaf)) {
         throw "Published output is missing required file: $FileName"
     }
+}
+
+if (-not (Test-Path -LiteralPath (Join-Path $PublishDirectory "libvocoder.dll") -PathType Leaf) -and -not $AllowMissingVocoder) {
+    throw "Published output is missing libvocoder.dll. Set DVMVOCODER_LIBRARY before publishing or pass -AllowMissingVocoder for a UI-only artifact."
 }
 
 $PrivateCodeplug = Get-ChildItem -LiteralPath $PublishDirectory -Recurse -File -ErrorAction SilentlyContinue |

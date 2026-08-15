@@ -16,8 +16,20 @@ Codeplugs created for R01A00 should be reviewed before use with R02A00. There ha
 
 ## Building the Avalonia application
 
-Install Git, the .NET 8 SDK, CMake, and a platform C/C++ toolchain, then clone
-the repository and initialize its FNE submodule:
+This project utilizes the Avalonia desktop framework for the Apple Silicon
+macOS and Windows x64 builds. A basic .NET 8 SDK installation, CMake, and a
+platform C/C++ toolchain are required to compile the application.
+
+### Dependencies
+
+- .NET 8 SDK
+- CMake
+- A platform C/C++ toolchain
+- dvmvocoder (libvocoder)
+
+### Build Instructions
+
+1. Clone the repository and initialize the FNE submodule.
 
 ```sh
 git clone --recurse-submodules https://github.com/RdWing/dvmconsole.git
@@ -28,31 +40,63 @@ dotnet restore src/DvmConsole.Rebuild.sln
 dotnet build src/DvmConsole.Rebuild.sln
 ```
 
-Use `src/DvmConsole.Rebuild.sln` for the Avalonia application. The root
+2. Use `src/DvmConsole.Rebuild.sln` for the Avalonia application. The root
 `dvmconsole.sln` is the original Windows-only WPF solution.
 
-Digital voice requires a matching native `dvmvocoder` library. macOS also
-requires the included CoreAudio shim; the macOS publishing script builds that
-shim automatically. Complete platform-specific prerequisites, development
-launch commands, native-library setup, and packaging commands are in
-[Desktop building and publishing](docs/PUBLISHING.md) and
-[Software vocoder](docs/VOCODER.md).
-Set `DVMVOCODER_LIBRARY` before running the complete solution test suite,
-because it includes native encode/decode integration tests.
+Please note that digital voice requires a matching native `dvmvocoder` library.
+macOS also requires the included CoreAudio shim. The macOS publishing script
+builds the CoreAudio shim automatically. See [Desktop building and
+publishing](docs/PUBLISHING.md) and [Software vocoder](docs/VOCODER.md) for
+additional information.
 
-Publish Apple Silicon macOS from a shell:
+Set `DVMVOCODER_LIBRARY` before running the complete solution test suite. The
+test suite includes native encode/decode integration tests.
+
+## End User Packages
+
+The publishing scripts produce self-contained applications. The .NET SDK and
+.NET Desktop Runtime are not required on the destination computer.
+
+### Apple Silicon macOS
+
+1. Publish the application with a matching `libvocoder.dylib`.
 
 ```sh
 DVMVOCODER_LIBRARY=/full/path/to/libvocoder.dylib \
   scripts/publish-desktop.sh osx-arm64 /tmp/dvmconsole-osx-arm64
+
+scripts/package-desktop.sh osx-arm64 \
+  /tmp/dvmconsole-osx-arm64 /tmp/dvmconsole-osx-arm64.zip
 ```
 
-Publish Windows x64 from PowerShell:
+2. Distribute `DVMConsole.app` or the ZIP created by the packaging command.
+The `.app` is created beside the ZIP. If the ZIP is used, extract it before
+launching the application.
+
+3. Start `DVMConsole.app`. If macOS prevents the application from opening,
+use the **Open** option from the Finder context menu. The package is unsigned.
+
+4. Use **Open Codeplug** within the application to load `codeplug.yml`.
+
+### Windows x64
+
+1. Publish the application with a matching `libvocoder.dll`.
 
 ```powershell
 $env:DVMVOCODER_LIBRARY = "C:\full\path\to\libvocoder.dll"
 .\scripts\publish-desktop.ps1 -Runtime win-x64 -OutputDirectory C:\Temp\dvmconsole-win-x64
+.\scripts\package-desktop.ps1 `
+  -PublishDirectory C:\Temp\dvmconsole-win-x64 `
+  -OutputArchive C:\Temp\dvmconsole-win-x64.zip
 ```
+
+2. Distribute the ZIP created by the packaging command. Extract the ZIP as a
+folder before launching the application. Do not copy only the `.exe`; the
+application requires the adjacent managed assemblies and native libraries.
+
+3. Start `DvmConsole.Desktop.exe`.
+
+4. Use **Open Codeplug** within the application to load `codeplug.yml`.
 
 ## Documentation
 

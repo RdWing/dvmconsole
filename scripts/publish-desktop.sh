@@ -7,6 +7,7 @@ RID="${1:-osx-arm64}"
 OUTPUT_DIR="${2:-$ROOT_DIR/artifacts/$RID}"
 CONFIGURATION="${CONFIGURATION:-Release}"
 VOCODER_LIBRARY="${DVMVOCODER_LIBRARY:-}"
+ALLOW_MISSING_VOCODER="${DVM_ALLOW_MISSING_VOCODER:-0}"
 
 if [[ "$RID" != "osx-arm64" && "$RID" != "win-x64" ]]; then
     printf 'Supported runtime identifiers: osx-arm64, win-x64\n' >&2
@@ -23,10 +24,10 @@ dotnet restore "$PROJECT" --runtime "$RID" --ignore-failed-sources -p:NuGetAudit
 dotnet publish "$PROJECT" \
     --configuration "$CONFIGURATION" \
     --runtime "$RID" \
-    --self-contained false \
+    --self-contained true \
     --no-restore \
     --output "$OUTPUT_DIR" \
-    /p:UseAppHost=false
+    /p:UseAppHost=true
 
 if [[ "$RID" == "osx-arm64" ]]; then
     cp "$AUDIO_BUILD_DIR/libdvmaudio.dylib" "$OUTPUT_DIR/libdvmaudio.dylib"
@@ -49,7 +50,13 @@ if [[ -n "$VOCODER_LIBRARY" ]]; then
 
     cp "$VOCODER_LIBRARY" "$OUTPUT_DIR/$VOCODER_OUTPUT"
 else
-    printf 'Warning: no native vocoder was copied; DMR/P25 voice will be unavailable.\n' >&2
+    if [[ "$ALLOW_MISSING_VOCODER" != "1" ]]; then
+        printf 'DVMVOCODER_LIBRARY is required for a working digital-voice package.\n' >&2
+        printf 'Build the native vocoder, set DVMVOCODER_LIBRARY, or set DVM_ALLOW_MISSING_VOCODER=1 for a UI-only artifact.\n' >&2
+        exit 4
+    fi
+
+    printf 'Warning: no native vocoder was copied; this is a UI-only artifact.\n' >&2
 fi
 
 printf 'Published %s to %s\n' "$RID" "$OUTPUT_DIR"

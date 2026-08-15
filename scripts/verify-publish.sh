@@ -3,6 +3,7 @@ set -euo pipefail
 
 RID="${1:-}"
 OUTPUT_DIR="${2:-}"
+ALLOW_MISSING_VOCODER="${DVM_ALLOW_MISSING_VOCODER:-0}"
 
 if [[ -z "$RID" || -z "$OUTPUT_DIR" ]]; then
     printf 'Usage: %s <osx-arm64|win-x64> <publish-directory>\n' "${0##*/}" >&2
@@ -36,6 +37,31 @@ for file_name in "${required_files[@]}"; do
     fi
 done
 
+case "$RID" in
+    osx-arm64)
+        if [[ ! -x "$OUTPUT_DIR/DvmConsole.Desktop" ]]; then
+            printf 'macOS publish is missing an executable apphost: %s\n' "$OUTPUT_DIR/DvmConsole.Desktop" >&2
+            exit 4
+        fi
+        apphost_description=$(/usr/bin/file "$OUTPUT_DIR/DvmConsole.Desktop")
+        if [[ "$apphost_description" != *arm64* ]]; then
+            printf 'macOS apphost is not arm64: %s\n' "$apphost_description" >&2
+            exit 4
+        fi
+        ;;
+    win-x64)
+        if [[ ! -f "$OUTPUT_DIR/DvmConsole.Desktop.exe" ]]; then
+            printf 'Windows publish is missing an executable apphost: %s\n' "$OUTPUT_DIR/DvmConsole.Desktop.exe" >&2
+            exit 4
+        fi
+        apphost_description=$(/usr/bin/file "$OUTPUT_DIR/DvmConsole.Desktop.exe")
+        if [[ "$apphost_description" != *x86-64* && "$apphost_description" != *x86_64* ]]; then
+            printf 'Windows apphost is not x64: %s\n' "$apphost_description" >&2
+            exit 4
+        fi
+        ;;
+esac
+
 if /usr/bin/find "$OUTPUT_DIR" -type f \( -name 'codeplug_testing.yml' -o -name 'codeplug_testing.yaml' \) -print -quit | /usr/bin/grep -q .; then
     printf 'Publish contains the testing codeplug; remove it before handoff.\n' >&2
     exit 5
@@ -65,11 +91,17 @@ case "$RID" in
             exit 8
         fi
 
-        optional_library="$OUTPUT_DIR/libvocoder.dylib"
-        if [[ -f "$optional_library" ]]; then
-            optional_description=$(/usr/bin/file "$optional_library")
-            if [[ "$optional_description" != *arm64* ]]; then
-                printf 'Optional macOS vocoder is not arm64: %s\n' "$optional_description" >&2
+        native_vocoder="$OUTPUT_DIR/libvocoder.dylib"
+        if [[ ! -f "$native_vocoder" ]]; then
+            if [[ "$ALLOW_MISSING_VOCODER" != "1" ]]; then
+                printf 'Missing macOS vocoder: %s\n' "$native_vocoder" >&2
+                printf 'Set DVMVOCODER_LIBRARY or DVM_ALLOW_MISSING_VOCODER=1 for a UI-only artifact.\n' >&2
+                exit 9
+            fi
+        else
+            native_description=$(/usr/bin/file "$native_vocoder")
+            if [[ "$native_description" != *arm64* ]]; then
+                printf 'macOS vocoder is not arm64: %s\n' "$native_description" >&2
                 exit 9
             fi
         fi
@@ -80,11 +112,17 @@ case "$RID" in
             exit 11
         fi
 
-        optional_library="$OUTPUT_DIR/libvocoder.dll"
-        if [[ -f "$optional_library" ]]; then
-            optional_description=$(/usr/bin/file "$optional_library")
+        native_vocoder="$OUTPUT_DIR/libvocoder.dll"
+        if [[ ! -f "$native_vocoder" ]]; then
+            if [[ "$ALLOW_MISSING_VOCODER" != "1" ]]; then
+                printf 'Missing Windows vocoder: %s\n' "$native_vocoder" >&2
+                printf 'Set DVMVOCODER_LIBRARY or DVM_ALLOW_MISSING_VOCODER=1 for a UI-only artifact.\n' >&2
+                exit 10
+            fi
+        else
+            optional_description=$(/usr/bin/file "$native_vocoder")
             if [[ "$optional_description" != *x86-64* && "$optional_description" != *x86_64* ]]; then
-                printf 'Optional Windows vocoder is not x64: %s\n' "$optional_description" >&2
+                printf 'Windows vocoder is not x64: %s\n' "$optional_description" >&2
                 exit 10
             fi
         fi

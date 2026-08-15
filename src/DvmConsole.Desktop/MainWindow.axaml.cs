@@ -38,6 +38,13 @@ public sealed partial class MainWindow : Window
     public MainWindow(string? configurationPath)
     {
         InitializeComponent();
+        // Avalonia can leave named controls declared inside nested MenuItems
+        // unresolved when the compiled XAML is loaded from a published
+        // self-contained apphost. Resolve them from the window name scope
+        // before the startup menu refreshes run.
+        recentCodeplugsMenu ??= this.FindControl<MenuItem>("recentCodeplugsMenu");
+        namedSettingsProfileLoadMenu ??= this.FindControl<MenuItem>("namedSettingsProfileLoadMenu");
+        namedSettingsProfileDeleteMenu ??= this.FindControl<MenuItem>("namedSettingsProfileDeleteMenu");
         viewModel = MainWindowViewModel.Load(configurationPath);
         cardPtt = new PressAndHoldPttController(
             channel => viewModel.StartChannelTransmitAsync(channel),
