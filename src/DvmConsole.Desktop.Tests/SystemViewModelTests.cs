@@ -114,9 +114,11 @@ public sealed class SystemViewModelTests
             Assert.Equal(["Alpha Emergency"], viewModel.Systems[0].Zones[1].Channels.Select(channel => channel.Name));
             Assert.Equal(["Dispatch", "Operations"], viewModel.Systems[1].Zones.Select(zone => zone.Name));
             Assert.Equal("TG 101", viewModel.Systems[0].Zones[0].Channels[0].TalkgroupText);
-            Assert.Single(viewModel.PatchGroups);
-            Assert.Equal("Dispatch Patch", viewModel.PatchGroups[0].Name);
-            Assert.Equal(5, viewModel.PatchGroups[0].Members.Count);
+            Assert.Equal(["Dispatch Patch", "Operations Select"], viewModel.PatchGroups.Select(group => group.Name));
+            PatchGroupEditorViewModel patchGroup = Assert.Single(viewModel.PatchGroups, group => group.IsPatchGroup);
+            PatchGroupEditorViewModel multiSelectGroup = Assert.Single(viewModel.PatchGroups, group => group.IsMultiSelect);
+            Assert.Equal(5, patchGroup.Members.Count);
+            Assert.True(multiSelectGroup.IsEnabled);
         }
         finally
         {
@@ -508,11 +510,56 @@ public sealed class SystemViewModelTests
             await using MainWindowViewModel viewModel = MainWindowViewModel.Load(codeplugPath, store);
 
             Assert.Equal(["Dispatch Patch"], viewModel.PatchGroupNames);
-            PatchGroupEditorViewModel group = Assert.Single(viewModel.PatchGroups);
+            PatchGroupEditorViewModel group = Assert.Single(viewModel.PatchGroups, candidate => candidate.IsPatchGroup);
             Assert.True(group.IsEnabled);
             Assert.Equal(
                 ["Alpha Dispatch", "Beta Dispatch"],
                 group.Members.Where(member => member.IsMember).Select(member => member.Channel.Name));
+            PatchGroupEditorViewModel multiSelect = Assert.Single(viewModel.PatchGroups, candidate => candidate.IsMultiSelect);
+            Assert.True(multiSelect.IsEnabled);
+            Assert.Equal(
+                ["Alpha Emergency", "Beta Operations"],
+                multiSelect.Members.Where(member => member.IsMember).Select(member => member.Channel.Name));
+        }
+        finally
+        {
+            CleanupSettingsPath(settingsPath);
+        }
+    }
+
+    [Fact]
+    public async Task SurfacesOverlappingPatchAndMultiSelectMemberships()
+    {
+        string codeplugPath = Path.Combine(AppContext.BaseDirectory, "TestData", "multiple-systems.yml");
+        string settingsPath = CreateSettingsPath();
+        var store = new UserSettingsStore(settingsPath);
+        store.Save(new UserSettings
+        {
+            PatchGroupMemberships = new Dictionary<string, List<PatchMemberSetting>>
+            {
+                ["Dispatch Patch"] =
+                [
+                    new PatchMemberSetting { SystemName = "Alpha", DestinationId = 101 },
+                    new PatchMemberSetting { SystemName = "Beta", DestinationId = 201 }
+                ],
+                ["Operations Select"] =
+                [
+                    new PatchMemberSetting { SystemName = "Alpha", DestinationId = 101 },
+                    new PatchMemberSetting { SystemName = "Beta", DestinationId = 202 }
+                ]
+            }
+        });
+
+        try
+        {
+            await using MainWindowViewModel viewModel = MainWindowViewModel.Load(codeplugPath, store);
+
+            Assert.All(viewModel.PatchGroups, group => Assert.True(group.HasConflicts));
+            PatchGroupEditorViewModel patch = Assert.Single(viewModel.PatchGroups, group => group.IsPatchGroup);
+            PatchMemberEditorViewModel overlappingMember = Assert.Single(
+                patch.Members,
+                member => member.IsMember && member.HasConflict);
+            Assert.Contains("Operations Select", overlappingMember.ConflictText);
         }
         finally
         {

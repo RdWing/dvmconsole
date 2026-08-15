@@ -110,6 +110,12 @@ public sealed partial class OperatorToolsWindow : Window
             viewModel.ApplyPatchGroup(group);
     }
 
+    private async void HandleMultiSelectPttClick(object? sender, RoutedEventArgs e)
+    {
+        if (sender is Button { Tag: PatchGroupEditorViewModel group })
+            await viewModel.ToggleMultiSelectPttAsync(group);
+    }
+
     private async void HandleExportCallHistoryClick(object? sender, RoutedEventArgs e)
     {
         if (!StorageProvider.CanSave)

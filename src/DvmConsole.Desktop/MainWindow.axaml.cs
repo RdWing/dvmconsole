@@ -654,6 +654,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     private readonly object patchSourceWorkSync = new();
     private readonly Dictionary<ChannelViewModel, Task> patchSourceWork = [];
     private ChannelViewModel[] suspendedAudioChannels = [];
+    private PatchGroupEditorViewModel? activeMultiSelectGroup;
     private readonly CallRecordingManager callRecordings;
     private readonly DispatcherTimer clockTimer;
     private string statusText;
@@ -765,16 +766,15 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             () => userSettings.AudioOutputDeviceId);
         Systems = systems.ToArray();
         Zones = zones.ToArray();
-        GroupConfiguration[] configuredPatchGroups = (groupDefinitions ?? [])
-            .Where(group => group.IsPatchGroup())
-            .ToArray();
+        GroupConfiguration[] configuredGroups = (groupDefinitions ?? []).ToArray();
         patchForwarding = new PatchForwardingCoordinator(Systems, p25KeyResolver)
         {
             SourceIdPassthrough = patchSourceIdPassthrough
         };
         patchSourceDecode = new PatchSourceDecodeCoordinator(p25KeyResolver, ObservePatchDecodedSamples);
-        RestorePatchState(configuredPatchGroups);
-        PatchGroups = BuildPatchGroups(configuredPatchGroups);
+        RestorePatchState(configuredGroups);
+        PatchGroups = BuildPatchGroups(configuredGroups);
+        RefreshPatchMembershipConflicts();
         CallHistory = new System.Collections.ObjectModel.ReadOnlyObservableCollection<CallHistoryEntry>(callHistory.Entries);
         Recordings = new ReadOnlyObservableCollection<CallRecordingMetadata>(recordingEntries);
         DtmfPresets = new ReadOnlyObservableCollection<DtmfPresetViewModel>(dtmfPresets);
@@ -3109,6 +3109,8 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         {
             foreach (ChannelViewModel channel in channels)
                 channel.SetTransmitEnabled(false);
+            activeMultiSelectGroup?.SetPttActive(false);
+            activeMultiSelectGroup = null;
             TransmitStatusText = $"Transmission stopped: {exception.Message}";
         });
         _ = Task.Run(async () =>
@@ -3268,7 +3270,92 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             .GroupBy(member => member.Key, StringComparer.OrdinalIgnoreCase)
             .Select(group => group.First())
             .ToList();
-        userSettings.PatchGroupMemberships[normalizedName] = normalizedMembers
+        PersistGroupDefinition(normalizedName, normalizedMembers, enabled, oneWay);
+        ReapplyPatchState();
+        PersistUserSettings();
+        RefreshPatchMembershipConflicts();
+        _ = SyncPatchSourceDecodeAsync();
+    }
+
+    public void ApplyPatchGroup(PatchGroupEditorViewModel group)
+    {
+        ArgumentNullException.ThrowIfNull(group);
+        List<PatchMemberAddress> members = group.Members
+            .Where(member => member.IsMember)
+            .Select(member => new PatchMemberAddress(
+                member.Channel.Definition.SystemName,
+                member.Channel.Definition.DestinationId))
+            .ToList();
+        if (group.IsMultiSelect)
+        {
+            if (ReferenceEquals(activeMultiSelectGroup, group))
+            {
+                StatusText = $"Stop multi-select PTT for '{group.Name}' before changing its membership.";
+                return;
+            }
+            PersistGroupDefinition(group.Name, members, enabled: true, oneWay: false);
+            PersistUserSettings();
+            RefreshPatchMembershipConflicts();
+            StatusText = $"Multi-select group '{group.Name}' saved with {members.Count} member(s).";
+            return;
+        }
+
+        ApplyPatchGroup(group.Name, members, group.IsEnabled, group.IsOneWay);
+        RefreshPatchMembershipConflicts();
+        StatusText = $"Patch group '{group.Name}' {(group.IsEnabled ? "enabled" : "disabled")}.";
+    }
+
+    public async Task ToggleMultiSelectPttAsync(PatchGroupEditorViewModel group)
+    {
+        ArgumentNullException.ThrowIfNull(group);
+        if (!group.IsMultiSelect)
+            return;
+
+        if (group.IsPttActive)
+        {
+            ChannelViewModel[] active = transmitCoordinator.ActiveChannels.ToArray();
+            if (active.Length > 0)
+                await StopTransmitAsync(active).ConfigureAwait(false);
+            group.SetPttActive(false);
+            if (ReferenceEquals(activeMultiSelectGroup, group))
+                activeMultiSelectGroup = null;
+            return;
+        }
+
+        if (transmitCoordinator.ActiveChannels.Count > 0)
+        {
+            TransmitStatusText = "Stop the current transmission before starting multi-select PTT.";
+            return;
+        }
+
+        ChannelViewModel[] targets = group.Members
+            .Where(member => member.IsMember && member.CanTransmit)
+            .Select(member => member.Channel)
+            .Distinct()
+            .ToArray();
+        if (targets.Length == 0)
+        {
+            TransmitStatusText = $"Multi-select group '{group.Name}' has no transmit-capable members.";
+            return;
+        }
+
+        await StartTransmitAsync(targets).ConfigureAwait(false);
+        if (transmitCoordinator.ActiveChannels.Count == targets.Length)
+        {
+            activeMultiSelectGroup?.SetPttActive(false);
+            activeMultiSelectGroup = group;
+            group.SetPttActive(true);
+        }
+    }
+
+    private void PersistGroupDefinition(
+        string groupName,
+        IEnumerable<PatchMemberAddress> members,
+        bool enabled,
+        bool oneWay)
+    {
+        string normalizedName = groupName.Trim();
+        userSettings.PatchGroupMemberships[normalizedName] = members
             .Select(member => new PatchMemberSetting
             {
                 SystemName = member.SystemName,
@@ -3277,24 +3364,6 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             .ToList();
         userSettings.PatchGroupModes[normalizedName] = oneWay;
         userSettings.PatchGroupEnabledStates[normalizedName] = enabled;
-        ReapplyPatchState();
-        PersistUserSettings();
-        _ = SyncPatchSourceDecodeAsync();
-    }
-
-    public void ApplyPatchGroup(PatchGroupEditorViewModel group)
-    {
-        ArgumentNullException.ThrowIfNull(group);
-        ApplyPatchGroup(
-            group.Name,
-            group.Members
-                .Where(member => member.IsMember)
-                .Select(member => new PatchMemberAddress(
-                    member.Channel.Definition.SystemName,
-                    member.Channel.Definition.DestinationId)),
-            group.IsEnabled,
-            group.IsOneWay);
-        StatusText = $"Patch group '{group.Name}' {(group.IsEnabled ? "enabled" : "disabled")}.";
     }
 
     private IReadOnlyList<PatchGroupEditorViewModel> BuildPatchGroups(
@@ -3316,18 +3385,63 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
                     .Select(member => $"{member.SystemName.Trim().ToLowerInvariant()}|{member.DestinationId}")
                     .ToHashSet(StringComparer.OrdinalIgnoreCase)
                 : [];
-            bool enabled = userSettings.PatchGroupEnabledStates.TryGetValue(groupName, out bool savedEnabled) && savedEnabled;
+            bool isMultiSelect = definition.IsMultiselectGroup();
+            bool enabled = isMultiSelect ||
+                (userSettings.PatchGroupEnabledStates.TryGetValue(groupName, out bool savedEnabled) && savedEnabled);
             bool oneWay = userSettings.PatchGroupModes.TryGetValue(groupName, out bool savedOneWay) && savedOneWay;
-            groups.Add(new PatchGroupEditorViewModel(
+            var group = new PatchGroupEditorViewModel(
                 groupName,
                 enabled,
                 oneWay,
                 channels.Select(channel => new PatchMemberEditorViewModel(
                     channel,
-                    configuredMembers.Contains($"{channel.Definition.SystemName.ToLowerInvariant()}|{channel.Definition.DestinationId}")))));
+                    configuredMembers.Contains($"{channel.Definition.SystemName.ToLowerInvariant()}|{channel.Definition.DestinationId}"))),
+                isMultiSelect);
+            group.MembershipChanged += HandlePatchMembershipChanged;
+            groups.Add(group);
         }
 
         return groups;
+    }
+
+    private void HandlePatchMembershipChanged(object? sender, EventArgs args)
+        => RefreshPatchMembershipConflicts();
+
+    private void RefreshPatchMembershipConflicts()
+    {
+        Dictionary<string, List<(PatchGroupEditorViewModel Group, PatchMemberEditorViewModel Member)>> memberships =
+            PatchGroups
+                .SelectMany(group => group.Members
+                    .Where(member => member.IsMember)
+                    .Select(member => (Group: group, Member: member)))
+                .GroupBy(item => item.Member.Channel.SettingsKey, StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(group => group.Key, group => group.ToList(), StringComparer.OrdinalIgnoreCase);
+
+        foreach (PatchGroupEditorViewModel group in PatchGroups)
+        {
+            List<string> conflictingChannels = [];
+            foreach (PatchMemberEditorViewModel member in group.Members)
+            {
+                if (!member.IsMember ||
+                    !memberships.TryGetValue(member.Channel.SettingsKey, out List<(PatchGroupEditorViewModel Group, PatchMemberEditorViewModel Member)>? owners) ||
+                    owners.Count < 2)
+                {
+                    member.SetConflictText(null);
+                    continue;
+                }
+
+                string otherGroups = string.Join(", ", owners
+                    .Where(owner => !ReferenceEquals(owner.Group, group))
+                    .Select(owner => owner.Group.Name)
+                    .Distinct(StringComparer.OrdinalIgnoreCase));
+                member.SetConflictText($"Also assigned to: {otherGroups}");
+                conflictingChannels.Add(member.Channel.Name);
+            }
+
+            group.SetConflictSummary(conflictingChannels.Count == 0
+                ? null
+                : $"{conflictingChannels.Count} member overlap(s): {string.Join(", ", conflictingChannels.Distinct(StringComparer.OrdinalIgnoreCase))}");
+        }
     }
 
     private void RestorePatchState(IEnumerable<GroupConfiguration>? groupDefinitions)
@@ -3340,17 +3454,20 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
 
     private void ReapplyPatchState(IEnumerable<GroupConfiguration>? groupDefinitions = null)
     {
-        HashSet<string>? patchGroupNames = groupDefinitions is null
-            ? null
-            : groupDefinitions
+        IEnumerable<string> configuredPatchNames = groupDefinitions is not null
+            ? groupDefinitions
                 .Where(group => group.IsPatchGroup())
                 .Select(group => group.Name.Trim())
-                .Where(name => name.Length > 0)
-                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            : PatchGroups
+                .Where(group => group.IsPatchGroup)
+                .Select(group => group.Name);
+        HashSet<string> patchGroupNames = configuredPatchNames
+            .Where(name => name.Length > 0)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
         var memberships = new Dictionary<string, IReadOnlyList<PatchMemberAddress>>(StringComparer.OrdinalIgnoreCase);
         foreach (KeyValuePair<string, List<PatchMemberSetting>> entry in userSettings.PatchGroupMemberships)
         {
-            if (patchGroupNames is not null && !patchGroupNames.Contains(entry.Key))
+            if (!patchGroupNames.Contains(entry.Key))
                 continue;
             if (!userSettings.PatchGroupEnabledStates.TryGetValue(entry.Key, out bool enabled) || !enabled)
                 continue;

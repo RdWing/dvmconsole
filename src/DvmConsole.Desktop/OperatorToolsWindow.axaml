@@ -86,7 +86,46 @@
       </TabItem>
 
       <TabItem Header="Groups">
-        <ScrollViewer Padding="10"><StackPanel Spacing="10"><TextBlock Classes="heading" Text="Patch Groups" /><ItemsControl ItemsSource="{Binding PatchGroups}"><ItemsControl.ItemTemplate><DataTemplate x:DataType="local:PatchGroupEditorViewModel"><Border Classes="panel"><StackPanel Spacing="8"><TextBlock FontWeight="SemiBold" Text="{Binding Name}" /><StackPanel Orientation="Horizontal" Spacing="12"><CheckBox Content="Enabled" IsChecked="{Binding IsEnabled, Mode=TwoWay}" /><CheckBox Content="One-way" IsChecked="{Binding IsOneWay, Mode=TwoWay}" /></StackPanel><ItemsControl ItemsSource="{Binding Members}"><ItemsControl.ItemTemplate><DataTemplate x:DataType="local:PatchMemberEditorViewModel"><CheckBox Content="{Binding DisplayName}" IsChecked="{Binding IsMember, Mode=TwoWay}" IsEnabled="{Binding CanTransmit}" /></DataTemplate></ItemsControl.ItemTemplate></ItemsControl><Button HorizontalAlignment="Left" Content="Apply group" Tag="{Binding}" Click="HandleApplyPatchGroupClick" /></StackPanel></Border></DataTemplate></ItemsControl.ItemTemplate></ItemsControl></StackPanel></ScrollViewer>
+        <ScrollViewer Padding="10">
+          <StackPanel Spacing="10">
+            <TextBlock Classes="heading" Text="Patch and Multi-select Groups" />
+            <ItemsControl ItemsSource="{Binding PatchGroups}">
+              <ItemsControl.ItemTemplate>
+                <DataTemplate x:DataType="local:PatchGroupEditorViewModel">
+                  <Border Classes="panel">
+                    <StackPanel Spacing="8">
+                      <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                        <StackPanel>
+                          <TextBlock FontWeight="SemiBold" Text="{Binding Name}" />
+                          <TextBlock Classes="caption" Text="{Binding GroupTypeText}" />
+                        </StackPanel>
+                        <Button Grid.Column="1" IsVisible="{Binding IsMultiSelect}" Content="{Binding PttButtonText}" Tag="{Binding}" Click="HandleMultiSelectPttClick" />
+                      </Grid>
+                      <Border IsVisible="{Binding HasConflicts}" Background="#4A2C16" BorderBrush="#B86B2B" BorderThickness="1" CornerRadius="4" Padding="8">
+                        <TextBlock Text="{Binding ConflictSummary}" TextWrapping="Wrap" />
+                      </Border>
+                      <StackPanel Orientation="Horizontal" Spacing="12" IsVisible="{Binding IsPatchGroup}">
+                        <CheckBox Content="Enabled" IsChecked="{Binding IsEnabled, Mode=TwoWay}" />
+                        <CheckBox Content="One-way" IsChecked="{Binding IsOneWay, Mode=TwoWay}" />
+                      </StackPanel>
+                      <ItemsControl ItemsSource="{Binding Members}">
+                        <ItemsControl.ItemTemplate>
+                          <DataTemplate x:DataType="local:PatchMemberEditorViewModel">
+                            <StackPanel Spacing="1">
+                              <CheckBox Content="{Binding DisplayName}" IsChecked="{Binding IsMember, Mode=TwoWay}" IsEnabled="{Binding CanTransmit}" />
+                              <TextBlock Classes="caption" IsVisible="{Binding HasConflict}" Text="{Binding ConflictText}" Margin="24,0,0,3" />
+                            </StackPanel>
+                          </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                      </ItemsControl>
+                      <Button HorizontalAlignment="Left" Content="Save group" Tag="{Binding}" Click="HandleApplyPatchGroupClick" />
+                    </StackPanel>
+                  </Border>
+                </DataTemplate>
+              </ItemsControl.ItemTemplate>
+            </ItemsControl>
+          </StackPanel>
+        </ScrollViewer>
       </TabItem>
 
       <TabItem Header="Connections">
