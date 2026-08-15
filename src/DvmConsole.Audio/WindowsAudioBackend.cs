@@ -112,6 +112,7 @@ public sealed class WindowsAudioBackend : IAudioBackend
         private readonly WaveInEvent input;
         private bool running;
         private bool disposed;
+        private Exception? captureFailure;
 
         public WindowsAudioCapture(int deviceNumber, PcmAudioFormat format)
         {
@@ -123,6 +124,7 @@ public sealed class WindowsAudioBackend : IAudioBackend
                 BufferMilliseconds = 20
             };
             input.DataAvailable += HandleDataAvailable;
+            input.RecordingStopped += HandleRecordingStopped;
         }
 
         public event EventHandler<PcmSamplesEventArgs>? SamplesAvailable;
@@ -133,6 +135,7 @@ public sealed class WindowsAudioBackend : IAudioBackend
         {
             ObjectDisposedException.ThrowIf(disposed, this);
             cancellationToken.ThrowIfCancellationRequested();
+            ThrowIfCaptureFailed();
             if (!running)
             {
                 input.StartRecording();
@@ -158,6 +161,7 @@ public sealed class WindowsAudioBackend : IAudioBackend
                 return;
             await StopAsync().ConfigureAwait(false);
             input.DataAvailable -= HandleDataAvailable;
+            input.RecordingStopped -= HandleRecordingStopped;
             input.Dispose();
             disposed = true;
         }
@@ -172,6 +176,19 @@ public sealed class WindowsAudioBackend : IAudioBackend
             Buffer.BlockCopy(args.Buffer, 0, samples, 0, sampleCount * sizeof(short));
             SamplesAvailable?.Invoke(this, new PcmSamplesEventArgs(samples));
         }
+
+        private void HandleRecordingStopped(object? sender, StoppedEventArgs args)
+        {
+            if (!disposed && args.Exception is not null)
+                Interlocked.CompareExchange(ref captureFailure, args.Exception, null);
+        }
+
+        private void ThrowIfCaptureFailed()
+        {
+            Exception? failure = Volatile.Read(ref captureFailure);
+            if (failure is not null)
+                throw new IOException("Windows audio capture stopped unexpectedly.", failure);
+        }
     }
 
     private sealed class WindowsAudioPlayback : IAudioPlayback
@@ -179,6 +196,7 @@ public sealed class WindowsAudioBackend : IAudioBackend
         private readonly WaveOutEvent output;
         private readonly BufferedWaveProvider buffer;
         private bool disposed;
+        private Exception? playbackFailure;
 
         public WindowsAudioPlayback(int deviceNumber, PcmAudioFormat format)
         {
@@ -189,6 +207,7 @@ public sealed class WindowsAudioBackend : IAudioBackend
             };
             output = new WaveOutEvent { DeviceNumber = deviceNumber };
             output.Init(buffer);
+            output.PlaybackStopped += HandlePlaybackStopped;
             output.Play();
         }
 
@@ -199,6 +218,7 @@ public sealed class WindowsAudioBackend : IAudioBackend
         {
             ObjectDisposedException.ThrowIf(disposed, this);
             cancellationToken.ThrowIfCancellationRequested();
+            ThrowIfPlaybackFailed();
             if (!samples.IsEmpty)
             {
                 byte[] bytes = new byte[samples.Length * sizeof(short)];
@@ -211,6 +231,7 @@ public sealed class WindowsAudioBackend : IAudioBackend
         public ValueTask FlushAsync(CancellationToken cancellationToken = default)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            ThrowIfPlaybackFailed();
             buffer.ClearBuffer();
             return ValueTask.CompletedTask;
         }
@@ -225,7 +246,11 @@ public sealed class WindowsAudioBackend : IAudioBackend
             try
             {
                 while (buffer.BufferedBytes > 0)
+                {
+                    ThrowIfPlaybackFailed();
                     await Task.Delay(5, timeout.Token).ConfigureAwait(false);
+                }
+                ThrowIfPlaybackFailed();
             }
             catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
             {
@@ -239,11 +264,25 @@ public sealed class WindowsAudioBackend : IAudioBackend
         {
             if (!disposed)
             {
+                output.PlaybackStopped -= HandlePlaybackStopped;
                 output.Stop();
                 output.Dispose();
                 disposed = true;
             }
             return ValueTask.CompletedTask;
+        }
+
+        private void HandlePlaybackStopped(object? sender, StoppedEventArgs args)
+        {
+            if (!disposed && args.Exception is not null)
+                Interlocked.CompareExchange(ref playbackFailure, args.Exception, null);
+        }
+
+        private void ThrowIfPlaybackFailed()
+        {
+            Exception? failure = Volatile.Read(ref playbackFailure);
+            if (failure is not null)
+                throw new IOException("Windows audio playback stopped unexpectedly.", failure);
         }
     }
 }
