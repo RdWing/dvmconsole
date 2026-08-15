@@ -87,6 +87,46 @@ public sealed class CallRecordingManagerTests
     }
 
     [Fact]
+    public void PersistsTrimAndActivityAnalysisForCompletedRecording()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "dvmconsole-recording-tests", Guid.NewGuid().ToString("N"));
+        var channel = new ChannelViewModel(new ChannelConfiguration
+        {
+            Name = "Dispatch",
+            System = "System 1",
+            Tgid = "99",
+            Mode = "analog"
+        });
+        using var manager = new CallRecordingManager(root);
+        channel.SetRecordingEnabled(true);
+
+        try
+        {
+            Assert.True(channel.TryApplyTraffic("System 1", Traffic("VOICE", "VOICE", 22)));
+            short[] samples = new short[8000];
+            samples[2000] = 1000;
+            samples[5000] = -1000;
+            manager.WriteSamples(channel, samples);
+            manager.ObserveTraffic(channel, Traffic("TERMINATOR", "TERMINATOR", 22));
+
+            CallRecordingMetadata metadata = manager.LoadRecordings().Single();
+            Assert.Equal(8000, metadata.OriginalSampleCount);
+            Assert.Equal(2, metadata.ActiveSampleCount);
+            Assert.Equal(1000, metadata.PeakAmplitude);
+            Assert.Equal(120, metadata.TrimLeadMs);
+            Assert.Equal(240, metadata.TrimTailMs);
+            Assert.Equal(640L, metadata.DurationMs);
+            Assert.Contains("activity 0.0%", metadata.AudioAnalysisText);
+            Assert.Contains("trim -120/+240 ms", metadata.AudioAnalysisText);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
     public void IgnoredSourceDoesNotStartRecording()
     {
         string root = Path.Combine(Path.GetTempPath(), "dvmconsole-recording-tests", Guid.NewGuid().ToString("N"));

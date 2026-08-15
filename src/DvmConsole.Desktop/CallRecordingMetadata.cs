@@ -22,6 +22,11 @@ public sealed class CallRecordingMetadata
     public int SampleRate { get; set; }
     public int BitsPerSample { get; set; }
     public int ChannelCount { get; set; }
+    public long OriginalSampleCount { get; set; }
+    public long ActiveSampleCount { get; set; }
+    public int PeakAmplitude { get; set; }
+    public int TrimLeadMs { get; set; }
+    public int TrimTailMs { get; set; }
     public string SystemName { get; set; } = string.Empty;
     public string ChannelName { get; set; } = string.Empty;
     public uint? TalkgroupId { get; set; }
@@ -48,7 +53,22 @@ public sealed class CallRecordingMetadata
     public string SummaryText => $"{SystemName} · {Protocol} · {TimestampText}";
 
     [JsonIgnore]
-    public string DetailText => $"{RouteText} · {DurationText} · {FileName}";
+    public string DetailText => $"{RouteText} · {DurationText} · {AudioAnalysisText} · {FileName}";
+
+    [JsonIgnore]
+    public string AudioAnalysisText
+    {
+        get
+        {
+            string activity = OriginalSampleCount > 0
+                ? $"activity {(ActiveSampleCount * 100d / OriginalSampleCount):0.0}%"
+                : "activity n/a";
+            string trim = TrimLeadMs == 0 && TrimTailMs == 0
+                ? "no trim"
+                : $"trim -{TrimLeadMs}/+{TrimTailMs} ms";
+            return $"peak {PeakAmplitude} · {activity} · {trim}";
+        }
+    }
 
     [JsonIgnore]
     public string RouteText => SubscriberId is uint subscriberId

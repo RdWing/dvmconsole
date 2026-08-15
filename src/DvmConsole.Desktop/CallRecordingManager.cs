@@ -292,7 +292,10 @@ public sealed class CallRecordingManager : IDisposable
         try
         {
             recording.Writer.Dispose();
-            WriteMetadata(channel, recording);
+            PcmWavTrimResult trim = PcmWavSilenceTrimmer.TrimFile(
+                recording.Writer.Path,
+                recording.Writer.Format);
+            WriteMetadata(channel, recording, trim);
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or InvalidOperationException or JsonException)
         {
@@ -300,7 +303,7 @@ public sealed class CallRecordingManager : IDisposable
         }
     }
 
-    private void WriteMetadata(ChannelViewModel channel, ActiveRecording recording)
+    private void WriteMetadata(ChannelViewModel channel, ActiveRecording recording, PcmWavTrimResult trim)
     {
         DateTimeOffset end = DateTimeOffset.UtcNow;
         FileInfo fileInfo = new(recording.Writer.Path);
@@ -310,7 +313,7 @@ public sealed class CallRecordingManager : IDisposable
             UtcStartTime = recording.UtcStartTime,
             UtcEndTime = end,
             DurationMs = (long)Math.Round(
-                recording.Writer.SamplesWritten * 1000d / recording.Writer.Format.SampleRate,
+                trim.OutputSamples * 1000d / recording.Writer.Format.SampleRate,
                 MidpointRounding.AwayFromZero),
             FilePath = recording.Writer.Path,
             FileName = Path.GetFileName(recording.Writer.Path),
@@ -318,6 +321,11 @@ public sealed class CallRecordingManager : IDisposable
             SampleRate = recording.Writer.Format.SampleRate,
             BitsPerSample = recording.Writer.Format.BitsPerSample,
             ChannelCount = recording.Writer.Format.Channels,
+            OriginalSampleCount = trim.OriginalSamples,
+            ActiveSampleCount = trim.ActiveSampleCount,
+            PeakAmplitude = trim.PeakAmplitude,
+            TrimLeadMs = trim.TrimLeadMs,
+            TrimTailMs = trim.TrimTailMs,
             SystemName = channel.Definition.SystemName,
             ChannelName = channel.Definition.Name,
             TalkgroupId = channel.Definition.DestinationId,

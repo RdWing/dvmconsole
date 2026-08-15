@@ -52,6 +52,34 @@ public sealed class PcmWavFileWriterTests
         }
     }
 
+    [Fact]
+    public void TrimsSilenceWithLegacyPaddingAndReportsActivity()
+    {
+        string path = CreatePath();
+        try
+        {
+            short[] samples = new short[8000];
+            samples[2000] = 1000;
+            samples[5000] = -1000;
+            using (var writer = new PcmWavFileWriter(path, PcmAudioFormat.Voice8KhzMono16Bit))
+                writer.Write(samples);
+
+            PcmWavTrimResult result = PcmWavSilenceTrimmer.TrimFile(path, PcmAudioFormat.Voice8KhzMono16Bit);
+
+            Assert.Equal(8000, result.OriginalSamples);
+            Assert.Equal(5120, result.OutputSamples);
+            Assert.Equal(120, result.TrimLeadMs);
+            Assert.Equal(240, result.TrimTailMs);
+            Assert.Equal(1000, result.PeakAmplitude);
+            Assert.Equal(2, result.ActiveSampleCount);
+            Assert.Equal(44 + (5120 * sizeof(short)), new FileInfo(path).Length);
+        }
+        finally
+        {
+            Cleanup(path);
+        }
+    }
+
     private static string CreatePath()
         => System.IO.Path.Combine(Path.GetTempPath(), "dvmconsole-wav-tests", $"{Guid.NewGuid():N}", "call.wav");
 
