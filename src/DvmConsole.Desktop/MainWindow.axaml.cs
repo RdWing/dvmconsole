@@ -743,6 +743,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     private readonly WebStreamPlaybackCoordinator webStreamPlayback;
     private readonly object patchSourceWorkSync = new();
     private readonly Dictionary<ChannelViewModel, Task> patchSourceWork = [];
+    private readonly Dictionary<string, FneConnectionState> lastConnectionChimeStates = new(StringComparer.OrdinalIgnoreCase);
     private ChannelViewModel[] suspendedAudioChannels = [];
     private PatchGroupEditorViewModel? activeMultiSelectGroup;
     private readonly CallRecordingManager callRecordings;
@@ -1346,6 +1347,19 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             userSettings.TalkPermitTone = value;
             PersistUserSettings();
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(TalkPermitTone)));
+        }
+    }
+
+    public bool ConnectionChimes
+    {
+        get => userSettings.ConnectionChimes;
+        set
+        {
+            if (userSettings.ConnectionChimes == value)
+                return;
+            userSettings.ConnectionChimes = value;
+            PersistUserSettings();
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ConnectionChimes)));
         }
     }
 
@@ -2150,6 +2164,11 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             NotifyConnectionPresentationChanged();
             if (status.State == FneConnectionState.Connected)
                 RequestMissingP25Keys(system);
+            bool stateChanged = !lastConnectionChimeStates.TryGetValue(system.Name, out FneConnectionState previousState) ||
+                previousState != status.State;
+            lastConnectionChimeStates[system.Name] = status.State;
+            if (stateChanged && (status.State is FneConnectionState.Connected or FneConnectionState.Faulted))
+                _ = PlayConnectionChimeAsync(system.Name, status.State);
             RaiseGeneratedAudioCanExecuteChanged();
         }
 
@@ -2157,6 +2176,27 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             Apply();
         else
             Dispatcher.UIThread.Post(Apply);
+    }
+
+    private async Task PlayConnectionChimeAsync(string systemName, FneConnectionState state)
+    {
+        if (!ConnectionChimes)
+            return;
+
+        try
+        {
+            await talkPermitTonePlayer.PlayAsync(
+                frequency: state == FneConnectionState.Connected ? 1500 : 500,
+                duration: state == FneConnectionState.Connected
+                    ? TimeSpan.FromMilliseconds(80)
+                    : TimeSpan.FromMilliseconds(160),
+                amplitude: 0.25).ConfigureAwait(false);
+        }
+        catch (Exception exception)
+        {
+            Dispatcher.UIThread.Post(() =>
+                AudioStatusText = $"{systemName} connection chime unavailable: {exception.Message}");
+        }
     }
 
     private void HandleSystemLog(object? sender, FneLogEntry entry)

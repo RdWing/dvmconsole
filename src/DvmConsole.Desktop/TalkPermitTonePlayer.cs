@@ -29,7 +29,11 @@ public sealed class TalkPermitTonePlayer : IAsyncDisposable
     public int? LastQueuedSamples { get; private set; }
     public int? LastConsumedSamples { get; private set; }
 
-    public async Task<AudioDeviceInfo> PlayAsync(CancellationToken cancellationToken = default)
+    public async Task<AudioDeviceInfo> PlayAsync(
+        double frequency = 1200,
+        TimeSpan? duration = null,
+        double amplitude = 0.40,
+        CancellationToken cancellationToken = default)
     {
         ObjectDisposedException.ThrowIf(disposed, this);
         await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
@@ -47,9 +51,9 @@ public sealed class TalkPermitTonePlayer : IAsyncDisposable
             }
 
             short[] samples = new PcmToneGenerator().GenerateTone(
-                frequency: 1200,
-                duration: ToneDuration,
-                amplitude: 0.40);
+                frequency,
+                duration ?? ToneDuration,
+                amplitude);
             ApplyFade(samples, PcmAudioFormat.Voice8KhzMono16Bit.SampleRate / 100);
             await playback.WriteAsync(samples, cancellationToken).ConfigureAwait(false);
             LastQueuedSamples = playback.QueuedSamples;

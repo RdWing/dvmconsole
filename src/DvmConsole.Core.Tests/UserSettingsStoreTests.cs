@@ -91,6 +91,7 @@ public sealed class UserSettingsStoreTests
                 ],
                 MuteRxAudioWhileTransmitting = false,
                 TalkPermitTone = true,
+                ConnectionChimes = true,
                 DarkMode = true,
                 ClockUse24HourTime = false,
                 ClockShowSeconds = false,
@@ -181,6 +182,7 @@ public sealed class UserSettingsStoreTests
             Assert.Equal(3, microphonePreset.HighGainDb);
             Assert.False(loaded.MuteRxAudioWhileTransmitting);
             Assert.True(loaded.TalkPermitTone);
+            Assert.True(loaded.ConnectionChimes);
             Assert.True(loaded.DarkMode);
             Assert.False(loaded.ClockUse24HourTime);
             Assert.False(loaded.ClockShowSeconds);

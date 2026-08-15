@@ -38,6 +38,7 @@ public sealed class UserSettings
     public List<AudioInputPresetSetting> AudioInputPresets { get; set; } = [];
     public bool MuteRxAudioWhileTransmitting { get; set; } = true;
     public bool TalkPermitTone { get; set; }
+    public bool ConnectionChimes { get; set; }
     public bool DarkMode { get; set; }
     public bool ClockUse24HourTime { get; set; } = true;
     public bool ClockShowSeconds { get; set; } = true;
