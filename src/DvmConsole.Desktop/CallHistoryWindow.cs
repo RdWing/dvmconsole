@@ -40,7 +40,8 @@ public sealed class CallHistoryWindow : Window
         var filterInput = new TextBox
         {
             Watermark = "Filter system, channel, RID, protocol",
-            MinWidth = 240
+            MinWidth = 160,
+            HorizontalAlignment = HorizontalAlignment.Stretch
         };
         filterInput.Bind(TextBox.TextProperty, new Binding(nameof(MainWindowViewModel.CallHistoryFilterText))
         {
@@ -96,21 +97,32 @@ public sealed class CallHistoryWindow : Window
         var exportButton = new Button { Content = "Export CSV…", MinWidth = 108 };
         var controls = new Grid
         {
-            ColumnDefinitions = new ColumnDefinitions("Auto,*,Auto,Auto,Auto"),
+            RowDefinitions = new RowDefinitions("Auto,Auto"),
+            ColumnDefinitions = new ColumnDefinitions("*,Auto,Auto,Auto"),
             ColumnSpacing = 8,
+            RowSpacing = 8,
             Children =
             {
-                new TextBlock { Text = "Event history", VerticalAlignment = VerticalAlignment.Center },
+                new TextBlock
+                {
+                    Text = "Event history",
+                    FontWeight = FontWeight.SemiBold,
+                    VerticalAlignment = VerticalAlignment.Center
+                },
                 filterInput,
                 clearButton,
                 exportButton,
                 closeButton
             }
         };
-        Grid.SetColumn(filterInput, 1);
-        Grid.SetColumn(clearButton, 2);
-        Grid.SetColumn(exportButton, 3);
-        Grid.SetColumn(closeButton, 4);
+        Grid.SetColumnSpan(controls.Children[0], 4);
+        Grid.SetRow(filterInput, 1);
+        Grid.SetRow(clearButton, 1);
+        Grid.SetRow(exportButton, 1);
+        Grid.SetRow(closeButton, 1);
+        Grid.SetColumn(clearButton, 1);
+        Grid.SetColumn(exportButton, 2);
+        Grid.SetColumn(closeButton, 3);
 
         var historyBorder = new Border
         {

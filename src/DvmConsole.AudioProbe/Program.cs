@@ -49,17 +49,25 @@ internal static class Program
         AudioDeviceInfo input = backend.EnumerateDevices(AudioDirection.Input).First(device => device.IsDefault);
         AudioDeviceInfo output = backend.EnumerateDevices(AudioDirection.Output).First(device => device.IsDefault);
         int capturedSamples = 0;
+        int peakSample = 0;
 
         await using IAudioCapture capture = backend.OpenCapture(input, PcmAudioFormat.Voice8KhzMono16Bit);
         await using IAudioPlayback playback = backend.OpenPlayback(output, PcmAudioFormat.Voice8KhzMono16Bit);
-        capture.SamplesAvailable += (_, eventArgs) => capturedSamples += eventArgs.Samples.Length;
+        capture.SamplesAvailable += (_, eventArgs) =>
+        {
+            capturedSamples += eventArgs.Samples.Length;
+            foreach (short sample in eventArgs.Samples.Span)
+                peakSample = Math.Max(peakSample, Math.Abs((int)sample));
+        };
 
         await capture.StartAsync().ConfigureAwait(false);
         await playback.WriteAsync(new short[PcmAudioFormat.Voice8KhzMono16Bit.SampleRate * seconds]).ConfigureAwait(false);
         await Task.Delay(TimeSpan.FromSeconds(seconds)).ConfigureAwait(false);
         await capture.StopAsync().ConfigureAwait(false);
 
-        Console.WriteLine($"Audio stream test completed; captured {capturedSamples} PCM samples.");
+        Console.WriteLine($"Input: {input.Id}: {input.Name}");
+        Console.WriteLine($"Output: {output.Id}: {output.Name}");
+        Console.WriteLine($"Audio stream test completed; captured {capturedSamples} PCM samples; peak level {peakSample}.");
         return 0;
     }
 

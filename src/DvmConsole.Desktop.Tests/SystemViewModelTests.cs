@@ -1,3 +1,4 @@
+using DvmConsole.Audio;
 using DvmConsole.Core.Settings;
 using DvmConsole.Core.Runtime;
 using DvmConsole.Desktop;
@@ -560,6 +561,8 @@ public sealed class SystemViewModelTests
 
             Assert.True(viewModel.ClockUse24HourTime);
             Assert.True(viewModel.ClockShowSeconds);
+            Assert.True(viewModel.IsConfiguredPttKey(KeyboardPttKey.Space));
+            Assert.False(viewModel.IsConfiguredPttKey(KeyboardPttKey.F1));
             Assert.Equal("13:05:09", MainWindowViewModel.FormatClock(
                 new DateTime(2026, 8, 14, 13, 5, 9),
                 use24HourTime: true,
@@ -573,12 +576,14 @@ public sealed class SystemViewModelTests
             viewModel.ClockShowSeconds = false;
             viewModel.KeepWindowOnTop = true;
             viewModel.TogglePttMode = true;
+            await viewModel.SetGlobalPttKeyAsync(KeyboardPttKey.F3);
 
             UserSettings saved = store.Load();
             Assert.False(saved.ClockUse24HourTime);
             Assert.False(saved.ClockShowSeconds);
             Assert.True(saved.KeepWindowOnTop);
             Assert.True(saved.TogglePttMode);
+            Assert.True(viewModel.IsConfiguredPttKey(KeyboardPttKey.F3));
             Assert.NotEmpty(viewModel.ClockText);
         }
         finally
@@ -694,6 +699,70 @@ public sealed class SystemViewModelTests
 
             Assert.Equal([42u, 1001u], store.Load().RecordingIgnoredSubscriberIds[channel.SettingsKey]);
             Assert.Equal("42, 1001", channel.IgnoredSubscriberIdsText);
+        }
+        finally
+        {
+            CleanupSettingsPath(settingsPath);
+        }
+    }
+
+    [Fact]
+    public async Task MovesPersistsRestoresAndResetsUnlockedChannelWidgets()
+    {
+        string codeplugPath = Path.Combine(AppContext.BaseDirectory, "TestData", "multiple-systems.yml");
+        string settingsPath = CreateSettingsPath();
+        var store = new UserSettingsStore(settingsPath);
+
+        try
+        {
+            store.Save(new UserSettings { LockWidgets = false });
+            string channelKey;
+            await using (MainWindowViewModel viewModel = MainWindowViewModel.Load(codeplugPath, store))
+            {
+                ChannelViewModel channel = viewModel.Systems[0].Channels[0];
+                channelKey = channel.SettingsKey;
+                viewModel.MoveChannelWidget(channel, 347, 186, persist: true);
+
+                Assert.Equal(347, channel.WidgetX);
+                Assert.Equal(186, channel.WidgetY);
+                Assert.Equal(347, store.Load().ChannelWidgetPositions[channelKey].X);
+            }
+
+            await using MainWindowViewModel restored = MainWindowViewModel.Load(codeplugPath, store);
+            ChannelViewModel restoredChannel = restored.Systems[0].Channels[0];
+            Assert.Equal(347, restoredChannel.WidgetX);
+            Assert.Equal(186, restoredChannel.WidgetY);
+
+            restored.ResetLayout();
+
+            Assert.True(restored.LockWidgets);
+            Assert.Empty(store.Load().ChannelWidgetPositions);
+            Assert.Equal(0, restoredChannel.WidgetX);
+            Assert.Equal(0, restoredChannel.WidgetY);
+        }
+        finally
+        {
+            CleanupSettingsPath(settingsPath);
+        }
+    }
+
+    [Fact]
+    public async Task LockedChannelWidgetsIgnoreMoveRequests()
+    {
+        string codeplugPath = Path.Combine(AppContext.BaseDirectory, "TestData", "multiple-systems.yml");
+        string settingsPath = CreateSettingsPath();
+        var store = new UserSettingsStore(settingsPath);
+
+        try
+        {
+            await using MainWindowViewModel viewModel = MainWindowViewModel.Load(codeplugPath, store);
+            ChannelViewModel channel = viewModel.Systems[0].Channels[0];
+
+            viewModel.MoveChannelWidget(channel, 500, 500, persist: true);
+
+            Assert.Equal(0, channel.WidgetX);
+            Assert.Equal(0, channel.WidgetY);
+            Assert.Empty(store.Load().ChannelWidgetPositions);
         }
         finally
         {

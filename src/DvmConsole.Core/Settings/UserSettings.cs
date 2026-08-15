@@ -16,6 +16,15 @@ public sealed class WindowPlacementSetting
 }
 
 /// <summary>
+/// Portable position for a movable console widget.
+/// </summary>
+public sealed class WidgetPositionSetting
+{
+    public double X { get; set; }
+    public double Y { get; set; }
+}
+
+/// <summary>
 /// Small, portable subset of operator state that is safe to persist outside a
 /// codeplug. Protocol credentials and encryption keys remain codeplug-owned.
 /// </summary>
@@ -50,6 +59,7 @@ public sealed class UserSettings
     public bool ShowChannels { get; set; } = true;
     public bool ShowAlertTones { get; set; } = true;
     public bool LockWidgets { get; set; } = true;
+    public Dictionary<string, WidgetPositionSetting> ChannelWidgetPositions { get; set; } = new(StringComparer.OrdinalIgnoreCase);
     public string? UserBackgroundImage { get; set; }
     public bool TogglePttMode { get; set; }
     /// <summary>
@@ -146,6 +156,7 @@ public sealed class UserSettingsStore
             settings.RecentCodeplugPaths = NormalizeRecentCodeplugPaths(settings.RecentCodeplugPaths);
             settings.ToolbarClocks = NormalizeToolbarClocks(settings.ToolbarClocks);
             settings.TransmitSelectedChannelKeys = NormalizeNames(settings.TransmitSelectedChannelKeys);
+            settings.ChannelWidgetPositions = NormalizeWidgetPositions(settings.ChannelWidgetPositions);
             NormalizeAudioInputSettings(settings);
             settings.AudioInputPresetName = settings.AudioInputPresetName?.Trim() ?? string.Empty;
             settings.AudioInputPresets = NormalizeAudioInputPresets(settings.AudioInputPresets);
@@ -390,6 +401,7 @@ public sealed class UserSettingsStore
         settings.SelectedWebStreams = NormalizeNames(settings.SelectedWebStreams);
         settings.GlobalPttKey = NormalizeGlobalPttKey(settings.GlobalPttKey);
         settings.TransmitSelectedChannelKeys = NormalizeNames(settings.TransmitSelectedChannelKeys);
+        settings.ChannelWidgetPositions = NormalizeWidgetPositions(settings.ChannelWidgetPositions);
     }
 
     public void Reset()
@@ -447,7 +459,8 @@ public sealed class UserSettingsStore
         if (settings.TalkPermitTone || settings.ConnectionChimes || settings.DarkMode ||
             settings.TogglePttMode || !string.Equals(settings.GlobalPttKey, "Space", StringComparison.OrdinalIgnoreCase) ||
             !settings.ShowSystemStatus || !settings.ShowChannels || !settings.ShowAlertTones ||
-            !settings.LockWidgets || !settings.ShowCallHistoryPane || settings.SnapCallHistoryToWindow ||
+            !settings.LockWidgets || settings.ChannelWidgetPositions.Count > 0 ||
+            !settings.ShowCallHistoryPane || settings.SnapCallHistoryToWindow ||
             settings.UserBackgroundImage is not null)
         {
             sections.Add("General");
@@ -508,6 +521,10 @@ public sealed class UserSettingsStore
             target.ShowChannels = source.ShowChannels;
             target.ShowAlertTones = source.ShowAlertTones;
             target.LockWidgets = source.LockWidgets;
+            target.ChannelWidgetPositions = source.ChannelWidgetPositions.ToDictionary(
+                entry => entry.Key,
+                entry => new WidgetPositionSetting { X = entry.Value.X, Y = entry.Value.Y },
+                StringComparer.OrdinalIgnoreCase);
             target.UserBackgroundImage = source.UserBackgroundImage;
             target.ShowCallHistoryPane = source.ShowCallHistoryPane;
             target.SnapCallHistoryToWindow = source.SnapCallHistoryToWindow;
@@ -580,6 +597,30 @@ public sealed class UserSettingsStore
             target.SelectedWebStreams = source.SelectedWebStreams.ToList();
             target.TransmitEncryptionStates = new Dictionary<string, bool>(source.TransmitEncryptionStates, StringComparer.OrdinalIgnoreCase);
         }
+    }
+
+    private static Dictionary<string, WidgetPositionSetting> NormalizeWidgetPositions(
+        Dictionary<string, WidgetPositionSetting>? positions)
+    {
+        var normalized = new Dictionary<string, WidgetPositionSetting>(StringComparer.OrdinalIgnoreCase);
+        foreach (KeyValuePair<string, WidgetPositionSetting> entry in positions ?? [])
+        {
+            string key = entry.Key?.Trim() ?? string.Empty;
+            WidgetPositionSetting? position = entry.Value;
+            if (key.Length == 0 || position is null ||
+                !double.IsFinite(position.X) || !double.IsFinite(position.Y))
+            {
+                continue;
+            }
+
+            normalized[key] = new WidgetPositionSetting
+            {
+                X = Math.Clamp(position.X, 0, 10_000),
+                Y = Math.Clamp(position.Y, 0, 10_000)
+            };
+        }
+
+        return normalized;
     }
 
     private static Dictionary<string, bool> NormalizeGroupStates(Dictionary<string, bool>? states)

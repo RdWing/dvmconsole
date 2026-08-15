@@ -30,6 +30,11 @@ public sealed partial class MainWindow : Window
     private MainWindowViewModel viewModel;
     private readonly PressAndHoldPttController cardPtt;
     private CallHistoryWindow? callHistoryWindow;
+    private Control? draggedChannelCard;
+    private ChannelViewModel? draggedChannel;
+    private Point dragPointerOrigin;
+    private double dragWidgetXOrigin;
+    private double dragWidgetYOrigin;
 
     public MainWindow() : this(null)
     {
@@ -77,9 +82,67 @@ public sealed partial class MainWindow : Window
         if (sender is Control { DataContext: ChannelViewModel channel } control &&
             DataContext is MainWindowViewModel viewModel)
         {
+            PointerPointProperties properties = e.GetCurrentPoint(control).Properties;
+            if (properties.IsRightButtonPressed && !viewModel.LockWidgets)
+            {
+                draggedChannelCard = control;
+                draggedChannel = channel;
+                dragPointerOrigin = e.GetPosition(this);
+                dragWidgetXOrigin = channel.WidgetX;
+                dragWidgetYOrigin = channel.WidgetY;
+                e.Pointer.Capture(control);
+                e.Handled = true;
+                control.Focus();
+                return;
+            }
+
+            if (!properties.IsLeftButtonPressed)
+                return;
+
             await viewModel.ToggleChannelReceiveAsync(channel);
             control.Focus();
         }
+    }
+
+    private void HandleChannelPointerMoved(object? sender, PointerEventArgs e)
+    {
+        if (draggedChannelCard is null || draggedChannel is null ||
+            !ReferenceEquals(sender, draggedChannelCard) ||
+            DataContext is not MainWindowViewModel viewModel)
+        {
+            return;
+        }
+
+        Point current = e.GetPosition(this);
+        const double gridSize = 10;
+        double x = Math.Max(0, Math.Round((dragWidgetXOrigin + current.X - dragPointerOrigin.X) / gridSize) * gridSize);
+        double y = Math.Max(0, Math.Round((dragWidgetYOrigin + current.Y - dragPointerOrigin.Y) / gridSize) * gridSize);
+        viewModel.MoveChannelWidget(draggedChannel, x, y, persist: false);
+        e.Handled = true;
+    }
+
+    private void HandleChannelPointerReleased(object? sender, PointerReleasedEventArgs e)
+    {
+        if (draggedChannelCard is null || draggedChannel is null || !ReferenceEquals(sender, draggedChannelCard))
+            return;
+
+        if (DataContext is MainWindowViewModel viewModel)
+            viewModel.MoveChannelWidget(draggedChannel, draggedChannel.WidgetX, draggedChannel.WidgetY, persist: true);
+        e.Pointer.Capture(null);
+        ClearChannelDrag();
+        e.Handled = true;
+    }
+
+    private void HandleChannelPointerCaptureLost(object? sender, PointerCaptureLostEventArgs e)
+    {
+        if (draggedChannelCard is not null && ReferenceEquals(sender, draggedChannelCard))
+            ClearChannelDrag();
+    }
+
+    private void ClearChannelDrag()
+    {
+        draggedChannelCard = null;
+        draggedChannel = null;
     }
 
     private async void HandlePttPointerPressed(object? sender, PointerPressedEventArgs e)
@@ -699,14 +762,44 @@ public sealed partial class MainWindow : Window
 
     private void HandleTransmitSelectionClick(object? sender, RoutedEventArgs e)
     {
-        if (sender is Button { DataContext: ChannelViewModel channel })
+        if (sender is Button { DataContext: ChannelViewModel channel } button)
+        {
             viewModel.ToggleChannelTransmitSelection(channel);
+            ApplyTransmitSelectionButtonBrush(button, channel);
+        }
+    }
+
+    private static void HandleTransmitSelectionPointerEntered(object? sender, PointerEventArgs e)
+    {
+        if (sender is Button { DataContext: ChannelViewModel channel } button)
+            ApplyTransmitSelectionButtonBrush(button, channel);
+    }
+
+    private static void ApplyTransmitSelectionButtonBrush(Button button, ChannelViewModel channel)
+    {
+        button.Background = channel.TransmitSelectionBrush;
+        button.BorderBrush = channel.TransmitSelectionBorderBrush;
     }
 
     private void HandlePageSelectionClick(object? sender, RoutedEventArgs e)
     {
-        if (sender is Button { DataContext: ChannelViewModel channel })
+        if (sender is Button { DataContext: ChannelViewModel channel } button)
+        {
             viewModel.ToggleChannelPageSelection(channel);
+            ApplyPageSelectionButtonBrush(button, channel);
+        }
+    }
+
+    private static void HandlePageSelectionPointerEntered(object? sender, PointerEventArgs e)
+    {
+        if (sender is Button { DataContext: ChannelViewModel channel } button)
+            ApplyPageSelectionButtonBrush(button, channel);
+    }
+
+    private static void ApplyPageSelectionButtonBrush(Button button, ChannelViewModel channel)
+    {
+        button.Background = channel.PageSelectionBrush;
+        button.BorderBrush = channel.PageSelectionBorderBrush;
     }
 
     private void HandleToggleAllTransmitSelectionClick(object? sender, RoutedEventArgs e)
@@ -716,6 +809,12 @@ public sealed partial class MainWindow : Window
     {
         if (sender is Button { Tag: AlertToneViewModel tone })
             await viewModel.SendAlertToneAsync(tone);
+    }
+
+    private void HandleToolbarToneToolsClick(object? sender, RoutedEventArgs e)
+    {
+        var window = new OperatorToolsWindow(viewModel, OperatorToolSection.Tones);
+        window.Show(this);
     }
 
     private async void HandleGlobalPttKeyClick(object? sender, RoutedEventArgs e)
@@ -731,20 +830,20 @@ public sealed partial class MainWindow : Window
     private void HandleKeyDown(object? sender, KeyEventArgs e)
     {
         if (DataContext is MainWindowViewModel viewModel &&
-            TryMapPttKey(e.Key, out KeyboardPttKey key) &&
-            viewModel.HandleKeyboardPttDown(key))
+            TryMapPttKey(e.Key, out KeyboardPttKey key))
         {
-            e.Handled = true;
+            bool handled = viewModel.HandleKeyboardPttDown(key);
+            e.Handled = handled || viewModel.IsConfiguredPttKey(key);
         }
     }
 
     private void HandleKeyUp(object? sender, KeyEventArgs e)
     {
         if (DataContext is MainWindowViewModel viewModel &&
-            TryMapPttKey(e.Key, out KeyboardPttKey key) &&
-            viewModel.HandleKeyboardPttUp(key))
+            TryMapPttKey(e.Key, out KeyboardPttKey key))
         {
-            e.Handled = true;
+            bool handled = viewModel.HandleKeyboardPttUp(key);
+            e.Handled = handled || viewModel.IsConfiguredPttKey(key);
         }
     }
 
@@ -1120,6 +1219,9 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             () => userSettings.AudioOutputDeviceId);
         Systems = systems.ToArray();
         Zones = zones.ToArray();
+        RestoreChannelWidgetLayout();
+        foreach (ChannelViewModel channel in Systems.SelectMany(system => system.Channels).Distinct())
+            channel.SetDarkMode(userSettings.DarkMode);
         GroupConfiguration[] configuredGroups = (groupDefinitions ?? []).ToArray();
         patchForwarding = new PatchForwardingCoordinator(Systems, p25KeyResolver)
         {
@@ -1378,7 +1480,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     {
         userBackgroundBitmap?.Dispose();
         userBackgroundBitmap = null;
-        mainBackgroundBrush = new SolidColorBrush(Color.Parse("#0D1116"));
+        mainBackgroundBrush = CreateShellBackgroundBrush(userSettings.DarkMode);
         userSettings.UserBackgroundImage = null;
         PersistUserSettings();
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(MainBackgroundBrush)));
@@ -1395,6 +1497,8 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         userSettings.ShowCallHistoryPane = true;
         userSettings.SnapCallHistoryToWindow = false;
         userSettings.CallHistoryWindowPlacement = new WindowPlacementSetting();
+        userSettings.ChannelWidgetPositions.Clear();
+        ApplyDefaultChannelWidgetLayout();
         PersistUserSettings();
         foreach (string propertyName in new[]
                  {
@@ -1410,7 +1514,26 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
         }
 
-        StatusText = "Widget layout reset to the default Avalonia grid.";
+        StatusText = "Channel widgets reset to their default positions and locked.";
+    }
+
+    public void MoveChannelWidget(ChannelViewModel channel, double x, double y, bool persist)
+    {
+        ArgumentNullException.ThrowIfNull(channel);
+        if (userSettings.LockWidgets)
+            return;
+
+        channel.SetWidgetPosition(x, y);
+        if (!persist)
+            return;
+
+        userSettings.ChannelWidgetPositions[channel.SettingsKey] = new WidgetPositionSetting
+        {
+            X = channel.WidgetX,
+            Y = channel.WidgetY
+        };
+        PersistUserSettings();
+        StatusText = $"Moved {channel.Name} to {channel.WidgetX:0}, {channel.WidgetY:0}.";
     }
 
     public WindowPlacementSetting GetCallHistoryWindowPlacement()
@@ -1688,6 +1811,13 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
                 return;
             userSettings.DarkMode = value;
             ApplyTheme(value);
+            foreach (ChannelViewModel channel in Systems.SelectMany(system => system.Channels).Distinct())
+                channel.SetDarkMode(value);
+            if (userBackgroundBitmap is null)
+            {
+                mainBackgroundBrush = CreateShellBackgroundBrush(value);
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(MainBackgroundBrush)));
+            }
             PersistUserSettings();
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(DarkMode)));
         }
@@ -2615,6 +2745,8 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     {
         return keyboardPtt.HandleKeyUp(key);
     }
+
+    public bool IsConfiguredPttKey(KeyboardPttKey key) => keyboardPtt.ActivationKey == key;
 
     public static MainWindowViewModel Load(string? configurationPath)
         => Load(configurationPath, new UserSettingsStore(UserSettingsStore.DefaultPath));
@@ -4535,7 +4667,10 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     private void LoadUserBackground(string? path)
     {
         if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
+        {
+            mainBackgroundBrush = CreateShellBackgroundBrush(userSettings.DarkMode);
             return;
+        }
 
         try
         {
@@ -4549,7 +4684,39 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         catch
         {
             userBackgroundBitmap = null;
-            mainBackgroundBrush = new SolidColorBrush(Color.Parse("#0D1116"));
+            mainBackgroundBrush = CreateShellBackgroundBrush(userSettings.DarkMode);
+        }
+    }
+
+    private static IBrush CreateShellBackgroundBrush(bool darkMode)
+        => new SolidColorBrush(Color.Parse(darkMode ? "#0D1116" : "#F3F5F7"));
+
+    private void RestoreChannelWidgetLayout()
+    {
+        ApplyDefaultChannelWidgetLayout();
+        foreach (ChannelViewModel channel in Zones.SelectMany(zone => zone.Channels).Distinct())
+        {
+            if (userSettings.ChannelWidgetPositions.TryGetValue(channel.SettingsKey, out WidgetPositionSetting? position))
+                channel.SetWidgetPosition(position.X, position.Y);
+        }
+    }
+
+    private void ApplyDefaultChannelWidgetLayout()
+    {
+        foreach (ZoneViewModel zone in Zones)
+        {
+            double x = 0;
+            double y = 0;
+            foreach (ChannelViewModel channel in zone.Channels)
+            {
+                channel.SetWidgetPosition(x, y);
+                x += channel.CardWidth + 20;
+                if (x + channel.CardWidth > 1_150)
+                {
+                    x = 0;
+                    y += 270;
+                }
+            }
         }
     }
 
@@ -5065,15 +5232,43 @@ public sealed class SystemViewModel : INotifyPropertyChanged, IAsyncDisposable
     }
 }
 
-public sealed record ZoneViewModel(
-    string Name,
-    IReadOnlyList<ChannelViewModel> Channels,
-    IReadOnlyList<WebStreamViewModel> WebStreams,
-    string? TabColor = null,
-    string? TabTextColor = null)
+public sealed class ZoneViewModel : INotifyPropertyChanged
 {
+    public ZoneViewModel(
+        string name,
+        IReadOnlyList<ChannelViewModel> channels,
+        IReadOnlyList<WebStreamViewModel> webStreams,
+        string? tabColor = null,
+        string? tabTextColor = null)
+    {
+        Name = name;
+        Channels = channels;
+        WebStreams = webStreams;
+        TabColor = tabColor;
+        TabTextColor = tabTextColor;
+        foreach (ChannelViewModel channel in Channels)
+            channel.PropertyChanged += HandleChannelPropertyChanged;
+    }
+
+    public event PropertyChangedEventHandler? PropertyChanged;
+    public string Name { get; }
+    public IReadOnlyList<ChannelViewModel> Channels { get; }
+    public IReadOnlyList<WebStreamViewModel> WebStreams { get; }
+    public string? TabColor { get; }
+    public string? TabTextColor { get; }
     public IBrush TabBrush => CreateBrush(TabColor, "#151D26");
     public IBrush TabTextBrush => CreateBrush(TabTextColor, "#DCE3EB");
+    public double WidgetCanvasWidth => Math.Max(1_150, Channels.Count == 0 ? 0 : Channels.Max(channel => channel.WidgetX + channel.CardWidth + 20));
+    public double WidgetCanvasHeight => Math.Max(520, Channels.Count == 0 ? 0 : Channels.Max(channel => channel.WidgetY + 260));
+
+    private void HandleChannelPropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName is nameof(ChannelViewModel.WidgetX) or nameof(ChannelViewModel.WidgetY))
+        {
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(WidgetCanvasWidth)));
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(WidgetCanvasHeight)));
+        }
+    }
 
     private static IBrush CreateBrush(string? color, string fallback)
     {
@@ -5118,6 +5313,9 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
     private string ignoredSubscriberIdsText = string.Empty;
     private string outputDeviceIdText = string.Empty;
     private IReadOnlyList<AudioDeviceOptionViewModel> outputDeviceOptions = [];
+    private double widgetX;
+    private double widgetY;
+    private bool darkMode;
 
     public ChannelViewModel(
         ChannelConfiguration configuration,
@@ -5155,19 +5353,21 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
         "large" => 450,
         _ => 285
     };
+    public double WidgetX => widgetX;
+    public double WidgetY => widgetY;
     public IBrush CardBackgroundBrush => runtime.State switch
     {
         ChannelRuntimeState.Receiving => new SolidColorBrush(Color.Parse("#008A3A")),
         ChannelRuntimeState.Transmitting => new SolidColorBrush(Color.Parse("#0B6B9C")),
-        _ when audioEnabled => new SolidColorBrush(Color.Parse("#1B2B22")),
-        _ => new SolidColorBrush(Color.Parse("#151D26"))
+        _ when audioEnabled => new SolidColorBrush(Color.Parse(darkMode ? "#1B2B22" : "#E2F3E8")),
+        _ => new SolidColorBrush(Color.Parse(darkMode ? "#151D26" : "#FFFFFF"))
     };
     public IBrush CardBorderBrush => runtime.State switch
     {
         ChannelRuntimeState.Receiving => new SolidColorBrush(Color.Parse("#00C86A")),
         ChannelRuntimeState.Transmitting => new SolidColorBrush(Color.Parse("#2497D3")),
         _ when audioEnabled => new SolidColorBrush(Color.Parse("#4E8060")),
-        _ => CreateBrush(configuration.ResourceColor, "#2A3A4B")
+        _ => CreateBrush(configuration.ResourceColor, darkMode ? "#2A3A4B" : "#9BA8B5")
     };
     public string StateText
     {
@@ -5461,6 +5661,31 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
     }
 
     public void RestoreTransmitSelection(bool selected) => SetTransmitSelected(selected);
+
+    public void SetWidgetPosition(double x, double y)
+    {
+        double nextX = double.IsFinite(x) ? Math.Clamp(x, 0, 10_000) : 0;
+        double nextY = double.IsFinite(y) ? Math.Clamp(y, 0, 10_000) : 0;
+        if (Math.Abs(widgetX - nextX) >= 0.01)
+        {
+            widgetX = nextX;
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(WidgetX)));
+        }
+        if (Math.Abs(widgetY - nextY) >= 0.01)
+        {
+            widgetY = nextY;
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(WidgetY)));
+        }
+    }
+
+    public void SetDarkMode(bool enabled)
+    {
+        if (darkMode == enabled)
+            return;
+        darkMode = enabled;
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CardBackgroundBrush)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CardBorderBrush)));
+    }
 
     public bool TryApplyTraffic(string systemName, FneTrafficFrame traffic)
     {

@@ -49,6 +49,8 @@ if [[ "$RID" == "osx-arm64" ]]; then
     APP_PATH="$STAGING_DIR/DVMConsole.app"
     mkdir -p "$APP_PATH/Contents/MacOS" "$APP_PATH/Contents/Resources/publish"
     cp "$ROOT_DIR/packaging/macos/Info.plist" "$APP_PATH/Contents/Info.plist"
+    plutil -lint "$APP_PATH/Contents/Info.plist" >/dev/null
+    /usr/libexec/PlistBuddy -c 'Print :NSMicrophoneUsageDescription' "$APP_PATH/Contents/Info.plist" >/dev/null
     cp "$ROOT_DIR/packaging/macos/DvmConsoleLauncher" "$APP_PATH/Contents/MacOS/DvmConsoleLauncher"
     chmod 755 "$APP_PATH/Contents/MacOS/DvmConsoleLauncher"
     cp -R "$PUBLISH_DIR"/. "$APP_PATH/Contents/Resources/publish/"

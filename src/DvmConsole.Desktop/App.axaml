@@ -5,14 +5,24 @@
     <ResourceDictionary>
       <ResourceDictionary.ThemeDictionaries>
         <ResourceDictionary x:Key="Light">
-          <SolidColorBrush x:Key="ShellBackgroundBrush" Color="#F1F3F5" />
+          <SolidColorBrush x:Key="ShellBackgroundBrush" Color="#F3F5F7" />
+          <SolidColorBrush x:Key="ShellHeaderBrush" Color="#E4E8EC" />
+          <SolidColorBrush x:Key="PrimaryTextBrush" Color="#18212B" />
           <SolidColorBrush x:Key="CardBackgroundBrush" Color="#FFFFFF" />
           <SolidColorBrush x:Key="MutedTextBrush" Color="#68727D" />
+          <SolidColorBrush x:Key="ButtonBackgroundBrush" Color="#FFFFFF" />
+          <SolidColorBrush x:Key="ButtonHoverBrush" Color="#DDE5ED" />
+          <SolidColorBrush x:Key="ControlBorderBrush" Color="#AAB5C0" />
         </ResourceDictionary>
         <ResourceDictionary x:Key="Dark">
-          <SolidColorBrush x:Key="ShellBackgroundBrush" Color="#1F2429" />
-          <SolidColorBrush x:Key="CardBackgroundBrush" Color="#2B3138" />
+          <SolidColorBrush x:Key="ShellBackgroundBrush" Color="#0D1116" />
+          <SolidColorBrush x:Key="ShellHeaderBrush" Color="#1A2028" />
+          <SolidColorBrush x:Key="PrimaryTextBrush" Color="#DCE3EB" />
+          <SolidColorBrush x:Key="CardBackgroundBrush" Color="#151D26" />
           <SolidColorBrush x:Key="MutedTextBrush" Color="#B7C0C9" />
+          <SolidColorBrush x:Key="ButtonBackgroundBrush" Color="#1A222D" />
+          <SolidColorBrush x:Key="ButtonHoverBrush" Color="#253446" />
+          <SolidColorBrush x:Key="ControlBorderBrush" Color="#273443" />
         </ResourceDictionary>
       </ResourceDictionary.ThemeDictionaries>
     </ResourceDictionary>

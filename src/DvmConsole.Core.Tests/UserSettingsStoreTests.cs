@@ -111,6 +111,10 @@ public sealed class UserSettingsStoreTests
                 ShowChannels = false,
                 ShowAlertTones = false,
                 LockWidgets = false,
+                ChannelWidgetPositions = new Dictionary<string, WidgetPositionSetting>
+                {
+                    [" System 1\u001FDispatch "] = new WidgetPositionSetting { X = 125, Y = 240 }
+                },
                 UserBackgroundImage = " /tmp/background.png ",
                 TogglePttMode = true,
                 GlobalPttKey = " f12 ",
@@ -207,6 +211,9 @@ public sealed class UserSettingsStoreTests
             Assert.False(loaded.ShowChannels);
             Assert.False(loaded.ShowAlertTones);
             Assert.False(loaded.LockWidgets);
+            WidgetPositionSetting widgetPosition = Assert.Single(loaded.ChannelWidgetPositions).Value;
+            Assert.Equal(125, widgetPosition.X);
+            Assert.Equal(240, widgetPosition.Y);
             Assert.Equal("/tmp/background.png", loaded.UserBackgroundImage);
             Assert.True(loaded.TogglePttMode);
             Assert.Equal("F12", loaded.GlobalPttKey);

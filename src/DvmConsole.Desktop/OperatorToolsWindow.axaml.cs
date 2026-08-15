@@ -19,8 +19,11 @@ public sealed partial class OperatorToolsWindow : Window
     {
         this.viewModel = viewModel ?? throw new ArgumentNullException(nameof(viewModel));
         InitializeComponent();
+        TabControl tabs = ToolTabs ?? this.FindControl<TabControl>("ToolTabs")
+            ?? throw new InvalidOperationException("The operator tools tab control could not be loaded.");
+        ToolTabs = tabs;
         DataContext = viewModel;
-        ToolTabs.SelectedIndex = (int)section;
+        tabs.SelectedIndex = (int)section;
     }
 
     private void InitializeComponent()

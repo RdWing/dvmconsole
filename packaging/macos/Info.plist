@@ -22,5 +22,7 @@
   <string>12.0</string>
   <key>NSHighResolutionCapable</key>
   <true/>
+  <key>NSMicrophoneUsageDescription</key>
+  <string>DVMConsole uses the selected microphone while transmitting radio audio.</string>
 </dict>
 </plist>
