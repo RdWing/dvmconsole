@@ -49,9 +49,22 @@ scripts/verify-publish.sh osx-arm64 /tmp/dvmconsole-osx-arm64
 dotnet /tmp/dvmconsole-osx-arm64/DvmConsole.Desktop.dll /full/path/to/codeplug.yml
 ```
 
-macOS may request microphone permission the first time PTT is used. These
-scripts do not create or sign an `.app` bundle; Gatekeeper signing and Apple
-notarization remain release-distribution steps.
+To create an unsigned application bundle and ZIP handoff, package the verified
+publish directory:
+
+```sh
+scripts/package-desktop.sh osx-arm64 \
+  /tmp/dvmconsole-osx-arm64 /tmp/dvmconsole-osx-arm64.zip
+```
+
+The bundle launcher uses the `DVM_DOTNET` environment variable when set, or
+the `dotnet` command on `PATH`. The bundle is intentionally unsigned; signing,
+entitlements, and notarization remain release-distribution steps.
+
+macOS may request microphone permission the first time PTT is used. The
+publisher itself produces a flat directory; the packaging helper creates only
+an unsigned `.app` bundle. Gatekeeper signing and Apple notarization remain
+release-distribution steps.
 
 ## Windows x64
 
@@ -72,6 +85,15 @@ script and verifier can also publish Windows:
 DVMVOCODER_LIBRARY=/c/full/path/to/libvocoder.dll \
   scripts/publish-desktop.sh win-x64 /c/Temp/dvmconsole-win-x64
 scripts/verify-publish.sh win-x64 /c/Temp/dvmconsole-win-x64
+```
+
+The PowerShell packaging helper creates an unsigned Windows ZIP from a
+verified publish directory:
+
+```powershell
+.\scripts\package-desktop.ps1 \
+  -PublishDirectory C:\Temp\dvmconsole-win-x64 \
+  -OutputArchive C:\Temp\dvmconsole-win-x64.zip
 ```
 
 ## Native libraries and optional media support

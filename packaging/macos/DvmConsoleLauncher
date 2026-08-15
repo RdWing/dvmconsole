@@ -1,0 +1,6 @@
+#!/bin/sh
+set -eu
+
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+DOTNET_COMMAND="${DVM_DOTNET:-dotnet}"
+exec "$DOTNET_COMMAND" "$SCRIPT_DIR/../Resources/publish/DvmConsole.Desktop.dll" "$@"

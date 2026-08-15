@@ -53,11 +53,29 @@ jobs:
         shell: bash
         run: scripts/verify-publish.sh "${{ matrix.rid }}" "$RUNNER_TEMP/dvmconsole-publish/${{ matrix.rid }}"
 
+      - name: Package unsigned macOS handoff
+        if: matrix.rid == 'osx-arm64'
+        shell: bash
+        run: scripts/package-desktop.sh "${{ matrix.rid }}" "$RUNNER_TEMP/dvmconsole-publish/${{ matrix.rid }}" "$RUNNER_TEMP/dvmconsole-publish/dvmconsole-${{ matrix.rid }}.zip"
+
+      - name: Package unsigned Windows handoff
+        if: matrix.rid == 'win-x64'
+        shell: pwsh
+        run: .\scripts\package-desktop.ps1 -PublishDirectory "$env:RUNNER_TEMP\dvmconsole-publish\${{ matrix.rid }}" -OutputArchive "$env:RUNNER_TEMP\dvmconsole-publish\dvmconsole-${{ matrix.rid }}.zip"
+
       - name: Upload unsigned publish artifact
         uses: actions/upload-artifact@v4
         with:
           name: dvmconsole-${{ matrix.rid }}
           path: ${{ runner.temp }}/dvmconsole-publish/${{ matrix.rid }}
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload unsigned package artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dvmconsole-package-${{ matrix.rid }}
+          path: ${{ runner.temp }}/dvmconsole-publish/dvmconsole-${{ matrix.rid }}.zip
           if-no-files-found: error
           retention-days: 7
 
