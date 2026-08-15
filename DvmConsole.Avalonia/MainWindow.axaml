@@ -448,6 +448,7 @@
                                             <Button Content="PTT"
                                                     Classes="ptt-button"
                                                     IsEnabled="{Binding CanChannelPtt}"
+                                                    Click="ChannelPttButton_Click"
                                                     PointerPressed="ChannelPttButton_PointerPressed"
                                                     PointerReleased="ChannelPttButton_PointerReleased"
                                                     PointerCaptureLost="ChannelPttButton_PointerCaptureLost" />
@@ -710,9 +711,15 @@
                                 <Button Classes="ptt-button"
                                         Classes.engaged="{Binding Ptt.IsEngaged}"
                                         Content="PUSH TO TALK"
+                                        Click="PttButton_Click"
                                         PointerPressed="PttButton_PointerPressed"
                                         PointerReleased="PttButton_PointerReleased"
                                         PointerCaptureLost="PttButton_PointerCaptureLost" />
+
+                                <TextBlock Classes="muted"
+                                           Text="{Binding AudioStatusMessage}"
+                                           IsVisible="{Binding AudioStatusMessage, Converter={x:Static conv:StringConverters.IsNotNullOrEmpty}}"
+                                           TextWrapping="Wrap" />
 
                                 <TextBlock Classes="muted"
                                            Text="Hotkey events are routed on the UI thread; registration attaches with the macOS backend gate." />

@@ -55,7 +55,7 @@ namespace DvmConsole.Avalonia.Services
                 return;
             }
 
-            CallFrameObserved?.Invoke(new ReceivedCallMetadata(
+            RaiseCallFrameObserved(new ReceivedCallMetadata(
                 systemName,
                 e.SrcId,
                 e.DstId,
@@ -87,7 +87,7 @@ namespace DvmConsole.Avalonia.Services
                 return;
             }
 
-            CallFrameObserved?.Invoke(new ReceivedCallMetadata(
+            RaiseCallFrameObserved(new ReceivedCallMetadata(
                 systemName,
                 e.SrcId,
                 e.DstId,
@@ -104,6 +104,35 @@ namespace DvmConsole.Avalonia.Services
             }
 
             route(FneFrameMapper.BuildP25TalkgroupKey(systemName, e.DstId), ldu, VoiceMode.P25);
+        }
+
+        /// <summary>
+        /// Invokes call-history/projection observers independently. Receive
+        /// callbacks run on fnecore's network thread; one optional observer
+        /// must never abort the audio route or prevent later observers from
+        /// seeing the same classified frame.
+        /// </summary>
+        private void RaiseCallFrameObserved(ReceivedCallMetadata metadata)
+        {
+            var handlers = CallFrameObserved?.GetInvocationList();
+            if (handlers is null)
+            {
+                return;
+            }
+
+            foreach (var handler in handlers)
+            {
+                try
+                {
+                    ((Action<ReceivedCallMetadata>)handler)(metadata);
+                }
+                catch (Exception)
+                {
+                    // Call history, receive projection and recording are
+                    // additive consumers. Their failures cannot suppress
+                    // decoded audio or destabilize fnecore's receive loop.
+                }
+            }
         }
 
         /// <summary>

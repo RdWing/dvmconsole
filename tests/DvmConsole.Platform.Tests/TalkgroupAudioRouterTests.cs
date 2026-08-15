@@ -192,6 +192,7 @@ namespace DvmConsole.Platform.Tests
             /// </summary>
             public Exception? StartExceptionOnCreate;
             public AudioWriteStatus? NextOutputWriteStatus;
+            public AudioDeviceException? OutputExceptionOnCreate;
 
             public IAudioInput CreateInput(AudioDeviceId deviceId, PcmFormat format)
             {
@@ -210,6 +211,11 @@ namespace DvmConsole.Platform.Tests
 
             public IAudioOutput CreateOutput(AudioDeviceId deviceId, PcmFormat format)
             {
+                if (OutputExceptionOnCreate is { } exception)
+                {
+                    throw exception;
+                }
+
                 var output = new FakeAudioOutput(
                     new AudioDeviceInfo(deviceId, AudioDeviceDirection.Output, "Fake Output"),
                     format)
@@ -355,7 +361,8 @@ namespace DvmConsole.Platform.Tests
             FakeVoiceFrameEncoder encoder,
             RecordingTrafficSender sender,
             ManualScheduler scheduler,
-            ManualClock? clock = null)
+            ManualClock? clock = null,
+            IDecodedPcmObserver? decodedPcmObserver = null)
             => new TalkgroupAudioRouter(
                 factory,
                 decoder,
@@ -363,7 +370,8 @@ namespace DvmConsole.Platform.Tests
                 sender,
                 () => AudioDeviceId.Default,
                 scheduler: scheduler.Schedule,
-                clock: clock is null ? null : () => clock.UtcNow);
+                clock: clock is null ? null : () => clock.UtcNow,
+                decodedPcmObserver: decodedPcmObserver);
 
         private static async Task BeginTransmitTargetsAsync(
             TalkgroupAudioRouter router,
@@ -439,6 +447,43 @@ namespace DvmConsole.Platform.Tests
             var output = Assert.Single(factory.Outputs);
             Assert.Equal(3, output.Writes.Count); // per-codeword decode granularity
             Assert.All(output.Writes, w => Assert.Equal(320, w.Length));
+        }
+
+        [Fact]
+        public void RouteVoiceFrame_OutputUnavailable_NotifiesAndStillObservesDecodedPcm()
+        {
+            var factory = new FakeAudioStreamFactory
+            {
+                OutputExceptionOnCreate = new AudioDeviceException(
+                    AudioDeviceErrorKind.OpenFailed,
+                    "AudioQueue could not start the output device (what)"),
+            };
+            var observer = new RecordingDecodedPcmObserver();
+            var router = CreateRouter(
+                factory,
+                new FakeVoiceFrameDecoder(),
+                new FakeVoiceFrameEncoder(),
+                new RecordingTrafficSender(),
+                new ManualScheduler(),
+                decodedPcmObserver: observer);
+            string? reportedKey = null;
+            AudioDeviceException? reportedException = null;
+            var notificationCount = 0;
+            router.MonitorUnavailable += (key, exception) =>
+            {
+                notificationCount++;
+                reportedKey = key;
+                reportedException = exception;
+            };
+
+            router.RouteVoiceFrame("SYS1/TG1", new byte[27], VoiceMode.Dmr);
+            router.RouteVoiceFrame("SYS1/TG1", new byte[27], VoiceMode.Dmr);
+
+            Assert.Equal("SYS1/TG1", reportedKey);
+            Assert.Same(factory.OutputExceptionOnCreate, reportedException);
+            Assert.Equal(1, notificationCount);
+            Assert.Equal(6, observer.FrameCount);
+            Assert.Empty(factory.Outputs);
         }
 
         [Fact]

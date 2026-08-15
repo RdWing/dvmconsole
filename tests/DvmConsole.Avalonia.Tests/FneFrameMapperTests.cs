@@ -43,16 +43,18 @@ namespace DvmConsole.Avalonia.Tests
         [Fact]
         public void TryExtractDmr_VoiceFrame_Assembles27AmbeBytes_WithNibbleFix()
         {
-            // 55-byte message: data[0..13] -> ambe[0..13], ambe[13] low
-            // nibble from data[19], data[20..32] -> ambe[14..26].
+            // 55-byte FNE message: WPF first slices the 33-byte DMR payload
+            // from message[20..52], then maps payload[0..13] -> ambe[0..13],
+            // ambe[13] low nibble from payload[19], and payload[20..32]
+            // -> ambe[14..26].
             var message = new byte[55];
             for (var i = 0; i < message.Length; i++)
             {
                 message[i] = (byte)(0xA0 + i);
             }
 
-            message[13] = 0x5F; // high nibble 0x5 kept, low nibble replaced
-            message[19] = 0x03; // low nibble source
+            message[33] = 0x5F; // payload[13]: high nibble kept
+            message[39] = 0x03; // payload[19]: low nibble source
 
             var e = new DMRDataReceivedEvent(
                 1, 1001, 31001, 0, CallType.GROUP, FrameType.VOICE, DMRDataType.VOICE_LC_HEADER,
@@ -65,13 +67,13 @@ namespace DvmConsole.Avalonia.Tests
             Assert.Equal(27, ambe.Length);
             for (var i = 0; i < 13; i++)
             {
-                Assert.Equal(message[i], ambe[i]);
+                Assert.Equal(message[20 + i], ambe[i]);
             }
 
             Assert.Equal(0x53, ambe[13]); // (0x5F & 0xF0) | (0x03 & 0x0F)
             for (var i = 0; i < 13; i++)
             {
-                Assert.Equal(message[20 + i], ambe[14 + i]);
+                Assert.Equal(message[40 + i], ambe[14 + i]);
             }
         }
 

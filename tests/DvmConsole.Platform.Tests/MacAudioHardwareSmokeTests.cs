@@ -15,6 +15,7 @@ namespace DvmConsole.Platform.Tests
     /// intentionally no-ops on non-macOS hosts; Linux proves only compilation and
     /// the managed contract suite, never native CoreAudio behavior.
     /// </summary>
+    [Collection("MacAudioHardware")]
     public sealed class MacAudioHardwareSmokeTests
     {
         [Fact]

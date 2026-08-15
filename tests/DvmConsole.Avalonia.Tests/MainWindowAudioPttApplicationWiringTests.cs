@@ -26,6 +26,32 @@ namespace DvmConsole.Avalonia.Tests
             Assert.Contains("TonePcmGenerator.GenerateTalkPermitTone()", source);
             Assert.Contains("router.PlayLocalPcmAsync", source);
             Assert.Contains("await router.BeginTransmitAsync", source);
+            Assert.Contains("PTT unavailable: select a primary channel or enable All Channels.", source);
+            Assert.Contains("PTT unavailable: the primary channel is receive-only.", source);
+            Assert.Contains("PTT unavailable: select a transmit-capable channel.", source);
+            Assert.Contains("PTT audio start failed: check the selected input device.", source);
+            Assert.Contains("Channel PTT failed: check the selected input device.", source);
+            Assert.Contains("talkgroupAudioRouter.MonitorUnavailable += OnMonitorUnavailable;", source);
+            Assert.Contains("Monitor audio unavailable", source);
+            Assert.Contains("private void PttButton_Click", source);
+            Assert.Contains("private async Task ChannelPttButton_ClickAsync", source);
+            Assert.DoesNotContain("HandlePointerDownAsync(slot).ConfigureAwait(false)", source);
+            Assert.DoesNotContain("HandlePointerUpAsync().ConfigureAwait(false)", source);
+        }
+
+        [Fact]
+        public void MainWindowXamlRendersAudioPttStatus()
+        {
+            var xaml = File.ReadAllText(
+                Path.Combine(
+                    Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../../")),
+                    "DvmConsole.Avalonia",
+                    "MainWindow.axaml"));
+
+            Assert.Contains("Text=\"{Binding AudioStatusMessage}\"", xaml);
+            Assert.Contains("StringConverters.IsNotNullOrEmpty", xaml);
+            Assert.Contains("Click=\"PttButton_Click\"", xaml);
+            Assert.Contains("Click=\"ChannelPttButton_Click\"", xaml);
         }
 
         private static string SourcePath()

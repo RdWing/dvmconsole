@@ -127,6 +127,15 @@ namespace DvmConsole.Avalonia
         private bool rejectDashboardPttRelease;
 
         /// <summary>
+        /// Accessibility and keyboard activation raise Button.Click without
+        /// pointer events. These latches suppress the Click that Avalonia
+        /// raises after a real pointer gesture so the fallback cannot start a
+        /// second transmit.
+        /// </summary>
+        private bool suppressDashboardPttClick;
+        private bool suppressChannelPttClick;
+
+        /// <summary>
         /// Tracks classified receive state independently of the receive
         /// thread and projects it onto the current channel slot instances.
         /// </summary>
@@ -557,6 +566,7 @@ namespace DvmConsole.Avalonia
 
                 talkgroupAudioRouter.CaptureEnded += OnCaptureEnded;
                 talkgroupAudioRouter.MonitorStreamEnded += OnMonitorStreamEnded;
+                talkgroupAudioRouter.MonitorUnavailable += OnMonitorUnavailable;
                 talkgroupAudioRouter.TalkgroupStreamEnded += OnTalkgroupStreamEnded;
 
                 toneDispatchCoordinator = new ToneDispatchRuntimeCoordinator(
@@ -2357,6 +2367,45 @@ namespace DvmConsole.Avalonia
         /// the button so release outside the card still reaches the release
         /// path; the coordinator resolves only this slot's target.
         /// </summary>
+        private void ChannelPttButton_Click(object? sender, RoutedEventArgs e)
+        {
+            if (suppressChannelPttClick)
+            {
+                suppressChannelPttClick = false;
+                return;
+            }
+
+            if (sender is Button { DataContext: ChannelSlotViewModel slot })
+            {
+                _ = ChannelPttButton_ClickAsync(slot);
+            }
+        }
+
+        private async Task ChannelPttButton_ClickAsync(ChannelSlotViewModel slot)
+        {
+            if (channelPttRuntimeCoordinator is not { } coordinator)
+            {
+                return;
+            }
+
+            try
+            {
+                await coordinator.HandlePointerDownAsync(slot);
+                await coordinator.HandlePointerUpAsync();
+            }
+            catch (Exception exception)
+            {
+                WriteApplicationException("Channel PTT click failed", exception);
+                Dispatcher.UIThread.Post(() =>
+                {
+                    if (DataContext is MainWindowViewModel viewModel)
+                    {
+                        viewModel.AudioStatusMessage = "Channel PTT failed: check the selected input device.";
+                    }
+                });
+            }
+        }
+
         private void ChannelPttButton_PointerPressed(object? sender, PointerPressedEventArgs e)
         {
             if (!PttButtonPointerInterpreter.TryGetPttPointerAction(
@@ -2368,6 +2417,7 @@ namespace DvmConsole.Avalonia
                 return;
             }
 
+            suppressChannelPttClick = true;
             e.Pointer.Capture(button);
             _ = HandleChannelPttDownAsync(slot);
         }
@@ -2383,6 +2433,7 @@ namespace DvmConsole.Avalonia
                 return;
             }
 
+            Dispatcher.UIThread.Post(() => suppressChannelPttClick = false);
             e.Pointer.Capture(null);
             _ = HandleChannelPttUpAsync();
         }
@@ -2393,7 +2444,10 @@ namespace DvmConsole.Avalonia
         /// asserted until router teardown has completed.
         /// </summary>
         private void ChannelPttButton_PointerCaptureLost(object? sender, PointerCaptureLostEventArgs e)
-            => _ = HandleChannelPttUpAsync();
+        {
+            Dispatcher.UIThread.Post(() => suppressChannelPttClick = false);
+            _ = HandleChannelPttUpAsync();
+        }
 
         private async Task HandleChannelPttDownAsync(ChannelSlotViewModel slot)
         {
@@ -2410,6 +2464,13 @@ namespace DvmConsole.Avalonia
             catch (Exception exception)
             {
                 WriteApplicationException("Channel PTT request failed", exception);
+                Dispatcher.UIThread.Post(() =>
+                {
+                    if (DataContext is MainWindowViewModel viewModel)
+                    {
+                        viewModel.AudioStatusMessage = "Channel PTT failed: check the selected input device.";
+                    }
+                });
             }
         }
 
@@ -2439,6 +2500,22 @@ namespace DvmConsole.Avalonia
         /// slice. Safe no-op for any other pointer update, null data
         /// context, or absent slice.
         /// </summary>
+        private void PttButton_Click(object? sender, RoutedEventArgs e)
+        {
+            if (suppressDashboardPttClick)
+            {
+                suppressDashboardPttClick = false;
+                return;
+            }
+
+            if (DataContext is MainWindowViewModel viewModel
+                && TryEngageDashboardPtt(viewModel)
+                && viewModel.Ptt is { ToggleMode: false } ptt)
+            {
+                ptt.PttPointerUp();
+            }
+        }
+
         private void PttButton_PointerPressed(object? sender, PointerPressedEventArgs e)
         {
             if (!PttButtonPointerInterpreter.TryGetPttPointerAction(
@@ -2448,10 +2525,61 @@ namespace DvmConsole.Avalonia
                 return;
             }
 
+            suppressDashboardPttClick = true;
+            if (sender is Button button)
+            {
+                e.Pointer.Capture(button);
+            }
+
             if (DataContext is MainWindowViewModel viewModel)
             {
-                viewModel.Ptt?.PttPointerDown();
+                TryEngageDashboardPtt(viewModel);
             }
+        }
+
+        private bool TryEngageDashboardPtt(MainWindowViewModel viewModel)
+        {
+            if (viewModel.Ptt is not { } ptt)
+            {
+                viewModel.AudioStatusMessage = "PTT unavailable: capability is not attached.";
+                return false;
+            }
+
+            if (viewModel.PrimaryChannel is { } primary && !primary.IsPttEnabled)
+            {
+                viewModel.AudioStatusMessage = "PTT unavailable: the primary channel is receive-only.";
+                return false;
+            }
+
+            if (viewModel.PrimaryChannel is null)
+            {
+                if (!ptt.AllChannels)
+                {
+                    viewModel.AudioStatusMessage =
+                        "PTT unavailable: select a primary channel or enable All Channels.";
+                    return false;
+                }
+
+                var hasSelectedTransmitChannel = false;
+                foreach (var slot in viewModel.SelectedChannels)
+                {
+                    if (slot.IsPttEnabled)
+                    {
+                        hasSelectedTransmitChannel = true;
+                        break;
+                    }
+                }
+
+                if (!hasSelectedTransmitChannel)
+                {
+                    viewModel.AudioStatusMessage =
+                        "PTT unavailable: select a transmit-capable channel.";
+                    return false;
+                }
+            }
+
+            ptt.PttPointerDown();
+            return true;
         }
 
         /// <summary>
@@ -2471,6 +2599,8 @@ namespace DvmConsole.Avalonia
                 return;
             }
 
+            Dispatcher.UIThread.Post(() => suppressDashboardPttClick = false);
+            e.Pointer.Capture(null);
             if (DataContext is MainWindowViewModel viewModel)
             {
                 viewModel.Ptt?.PttPointerUp();
@@ -2486,6 +2616,7 @@ namespace DvmConsole.Avalonia
         /// </summary>
         private void PttButton_PointerCaptureLost(object? sender, PointerCaptureLostEventArgs e)
         {
+            Dispatcher.UIThread.Post(() => suppressDashboardPttClick = false);
             if (DataContext is MainWindowViewModel viewModel)
             {
                 viewModel.Ptt?.PttPointerUp();
@@ -3166,6 +3297,12 @@ namespace DvmConsole.Avalonia
                 var targets = ResolveTransmitTargets();
                 if (targets.Count == 0)
                 {
+                    if (viewModel is not null)
+                    {
+                        viewModel.AudioStatusMessage =
+                            "PTT unavailable: select a primary channel or enable All Channels.";
+                    }
+
                     return;
                 }
 
@@ -3233,6 +3370,13 @@ namespace DvmConsole.Avalonia
                 Interlocked.Exchange(ref dashboardTransmitActive, 0);
                 tarRecordingCoordinator?.StopAllTransmit(DateTime.UtcNow);
                 WriteApplicationException("PTT audio start failed", exception);
+                Dispatcher.UIThread.Post(() =>
+                {
+                    if (DataContext is MainWindowViewModel viewModel)
+                    {
+                        viewModel.AudioStatusMessage = "PTT audio start failed: check the selected input device.";
+                    }
+                });
                 return;
             }
 
@@ -3354,6 +3498,20 @@ namespace DvmConsole.Avalonia
                 if (DataContext is MainWindowViewModel viewModel)
                 {
                     viewModel.AudioStatusMessage = "Monitor stream ended: output device lost";
+                }
+            });
+
+        /// <summary>
+        /// Shows the typed output-open failure while receive decoding and
+        /// observers continue independently of local speaker playback.
+        /// </summary>
+        private void OnMonitorUnavailable(string talkgroupKey, AudioDeviceException exception)
+            => Dispatcher.UIThread.Post(() =>
+            {
+                if (DataContext is MainWindowViewModel viewModel)
+                {
+                    viewModel.AudioStatusMessage =
+                        $"Monitor audio unavailable for {talkgroupKey}: {exception.Message}";
                 }
             });
 

@@ -137,6 +137,18 @@ namespace DvmConsole.Avalonia.Tests
         }
 
         [Fact]
+        public void ThrowingObserver_DoesNotSuppressVoiceRouting()
+        {
+            var routed = 0;
+            var glue = MakeGlue((_, _, _) => routed++);
+            glue.CallFrameObserved += _ => throw new InvalidOperationException("history observer failed");
+
+            glue.OnDmrFrame("System 1", MakeDmrVoice(111, 222, 1, 7));
+
+            Assert.Equal(1, routed);
+        }
+
+        [Fact]
         public void DmrTerminator_RaisesMetadata_IsTerminator_ButNotRouted()
         {
             ReceivedCallMetadata? seen = null;

@@ -77,9 +77,10 @@ namespace DvmConsole.Avalonia.Services
         /// <summary>
         /// Extracts the 27 AMBE bytes from a DMR voice frame, or
         /// classifies a DATA_SYNC terminator. WPF parity
-        /// MainWindow.DMR.cs:437-445: only VOICE_SYNC and VOICE frames
-        /// produce audio; ambe[0..13] = message[0..13], ambe[13] low
-        /// nibble from message[19], ambe[14..26] = message[20..32].
+        /// MainWindow.DMR.cs:292-294 and :437-445: the 33-byte DMR
+        /// payload starts at message[20]; payload[0..13] maps to
+        /// ambe[0..13], payload[19] supplies ambe[13]'s low nibble,
+        /// and payload[20..32] maps to ambe[14..26].
         /// </summary>
         /// <param name="e">The raw DMR receive event.</param>
         /// <param name="ambe">The 27-byte AMBE frame, or null for a terminator.</param>
@@ -90,20 +91,28 @@ namespace DvmConsole.Avalonia.Services
             ambe = null;
             terminator = false;
 
-            if (e is null || e.Data is null || e.Data.Length < 33)
+            if (e is null || e.Data is null)
             {
                 return false;
             }
 
             if (e.FrameType == FrameType.VOICE_SYNC || e.FrameType == FrameType.VOICE)
             {
+                const int dmrPayloadOffset = 20;
+                const int dmrPayloadLength = 33;
+                if (e.Data.Length < dmrPayloadOffset + dmrPayloadLength)
+                {
+                    return false;
+                }
+
                 // WPF parity: 27 AMBE bytes with the nibble fix
-                // (ambe[13] high nibble from message[13], low nibble
-                // from message[19]).
+                // (the raw FNE message's 33-byte DMR payload begins at
+                // message[20]; ambe[13] high nibble from payload[13],
+                // low nibble from payload[19]).
                 ambe = new byte[DmrAmbeLengthBytes];
-                Buffer.BlockCopy(e.Data, 0, ambe, 0, 14);
-                ambe[13] = (byte)((ambe[13] & 0xF0) | (e.Data[19] & 0x0F));
-                Buffer.BlockCopy(e.Data, 20, ambe, 14, 13);
+                Buffer.BlockCopy(e.Data, dmrPayloadOffset, ambe, 0, 14);
+                ambe[13] = (byte)((ambe[13] & 0xF0) | (e.Data[dmrPayloadOffset + 19] & 0x0F));
+                Buffer.BlockCopy(e.Data, dmrPayloadOffset + 20, ambe, 14, 13);
                 return true;
             }
 

@@ -75,6 +75,7 @@ namespace DvmConsole.Platform.Audio
             public MonitorAudioPipeline? Pipeline;
             public IDisposable? ReleaseHandle;
             public VoiceMode Mode;
+            public bool MonitorUnavailableNotified;
         }
 
         /// <summary>
@@ -250,6 +251,14 @@ namespace DvmConsole.Platform.Audio
         /// thread.
         /// </summary>
         public event Action? MonitorStreamEnded;
+
+        /// <summary>
+        /// Raised when a receive monitor cannot open its output device. The
+        /// decoded observer still receives PCM, so this event is diagnostic and
+        /// does not terminate receive routing. The shell marshals it to its UI
+        /// thread.
+        /// </summary>
+        public event Action<string, AudioDeviceException>? MonitorUnavailable;
 
         /// <summary>
         /// Raised when the receive monitor's idle release ends a talkgroup
@@ -512,9 +521,15 @@ namespace DvmConsole.Platform.Audio
                         // Monitor playback is optional. Decoding and the
                         // observer boundary below must still run when the
                         // selected output is unavailable; retry monitor
-                        // creation on the next received frame.
-                        WriteDiagnostic(
-                            $"Talkgroup monitor unavailable for {talkgroupKey}; observing without playback: {exception.Message}");
+                        // creation on the next received frame, but notify the
+                        // shell only once until a pipeline opens again.
+                        if (!state.MonitorUnavailableNotified)
+                        {
+                            state.MonitorUnavailableNotified = true;
+                            WriteDiagnostic(
+                                $"Talkgroup monitor unavailable for {talkgroupKey}; observing without playback: {exception.Message}");
+                            RaiseMonitorUnavailable(talkgroupKey, exception);
+                        }
                     }
 
                     if (pipeline.IsRunning)
@@ -522,6 +537,7 @@ namespace DvmConsole.Platform.Audio
                         var created = pipeline;
                         created.StreamEnded += _ => OnPipelineStreamEnded(state, created);
                         state.Pipeline = created;
+                        state.MonitorUnavailableNotified = false;
                     }
                 }
 
@@ -1504,6 +1520,19 @@ namespace DvmConsole.Platform.Audio
             }
 
             return Task.CompletedTask;
+        }
+
+        private void RaiseMonitorUnavailable(string talkgroupKey, AudioDeviceException exception)
+        {
+            try
+            {
+                MonitorUnavailable?.Invoke(talkgroupKey, exception);
+            }
+            catch (Exception notificationException)
+            {
+                WriteDiagnostic(
+                    $"Monitor-unavailable notification failed for {talkgroupKey}: {notificationException.Message}");
+            }
         }
 
         private void WriteDiagnostic(string message)
