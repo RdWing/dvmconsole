@@ -149,6 +149,31 @@ public sealed partial class OperatorToolsWindow : Window
     private void HandleClearRecordingFiltersClick(object? sender, RoutedEventArgs e)
         => viewModel.ClearRecordingFilters();
 
+    private void HandleApplyRecordingRootClick(object? sender, RoutedEventArgs e)
+        => viewModel.ApplyRecordingRoot();
+
+    private async void HandleChooseRecordingRootClick(object? sender, RoutedEventArgs e)
+    {
+        if (!StorageProvider.CanOpen)
+            return;
+
+        IReadOnlyList<IStorageFolder> folders = await StorageProvider.OpenFolderPickerAsync(
+            new FolderPickerOpenOptions
+            {
+                Title = "Choose recording folder",
+                AllowMultiple = false
+            });
+        if (folders.Count == 0)
+            return;
+
+        string? path = folders[0].TryGetLocalPath();
+        if (string.IsNullOrWhiteSpace(path))
+            return;
+
+        viewModel.RecordingRootPathText = path;
+        viewModel.ApplyRecordingRoot();
+    }
+
     private void HandleOpenRecordingClick(object? sender, RoutedEventArgs e)
     {
         if (sender is Button { Tag: CallRecordingMetadata metadata })

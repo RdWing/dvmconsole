@@ -21,7 +21,7 @@ public sealed class CallRecordingManager : IDisposable
     };
 
     private readonly object sync = new();
-    private readonly string rootPath;
+    private string rootPath;
     private readonly Action<ChannelViewModel, Exception>? faultHandler;
     private readonly Func<ChannelViewModel, uint, bool> shouldRecordSource;
     private int retentionDays;
@@ -64,7 +64,49 @@ public sealed class CallRecordingManager : IDisposable
         }
     }
 
-    public string RootPath => rootPath;
+    public string RootPath
+    {
+        get
+        {
+            lock (sync)
+                return rootPath;
+        }
+    }
+
+    public bool TrySetRootPath(string requestedPath, out string errorMessage)
+    {
+        errorMessage = string.Empty;
+        if (string.IsNullOrWhiteSpace(requestedPath))
+        {
+            errorMessage = "The recording folder cannot be empty.";
+            return false;
+        }
+
+        string normalizedPath;
+        try
+        {
+            normalizedPath = Path.GetFullPath(requestedPath.Trim());
+            Directory.CreateDirectory(normalizedPath);
+        }
+        catch (Exception exception) when (exception is ArgumentException or IOException or UnauthorizedAccessException or NotSupportedException or PathTooLongException)
+        {
+            errorMessage = $"The recording folder is unavailable: {exception.Message}";
+            return false;
+        }
+
+        lock (sync)
+        {
+            if (active.Count > 0)
+            {
+                errorMessage = "Stop active recordings before changing the recording folder.";
+                return false;
+            }
+
+            rootPath = normalizedPath;
+        }
+
+        return true;
+    }
 
     public IReadOnlyList<CallRecordingMetadata> LoadRecordings()
     {

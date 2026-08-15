@@ -67,6 +67,7 @@ public sealed class UserSettings
     public List<TonePresetSetting> TonePresets { get; set; } = [];
     public List<AlertToneSetting> AlertTones { get; set; } = [];
     public int RecordingRetentionDays { get; set; } = 7;
+    public string RecordingRootPath { get; set; } = string.Empty;
     public Dictionary<string, double> ChannelVolumes { get; set; } = new(StringComparer.OrdinalIgnoreCase);
     public Dictionary<string, string> ChannelOutputDeviceIds { get; set; } = new(StringComparer.OrdinalIgnoreCase);
     public Dictionary<string, string> WebStreamOutputDeviceIds { get; set; } = new(StringComparer.OrdinalIgnoreCase);
@@ -157,6 +158,7 @@ public sealed class UserSettingsStore
             settings.TonePresets = NormalizeTonePresets(settings.TonePresets);
             settings.AlertTones = NormalizeAlertTones(settings.AlertTones);
             settings.RecordingRetentionDays = Math.Max(0, settings.RecordingRetentionDays);
+            settings.RecordingRootPath = NormalizeRecordingRootPath(settings.RecordingRootPath);
             var channelVolumes = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
             foreach (KeyValuePair<string, double> entry in settings.ChannelVolumes ?? [])
             {
@@ -384,6 +386,7 @@ public sealed class UserSettingsStore
         settings.ChannelOutputDeviceIds = NormalizeChannelOutputDevices(settings.ChannelOutputDeviceIds);
         settings.WebStreamOutputDeviceIds = NormalizeChannelOutputDevices(settings.WebStreamOutputDeviceIds);
         settings.WebStreamVolumes = NormalizeWebStreamVolumes(settings.WebStreamVolumes);
+        settings.RecordingRootPath = NormalizeRecordingRootPath(settings.RecordingRootPath);
         settings.SelectedWebStreams = NormalizeNames(settings.SelectedWebStreams);
         settings.GlobalPttKey = NormalizeGlobalPttKey(settings.GlobalPttKey);
         settings.TransmitSelectedChannelKeys = NormalizeNames(settings.TransmitSelectedChannelKeys);
@@ -466,7 +469,8 @@ public sealed class UserSettingsStore
             sections.Add("Presets");
         }
 
-        if (settings.RecordingRetentionDays != 7 || settings.RecordingIgnoredSubscriberIds.Count > 0 ||
+        if (settings.RecordingRetentionDays != 7 || !string.IsNullOrWhiteSpace(settings.RecordingRootPath) ||
+            settings.RecordingIgnoredSubscriberIds.Count > 0 ||
             settings.PatchGroupMemberships.Count > 0 || settings.PatchGroupModes.Count > 0 ||
             settings.PatchGroupEnabledStates.Count > 0 || settings.RetainPatchStateOnStartup)
         {
@@ -549,6 +553,7 @@ public sealed class UserSettingsStore
         if ((scope & SettingsImportScope.RecordingAndPatch) != 0)
         {
             target.RecordingRetentionDays = source.RecordingRetentionDays;
+            target.RecordingRootPath = source.RecordingRootPath;
             target.RecordingIgnoredSubscriberIds = source.RecordingIgnoredSubscriberIds
                 .ToDictionary(entry => entry.Key, entry => entry.Value.ToList(), StringComparer.OrdinalIgnoreCase);
             target.PatchGroupMemberships = source.PatchGroupMemberships
@@ -723,6 +728,21 @@ public sealed class UserSettingsStore
 
     private static double NormalizeChannelVolume(double volume)
         => double.IsFinite(volume) ? Math.Clamp(volume, 0, 4) : 1.0;
+
+    private static string NormalizeRecordingRootPath(string? rootPath)
+    {
+        if (string.IsNullOrWhiteSpace(rootPath))
+            return string.Empty;
+
+        try
+        {
+            return System.IO.Path.GetFullPath(rootPath.Trim());
+        }
+        catch (Exception exception) when (exception is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            return string.Empty;
+        }
+    }
 
     private static List<ToolbarClockSetting> NormalizeToolbarClocks(IEnumerable<ToolbarClockSetting>? clocks)
     {

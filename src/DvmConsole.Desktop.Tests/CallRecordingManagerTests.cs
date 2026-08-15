@@ -175,6 +175,46 @@ public sealed class CallRecordingManagerTests
     }
 
     [Fact]
+    public void ChangesRecordingRootOnlyWhenNoStreamIsActive()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "dvmconsole-recording-tests", Guid.NewGuid().ToString("N"));
+        string nextRoot = Path.Combine(Path.GetTempPath(), "dvmconsole-recording-tests", Guid.NewGuid().ToString("N"));
+        var channel = new ChannelViewModel(new ChannelConfiguration
+        {
+            Name = "Dispatch",
+            System = "System 1",
+            Tgid = "99",
+            Mode = "analog"
+        });
+        using var manager = new CallRecordingManager(root);
+        channel.SetRecordingEnabled(true);
+
+        try
+        {
+            Assert.True(manager.TrySetRootPath(nextRoot, out string error));
+            Assert.Equal(string.Empty, error);
+            Assert.Equal(Path.GetFullPath(nextRoot), manager.RootPath);
+
+            Assert.True(channel.TryApplyTraffic("System 1", Traffic("VOICE", "VOICE", 31)));
+            manager.WriteSamples(channel, new short[] { 1, 2, 3 });
+            Assert.False(manager.TrySetRootPath(root, out error));
+            Assert.Contains("active recordings", error, StringComparison.OrdinalIgnoreCase);
+
+            manager.StopChannel(channel);
+            Assert.True(manager.TrySetRootPath(root, out error));
+            Assert.Equal(string.Empty, error);
+            Assert.Equal(Path.GetFullPath(root), manager.RootPath);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+            if (Directory.Exists(nextRoot))
+                Directory.Delete(nextRoot, recursive: true);
+        }
+    }
+
+    [Fact]
     public void DeletesCatalogRecordingAndSidecarWithinRoot()
     {
         string root = Path.Combine(Path.GetTempPath(), "dvmconsole-recording-tests", Guid.NewGuid().ToString("N"));

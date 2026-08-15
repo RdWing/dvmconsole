@@ -956,6 +956,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     private string tonePresetName = string.Empty;
     private string alertToneNameText = string.Empty;
     private string recordingRetentionDaysText = string.Empty;
+    private string recordingRootPathText = string.Empty;
     private string recordingDirectionFilter = "All";
     private string recordingProtocolFilter = "All";
     private string recordingEncryptionFilter = "All";
@@ -1023,6 +1024,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         audioInputAgcEnabled = userSettings.AudioInputAgcEnabled;
         audioInputPresetNameText = userSettings.AudioInputPresetName;
         recordingRetentionDaysText = userSettings.RecordingRetentionDays.ToString(CultureInfo.InvariantCulture);
+        recordingRootPathText = GetDefaultRecordingRoot(userSettings.RecordingRootPath);
         webStreamPlayback = new WebStreamPlaybackCoordinator(
             () => AudioBackendFactory.CreateDefault(Environment.GetEnvironmentVariable("DVM_AUDIO_LIBRARY")),
             () => userSettings.AudioOutputDeviceId,
@@ -1045,7 +1047,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             audioInputPresets.Add(new AudioInputPresetViewModel(preset));
         p25KeyRing = p25KeyResolver as P25KeyRing;
         callRecordings = new CallRecordingManager(
-            GetDefaultRecordingRoot(),
+            recordingRootPathText,
             HandleRecordingFaulted,
             userSettings.RecordingRetentionDays,
             ShouldRecordSource);
@@ -1754,6 +1756,12 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         set => SetField(ref recordingRetentionDaysText, value ?? string.Empty);
     }
 
+    public string RecordingRootPathText
+    {
+        get => recordingRootPathText;
+        set => SetField(ref recordingRootPathText, value ?? string.Empty);
+    }
+
     public string SelectionStatusText => selectedChannel is null
         ? $"Choose TX on one or more cards, then hold {GlobalPttKeyText}."
         : $"RX focus: {selectedChannel.Name}. Global PTT: {GlobalPttKeyText}.";
@@ -1926,6 +1934,24 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         RecordingChannelFilterText = string.Empty;
         RecordingTalkgroupFilterText = string.Empty;
         RecordingSubscriberFilterText = string.Empty;
+    }
+
+    public bool ApplyRecordingRoot()
+    {
+        if (!callRecordings.TrySetRootPath(RecordingRootPathText, out string errorMessage))
+        {
+            RecordingRootPathText = callRecordings.RootPath;
+            AudioStatusText = $"TAR storage unchanged: {errorMessage}";
+            return false;
+        }
+
+        userSettings.RecordingRootPath = callRecordings.RootPath;
+        PersistUserSettings();
+        callRecordings.PruneExpired();
+        RefreshRecordings();
+        RecordingRootPathText = callRecordings.RootPath;
+        AudioStatusText = $"TAR recordings now use {callRecordings.RootPath}.";
+        return true;
     }
 
     public IReadOnlyList<CallRecordingMetadata> FilteredRecordings
@@ -4449,8 +4475,11 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         PersistUserSettings();
     }
 
-    private static string GetDefaultRecordingRoot()
+    private static string GetDefaultRecordingRoot(string? configuredRootPath = null)
     {
+        if (!string.IsNullOrWhiteSpace(configuredRootPath))
+            return Path.GetFullPath(configuredRootPath.Trim());
+
         string settingsPath = UserSettingsStore.DefaultPath;
         string? settingsDirectory = Path.GetDirectoryName(settingsPath);
         return Path.Combine(settingsDirectory ?? AppContext.BaseDirectory, "Recordings");
