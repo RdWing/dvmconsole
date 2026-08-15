@@ -29,7 +29,7 @@ public sealed class DmrTxAudioSessionTests
         Assert.Equal((uint)77, packet.Stream);
         Assert.Equal(new byte[] { 0x01, 0x02, 0x03 }, packet.Payload[5..8]);
         Assert.Equal(new byte[] { 0xA0, 0xB0, 0xC0 }, packet.Payload[8..11]);
-        Assert.Equal((byte)0x10, packet.Payload[15]);
+        Assert.Equal((byte)0x90, packet.Payload[15]);
         Assert.Equal(27, DmrVoicePacketCodec.ExtractAmbe(packet.Payload).Length);
     }
 
@@ -52,8 +52,8 @@ public sealed class DmrTxAudioSessionTests
         Assert.Equal(2, packets.Count);
         Assert.Equal((ushort)41, packets[0].Sequence);
         Assert.Equal((ushort)42, packets[1].Sequence);
-        Assert.Equal((byte)0x90, packets[0].Payload[15]);
-        Assert.Equal((byte)0x81, packets[1].Payload[15]);
+        Assert.Equal((byte)0x10, packets[0].Payload[15]);
+        Assert.Equal((byte)0x01, packets[1].Payload[15]);
         Assert.Equal((byte)9, packets[0].Payload[4]);
         Assert.Equal((byte)10, packets[1].Payload[4]);
     }

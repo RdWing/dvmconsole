@@ -149,8 +149,8 @@ public static class DmrVoicePacketCodec
         packet[4] = frameSequence;
         WriteThreeBytes(packet, 5, sourceId);
         WriteThreeBytes(packet, 8, destinationId);
-        // FNE uses zero-based slots: slot 0 sets the high bit, slot 1 clears it.
-        packet[15] = (byte)(slot == 0 ? 0x80 : 0x00);
+        // FNE decodes the high bit as zero-based slot 1 (displayed as timeslot 2).
+        packet[15] = (byte)(slot == 1 ? 0x80 : 0x00);
         return packet;
     }
 
