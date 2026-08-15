@@ -125,7 +125,6 @@ public sealed class RecordingPlaybackCoordinator : IAsyncDisposable
         finally
         {
             gate.Release();
-            gate.Dispose();
         }
     }
 

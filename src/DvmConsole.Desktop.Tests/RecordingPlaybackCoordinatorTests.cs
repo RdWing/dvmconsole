@@ -113,6 +113,17 @@ public sealed class RecordingPlaybackCoordinatorTests
         }
     }
 
+    [Fact]
+    public async Task DisposeAsyncIsIdempotent()
+    {
+        await using var coordinator = new RecordingPlaybackCoordinator(
+            () => new FakeAudioBackend(),
+            () => "output");
+
+        await coordinator.DisposeAsync();
+        await coordinator.DisposeAsync();
+    }
+
     private static async Task WaitForAsync(Func<bool> condition)
     {
         for (int attempt = 0; attempt < 100 && !condition(); attempt++)
