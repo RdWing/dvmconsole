@@ -62,6 +62,8 @@ public sealed class UserSettingsStoreTests
                 ClockShowSeconds = false,
                 KeepWindowOnTop = true,
                 TogglePttMode = true,
+                GlobalPttKey = " f12 ",
+                TransmitSelectedChannelKeys = [" System 1\u001FDispatch ", "system 1\u001Fdispatch"],
                 LastDtmfDigits = " 12a# ",
                 ToneFrequencyHz = 1200,
                 ToneDurationSeconds = 2.5,
@@ -140,6 +142,8 @@ public sealed class UserSettingsStoreTests
             Assert.False(loaded.ClockShowSeconds);
             Assert.True(loaded.KeepWindowOnTop);
             Assert.True(loaded.TogglePttMode);
+            Assert.Equal("F12", loaded.GlobalPttKey);
+            Assert.Equal(["System 1\u001FDispatch"], loaded.TransmitSelectedChannelKeys);
             Assert.Equal("12A#", loaded.LastDtmfDigits);
             Assert.Equal(1200, loaded.ToneFrequencyHz);
             Assert.Equal(2.5, loaded.ToneDurationSeconds);

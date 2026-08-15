@@ -37,7 +37,7 @@ public sealed class DmrTxCallSessionTests
 
         Assert.Equal(3, packets.Count);
         Assert.Equal((ushort)1, packets[1].Sequence);
-        Assert.Equal((byte)0x81, packets[1].Payload[15]);
+        Assert.Equal((byte)0x90, packets[1].Payload[15]);
         Assert.Equal((ushort)2, packets[2].Sequence);
         Assert.Equal((byte)0xA2, packets[2].Payload[15]);
         Assert.True(session.IsEnded);

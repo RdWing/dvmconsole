@@ -13,6 +13,7 @@
     <Style Selector="Button:pointerover"><Setter Property="Background" Value="#253446" /></Style>
     <Style Selector="Button.ptt"><Setter Property="HorizontalAlignment" Value="Stretch" /><Setter Property="FontWeight" Value="SemiBold" /><Setter Property="Background" Value="#17202B" /></Style>
     <Style Selector="Button.ptt:pressed"><Setter Property="Background" Value="#0A9B48" /></Style>
+    <Style Selector="Button.tx-select"><Setter Property="Padding" Value="5,2" /><Setter Property="FontSize" Value="10" /><Setter Property="Background" Value="#242038" /></Style>
     <Style Selector="TabItem"><Setter Property="Foreground" Value="#AEB9C5" /><Setter Property="Padding" Value="6,8" /><Setter Property="FontSize" Value="16" /></Style>
     <Style Selector="TabItem:selected"><Setter Property="Foreground" Value="#F4F7FA" /></Style>
     <Style Selector="TabControl.zone-tabs TabItem"><Setter Property="FontSize" Value="13" /><Setter Property="Padding" Value="5,6" /></Style>
@@ -36,6 +37,23 @@
             <MenuItem Header="Disable receive on selected card" Click="HandleDisableSelectedReceiveClick" />
             <Separator />
             <MenuItem Header="Disable all receive" Click="HandleDisableAllReceiveClick" />
+            <Separator />
+            <MenuItem Header="Global PTT key">
+              <MenuItem Header="Space" Tag="Space" Click="HandleGlobalPttKeyClick" />
+              <MenuItem Header="F1" Tag="F1" Click="HandleGlobalPttKeyClick" />
+              <MenuItem Header="F2" Tag="F2" Click="HandleGlobalPttKeyClick" />
+              <MenuItem Header="F3" Tag="F3" Click="HandleGlobalPttKeyClick" />
+              <MenuItem Header="F4" Tag="F4" Click="HandleGlobalPttKeyClick" />
+              <MenuItem Header="F5" Tag="F5" Click="HandleGlobalPttKeyClick" />
+              <MenuItem Header="F6" Tag="F6" Click="HandleGlobalPttKeyClick" />
+              <MenuItem Header="F7" Tag="F7" Click="HandleGlobalPttKeyClick" />
+              <MenuItem Header="F8" Tag="F8" Click="HandleGlobalPttKeyClick" />
+              <MenuItem Header="F9" Tag="F9" Click="HandleGlobalPttKeyClick" />
+              <MenuItem Header="F10" Tag="F10" Click="HandleGlobalPttKeyClick" />
+              <MenuItem Header="F11" Tag="F11" Click="HandleGlobalPttKeyClick" />
+              <MenuItem Header="F12" Tag="F12" Click="HandleGlobalPttKeyClick" />
+            </MenuItem>
+            <MenuItem Header="Toggle global PTT" IsChecked="{Binding TogglePttMode, Mode=TwoWay}" ToggleType="CheckBox" />
           </MenuItem>
           <MenuItem Header="Audio">
             <MenuItem Header="Mute RX while transmitting" IsChecked="{Binding MuteRxAudioWhileTransmitting, Mode=TwoWay}" ToggleType="CheckBox" />
@@ -91,11 +109,11 @@
                             <DataTemplate x:DataType="local:ChannelViewModel">
                               <Border Width="{Binding CardWidth}" Background="{Binding CardBackgroundBrush}" BorderBrush="{Binding CardBorderBrush}" BorderThickness="1" CornerRadius="8" Padding="10" Margin="0,0,10,10" Focusable="True" PointerPressed="HandleChannelPointerPressed">
                                 <Grid RowDefinitions="Auto,Auto,Auto,Auto,Auto" RowSpacing="7">
-                                  <Grid ColumnDefinitions="*,Auto"><StackPanel Spacing="1"><TextBlock FontWeight="Bold" FontSize="14" Text="{Binding Name}" /><TextBlock Classes="eyebrow" Text="{Binding TalkgroupText}" /></StackPanel><TextBlock Grid.Column="1" Classes="eyebrow" Text="{Binding ModeText}" /></Grid>
+                                  <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="6"><StackPanel Spacing="1"><TextBlock FontWeight="Bold" FontSize="14" Text="{Binding Name}" /><TextBlock Classes="eyebrow" Text="{Binding TalkgroupText}" /></StackPanel><TextBlock Grid.Column="1" Classes="eyebrow" Text="{Binding ModeText}" /><Button Grid.Column="2" Classes="tx-select" Content="{Binding TransmitSelectionText}" IsEnabled="{Binding CanTransmit}" Click="HandleTransmitSelectionClick" /></Grid>
                                   <StackPanel Grid.Row="1" Spacing="2"><TextBlock Classes="eyebrow" Text="Last caller" /><TextBlock FontSize="11" Text="{Binding LastCallerText}" TextTrimming="CharacterEllipsis" /></StackPanel>
                                   <ProgressBar Grid.Row="2" Classes="receive-level" Height="4" Minimum="0" Maximum="100" Value="{Binding ReceiveLevel}" />
                                   <Slider Grid.Row="3" Minimum="0" Maximum="2" Value="{Binding Volume, Mode=TwoWay}" VerticalAlignment="Center" />
-                                  <Button Grid.Row="4" Classes="ptt" Content="{Binding PttButtonText}" IsEnabled="{Binding CanTransmit}" PointerPressed="HandlePttPointerPressed" PointerReleased="HandlePttPointerReleased" />
+                                  <Button Grid.Row="4" Classes="ptt" Content="{Binding PttButtonText}" IsEnabled="{Binding CanTransmit}" PointerPressed="HandlePttPointerPressed" PointerReleased="HandlePttPointerReleased" PointerCaptureLost="HandlePttPointerCaptureLost" />
                                 </Grid>
                               </Border>
                             </DataTemplate>

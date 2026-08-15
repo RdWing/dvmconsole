@@ -63,7 +63,11 @@ public sealed class DmrTxCallSession : IDisposable
             vocoder ?? throw new ArgumentNullException(nameof(vocoder)),
             send,
             sequence,
-            embeddedSequence: 1,
+            // A DMR voice LC header is followed by a voice-sync burst. The
+            // legacy transmitter starts its N sequence at zero here; starting
+            // at one produces an embedded-data burst before the FNE has seen
+            // voice sync and causes some masters to drop the call.
+            embeddedSequence: 0,
             embeddedData: embedded);
     }
 
