@@ -66,6 +66,11 @@ publisher itself produces a flat directory; the packaging helper creates only
 an unsigned `.app` bundle. Gatekeeper signing and Apple notarization remain
 release-distribution steps.
 
+The desktop also attempts OS-global Space/F-key PTT on macOS and Windows. On
+macOS, grant the packaged application Accessibility or Input Monitoring access
+if global PTT is required. If permission is unavailable, PTT falls back to
+events received while the DVM Console window is focused.
+
 ## Windows x64
 
 Run the PowerShell publisher from a PowerShell terminal:

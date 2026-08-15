@@ -6,6 +6,62 @@ namespace DvmConsole.Audio.Tests;
 public sealed class KeyboardPttSourceTests
 {
     [Fact]
+    public async Task GlobalAdapterRelaysNativeKeyTransitionsAndStopsCapture()
+    {
+        var capture = new FakeGlobalKeyboardCapture();
+        await using var ptt = new GlobalKeyboardPttSource(
+            KeyboardPttKey.F12,
+            () => capture);
+        var states = new List<bool>();
+        ptt.StateChanged += (_, pressed) => states.Add(pressed);
+
+        await ptt.StartAsync();
+        capture.Emit(KeyboardPttKey.F11, true);
+        capture.Emit(KeyboardPttKey.F12, true);
+        capture.Emit(KeyboardPttKey.F12, true);
+        capture.Emit(KeyboardPttKey.F12, false);
+        await ptt.StopAsync();
+
+        Assert.True(capture.Started);
+        Assert.True(capture.Stopped);
+        Assert.Equal(new[] { true, false }, states);
+        Assert.False(ptt.IsPressed);
+    }
+
+    [Fact]
+    public async Task GlobalAdapterSupportsToggleMode()
+    {
+        var capture = new FakeGlobalKeyboardCapture();
+        await using var ptt = new GlobalKeyboardPttSource(
+            KeyboardPttKey.Space,
+            () => capture)
+        {
+            ToggleMode = true
+        };
+        var states = new List<bool>();
+        ptt.StateChanged += (_, pressed) => states.Add(pressed);
+
+        await ptt.StartAsync();
+        capture.Emit(KeyboardPttKey.Space, true);
+        capture.Emit(KeyboardPttKey.Space, true);
+        capture.Emit(KeyboardPttKey.Space, false);
+        capture.Emit(KeyboardPttKey.Space, true);
+
+        Assert.False(ptt.IsPressed);
+        Assert.Equal(new[] { true, false }, states);
+    }
+
+    [Theory]
+    [InlineData(0x20, KeyboardPttKey.Space)]
+    [InlineData(0x70, KeyboardPttKey.F1)]
+    [InlineData(0x7B, KeyboardPttKey.F12)]
+    public void MapsWindowsVirtualKeys(uint virtualKey, KeyboardPttKey expected)
+    {
+        Assert.True(KeyboardPttKeyMapping.TryFromWindowsVirtualKey(virtualKey, out KeyboardPttKey actual));
+        Assert.Equal(expected, actual);
+    }
+
+    [Fact]
     public async Task PublishesOnlyMatchingKeyTransitions()
     {
         await using var ptt = new KeyboardPttSource(KeyboardPttKey.F12);
@@ -56,5 +112,21 @@ public sealed class KeyboardPttSourceTests
         Assert.False(ptt.IsPressed);
 
         Assert.Equal(new[] { true, false }, states);
+    }
+
+    private sealed class FakeGlobalKeyboardCapture : IGlobalKeyboardCapture
+    {
+        public event Action<KeyboardPttKey, bool>? KeyChanged;
+        public bool Started { get; private set; }
+        public bool Stopped { get; private set; }
+
+        public void Start() => Started = true;
+
+        public void Stop() => Stopped = true;
+
+        public void Dispose() => Stopped = true;
+
+        public void Emit(KeyboardPttKey key, bool isDown)
+            => KeyChanged?.Invoke(key, isDown);
     }
 }

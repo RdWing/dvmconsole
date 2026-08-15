@@ -927,6 +927,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     private readonly PatchSourceDecodeCoordinator patchSourceDecode;
     private readonly P25KeyRing? p25KeyRing;
     private KeyboardPttSource keyboardPtt;
+    private GlobalKeyboardPttSource? globalKeyboardPtt;
     private readonly SerialPttSource? serialPtt;
     private readonly CallHistoryStore callHistory = new();
     private readonly ObservableCollection<CallRecordingMetadata> recordingEntries = [];
@@ -1000,6 +1001,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     private string callHistoryFilterText = string.Empty;
     private string recordingFilterText = string.Empty;
     private bool busy;
+    private bool pttStarted;
     private ChannelViewModel? selectedChannel;
     private SystemViewModel? selectedSystem;
     private AudioDeviceOptionViewModel? selectedAudioInputDevice;
@@ -1732,6 +1734,8 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
                 return;
             userSettings.TogglePttMode = value;
             keyboardPtt.ToggleMode = value;
+            if (globalKeyboardPtt is not null)
+                globalKeyboardPtt.ToggleMode = value;
             PersistUserSettings();
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(TogglePttMode)));
         }
@@ -2365,7 +2369,12 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
 
     public async ValueTask StartKeyboardPttAsync(CancellationToken cancellationToken = default)
     {
-        await keyboardPtt.StartAsync(cancellationToken).ConfigureAwait(false);
+        if (!pttStarted)
+        {
+            await StartKeyboardPttSourceAsync(cancellationToken).ConfigureAwait(false);
+            pttStarted = true;
+        }
+
         if (serialPtt is null)
             return;
 
@@ -2380,10 +2389,37 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         }
     }
 
+    private async ValueTask StartKeyboardPttSourceAsync(CancellationToken cancellationToken)
+    {
+        if (GlobalKeyboardPttSource.IsPlatformSupported)
+        {
+            var candidate = new GlobalKeyboardPttSource(keyboardPtt.ActivationKey)
+            {
+                ToggleMode = userSettings.TogglePttMode
+            };
+            candidate.StateChanged += HandleKeyboardPttStateChanged;
+            try
+            {
+                await candidate.StartAsync(cancellationToken).ConfigureAwait(false);
+                globalKeyboardPtt = candidate;
+                TransmitStatusText = $"PTT idle; OS-global {GlobalPttKeyText} ready.";
+                return;
+            }
+            catch (Exception exception) when (exception is PlatformNotSupportedException or UnauthorizedAccessException or InvalidOperationException or TimeoutException or System.ComponentModel.Win32Exception)
+            {
+                candidate.StateChanged -= HandleKeyboardPttStateChanged;
+                await candidate.DisposeAsync().ConfigureAwait(false);
+                TransmitStatusText = $"OS-global PTT unavailable; using window keyboard fallback: {exception.Message}";
+            }
+        }
+
+        await keyboardPtt.StartAsync(cancellationToken).ConfigureAwait(false);
+    }
+
     public void SelectChannel(ChannelViewModel channel)
     {
         ArgumentNullException.ThrowIfNull(channel);
-        if (keyboardPtt.IsPressed && selectedChannel is not null && !ReferenceEquals(selectedChannel, channel))
+        if (AnyPttSourcePressed && selectedChannel is not null && !ReferenceEquals(selectedChannel, channel))
             return;
         if (ReferenceEquals(selectedChannel, channel))
             return;
@@ -2437,16 +2473,25 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
 
     public async Task SetGlobalPttKeyAsync(KeyboardPttKey key)
     {
-        if (keyboardPtt.ActivationKey == key)
+        if (keyboardPtt.ActivationKey == key &&
+            (globalKeyboardPtt is null || globalKeyboardPtt.ActivationKey == key))
             return;
-        if (keyboardPtt.IsPressed)
+        if (AnyPttSourcePressed)
             await HandleKeyboardPttStateChangedAsync(false).ConfigureAwait(false);
 
         keyboardPtt.StateChanged -= HandleKeyboardPttStateChanged;
         await keyboardPtt.DisposeAsync().ConfigureAwait(false);
+        if (globalKeyboardPtt is not null)
+        {
+            globalKeyboardPtt.StateChanged -= HandleKeyboardPttStateChanged;
+            await globalKeyboardPtt.DisposeAsync().ConfigureAwait(false);
+            globalKeyboardPtt = null;
+        }
+
         keyboardPtt = new KeyboardPttSource(key) { ToggleMode = userSettings.TogglePttMode };
         keyboardPtt.StateChanged += HandleKeyboardPttStateChanged;
-        await keyboardPtt.StartAsync().ConfigureAwait(false);
+        if (pttStarted)
+            await StartKeyboardPttSourceAsync(CancellationToken.None).ConfigureAwait(false);
         userSettings.GlobalPttKey = key.ToString();
         PersistUserSettings();
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(GlobalPttKeyText)));
@@ -2641,11 +2686,15 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         clockTimer.Tick -= HandleClockTick;
         transmitCoordinator.Faulted -= HandleTransmitFaulted;
         keyboardPtt.StateChanged -= HandleKeyboardPttStateChanged;
+        if (globalKeyboardPtt is not null)
+            globalKeyboardPtt.StateChanged -= HandleKeyboardPttStateChanged;
         if (serialPtt is not null)
             serialPtt.StateChanged -= HandleKeyboardPttStateChanged;
         await patchSourceDecode.DisposeAsync().ConfigureAwait(false);
         patchForwarding.Dispose();
         await keyboardPtt.DisposeAsync().ConfigureAwait(false);
+        if (globalKeyboardPtt is not null)
+            await globalKeyboardPtt.DisposeAsync().ConfigureAwait(false);
         if (serialPtt is not null)
             await serialPtt.DisposeAsync().ConfigureAwait(false);
         await toneTransmitCoordinator.DisposeAsync().ConfigureAwait(false);
@@ -4251,7 +4300,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     }
 
     private bool AnyPttSourcePressed
-        => keyboardPtt.IsPressed || serialPtt?.IsPressed == true;
+        => (globalKeyboardPtt?.IsPressed ?? keyboardPtt.IsPressed) || serialPtt?.IsPressed == true;
 
     private static int ReadSerialPttBaudRate()
     {

@@ -52,6 +52,16 @@ The Windows path is kept behind the same contracts through
 output. `AudioBackendFactory.CreateDefault()` selects CoreAudio on macOS and
 the NAudio backend on Windows; no Windows audio code is loaded on macOS.
 
+## Global keyboard PTT
+
+On macOS, the configured Space/F-key PTT can use a listen-only CoreGraphics
+event tap so it remains active when another application has focus. macOS must
+grant DVM Console Accessibility or Input Monitoring permission; if the event
+tap cannot be created, the desktop host reports the reason and keeps the
+focused-window keyboard PTT path available. Windows uses a low-level,
+non-swallowing keyboard hook with the same fallback behavior. Both native
+adapters release their event loop or hook during stop and window shutdown.
+
 ## Hardware PTT
 
 `SerialPttSource` provides a cross-platform adapter for USB serial
