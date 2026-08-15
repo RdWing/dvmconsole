@@ -774,6 +774,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     private string debugLogFilterText = string.Empty;
     private string debugLogSeverityFilter = "All";
     private string callHistoryFilterText = string.Empty;
+    private string recordingFilterText = string.Empty;
     private bool busy;
     private ChannelViewModel? selectedChannel;
     private SystemViewModel? selectedSystem;
@@ -1614,6 +1615,38 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(FilteredCallHistory)));
         }
     }
+
+    public string RecordingFilterText
+    {
+        get => recordingFilterText;
+        set
+        {
+            string normalized = value ?? string.Empty;
+            if (recordingFilterText == normalized)
+                return;
+            recordingFilterText = normalized;
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(RecordingFilterText)));
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(FilteredRecordings)));
+        }
+    }
+
+    public IReadOnlyList<CallRecordingMetadata> FilteredRecordings
+        => Recordings
+            .Where(metadata =>
+            {
+                if (string.IsNullOrWhiteSpace(RecordingFilterText))
+                    return true;
+
+                string filter = RecordingFilterText.Trim();
+                return metadata.SystemName.Contains(filter, StringComparison.OrdinalIgnoreCase) ||
+                    metadata.ChannelName.Contains(filter, StringComparison.OrdinalIgnoreCase) ||
+                    metadata.Protocol.Contains(filter, StringComparison.OrdinalIgnoreCase) ||
+                    metadata.FileName.Contains(filter, StringComparison.OrdinalIgnoreCase) ||
+                    metadata.RouteText.Contains(filter, StringComparison.OrdinalIgnoreCase) ||
+                    metadata.SubscriberId?.ToString(CultureInfo.InvariantCulture).Contains(filter, StringComparison.OrdinalIgnoreCase) == true ||
+                    metadata.TalkgroupId?.ToString(CultureInfo.InvariantCulture).Contains(filter, StringComparison.OrdinalIgnoreCase) == true;
+            })
+            .ToArray();
 
     public void ClearDebugLogs()
     {
@@ -2591,6 +2624,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         recordingEntries.Clear();
         foreach (CallRecordingMetadata metadata in callRecordings.LoadRecordings())
             recordingEntries.Add(metadata);
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(FilteredRecordings)));
     }
 
     private void HandleSystemTraffic(SystemViewModel system, FneTrafficFrame traffic)

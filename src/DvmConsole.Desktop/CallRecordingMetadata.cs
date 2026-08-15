@@ -45,6 +45,12 @@ public sealed class CallRecordingMetadata
         DurationMs >= 3_600_000 ? "hh\\:mm\\:ss" : "mm\\:ss");
 
     [JsonIgnore]
+    public string SummaryText => $"{SystemName} · {Protocol} · {TimestampText}";
+
+    [JsonIgnore]
+    public string DetailText => $"{RouteText} · {DurationText} · {FileName}";
+
+    [JsonIgnore]
     public string RouteText => SubscriberId is uint subscriberId
         ? $"RID {subscriberId} → TG {TalkgroupId}"
         : $"TG {TalkgroupId}";
