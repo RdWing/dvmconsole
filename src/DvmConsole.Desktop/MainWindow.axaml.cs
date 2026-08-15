@@ -84,27 +84,94 @@ public sealed partial class MainWindow : Window
 
     private async void HandleOpenCodeplugClick(object? sender, RoutedEventArgs e)
     {
-        IReadOnlyList<IStorageFile> files = await StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
+        if (!StorageProvider.CanOpen)
         {
-            Title = "Open Codeplug",
-            AllowMultiple = false,
-            FileTypeFilter =
-            [
-                new FilePickerFileType("Codeplug YAML")
-                {
-                    Patterns = ["*.yml", "*.yaml"]
-                }
-            ]
-        });
-        if (files.Count == 0 || !files[0].Path.IsFile)
+            await ShowCodeplugErrorAsync("This platform did not provide an available file picker.");
+            return;
+        }
+
+        IReadOnlyList<IStorageFile> files;
+        try
+        {
+            files = await StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
+            {
+                Title = "Open Codeplug",
+                AllowMultiple = false,
+                FileTypeFilter =
+                [
+                    new FilePickerFileType("Codeplug YAML")
+                    {
+                        Patterns = ["*.yml", "*.yaml"],
+                        MimeTypes = ["application/yaml", "text/yaml", "text/x-yaml"],
+                        AppleUniformTypeIdentifiers = ["public.yaml", "public.text"]
+                    }
+                ]
+            });
+        }
+        catch (Exception exception)
+        {
+            await ShowCodeplugErrorAsync($"The codeplug picker could not be opened.\n\n{exception.Message}");
+            return;
+        }
+
+        if (files.Count == 0)
             return;
 
+        string? path = files[0].TryGetLocalPath();
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            await ShowCodeplugErrorAsync("The selected codeplug does not have a local filesystem path.");
+            return;
+        }
+
+        var replacement = MainWindowViewModel.Load(path);
+        if (!replacement.IsCodeplugLoaded)
+        {
+            string error = replacement.StatusText;
+            await replacement.DisposeAsync();
+            await ShowCodeplugErrorAsync(error);
+            return;
+        }
+
         MainWindowViewModel previous = viewModel;
-        var replacement = MainWindowViewModel.Load(files[0].Path.LocalPath);
         viewModel = replacement;
         DataContext = replacement;
         await previous.DisposeAsync();
         await replacement.StartKeyboardPttAsync();
+    }
+
+    private async Task ShowCodeplugErrorAsync(string message)
+    {
+        var closeButton = new Button
+        {
+            Content = "OK",
+            HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Right,
+            MinWidth = 80
+        };
+        var dialog = new Window
+        {
+            Title = "Unable to open codeplug",
+            Width = 520,
+            MinHeight = 220,
+            CanResize = false,
+            WindowStartupLocation = WindowStartupLocation.CenterOwner,
+            Content = new StackPanel
+            {
+                Margin = new Thickness(20),
+                Spacing = 18,
+                Children =
+                {
+                    new TextBlock
+                    {
+                        Text = message,
+                        TextWrapping = TextWrapping.Wrap
+                    },
+                    closeButton
+                }
+            }
+        };
+        closeButton.Click += (_, _) => dialog.Close();
+        await dialog.ShowDialog(this);
     }
 
     private async void HandleEnableSelectedReceiveClick(object? sender, RoutedEventArgs e)
@@ -558,6 +625,8 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         get => statusText;
         private set => SetField(ref statusText, value);
     }
+
+    public bool IsCodeplugLoaded => Systems.Count > 0;
 
     public string AudioStatusText
     {
@@ -1123,7 +1192,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
                 zone.TabTextColor)).ToArray();
             string status = errors.Count == 0
                 ? $"Loaded {configuration.Systems.Count} system(s) and {configuration.Zones.Count} zone(s). Connections are idle until Connect is pressed."
-                : $"Configuration has {errors.Count} validation error(s).";
+                : $"Configuration has {errors.Count} validation error(s):\n• {string.Join("\n• ", errors)}";
 
             var viewModel = new MainWindowViewModel(
                 status,
@@ -1135,7 +1204,8 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
                 userSettingsStore,
                 configuration.EffectiveGroups(),
                 configuration.PatchSourceIdPassthrough);
-            viewModel.RecordLoadedCodeplug(configuration.SourcePath ?? Path.GetFullPath(configurationPath));
+            if (errors.Count == 0)
+                viewModel.RecordLoadedCodeplug(configuration.SourcePath ?? Path.GetFullPath(configurationPath));
             return viewModel;
         }
         catch (Exception exception) when (exception is IOException or InvalidDataException or FormatException or YamlDotNet.Core.YamlException)

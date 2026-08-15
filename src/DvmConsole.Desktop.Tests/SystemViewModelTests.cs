@@ -10,6 +10,32 @@ namespace DvmConsole.Desktop.Tests;
 public sealed class SystemViewModelTests
 {
     [Fact]
+    public async Task InvalidCodeplugReportsFailureWithoutReplacingLastKnownPath()
+    {
+        string settingsPath = CreateSettingsPath();
+        string invalidPath = Path.Combine(Path.GetTempPath(), $"dvmconsole-invalid-{Guid.NewGuid():N}.yml");
+        string knownPath = Path.Combine(AppContext.BaseDirectory, "TestData", "multiple-systems.yml");
+        var store = new UserSettingsStore(settingsPath);
+
+        try
+        {
+            store.Save(new UserSettings { LastCodeplugPath = knownPath });
+            await File.WriteAllTextAsync(invalidPath, "systems:\n  - name: broken\n    address: [\n");
+
+            await using MainWindowViewModel viewModel = MainWindowViewModel.Load(invalidPath, store);
+
+            Assert.False(viewModel.IsCodeplugLoaded);
+            Assert.StartsWith("Unable to load codeplug:", viewModel.StatusText);
+            Assert.Equal(knownPath, store.Load().LastCodeplugPath);
+        }
+        finally
+        {
+            File.Delete(invalidPath);
+            CleanupSettingsPath(settingsPath);
+        }
+    }
+
+    [Fact]
     public async Task LoadsVariableSystemTabsFromCodeplugSystems()
     {
         string path = Path.Combine(AppContext.BaseDirectory, "TestData", "multiple-systems.yml");
