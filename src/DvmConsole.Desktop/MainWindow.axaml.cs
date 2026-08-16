@@ -6067,7 +6067,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     }
 }
 
-public sealed class SystemViewModel : INotifyPropertyChanged, IAsyncDisposable
+public sealed class SystemViewModel : IFneTrafficEndpoint, INotifyPropertyChanged, IAsyncDisposable
 {
     private readonly FneConnection connection;
     private readonly FneConnectionOptions options;

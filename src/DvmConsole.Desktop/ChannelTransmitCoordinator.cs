@@ -5,7 +5,7 @@ using DvmConsole.Vocoder;
 
 namespace DvmConsole.Desktop;
 
-public sealed record TransmitTarget(ChannelViewModel Channel, SystemViewModel System);
+public sealed record TransmitTarget(ChannelViewModel Channel, IFneTrafficEndpoint System);
 
 // Lazily owns explicit transmit calls. Direct PTT starts one target; global
 // PTT may start several targets, all fed by one microphone capture stream.
@@ -14,6 +14,7 @@ public sealed class ChannelTransmitCoordinator : IAsyncDisposable
     private readonly IP25KeyResolver? p25KeyResolver;
     private readonly Action<ChannelViewModel, uint, uint, ReadOnlyMemory<short>>? samplesObserver;
     private readonly Func<IAudioBackend> createAudioBackend;
+    private readonly Func<IVocoderBackend> createVocoderBackend;
     private readonly SemaphoreSlim gate = new(1, 1);
     private IAudioBackend? audioBackend;
     private IVocoderBackend? vocoderBackend;
@@ -31,13 +32,16 @@ public sealed class ChannelTransmitCoordinator : IAsyncDisposable
         IP25KeyResolver? p25KeyResolver = null,
         AudioInputProcessingOptions? audioInputOptions = null,
         Action<ChannelViewModel, uint, uint, ReadOnlyMemory<short>>? samplesObserver = null,
-        Func<IAudioBackend>? createAudioBackend = null)
+        Func<IAudioBackend>? createAudioBackend = null,
+        Func<IVocoderBackend>? createVocoderBackend = null)
     {
         this.p25KeyResolver = p25KeyResolver;
         this.audioInputOptions = (audioInputOptions ?? new AudioInputProcessingOptions()).Normalize();
         this.samplesObserver = samplesObserver;
         this.createAudioBackend = createAudioBackend ??
             (() => AudioBackendFactory.CreateDefault(Environment.GetEnvironmentVariable("DVM_AUDIO_LIBRARY")));
+        this.createVocoderBackend = createVocoderBackend ??
+            (() => new SoftwareVocoderBackend(Environment.GetEnvironmentVariable("DVMVOCODER_LIBRARY")));
     }
 
     public void UpdateAudioInputOptions(AudioInputProcessingOptions options)
@@ -52,7 +56,7 @@ public sealed class ChannelTransmitCoordinator : IAsyncDisposable
         return active.FirstOrDefault(entry => ReferenceEquals(entry.Channel, channel))?.StreamId ?? 0;
     }
 
-    public Task StartAsync(ChannelViewModel channel, SystemViewModel system)
+    public Task StartAsync(ChannelViewModel channel, IFneTrafficEndpoint system)
         => StartAsync([new TransmitTarget(channel, system)]);
 
     public async Task StartAsync(IEnumerable<TransmitTarget> targets)
@@ -102,7 +106,7 @@ public sealed class ChannelTransmitCoordinator : IAsyncDisposable
                 createdSharedCapture = new SharedAudioCapture(capture);
 
                 if (requested.Any(target => target.Channel.Definition.Mode != "analog"))
-                    createdVocoderBackend = new SoftwareVocoderBackend(Environment.GetEnvironmentVariable("DVMVOCODER_LIBRARY"));
+                    createdVocoderBackend = createVocoderBackend();
 
                 foreach (TransmitTarget target in requested)
                 {

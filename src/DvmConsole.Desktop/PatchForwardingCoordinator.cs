@@ -12,7 +12,7 @@ namespace DvmConsole.Desktop;
 public sealed class PatchForwardingCoordinator : IDisposable
 {
     private readonly object sync = new();
-    private readonly IReadOnlyList<SystemViewModel> systems;
+    private readonly IReadOnlyList<IFneTrafficEndpoint> systems;
     private readonly Dictionary<string, ChannelViewModel> channels;
     private readonly IP25KeyResolver? p25KeyResolver;
     private readonly Func<IVocoderBackend> createVocoderBackend;
@@ -22,7 +22,7 @@ public sealed class PatchForwardingCoordinator : IDisposable
     private bool disposed;
 
     public PatchForwardingCoordinator(
-        IEnumerable<SystemViewModel> systems,
+        IEnumerable<IFneTrafficEndpoint> systems,
         IP25KeyResolver? p25KeyResolver = null,
         Func<IVocoderBackend>? createVocoderBackend = null)
     {
@@ -112,7 +112,7 @@ public sealed class PatchForwardingCoordinator : IDisposable
         if (disposed || !channels.TryGetValue(member.Key, out ChannelViewModel? channel))
             return 0;
 
-        SystemViewModel? system = systems.FirstOrDefault(candidate =>
+        IFneTrafficEndpoint? system = systems.FirstOrDefault(candidate =>
             candidate.Name.Equals(member.SystemName, StringComparison.OrdinalIgnoreCase));
         if (system is null || !system.IsConnected || !channel.CanTransmit || sourceId == 0)
             return 0;
@@ -206,7 +206,7 @@ public sealed class PatchForwardingCoordinator : IDisposable
 
     private uint GetFallbackSourceId(PatchMemberAddress member)
     {
-        SystemViewModel? system = systems.FirstOrDefault(candidate =>
+        IFneTrafficEndpoint? system = systems.FirstOrDefault(candidate =>
             candidate.Name.Equals(member.SystemName, StringComparison.OrdinalIgnoreCase));
         return system?.SourceId ?? 0;
     }
@@ -229,5 +229,5 @@ public sealed class PatchForwardingCoordinator : IDisposable
     private static string BuildStreamKey(PatchMemberAddress member, uint streamId)
         => $"{member.Key}|{streamId}";
 
-    private sealed record ActiveTarget(PatchTransmitSession Session, ChannelViewModel Channel, SystemViewModel System);
+    private sealed record ActiveTarget(PatchTransmitSession Session, ChannelViewModel Channel, IFneTrafficEndpoint System);
 }

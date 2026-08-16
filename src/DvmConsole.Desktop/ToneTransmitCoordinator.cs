@@ -30,7 +30,7 @@ public sealed class ToneTransmitCoordinator : IAsyncDisposable
 
     public async Task SendAsync(
         ChannelViewModel channel,
-        SystemViewModel system,
+        IFneTrafficEndpoint system,
         ReadOnlyMemory<short> samples,
         CancellationToken cancellationToken = default)
         => await SendAsync([new TransmitTarget(channel, system)], samples, cancellationToken).ConfigureAwait(false);
@@ -107,7 +107,7 @@ public sealed class ToneTransmitCoordinator : IAsyncDisposable
 
     private async Task SendCoreAsync(
         ChannelViewModel channel,
-        SystemViewModel system,
+        IFneTrafficEndpoint system,
         uint sourceId,
         ReadOnlyMemory<short> samples,
         CancellationToken cancellationToken)
