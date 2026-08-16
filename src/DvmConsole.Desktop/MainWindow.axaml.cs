@@ -6324,6 +6324,7 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
         _ => 235
     };
     public double CardContentWidth => CardWidth - 12;
+    public double AudioMeterWidth => CardWidth - (CardWidth == 180 ? 20 : 12);
     public double WidgetX => widgetX;
     public double WidgetY => widgetY;
     public IBrush CardBackgroundBrush => runtime.State switch
