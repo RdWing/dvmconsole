@@ -910,6 +910,12 @@ public sealed partial class MainWindow : Window
         }
     }
 
+    private async void HandleSystemStatusClick(object? sender, RoutedEventArgs e)
+    {
+        if (sender is Button { Tag: SystemViewModel system })
+            await viewModel.ToggleSystemConnectionAsync(system);
+    }
+
     private static void HandleAlertSelectionPointerEntered(object? sender, PointerEventArgs e)
     {
         if (sender is Button { DataContext: ChannelViewModel channel } button)
@@ -1186,6 +1192,8 @@ public sealed partial class MainWindow : Window
 
 public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposable
 {
+    internal const double ChannelWidgetSpacing = 8;
+    internal const double DefaultWidgetCanvasWidth = 900;
     private const int MaximumSubscriberCommandAuditEntries = 50;
     private readonly ChannelReceiveAudioCoordinator audioCoordinator;
     private readonly UserSettingsStore userSettingsStore;
@@ -1504,6 +1512,8 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
                 Systems.FirstOrDefault(system => selectedChannel is not null && system.Channels.Contains(selectedChannel)) ??
                 Systems.FirstOrDefault()
             : Systems.FirstOrDefault();
+        foreach (SystemViewModel system in Systems)
+            system.SetSelected(ReferenceEquals(system, selectedSystem));
 
         ConnectCommand = new AsyncRelayCommand(ConnectAsync, () => !busy && Systems.Count > 0);
         DisconnectCommand = new AsyncRelayCommand(DisconnectAsync, () => !busy && Systems.Count > 0);
@@ -1845,7 +1855,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     public void ClearCallHistory()
     {
         callHistory.Clear();
-        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(FilteredCallHistory)));
+        NotifyCallHistoryChanged();
         StatusText = "Activity history cleared.";
     }
 
@@ -1861,7 +1871,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         void Apply()
         {
             callHistory.AddEvent(DateTimeOffset.Now, source, message, ridText, tgidText);
-            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(FilteredCallHistory)));
+            NotifyCallHistoryChanged();
         }
 
         if (Dispatcher.UIThread.CheckAccess())
@@ -2234,6 +2244,18 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     public ReadOnlyObservableCollection<DebugLogEntry> DebugLogEntries { get; }
     public ReadOnlyObservableCollection<WebStreamViewModel> WebStreams { get; }
     public System.Collections.ObjectModel.ReadOnlyObservableCollection<CallHistoryEntry> CallHistory { get; }
+    public IReadOnlyList<CallHistoryEntry> ActivityCallHistory
+        => SelectedSystem is null
+            ? []
+            : CallHistory
+                .Where(entry => entry.SystemName.Equals(SelectedSystem.Name, StringComparison.OrdinalIgnoreCase))
+                .ToArray();
+    public IReadOnlyList<SubscriberCommandAuditEntry> ActivitySubscriberCommandAudit
+        => SelectedSystem is null
+            ? []
+            : SubscriberCommandAudit
+                .Where(entry => entry.SystemName.Equals(SelectedSystem.Name, StringComparison.OrdinalIgnoreCase))
+                .ToArray();
     public IReadOnlyList<CallHistoryEntry> FilteredCallHistory
         => CallHistory
             .Where(entry =>
@@ -2787,9 +2809,13 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
                 return;
 
             selectedSystem = value;
+            foreach (SystemViewModel system in Systems)
+                system.SetSelected(ReferenceEquals(system, selectedSystem));
             userSettings.LastSelectedSystemName = value?.Name;
             PersistUserSettings();
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SelectedSystem)));
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ActivityCallHistory)));
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ActivitySubscriberCommandAudit)));
             NotifyConnectionPresentationChanged();
             RaiseGeneratedAudioCanExecuteChanged();
         }
@@ -3231,6 +3257,33 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
                 exception.Message,
                 DateTimeOffset.UtcNow));
         }
+    }
+
+    public async Task ToggleSystemConnectionAsync(SystemViewModel system)
+    {
+        ArgumentNullException.ThrowIfNull(system);
+        if (!Systems.Contains(system))
+            throw new ArgumentException("The FNE is not part of this console.", nameof(system));
+
+        SelectedSystem = system;
+        if (system.IsConnectionActive)
+        {
+            StatusText = $"Stopping {system.Name}...";
+            try
+            {
+                await system.StopAsync();
+                StatusText = $"{system.Name}: disconnected.";
+            }
+            catch (Exception exception)
+            {
+                StatusText = $"{system.Name}: disconnect failed — {exception.Message}";
+            }
+            return;
+        }
+
+        StatusText = $"Starting {system.Name}...";
+        await StartSystemAsync(system);
+        await SyncPatchSourceDecodeAsync();
     }
 
     private async Task DisconnectAsync()
@@ -3821,7 +3874,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         foreach (ChannelViewModel channel in activePatchSourceChannels)
             EnqueuePatchSource(channel, traffic);
         if (callHistoryChanged)
-            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(FilteredCallHistory)));
+            NotifyCallHistoryChanged();
     }
 
     private static ProtocolEncryptionMetadata? TryResolveProtocolEncryption(FneTrafficFrame traffic)
@@ -4066,7 +4119,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
                     callerText: "Console",
                     encrypted: channel.Definition.IsEncrypted);
             }
-            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(FilteredCallHistory)));
+            NotifyCallHistoryChanged();
             TransmitStatusText = transmitCoordinator.ActiveChannels.Count == 1
                 ? $"Transmitting on {transmitCoordinator.ActiveChannel!.Name}."
                 : $"Transmitting on {transmitCoordinator.ActiveChannels.Count} selected channels.";
@@ -4125,7 +4178,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
                         DateTimeOffset.Now);
             }
             if (activeStreams.Length > 0)
-                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(FilteredCallHistory)));
+                NotifyCallHistoryChanged();
             RefreshRecordings();
             try
             {
@@ -5009,7 +5062,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
                             DateTimeOffset.Now);
                 }
                 if (activeStreams.Length > 0)
-                    Dispatcher.UIThread.Post(() => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(FilteredCallHistory))));
+                    Dispatcher.UIThread.Post(NotifyCallHistoryChanged);
                 RefreshRecordings();
             }
             try
@@ -5059,6 +5112,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             destinationId,
             succeeded,
             detail));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ActivitySubscriberCommandAudit)));
     }
 
     private static string CommandName(P25SubscriberCommand command)
@@ -5124,13 +5178,14 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             double y = 0;
             foreach (ChannelViewModel channel in zone.Channels)
             {
-                channel.SetWidgetPosition(x, y);
-                x += channel.CardWidth + 10;
-                if (x + channel.CardWidth > 900)
+                if (x > 0 && x + channel.CardWidth > DefaultWidgetCanvasWidth)
                 {
                     x = 0;
-                    y += ChannelCardHeight + 6;
+                    y += ChannelCardHeight + ChannelWidgetSpacing;
                 }
+
+                channel.SetWidgetPosition(x, y);
+                x += channel.CardWidth + ChannelWidgetSpacing;
             }
         }
     }
@@ -5170,7 +5225,13 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         if (recordingStateChanged)
             RefreshRecordings();
         if (callHistoryChanged)
-            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(FilteredCallHistory)));
+            NotifyCallHistoryChanged();
+    }
+
+    private void NotifyCallHistoryChanged()
+    {
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(FilteredCallHistory)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ActivityCallHistory)));
     }
 
     private void RefreshClock()
@@ -5538,6 +5599,7 @@ public sealed class SystemViewModel : INotifyPropertyChanged, IAsyncDisposable
     private long sentPacketBytes;
     private long nonCallDmrTerminatorCount;
     private string lastPacketText = "No media packets received.";
+    private bool isSelected;
 
     public SystemViewModel(
         FneConnectionOptions options,
@@ -5570,6 +5632,21 @@ public sealed class SystemViewModel : INotifyPropertyChanged, IAsyncDisposable
     public uint? SourceId => options.SourceId;
     public string Identity => options.Identity;
     public bool IsConnected => connection.Status.State == FneConnectionState.Connected;
+    public bool IsConnectionActive => connection.Status.State is not (FneConnectionState.Disconnected or FneConnectionState.Faulted);
+    public bool IsSelected => isSelected;
+    public string ConnectionPillText => connection.Status.State.ToString().ToUpperInvariant();
+    public string ConnectionActionText => IsConnectionActive ? $"Disconnect {Name}" : $"Start {Name}";
+    public IBrush ConnectionBrush => new SolidColorBrush(Color.Parse(connection.Status.State switch
+    {
+        FneConnectionState.Connected => "#00BE5A",
+        FneConnectionState.Starting or
+        FneConnectionState.WaitingForLogin or
+        FneConnectionState.Authenticating or
+        FneConnectionState.Configuring or
+        FneConnectionState.Stopping => "#E5A93C",
+        FneConnectionState.Faulted => "#E05252",
+        _ => "#8794A1"
+    }));
     public string SystemTabText => $"{Name} {(ConnectionStatus.StartsWith("Connected:", StringComparison.OrdinalIgnoreCase) ? "●" : "○")}";
     public string PacketDiagnosticsText
         => $"RX {receivedPacketCount:N0} packets / {receivedPacketBytes:N0} bytes · TX {sentPacketCount:N0} packets / {sentPacketBytes:N0} bytes" +
@@ -5587,8 +5664,20 @@ public sealed class SystemViewModel : INotifyPropertyChanged, IAsyncDisposable
             connectionStatus = value;
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ConnectionStatus)));
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsConnected)));
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsConnectionActive)));
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ConnectionPillText)));
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ConnectionActionText)));
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ConnectionBrush)));
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SystemTabText)));
         }
+    }
+
+    internal void SetSelected(bool selected)
+    {
+        if (isSelected == selected)
+            return;
+        isSelected = selected;
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsSelected)));
     }
 
     public async Task StartAsync(CancellationToken cancellationToken = default)

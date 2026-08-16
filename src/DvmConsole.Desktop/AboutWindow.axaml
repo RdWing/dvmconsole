@@ -16,7 +16,6 @@
     </StackPanel>
     <Border Grid.Row="1" Background="{DynamicResource CardBackgroundBrush}" BorderBrush="{DynamicResource ControlBorderBrush}" BorderThickness="1" CornerRadius="7" Padding="12">
       <StackPanel Spacing="7">
-        <TextBlock Text="Author: RdWing" FontWeight="SemiBold" />
         <TextBlock Text="Copyright © 2025–2026 RdWing." TextWrapping="Wrap" />
         <TextBlock Text="Licensed under the GNU Affero General Public License v3.0 (AGPL-3.0-only). Distributed without warranty." TextWrapping="Wrap" />
       </StackPanel>

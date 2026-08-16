@@ -183,6 +183,76 @@ public sealed class SystemViewModelTests
     }
 
     [Fact]
+    public async Task ActivitySidebarTracksOnlyTheSelectedSystem()
+    {
+        string path = Path.Combine(AppContext.BaseDirectory, "TestData", "multiple-systems.yml");
+        string settingsPath = CreateSettingsPath();
+
+        try
+        {
+            await using MainWindowViewModel viewModel = MainWindowViewModel.Load(
+                path,
+                new UserSettingsStore(settingsPath));
+            SystemViewModel alpha = viewModel.Systems[0];
+            SystemViewModel beta = viewModel.Systems[1];
+
+            Assert.Same(alpha, viewModel.SelectedSystem);
+            Assert.True(alpha.IsSelected);
+            Assert.False(beta.IsSelected);
+
+            viewModel.ProcessTraffic(alpha, new FneTrafficFrame(
+                FneTrafficProtocol.Dmr,
+                1,
+                42,
+                101,
+                0,
+                "GROUP",
+                "VOICE",
+                "VOICE",
+                1,
+                701,
+                new byte[DmrVoicePacketCodec.PacketBytes]));
+            viewModel.ProcessTraffic(beta, new FneTrafficFrame(
+                FneTrafficProtocol.P25,
+                2,
+                43,
+                201,
+                null,
+                "GROUP",
+                "VOICE",
+                "LDU1",
+                1,
+                702,
+                P25DfsiFrameCodec.CreateLdu1Payload(43, 201, new byte[P25DfsiFrameCodec.ImbeBytes])));
+
+            Assert.False(viewModel.TrySendSubscriberCommand(
+                alpha,
+                P25SubscriberCommand.CallAlert,
+                "2001",
+                out _));
+            Assert.False(viewModel.TrySendSubscriberCommand(
+                beta,
+                P25SubscriberCommand.CallAlert,
+                "2002",
+                out _));
+
+            Assert.Single(viewModel.ActivityCallHistory, entry => entry.SystemName == "Alpha");
+            Assert.Single(viewModel.ActivitySubscriberCommandAudit, entry => entry.SystemName == "Alpha");
+
+            viewModel.SelectedSystem = beta;
+
+            Assert.False(alpha.IsSelected);
+            Assert.True(beta.IsSelected);
+            Assert.Single(viewModel.ActivityCallHistory, entry => entry.SystemName == "Beta");
+            Assert.Single(viewModel.ActivitySubscriberCommandAudit, entry => entry.SystemName == "Beta");
+        }
+        finally
+        {
+            CleanupSettingsPath(settingsPath);
+        }
+    }
+
+    [Fact]
     public async Task TogglesAllTransmitCapableChannelsInTheSelectedSystem()
     {
         string path = Path.Combine(AppContext.BaseDirectory, "TestData", "multiple-systems.yml");
@@ -877,6 +947,55 @@ public sealed class SystemViewModelTests
             Assert.Empty(store.Load().ChannelWidgetPositions);
             Assert.Equal(0, restoredChannel.WidgetX);
             Assert.Equal(0, restoredChannel.WidgetY);
+        }
+        finally
+        {
+            CleanupSettingsPath(settingsPath);
+        }
+    }
+
+    [Fact]
+    public async Task DefaultWidgetLayoutUsesOneGapAndWrapsBeforeMixedWidthCardsOverflow()
+    {
+        string codeplugPath = Path.Combine(AppContext.BaseDirectory, "TestData", "mixed-card-sizes.yml");
+        string settingsPath = CreateSettingsPath();
+
+        try
+        {
+            await using MainWindowViewModel viewModel = MainWindowViewModel.Load(
+                codeplugPath,
+                new UserSettingsStore(settingsPath));
+            IReadOnlyList<ChannelViewModel> channels = viewModel.Zones[0].Channels;
+
+            Assert.Equal(13, channels.Count);
+            Assert.Equal(0, channels[0].WidgetX);
+            Assert.Equal(channels[0].CardWidth + MainWindowViewModel.ChannelWidgetSpacing, channels[1].WidgetX);
+            Assert.Equal(channels[1].WidgetX + channels[1].CardWidth + MainWindowViewModel.ChannelWidgetSpacing, channels[2].WidgetX);
+            Assert.Equal(0, channels[3].WidgetX);
+            Assert.Equal(viewModel.ChannelCardHeight + MainWindowViewModel.ChannelWidgetSpacing, channels[3].WidgetY);
+            Assert.Equal(channels[3].CardWidth + MainWindowViewModel.ChannelWidgetSpacing, channels[4].WidgetX);
+
+            foreach (IGrouping<double, ChannelViewModel> row in channels.GroupBy(channel => channel.WidgetY))
+            {
+                ChannelViewModel[] rowChannels = row.OrderBy(channel => channel.WidgetX).ToArray();
+                Assert.All(rowChannels, channel =>
+                    Assert.True(channel.WidgetX + channel.CardWidth <= MainWindowViewModel.DefaultWidgetCanvasWidth));
+                for (int index = 1; index < rowChannels.Length; index++)
+                {
+                    Assert.Equal(
+                        rowChannels[index - 1].WidgetX + rowChannels[index - 1].CardWidth + MainWindowViewModel.ChannelWidgetSpacing,
+                        rowChannels[index].WidgetX);
+                }
+            }
+
+            double[] rowOffsets = channels.Select(channel => channel.WidgetY).Distinct().Order().ToArray();
+            for (int index = 1; index < rowOffsets.Length; index++)
+                Assert.Equal(viewModel.ChannelCardHeight + MainWindowViewModel.ChannelWidgetSpacing, rowOffsets[index] - rowOffsets[index - 1]);
+
+            viewModel.ResetLayout();
+
+            Assert.Equal(0, channels[3].WidgetX);
+            Assert.Equal(viewModel.ChannelCardHeight + MainWindowViewModel.ChannelWidgetSpacing, channels[3].WidgetY);
         }
         finally
         {

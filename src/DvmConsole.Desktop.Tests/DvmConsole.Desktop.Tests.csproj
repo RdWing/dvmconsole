@@ -14,6 +14,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <None Include="TestData/mixed-card-sizes.yml" CopyToOutputDirectory="PreserveNewest" />
     <None Include="TestData/multiple-systems.yml" CopyToOutputDirectory="PreserveNewest" />
     <ProjectReference Include="../DvmConsole.Desktop/DvmConsole.Desktop.csproj" />
     <ProjectReference Include="../DvmConsole.FneClient/DvmConsole.FneClient.csproj" />

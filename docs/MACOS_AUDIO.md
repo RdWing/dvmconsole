@@ -63,6 +63,48 @@ The Windows path is kept behind the same contracts through
 output. `AudioBackendFactory.CreateDefault()` selects CoreAudio on macOS and
 the NAudio backend on Windows; no Windows audio code is loaded on macOS.
 
+## Apple API and real-time design audit
+
+The native macOS shim follows Apple's Audio Component loading model. It finds
+Apple's HAL Output Audio Unit with `AudioComponentFindNext`, creates it with
+`AudioComponentInstanceNew`, configures its stream format and render callback,
+and starts it with `AudioOutputUnitStart`. This is an Audio Unit v2 system-I/O
+host, not a third-party plug-in host. AUv3 migration is therefore not required
+for the current macOS hardware path; if the console later hosts effects or
+other third-party Audio Units, use `AVAudioUnitComponentManager` and
+`AVAudioUnit.instantiate` so AUv2 and AUv3 components share Apple's bridging
+layer.
+
+Both hardware callbacks are kept bounded and real-time-safe: their storage is
+allocated before the Audio Unit starts, the callbacks use only the preallocated
+PCM buffer and lock-free ring, and managed decoding, rate conversion, network
+I/O, logging, and UI work remain off the render thread. The framework-provided
+render thread is automatically joined to the device's audio workgroup; the shim
+does not create an auxiliary real-time thread, so it does not need to join one
+manually.
+
+The macOS backend is intentionally not treated as an iOS/iPadOS backend. A
+mobile host needs an `AVAudioSession` configured for simultaneous input/output,
+record permission with `NSMicrophoneUsageDescription`, and interruption, route
+change, and media-services-reset handling. For two-way dispatch voice, start
+with the `playAndRecord` category and evaluate `voiceChat` plus either the Voice
+Processing I/O Audio Unit or `AVAudioEngine.setVoiceProcessingEnabled`; those
+paths provide system echo cancellation and automatic gain control. Whether
+voice processing should be enabled must remain an operator/product choice,
+because the console already offers its own input gain, AGC, and EQ and must not
+apply both processing chains accidentally.
+
+Apple references used for this audit:
+
+- [Audio Components](https://developer.apple.com/documentation/audiotoolbox/audio-components)
+- [Migrating an Audio Unit host to AUv3](https://developer.apple.com/documentation/audiotoolbox/migrating-your-audio-unit-host-to-the-auv3-api)
+- [Understanding Audio Workgroups](https://developer.apple.com/documentation/audiotoolbox/understanding-audio-workgroups)
+- [AVAudioSession](https://developer.apple.com/documentation/avfaudio/avaudiosession)
+- [`playAndRecord`](https://developer.apple.com/documentation/avfaudio/avaudiosession/category-swift.struct/playandrecord)
+- [`voiceChat`](https://developer.apple.com/documentation/avfaudio/avaudiosession/mode-swift.struct/voicechat)
+- [Requesting record permission](https://developer.apple.com/documentation/avfaudio/avaudioapplication/requestrecordpermission(completionhandler:))
+- [Responding to audio route changes](https://developer.apple.com/documentation/avfaudio/responding-to-audio-route-changes)
+
 ## Global keyboard PTT
 
 On macOS, the configured Space/F-key PTT can use a listen-only CoreGraphics

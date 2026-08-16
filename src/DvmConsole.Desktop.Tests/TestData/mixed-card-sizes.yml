@@ -1,0 +1,71 @@
+systems:
+  - name: "Layout"
+    identity: "Layout Test"
+    address: "127.0.0.1"
+    port: 62031
+    peerId: 1000001
+    rid: "1001"
+
+zones:
+  - name: "Mixed"
+    channels:
+      - name: "Small One"
+        system: "Layout"
+        tgid: "101"
+        mode: "p25"
+        card_size: small
+      - name: "Normal One"
+        system: "Layout"
+        tgid: "102"
+        mode: "p25"
+        card_size: normal
+      - name: "Large One"
+        system: "Layout"
+        tgid: "103"
+        mode: "p25"
+        card_size: large
+      - name: "Normal Two"
+        system: "Layout"
+        tgid: "104"
+        mode: "p25"
+        card_size: normal
+      - name: "Small Two"
+        system: "Layout"
+        tgid: "105"
+        mode: "p25"
+        card_size: small
+      - name: "Normal Three"
+        system: "Layout"
+        tgid: "106"
+        mode: "p25"
+      - name: "Normal Four"
+        system: "Layout"
+        tgid: "107"
+        mode: "p25"
+      - name: "Large Two"
+        system: "Layout"
+        tgid: "108"
+        mode: "p25"
+        card_size: large
+      - name: "Small Three"
+        system: "Layout"
+        tgid: "109"
+        mode: "p25"
+        card_size: small
+      - name: "Normal Five"
+        system: "Layout"
+        tgid: "110"
+        mode: "p25"
+      - name: "Small Four"
+        system: "Layout"
+        tgid: "111"
+        mode: "p25"
+        card_size: small
+      - name: "Normal Six"
+        system: "Layout"
+        tgid: "112"
+        mode: "p25"
+      - name: "Normal Seven"
+        system: "Layout"
+        tgid: "113"
+        mode: "p25"

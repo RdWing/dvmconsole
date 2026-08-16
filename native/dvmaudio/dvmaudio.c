@@ -15,6 +15,8 @@ struct DvmAudioStream {
     uint32_t sample_rate;
     uint32_t ring_capacity;
     int16_t *ring;
+    uint32_t input_buffer_capacity;
+    int16_t *input_buffer;
     _Atomic uint32_t read_index;
     _Atomic uint32_t write_index;
     _Atomic int32_t running;
@@ -188,32 +190,43 @@ int32_t dvm_audio_get_device(
     return -4;
 }
 
-static void ring_push(DvmAudioStream *stream, const int16_t *samples, uint32_t count)
+static uint32_t ring_push(DvmAudioStream *stream, const int16_t *samples, uint32_t count)
 {
-    for (uint32_t index = 0; index < count; index++) {
-        uint32_t write = atomic_load_explicit(&stream->write_index, memory_order_relaxed);
-        uint32_t next = (write + 1) % stream->ring_capacity;
-        uint32_t read = atomic_load_explicit(&stream->read_index, memory_order_acquire);
-        if (next == read) {
-            read = (read + 1) % stream->ring_capacity;
-            atomic_store_explicit(&stream->read_index, read, memory_order_release);
-        }
-        stream->ring[write] = samples[index];
-        atomic_store_explicit(&stream->write_index, next, memory_order_release);
-    }
+    uint32_t write = atomic_load_explicit(&stream->write_index, memory_order_relaxed);
+    uint32_t read = atomic_load_explicit(&stream->read_index, memory_order_acquire);
+    uint32_t available = read > write
+        ? read - write - 1
+        : stream->ring_capacity - write + read - 1;
+    uint32_t accepted = count < available ? count : available;
+    uint32_t first = accepted < stream->ring_capacity - write
+        ? accepted
+        : stream->ring_capacity - write;
+    memcpy(stream->ring + write, samples, first * sizeof(int16_t));
+    memcpy(stream->ring, samples + first, (accepted - first) * sizeof(int16_t));
+    atomic_store_explicit(
+        &stream->write_index,
+        (write + accepted) % stream->ring_capacity,
+        memory_order_release);
+    return accepted;
 }
 
 static uint32_t ring_pop(DvmAudioStream *stream, int16_t *samples, uint32_t capacity)
 {
-    uint32_t count = 0;
-    while (count < capacity) {
-        uint32_t read = atomic_load_explicit(&stream->read_index, memory_order_relaxed);
-        uint32_t write = atomic_load_explicit(&stream->write_index, memory_order_acquire);
-        if (read == write)
-            break;
-        samples[count++] = stream->ring[read];
-        atomic_store_explicit(&stream->read_index, (read + 1) % stream->ring_capacity, memory_order_release);
-    }
+    uint32_t read = atomic_load_explicit(&stream->read_index, memory_order_relaxed);
+    uint32_t write = atomic_load_explicit(&stream->write_index, memory_order_acquire);
+    uint32_t available = write >= read
+        ? write - read
+        : stream->ring_capacity - read + write;
+    uint32_t count = capacity < available ? capacity : available;
+    uint32_t first = count < stream->ring_capacity - read
+        ? count
+        : stream->ring_capacity - read;
+    memcpy(samples, stream->ring + read, first * sizeof(int16_t));
+    memcpy(samples + first, stream->ring, (count - first) * sizeof(int16_t));
+    atomic_store_explicit(
+        &stream->read_index,
+        (read + count) % stream->ring_capacity,
+        memory_order_release);
     return count;
 }
 
@@ -241,8 +254,7 @@ static OSStatus input_callback(
     if (stream == NULL || !atomic_load_explicit(&stream->running, memory_order_acquire))
         return noErr;
 
-    int16_t *samples = (int16_t *)malloc(number_frames * sizeof(int16_t));
-    if (samples == NULL)
+    if (stream->input_buffer == NULL || number_frames > stream->input_buffer_capacity)
         return kAudio_ParamError;
 
     AudioBufferList buffer_list;
@@ -250,12 +262,11 @@ static OSStatus input_callback(
     buffer_list.mNumberBuffers = 1;
     buffer_list.mBuffers[0].mNumberChannels = 1;
     buffer_list.mBuffers[0].mDataByteSize = number_frames * sizeof(int16_t);
-    buffer_list.mBuffers[0].mData = samples;
+    buffer_list.mBuffers[0].mData = stream->input_buffer;
 
     OSStatus status = AudioUnitRender(stream->unit, action_flags, timestamp, bus_number, number_frames, &buffer_list);
     if (status == noErr)
-        ring_push(stream, samples, number_frames);
-    free(samples);
+        ring_push(stream, stream->input_buffer, number_frames);
     return status;
 }
 
@@ -380,6 +391,24 @@ DvmAudioStream *dvm_audio_stream_create(
         goto fail;
     stream->sample_rate = (uint32_t)format.mSampleRate;
 
+    if (stream->input) {
+        UInt32 maximum_frames = 0;
+        UInt32 maximum_frames_size = sizeof(maximum_frames);
+        if (AudioUnitGetProperty(
+                stream->unit,
+                kAudioUnitProperty_MaximumFramesPerSlice,
+                kAudioUnitScope_Global,
+                0,
+                &maximum_frames,
+                &maximum_frames_size) != noErr ||
+            maximum_frames == 0)
+            goto fail;
+        stream->input_buffer_capacity = maximum_frames;
+        stream->input_buffer = (int16_t *)calloc(maximum_frames, sizeof(int16_t));
+        if (stream->input_buffer == NULL)
+            goto fail;
+    }
+
     AURenderCallbackStruct callback = {
         stream->input ? input_callback : output_callback,
         stream};
@@ -401,6 +430,7 @@ fail:
         AudioUnitUninitialize(stream->unit);
         AudioComponentInstanceDispose(stream->unit);
     }
+    free(stream->input_buffer);
     free(stream->ring);
     free(stream);
     return NULL;
@@ -450,8 +480,7 @@ int32_t dvm_audio_stream_write(DvmAudioStream *stream, const int16_t *samples, u
 {
     if (stream == NULL || samples == NULL)
         return -1;
-    ring_push(stream, samples, count);
-    return (int32_t)count;
+    return (int32_t)ring_push(stream, samples, count);
 }
 
 uint32_t dvm_audio_stream_queued_samples(DvmAudioStream *stream)
@@ -468,6 +497,7 @@ void dvm_audio_stream_destroy(DvmAudioStream *stream)
     dvm_audio_stream_stop(stream);
     if (stream->unit != NULL)
         AudioComponentInstanceDispose(stream->unit);
+    free(stream->input_buffer);
     free(stream->ring);
     free(stream);
 }
