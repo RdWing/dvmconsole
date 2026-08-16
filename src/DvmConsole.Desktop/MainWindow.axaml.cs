@@ -31,6 +31,7 @@ namespace DvmConsole.Desktop;
 public sealed partial class MainWindow : Window
 {
     private MainWindowViewModel viewModel;
+    private readonly ViewModelPropertySubscription<MainWindowViewModel> viewModelPropertySubscription;
     private readonly PressAndHoldPttController cardPtt;
     private CallHistoryWindow? callHistoryWindow;
     private OperatorToolsWindow? operatorToolsWindow;
@@ -65,7 +66,9 @@ public sealed partial class MainWindow : Window
             channel => viewModel.StartChannelTransmitAsync(channel),
             channel => viewModel.StopChannelTransmitAsync(channel));
         DataContext = viewModel;
-        viewModel.PropertyChanged += HandleViewModelPropertyChanged;
+        viewModelPropertySubscription = new ViewModelPropertySubscription<MainWindowViewModel>(
+            viewModel,
+            HandleViewModelPropertyChanged);
         AddHandler(InputElement.KeyDownEvent, HandleKeyDown, RoutingStrategies.Tunnel);
         AddHandler(InputElement.KeyUpEvent, HandleKeyUp, RoutingStrategies.Tunnel);
         AddHandler(InputElement.PointerPressedEvent, HandlePttPointerPressed, RoutingStrategies.Tunnel, true);
@@ -86,7 +89,7 @@ public sealed partial class MainWindow : Window
         {
             try
             {
-                viewModel.PropertyChanged -= HandleViewModelPropertyChanged;
+                viewModelPropertySubscription.Dispose();
                 callHistoryWindow?.Close();
                 operatorToolsWindow?.Close();
                 documentationWindow?.Close();
@@ -569,10 +572,9 @@ public sealed partial class MainWindow : Window
         // them before disposing the old model rather than leaving a visible
         // window bound to stale settings, history, or PTT state.
         CloseModelessViewModelWindows();
-        previous.PropertyChanged -= HandleViewModelPropertyChanged;
         viewModel = replacement;
         DataContext = replacement;
-        replacement.PropertyChanged += HandleViewModelPropertyChanged;
+        viewModelPropertySubscription.Rebind(replacement);
         RefreshRecentCodeplugMenu();
         RefreshNamedSettingsProfileMenus();
         await previous.DisposeAsync();
