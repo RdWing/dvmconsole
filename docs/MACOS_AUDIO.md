@@ -124,7 +124,11 @@ receive. The adapter releases PTT on EOF, stop, or a read fault. Its stream
 factory overload is available for host-specific serial transports and tests;
 the direct constructor uses `System.IO.Ports` on both macOS and Windows.
 
-The Avalonia host enables the adapter when `DVM_PTT_SERIAL_PORT` is set and
-accepts an optional positive `DVM_PTT_SERIAL_BAUD` value (default `9600`).
+Configure the adapter from **Settings → Global PTT settings… → PTT** in Console
+Tools. The device list can be refreshed while the application is running; the
+selected port, baud rate, and enabled state are persisted in the user settings,
+and Apply safely releases and replaces the previous source. `DVM_PTT_SERIAL_PORT`
+and the optional `DVM_PTT_SERIAL_BAUD` (default `9600`) remain backward-compatible
+fallbacks only when no serial device has been saved through the GUI.
 Keyboard and serial sources are combined fail-safe: releasing either source
 does not stop an active call while the other source remains pressed.

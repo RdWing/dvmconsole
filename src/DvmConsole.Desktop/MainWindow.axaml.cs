@@ -1195,6 +1195,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     internal const double ChannelWidgetSpacing = 8;
     internal const double DefaultWidgetCanvasWidth = 900;
     private const int MaximumSubscriberCommandAuditEntries = 50;
+    private static readonly int[] SerialPttBaudRateOptions = [1_200, 2_400, 4_800, 9_600, 19_200, 38_400, 57_600, 115_200];
     private readonly ChannelReceiveAudioCoordinator audioCoordinator;
     private readonly UserSettingsStore userSettingsStore;
     private readonly UserSettings userSettings;
@@ -1207,7 +1208,11 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     private readonly P25KeyRing? p25KeyRing;
     private KeyboardPttSource keyboardPtt;
     private GlobalKeyboardPttSource? globalKeyboardPtt;
-    private readonly SerialPttSource? serialPtt;
+    private IPttSource? serialPtt;
+    private readonly Func<string, int, IPttSource> serialPttFactory;
+    private readonly Func<IReadOnlyList<string>> serialPortProvider;
+    private readonly SemaphoreSlim serialPttChangeLock = new(1, 1);
+    private readonly ObservableCollection<string> serialPttPortOptions = [];
     private readonly CallHistoryStore callHistory = new();
     private readonly ObservableCollection<CallRecordingMetadata> recordingEntries = [];
     private readonly ObservableCollection<DtmfPresetViewModel> dtmfPresets = [];
@@ -1286,6 +1291,10 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     private string recordingFilterText = string.Empty;
     private bool busy;
     private bool pttStarted;
+    private bool serialPttEnabled;
+    private string serialPttPortName = string.Empty;
+    private int serialPttBaudRate = 9_600;
+    private string serialPttStatusText = "Serial PTT is disabled.";
     private ChannelViewModel? selectedChannel;
     private SystemViewModel? selectedSystem;
     private AudioDeviceOptionViewModel? selectedAudioInputDevice;
@@ -1299,12 +1308,16 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         IP25KeyResolver? p25KeyResolver = null,
         UserSettingsStore? userSettingsStore = null,
         IEnumerable<GroupConfiguration>? groupDefinitions = null,
-        bool patchSourceIdPassthrough = false)
+        bool patchSourceIdPassthrough = false,
+        Func<IReadOnlyList<string>>? serialPortProvider = null,
+        Func<string, int, IPttSource>? serialPttFactory = null)
     {
         this.statusText = statusText;
         codeplugDiagnosticsText = statusText;
         this.userSettingsStore = userSettingsStore ?? new UserSettingsStore(UserSettingsStore.DefaultPath);
         userSettings = this.userSettingsStore.Load();
+        this.serialPortProvider = serialPortProvider ?? SerialPttSource.GetAvailablePortNames;
+        this.serialPttFactory = serialPttFactory ?? ((portName, baudRate) => new SerialPttSource(portName, baudRate));
         uiScaleTransform = new ScaleTransform
         {
             ScaleX = userSettings.UiScale,
@@ -1318,12 +1331,21 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         {
             ToggleMode = userSettings.TogglePttMode
         };
-        string? serialPttPort = Environment.GetEnvironmentVariable("DVM_PTT_SERIAL_PORT");
-        if (!string.IsNullOrWhiteSpace(serialPttPort))
+        serialPttEnabled = userSettings.SerialPttEnabled;
+        serialPttPortName = userSettings.SerialPttPortName;
+        serialPttBaudRate = userSettings.SerialPttBaudRate;
+        string? environmentSerialPort = Environment.GetEnvironmentVariable("DVM_PTT_SERIAL_PORT");
+        if (serialPttPortName.Length == 0 && !string.IsNullOrWhiteSpace(environmentSerialPort))
         {
-            serialPtt = new SerialPttSource(
-                serialPttPort.Trim(),
-                ReadSerialPttBaudRate());
+            serialPttEnabled = true;
+            serialPttPortName = environmentSerialPort.Trim();
+            serialPttBaudRate = ReadSerialPttBaudRate();
+        }
+        RefreshSerialPttDevices();
+        if (serialPttEnabled && serialPttPortName.Length > 0)
+        {
+            serialPtt = this.serialPttFactory(serialPttPortName, serialPttBaudRate);
+            serialPttStatusText = $"Configured for {serialPttPortName} at {serialPttBaudRate:N0} baud.";
         }
         clockText = FormatClock(DateTime.Now, userSettings.ClockUse24HourTime, userSettings.ClockShowSeconds);
         clockTimer = new DispatcherTimer
@@ -2160,6 +2182,143 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
 
     public string GlobalPttKeyText => keyboardPtt.ActivationKey.ToString();
 
+    public bool SerialPttEnabled
+    {
+        get => serialPttEnabled;
+        set => SetField(ref serialPttEnabled, value);
+    }
+
+    public string SerialPttPortName
+    {
+        get => serialPttPortName;
+        set => SetField(ref serialPttPortName, value?.Trim() ?? string.Empty);
+    }
+
+    public int SerialPttBaudRate
+    {
+        get => serialPttBaudRate;
+        set => SetField(ref serialPttBaudRate, value);
+    }
+
+    public IReadOnlyList<string> SerialPttPortOptions => serialPttPortOptions;
+
+    public IReadOnlyList<int> SerialPttBaudRates
+        => SerialPttBaudRateOptions
+            .Append(SerialPttBaudRate)
+            .Where(baudRate => baudRate > 0)
+            .Distinct()
+            .Order()
+            .ToArray();
+
+    public string SerialPttStatusText
+    {
+        get => serialPttStatusText;
+        private set => SetField(ref serialPttStatusText, value);
+    }
+
+    public void RefreshSerialPttDevices()
+    {
+        try
+        {
+            string[] devices = serialPortProvider()
+                .Where(portName => !string.IsNullOrWhiteSpace(portName))
+                .Select(portName => portName.Trim())
+                .Append(SerialPttPortName)
+                .Where(portName => portName.Length > 0)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .OrderBy(portName => portName, StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+            serialPttPortOptions.Clear();
+            foreach (string device in devices)
+                serialPttPortOptions.Add(device);
+
+            if (SerialPttPortName.Length == 0 && devices.Length > 0)
+                SerialPttPortName = devices[0];
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SerialPttPortOptions)));
+            SerialPttStatusText = serialPtt is not null && SerialPttEnabled
+                ? $"Serial PTT configured for {SerialPttPortName} at {SerialPttBaudRate:N0} baud."
+                : devices.Length == 0
+                    ? "Serial PTT is disabled; no serial devices were detected."
+                    : $"Serial PTT is disabled; detected {devices.Length} serial device(s).";
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or InvalidOperationException or PlatformNotSupportedException or System.ComponentModel.Win32Exception)
+        {
+            serialPttPortOptions.Clear();
+            if (SerialPttPortName.Length > 0)
+                serialPttPortOptions.Add(SerialPttPortName);
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SerialPttPortOptions)));
+            SerialPttStatusText = $"Serial device discovery unavailable: {exception.Message}";
+        }
+    }
+
+    public async Task<bool> ApplySerialPttSettingsAsync()
+    {
+        string portName = SerialPttPortName.Trim();
+        int baudRate = SerialPttBaudRate;
+        if (SerialPttEnabled && portName.Length == 0)
+        {
+            SerialPttStatusText = "Select a serial device before enabling hardware PTT.";
+            return false;
+        }
+        if (baudRate is < 300 or > 4_000_000)
+        {
+            SerialPttStatusText = "Serial PTT baud rate must be between 300 and 4,000,000.";
+            return false;
+        }
+
+        await serialPttChangeLock.WaitAsync();
+        try
+        {
+            IPttSource? previous = serialPtt;
+            serialPtt = null;
+            if (previous is not null)
+                await StopAndDisposeSerialPttAsync(previous);
+
+            userSettings.SerialPttEnabled = SerialPttEnabled;
+            userSettings.SerialPttPortName = portName;
+            userSettings.SerialPttBaudRate = baudRate;
+            PersistUserSettings();
+            if (!SerialPttEnabled)
+            {
+                SerialPttStatusText = "Serial PTT is disabled.";
+                TransmitStatusText = "PTT idle; serial hardware source disabled.";
+                return true;
+            }
+
+            IPttSource? candidate = null;
+            try
+            {
+                candidate = serialPttFactory(portName, baudRate);
+                candidate.StateChanged += HandleKeyboardPttStateChanged;
+                if (pttStarted)
+                    await candidate.StartAsync();
+                serialPtt = candidate;
+                SerialPttStatusText = pttStarted
+                    ? $"Serial PTT ready on {portName} at {baudRate:N0} baud."
+                    : $"Serial PTT configured for {portName} at {baudRate:N0} baud.";
+                TransmitStatusText = pttStarted
+                    ? $"PTT idle; serial source {portName} ready."
+                    : $"PTT idle; serial source {portName} will start with global PTT.";
+                return true;
+            }
+            catch (Exception exception) when (exception is IOException or InvalidOperationException or UnauthorizedAccessException or ArgumentException or PlatformNotSupportedException or System.ComponentModel.Win32Exception)
+            {
+                if (candidate is not null)
+                {
+                    candidate.StateChanged -= HandleKeyboardPttStateChanged;
+                    await candidate.DisposeAsync();
+                }
+                SerialPttStatusText = $"Serial PTT unavailable on {portName}: {exception.Message}";
+                TransmitStatusText = $"PTT idle; serial source unavailable: {exception.Message}";
+                return false;
+            }
+        }
+        finally
+        {
+            serialPttChangeLock.Release();
+        }
+    }
+
     public bool RestoreSelectedChannelsOnStartup
     {
         get => userSettings.RestoreSelectedChannelsOnStartup;
@@ -2829,17 +2988,40 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             pttStarted = true;
         }
 
-        if (serialPtt is null)
-            return;
-
+        await serialPttChangeLock.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            await serialPtt.StartAsync(cancellationToken).ConfigureAwait(false);
-            TransmitStatusText = $"PTT idle; serial source {serialPtt.PortName} ready.";
+            if (serialPtt is null)
+                return;
+
+            try
+            {
+                await serialPtt.StartAsync(cancellationToken).ConfigureAwait(false);
+                SerialPttStatusText = $"Serial PTT ready on {SerialPttPortName} at {SerialPttBaudRate:N0} baud.";
+                TransmitStatusText = $"PTT idle; serial source {SerialPttPortName} ready.";
+            }
+            catch (Exception exception) when (exception is IOException or InvalidOperationException or UnauthorizedAccessException or ArgumentException or PlatformNotSupportedException or System.ComponentModel.Win32Exception)
+            {
+                SerialPttStatusText = $"Serial PTT unavailable on {SerialPttPortName}: {exception.Message}";
+                TransmitStatusText = $"PTT idle; serial source unavailable: {exception.Message}";
+            }
         }
-        catch (Exception exception) when (exception is IOException or InvalidOperationException or UnauthorizedAccessException or ArgumentException or PlatformNotSupportedException)
+        finally
         {
-            TransmitStatusText = $"PTT idle; serial source unavailable: {exception.Message}";
+            serialPttChangeLock.Release();
+        }
+    }
+
+    private async Task StopAndDisposeSerialPttAsync(IPttSource source)
+    {
+        try
+        {
+            await source.StopAsync().ConfigureAwait(false);
+        }
+        finally
+        {
+            source.StateChanged -= HandleKeyboardPttStateChanged;
+            await source.DisposeAsync().ConfigureAwait(false);
         }
     }
 
@@ -3054,7 +3236,9 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
 
     internal static MainWindowViewModel Load(
         string? configurationPath,
-        UserSettingsStore userSettingsStore)
+        UserSettingsStore userSettingsStore,
+        Func<IReadOnlyList<string>>? serialPortProvider = null,
+        Func<string, int, IPttSource>? serialPttFactory = null)
     {
         ArgumentNullException.ThrowIfNull(userSettingsStore);
         if (string.IsNullOrWhiteSpace(configurationPath))
@@ -3067,7 +3251,9 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
                 [],
                 [],
                 userSettingsStore: userSettingsStore,
-                groupDefinitions: []);
+                groupDefinitions: [],
+                serialPortProvider: serialPortProvider,
+                serialPttFactory: serialPttFactory);
         }
 
         try
@@ -3101,7 +3287,9 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
                 p25KeyRing,
                 userSettingsStore,
                 configuration.EffectiveGroups(),
-                configuration.PatchSourceIdPassthrough);
+                configuration.PatchSourceIdPassthrough,
+                serialPortProvider,
+                serialPttFactory);
             if (errors.Count == 0)
                 viewModel.RecordLoadedCodeplug(configuration.SourcePath ?? Path.GetFullPath(configurationPath));
             return viewModel;
@@ -3113,7 +3301,9 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
                 [],
                 [],
                 userSettingsStore: userSettingsStore,
-                groupDefinitions: []);
+                groupDefinitions: [],
+                serialPortProvider: serialPortProvider,
+                serialPttFactory: serialPttFactory);
         }
     }
 
@@ -3189,13 +3379,21 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         keyboardPtt.StateChanged -= HandleKeyboardPttStateChanged;
         if (globalKeyboardPtt is not null)
             globalKeyboardPtt.StateChanged -= HandleKeyboardPttStateChanged;
-        if (serialPtt is not null)
-            serialPtt.StateChanged -= HandleKeyboardPttStateChanged;
         await keyboardPtt.DisposeAsync().ConfigureAwait(false);
         if (globalKeyboardPtt is not null)
             await globalKeyboardPtt.DisposeAsync().ConfigureAwait(false);
-        if (serialPtt is not null)
-            await serialPtt.DisposeAsync().ConfigureAwait(false);
+        await serialPttChangeLock.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            IPttSource? currentSerialPtt = serialPtt;
+            serialPtt = null;
+            if (currentSerialPtt is not null)
+                await StopAndDisposeSerialPttAsync(currentSerialPtt).ConfigureAwait(false);
+        }
+        finally
+        {
+            serialPttChangeLock.Release();
+        }
         await toneTransmitCoordinator.DisposeAsync().ConfigureAwait(false);
         await talkPermitTonePlayer.DisposeAsync().ConfigureAwait(false);
         await transmitCoordinator.DisposeAsync().ConfigureAwait(false);
@@ -5001,6 +5199,9 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
                 await StopTransmitAsync(transmitCoordinator.ActiveChannels);
             return;
         }
+
+        if (AnyPttSourcePressed)
+            return;
 
         ChannelViewModel[] active = transmitCoordinator.ActiveChannels.ToArray();
         if (active.Length > 0)

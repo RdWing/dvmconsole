@@ -302,6 +302,44 @@
       <TabItem Header="General">
         <ScrollViewer Padding="10"><StackPanel Spacing="10"><TextBlock Classes="heading" Text="Console Settings" /><TextBlock Classes="caption" Text="{Binding SettingsVersionText}" /><TextBlock FontWeight="SemiBold" Text="Appearance" /><Grid ColumnDefinitions="*,*" ColumnSpacing="16"><StackPanel Spacing="4"><TextBlock Classes="caption" Text="{Binding UiFontSizeText}" /><Slider Minimum="11" Maximum="20" TickFrequency="1" IsSnapToTickEnabled="True" Value="{Binding UiFontSize, Mode=TwoWay}" /></StackPanel><StackPanel Grid.Column="1" Spacing="4"><TextBlock Classes="caption" Text="{Binding UiScaleText}" /><Slider Minimum="0.75" Maximum="1.5" TickFrequency="0.05" IsSnapToTickEnabled="True" Value="{Binding UiScale, Mode=TwoWay}" /></StackPanel></Grid><Separator /><CheckBox Content="Toggle global PTT instead of hold-to-talk" IsChecked="{Binding TogglePttMode, Mode=TwoWay}" /><CheckBox Content="Talk permit tone" IsChecked="{Binding TalkPermitTone, Mode=TwoWay}" /><CheckBox Content="Connection chimes" IsChecked="{Binding ConnectionChimes, Mode=TwoWay}" /><CheckBox Content="Mute RX while transmitting" IsChecked="{Binding MuteRxAudioWhileTransmitting, Mode=TwoWay}" /><CheckBox Content="Restore selected channels on startup" IsChecked="{Binding RestoreSelectedChannelsOnStartup, Mode=TwoWay}" /><CheckBox Content="Retain patch state on startup" IsChecked="{Binding RetainPatchStateOnStartup, Mode=TwoWay}" /><CheckBox Content="Dark mode" IsChecked="{Binding DarkMode, Mode=TwoWay}" /><CheckBox Content="Keep window on top" IsChecked="{Binding KeepWindowOnTop, Mode=TwoWay}" /><Separator /><TextBlock FontWeight="SemiBold" Text="Widgets" /><CheckBox Content="Show system status" IsChecked="{Binding ShowSystemStatus, Mode=TwoWay}" /><CheckBox Content="Show channel widgets" IsChecked="{Binding ShowChannels, Mode=TwoWay}" /><CheckBox Content="Show alert buttons" IsChecked="{Binding ShowAlertTones, Mode=TwoWay}" /><CheckBox Content="Lock channel widget positions" IsChecked="{Binding LockWidgets, Mode=TwoWay}" /><Button Content="Reset widget layout" Click="HandleResetLayoutClick" /><Separator /><TextBlock FontWeight="SemiBold" Text="Toolbar clocks" /><TextBlock Classes="caption" Text="Enable slots, choose a UTC offset, and color-code each clock." TextWrapping="Wrap" /><ItemsControl ItemsSource="{Binding ToolbarClocks}"><ItemsControl.ItemTemplate><DataTemplate x:DataType="local:ToolbarClockViewModel"><Grid ColumnDefinitions="Auto,Auto,150,150,*" ColumnSpacing="8" Margin="0,2"><CheckBox IsChecked="{Binding Enabled, Mode=TwoWay}" /><TextBlock Grid.Column="1" Text="{Binding SlotLabel}" VerticalAlignment="Center" /><ComboBox Grid.Column="2" ItemsSource="{Binding UtcOffsetOptions}" SelectedItem="{Binding SelectedUtcOffsetOption, Mode=TwoWay}"><ComboBox.ItemTemplate><DataTemplate x:DataType="local:ToolbarClockUtcOffsetOption"><TextBlock Text="{Binding Label}" /></DataTemplate></ComboBox.ItemTemplate></ComboBox><ComboBox Grid.Column="3" ItemsSource="{Binding ColorOptions}" SelectedItem="{Binding SelectedColorOption, Mode=TwoWay}"><ComboBox.ItemTemplate><DataTemplate x:DataType="local:ToolbarClockColorOption"><StackPanel Orientation="Horizontal" Spacing="6"><Border Width="14" Height="14" Background="{Binding ColorBrush}" CornerRadius="3" /><TextBlock Text="{Binding Label}" /></StackPanel></DataTemplate></ComboBox.ItemTemplate></ComboBox><TextBlock Grid.Column="4" Classes="caption" Text="{Binding TimeZoneLabel}" VerticalAlignment="Center" /></Grid></DataTemplate></ItemsControl.ItemTemplate></ItemsControl><Button Content="Save toolbar clocks" Click="HandleSaveToolbarClocksClick" /><Separator /><TextBlock FontWeight="SemiBold" Text="Clock" /><CheckBox Content="Use 24-hour time" IsChecked="{Binding ClockUse24HourTime, Mode=TwoWay}" /><CheckBox Content="Show seconds" IsChecked="{Binding ClockShowSeconds, Mode=TwoWay}" /><StackPanel Orientation="Horizontal" Spacing="4"><TextBlock Classes="caption" Text="Global PTT key:" /><TextBlock Classes="caption" Text="{Binding GlobalPttKeyText}" /></StackPanel></StackPanel></ScrollViewer>
       </TabItem>
+
+      <TabItem Header="PTT">
+        <ScrollViewer Padding="10">
+          <StackPanel Spacing="12">
+            <TextBlock Classes="heading" Text="Global PTT Settings" />
+            <TextBlock Classes="caption" Text="The configured keyboard key and optional serial hardware source both operate the channels selected with TX." TextWrapping="Wrap" />
+            <Border Classes="panel">
+              <StackPanel Spacing="8">
+                <TextBlock FontWeight="SemiBold" Text="Keyboard PTT" />
+                <StackPanel Orientation="Horizontal" Spacing="4">
+                  <TextBlock Text="Current key:" />
+                  <TextBlock FontWeight="SemiBold" Text="{Binding GlobalPttKeyText}" />
+                </StackPanel>
+                <CheckBox Content="Toggle global PTT instead of hold-to-talk" IsChecked="{Binding TogglePttMode, Mode=TwoWay}" />
+                <TextBlock Classes="caption" Text="Change the key from Settings → Global PTT key in the main window." TextWrapping="Wrap" />
+              </StackPanel>
+            </Border>
+            <Border Classes="panel">
+              <StackPanel Spacing="10">
+                <TextBlock FontWeight="SemiBold" Text="Serial hardware PTT" />
+                <CheckBox Content="Enable serial device as a global PTT source" IsChecked="{Binding SerialPttEnabled, Mode=TwoWay}" />
+                <Grid ColumnDefinitions="Auto,*,Auto,160" ColumnSpacing="8">
+                  <TextBlock Text="Device" VerticalAlignment="Center" />
+                  <ComboBox Grid.Column="1" ItemsSource="{Binding SerialPttPortOptions}" SelectedItem="{Binding SerialPttPortName, Mode=TwoWay}" IsEnabled="{Binding SerialPttEnabled}" />
+                  <TextBlock Grid.Column="2" Text="Baud" VerticalAlignment="Center" />
+                  <ComboBox Grid.Column="3" ItemsSource="{Binding SerialPttBaudRates}" SelectedItem="{Binding SerialPttBaudRate, Mode=TwoWay}" IsEnabled="{Binding SerialPttEnabled}" />
+                </Grid>
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                  <Button Content="Refresh devices" Click="HandleRefreshSerialPttDevicesClick" />
+                  <Button Content="Apply" Click="HandleApplySerialPttSettingsClick" />
+                </StackPanel>
+                <TextBlock Text="{Binding SerialPttStatusText}" TextWrapping="Wrap" />
+                <TextBlock Classes="caption" Text="The device must send one state per line: on, 1, pressed, or ptt=on to key; off, 0, released, or ptt=off to release. Device removal always releases PTT." TextWrapping="Wrap" />
+              </StackPanel>
+            </Border>
+          </StackPanel>
+        </ScrollViewer>
+      </TabItem>
     </TabControl>
     <Border Grid.Row="1" BorderBrush="#3A4654" BorderThickness="0,1,0,0" Padding="10"><Grid ColumnDefinitions="*,Auto"><TextBlock Classes="caption" Text="{Binding AudioStatusText}" VerticalAlignment="Center" /><Button Grid.Column="1" Content="Close" Click="HandleCloseClick" /></Grid></Border>
   </Grid>

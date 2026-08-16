@@ -111,6 +111,12 @@ public sealed partial class OperatorToolsWindow : Window
     private void HandleResetLayoutClick(object? sender, RoutedEventArgs e)
         => viewModel.ResetLayout();
 
+    private void HandleRefreshSerialPttDevicesClick(object? sender, RoutedEventArgs e)
+        => viewModel.RefreshSerialPttDevices();
+
+    private async void HandleApplySerialPttSettingsClick(object? sender, RoutedEventArgs e)
+        => await viewModel.ApplySerialPttSettingsAsync();
+
     private async void HandleImportAlertToneClick(object? sender, RoutedEventArgs e)
     {
         if (!StorageProvider.CanOpen)
@@ -301,5 +307,6 @@ public enum OperatorToolSection
     History,
     Groups,
     Connections,
-    General
+    General,
+    Ptt
 }

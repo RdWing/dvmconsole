@@ -1004,6 +1004,58 @@ public sealed class SystemViewModelTests
     }
 
     [Fact]
+    public async Task SerialPttSettingsDiscoverPersistReplaceAndDisableTheSelectedDevice()
+    {
+        string codeplugPath = Path.Combine(AppContext.BaseDirectory, "TestData", "multiple-systems.yml");
+        string settingsPath = CreateSettingsPath();
+        var store = new UserSettingsStore(settingsPath);
+        var createdSources = new List<TestPttSource>();
+        var createdConfigurations = new List<(string PortName, int BaudRate)>();
+
+        try
+        {
+            await using MainWindowViewModel viewModel = MainWindowViewModel.Load(
+                codeplugPath,
+                store,
+                serialPortProvider: () => ["/dev/cu.zzz", "/dev/cu.aaa"],
+                serialPttFactory: (portName, baudRate) =>
+                {
+                    createdConfigurations.Add((portName, baudRate));
+                    var source = new TestPttSource();
+                    createdSources.Add(source);
+                    return source;
+                });
+
+            Assert.Equal(["/dev/cu.aaa", "/dev/cu.zzz"], viewModel.SerialPttPortOptions);
+            Assert.Equal("/dev/cu.aaa", viewModel.SerialPttPortName);
+
+            viewModel.SerialPttEnabled = true;
+            viewModel.SerialPttPortName = "/dev/cu.zzz";
+            viewModel.SerialPttBaudRate = 19_200;
+
+            Assert.True(await viewModel.ApplySerialPttSettingsAsync());
+            Assert.Equal([("/dev/cu.zzz", 19_200)], createdConfigurations);
+            Assert.Equal(0, Assert.Single(createdSources).StartCount);
+            UserSettings saved = store.Load();
+            Assert.True(saved.SerialPttEnabled);
+            Assert.Equal("/dev/cu.zzz", saved.SerialPttPortName);
+            Assert.Equal(19_200, saved.SerialPttBaudRate);
+
+            viewModel.SerialPttEnabled = false;
+
+            Assert.True(await viewModel.ApplySerialPttSettingsAsync());
+            Assert.Equal(1, createdSources[0].StopCount);
+            Assert.Equal(1, createdSources[0].DisposeCount);
+            Assert.False(store.Load().SerialPttEnabled);
+            Assert.Equal("Serial PTT is disabled.", viewModel.SerialPttStatusText);
+        }
+        finally
+        {
+            CleanupSettingsPath(settingsPath);
+        }
+    }
+
+    [Fact]
     public async Task LockedChannelWidgetsIgnoreMoveRequests()
     {
         string codeplugPath = Path.Combine(AppContext.BaseDirectory, "TestData", "multiple-systems.yml");
@@ -1029,6 +1081,40 @@ public sealed class SystemViewModelTests
 
     private static string CreateSettingsPath()
         => Path.Combine(Path.GetTempPath(), "dvmconsole-settings-tests", $"{Guid.NewGuid():N}", "UserSettings.json");
+
+    private sealed class TestPttSource : IPttSource
+    {
+        public event EventHandler<bool>? StateChanged;
+        public bool IsPressed { get; private set; }
+        public int StartCount { get; private set; }
+        public int StopCount { get; private set; }
+        public int DisposeCount { get; private set; }
+
+        public ValueTask StartAsync(CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            StartCount++;
+            return ValueTask.CompletedTask;
+        }
+
+        public ValueTask StopAsync(CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            StopCount++;
+            if (IsPressed)
+            {
+                IsPressed = false;
+                StateChanged?.Invoke(this, false);
+            }
+            return ValueTask.CompletedTask;
+        }
+
+        public ValueTask DisposeAsync()
+        {
+            DisposeCount++;
+            return ValueTask.CompletedTask;
+        }
+    }
 
     private static void CleanupSettingsPath(string settingsPath)
     {

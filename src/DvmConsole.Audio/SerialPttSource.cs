@@ -43,6 +43,14 @@ public sealed class SerialPttSource : IPttSource
 
     public int? BaudRate { get; }
 
+    public static IReadOnlyList<string> GetAvailablePortNames()
+        => SerialPort.GetPortNames()
+            .Select(portName => portName.Trim())
+            .Where(portName => portName.Length > 0)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(portName => portName, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
     public ValueTask StartAsync(CancellationToken cancellationToken = default)
     {
         ObjectDisposedException.ThrowIf(disposed, this);

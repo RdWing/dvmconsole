@@ -61,6 +61,9 @@ public sealed class UserSettings
     // Portable name of the key that activates global PTT.  The desktop host
     // maps this to its platform key enum so Core remains UI-independent.
     public string GlobalPttKey { get; set; } = "Space";
+    public bool SerialPttEnabled { get; set; }
+    public string SerialPttPortName { get; set; } = string.Empty;
+    public int SerialPttBaudRate { get; set; } = 9_600;
     public List<string> TransmitSelectedChannelKeys { get; set; } = [];
     public string LastDtmfDigits { get; set; } = "123";
     public double ToneFrequencyHz { get; set; } = 1000;
@@ -143,6 +146,7 @@ public sealed class UserSettingsStore
             settings.TransmitEncryptionStates ??= new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
             settings.CallHistoryWindowPlacement = NormalizeWindowPlacement(settings.CallHistoryWindowPlacement);
             settings.GlobalPttKey = NormalizeGlobalPttKey(settings.GlobalPttKey);
+            NormalizeSerialPttSettings(settings);
             settings.UserBackgroundImage = string.IsNullOrWhiteSpace(settings.UserBackgroundImage)
                 ? null
                 : settings.UserBackgroundImage.Trim();
@@ -397,6 +401,7 @@ public sealed class UserSettingsStore
         settings.RecordingEnabledChannelKeys = NormalizeNames(settings.RecordingEnabledChannelKeys);
         settings.SelectedWebStreams = NormalizeNames(settings.SelectedWebStreams);
         settings.GlobalPttKey = NormalizeGlobalPttKey(settings.GlobalPttKey);
+        NormalizeSerialPttSettings(settings);
         settings.TransmitSelectedChannelKeys = NormalizeNames(settings.TransmitSelectedChannelKeys);
         settings.ChannelWidgetPositions = NormalizeWidgetPositions(settings.ChannelWidgetPositions);
     }
@@ -456,6 +461,8 @@ public sealed class UserSettingsStore
         if (settings.TalkPermitTone || !settings.ConnectionChimes || settings.DarkMode ||
             settings.UiFontSize != 14 || settings.UiScale != 1.0 ||
             settings.TogglePttMode || !string.Equals(settings.GlobalPttKey, "Space", StringComparison.OrdinalIgnoreCase) ||
+            settings.SerialPttEnabled || !string.IsNullOrWhiteSpace(settings.SerialPttPortName) ||
+            settings.SerialPttBaudRate != 9_600 ||
             !settings.ShowSystemStatus || !settings.ShowChannels || !settings.ShowAlertTones ||
             !settings.LockWidgets || settings.ChannelWidgetPositions.Count > 0 ||
             !settings.ShowCallHistoryPane || settings.SnapCallHistoryToWindow ||
@@ -508,6 +515,9 @@ public sealed class UserSettingsStore
         {
             target.TogglePttMode = source.TogglePttMode;
             target.GlobalPttKey = source.GlobalPttKey;
+            target.SerialPttEnabled = source.SerialPttEnabled;
+            target.SerialPttPortName = source.SerialPttPortName;
+            target.SerialPttBaudRate = source.SerialPttBaudRate;
             target.TalkPermitTone = source.TalkPermitTone;
             target.ConnectionChimes = source.ConnectionChimes;
             target.DarkMode = source.DarkMode;
@@ -686,6 +696,16 @@ public sealed class UserSettingsStore
                 var value => value
             }
             : "Space";
+    }
+
+    private static void NormalizeSerialPttSettings(UserSettings settings)
+    {
+        settings.SerialPttPortName = settings.SerialPttPortName?.Trim() ?? string.Empty;
+        settings.SerialPttBaudRate = settings.SerialPttBaudRate is >= 300 and <= 4_000_000
+            ? settings.SerialPttBaudRate
+            : 9_600;
+        if (settings.SerialPttPortName.Length == 0)
+            settings.SerialPttEnabled = false;
     }
 
     private static void NormalizeAudioInputSettings(UserSettings settings)

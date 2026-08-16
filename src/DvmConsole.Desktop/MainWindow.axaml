@@ -103,6 +103,7 @@
             <MenuItem Header="Retain patch state on startup" IsChecked="{Binding RetainPatchStateOnStartup, Mode=TwoWay}" ToggleType="CheckBox" />
             <MenuItem Header="Restore selected channels on startup" IsChecked="{Binding RestoreSelectedChannelsOnStartup, Mode=TwoWay}" ToggleType="CheckBox" />
             <Separator />
+            <MenuItem Header="Global PTT settings…" Tag="Ptt" Click="HandleOpenOperatorToolsClick" />
             <MenuItem Header="Clock settings…" Tag="General" Click="HandleOpenOperatorToolsClick" />
             <MenuItem Header="Audio settings…" Tag="Audio" Click="HandleOpenOperatorToolsClick" />
             <MenuItem Header="Reset settings…" Click="HandleResetSettingsClick" />

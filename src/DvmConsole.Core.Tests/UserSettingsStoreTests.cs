@@ -147,6 +147,9 @@ public sealed class UserSettingsStoreTests
                 UserBackgroundImage = " /tmp/background.png ",
                 TogglePttMode = true,
                 GlobalPttKey = " f12 ",
+                SerialPttEnabled = true,
+                SerialPttPortName = " /dev/cu.ptt ",
+                SerialPttBaudRate = 19_200,
                 TransmitSelectedChannelKeys = [" System 1\u001FDispatch ", "system 1\u001Fdispatch"],
                 LastDtmfDigits = " 12a# ",
                 ToneFrequencyHz = 1200,
@@ -251,6 +254,9 @@ public sealed class UserSettingsStoreTests
             Assert.Equal("/tmp/background.png", loaded.UserBackgroundImage);
             Assert.True(loaded.TogglePttMode);
             Assert.Equal("F12", loaded.GlobalPttKey);
+            Assert.True(loaded.SerialPttEnabled);
+            Assert.Equal("/dev/cu.ptt", loaded.SerialPttPortName);
+            Assert.Equal(19_200, loaded.SerialPttBaudRate);
             Assert.Equal(["System 1\u001FDispatch"], loaded.TransmitSelectedChannelKeys);
             Assert.Equal("12A#", loaded.LastDtmfDigits);
             Assert.Equal(1200, loaded.ToneFrequencyHz);
@@ -311,6 +317,32 @@ public sealed class UserSettingsStoreTests
     }
 
     [Fact]
+    public void InvalidSerialPttSettingsFailSafeToDisabledDefaults()
+    {
+        string path = CreatePath();
+        try
+        {
+            var store = new UserSettingsStore(path);
+            store.Save(new UserSettings
+            {
+                SerialPttEnabled = true,
+                SerialPttPortName = "   ",
+                SerialPttBaudRate = -1
+            });
+
+            UserSettings loaded = store.Load();
+
+            Assert.False(loaded.SerialPttEnabled);
+            Assert.Equal(string.Empty, loaded.SerialPttPortName);
+            Assert.Equal(9_600, loaded.SerialPttBaudRate);
+        }
+        finally
+        {
+            Cleanup(path);
+        }
+    }
+
+    [Fact]
     public void ExportsImportsAndResetsPortableSettings()
     {
         string path = CreatePath();
@@ -323,7 +355,10 @@ public sealed class UserSettingsStoreTests
             {
                 LastCodeplugPath = "/tmp/original.yml",
                 TalkPermitTone = true,
-                GlobalPttKey = "F4"
+                GlobalPttKey = "F4",
+                SerialPttEnabled = true,
+                SerialPttPortName = "/dev/cu.original",
+                SerialPttBaudRate = 9_600
             }, exportPath);
 
             Assert.True(File.Exists(exportPath));
@@ -333,7 +368,10 @@ public sealed class UserSettingsStoreTests
                 {
                   "lastCodeplugPath": "/tmp/imported.yml",
                   "talkPermitTone": false,
-                  "globalPttKey": "f9"
+                  "globalPttKey": "f9",
+                  "serialPttEnabled": true,
+                  "serialPttPortName": " /dev/cu.imported ",
+                  "serialPttBaudRate": 38400
                 }
                 """);
             UserSettings imported = store.Import(importedPath);
@@ -341,6 +379,9 @@ public sealed class UserSettingsStoreTests
             Assert.Equal("/tmp/imported.yml", imported.LastCodeplugPath);
             Assert.False(imported.TalkPermitTone);
             Assert.Equal("F9", imported.GlobalPttKey);
+            Assert.True(imported.SerialPttEnabled);
+            Assert.Equal("/dev/cu.imported", imported.SerialPttPortName);
+            Assert.Equal(38_400, imported.SerialPttBaudRate);
 
             store.Reset();
             Assert.False(File.Exists(path));
