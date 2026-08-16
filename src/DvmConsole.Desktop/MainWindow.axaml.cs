@@ -4278,7 +4278,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         routes.TryGetValue((traffic.Protocol, traffic.DestinationId), out ChannelViewModel[]? routedChannels);
         routedChannels ??= [];
         if (!IsTerminatingTraffic(traffic))
-            return routedChannels;
+            return SelectResourceRepresentatives(routedChannels, traffic);
 
         ChannelViewModel[] activeStreamChannels = system.Channels
             .Where(channel => channel.State == ChannelRuntimeState.Receiving &&
@@ -4292,6 +4292,30 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         return routedChannels
             .Concat(activeStreamChannels)
             .Distinct()
+            .ToArray();
+    }
+
+    private IReadOnlyList<ChannelViewModel> SelectResourceRepresentatives(
+        IEnumerable<ChannelViewModel> channels,
+        FneTrafficFrame traffic)
+    {
+        // A resource can be placed in more than one zone, producing multiple
+        // visual channel instances for the same system/talkgroup. As in the
+        // WPF console, only one copy may own an inbound stream; otherwise one
+        // network frame creates duplicate call starts, recording work, patch
+        // forwarding, and decoded audio.
+        return channels
+            .GroupBy(channel => (
+                channel.Definition.Mode,
+                channel.Definition.DestinationId,
+                Slot: channel.Definition.Mode == "dmr" ? channel.Definition.Slot : (byte)0))
+            .Select(group => group.FirstOrDefault(channel =>
+                    channel.State == ChannelRuntimeState.Receiving &&
+                    channel.StreamId == traffic.StreamId) ??
+                group.FirstOrDefault(channel => audioCoordinator.IsActive(channel)) ??
+                group.FirstOrDefault(channel => patchSourceDecode.IsActive(channel)) ??
+                group.FirstOrDefault(channel => channel.IsRecordingEnabled) ??
+                group.First())
             .ToArray();
     }
 

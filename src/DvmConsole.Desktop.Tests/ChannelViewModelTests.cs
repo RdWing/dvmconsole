@@ -484,7 +484,7 @@ public sealed class ChannelViewModelTests
                 {
                     KeyId = 0x50,
                     AlgId = P25Defines.P25_ALGO_AES,
-                    Key = "00112233445566778899AABBCCDDEEFF00112233445566778899AABBCCDDEEFF"
+                    Key = "00112233445566778899AABBCCDDEEFF"
                 }
             ]
         });
@@ -532,7 +532,7 @@ public sealed class ChannelViewModelTests
             "System 1",
             P25Defines.P25_ALGO_AES,
             0x50,
-            Convert.FromHexString("00112233445566778899AABBCCDDEEFF00112233445566778899AABBCCDDEEFF"));
+            Convert.FromHexString("00112233445566778899AABBCCDDEEFF"));
         channel.RefreshEncryptionState();
 
         Assert.True(channel.CanListen);
@@ -550,7 +550,7 @@ public sealed class ChannelViewModelTests
                 {
                     KeyId = 0x50,
                     AlgId = P25Defines.P25_ALGO_AES,
-                    Key = "00112233445566778899AABBCCDDEEFF00112233445566778899AABBCCDDEEFF"
+                    Key = "00112233445566778899AABBCCDDEEFF"
                 }
             ]
         });
@@ -583,7 +583,7 @@ public sealed class ChannelViewModelTests
                 {
                     KeyId = 0x50,
                     AlgId = P25Defines.P25_ALGO_AES,
-                    Key = "00112233445566778899AABBCCDDEEFF00112233445566778899AABBCCDDEEFF"
+                    Key = "00112233445566778899AABBCCDDEEFF"
                 }
             ]
         });

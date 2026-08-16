@@ -58,8 +58,10 @@ public sealed class P25KeyRing : IP25KeyResolver, IDisposable
             if (!IsSupportedAlgorithm(algorithmId))
                 throw new FormatException($"Unsupported P25 encryption algorithm 0x{algorithmId:X2}.");
 
-            byte[] key = entry.KeyBytes;
-            ValidateKeyLength(algorithmId, key.Length, static message => new FormatException(message));
+            byte[] key = NormalizeKeyMaterial(
+                algorithmId,
+                entry.KeyBytes,
+                static message => new FormatException(message));
             if (!loaded.TryAdd((algorithmId, entry.KeyId), key))
                 throw new FormatException($"Duplicate P25 key 0x{entry.KeyId:X4} for algorithm 0x{algorithmId:X2}.");
         }
@@ -90,7 +92,10 @@ public sealed class P25KeyRing : IP25KeyResolver, IDisposable
             throw new ArgumentOutOfRangeException(nameof(keyId), "P25 key ID must be non-zero.");
         if (!IsSupportedAlgorithm(algorithmId))
             throw new ArgumentOutOfRangeException(nameof(algorithmId), "Unsupported P25 encryption algorithm.");
-        ValidateKeyLength(algorithmId, key.Length, static message => new ArgumentException(message, "key"));
+        byte[] normalizedKey = NormalizeKeyMaterial(
+            algorithmId,
+            key,
+            static message => new ArgumentException(message, "key"));
 
         lock (sync)
         {
@@ -98,7 +103,7 @@ public sealed class P25KeyRing : IP25KeyResolver, IDisposable
             if (!keys.TryGetValue(lookup, out KeySlot? slot))
                 keys[lookup] = slot = new KeySlot();
             ClearMaterial(ref slot.FneMaterial);
-            slot.FneMaterial = key.ToArray();
+            slot.FneMaterial = normalizedKey;
         }
     }
 
@@ -236,9 +241,9 @@ public sealed class P25KeyRing : IP25KeyResolver, IDisposable
             P25Defines.P25_ALGO_ARC4;
     }
 
-    private static void ValidateKeyLength(
+    private static byte[] NormalizeKeyMaterial(
         byte algorithmId,
-        int actualLength,
+        ReadOnlySpan<byte> material,
         Func<string, Exception> createException)
     {
         int expectedLength = algorithmId switch
@@ -248,11 +253,29 @@ public sealed class P25KeyRing : IP25KeyResolver, IDisposable
             P25Defines.P25_ALGO_ARC4 => 5,
             _ => 0
         };
-        if (actualLength != expectedLength)
+
+        if (algorithmId == P25Defines.P25_ALGO_AES)
+        {
+            if (material.IsEmpty || material.Length > expectedLength)
+            {
+                throw createException(
+                    $"P25 AES key material must contain 1 to {expectedLength} bytes; received {material.Length}.");
+            }
+
+            // Legacy P25Crypto accepts short AES material and appends zero
+            // bytes until it reaches the 32-byte AES-256 key size.
+            byte[] normalized = new byte[expectedLength];
+            material.CopyTo(normalized);
+            return normalized;
+        }
+
+        if (material.Length != expectedLength)
         {
             throw createException(
-                $"P25 algorithm 0x{algorithmId:X2} requires exactly {expectedLength} bytes of key material; received {actualLength}.");
+                $"P25 algorithm 0x{algorithmId:X2} requires exactly {expectedLength} bytes of key material; received {material.Length}.");
         }
+
+        return material.ToArray();
     }
 
     private static void ClearMaterial(ref byte[]? material)
