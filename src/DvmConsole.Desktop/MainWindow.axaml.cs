@@ -302,32 +302,11 @@ public sealed partial class MainWindow : Window
     }
 
     private void RefreshRecentCodeplugMenu()
-    {
-        recentCodeplugsMenu.Items.Clear();
-        if (viewModel.RecentCodeplugPaths.Count == 0)
-        {
-            recentCodeplugsMenu.Items.Add(new MenuItem
-            {
-                Header = "No recent codeplugs",
-                IsEnabled = false
-            });
-            recentCodeplugsMenu.IsEnabled = false;
-            return;
-        }
-
-        foreach (string path in viewModel.RecentCodeplugPaths)
-        {
-            var item = new MenuItem
-            {
-                Header = path,
-                Tag = path
-            };
-            item.Click += HandleOpenRecentCodeplugClick;
-            recentCodeplugsMenu.Items.Add(item);
-        }
-
-        recentCodeplugsMenu.IsEnabled = true;
-    }
+        => MainWindowMenuBuilder.ReplaceItems(
+            recentCodeplugsMenu,
+            viewModel.RecentCodeplugPaths,
+            "No recent codeplugs",
+            HandleOpenRecentCodeplugClick);
 
     private void RefreshNamedSettingsProfileMenus()
     {
@@ -345,28 +324,7 @@ public sealed partial class MainWindow : Window
         MenuItem menu,
         string emptyHeader,
         EventHandler<RoutedEventArgs> clickHandler)
-    {
-        menu.Items.Clear();
-        if (viewModel.NamedSettingsProfiles.Count == 0)
-        {
-            menu.Items.Add(new MenuItem { Header = emptyHeader, IsEnabled = false });
-            menu.IsEnabled = false;
-            return;
-        }
-
-        foreach (string profileName in viewModel.NamedSettingsProfiles)
-        {
-            var item = new MenuItem
-            {
-                Header = profileName,
-                Tag = profileName
-            };
-            item.Click += clickHandler;
-            menu.Items.Add(item);
-        }
-
-        menu.IsEnabled = true;
-    }
+        => MainWindowMenuBuilder.ReplaceItems(menu, viewModel.NamedSettingsProfiles, emptyHeader, clickHandler);
 
     private async void HandleSelectBackgroundClick(object? sender, RoutedEventArgs e)
     {
