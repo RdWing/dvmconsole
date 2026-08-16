@@ -681,7 +681,7 @@ public sealed class SystemViewModelTests
     }
 
     [Fact]
-    public async Task PersistsMutuallyExclusiveAppleVoiceProcessingMode()
+    public async Task PersistsPlatformAppropriateAudioProcessingMode()
     {
         string codeplugPath = Path.Combine(AppContext.BaseDirectory, "TestData", "multiple-systems.yml");
         string settingsPath = CreateSettingsPath();
@@ -695,6 +695,21 @@ public sealed class SystemViewModelTests
             viewModel.AudioOutputDeviceIdText = "output-device-84";
             viewModel.SelectedAudioProcessingMode = "Apple voice processing";
             viewModel.ApplyAudioInputSettingsCommand.Execute(null);
+
+            if (!OperatingSystem.IsMacOS())
+            {
+                Assert.Single(viewModel.AudioProcessingModeOptions);
+                Assert.Equal("DVM Console processing", viewModel.AudioProcessingModeOptions[0]);
+                Assert.DoesNotContain("Apple voice processing", viewModel.AudioProcessingModeOptions);
+                Assert.Equal("DVM Console processing", viewModel.SelectedAudioProcessingMode);
+                Assert.True(viewModel.IsDvmConsoleProcessingSelected);
+                UserSettings unsupportedPlatformSettings = store.Load();
+                Assert.Equal(UserSettings.DvmConsoleAudioProcessingMode, unsupportedPlatformSettings.AudioProcessingMode);
+                Assert.Equal("input-device-42", unsupportedPlatformSettings.AudioInputDeviceId);
+                Assert.Equal("output-device-84", unsupportedPlatformSettings.AudioOutputDeviceId);
+                Assert.DoesNotContain("echo cancellation", viewModel.AudioProcessingDescription, StringComparison.OrdinalIgnoreCase);
+                return;
+            }
 
             Assert.False(viewModel.IsDvmConsoleProcessingSelected);
             UserSettings appleSettings = store.Load();
