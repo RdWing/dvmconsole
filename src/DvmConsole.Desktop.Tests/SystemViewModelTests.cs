@@ -800,6 +800,44 @@ public sealed class SystemViewModelTests
     }
 
     [Fact]
+    public async Task PersistsAndRestoresTarArmedState()
+    {
+        string codeplugPath = Path.Combine(AppContext.BaseDirectory, "TestData", "multiple-systems.yml");
+        string settingsPath = CreateSettingsPath();
+        var store = new UserSettingsStore(settingsPath);
+
+        try
+        {
+            string channelKey;
+            await using (MainWindowViewModel viewModel = MainWindowViewModel.Load(codeplugPath, store))
+            {
+                ChannelViewModel channel = viewModel.Systems[0].Channels[0];
+                channelKey = channel.SettingsKey;
+                channel.SetRecordingEnabled(true);
+
+                Assert.True(channel.IsRecordingEnabled);
+                Assert.Contains(channelKey, store.Load().RecordingEnabledChannelKeys, StringComparer.OrdinalIgnoreCase);
+            }
+
+            await using MainWindowViewModel restored = MainWindowViewModel.Load(codeplugPath, store);
+            ChannelViewModel restoredChannel = restored.Systems[0].Channels[0];
+
+            Assert.True(restoredChannel.IsRecordingEnabled);
+            Assert.Equal("Disable TAR", restoredChannel.RecordingConfigurationButtonText);
+
+            restoredChannel.SetRecordingEnabled(false);
+            Assert.DoesNotContain(
+                channelKey,
+                store.Load().RecordingEnabledChannelKeys,
+                StringComparer.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            CleanupSettingsPath(settingsPath);
+        }
+    }
+
+    [Fact]
     public async Task MovesPersistsRestoresAndResetsUnlockedChannelWidgets()
     {
         string codeplugPath = Path.Combine(AppContext.BaseDirectory, "TestData", "multiple-systems.yml");

@@ -84,6 +84,7 @@ public sealed class UserSettings
     public Dictionary<string, string> ChannelOutputDeviceIds { get; set; } = new(StringComparer.OrdinalIgnoreCase);
     public Dictionary<string, string> WebStreamOutputDeviceIds { get; set; } = new(StringComparer.OrdinalIgnoreCase);
     public Dictionary<string, double> WebStreamVolumes { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+    public List<string> RecordingEnabledChannelKeys { get; set; } = [];
     public Dictionary<string, List<uint>> RecordingIgnoredSubscriberIds { get; set; } = new(StringComparer.OrdinalIgnoreCase);
     public Dictionary<string, List<PatchMemberSetting>> PatchGroupMemberships { get; set; } = new(StringComparer.OrdinalIgnoreCase);
     public Dictionary<string, bool> PatchGroupModes { get; set; } = new(StringComparer.OrdinalIgnoreCase);
@@ -199,6 +200,7 @@ public sealed class UserSettingsStore
                     webStreamVolumes[streamName] = NormalizeChannelVolume(entry.Value);
             }
             settings.WebStreamVolumes = webStreamVolumes;
+            settings.RecordingEnabledChannelKeys = NormalizeNames(settings.RecordingEnabledChannelKeys);
             var ignoredSubscribers = new Dictionary<string, List<uint>>(StringComparer.OrdinalIgnoreCase);
             foreach (KeyValuePair<string, List<uint>> entry in settings.RecordingIgnoredSubscriberIds ?? [])
             {
@@ -402,6 +404,7 @@ public sealed class UserSettingsStore
         settings.WebStreamOutputDeviceIds = NormalizeChannelOutputDevices(settings.WebStreamOutputDeviceIds);
         settings.WebStreamVolumes = NormalizeWebStreamVolumes(settings.WebStreamVolumes);
         settings.RecordingRootPath = NormalizeRecordingRootPath(settings.RecordingRootPath);
+        settings.RecordingEnabledChannelKeys = NormalizeNames(settings.RecordingEnabledChannelKeys);
         settings.SelectedWebStreams = NormalizeNames(settings.SelectedWebStreams);
         settings.GlobalPttKey = NormalizeGlobalPttKey(settings.GlobalPttKey);
         settings.TransmitSelectedChannelKeys = NormalizeNames(settings.TransmitSelectedChannelKeys);
@@ -488,7 +491,7 @@ public sealed class UserSettingsStore
         }
 
         if (settings.RecordingRetentionDays != 7 || !string.IsNullOrWhiteSpace(settings.RecordingRootPath) ||
-            settings.RecordingIgnoredSubscriberIds.Count > 0 ||
+            settings.RecordingEnabledChannelKeys.Count > 0 || settings.RecordingIgnoredSubscriberIds.Count > 0 ||
             settings.PatchGroupMemberships.Count > 0 || settings.PatchGroupModes.Count > 0 ||
             settings.PatchGroupEnabledStates.Count > 0 || settings.RetainPatchStateOnStartup)
         {
@@ -578,6 +581,7 @@ public sealed class UserSettingsStore
         {
             target.RecordingRetentionDays = source.RecordingRetentionDays;
             target.RecordingRootPath = source.RecordingRootPath;
+            target.RecordingEnabledChannelKeys = source.RecordingEnabledChannelKeys.ToList();
             target.RecordingIgnoredSubscriberIds = source.RecordingIgnoredSubscriberIds
                 .ToDictionary(entry => entry.Key, entry => entry.Value.ToList(), StringComparer.OrdinalIgnoreCase);
             target.PatchGroupMemberships = source.PatchGroupMemberships

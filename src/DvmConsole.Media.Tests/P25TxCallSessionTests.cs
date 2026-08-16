@@ -56,6 +56,34 @@ public sealed class P25TxCallSessionTests
         Assert.Throws<InvalidOperationException>(() => session.Process(new short[160]));
     }
 
+    [Fact]
+    public void PadsPartialAudioIntoAnLduBeforeSendingTerminators()
+    {
+        var packets = new List<(byte[] Payload, ushort Sequence)>();
+        using var session = new P25TxCallSession(
+            sourceId: 1,
+            destinationId: 2,
+            streamId: 3,
+            vocoder: new FakeVocoderSession(),
+            send: (payload, sequence, _) => packets.Add((payload.ToArray(), sequence)));
+
+        session.Start();
+        Assert.Equal(0, session.Process(new short[161]));
+
+        session.End();
+
+        Assert.Equal(6, packets.Count);
+        Assert.Equal(P25DfsiFrameCodec.Ldu1Duid, packets[1].Payload[22]);
+        Assert.Equal((ushort)0, packets[1].Sequence);
+        Assert.All(packets.Skip(2), packet =>
+        {
+            Assert.Equal(P25DfsiFrameCodec.TduDuid, packet.Payload[22]);
+            Assert.Equal(P25DfsiFrameCodec.RtpCallEndSequence, packet.Sequence);
+        });
+        Assert.Equal(9, session.CodewordsEncoded);
+        Assert.Equal(1, session.LdusSent);
+    }
+
     private sealed class FakeVocoderSession : IVocoderSession
     {
         public int Encode(ReadOnlySpan<short> samples, Span<byte> codeword)

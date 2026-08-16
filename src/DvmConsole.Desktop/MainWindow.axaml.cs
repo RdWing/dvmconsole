@@ -1358,6 +1358,8 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         Systems = systems.ToArray();
         Zones = zones.ToArray();
         RestoreChannelWidgetLayout();
+        foreach (ZoneViewModel zone in Zones)
+            zone.SetWidgetCardHeight(ChannelCardHeight);
         foreach (ChannelViewModel channel in Systems.SelectMany(system => system.Channels).Distinct())
             channel.SetDarkMode(userSettings.DarkMode);
         foreach (ZoneViewModel zone in Zones)
@@ -1421,6 +1423,9 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
                 userSettings.ChannelOutputDeviceIds.TryGetValue(channel.SettingsKey, out string? savedOutputDeviceId)
                     ? savedOutputDeviceId
                     : string.Empty);
+            channel.RestoreRecordingEnabled(userSettings.RecordingEnabledChannelKeys.Contains(
+                channel.SettingsKey,
+                StringComparer.OrdinalIgnoreCase));
             channel.TransmitEncryptionChanged += HandleChannelEncryptionChanged;
             channel.RecordingStateChanged += HandleChannelRecordingChanged;
             channel.VolumeChanged += HandleChannelVolumeChanged;
@@ -1435,6 +1440,8 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             channel.RestoreTransmitSelection(userSettings.TransmitSelectedChannelKeys.Contains(
                 channel.SettingsKey,
                 StringComparer.OrdinalIgnoreCase));
+            if (channel.IsRecordingEnabled)
+                _ = EnsureRecordingAudioAsync(channel);
         }
 
         foreach (SystemViewModel system in Systems)
@@ -1566,7 +1573,10 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             if (userSettings.ChannelWidgetPositions.Count == 0)
                 ApplyDefaultChannelWidgetLayout();
             foreach (ZoneViewModel zone in Zones)
+            {
+                zone.SetWidgetCardHeight(ChannelCardHeight);
                 zone.RefreshWidgetCanvasBounds();
+            }
         }
     }
 
@@ -1574,7 +1584,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     public double UiSmallFontSize => UiFontSize - 2;
     public double UiCompactFontSize => UiFontSize - 3;
     public double UiHeadingFontSize => UiFontSize + 4;
-    public double ChannelCardHeight => 134 + ((UiFontSize - 14) * 4);
+    public double ChannelCardHeight => 122 + ((UiFontSize - 14) * 3);
 
     public double UiScale
     {
@@ -3335,6 +3345,12 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         if (sender is not ChannelViewModel channel)
             return;
 
+        userSettings.RecordingEnabledChannelKeys.RemoveAll(
+            key => key.Equals(channel.SettingsKey, StringComparison.OrdinalIgnoreCase));
+        if (enabled)
+            userSettings.RecordingEnabledChannelKeys.Add(channel.SettingsKey);
+        PersistUserSettings();
+
         if (!enabled)
         {
             callRecordings.StopChannel(channel);
@@ -3508,9 +3524,6 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     {
         if (!audioCoordinator.IsActive(channel))
             await StartAudioAsync(channel);
-
-        if (!audioCoordinator.IsActive(channel))
-            channel.SetRecordingEnabled(false);
     }
 
     private void HandleDecodedSamples(ChannelViewModel channel, ReadOnlyMemory<short> samples)
@@ -5613,8 +5626,17 @@ public sealed class ZoneViewModel : INotifyPropertyChanged
     public string? TabTextColor { get; }
     public IBrush TabBrush => CreateBrush(TabColor, darkMode ? "#151D26" : "#E8EDF3");
     public IBrush TabTextBrush => CreateBrush(TabTextColor, darkMode ? "#DCE3EB" : "#18212B");
+    private double widgetCardHeight = 122;
     public double WidgetCanvasWidth => Math.Max(1, Channels.Count == 0 ? 0 : Channels.Max(channel => channel.WidgetX + channel.CardWidth + 12));
-    public double WidgetCanvasHeight => Math.Max(1, Channels.Count == 0 ? 0 : Channels.Max(channel => channel.WidgetY + 165));
+    public double WidgetCanvasHeight => Math.Max(1, Channels.Count == 0 ? 0 : Channels.Max(channel => channel.WidgetY + widgetCardHeight + 12));
+
+    public void SetWidgetCardHeight(double height)
+    {
+        if (Math.Abs(widgetCardHeight - height) < 0.001)
+            return;
+        widgetCardHeight = height;
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(WidgetCanvasHeight)));
+    }
 
     public void RefreshWidgetCanvasBounds()
     {
@@ -5938,6 +5960,12 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
     }
 
     public void SetRecordingEnabled(bool enabled)
+        => SetRecordingEnabledCore(enabled, raiseStateChanged: true);
+
+    public void RestoreRecordingEnabled(bool enabled)
+        => SetRecordingEnabledCore(enabled, raiseStateChanged: false);
+
+    private void SetRecordingEnabledCore(bool enabled, bool raiseStateChanged)
     {
         if (recordingEnabled == enabled)
             return;
@@ -5948,7 +5976,8 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(RecordingConfigurationButtonText)));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(RecordingSelectionBrush)));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(RecordingSelectionBorderBrush)));
-        RecordingStateChanged?.Invoke(this, enabled);
+        if (raiseStateChanged)
+            RecordingStateChanged?.Invoke(this, enabled);
         (RecordingCommand as AsyncRelayCommand)?.RaiseCanExecuteChanged();
     }
 

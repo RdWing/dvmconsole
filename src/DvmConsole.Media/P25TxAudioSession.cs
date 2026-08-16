@@ -64,6 +64,7 @@ public sealed class P25TxAudioSession : IDisposable
     private readonly P25Crypto? crypto;
     private readonly byte[] messageIndicator;
     private readonly List<byte> pendingImbe = [];
+    private int pendingPcmSamples;
     private ushort packetSequence;
     private bool sendLdu1 = true;
     private bool disposed;
@@ -113,7 +114,26 @@ public sealed class P25TxAudioSession : IDisposable
     {
         ObjectDisposedException.ThrowIf(disposed, this);
         int packetsBefore = LdusSent;
+        pendingPcmSamples = (pendingPcmSamples + samples.Length) % VocoderFrameSizes.PcmSamplesPerFrame;
         encoder.Process(samples, EmitCodeword);
+        return LdusSent - packetsBefore;
+    }
+
+    /// <summary>
+    /// Pads the final PCM frame and LDU with encoded silence so releasing PTT
+    /// does not discard the tail of a call.
+    /// </summary>
+    internal int CompleteLdu()
+    {
+        ObjectDisposedException.ThrowIf(disposed, this);
+        int packetsBefore = LdusSent;
+
+        if (pendingPcmSamples > 0)
+            Process(new short[VocoderFrameSizes.PcmSamplesPerFrame - pendingPcmSamples]);
+
+        while (pendingImbe.Count > 0)
+            Process(new short[VocoderFrameSizes.PcmSamplesPerFrame]);
+
         return LdusSent - packetsBefore;
     }
 
@@ -123,6 +143,7 @@ public sealed class P25TxAudioSession : IDisposable
             return;
         encoder.Dispose();
         pendingImbe.Clear();
+        pendingPcmSamples = 0;
         disposed = true;
     }
 

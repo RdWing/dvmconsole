@@ -85,6 +85,7 @@ public sealed class P25TxCallSession : IDisposable
         if (ended)
             return;
 
+        audio.CompleteLdu();
         byte[] terminator = P25DfsiFrameCodec.CreateTduPayload(sourceId, destinationId, grantDemand: false);
         for (int index = 0; index < EndTduCount; index++)
             send(terminator, P25DfsiFrameCodec.RtpCallEndSequence, streamId);

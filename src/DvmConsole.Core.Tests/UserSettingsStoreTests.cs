@@ -185,6 +185,7 @@ public sealed class UserSettingsStoreTests
                 {
                     [" System 1\u001FDispatch "] = [42, 42, 0]
                 },
+                RecordingEnabledChannelKeys = [" System 1\u001FDispatch ", "system 1\u001fdispatch"],
                 PatchGroupMemberships = new Dictionary<string, List<PatchMemberSetting>>
                 {
                     [" Dispatch "] =
@@ -270,6 +271,7 @@ public sealed class UserSettingsStoreTests
             Assert.Equal("web-stream-output-1", loaded.WebStreamOutputDeviceIds["News"]);
             Assert.Equal(14, loaded.RecordingRetentionDays);
             Assert.Equal(Path.GetFullPath("/tmp/recordings"), loaded.RecordingRootPath);
+            Assert.Equal(["System 1\u001FDispatch"], loaded.RecordingEnabledChannelKeys);
             Assert.Equal([42u], loaded.RecordingIgnoredSubscriberIds["System 1\u001FDispatch"]);
             Assert.Equal(2, loaded.PatchGroupMemberships["Dispatch"].Count);
             Assert.True(loaded.PatchGroupModes["Dispatch"]);
