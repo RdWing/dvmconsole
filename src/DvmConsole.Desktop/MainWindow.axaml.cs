@@ -1545,6 +1545,10 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(UiCompactFontSize)));
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(UiHeadingFontSize)));
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ChannelCardHeight)));
+            if (userSettings.ChannelWidgetPositions.Count == 0)
+                ApplyDefaultChannelWidgetLayout();
+            foreach (ZoneViewModel zone in Zones)
+                zone.RefreshWidgetCanvasBounds();
         }
     }
 
@@ -1552,7 +1556,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     public double UiSmallFontSize => UiFontSize - 2;
     public double UiCompactFontSize => UiFontSize - 3;
     public double UiHeadingFontSize => UiFontSize + 4;
-    public double ChannelCardHeight => 126 + ((UiFontSize - 14) * 4);
+    public double ChannelCardHeight => 145 + ((UiFontSize - 14) * 4);
 
     public double UiScale
     {
@@ -4982,7 +4986,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
                 if (x + channel.CardWidth > 900)
                 {
                     x = 0;
-                    y += 136;
+                    y += ChannelCardHeight + 6;
                 }
             }
         }
@@ -5580,7 +5584,13 @@ public sealed class ZoneViewModel : INotifyPropertyChanged
     public IBrush TabBrush => CreateBrush(TabColor, darkMode ? "#151D26" : "#E8EDF3");
     public IBrush TabTextBrush => CreateBrush(TabTextColor, darkMode ? "#DCE3EB" : "#18212B");
     public double WidgetCanvasWidth => Math.Max(1, Channels.Count == 0 ? 0 : Channels.Max(channel => channel.WidgetX + channel.CardWidth + 12));
-    public double WidgetCanvasHeight => Math.Max(1, Channels.Count == 0 ? 0 : Channels.Max(channel => channel.WidgetY + 160));
+    public double WidgetCanvasHeight => Math.Max(1, Channels.Count == 0 ? 0 : Channels.Max(channel => channel.WidgetY + 176));
+
+    public void RefreshWidgetCanvasBounds()
+    {
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(WidgetCanvasWidth)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(WidgetCanvasHeight)));
+    }
 
     public void SetDarkMode(bool enabled)
     {
