@@ -14,6 +14,7 @@ public sealed class P25RxAudioSession : IAsyncDisposable
     private readonly VoiceFrameDecoder decoder;
     private readonly IAudioPlayback playback;
     private readonly IP25KeyResolver? keyResolver;
+    private readonly string systemName;
     private readonly VoicePacketSequenceTracker sequenceTracker = new();
     private P25CryptoState? cryptoState;
     private bool disposed;
@@ -22,12 +23,14 @@ public sealed class P25RxAudioSession : IAsyncDisposable
         P25TrafficSelector selector,
         IVocoderSession vocoder,
         IAudioPlayback playback,
-        IP25KeyResolver? keyResolver = null)
+        IP25KeyResolver? keyResolver = null,
+        string systemName = "")
     {
         this.selector = selector ?? throw new ArgumentNullException(nameof(selector));
         decoder = new VoiceFrameDecoder(vocoder, VocoderMode.P25Imbe);
         this.playback = playback ?? throw new ArgumentNullException(nameof(playback));
         this.keyResolver = keyResolver;
+        this.systemName = systemName ?? string.Empty;
     }
 
     public int FramesDecoded { get; private set; }
@@ -126,7 +129,7 @@ public sealed class P25RxAudioSession : IAsyncDisposable
     private P25CryptoState CreateCryptoState(uint streamId, P25DfsiFrameCodec.P25EncryptionMetadata metadata)
     {
         if (keyResolver is null ||
-            !keyResolver.TryResolve(metadata.AlgorithmId, metadata.KeyId, out ReadOnlyMemory<byte> key))
+            !keyResolver.TryResolve(systemName, metadata.AlgorithmId, metadata.KeyId, out ReadOnlyMemory<byte> key))
         {
             throw new NotSupportedException(
                 $"P25 encrypted receive requires key 0x{metadata.KeyId:X} for algorithm 0x{metadata.AlgorithmId:X2}.");
@@ -179,7 +182,7 @@ public sealed class P25RxAudioSession : IAsyncDisposable
             if (metadata.AlgorithmId != cryptoState.AlgorithmId || metadata.KeyId != cryptoState.KeyId)
             {
                 if (keyResolver is null ||
-                    !keyResolver.TryResolve(metadata.AlgorithmId, metadata.KeyId, out ReadOnlyMemory<byte> key))
+                    !keyResolver.TryResolve(systemName, metadata.AlgorithmId, metadata.KeyId, out ReadOnlyMemory<byte> key))
                 {
                     throw new NotSupportedException(
                         $"P25 encrypted receive requires key 0x{metadata.KeyId:X} for algorithm 0x{metadata.AlgorithmId:X2}.");

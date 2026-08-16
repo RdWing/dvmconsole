@@ -150,7 +150,7 @@ When enabled:
 
 - selected resources are restored on startup
 - saved volume for restored resources is restored
-- encrypted restored resources request keys after FNE connection and a short delay
+- configured encrypted P25 resources request keys through KMM after their FNE connects and use the local key file as fallback
 
 When disabled:
 

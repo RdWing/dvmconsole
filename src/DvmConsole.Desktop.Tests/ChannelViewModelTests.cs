@@ -476,7 +476,7 @@ public sealed class ChannelViewModelTests
     [Fact]
     public void EncryptedP25CanListenWhenTheConfiguredKeyResolves()
     {
-        var keyRing = new P25KeyRing(new KeyContainer
+        var keyRing = new P25KeyRing("System 1", new KeyContainer
         {
             Keys =
             [
@@ -484,7 +484,7 @@ public sealed class ChannelViewModelTests
                 {
                     KeyId = 0x50,
                     AlgId = P25Defines.P25_ALGO_AES,
-                    Key = "00112233445566778899AABBCCDDEEFF"
+                    Key = "00112233445566778899AABBCCDDEEFF00112233445566778899AABBCCDDEEFF"
                 }
             ]
         });
@@ -514,7 +514,7 @@ public sealed class ChannelViewModelTests
     [Fact]
     public void EncryptedP25RefreshesCapabilitiesAfterRuntimeKeyArrival()
     {
-        var keyRing = new P25KeyRing(new KeyContainer());
+        var keyRing = new P25KeyRing();
         var channel = new ChannelViewModel(new ChannelConfiguration
         {
             Name = "Runtime-key P25",
@@ -528,7 +528,11 @@ public sealed class ChannelViewModelTests
         Assert.False(channel.CanListen);
         Assert.False(channel.CanTransmit);
 
-        keyRing.AddOrReplace(P25Defines.P25_ALGO_AES, 0x50, Convert.FromHexString("00112233445566778899AABBCCDDEEFF"));
+        keyRing.AddOrReplaceFromFne(
+            "System 1",
+            P25Defines.P25_ALGO_AES,
+            0x50,
+            Convert.FromHexString("00112233445566778899AABBCCDDEEFF00112233445566778899AABBCCDDEEFF"));
         channel.RefreshEncryptionState();
 
         Assert.True(channel.CanListen);
@@ -538,7 +542,7 @@ public sealed class ChannelViewModelTests
     [Fact]
     public void SelectableClearP25UsesClearDefinitionForGeneratedTransmit()
     {
-        var keyRing = new P25KeyRing(new KeyContainer
+        var keyRing = new P25KeyRing("System 1", new KeyContainer
         {
             Keys =
             [
@@ -546,7 +550,7 @@ public sealed class ChannelViewModelTests
                 {
                     KeyId = 0x50,
                     AlgId = P25Defines.P25_ALGO_AES,
-                    Key = "00112233445566778899AABBCCDDEEFF"
+                    Key = "00112233445566778899AABBCCDDEEFF00112233445566778899AABBCCDDEEFF"
                 }
             ]
         });
@@ -571,7 +575,7 @@ public sealed class ChannelViewModelTests
     [Fact]
     public void RestoresSelectableEncryptionStateWithoutChangingCodeplugPolicy()
     {
-        var keyRing = new P25KeyRing(new KeyContainer
+        var keyRing = new P25KeyRing("System 1", new KeyContainer
         {
             Keys =
             [
@@ -579,7 +583,7 @@ public sealed class ChannelViewModelTests
                 {
                     KeyId = 0x50,
                     AlgId = P25Defines.P25_ALGO_AES,
-                    Key = "00112233445566778899AABBCCDDEEFF"
+                    Key = "00112233445566778899AABBCCDDEEFF00112233445566778899AABBCCDDEEFF"
                 }
             ]
         });

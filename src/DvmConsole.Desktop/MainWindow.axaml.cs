@@ -3394,20 +3394,23 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         ConsoleConfiguration configuration,
         out string? warning)
     {
+        var ring = new P25KeyRing();
         warning = null;
         if (string.IsNullOrWhiteSpace(configuration.KeyFile))
-            return new P25KeyRing(new KeyContainer());
+            return ring;
 
         try
         {
-            return new P25KeyRing(KeyFileLoader.Load(
-                ConfigurationLoader.ResolvePath(configuration, configuration.KeyFile)));
+            KeyContainer localKeys = KeyFileLoader.Load(
+                ConfigurationLoader.ResolvePath(configuration, configuration.KeyFile));
+            foreach (SystemConfiguration system in configuration.Systems)
+                ring.AddLocalKeys(system.Name, localKeys);
         }
         catch (Exception exception) when (exception is IOException or InvalidDataException or FormatException or YamlDotNet.Core.YamlException)
         {
-            warning = $"Encryption keys unavailable: {exception.Message} Encrypted P25 channels are disabled.";
-            return new P25KeyRing(new KeyContainer());
+            warning = $"Encryption keys unavailable: {exception.Message} Encrypted P25 channels are disabled until FNE/KMM supplies their keys.";
         }
+        return ring;
     }
 
     private static IReadOnlyList<SystemViewModel> CreateSystemViewModels(
@@ -3494,6 +3497,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         await recordingPlayback.DisposeAsync().ConfigureAwait(false);
         audioReconfigurationLock.Dispose();
         callRecordings.Dispose();
+        p25KeyRing?.Dispose();
         userBackgroundBitmap?.Dispose();
         userBackgroundBitmap = null;
         foreach (ChannelViewModel channel in Systems.SelectMany(system => system.Channels))
@@ -3593,10 +3597,19 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             StatusText = $"{system.Name}: {status.State} — {status.Message}";
             NotifyConnectionPresentationChanged();
             if (status.State == FneConnectionState.Connected)
-                RequestMissingP25Keys(system);
+                RequestConfiguredP25Keys(system);
             bool stateChanged = !lastConnectionStates.TryGetValue(system.Name, out FneConnectionState previousState) ||
                 previousState != status.State;
             lastConnectionStates[system.Name] = status.State;
+            if (stateChanged &&
+                previousState == FneConnectionState.Connected &&
+                status.State != FneConnectionState.Connected &&
+                p25KeyRing is not null)
+            {
+                p25KeyRing.ClearFneKeys(system.Name);
+                RefreshP25KeyState();
+                _ = SyncPatchSourceDecodeAsync();
+            }
             if (stateChanged && status.State is FneConnectionState.Connected or FneConnectionState.Disconnected or FneConnectionState.Faulted)
             {
                 string stateText = status.State.ToString().ToLowerInvariant();
@@ -3660,21 +3673,15 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             Dispatcher.UIThread.Post(Apply);
     }
 
-    private void RequestMissingP25Keys(SystemViewModel system)
+    private void RequestConfiguredP25Keys(SystemViewModel system)
     {
+        // Request every configured key even when a local fallback is available.
+        // Valid KMM material takes precedence for this system when it arrives.
         if (p25KeyRing is null)
             return;
 
-        foreach (ChannelViewModel channel in system.Channels)
+        foreach ((byte algorithmId, ushort keyId) in ResolveConfiguredP25KeyRequests(system.Channels))
         {
-            if (channel.Definition.Mode != "p25" || !channel.Definition.IsEncrypted ||
-                !P25KeyRing.TryParseAlgorithmId(channel.Definition.EncryptionAlgorithm, out byte algorithmId) ||
-                !P25KeyRing.TryParseKeyId(channel.Definition.EncryptionKeyId, out ushort keyId) ||
-                p25KeyRing.CanResolve(channel.Definition.EncryptionAlgorithm, channel.Definition.EncryptionKeyId))
-            {
-                continue;
-            }
-
             try
             {
                 system.RequestP25Key(algorithmId, keyId);
@@ -3686,26 +3693,68 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         }
     }
 
+    internal static IReadOnlyList<(byte AlgorithmId, ushort KeyId)> ResolveConfiguredP25KeyRequests(
+        IEnumerable<ChannelViewModel> channels)
+    {
+        ArgumentNullException.ThrowIfNull(channels);
+        return channels
+            .Where(channel => channel.Definition.Mode == "p25" && channel.Definition.IsEncrypted)
+            .Select(channel =>
+            {
+                byte algorithmId = 0;
+                ushort keyId = 0;
+                bool valid = P25KeyRing.TryParseAlgorithmId(
+                        channel.Definition.EncryptionAlgorithm,
+                        out algorithmId) &&
+                    P25KeyRing.TryParseKeyId(channel.Definition.EncryptionKeyId, out keyId);
+                return (Valid: valid, AlgorithmId: algorithmId, KeyId: keyId);
+            })
+            .Where(request => request.Valid)
+            .Select(request => (request.AlgorithmId, request.KeyId))
+            .Distinct()
+            .ToArray();
+    }
+
     private void HandleSystemKeyResponse(object? sender, FneKeyResponse response)
     {
-        if (sender is not SystemViewModel system || p25KeyRing is null)
+        if (sender is not SystemViewModel system ||
+            p25KeyRing is null ||
+            !response.SystemName.Equals(system.Name, StringComparison.OrdinalIgnoreCase))
+        {
             return;
+        }
 
         void Apply()
         {
-            p25KeyRing.AddOrReplace(response.AlgorithmId, response.KeyId, response.KeyMaterial.Span);
-            foreach (ChannelViewModel channel in Systems.SelectMany(candidate => candidate.Channels))
-                channel.RefreshEncryptionState();
-            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(KeyStatusItems)));
-            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(HasNoKeyStatusItems)));
-            StatusText = $"{system.Name}: P25 key material received.";
-            _ = SyncPatchSourceDecodeAsync();
+            try
+            {
+                p25KeyRing.AddOrReplaceFromFne(
+                    system.Name,
+                    response.AlgorithmId,
+                    response.KeyId,
+                    response.KeyMaterial.Span);
+                RefreshP25KeyState();
+                StatusText = $"{system.Name}: P25 key 0x{response.KeyId:X4} received through FNE/KMM.";
+                _ = SyncPatchSourceDecodeAsync();
+            }
+            catch (ArgumentException exception)
+            {
+                StatusText = $"{system.Name}: rejected P25 KMM key 0x{response.KeyId:X4} — {exception.Message}";
+            }
         }
 
         if (Dispatcher.UIThread.CheckAccess())
             Apply();
         else
             Dispatcher.UIThread.Post(Apply);
+    }
+
+    private void RefreshP25KeyState()
+    {
+        foreach (ChannelViewModel channel in Systems.SelectMany(candidate => candidate.Channels))
+            channel.RefreshEncryptionState();
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(KeyStatusItems)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(HasNoKeyStatusItems)));
     }
 
     private void HandleChannelEncryptionChanged(object? sender, bool encrypted)
@@ -5978,6 +6027,7 @@ public sealed class SystemViewModel : INotifyPropertyChanged, IAsyncDisposable
     private readonly FneConnection connection;
     private readonly FneConnectionOptions options;
     private string connectionStatus = "Disconnected";
+    private readonly object keyRequestSync = new();
     private readonly HashSet<(byte AlgorithmId, ushort KeyId)> requestedP25Keys = [];
     private long receivedPacketCount;
     private long receivedPacketBytes;
@@ -6074,7 +6124,8 @@ public sealed class SystemViewModel : INotifyPropertyChanged, IAsyncDisposable
     public async Task StopAsync(CancellationToken cancellationToken = default)
     {
         await connection.StopAsync(cancellationToken).ConfigureAwait(false);
-        requestedP25Keys.Clear();
+        lock (keyRequestSync)
+            requestedP25Keys.Clear();
     }
 
     public async Task RestartAsync(CancellationToken cancellationToken = default)
@@ -6093,8 +6144,11 @@ public sealed class SystemViewModel : INotifyPropertyChanged, IAsyncDisposable
 
     public void RequestP25Key(byte algorithmId, ushort keyId)
     {
-        if (!requestedP25Keys.Add((algorithmId, keyId)))
-            return;
+        lock (keyRequestSync)
+        {
+            if (!requestedP25Keys.Add((algorithmId, keyId)))
+                return;
+        }
 
         try
         {
@@ -6102,7 +6156,8 @@ public sealed class SystemViewModel : INotifyPropertyChanged, IAsyncDisposable
         }
         catch
         {
-            requestedP25Keys.Remove((algorithmId, keyId));
+            lock (keyRequestSync)
+                requestedP25Keys.Remove((algorithmId, keyId));
             throw;
         }
     }
@@ -6142,6 +6197,11 @@ public sealed class SystemViewModel : INotifyPropertyChanged, IAsyncDisposable
 
     private void HandleConnectionStatus(object? sender, FneConnectionStatus status)
     {
+        if (status.State != FneConnectionState.Connected)
+        {
+            lock (keyRequestSync)
+                requestedP25Keys.Clear();
+        }
         StatusChanged?.Invoke(this, status);
     }
 
@@ -6421,11 +6481,13 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
         runtime.Definition.IsEncrypted &&
         runtime.Definition.SelectableEncryption &&
         (p25KeyResolver?.CanResolve(
+            runtime.Definition.SystemName,
             runtime.Definition.EncryptionAlgorithm,
             runtime.Definition.EncryptionKeyId) ?? false);
     public string EncryptionStatusText => !runtime.Definition.IsEncrypted
         ? "Clear"
         : p25KeyResolver?.CanResolve(
+            runtime.Definition.SystemName,
             runtime.Definition.EncryptionAlgorithm,
             runtime.Definition.EncryptionKeyId) == true
             ? "Key available"
@@ -6436,6 +6498,7 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
         "dmr" or "analog" => !runtime.Definition.IsEncrypted,
         "p25" => !runtime.Definition.IsEncrypted ||
                  (p25KeyResolver?.CanResolve(
+                     runtime.Definition.SystemName,
                      runtime.Definition.EncryptionAlgorithm,
                      runtime.Definition.EncryptionKeyId) ?? false),
         _ => false
@@ -6447,6 +6510,7 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
             "dmr" or "analog" => !runtime.Definition.IsEncrypted,
             "p25" => !runtime.Definition.IsEncrypted ||
                      (p25KeyResolver?.CanResolve(
+                         runtime.Definition.SystemName,
                          runtime.Definition.EncryptionAlgorithm,
                          runtime.Definition.EncryptionKeyId) ?? false),
             _ => false

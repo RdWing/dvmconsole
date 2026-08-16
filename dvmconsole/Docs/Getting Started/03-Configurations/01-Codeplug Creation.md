@@ -68,7 +68,7 @@ Fields:
 - `address`: FNE hostname or IP address.
 - `port`: FNE port.
 - `peerId`: peer ID used for the console connection.
-- `rid`: radio ID used when the console transmits.
+- `rid`: radio ID used when the console transmits and when it requests configured P25 keys through FNE/KMM.
 - `password`: FNE password.
 - `encrypted`: whether the FNE connection uses transport encryption.
 - `presharedKey`: key used when `encrypted` is enabled.
@@ -234,7 +234,7 @@ Use `keyFile` to reference a YAML key file:
 keyFile: "Full/Path/To/Keyfile.clear"
 ```
 
-See **Encryption Keys** for the key file format and runtime behavior.
+The file is the automatic fallback for configured P25 keys. After each system connects, the console first requests those keys through FNE/KMM; a valid system-scoped KMM key takes precedence until that FNE disconnects. See **Encryption Keys** for the file format and runtime behavior.
 
 ---
 

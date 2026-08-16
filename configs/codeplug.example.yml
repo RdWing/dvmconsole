@@ -22,7 +22,9 @@
 # file.
 #
 
-# Full path to local key YAML file (see keys.example.clear for formatting)
+# Optional local fallback key YAML file (see keys.example.clear for formatting).
+# After each FNE connects, configured P25 keys are requested through KMM first;
+# a valid KMM key takes precedence until that system disconnects.
 #keyFile: "Full/Path/To/Keyfile.clear"
 
 #
@@ -39,7 +41,7 @@ systems:
     port: 62031
     # Peer ID for FNE
     peerId: 1000001
-    # Radio ID transmitted traffic will come from
+    # Radio ID used for transmitted traffic and P25 KMM key requests
     rid: "1001"
     # FNE Password
     password: "RPT_PASSWORD"
@@ -97,7 +99,7 @@ zones:
         # Optional: show an in-card SELECT toggle so operators can choose encrypted or clear TX.
         # Requires keyId/algo to be configured. The selected state is saved by system/TG.
         selectable_encryption: true
-        # Ignored now, we use dvmfne KMM support (This will be used in the future to ovveride FNE KMM support)
+        # Legacy field; ignored. KMM is preferred automatically and keyFile is the fallback.
         encryptionKey: null
         # Voice mode DMR ("dmr"), P25 ("p25")
         mode: "p25"

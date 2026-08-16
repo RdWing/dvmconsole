@@ -136,7 +136,7 @@ public sealed class P25DfsiFrameCodecTests
             new P25TrafficSelector(100),
             vocoder,
             playback,
-            new P25KeyRing(new KeyContainer()));
+            new P25KeyRing());
 
         Assert.Equal(0, await session.ProcessAsync(CreateTraffic(
             "LDU2",
@@ -173,7 +173,7 @@ public sealed class P25DfsiFrameCodecTests
         payload[183] = (byte)keyId;
         messageIndicator.CopyTo(payload, 184);
 
-        var resolver = new P25KeyRing(new KeyContainer
+        var resolver = new P25KeyRing(string.Empty, new KeyContainer
         {
             Keys =
             [
@@ -275,7 +275,7 @@ public sealed class P25DfsiFrameCodecTests
         ldu2Payload[113] = (byte)(keyId >> 8);
         ldu2Payload[114] = (byte)keyId;
 
-        var resolver = new P25KeyRing(new KeyContainer
+        var resolver = new P25KeyRing(string.Empty, new KeyContainer
         {
             Keys =
             [
@@ -313,7 +313,7 @@ public sealed class P25DfsiFrameCodecTests
         const byte algorithmId = P25Defines.P25_ALGO_AES;
         byte[] key = Enumerable.Range(1, 32).Select(static value => (byte)value).ToArray();
         byte[] messageIndicator = Enumerable.Range(0x10, 9).Select(static value => (byte)value).ToArray();
-        var resolver = new P25KeyRing(new KeyContainer
+        var resolver = new P25KeyRing(string.Empty, new KeyContainer
         {
             Keys =
             [

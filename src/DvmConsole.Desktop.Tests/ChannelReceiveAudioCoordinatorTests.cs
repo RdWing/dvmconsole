@@ -171,7 +171,7 @@ public sealed class ChannelReceiveAudioCoordinatorTests
     {
         var backend = new FakeAudioBackend();
         var vocoder = new FakeVocoderBackend();
-        var keyRing = new P25KeyRing(new KeyContainer
+        var keyRing = new P25KeyRing("System 1", new KeyContainer
         {
             Keys =
             [
@@ -179,7 +179,7 @@ public sealed class ChannelReceiveAudioCoordinatorTests
                 {
                     KeyId = 0x50,
                     AlgId = P25Defines.P25_ALGO_AES,
-                    Key = "00112233445566778899AABBCCDDEEFF"
+                    Key = "00112233445566778899AABBCCDDEEFF00112233445566778899AABBCCDDEEFF"
                 }
             ]
         });

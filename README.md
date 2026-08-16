@@ -134,8 +134,7 @@ release archives do not contain a stale copy of the documentation.
    The full file paths for both `keys.clear` and `alias.yml` must be defined within `codeplug.yml` if used.
 
 2. **Configure Encryption Keys (`keys.clear`)**  
-   If your system's talkgroups use encryption, define your key entries in the `keys.clear` file.  
-   Each key entry should match the Key ID referenced in your codeplug.
+   For encrypted P25 talkgroups, the console requests configured keys from each connected FNE through KMM. An optional `keys.clear` file supplies the automatic local fallback. KMM-delivered keys take precedence for their originating system until it disconnects.
 
 3. **Configure RID Aliases (`alias.yml`)**  
    To display friendly names instead of raw RIDs, populate `alias.yml` with your Radio ID to alias mappings.  
