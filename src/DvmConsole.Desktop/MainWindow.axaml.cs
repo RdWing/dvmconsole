@@ -16,6 +16,7 @@ using DvmConsole.Core.Runtime;
 using DvmConsole.Core.Settings;
 using DvmConsole.FneClient;
 using DvmConsole.Media;
+using DvmConsole.Vocoder;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Diagnostics;
@@ -1195,6 +1196,12 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     internal const double ChannelWidgetSpacing = 8;
     internal const double DefaultWidgetCanvasWidth = 900;
     private const int MaximumSubscriberCommandAuditEntries = 50;
+    private const string DvmConsoleProcessingDisplay = "DVM Console processing";
+    private const string AppleVoiceProcessingDisplay = "Apple voice processing";
+    private static readonly string[] AppleAudioProcessingModeOptions =
+        [DvmConsoleProcessingDisplay, AppleVoiceProcessingDisplay];
+    private static readonly string[] DvmConsoleAudioProcessingModeOptions =
+        [DvmConsoleProcessingDisplay];
     private static readonly int[] SerialPttBaudRateOptions = [1_200, 2_400, 4_800, 9_600, 19_200, 38_400, 57_600, 115_200];
     private readonly ChannelReceiveAudioCoordinator audioCoordinator;
     private readonly UserSettingsStore userSettingsStore;
@@ -1257,6 +1264,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     private string audioInputMidGainText = "0";
     private string audioInputHighGainText = "0";
     private bool audioInputAgcEnabled;
+    private string selectedAudioProcessingMode = "DVM Console processing";
     private string audioInputPresetNameText = string.Empty;
     private string dtmfPresetName = string.Empty;
     private string tonePresetName = string.Empty;
@@ -1316,6 +1324,15 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         codeplugDiagnosticsText = statusText;
         this.userSettingsStore = userSettingsStore ?? new UserSettingsStore(UserSettingsStore.DefaultPath);
         userSettings = this.userSettingsStore.Load();
+        if (OperatingSystem.IsMacOS() &&
+            userSettings.AudioProcessingMode == UserSettings.AppleVoiceProcessingMode)
+        {
+            // Voice Processing I/O owns the paired system route. Custom output
+            // devices remain available only as per-channel HAL routes outside
+            // the echo-cancellation reference.
+            userSettings.AudioInputDeviceId = "default";
+            userSettings.AudioOutputDeviceId = "default";
+        }
         this.serialPortProvider = serialPortProvider ?? SerialPttSource.GetAvailablePortNames;
         this.serialPttFactory = serialPttFactory ?? ((portName, baudRate) => new SerialPttSource(portName, baudRate));
         uiScaleTransform = new ScaleTransform
@@ -1366,6 +1383,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         audioInputMidGainText = userSettings.AudioInputEqMidGainDb.ToString("0.###", CultureInfo.InvariantCulture);
         audioInputHighGainText = userSettings.AudioInputEqHighGainDb.ToString("0.###", CultureInfo.InvariantCulture);
         audioInputAgcEnabled = userSettings.AudioInputAgcEnabled;
+        selectedAudioProcessingMode = ToAudioProcessingModeDisplay(userSettings.AudioProcessingMode);
         audioInputPresetNameText = userSettings.AudioInputPresetName;
         recordingRetentionDaysText = userSettings.RecordingRetentionDays.ToString(CultureInfo.InvariantCulture);
         recordingRootPathText = GetDefaultRecordingRoot(userSettings.RecordingRootPath);
@@ -1403,6 +1421,8 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             () => userSettings.AudioOutputDeviceId,
             HandleRecordingPlaybackFaulted);
         audioCoordinator = new ChannelReceiveAudioCoordinator(
+            CreateRadioAudioBackend,
+            () => new SoftwareVocoderBackend(Environment.GetEnvironmentVariable("DVMVOCODER_LIBRARY")),
             p25KeyResolver,
             HandleDecodedSamples,
             GetChannelVolume,
@@ -1412,13 +1432,15 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             new AudioInputProcessingOptions
             {
                 DeviceId = userSettings.AudioInputDeviceId,
+                ProcessingMode = GetConfiguredAudioProcessingMode(),
                 AgcEnabled = userSettings.AudioInputAgcEnabled,
                 Gain = userSettings.AudioInputGain,
                 LowGainDb = userSettings.AudioInputEqLowGainDb,
                 MidGainDb = userSettings.AudioInputEqMidGainDb,
                 HighGainDb = userSettings.AudioInputEqHighGainDb
             },
-            HandleTransmitSamples);
+            HandleTransmitSamples,
+            CreateRadioAudioBackend);
         toneTransmitCoordinator = new ToneTransmitCoordinator(p25KeyResolver);
         talkPermitTonePlayer = new TalkPermitTonePlayer(
             () => AudioBackendFactory.CreateDefault(Environment.GetEnvironmentVariable("DVM_AUDIO_LIBRARY")),
@@ -2032,6 +2054,35 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         get => audioInputAgcEnabled;
         set => SetField(ref audioInputAgcEnabled, value);
     }
+
+    public IReadOnlyList<string> AudioProcessingModeOptions
+        => OperatingSystem.IsMacOS()
+            ? AppleAudioProcessingModeOptions
+            : DvmConsoleAudioProcessingModeOptions;
+
+    public string SelectedAudioProcessingMode
+    {
+        get => selectedAudioProcessingMode;
+        set
+        {
+            string normalized = OperatingSystem.IsMacOS() && value == AppleVoiceProcessingDisplay
+                ? AppleVoiceProcessingDisplay
+                : DvmConsoleProcessingDisplay;
+            if (selectedAudioProcessingMode == normalized)
+                return;
+            SetField(ref selectedAudioProcessingMode, normalized);
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsDvmConsoleProcessingSelected)));
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(AudioProcessingDescription)));
+        }
+    }
+
+    public bool IsDvmConsoleProcessingSelected
+        => SelectedAudioProcessingMode == DvmConsoleProcessingDisplay;
+
+    public string AudioProcessingDescription
+        => IsDvmConsoleProcessingSelected
+            ? "DVM Console applies its gain, EQ, and optional AGC after microphone capture."
+            : "Apple Voice Processing I/O applies acoustic echo cancellation and automatic gain control to the default input/output pair. The final mixed radio output supplies the echo reference.";
 
     public string AudioInputPresetNameText
     {
@@ -3799,6 +3850,27 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             : 1.0;
     }
 
+    private IAudioBackend CreateRadioAudioBackend()
+        => AudioBackendFactory.CreateDefault(
+            Environment.GetEnvironmentVariable("DVM_AUDIO_LIBRARY"),
+            GetConfiguredAudioProcessingMode());
+
+    private AudioProcessingMode GetConfiguredAudioProcessingMode()
+        => OperatingSystem.IsMacOS() &&
+           userSettings.AudioProcessingMode == UserSettings.AppleVoiceProcessingMode
+            ? AudioProcessingMode.AppleVoiceProcessing
+            : AudioProcessingMode.DvmConsole;
+
+    private AudioProcessingMode GetSelectedAudioProcessingMode()
+        => SelectedAudioProcessingMode == AppleVoiceProcessingDisplay
+            ? AudioProcessingMode.AppleVoiceProcessing
+            : AudioProcessingMode.DvmConsole;
+
+    private static string ToAudioProcessingModeDisplay(string? mode)
+        => OperatingSystem.IsMacOS() && mode == UserSettings.AppleVoiceProcessingMode
+            ? AppleVoiceProcessingDisplay
+            : DvmConsoleProcessingDisplay;
+
     private string? GetChannelOutputDeviceId(ChannelViewModel channel)
     {
         if (userSettings.ChannelOutputDeviceIds.TryGetValue(channel.SettingsKey, out string? channelDeviceId))
@@ -4594,10 +4666,23 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             return;
         }
 
+        AudioProcessingMode processingMode = GetSelectedAudioProcessingMode();
         string deviceId = AudioInputDeviceIdText.Trim();
         string outputDeviceId = AudioOutputDeviceIdText.Trim();
+        if (processingMode == AudioProcessingMode.AppleVoiceProcessing)
+        {
+            deviceId = audioInputDevices.FirstOrDefault(device => device.IsDefault)?.Id ?? "default";
+            outputDeviceId = audioOutputDevices.FirstOrDefault(device => device.IsDefault)?.Id ?? "default";
+            selectedAudioInputDevice = ResolveAudioDeviceOption(audioInputDevices, deviceId);
+            selectedAudioOutputDevice = ResolveAudioDeviceOption(audioOutputDevices, outputDeviceId);
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SelectedAudioInputDevice)));
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SelectedAudioOutputDevice)));
+        }
         userSettings.AudioInputDeviceId = deviceId;
         userSettings.AudioOutputDeviceId = outputDeviceId;
+        userSettings.AudioProcessingMode = processingMode == AudioProcessingMode.AppleVoiceProcessing
+            ? UserSettings.AppleVoiceProcessingMode
+            : UserSettings.DvmConsoleAudioProcessingMode;
         userSettings.AudioInputAgcEnabled = AudioInputAgcEnabled;
         userSettings.AudioInputGain = gain;
         userSettings.AudioInputEqLowGainDb = lowGainDb;
@@ -4607,6 +4692,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         transmitCoordinator.UpdateAudioInputOptions(new AudioInputProcessingOptions
         {
             DeviceId = deviceId,
+            ProcessingMode = processingMode,
             AgcEnabled = AudioInputAgcEnabled,
             Gain = gain,
             LowGainDb = lowGainDb,
@@ -4620,7 +4706,9 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         AudioInputLowGainText = lowGainDb.ToString("0.###", CultureInfo.InvariantCulture);
         AudioInputMidGainText = midGainDb.ToString("0.###", CultureInfo.InvariantCulture);
         AudioInputHighGainText = highGainDb.ToString("0.###", CultureInfo.InvariantCulture);
-        AudioStatusText = "Audio device and microphone settings saved; device routes apply to the next audio session and PTT call.";
+        AudioStatusText = processingMode == AudioProcessingMode.AppleVoiceProcessing
+            ? "Apple voice processing saved. The default input/output pair and final radio mix will use Apple AEC/AGC in the next receive session and PTT call."
+            : "DVM Console audio processing saved; device routes apply to the next audio session and PTT call.";
     }
 
     public void RefreshAudioDevices()
@@ -4664,6 +4752,18 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         if (selectedAudioInputDevice is null || selectedAudioOutputDevice is null)
             return;
 
+        if (GetConfiguredAudioProcessingMode() == AudioProcessingMode.AppleVoiceProcessing &&
+            (!selectedAudioInputDevice.IsDefault || !selectedAudioOutputDevice.IsDefault))
+        {
+            selectedAudioInputDevice = audioInputDevices.FirstOrDefault(device => device.IsDefault);
+            selectedAudioOutputDevice = audioOutputDevices.FirstOrDefault(device => device.IsDefault);
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SelectedAudioInputDevice)));
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SelectedAudioOutputDevice)));
+            AudioStatusText = "Apple voice processing uses the macOS default input/output pair. Use per-channel routes for additional outputs outside AEC.";
+            if (selectedAudioInputDevice is null || selectedAudioOutputDevice is null)
+                return;
+        }
+
         AudioInputDeviceIdText = selectedAudioInputDevice.Id;
         AudioOutputDeviceIdText = selectedAudioOutputDevice.Id;
         userSettings.AudioInputDeviceId = selectedAudioInputDevice.Id;
@@ -4671,6 +4771,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         transmitCoordinator.UpdateAudioInputOptions(new AudioInputProcessingOptions
         {
             DeviceId = selectedAudioInputDevice.Id,
+            ProcessingMode = GetConfiguredAudioProcessingMode(),
             AgcEnabled = userSettings.AudioInputAgcEnabled,
             Gain = userSettings.AudioInputGain,
             LowGainDb = userSettings.AudioInputEqLowGainDb,
@@ -4678,7 +4779,9 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             HighGainDb = userSettings.AudioInputEqHighGainDb
         });
         PersistUserSettings();
-        AudioStatusText = "Audio devices selected; restart an active receive channel before its output route changes.";
+        AudioStatusText = GetConfiguredAudioProcessingMode() == AudioProcessingMode.AppleVoiceProcessing
+            ? "Apple voice processing will use the macOS default input/output pair in the next radio audio session."
+            : "Audio devices selected; restart an active receive channel before its output route changes.";
     }
 
     private static void ReplaceAudioDeviceOptions(

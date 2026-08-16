@@ -681,6 +681,36 @@ public sealed class SystemViewModelTests
     }
 
     [Fact]
+    public async Task PersistsMutuallyExclusiveAppleVoiceProcessingMode()
+    {
+        string codeplugPath = Path.Combine(AppContext.BaseDirectory, "TestData", "multiple-systems.yml");
+        string settingsPath = CreateSettingsPath();
+        var store = new UserSettingsStore(settingsPath);
+
+        try
+        {
+            await using MainWindowViewModel viewModel = MainWindowViewModel.Load(codeplugPath, store);
+
+            viewModel.SelectedAudioProcessingMode = "Apple voice processing";
+            viewModel.ApplyAudioInputSettingsCommand.Execute(null);
+
+            Assert.False(viewModel.IsDvmConsoleProcessingSelected);
+            Assert.Equal(UserSettings.AppleVoiceProcessingMode, store.Load().AudioProcessingMode);
+            Assert.Contains("echo cancellation", viewModel.AudioProcessingDescription, StringComparison.OrdinalIgnoreCase);
+
+            viewModel.SelectedAudioProcessingMode = "DVM Console processing";
+            viewModel.ApplyAudioInputSettingsCommand.Execute(null);
+
+            Assert.True(viewModel.IsDvmConsoleProcessingSelected);
+            Assert.Equal(UserSettings.DvmConsoleAudioProcessingMode, store.Load().AudioProcessingMode);
+        }
+        finally
+        {
+            CleanupSettingsPath(settingsPath);
+        }
+    }
+
+    [Fact]
     public async Task PersistsAndFormatsToolbarClockSettings()
     {
         string codeplugPath = Path.Combine(AppContext.BaseDirectory, "TestData", "multiple-systems.yml");

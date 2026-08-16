@@ -101,6 +101,7 @@ public sealed class UserSettingsStoreTests
                 LastSelectedChannelKey = "System 1\u001FDispatch",
                 AudioInputDeviceId = " microphone-1 ",
                 AudioOutputDeviceId = " speaker-1 ",
+                AudioProcessingMode = UserSettings.AppleVoiceProcessingMode,
                 AudioInputAgcEnabled = true,
                 AudioInputGain = 1.5,
                 AudioInputEqLowGainDb = -3,
@@ -220,6 +221,7 @@ public sealed class UserSettingsStoreTests
             Assert.Equal("System 1\u001FDispatch", loaded.LastSelectedChannelKey);
             Assert.Equal("microphone-1", loaded.AudioInputDeviceId);
             Assert.Equal("speaker-1", loaded.AudioOutputDeviceId);
+            Assert.Equal(UserSettings.AppleVoiceProcessingMode, loaded.AudioProcessingMode);
             Assert.True(loaded.AudioInputAgcEnabled);
             Assert.Equal(1.5, loaded.AudioInputGain);
             Assert.Equal(-3, loaded.AudioInputEqLowGainDb);
@@ -432,6 +434,7 @@ public sealed class UserSettingsStoreTests
                 ],
                 AudioInputDeviceId = " ",
                 AudioOutputDeviceId = " ",
+                AudioProcessingMode = "invalid",
                 AudioInputGain = 50,
                 AudioInputEqLowGainDb = -50,
                 AudioInputEqMidGainDb = double.NaN,
@@ -459,6 +462,7 @@ public sealed class UserSettingsStoreTests
             Assert.Equal(1.0, loaded.TonePresets[0].DurationSeconds);
             Assert.Equal("default", loaded.AudioInputDeviceId);
             Assert.Equal("default", loaded.AudioOutputDeviceId);
+            Assert.Equal(UserSettings.DvmConsoleAudioProcessingMode, loaded.AudioProcessingMode);
             Assert.Equal(3, loaded.AudioInputGain);
             Assert.Equal(-12, loaded.AudioInputEqLowGainDb);
             Assert.Equal(0, loaded.AudioInputEqMidGainDb);

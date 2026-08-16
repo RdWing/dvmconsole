@@ -17,7 +17,13 @@ internal static class Program
             if (args.FirstOrDefault() is "--global-ptt")
                 return await RunGlobalPttAsync(args.ElementAtOrDefault(1)).ConfigureAwait(false);
 
-            using var backend = new MacCoreAudioBackend();
+            bool voiceProcessing = args.FirstOrDefault() is "--voice-processing-stream-test";
+            using var backend = new MacCoreAudioBackend(
+                processingMode: voiceProcessing
+                    ? AudioProcessingMode.AppleVoiceProcessing
+                    : AudioProcessingMode.DvmConsole);
+            if (voiceProcessing)
+                return await RunStreamTestAsync(backend, args.ElementAtOrDefault(1), allowSystemDefaultsWithoutEnumeration: true).ConfigureAwait(false);
             if (args.FirstOrDefault() is "--stream-test")
                 return await RunStreamTestAsync(backend, args.ElementAtOrDefault(1)).ConfigureAwait(false);
             if (args.FirstOrDefault() is "--permit-tone")
@@ -38,7 +44,10 @@ internal static class Program
         }
     }
 
-    private static async Task<int> RunStreamTestAsync(MacCoreAudioBackend backend, string? durationArgument)
+    private static async Task<int> RunStreamTestAsync(
+        MacCoreAudioBackend backend,
+        string? durationArgument,
+        bool allowSystemDefaultsWithoutEnumeration = false)
     {
         if (!int.TryParse(durationArgument ?? "2", out int seconds) || seconds is < 1 or > 10)
         {
@@ -46,8 +55,14 @@ internal static class Program
             return 2;
         }
 
-        AudioDeviceInfo input = backend.EnumerateDevices(AudioDirection.Input).First(device => device.IsDefault);
-        AudioDeviceInfo output = backend.EnumerateDevices(AudioDirection.Output).First(device => device.IsDefault);
+        AudioDeviceInfo input = backend.EnumerateDevices(AudioDirection.Input).FirstOrDefault(device => device.IsDefault)
+            ?? (allowSystemDefaultsWithoutEnumeration
+                ? new AudioDeviceInfo("default", "System default input", AudioDirection.Input, true)
+                : throw new InvalidOperationException("No default input device is available."));
+        AudioDeviceInfo output = backend.EnumerateDevices(AudioDirection.Output).FirstOrDefault(device => device.IsDefault)
+            ?? (allowSystemDefaultsWithoutEnumeration
+                ? new AudioDeviceInfo("default", "System default output", AudioDirection.Output, true)
+                : throw new InvalidOperationException("No default output device is available."));
         int capturedSamples = 0;
         int peakSample = 0;
 

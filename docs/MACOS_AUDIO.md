@@ -28,6 +28,15 @@ DVM_AUDIO_LIBRARY=/tmp/dvmaudio-build/libdvmaudio.dylib \
   --stream-test 2
 ```
 
+Exercise the full-duplex Apple Voice Processing I/O path (AEC and Apple AGC)
+using the system default input/output pair:
+
+```sh
+DVM_AUDIO_LIBRARY=/tmp/dvmaudio-build/libdvmaudio.dylib \
+  dotnet run --project src/DvmConsole.AudioProbe/DvmConsole.AudioProbe.csproj --no-restore -- \
+  --voice-processing-stream-test 2
+```
+
 Exercise the talk-permit tone path and wait for queued playback to drain. Pass
 an optional CoreAudio output device ID to select a specific output:
 
@@ -83,16 +92,22 @@ render thread is automatically joined to the device's audio workgroup; the shim
 does not create an auxiliary real-time thread, so it does not need to join one
 manually.
 
-The macOS backend is intentionally not treated as an iOS/iPadOS backend. A
-mobile host needs an `AVAudioSession` configured for simultaneous input/output,
-record permission with `NSMicrophoneUsageDescription`, and interruption, route
-change, and media-services-reset handling. For two-way dispatch voice, start
-with the `playAndRecord` category and evaluate `voiceChat` plus either the Voice
-Processing I/O Audio Unit or `AVAudioEngine.setVoiceProcessingEnabled`; those
-paths provide system echo cancellation and automatic gain control. Whether
-voice processing should be enabled must remain an operator/product choice,
-because the console already offers its own input gain, AGC, and EQ and must not
-apply both processing chains accidentally.
+The desktop exposes two mutually exclusive policies: **DVM Console
+processing** and **Apple voice processing**. The Apple policy uses one
+full-duplex Voice Processing I/O Audio Unit for the system default input/output
+pair, enables Apple's AEC and AGC, and bypasses DVM Console's microphone gain,
+EQ, and AGC so the chains cannot be applied twice. The existing per-channel
+`AudioMixer` remains upstream and sends one final mixed radio signal to the
+unit, allowing simultaneous radio channels to share the same echo reference.
+Additional per-channel physical output routes remain available through HAL but
+are explicitly outside that AEC reference.
+
+The policy enum and backend selection are platform-neutral plumbing intended
+for reuse by an iOS/iPadOS host. That mobile backend will additionally need an
+`AVAudioSession` configured with `playAndRecord`, likely `voiceChat`, record
+permission with `NSMicrophoneUsageDescription`, and interruption, route-change,
+and media-services-reset handling. Native macOS does not provide
+`AVAudioSession`; it uses the same Voice Processing I/O Audio Unit directly.
 
 Apple references used for this audit:
 

@@ -57,4 +57,46 @@ public sealed class PcmInputProcessorTests
         Assert.Equal(0, normalized.MidGainDb);
         Assert.Equal(12, normalized.HighGainDb);
     }
+
+    [Fact]
+    public async Task AppleModeDoesNotRunDvmConsoleGainOrAgcASecondTime()
+    {
+        var source = new TestCapture();
+        await using var capture = new ProcessedAudioCapture(source, new AudioInputProcessingOptions
+        {
+            ProcessingMode = AudioProcessingMode.AppleVoiceProcessing,
+            AgcEnabled = true,
+            Gain = 3,
+            LowGainDb = 12,
+            MidGainDb = 12,
+            HighGainDb = 12
+        });
+        short[]? received = null;
+        capture.SamplesAvailable += (_, args) => received = args.Samples.ToArray();
+
+        short[] appleProcessed = [100, -200, 300];
+        source.Emit(appleProcessed);
+
+        Assert.Equal(appleProcessed, received);
+    }
+
+    private sealed class TestCapture : IAudioCapture
+    {
+        public event EventHandler<PcmSamplesEventArgs>? SamplesAvailable;
+        public PcmAudioFormat Format => PcmAudioFormat.Voice8KhzMono16Bit;
+        public bool IsRunning { get; private set; }
+        public ValueTask StartAsync(CancellationToken cancellationToken = default)
+        {
+            IsRunning = true;
+            return ValueTask.CompletedTask;
+        }
+        public ValueTask StopAsync(CancellationToken cancellationToken = default)
+        {
+            IsRunning = false;
+            return ValueTask.CompletedTask;
+        }
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+        public void Emit(short[] samples)
+            => SamplesAvailable?.Invoke(this, new PcmSamplesEventArgs(samples));
+    }
 }

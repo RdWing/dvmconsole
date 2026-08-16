@@ -25,6 +25,8 @@ public sealed class WidgetPositionSetting
 public sealed class UserSettings
 {
     public const int CurrentSchemaVersion = 1;
+    public const string DvmConsoleAudioProcessingMode = "DvmConsole";
+    public const string AppleVoiceProcessingMode = "AppleVoiceProcessing";
     public const int MaximumToolbarClocks = 8;
     public const int MaximumRecentCodeplugs = 8;
     public int SchemaVersion { get; set; } = CurrentSchemaVersion;
@@ -34,6 +36,7 @@ public sealed class UserSettings
     public string? LastSelectedChannelKey { get; set; }
     public string AudioInputDeviceId { get; set; } = "default";
     public string AudioOutputDeviceId { get; set; } = "default";
+    public string AudioProcessingMode { get; set; } = DvmConsoleAudioProcessingMode;
     public bool AudioInputAgcEnabled { get; set; }
     public double AudioInputGain { get; set; } = 1.0;
     public double AudioInputEqLowGainDb { get; set; }
@@ -473,6 +476,7 @@ public sealed class UserSettingsStore
 
         if (!string.Equals(settings.AudioInputDeviceId, "default", StringComparison.OrdinalIgnoreCase) ||
             !string.Equals(settings.AudioOutputDeviceId, "default", StringComparison.OrdinalIgnoreCase) ||
+            !string.Equals(settings.AudioProcessingMode, UserSettings.DvmConsoleAudioProcessingMode, StringComparison.Ordinal) ||
             settings.AudioInputAgcEnabled || settings.AudioInputPresets.Count > 0 ||
             settings.ChannelVolumes.Count > 0 || settings.ChannelOutputDeviceIds.Count > 0 ||
             settings.WebStreamOutputDeviceIds.Count > 0 || settings.WebStreamVolumes.Count > 0)
@@ -551,6 +555,7 @@ public sealed class UserSettingsStore
         {
             target.AudioInputDeviceId = source.AudioInputDeviceId;
             target.AudioOutputDeviceId = source.AudioOutputDeviceId;
+            target.AudioProcessingMode = source.AudioProcessingMode;
             target.AudioInputAgcEnabled = source.AudioInputAgcEnabled;
             target.AudioInputGain = source.AudioInputGain;
             target.AudioInputEqLowGainDb = source.AudioInputEqLowGainDb;
@@ -716,6 +721,11 @@ public sealed class UserSettingsStore
         settings.AudioOutputDeviceId = string.IsNullOrWhiteSpace(settings.AudioOutputDeviceId)
             ? "default"
             : settings.AudioOutputDeviceId.Trim();
+        settings.AudioProcessingMode = settings.AudioProcessingMode?.Trim() switch
+        {
+            UserSettings.AppleVoiceProcessingMode => UserSettings.AppleVoiceProcessingMode,
+            _ => UserSettings.DvmConsoleAudioProcessingMode
+        };
         settings.AudioInputGain = NormalizeBounded(settings.AudioInputGain, 1.0, 0.25, 3.0);
         settings.AudioInputEqLowGainDb = NormalizeBounded(settings.AudioInputEqLowGainDb, 0, -12, 12);
         settings.AudioInputEqMidGainDb = NormalizeBounded(settings.AudioInputEqMidGainDb, 0, -12, 12);

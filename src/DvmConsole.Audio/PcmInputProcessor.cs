@@ -6,6 +6,7 @@ namespace DvmConsole.Audio;
 public sealed class AudioInputProcessingOptions
 {
     public string DeviceId { get; init; } = "default";
+    public AudioProcessingMode ProcessingMode { get; init; } = AudioProcessingMode.DvmConsole;
     public bool AgcEnabled { get; init; }
     public double Gain { get; init; } = 1.0;
     public double LowGainDb { get; init; }
@@ -16,6 +17,7 @@ public sealed class AudioInputProcessingOptions
         => new()
         {
             DeviceId = string.IsNullOrWhiteSpace(DeviceId) ? "default" : DeviceId.Trim(),
+            ProcessingMode = Enum.IsDefined(ProcessingMode) ? ProcessingMode : AudioProcessingMode.DvmConsole,
             AgcEnabled = AgcEnabled,
             Gain = NormalizeFinite(Gain, 1.0, 0.25, 3.0),
             LowGainDb = NormalizeFinite(LowGainDb, 0, -12, 12),
@@ -104,13 +106,16 @@ public sealed class PcmInputProcessor
 public sealed class ProcessedAudioCapture : IAudioCapture
 {
     private readonly IAudioCapture source;
-    private readonly PcmInputProcessor processor;
+    private readonly PcmInputProcessor? processor;
     private bool disposed;
 
     public ProcessedAudioCapture(IAudioCapture source, AudioInputProcessingOptions? options = null)
     {
         this.source = source ?? throw new ArgumentNullException(nameof(source));
-        processor = new PcmInputProcessor(options);
+        AudioInputProcessingOptions normalized = (options ?? new AudioInputProcessingOptions()).Normalize();
+        processor = normalized.ProcessingMode == AudioProcessingMode.DvmConsole
+            ? new PcmInputProcessor(normalized)
+            : null;
         Format = source.Format;
         source.SamplesAvailable += HandleSamplesAvailable;
     }
@@ -137,6 +142,12 @@ public sealed class ProcessedAudioCapture : IAudioCapture
 
     private void HandleSamplesAvailable(object? sender, PcmSamplesEventArgs args)
     {
+        if (processor is null)
+        {
+            SamplesAvailable?.Invoke(this, args);
+            return;
+        }
+
         short[] processed = new short[args.Samples.Length];
         processor.Process(args.Samples.Span, processed);
         SamplesAvailable?.Invoke(this, new PcmSamplesEventArgs(processed));

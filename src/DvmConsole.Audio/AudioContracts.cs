@@ -6,6 +6,16 @@ public enum AudioDirection
     Output
 }
 
+// Portable policy selected by the operator. Apple platforms implement the
+// second mode with their native full-duplex voice-processing stack; other
+// platforms can expose only the DVM Console mode until they provide an
+// equivalent backend.
+public enum AudioProcessingMode
+{
+    DvmConsole,
+    AppleVoiceProcessing
+}
+
 public sealed record AudioDeviceInfo(
     string Id,
     string Name,

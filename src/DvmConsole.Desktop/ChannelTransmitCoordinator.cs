@@ -13,6 +13,7 @@ public sealed class ChannelTransmitCoordinator : IAsyncDisposable
 {
     private readonly IP25KeyResolver? p25KeyResolver;
     private readonly Action<ChannelViewModel, uint, uint, ReadOnlyMemory<short>>? samplesObserver;
+    private readonly Func<IAudioBackend> createAudioBackend;
     private readonly SemaphoreSlim gate = new(1, 1);
     private IAudioBackend? audioBackend;
     private IVocoderBackend? vocoderBackend;
@@ -29,11 +30,14 @@ public sealed class ChannelTransmitCoordinator : IAsyncDisposable
     public ChannelTransmitCoordinator(
         IP25KeyResolver? p25KeyResolver = null,
         AudioInputProcessingOptions? audioInputOptions = null,
-        Action<ChannelViewModel, uint, uint, ReadOnlyMemory<short>>? samplesObserver = null)
+        Action<ChannelViewModel, uint, uint, ReadOnlyMemory<short>>? samplesObserver = null,
+        Func<IAudioBackend>? createAudioBackend = null)
     {
         this.p25KeyResolver = p25KeyResolver;
         this.audioInputOptions = (audioInputOptions ?? new AudioInputProcessingOptions()).Normalize();
         this.samplesObserver = samplesObserver;
+        this.createAudioBackend = createAudioBackend ??
+            (() => AudioBackendFactory.CreateDefault(Environment.GetEnvironmentVariable("DVM_AUDIO_LIBRARY")));
     }
 
     public void UpdateAudioInputOptions(AudioInputProcessingOptions options)
@@ -75,7 +79,7 @@ public sealed class ChannelTransmitCoordinator : IAsyncDisposable
             var created = new List<ActiveTransmit>();
             try
             {
-                createdAudioBackend = AudioBackendFactory.CreateDefault(Environment.GetEnvironmentVariable("DVM_AUDIO_LIBRARY"));
+                createdAudioBackend = createAudioBackend();
                 AudioDeviceInfo input = SelectInput(
                     createdAudioBackend.EnumerateDevices(AudioDirection.Input),
                     audioInputOptions.DeviceId);

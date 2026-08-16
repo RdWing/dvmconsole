@@ -7,12 +7,16 @@ namespace DvmConsole.Audio;
 public sealed class MacCoreAudioBackend : IAudioBackend
 {
     private readonly NativeCoreAudioApi api;
+    private readonly AudioProcessingMode processingMode;
 
-    public MacCoreAudioBackend(string? libraryPath = null)
+    public MacCoreAudioBackend(
+        string? libraryPath = null,
+        AudioProcessingMode processingMode = AudioProcessingMode.DvmConsole)
     {
         if (!OperatingSystem.IsMacOS())
             throw new PlatformNotSupportedException("MacCoreAudioBackend requires macOS.");
 
+        this.processingMode = processingMode;
         api = NativeCoreAudioApi.Load(libraryPath);
     }
 
@@ -41,11 +45,25 @@ public sealed class MacCoreAudioBackend : IAudioBackend
 
     public IAudioCapture OpenCapture(AudioDeviceInfo device, PcmAudioFormat format)
     {
+        if (processingMode == AudioProcessingMode.AppleVoiceProcessing)
+        {
+            if (!device.IsDefault)
+                throw new NotSupportedException("Apple voice processing uses the macOS default input device.");
+            return new MacVoiceProcessingCapture(
+                VoiceProcessingSessionRegistry.Acquire(api.LibraryPath, format, VoiceEndpoint.Capture),
+                format);
+        }
         return new MacCoreAudioCapture(api, ParseDeviceId(device), format);
     }
 
     public IAudioPlayback OpenPlayback(AudioDeviceInfo device, PcmAudioFormat format)
     {
+        if (processingMode == AudioProcessingMode.AppleVoiceProcessing && device.IsDefault)
+        {
+            return new MacVoiceProcessingPlayback(
+                VoiceProcessingSessionRegistry.Acquire(api.LibraryPath, format, VoiceEndpoint.Playback),
+                format);
+        }
         return new MacCoreAudioPlayback(api, ParseDeviceId(device), format);
     }
 
@@ -231,6 +249,337 @@ public sealed class MacCoreAudioBackend : IAudioBackend
         }
     }
 
+    private enum VoiceEndpoint
+    {
+        Capture,
+        Playback
+    }
+
+    private sealed class MacVoiceProcessingCapture : IAudioCapture
+    {
+        private readonly VoiceProcessingSession session;
+        private CancellationTokenSource? pumpCancellation;
+        private Task? pumpTask;
+        private bool disposed;
+
+        public MacVoiceProcessingCapture(VoiceProcessingSession session, PcmAudioFormat format)
+        {
+            this.session = session;
+            Format = format;
+        }
+
+        public event EventHandler<PcmSamplesEventArgs>? SamplesAvailable;
+        public PcmAudioFormat Format { get; }
+        public bool IsRunning => pumpCancellation is not null;
+
+        public ValueTask StartAsync(CancellationToken cancellationToken = default)
+        {
+            ObjectDisposedException.ThrowIf(disposed, this);
+            cancellationToken.ThrowIfCancellationRequested();
+            if (IsRunning)
+                return ValueTask.CompletedTask;
+
+            session.StartCapture();
+            pumpCancellation = new CancellationTokenSource();
+            pumpTask = PumpAsync(pumpCancellation.Token);
+            return ValueTask.CompletedTask;
+        }
+
+        public async ValueTask StopAsync(CancellationToken cancellationToken = default)
+        {
+            CancellationTokenSource? cancellation = pumpCancellation;
+            Task? task = pumpTask;
+            if (cancellation is null)
+                return;
+
+            pumpCancellation = null;
+            pumpTask = null;
+            cancellation.Cancel();
+            if (task is not null)
+                await task.ConfigureAwait(false);
+            cancellation.Dispose();
+            cancellationToken.ThrowIfCancellationRequested();
+            session.StopCapture();
+        }
+
+        public async ValueTask DisposeAsync()
+        {
+            if (disposed)
+                return;
+            try
+            {
+                await StopAsync().ConfigureAwait(false);
+            }
+            finally
+            {
+                VoiceProcessingSessionRegistry.Release(session, VoiceEndpoint.Capture);
+                disposed = true;
+            }
+        }
+
+        private async Task PumpAsync(CancellationToken cancellationToken)
+        {
+            short[] buffer = new short[Math.Max(1600, Format.SampleRate / 5)];
+            using var timer = new PeriodicTimer(TimeSpan.FromMilliseconds(10));
+            try
+            {
+                while (await timer.WaitForNextTickAsync(cancellationToken).ConfigureAwait(false))
+                {
+                    int count = session.Read(buffer);
+                    if (count <= 0)
+                        continue;
+                    short[] samples = new short[count];
+                    Array.Copy(buffer, samples, count);
+                    SamplesAvailable?.Invoke(this, new PcmSamplesEventArgs(samples));
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                // Expected during shutdown.
+            }
+        }
+    }
+
+    private sealed class MacVoiceProcessingPlayback : IAudioPlayback
+    {
+        private readonly VoiceProcessingSession session;
+        private bool disposed;
+
+        public MacVoiceProcessingPlayback(VoiceProcessingSession session, PcmAudioFormat format)
+        {
+            this.session = session;
+            Format = format;
+            try
+            {
+                session.StartPlayback();
+            }
+            catch
+            {
+                VoiceProcessingSessionRegistry.Release(session, VoiceEndpoint.Playback);
+                throw;
+            }
+        }
+
+        public PcmAudioFormat Format { get; }
+        public int? QueuedSamples => session.QueuedSamples;
+
+        public async ValueTask WriteAsync(ReadOnlyMemory<short> samples, CancellationToken cancellationToken = default)
+        {
+            ObjectDisposedException.ThrowIf(disposed, this);
+            short[] buffer = samples.ToArray();
+            int offset = 0;
+            while (offset < buffer.Length)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                int written = session.Write(buffer.AsSpan(offset).ToArray());
+                if (written < 0)
+                    EnsureSuccess(written, "write Apple voice-processing playback");
+                offset += written;
+                if (written == 0)
+                    await Task.Delay(2, cancellationToken).ConfigureAwait(false);
+            }
+        }
+
+        public ValueTask FlushAsync(CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return ValueTask.CompletedTask;
+        }
+
+        public async ValueTask<int?> DrainAsync(CancellationToken cancellationToken = default)
+        {
+            ObjectDisposedException.ThrowIf(disposed, this);
+            int initialSamples = QueuedSamples ?? 0;
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            timeout.CancelAfter(TimeSpan.FromSeconds(5));
+            try
+            {
+                while ((QueuedSamples ?? 0) > 0)
+                    await Task.Delay(5, timeout.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+            {
+                throw new TimeoutException("Apple voice-processing playback did not drain within five seconds.");
+            }
+            return initialSamples - (QueuedSamples ?? 0);
+        }
+
+        public ValueTask DisposeAsync()
+        {
+            if (!disposed)
+            {
+                try
+                {
+                    session.StopPlayback();
+                }
+                finally
+                {
+                    VoiceProcessingSessionRegistry.Release(session, VoiceEndpoint.Playback);
+                    disposed = true;
+                }
+            }
+            return ValueTask.CompletedTask;
+        }
+    }
+
+    private static class VoiceProcessingSessionRegistry
+    {
+        private static readonly object Sync = new();
+        private static readonly Dictionary<string, VoiceProcessingSession> Sessions =
+            new(StringComparer.Ordinal);
+
+        public static VoiceProcessingSession Acquire(
+            string libraryPath,
+            PcmAudioFormat format,
+            VoiceEndpoint endpoint)
+        {
+            ValidateFormat(format);
+            lock (Sync)
+            {
+                if (!Sessions.TryGetValue(libraryPath, out VoiceProcessingSession? session))
+                {
+                    session = new VoiceProcessingSession(libraryPath, format);
+                    Sessions.Add(libraryPath, session);
+                }
+                try
+                {
+                    session.AddEndpoint(format, endpoint);
+                    return session;
+                }
+                catch
+                {
+                    if (session.HasNoEndpoints)
+                    {
+                        Sessions.Remove(libraryPath);
+                        session.Dispose();
+                    }
+                    throw;
+                }
+            }
+        }
+
+        public static void Release(VoiceProcessingSession session, VoiceEndpoint endpoint)
+        {
+            lock (Sync)
+            {
+                if (!session.RemoveEndpoint(endpoint))
+                    return;
+                Sessions.Remove(session.LibraryPath);
+                session.Dispose();
+            }
+        }
+    }
+
+    private sealed class VoiceProcessingSession : IDisposable
+    {
+        private readonly object sync = new();
+        private readonly NativeCoreAudioApi api;
+        private readonly IntPtr stream;
+        private readonly PcmAudioFormat format;
+        private int captureEndpoints;
+        private int playbackEndpoints;
+        private int runningEndpoints;
+        private bool disposed;
+
+        public VoiceProcessingSession(string libraryPath, PcmAudioFormat format)
+        {
+            LibraryPath = libraryPath;
+            this.format = format;
+            api = NativeCoreAudioApi.Load(libraryPath);
+            stream = api.CreateVoiceProcessingStream(format.SampleRate, format.Channels, format.BitsPerSample);
+            if (stream == IntPtr.Zero)
+            {
+                api.Dispose();
+                throw new InvalidOperationException(
+                    "CoreAudio could not create the Apple Voice Processing I/O stream. " +
+                    "Confirm that the system default input and output devices support full-duplex voice audio.");
+            }
+        }
+
+        public string LibraryPath { get; }
+        public bool HasNoEndpoints => captureEndpoints == 0 && playbackEndpoints == 0;
+        public int QueuedSamples => checked((int)api.GetVoiceProcessingQueuedSamples(stream));
+
+        public void AddEndpoint(PcmAudioFormat requestedFormat, VoiceEndpoint endpoint)
+        {
+            if (requestedFormat != format)
+                throw new InvalidOperationException("Apple voice-processing capture and playback must use the same PCM format.");
+            if (endpoint == VoiceEndpoint.Capture)
+            {
+                if (captureEndpoints != 0)
+                    throw new InvalidOperationException("Only one Apple voice-processing microphone endpoint can be open.");
+                captureEndpoints++;
+            }
+            else
+            {
+                if (playbackEndpoints != 0)
+                    throw new InvalidOperationException(
+                        "Only the final mixed radio output can use Apple voice processing. " +
+                        "Additional physical output routes use the normal CoreAudio path.");
+                playbackEndpoints++;
+            }
+        }
+
+        public bool RemoveEndpoint(VoiceEndpoint endpoint)
+        {
+            if (endpoint == VoiceEndpoint.Capture)
+                captureEndpoints--;
+            else
+                playbackEndpoints--;
+            return captureEndpoints == 0 && playbackEndpoints == 0;
+        }
+
+        public void StartCapture() => StartEndpoint();
+        public void StopCapture() => StopEndpoint();
+        public void StartPlayback() => StartEndpoint();
+        public void StopPlayback() => StopEndpoint();
+        public int Read(short[] samples) => api.ReadVoiceProcessing(stream, samples, samples.Length);
+        public int Write(short[] samples) => api.WriteVoiceProcessing(stream, samples, samples.Length);
+
+        public void Dispose()
+        {
+            lock (sync)
+            {
+                if (disposed)
+                    return;
+                if (runningEndpoints > 0)
+                    api.StopVoiceProcessing(stream);
+                api.DestroyVoiceProcessingStream(stream);
+                api.Dispose();
+                runningEndpoints = 0;
+                disposed = true;
+            }
+        }
+
+        private void StartEndpoint()
+        {
+            lock (sync)
+            {
+                ObjectDisposedException.ThrowIf(disposed, this);
+                if (runningEndpoints++ == 0)
+                {
+                    int result = api.StartVoiceProcessing(stream);
+                    if (result != 0)
+                    {
+                        runningEndpoints--;
+                        EnsureSuccess(result, "start Apple voice processing");
+                    }
+                }
+            }
+        }
+
+        private void StopEndpoint()
+        {
+            lock (sync)
+            {
+                if (runningEndpoints <= 0)
+                    return;
+                if (--runningEndpoints == 0)
+                    EnsureSuccess(api.StopVoiceProcessing(stream), "stop Apple voice processing");
+            }
+        }
+    }
+
     private static void ValidateFormat(PcmAudioFormat format)
     {
         ArgumentNullException.ThrowIfNull(format);
@@ -249,6 +598,7 @@ public sealed class MacCoreAudioBackend : IAudioBackend
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate int StreamWriteDelegate(IntPtr stream, short[] samples, int count);
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate uint StreamQueuedSamplesDelegate(IntPtr stream);
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate void DestroyStreamDelegate(IntPtr stream);
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate IntPtr CreateVoiceProcessingStreamDelegate(int sampleRate, int channels, int bitsPerSample);
 
         private readonly IntPtr handle;
         private readonly GetDeviceCountDelegate getDeviceCount;
@@ -261,10 +611,18 @@ public sealed class MacCoreAudioBackend : IAudioBackend
         private readonly StreamWriteDelegate writeStream;
         private readonly StreamQueuedSamplesDelegate queuedSamples;
         private readonly DestroyStreamDelegate destroyStream;
+        private readonly CreateVoiceProcessingStreamDelegate createVoiceProcessingStream;
+        private readonly StreamStatusDelegate startVoiceProcessing;
+        private readonly StreamStatusDelegate stopVoiceProcessing;
+        private readonly StreamReadDelegate readVoiceProcessing;
+        private readonly StreamWriteDelegate writeVoiceProcessing;
+        private readonly StreamQueuedSamplesDelegate voiceProcessingQueuedSamples;
+        private readonly DestroyStreamDelegate destroyVoiceProcessingStream;
 
-        private NativeCoreAudioApi(IntPtr handle)
+        private NativeCoreAudioApi(IntPtr handle, string libraryPath)
         {
             this.handle = handle;
+            LibraryPath = libraryPath;
             getDeviceCount = Get<GetDeviceCountDelegate>("dvm_audio_get_device_count");
             getDevice = Get<GetDeviceDelegate>("dvm_audio_get_device");
             createStream = Get<CreateStreamDelegate>("dvm_audio_stream_create");
@@ -275,7 +633,16 @@ public sealed class MacCoreAudioBackend : IAudioBackend
             writeStream = Get<StreamWriteDelegate>("dvm_audio_stream_write");
             queuedSamples = Get<StreamQueuedSamplesDelegate>("dvm_audio_stream_queued_samples");
             destroyStream = Get<DestroyStreamDelegate>("dvm_audio_stream_destroy");
+            createVoiceProcessingStream = Get<CreateVoiceProcessingStreamDelegate>("dvm_audio_voice_processing_create");
+            startVoiceProcessing = Get<StreamStatusDelegate>("dvm_audio_voice_processing_start");
+            stopVoiceProcessing = Get<StreamStatusDelegate>("dvm_audio_voice_processing_stop");
+            readVoiceProcessing = Get<StreamReadDelegate>("dvm_audio_voice_processing_read");
+            writeVoiceProcessing = Get<StreamWriteDelegate>("dvm_audio_voice_processing_write");
+            voiceProcessingQueuedSamples = Get<StreamQueuedSamplesDelegate>("dvm_audio_voice_processing_queued_samples");
+            destroyVoiceProcessingStream = Get<DestroyStreamDelegate>("dvm_audio_voice_processing_destroy");
         }
+
+        public string LibraryPath { get; }
 
         public static NativeCoreAudioApi Load(string? configuredPath)
         {
@@ -285,10 +652,11 @@ public sealed class MacCoreAudioBackend : IAudioBackend
             if (string.IsNullOrWhiteSpace(path))
                 path = Path.Combine(AppContext.BaseDirectory, "libdvmaudio.dylib");
 
-            IntPtr handle = NativeLibrary.Load(Path.GetFullPath(path));
+            string fullPath = Path.GetFullPath(path);
+            IntPtr handle = NativeLibrary.Load(fullPath);
             try
             {
-                return new NativeCoreAudioApi(handle);
+                return new NativeCoreAudioApi(handle, fullPath);
             }
             catch
             {
@@ -307,6 +675,13 @@ public sealed class MacCoreAudioBackend : IAudioBackend
         public int WriteStream(IntPtr stream, short[] samples, int count) => writeStream(stream, samples, count);
         public uint GetQueuedSamples(IntPtr stream) => queuedSamples(stream);
         public void DestroyStream(IntPtr stream) => destroyStream(stream);
+        public IntPtr CreateVoiceProcessingStream(int sampleRate, int channels, int bits) => createVoiceProcessingStream(sampleRate, channels, bits);
+        public int StartVoiceProcessing(IntPtr stream) => startVoiceProcessing(stream);
+        public int StopVoiceProcessing(IntPtr stream) => stopVoiceProcessing(stream);
+        public int ReadVoiceProcessing(IntPtr stream, short[] samples, int capacity) => readVoiceProcessing(stream, samples, capacity);
+        public int WriteVoiceProcessing(IntPtr stream, short[] samples, int count) => writeVoiceProcessing(stream, samples, count);
+        public uint GetVoiceProcessingQueuedSamples(IntPtr stream) => voiceProcessingQueuedSamples(stream);
+        public void DestroyVoiceProcessingStream(IntPtr stream) => destroyVoiceProcessingStream(stream);
         public void Dispose() => NativeLibrary.Free(handle);
 
         private T Get<T>(string symbol) where T : Delegate

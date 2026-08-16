@@ -41,14 +41,19 @@
             <Border Classes="panel">
               <StackPanel Spacing="8">
                 <TextBlock FontWeight="SemiBold" Text="Microphone processing" />
-                <Grid ColumnDefinitions="Auto,100,Auto,100,Auto,100,Auto,100" ColumnSpacing="8">
+                <Grid ColumnDefinitions="Auto,260,*" ColumnSpacing="8">
+                  <TextBlock Text="Mode" VerticalAlignment="Center" />
+                  <ComboBox Grid.Column="1" ItemsSource="{Binding AudioProcessingModeOptions}" SelectedItem="{Binding SelectedAudioProcessingMode, Mode=TwoWay}" />
+                </Grid>
+                <TextBlock Classes="caption" Text="{Binding AudioProcessingDescription}" TextWrapping="Wrap" />
+                <Grid ColumnDefinitions="Auto,100,Auto,100,Auto,100,Auto,100" ColumnSpacing="8" IsEnabled="{Binding IsDvmConsoleProcessingSelected}">
                   <TextBlock Text="Gain" VerticalAlignment="Center" /><TextBox Grid.Column="1" Text="{Binding AudioInputGainText, Mode=TwoWay}" />
                   <TextBlock Grid.Column="2" Text="Low dB" VerticalAlignment="Center" /><TextBox Grid.Column="3" Text="{Binding AudioInputLowGainText, Mode=TwoWay}" />
                   <TextBlock Grid.Column="4" Text="Mid dB" VerticalAlignment="Center" /><TextBox Grid.Column="5" Text="{Binding AudioInputMidGainText, Mode=TwoWay}" />
                   <TextBlock Grid.Column="6" Text="High dB" VerticalAlignment="Center" /><TextBox Grid.Column="7" Text="{Binding AudioInputHighGainText, Mode=TwoWay}" />
                 </Grid>
                 <StackPanel Orientation="Horizontal" Spacing="10">
-                  <CheckBox Content="Automatic gain control" IsChecked="{Binding AudioInputAgcEnabled, Mode=TwoWay}" />
+                  <CheckBox Content="Automatic gain control" IsChecked="{Binding AudioInputAgcEnabled, Mode=TwoWay}" IsEnabled="{Binding IsDvmConsoleProcessingSelected}" />
                   <Button Content="Apply" Command="{Binding ApplyAudioInputSettingsCommand}" />
                 </StackPanel>
               </StackPanel>
