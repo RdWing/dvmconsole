@@ -10,7 +10,7 @@ public sealed class KeyStatusItemViewModelTests
     [Fact]
     public void ShowsRedactedIdentifiersAndAvailableStatus()
     {
-        var resolver = new P25KeyRing(new KeyContainer
+        using var resolver = new P25KeyRing("Alpha", new KeyContainer
         {
             Keys =
             [
@@ -18,7 +18,7 @@ public sealed class KeyStatusItemViewModelTests
                 {
                     KeyId = 0x50,
                     AlgId = P25Defines.P25_ALGO_AES,
-                    Key = "00112233445566778899AABBCCDDEEFF"
+                    Key = "00112233445566778899AABBCCDDEEFF00112233445566778899AABBCCDDEEFF"
                 }
             ]
         });
@@ -39,8 +39,16 @@ public sealed class KeyStatusItemViewModelTests
         Assert.Equal("P25", item.ModeText);
         Assert.Equal("0x84", item.AlgorithmIdText);
         Assert.Equal("0x0050", item.KeyIdText);
-        Assert.Equal("Key available", item.StatusText);
+        Assert.Equal("Available · local file", item.StatusText);
         Assert.DoesNotContain("001122", item.AlgorithmIdText + item.KeyIdText + item.StatusText);
+
+        resolver.AddOrReplaceFromFne(
+            "Alpha",
+            P25Defines.P25_ALGO_AES,
+            0x50,
+            Convert.FromHexString("FFEEDDCCBBAA99887766554433221100FFEEDDCCBBAA99887766554433221100"));
+
+        Assert.Equal("Available · FNE/KMM", KeyStatusItemViewModel.From(channel, resolver).StatusText);
     }
 
     [Fact]
@@ -54,7 +62,7 @@ public sealed class KeyStatusItemViewModelTests
             Mode = "p25",
             Algo = "des-ofb",
             KeyId = "81"
-        }, new P25KeyRing(new KeyContainer()));
+        }, new P25KeyRing());
         var dmrChannel = new ChannelViewModel(new ChannelConfiguration
         {
             Name = "Encrypted DMR",
@@ -66,7 +74,7 @@ public sealed class KeyStatusItemViewModelTests
             KeyId = "0x50"
         });
 
-        Assert.Equal("Key unavailable", KeyStatusItemViewModel.From(p25Channel, new P25KeyRing(new KeyContainer())).StatusText);
+        Assert.Equal("Key unavailable", KeyStatusItemViewModel.From(p25Channel, new P25KeyRing()).StatusText);
         Assert.Equal("Unsupported protocol", KeyStatusItemViewModel.From(dmrChannel, null).StatusText);
     }
 }

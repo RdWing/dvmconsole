@@ -14,6 +14,48 @@ namespace DvmConsole.Desktop.Tests;
 public sealed class SystemViewModelTests
 {
     [Fact]
+    public void PlansFneKeyRequestsEvenWhenLocalFallbackKeysAreAvailable()
+    {
+        const string aesKey = "00112233445566778899AABBCCDDEEFF00112233445566778899AABBCCDDEEFF";
+        using var keyRing = new P25KeyRing("Alpha", new DvmConsole.Core.Configuration.KeyContainer
+        {
+            Keys =
+            [
+                new DvmConsole.Core.Configuration.KeyEntry
+                {
+                    KeyId = 0x50,
+                    AlgId = fnecore.P25.P25Defines.P25_ALGO_AES,
+                    Key = aesKey
+                }
+            ]
+        });
+        var secure = new ChannelViewModel(new DvmConsole.Core.Configuration.ChannelConfiguration
+        {
+            Name = "Secure",
+            System = "Alpha",
+            Tgid = "101",
+            Mode = "p25",
+            Algo = "aes",
+            KeyId = "0x50"
+        }, keyRing);
+        var duplicate = new ChannelViewModel(new DvmConsole.Core.Configuration.ChannelConfiguration
+        {
+            Name = "Secure duplicate",
+            System = "Alpha",
+            Tgid = "102",
+            Mode = "p25",
+            Algo = "aes",
+            KeyId = "0x50"
+        }, keyRing);
+
+        IReadOnlyList<(byte AlgorithmId, ushort KeyId)> requests =
+            MainWindowViewModel.ResolveConfiguredP25KeyRequests([secure, duplicate]);
+
+        Assert.Equal([(fnecore.P25.P25Defines.P25_ALGO_AES, (ushort)0x50)], requests);
+        Assert.True(secure.CanListen);
+    }
+
+    [Fact]
     public void ReportsUnreleasedSemanticVersion()
         => Assert.StartsWith("0.1.0", MainWindow.ApplicationVersion, StringComparison.Ordinal);
 
@@ -130,7 +172,7 @@ public sealed class SystemViewModelTests
             ChannelViewModel channel = Assert.Single(Assert.Single(viewModel.Systems).Channels);
             Assert.True(viewModel.IsCodeplugLoaded);
             Assert.Contains("Encryption keys unavailable:", viewModel.StatusText);
-            Assert.Contains("Encrypted P25 channels are disabled.", viewModel.StatusText);
+            Assert.Contains("Encrypted P25 channels are disabled until FNE/KMM supplies their keys.", viewModel.StatusText);
             Assert.True(viewModel.HasCodeplugDiagnostics);
             viewModel.DismissCodeplugDiagnostics();
             Assert.False(viewModel.HasCodeplugDiagnostics);

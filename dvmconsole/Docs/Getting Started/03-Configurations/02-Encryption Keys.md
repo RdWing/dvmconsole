@@ -1,8 +1,10 @@
 # Encryption Keys
 
-Encryption keys allow the console to decrypt and transmit encrypted voice traffic when supported by the connected FNE system.
+Encryption keys allow the console to decrypt and transmit encrypted P25 voice traffic when supported by the connected FNE system.
 
-The console can load local key material from a YAML key file referenced by the codeplug.
+The console uses two automatic key-material pathways. After an FNE connects, it requests every configured P25 algorithm/key ID through KMM. A valid key delivered by that FNE takes precedence. If KMM has not supplied the key, the console falls back to the local YAML key file referenced by the codeplug.
+
+Keys are isolated by FNE system. Two systems can safely use the same algorithm and key ID with different key material. KMM-delivered material is retained only in memory and is cleared when that system disconnects, revealing the local fallback again.
 
 ---
 
@@ -19,6 +21,8 @@ Reference the key file with `keyFile` in the codeplug:
 ```yaml
 keyFile: "Full/Path/To/Keyfile.clear"
 ```
+
+The key file is optional when every required key will be delivered by FNE/KMM. When present, it provides the fallback for all configured systems.
 
 ---
 
@@ -43,7 +47,7 @@ Fields:
 
 - `keyId`: key ID referenced by channels.
 - `algId`: algorithm ID.
-- `key`: key material as an even-length hexadecimal string. Do not include spaces, separators, or non-hexadecimal characters.
+- `key`: key material as hexadecimal without spaces or separators. AES-256 requires exactly 32 bytes (64 hexadecimal characters), DES-OFB requires 8 bytes (16 hexadecimal characters), and ARC4/ADP requires 5 bytes (10 hexadecimal characters).
 
 ---
 
@@ -59,8 +63,8 @@ algo: "aes"
 Supported `algo` values include:
 
 - `aes`
-- `des`
-- `arc4`
+- `des` or `des-ofb`
+- `arc4` or `adp`
 - `none`
 
 If `keyId` is blank or zero, the channel is treated as clear for normal operation.
@@ -85,17 +89,17 @@ The selected encrypted/clear state is saved and restored across restarts. The ke
 
 # FNE Key Requests
 
-When **Restore Selected Channels On Startup** is enabled, selected encrypted channels may need to request keys after startup.
+After each FNE connection completes, the console requests the distinct algorithm/key IDs configured by that system's encrypted P25 channels. The system `rid` is used as the requesting console identity and must be a valid nonzero 24-bit ID.
 
-The console waits for the relevant FNE connection to complete before sending startup key requests. It then waits a short post-connect delay and spaces multiple key requests apart so the FNE is not flooded.
+If the FNE delivers a valid KMM key, it becomes the active key for that system. A response from one FNE is never applied to another FNE, even when both use the same algorithm and key ID. When the connection is lost, its KMM keys are removed and local keys become active again where available.
 
-This startup delay applies to restored selected encrypted resources. Normal key behavior outside startup remains unchanged.
+Clear and MI-instruction KMM responses are accepted. Peer-encrypted KMM responses require the system's separate `kmfPresharedKey`; the FNE transport `presharedKey` is never reused for this purpose.
 
 ---
 
 # Key Status
 
-Open **Tools > Encryption Key Status** to inspect loaded or received key state for configured encrypted resources.
+Open **Tools > Encryption Key Status** to inspect loaded or received key state for configured encrypted resources. Available entries identify their active source as **local file** or **FNE/KMM**.
 
 The status page shows identifiers and availability only. Key material is never displayed or written to the debug log.
 
@@ -114,3 +118,4 @@ If an encrypted channel does not decrypt correctly:
 - Protect clear key files.
 - Do not commit operational key material to source control.
 - Use test keys for development environments.
+- KMM-delivered key material is never written back to the local key file.

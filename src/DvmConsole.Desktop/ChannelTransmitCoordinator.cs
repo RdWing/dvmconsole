@@ -299,7 +299,11 @@ public sealed class ChannelTransmitCoordinator : IAsyncDisposable
         if (p25KeyResolver is null ||
             !P25KeyRing.TryParseAlgorithmId(channel.Definition.EncryptionAlgorithm, out byte algorithmId) ||
             !P25KeyRing.TryParseKeyId(channel.Definition.EncryptionKeyId, out ushort keyId) ||
-            !p25KeyResolver.TryResolve(algorithmId, keyId, out ReadOnlyMemory<byte> key))
+            !p25KeyResolver.TryResolve(
+                channel.Definition.SystemName,
+                algorithmId,
+                keyId,
+                out ReadOnlyMemory<byte> key))
         {
             throw new NotSupportedException(
                 $"P25 encrypted transmit requires a configured key for {channel.Definition.EncryptionAlgorithm}/{channel.Definition.EncryptionKeyId}.");

@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Security.Cryptography;
 using DvmConsole.Core.Configuration;
 using fnecore.P25;
 
@@ -8,66 +9,113 @@ namespace DvmConsole.Media;
 // the receive session or desktop layer.
 public interface IP25KeyResolver
 {
-    bool TryResolve(byte algorithmId, ushort keyId, out ReadOnlyMemory<byte> key);
+    bool TryResolve(string systemName, byte algorithmId, ushort keyId, out ReadOnlyMemory<byte> key);
 
-    bool CanResolve(string? algorithm, string? keyId);
+    bool CanResolve(string systemName, string? algorithm, string? keyId);
+
+    bool TryGetSource(string systemName, byte algorithmId, ushort keyId, out P25KeyMaterialSource source);
+}
+
+public enum P25KeyMaterialSource
+{
+    LocalFile,
+    FneKmm
 }
 
 // Mutable in-memory lookup of P25 AES, DES-OFB, and ARC4/ADP key material.
-// The codeplug key file is the initial seed; runtime KMM responses can add or
-// replace entries without persisting key material.
-public sealed class P25KeyRing : IP25KeyResolver
+// Each system has two layers: FNE/KMM material takes precedence while it is
+// connected, with the local key file retained as an automatic fallback.
+public sealed class P25KeyRing : IP25KeyResolver, IDisposable
 {
     private readonly object sync = new();
-    private readonly Dictionary<(byte AlgorithmId, ushort KeyId), byte[]> keys;
+    private readonly Dictionary<(string SystemName, byte AlgorithmId, ushort KeyId), KeySlot> keys = [];
+    private bool disposed;
 
-    public P25KeyRing(KeyContainer container)
+    public P25KeyRing()
     {
+    }
+
+    public P25KeyRing(string systemName, KeyContainer container)
+    {
+        AddLocalKeys(systemName, container);
+    }
+
+    public void AddLocalKeys(string systemName, KeyContainer container)
+    {
+        ObjectDisposedException.ThrowIf(disposed, this);
+        string scope = NormalizeSystemName(systemName);
         ArgumentNullException.ThrowIfNull(container);
 
-        keys = [];
+        var loaded = new Dictionary<(byte AlgorithmId, ushort KeyId), byte[]>();
         foreach (KeyEntry entry in container.Keys ?? [])
         {
-            if (entry.KeyId == 0 || entry.AlgId is < byte.MinValue or > byte.MaxValue)
-                continue;
+            if (entry.KeyId == 0)
+                throw new FormatException("P25 key IDs must be non-zero.");
+            if (entry.AlgId is < byte.MinValue or > byte.MaxValue)
+                throw new FormatException($"P25 algorithm ID {entry.AlgId} is outside the supported byte range.");
 
             byte algorithmId = (byte)entry.AlgId;
             if (!IsSupportedAlgorithm(algorithmId))
-                continue;
+                throw new FormatException($"Unsupported P25 encryption algorithm 0x{algorithmId:X2}.");
 
             byte[] key = entry.KeyBytes;
-            if (key.Length == 0)
-                continue;
-            if (algorithmId == P25Defines.P25_ALGO_AES && key.Length > 32)
-                throw new FormatException("P25 AES key material cannot exceed 32 bytes.");
+            ValidateKeyLength(algorithmId, key.Length, static message => new FormatException(message));
+            if (!loaded.TryAdd((algorithmId, entry.KeyId), key))
+                throw new FormatException($"Duplicate P25 key 0x{entry.KeyId:X4} for algorithm 0x{algorithmId:X2}.");
+        }
 
-            keys[(algorithmId, entry.KeyId)] = (byte[])key.Clone();
+        lock (sync)
+        {
+            foreach (var entry in keys.Where(entry => entry.Key.SystemName == scope).ToArray())
+            {
+                ClearMaterial(ref entry.Value.LocalMaterial);
+                if (entry.Value.FneMaterial is null)
+                    keys.Remove(entry.Key);
+            }
+
+            foreach (((byte algorithmId, ushort keyId), byte[] key) in loaded)
+            {
+                var lookup = (scope, algorithmId, keyId);
+                if (!keys.TryGetValue(lookup, out KeySlot? slot))
+                    keys[lookup] = slot = new KeySlot();
+                slot.LocalMaterial = (byte[])key.Clone();
+            }
         }
     }
 
-    public void AddOrReplace(byte algorithmId, ushort keyId, ReadOnlySpan<byte> key)
+    public void AddOrReplaceFromFne(string systemName, byte algorithmId, ushort keyId, ReadOnlySpan<byte> key)
     {
+        ObjectDisposedException.ThrowIf(disposed, this);
         if (keyId == 0)
             throw new ArgumentOutOfRangeException(nameof(keyId), "P25 key ID must be non-zero.");
         if (!IsSupportedAlgorithm(algorithmId))
             throw new ArgumentOutOfRangeException(nameof(algorithmId), "Unsupported P25 encryption algorithm.");
-        if (key.Length == 0)
-            throw new ArgumentException("P25 key material cannot be empty.", nameof(key));
-        if (algorithmId == P25Defines.P25_ALGO_AES && key.Length > 32)
-            throw new ArgumentException("P25 AES key material cannot exceed 32 bytes.", nameof(key));
+        ValidateKeyLength(algorithmId, key.Length, static message => new ArgumentException(message, "key"));
 
         lock (sync)
-            keys[(algorithmId, keyId)] = key.ToArray();
+        {
+            var lookup = (NormalizeSystemName(systemName), algorithmId, keyId);
+            if (!keys.TryGetValue(lookup, out KeySlot? slot))
+                keys[lookup] = slot = new KeySlot();
+            ClearMaterial(ref slot.FneMaterial);
+            slot.FneMaterial = key.ToArray();
+        }
     }
 
-    public bool TryResolve(byte algorithmId, ushort keyId, out ReadOnlyMemory<byte> key)
+    public bool TryResolve(string systemName, byte algorithmId, ushort keyId, out ReadOnlyMemory<byte> key)
     {
         lock (sync)
         {
-            if (keyId != 0 && keys.TryGetValue((algorithmId, keyId), out byte[]? material))
+            if (keyId != 0 && keys.TryGetValue(
+                    (NormalizeSystemName(systemName), algorithmId, keyId),
+                    out KeySlot? slot))
             {
-                key = new ReadOnlyMemory<byte>((byte[])material.Clone());
-                return true;
+                byte[]? material = slot.FneMaterial ?? slot.LocalMaterial;
+                if (material is not null)
+                {
+                    key = new ReadOnlyMemory<byte>((byte[])material.Clone());
+                    return true;
+                }
             }
         }
 
@@ -75,11 +123,70 @@ public sealed class P25KeyRing : IP25KeyResolver
         return false;
     }
 
-    public bool CanResolve(string? algorithm, string? keyId)
+    public bool CanResolve(string systemName, string? algorithm, string? keyId)
     {
         return TryParseAlgorithmId(algorithm, out byte algorithmId) &&
             TryParseKeyId(keyId, out ushort parsedKeyId) &&
-            TryResolve(algorithmId, parsedKeyId, out _);
+            TryResolve(systemName, algorithmId, parsedKeyId, out _);
+    }
+
+    public bool TryGetSource(
+        string systemName,
+        byte algorithmId,
+        ushort keyId,
+        out P25KeyMaterialSource source)
+    {
+        lock (sync)
+        {
+            if (keys.TryGetValue(
+                    (NormalizeSystemName(systemName), algorithmId, keyId),
+                    out KeySlot? slot))
+            {
+                if (slot.FneMaterial is not null)
+                {
+                    source = P25KeyMaterialSource.FneKmm;
+                    return true;
+                }
+                if (slot.LocalMaterial is not null)
+                {
+                    source = P25KeyMaterialSource.LocalFile;
+                    return true;
+                }
+            }
+        }
+
+        source = default;
+        return false;
+    }
+
+    public void ClearFneKeys(string systemName)
+    {
+        string scope = NormalizeSystemName(systemName);
+        lock (sync)
+        {
+            foreach (var entry in keys.Where(entry => entry.Key.SystemName == scope).ToArray())
+            {
+                ClearMaterial(ref entry.Value.FneMaterial);
+                if (entry.Value.LocalMaterial is null)
+                    keys.Remove(entry.Key);
+            }
+        }
+    }
+
+    public void Dispose()
+    {
+        if (disposed)
+            return;
+        lock (sync)
+        {
+            foreach (KeySlot slot in keys.Values)
+            {
+                ClearMaterial(ref slot.FneMaterial);
+                ClearMaterial(ref slot.LocalMaterial);
+            }
+            keys.Clear();
+            disposed = true;
+        }
     }
 
     public static bool TryParseAlgorithmId(string? value, out byte algorithmId)
@@ -129,11 +236,46 @@ public sealed class P25KeyRing : IP25KeyResolver
             P25Defines.P25_ALGO_ARC4;
     }
 
+    private static void ValidateKeyLength(
+        byte algorithmId,
+        int actualLength,
+        Func<string, Exception> createException)
+    {
+        int expectedLength = algorithmId switch
+        {
+            P25Defines.P25_ALGO_AES => 32,
+            P25Defines.P25_ALGO_DES => 8,
+            P25Defines.P25_ALGO_ARC4 => 5,
+            _ => 0
+        };
+        if (actualLength != expectedLength)
+        {
+            throw createException(
+                $"P25 algorithm 0x{algorithmId:X2} requires exactly {expectedLength} bytes of key material; received {actualLength}.");
+        }
+    }
+
+    private static void ClearMaterial(ref byte[]? material)
+    {
+        if (material is not null)
+            CryptographicOperations.ZeroMemory(material);
+        material = null;
+    }
+
+    private static string NormalizeSystemName(string? systemName)
+        => (systemName ?? string.Empty).Trim().ToUpperInvariant();
+
     private static bool TryParseByte(string value, out byte result)
     {
         if (value.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
             return byte.TryParse(value[2..], NumberStyles.AllowHexSpecifier, CultureInfo.InvariantCulture, out result);
 
         return byte.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out result);
+    }
+
+    private sealed class KeySlot
+    {
+        public byte[]? LocalMaterial;
+        public byte[]? FneMaterial;
     }
 }

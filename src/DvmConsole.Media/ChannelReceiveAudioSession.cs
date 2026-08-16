@@ -44,7 +44,8 @@ public sealed class ChannelReceiveAudioSession : IAsyncDisposable
                     new P25TrafficSelector(definition.DestinationId),
                     vocoder,
                     playback,
-                    keyResolver);
+                    keyResolver,
+                    definition.SystemName);
                 break;
             case "nxdn":
                 if (nxdnVocoder is null)

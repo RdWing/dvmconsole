@@ -212,6 +212,7 @@ public sealed class PatchSourceDecodeCoordinator : IAsyncDisposable
             (channel.Definition.Mode == "p25" &&
              p25KeyResolver is not null &&
              p25KeyResolver.CanResolve(
+                 channel.Definition.SystemName,
                  channel.Definition.EncryptionAlgorithm,
                  channel.Definition.EncryptionKeyId));
     }

@@ -33,9 +33,14 @@ public sealed record KeyStatusItemViewModel(
             : channel.Definition.Mode != "p25"
                 ? "Unsupported protocol"
                 : keyResolver?.CanResolve(
+                    channel.Definition.SystemName,
                     channel.Definition.EncryptionAlgorithm,
                     channel.Definition.EncryptionKeyId) == true
-                    ? "Key available"
+                    ? DescribeAvailableKey(
+                        keyResolver,
+                        channel.Definition.SystemName,
+                        algorithmId,
+                        keyId)
                     : "Key unavailable";
 
         return new KeyStatusItemViewModel(
@@ -45,5 +50,19 @@ public sealed record KeyStatusItemViewModel(
             algorithmText,
             keyIdText,
             statusText);
+    }
+
+    private static string DescribeAvailableKey(
+        IP25KeyResolver resolver,
+        string systemName,
+        byte algorithmId,
+        ushort keyId)
+    {
+        if (!resolver.TryGetSource(systemName, algorithmId, keyId, out P25KeyMaterialSource source))
+            return "Key available";
+
+        return source == P25KeyMaterialSource.LocalFile
+            ? "Available · local file"
+            : "Available · FNE/KMM";
     }
 }

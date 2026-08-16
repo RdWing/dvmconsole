@@ -65,7 +65,7 @@ Off
 
 When enabled, selected resources are restored on startup.
 
-Restored selected encrypted resources request keys after the relevant FNE connection is established and a short delay has passed.
+Configured encrypted P25 resources request keys through KMM whenever the relevant FNE connects, whether or not this setting is enabled. Restored selection state controls only which resources return selected; the local key file remains the automatic fallback.
 
 When disabled, selected resources and per-resource volume do not come back sticky on startup.
 

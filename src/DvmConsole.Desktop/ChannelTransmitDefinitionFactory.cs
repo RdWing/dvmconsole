@@ -36,7 +36,11 @@ internal static class ChannelTransmitDefinitionFactory
         if (transmitDefinition.Mode != "p25" || p25KeyResolver is null ||
             !P25KeyRing.TryParseAlgorithmId(transmitDefinition.EncryptionAlgorithm, out byte algorithmId) ||
             !P25KeyRing.TryParseKeyId(transmitDefinition.EncryptionKeyId, out ushort keyId) ||
-            !p25KeyResolver.TryResolve(algorithmId, keyId, out ReadOnlyMemory<byte> key))
+            !p25KeyResolver.TryResolve(
+                transmitDefinition.SystemName,
+                algorithmId,
+                keyId,
+                out ReadOnlyMemory<byte> key))
         {
             throw new InvalidOperationException(
                 $"P25 transmit requires a configured key for {channel.Definition.EncryptionAlgorithm}/{channel.Definition.EncryptionKeyId}.");
