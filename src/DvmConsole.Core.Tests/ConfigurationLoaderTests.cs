@@ -21,6 +21,30 @@ public sealed class ConfigurationLoaderTests
     }
 
     [Fact]
+    public void ValidatesTransportEncryptionCompatibilityMode()
+    {
+        var configuration = new ConsoleConfiguration
+        {
+            Systems =
+            [
+                new SystemConfiguration
+                {
+                    Name = "System 1",
+                    Address = "127.0.0.1",
+                    Port = 62031,
+                    TransportEncryptionMode = "gcm"
+                }
+            ]
+        };
+
+        IReadOnlyList<string> errors = ConfigurationLoader.Validate(configuration);
+
+        Assert.Contains(errors, error => error.Contains(
+            "unsupported transport encryption mode 'gcm'",
+            StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void ResolvesRelativePathsFromTheCodeplugDirectory()
     {
         string path = Path.Combine(AppContext.BaseDirectory, "TestData", "codeplug.example.yml");

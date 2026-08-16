@@ -23,6 +23,13 @@ public enum FneConnectionState
     Faulted
 }
 
+public enum FneTransportEncryptionPreference
+{
+    Auto,
+    Ecb,
+    Cbc
+}
+
 public sealed record FneConnectionOptions(
     string Name,
     string Identity,
@@ -45,6 +52,9 @@ public sealed record FneConnectionOptions(
     // Enables sanitized diagnostic callbacks used by the bounded live probe.
     // Raw packet contents are never exposed by the rebuild client.
     public bool EnableDiagnostics { get; init; }
+
+    public FneTransportEncryptionPreference TransportEncryptionMode { get; init; } =
+        FneTransportEncryptionPreference.Auto;
 
     public static FneConnectionOptions FromConfiguration(SystemConfiguration configuration)
     {
@@ -74,9 +84,18 @@ public sealed record FneConnectionOptions(
             configuration.Encrypted ? configuration.PresharedKey : null)
         {
             SourceId = sourceId,
-            KmfPresharedKey = configuration.KmfPresharedKey
+            KmfPresharedKey = configuration.KmfPresharedKey,
+            TransportEncryptionMode = ParseTransportEncryptionMode(configuration.TransportEncryptionMode)
         };
     }
+
+    private static FneTransportEncryptionPreference ParseTransportEncryptionMode(string? mode)
+        => mode?.Trim().ToLowerInvariant() switch
+        {
+            "ecb" => FneTransportEncryptionPreference.Ecb,
+            "cbc" => FneTransportEncryptionPreference.Cbc,
+            _ => FneTransportEncryptionPreference.Auto
+        };
 }
 
 public sealed record FneConnectionStatus(
@@ -427,6 +446,13 @@ public sealed class FneConnection : IAsyncDisposable
 
     internal FnePeer CreatePeer(IPEndPoint endpoint)
     {
+        using IDisposable encryptionScope = FneTransportEncryptionContext.Use(
+            options.TransportEncryptionMode switch
+            {
+                FneTransportEncryptionPreference.Ecb => fnecore.FneTransportEncryptionMode.Ecb,
+                FneTransportEncryptionPreference.Cbc => fnecore.FneTransportEncryptionMode.Cbc,
+                _ => fnecore.FneTransportEncryptionMode.Auto
+            });
         var created = new FnePeer("DVMCONSOLE", options.PeerId, endpoint, options.PresharedKey);
         created.Passphrase = options.Password;
         created.PingTime = 5;

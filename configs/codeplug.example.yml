@@ -47,6 +47,8 @@ systems:
     password: "RPT_PASSWORD"
     # FNE Encrypted flag
     encrypted: false
+    # Transport compatibility: auto, ecb, or cbc. Auto detects during login.
+    transportEncryptionMode: auto
     # Preshared FNE encryption key
     presharedKey: "123ABC1234"
     # Optional separate KMF key for peer-encrypted P25 KMM responses.

@@ -18,6 +18,7 @@ public sealed class FneProtocolTests
             "C9F060FFE3CBE0C60000037900000008" +
             "5250544C000003790000000000000000");
 
+        using IDisposable encryptionScope = FneTransportEncryptionContext.Use(FneTransportEncryptionMode.Ecb);
         using var listener = new UdpClient(new IPEndPoint(IPAddress.Loopback, 0));
         var destination = Assert.IsType<IPEndPoint>(listener.Client.LocalEndPoint);
         var sender = new UdpReceiver();
@@ -35,18 +36,66 @@ public sealed class FneProtocolTests
 
         Assert.Equal(new byte[] { 0xC0, 0xFE }, wire[..2]);
         Assert.Equal(0, (wire.Length - 2) % 16);
-
-        using Aes aes = Aes.Create();
-        aes.KeySize = 256;
-        aes.Key = Convert.FromHexString(keyHex);
-        aes.BlockSize = 128;
-        aes.Mode = CipherMode.ECB;
-        aes.Padding = PaddingMode.None;
-        using ICryptoTransform decryptor = aes.CreateDecryptor();
-        byte[] decrypted = decryptor.TransformFinalBlock(wire, 2, wire.Length - 2);
+        byte[] decrypted = DecryptEcb(wire, keyHex);
 
         Assert.Equal(plaintext, decrypted[..plaintext.Length]);
         Assert.All(decrypted[plaintext.Length..], value => Assert.Equal((byte)0, value));
+    }
+
+    [Fact]
+    public async Task EncryptedUdpFrameSupportsCbcEnvelopeWithTrailingIv()
+    {
+        const string keyHex =
+            "000102030405060708090A0B0C0D0E0F000102030405060708090A0B0C0D0E0F";
+        byte[] plaintext = CreateLoginFrame();
+
+        using IDisposable encryptionScope = FneTransportEncryptionContext.Use(FneTransportEncryptionMode.Cbc);
+        using var listener = new UdpClient(new IPEndPoint(IPAddress.Loopback, 0));
+        var destination = Assert.IsType<IPEndPoint>(listener.Client.LocalEndPoint);
+        var sender = new UdpReceiver();
+        sender.SetPresharedKey(Convert.FromHexString(keyHex));
+        sender.Connect(destination);
+
+        sender.Send(new UdpFrame { Endpoint = destination, Message = plaintext });
+        UdpReceiveResult result = await listener.ReceiveAsync().WaitAsync(TimeSpan.FromSeconds(2));
+
+        Assert.Equal(new byte[] { 0xC0, 0xFE }, result.Buffer[..2]);
+        Assert.Equal(0, (result.Buffer.Length - 18) % 16);
+        Assert.Equal(plaintext, DecryptCbc(result.Buffer, keyHex));
+    }
+
+    [Fact]
+    public async Task AutoEncryptionAlternatesThenLocksToValidatedServerMode()
+    {
+        const string keyHex =
+            "000102030405060708090A0B0C0D0E0F000102030405060708090A0B0C0D0E0F";
+        byte[] plaintext = CreateLoginFrame();
+
+        using IDisposable encryptionScope = FneTransportEncryptionContext.Use(FneTransportEncryptionMode.Auto);
+        using var server = new UdpClient(new IPEndPoint(IPAddress.Loopback, 0));
+        var destination = Assert.IsType<IPEndPoint>(server.Client.LocalEndPoint);
+        var client = new UdpReceiver();
+        client.SetPresharedKey(Convert.FromHexString(keyHex));
+        client.Connect(destination);
+
+        client.Send(new UdpFrame { Endpoint = destination, Message = plaintext });
+        UdpReceiveResult first = await server.ReceiveAsync().WaitAsync(TimeSpan.FromSeconds(2));
+        Assert.Equal(plaintext, DecryptEcb(first.Buffer, keyHex));
+
+        client.Send(new UdpFrame { Endpoint = destination, Message = plaintext });
+        UdpReceiveResult second = await server.ReceiveAsync().WaitAsync(TimeSpan.FromSeconds(2));
+        Assert.Equal(plaintext, DecryptCbc(second.Buffer, keyHex));
+
+        byte[] cbcResponse = EncryptCbc(plaintext, keyHex);
+        await server.SendAsync(cbcResponse, second.RemoteEndPoint);
+        UdpFrame response = await client.Receive().WaitAsync(TimeSpan.FromSeconds(2));
+
+        Assert.Equal(plaintext, response.Message);
+        Assert.Equal(FneTransportEncryptionMode.Cbc, client.NegotiatedEncryptionMode);
+
+        client.Send(new UdpFrame { Endpoint = destination, Message = plaintext });
+        UdpReceiveResult third = await server.ReceiveAsync().WaitAsync(TimeSpan.FromSeconds(2));
+        Assert.Equal(plaintext, DecryptCbc(third.Buffer, keyHex));
     }
 
     [Fact]
@@ -135,5 +184,59 @@ public sealed class FneProtocolTests
 
         Assert.Equal((byte)0x12, opcode.Item1);
         Assert.Equal((byte)0x34, opcode.Item2);
+    }
+
+    private static byte[] CreateLoginFrame()
+        => Convert.FromHexString(
+            "905600001376E9000000037900FE0004" +
+            "C9F060FFE3CBE0C60000037900000008" +
+            "5250544C000003790000000000000000");
+
+    private static byte[] DecryptEcb(byte[] wire, string keyHex)
+        => Transform(wire[2..], Convert.FromHexString(keyHex), CipherMode.ECB, encrypt: false, null);
+
+    private static byte[] DecryptCbc(byte[] wire, string keyHex)
+    {
+        byte[] decrypted = Transform(
+            wire[2..^16],
+            Convert.FromHexString(keyHex),
+            CipherMode.CBC,
+            encrypt: false,
+            wire[^16..]);
+        return decrypted;
+    }
+
+    private static byte[] EncryptCbc(byte[] plaintext, string keyHex)
+    {
+        byte[] iv = RandomNumberGenerator.GetBytes(16);
+        byte[] encrypted = Transform(
+            plaintext,
+            Convert.FromHexString(keyHex),
+            CipherMode.CBC,
+            encrypt: true,
+            iv);
+        byte[] wire = new byte[2 + encrypted.Length + iv.Length];
+        wire[0] = 0xC0;
+        wire[1] = 0xFE;
+        encrypted.CopyTo(wire, 2);
+        iv.CopyTo(wire, 2 + encrypted.Length);
+        return wire;
+    }
+
+    private static byte[] Transform(
+        byte[] input,
+        byte[] key,
+        CipherMode mode,
+        bool encrypt,
+        byte[]? iv)
+    {
+        using Aes aes = Aes.Create();
+        aes.Key = key;
+        aes.Mode = mode;
+        aes.Padding = PaddingMode.None;
+        if (iv is not null)
+            aes.IV = iv;
+        using ICryptoTransform transform = encrypt ? aes.CreateEncryptor() : aes.CreateDecryptor();
+        return transform.TransformFinalBlock(input, 0, input.Length);
     }
 }

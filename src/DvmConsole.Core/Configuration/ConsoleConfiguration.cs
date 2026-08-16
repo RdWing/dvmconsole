@@ -68,6 +68,9 @@ public sealed class SystemConfiguration
     // is intentionally separate from the FNE transport preshared key.
     public string? KmfPresharedKey { get; set; }
     public bool Encrypted { get; set; }
+    // FNE transport framing compatibility: auto, ecb, or cbc. Auto starts
+    // with ECB and locks to whichever mode returns a valid FNE response.
+    public string TransportEncryptionMode { get; set; } = "auto";
     public uint PeerId { get; set; }
     public string Rid { get; set; } = string.Empty;
     public string AliasPath { get; set; } = "./alias.yml";

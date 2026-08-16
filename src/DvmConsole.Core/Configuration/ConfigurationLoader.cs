@@ -49,6 +49,8 @@ public static class ConfigurationLoader
                 errors.Add($"System '{system.Name}' must have an address.");
             if (system.Port is < 1 or > 65535)
                 errors.Add($"System '{system.Name}' has an invalid port.");
+            if (system.TransportEncryptionMode is not ("auto" or "ecb" or "cbc"))
+                errors.Add($"System '{system.Name}' has unsupported transport encryption mode '{system.TransportEncryptionMode}'.");
         }
 
         var channelNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -124,6 +126,9 @@ public static class ConfigurationLoader
 
         foreach (SystemConfiguration system in configuration.Systems)
         {
+            system.TransportEncryptionMode = string.IsNullOrWhiteSpace(system.TransportEncryptionMode)
+                ? "auto"
+                : system.TransportEncryptionMode.Trim().ToLowerInvariant();
             system.AliasPath = string.IsNullOrWhiteSpace(system.AliasPath)
                 ? "./alias.yml"
                 : system.AliasPath.Trim();

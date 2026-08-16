@@ -20,6 +20,7 @@ public sealed class FneConnectionTests
             Rid = "1001",
             Password = "password",
             Encrypted = true,
+            TransportEncryptionMode = "cbc",
             PresharedKey = "00112233445566778899AABBCCDDEEFF"
         };
 
@@ -33,6 +34,7 @@ public sealed class FneConnectionTests
         Assert.Equal((uint)1001, options.SourceId);
         Assert.Equal("password", options.Password);
         Assert.Equal(system.PresharedKey, options.PresharedKey);
+        Assert.Equal(FneTransportEncryptionPreference.Cbc, options.TransportEncryptionMode);
         Assert.Null(options.KmfPresharedKey);
     }
 
