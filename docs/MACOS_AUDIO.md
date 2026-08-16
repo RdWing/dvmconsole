@@ -94,16 +94,19 @@ manually.
 
 The desktop exposes two mutually exclusive policies: **DVM Console
 processing** and **Apple voice processing**. The Apple policy uses one
-full-duplex Voice Processing I/O Audio Unit for the input/output devices selected
+full-duplex Voice Processing I/O Audio Unit for the compatible input/output devices selected
 in Audio Settings, enables Apple's AEC and AGC, and bypasses DVM Console's microphone gain,
 EQ, and AGC so the chains cannot be applied twice. The existing per-channel
 `AudioMixer` remains upstream and sends one final mixed radio signal to the
 unit, allowing simultaneous radio channels to share the same echo reference.
-When the selected input and output are different Core Audio devices, the native
-host supplies Voice Processing I/O with one private aggregate device using the
-output as its clock and drift compensation on the input. Per-channel routes
-inherit the main output by default. Explicit alternate physical outputs remain
-available through HAL but are outside the Apple AEC reference.
+On macOS, Voice Processing I/O supports the system-default input/output pair or
+one selected duplex Core Audio device. Core Audio rejects a private aggregate as
+the unit's current device, so selecting two unrelated non-default devices is
+reported as incompatible instead of repeatedly rebuilding the system microphone
+route. DVM Console processing remains available for split-device routing.
+Per-channel routes inherit the main output by default. Explicit alternate
+physical outputs remain available through HAL but are outside the Apple AEC
+reference.
 
 Changing the main route or processing mode stops and restarts every active
 listening channel automatically. In Apple mode the duplex unit remains alive

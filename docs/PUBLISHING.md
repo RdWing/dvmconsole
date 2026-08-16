@@ -12,9 +12,8 @@ folder.
 
 ## Versioning and commit history
 
-The Avalonia rebuild is currently unreleased. Development packages identify
-the application as `0.1.0-alpha.1`; they are test artifacts and are not a
-stable `1.0.0` release. Future versions follow Semantic Versioning. Increment
+The first public Avalonia release is `0.1.0`. Future versions follow Semantic
+Versioning. Increment
 the major version for incompatible operator or configuration changes, the
 minor version for backward-compatible capability, and the patch version for
 backward-compatible corrections. Use pre-release suffixes until a build is
@@ -104,19 +103,27 @@ output. Test it with:
 open /tmp/DVMConsole.app
 ```
 
-Do not rename or move files inside `DVMConsole.app`. The managed assemblies,
-native libraries, and documentation are loaded relative to the bundled
-executable. Alert 1 through Alert 3 are generated in memory and do not require
-external WAV assets.
+Do not rename or move files inside `DVMConsole.app`. The managed assemblies and
+native libraries are loaded relative to the bundled executable. The in-app
+viewer reads current documentation from GitHub. Alert 1 through Alert 3 are
+generated in memory and do not require external WAV assets.
 
-4. The bundle launches the bundled `DvmConsole.Desktop` executable and does not
+4. The bundle launches the bundled `DVM Console` executable and does not
 depend on `dotnet` being installed. The old `dotnet DvmConsole.Desktop.dll`
 command is only a development launch path.
 
-5. The package is unsigned. If Gatekeeper blocks a double-click, use Finder's
-**Open** action from the context menu on the app. macOS may request microphone
+5. The package is unsigned. A downloaded unsigned bundle may be reported as
+damaged because its quarantine attribute cannot be cleared by a signature.
+After moving an official release to Applications, remove quarantine with:
+
+```sh
+xattr -dr com.apple.quarantine "/Applications/DVMConsole.app"
+```
+
+Do not use this command on an app obtained from any other source. macOS may
+request local-network access on the first FNE connection and microphone
 permission the first time PTT is used. Grant Accessibility or Input Monitoring
-access to the application if global Space/F-key PTT is required.
+access if global Space/F-key PTT is required.
 
 If the application closes without displaying an error, collect the local
 `LastCrash.log` before restarting it. On macOS it is stored under
@@ -140,8 +147,9 @@ $env:DVMVOCODER_LIBRARY = "C:\full\path\to\libvocoder.dll"
 .\scripts\publish-desktop.ps1 -Runtime win-x64 -OutputDirectory C:\Temp\dvmconsole-win-x64
 ```
 
-2. The output contains the self-contained `DvmConsole.Desktop.exe` and can be
-tested directly:
+2. The output contains a self-contained single-file
+`DvmConsole.Desktop.exe` and the native `libvocoder.dll`. It can be tested
+directly:
 
 ```powershell
 Start-Process C:\Temp\dvmconsole-win-x64\DvmConsole.Desktop.exe
@@ -167,9 +175,9 @@ verified publish directory:
   -OutputArchive C:\Temp\dvmconsole-win-x64.zip
 ```
 
-The PowerShell publisher and packager verify that the application apphost and
-native vocoder are Windows x64 PE files. Extract the entire ZIP before testing;
-copying only the `.exe` does not produce a runnable installation.
+The PowerShell publisher and packager verify that the application and native
+vocoder are Windows x64 PE files. The managed runtime and dependencies are
+inside the application EXE, leaving only the separate native vocoder beside it.
 
 ## Release acceptance
 
@@ -209,7 +217,14 @@ formats, install a compatible FFmpeg executable on the target machine and set
 Neither publishing script copies a codeplug, alias file, encryption key file,
 or user settings. Keep those files outside distributable application folders.
 
-## CI validation
+## Documentation delivery
+
+Markdown under `dvmconsole/Docs` remains the documentation source in Git. It is
+not copied into publish or release output. The in-app viewer retrieves those
+pages from the `avalonia_v2` branch on GitHub, so it needs an internet
+connection and does not preserve a stale package-time copy.
+
+## CI validation and tagged releases
 
 The `Avalonia rebuild` workflow runs the complete solution test suite on Apple
 Silicon macOS and Windows x64. Each runner checks out a pinned revision of
@@ -218,6 +233,13 @@ runs its encode/decode integration tests, and includes that library in the
 package. The workflow publishes self-contained apphosts, verifies apphost and
 native-library architecture, checks for excluded test material, and uploads
 unsigned packages for seven days.
+
+Pushing a tag that matches the source version, such as `v0.1.0`, runs the same
+two-platform test and packaging matrix. If both jobs pass, the workflow creates
+a GitHub release and attaches the versioned macOS and Windows ZIP files. A
+matching `docs/releases/<tag>.md` file supplies curated notes; otherwise GitHub
+generates notes from the commit history. Do not push a release tag until the
+release notes and hardware acceptance checks have been approved.
 
 FFmpeg remains optional. If it is unavailable on a runner, the additional OGG
 decoder test is reported as skipped; WAV and MP3 support and the complete radio

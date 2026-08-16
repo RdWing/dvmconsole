@@ -3,7 +3,7 @@
         xmlns:local="using:DvmConsole.Desktop"
         x:Class="DvmConsole.Desktop.OperatorToolsWindow"
         x:DataType="local:MainWindowViewModel"
-        Title="Console Tools" Width="920" Height="680" MinWidth="720" MinHeight="520" Background="{DynamicResource ShellBackgroundBrush}" FontSize="{Binding UiFontSize}"
+        Title="Console Settings" Width="1180" Height="780" MinWidth="720" MinHeight="520" Background="{DynamicResource ShellBackgroundBrush}" FontSize="{Binding UiFontSize}"
         WindowStartupLocation="CenterScreen">
   <Window.Styles>
     <Style Selector="TextBlock.heading"><Setter Property="FontSize" Value="{Binding $parent[Window].((local:MainWindowViewModel)DataContext).UiHeadingFontSize}" /><Setter Property="FontWeight" Value="SemiBold" /></Style>
@@ -20,8 +20,8 @@
   <Grid RowDefinitions="*,Auto">
     <TabControl x:Name="ToolTabs" Margin="10">
       <TabItem Header="Audio">
-        <ScrollViewer Padding="10,10,10,24">
-          <StackPanel Spacing="12" Margin="0,0,0,4">
+        <ScrollViewer Padding="10,10,10,36" VerticalScrollBarVisibility="Auto">
+          <StackPanel Spacing="12" Margin="0,0,0,20">
             <TextBlock Classes="heading" Text="Audio Settings" />
             <Grid ColumnDefinitions="Auto,*,Auto,*" ColumnSpacing="8" RowDefinitions="Auto,Auto">
               <TextBlock Text="Input device" VerticalAlignment="Center" />

@@ -50,19 +50,15 @@ if (-not (Test-Path -LiteralPath $PublishDirectory -PathType Container)) {
 }
 
 foreach ($FileName in @(
-    "DvmConsole.Desktop.exe",
-    "DvmConsole.Desktop.dll",
-    "DvmConsole.Desktop.deps.json",
-    "DvmConsole.Desktop.runtimeconfig.json"
+    "DvmConsole.Desktop.exe"
 )) {
     if (-not (Test-Path -LiteralPath (Join-Path $PublishDirectory $FileName) -PathType Leaf)) {
         throw "Published output is missing required file: $FileName"
     }
 }
 
-$DocumentationOverview = Join-Path $PublishDirectory "Docs/Getting Started/01-Overview.md"
-if (-not (Test-Path -LiteralPath $DocumentationOverview -PathType Leaf)) {
-    throw "Published output is missing the in-app Markdown documentation: $DocumentationOverview"
+if (Test-Path -LiteralPath (Join-Path $PublishDirectory "Docs")) {
+    throw "Publish contains documentation that must be read live from GitHub."
 }
 
 foreach ($LegacyAlert in @("alert1.wav", "alert2.wav", "alert3.wav")) {

@@ -49,9 +49,19 @@ if [[ "$RID" == "osx-arm64" ]]; then
     APP_PATH="$STAGING_DIR/DVMConsole.app"
     mkdir -p "$APP_PATH/Contents/MacOS" "$APP_PATH/Contents/Resources"
     cp "$ROOT_DIR/packaging/macos/Info.plist" "$APP_PATH/Contents/Info.plist"
+    if [[ -n "${DVM_RELEASE_VERSION:-}" ]]; then
+        if [[ ! "$DVM_RELEASE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
+            printf 'DVM_RELEASE_VERSION is not a valid bundle version: %s\n' "$DVM_RELEASE_VERSION" >&2
+            exit 12
+        fi
+        /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $DVM_RELEASE_VERSION" "$APP_PATH/Contents/Info.plist"
+        bundle_version="${DVM_RELEASE_VERSION%%-*}"
+        /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $bundle_version" "$APP_PATH/Contents/Info.plist"
+    fi
     cp "$ROOT_DIR/packaging/macos/DVMConsole.icns" "$APP_PATH/Contents/Resources/DVMConsole.icns"
     plutil -lint "$APP_PATH/Contents/Info.plist" >/dev/null
     /usr/libexec/PlistBuddy -c 'Print :NSMicrophoneUsageDescription' "$APP_PATH/Contents/Info.plist" >/dev/null
+    /usr/libexec/PlistBuddy -c 'Print :NSLocalNetworkUsageDescription' "$APP_PATH/Contents/Info.plist" >/dev/null
     bundle_icon=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIconFile' "$APP_PATH/Contents/Info.plist")
     if [[ "$bundle_icon" != "DVMConsole.icns" || ! -f "$APP_PATH/Contents/Resources/$bundle_icon" ]]; then
         printf 'macOS bundle is missing its application icon.\n' >&2
@@ -61,9 +71,10 @@ if [[ "$RID" == "osx-arm64" ]]; then
     # wrapper that execs an apphost from Resources works in Terminal but exits
     # or aborts when Finder owns the application lifecycle.
     cp -R "$PUBLISH_DIR"/. "$APP_PATH/Contents/MacOS/"
-    chmod 755 "$APP_PATH/Contents/MacOS/DvmConsole.Desktop"
+    mv "$APP_PATH/Contents/MacOS/DvmConsole.Desktop" "$APP_PATH/Contents/MacOS/DVM Console"
+    chmod 755 "$APP_PATH/Contents/MacOS/DVM Console"
     bundle_executable=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$APP_PATH/Contents/Info.plist")
-    if [[ "$bundle_executable" != "DvmConsole.Desktop" || ! -x "$APP_PATH/Contents/MacOS/$bundle_executable" ]]; then
+    if [[ "$bundle_executable" != "DVM Console" || ! -x "$APP_PATH/Contents/MacOS/$bundle_executable" ]]; then
         printf 'macOS bundle does not launch the real apphost from Contents/MacOS.\n' >&2
         exit 12
     fi

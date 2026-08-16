@@ -11,6 +11,7 @@
     <Authors>RdWing</Authors>
     <Company>DVMProject</Company>
     <Product>Digital Voice Modem - Desktop Dispatch Console</Product>
+    <AssemblyTitle>DVM Console</AssemblyTitle>
     <Copyright>Copyright © 2025-2026 RdWing</Copyright>
     <PackageLicenseExpression>AGPL-3.0-only</PackageLicenseExpression>
     <RepositoryUrl>https://github.com/RdWing/dvmconsole</RepositoryUrl>
@@ -34,9 +35,5 @@
 
   <ItemGroup>
     <AvaloniaResource Include="Assets/DVMConsole.png" />
-    <Content Include="../../dvmconsole/Docs/**/*.md"
-             Link="Docs/%(RecursiveDir)%(Filename)%(Extension)"
-             CopyToOutputDirectory="PreserveNewest"
-             CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

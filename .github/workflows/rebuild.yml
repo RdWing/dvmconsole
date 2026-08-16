@@ -4,6 +4,8 @@ on:
   push:
     branches:
       - avalonia_v2
+    tags:
+      - "v*"
   pull_request:
     branches:
       - avalonia_v2
@@ -34,6 +36,26 @@ jobs:
         uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 8.0.x
+
+      - name: Resolve package version
+        shell: bash
+        run: |
+          source_version="$(sed -n 's:.*<VersionPrefix>\(.*\)</VersionPrefix>.*:\1:p' src/Directory.Build.props)"
+          if [[ -z "$source_version" ]]; then
+            printf 'VersionPrefix was not found in src/Directory.Build.props.\n' >&2
+            exit 1
+          fi
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            package_version="${GITHUB_REF_NAME#v}"
+            if [[ "$package_version" != "$source_version" ]]; then
+              printf 'Tag v%s does not match source version %s.\n' "$package_version" "$source_version" >&2
+              exit 1
+            fi
+            printf 'DVM_RELEASE_VERSION=%s\n' "$package_version" >> "$GITHUB_ENV"
+          else
+            package_version="${source_version}-${GITHUB_SHA::7}"
+          fi
+          printf 'DVM_PACKAGE_VERSION=%s\n' "$package_version" >> "$GITHUB_ENV"
 
       - name: Check out pinned dvmvocoder source
         uses: actions/checkout@v4
@@ -80,12 +102,12 @@ jobs:
       - name: Package unsigned macOS handoff
         if: matrix.rid == 'osx-arm64'
         shell: bash
-        run: scripts/package-desktop.sh "${{ matrix.rid }}" "$RUNNER_TEMP/dvmconsole-publish/${{ matrix.rid }}" "$RUNNER_TEMP/dvmconsole-publish/dvmconsole-${{ matrix.rid }}.zip"
+        run: scripts/package-desktop.sh "${{ matrix.rid }}" "$RUNNER_TEMP/dvmconsole-publish/${{ matrix.rid }}" "$RUNNER_TEMP/dvmconsole-publish/dvmconsole-${DVM_PACKAGE_VERSION}-${{ matrix.rid }}.zip"
 
       - name: Package unsigned Windows handoff
         if: matrix.rid == 'win-x64'
         shell: pwsh
-        run: .\scripts\package-desktop.ps1 -PublishDirectory "$env:RUNNER_TEMP\dvmconsole-publish\${{ matrix.rid }}" -OutputArchive "$env:RUNNER_TEMP\dvmconsole-publish\dvmconsole-${{ matrix.rid }}.zip"
+        run: .\scripts\package-desktop.ps1 -PublishDirectory "$env:RUNNER_TEMP\dvmconsole-publish\${{ matrix.rid }}" -OutputArchive "$env:RUNNER_TEMP\dvmconsole-publish\dvmconsole-$($env:DVM_PACKAGE_VERSION)-${{ matrix.rid }}.zip"
 
       - name: Upload unsigned publish artifact
         uses: actions/upload-artifact@v4
@@ -99,7 +121,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: dvmconsole-package-${{ matrix.rid }}
-          path: ${{ runner.temp }}/dvmconsole-publish/dvmconsole-${{ matrix.rid }}.zip
+          path: ${{ runner.temp }}/dvmconsole-publish/dvmconsole-${{ env.DVM_PACKAGE_VERSION }}-${{ matrix.rid }}.zip
           if-no-files-found: error
           retention-days: 7
 
@@ -111,3 +133,46 @@ jobs:
           path: ${{ github.workspace }}/**/*.trx
           if-no-files-found: warn
           retention-days: 7
+
+  publish-release:
+    name: Publish tagged release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: test-and-publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Check out release notes
+        uses: actions/checkout@v4
+
+      - name: Download verified release packages
+        uses: actions/download-artifact@v4
+        with:
+          pattern: dvmconsole-package-*
+          path: release-artifacts
+          merge-multiple: true
+
+      - name: Publish GitHub release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          shopt -s nullglob
+          packages=(release-artifacts/*.zip)
+          if (( ${#packages[@]} != 2 )); then
+            printf 'Expected two release packages, found %s.\n' "${#packages[@]}" >&2
+            exit 1
+          fi
+          notes_file="docs/releases/${GITHUB_REF_NAME}.md"
+          if [[ -f "$notes_file" ]]; then
+            gh release create "$GITHUB_REF_NAME" "${packages[@]}" \
+              --title "DVM Console ${GITHUB_REF_NAME}" \
+              --notes-file "$notes_file" \
+              --verify-tag
+          else
+            gh release create "$GITHUB_REF_NAME" "${packages[@]}" \
+              --title "DVM Console ${GITHUB_REF_NAME}" \
+              --generate-notes \
+              --verify-tag
+          fi

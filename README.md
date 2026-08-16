@@ -2,8 +2,8 @@
 
 The Digital Voice Modem Desktop Dispatch Console ("DDC") is a desktop application that operates similarly to a traditional dispatch console, allowing DVM users to monitor multiple talkgroups on a DVM FNE from a single application. The `avalonia_v2` branch contains the cross-platform Avalonia rebuild for Apple Silicon macOS and Windows x64; the original WPF application remains in the repository as the feature and behavior reference.
 
-The Avalonia rebuild has not had its first release. Current test packages use
-the Semantic Versioning pre-release identifier `0.1.0-alpha.1`.
+The first public Avalonia release is version `0.1.0`. Release packages are
+self-contained for Apple Silicon macOS and Windows x64.
 
 ![Dark Mode Console](./repo/Screenshot-3.png)
 
@@ -68,10 +68,18 @@ application correctly from inside the archive.
 requires an Apple Silicon Mac.
 2. Double-click the ZIP in Finder, then move the extracted `DVMConsole.app` to
 `Applications`. Do not move files out of the application bundle.
-3. The application is currently unsigned. On first launch, control-click
-`DVMConsole.app`, choose **Open**, then confirm **Open**. macOS may request
-microphone permission when PTT is first used and Accessibility or Input
-Monitoring permission when global PTT is enabled.
+3. The application is currently unsigned. Remove the download quarantine after
+moving the app to Applications:
+
+```sh
+xattr -dr com.apple.quarantine "/Applications/DVMConsole.app"
+```
+
+Only do this for an archive downloaded from the official project release. You
+can then open `DVMConsole.app` normally. macOS may request local-network access
+when the first FNE connection is made, microphone permission when PTT is first
+used, and Accessibility or Input Monitoring permission when global PTT is
+enabled.
 4. Use **Open Codeplug** within the application to load `codeplug.yml`.
 
 If the application opens and immediately closes, copy
@@ -82,9 +90,9 @@ starting it again and include that file with the problem report.
 
 1. Download the `dvmconsole-win-x64-<version>.zip` release file and choose
 **Extract All** in File Explorer.
-2. Keep the extracted folder together. Do not copy only
-`DvmConsole.Desktop.exe`; the adjacent assemblies and native libraries are
-required.
+2. Keep `DvmConsole.Desktop.exe` and `libvocoder.dll` together. The managed
+application and runtime are bundled into the single EXE; the native vocoder
+remains beside it.
 3. Start `DvmConsole.Desktop.exe`. If Microsoft Defender SmartScreen warns
 about the unsigned build, use **More info**, verify the publisher/source, and
 choose **Run anyway** only if the archive came from the project release.
@@ -101,7 +109,9 @@ macOS and Windows test packages.
 
 ## Documentation
 
-The same documentation is built into the app under `Help > Documentation`.
+`Help > Documentation` reads the current Markdown pages directly from this
+repository. An internet connection is required to use the in-app viewer; the
+release archives do not contain a stale copy of the documentation.
 
 - [Overview](dvmconsole/Docs/Getting%20Started/01-Overview.md)
 - [Building](dvmconsole/Docs/Getting%20Started/02-Building.md)

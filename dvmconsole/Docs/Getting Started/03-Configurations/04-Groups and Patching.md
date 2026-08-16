@@ -1,6 +1,6 @@
 # Groups and Patching
 
-Patch groups and multi-select groups are managed from Console Tools.
+Patch groups and multi-select groups are managed from Console Settings.
 
 Open it from:
 

@@ -4,7 +4,7 @@ The Digital Voice Modem Desktop Dispatch Console is a cross-platform operator co
 
 The Avalonia application runs on Apple Silicon macOS and 64-bit Windows. It keeps the established DVMConsole codeplug and FNE behavior while providing the same operator workflow on both platforms.
 
-This rebuild is currently a prerelease. Test every build with the intended FNE, audio devices, and operator workflow before operational use.
+The first public Avalonia release is version `0.1.0`. Test every build with the intended FNE, audio devices, and operator workflow before operational use.
 
 ---
 
@@ -61,13 +61,13 @@ Purple means a route or recorder is enabled. Gray means it is disabled.
 
 The Activity sidebar shows recent calls. Collapse it with the arrow at the edge of the sidebar. Double-click the Activity list to open the full Event History window.
 
-The toolbar provides the three original alert patterns and a **TONES** button that opens Console Tools directly to the Tones page.
+The toolbar provides the three original alert patterns and a **TONES** button that opens Console Settings directly to the Tones page.
 
 ---
 
-# Console Tools
+# Console Settings
 
-Several menu entries open the modeless Console Tools window on a specific page. The window can remain open while the main console is used.
+Several menu entries open the modeless Console Settings window on a specific page. The window can remain open while the main console is used.
 
 Pages include:
 

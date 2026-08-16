@@ -1,91 +1,93 @@
+using System.Net.Http.Headers;
 using System.Text.RegularExpressions;
 
 namespace DvmConsole.Desktop;
 
-internal sealed record DocumentationPage(string Title, string RelativePath, string FilePath);
+internal sealed record DocumentationPage(string Title, string RelativePath, Uri ContentUri);
 
 internal sealed class DocumentationCatalog
 {
     private static readonly Regex SortPrefix = new(@"^\d+\s*-\s*", RegexOptions.Compiled);
-    private readonly string root;
+    private static readonly string[] DefaultPagePaths =
+    [
+        "Getting Started/01-Overview.md",
+        "Getting Started/02-Building.md",
+        "Getting Started/03-Configurations/01-Codeplug Creation.md",
+        "Getting Started/03-Configurations/02-Encryption Keys.md",
+        "Getting Started/03-Configurations/03-RID Aliases.md",
+        "Getting Started/03-Configurations/04-Groups and Patching.md",
+        "Getting Started/03-Configurations/05-Talkgroup Audio Recorder.md",
+        "Getting Started/04-Operations/01-Console Operation.md",
+        "Getting Started/04-Operations/02-Settings Reference.md",
+        "Getting Started/04-Operations/03-Audio Settings.md",
+        "Getting Started/04-Operations/04-Alert Tones.md"
+    ];
+    private static readonly Uri DefaultRoot = new(
+        "https://raw.githubusercontent.com/RdWing/dvmconsole/avalonia_v2/dvmconsole/Docs/");
+    private static readonly HttpClient SharedClient = CreateSharedClient();
 
-    public DocumentationCatalog(string root)
+    private readonly HttpClient httpClient;
+    private readonly IReadOnlyList<DocumentationPage> pages;
+
+    public DocumentationCatalog(
+        HttpClient httpClient,
+        Uri root,
+        IEnumerable<string>? relativePaths = null)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(root);
-        this.root = Path.GetFullPath(root);
-    }
+        this.httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
+        ArgumentNullException.ThrowIfNull(root);
+        if (!root.IsAbsoluteUri || root.Scheme != Uri.UriSchemeHttps)
+            throw new ArgumentException("The documentation root must be an absolute HTTPS URL.", nameof(root));
 
-    public string Root => root;
-
-    public static DocumentationCatalog OpenDefault()
-    {
-        foreach (string candidate in EnumerateRootCandidates(AppContext.BaseDirectory))
-        {
-            if (Directory.Exists(candidate))
-                return new DocumentationCatalog(candidate);
-        }
-
-        throw new DirectoryNotFoundException(
-            $"The documentation folder was not found. Expected Docs under {AppContext.BaseDirectory}.");
-    }
-
-    internal static IEnumerable<string> EnumerateRootCandidates(string baseDirectory)
-    {
-        string current = Path.GetFullPath(baseDirectory);
-        for (int depth = 0; depth < 8; depth++)
-        {
-            yield return Path.Combine(current, "Docs");
-            yield return Path.Combine(current, "dvmconsole", "Docs");
-            DirectoryInfo? parent = Directory.GetParent(current);
-            if (parent is null)
-                yield break;
-            current = parent.FullName;
-        }
-    }
-
-    public IReadOnlyList<DocumentationPage> Find(string? searchText = null)
-    {
-        string query = searchText?.Trim() ?? string.Empty;
-        var pages = new List<DocumentationPage>();
-        foreach (string filePath in Directory.EnumerateFiles(root, "*.md", SearchOption.AllDirectories))
-        {
-            string relativePath = Path.GetRelativePath(root, filePath);
-            string title = FormatTitle(Path.GetFileName(filePath));
-            if (query.Length > 0)
-            {
-                string markdown;
-                try
-                {
-                    markdown = File.ReadAllText(filePath);
-                }
-                catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
-                {
-                    continue;
-                }
-
-                if (!title.Contains(query, StringComparison.OrdinalIgnoreCase) &&
-                    !markdown.Contains(query, StringComparison.OrdinalIgnoreCase))
-                {
-                    continue;
-                }
-            }
-
-            pages.Add(new DocumentationPage(title, relativePath, Path.GetFullPath(filePath)));
-        }
-
-        return pages
+        pages = (relativePaths ?? DefaultPagePaths)
+            .Select(NormalizeRelativePath)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Select(path => new DocumentationPage(FormatTitle(Path.GetFileName(path)), path, new Uri(root, path)))
             .OrderBy(page => page.RelativePath, DocumentationPathComparer.Instance)
             .ToArray();
     }
 
-    public string Read(DocumentationPage page)
+    public static DocumentationCatalog OpenDefault()
+        => new(SharedClient, DefaultRoot);
+
+    public async Task<IReadOnlyList<DocumentationPage>> FindAsync(
+        string? searchText = null,
+        CancellationToken cancellationToken = default)
+    {
+        string query = searchText?.Trim() ?? string.Empty;
+        if (query.Length == 0)
+            return pages;
+
+        Task<DocumentationPage?>[] searches = pages.Select(async page =>
+        {
+            if (page.Title.Contains(query, StringComparison.OrdinalIgnoreCase))
+                return page;
+            string markdown = await ReadAsync(page, cancellationToken).ConfigureAwait(false);
+            return markdown.Contains(query, StringComparison.OrdinalIgnoreCase) ? page : null;
+        }).ToArray();
+        DocumentationPage?[] matches = await Task.WhenAll(searches).ConfigureAwait(false);
+        return matches.Where(page => page is not null).Cast<DocumentationPage>().ToArray();
+    }
+
+    public async Task<string> ReadAsync(
+        DocumentationPage page,
+        CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(page);
-        string fullPath = Path.GetFullPath(page.FilePath);
-        string relativePath = Path.GetRelativePath(root, fullPath);
-        if (relativePath.StartsWith("..", StringComparison.Ordinal) || Path.IsPathRooted(relativePath))
-            throw new InvalidOperationException("The documentation page is outside the configured documentation folder.");
-        return File.ReadAllText(fullPath);
+        DocumentationPage? knownPage = pages.FirstOrDefault(candidate =>
+            candidate.RelativePath.Equals(page.RelativePath, StringComparison.OrdinalIgnoreCase) &&
+            candidate.ContentUri == page.ContentUri);
+        if (knownPage is null)
+            throw new InvalidOperationException("The documentation page is outside the configured GitHub documentation set.");
+
+        using var request = new HttpRequestMessage(HttpMethod.Get, knownPage.ContentUri);
+        request.Headers.CacheControl = new CacheControlHeaderValue { NoCache = true };
+        using HttpResponseMessage response = await httpClient.SendAsync(
+            request,
+            HttpCompletionOption.ResponseHeadersRead,
+            cancellationToken).ConfigureAwait(false);
+        response.EnsureSuccessStatusCode();
+        return await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
     }
 
     public static string FormatTitle(string value)
@@ -94,14 +96,29 @@ internal sealed class DocumentationCatalog
         return SortPrefix.Replace(name, string.Empty).Trim();
     }
 
+    private static string NormalizeRelativePath(string value)
+    {
+        string path = (value ?? string.Empty).Replace('\\', '/').Trim('/');
+        if (path.Length == 0 || path.Split('/').Any(segment => segment is "." or ".."))
+            throw new ArgumentException("Documentation paths must remain under the configured GitHub documentation root.", nameof(value));
+        return path;
+    }
+
+    private static HttpClient CreateSharedClient()
+    {
+        var client = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
+        client.DefaultRequestHeaders.UserAgent.ParseAdd("DVMConsole-Documentation/0.1");
+        return client;
+    }
+
     private sealed class DocumentationPathComparer : IComparer<string>
     {
         public static DocumentationPathComparer Instance { get; } = new();
 
         public int Compare(string? left, string? right)
         {
-            string[] leftParts = (left ?? string.Empty).Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-            string[] rightParts = (right ?? string.Empty).Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            string[] leftParts = (left ?? string.Empty).Split('/');
+            string[] rightParts = (right ?? string.Empty).Split('/');
             int common = Math.Min(leftParts.Length, rightParts.Length);
             for (int index = 0; index < common; index++)
             {

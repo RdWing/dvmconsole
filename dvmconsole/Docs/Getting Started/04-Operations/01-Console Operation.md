@@ -78,8 +78,8 @@ Global PTT keys every channel with `TX` armed. At least one transmit-capable cha
 
 Choose the key under **Channels > Global PTT key**. Space and F1 through F12 are supported. On macOS, OS-global capture may require Accessibility or Input Monitoring permission. When global capture is unavailable, the key still works while the application has keyboard focus.
 
-The global PTT key remains active while the modeless **Console Tools** window
-has focus. Console Tools can stay open while the operator selects resources or
+The global PTT key remains active while the modeless **Console Settings** window
+has focus. Console Settings can stay open while the operator selects resources or
 uses other controls in the main window.
 
 The talk permit tone uses the selected output device for both card and global PTT. Use **Audio > Test talk permit tone** when checking the route.

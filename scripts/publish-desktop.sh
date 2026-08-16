@@ -32,13 +32,23 @@ case "$RID" in
 esac
 
 dotnet restore "$PROJECT" --runtime "$RID" --ignore-failed-sources -p:NuGetAudit=false --verbosity minimal
+PUBLISH_PROPERTIES=(-p:UseAppHost=true)
+if [[ "$RID" == "win-x64" ]]; then
+    PUBLISH_PROPERTIES+=(
+        -p:PublishSingleFile=true
+        -p:IncludeNativeLibrariesForSelfExtract=true
+        -p:EnableCompressionInSingleFile=true
+        -p:DebugType=None
+    )
+fi
+
 dotnet publish "$PROJECT" \
     --configuration "$CONFIGURATION" \
     --runtime "$RID" \
     --self-contained true \
     --no-restore \
     --output "$OUTPUT_DIR" \
-    -p:UseAppHost=true
+    "${PUBLISH_PROPERTIES[@]}"
 
 if [[ "$RID" == "osx-arm64" ]]; then
     cp "$AUDIO_BUILD_DIR/libdvmaudio.dylib" "$OUTPUT_DIR/libdvmaudio.dylib"

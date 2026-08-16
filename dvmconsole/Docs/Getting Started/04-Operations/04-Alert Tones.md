@@ -34,7 +34,7 @@ Target TG unavailable on FNE
 
 ---
 
-# Console Tools Tones
+# Console Settings Tones
 
 Open from:
 

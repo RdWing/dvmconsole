@@ -37,7 +37,7 @@ Open **Settings > All console settings** and use the Appearance controls to
 adjust the console display.
 
 - **Text size** changes the inherited application font size.
-- **Interface scale** scales the complete main console and Console Tools UI.
+- **Interface scale** scales the complete main console and Console Settings UI.
 
 Both settings apply immediately and are saved for the next launch.
 
@@ -71,7 +71,7 @@ When disabled, selected resources and per-resource volume do not come back stick
 
 ## Toolbar Clocks
 
-Open **Settings > Clock settings** to show the General page in Console Tools. Up to eight toolbar clocks can be enabled.
+Open **Settings > Clock settings** to show the General page in Console Settings. Up to eight toolbar clocks can be enabled.
 
 Each clock has:
 
@@ -88,7 +88,7 @@ Clock settings are saved and restored on startup. Enabled clock slots, UTC offse
 
 ## Audio Settings
 
-Opens Console Tools on the Audio page.
+Opens Console Settings on the Audio page.
 
 See **Audio Settings** for details.
 
@@ -155,7 +155,7 @@ The Event History can be docked in the collapsible Activity sidebar or opened as
 
 ## Groups
 
-Opens Console Tools on the Groups page.
+Opens Console Settings on the Groups page.
 
 ## Keep Window on Top
 
@@ -190,8 +190,11 @@ Opens manual connection controls for configured FNE systems.
 
 ## Documentation
 
-Opens this searchable documentation viewer. The selected Markdown file is read live from the packaged `Docs` folder and rendered with headings, lists, tables, links, and code blocks.
+Opens the searchable documentation viewer. Pages are read live from the
+`avalonia_v2` documentation tree on GitHub and rendered with headings, lists,
+tables, links, and code blocks. An internet connection is required; Markdown is
+not bundled into the application package.
 
 ## About
 
-Shows the prerelease version and seven-character commit ID, copyright, AGPL license notice, project attribution, and repository links.
+Shows version `0.1.0` and the seven-character commit ID, copyright, AGPL license notice, project attribution, and repository links.

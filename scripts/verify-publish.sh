@@ -24,21 +24,17 @@ if [[ ! -d "$OUTPUT_DIR" ]]; then
     exit 3
 fi
 
-required_files=(
-    DvmConsole.Desktop.dll
-    DvmConsole.Desktop.deps.json
-    DvmConsole.Desktop.runtimeconfig.json
-)
+if [[ "$RID" == "osx-arm64" ]]; then
+    for file_name in DvmConsole.Desktop.dll DvmConsole.Desktop.deps.json DvmConsole.Desktop.runtimeconfig.json; do
+        if [[ ! -f "$OUTPUT_DIR/$file_name" ]]; then
+            printf 'Missing required publish file: %s\n' "$OUTPUT_DIR/$file_name" >&2
+            exit 4
+        fi
+    done
+fi
 
-for file_name in "${required_files[@]}"; do
-    if [[ ! -f "$OUTPUT_DIR/$file_name" ]]; then
-        printf 'Missing required publish file: %s\n' "$OUTPUT_DIR/$file_name" >&2
-        exit 4
-    fi
-done
-
-if [[ ! -f "$OUTPUT_DIR/Docs/Getting Started/01-Overview.md" ]]; then
-    printf 'Publish is missing the in-app Markdown documentation.\n' >&2
+if [[ -e "$OUTPUT_DIR/Docs" ]]; then
+    printf 'Publish contains documentation that must be read live from GitHub.\n' >&2
     exit 4
 fi
 
@@ -69,6 +65,12 @@ case "$RID" in
         apphost_description=$(/usr/bin/file "$OUTPUT_DIR/DvmConsole.Desktop.exe")
         if [[ "$apphost_description" != *x86-64* && "$apphost_description" != *x86_64* ]]; then
             printf 'Windows apphost is not x64: %s\n' "$apphost_description" >&2
+            exit 4
+        fi
+        if [[ -e "$OUTPUT_DIR/DvmConsole.Desktop.dll" ||
+              -e "$OUTPUT_DIR/DvmConsole.Desktop.deps.json" ||
+              -e "$OUTPUT_DIR/DvmConsole.Desktop.runtimeconfig.json" ]]; then
+            printf 'Windows publish is not a clean single-file application.\n' >&2
             exit 4
         fi
         ;;

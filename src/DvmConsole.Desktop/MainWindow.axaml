@@ -158,7 +158,7 @@
               <ItemsControl.ItemsPanel><ItemsPanelTemplate><StackPanel Orientation="Horizontal" Spacing="4" /></ItemsPanelTemplate></ItemsControl.ItemsPanel>
               <ItemsControl.ItemTemplate><DataTemplate x:DataType="local:BuiltInAlertToneViewModel"><Button Content="{Binding Name}" Tag="{Binding}" ToolTip.Tip="Generate this legacy alert pattern on ALERT-armed channels" Padding="6,3" Click="HandleToolbarAlertToneClick" /></DataTemplate></ItemsControl.ItemTemplate>
             </ItemsControl>
-            <Button Content="TONES" ToolTip.Tip="Open Console Tools directly to Tones and DTMF" Padding="6,3" Click="HandleToolbarToneToolsClick" />
+            <Button Content="TONES" ToolTip.Tip="Open Console Settings directly to Tones and DTMF" Padding="6,3" Click="HandleToolbarToneToolsClick" />
           </StackPanel>
         </StackPanel>
       </DockPanel>

@@ -3,9 +3,9 @@
 <plist version="1.0">
 <dict>
   <key>CFBundleDisplayName</key>
-  <string>DVMConsole</string>
+  <string>DVM Console</string>
   <key>CFBundleExecutable</key>
-  <string>DvmConsole.Desktop</string>
+  <string>DVM Console</string>
   <key>CFBundleIdentifier</key>
   <string>org.dvmproject.dvmconsole</string>
   <key>CFBundleIconFile</key>
@@ -13,7 +13,7 @@
   <key>CFBundleInfoDictionaryVersion</key>
   <string>6.0</string>
   <key>CFBundleName</key>
-  <string>DVMConsole</string>
+  <string>DVM Console</string>
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleShortVersionString</key>
@@ -25,6 +25,8 @@
   <key>NSHighResolutionCapable</key>
   <true/>
   <key>NSMicrophoneUsageDescription</key>
-  <string>DVMConsole uses the selected microphone while transmitting radio audio.</string>
+  <string>DVM Console uses the selected microphone while transmitting radio audio.</string>
+  <key>NSLocalNetworkUsageDescription</key>
+  <string>DVM Console connects to configured FNE systems on your local network.</string>
 </dict>
 </plist>

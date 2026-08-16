@@ -7,6 +7,7 @@ namespace DvmConsole.Desktop;
 public sealed partial class DocumentationWindow : Window
 {
     private readonly DocumentationCatalog catalog;
+    private CancellationTokenSource reloadCancellation = new();
 
     public DocumentationWindow()
         : this(DocumentationCatalog.OpenDefault())
@@ -17,7 +18,9 @@ public sealed partial class DocumentationWindow : Window
     {
         this.catalog = catalog ?? throw new ArgumentNullException(nameof(catalog));
         InitializeComponent();
-        ReloadTree();
+        markdownViewer.Markdown = "# Loading documentation\n\nFetching the current pages from GitHub…";
+        Opened += HandleOpened;
+        Closed += HandleClosed;
     }
 
     private void InitializeComponent()
@@ -31,35 +34,69 @@ public sealed partial class DocumentationWindow : Window
             ?? throw new InvalidOperationException("Documentation content control was not created.");
     }
 
-    private void HandleSearchTextChanged(object? sender, TextChangedEventArgs e)
-        => ReloadTree(searchBox.Text);
+    private async void HandleOpened(object? sender, EventArgs e)
+        => await ReloadTreeAsync();
 
-    private void HandleDocumentSelectionChanged(object? sender, SelectionChangedEventArgs e)
+    private void HandleClosed(object? sender, EventArgs e)
+    {
+        reloadCancellation.Cancel();
+        reloadCancellation.Dispose();
+    }
+
+    private async void HandleSearchTextChanged(object? sender, TextChangedEventArgs e)
+    {
+        reloadCancellation.Cancel();
+        reloadCancellation.Dispose();
+        reloadCancellation = new CancellationTokenSource();
+        CancellationToken cancellationToken = reloadCancellation.Token;
+        try
+        {
+            await Task.Delay(250, cancellationToken);
+            await ReloadTreeAsync(searchBox.Text, cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+        }
+    }
+
+    private async void HandleDocumentSelectionChanged(object? sender, SelectionChangedEventArgs e)
     {
         if (documentTree.SelectedItem is not TreeViewItem { Tag: DocumentationPage page })
             return;
 
+        markdownViewer.Markdown = $"# {page.Title}\n\nLoading the current page from GitHub…";
         try
         {
-            markdownViewer.Markdown = catalog.Read(page);
+            string markdown = await catalog.ReadAsync(page, reloadCancellation.Token);
+            if (documentTree.SelectedItem is TreeViewItem { Tag: DocumentationPage selected } && selected == page)
+                markdownViewer.Markdown = markdown;
         }
-        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or InvalidOperationException)
+        catch (OperationCanceledException)
         {
-            markdownViewer.Markdown = $"# Documentation unavailable\n\n{exception.Message}";
+        }
+        catch (Exception exception) when (exception is HttpRequestException or IOException or InvalidOperationException)
+        {
+            markdownViewer.Markdown = FormatUnavailable(exception);
         }
     }
 
-    private void ReloadTree(string? searchText = null)
+    private async Task ReloadTreeAsync(
+        string? searchText = null,
+        CancellationToken cancellationToken = default)
     {
         IReadOnlyList<DocumentationPage> pages;
         try
         {
-            pages = catalog.Find(searchText);
+            pages = await catalog.FindAsync(searchText, cancellationToken);
         }
-        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        catch (OperationCanceledException)
+        {
+            return;
+        }
+        catch (Exception exception) when (exception is HttpRequestException or IOException or InvalidOperationException)
         {
             documentTree.ItemsSource = Array.Empty<object?>();
-            markdownViewer.Markdown = $"# Documentation unavailable\n\n{exception.Message}";
+            markdownViewer.Markdown = FormatUnavailable(exception);
             return;
         }
 
@@ -67,7 +104,7 @@ public sealed partial class DocumentationWindow : Window
         var folders = new Dictionary<string, TreeViewItem>(StringComparer.OrdinalIgnoreCase);
         foreach (DocumentationPage page in pages)
         {
-            string? directory = Path.GetDirectoryName(page.RelativePath);
+            string? directory = Path.GetDirectoryName(page.RelativePath.Replace('/', Path.DirectorySeparatorChar));
             IList<object?> parent = roots;
             string cumulative = string.Empty;
             if (!string.IsNullOrWhiteSpace(directory))
@@ -98,13 +135,18 @@ public sealed partial class DocumentationWindow : Window
         if (firstPage is null)
         {
             markdownViewer.Markdown = string.IsNullOrWhiteSpace(searchText)
-                ? "# Documentation unavailable\n\nNo Markdown pages were found."
-                : "# No results\n\nNo documentation pages match the current search.";
+                ? "# Documentation unavailable\n\nNo documentation pages are configured."
+                : "# No results\n\nNo current GitHub documentation pages match the search.";
             return;
         }
 
         firstPage.IsSelected = true;
     }
+
+    private static string FormatUnavailable(Exception exception)
+        => "# Documentation unavailable\n\n" +
+           "DVM Console reads these pages live from GitHub. Check the network connection and try again.\n\n" +
+           $"`{exception.Message}`";
 
     private static TreeViewItem? FindFirstPage(IEnumerable<object?> items)
     {

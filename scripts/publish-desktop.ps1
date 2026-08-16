@@ -65,13 +65,21 @@ if ($LASTEXITCODE -ne 0) {
     throw "dotnet restore failed with exit code $LASTEXITCODE."
 }
 
+$PublishProperties = @("-p:UseAppHost=true")
+$PublishProperties += @(
+    "-p:PublishSingleFile=true",
+    "-p:IncludeNativeLibrariesForSelfExtract=true",
+    "-p:EnableCompressionInSingleFile=true",
+    "-p:DebugType=None"
+)
+
 dotnet publish $Project `
     --configuration $Configuration `
     --runtime $Runtime `
     --self-contained true `
     --no-restore `
     --output $OutputDirectory `
-    -p:UseAppHost=true
+    @PublishProperties
 if ($LASTEXITCODE -ne 0) {
     throw "dotnet publish failed with exit code $LASTEXITCODE."
 }
@@ -87,17 +95,17 @@ if (-not [string]::IsNullOrWhiteSpace($VocoderLibrary)) {
 }
 
 $RequiredFiles = @(
-    "DvmConsole.Desktop.exe",
-    "DvmConsole.Desktop.dll",
-    "DvmConsole.Desktop.deps.json",
-    "DvmConsole.Desktop.runtimeconfig.json",
-    "Docs/Getting Started/01-Overview.md"
+    "DvmConsole.Desktop.exe"
 )
 foreach ($FileName in $RequiredFiles) {
     $Path = Join-Path $OutputDirectory $FileName
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
         throw "Published output is missing required file: $Path"
     }
+}
+
+if (Test-Path -LiteralPath (Join-Path $OutputDirectory "Docs")) {
+    throw "Published output must not contain documentation; the app reads current pages from GitHub."
 }
 
 foreach ($LegacyAlert in @("alert1.wav", "alert2.wav", "alert3.wav")) {

@@ -11,7 +11,7 @@ Most users should download a release package instead of building from source. A 
 - Apple Silicon macOS: `osx-arm64`
 - 64-bit Windows: `win-x64`
 
-The current prerelease version is `0.1.0-alpha.1`. Development packages are test artifacts and are not a stable `1.0.0` release.
+The first public Avalonia release is version `0.1.0`.
 
 ---
 
@@ -95,9 +95,18 @@ scripts/package-desktop.sh osx-arm64 \
 
 This creates `DVMConsole.app` and a ZIP containing that application bundle.
 
-Do not move or rename files inside the application bundle. The managed assemblies, native libraries, icon, and documentation are loaded relative to the bundled executable.
+Do not move or rename files inside the application bundle. The managed assemblies, native libraries, and icon are loaded relative to the bundled executable. Documentation is read from GitHub and is not copied into the bundle.
 
-The development package is unsigned. If Gatekeeper blocks it, use Finder's **Open** action from the context menu. macOS may also request microphone, Accessibility, or Input Monitoring permission for transmit and OS-global PTT.
+The package is unsigned. After moving an official release to Applications,
+remove its download quarantine before launching:
+
+```sh
+xattr -dr com.apple.quarantine "/Applications/DVMConsole.app"
+```
+
+Do not use this command for an app obtained from another source. macOS may also
+request local-network, microphone, Accessibility, or Input Monitoring
+permission for FNE connections, transmit, and OS-global PTT.
 
 ---
 
@@ -116,19 +125,33 @@ $env:DVMVOCODER_LIBRARY = "C:\full\path\to\libvocoder.dll"
   -OutputArchive C:\Temp\dvmconsole-win-x64.zip
 ```
 
-Extract the complete ZIP before launching `DvmConsole.Desktop.exe`. Copying only the EXE does not produce a working application.
+Extract the ZIP before launching `DvmConsole.Desktop.exe`. The managed
+application and .NET runtime are bundled into the single EXE. Keep the adjacent
+`libvocoder.dll` with it for DMR and P25 voice.
 
 ---
 
-# Documentation Files
+# Documentation
 
-The in-app documentation viewer reads Markdown files from:
+The source Markdown files remain under:
 
 ```
 dvmconsole/Docs
 ```
 
-The files are copied into build and publish output. The viewer reads the selected file each time it is opened or selected, so an updated Markdown file can be reviewed without rebuilding the documentation UI.
+The files are not copied into build or release output. The in-app viewer reads
+the current pages from the `avalonia_v2` branch on GitHub, so updated
+documentation is available without rebuilding the application. An internet
+connection is required.
+
+---
+
+# Tagged Releases
+
+Pushing a version tag such as `v0.1.0` starts the macOS and Windows test and
+packaging matrix. The workflow publishes a GitHub release only after both
+platform jobs pass, and attaches the two versioned ZIP files. Release notes can
+be supplied in `docs/releases/v0.1.0.md` before the tag is pushed.
 
 ---
 

@@ -68,9 +68,32 @@ Web stream output overrides are keyed by stream name. Keep stream names stable i
 
 ---
 
-# AGC
+# Microphone Processing
 
-The **Enable AGC for console microphone audio** checkbox controls console microphone automatic gain behavior.
+DVM Console provides two mutually exclusive microphone processing modes on
+macOS:
+
+- **DVM Console processing** applies the console gain, equalizer, and optional
+  automatic gain control after capture.
+- **Apple voice processing** uses Apple's full-duplex Voice Processing I/O for
+  acoustic echo cancellation and automatic gain control. DVM Console gain,
+  equalizer, and AGC are bypassed in this mode so the signal is not processed
+  twice.
+
+Windows uses DVM Console processing.
+
+Apple voice processing supports the system-default microphone/speaker pair or
+one Core Audio device that provides both input and output. macOS does not allow
+the Voice Processing I/O unit to use a private aggregate of unrelated selected
+devices. Use DVM Console processing when the microphone and speaker are separate
+non-default devices.
+
+Applying a different main route or processing mode automatically restarts every
+active listening channel. The operator does not need to turn each card off and
+on manually.
+
+The **Automatic gain control** checkbox controls the DVM Console microphone AGC
+path.
 
 When enabled, the console applies its microphone AGC path before transmit.
 
@@ -88,7 +111,7 @@ This setting is in the Settings menu, not the Audio Settings window:
 Settings > Mute RX Audio While Transmitting
 ```
 
-When enabled, local RX speaker playback is suppressed while the console is transmitting.
+When enabled, local RX speaker playback is suppressed while the console is transmitting. In Apple voice-processing mode the mixer is silenced in place so the full-duplex unit and macOS microphone-mode state remain active.
 
 This does not affect:
 
@@ -116,3 +139,5 @@ This helps keep the AppData settings JSON from accumulating stale audio routing,
 - Use the master output for the normal speaker path.
 - Use per-resource overrides sparingly so future troubleshooting is easier.
 - If audio is playing from the wrong device, check both the master output and the resource override.
+- If Apple voice processing reports an incompatible split-device route, choose
+  the system-default pair, a single duplex device, or DVM Console processing.

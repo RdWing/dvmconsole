@@ -1,3 +1,4 @@
+using System.Net;
 using DvmConsole.Desktop;
 using Xunit;
 
@@ -6,61 +7,54 @@ namespace DvmConsole.Desktop.Tests;
 public sealed class DocumentationCatalogTests
 {
     [Fact]
-    public void FindsPagesInDisplayOrderAndSearchesCurrentContent()
+    public async Task FindsRemotePagesInDisplayOrderAndSearchesCurrentContent()
     {
-        string root = CreateRoot();
-        try
+        var content = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
-            Write(root, "02-Second.md", "# Second\n\nAudio routing");
-            Write(root, "01-First.md", "# First\n\nConsole overview");
-            Write(root, Path.Combine("03-Operations", "01-PTT.md"), "# PTT\n\nGlobal transmit");
-            var catalog = new DocumentationCatalog(root);
+            ["02-Second.md"] = "# Second\n\nAudio routing",
+            ["01-First.md"] = "# First\n\nConsole overview",
+            ["03-Operations/01-PTT.md"] = "# PTT\n\nGlobal transmit"
+        };
+        DocumentationCatalog catalog = CreateCatalog(content);
 
-            Assert.Equal(["First", "Second", "PTT"], catalog.Find().Select(page => page.Title));
-            Assert.Equal("PTT", Assert.Single(catalog.Find("global transmit")).Title);
-        }
-        finally
-        {
-            Directory.Delete(root, recursive: true);
-        }
+        Assert.Equal(["First", "Second", "PTT"], (await catalog.FindAsync()).Select(page => page.Title));
+        Assert.Equal("PTT", Assert.Single(await catalog.FindAsync("global transmit")).Title);
     }
 
     [Fact]
-    public void ReadsSelectedMarkdownLiveAndRejectsOutsideFiles()
+    public async Task ReadsSelectedMarkdownLiveAndRejectsUnknownUrls()
     {
-        string root = CreateRoot();
-        string outside = Path.Combine(Path.GetTempPath(), $"dvmconsole-doc-{Guid.NewGuid():N}.md");
-        try
+        var content = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
-            string pagePath = Write(root, "01-Overview.md", "# First version");
-            var catalog = new DocumentationCatalog(root);
-            DocumentationPage page = Assert.Single(catalog.Find());
+            ["01-Overview.md"] = "# First version"
+        };
+        DocumentationCatalog catalog = CreateCatalog(content);
+        DocumentationPage page = Assert.Single(await catalog.FindAsync());
 
-            File.WriteAllText(pagePath, "# Updated version");
+        content["01-Overview.md"] = "# Updated version";
 
-            Assert.Equal("# Updated version", catalog.Read(page));
-            Assert.Throws<InvalidOperationException>(() => catalog.Read(
-                new DocumentationPage("Outside", "outside.md", outside)));
-        }
-        finally
-        {
-            Directory.Delete(root, recursive: true);
-            File.Delete(outside);
-        }
+        Assert.Equal("# Updated version", await catalog.ReadAsync(page));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => catalog.ReadAsync(
+            new DocumentationPage("Outside", "outside.md", new Uri("https://example.test/outside.md"))));
     }
 
-    private static string CreateRoot()
+    private static DocumentationCatalog CreateCatalog(Dictionary<string, string> content)
     {
-        string root = Path.Combine(Path.GetTempPath(), $"dvmconsole-docs-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(root);
-        return root;
+        var client = new HttpClient(new DocumentationHandler(content));
+        return new DocumentationCatalog(client, new Uri("https://example.test/docs/"), content.Keys);
     }
 
-    private static string Write(string root, string relativePath, string content)
+    private sealed class DocumentationHandler(Dictionary<string, string> content) : HttpMessageHandler
     {
-        string path = Path.Combine(root, relativePath);
-        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-        File.WriteAllText(path, content);
-        return path;
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            string path = Uri.UnescapeDataString(request.RequestUri!.AbsolutePath["/docs/".Length..]);
+            var response = content.TryGetValue(path, out string? markdown)
+                ? new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(markdown) }
+                : new HttpResponseMessage(HttpStatusCode.NotFound);
+            return Task.FromResult(response);
+        }
     }
 }
