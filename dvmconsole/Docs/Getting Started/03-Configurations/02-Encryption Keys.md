@@ -47,7 +47,7 @@ Fields:
 
 - `keyId`: key ID referenced by channels.
 - `algId`: algorithm ID.
-- `key`: key material as hexadecimal without spaces or separators. AES-256 requires exactly 32 bytes (64 hexadecimal characters), DES-OFB requires 8 bytes (16 hexadecimal characters), and ARC4/ADP requires 5 bytes (10 hexadecimal characters).
+- `key`: key material as hexadecimal without spaces or separators. AES-256 normally uses 32 bytes (64 hexadecimal characters); for legacy WPF compatibility, shorter AES material is accepted and zero-padded on the right to 32 bytes. DES-OFB requires 8 bytes (16 hexadecimal characters), and ARC4/ADP requires 5 bytes (10 hexadecimal characters).
 
 ---
 

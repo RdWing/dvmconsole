@@ -8,7 +8,8 @@ namespace DvmConsole.Media.Tests;
 public sealed class P25KeyRingTests
 {
     private const string SystemName = "System 1";
-    private const string Aes256Key = "00112233445566778899AABBCCDDEEFF00112233445566778899AABBCCDDEEFF";
+    private const string ShortAesKey = "00112233445566778899AABBCCDDEEFF";
+    private const string Aes256Key = "00112233445566778899AABBCCDDEEFF00000000000000000000000000000000";
 
     [Theory]
     [InlineData("aes", "0x50", P25Defines.P25_ALGO_AES)]
@@ -24,7 +25,7 @@ public sealed class P25KeyRingTests
                 {
                     KeyId = 0x50,
                     AlgId = P25Defines.P25_ALGO_AES,
-                    Key = Aes256Key
+                    Key = ShortAesKey
                 },
                 new KeyEntry
                 {
@@ -76,7 +77,6 @@ public sealed class P25KeyRingTests
     }
 
     [Theory]
-    [InlineData(P25Defines.P25_ALGO_AES, "00112233445566778899AABBCCDDEEFF")]
     [InlineData(P25Defines.P25_ALGO_DES, "00112233445566")]
     [InlineData(P25Defines.P25_ALGO_ARC4, "00112233")]
     public void RejectsIncorrectKeyLengths(byte algorithmId, string key)
@@ -93,6 +93,68 @@ public sealed class P25KeyRingTests
                     }
                 ]
             }));
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("000102030405060708090A0B0C0D0E0F101112131415161718191A1B1C1D1E1F20")]
+    public void RejectsEmptyOrOversizedAesKeys(string key)
+    {
+        Assert.Throws<FormatException>(() => new P25KeyRing(SystemName, new KeyContainer
+            {
+                Keys =
+                [
+                    new KeyEntry
+                    {
+                        KeyId = 0x50,
+                        AlgId = P25Defines.P25_ALGO_AES,
+                        Key = key
+                    }
+                ]
+            }));
+    }
+
+    [Fact]
+    public void ZeroPadsShortLocalAesKeysLikeLegacyP25Crypto()
+    {
+        using var ring = new P25KeyRing(SystemName, new KeyContainer
+        {
+            Keys =
+            [
+                new KeyEntry
+                {
+                    KeyId = 0x50,
+                    AlgId = P25Defines.P25_ALGO_AES,
+                    Key = ShortAesKey
+                }
+            ]
+        });
+
+        Assert.True(ring.TryResolve(
+            SystemName,
+            P25Defines.P25_ALGO_AES,
+            0x50,
+            out ReadOnlyMemory<byte> resolved));
+        Assert.Equal(Convert.FromHexString(Aes256Key), resolved.ToArray());
+    }
+
+    [Fact]
+    public void ZeroPadsShortFneAesKeysLikeLegacyP25Crypto()
+    {
+        using var ring = new P25KeyRing();
+
+        ring.AddOrReplaceFromFne(
+            SystemName,
+            P25Defines.P25_ALGO_AES,
+            0x50,
+            Convert.FromHexString(ShortAesKey));
+
+        Assert.True(ring.TryResolve(
+            SystemName,
+            P25Defines.P25_ALGO_AES,
+            0x50,
+            out ReadOnlyMemory<byte> resolved));
+        Assert.Equal(Convert.FromHexString(Aes256Key), resolved.ToArray());
     }
 
     [Fact]

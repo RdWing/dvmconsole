@@ -18,7 +18,7 @@ public sealed class KeyStatusItemViewModelTests
                 {
                     KeyId = 0x50,
                     AlgId = P25Defines.P25_ALGO_AES,
-                    Key = "00112233445566778899AABBCCDDEEFF00112233445566778899AABBCCDDEEFF"
+                    Key = "00112233445566778899AABBCCDDEEFF"
                 }
             ]
         });

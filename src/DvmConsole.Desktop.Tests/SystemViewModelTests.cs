@@ -16,7 +16,7 @@ public sealed class SystemViewModelTests
     [Fact]
     public void PlansFneKeyRequestsEvenWhenLocalFallbackKeysAreAvailable()
     {
-        const string aesKey = "00112233445566778899AABBCCDDEEFF00112233445566778899AABBCCDDEEFF";
+        const string aesKey = "00112233445566778899AABBCCDDEEFF";
         using var keyRing = new P25KeyRing("Alpha", new DvmConsole.Core.Configuration.KeyContainer
         {
             Keys =
@@ -458,6 +458,69 @@ public sealed class SystemViewModelTests
         }
         finally
         {
+            CleanupSettingsPath(settingsPath);
+        }
+    }
+
+    [Fact]
+    public async Task DuplicateZoneCopiesShareOneInboundVoiceStream()
+    {
+        string directory = Path.Combine(Path.GetTempPath(), "dvmconsole-duplicate-resource-tests", Guid.NewGuid().ToString("N"));
+        string codeplugPath = Path.Combine(directory, "codeplug.yml");
+        string settingsPath = CreateSettingsPath();
+        Directory.CreateDirectory(directory);
+
+        try
+        {
+            await File.WriteAllTextAsync(codeplugPath, """
+                systems:
+                  - name: "Alpha"
+                    identity: "Alpha Console"
+                    address: "127.0.0.1"
+                    port: 62031
+                    peerId: 1000001
+                    rid: "1001"
+                zones:
+                  - name: "Dispatch"
+                    channels:
+                      - name: "Alpha Dispatch"
+                        system: "Alpha"
+                        tgid: "101"
+                        mode: "dmr"
+                        slot: 1
+                  - name: "Operations"
+                    channels:
+                      - name: "Alpha Dispatch Copy"
+                        system: "Alpha"
+                        tgid: "101"
+                        mode: "dmr"
+                        slot: 1
+                """);
+
+            await using MainWindowViewModel viewModel = MainWindowViewModel.Load(
+                codeplugPath,
+                new UserSettingsStore(settingsPath));
+            SystemViewModel system = Assert.Single(viewModel.Systems);
+
+            viewModel.ProcessTraffic(system, new FneTrafficFrame(
+                FneTrafficProtocol.Dmr,
+                1,
+                42,
+                101,
+                0,
+                "GROUP",
+                "VOICE",
+                "VOICE",
+                1,
+                77,
+                new byte[DmrVoicePacketCodec.PacketBytes]));
+
+            Assert.Single(viewModel.CallHistory);
+            Assert.Single(system.Channels, channel => channel.State == ChannelRuntimeState.Receiving);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
             CleanupSettingsPath(settingsPath);
         }
     }
