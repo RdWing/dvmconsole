@@ -1,3 +1,4 @@
+using Avalonia.Threading;
 using DvmConsole.Core.Runtime;
 using DvmConsole.FneClient;
 using DvmConsole.Media;
@@ -145,7 +146,7 @@ public sealed class ToneTransmitCoordinator : IAsyncDisposable
                 encryption);
             vocoderSession = null;
             session.Start();
-            channel.SetTransmitEnabled(true, streamId);
+            await SetTransmitStateAsync(channel, enabled: true, streamId).ConfigureAwait(false);
 
             try
             {
@@ -163,7 +164,7 @@ public sealed class ToneTransmitCoordinator : IAsyncDisposable
             }
             finally
             {
-                channel.SetTransmitEnabled(false);
+                await SetTransmitStateAsync(channel, enabled: false).ConfigureAwait(false);
             }
         }
         finally
@@ -194,4 +195,18 @@ public sealed class ToneTransmitCoordinator : IAsyncDisposable
             "analog" => FneTrafficProtocol.Analog,
             _ => throw new ArgumentOutOfRangeException(nameof(mode))
         };
+
+    private static async Task SetTransmitStateAsync(
+        ChannelViewModel channel,
+        bool enabled,
+        uint streamId = 0)
+    {
+        if (Dispatcher.UIThread.CheckAccess())
+        {
+            channel.SetTransmitEnabled(enabled, streamId);
+            return;
+        }
+
+        await Dispatcher.UIThread.InvokeAsync(() => channel.SetTransmitEnabled(enabled, streamId));
+    }
 }

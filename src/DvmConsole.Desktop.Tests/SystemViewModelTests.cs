@@ -14,6 +14,10 @@ namespace DvmConsole.Desktop.Tests;
 public sealed class SystemViewModelTests
 {
     [Fact]
+    public void ReportsUnreleasedSemanticVersion()
+        => Assert.StartsWith("0.1.0-alpha.1", MainWindow.ApplicationVersion, StringComparison.Ordinal);
+
+    [Fact]
     public void DefaultZoneColorsRemainReadableInBothThemes()
     {
         var zone = new ZoneViewModel("Dispatch", [], []);
@@ -750,6 +754,44 @@ public sealed class SystemViewModelTests
 
             Assert.Equal([42u, 1001u], store.Load().RecordingIgnoredSubscriberIds[channel.SettingsKey]);
             Assert.Equal("42, 1001", channel.IgnoredSubscriberIdsText);
+        }
+        finally
+        {
+            CleanupSettingsPath(settingsPath);
+        }
+    }
+
+    [Fact]
+    public async Task ExposesConsistentActivityAndRecordingControlState()
+    {
+        string codeplugPath = Path.Combine(AppContext.BaseDirectory, "TestData", "multiple-systems.yml");
+        string settingsPath = CreateSettingsPath();
+        var store = new UserSettingsStore(settingsPath);
+
+        try
+        {
+            await using MainWindowViewModel viewModel = MainWindowViewModel.Load(codeplugPath, store);
+            var channel = new ChannelViewModel(new DvmConsole.Core.Configuration.ChannelConfiguration
+            {
+                Name = "Recording test",
+                System = "Alpha",
+                Tgid = "101",
+                Mode = "dmr"
+            });
+
+            Assert.True(viewModel.ShowCallHistoryPane);
+            Assert.False(viewModel.IsActivitySidebarCollapsed);
+            Assert.Equal(250, viewModel.ActivitySidebarWidth);
+            Assert.Equal("Enable TAR", channel.RecordingConfigurationButtonText);
+
+            viewModel.ShowCallHistoryPane = false;
+            channel.SetRecordingEnabled(true);
+
+            Assert.True(viewModel.IsActivitySidebarCollapsed);
+            Assert.Equal(34, viewModel.ActivitySidebarWidth);
+            Assert.False(store.Load().ShowCallHistoryPane);
+            Assert.Equal("TAR", channel.RecordButtonText);
+            Assert.Equal("Disable TAR", channel.RecordingConfigurationButtonText);
         }
         finally
         {

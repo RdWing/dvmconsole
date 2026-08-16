@@ -15,6 +15,14 @@
     <Style Selector="Button.ptt:pressed"><Setter Property="Background" Value="#0A9B48" /></Style>
     <Style Selector="Button.card-action"><Setter Property="Padding" Value="5,2" /><Setter Property="FontSize" Value="{Binding $parent[Window].((local:MainWindowViewModel)DataContext).UiCompactFontSize}" /></Style>
     <Style Selector="Button.tx-select"><Setter Property="Height" Value="22" /><Setter Property="Padding" Value="3,0" /><Setter Property="HorizontalContentAlignment" Value="Center" /><Setter Property="VerticalContentAlignment" Value="Center" /><Setter Property="FontSize" Value="{Binding $parent[Window].((local:MainWindowViewModel)DataContext).UiCompactFontSize}" /><Setter Property="Background" Value="{DynamicResource SelectorBackgroundBrush}" /></Style>
+    <Style Selector="Button.tx-multi:pointerover" x:DataType="local:ChannelViewModel"><Setter Property="Background" Value="{Binding TransmitSelectionBrush}" /><Setter Property="BorderBrush" Value="{Binding TransmitSelectionBorderBrush}" /></Style>
+    <Style Selector="Button.tx-multi:pressed" x:DataType="local:ChannelViewModel"><Setter Property="Background" Value="{Binding TransmitSelectionBrush}" /><Setter Property="BorderBrush" Value="{Binding TransmitSelectionBorderBrush}" /></Style>
+    <Style Selector="Button.page-select:pointerover" x:DataType="local:ChannelViewModel"><Setter Property="Background" Value="{Binding PageSelectionBrush}" /><Setter Property="BorderBrush" Value="{Binding PageSelectionBorderBrush}" /></Style>
+    <Style Selector="Button.page-select:pressed" x:DataType="local:ChannelViewModel"><Setter Property="Background" Value="{Binding PageSelectionBrush}" /><Setter Property="BorderBrush" Value="{Binding PageSelectionBorderBrush}" /></Style>
+    <Style Selector="Button.alert-select:pointerover" x:DataType="local:ChannelViewModel"><Setter Property="Background" Value="{Binding AlertSelectionBrush}" /><Setter Property="BorderBrush" Value="{Binding AlertSelectionBorderBrush}" /></Style>
+    <Style Selector="Button.alert-select:pressed" x:DataType="local:ChannelViewModel"><Setter Property="Background" Value="{Binding AlertSelectionBrush}" /><Setter Property="BorderBrush" Value="{Binding AlertSelectionBorderBrush}" /></Style>
+    <Style Selector="Button.tar-select:pointerover" x:DataType="local:ChannelViewModel"><Setter Property="Background" Value="{Binding RecordingSelectionBrush}" /><Setter Property="BorderBrush" Value="{Binding RecordingSelectionBorderBrush}" /></Style>
+    <Style Selector="Button.tar-select:pressed" x:DataType="local:ChannelViewModel"><Setter Property="Background" Value="{Binding RecordingSelectionBrush}" /><Setter Property="BorderBrush" Value="{Binding RecordingSelectionBorderBrush}" /></Style>
     <Style Selector="Button.status-card"><Setter Property="HorizontalAlignment" Value="Left" /><Setter Property="Background" Value="Transparent" /><Setter Property="BorderThickness" Value="0" /><Setter Property="Padding" Value="6,3" /></Style>
     <Style Selector="TabItem"><Setter Property="Foreground" Value="{DynamicResource TabTextBrush}" /><Setter Property="Padding" Value="6,8" /><Setter Property="FontSize" Value="{Binding $parent[Window].((local:MainWindowViewModel)DataContext).UiFontSize}" /></Style>
     <Style Selector="TabItem:selected"><Setter Property="Foreground" Value="{DynamicResource SelectedTabTextBrush}" /></Style>
@@ -25,8 +33,8 @@
   </Window.Styles>
 
   <LayoutTransformControl LayoutTransform="{Binding UiScaleTransform}">
-  <Grid RowDefinitions="Auto,*,Auto">
-    <Border Background="{DynamicResource ShellHeaderBrush}" Padding="6,0">
+  <Grid RowDefinitions="Auto,*,Auto" ColumnDefinitions="*,4,Auto">
+    <Border Grid.Row="0" Grid.Column="0" Background="{DynamicResource ShellHeaderBrush}" Padding="6,0">
       <DockPanel LastChildFill="False">
         <Menu Background="Transparent" Foreground="{DynamicResource PrimaryTextBrush}">
           <MenuItem Header="File">
@@ -140,13 +148,11 @@
             </ItemsControl>
             <Button Content="TONES" ToolTip.Tip="Open Console Tools directly to Tones and DTMF" Padding="6,3" Click="HandleToolbarToneToolsClick" />
           </StackPanel>
-          <StackPanel Orientation="Horizontal" Spacing="10" IsVisible="{Binding ShowSystemStatus}"><TextBlock Classes="muted" FontSize="{Binding UiSmallFontSize}" Text="{Binding ClockText}" /><TextBlock Classes="muted" FontSize="{Binding UiSmallFontSize}" Text="{Binding SystemStatusText}" /></StackPanel>
         </StackPanel>
       </DockPanel>
     </Border>
 
-    <Grid Grid.Row="1" ColumnDefinitions="*,4,Auto">
-      <Border Grid.Column="0" Background="{Binding MainBackgroundBrush}" Padding="3,5,4,4">
+      <Border Grid.Row="1" Grid.Column="0" Background="{Binding MainBackgroundBrush}" Padding="3,5,4,4">
         <Grid RowDefinitions="Auto,Auto,*">
           <DockPanel Margin="0,0,0,8" IsVisible="{Binding ShowSystemStatus}">
             <Button Classes="status-card" Command="{Binding ConnectionCommand}" ToolTip.Tip="Connect or disconnect the selected FNE">
@@ -210,11 +216,15 @@
           </TabControl>
         </Grid>
       </Border>
-      <GridSplitter Grid.Column="1" Background="{DynamicResource SplitterBrush}" ResizeDirection="Columns" IsEnabled="{Binding CanResizeLayout}" />
-      <Border Grid.Column="2" Width="250" Background="{DynamicResource SidebarBackgroundBrush}" Padding="8,10" IsVisible="{Binding ShowCallHistoryPane}" DoubleTapped="HandleActivityDoubleTapped">
+      <GridSplitter Grid.Row="0" Grid.RowSpan="2" Grid.Column="1" Background="{DynamicResource SplitterBrush}" ResizeDirection="Columns" IsEnabled="{Binding CanResizeLayout}" IsVisible="{Binding ShowCallHistoryPane}" />
+      <Border Grid.Row="0" Grid.RowSpan="2" Grid.Column="2" Width="{Binding ActivitySidebarWidth}" Background="{DynamicResource SidebarBackgroundBrush}" Padding="8,10" DoubleTapped="HandleActivityDoubleTapped">
         <Grid RowDefinitions="Auto,*">
-          <TextBlock FontSize="{Binding UiFontSize}" FontWeight="SemiBold" Text="Activity" />
-          <ScrollViewer x:Name="activityScrollViewer" Grid.Row="1" Margin="0,8,0,0" HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
+          <Grid ColumnDefinitions="*,Auto" IsVisible="{Binding ShowCallHistoryPane}">
+            <TextBlock FontSize="{Binding UiFontSize}" FontWeight="SemiBold" Text="Activity" VerticalAlignment="Center" />
+            <Button Grid.Column="1" Content="‹" Padding="4,0" ToolTip.Tip="Collapse Activity sidebar" Click="HandleToggleActivitySidebarClick" />
+          </Grid>
+          <Button Content="›" Padding="0" HorizontalAlignment="Stretch" ToolTip.Tip="Expand Activity sidebar" IsVisible="{Binding IsActivitySidebarCollapsed}" Click="HandleToggleActivitySidebarClick" />
+          <ScrollViewer x:Name="activityScrollViewer" Grid.Row="1" Margin="0,8,0,0" HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto" IsVisible="{Binding ShowCallHistoryPane}">
             <StackPanel Spacing="14">
               <StackPanel Spacing="6">
                 <TextBlock Classes="eyebrow" Text="Event History" />
@@ -222,7 +232,7 @@
                   <ItemsControl.ItemTemplate>
                     <DataTemplate x:DataType="local:CallHistoryEntry">
                       <Border Background="{DynamicResource ActivityBackgroundBrush}" BorderBrush="{DynamicResource ControlBorderBrush}" BorderThickness="1" CornerRadius="6" Padding="7" Margin="0,0,0,6">
-                        <Grid RowDefinitions="Auto,Auto,Auto" ColumnDefinitions="*,Auto,Auto" ColumnSpacing="4"><TextBlock FontSize="{Binding $parent[Window].((local:MainWindowViewModel)DataContext).UiSmallFontSize}" FontWeight="SemiBold" Text="{Binding DisplayChannelText}" /><TextBlock Grid.Column="1" Classes="eyebrow" Text="{Binding TimestampText}" /><Button Grid.Column="2" Grid.RowSpan="3" Content="▶" Tag="{Binding}" IsVisible="{Binding HasRecording}" ToolTip.Tip="Play TAR recording" Padding="5,2" VerticalAlignment="Center" Click="HandlePlayCallHistoryRecordingClick" /><TextBlock Grid.Row="1" Classes="eyebrow" Text="{Binding RouteText}" TextTrimming="CharacterEllipsis" /><TextBlock Grid.Row="1" Grid.Column="1" Classes="eyebrow" Text="{Binding ProtocolText}" /><TextBlock Grid.Row="2" Classes="eyebrow" Text="{Binding EncryptionText}" /><TextBlock Grid.Row="2" Grid.Column="1" Classes="eyebrow" Text="{Binding DurationText}" /></Grid>
+                        <Grid RowDefinitions="Auto,Auto,Auto" ColumnDefinitions="*,Auto,Auto" ColumnSpacing="4"><TextBlock FontSize="{Binding $parent[Window].((local:MainWindowViewModel)DataContext).UiSmallFontSize}" FontWeight="SemiBold" Text="{Binding DisplayChannelText}" /><Button Grid.Column="1" Grid.RowSpan="3" Content="▶" Tag="{Binding}" IsVisible="{Binding HasRecording}" ToolTip.Tip="Play TAR recording" Padding="5,2" VerticalAlignment="Center" Click="HandlePlayCallHistoryRecordingClick" /><TextBlock Grid.Column="2" Classes="eyebrow" Text="{Binding TimestampText}" /><TextBlock Grid.Row="1" Classes="eyebrow" Text="{Binding RouteText}" TextTrimming="CharacterEllipsis" /><TextBlock Grid.Row="1" Grid.Column="2" Classes="eyebrow" Text="{Binding ProtocolText}" /><TextBlock Grid.Row="2" Classes="eyebrow" Text="{Binding EncryptionText}" /><TextBlock Grid.Row="2" Grid.Column="2" Classes="eyebrow" Text="{Binding DurationText}" /></Grid>
                       </Border>
                     </DataTemplate>
                   </ItemsControl.ItemTemplate>
@@ -244,8 +254,7 @@
           </ScrollViewer>
         </Grid>
       </Border>
-    </Grid>
-    <Border Grid.Row="2" Background="{DynamicResource StatusBarBackgroundBrush}" Padding="8,5"><Grid ColumnDefinitions="*,*,*"><TextBlock Classes="eyebrow" Text="{Binding StatusText}" TextTrimming="CharacterEllipsis" /><TextBlock Grid.Column="1" Classes="eyebrow" Text="{Binding AudioStatusText}" TextTrimming="CharacterEllipsis" TextAlignment="Center" /><TextBlock Grid.Column="2" Classes="eyebrow" Text="{Binding TransmitStatusText}" TextTrimming="CharacterEllipsis" TextAlignment="Right" /></Grid></Border>
+    <Border Grid.Row="2" Grid.ColumnSpan="3" Background="{DynamicResource StatusBarBackgroundBrush}" Padding="8,5"><Grid ColumnDefinitions="*,*,*"><TextBlock Classes="eyebrow" Text="{Binding StatusText}" TextTrimming="CharacterEllipsis" /><TextBlock Grid.Column="1" Classes="eyebrow" Text="{Binding AudioStatusText}" TextTrimming="CharacterEllipsis" TextAlignment="Center" /><TextBlock Grid.Column="2" Classes="eyebrow" Text="{Binding TransmitStatusText}" TextTrimming="CharacterEllipsis" TextAlignment="Right" /></Grid></Border>
   </Grid>
   </LayoutTransformControl>
 </Window>

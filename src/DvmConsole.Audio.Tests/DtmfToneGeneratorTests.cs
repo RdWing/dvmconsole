@@ -55,9 +55,19 @@ public sealed class DtmfToneGeneratorTests
         ],
         amplitude: 0.25);
 
-        Assert.Equal(2000, samples.Length);
-        Assert.All(samples[800..1200], sample => Assert.Equal((short)0, sample));
+        Assert.Equal(2080, samples.Length);
+        Assert.All(samples[800..1280], sample => Assert.Equal((short)0, sample));
         Assert.Contains(samples[..800], sample => sample != 0);
-        Assert.Contains(samples[1200..], sample => sample != 0);
+        Assert.Contains(samples[1280..], sample => sample != 0);
+        Assert.Equal(0, samples.Length % 160);
     }
+
+    [Theory]
+    [InlineData(1, 20)]
+    [InlineData(50, 60)]
+    [InlineData(250, 260)]
+    public void AlignsDurationsToTwentyMillisecondVoiceFrames(int milliseconds, int expected)
+        => Assert.Equal(
+            TimeSpan.FromMilliseconds(expected),
+            DtmfToneGenerator.AlignToFrame(TimeSpan.FromMilliseconds(milliseconds)));
 }

@@ -20,6 +20,7 @@ using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Globalization;
+using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Windows.Input;
 using fnecore.P25;
@@ -723,6 +724,12 @@ public sealed partial class MainWindow : Window
         e.Handled = true;
     }
 
+    private void HandleToggleActivitySidebarClick(object? sender, RoutedEventArgs e)
+    {
+        viewModel.ShowCallHistoryPane = !viewModel.ShowCallHistoryPane;
+        e.Handled = true;
+    }
+
     private void HandleViewModelPropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
         if (e.PropertyName == nameof(MainWindowViewModel.SnapCallHistoryToWindow))
@@ -780,7 +787,12 @@ public sealed partial class MainWindow : Window
     private async void HandleAboutClick(object? sender, RoutedEventArgs e)
         => await ShowInformationAsync(
             "About DVM Console",
-            "DVM Console Avalonia v2\n\nCross-platform DVM FNE dispatch console for macOS and Windows.\n\nThis software must not be used for public-safety or life-safety critical applications.");
+            $"DVM Console {ApplicationVersion}\n\nCross-platform DVM FNE dispatch console for macOS and Windows.\n\nThis software must not be used for public-safety or life-safety critical applications.");
+
+    internal static string ApplicationVersion =>
+        typeof(MainWindow).Assembly
+            .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?
+            .InformationalVersion ?? "unversioned development build";
 
     private async Task ShowInformationAsync(string title, string message)
     {
@@ -1500,8 +1512,14 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             userSettings.ShowCallHistoryPane = value;
             PersistUserSettings();
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ShowCallHistoryPane)));
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsActivitySidebarCollapsed)));
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ActivitySidebarWidth)));
         }
     }
+
+    public bool IsActivitySidebarCollapsed => !ShowCallHistoryPane;
+
+    public double ActivitySidebarWidth => ShowCallHistoryPane ? 250 : 34;
 
     public bool SnapCallHistoryToWindow
     {
@@ -3489,7 +3507,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     private async Task EnsureRecordingAudioAsync(ChannelViewModel channel)
     {
         if (!audioCoordinator.IsActive(channel))
-            await StartAudioAsync(channel).ConfigureAwait(false);
+            await StartAudioAsync(channel);
 
         if (!audioCoordinator.IsActive(channel))
             channel.SetRecordingEnabled(false);
@@ -4436,9 +4454,9 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             var generator = new DtmfToneGenerator();
             short[] samples = generator.GenerateSequence(
                 normalizedDigits,
-                TimeSpan.FromMilliseconds(250),
-                TimeSpan.FromMilliseconds(50),
-                amplitude: 0.70);
+                TimeSpan.FromMilliseconds(240),
+                TimeSpan.FromMilliseconds(60),
+                amplitude: 0.35);
             userSettings.LastDtmfDigits = normalizedDigits;
             PersistUserSettings();
             await SendGeneratedToneAsync(samples, "DTMF");
@@ -4459,7 +4477,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
                     string.IsNullOrWhiteSpace(step.Digit) ? '1' : step.Digit[0],
                     TimeSpan.FromSeconds(step.DurationSeconds),
                     string.Equals(step.Kind, AudioPresetStepKinds.Hold, StringComparison.OrdinalIgnoreCase))),
-                amplitude: 0.70);
+                amplitude: 0.35);
             await SendGeneratedToneAsync(samples, $"DTMF preset '{preset.Name}'");
         }
         catch (Exception exception)
@@ -4730,13 +4748,25 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         {
             await toneTransmitCoordinator.SendAsync(targets, samples);
             string targetText = FormatToneTargetText(targets.Select(target => target.Channel));
-            TransmitStatusText = $"{label} sent on {targetText}.";
+            await RunOnUiThreadAsync(() => TransmitStatusText = $"{label} sent on {targetText}.");
         }
         finally
         {
             await RestoreSuspendedAudioAsync();
-            RaiseGeneratedAudioCanExecuteChanged();
+            await RunOnUiThreadAsync(RaiseGeneratedAudioCanExecuteChanged);
         }
+    }
+
+    private static async Task RunOnUiThreadAsync(Action action)
+    {
+        ArgumentNullException.ThrowIfNull(action);
+        if (Dispatcher.UIThread.CheckAccess())
+        {
+            action();
+            return;
+        }
+
+        await Dispatcher.UIThread.InvokeAsync(action);
     }
 
     internal ChannelViewModel[] ResolveGeneratedToneChannels()
@@ -5747,6 +5777,7 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
     public bool IsTransmitEncrypted => transmitEncrypted;
     public bool IsRecordingEnabled => recordingEnabled;
     public string RecordButtonText => "TAR";
+    public string RecordingConfigurationButtonText => recordingEnabled ? "Disable TAR" : "Enable TAR";
     public double Volume
     {
         get => volume;
@@ -5914,6 +5945,7 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
         recordingEnabled = enabled;
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsRecordingEnabled)));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(RecordButtonText)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(RecordingConfigurationButtonText)));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(RecordingSelectionBrush)));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(RecordingSelectionBorderBrush)));
         RecordingStateChanged?.Invoke(this, enabled);

@@ -18,7 +18,7 @@ public static class LegacyAlertToneGenerator
     public const double AlternatingHighFrequencyHz = 1500;
     public const double AlternatingLowFrequencyHz = 800;
     public const double Amplitude = 1845d / short.MaxValue;
-    public static readonly TimeSpan StepDuration = TimeSpan.FromMilliseconds(250);
+    public static readonly TimeSpan StepDuration = TimeSpan.FromMilliseconds(240);
 
     public static short[] Generate(LegacyAlertTone tone)
         => Generate(tone, Amplitude);

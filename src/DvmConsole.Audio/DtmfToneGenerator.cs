@@ -11,6 +11,8 @@ public readonly record struct DtmfToneStep(
 /// </summary>
 public sealed class DtmfToneGenerator
 {
+    public static readonly TimeSpan FrameDuration = TimeSpan.FromMilliseconds(20);
+
     private static readonly IReadOnlyDictionary<char, (double Low, double High)> Frequencies =
         new Dictionary<char, (double Low, double High)>
         {
@@ -41,7 +43,11 @@ public sealed class DtmfToneGenerator
         if (!Frequencies.TryGetValue(char.ToUpperInvariant(digit), out (double Low, double High) frequency))
             throw new ArgumentOutOfRangeException(nameof(digit), $"'{digit}' is not a DTMF digit.");
 
-        return toneGenerator.GenerateDualTone(frequency.Low, frequency.High, duration, amplitude);
+        return toneGenerator.GenerateDualTone(
+            frequency.Low,
+            frequency.High,
+            AlignToFrame(duration),
+            amplitude);
     }
 
     public short[] GenerateSequence(
@@ -66,7 +72,7 @@ public sealed class DtmfToneGenerator
 
             if (samples.Count > 0 && interDigitSilence > TimeSpan.Zero)
                 samples.AddRange(new short[Math.Max(1, (int)Math.Round(
-                    interDigitSilence.TotalSeconds * Format.SampleRate,
+                    AlignToFrame(interDigitSilence).TotalSeconds * Format.SampleRate,
                     MidpointRounding.AwayFromZero))]);
             samples.AddRange(GenerateDigit(digit, digitDuration, amplitude));
         }
@@ -84,7 +90,7 @@ public sealed class DtmfToneGenerator
         foreach (DtmfToneStep step in steps)
         {
             if (step.IsHold)
-                samples.AddRange(toneGenerator.GenerateSilence(step.Duration));
+                samples.AddRange(toneGenerator.GenerateSilence(AlignToFrame(step.Duration)));
             else
                 samples.AddRange(GenerateDigit(step.Digit, step.Duration, amplitude));
         }
@@ -92,5 +98,16 @@ public sealed class DtmfToneGenerator
         if (samples.Count == 0)
             throw new ArgumentException("The DTMF preset contains no steps.", nameof(steps));
         return samples.ToArray();
+    }
+
+    public static TimeSpan AlignToFrame(TimeSpan duration)
+    {
+        if (duration <= TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(nameof(duration));
+
+        double frameCount = duration.TotalMilliseconds / FrameDuration.TotalMilliseconds;
+        return TimeSpan.FromMilliseconds(
+            Math.Max(1, Math.Round(frameCount, MidpointRounding.AwayFromZero)) *
+            FrameDuration.TotalMilliseconds);
     }
 }

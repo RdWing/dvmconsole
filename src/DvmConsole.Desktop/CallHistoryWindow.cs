@@ -107,7 +107,7 @@ public sealed class CallHistoryWindow : Window
         history.Bind(ItemsControl.ItemsSourceProperty, new Binding(nameof(MainWindowViewModel.FilteredCallHistory)));
 
         var closeButton = new Button { Content = "Close", MinWidth = 88 };
-        var clearButton = new Button { Content = "Clear", MinWidth = 88 };
+        var clearButton = new Button { Content = "Clear History", MinWidth = 104 };
         var exportButton = new Button { Content = "Export CSV…", MinWidth = 108 };
         var controls = new Grid
         {
