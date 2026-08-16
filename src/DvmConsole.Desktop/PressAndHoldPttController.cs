@@ -27,7 +27,12 @@ public sealed class PressAndHoldPttController
                 return;
         }
 
-        await gate.WaitAsync().ConfigureAwait(false);
+        // PTT delegates update Avalonia-bound channel state. Preserve the
+        // caller's UI synchronization context when startup is slow (for
+        // example while macOS changes an AirPods Bluetooth audio profile).
+        // Otherwise an early release can resume on a pool thread and crash
+        // when the stop delegate raises CanExecuteChanged.
+        await gate.WaitAsync();
         try
         {
             lock (sync)
@@ -35,7 +40,7 @@ public sealed class PressAndHoldPttController
                 if (!pressed.Contains(channel))
                     return;
             }
-            await start(channel).ConfigureAwait(false);
+            await start(channel);
         }
         finally
         {
@@ -52,10 +57,10 @@ public sealed class PressAndHoldPttController
                 return;
         }
 
-        await gate.WaitAsync().ConfigureAwait(false);
+        await gate.WaitAsync();
         try
         {
-            await stop(channel).ConfigureAwait(false);
+            await stop(channel);
         }
         finally
         {

@@ -64,6 +64,49 @@ public sealed class PressAndHoldPttControllerTests
         Assert.Equal(1, stops);
     }
 
+    [Fact]
+    public async Task EarlyReleasePreservesUiContextAfterWaitingForStartup()
+    {
+        ChannelViewModel channel = CreateChannel();
+        var startupEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var allowStartup = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var uiContext = new InlineSynchronizationContext();
+        bool stopRanOnUiContext = false;
+        var controller = new PressAndHoldPttController(
+            async _ =>
+            {
+                startupEntered.SetResult();
+                await allowStartup.Task;
+            },
+            _ =>
+            {
+                stopRanOnUiContext = ReferenceEquals(SynchronizationContext.Current, uiContext);
+                return Task.CompletedTask;
+            });
+
+        SynchronizationContext? originalContext = SynchronizationContext.Current;
+        Task press;
+        Task release;
+        try
+        {
+            SynchronizationContext.SetSynchronizationContext(uiContext);
+            press = controller.PressAsync(channel);
+            await startupEntered.Task;
+            release = controller.ReleaseAsync(channel);
+        }
+        finally
+        {
+            SynchronizationContext.SetSynchronizationContext(originalContext);
+        }
+
+        Assert.False(release.IsCompleted);
+        allowStartup.SetResult();
+        await Task.WhenAll(press, release);
+
+        Assert.True(stopRanOnUiContext);
+        Assert.True(uiContext.PostCount > 0);
+    }
+
     private static ChannelViewModel CreateChannel()
         => new(new ChannelConfiguration
         {
@@ -73,4 +116,26 @@ public sealed class PressAndHoldPttControllerTests
             Mode = "dmr",
             Slot = 1
         });
+
+    private sealed class InlineSynchronizationContext : SynchronizationContext
+    {
+        private int postCount;
+
+        public int PostCount => Volatile.Read(ref postCount);
+
+        public override void Post(SendOrPostCallback callback, object? state)
+        {
+            Interlocked.Increment(ref postCount);
+            SynchronizationContext? originalContext = Current;
+            try
+            {
+                SetSynchronizationContext(this);
+                callback(state);
+            }
+            finally
+            {
+                SetSynchronizationContext(originalContext);
+            }
+        }
+    }
 }
