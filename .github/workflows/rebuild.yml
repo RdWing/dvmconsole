@@ -72,7 +72,14 @@ jobs:
           $buildDirectory = Join-Path $env:RUNNER_TEMP "dvmvocoder-build"
           if ("${{ matrix.rid }}" -like "osx-*") {
             $architecture = if ("${{ matrix.rid }}" -eq "osx-arm64") { "arm64" } else { "x86_64" }
-            cmake -S .native/dvmvocoder -B $buildDirectory -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES=$architecture -DCMAKE_OSX_DEPLOYMENT_TARGET=14.0
+            $cmakeArguments = @(
+              "-S", ".native/dvmvocoder",
+              "-B", $buildDirectory,
+              "-DCMAKE_BUILD_TYPE=Release",
+              "-DCMAKE_OSX_ARCHITECTURES=$architecture",
+              "-DCMAKE_OSX_DEPLOYMENT_TARGET=14.0"
+            )
+            cmake @cmakeArguments
             $library = Join-Path $buildDirectory "libvocoder.dylib"
           } else {
             cmake -S .native/dvmvocoder -B $buildDirectory -A x64
