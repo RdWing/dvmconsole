@@ -1556,7 +1556,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     public double UiSmallFontSize => UiFontSize - 2;
     public double UiCompactFontSize => UiFontSize - 3;
     public double UiHeadingFontSize => UiFontSize + 4;
-    public double ChannelCardHeight => 145 + ((UiFontSize - 14) * 4);
+    public double ChannelCardHeight => 137 + ((UiFontSize - 14) * 4);
 
     public double UiScale
     {
@@ -5584,7 +5584,7 @@ public sealed class ZoneViewModel : INotifyPropertyChanged
     public IBrush TabBrush => CreateBrush(TabColor, darkMode ? "#151D26" : "#E8EDF3");
     public IBrush TabTextBrush => CreateBrush(TabTextColor, darkMode ? "#DCE3EB" : "#18212B");
     public double WidgetCanvasWidth => Math.Max(1, Channels.Count == 0 ? 0 : Channels.Max(channel => channel.WidgetX + channel.CardWidth + 12));
-    public double WidgetCanvasHeight => Math.Max(1, Channels.Count == 0 ? 0 : Channels.Max(channel => channel.WidgetY + 176));
+    public double WidgetCanvasHeight => Math.Max(1, Channels.Count == 0 ? 0 : Channels.Max(channel => channel.WidgetY + 168));
 
     public void RefreshWidgetCanvasBounds()
     {
