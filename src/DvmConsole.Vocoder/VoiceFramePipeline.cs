@@ -1,9 +1,7 @@
 namespace DvmConsole.Vocoder;
 
-/// <summary>
-/// Converts arbitrary PCM callback chunks into fixed-size vocoder codewords.
-/// This is the seam used by future FNE transmit and receive routers.
-/// </summary>
+// Converts arbitrary PCM callback chunks into fixed-size vocoder codewords.
+// This is the seam used by future FNE transmit and receive routers.
 public sealed class VoiceFrameEncoder : IDisposable
 {
     private readonly IVocoderSession session;
@@ -47,9 +45,7 @@ public sealed class VoiceFrameEncoder : IDisposable
 
 }
 
-/// <summary>
-/// Decodes one fixed-size FNE vocoder codeword into a PCM frame.
-/// </summary>
+// Decodes one fixed-size FNE vocoder codeword into a PCM frame.
 public sealed class VoiceFrameDecoder : IDisposable
 {
     private readonly IVocoderSession session;

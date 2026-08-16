@@ -2,11 +2,9 @@ using DvmConsole.Audio;
 
 namespace DvmConsole.Media;
 
-/// <summary>
-/// Forwards PCM to a shared output without taking ownership of that output.
-/// Receive sessions can therefore be added or removed independently while the
-/// coordinator owns the single native playback device.
-/// </summary>
+// Forwards PCM to a shared output without taking ownership of that output.
+// Receive sessions can therefore be added or removed independently while the
+// coordinator owns the single native playback device.
 public sealed class SharedAudioPlayback : IAudioPlayback
 {
     private readonly IAudioPlayback inner;

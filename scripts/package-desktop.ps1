@@ -60,6 +60,11 @@ foreach ($FileName in @(
     }
 }
 
+$DocumentationOverview = Join-Path $PublishDirectory "Docs/Getting Started/01-Overview.md"
+if (-not (Test-Path -LiteralPath $DocumentationOverview -PathType Leaf)) {
+    throw "Published output is missing the in-app Markdown documentation: $DocumentationOverview"
+}
+
 foreach ($LegacyAlert in @("alert1.wav", "alert2.wav", "alert3.wav")) {
     $LegacyAlertPath = Join-Path $PublishDirectory "Audio/$LegacyAlert"
     if (Test-Path -LiteralPath $LegacyAlertPath) {

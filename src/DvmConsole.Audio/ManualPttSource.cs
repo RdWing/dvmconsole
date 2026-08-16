@@ -1,10 +1,8 @@
 namespace DvmConsole.Audio;
 
-/// <summary>
-/// A lifecycle-bound PTT source controlled by the host UI or a future keyboard
-/// adapter. It provides a deterministic state boundary without assuming a
-/// platform-specific global hotkey implementation.
-/// </summary>
+// A lifecycle-bound PTT source controlled by the host UI or a future keyboard
+// adapter. It provides a deterministic state boundary without assuming a
+// platform-specific global hotkey implementation.
 public sealed class ManualPttSource : IPttSource
 {
     private bool started;

@@ -33,6 +33,8 @@ public sealed partial class MainWindow : Window
     private readonly PressAndHoldPttController cardPtt;
     private CallHistoryWindow? callHistoryWindow;
     private OperatorToolsWindow? operatorToolsWindow;
+    private DocumentationWindow? documentationWindow;
+    private AboutWindow? aboutWindow;
     private readonly List<DispatcherTimer> scrollBarTimers = [];
     private readonly HashSet<ScrollViewer> configuredScrollViewers = [];
     private Control? draggedChannelCard;
@@ -81,12 +83,21 @@ public sealed partial class MainWindow : Window
         SizeChanged += (_, _) => SnapCallHistoryWindowIfNeeded();
         Closed += async (_, _) =>
         {
-            viewModel.PropertyChanged -= HandleViewModelPropertyChanged;
-            callHistoryWindow?.Close();
-            operatorToolsWindow?.Close();
-            foreach (DispatcherTimer timer in scrollBarTimers)
-                timer.Stop();
-            await viewModel.DisposeAsync().ConfigureAwait(false);
+            try
+            {
+                viewModel.PropertyChanged -= HandleViewModelPropertyChanged;
+                callHistoryWindow?.Close();
+                operatorToolsWindow?.Close();
+                documentationWindow?.Close();
+                aboutWindow?.Close();
+                foreach (DispatcherTimer timer in scrollBarTimers)
+                    timer.Stop();
+                await viewModel.DisposeAsync().ConfigureAwait(false);
+            }
+            catch (Exception exception)
+            {
+                DesktopCrashLog.Write("Main window shutdown", exception);
+            }
         };
     }
 
@@ -770,29 +781,53 @@ public sealed partial class MainWindow : Window
 
     private void HandleDocumentationClick(object? sender, RoutedEventArgs e)
     {
-        try
+        if (documentationWindow is null)
         {
-            Process.Start(new ProcessStartInfo
-            {
-                FileName = "https://github.com/RdWing/dvmconsole/tree/avalonia_v2/docs",
-                UseShellExecute = true
-            });
+            documentationWindow = new DocumentationWindow();
+            documentationWindow.Closed += (_, _) => documentationWindow = null;
         }
-        catch (Exception exception)
-        {
-            _ = ShowInformationAsync("Documentation unavailable", exception.Message);
-        }
+
+        if (!documentationWindow.IsVisible)
+            documentationWindow.Show(this);
+        documentationWindow.Activate();
     }
 
-    private async void HandleAboutClick(object? sender, RoutedEventArgs e)
-        => await ShowInformationAsync(
-            "About DVM Console",
-            $"DVM Console {ApplicationVersion}\n\nCross-platform DVM FNE dispatch console for macOS and Windows.\n\nThis software must not be used for public-safety or life-safety critical applications.");
+    private void HandleAboutClick(object? sender, RoutedEventArgs e)
+    {
+        if (aboutWindow is null)
+        {
+            aboutWindow = new AboutWindow();
+            aboutWindow.Closed += (_, _) => aboutWindow = null;
+        }
+
+        if (!aboutWindow.IsVisible)
+            aboutWindow.Show(this);
+        aboutWindow.Activate();
+    }
 
     internal static string ApplicationVersion =>
         typeof(MainWindow).Assembly
             .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?
             .InformationalVersion ?? "unversioned development build";
+
+    internal static string ShortApplicationVersion => FormatShortVersion(ApplicationVersion);
+
+    internal static string FormatShortVersion(string informationalVersion)
+    {
+        if (string.IsNullOrWhiteSpace(informationalVersion))
+            return "unversioned development build";
+
+        string value = informationalVersion.Trim();
+        int plusIndex = value.IndexOf('+');
+        if (plusIndex < 0)
+            return value;
+
+        string version = value[..plusIndex];
+        string revision = value[(plusIndex + 1)..].Split('.')[0];
+        if (revision.Length == 0)
+            return version;
+        return $"{version} ({revision[..Math.Min(7, revision.Length)]})";
+    }
 
     private async Task ShowInformationAsync(string title, string message)
     {
@@ -1182,6 +1217,8 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     private readonly WebStreamPlaybackCoordinator webStreamPlayback;
     private readonly object patchSourceWorkSync = new();
     private readonly Dictionary<ChannelViewModel, Task> patchSourceWork = [];
+    private readonly object receiveAudioWorkSync = new();
+    private readonly Dictionary<ChannelViewModel, Task> receiveAudioWork = [];
     private readonly Dictionary<string, FneConnectionState> lastConnectionStates = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConnectionChimeTracker connectionChimeTracker = new();
     private ChannelViewModel[] suspendedAudioChannels = [];
@@ -1190,6 +1227,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     private readonly RecordingPlaybackCoordinator recordingPlayback;
     private readonly DispatcherTimer clockTimer;
     private Bitmap? userBackgroundBitmap;
+    private int disposeStarted;
     private IBrush mainBackgroundBrush = new SolidColorBrush(Color.Parse("#0D1116"));
     private string statusText;
     private string audioStatusText = "RX audio disabled.";
@@ -3116,6 +3154,9 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
 
     public async ValueTask DisposeAsync()
     {
+        if (Interlocked.Exchange(ref disposeStarted, 1) != 0)
+            return;
+
         clockTimer.Stop();
         clockTimer.Tick -= HandleClockTick;
         transmitCoordinator.Faulted -= HandleTransmitFaulted;
@@ -3124,8 +3165,6 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             globalKeyboardPtt.StateChanged -= HandleKeyboardPttStateChanged;
         if (serialPtt is not null)
             serialPtt.StateChanged -= HandleKeyboardPttStateChanged;
-        await patchSourceDecode.DisposeAsync().ConfigureAwait(false);
-        patchForwarding.Dispose();
         await keyboardPtt.DisposeAsync().ConfigureAwait(false);
         if (globalKeyboardPtt is not null)
             await globalKeyboardPtt.DisposeAsync().ConfigureAwait(false);
@@ -3134,18 +3173,21 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         await toneTransmitCoordinator.DisposeAsync().ConfigureAwait(false);
         await talkPermitTonePlayer.DisposeAsync().ConfigureAwait(false);
         await transmitCoordinator.DisposeAsync().ConfigureAwait(false);
-        await audioCoordinator.DisposeAsync().ConfigureAwait(false);
-        await webStreamPlayback.DisposeAsync().ConfigureAwait(false);
-        await recordingPlayback.DisposeAsync().ConfigureAwait(false);
-        callRecordings.Dispose();
-        userBackgroundBitmap?.Dispose();
-        userBackgroundBitmap = null;
         foreach (SystemViewModel system in Systems)
         {
             system.KeyResponseReceived -= HandleSystemKeyResponse;
             system.LogReceived -= HandleSystemLog;
             await system.DisposeAsync().ConfigureAwait(false);
         }
+        await DrainFrameWorkAsync().ConfigureAwait(false);
+        await patchSourceDecode.DisposeAsync().ConfigureAwait(false);
+        patchForwarding.Dispose();
+        await audioCoordinator.DisposeAsync().ConfigureAwait(false);
+        await webStreamPlayback.DisposeAsync().ConfigureAwait(false);
+        await recordingPlayback.DisposeAsync().ConfigureAwait(false);
+        callRecordings.Dispose();
+        userBackgroundBitmap?.Dispose();
+        userBackgroundBitmap = null;
         foreach (ChannelViewModel channel in Systems.SelectMany(system => system.Channels))
         {
             channel.TransmitEncryptionChanged -= HandleChannelEncryptionChanged;
@@ -3686,8 +3728,14 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
 
     private void HandleSystemTraffic(SystemViewModel system, FneTrafficFrame traffic)
     {
+        if (Volatile.Read(ref disposeStarted) != 0)
+            return;
+
         void Apply()
-            => ProcessTraffic(system, traffic);
+        {
+            if (Volatile.Read(ref disposeStarted) == 0)
+                ProcessTraffic(system, traffic);
+        }
 
         if (Dispatcher.UIThread.CheckAccess())
             Apply();
@@ -3769,7 +3817,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         }
 
         foreach (ChannelViewModel channel in activeAudioChannels)
-            _ = Task.Run(() => ProcessAudioAsync(channel, traffic));
+            EnqueueReceiveAudio(channel, traffic);
         foreach (ChannelViewModel channel in activePatchSourceChannels)
             EnqueuePatchSource(channel, traffic);
         if (callHistoryChanged)
@@ -3887,6 +3935,58 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             // from playback recovery.
             callRecordings.ObserveTraffic(channel, traffic);
             RefreshRecordings();
+        }
+    }
+
+    private void EnqueueReceiveAudio(ChannelViewModel channel, FneTrafficFrame traffic)
+    {
+        if (Volatile.Read(ref disposeStarted) != 0)
+            return;
+
+        Task current;
+        lock (receiveAudioWorkSync)
+        {
+            Task previous = receiveAudioWork.TryGetValue(channel, out Task? pending)
+                ? pending
+                : Task.CompletedTask;
+            current = previous
+                .ContinueWith(
+                    _ => ProcessAudioAsync(channel, traffic),
+                    CancellationToken.None,
+                    TaskContinuationOptions.ExecuteSynchronously,
+                    TaskScheduler.Default)
+                .Unwrap();
+            receiveAudioWork[channel] = current;
+        }
+
+        _ = current.ContinueWith(
+            _ => RemoveCompletedWork(receiveAudioWorkSync, receiveAudioWork, channel, current),
+            CancellationToken.None,
+            TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
+    }
+
+    private async Task DrainFrameWorkAsync()
+    {
+        Task[] pending;
+        lock (receiveAudioWorkSync)
+            pending = receiveAudioWork.Values.ToArray();
+        lock (patchSourceWorkSync)
+            pending = pending.Concat(patchSourceWork.Values).ToArray();
+        if (pending.Length > 0)
+            await Task.WhenAll(pending).ConfigureAwait(false);
+    }
+
+    private static void RemoveCompletedWork(
+        object sync,
+        Dictionary<ChannelViewModel, Task> work,
+        ChannelViewModel channel,
+        Task completed)
+    {
+        lock (sync)
+        {
+            if (work.TryGetValue(channel, out Task? pending) && ReferenceEquals(pending, completed))
+                work.Remove(channel);
         }
     }
 

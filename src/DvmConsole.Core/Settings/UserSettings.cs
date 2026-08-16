@@ -3,10 +3,8 @@ using System.Text.Json.Serialization;
 
 namespace DvmConsole.Core.Settings;
 
-/// <summary>
-/// Portable placement for a modeless operator window. Coordinates are
-/// optional because a display topology can change between launches.
-/// </summary>
+// Portable placement for a modeless operator window. Coordinates are
+// optional because a display topology can change between launches.
 public sealed class WindowPlacementSetting
 {
     public double? Left { get; set; }
@@ -15,19 +13,15 @@ public sealed class WindowPlacementSetting
     public double Height { get; set; } = 500;
 }
 
-/// <summary>
-/// Portable position for a movable console widget.
-/// </summary>
+// Portable position for a movable console widget.
 public sealed class WidgetPositionSetting
 {
     public double X { get; set; }
     public double Y { get; set; }
 }
 
-/// <summary>
-/// Small, portable subset of operator state that is safe to persist outside a
-/// codeplug. Protocol credentials and encryption keys remain codeplug-owned.
-/// </summary>
+// Small, portable subset of operator state that is safe to persist outside a
+// codeplug. Protocol credentials and encryption keys remain codeplug-owned.
 public sealed class UserSettings
 {
     public const int CurrentSchemaVersion = 1;
@@ -64,10 +58,8 @@ public sealed class UserSettings
     public Dictionary<string, WidgetPositionSetting> ChannelWidgetPositions { get; set; } = new(StringComparer.OrdinalIgnoreCase);
     public string? UserBackgroundImage { get; set; }
     public bool TogglePttMode { get; set; }
-    /// <summary>
-    /// Portable name of the key that activates global PTT.  The desktop host
-    /// maps this to its platform key enum so Core remains UI-independent.
-    /// </summary>
+    // Portable name of the key that activates global PTT.  The desktop host
+    // maps this to its platform key enum so Core remains UI-independent.
     public string GlobalPttKey { get; set; } = "Space";
     public List<string> TransmitSelectedChannelKeys { get; set; } = [];
     public string LastDtmfDigits { get; set; } = "123";
@@ -98,11 +90,9 @@ public sealed class UserSettings
     public WindowPlacementSetting CallHistoryWindowPlacement { get; set; } = new();
 }
 
-/// <summary>
-/// JSON-backed user settings store with resilient reads and atomic replacement.
-/// The path is injectable so tests and packaged hosts do not depend on a
-/// platform-specific profile location.
-/// </summary>
+// JSON-backed user settings store with resilient reads and atomic replacement.
+// The path is injectable so tests and packaged hosts do not depend on a
+// platform-specific profile location.
 public sealed class UserSettingsStore
 {
     private const double PresetMinDurationSeconds = 0.25;

@@ -1,11 +1,9 @@
 namespace DvmConsole.Audio;
 
-/// <summary>
-/// Builds the fixed-duration two-tone sequence used by a Quick Call II page.
-/// The legacy console sends tone A for one second followed by tone B for three
-/// seconds; keeping those timings here makes the behavior testable without a
-/// live FNE or audio device.
-/// </summary>
+// Builds the fixed-duration two-tone sequence used by a Quick Call II page.
+// The legacy console sends tone A for one second followed by tone B for three
+// seconds; keeping those timings here makes the behavior testable without a
+// live FNE or audio device.
 public static class QuickCallToneGenerator
 {
     public const double MinimumFrequencyHz = 1;

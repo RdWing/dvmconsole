@@ -10,9 +10,9 @@ Click a resource card to select or deselect it.
 
 Selected resources are monitored locally. If a receiving resource is deselected while active, local monitoring for that resource stops and the card RX state is cleared.
 
-Use **Select All/Unselect All** from the toolbar to quickly toggle selected resources.
+Use **Channels > Disable all receive** to stop local monitoring on every channel.
 
-Each transmit-capable card has three independent routing selectors:
+Each transmit-capable card has four independent routing controls:
 
 - `TX` includes the resource in global or multi-channel voice PTT.
 - `PAGE` includes the resource when a QCII page is sent.
@@ -74,13 +74,15 @@ If the resource does not show **SELECT**, encryption behavior is fixed by the co
 
 # Global PTT
 
-Global PTT keys the current primary selected channel.
+Global PTT keys every channel with `TX` armed. At least one transmit-capable channel must be armed before global PTT can begin.
 
-If no primary channel is available, legacy all-channel global PTT behavior is not exposed in the menu. Use multi-select groups instead when an operator needs to transmit to multiple resources.
+Choose the key under **Channels > Global PTT key**. Space and F1 through F12 are supported. On macOS, OS-global capture may require Accessibility or Input Monitoring permission. When global capture is unavailable, the key still works while the application has keyboard focus.
 
 The global PTT key remains active while the modeless **Console Tools** window
 has focus. Console Tools can stay open while the operator selects resources or
 uses other controls in the main window.
+
+The talk permit tone uses the selected output device for both card and global PTT. Use **Audio > Test talk permit tone** when checking the route.
 
 ---
 

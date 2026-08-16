@@ -4,9 +4,7 @@ using DvmConsole.FneClient;
 
 namespace DvmConsole.Desktop;
 
-/// <summary>
-/// One inbound voice stream recorded by the dispatch shell.
-/// </summary>
+// One inbound voice stream recorded by the dispatch shell.
 public sealed class CallHistoryEntry : INotifyPropertyChanged
 {
     private DateTimeOffset? endTimestamp;
@@ -193,9 +191,7 @@ public sealed class CallHistoryEntry : INotifyPropertyChanged
     }
 }
 
-/// <summary>
-/// Bounded newest-first call history for the Avalonia shell.
-/// </summary>
+// Bounded newest-first call history for the Avalonia shell.
 public sealed class CallHistoryStore
 {
     public const int DefaultMaxEntries = 100;

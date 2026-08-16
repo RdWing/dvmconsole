@@ -1,10 +1,8 @@
 namespace DvmConsole.Core.Runtime;
 
-/// <summary>
-/// Stable system/talkgroup identity used by patch routing. The router does not
-/// know about UI controls or protocol encoders; the host supplies those at the
-/// begin/end/audio callback boundary.
-/// </summary>
+// Stable system/talkgroup identity used by patch routing. The router does not
+// know about UI controls or protocol encoders; the host supplies those at the
+// begin/end/audio callback boundary.
 public sealed record PatchMemberAddress
 {
     public PatchMemberAddress(string systemName, uint destinationId)
@@ -22,12 +20,10 @@ public sealed record PatchMemberAddress
     public string Key => $"{SystemName.ToLowerInvariant()}|{DestinationId}";
 }
 
-/// <summary>
-/// Protocol-independent patch membership and active-call state machine.
-/// Membership changes stop active target calls before the new membership is
-/// committed. Audio forwarding remains callback-driven so each host can choose
-/// the appropriate DMR, P25, or analog packetizer.
-/// </summary>
+// Protocol-independent patch membership and active-call state machine.
+// Membership changes stop active target calls before the new membership is
+// committed. Audio forwarding remains callback-driven so each host can choose
+// the appropriate DMR, P25, or analog packetizer.
 public sealed class PatchRoutingTable
 {
     private static readonly TimeSpan LatePacketSuppressWindow = TimeSpan.FromSeconds(2);

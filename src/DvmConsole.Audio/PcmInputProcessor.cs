@@ -1,10 +1,8 @@
 namespace DvmConsole.Audio;
 
-/// <summary>
-/// Cross-platform microphone processing settings. Device selection is resolved
-/// by the host; these values only describe the PCM processing applied after
-/// capture and before protocol encoding.
-/// </summary>
+// Cross-platform microphone processing settings. Device selection is resolved
+// by the host; these values only describe the PCM processing applied after
+// capture and before protocol encoding.
 public sealed class AudioInputProcessingOptions
 {
     public string DeviceId { get; init; } = "default";
@@ -29,10 +27,8 @@ public sealed class AudioInputProcessingOptions
         => double.IsFinite(value) ? Math.Clamp(value, minimum, maximum) : fallback;
 }
 
-/// <summary>
-/// Applies bounded microphone gain, optional three-band shaping, and optional
-/// block AGC without coupling the capture path to a platform audio API.
-/// </summary>
+// Applies bounded microphone gain, optional three-band shaping, and optional
+// block AGC without coupling the capture path to a platform audio API.
 public sealed class PcmInputProcessor
 {
     private const double AgcTargetRms = 0.18;
@@ -103,10 +99,8 @@ public sealed class PcmInputProcessor
         => Math.Pow(10, decibels / 20.0);
 }
 
-/// <summary>
-/// Decorates a platform capture with the shared PCM microphone processor while
-/// preserving the existing capture lifecycle contract.
-/// </summary>
+// Decorates a platform capture with the shared PCM microphone processor while
+// preserving the existing capture lifecycle contract.
 public sealed class ProcessedAudioCapture : IAudioCapture
 {
     private readonly IAudioCapture source;

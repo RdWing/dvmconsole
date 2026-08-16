@@ -1,6 +1,6 @@
 # Groups and Patching
 
-Patch groups and multi-select groups are managed from the Groups window.
+Patch groups and multi-select groups are managed from Console Tools.
 
 Open it from:
 
@@ -29,7 +29,7 @@ Membership can exist while the patch is disabled.
 
 # Patch Enable/Disable
 
-Each patch group has an enable/disable control in the Groups window.
+Each patch group has an **Enabled** control on the Groups page.
 
 When a patch is disabled:
 
@@ -103,30 +103,18 @@ Use multi-select when an operator wants to key several resources together from t
 To edit a group:
 
 1. Open **View > Groups**.
-2. Select a patch or multi-select group tab.
-3. Click **Edit Members**.
-4. Drag resources from the main console into the group member list.
-5. Remove members from the list if needed.
-6. Click **Stop Editing**.
+2. Find the required patch or multi-select group.
+3. Check each channel that should be a member.
+4. For a patch, select **Enabled** and **One-way** as required.
+5. Select **Save group**.
 
-Patch edit mode is temporary.
-
-Important behavior:
-
-- Closing the Groups window automatically stops edit mode.
-- PTT is blocked while patch edit mode is active to avoid conflicting transmit state.
-- Switching group tabs exits edit mode for the previous group.
+The console displays a conflict warning when a channel assignment cannot be used safely. Resolve the listed conflict before relying on that group.
 
 ---
 
 # Group PTT
 
-Each group has a transmit button:
-
-- **Patch PTT**
-- **Multi-Select PTT**
-
-Click the button to start group transmit. Click again to stop.
+Multi-select groups provide a group PTT button. Patch groups forward received traffic when enabled and do not use a separate operator patch PTT control on this page.
 
 The console includes a short transmit tail after de-key so final audio frames are not clipped before call end signaling is sent.
 
@@ -134,13 +122,7 @@ The console includes a short transmit tail after de-key so final audio frames ar
 
 # Card Icons
 
-Resource cards show top-right indicators for patch or multi-select membership.
-
-Common meanings:
-
-- `patch_edit_off.png`: resource belongs to a disabled patch
-- `patch_edit_on.png`: resource belongs to an enabled patch
-- `msel_inactive.png`: resource belongs to a multi-select group
+Resource cards show an operator-visible indicator for patch or multi-select membership.
 
 If a resource belongs to both a patch and a multi-select group, the multi-select indicator takes priority in the card indicator area.
 

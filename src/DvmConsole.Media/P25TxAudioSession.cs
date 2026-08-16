@@ -4,10 +4,8 @@ using fnecore.P25;
 
 namespace DvmConsole.Media;
 
-/// <summary>
-/// Key-stream inputs for one encrypted P25 transmit call. The message
-/// indicator is copied so the call owns an immutable starting point.
-/// </summary>
+// Key-stream inputs for one encrypted P25 transmit call. The message
+// indicator is copied so the call owns an immutable starting point.
 public sealed class P25TxEncryptionOptions
 {
     public P25TxEncryptionOptions(
@@ -47,12 +45,10 @@ public sealed class P25TxEncryptionOptions
     }
 }
 
-/// <summary>
-/// Aggregates nine IMBE codewords into alternating clear P25 LDU1/LDU2
-/// payloads. When encryption options are supplied, IMBE codewords are
-/// encrypted through the same P25Crypto key-stream boundary used by receive;
-/// HDU and LDU2 encryption-sync metadata are emitted with the voice payloads.
-/// </summary>
+// Aggregates nine IMBE codewords into alternating clear P25 LDU1/LDU2
+// payloads. When encryption options are supplied, IMBE codewords are
+// encrypted through the same P25Crypto key-stream boundary used by receive;
+// HDU and LDU2 encryption-sync metadata are emitted with the voice payloads.
 public sealed class P25TxAudioSession : IDisposable
 {
     private readonly uint sourceId;
@@ -119,10 +115,8 @@ public sealed class P25TxAudioSession : IDisposable
         return LdusSent - packetsBefore;
     }
 
-    /// <summary>
-    /// Pads the final PCM frame and LDU with encoded silence so releasing PTT
-    /// does not discard the tail of a call.
-    /// </summary>
+    // Pads the final PCM frame and LDU with encoded silence so releasing PTT
+    // does not discard the tail of a call.
     internal int CompleteLdu()
     {
         ObjectDisposedException.ThrowIf(disposed, this);

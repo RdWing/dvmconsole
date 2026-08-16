@@ -6,11 +6,9 @@ using DvmConsole.Vocoder;
 
 namespace DvmConsole.Desktop;
 
-/// <summary>
-/// Sends generated 8 kHz PCM tone sequences through the selected channel's
-/// normal DMR, P25, or analog call lifecycle. It deliberately does not open a
-/// microphone; generated audio is paced as 20 ms media frames instead.
-/// </summary>
+// Sends generated 8 kHz PCM tone sequences through the selected channel's
+// normal DMR, P25, or analog call lifecycle. It deliberately does not open a
+// microphone; generated audio is paced as 20 ms media frames instead.
 public sealed class ToneTransmitCoordinator : IAsyncDisposable
 {
     private readonly IP25KeyResolver? p25KeyResolver;

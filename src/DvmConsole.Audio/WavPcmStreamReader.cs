@@ -3,12 +3,10 @@ using System.Text;
 
 namespace DvmConsole.Audio;
 
-/// <summary>
-/// Reads uncompressed PCM WAV data from a seekable or non-seekable stream and
-/// exposes mono 16-bit samples at the file's native sample rate. This is the
-/// portable web-stream decoder boundary; compressed formats are rejected
-/// instead of being routed through a platform-specific media framework.
-/// </summary>
+// Reads uncompressed PCM WAV data from a seekable or non-seekable stream and
+// exposes mono 16-bit samples at the file's native sample rate. This is the
+// portable web-stream decoder boundary; compressed formats are rejected
+// instead of being routed through a platform-specific media framework.
 public sealed class WavPcmStreamReader : IAudioPcmStreamReader
 {
     private readonly Stream source;

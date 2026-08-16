@@ -8,9 +8,7 @@ The console can load local key material from a YAML key file referenced by the c
 
 # FNE Compatibility
 
-DVMConsole R02A00 is intended for use with DVMHost/FNE R06A00 or newer.
-
-Older FNE builds are not recommended for encrypted console operation.
+Encryption and key-management behavior depends on the connected FNE. Validate key delivery, algorithm support, and encrypted voice against the exact FNE build used by the deployment.
 
 ---
 
@@ -34,18 +32,18 @@ Example:
 keys:
   - keyId: 0x1
     algId: 0x84
-    key: "1234567890ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890ABCDEFGHIJKLMNOPQR"
+    key: "000102030405060708090A0B0C0D0E0F101112131415161718191A1B1C1D1E1F"
 
   - keyId: 0x2
     algId: 0xAA
-    key: "1234567890"
+    key: "0011223344"
 ```
 
 Fields:
 
 - `keyId`: key ID referenced by channels.
 - `algId`: algorithm ID.
-- `key`: key material.
+- `key`: key material as an even-length hexadecimal string. Do not include spaces, separators, or non-hexadecimal characters.
 
 ---
 
@@ -97,7 +95,9 @@ This startup delay applies to restored selected encrypted resources. Normal key 
 
 # Key Status
 
-Use the key status toolbar button to inspect loaded or received key state for configured encrypted resources.
+Open **Tools > Encryption Key Status** to inspect loaded or received key state for configured encrypted resources.
+
+The status page shows identifiers and availability only. Key material is never displayed or written to the debug log.
 
 If an encrypted channel does not decrypt correctly:
 

@@ -3,7 +3,7 @@
 Open Audio Settings from:
 
 ```
-Settings > Audio Settings
+Audio > Audio settings
 ```
 
 Audio Settings controls microphone input and local speaker output routing.
@@ -16,24 +16,24 @@ The global input device is the microphone used for console transmit audio.
 
 Options include:
 
-- Windows Default Input
+- System Default Input
 - specific installed input devices
 
-If Windows Default Input is selected, the console follows the current Windows default microphone.
+If System Default Input is selected, the console follows the current macOS or Windows default microphone.
 
 If a specific device is selected, the console uses that device instead.
 
-If a saved device is missing, the console falls back to Windows default.
+If a saved device is missing, the console falls back to the system default and reports the change in the audio status.
 
 ---
 
 # Device Persistence
 
-Audio device selections are saved by device identity, not just by Windows device number.
+Audio device selections are saved by device identity, not only by a temporary device number.
 
 This helps prevent routing from jumping to the wrong microphone or speaker when USB audio devices are plugged in, unplugged, or reordered by Windows.
 
-If a saved device is temporarily unavailable, the console uses Windows Default until that device returns.
+If a saved device is temporarily unavailable, the console uses the system default until that device returns.
 
 ---
 
@@ -43,10 +43,10 @@ The master output device is the default speaker/output device for resources.
 
 Options include:
 
-- Windows Default Output
+- System Default Output
 - specific installed output devices
 
-If Windows Default Output is selected, the console follows the current Windows default playback device.
+If System Default Output is selected, the console follows the current macOS or Windows default playback device.
 
 ---
 
@@ -112,7 +112,7 @@ This helps keep the AppData settings JSON from accumulating stale audio routing,
 
 # Tips
 
-- Use Windows Default devices unless a deployment needs fixed hardware routing.
+- Use system default devices unless a deployment needs fixed hardware routing.
 - Use the master output for the normal speaker path.
 - Use per-resource overrides sparingly so future troubleshooting is easier.
 - If audio is playing from the wrong device, check both the master output and the resource override.

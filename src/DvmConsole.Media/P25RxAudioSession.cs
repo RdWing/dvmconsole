@@ -5,11 +5,9 @@ using fnecore.P25;
 
 namespace DvmConsole.Media;
 
-/// <summary>
-/// Decodes selected P25 DFSI LDUs to 8 kHz PCM. Encrypted IMBE codewords are
-/// decrypted only when the corresponding key resolves from the injected key
-/// ring; missing key material fails closed before audio is emitted.
-/// </summary>
+// Decodes selected P25 DFSI LDUs to 8 kHz PCM. Encrypted IMBE codewords are
+// decrypted only when the corresponding key resolves from the injected key
+// ring; missing key material fails closed before audio is emitted.
 public sealed class P25RxAudioSession : IAsyncDisposable
 {
     private readonly P25TrafficSelector selector;

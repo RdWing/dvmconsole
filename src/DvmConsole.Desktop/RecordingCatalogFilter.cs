@@ -2,11 +2,9 @@ using System.Globalization;
 
 namespace DvmConsole.Desktop;
 
-/// <summary>
-/// Pure catalog filtering rules shared by the Recorder UI and tests. This
-/// keeps operator filtering independent from the recording lifecycle and file
-/// system implementation.
-/// </summary>
+// Pure catalog filtering rules shared by the Recorder UI and tests. This
+// keeps operator filtering independent from the recording lifecycle and file
+// system implementation.
 public sealed record RecordingCatalogFilter(
     string SearchText = "",
     string Direction = "All",

@@ -1,8 +1,6 @@
 namespace DvmConsole.Audio;
 
-/// <summary>
-/// Converts arbitrary PCM callback sizes into fixed-size voice frames.
-/// </summary>
+// Converts arbitrary PCM callback sizes into fixed-size voice frames.
 public sealed class PcmFrameAssembler
 {
     private readonly short[] buffer;

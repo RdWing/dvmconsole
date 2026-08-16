@@ -3,11 +3,9 @@ using DvmConsole.Vocoder;
 
 namespace DvmConsole.Media;
 
-/// <summary>
-/// Binds one PCM capture device to one explicit DMR transmit call. The host
-/// owns PTT policy and transport; this class only controls capture/call order
-/// and converts callback samples into DMR voice packets.
-/// </summary>
+// Binds one PCM capture device to one explicit DMR transmit call. The host
+// owns PTT policy and transport; this class only controls capture/call order
+// and converts callback samples into DMR voice packets.
 public sealed class DmrTransmitCaptureSession : ITransmitCaptureSession
 {
     private readonly IAudioCapture capture;

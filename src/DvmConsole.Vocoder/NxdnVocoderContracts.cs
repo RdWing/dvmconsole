@@ -1,9 +1,7 @@
 namespace DvmConsole.Vocoder;
 
-/// <summary>
-/// Optional NXDN codec boundary. The default software backend does not
-/// implement this interface because NXDN requires its own FEC/AMBE+2 path.
-/// </summary>
+// Optional NXDN codec boundary. The default software backend does not
+// implement this interface because NXDN requires its own FEC/AMBE+2 path.
 public interface INxdnVocoderBackend : IDisposable
 {
     string Name { get; }

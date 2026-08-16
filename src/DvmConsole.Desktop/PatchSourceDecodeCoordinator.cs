@@ -5,11 +5,9 @@ using DvmConsole.Vocoder;
 
 namespace DvmConsole.Desktop;
 
-/// <summary>
-/// Decodes enabled patch-source channels without opening a local playback
-/// device. The resulting PCM is handed to the patch router; normal Listen
-/// remains independently responsible for operator playback and recording.
-/// </summary>
+// Decodes enabled patch-source channels without opening a local playback
+// device. The resulting PCM is handed to the patch router; normal Listen
+// remains independently responsible for operator playback and recording.
 public sealed class PatchSourceDecodeCoordinator : IAsyncDisposable
 {
     private readonly SemaphoreSlim gate = new(1, 1);

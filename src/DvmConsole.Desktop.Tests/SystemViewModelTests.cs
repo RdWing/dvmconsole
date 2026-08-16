@@ -17,6 +17,13 @@ public sealed class SystemViewModelTests
     public void ReportsUnreleasedSemanticVersion()
         => Assert.StartsWith("0.1.0-alpha.1", MainWindow.ApplicationVersion, StringComparison.Ordinal);
 
+    [Theory]
+    [InlineData("0.1.0-alpha.1+abcdef123456", "0.1.0-alpha.1 (abcdef1)")]
+    [InlineData("0.1.0-alpha.1", "0.1.0-alpha.1")]
+    [InlineData("0.1.0+abc", "0.1.0 (abc)")]
+    public void FormatsCommitVersionLikeGitHub(string version, string expected)
+        => Assert.Equal(expected, MainWindow.FormatShortVersion(version));
+
     [Fact]
     public void DefaultZoneColorsRemainReadableInBothThemes()
     {

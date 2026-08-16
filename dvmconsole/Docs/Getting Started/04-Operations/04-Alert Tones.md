@@ -34,23 +34,21 @@ Target TG unavailable on FNE
 
 ---
 
-# Alert Tone Manager
+# Console Tools Tones
 
 Open from:
 
 ```
-Commands > Tones > QCII, DTMF, and Alerts
+Commands > Tones > QCII / alert tones
 ```
 
-The Alert Tone Manager allows operators or admins to:
+The Tones page allows operators to:
 
 - view custom alert tones
 - add a new alert tone
-- rename an alert tone
-- replace the backing audio file
-- assign a tone to a tab
 - delete a custom alert tone
-- save changes without closing the manager
+- save and send DTMF or generated-tone presets
+- send a Quick Call II two-tone page
 
 Changes are saved through the normal settings system.
 
@@ -68,22 +66,9 @@ an error without keying an `ALERT` resource.
 
 # Deleting Alert Tones
 
-Deleting a custom alert tone removes it from:
-
-- the manager list
-- the UI
-- saved settings
-- saved tab assignment and related custom tone state
+Deleting a custom alert tone removes it from the list and saved settings.
 
 Use the confirmation prompt to avoid accidental removal.
-
----
-
-# Tab Assignment
-
-Custom alert tones can be assigned to a tab/resource tab when supported by the current codeplug layout.
-
-This keeps custom tones near the resources operators use with them.
 
 ---
 
@@ -92,5 +77,4 @@ This keeps custom tones near the resources operators use with them.
 - Alert tone audio is transmitted to all `ALERT`-armed resources when sent.
 - QCII page audio is transmitted to all `PAGE`-armed resources.
 - Alert tone sends do not bypass talkgroup validation.
-- If an alert tone is renamed, the display name shown in the UI updates and persists after restart.
-- If the backing file is replaced, verify the new file uses the required audio format.
+- A custom asset is copied into application settings storage; the original source file is not required after import.

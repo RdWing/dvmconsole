@@ -3,11 +3,9 @@ using DvmConsole.Audio;
 
 namespace DvmConsole.Media;
 
-/// <summary>
-/// Streams signed little-endian PCM samples to a RIFF/WAVE file and patches
-/// the RIFF/data lengths when the recording ends. It contains no TAR policy;
-/// callers own naming, retention, and call lifecycle decisions.
-/// </summary>
+// Streams signed little-endian PCM samples to a RIFF/WAVE file and patches
+// the RIFF/data lengths when the recording ends. It contains no TAR policy;
+// callers own naming, retention, and call lifecycle decisions.
 public sealed class PcmWavFileWriter : IDisposable, IAsyncDisposable
 {
     private const int HeaderLength = 44;

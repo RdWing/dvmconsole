@@ -2,10 +2,8 @@ using DvmConsole.Media;
 
 namespace DvmConsole.Desktop;
 
-/// <summary>
-/// Redacted operator-facing encryption status.  It intentionally exposes
-/// algorithm and key identifiers but never key material.
-/// </summary>
+// Redacted operator-facing encryption status.  It intentionally exposes
+// algorithm and key identifiers but never key material.
 public sealed record KeyStatusItemViewModel(
     string SystemName,
     string ChannelName,

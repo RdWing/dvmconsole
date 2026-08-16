@@ -4,10 +4,8 @@ using DvmConsole.Vocoder;
 
 namespace DvmConsole.Media;
 
-/// <summary>
-/// Decodes inbound DMR voice packets and writes their PCM frames to one audio
-/// playback device. Call/channel selection remains above this reusable session.
-/// </summary>
+// Decodes inbound DMR voice packets and writes their PCM frames to one audio
+// playback device. Call/channel selection remains above this reusable session.
 public sealed class DmrRxAudioSession : IAsyncDisposable
 {
     private readonly VoiceFrameDecoder decoder;

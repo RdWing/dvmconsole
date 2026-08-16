@@ -3,9 +3,7 @@ using DvmConsole.FneClient;
 
 namespace DvmConsole.Media;
 
-/// <summary>
-/// Routes selected FNE analog PCM frames directly to the shared playback path.
-/// </summary>
+// Routes selected FNE analog PCM frames directly to the shared playback path.
 public sealed class AnalogRxAudioSession : IAsyncDisposable
 {
     private readonly AnalogTrafficSelector selector;

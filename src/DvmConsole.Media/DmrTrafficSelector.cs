@@ -2,11 +2,9 @@ using DvmConsole.FneClient;
 
 namespace DvmConsole.Media;
 
-/// <summary>
-/// Selects the DMR voice stream that belongs to one configured talkgroup and
-/// timeslot. FNE reports DMR slots as zero-based values; codeplug conversion
-/// belongs at the configuration boundary.
-/// </summary>
+// Selects the DMR voice stream that belongs to one configured talkgroup and
+// timeslot. FNE reports DMR slots as zero-based values; codeplug conversion
+// belongs at the configuration boundary.
 public sealed record DmrTrafficSelector
 {
     public DmrTrafficSelector(uint destinationId, byte slot)

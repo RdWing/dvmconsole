@@ -4,12 +4,10 @@ using System.Runtime.InteropServices;
 
 namespace DvmConsole.Audio;
 
-/// <summary>
-/// Captures the configured PTT key outside the application window when the
-/// host platform permits it.  The adapter deliberately listens without
-/// swallowing the key, so the focused-window <see cref="KeyboardPttSource"/>
-/// remains a safe fallback when native capture is unavailable.
-/// </summary>
+// Captures the configured PTT key outside the application window when the
+// host platform permits it.  The adapter deliberately listens without
+// swallowing the key, so the focused-window <see cref="KeyboardPttSource"/>
+// remains a safe fallback when native capture is unavailable.
 public sealed class GlobalKeyboardPttSource : IPttSource
 {
     private readonly KeyboardPttSource stateSource;

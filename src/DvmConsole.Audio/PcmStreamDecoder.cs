@@ -1,11 +1,9 @@
 namespace DvmConsole.Audio;
 
-/// <summary>
-/// Chooses a portable decoder from the beginning of a stream. WAV remains
-/// handled by the in-box PCM reader; MPEG Layer I/II/III audio is decoded by
-/// the managed NLayer adapter. Other formats can opt into an explicitly
-/// configured FFmpeg process through <c>DVM_FFMPEG</c>.
-/// </summary>
+// Chooses a portable decoder from the beginning of a stream. WAV remains
+// handled by the in-box PCM reader; MPEG Layer I/II/III audio is decoded by
+// the managed NLayer adapter. Other formats can opt into an explicitly
+// configured FFmpeg process through `DVM_FFMPEG`.
 public static class PcmStreamDecoder
 {
     public static async Task<IAudioPcmStreamReader> OpenAsync(

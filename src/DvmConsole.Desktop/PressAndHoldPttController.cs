@@ -1,9 +1,7 @@
 namespace DvmConsole.Desktop;
 
-/// <summary>
-/// Serializes a card's press-and-hold PTT lifecycle so release cannot race
-/// ahead of slower audio/vocoder startup and leave a call keyed.
-/// </summary>
+// Serializes a card's press-and-hold PTT lifecycle so release cannot race
+// ahead of slower audio/vocoder startup and leave a call keyed.
 public sealed class PressAndHoldPttController
 {
     private readonly Func<ChannelViewModel, Task> start;

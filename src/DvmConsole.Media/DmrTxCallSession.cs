@@ -3,11 +3,9 @@ using DvmConsole.Vocoder;
 
 namespace DvmConsole.Media;
 
-/// <summary>
-/// Represents one explicit DMR group call. Start emits the voice LC header,
-/// Process emits encoded voice packets, and End emits the LC terminator.
-/// Microphone capture and FNE connection state remain owned by the host.
-/// </summary>
+// Represents one explicit DMR group call. Start emits the voice LC header,
+// Process emits encoded voice packets, and End emits the LC terminator.
+// Microphone capture and FNE connection state remain owned by the host.
 public sealed class DmrTxCallSession : IDisposable
 {
     private readonly uint sourceId;

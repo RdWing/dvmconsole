@@ -2,11 +2,9 @@ using DvmConsole.FneClient;
 
 namespace DvmConsole.Media;
 
-/// <summary>
-/// Selects one P25 talkgroup for receive playback. The selector deliberately
-/// accepts only complete voice LDUs; TSDU/PDU/terminator traffic is handled by
-/// higher-level call-state code.
-/// </summary>
+// Selects one P25 talkgroup for receive playback. The selector deliberately
+// accepts only complete voice LDUs; TSDU/PDU/terminator traffic is handled by
+// higher-level call-state code.
 public sealed record P25TrafficSelector
 {
     public P25TrafficSelector(uint destinationId)

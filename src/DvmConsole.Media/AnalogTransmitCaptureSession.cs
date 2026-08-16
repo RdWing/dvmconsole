@@ -2,10 +2,8 @@ using DvmConsole.Audio;
 
 namespace DvmConsole.Media;
 
-/// <summary>
-/// Binds one PCM capture device to one explicit analog transmit call. The
-/// host owns PTT policy and transport; this class controls capture/call order.
-/// </summary>
+// Binds one PCM capture device to one explicit analog transmit call. The
+// host owns PTT policy and transport; this class controls capture/call order.
 public sealed class AnalogTransmitCaptureSession : ITransmitCaptureSession
 {
     private readonly IAudioCapture capture;

@@ -2,11 +2,9 @@ using System.Runtime.InteropServices;
 
 namespace DvmConsole.Vocoder;
 
-/// <summary>
-/// Software vocoder backed by the native dvmvocoder shared library.
-/// The loader is explicit so macOS .dylib packaging and a future AMBE backend
-/// do not leak platform-specific filenames into the application core.
-/// </summary>
+// Software vocoder backed by the native dvmvocoder shared library.
+// The loader is explicit so macOS .dylib packaging and a future AMBE backend
+// do not leak platform-specific filenames into the application core.
 public sealed class SoftwareVocoderBackend : IVocoderBackend
 {
     private readonly NativeVocoderApi api;

@@ -69,11 +69,9 @@ Restored selected encrypted resources request keys after the relevant FNE connec
 
 When disabled, selected resources and per-resource volume do not come back sticky on startup.
 
-## Clock Manager
+## Toolbar Clocks
 
-Opens the Clock Manager window.
-
-Clock Manager controls the optional clocks shown in the top-right toolbar area. Up to eight clocks can be enabled.
+Open **Settings > Clock settings** to show the General page in Console Tools. Up to eight toolbar clocks can be enabled.
 
 Each clock has:
 
@@ -81,7 +79,7 @@ Each clock has:
 - a UTC offset, such as `UTC+00`, `UTC-05`, or `UTC+09`
 - a preset box color for visual grouping
 
-Clock Manager also controls the shared clock display format:
+The General page also controls the shared clock display format:
 
 - `Use 24-hour time`
 - `Show seconds`
@@ -90,7 +88,7 @@ Clock settings are saved and restored on startup. Enabled clock slots, UTC offse
 
 ## Audio Settings
 
-Opens the Audio Settings window.
+Opens Console Tools on the Audio page.
 
 See **Audio Settings** for details.
 
@@ -123,17 +121,13 @@ Clears saved user settings.
 
 Use with care. This can remove saved window layout, widget positions, audio routing, selected channel state, and other preferences.
 
-## Select Widgets to Display
+## Widgets
 
-Controls whether major widget categories are shown.
+The General page can show or hide system status cards, channel widgets, and toolbar alert buttons. **Lock channel widget positions** prevents card dragging; clear it to arrange cards on the active tab.
 
-## Alerts > Manage Alert Tones
+## Global PTT Key
 
-Opens the Alert Tone Manager.
-
-## Keyboard Shortcuts > Set Global PTT Keybind
-
-Prompts for a key and stores it as the global PTT shortcut.
+Choose Space or F1 through F12 from **Channels > Global PTT key**.
 
 ---
 
@@ -151,23 +145,19 @@ Toggles the app theme.
 
 Prevents resource and status widgets from being moved.
 
-## Reset Tab Layout
+## Reset Widget Layout
 
 Snaps channel cards back to a grid-style layout.
 
-## Fit Channel Display to Window Size
+## Event History
 
-Resizes the channel display area to the current window.
-
-## Snap Event History To Window
-
-Keeps the Event History window aligned next to the main console when shown.
+The Event History can be docked in the collapsible Activity sidebar or opened as a separate window. **Snap detached Event History** keeps the detached window aligned with the main console.
 
 ## Groups
 
-Opens the Groups window.
+Opens Console Tools on the Groups page.
 
-## Always on Top
+## Keep Window on Top
 
 Keeps the console above other windows.
 
@@ -200,8 +190,8 @@ Opens manual connection controls for configured FNE systems.
 
 ## Documentation
 
-Opens this documentation viewer.
+Opens this searchable documentation viewer. The selected Markdown file is read live from the packaged `Docs` folder and rendered with headings, lists, tables, links, and code blocks.
 
 ## About
 
-Shows version information and includes the **View Debug Logs** button.
+Shows the prerelease version and seven-character commit ID, copyright, AGPL license notice, project attribution, and repository links.

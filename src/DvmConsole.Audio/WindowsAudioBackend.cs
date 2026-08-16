@@ -3,11 +3,9 @@ using System.Runtime.InteropServices;
 
 namespace DvmConsole.Audio;
 
-/// <summary>
-/// Windows audio backend using NAudio's WinMM wave input/output adapters.
-/// The managed contract remains independent of NAudio and the implementation
-/// is only constructible on Windows.
-/// </summary>
+// Windows audio backend using NAudio's WinMM wave input/output adapters.
+// The managed contract remains independent of NAudio and the implementation
+// is only constructible on Windows.
 public sealed class WindowsAudioBackend : IAudioBackend
 {
     private const string DefaultDeviceId = "default";

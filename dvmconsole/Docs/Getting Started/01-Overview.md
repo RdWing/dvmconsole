@@ -1,29 +1,10 @@
 # Overview
 
-The Digital Voice Modem Desktop Dispatch Console is a WPF desktop console for monitoring and transmitting on DVM FNE talkgroups from one operator position.
+The Digital Voice Modem Desktop Dispatch Console is a cross-platform operator console for monitoring and transmitting on DVM FNE talkgroups.
 
-The console is organized around resources. A resource is a channel card that maps to a system and talkgroup from the loaded codeplug.
+The Avalonia application runs on Apple Silicon macOS and 64-bit Windows. It keeps the established DVMConsole codeplug and FNE behavior while providing the same operator workflow on both platforms.
 
-Common operator tasks include:
-
-- Monitor selected resources
-- Transmit with resource PTT or Global PTT
-- Send alert tones or hold tones
-- Build patch groups and multi-select groups
-- Manage audio input and output routing
-- View call history, key status, connection status, and debug logs
-
----
-
-# Compatibility Warning
-
-DVMConsole R02A00 has limited backwards compatibility with older FNE builds and older codeplugs.
-
-DVMConsole R02A00 is intended for use with DVMHost/FNE R06A00 or newer.
-
-Older FNE builds are not recommended and may behave unpredictably with this console release.
-
-Codeplugs created for R01A00 should be reviewed before use with R02A00. There have been major changes to resource configuration.
+This rebuild is currently a prerelease. Test every build with the intended FNE, audio devices, and operator workflow before operational use.
 
 ---
 
@@ -31,150 +12,112 @@ Codeplugs created for R01A00 should be reviewed before use with R02A00. There ha
 
 ## Systems
 
-A system is an FNE connection defined in the codeplug.
+A system is an FNE peer connection defined in the codeplug. Each system has its own address, port, peer ID, console RID, credentials, and optional RID alias file.
 
-Each system has its own address, port, peer ID, console RID, password, and optional alias file.
-
-## Zones
-
-Zones become tabs across the top of the main console.
-
-Use zones to group resources by dispatch area, agency, site, or operational role.
-
-## Resources
-
-Resources are channel cards inside a zone.
-
-Each resource maps to:
-
-- a system
-- a talkgroup ID
-- a mode such as P25 or DMR
-- optional encryption information
-- optional visual color
-
-## Groups
-
-Groups are configured in the codeplug and managed at runtime in the Groups window.
-
-Two group types are supported:
-
-- Patch groups
-- Multi-select groups
-
-Patch group membership can persist across restart. Patch active state is controlled separately.
-
----
-
-# Important Windows
-
-## Main Console
-
-The main console contains resource cards, system status widgets, toolbar buttons, menus, and tabs.
-
-## Groups
-
-Open from:
-
-```
-View > Groups
-```
-
-Used to edit patch and multi-select memberships, enable or disable patch groups, and use group PTT.
-
-## Audio Settings
-
-Open from:
-
-```
-Settings > Audio Settings
-```
-
-Used to select the global microphone input, master output device, per-resource output overrides, and AGC behavior.
-
-## Alert Tone Manager
-
-Open from:
-
-```
-Settings > Alerts > Manage Alert Tones
-```
-
-Used to add, rename, delete, replace, and assign custom alert tones to tabs.
-
-## Talkgroup Audio Recorder (TAR)
-
-Open from:
-
-```
-Tools > Talkgroup Audio Recorder
-```
-
-Used to configure per-talkgroup recording, review saved recordings, filter results, and manage TAR playback or deletion.
-
-## FNE Connection Manager
-
-Open from:
+Click a system status card to connect or disconnect that FNE. Manual connection controls are also available under:
 
 ```
 Tools > FNE Connection Manager
 ```
 
-Used to manually start, stop, or restart configured FNE system connections.
+## Zones
 
-## Debug Logs
+Zones become tabs across the top of the channel area. Use zones to group channels by dispatch area, agency, site, or operator role.
 
-Open from:
+## Channels
+
+A channel card maps a system to a talkgroup. The card provides receive selection, local volume, PTT, transmit routing, page routing, alert routing, and TAR control.
+
+The card displays the talkgroup and protocol together, for example:
 
 ```
-Help > About > View Debug Logs
+TG 9990 - P25
 ```
 
-Used to view recent live FNECore/debug log output.
+## Groups
+
+Groups are defined in the codeplug and managed under **View > Groups**.
+
+- Patch groups forward received audio between member channels.
+- Multi-select groups key several member channels from one operator PTT.
+
+Membership is saved separately from whether a patch is active.
 
 ---
 
-# Startup Behavior
+# Main Console
 
-The console can restore selected channels on startup if enabled in Settings.
+Click a channel card outside its controls to enable or disable local receive audio.
 
-When this is enabled:
+The bottom row contains:
 
-- selected channel state is restored
-- saved per-resource volume is restored for those restored channels
-- encrypted restored channels request keys after the relevant FNE connection is established and a short post-connect delay has passed
+- `PTT`: transmit on that channel only.
+- `TX`: include the channel in global PTT.
+- `PAGE`: include the channel in QCII pages.
+- `ALERT`: include the channel in alert tones, DTMF, and custom alert audio.
+- `TAR`: enable or disable Talkgroup Audio Recorder capture for the channel.
 
-When restore selected channels is disabled:
+Purple means a route or recorder is enabled. Gray means it is disabled.
 
-- resources start unselected
-- per-resource volumes start at default
+The Activity sidebar shows recent calls. Collapse it with the arrow at the edge of the sidebar. Double-click the Activity list to open the full Event History window.
 
-Patch group members are sticky across restart. Patch active state only restores if **Retain Patch State on Startup** is enabled.
+The toolbar provides the three original alert patterns and a **TONES** button that opens Console Tools directly to the Tones page.
 
 ---
 
-# Talkgroup Availability
+# Console Tools
 
-The console validates target talkgroups using active talkgroup rules received from the connected FNE.
+Several menu entries open the modeless Console Tools window on a specific page. The window can remain open while the main console is used.
 
-If a resource targets a talkgroup that is not currently available on that FNE, transmit actions are blocked and the console displays:
+Pages include:
+
+- Audio device and per-channel routing
+- DTMF, generated tones, QCII, and custom alert audio
+- Web streams
+- Talkgroup Audio Recorder configuration and playback
+- Event history tools
+- Patch and multi-select groups
+- FNE connections and encryption key status
+- Appearance, clocks, widgets, startup behavior, and PTT settings
+
+---
+
+# Subscriber Commands
+
+P25 Page, Radio Check, Inhibit, and Uninhibit commands are available under **Commands**.
+
+The console validates the 24-bit subscriber ID, requires a connected FNE and configured source RID, and requires confirmation before Inhibit or Uninhibit. Sent commands appear in the command audit history.
+
+Subscriber acknowledgement decoding is not yet implemented. A successful send confirms that the command was submitted to the connected FNE, not that the target radio acknowledged it.
+
+---
+
+# Diagnostics
+
+Open the live debug log viewer from:
 
 ```
-Target TG unavailable on FNE
+View > Debug Logs
 ```
 
-This validation is per system. A talkgroup can be valid on one FNE and unavailable on another.
+The viewer captures FNE messages, supports filtering, and can export a redacted log for troubleshooting.
+
+If the application closes without an error dialog, inspect `LastCrash.log` before restarting:
+
+- macOS: `~/Library/Application Support/DVMProject/dvmconsole/`
+- Windows: `%APPDATA%\DVMProject\dvmconsole\`
 
 ---
 
 # Project Notes
 
-- The console does not interface directly with base station or mobile radios.
-- For a DVM-compatible console that supports base/mobile radio interfacing, see RadioConsole2 and rc2-dvm.
+- DVMConsole connects to DVM FNE peers; it does not directly control base or mobile radios.
+- DMR and P25 voice require the native DVM vocoder included in a complete release package.
+- NXDN operator audio is not enabled until a compatible NXDN vocoder backend is supplied.
 - This software is intended for amateur and educational use. Any other use is at the user's discretion and risk.
 
 ---
 
 # License
 
-This project is licensed under the AGPLv3 License. See the repository `LICENSE` file for details.
+DVMConsole is free software licensed under the GNU Affero General Public License, version 3. See the repository `LICENSE` file for the complete terms.

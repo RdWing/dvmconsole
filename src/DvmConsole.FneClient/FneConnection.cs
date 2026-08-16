@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Sockets;
+using System.Diagnostics;
 using DvmConsole.Core.Configuration;
 using DvmConsole.Core.Diagnostics;
 using fnecore;
@@ -31,23 +32,17 @@ public sealed record FneConnectionOptions(
     bool Encrypted,
     string? PresharedKey)
 {
-    /// <summary>
-    /// Radio/source ID used for outbound voice traffic. It is optional so
-    /// connections without a transmit RID can still be used for receive-only
-    /// monitoring.
-    /// </summary>
+    // Radio/source ID used for outbound voice traffic. It is optional so
+    // connections without a transmit RID can still be used for receive-only
+    // monitoring.
     public uint? SourceId { get; init; }
 
-    /// <summary>
-    /// Optional KMF key used only to decrypt peer-encrypted P25 KMM responses.
-    /// It is never inferred from the FNE transport preshared key.
-    /// </summary>
+    // Optional KMF key used only to decrypt peer-encrypted P25 KMM responses.
+    // It is never inferred from the FNE transport preshared key.
     public string? KmfPresharedKey { get; init; }
 
-    /// <summary>
-    /// Enables sanitized diagnostic callbacks used by the bounded live probe.
-    /// Raw packet contents are never exposed by the rebuild client.
-    /// </summary>
+    // Enables sanitized diagnostic callbacks used by the bounded live probe.
+    // Raw packet contents are never exposed by the rebuild client.
     public bool EnableDiagnostics { get; init; }
 
     public static FneConnectionOptions FromConfiguration(SystemConfiguration configuration)
@@ -95,19 +90,15 @@ public sealed record FneLogEntry(
     string Message,
     DateTimeOffset Timestamp);
 
-/// <summary>
-/// Sanitized P25 key response. Raw KMM frames and transport payloads are not
-/// exposed to the desktop or media layers.
-/// </summary>
+// Sanitized P25 key response. Raw KMM frames and transport payloads are not
+// exposed to the desktop or media layers.
 public sealed record FneKeyResponse(
     string SystemName,
     byte AlgorithmId,
     ushort KeyId,
     ReadOnlyMemory<byte> KeyMaterial);
 
-/// <summary>
-/// Owns one cross-platform FNE peer lifecycle. It does not start until StartAsync is called.
-/// </summary>
+// Owns one cross-platform FNE peer lifecycle. It does not start until StartAsync is called.
 public sealed class FneConnection : IAsyncDisposable
 {
     private readonly FneConnectionOptions options;
@@ -159,17 +150,20 @@ public sealed class FneConnection : IAsyncDisposable
         return streamId;
     }
 
-    /// <summary>
-    /// Sends one protocol payload through the active FNE traffic channel.
-    /// Protocol-specific packet construction stays in the media layer while
-    /// this service owns connection state and the legacy transport adapter.
-    /// </summary>
+    // Sends one protocol payload through the active FNE traffic channel.
+    // Protocol-specific packet construction stays in the media layer while
+    // this service owns connection state and the legacy transport adapter.
     public void SendTraffic(
         FneTrafficProtocol protocol,
         ReadOnlySpan<byte> payload,
         ushort packetSequence,
         uint streamId)
     {
+        if (payload.IsEmpty)
+            throw new ArgumentException("FNE traffic payload cannot be empty.", nameof(payload));
+        if (streamId == 0)
+            throw new ArgumentOutOfRangeException(nameof(streamId), "FNE traffic stream ID must be non-zero.");
+
         FnePeer current;
         lock (sync)
         {
@@ -190,10 +184,8 @@ public sealed class FneConnection : IAsyncDisposable
         current.SendMasterTraffic(opcode, payload.ToArray(), packetSequence, streamId);
     }
 
-    /// <summary>
-    /// Requests one P25 key from the connected FNE. The response is accepted
-    /// only through the sanitized key callback below.
-    /// </summary>
+    // Requests one P25 key from the connected FNE. The response is accepted
+    // only through the sanitized key callback below.
     public void RequestP25Key(byte algorithmId, ushort keyId)
     {
         if (!IsSupportedP25Algorithm(algorithmId))
@@ -282,11 +274,9 @@ public sealed class FneConnection : IAsyncDisposable
         }
     }
 
-    /// <summary>
-    /// Starts the connection, replacing a retained peer after a fault or
-    /// transport loss. This is the operation used by the desktop Connect
-    /// command when the status is no longer Connected.
-    /// </summary>
+    // Starts the connection, replacing a retained peer after a fault or
+    // transport loss. This is the operation used by the desktop Connect
+    // command when the status is no longer Connected.
     public async Task StartOrReconnectAsync(CancellationToken cancellationToken = default)
     {
         await lifecycle.WaitAsync(cancellationToken).ConfigureAwait(false);
@@ -335,6 +325,20 @@ public sealed class FneConnection : IAsyncDisposable
             }
 
             StopStateMonitor();
+
+            if (candidate is not null)
+            {
+                DetachPeerHandlers(candidate);
+                try
+                {
+                    await Task.Run(candidate.Stop, CancellationToken.None).ConfigureAwait(false);
+                }
+                catch (Exception cleanupException) when (cleanupException is
+                    ObjectDisposedException or SocketException or InvalidOperationException)
+                {
+                    Debug.WriteLine($"FNE startup cleanup: {cleanupException.Message}");
+                }
+            }
 
             Publish(FneConnectionState.Faulted, exception.Message);
             throw;
@@ -389,10 +393,7 @@ public sealed class FneConnection : IAsyncDisposable
             }
         }
         monitorCancellation?.Dispose();
-        current.PeerConnected -= HandlePeerConnected;
-        current.KeyResponse -= HandleKeyResponse;
-        current.PeerDisconnected = null;
-        DetachTrafficHandlers(current);
+        DetachPeerHandlers(current);
 
         try
         {
@@ -487,7 +488,7 @@ public sealed class FneConnection : IAsyncDisposable
             if (material.Length == 0)
                 continue;
 
-            KeyResponseReceived?.Invoke(this, new FneKeyResponse(
+            Raise(KeyResponseReceived, new FneKeyResponse(
                 options.Name,
                 algorithmId,
                 key.KeyId,
@@ -561,12 +562,14 @@ public sealed class FneConnection : IAsyncDisposable
 
     private void PublishTraffic(FneTrafficFrame frame)
     {
-        TrafficReceived?.Invoke(this, frame);
+        Raise(TrafficReceived, frame);
     }
 
-    private void DetachTrafficHandlers(FnePeer current)
+    private void DetachPeerHandlers(FnePeer current)
     {
+        current.PeerConnected -= HandlePeerConnected;
         current.KeyResponse -= HandleKeyResponse;
+        current.PeerDisconnected = null;
         current.DMRDataReceived -= HandleDmrDataReceived;
         current.P25DataReceived -= HandleP25DataReceived;
         current.NXDNDataReceived -= HandleNxdnDataReceived;
@@ -582,7 +585,7 @@ public sealed class FneConnection : IAsyncDisposable
 
     private void HandlePeerLog(LogLevel level, string message)
     {
-        LogReceived?.Invoke(this, new FneLogEntry(
+        Raise(LogReceived, new FneLogEntry(
             options.Name,
             MapLogSeverity(level),
             DebugLogRedactor.Redact(message),
@@ -717,6 +720,24 @@ public sealed class FneConnection : IAsyncDisposable
         FneConnectionStatus next = new(options.Name, state, message, DateTimeOffset.UtcNow);
         lock (sync)
             status = next;
-        StatusChanged?.Invoke(this, next);
+        Raise(StatusChanged, next);
+    }
+
+    private void Raise<T>(EventHandler<T>? handlers, T args)
+    {
+        if (handlers is null)
+            return;
+
+        foreach (EventHandler<T> handler in handlers.GetInvocationList().Cast<EventHandler<T>>())
+        {
+            try
+            {
+                handler(this, args);
+            }
+            catch (Exception exception)
+            {
+                Debug.WriteLine($"FNE event handler failed: {exception.Message}");
+            }
+        }
     }
 }

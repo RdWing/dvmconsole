@@ -5,10 +5,8 @@ public readonly record struct PcmToneStep(
     TimeSpan Duration,
     bool IsHold = false);
 
-/// <summary>
-/// Generates bounded mono PCM tones for alerts and future DTMF/preset playback.
-/// The generator has no device or UI dependency.
-/// </summary>
+// Generates bounded mono PCM tones for alerts and future DTMF/preset playback.
+// The generator has no device or UI dependency.
 public sealed class PcmToneGenerator
 {
     public PcmToneGenerator(PcmAudioFormat? format = null)

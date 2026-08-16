@@ -3,11 +3,9 @@ using DvmConsole.Vocoder;
 
 namespace DvmConsole.Media;
 
-/// <summary>
-/// Adapts an already-decoded PCM stream to one patch target. It reuses the
-/// normal outbound call lifecycles and deliberately fails closed for targets
-/// whose encryption or vocoder boundary is not available.
-/// </summary>
+// Adapts an already-decoded PCM stream to one patch target. It reuses the
+// normal outbound call lifecycles and deliberately fails closed for targets
+// whose encryption or vocoder boundary is not available.
 public sealed class PatchTransmitSession : IDisposable
 {
     private readonly ChannelRuntimeDefinition target;

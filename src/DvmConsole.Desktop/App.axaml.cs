@@ -69,6 +69,16 @@ public sealed class App : Application
             await Task.Delay(75);
             logs.Close();
 
+            var documentation = new DocumentationWindow();
+            documentation.Show(mainWindow);
+            await Task.Delay(75);
+            documentation.Close();
+
+            var about = new AboutWindow();
+            about.Show(mainWindow);
+            await Task.Delay(75);
+            about.Close();
+
             Console.WriteLine("Desktop window smoke passed.");
             desktop.Shutdown(0);
         }

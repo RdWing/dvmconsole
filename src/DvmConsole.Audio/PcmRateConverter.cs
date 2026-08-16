@@ -1,9 +1,7 @@
 namespace DvmConsole.Audio;
 
-/// <summary>
-/// Small streaming linear PCM rate converter used when CoreAudio exposes a
-/// hardware rate different from the 8 kHz voice rate.
-/// </summary>
+// Small streaming linear PCM rate converter used when CoreAudio exposes a
+// hardware rate different from the 8 kHz voice rate.
 public sealed class PcmRateConverter
 {
     private readonly int inputRate;

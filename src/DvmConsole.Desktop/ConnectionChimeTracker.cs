@@ -2,10 +2,8 @@ using DvmConsole.FneClient;
 
 namespace DvmConsole.Desktop;
 
-/// <summary>
-/// Converts verbose connection status updates into one audible connected edge
-/// and one audible disconnected edge per system.
-/// </summary>
+// Converts verbose connection status updates into one audible connected edge
+// and one audible disconnected edge per system.
 public sealed class ConnectionChimeTracker
 {
     private readonly Dictionary<string, bool> connectedStates = new(StringComparer.OrdinalIgnoreCase);

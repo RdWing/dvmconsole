@@ -2,13 +2,11 @@ using DvmConsole.Audio;
 
 namespace DvmConsole.Desktop;
 
-/// <summary>
-/// Fans one microphone capture stream out to independently-owned transmit
-/// calls. Each lease has the normal <see cref="IAudioCapture"/> lifecycle,
-/// while the physical device starts once for the first lease and stops after
-/// the final lease. This permits intentional multi-TX without competing for
-/// the microphone.
-/// </summary>
+// Fans one microphone capture stream out to independently-owned transmit
+// calls. Each lease has the normal <see cref="IAudioCapture"/> lifecycle,
+// while the physical device starts once for the first lease and stops after
+// the final lease. This permits intentional multi-TX without competing for
+// the microphone.
 internal sealed class SharedAudioCapture : IAsyncDisposable
 {
     private readonly IAudioCapture source;

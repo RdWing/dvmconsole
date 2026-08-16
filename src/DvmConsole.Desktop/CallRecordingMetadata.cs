@@ -3,10 +3,8 @@ using System.Text.Json.Serialization;
 
 namespace DvmConsole.Desktop;
 
-/// <summary>
-/// Portable metadata written beside each completed receive or console transmit recording.
-/// Encryption identifiers are descriptive only; key material is never stored.
-/// </summary>
+// Portable metadata written beside each completed receive or console transmit recording.
+// Encryption identifiers are descriptive only; key material is never stored.
 public sealed class CallRecordingMetadata
 {
     public int SchemaVersion { get; set; } = 1;

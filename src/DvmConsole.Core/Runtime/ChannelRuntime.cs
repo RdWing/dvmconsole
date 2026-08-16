@@ -12,10 +12,8 @@ public enum ChannelRuntimeState
     Faulted
 }
 
-/// <summary>
-/// Immutable channel identity used by services and views without depending on
-/// a WPF/Avalonia control instance.
-/// </summary>
+// Immutable channel identity used by services and views without depending on
+// a WPF/Avalonia control instance.
 public sealed record ChannelRuntimeDefinition
 {
     public ChannelRuntimeDefinition(
@@ -89,10 +87,8 @@ public sealed record ChannelRuntimeDefinition
     }
 }
 
-/// <summary>
-/// Runtime call state for one configured channel. It is intentionally free of
-/// UI and protocol types so WPF and Avalonia can consume the same state model.
-/// </summary>
+// Runtime call state for one configured channel. It is intentionally free of
+// UI and protocol types so WPF and Avalonia can consume the same state model.
 public sealed class ChannelRuntime : INotifyPropertyChanged
 {
     private ChannelRuntimeState state = ChannelRuntimeState.Idle;

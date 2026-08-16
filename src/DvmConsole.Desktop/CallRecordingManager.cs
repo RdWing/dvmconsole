@@ -6,11 +6,9 @@ using System.Text.Json;
 
 namespace DvmConsole.Desktop;
 
-/// <summary>
-/// Owns per-channel receive and console-transmit recordings fed by PCM. A
-/// recording starts on the first frame for an active stream and is finalized
-/// on its terminator, call stop, channel stop, or application shutdown.
-/// </summary>
+// Owns per-channel receive and console-transmit recordings fed by PCM. A
+// recording starts on the first frame for an active stream and is finalized
+// on its terminator, call stop, channel stop, or application shutdown.
 public sealed class CallRecordingManager : IDisposable
 {
     public const int DefaultRetentionDays = 7;

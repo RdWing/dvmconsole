@@ -7,6 +7,13 @@
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <RootNamespace>DvmConsole.Desktop</RootNamespace>
     <AvaloniaUseCompiledBindingsByDefault>true</AvaloniaUseCompiledBindingsByDefault>
+    <ApplicationIcon>Assets/DVMConsole.ico</ApplicationIcon>
+    <Authors>RdWing</Authors>
+    <Company>DVMProject</Company>
+    <Product>Digital Voice Modem - Desktop Dispatch Console</Product>
+    <Copyright>Copyright © 2025-2026 RdWing</Copyright>
+    <PackageLicenseExpression>AGPL-3.0-only</PackageLicenseExpression>
+    <RepositoryUrl>https://github.com/RdWing/dvmconsole</RepositoryUrl>
   </PropertyGroup>
 
   <ItemGroup>
@@ -14,6 +21,7 @@
     <PackageReference Include="Avalonia.Desktop" Version="11.3.18" />
     <PackageReference Include="Avalonia.Themes.Fluent" Version="11.3.18" />
     <PackageReference Include="AvaloniaUI.DiagnosticsSupport" Version="2.2.3" />
+    <PackageReference Include="Markdown.Avalonia" Version="11.0.3" />
   </ItemGroup>
 
   <ItemGroup>
@@ -22,5 +30,13 @@
     <ProjectReference Include="../DvmConsole.FneClient/DvmConsole.FneClient.csproj" />
     <ProjectReference Include="../DvmConsole.Media/DvmConsole.Media.csproj" />
     <ProjectReference Include="../DvmConsole.Vocoder/DvmConsole.Vocoder.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <AvaloniaResource Include="Assets/DVMConsole.png" />
+    <Content Include="../../dvmconsole/Docs/**/*.md"
+             Link="Docs/%(RecursiveDir)%(Filename)%(Extension)"
+             CopyToOutputDirectory="PreserveNewest"
+             CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

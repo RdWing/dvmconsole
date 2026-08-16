@@ -5,11 +5,9 @@ using DvmConsole.Vocoder;
 
 namespace DvmConsole.Media;
 
-/// <summary>
-/// Composes the existing protocol selector, vocoder, and playback boundaries
-/// for one configured channel. The caller owns the lifecycle decision; this
-/// class never opens an audio device or native library by itself.
-/// </summary>
+// Composes the existing protocol selector, vocoder, and playback boundaries
+// for one configured channel. The caller owns the lifecycle decision; this
+// class never opens an audio device or native library by itself.
 public sealed class ChannelReceiveAudioSession : IAsyncDisposable
 {
     private readonly IAudioPlayback playback;

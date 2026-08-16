@@ -3,10 +3,8 @@ using DvmConsole.Vocoder;
 
 namespace DvmConsole.Media;
 
-/// <summary>
-/// Binds one PCM capture device to one explicit P25 transmit call. Optional
-/// encryption is provided by the host after resolving codeplug key material.
-/// </summary>
+// Binds one PCM capture device to one explicit P25 transmit call. Optional
+// encryption is provided by the host after resolving codeplug key material.
 public sealed class P25TransmitCaptureSession : ITransmitCaptureSession
 {
     private readonly IAudioCapture capture;

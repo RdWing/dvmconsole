@@ -1,10 +1,8 @@
 namespace DvmConsole.Media;
 
-/// <summary>
-/// Extracts the raw NXDN frame from an FNE NXDD packet. The returned 48-byte
-/// frame is still encoded NXDN data; it must not be passed to a DMR AMBE
-/// decoder or treated as PCM.
-/// </summary>
+// Extracts the raw NXDN frame from an FNE NXDD packet. The returned 48-byte
+// frame is still encoded NXDN data; it must not be passed to a DMR AMBE
+// decoder or treated as PCM.
 public static class NxdnVoicePacketCodec
 {
     public const int HeaderBytes = 20;

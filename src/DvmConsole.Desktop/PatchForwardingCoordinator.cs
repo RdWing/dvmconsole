@@ -6,11 +6,9 @@ using fnecore.P25;
 
 namespace DvmConsole.Desktop;
 
-/// <summary>
-/// Connects the platform-neutral patch router to configured Avalonia channels
-/// and FNE systems. Patch audio is sourced from channels that are already being
-/// decoded by the receive coordinator; no hidden audio device is opened.
-/// </summary>
+// Connects the platform-neutral patch router to configured Avalonia channels
+// and FNE systems. Patch audio is sourced from channels that are already being
+// decoded by the receive coordinator; no hidden audio device is opened.
 public sealed class PatchForwardingCoordinator : IDisposable
 {
     private readonly object sync = new();

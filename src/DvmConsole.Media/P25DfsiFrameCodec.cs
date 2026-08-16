@@ -3,12 +3,10 @@ using fnecore.P25;
 
 namespace DvmConsole.Media;
 
-/// <summary>
-/// Extracts the nine 88-bit IMBE codewords from one complete P25 DFSI LDU.
-/// The FNE payload contains a 24-byte network header followed by the DFSI
-/// records whose lengths and codeword offsets are defined by the P25 wire
-/// format.
-/// </summary>
+// Extracts the nine 88-bit IMBE codewords from one complete P25 DFSI LDU.
+// The FNE payload contains a 24-byte network header followed by the DFSI
+// records whose lengths and codeword offsets are defined by the P25 wire
+// format.
 public static class P25DfsiFrameCodec
 {
     public const int HeaderBytes = 24;
@@ -55,12 +53,10 @@ public static class P25DfsiFrameCodec
         return imbe;
     }
 
-    /// <summary>
-    /// Extracts the legacy P25 encryption metadata carried by a voice LDU.
-    /// LDU1 contains the HDU fields after its DFSI records. LDU2 contains the
-    /// next message indicator and key identity in its encryption-sync records.
-    /// A clear LDU2 has zeroed sync fields and returns false.
-    /// </summary>
+    // Extracts the legacy P25 encryption metadata carried by a voice LDU.
+    // LDU1 contains the HDU fields after its DFSI records. LDU2 contains the
+    // next message indicator and key identity in its encryption-sync records.
+    // A clear LDU2 has zeroed sync fields and returns false.
     public static bool TryExtractEncryptionMetadata(
         FneTrafficFrame traffic,
         out P25EncryptionMetadata metadata)
@@ -112,9 +108,7 @@ public static class P25DfsiFrameCodec
         return true;
     }
 
-    /// <summary>
-    /// Builds a clear P25 LDU1 payload from nine 88-bit IMBE codewords.
-    /// </summary>
+    // Builds a clear P25 LDU1 payload from nine 88-bit IMBE codewords.
     public static byte[] CreateLdu1Payload(uint sourceId, uint destinationId, ReadOnlySpan<byte> imbe)
     {
         ValidateIdentifiers(sourceId, destinationId);
@@ -139,11 +133,9 @@ public static class P25DfsiFrameCodec
         return payload;
     }
 
-    /// <summary>
-    /// Builds an encrypted P25 LDU1 payload. The nine IMBE codewords must
-    /// already be encrypted with the supplied key stream. The initial HDU
-    /// metadata follows the layout emitted by the legacy FNE adapter.
-    /// </summary>
+    // Builds an encrypted P25 LDU1 payload. The nine IMBE codewords must
+    // already be encrypted with the supplied key stream. The initial HDU
+    // metadata follows the layout emitted by the legacy FNE adapter.
     public static byte[] CreateEncryptedLdu1Payload(
         uint sourceId,
         uint destinationId,
@@ -156,10 +148,8 @@ public static class P25DfsiFrameCodec
         return payload;
     }
 
-    /// <summary>
-    /// Builds a clear P25 LDU2 payload from nine 88-bit IMBE codewords.
-    /// The encryption-sync fields are zeroed for clear traffic.
-    /// </summary>
+    // Builds a clear P25 LDU2 payload from nine 88-bit IMBE codewords.
+    // The encryption-sync fields are zeroed for clear traffic.
     public static byte[] CreateLdu2Payload(uint sourceId, uint destinationId, ReadOnlySpan<byte> imbe)
     {
         ValidateIdentifiers(sourceId, destinationId);
@@ -182,11 +172,9 @@ public static class P25DfsiFrameCodec
         return payload;
     }
 
-    /// <summary>
-    /// Builds an encrypted P25 LDU2 payload. The metadata carries the next
-    /// message indicator, matching the legacy transmitter's MI advance after
-    /// the current LDU2 has been encrypted.
-    /// </summary>
+    // Builds an encrypted P25 LDU2 payload. The metadata carries the next
+    // message indicator, matching the legacy transmitter's MI advance after
+    // the current LDU2 has been encrypted.
     public static byte[] CreateEncryptedLdu2Payload(
         uint sourceId,
         uint destinationId,
@@ -211,11 +199,9 @@ public static class P25DfsiFrameCodec
         return payload;
     }
 
-    /// <summary>
-    /// Builds the legacy P25 TDU control payload used to request or terminate
-    /// a clear group call. The FNE RTP call-end sequence is supplied by the
-    /// call session, not embedded in this protocol payload.
-    /// </summary>
+    // Builds the legacy P25 TDU control payload used to request or terminate
+    // a clear group call. The FNE RTP call-end sequence is supplied by the
+    // call session, not embedded in this protocol payload.
     public static byte[] CreateTduPayload(uint sourceId, uint destinationId, bool grantDemand)
     {
         ValidateIdentifiers(sourceId, destinationId);

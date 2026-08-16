@@ -2,12 +2,10 @@ using DvmConsole.Vocoder;
 
 namespace DvmConsole.Media;
 
-/// <summary>
-/// Represents one explicit P25 group call. Start emits the legacy grant-demand
-/// TDU, Process emits LDU1/LDU2 voice payloads, and End emits the four TDU
-/// terminators used by the existing FNE implementation. Optional encryption
-/// uses the same HDU/LDU2 metadata and key-stream boundary as the legacy host.
-/// </summary>
+// Represents one explicit P25 group call. Start emits the legacy grant-demand
+// TDU, Process emits LDU1/LDU2 voice payloads, and End emits the four TDU
+// terminators used by the existing FNE implementation. Optional encryption
+// uses the same HDU/LDU2 metadata and key-stream boundary as the legacy host.
 public sealed class P25TxCallSession : IDisposable
 {
     private const int EndTduCount = 4;

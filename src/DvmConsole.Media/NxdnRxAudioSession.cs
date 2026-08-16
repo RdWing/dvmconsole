@@ -4,11 +4,9 @@ using DvmConsole.Vocoder;
 
 namespace DvmConsole.Media;
 
-/// <summary>
-/// Routes selected NXDN frames through an explicitly supplied NXDN decoder.
-/// No default backend is provided until the required FEC/AMBE+2 implementation
-/// is available, so normal application construction remains fail-closed.
-/// </summary>
+// Routes selected NXDN frames through an explicitly supplied NXDN decoder.
+// No default backend is provided until the required FEC/AMBE+2 implementation
+// is available, so normal application construction remains fail-closed.
 public sealed class NxdnRxAudioSession : IAsyncDisposable
 {
     private readonly NxdnTrafficSelector selector;

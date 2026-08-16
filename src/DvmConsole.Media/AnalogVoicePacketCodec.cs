@@ -9,11 +9,9 @@ public enum AnalogAudioFrameType : byte
     Terminator = 0x02
 }
 
-/// <summary>
-/// Encodes and extracts the G.711 μ-law audio carried by an FNE analog packet.
-/// The wire length follows the published fnecore analog packet constant. The
-/// packet's first 160 bytes of audio carry the μ-law samples.
-/// </summary>
+// Encodes and extracts the G.711 μ-law audio carried by an FNE analog packet.
+// The wire length follows the published fnecore analog packet constant. The
+// packet's first 160 bytes of audio carry the μ-law samples.
 public static class AnalogVoicePacketCodec
 {
     public const int HeaderBytes = 20;

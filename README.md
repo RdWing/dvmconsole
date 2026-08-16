@@ -101,7 +101,7 @@ macOS and Windows test packages.
 
 ## Documentation
 
-The same documentation is also built into the app under `Help > Documentation`.
+The same documentation is built into the app under `Help > Documentation`.
 
 - [Overview](dvmconsole/Docs/Getting%20Started/01-Overview.md)
 - [Building](dvmconsole/Docs/Getting%20Started/02-Building.md)

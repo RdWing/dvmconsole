@@ -1,9 +1,7 @@
 namespace DvmConsole.Core.Settings;
 
-/// <summary>
-/// Persisted microphone gain and EQ preset. AGC remains an independent global
-/// toggle, matching the legacy audio settings behavior.
-/// </summary>
+// Persisted microphone gain and EQ preset. AGC remains an independent global
+// toggle, matching the legacy audio settings behavior.
 public sealed class AudioInputPresetSetting
 {
     public string Name { get; set; } = string.Empty;

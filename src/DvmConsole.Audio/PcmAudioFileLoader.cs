@@ -1,10 +1,8 @@
 namespace DvmConsole.Audio;
 
-/// <summary>
-/// Loads a bounded local alert asset into the 8 kHz mono PCM format expected by
-/// the radio transmit sessions. The decoder supports PCM WAV and MPEG audio;
-/// other formats require the same explicit DVM_FFMPEG opt-in as web streams.
-/// </summary>
+// Loads a bounded local alert asset into the 8 kHz mono PCM format expected by
+// the radio transmit sessions. The decoder supports PCM WAV and MPEG audio;
+// other formats require the same explicit DVM_FFMPEG opt-in as web streams.
 public static class PcmAudioFileLoader
 {
     private static readonly TimeSpan DefaultMaximumDuration = TimeSpan.FromSeconds(30);

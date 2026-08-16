@@ -6,11 +6,9 @@ public enum ChannelAudioDirection
     Transmit
 }
 
-/// <summary>
-/// Converts 16-bit voice PCM into a visual-only card meter level. The tuning
-/// matches the legacy console: decoded radio audio receives more display gain
-/// than local microphone audio.
-/// </summary>
+// Converts 16-bit voice PCM into a visual-only card meter level. The tuning
+// matches the legacy console: decoded radio audio receives more display gain
+// than local microphone audio.
 public static class ChannelAudioMeter
 {
     private const double TransmitGain = 0.85;

@@ -5,13 +5,11 @@ using DvmConsole.Vocoder;
 
 namespace DvmConsole.Desktop;
 
-/// <summary>
-/// Owns explicitly selected receive-audio channels. Clear DMR/P25/analog sessions
-/// share one output stream through a fixed-rate PCM mixer, and the coordinator
-/// serializes traffic processing so decoded PCM frames remain ordered per
-/// channel before mixing.
-/// Audio devices and the native vocoder are created only when Listen is used.
-/// </summary>
+// Owns explicitly selected receive-audio channels. Clear DMR/P25/analog sessions
+// share one output stream through a fixed-rate PCM mixer, and the coordinator
+// serializes traffic processing so decoded PCM frames remain ordered per
+// channel before mixing.
+// Audio devices and the native vocoder are created only when Listen is used.
 public sealed class ChannelReceiveAudioCoordinator : IAsyncDisposable
 {
     private readonly SemaphoreSlim gate = new(1, 1);
@@ -93,12 +91,10 @@ public sealed class ChannelReceiveAudioCoordinator : IAsyncDisposable
             : new ReceiveAudioDiagnostics(0, 0, 0, 0);
     }
 
-    /// <summary>
-    /// Recreates the selected channel's audio route and receive session after
-    /// a platform playback device disappears. The bounded operation returns
-    /// false when the replacement device/backend cannot be opened, leaving the
-    /// channel stopped for an explicit operator retry.
-    /// </summary>
+    // Recreates the selected channel's audio route and receive session after
+    // a platform playback device disappears. The bounded operation returns
+    // false when the replacement device/backend cannot be opened, leaving the
+    // channel stopped for an explicit operator retry.
     public async Task<bool> TryRecoverAsync(
         ChannelViewModel channel,
         CancellationToken cancellationToken = default)

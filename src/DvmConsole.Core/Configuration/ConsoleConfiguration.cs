@@ -2,10 +2,8 @@ using YamlDotNet.Serialization;
 
 namespace DvmConsole.Core.Configuration;
 
-/// <summary>
-/// Cross-platform representation of the existing dvmconsole codeplug format.
-/// The YAML names intentionally match the legacy configuration contract.
-/// </summary>
+// Cross-platform representation of the existing dvmconsole codeplug format.
+// The YAML names intentionally match the legacy configuration contract.
 public sealed class ConsoleConfiguration
 {
     [YamlMember(Alias = "keyFile")]
@@ -25,10 +23,8 @@ public sealed class ConsoleConfiguration
     [YamlIgnore]
     public string? SourcePath { get; internal set; }
 
-    /// <summary>
-    /// Resolves current and legacy group keys using the same merge semantics as
-    /// the WPF codeplug loader. The current key wins when names overlap.
-    /// </summary>
+    // Resolves current and legacy group keys using the same merge semantics as
+    // the WPF codeplug loader. The current key wins when names overlap.
     public IEnumerable<GroupConfiguration> EffectiveGroups()
         => ResolveGroups(Groups, LegacyPatchGroups);
 
@@ -68,10 +64,8 @@ public sealed class SystemConfiguration
     public int Port { get; set; }
     public string? Password { get; set; }
     public string? PresharedKey { get; set; }
-    /// <summary>
-    /// Optional KMF key used only by FNE KMM peer-encrypted key responses. It
-    /// is intentionally separate from the FNE transport preshared key.
-    /// </summary>
+    // Optional KMF key used only by FNE KMM peer-encrypted key responses. It
+    // is intentionally separate from the FNE transport preshared key.
     public string? KmfPresharedKey { get; set; }
     public bool Encrypted { get; set; }
     public uint PeerId { get; set; }

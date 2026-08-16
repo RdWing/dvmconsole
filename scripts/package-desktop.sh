@@ -49,8 +49,14 @@ if [[ "$RID" == "osx-arm64" ]]; then
     APP_PATH="$STAGING_DIR/DVMConsole.app"
     mkdir -p "$APP_PATH/Contents/MacOS" "$APP_PATH/Contents/Resources"
     cp "$ROOT_DIR/packaging/macos/Info.plist" "$APP_PATH/Contents/Info.plist"
+    cp "$ROOT_DIR/packaging/macos/DVMConsole.icns" "$APP_PATH/Contents/Resources/DVMConsole.icns"
     plutil -lint "$APP_PATH/Contents/Info.plist" >/dev/null
     /usr/libexec/PlistBuddy -c 'Print :NSMicrophoneUsageDescription' "$APP_PATH/Contents/Info.plist" >/dev/null
+    bundle_icon=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIconFile' "$APP_PATH/Contents/Info.plist")
+    if [[ "$bundle_icon" != "DVMConsole.icns" || ! -f "$APP_PATH/Contents/Resources/$bundle_icon" ]]; then
+        printf 'macOS bundle is missing its application icon.\n' >&2
+        exit 12
+    fi
     # LaunchServices must start the real Cocoa/.NET apphost directly. A shell
     # wrapper that execs an apphost from Resources works in Terminal but exits
     # or aborts when Finder owns the application lifecycle.

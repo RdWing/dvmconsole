@@ -2,12 +2,10 @@ using DvmConsole.Audio;
 
 namespace DvmConsole.Media;
 
-/// <summary>
-/// Frames PCM into the 160-sample analog wire packets used by dvmhost.
-/// The first packet is <c>VOICE_START</c>; subsequent packets are <c>VOICE</c>.
-/// Call lifecycle and capture ownership remain outside this reusable media
-/// session.
-/// </summary>
+// Frames PCM into the 160-sample analog wire packets used by dvmhost.
+// The first packet is `VOICE_START`; subsequent packets are `VOICE`.
+// Call lifecycle and capture ownership remain outside this reusable media
+// session.
 public sealed class AnalogTxAudioSession : IDisposable
 {
     private readonly uint sourceId;

@@ -2,11 +2,9 @@ using fnecore.DMR;
 
 namespace DvmConsole.Media;
 
-/// <summary>
-/// Extracts the three AMBE codewords carried by one DMR FNE voice packet.
-/// The layout matches the legacy DMRD/FNE packet: a 20-byte RTP/FNE header,
-/// followed by a 33-byte DMR frame and a two-byte trailer.
-/// </summary>
+// Extracts the three AMBE codewords carried by one DMR FNE voice packet.
+// The layout matches the legacy DMRD/FNE packet: a 20-byte RTP/FNE header,
+// followed by a 33-byte DMR frame and a two-byte trailer.
 public static class DmrVoicePacketCodec
 {
     public const int HeaderBytes = 20;
@@ -39,12 +37,10 @@ public static class DmrVoicePacketCodec
         return ambe;
     }
 
-    /// <summary>
-    /// Reads the DMR privacy indicator link-control header from a complete
-    /// DMR network packet. The FNE payload contains the 33-byte BPTC frame
-    /// after the 20-byte network header; malformed or CRC-invalid PI frames
-    /// are treated as unknown rather than as clear traffic.
-    /// </summary>
+    // Reads the DMR privacy indicator link-control header from a complete
+    // DMR network packet. The FNE payload contains the 33-byte BPTC frame
+    // after the 20-byte network header; malformed or CRC-invalid PI frames
+    // are treated as unknown rather than as clear traffic.
     public static bool TryExtractEncryptionMetadata(
         ReadOnlySpan<byte> packet,
         out DmrEncryptionMetadata metadata)
@@ -73,11 +69,9 @@ public static class DmrVoicePacketCodec
         }
     }
 
-    /// <summary>
-    /// Builds the fixed-size DMR voice packet used by the FNE traffic API.
-    /// Link-control header/terminator construction remains in the TX session
-    /// layer; this method only maps one AMBE slot into the wire frame.
-    /// </summary>
+    // Builds the fixed-size DMR voice packet used by the FNE traffic API.
+    // Link-control header/terminator construction remains in the TX session
+    // layer; this method only maps one AMBE slot into the wire frame.
     public static byte[] CreateVoicePacket(
         uint sourceId,
         uint destinationId,
@@ -118,9 +112,7 @@ public static class DmrVoicePacketCodec
         return packet;
     }
 
-    /// <summary>
-    /// Creates the DMR voice link-control header that starts a group call.
-    /// </summary>
+    // Creates the DMR voice link-control header that starts a group call.
     public static byte[] CreateVoiceLcHeaderPacket(
         uint sourceId,
         uint destinationId,
@@ -130,9 +122,7 @@ public static class DmrVoicePacketCodec
         return CreateControlPacket(sourceId, destinationId, slot, frameSequence, DMRDataType.VOICE_LC_HEADER);
     }
 
-    /// <summary>
-    /// Creates the DMR terminator with link-control that ends a group call.
-    /// </summary>
+    // Creates the DMR terminator with link-control that ends a group call.
     public static byte[] CreateTerminatorPacket(
         uint sourceId,
         uint destinationId,

@@ -5,10 +5,8 @@ public readonly record struct DtmfToneStep(
     TimeSpan Duration,
     bool IsHold = false);
 
-/// <summary>
-/// Generates standard DTMF PCM digits and sequences without depending on an
-/// audio device or UI. The caller owns transmission timing and playback.
-/// </summary>
+// Generates standard DTMF PCM digits and sequences without depending on an
+// audio device or UI. The caller owns transmission timing and playback.
 public sealed class DtmfToneGenerator
 {
     public static readonly TimeSpan FrameDuration = TimeSpan.FromMilliseconds(20);

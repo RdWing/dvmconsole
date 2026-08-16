@@ -3,12 +3,10 @@ using System.Text;
 
 namespace DvmConsole.Audio;
 
-/// <summary>
-/// Lifecycle-bound hardware PTT adapter for USB serial footswitches and small
-/// serial controllers. The device sends one state token per line: on/1/true/
-/// pressed assert PTT, and off/0/false/released release it. Unknown lines are
-/// ignored and the source always returns to released on EOF, stop, or fault.
-/// </summary>
+// Lifecycle-bound hardware PTT adapter for USB serial footswitches and small
+// serial controllers. The device sends one state token per line: on/1/true/
+// pressed assert PTT, and off/0/false/released release it. Unknown lines are
+// ignored and the source always returns to released on EOF, stop, or fault.
 public sealed class SerialPttSource : IPttSource
 {
     private readonly Func<Stream> openStream;
@@ -30,10 +28,8 @@ public sealed class SerialPttSource : IPttSource
         BaudRate = baudRate;
     }
 
-    /// <summary>
-    /// Creates a source from an already-open input stream. This overload also
-    /// supports host-specific serial transports and deterministic tests.
-    /// </summary>
+    // Creates a source from an already-open input stream. This overload also
+    // supports host-specific serial transports and deterministic tests.
     public SerialPttSource(Func<Stream> openStream)
     {
         this.openStream = openStream ?? throw new ArgumentNullException(nameof(openStream));

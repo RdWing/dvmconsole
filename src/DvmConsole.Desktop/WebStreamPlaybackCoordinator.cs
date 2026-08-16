@@ -5,12 +5,10 @@ using DvmConsole.Core.Configuration;
 
 namespace DvmConsole.Desktop;
 
-/// <summary>
-/// Plays configured HTTP(S) streams through the portable PCM audio boundary.
-/// Supported sources include uncompressed PCM WAV and MPEG/MP3. Additional
-/// formats can opt into the explicit FFmpeg process adapter through
-/// <c>DVM_FFMPEG</c>; no platform-specific media framework is assumed.
-/// </summary>
+// Plays configured HTTP(S) streams through the portable PCM audio boundary.
+// Supported sources include uncompressed PCM WAV and MPEG/MP3. Additional
+// formats can opt into the explicit FFmpeg process adapter through
+// `DVM_FFMPEG`; no platform-specific media framework is assumed.
 public sealed class WebStreamPlaybackCoordinator : IAsyncDisposable
 {
     private readonly SemaphoreSlim gate = new(1, 1);

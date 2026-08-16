@@ -8,11 +8,9 @@ public enum FneTrafficProtocol
     Analog
 }
 
-/// <summary>
-/// Platform-neutral representation of an inbound FNE media frame. Enum values
-/// from the legacy protocol library are intentionally represented as strings so
-/// the desktop/audio layers do not depend on fnecore implementation types.
-/// </summary>
+// Platform-neutral representation of an inbound FNE media frame. Enum values
+// from the legacy protocol library are intentionally represented as strings so
+// the desktop/audio layers do not depend on fnecore implementation types.
 public sealed record FneTrafficFrame
 {
     public FneTrafficFrame(

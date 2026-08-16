@@ -3,11 +3,9 @@ using DvmConsole.Audio;
 
 namespace DvmConsole.Media;
 
-/// <summary>
-/// Applies the legacy TAR silence-trim policy to a completed mono PCM WAV
-/// without buffering the call in memory. The scan uses 20 ms activity windows,
-/// a 400-sample threshold, and retains 120 ms of padding around activity.
-/// </summary>
+// Applies the legacy TAR silence-trim policy to a completed mono PCM WAV
+// without buffering the call in memory. The scan uses 20 ms activity windows,
+// a 400-sample threshold, and retains 120 ms of padding around activity.
 public static class PcmWavSilenceTrimmer
 {
     private const int HeaderLength = 44;

@@ -2,11 +2,9 @@ using DvmConsole.Audio;
 
 namespace DvmConsole.Desktop;
 
-/// <summary>
-/// Plays the short local talk-permit indication without sending it over the
-/// selected radio channel. The backend and output device are created lazily
-/// and reused for the lifetime of the desktop view model.
-/// </summary>
+// Plays the short local talk-permit indication without sending it over the
+// selected radio channel. The backend and output device are created lazily
+// and reused for the lifetime of the desktop view model.
 public sealed class TalkPermitTonePlayer : IAsyncDisposable
 {
     private static readonly TimeSpan ToneDuration = TimeSpan.FromMilliseconds(120);

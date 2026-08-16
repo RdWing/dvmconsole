@@ -4,11 +4,9 @@ using DvmConsole.Vocoder;
 
 namespace DvmConsole.Media;
 
-/// <summary>
-/// Serializes selected DMR traffic into one playback path. FNE callbacks may
-/// arrive concurrently with device callbacks, so the router never allows two
-/// decoded packets to write to the same playback device at once.
-/// </summary>
+// Serializes selected DMR traffic into one playback path. FNE callbacks may
+// arrive concurrently with device callbacks, so the router never allows two
+// decoded packets to write to the same playback device at once.
 public sealed class DmrRxAudioRouter : IAsyncDisposable
 {
     private readonly DmrTrafficSelector selector;

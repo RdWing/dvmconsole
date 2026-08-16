@@ -19,10 +19,8 @@ public sealed record P25SubscriberCommandMessage(
     byte LinkControlOpcode,
     byte[] Tsbk);
 
-/// <summary>
-/// Builds the same P25 TSBK subscriber commands used by the WPF console while
-/// keeping validation and packet construction testable without a live FNE.
-/// </summary>
+// Builds the same P25 TSBK subscriber commands used by the WPF console while
+// keeping validation and packet construction testable without a live FNE.
 public static class P25SubscriberCommandCodec
 {
     public const uint MaximumP25Id = 0xFFFFFF;

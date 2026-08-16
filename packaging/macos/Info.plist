@@ -8,6 +8,8 @@
   <string>DvmConsole.Desktop</string>
   <key>CFBundleIdentifier</key>
   <string>org.dvmproject.dvmconsole</string>
+  <key>CFBundleIconFile</key>
+  <string>DVMConsole.icns</string>
   <key>CFBundleInfoDictionaryVersion</key>
   <string>6.0</string>
   <key>CFBundleName</key>

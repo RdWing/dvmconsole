@@ -2,10 +2,8 @@ using System.Runtime.InteropServices;
 
 namespace DvmConsole.Audio;
 
-/// <summary>
-/// macOS CoreAudio backend. The native shim is loaded explicitly so the rest of
-/// the application remains independent of CoreAudio and Windows audio APIs.
-/// </summary>
+// macOS CoreAudio backend. The native shim is loaded explicitly so the rest of
+// the application remains independent of CoreAudio and Windows audio APIs.
 public sealed class MacCoreAudioBackend : IAudioBackend
 {
     private readonly NativeCoreAudioApi api;

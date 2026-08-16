@@ -1,9 +1,7 @@
 namespace DvmConsole.Media;
 
-/// <summary>
-/// Common host boundary for protocol-specific capture sessions. The session
-/// owns capture/call ordering; the desktop layer owns channel policy.
-/// </summary>
+// Common host boundary for protocol-specific capture sessions. The session
+// owns capture/call ordering; the desktop layer owns channel policy.
 public interface ITransmitCaptureSession : IAsyncDisposable
 {
     event EventHandler<Exception>? Faulted;

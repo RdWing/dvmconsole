@@ -2,11 +2,9 @@ using System.Diagnostics;
 
 namespace DvmConsole.Audio;
 
-/// <summary>
-/// Adapts an explicitly configured FFmpeg executable to the streaming PCM
-/// reader contract. FFmpeg receives the original source on stdin and emits
-/// signed little-endian mono PCM at the console voice rate on stdout.
-/// </summary>
+// Adapts an explicitly configured FFmpeg executable to the streaming PCM
+// reader contract. FFmpeg receives the original source on stdin and emits
+// signed little-endian mono PCM at the console voice rate on stdout.
 public sealed class FfmpegPcmStreamReader : IAudioPcmStreamReader
 {
     public const int OutputSampleRate = 8000;

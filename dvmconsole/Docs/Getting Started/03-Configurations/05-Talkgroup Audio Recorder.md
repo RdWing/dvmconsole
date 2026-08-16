@@ -43,11 +43,7 @@ If a talkgroup is TAR-enabled but the resource is not selected, TAR does not cap
 
 TAR requires a valid recording folder.
 
-Default location:
-
-```
-Documents\DVMConsole\TAR
-```
+The default location is the `DVMConsole/TAR` folder under the current user's Documents folder.
 
 You can change this in:
 
@@ -65,8 +61,7 @@ In the TAR Configuration window:
 
 - channels are grouped by console tab
 - each row is keyed by TGID
-- check **Record** to enable TAR on that talkgroup
-- set **Keep Days** for retention
+- click the `TAR` control to enable or disable recording
 - optionally enter ignored subscriber IDs in **Ignore RIDs**
 
 After TAR is enabled for a talkgroup, the operator must still select that resource on the main console for TAR to record live activity on it.
@@ -85,13 +80,13 @@ Example:
 
 # Channel Indicator
 
-When TAR is enabled for a talkgroup, the resource card shows a small purple:
+When TAR is enabled for a talkgroup, the resource card shows a purple:
 
 ```text
 TAR
 ```
 
-label inside the card.
+button in the card's bottom control row.
 
 If TAR is not enabled for that talkgroup, nothing is shown.
 
@@ -101,7 +96,7 @@ If TAR is not enabled for that talkgroup, nothing is shown.
 
 The TAR Viewer opens with the newest recordings first.
 
-Default columns:
+Default fields:
 
 - Time
 - Duration
@@ -242,5 +237,5 @@ This metadata is used by the TAR Viewer and also makes the raw archive easier to
 - TAR records to `.wav`
 - TAR writes a `.json` sidecar for each recording
 - TAR trims leading and trailing silence before finalizing the saved file
-- TAR viewer playback uses local system audio output
+- TAR viewer playback uses the configured master output device
 - deleting a recording from the Viewer removes both the `.wav` and `.json`

@@ -2,11 +2,9 @@ using DvmConsole.Audio;
 
 namespace DvmConsole.Media;
 
-/// <summary>
-/// Mixes PCM from independently selected receive channels into one playback
-/// stream. The mixer emits one 20 ms frame at a time and treats channels with
-/// no frame ready as silence, so a quiet channel cannot block an active one.
-/// </summary>
+// Mixes PCM from independently selected receive channels into one playback
+// stream. The mixer emits one 20 ms frame at a time and treats channels with
+// no frame ready as silence, so a quiet channel cannot block an active one.
 public sealed class AudioMixer : IAsyncDisposable
 {
     private const int MaximumBufferedFrames = 100;

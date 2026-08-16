@@ -2,10 +2,8 @@ using NLayer;
 
 namespace DvmConsole.Audio;
 
-/// <summary>
-/// Adapts NLayer's synchronous floating-point MPEG decoder to the shared
-/// cancellable mono 16-bit PCM reader contract.
-/// </summary>
+// Adapts NLayer's synchronous floating-point MPEG decoder to the shared
+// cancellable mono 16-bit PCM reader contract.
 public sealed class MpegPcmStreamReader : IAudioPcmStreamReader
 {
     private readonly Stream source;

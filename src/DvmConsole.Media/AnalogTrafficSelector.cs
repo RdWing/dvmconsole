@@ -2,9 +2,7 @@ using DvmConsole.FneClient;
 
 namespace DvmConsole.Media;
 
-/// <summary>
-/// Selects voice frames for one configured analog talkgroup.
-/// </summary>
+// Selects voice frames for one configured analog talkgroup.
 public sealed record AnalogTrafficSelector
 {
     public AnalogTrafficSelector(uint destinationId)

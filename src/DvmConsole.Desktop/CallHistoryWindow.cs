@@ -9,10 +9,8 @@ using DvmConsole.Core.Settings;
 
 namespace DvmConsole.Desktop;
 
-/// <summary>
-/// Modeless event-history view. The main shell keeps a compact docked view;
-/// this window provides the legacy console's detachable, filterable view.
-/// </summary>
+// Modeless event-history view. The main shell keeps a compact docked view;
+// this window provides the legacy console's detachable, filterable view.
 public sealed class CallHistoryWindow : Window
 {
     private readonly MainWindowViewModel viewModel;

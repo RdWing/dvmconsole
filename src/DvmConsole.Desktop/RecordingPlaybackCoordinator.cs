@@ -2,11 +2,9 @@ using DvmConsole.Audio;
 
 namespace DvmConsole.Desktop;
 
-/// <summary>
-/// Plays one completed local recording through the configured portable output
-/// backend. The coordinator owns only its playback stream; receive routing and
-/// recording catalog lifetime remain separate.
-/// </summary>
+// Plays one completed local recording through the configured portable output
+// backend. The coordinator owns only its playback stream; receive routing and
+// recording catalog lifetime remain separate.
 public sealed class RecordingPlaybackCoordinator : IAsyncDisposable
 {
     private readonly SemaphoreSlim gate = new(1, 1);

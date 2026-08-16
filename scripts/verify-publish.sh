@@ -37,6 +37,11 @@ for file_name in "${required_files[@]}"; do
     fi
 done
 
+if [[ ! -f "$OUTPUT_DIR/Docs/Getting Started/01-Overview.md" ]]; then
+    printf 'Publish is missing the in-app Markdown documentation.\n' >&2
+    exit 4
+fi
+
 for legacy_alert in alert1.wav alert2.wav alert3.wav; do
     if [[ -e "$OUTPUT_DIR/Audio/$legacy_alert" ]]; then
         printf 'Publish contains obsolete generated-alert asset: %s\n' "$OUTPUT_DIR/Audio/$legacy_alert" >&2

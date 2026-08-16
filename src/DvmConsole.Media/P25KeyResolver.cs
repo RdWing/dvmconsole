@@ -4,10 +4,8 @@ using fnecore.P25;
 
 namespace DvmConsole.Media;
 
-/// <summary>
-/// Resolves P25 traffic-encryption keys without exposing the key-file model to
-/// the receive session or desktop layer.
-/// </summary>
+// Resolves P25 traffic-encryption keys without exposing the key-file model to
+// the receive session or desktop layer.
 public interface IP25KeyResolver
 {
     bool TryResolve(byte algorithmId, ushort keyId, out ReadOnlyMemory<byte> key);
@@ -15,11 +13,9 @@ public interface IP25KeyResolver
     bool CanResolve(string? algorithm, string? keyId);
 }
 
-/// <summary>
-/// Mutable in-memory lookup of P25 AES, DES-OFB, and ARC4/ADP key material.
-/// The codeplug key file is the initial seed; runtime KMM responses can add or
-/// replace entries without persisting key material.
-/// </summary>
+// Mutable in-memory lookup of P25 AES, DES-OFB, and ARC4/ADP key material.
+// The codeplug key file is the initial seed; runtime KMM responses can add or
+// replace entries without persisting key material.
 public sealed class P25KeyRing : IP25KeyResolver
 {
     private readonly object sync = new();

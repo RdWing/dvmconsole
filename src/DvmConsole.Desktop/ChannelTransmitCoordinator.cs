@@ -7,10 +7,8 @@ namespace DvmConsole.Desktop;
 
 public sealed record TransmitTarget(ChannelViewModel Channel, SystemViewModel System);
 
-/// <summary>
-/// Lazily owns explicit transmit calls. Direct PTT starts one target; global
-/// PTT may start several targets, all fed by one microphone capture stream.
-/// </summary>
+// Lazily owns explicit transmit calls. Direct PTT starts one target; global
+// PTT may start several targets, all fed by one microphone capture stream.
 public sealed class ChannelTransmitCoordinator : IAsyncDisposable
 {
     private readonly IP25KeyResolver? p25KeyResolver;

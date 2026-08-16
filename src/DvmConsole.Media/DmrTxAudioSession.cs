@@ -3,11 +3,9 @@ using fnecore.DMR;
 
 namespace DvmConsole.Media;
 
-/// <summary>
-/// Aggregates three encoded DMR AMBE codewords into one FNE voice packet.
-/// Call-control, link-control, terminators, and audio capture remain outside
-/// this reusable media session.
-/// </summary>
+// Aggregates three encoded DMR AMBE codewords into one FNE voice packet.
+// Call-control, link-control, terminators, and audio capture remain outside
+// this reusable media session.
 public sealed class DmrTxAudioSession : IDisposable
 {
     private const int CodewordsPerPacket = DmrVoicePacketCodec.CodewordsPerPacket;
@@ -84,10 +82,8 @@ public sealed class DmrTxAudioSession : IDisposable
     public int CodewordsEncoded { get; private set; }
     public int PacketsSent { get; private set; }
 
-    /// <summary>
-    /// Encodes complete 160-sample frames and emits a packet for every three
-    /// codewords. Incomplete audio remains buffered until more samples arrive.
-    /// </summary>
+    // Encodes complete 160-sample frames and emits a packet for every three
+    // codewords. Incomplete audio remains buffered until more samples arrive.
     public int Process(ReadOnlySpan<short> samples)
     {
         ObjectDisposedException.ThrowIf(disposed, this);
@@ -97,11 +93,9 @@ public sealed class DmrTxAudioSession : IDisposable
         return PacketsSent - packetsBefore;
     }
 
-    /// <summary>
-    /// Pads a released call with encoded silence so no partial PCM/AMBE packet
-    /// is discarded and the current six-burst DMR superframe is completed
-    /// before its terminator is emitted.
-    /// </summary>
+    // Pads a released call with encoded silence so no partial PCM/AMBE packet
+    // is discarded and the current six-burst DMR superframe is completed
+    // before its terminator is emitted.
     internal int CompleteSuperframe()
     {
         ObjectDisposedException.ThrowIf(disposed, this);
@@ -158,11 +152,9 @@ public sealed class DmrTxAudioSession : IDisposable
     }
 }
 
-/// <summary>
-/// Owns the packet and DMR frame sequence numbers for one outbound call.
-/// RTP sequence 65535 is reserved for call-end signaling and is never used
-/// for a voice packet.
-/// </summary>
+// Owns the packet and DMR frame sequence numbers for one outbound call.
+// RTP sequence 65535 is reserved for call-end signaling and is never used
+// for a voice packet.
 public sealed class DmrTxPacketSequence
 {
     public DmrTxPacketSequence(ushort packetSequence = 0, byte frameSequence = 0)

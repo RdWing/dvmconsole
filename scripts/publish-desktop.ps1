@@ -90,7 +90,8 @@ $RequiredFiles = @(
     "DvmConsole.Desktop.exe",
     "DvmConsole.Desktop.dll",
     "DvmConsole.Desktop.deps.json",
-    "DvmConsole.Desktop.runtimeconfig.json"
+    "DvmConsole.Desktop.runtimeconfig.json",
+    "Docs/Getting Started/01-Overview.md"
 )
 foreach ($FileName in $RequiredFiles) {
     $Path = Join-Path $OutputDirectory $FileName

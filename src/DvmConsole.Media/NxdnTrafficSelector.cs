@@ -2,10 +2,8 @@ using DvmConsole.FneClient;
 
 namespace DvmConsole.Media;
 
-/// <summary>
-/// Selects one NXDN destination for an injected NXDN decoder. Message framing
-/// and codec interpretation remain separate from destination selection.
-/// </summary>
+// Selects one NXDN destination for an injected NXDN decoder. Message framing
+// and codec interpretation remain separate from destination selection.
 public sealed record NxdnTrafficSelector
 {
     public NxdnTrafficSelector(uint destinationId)

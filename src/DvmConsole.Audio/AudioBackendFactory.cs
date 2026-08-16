@@ -1,9 +1,7 @@
 namespace DvmConsole.Audio;
 
-/// <summary>
-/// Selects the audio implementation for the current operating system without
-/// leaking native backend details into the console application.
-/// </summary>
+// Selects the audio implementation for the current operating system without
+// leaking native backend details into the console application.
 public static class AudioBackendFactory
 {
     public static IAudioBackend CreateDefault(string? macLibraryPath = null)

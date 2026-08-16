@@ -16,11 +16,9 @@ Common optional sections include:
 
 ---
 
-# R02A00 Compatibility
+# Compatibility
 
-Codeplugs created for R01A00 should be reviewed before use with R02A00.
-
-There have been major changes to resource configuration. Do not assume an older codeplug is ready for operational use without review and testing.
+The Avalonia application preserves the current YAML contract and accepts the legacy `patchGroups` key. Review older codeplugs before use because unsupported or misspelled values can still produce a valid YAML file with incorrect operator behavior.
 
 ---
 
@@ -131,7 +129,7 @@ Fields:
 - `name`: resource/card name.
 - `system`: system name from the `systems` section.
 - `tgid`: target talkgroup ID.
-- `mode`: `p25` or `dmr`. If omitted, P25 is used.
+- `mode`: `p25` or `dmr`. If omitted, P25 is used. NXDN operator audio is not enabled in the standard desktop build.
 - `keyId`: optional encryption key ID.
 - `algo`: optional encryption algorithm, such as `aes`, `des`, `arc4`, or `none`.
 - `selectable_encryption`: optional flag for P25 secure-capable resources. When `true`, the card shows a **SELECT** toggle so operators can choose encrypted or clear transmit. This requires a valid `keyId` and `algo`.
@@ -168,7 +166,7 @@ web_streams:
 Fields:
 
 - `name`: stream chip label. Keep names unique because saved position, volume, active startup state, and output routing are keyed by name.
-- `url`: direct audio stream URL. The stream must be playable by Windows Media Foundation.
+- `url`: direct HTTP or HTTPS audio stream URL. WAV and MP3 are supported by the built-in decoder. Other formats require a compatible FFmpeg executable selected with `DVM_FFMPEG`.
 - `authUsername`: optional HTTP Basic Auth username for protected streams.
 - `authPassword`: optional HTTP Basic Auth password for protected streams.
 - `idleColor`: optional active-idle chip color in hex. If omitted, the standard selected-resource blue is used.

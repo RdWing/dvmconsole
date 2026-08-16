@@ -17,11 +17,9 @@ public enum KeyboardPttKey
     F12
 }
 
-/// <summary>
-/// Lifecycle-bound keyboard PTT adapter. The host maps its platform key
-/// events to <see cref="HandleKeyDown"/> and <see cref="HandleKeyUp"/>;
-/// this class keeps key-repeat and unrelated-key behavior deterministic.
-/// </summary>
+// Lifecycle-bound keyboard PTT adapter. The host maps its platform key
+// events to <see cref="HandleKeyDown"/> and <see cref="HandleKeyUp"/>;
+// this class keeps key-repeat and unrelated-key behavior deterministic.
 public sealed class KeyboardPttSource : IPttSource
 {
     private readonly KeyboardPttKey activationKey;
