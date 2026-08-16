@@ -231,6 +231,11 @@ public sealed class ConfigurationLoaderTests
         Assert.Contains(nameof(ChannelRuntime.StateText), changed);
         Assert.Contains("Receiving from 123", runtime.StateText);
 
+        changed.Clear();
+        runtime.MarkReceiving(123, 456, DateTimeOffset.UnixEpoch.AddSeconds(1));
+
+        Assert.Equal([nameof(ChannelRuntime.LastActivity)], changed);
+
         runtime.MarkIdle(DateTimeOffset.UnixEpoch);
 
         Assert.Equal(ChannelRuntimeState.Idle, runtime.State);

@@ -23,6 +23,8 @@ jobs:
         include:
           - os: macos-14
             rid: osx-arm64
+          - os: macos-15-intel
+            rid: osx-x64
           - os: windows-latest
             rid: win-x64
 
@@ -32,10 +34,10 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Set up .NET 8
+      - name: Set up .NET 10
         uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: 8.0.x
+          dotnet-version: 10.0.x
 
       - name: Resolve package version
         shell: bash
@@ -68,8 +70,9 @@ jobs:
         shell: pwsh
         run: |
           $buildDirectory = Join-Path $env:RUNNER_TEMP "dvmvocoder-build"
-          if ("${{ matrix.rid }}" -eq "osx-arm64") {
-            cmake -S .native/dvmvocoder -B $buildDirectory -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES=arm64
+          if ("${{ matrix.rid }}" -like "osx-*") {
+            $architecture = if ("${{ matrix.rid }}" -eq "osx-arm64") { "arm64" } else { "x86_64" }
+            cmake -S .native/dvmvocoder -B $buildDirectory -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES=$architecture -DCMAKE_OSX_DEPLOYMENT_TARGET=14.0
             $library = Join-Path $buildDirectory "libvocoder.dylib"
           } else {
             cmake -S .native/dvmvocoder -B $buildDirectory -A x64
@@ -100,7 +103,7 @@ jobs:
         run: scripts/verify-publish.sh "${{ matrix.rid }}" "$RUNNER_TEMP/dvmconsole-publish/${{ matrix.rid }}"
 
       - name: Package unsigned macOS handoff
-        if: matrix.rid == 'osx-arm64'
+        if: startsWith(matrix.rid, 'osx-')
         shell: bash
         run: scripts/package-desktop.sh "${{ matrix.rid }}" "$RUNNER_TEMP/dvmconsole-publish/${{ matrix.rid }}" "$RUNNER_TEMP/dvmconsole-publish/dvmconsole-${DVM_PACKAGE_VERSION}-${{ matrix.rid }}.zip"
 
@@ -160,12 +163,19 @@ jobs:
         run: |
           shopt -s nullglob
           packages=(release-artifacts/*.zip)
-          if (( ${#packages[@]} != 2 )); then
-            printf 'Expected two release packages, found %s.\n' "${#packages[@]}" >&2
+          if (( ${#packages[@]} != 3 )); then
+            printf 'Expected three release packages, found %s.\n' "${#packages[@]}" >&2
             exit 1
           fi
           notes_file="docs/releases/${GITHUB_REF_NAME}.md"
-          if [[ -f "$notes_file" ]]; then
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" "${packages[@]}" --clobber
+            if [[ -f "$notes_file" ]]; then
+              gh release edit "$GITHUB_REF_NAME" \
+                --title "DVM Console ${GITHUB_REF_NAME}" \
+                --notes-file "$notes_file"
+            fi
+          elif [[ -f "$notes_file" ]]; then
             gh release create "$GITHUB_REF_NAME" "${packages[@]}" \
               --title "DVM Console ${GITHUB_REF_NAME}" \
               --notes-file "$notes_file" \

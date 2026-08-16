@@ -1,9 +1,9 @@
 # Desktop building and publishing
 
-The Avalonia application supports Apple Silicon macOS (`osx-arm64`) and
-64-bit Windows (`win-x64`). The publishing scripts produce self-contained
-applications: an end user does not need the .NET SDK or the .NET Desktop
-Runtime installed.
+The Avalonia application supports Apple Silicon macOS (`osx-arm64`), Intel
+macOS (`osx-x64`), and 64-bit Windows (`win-x64`). The publishing scripts
+produce self-contained applications: an end user does not need the .NET SDK
+or the .NET Desktop Runtime installed.
 
 These instructions have separate build-machine and end-user sections. A build
 machine needs the SDK and native toolchain; an end user needs only the
@@ -27,7 +27,7 @@ uses `!` after the type or a `BREAKING CHANGE:` footer.
 
 ## Dependencies
 
-Both platforms require Git, the .NET 8 SDK selected by `global.json`, CMake,
+All targets require Git, the .NET 10 SDK selected by `global.json`, CMake,
 and a C/C++ toolchain.
 
 ### Build Instructions
@@ -44,7 +44,7 @@ dotnet build src/DvmConsole.Rebuild.sln
 ```
 
 2. On macOS, install Xcode Command Line Tools and CMake. On Windows, install the
-.NET 8 SDK and Visual Studio 2022 Build Tools with the **Desktop development
+.NET 10 SDK and Visual Studio 2022 Build Tools with the **Desktop development
 with C++** workload (or an equivalent CMake/MSVC toolchain).
 
 ### Native vocoder
@@ -66,7 +66,7 @@ After setting `DVMVOCODER_LIBRARY`, run the complete test suite with:
 dotnet test src/DvmConsole.Rebuild.sln --no-restore
 ```
 
-The two native vocoder integration cases cannot run without that environment
+The native vocoder integration cases cannot run without that environment
 variable; the managed projects can still be restored and built without it.
 
 ## End User Packages
@@ -74,25 +74,34 @@ variable; the managed projects can still be restored and built without it.
 The publishing scripts produce self-contained applications. The .NET SDK and
 .NET Desktop Runtime are not required on the destination computer.
 
-### Apple Silicon macOS
+### macOS
 
-1. From the repository root, publish the application with a matching
-`libvocoder.dylib`. The shell publisher builds the CoreAudio shim and copies
-both native libraries into one directory:
+1. Choose the runtime identifier matching the destination Mac and provide a
+`libvocoder.dylib` built for the same architecture. Use `osx-arm64` for Apple
+Silicon or `osx-x64` for Intel. The shell publisher cross-builds the matching
+CoreAudio shim and copies both native libraries into one directory:
 
 ```sh
+RID=osx-arm64 # use osx-x64 for Intel
+PUBLISH_DIR="/tmp/dvmconsole-$RID"
 DVMVOCODER_LIBRARY=/full/path/to/libvocoder.dylib \
-  scripts/publish-desktop.sh osx-arm64 /tmp/dvmconsole-osx-arm64
+  scripts/publish-desktop.sh "$RID" "$PUBLISH_DIR"
 
-scripts/verify-publish.sh osx-arm64 /tmp/dvmconsole-osx-arm64
+scripts/verify-publish.sh "$RID" "$PUBLISH_DIR"
 ```
+
+The supported deployment floor is macOS 14 for both architectures. The
+publisher passes that target to the CoreAudio shim build. Build the separately
+supplied vocoder with `-DCMAKE_OSX_DEPLOYMENT_TARGET=14.0` as well; CI does this
+for both Mac targets, and the artifact verifier rejects a different native
+deployment target.
 
 2. To create an unsigned application bundle and ZIP handoff, package the
 verified publish directory:
 
 ```sh
-scripts/package-desktop.sh osx-arm64 \
-  /tmp/dvmconsole-osx-arm64 /tmp/dvmconsole-osx-arm64.zip
+scripts/package-desktop.sh "$RID" "$PUBLISH_DIR" \
+  "/tmp/dvmconsole-$RID.zip"
 ```
 
 3. This leaves both `/tmp/DVMConsole.app` and the ZIP. The `.app` is the same
@@ -200,8 +209,9 @@ are restored.
 The application uses the same managed console, FNE, vocoder, and media logic
 on macOS and Windows. Audio device access and global keyboard capture use
 platform-specific backends, so both operating systems require this acceptance
-test. A successful cross-publish on macOS is not a substitute for running the
-Windows package on Windows hardware.
+test. Apple Silicon and Intel packages must also be exercised on their matching
+hardware before release. A successful cross-publish is not a substitute for
+running the package on its destination architecture and operating system.
 
 ## Native libraries and optional media support
 
@@ -227,7 +237,7 @@ connection and does not preserve a stale package-time copy.
 ## CI validation and tagged releases
 
 The `Avalonia rebuild` workflow runs the complete solution test suite on Apple
-Silicon macOS and Windows x64. Each runner checks out a pinned revision of
+Silicon macOS, Intel macOS, and Windows x64. Each runner checks out a pinned revision of
 `DVMProject/dvmvocoder`, builds the native library for the target architecture,
 runs its encode/decode integration tests, and includes that library in the
 package. The workflow publishes self-contained apphosts, verifies apphost and
@@ -235,8 +245,9 @@ native-library architecture, checks for excluded test material, and uploads
 unsigned packages for seven days.
 
 Pushing a tag that matches the source version, such as `v0.1.0`, runs the same
-two-platform test and packaging matrix. If both jobs pass, the workflow creates
-a GitHub release and attaches the versioned macOS and Windows ZIP files. A
+three-target test and packaging matrix. If all jobs pass, the workflow creates
+a GitHub release and attaches the versioned Apple Silicon macOS, Intel macOS,
+and Windows ZIP files. A
 matching `docs/releases/<tag>.md` file supplies curated notes; otherwise GitHub
 generates notes from the commit history. Do not push a release tag until the
 release notes and hardware acceptance checks have been approved.
@@ -245,5 +256,5 @@ FFmpeg remains optional. If it is unavailable on a runner, the additional OGG
 decoder test is reported as skipped; WAV and MP3 support and the complete radio
 package are still built and tested.
 
-Windows radio, microphone, speaker, and global-hotkey hardware validation
-remains an operator test step.
+Intel macOS and Windows radio, microphone, speaker, and global-hotkey hardware
+validation remain operator test steps.

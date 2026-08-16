@@ -917,6 +917,11 @@ public sealed partial class MainWindow : Window
             await viewModel.ToggleSystemConnectionAsync(system);
     }
 
+    private void HandleDismissCodeplugDiagnosticsClick(object? sender, RoutedEventArgs e)
+    {
+        viewModel.DismissCodeplugDiagnostics();
+    }
+
     private static void HandleAlertSelectionPointerEntered(object? sender, PointerEventArgs e)
     {
         if (sender is Button { DataContext: ChannelViewModel channel } button)
@@ -1242,6 +1247,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     private readonly SemaphoreSlim audioReconfigurationLock = new(1, 1);
     private readonly Dictionary<ChannelViewModel, Task> receiveAudioWork = [];
     private readonly Dictionary<string, FneConnectionState> lastConnectionStates = new(StringComparer.OrdinalIgnoreCase);
+    private readonly IReadOnlyDictionary<SystemViewModel, IReadOnlyDictionary<(FneTrafficProtocol Protocol, uint DestinationId), ChannelViewModel[]>> trafficRoutes;
     private readonly ConnectionChimeTracker connectionChimeTracker = new();
     private ChannelViewModel[] suspendedAudioChannels = [];
     private bool suspendedAudioKeptActive;
@@ -1302,6 +1308,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     private string callHistoryFilterText = string.Empty;
     private string recordingFilterText = string.Empty;
     private bool busy;
+    private bool codeplugDiagnosticsDismissed;
     private bool pttStarted;
     private bool serialPttEnabled;
     private string serialPttPortName = string.Empty;
@@ -1443,6 +1450,11 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             () => userSettings.AudioOutputDeviceId);
         Systems = systems.ToArray();
         Zones = zones.ToArray();
+        trafficRoutes = Systems.ToDictionary(
+            system => system,
+            system => (IReadOnlyDictionary<(FneTrafficProtocol Protocol, uint DestinationId), ChannelViewModel[]>)system.Channels
+                .GroupBy(channel => (ProtocolFor(channel), channel.Definition.DestinationId))
+                .ToDictionary(group => group.Key, group => group.ToArray()));
         RestoreChannelWidgetLayout();
         foreach (ZoneViewModel zone in Zones)
             zone.SetWidgetCardHeight(ChannelCardHeight);
@@ -1595,9 +1607,19 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
 
     public IReadOnlyList<string> NamedSettingsProfiles => userSettingsStore.ListNamedProfiles();
 
-    public bool HasCodeplugDiagnostics => !IsCodeplugLoaded || codeplugDiagnosticsText.Contains('\n');
+    public bool HasCodeplugDiagnostics => !codeplugDiagnosticsDismissed &&
+        (!IsCodeplugLoaded || codeplugDiagnosticsText.Contains('\n'));
 
     public string CodeplugDiagnosticsText => codeplugDiagnosticsText;
+
+    public void DismissCodeplugDiagnostics()
+    {
+        if (codeplugDiagnosticsDismissed)
+            return;
+
+        codeplugDiagnosticsDismissed = true;
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(HasCodeplugDiagnostics)));
+    }
 
     public bool ShowCallHistoryPane
     {
@@ -4091,58 +4113,55 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         bool matchedAnyChannel = false;
         ProtocolEncryptionMetadata? protocolEncryption = TryResolveProtocolEncryption(traffic);
         bool? protocolEncrypted = protocolEncryption?.Encrypted;
-        foreach (SystemViewModel configuredSystem in Systems)
+        foreach (ChannelViewModel channel in ResolveTrafficCandidates(system, traffic))
         {
-            foreach (ChannelViewModel channel in configuredSystem.Channels)
+            bool sameActiveStream = channel.State == ChannelRuntimeState.Receiving &&
+                channel.StreamId == traffic.StreamId;
+            bool matched = channel.TryApplyTraffic(system.Name, traffic);
+            if (!matched)
+                continue;
+            matchedAnyChannel = true;
+
+            patchForwarding.ObserveTraffic(channel, traffic);
+            if (patchSourceDecode.IsActive(channel))
+                activePatchSourceChannels.Add(channel);
+
+            if (sameActiveStream && channel.State != ChannelRuntimeState.Receiving)
             {
-                bool sameActiveStream = channel.State == ChannelRuntimeState.Receiving &&
-                    channel.StreamId == traffic.StreamId;
-                bool matched = channel.TryApplyTraffic(system.Name, traffic);
-                if (!matched)
-                    continue;
-                matchedAnyChannel = true;
-
-                patchForwarding.ObserveTraffic(channel, traffic);
-                if (patchSourceDecode.IsActive(channel))
-                    activePatchSourceChannels.Add(channel);
-
-                if (sameActiveStream && channel.State != ChannelRuntimeState.Receiving)
-                {
-                    callHistoryChanged = callHistory.Complete(
-                        system.Name,
-                        traffic.Protocol,
-                        traffic.StreamId,
-                        DateTimeOffset.Now) || callHistoryChanged;
-                }
-                else if (!sameActiveStream)
-                {
-                    callHistory.Add(new CallHistoryEntry(
-                        DateTimeOffset.Now,
-                        system.Name,
-                        channel.Name,
-                        traffic.SourceId,
-                        traffic.DestinationId,
-                        traffic.Protocol,
-                        traffic.StreamId,
-                        channel.LastCallerText,
-                        protocolEncrypted ?? channel.Definition.IsEncrypted));
-                    callHistoryChanged = true;
-                }
-
-                if (protocolEncrypted is bool encrypted)
-                {
-                    callHistoryChanged = callHistory.UpdateEncryption(
-                        system.Name,
-                        traffic.Protocol,
-                        traffic.StreamId,
-                        encrypted,
-                        protocolEncryption?.AlgorithmId,
-                        protocolEncryption?.KeyId) || callHistoryChanged;
-                }
-
-                if (audioCoordinator.IsActive(channel))
-                    activeAudioChannels.Add(channel);
+                callHistoryChanged = callHistory.Complete(
+                    system.Name,
+                    traffic.Protocol,
+                    traffic.StreamId,
+                    DateTimeOffset.Now) || callHistoryChanged;
             }
+            else if (!sameActiveStream)
+            {
+                callHistory.Add(new CallHistoryEntry(
+                    DateTimeOffset.Now,
+                    system.Name,
+                    channel.Name,
+                    traffic.SourceId,
+                    traffic.DestinationId,
+                    traffic.Protocol,
+                    traffic.StreamId,
+                    channel.LastCallerText,
+                    protocolEncrypted ?? channel.Definition.IsEncrypted));
+                callHistoryChanged = true;
+            }
+
+            if (protocolEncrypted is bool encrypted)
+            {
+                callHistoryChanged = callHistory.UpdateEncryption(
+                    system.Name,
+                    traffic.Protocol,
+                    traffic.StreamId,
+                    encrypted,
+                    protocolEncryption?.AlgorithmId,
+                    protocolEncryption?.KeyId) || callHistoryChanged;
+            }
+
+            if (audioCoordinator.IsActive(channel))
+                activeAudioChannels.Add(channel);
         }
 
         if (!matchedAnyChannel &&
@@ -4198,6 +4217,48 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     {
         return traffic.FrameType.Equals("TERMINATOR", StringComparison.OrdinalIgnoreCase) ||
             traffic.Subtype.Equals("TERMINATOR_WITH_LC", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private IReadOnlyList<ChannelViewModel> ResolveTrafficCandidates(
+        SystemViewModel system,
+        FneTrafficFrame traffic)
+    {
+        if (!trafficRoutes.TryGetValue(system, out IReadOnlyDictionary<(FneTrafficProtocol Protocol, uint DestinationId), ChannelViewModel[]>? routes))
+            return [];
+
+        routes.TryGetValue((traffic.Protocol, traffic.DestinationId), out ChannelViewModel[]? routedChannels);
+        routedChannels ??= [];
+        if (!IsTerminatingTraffic(traffic))
+            return routedChannels;
+
+        ChannelViewModel[] activeStreamChannels = system.Channels
+            .Where(channel => channel.State == ChannelRuntimeState.Receiving &&
+                channel.StreamId == traffic.StreamId)
+            .ToArray();
+        if (activeStreamChannels.Length == 0)
+            return routedChannels;
+        if (routedChannels.Length == 0)
+            return activeStreamChannels;
+
+        return routedChannels
+            .Concat(activeStreamChannels)
+            .Distinct()
+            .ToArray();
+    }
+
+    private static bool IsTerminatingTraffic(FneTrafficFrame traffic)
+    {
+        if (traffic.FrameType.Equals("TERMINATOR", StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        return traffic.Protocol switch
+        {
+            FneTrafficProtocol.Dmr => traffic.Subtype.Equals("TERMINATOR_WITH_LC", StringComparison.OrdinalIgnoreCase),
+            FneTrafficProtocol.P25 => traffic.Subtype.Equals("TDU", StringComparison.OrdinalIgnoreCase) ||
+                                      traffic.Subtype.Equals("TDULC", StringComparison.OrdinalIgnoreCase),
+            FneTrafficProtocol.Analog => traffic.Subtype.Equals("TERMINATOR", StringComparison.OrdinalIgnoreCase),
+            _ => false
+        };
     }
 
     private async Task StartAudioAsync(ChannelViewModel channel)
@@ -6262,6 +6323,7 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
         "large" => 330,
         _ => 235
     };
+    public double CardContentWidth => CardWidth - 12;
     public double WidgetX => widgetX;
     public double WidgetY => widgetY;
     public IBrush CardBackgroundBrush => runtime.State switch
@@ -6860,23 +6922,36 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
 
     private void HandleRuntimePropertyChanged(object? sender, PropertyChangedEventArgs args)
     {
-        if (runtime.State == ChannelRuntimeState.Receiving && runtime.SourceId is uint sourceId)
+        PropertyChanged?.Invoke(this, args);
+        if (args.PropertyName == nameof(ChannelRuntime.LastActivity))
+            return;
+
+        bool callerChanged = args.PropertyName is nameof(ChannelRuntime.State) or nameof(ChannelRuntime.SourceId);
+        if (callerChanged && runtime.State == ChannelRuntimeState.Receiving && runtime.SourceId is uint sourceId)
         {
             string alias = AliasFileLoader.FindAlias(aliases, sourceId).Trim();
             lastCallerText = string.IsNullOrWhiteSpace(alias)
                 ? sourceId.ToString(CultureInfo.InvariantCulture)
                 : alias;
         }
-        else if (runtime.State is not (ChannelRuntimeState.Receiving or ChannelRuntimeState.Transmitting))
+        else if (args.PropertyName == nameof(ChannelRuntime.State) &&
+            runtime.State is not (ChannelRuntimeState.Receiving or ChannelRuntimeState.Transmitting))
         {
             SetAudioLevel(0);
         }
-        PropertyChanged?.Invoke(this, args);
-        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(LastCallerText)));
-        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(LastCallerDisplayText)));
-        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CardBackgroundBrush)));
-        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CardBorderBrush)));
-        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CardTextBrush)));
+
+        if (callerChanged)
+        {
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(LastCallerText)));
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(LastCallerDisplayText)));
+        }
+
+        if (args.PropertyName == nameof(ChannelRuntime.State))
+        {
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CardBackgroundBrush)));
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CardBorderBrush)));
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CardTextBrush)));
+        }
     }
 
     private static IBrush CreateBrush(string? color, string fallback)

@@ -6,12 +6,19 @@ the managed `DvmConsole.Audio` layer. It is deliberately separate from the
 cross-platform audio contracts so a Windows WASAPI/NAudio implementation can be
 added without changing the application core.
 
-Build the native library on Apple Silicon:
+Build the native library for the host Mac:
 
 ```sh
 cmake -S native/dvmaudio -B /tmp/dvmaudio-build -DCMAKE_BUILD_TYPE=Release
 cmake --build /tmp/dvmaudio-build --config Release
 ```
+
+To cross-build for the other Mac architecture, add
+`-DCMAKE_OSX_ARCHITECTURES=arm64` or
+`-DCMAKE_OSX_ARCHITECTURES=x86_64` to the configure command. Release builds
+also use `-DCMAKE_OSX_DEPLOYMENT_TARGET=14.0`, matching the .NET 10 support
+floor and application bundle metadata. The desktop publisher supplies the
+architecture and deployment target automatically.
 
 Then enumerate devices:
 

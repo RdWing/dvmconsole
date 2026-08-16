@@ -8,22 +8,37 @@ OUTPUT_DIR="${2:-$ROOT_DIR/artifacts/$RID}"
 CONFIGURATION="${CONFIGURATION:-Release}"
 VOCODER_LIBRARY="${DVMVOCODER_LIBRARY:-}"
 ALLOW_MISSING_VOCODER="${DVM_ALLOW_MISSING_VOCODER:-0}"
+MACOS_DEPLOYMENT_TARGET="14.0"
 
-if [[ "$RID" != "osx-arm64" && "$RID" != "win-x64" ]]; then
-    printf 'Supported runtime identifiers: osx-arm64, win-x64\n' >&2
-    exit 2
-fi
+case "$RID" in
+    osx-arm64)
+        MACOS_ARCHITECTURE="arm64"
+        ;;
+    osx-x64)
+        MACOS_ARCHITECTURE="x86_64"
+        ;;
+    win-x64)
+        MACOS_ARCHITECTURE=""
+        ;;
+    *)
+        printf 'Supported runtime identifiers: osx-arm64, osx-x64, win-x64\n' >&2
+        exit 2
+        ;;
+esac
 
-if [[ "$RID" == "osx-arm64" ]]; then
+if [[ -n "$MACOS_ARCHITECTURE" ]]; then
     AUDIO_BUILD_DIR="${DVM_AUDIO_BUILD_DIR:-$ROOT_DIR/native/dvmaudio/build/$RID}"
-    cmake -S "$ROOT_DIR/native/dvmaudio" -B "$AUDIO_BUILD_DIR" -DCMAKE_BUILD_TYPE="$CONFIGURATION"
+    cmake -S "$ROOT_DIR/native/dvmaudio" -B "$AUDIO_BUILD_DIR" \
+        -DCMAKE_BUILD_TYPE="$CONFIGURATION" \
+        -DCMAKE_OSX_ARCHITECTURES="$MACOS_ARCHITECTURE" \
+        -DCMAKE_OSX_DEPLOYMENT_TARGET="$MACOS_DEPLOYMENT_TARGET"
     cmake --build "$AUDIO_BUILD_DIR" --config "$CONFIGURATION"
 fi
 
 mkdir -p "$OUTPUT_DIR"
 rm -f "$OUTPUT_DIR/Audio/alert1.wav" "$OUTPUT_DIR/Audio/alert2.wav" "$OUTPUT_DIR/Audio/alert3.wav"
 case "$RID" in
-    osx-arm64)
+    osx-arm64|osx-x64)
         rm -f "$OUTPUT_DIR/libvocoder.dylib"
         ;;
     win-x64)
@@ -50,7 +65,7 @@ dotnet publish "$PROJECT" \
     --output "$OUTPUT_DIR" \
     "${PUBLISH_PROPERTIES[@]}"
 
-if [[ "$RID" == "osx-arm64" ]]; then
+if [[ -n "$MACOS_ARCHITECTURE" ]]; then
     cp "$AUDIO_BUILD_DIR/libdvmaudio.dylib" "$OUTPUT_DIR/libdvmaudio.dylib"
 fi
 
@@ -61,7 +76,7 @@ if [[ -n "$VOCODER_LIBRARY" ]]; then
     fi
 
     case "$RID" in
-        osx-arm64)
+        osx-arm64|osx-x64)
             VOCODER_OUTPUT="libvocoder.dylib"
             ;;
         win-x64)

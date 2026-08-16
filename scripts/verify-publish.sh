@@ -5,16 +5,41 @@ RID="${1:-}"
 OUTPUT_DIR="${2:-}"
 ALLOW_MISSING_VOCODER="${DVM_ALLOW_MISSING_VOCODER:-0}"
 
+verify_macos_deployment_target() {
+    local description="$1"
+    local library_path="$2"
+    local build_information
+    local minimum_version
+
+    if ! build_information=$(/usr/bin/xcrun vtool -show-build "$library_path" 2>&1); then
+        printf 'Unable to inspect %s deployment target: %s\n' "$description" "$build_information" >&2
+        exit 9
+    fi
+
+    minimum_version=$(printf '%s\n' "$build_information" | /usr/bin/awk '$1 == "minos" { print $2; exit }')
+    if [[ "$minimum_version" != "14.0" ]]; then
+        printf '%s deployment target is not macOS 14.0: %s\n' "$description" "${minimum_version:-unknown}" >&2
+        exit 9
+    fi
+}
+
 if [[ -z "$RID" || -z "$OUTPUT_DIR" ]]; then
-    printf 'Usage: %s <osx-arm64|win-x64> <publish-directory>\n' "${0##*/}" >&2
+    printf 'Usage: %s <osx-arm64|osx-x64|win-x64> <publish-directory>\n' "${0##*/}" >&2
     exit 2
 fi
 
 case "$RID" in
-    osx-arm64|win-x64)
+    osx-arm64)
+        EXPECTED_MACOS_ARCHITECTURE="arm64"
+        ;;
+    osx-x64)
+        EXPECTED_MACOS_ARCHITECTURE="x86_64"
+        ;;
+    win-x64)
+        EXPECTED_MACOS_ARCHITECTURE=""
         ;;
     *)
-        printf 'Supported runtime identifiers: osx-arm64, win-x64\n' >&2
+        printf 'Supported runtime identifiers: osx-arm64, osx-x64, win-x64\n' >&2
         exit 2
         ;;
 esac
@@ -24,7 +49,7 @@ if [[ ! -d "$OUTPUT_DIR" ]]; then
     exit 3
 fi
 
-if [[ "$RID" == "osx-arm64" ]]; then
+if [[ -n "$EXPECTED_MACOS_ARCHITECTURE" ]]; then
     for file_name in DvmConsole.Desktop.dll DvmConsole.Desktop.deps.json DvmConsole.Desktop.runtimeconfig.json; do
         if [[ ! -f "$OUTPUT_DIR/$file_name" ]]; then
             printf 'Missing required publish file: %s\n' "$OUTPUT_DIR/$file_name" >&2
@@ -46,14 +71,14 @@ for legacy_alert in alert1.wav alert2.wav alert3.wav; do
 done
 
 case "$RID" in
-    osx-arm64)
+    osx-arm64|osx-x64)
         if [[ ! -x "$OUTPUT_DIR/DvmConsole.Desktop" ]]; then
             printf 'macOS publish is missing an executable apphost: %s\n' "$OUTPUT_DIR/DvmConsole.Desktop" >&2
             exit 4
         fi
         apphost_description=$(/usr/bin/file "$OUTPUT_DIR/DvmConsole.Desktop")
-        if [[ "$apphost_description" != *arm64* ]]; then
-            printf 'macOS apphost is not arm64: %s\n' "$apphost_description" >&2
+        if [[ "$apphost_description" != *"$EXPECTED_MACOS_ARCHITECTURE"* ]]; then
+            printf 'macOS apphost is not %s: %s\n' "$EXPECTED_MACOS_ARCHITECTURE" "$apphost_description" >&2
             exit 4
         fi
         ;;
@@ -92,7 +117,7 @@ if ((${#text_files[@]} > 0)) && /usr/bin/grep -Eiq '10\.10\.10\.55|preshared|aut
 fi
 
 case "$RID" in
-    osx-arm64)
+    osx-arm64|osx-x64)
         native_library="$OUTPUT_DIR/libdvmaudio.dylib"
         if [[ ! -f "$native_library" ]]; then
             printf 'Missing required macOS audio shim: %s\n' "$native_library" >&2
@@ -100,10 +125,11 @@ case "$RID" in
         fi
 
         native_description=$(/usr/bin/file "$native_library")
-        if [[ "$native_description" != *arm64* ]]; then
-            printf 'macOS audio shim is not arm64: %s\n' "$native_description" >&2
+        if [[ "$native_description" != *"$EXPECTED_MACOS_ARCHITECTURE"* ]]; then
+            printf 'macOS audio shim is not %s: %s\n' "$EXPECTED_MACOS_ARCHITECTURE" "$native_description" >&2
             exit 8
         fi
+        verify_macos_deployment_target "macOS audio shim" "$native_library"
 
         native_vocoder="$OUTPUT_DIR/libvocoder.dylib"
         if [[ ! -f "$native_vocoder" ]]; then
@@ -114,10 +140,11 @@ case "$RID" in
             fi
         else
             native_description=$(/usr/bin/file "$native_vocoder")
-            if [[ "$native_description" != *arm64* ]]; then
-                printf 'macOS vocoder is not arm64: %s\n' "$native_description" >&2
+            if [[ "$native_description" != *"$EXPECTED_MACOS_ARCHITECTURE"* ]]; then
+                printf 'macOS vocoder is not %s: %s\n' "$EXPECTED_MACOS_ARCHITECTURE" "$native_description" >&2
                 exit 9
             fi
+            verify_macos_deployment_target "macOS vocoder" "$native_vocoder"
         fi
         ;;
     win-x64)

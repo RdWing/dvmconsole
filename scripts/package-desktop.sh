@@ -8,15 +8,22 @@ OUTPUT_PATH="${3:-$ROOT_DIR/artifacts/dvmconsole-$RID.zip}"
 APP_OUTPUT="${4:-}"
 
 if [[ -z "$RID" || -z "$PUBLISH_DIR" ]]; then
-    printf 'Usage: %s <osx-arm64|win-x64> <publish-directory> [zip-output] [macos-app-output]\n' "${0##*/}" >&2
+    printf 'Usage: %s <osx-arm64|osx-x64|win-x64> <publish-directory> [zip-output] [macos-app-output]\n' "${0##*/}" >&2
     exit 2
 fi
 
 case "$RID" in
-    osx-arm64|win-x64)
+    osx-arm64)
+        EXPECTED_MACOS_ARCHITECTURE="arm64"
+        ;;
+    osx-x64)
+        EXPECTED_MACOS_ARCHITECTURE="x86_64"
+        ;;
+    win-x64)
+        EXPECTED_MACOS_ARCHITECTURE=""
         ;;
     *)
-        printf 'Supported runtime identifiers: osx-arm64, win-x64\n' >&2
+        printf 'Supported runtime identifiers: osx-arm64, osx-x64, win-x64\n' >&2
         exit 2
         ;;
 esac
@@ -38,7 +45,7 @@ mkdir -p "$(dirname "$OUTPUT_PATH")"
 
 OUTPUT_PATH="$(cd "$(dirname "$OUTPUT_PATH")" && pwd)/$(basename "$OUTPUT_PATH")"
 
-if [[ "$RID" == "osx-arm64" ]]; then
+if [[ -n "$EXPECTED_MACOS_ARCHITECTURE" ]]; then
     if [[ -z "$APP_OUTPUT" ]]; then
         APP_OUTPUT="$(dirname "$OUTPUT_PATH")/DVMConsole.app"
     else
@@ -62,6 +69,11 @@ if [[ "$RID" == "osx-arm64" ]]; then
     plutil -lint "$APP_PATH/Contents/Info.plist" >/dev/null
     /usr/libexec/PlistBuddy -c 'Print :NSMicrophoneUsageDescription' "$APP_PATH/Contents/Info.plist" >/dev/null
     /usr/libexec/PlistBuddy -c 'Print :NSLocalNetworkUsageDescription' "$APP_PATH/Contents/Info.plist" >/dev/null
+    bundle_minimum_version=$(/usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' "$APP_PATH/Contents/Info.plist")
+    if [[ "$bundle_minimum_version" != "14.0" ]]; then
+        printf 'macOS bundle minimum version is not 14.0: %s\n' "$bundle_minimum_version" >&2
+        exit 12
+    fi
     bundle_icon=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIconFile' "$APP_PATH/Contents/Info.plist")
     if [[ "$bundle_icon" != "DVMConsole.icns" || ! -f "$APP_PATH/Contents/Resources/$bundle_icon" ]]; then
         printf 'macOS bundle is missing its application icon.\n' >&2
@@ -79,8 +91,8 @@ if [[ "$RID" == "osx-arm64" ]]; then
         exit 12
     fi
     bundle_apphost_description=$(/usr/bin/file "$APP_PATH/Contents/MacOS/$bundle_executable")
-    if [[ "$bundle_apphost_description" != *arm64* ]]; then
-        printf 'macOS bundle executable is not arm64: %s\n' "$bundle_apphost_description" >&2
+    if [[ "$bundle_apphost_description" != *"$EXPECTED_MACOS_ARCHITECTURE"* ]]; then
+        printf 'macOS bundle executable is not %s: %s\n' "$EXPECTED_MACOS_ARCHITECTURE" "$bundle_apphost_description" >&2
         exit 12
     fi
     rm -rf "$APP_OUTPUT"
@@ -98,7 +110,7 @@ rm -f "$OUTPUT_PATH"
     zip -q -r "$OUTPUT_PATH" "$(basename "$PACKAGE_ROOT")"
 )
 
-if [[ "$RID" == "osx-arm64" ]]; then
+if [[ -n "$EXPECTED_MACOS_ARCHITECTURE" ]]; then
     printf 'Packaged unsigned %s output to %s and %s\n' "$RID" "$APP_OUTPUT" "$OUTPUT_PATH"
 else
     printf 'Packaged unsigned %s output to %s\n' "$RID" "$OUTPUT_PATH"

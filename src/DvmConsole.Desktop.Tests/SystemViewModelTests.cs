@@ -131,6 +131,9 @@ public sealed class SystemViewModelTests
             Assert.True(viewModel.IsCodeplugLoaded);
             Assert.Contains("Encryption keys unavailable:", viewModel.StatusText);
             Assert.Contains("Encrypted P25 channels are disabled.", viewModel.StatusText);
+            Assert.True(viewModel.HasCodeplugDiagnostics);
+            viewModel.DismissCodeplugDiagnostics();
+            Assert.False(viewModel.HasCodeplugDiagnostics);
             Assert.False(channel.CanListen);
             Assert.False(channel.CanTransmit);
             Assert.False(channel.CanToggleEncryption);
@@ -1021,6 +1024,7 @@ public sealed class SystemViewModelTests
             IReadOnlyList<ChannelViewModel> channels = viewModel.Zones[0].Channels;
 
             Assert.Equal(13, channels.Count);
+            Assert.All(channels, channel => Assert.Equal(channel.CardWidth - 12, channel.CardContentWidth));
             Assert.Equal(0, channels[0].WidgetX);
             Assert.Equal(channels[0].CardWidth + MainWindowViewModel.ChannelWidgetSpacing, channels[1].WidgetX);
             Assert.Equal(channels[1].WidgetX + channels[1].CardWidth + MainWindowViewModel.ChannelWidgetSpacing, channels[2].WidgetX);

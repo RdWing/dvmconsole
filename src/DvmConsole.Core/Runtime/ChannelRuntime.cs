@@ -125,11 +125,21 @@ public sealed class ChannelRuntime : INotifyPropertyChanged
         if (streamId == 0)
             throw new ArgumentOutOfRangeException(nameof(streamId));
 
+        DateTimeOffset nextActivity = activity ?? DateTimeOffset.UtcNow;
+        if (state == ChannelRuntimeState.Receiving &&
+            this.sourceId == sourceId &&
+            this.streamId == streamId)
+        {
+            lastActivity = nextActivity;
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(LastActivity)));
+            return;
+        }
+
         state = ChannelRuntimeState.Receiving;
         this.sourceId = sourceId;
         this.streamId = streamId;
         faultMessage = null;
-        lastActivity = activity ?? DateTimeOffset.UtcNow;
+        lastActivity = nextActivity;
         NotifyStateChanged();
     }
 

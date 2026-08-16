@@ -23,6 +23,18 @@ PowerShell with the Visual Studio C++ workload installed; multi-configuration
 generators normally place `libvocoder.dll` under the build directory's
 `Release` folder. Use the actual generated path for `DVMVOCODER_LIBRARY`.
 
+For a distributable macOS library, also select the destination architecture
+and the supported macOS 14 deployment floor when configuring CMake:
+
+```sh
+cmake -S dvmvocoder -B dvmvocoder-build \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_OSX_ARCHITECTURES=arm64 \
+  -DCMAKE_OSX_DEPLOYMENT_TARGET=14.0
+```
+
+Use `x86_64` instead of `arm64` for the Intel package.
+
 For local application development, point the runtime at that library:
 
 ```sh

@@ -1,9 +1,9 @@
 # Digital Voice Modem Desktop Dispatch Console
 
-The Digital Voice Modem Desktop Dispatch Console ("DDC") is a desktop application that operates similarly to a traditional dispatch console, allowing DVM users to monitor multiple talkgroups on a DVM FNE from a single application. The `avalonia_v2` branch contains the cross-platform Avalonia rebuild for Apple Silicon macOS and Windows x64; the original WPF application remains in the repository as the feature and behavior reference.
+The Digital Voice Modem Desktop Dispatch Console ("DDC") is a desktop application that operates similarly to a traditional dispatch console, allowing DVM users to monitor multiple talkgroups on a DVM FNE from a single application. The `avalonia_v2` branch contains the cross-platform Avalonia rebuild for Apple Silicon and Intel macOS plus Windows x64; the original WPF application remains in the repository as the feature and behavior reference.
 
 The first public Avalonia release is version `0.1.0`. Release packages are
-self-contained for Apple Silicon macOS and Windows x64.
+self-contained for Apple Silicon macOS, Intel macOS, and Windows x64.
 
 ![Dark Mode Console](./repo/Screenshot-3.png)
 
@@ -20,12 +20,12 @@ Codeplugs created for R01A00 should be reviewed before use with R02A00. There ha
 ## Building the Avalonia application
 
 This project utilizes the Avalonia desktop framework for the Apple Silicon
-macOS and Windows x64 builds. A basic .NET 8 SDK installation, CMake, and a
+macOS, Intel macOS, and Windows x64 builds. A .NET 10 SDK installation, CMake, and a
 platform C/C++ toolchain are required to compile the application.
 
 ### Dependencies
 
-- .NET 8 SDK
+- .NET 10 SDK
 - CMake
 - A platform C/C++ toolchain
 - dvmvocoder (libvocoder)
@@ -62,10 +62,12 @@ Desktop Runtime are not required on the destination computer. Always extract
 the complete ZIP before starting DVMConsole; neither platform can run the
 application correctly from inside the archive.
 
-### Apple Silicon macOS
+### macOS
 
-1. Download the `dvmconsole-osx-arm64-<version>.zip` release file. This build
-requires an Apple Silicon Mac.
+1. Download the package matching the Mac's processor:
+   - `dvmconsole-<version>-osx-arm64.zip` for Apple Silicon.
+   - `dvmconsole-<version>-osx-x64.zip` for Intel.
+   Both packages require macOS 14 or newer.
 2. Double-click the ZIP in Finder, then move the extracted `DVMConsole.app` to
 `Applications`. Do not move files out of the application bundle.
 3. The application is currently unsigned. Remove the download quarantine after
@@ -88,7 +90,7 @@ starting it again and include that file with the problem report.
 
 ### Windows x64
 
-1. Download the `dvmconsole-win-x64-<version>.zip` release file and choose
+1. Download the `dvmconsole-<version>-win-x64.zip` release file and choose
 **Extract All** in File Explorer.
 2. Keep `DvmConsole.Desktop.exe` and `libvocoder.dll` together. The managed
 application and runtime are bundled into the single EXE; the native vocoder
@@ -105,7 +107,7 @@ include that file with the problem report.
 Maintainers creating these packages should follow [Desktop building and
 publishing](docs/PUBLISHING.md). The `Avalonia rebuild` GitHub Actions workflow
 builds a pinned native vocoder for each target and includes it in the unsigned
-macOS and Windows test packages.
+Apple Silicon macOS, Intel macOS, and Windows test packages.
 
 ## Documentation
 
