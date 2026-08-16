@@ -2,6 +2,9 @@
 
 The Digital Voice Modem Desktop Dispatch Console ("DDC") is a desktop application that operates similarly to a traditional dispatch console, allowing DVM users to monitor multiple talkgroups on a DVM FNE from a single application. The `avalonia_v2` branch contains the cross-platform Avalonia rebuild for Apple Silicon macOS and Windows x64; the original WPF application remains in the repository as the feature and behavior reference.
 
+The Avalonia rebuild has not had its first release. Current test packages use
+the Semantic Versioning pre-release identifier `0.1.0-alpha.1`.
+
 ![Dark Mode Console](./repo/Screenshot-3.png)
 
 ## Compatibility Warning

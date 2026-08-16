@@ -10,6 +10,22 @@ machine needs the SDK and native toolchain; an end user needs only the
 extracted `DVMConsole.app` on macOS or the extracted Windows application
 folder.
 
+## Versioning and commit history
+
+The Avalonia rebuild is currently unreleased. Development packages identify
+the application as `0.1.0-alpha.1`; they are test artifacts and are not a
+stable `1.0.0` release. Future versions follow Semantic Versioning. Increment
+the major version for incompatible operator or configuration changes, the
+minor version for backward-compatible capability, and the patch version for
+backward-compatible corrections. Use pre-release suffixes until a build is
+ready for general use.
+
+Commit subjects follow the Conventional Commits format. Use `feat:` for new
+operator capability, `fix:` for corrections, `docs:` for documentation,
+`test:` for test-only changes, `build:` for packaging or dependency work,
+`ci:` for workflow changes, and `chore:` for maintenance. A breaking change
+uses `!` after the type or a `BREAKING CHANGE:` footer.
+
 ## Dependencies
 
 Both platforms require Git, the .NET 8 SDK selected by `global.json`, CMake,
