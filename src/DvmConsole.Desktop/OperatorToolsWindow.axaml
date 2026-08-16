@@ -72,7 +72,7 @@
             <Border Classes="panel">
               <StackPanel Spacing="8">
                 <TextBlock FontWeight="SemiBold" Text="Per-channel output routes" />
-                <TextBlock Classes="caption" Text="Choose a discovered output device for each receive channel. System default removes a channel-specific override." TextWrapping="Wrap" />
+                <TextBlock Classes="caption" Text="Each channel follows the main output device above. Choose a different device only for an explicit channel override; System default removes the override and restores inheritance." TextWrapping="Wrap" />
                 <ItemsControl ItemsSource="{Binding Systems}">
                   <ItemsControl.ItemTemplate>
                     <DataTemplate x:DataType="local:SystemViewModel">
@@ -316,12 +316,13 @@
             <Border Classes="panel">
               <StackPanel Spacing="8">
                 <TextBlock FontWeight="SemiBold" Text="Keyboard PTT" />
-                <StackPanel Orientation="Horizontal" Spacing="4">
-                  <TextBlock Text="Current key:" />
-                  <TextBlock FontWeight="SemiBold" Text="{Binding GlobalPttKeyText}" />
-                </StackPanel>
+                <Grid ColumnDefinitions="Auto,180,Auto" ColumnSpacing="8">
+                  <TextBlock Text="Global PTT key" VerticalAlignment="Center" />
+                  <ComboBox Grid.Column="1" ItemsSource="{Binding GlobalPttKeyOptions}" SelectedItem="{Binding SelectedGlobalPttKey, Mode=TwoWay}" />
+                  <Button Grid.Column="2" Content="Apply" Click="HandleApplyGlobalPttKeyClick" />
+                </Grid>
                 <CheckBox Content="Toggle global PTT instead of hold-to-talk" IsChecked="{Binding TogglePttMode, Mode=TwoWay}" />
-                <TextBlock Classes="caption" Text="Change the key from Settings → Global PTT key in the main window." TextWrapping="Wrap" />
+                <TextBlock Classes="caption" Text="This is the same global key available from Settings → Global PTT key in the main window." TextWrapping="Wrap" />
               </StackPanel>
             </Border>
             <Border Classes="panel">

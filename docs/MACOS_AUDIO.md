@@ -94,25 +94,40 @@ manually.
 
 The desktop exposes two mutually exclusive policies: **DVM Console
 processing** and **Apple voice processing**. The Apple policy uses one
-full-duplex Voice Processing I/O Audio Unit for the system default input/output
-pair, enables Apple's AEC and AGC, and bypasses DVM Console's microphone gain,
+full-duplex Voice Processing I/O Audio Unit for the input/output devices selected
+in Audio Settings, enables Apple's AEC and AGC, and bypasses DVM Console's microphone gain,
 EQ, and AGC so the chains cannot be applied twice. The existing per-channel
 `AudioMixer` remains upstream and sends one final mixed radio signal to the
 unit, allowing simultaneous radio channels to share the same echo reference.
-Additional per-channel physical output routes remain available through HAL but
-are explicitly outside that AEC reference.
+When the selected input and output are different Core Audio devices, the native
+host supplies Voice Processing I/O with one private aggregate device using the
+output as its clock and drift compensation on the input. Per-channel routes
+inherit the main output by default. Explicit alternate physical outputs remain
+available through HAL but are outside the Apple AEC reference.
+
+Changing the main route or processing mode stops and restarts every active
+listening channel automatically. In Apple mode the duplex unit remains alive
+while PTT is held, even when the general "Mute RX while transmitting" preference
+is enabled; the active mixer channels are silenced in place and their configured
+levels are restored on release. This avoids repeatedly removing and recreating
+macOS microphone-mode state during a call without changing the mute preference's
+operator-visible behavior.
 
 The policy enum and backend selection are platform-neutral plumbing intended
 for reuse by an iOS/iPadOS host. That mobile backend will additionally need an
 `AVAudioSession` configured with `playAndRecord`, likely `voiceChat`, record
 permission with `NSMicrophoneUsageDescription`, and interruption, route-change,
-and media-services-reset handling. Native macOS does not provide
+and media-services-reset handling. On iOS/iPadOS 18 and later,
+`NSAlwaysAllowMicrophoneModeControl` can additionally expose microphone-mode
+selection before capture becomes active. Native macOS does not provide
 `AVAudioSession`; it uses the same Voice Processing I/O Audio Unit directly.
 
 Apple references used for this audit:
 
+- [Audio Unit Voice I/O](https://developer.apple.com/documentation/audiotoolbox/audio-unit-voice-i-o)
 - [Audio Components](https://developer.apple.com/documentation/audiotoolbox/audio-components)
 - [Migrating an Audio Unit host to AUv3](https://developer.apple.com/documentation/audiotoolbox/migrating-your-audio-unit-host-to-the-auv3-api)
+- [NSAlwaysAllowMicrophoneModeControl](https://developer.apple.com/documentation/bundleresources/information-property-list/nsalwaysallowmicrophonemodecontrol)
 - [Understanding Audio Workgroups](https://developer.apple.com/documentation/audiotoolbox/understanding-audio-workgroups)
 - [AVAudioSession](https://developer.apple.com/documentation/avfaudio/avaudiosession)
 - [`playAndRecord`](https://developer.apple.com/documentation/avfaudio/avaudiosession/category-swift.struct/playandrecord)

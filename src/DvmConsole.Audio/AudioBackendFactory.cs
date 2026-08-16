@@ -6,10 +6,12 @@ public static class AudioBackendFactory
 {
     public static IAudioBackend CreateDefault(
         string? macLibraryPath = null,
-        AudioProcessingMode processingMode = AudioProcessingMode.DvmConsole)
+        AudioProcessingMode processingMode = AudioProcessingMode.DvmConsole,
+        string? inputDeviceId = null,
+        string? outputDeviceId = null)
     {
         if (OperatingSystem.IsMacOS())
-            return new MacCoreAudioBackend(macLibraryPath, processingMode);
+            return new MacCoreAudioBackend(macLibraryPath, processingMode, inputDeviceId, outputDeviceId);
         if (processingMode == AudioProcessingMode.AppleVoiceProcessing)
             throw new PlatformNotSupportedException("Apple voice processing requires an Apple audio backend.");
         if (OperatingSystem.IsWindows())

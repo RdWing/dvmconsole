@@ -36,6 +36,8 @@ void dvm_audio_stream_destroy(DvmAudioStream *stream);
 // One full-duplex Voice Processing I/O unit. Playback written here is the
 // echo-reference signal used by Apple's microphone AEC/AGC processing.
 DvmVoiceProcessingStream *dvm_audio_voice_processing_create(
+    uint64_t input_device_id,
+    uint64_t output_device_id,
     int32_t sample_rate,
     int32_t channels,
     int32_t bits_per_sample);

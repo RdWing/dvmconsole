@@ -8,15 +8,21 @@ public sealed class MacCoreAudioBackend : IAudioBackend
 {
     private readonly NativeCoreAudioApi api;
     private readonly AudioProcessingMode processingMode;
+    private readonly string configuredInputDeviceId;
+    private readonly string configuredOutputDeviceId;
 
     public MacCoreAudioBackend(
         string? libraryPath = null,
-        AudioProcessingMode processingMode = AudioProcessingMode.DvmConsole)
+        AudioProcessingMode processingMode = AudioProcessingMode.DvmConsole,
+        string? inputDeviceId = null,
+        string? outputDeviceId = null)
     {
         if (!OperatingSystem.IsMacOS())
             throw new PlatformNotSupportedException("MacCoreAudioBackend requires macOS.");
 
         this.processingMode = processingMode;
+        configuredInputDeviceId = NormalizeConfiguredDeviceId(inputDeviceId);
+        configuredOutputDeviceId = NormalizeConfiguredDeviceId(outputDeviceId);
         api = NativeCoreAudioApi.Load(libraryPath);
     }
 
@@ -24,33 +30,53 @@ public sealed class MacCoreAudioBackend : IAudioBackend
 
     public IReadOnlyList<AudioDeviceInfo> EnumerateDevices(AudioDirection direction)
     {
-        int input = direction == AudioDirection.Input ? 1 : 0;
-        int result = api.GetDeviceCount(input, out int count);
-        EnsureSuccess(result, "enumerate audio devices");
-
-        var devices = new List<AudioDeviceInfo>(count);
-        for (int index = 0; index < count; index++)
+        const int maximumAttempts = 8;
+        for (int attempt = 0; attempt < maximumAttempts; attempt++)
         {
-            byte[] name = new byte[256];
-            result = api.GetDevice(input, index, out ulong deviceId, name, name.Length, out int isDefault);
-            EnsureSuccess(result, "read audio device");
-            string deviceName = System.Text.Encoding.UTF8.GetString(name).TrimEnd('\0');
-            if (string.IsNullOrWhiteSpace(deviceName))
-                deviceName = $"Audio device {deviceId}";
-            devices.Add(new AudioDeviceInfo(deviceId.ToString(), deviceName, direction, isDefault != 0));
+            int input = direction == AudioDirection.Input ? 1 : 0;
+            int result = api.GetDeviceCount(input, out int count);
+            EnsureSuccess(result, "enumerate audio devices");
+
+            var devices = new List<AudioDeviceInfo>(count);
+            bool changedDuringEnumeration = false;
+            for (int index = 0; index < count; index++)
+            {
+                byte[] name = new byte[256];
+                result = api.GetDevice(input, index, out ulong deviceId, name, name.Length, out int isDefault);
+                if (result == -4)
+                {
+                    changedDuringEnumeration = true;
+                    break;
+                }
+                EnsureSuccess(result, "read audio device");
+                string deviceName = System.Text.Encoding.UTF8.GetString(name).TrimEnd('\0');
+                if (string.IsNullOrWhiteSpace(deviceName))
+                    deviceName = $"Audio device {deviceId}";
+                devices.Add(new AudioDeviceInfo(deviceId.ToString(), deviceName, direction, isDefault != 0));
+            }
+
+            if (!changedDuringEnumeration)
+                return devices;
+            if (attempt + 1 < maximumAttempts)
+                Thread.Sleep(40);
         }
 
-        return devices;
+        throw new InvalidOperationException("Unable to read the audio device list because CoreAudio is changing routes. Try again after the microphone mode finishes changing.");
     }
 
     public IAudioCapture OpenCapture(AudioDeviceInfo device, PcmAudioFormat format)
     {
         if (processingMode == AudioProcessingMode.AppleVoiceProcessing)
         {
-            if (!device.IsDefault)
-                throw new NotSupportedException("Apple voice processing uses the macOS default input device.");
+            ulong inputDeviceId = ParseDeviceId(device);
+            ulong outputDeviceId = ResolveConfiguredDeviceId(AudioDirection.Output, configuredOutputDeviceId);
             return new MacVoiceProcessingCapture(
-                VoiceProcessingSessionRegistry.Acquire(api.LibraryPath, format, VoiceEndpoint.Capture),
+                VoiceProcessingSessionRegistry.Acquire(
+                    api.LibraryPath,
+                    inputDeviceId,
+                    outputDeviceId,
+                    format,
+                    VoiceEndpoint.Capture),
                 format);
         }
         return new MacCoreAudioCapture(api, ParseDeviceId(device), format);
@@ -58,13 +84,21 @@ public sealed class MacCoreAudioBackend : IAudioBackend
 
     public IAudioPlayback OpenPlayback(AudioDeviceInfo device, PcmAudioFormat format)
     {
-        if (processingMode == AudioProcessingMode.AppleVoiceProcessing && device.IsDefault)
+        ulong outputDeviceId = ParseDeviceId(device);
+        if (processingMode == AudioProcessingMode.AppleVoiceProcessing &&
+            outputDeviceId == ResolveConfiguredDeviceId(AudioDirection.Output, configuredOutputDeviceId))
         {
+            ulong inputDeviceId = ResolveConfiguredDeviceId(AudioDirection.Input, configuredInputDeviceId);
             return new MacVoiceProcessingPlayback(
-                VoiceProcessingSessionRegistry.Acquire(api.LibraryPath, format, VoiceEndpoint.Playback),
+                VoiceProcessingSessionRegistry.Acquire(
+                    api.LibraryPath,
+                    inputDeviceId,
+                    outputDeviceId,
+                    format,
+                    VoiceEndpoint.Playback),
                 format);
         }
-        return new MacCoreAudioPlayback(api, ParseDeviceId(device), format);
+        return new MacCoreAudioPlayback(api, outputDeviceId, format);
     }
 
     public void Dispose() => api.Dispose();
@@ -76,6 +110,21 @@ public sealed class MacCoreAudioBackend : IAudioBackend
             throw new ArgumentException("The CoreAudio device ID is invalid.", nameof(device));
         return deviceId;
     }
+
+    private ulong ResolveConfiguredDeviceId(AudioDirection direction, string configuredId)
+    {
+        IReadOnlyList<AudioDeviceInfo> devices = EnumerateDevices(direction);
+        AudioDeviceInfo device = devices.FirstOrDefault(candidate =>
+                !configuredId.Equals("default", StringComparison.OrdinalIgnoreCase) &&
+                candidate.Id.Equals(configuredId, StringComparison.OrdinalIgnoreCase))
+            ?? devices.FirstOrDefault(candidate => candidate.IsDefault)
+            ?? devices.FirstOrDefault()
+            ?? throw new InvalidOperationException($"No {direction.ToString().ToLowerInvariant()} audio device is available.");
+        return ParseDeviceId(device);
+    }
+
+    private static string NormalizeConfiguredDeviceId(string? deviceId)
+        => string.IsNullOrWhiteSpace(deviceId) ? "default" : deviceId.Trim();
 
     private static void EnsureSuccess(int result, string operation)
     {
@@ -425,21 +474,23 @@ public sealed class MacCoreAudioBackend : IAudioBackend
     private static class VoiceProcessingSessionRegistry
     {
         private static readonly object Sync = new();
-        private static readonly Dictionary<string, VoiceProcessingSession> Sessions =
-            new(StringComparer.Ordinal);
+        private static readonly Dictionary<VoiceSessionKey, VoiceProcessingSession> Sessions = [];
 
         public static VoiceProcessingSession Acquire(
             string libraryPath,
+            ulong inputDeviceId,
+            ulong outputDeviceId,
             PcmAudioFormat format,
             VoiceEndpoint endpoint)
         {
             ValidateFormat(format);
             lock (Sync)
             {
-                if (!Sessions.TryGetValue(libraryPath, out VoiceProcessingSession? session))
+                var key = new VoiceSessionKey(libraryPath, inputDeviceId, outputDeviceId);
+                if (!Sessions.TryGetValue(key, out VoiceProcessingSession? session))
                 {
-                    session = new VoiceProcessingSession(libraryPath, format);
-                    Sessions.Add(libraryPath, session);
+                    session = new VoiceProcessingSession(key, format);
+                    Sessions.Add(key, session);
                 }
                 try
                 {
@@ -450,7 +501,7 @@ public sealed class MacCoreAudioBackend : IAudioBackend
                 {
                     if (session.HasNoEndpoints)
                     {
-                        Sessions.Remove(libraryPath);
+                        Sessions.Remove(key);
                         session.Dispose();
                     }
                     throw;
@@ -464,10 +515,15 @@ public sealed class MacCoreAudioBackend : IAudioBackend
             {
                 if (!session.RemoveEndpoint(endpoint))
                     return;
-                Sessions.Remove(session.LibraryPath);
+                Sessions.Remove(session.Key);
                 session.Dispose();
             }
         }
+
+        public readonly record struct VoiceSessionKey(
+            string LibraryPath,
+            ulong InputDeviceId,
+            ulong OutputDeviceId);
     }
 
     private sealed class VoiceProcessingSession : IDisposable
@@ -481,22 +537,27 @@ public sealed class MacCoreAudioBackend : IAudioBackend
         private int runningEndpoints;
         private bool disposed;
 
-        public VoiceProcessingSession(string libraryPath, PcmAudioFormat format)
+        public VoiceProcessingSession(VoiceProcessingSessionRegistry.VoiceSessionKey key, PcmAudioFormat format)
         {
-            LibraryPath = libraryPath;
+            Key = key;
             this.format = format;
-            api = NativeCoreAudioApi.Load(libraryPath);
-            stream = api.CreateVoiceProcessingStream(format.SampleRate, format.Channels, format.BitsPerSample);
+            api = NativeCoreAudioApi.Load(key.LibraryPath);
+            stream = api.CreateVoiceProcessingStream(
+                key.InputDeviceId,
+                key.OutputDeviceId,
+                format.SampleRate,
+                format.Channels,
+                format.BitsPerSample);
             if (stream == IntPtr.Zero)
             {
                 api.Dispose();
                 throw new InvalidOperationException(
                     "CoreAudio could not create the Apple Voice Processing I/O stream. " +
-                    "Confirm that the system default input and output devices support full-duplex voice audio.");
+                    "Confirm that the selected input/output pair supports full-duplex voice audio.");
             }
         }
 
-        public string LibraryPath { get; }
+        public VoiceProcessingSessionRegistry.VoiceSessionKey Key { get; }
         public bool HasNoEndpoints => captureEndpoints == 0 && playbackEndpoints == 0;
         public int QueuedSamples => checked((int)api.GetVoiceProcessingQueuedSamples(stream));
 
@@ -598,7 +659,7 @@ public sealed class MacCoreAudioBackend : IAudioBackend
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate int StreamWriteDelegate(IntPtr stream, short[] samples, int count);
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate uint StreamQueuedSamplesDelegate(IntPtr stream);
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate void DestroyStreamDelegate(IntPtr stream);
-        [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate IntPtr CreateVoiceProcessingStreamDelegate(int sampleRate, int channels, int bitsPerSample);
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate IntPtr CreateVoiceProcessingStreamDelegate(ulong inputDeviceId, ulong outputDeviceId, int sampleRate, int channels, int bitsPerSample);
 
         private readonly IntPtr handle;
         private readonly GetDeviceCountDelegate getDeviceCount;
@@ -675,7 +736,7 @@ public sealed class MacCoreAudioBackend : IAudioBackend
         public int WriteStream(IntPtr stream, short[] samples, int count) => writeStream(stream, samples, count);
         public uint GetQueuedSamples(IntPtr stream) => queuedSamples(stream);
         public void DestroyStream(IntPtr stream) => destroyStream(stream);
-        public IntPtr CreateVoiceProcessingStream(int sampleRate, int channels, int bits) => createVoiceProcessingStream(sampleRate, channels, bits);
+        public IntPtr CreateVoiceProcessingStream(ulong inputDeviceId, ulong outputDeviceId, int sampleRate, int channels, int bits) => createVoiceProcessingStream(inputDeviceId, outputDeviceId, sampleRate, channels, bits);
         public int StartVoiceProcessing(IntPtr stream) => startVoiceProcessing(stream);
         public int StopVoiceProcessing(IntPtr stream) => stopVoiceProcessing(stream);
         public int ReadVoiceProcessing(IntPtr stream, short[] samples, int capacity) => readVoiceProcessing(stream, samples, capacity);

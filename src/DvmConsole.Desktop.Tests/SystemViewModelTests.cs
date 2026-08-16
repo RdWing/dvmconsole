@@ -691,11 +691,16 @@ public sealed class SystemViewModelTests
         {
             await using MainWindowViewModel viewModel = MainWindowViewModel.Load(codeplugPath, store);
 
+            viewModel.AudioInputDeviceIdText = "input-device-42";
+            viewModel.AudioOutputDeviceIdText = "output-device-84";
             viewModel.SelectedAudioProcessingMode = "Apple voice processing";
             viewModel.ApplyAudioInputSettingsCommand.Execute(null);
 
             Assert.False(viewModel.IsDvmConsoleProcessingSelected);
-            Assert.Equal(UserSettings.AppleVoiceProcessingMode, store.Load().AudioProcessingMode);
+            UserSettings appleSettings = store.Load();
+            Assert.Equal(UserSettings.AppleVoiceProcessingMode, appleSettings.AudioProcessingMode);
+            Assert.Equal("input-device-42", appleSettings.AudioInputDeviceId);
+            Assert.Equal("output-device-84", appleSettings.AudioOutputDeviceId);
             Assert.Contains("echo cancellation", viewModel.AudioProcessingDescription, StringComparison.OrdinalIgnoreCase);
 
             viewModel.SelectedAudioProcessingMode = "DVM Console processing";
@@ -738,13 +743,16 @@ public sealed class SystemViewModelTests
             viewModel.ClockShowSeconds = false;
             viewModel.KeepWindowOnTop = true;
             viewModel.TogglePttMode = true;
-            await viewModel.SetGlobalPttKeyAsync(KeyboardPttKey.F3);
+            Assert.Contains(KeyboardPttKey.F3, viewModel.GlobalPttKeyOptions);
+            viewModel.SelectedGlobalPttKey = KeyboardPttKey.F3;
+            await viewModel.ApplyGlobalPttKeySelectionAsync();
 
             UserSettings saved = store.Load();
             Assert.False(saved.ClockUse24HourTime);
             Assert.False(saved.ClockShowSeconds);
             Assert.True(saved.KeepWindowOnTop);
             Assert.True(saved.TogglePttMode);
+            Assert.Equal("F3", saved.GlobalPttKey);
             Assert.True(viewModel.IsConfiguredPttKey(KeyboardPttKey.F3));
             Assert.NotEmpty(viewModel.ClockText);
         }

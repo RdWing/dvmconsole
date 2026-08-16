@@ -117,6 +117,9 @@ public sealed partial class OperatorToolsWindow : Window
     private async void HandleApplySerialPttSettingsClick(object? sender, RoutedEventArgs e)
         => await viewModel.ApplySerialPttSettingsAsync();
 
+    private async void HandleApplyGlobalPttKeyClick(object? sender, RoutedEventArgs e)
+        => await viewModel.ApplyGlobalPttKeySelectionAsync();
+
     private async void HandleImportAlertToneClick(object? sender, RoutedEventArgs e)
     {
         if (!StorageProvider.CanOpen)

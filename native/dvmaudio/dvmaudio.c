@@ -24,6 +24,7 @@ struct DvmAudioStream {
 
 struct DvmVoiceProcessingStream {
     AudioUnit unit;
+    AudioDeviceID aggregate_device;
     uint32_t sample_rate;
     uint32_t capture_ring_capacity;
     int16_t *capture_ring;
@@ -331,6 +332,106 @@ static AudioStreamBasicDescription pcm_format(int32_t sample_rate)
     return format;
 }
 
+static CFStringRef device_uid(AudioDeviceID device)
+{
+    AudioObjectPropertyAddress address = {
+        kAudioDevicePropertyDeviceUID,
+        kAudioObjectPropertyScopeGlobal,
+        kAudioObjectPropertyElementMain};
+    CFStringRef uid = NULL;
+    UInt32 size = sizeof(uid);
+    if (AudioObjectGetPropertyData(device, &address, 0, NULL, &size, &uid) != noErr)
+        return NULL;
+    return uid;
+}
+
+static AudioDeviceID create_voice_aggregate_device(
+    AudioDeviceID input_device,
+    AudioDeviceID output_device)
+{
+    if (input_device == output_device)
+        return input_device;
+
+    CFStringRef input_uid = device_uid(input_device);
+    CFStringRef output_uid = device_uid(output_device);
+    if (input_uid == NULL || output_uid == NULL) {
+        if (input_uid != NULL)
+            CFRelease(input_uid);
+        if (output_uid != NULL)
+            CFRelease(output_uid);
+        return kAudioObjectUnknown;
+    }
+
+    CFUUIDRef uuid = CFUUIDCreate(kCFAllocatorDefault);
+    CFStringRef uuid_string = uuid == NULL
+        ? NULL
+        : CFUUIDCreateString(kCFAllocatorDefault, uuid);
+    CFStringRef aggregate_uid = uuid_string == NULL
+        ? NULL
+        : CFStringCreateWithFormat(
+            kCFAllocatorDefault,
+            NULL,
+            CFSTR("com.dvmproject.dvmconsole.voice.%@"),
+            uuid_string);
+    CFMutableDictionaryRef output_subdevice = CFDictionaryCreateMutable(
+        kCFAllocatorDefault,
+        0,
+        &kCFTypeDictionaryKeyCallBacks,
+        &kCFTypeDictionaryValueCallBacks);
+    CFMutableDictionaryRef input_subdevice = CFDictionaryCreateMutable(
+        kCFAllocatorDefault,
+        0,
+        &kCFTypeDictionaryKeyCallBacks,
+        &kCFTypeDictionaryValueCallBacks);
+    CFMutableDictionaryRef description = CFDictionaryCreateMutable(
+        kCFAllocatorDefault,
+        0,
+        &kCFTypeDictionaryKeyCallBacks,
+        &kCFTypeDictionaryValueCallBacks);
+    AudioDeviceID aggregate = kAudioObjectUnknown;
+
+    if (aggregate_uid != NULL && output_subdevice != NULL && input_subdevice != NULL && description != NULL) {
+        CFDictionarySetValue(output_subdevice, CFSTR(kAudioSubDeviceUIDKey), output_uid);
+        CFDictionarySetValue(input_subdevice, CFSTR(kAudioSubDeviceUIDKey), input_uid);
+        // The output device is the timing source for the AEC reference. The
+        // independently-clocked microphone is drift compensated by CoreAudio.
+        CFDictionarySetValue(input_subdevice, CFSTR(kAudioSubDeviceDriftCompensationKey), kCFBooleanTrue);
+        const void *subdevices[] = {output_subdevice, input_subdevice};
+        CFArrayRef subdevice_list = CFArrayCreate(
+            kCFAllocatorDefault,
+            subdevices,
+            2,
+            &kCFTypeArrayCallBacks);
+        if (subdevice_list != NULL) {
+            CFDictionarySetValue(description, CFSTR(kAudioAggregateDeviceNameKey), CFSTR("DVM Console Voice Processing"));
+            CFDictionarySetValue(description, CFSTR(kAudioAggregateDeviceUIDKey), aggregate_uid);
+            CFDictionarySetValue(description, CFSTR(kAudioAggregateDeviceSubDeviceListKey), subdevice_list);
+            CFDictionarySetValue(description, CFSTR(kAudioAggregateDeviceMainSubDeviceKey), output_uid);
+            CFDictionarySetValue(description, CFSTR(kAudioAggregateDeviceClockDeviceKey), output_uid);
+            CFDictionarySetValue(description, CFSTR(kAudioAggregateDeviceIsPrivateKey), kCFBooleanTrue);
+            if (AudioHardwareCreateAggregateDevice(description, &aggregate) != noErr)
+                aggregate = kAudioObjectUnknown;
+            CFRelease(subdevice_list);
+        }
+    }
+
+    if (description != NULL)
+        CFRelease(description);
+    if (input_subdevice != NULL)
+        CFRelease(input_subdevice);
+    if (output_subdevice != NULL)
+        CFRelease(output_subdevice);
+    if (aggregate_uid != NULL)
+        CFRelease(aggregate_uid);
+    if (uuid_string != NULL)
+        CFRelease(uuid_string);
+    if (uuid != NULL)
+        CFRelease(uuid);
+    CFRelease(input_uid);
+    CFRelease(output_uid);
+    return aggregate;
+}
+
 static uint32_t voice_ring_push(
     int16_t *ring,
     uint32_t ring_capacity,
@@ -451,17 +552,27 @@ static OSStatus voice_output_callback(
 }
 
 DvmVoiceProcessingStream *dvm_audio_voice_processing_create(
+    uint64_t input_device_id,
+    uint64_t output_device_id,
     int32_t sample_rate,
     int32_t channels,
     int32_t bits_per_sample)
 {
-    if (sample_rate <= 0 || channels != 1 || bits_per_sample != 16)
+    if (input_device_id == kAudioObjectUnknown || output_device_id == kAudioObjectUnknown ||
+        sample_rate <= 0 || channels != 1 || bits_per_sample != 16)
         return NULL;
 
     DvmVoiceProcessingStream *stream = (DvmVoiceProcessingStream *)calloc(1, sizeof(DvmVoiceProcessingStream));
     if (stream == NULL)
         return NULL;
     stream->sample_rate = (uint32_t)sample_rate;
+    AudioDeviceID input_device = (AudioDeviceID)input_device_id;
+    AudioDeviceID output_device = (AudioDeviceID)output_device_id;
+    AudioDeviceID voice_device = create_voice_aggregate_device(input_device, output_device);
+    if (voice_device == kAudioObjectUnknown)
+        goto fail;
+    if (voice_device != input_device || voice_device != output_device)
+        stream->aggregate_device = voice_device;
     stream->capture_ring_capacity = stream->sample_rate * DVM_AUDIO_RING_SECONDS + 1;
     stream->playback_ring_capacity = stream->sample_rate * DVM_AUDIO_RING_SECONDS + 1;
     stream->capture_ring = (int16_t *)calloc(stream->capture_ring_capacity, sizeof(int16_t));
@@ -482,6 +593,9 @@ DvmVoiceProcessingStream *dvm_audio_voice_processing_create(
     UInt32 enable = 1;
     if (AudioUnitSetProperty(stream->unit, kAudioOutputUnitProperty_EnableIO, kAudioUnitScope_Input, 1, &enable, sizeof(enable)) != noErr ||
         AudioUnitSetProperty(stream->unit, kAudioOutputUnitProperty_EnableIO, kAudioUnitScope_Output, 0, &enable, sizeof(enable)) != noErr)
+        goto fail;
+
+    if (AudioUnitSetProperty(stream->unit, kAudioOutputUnitProperty_CurrentDevice, kAudioUnitScope_Global, 0, &voice_device, sizeof(voice_device)) != noErr)
         goto fail;
 
     AudioStreamBasicDescription format = pcm_format(sample_rate);
@@ -523,6 +637,8 @@ fail:
         AudioUnitUninitialize(stream->unit);
         AudioComponentInstanceDispose(stream->unit);
     }
+    if (stream->aggregate_device != kAudioObjectUnknown)
+        AudioHardwareDestroyAggregateDevice(stream->aggregate_device);
     free(stream->input_buffer);
     free(stream->capture_ring);
     free(stream->playback_ring);
@@ -583,6 +699,8 @@ void dvm_audio_voice_processing_destroy(DvmVoiceProcessingStream *stream)
         return;
     dvm_audio_voice_processing_stop(stream);
     AudioComponentInstanceDispose(stream->unit);
+    if (stream->aggregate_device != kAudioObjectUnknown)
+        AudioHardwareDestroyAggregateDevice(stream->aggregate_device);
     free(stream->input_buffer);
     free(stream->capture_ring);
     free(stream->playback_ring);
