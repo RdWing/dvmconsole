@@ -562,13 +562,32 @@ public sealed partial class MainWindow : Window
 
     private async Task ReplaceViewModelAsync(MainWindowViewModel replacement)
     {
+        ArgumentNullException.ThrowIfNull(replacement);
         MainWindowViewModel previous = viewModel;
+
+        // These modeless windows hold direct references to the view model. Close
+        // them before disposing the old model rather than leaving a visible
+        // window bound to stale settings, history, or PTT state.
+        CloseModelessViewModelWindows();
+        previous.PropertyChanged -= HandleViewModelPropertyChanged;
         viewModel = replacement;
         DataContext = replacement;
+        replacement.PropertyChanged += HandleViewModelPropertyChanged;
         RefreshRecentCodeplugMenu();
         RefreshNamedSettingsProfileMenus();
         await previous.DisposeAsync();
         await replacement.StartKeyboardPttAsync();
+    }
+
+    private void CloseModelessViewModelWindows()
+    {
+        CallHistoryWindow? history = callHistoryWindow;
+        callHistoryWindow = null;
+        history?.Close();
+
+        OperatorToolsWindow? tools = operatorToolsWindow;
+        operatorToolsWindow = null;
+        tools?.Close();
     }
 
     private async Task<bool> ConfirmAsync(string title, string message, string confirmLabel = "Reset")

@@ -208,7 +208,13 @@ public static class PcmWavSilenceTrimmer
 
         long availableBytes = input.Length - HeaderLength;
         long declaredBytes = BinaryPrimitives.ReadUInt32LittleEndian(header[40..]);
-        return Math.Min(availableBytes, declaredBytes) & ~1L;
+        if ((declaredBytes & 1) != 0 || (availableBytes & 1) != 0 || declaredBytes != availableBytes)
+        {
+            throw new InvalidDataException(
+                "The WAV data chunk size does not match the physical PCM data.");
+        }
+
+        return declaredBytes;
     }
 
     private static int ToMilliseconds(long samples, int sampleRate)
