@@ -69,12 +69,46 @@ public sealed class TransmitCoordinatorTests
         Assert.True(vocoder.IsDisposed);
     }
 
+    [Fact]
+    public async Task CaptureStartFailureRollsBackCreatedSessionsAndInfrastructure()
+    {
+        var channel = Channel("Analog", 100);
+        var endpoint = new FakeEndpoint("Test", [channel]);
+        var audio = new FakeAudioBackend(failStart: true);
+        await using var coordinator = new ChannelTransmitCoordinator(createAudioBackend: () => audio);
+
+        await Assert.ThrowsAsync<IOException>(() => coordinator.StartAsync(channel, endpoint));
+
+        Assert.Empty(coordinator.ActiveChannels);
+        Assert.True(audio.Capture.IsDisposed);
+        Assert.True(audio.IsDisposed);
+    }
+
+    [Fact]
+    public async Task SessionFaultIsReportedAndCleanupRemainsSafe()
+    {
+        var channel = Channel("Analog", 100);
+        var endpoint = new FakeEndpoint("Test", [channel], throwOnSend: true);
+        var audio = new FakeAudioBackend();
+        await using var coordinator = new ChannelTransmitCoordinator(createAudioBackend: () => audio);
+        Exception? fault = null;
+        coordinator.Faulted += (_, exception) => fault = exception;
+
+        await coordinator.StartAsync(channel, endpoint);
+        audio.Capture.Emit(new short[160]);
+        await WaitForAsync(() => fault is not null);
+        await coordinator.StopAsync();
+
+        Assert.IsType<IOException>(fault);
+        Assert.True(audio.Capture.IsDisposed);
+    }
+
     private static ChannelViewModel Channel(string name, uint tgid, string mode = "analog") => new(new ChannelConfiguration
     {
         Name = name, System = "Test", Tgid = tgid.ToString(), Mode = mode, Slot = 1
     });
 
-    private sealed class FakeEndpoint(string name, IReadOnlyList<ChannelViewModel> channels) : IFneTrafficEndpoint
+    private sealed class FakeEndpoint(string name, IReadOnlyList<ChannelViewModel> channels, bool throwOnSend = false) : IFneTrafficEndpoint
     {
         private uint nextStreamId;
         public string Name => name;
@@ -84,12 +118,16 @@ public sealed class TransmitCoordinatorTests
         public List<(FneTrafficProtocol Protocol, uint StreamId)> Sent { get; } = [];
         public uint CreateStreamId() => ++nextStreamId;
         public void SendTraffic(FneTrafficProtocol protocol, ReadOnlySpan<byte> payload, ushort sequence, uint streamId)
-            => Sent.Add((protocol, streamId));
+        {
+            if (throwOnSend)
+                throw new IOException("test transport fault");
+            Sent.Add((protocol, streamId));
+        }
     }
 
-    private sealed class FakeAudioBackend : IAudioBackend
+    private sealed class FakeAudioBackend(bool failStart = false) : IAudioBackend
     {
-        public FakeCapture Capture { get; } = new();
+        public FakeCapture Capture { get; } = new(failStart);
         public int OpenCaptureCalls { get; private set; }
         public bool IsDisposed { get; private set; }
         public string Name => "test";
@@ -100,13 +138,19 @@ public sealed class TransmitCoordinatorTests
         public void Dispose() => IsDisposed = true;
     }
 
-    private sealed class FakeCapture : IAudioCapture
+    private sealed class FakeCapture(bool failStart = false) : IAudioCapture
     {
         public event EventHandler<PcmSamplesEventArgs>? SamplesAvailable;
         public PcmAudioFormat Format => PcmAudioFormat.Voice8KhzMono16Bit;
         public bool IsRunning { get; private set; }
         public bool IsDisposed { get; private set; }
-        public ValueTask StartAsync(CancellationToken cancellationToken = default) { IsRunning = true; return ValueTask.CompletedTask; }
+        public ValueTask StartAsync(CancellationToken cancellationToken = default)
+        {
+            if (failStart)
+                throw new IOException("test capture start failure");
+            IsRunning = true;
+            return ValueTask.CompletedTask;
+        }
         public ValueTask StopAsync(CancellationToken cancellationToken = default) { IsRunning = false; return ValueTask.CompletedTask; }
         public ValueTask DisposeAsync() { IsDisposed = true; return ValueTask.CompletedTask; }
         public void Emit(short[] samples) => SamplesAvailable?.Invoke(this, new PcmSamplesEventArgs(samples));
@@ -127,5 +171,12 @@ public sealed class TransmitCoordinatorTests
         public int Encode(ReadOnlySpan<short> samples, Span<byte> codeword) { codeword.Fill(0x42); return 0; }
         public int Decode(ReadOnlySpan<byte> codeword, Span<short> samples) => 0;
         public void Dispose() { }
+    }
+
+    private static async Task WaitForAsync(Func<bool> condition)
+    {
+        for (int attempt = 0; attempt < 100 && !condition(); attempt++)
+            await Task.Delay(5);
+        Assert.True(condition());
     }
 }
