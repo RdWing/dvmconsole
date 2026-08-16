@@ -35,6 +35,7 @@ public sealed partial class MainWindow : Window
     private readonly PressAndHoldPttController cardPtt;
     private CallHistoryWindow? callHistoryWindow;
     private OperatorToolsWindow? operatorToolsWindow;
+    private DebugLogWindow? debugLogWindow;
     private DocumentationWindow? documentationWindow;
     private AboutWindow? aboutWindow;
     private readonly List<DispatcherTimer> scrollBarTimers = [];
@@ -92,6 +93,7 @@ public sealed partial class MainWindow : Window
                 viewModelPropertySubscription.Dispose();
                 callHistoryWindow?.Close();
                 operatorToolsWindow?.Close();
+                debugLogWindow?.Close();
                 documentationWindow?.Close();
                 aboutWindow?.Close();
                 foreach (DispatcherTimer timer in scrollBarTimers)
@@ -548,6 +550,10 @@ public sealed partial class MainWindow : Window
         OperatorToolsWindow? tools = operatorToolsWindow;
         operatorToolsWindow = null;
         tools?.Close();
+
+        DebugLogWindow? logs = debugLogWindow;
+        debugLogWindow = null;
+        logs?.Close();
     }
 
     private async Task<bool> ConfirmAsync(string title, string message, string confirmLabel = "Reset")
@@ -689,10 +695,17 @@ public sealed partial class MainWindow : Window
         await window.ShowDialog(this);
     }
 
-    private async void HandleOpenDebugLogsClick(object? sender, RoutedEventArgs e)
+    private void HandleOpenDebugLogsClick(object? sender, RoutedEventArgs e)
     {
-        var window = new DebugLogWindow(viewModel);
-        await window.ShowDialog(this);
+        if (debugLogWindow is null)
+        {
+            debugLogWindow = new DebugLogWindow(viewModel);
+            debugLogWindow.Closed += (_, _) => debugLogWindow = null;
+        }
+
+        if (!debugLogWindow.IsVisible)
+            debugLogWindow.Show(this);
+        debugLogWindow.Activate();
     }
 
     private void HandleOpenCallHistoryClick(object? sender, RoutedEventArgs e)
