@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Sockets;
 using System.Diagnostics;
+using System.Reflection;
 using DvmConsole.Core.Configuration;
 using DvmConsole.Core.Diagnostics;
 using fnecore;
@@ -101,6 +102,11 @@ public sealed record FneKeyResponse(
 // Owns one cross-platform FNE peer lifecycle. It does not start until StartAsync is called.
 public sealed class FneConnection : IAsyncDisposable
 {
+    internal static string SoftwareIdentifier => FormatSoftwareIdentifier(
+        typeof(FneConnection).Assembly
+            .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?
+            .InformationalVersion);
+
     private readonly FneConnectionOptions options;
     private readonly object sync = new();
     private readonly SemaphoreSlim lifecycle = new(1, 1);
@@ -438,7 +444,7 @@ public sealed class FneConnection : IAsyncDisposable
         {
             ConventionalPeer = true,
             PeerClass = PeerConnectionClass.PEER_CONN_CLASS_CONSOLE,
-            Software = "CONSOLE_REBUILD",
+            Software = SoftwareIdentifier,
             Identity = options.Identity
         };
         created.Logger = HandlePeerLog;
@@ -452,6 +458,15 @@ public sealed class FneConnection : IAsyncDisposable
         created.NXDNDataReceived += HandleNxdnDataReceived;
         created.AnalogDataReceived += HandleAnalogDataReceived;
         return created;
+    }
+
+    internal static string FormatSoftwareIdentifier(string? informationalVersion)
+    {
+        const string fallbackVersion = "UNKNOWN";
+        string version = string.IsNullOrWhiteSpace(informationalVersion)
+            ? fallbackVersion
+            : informationalVersion.Trim().Split('+', 2)[0];
+        return $"DVMC_AV_{version}";
     }
 
     private void HandlePeerConnected(object? sender, PeerConnectedEvent args)
