@@ -39,6 +39,7 @@ public sealed class UserSettings
     public string AudioProcessingMode { get; set; } = DvmConsoleAudioProcessingMode;
     public bool HighQualityBluetoothAudioEnabled { get; set; } = true;
     public bool AudioInputAgcEnabled { get; set; }
+    public double AudioInputAgcTargetDbfs { get; set; } = -25.0;
     public bool KeepTransmitMicrophoneWarm { get; set; }
     public double AudioInputGain { get; set; } = 1.0;
     public double AudioInputEqLowGainDb { get; set; }
@@ -480,7 +481,8 @@ public sealed class UserSettingsStore
             !string.Equals(settings.AudioOutputDeviceId, "default", StringComparison.OrdinalIgnoreCase) ||
             !string.Equals(settings.AudioProcessingMode, UserSettings.DvmConsoleAudioProcessingMode, StringComparison.Ordinal) ||
             !settings.HighQualityBluetoothAudioEnabled ||
-            settings.AudioInputAgcEnabled || settings.AudioInputPresets.Count > 0 ||
+            settings.AudioInputAgcEnabled || settings.AudioInputAgcTargetDbfs != -25.0 ||
+            settings.AudioInputPresets.Count > 0 ||
             settings.ChannelVolumes.Count > 0 || settings.ChannelOutputDeviceIds.Count > 0 ||
             settings.WebStreamOutputDeviceIds.Count > 0 || settings.WebStreamVolumes.Count > 0)
         {
@@ -561,6 +563,7 @@ public sealed class UserSettingsStore
             target.AudioProcessingMode = source.AudioProcessingMode;
             target.HighQualityBluetoothAudioEnabled = source.HighQualityBluetoothAudioEnabled;
             target.AudioInputAgcEnabled = source.AudioInputAgcEnabled;
+            target.AudioInputAgcTargetDbfs = source.AudioInputAgcTargetDbfs;
             target.KeepTransmitMicrophoneWarm = source.KeepTransmitMicrophoneWarm;
             target.AudioInputGain = source.AudioInputGain;
             target.AudioInputEqLowGainDb = source.AudioInputEqLowGainDb;
@@ -731,6 +734,7 @@ public sealed class UserSettingsStore
             UserSettings.AppleVoiceProcessingMode => UserSettings.AppleVoiceProcessingMode,
             _ => UserSettings.DvmConsoleAudioProcessingMode
         };
+        settings.AudioInputAgcTargetDbfs = NormalizeBounded(settings.AudioInputAgcTargetDbfs, -25.0, -40.0, -12.0);
         settings.AudioInputGain = NormalizeBounded(settings.AudioInputGain, 1.0, 0.25, 3.0);
         settings.AudioInputEqLowGainDb = NormalizeBounded(settings.AudioInputEqLowGainDb, 0, -12, 12);
         settings.AudioInputEqMidGainDb = NormalizeBounded(settings.AudioInputEqMidGainDb, 0, -12, 12);

@@ -8,6 +8,7 @@ public sealed class AudioInputProcessingOptions
     public string DeviceId { get; init; } = "default";
     public AudioProcessingMode ProcessingMode { get; init; } = AudioProcessingMode.DvmConsole;
     public bool AgcEnabled { get; init; }
+    public double AgcTargetDbfs { get; init; } = -25.0;
     public double Gain { get; init; } = 1.0;
     public double LowGainDb { get; init; }
     public double MidGainDb { get; init; }
@@ -19,6 +20,7 @@ public sealed class AudioInputProcessingOptions
             DeviceId = string.IsNullOrWhiteSpace(DeviceId) ? "default" : DeviceId.Trim(),
             ProcessingMode = Enum.IsDefined(ProcessingMode) ? ProcessingMode : AudioProcessingMode.DvmConsole,
             AgcEnabled = AgcEnabled,
+            AgcTargetDbfs = NormalizeFinite(AgcTargetDbfs, -25.0, -40.0, -12.0),
             Gain = NormalizeFinite(Gain, 1.0, 0.25, 3.0),
             LowGainDb = NormalizeFinite(LowGainDb, 0, -12, 12),
             MidGainDb = NormalizeFinite(MidGainDb, 0, -12, 12),
@@ -34,11 +36,11 @@ public sealed class AudioInputProcessingOptions
 public sealed class PcmInputProcessor
 {
     // TIA P25 codec-test guidance calibrates nominal active speech to 25 dB
-    // below A/D overload. This is deliberately an input-only target; decoded
-    // receive PCM retains its native level until the receive mixer applies the
-    // operator's channel gain.
-    private const double AgcTargetRms = 0.05623413251903491; // 10^(-25 / 20)
+    // below A/D overload, which remains the default configurable target. This
+    // is deliberately input-only; decoded receive PCM retains its native level
+    // until the receive mixer applies the operator's channel gain.
     private readonly AudioInputProcessingOptions options;
+    private readonly double agcTargetRms;
     private readonly double lowGain;
     private readonly double midGain;
     private readonly double highGain;
@@ -50,6 +52,7 @@ public sealed class PcmInputProcessor
     public PcmInputProcessor(AudioInputProcessingOptions? options = null)
     {
         this.options = (options ?? new AudioInputProcessingOptions()).Normalize();
+        agcTargetRms = DbToLinear(this.options.AgcTargetDbfs);
         lowGain = DbToLinear(this.options.LowGainDb);
         midGain = DbToLinear(this.options.MidGainDb);
         highGain = DbToLinear(this.options.HighGainDb);
@@ -85,7 +88,7 @@ public sealed class PcmInputProcessor
             // to the vocoder, rather than an intermediate signal, converges on
             // the P25 reference level.
             double inputAdjustedRms = Math.Sqrt(sumSquares / input.Length) * options.Gain;
-            double requestedGain = AgcTargetRms / Math.Max(inputAdjustedRms, 0.001);
+            double requestedGain = agcTargetRms / Math.Max(inputAdjustedRms, 0.001);
             requestedGain = Math.Clamp(requestedGain, 0.25, 3.0);
             agcGain = (agcGain * 0.8) + (requestedGain * 0.2);
         }

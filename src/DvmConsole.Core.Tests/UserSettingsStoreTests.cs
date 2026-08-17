@@ -104,6 +104,7 @@ public sealed class UserSettingsStoreTests
                 AudioProcessingMode = UserSettings.AppleVoiceProcessingMode,
                 HighQualityBluetoothAudioEnabled = false,
                 AudioInputAgcEnabled = true,
+                AudioInputAgcTargetDbfs = -30,
                 KeepTransmitMicrophoneWarm = true,
                 AudioInputGain = 1.5,
                 AudioInputEqLowGainDb = -3,
@@ -226,6 +227,7 @@ public sealed class UserSettingsStoreTests
             Assert.Equal(UserSettings.AppleVoiceProcessingMode, loaded.AudioProcessingMode);
             Assert.False(loaded.HighQualityBluetoothAudioEnabled);
             Assert.True(loaded.AudioInputAgcEnabled);
+            Assert.Equal(-30, loaded.AudioInputAgcTargetDbfs);
             Assert.True(loaded.KeepTransmitMicrophoneWarm);
             Assert.Equal(1.5, loaded.AudioInputGain);
             Assert.Equal(-3, loaded.AudioInputEqLowGainDb);
@@ -439,6 +441,7 @@ public sealed class UserSettingsStoreTests
                 AudioInputDeviceId = " ",
                 AudioOutputDeviceId = " ",
                 AudioProcessingMode = "invalid",
+                AudioInputAgcTargetDbfs = -100,
                 AudioInputGain = 50,
                 AudioInputEqLowGainDb = -50,
                 AudioInputEqMidGainDb = double.NaN,
@@ -467,6 +470,7 @@ public sealed class UserSettingsStoreTests
             Assert.Equal("default", loaded.AudioInputDeviceId);
             Assert.Equal("default", loaded.AudioOutputDeviceId);
             Assert.Equal(UserSettings.DvmConsoleAudioProcessingMode, loaded.AudioProcessingMode);
+            Assert.Equal(-40, loaded.AudioInputAgcTargetDbfs);
             Assert.Equal(3, loaded.AudioInputGain);
             Assert.Equal(-12, loaded.AudioInputEqLowGainDb);
             Assert.Equal(0, loaded.AudioInputEqMidGainDb);

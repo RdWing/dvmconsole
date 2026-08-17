@@ -12,15 +12,67 @@
     <Style Selector="Button"><Setter Property="Padding" Value="10,6" /></Style>
     <Style Selector="Button.tar-select:pointerover" x:DataType="local:ChannelViewModel"><Setter Property="Background" Value="{Binding RecordingSelectionBrush}" /><Setter Property="BorderBrush" Value="{Binding RecordingSelectionBorderBrush}" /></Style>
     <Style Selector="Button.tar-select:pressed" x:DataType="local:ChannelViewModel"><Setter Property="Background" Value="{Binding RecordingSelectionBrush}" /><Setter Property="BorderBrush" Value="{Binding RecordingSelectionBorderBrush}" /></Style>
-    <Style Selector="ScrollViewer"><Setter Property="AllowAutoHide" Value="True" /></Style>
+    <Style Selector="ScrollViewer"><Setter Property="AllowAutoHide" Value="True" /><Setter Property="VerticalScrollBarVisibility" Value="Hidden" /></Style>
     <Style Selector="ScrollBar"><Setter Property="AllowAutoHide" Value="True" /><Setter Property="ShowDelay" Value="0:0:0" /><Setter Property="HideDelay" Value="0:0:0.7" /></Style>
   </Window.Styles>
 
   <LayoutTransformControl LayoutTransform="{Binding UiScaleTransform}">
   <Grid RowDefinitions="*,Auto">
     <TabControl x:Name="ToolTabs" Margin="10">
+      <TabItem Header="General">
+        <ScrollViewer Margin="10">
+          <StackPanel Spacing="10">
+            <TextBlock Classes="heading" Text="Console Settings" />
+            <TextBlock Classes="caption" Text="{Binding SettingsVersionText}" />
+            <TextBlock FontWeight="SemiBold" Text="Appearance" />
+            <Grid ColumnDefinitions="*,*" ColumnSpacing="16">
+              <StackPanel Spacing="4"><TextBlock Classes="caption" Text="{Binding UiFontSizeText}" /><Slider Minimum="11" Maximum="20" TickFrequency="1" IsSnapToTickEnabled="True" Value="{Binding UiFontSize, Mode=TwoWay}" /></StackPanel>
+              <StackPanel Grid.Column="1" Spacing="4"><TextBlock Classes="caption" Text="{Binding UiScaleText}" /><Slider Minimum="0.75" Maximum="1.5" TickFrequency="0.05" IsSnapToTickEnabled="True" Value="{Binding UiScale, Mode=TwoWay}" /></StackPanel>
+            </Grid>
+            <Separator />
+            <CheckBox Content="Toggle global PTT instead of hold-to-talk" IsChecked="{Binding TogglePttMode, Mode=TwoWay}" />
+            <CheckBox Content="Talk permit tone" IsChecked="{Binding TalkPermitTone, Mode=TwoWay}" />
+            <CheckBox Content="Connection chimes" IsChecked="{Binding ConnectionChimes, Mode=TwoWay}" />
+            <CheckBox Content="Mute RX while transmitting" IsChecked="{Binding MuteRxAudioWhileTransmitting, Mode=TwoWay}" />
+            <CheckBox Content="Restore selected channels on startup" IsChecked="{Binding RestoreSelectedChannelsOnStartup, Mode=TwoWay}" />
+            <CheckBox Content="Retain patch state on startup" IsChecked="{Binding RetainPatchStateOnStartup, Mode=TwoWay}" />
+            <CheckBox Content="Dark mode" IsChecked="{Binding DarkMode, Mode=TwoWay}" />
+            <CheckBox Content="Keep window on top" IsChecked="{Binding KeepWindowOnTop, Mode=TwoWay}" />
+            <Separator />
+            <TextBlock FontWeight="SemiBold" Text="Widgets" />
+            <CheckBox Content="Show system status" IsChecked="{Binding ShowSystemStatus, Mode=TwoWay}" />
+            <CheckBox Content="Show channel widgets" IsChecked="{Binding ShowChannels, Mode=TwoWay}" />
+            <CheckBox Content="Show alert buttons" IsChecked="{Binding ShowAlertTones, Mode=TwoWay}" />
+            <CheckBox Content="Lock channel widget positions" IsChecked="{Binding LockWidgets, Mode=TwoWay}" />
+            <Button Content="Reset widget layout" Click="HandleResetLayoutClick" />
+            <Separator />
+            <TextBlock x:Name="ClockSettingsSection" FontWeight="SemiBold" Text="Toolbar clocks" />
+            <TextBlock Classes="caption" Text="Enable slots, choose a UTC offset, and color-code each clock." TextWrapping="Wrap" />
+            <ItemsControl ItemsSource="{Binding ToolbarClocks}">
+              <ItemsControl.ItemTemplate>
+                <DataTemplate x:DataType="local:ToolbarClockViewModel">
+                  <Grid ColumnDefinitions="Auto,Auto,150,150,*" ColumnSpacing="8" Margin="0,2">
+                    <CheckBox IsChecked="{Binding Enabled, Mode=TwoWay}" />
+                    <TextBlock Grid.Column="1" Text="{Binding SlotLabel}" VerticalAlignment="Center" />
+                    <ComboBox Grid.Column="2" ItemsSource="{Binding UtcOffsetOptions}" SelectedItem="{Binding SelectedUtcOffsetOption, Mode=TwoWay}"><ComboBox.ItemTemplate><DataTemplate x:DataType="local:ToolbarClockUtcOffsetOption"><TextBlock Text="{Binding Label}" /></DataTemplate></ComboBox.ItemTemplate></ComboBox>
+                    <ComboBox Grid.Column="3" ItemsSource="{Binding ColorOptions}" SelectedItem="{Binding SelectedColorOption, Mode=TwoWay}"><ComboBox.ItemTemplate><DataTemplate x:DataType="local:ToolbarClockColorOption"><StackPanel Orientation="Horizontal" Spacing="6"><Border Width="14" Height="14" Background="{Binding ColorBrush}" CornerRadius="3" /><TextBlock Text="{Binding Label}" /></StackPanel></DataTemplate></ComboBox.ItemTemplate></ComboBox>
+                    <TextBlock Grid.Column="4" Classes="caption" Text="{Binding TimeZoneLabel}" VerticalAlignment="Center" />
+                  </Grid>
+                </DataTemplate>
+              </ItemsControl.ItemTemplate>
+            </ItemsControl>
+            <Button Content="Save toolbar clocks" Click="HandleSaveToolbarClocksClick" />
+            <Separator />
+            <TextBlock FontWeight="SemiBold" Text="Clock" />
+            <CheckBox Content="Use 24-hour time" IsChecked="{Binding ClockUse24HourTime, Mode=TwoWay}" />
+            <CheckBox Content="Show seconds" IsChecked="{Binding ClockShowSeconds, Mode=TwoWay}" />
+            <StackPanel Orientation="Horizontal" Spacing="4"><TextBlock Classes="caption" Text="Global PTT key:" /><TextBlock Classes="caption" Text="{Binding GlobalPttKeyText}" /></StackPanel>
+          </StackPanel>
+        </ScrollViewer>
+      </TabItem>
+
       <TabItem Header="Audio">
-        <ScrollViewer Margin="10" VerticalScrollBarVisibility="Auto">
+        <ScrollViewer Margin="10">
           <StackPanel Spacing="12" Margin="0,0,0,20">
             <TextBlock Classes="heading" Text="Audio Settings" />
             <Grid ColumnDefinitions="Auto,*,Auto,*" ColumnSpacing="8" RowDefinitions="Auto,Auto">
@@ -46,6 +98,7 @@
                   <ComboBox Grid.Column="1" ItemsSource="{Binding AudioProcessingModeOptions}" SelectedItem="{Binding SelectedAudioProcessingMode, Mode=TwoWay}" />
                 </Grid>
                 <TextBlock Classes="caption" Text="{Binding AudioProcessingDescription}" TextWrapping="Wrap" />
+                <TextBlock Classes="caption" Text="{Binding AppleVoiceProcessingRouteDescription}" TextWrapping="Wrap" IsVisible="{Binding IsAppleVoiceProcessingPlatformAvailable}" />
                 <Grid ColumnDefinitions="Auto,100,Auto,100,Auto,100,Auto,100" ColumnSpacing="8" IsEnabled="{Binding IsDvmConsoleProcessingSelected}">
                   <TextBlock Text="Gain" VerticalAlignment="Center" /><TextBox Grid.Column="1" Text="{Binding AudioInputGainText, Mode=TwoWay}" />
                   <TextBlock Grid.Column="2" Text="Low dB" VerticalAlignment="Center" /><TextBox Grid.Column="3" Text="{Binding AudioInputLowGainText, Mode=TwoWay}" />
@@ -54,16 +107,19 @@
                 </Grid>
                 <StackPanel Orientation="Horizontal" Spacing="10">
                   <CheckBox Content="Automatic gain control" IsChecked="{Binding AudioInputAgcEnabled, Mode=TwoWay}" IsEnabled="{Binding IsDvmConsoleProcessingSelected}" />
+                  <TextBlock Text="AGC target (dBFS)" VerticalAlignment="Center" IsEnabled="{Binding IsAgcTargetEnabled}" />
+                  <TextBox Width="70" Text="{Binding AudioInputAgcTargetDbfsText, Mode=TwoWay}" IsEnabled="{Binding IsAgcTargetEnabled}" />
                   <CheckBox Content="Keep transmit microphone warm" IsChecked="{Binding KeepTransmitMicrophoneWarm, Mode=TwoWay}" />
                   <Button Content="Apply" Command="{Binding ApplyAudioInputSettingsCommand}" />
                 </StackPanel>
+                <TextBlock Classes="caption" Text="The default AGC target is -25 dBFS. Use a more-negative value for a quieter target; accepted range is -40 to -12 dBFS." TextWrapping="Wrap" />
+                <TextBlock Classes="caption" Text="Keeping the microphone warm is generally advised only for Bluetooth headsets to reduce PTT startup latency; without high-quality AirPods support it may lower output audio quality while enabled." TextWrapping="Wrap" />
                 <CheckBox Content="Use high-quality AirPods audio when supported"
                           IsChecked="{Binding HighQualityBluetoothAudioEnabled, Mode=TwoWay}"
                           IsVisible="{Binding IsHighQualityBluetoothAudioAvailable}" />
                 <TextBlock Classes="caption" IsVisible="{Binding IsHighQualityBluetoothAudioAvailable}"
                            Text="On macOS 26+, compatible AirPods are detected at runtime and requested at full bandwidth. Unsupported models, regions, and routes use the normal Bluetooth fallback. This mode can add microphone latency."
                            TextWrapping="Wrap" />
-                <TextBlock Classes="caption" Text="Keeping the microphone warm is generally advised only for Bluetooth headsets to reduce PTT startup latency; without high-quality AirPods support it may lower output audio quality while enabled." TextWrapping="Wrap" />
               </StackPanel>
             </Border>
 
@@ -310,10 +366,6 @@
 
       <TabItem Header="Connections">
         <ScrollViewer Margin="10"><StackPanel Spacing="12"><TextBlock Classes="heading" Text="FNE Connections and Key Status" /><ItemsControl ItemsSource="{Binding Systems}"><ItemsControl.ItemTemplate><DataTemplate x:DataType="local:SystemViewModel"><Border Classes="panel"><Grid ColumnDefinitions="*,Auto,Auto,Auto" ColumnSpacing="8"><StackPanel><TextBlock FontWeight="SemiBold" Text="{Binding Name}" /><TextBlock Classes="caption" Text="{Binding Endpoint}" /><TextBlock Text="{Binding ConnectionStatus}" /><TextBlock Classes="caption" Text="{Binding PacketDiagnosticsText}" /><TextBlock Classes="caption" Text="{Binding LastPacketText}" TextTrimming="CharacterEllipsis" /></StackPanel><Button Grid.Column="1" Content="Connect" Tag="{Binding}" Click="HandleConnectSystemClick" /><Button Grid.Column="2" Content="Disconnect" Tag="{Binding}" Click="HandleDisconnectSystemClick" /><Button Grid.Column="3" Content="Restart" Tag="{Binding}" Click="HandleRestartSystemClick" /></Grid></Border></DataTemplate></ItemsControl.ItemTemplate></ItemsControl><TextBlock FontWeight="SemiBold" Text="Channel key status" /><ItemsControl ItemsSource="{Binding KeyStatusItems}"><ItemsControl.ItemTemplate><DataTemplate x:DataType="local:KeyStatusItemViewModel"><Border Classes="panel"><Grid ColumnDefinitions="*,*,90,90,140" ColumnSpacing="8"><StackPanel><TextBlock FontWeight="SemiBold" Text="{Binding ChannelName}" /><TextBlock Classes="caption" Text="{Binding SystemName}" /></StackPanel><TextBlock Grid.Column="1" Text="{Binding ModeText}" VerticalAlignment="Center" /><TextBlock Grid.Column="2" Text="{Binding AlgorithmIdText}" VerticalAlignment="Center" /><TextBlock Grid.Column="3" Text="{Binding KeyIdText}" VerticalAlignment="Center" /><TextBlock Grid.Column="4" Text="{Binding StatusText}" VerticalAlignment="Center" /></Grid></Border></DataTemplate></ItemsControl.ItemTemplate></ItemsControl><TextBlock Classes="caption" Text="Key material is never displayed or logged; only identifiers and availability are shown." IsVisible="{Binding HasNoKeyStatusItems}" /></StackPanel></ScrollViewer>
-      </TabItem>
-
-      <TabItem Header="General">
-        <ScrollViewer Margin="10"><StackPanel Spacing="10"><TextBlock Classes="heading" Text="Console Settings" /><TextBlock Classes="caption" Text="{Binding SettingsVersionText}" /><TextBlock FontWeight="SemiBold" Text="Appearance" /><Grid ColumnDefinitions="*,*" ColumnSpacing="16"><StackPanel Spacing="4"><TextBlock Classes="caption" Text="{Binding UiFontSizeText}" /><Slider Minimum="11" Maximum="20" TickFrequency="1" IsSnapToTickEnabled="True" Value="{Binding UiFontSize, Mode=TwoWay}" /></StackPanel><StackPanel Grid.Column="1" Spacing="4"><TextBlock Classes="caption" Text="{Binding UiScaleText}" /><Slider Minimum="0.75" Maximum="1.5" TickFrequency="0.05" IsSnapToTickEnabled="True" Value="{Binding UiScale, Mode=TwoWay}" /></StackPanel></Grid><Separator /><CheckBox Content="Toggle global PTT instead of hold-to-talk" IsChecked="{Binding TogglePttMode, Mode=TwoWay}" /><CheckBox Content="Talk permit tone" IsChecked="{Binding TalkPermitTone, Mode=TwoWay}" /><CheckBox Content="Connection chimes" IsChecked="{Binding ConnectionChimes, Mode=TwoWay}" /><CheckBox Content="Mute RX while transmitting" IsChecked="{Binding MuteRxAudioWhileTransmitting, Mode=TwoWay}" /><CheckBox Content="Restore selected channels on startup" IsChecked="{Binding RestoreSelectedChannelsOnStartup, Mode=TwoWay}" /><CheckBox Content="Retain patch state on startup" IsChecked="{Binding RetainPatchStateOnStartup, Mode=TwoWay}" /><CheckBox Content="Dark mode" IsChecked="{Binding DarkMode, Mode=TwoWay}" /><CheckBox Content="Keep window on top" IsChecked="{Binding KeepWindowOnTop, Mode=TwoWay}" /><Separator /><TextBlock FontWeight="SemiBold" Text="Widgets" /><CheckBox Content="Show system status" IsChecked="{Binding ShowSystemStatus, Mode=TwoWay}" /><CheckBox Content="Show channel widgets" IsChecked="{Binding ShowChannels, Mode=TwoWay}" /><CheckBox Content="Show alert buttons" IsChecked="{Binding ShowAlertTones, Mode=TwoWay}" /><CheckBox Content="Lock channel widget positions" IsChecked="{Binding LockWidgets, Mode=TwoWay}" /><Button Content="Reset widget layout" Click="HandleResetLayoutClick" /><Separator /><TextBlock FontWeight="SemiBold" Text="Toolbar clocks" /><TextBlock Classes="caption" Text="Enable slots, choose a UTC offset, and color-code each clock." TextWrapping="Wrap" /><ItemsControl ItemsSource="{Binding ToolbarClocks}"><ItemsControl.ItemTemplate><DataTemplate x:DataType="local:ToolbarClockViewModel"><Grid ColumnDefinitions="Auto,Auto,150,150,*" ColumnSpacing="8" Margin="0,2"><CheckBox IsChecked="{Binding Enabled, Mode=TwoWay}" /><TextBlock Grid.Column="1" Text="{Binding SlotLabel}" VerticalAlignment="Center" /><ComboBox Grid.Column="2" ItemsSource="{Binding UtcOffsetOptions}" SelectedItem="{Binding SelectedUtcOffsetOption, Mode=TwoWay}"><ComboBox.ItemTemplate><DataTemplate x:DataType="local:ToolbarClockUtcOffsetOption"><TextBlock Text="{Binding Label}" /></DataTemplate></ComboBox.ItemTemplate></ComboBox><ComboBox Grid.Column="3" ItemsSource="{Binding ColorOptions}" SelectedItem="{Binding SelectedColorOption, Mode=TwoWay}"><ComboBox.ItemTemplate><DataTemplate x:DataType="local:ToolbarClockColorOption"><StackPanel Orientation="Horizontal" Spacing="6"><Border Width="14" Height="14" Background="{Binding ColorBrush}" CornerRadius="3" /><TextBlock Text="{Binding Label}" /></StackPanel></DataTemplate></ComboBox.ItemTemplate></ComboBox><TextBlock Grid.Column="4" Classes="caption" Text="{Binding TimeZoneLabel}" VerticalAlignment="Center" /></Grid></DataTemplate></ItemsControl.ItemTemplate></ItemsControl><Button Content="Save toolbar clocks" Click="HandleSaveToolbarClocksClick" /><Separator /><TextBlock FontWeight="SemiBold" Text="Clock" /><CheckBox Content="Use 24-hour time" IsChecked="{Binding ClockUse24HourTime, Mode=TwoWay}" /><CheckBox Content="Show seconds" IsChecked="{Binding ClockShowSeconds, Mode=TwoWay}" /><StackPanel Orientation="Horizontal" Spacing="4"><TextBlock Classes="caption" Text="Global PTT key:" /><TextBlock Classes="caption" Text="{Binding GlobalPttKeyText}" /></StackPanel></StackPanel></ScrollViewer>
       </TabItem>
 
       <TabItem Header="PTT">

@@ -34,6 +34,9 @@
     <Style Selector="Button.tar-select.armed:pressed /template/ ContentPresenter#PART_ContentPresenter" x:DataType="local:ChannelViewModel"><Setter Property="Background" Value="{Binding RecordingSelectionBrush}" /><Setter Property="BorderBrush" Value="{Binding RecordingSelectionBorderBrush}" /></Style>
     <Style Selector="Button.status-card"><Setter Property="HorizontalAlignment" Value="Left" /><Setter Property="Background" Value="{DynamicResource ButtonBackgroundBrush}" /><Setter Property="BorderThickness" Value="2" /><Setter Property="CornerRadius" Value="7" /><Setter Property="Padding" Value="8,4" /></Style>
     <Style Selector="Button.status-card:pointerover"><Setter Property="Background" Value="{DynamicResource ButtonHoverBrush}" /></Style>
+    <Style Selector="ToggleButton.mic-warm"><Setter Property="Width" Value="30" /><Setter Property="Height" Value="26" /><Setter Property="Padding" Value="2,0" /><Setter Property="HorizontalContentAlignment" Value="Center" /><Setter Property="VerticalContentAlignment" Value="Center" /><Setter Property="Opacity" Value="0.72" /></Style>
+    <Style Selector="ToggleButton.mic-warm:checked"><Setter Property="Background" Value="#0A9B48" /><Setter Property="BorderBrush" Value="#60D394" /><Setter Property="Opacity" Value="1" /></Style>
+    <Style Selector="ToggleButton.mic-warm:checked:pointerover"><Setter Property="Background" Value="#087F3B" /></Style>
     <Style Selector="TabItem"><Setter Property="Foreground" Value="{DynamicResource TabTextBrush}" /><Setter Property="Padding" Value="6,8" /><Setter Property="FontSize" Value="{Binding $parent[Window].((local:MainWindowViewModel)DataContext).UiFontSize}" /></Style>
     <Style Selector="TabItem:selected"><Setter Property="Foreground" Value="{DynamicResource SelectedTabTextBrush}" /></Style>
     <Style Selector="ScrollViewer"><Setter Property="AllowAutoHide" Value="True" /></Style>
@@ -82,6 +85,8 @@
               <MenuItem Header="F11" Tag="F11" Click="HandleGlobalPttKeyClick" />
               <MenuItem Header="F12" Tag="F12" Click="HandleGlobalPttKeyClick" />
             </MenuItem>
+            <Separator />
+            <MenuItem Header="Select/unselect all TX channels" Click="HandleToggleAllTransmitSelectionClick" />
           </MenuItem>
           <MenuItem Header="Commands">
             <MenuItem Header="Page Subscriber…" Tag="CallAlert" Click="HandleSubscriberCommandClick" />
@@ -90,10 +95,7 @@
             <MenuItem Header="Inhibit Subscriber…" Tag="Inhibit" Click="HandleSubscriberCommandClick" />
             <MenuItem Header="Uninhibit Subscriber…" Tag="Uninhibit" Click="HandleSubscriberCommandClick" />
             <Separator />
-            <MenuItem Header="Tones">
-              <MenuItem Header="QCII / alert tones" Tag="Tones" Click="HandleOpenOperatorToolsClick" />
-              <MenuItem Header="DTMF" Tag="Tones" Click="HandleOpenOperatorToolsClick" />
-            </MenuItem>
+            <MenuItem Header="Tones…" Tag="Tones" Click="HandleOpenOperatorToolsClick" />
           </MenuItem>
           <MenuItem Header="Settings">
             <MenuItem Header="Toggle push-to-talk mode" IsChecked="{Binding TogglePttMode, Mode=TwoWay}" ToggleType="CheckBox" />
@@ -103,14 +105,13 @@
             <MenuItem Header="Restore selected channels on startup" IsChecked="{Binding RestoreSelectedChannelsOnStartup, Mode=TwoWay}" ToggleType="CheckBox" />
             <Separator />
             <MenuItem Header="Global PTT settings…" Tag="Ptt" Click="HandleOpenOperatorToolsClick" />
-            <MenuItem Header="Clock settings…" Tag="General" Click="HandleOpenOperatorToolsClick" />
+            <MenuItem Header="Clock settings…" Tag="Clock" Click="HandleOpenOperatorToolsClick" />
             <MenuItem Header="Audio settings…" Tag="Audio" Click="HandleOpenOperatorToolsClick" />
             <MenuItem Header="Reset settings…" Click="HandleResetSettingsClick" />
             <MenuItem Header="All console settings…" Tag="General" Click="HandleOpenOperatorToolsClick" />
           </MenuItem>
           <MenuItem Header="Audio">
             <MenuItem Header="Audio settings…" Tag="Audio" Click="HandleOpenOperatorToolsClick" />
-            <MenuItem Header="Test talk permit tone" Click="HandleTestTalkPermitToneClick" />
             <MenuItem Header="Web streams…" Tag="Streams" Click="HandleOpenOperatorToolsClick" />
           </MenuItem>
           <MenuItem Header="View">
@@ -119,15 +120,11 @@
             <MenuItem Header="Clear user background" Click="HandleClearBackgroundClick" />
             <Separator />
             <MenuItem Header="Show system status" IsChecked="{Binding ShowSystemStatus, Mode=TwoWay}" ToggleType="CheckBox" />
-            <MenuItem Header="Show channel widgets" IsChecked="{Binding ShowChannels, Mode=TwoWay}" ToggleType="CheckBox" />
             <MenuItem Header="Show alert buttons" IsChecked="{Binding ShowAlertTones, Mode=TwoWay}" ToggleType="CheckBox" />
             <MenuItem Header="Lock widgets" IsChecked="{Binding LockWidgets, Mode=TwoWay}" ToggleType="CheckBox" />
             <MenuItem Header="Reset widget layout" Click="HandleResetLayoutClick" />
-            <MenuItem Header="Select/unselect all TX channels" Click="HandleToggleAllTransmitSelectionClick" />
             <Separator />
             <MenuItem Header="Event History window…" Click="HandleOpenCallHistoryClick" />
-            <MenuItem Header="Dock Event History in sidebar" IsChecked="{Binding ShowCallHistoryPane, Mode=TwoWay}" ToggleType="CheckBox" />
-            <MenuItem Header="Snap detached Event History" IsChecked="{Binding SnapCallHistoryToWindow, Mode=TwoWay}" ToggleType="CheckBox" />
             <MenuItem Header="Call History tools…" Tag="History" Click="HandleOpenOperatorToolsClick" />
             <MenuItem Header="Groups…" Tag="Groups" Click="HandleOpenOperatorToolsClick" />
             <MenuItem Header="Debug Logs…" Click="HandleOpenDebugLogsClick" />
@@ -152,10 +149,14 @@
             <ItemsControl.ItemsPanel><ItemsPanelTemplate><StackPanel Orientation="Horizontal" Spacing="4" /></ItemsPanelTemplate></ItemsControl.ItemsPanel>
             <ItemsControl.ItemTemplate><DataTemplate x:DataType="local:ToolbarClockViewModel"><Border IsVisible="{Binding Enabled}" Background="{Binding BackgroundBrush}" BorderBrush="{DynamicResource ClockBorderBrush}" BorderThickness="1" CornerRadius="4" Padding="5,2"><StackPanel><TextBlock Foreground="{DynamicResource ClockTextBrush}" FontSize="{Binding $parent[Window].((local:MainWindowViewModel)DataContext).UiCompactFontSize}" Text="{Binding TimeZoneLabel}" HorizontalAlignment="Center" /><TextBlock Foreground="{DynamicResource ClockTextBrush}" FontSize="{Binding $parent[Window].((local:MainWindowViewModel)DataContext).UiSmallFontSize}" Text="{Binding TimeText}" HorizontalAlignment="Center" /></StackPanel></Border></DataTemplate></ItemsControl.ItemTemplate>
           </ItemsControl>
+          <ToggleButton Classes="mic-warm" Content="🎙️"
+                        IsChecked="{Binding KeepTransmitMicrophoneWarm, Mode=TwoWay}"
+                        ToolTip.Tip="{Binding KeepTransmitMicrophoneWarmToolTip}"
+                        AutomationProperties.Name="{Binding KeepTransmitMicrophoneWarmToolTip}" />
           <StackPanel Orientation="Horizontal" Spacing="4" IsVisible="{Binding ShowAlertTones}">
             <ItemsControl ItemsSource="{Binding BuiltInAlertTones}">
               <ItemsControl.ItemsPanel><ItemsPanelTemplate><StackPanel Orientation="Horizontal" Spacing="4" /></ItemsPanelTemplate></ItemsControl.ItemsPanel>
-              <ItemsControl.ItemTemplate><DataTemplate x:DataType="local:BuiltInAlertToneViewModel"><Button Content="{Binding Name}" Tag="{Binding}" ToolTip.Tip="Generate this legacy alert pattern on ALERT-armed channels" Padding="6,3" Click="HandleToolbarAlertToneClick" /></DataTemplate></ItemsControl.ItemTemplate>
+              <ItemsControl.ItemTemplate><DataTemplate x:DataType="local:BuiltInAlertToneViewModel"><Button Content="{Binding Name}" Tag="{Binding}" ToolTip.Tip="{Binding Description}" Padding="6,3" Click="HandleToolbarAlertToneClick" /></DataTemplate></ItemsControl.ItemTemplate>
             </ItemsControl>
             <Button Content="TONES" ToolTip.Tip="Open Console Settings directly to Tones and DTMF" Padding="6,3" Click="HandleToolbarToneToolsClick" />
           </StackPanel>

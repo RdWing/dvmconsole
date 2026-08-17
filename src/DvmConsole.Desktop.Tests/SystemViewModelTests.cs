@@ -14,6 +14,42 @@ namespace DvmConsole.Desktop.Tests;
 public sealed class SystemViewModelTests
 {
     [Fact]
+    public void OperatorToolSectionsFollowConsoleSettingsTabOrder()
+    {
+        Assert.Equal(
+            [
+                OperatorToolSection.General,
+                OperatorToolSection.Audio,
+                OperatorToolSection.Tones,
+                OperatorToolSection.Streams,
+                OperatorToolSection.Recorder,
+                OperatorToolSection.History,
+                OperatorToolSection.Groups,
+                OperatorToolSection.Connections,
+                OperatorToolSection.Ptt
+            ],
+            Enum.GetValues<OperatorToolSection>().Where(section => section != OperatorToolSection.Clock));
+    }
+
+    [Theory]
+    [InlineData("duplex", true, "duplex", false, true)]
+    [InlineData("input-default", true, "output-default", true, true)]
+    [InlineData("input", false, "output", false, false)]
+    [InlineData("input-default", true, "output", false, false)]
+    public void IdentifiesAppleVoiceProcessingCompatibleDevicePairs(
+        string inputId,
+        bool inputIsDefault,
+        string outputId,
+        bool outputIsDefault,
+        bool expected)
+    {
+        var input = new AudioDeviceOptionViewModel(inputId, "Input", inputIsDefault);
+        var output = new AudioDeviceOptionViewModel(outputId, "Output", outputIsDefault);
+
+        Assert.Equal(expected, MainWindowViewModel.IsAppleVoiceProcessingDevicePairCompatible(input, output));
+    }
+
+    [Fact]
     public void PlansFneKeyRequestsEvenWhenLocalFallbackKeysAreAvailable()
     {
         const string aesKey = "00112233445566778899AABBCCDDEEFF";
@@ -102,6 +138,13 @@ public sealed class SystemViewModelTests
             Assert.Equal(
                 [LegacyAlertTone.Alert1, LegacyAlertTone.Alert2, LegacyAlertTone.Alert3],
                 viewModel.BuiltInAlertTones.Select(tone => tone.Tone));
+            Assert.Equal(
+                [
+                    "Generate 1 kHz for 3 sec",
+                    "Generate alternating 1.5 kHz / 800 Hz tones for 3.36 sec",
+                    "Generate eight 1 kHz pulses over 3.6 sec"
+                ],
+                viewModel.BuiltInAlertTones.Select(tone => tone.Description));
         }
         finally
         {
@@ -805,6 +848,8 @@ public sealed class SystemViewModelTests
             viewModel.AudioInputDeviceIdText = "input-device-42";
             viewModel.AudioOutputDeviceIdText = "output-device-84";
             viewModel.HighQualityBluetoothAudioEnabled = false;
+            viewModel.AudioInputAgcEnabled = true;
+            viewModel.AudioInputAgcTargetDbfsText = "-30";
             viewModel.SelectedAudioProcessingMode = "Apple voice processing";
             viewModel.ApplyAudioInputSettingsCommand.Execute(null);
 
@@ -820,7 +865,18 @@ public sealed class SystemViewModelTests
                 Assert.Equal("input-device-42", unsupportedPlatformSettings.AudioInputDeviceId);
                 Assert.Equal("output-device-84", unsupportedPlatformSettings.AudioOutputDeviceId);
                 Assert.True(unsupportedPlatformSettings.HighQualityBluetoothAudioEnabled);
+                Assert.True(unsupportedPlatformSettings.AudioInputAgcEnabled);
+                Assert.Equal(-30, unsupportedPlatformSettings.AudioInputAgcTargetDbfs);
                 Assert.DoesNotContain("echo cancellation", viewModel.AudioProcessingDescription, StringComparison.OrdinalIgnoreCase);
+                return;
+            }
+
+            if (!viewModel.IsAppleVoiceProcessingRouteCompatible)
+            {
+                Assert.True(viewModel.IsDvmConsoleProcessingSelected);
+                Assert.DoesNotContain("Apple voice processing", viewModel.AudioProcessingModeOptions);
+                Assert.Contains("unavailable", viewModel.AppleVoiceProcessingRouteDescription, StringComparison.OrdinalIgnoreCase);
+                Assert.Equal(UserSettings.DvmConsoleAudioProcessingMode, store.Load().AudioProcessingMode);
                 return;
             }
 
@@ -829,6 +885,8 @@ public sealed class SystemViewModelTests
             Assert.Equal(UserSettings.AppleVoiceProcessingMode, appleSettings.AudioProcessingMode);
             Assert.Equal("input-device-42", appleSettings.AudioInputDeviceId);
             Assert.Equal("output-device-84", appleSettings.AudioOutputDeviceId);
+            Assert.True(appleSettings.AudioInputAgcEnabled);
+            Assert.Equal(-30, appleSettings.AudioInputAgcTargetDbfs);
             Assert.Equal(
                 !OperatingSystem.IsMacOSVersionAtLeast(26),
                 appleSettings.HighQualityBluetoothAudioEnabled);

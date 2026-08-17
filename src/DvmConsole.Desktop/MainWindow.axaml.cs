@@ -680,9 +680,6 @@ public sealed partial class MainWindow : Window
     private async void HandleDisableAllReceiveClick(object? sender, RoutedEventArgs e)
         => await viewModel.DisableAllReceiveAsync();
 
-    private async void HandleTestTalkPermitToneClick(object? sender, RoutedEventArgs e)
-        => await viewModel.TestTalkPermitToneAsync();
-
     private async void HandleSubscriberCommandClick(object? sender, RoutedEventArgs e)
     {
         if (sender is not MenuItem { Tag: string value } ||
@@ -1264,6 +1261,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     private string audioInputLowGainText = "0";
     private string audioInputMidGainText = "0";
     private string audioInputHighGainText = "0";
+    private string audioInputAgcTargetDbfsText = "-25";
     private bool audioInputAgcEnabled;
     private bool highQualityBluetoothAudioEnabled;
     private string selectedAudioProcessingMode = "DVM Console processing";
@@ -1378,6 +1376,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         audioInputLowGainText = userSettings.AudioInputEqLowGainDb.ToString("0.###", CultureInfo.InvariantCulture);
         audioInputMidGainText = userSettings.AudioInputEqMidGainDb.ToString("0.###", CultureInfo.InvariantCulture);
         audioInputHighGainText = userSettings.AudioInputEqHighGainDb.ToString("0.###", CultureInfo.InvariantCulture);
+        audioInputAgcTargetDbfsText = userSettings.AudioInputAgcTargetDbfs.ToString("0.###", CultureInfo.InvariantCulture);
         audioInputAgcEnabled = userSettings.AudioInputAgcEnabled;
         highQualityBluetoothAudioEnabled = userSettings.HighQualityBluetoothAudioEnabled;
         selectedAudioProcessingMode = ToAudioProcessingModeDisplay(userSettings.AudioProcessingMode);
@@ -1431,6 +1430,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
                 DeviceId = userSettings.AudioInputDeviceId,
                 ProcessingMode = GetConfiguredAudioProcessingMode(),
                 AgcEnabled = userSettings.AudioInputAgcEnabled,
+                AgcTargetDbfs = userSettings.AudioInputAgcTargetDbfs,
                 Gain = userSettings.AudioInputGain,
                 LowGainDb = userSettings.AudioInputEqLowGainDb,
                 MidGainDb = userSettings.AudioInputEqMidGainDb,
@@ -2025,6 +2025,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SelectedAudioInputDevice)));
             if (value is not null)
                 AudioInputDeviceIdText = value.Id;
+            RefreshAppleVoiceProcessingRouteState();
         }
     }
 
@@ -2039,6 +2040,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SelectedAudioOutputDevice)));
             if (value is not null)
                 AudioOutputDeviceIdText = value.Id;
+            RefreshAppleVoiceProcessingRouteState();
         }
     }
 
@@ -2069,7 +2071,19 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     public bool AudioInputAgcEnabled
     {
         get => audioInputAgcEnabled;
-        set => SetField(ref audioInputAgcEnabled, value);
+        set
+        {
+            if (audioInputAgcEnabled == value)
+                return;
+            SetField(ref audioInputAgcEnabled, value);
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsAgcTargetEnabled)));
+        }
+    }
+
+    public string AudioInputAgcTargetDbfsText
+    {
+        get => audioInputAgcTargetDbfsText;
+        set => SetField(ref audioInputAgcTargetDbfsText, value ?? string.Empty);
     }
 
     public bool HighQualityBluetoothAudioEnabled
@@ -2091,33 +2105,56 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             userSettings.KeepTransmitMicrophoneWarm = value;
             PersistUserSettings();
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(KeepTransmitMicrophoneWarm)));
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(KeepTransmitMicrophoneWarmToolTip)));
             _ = WarmTransmitMicrophoneAsync();
         }
     }
 
+    public string KeepTransmitMicrophoneWarmToolTip
+        => KeepTransmitMicrophoneWarm
+            ? "Keep transmit microphone warm: On (click to turn off)"
+            : "Keep transmit microphone warm: Off (click to turn on)";
+
     public IReadOnlyList<string> AudioProcessingModeOptions
-        => OperatingSystem.IsMacOS()
+        => IsAppleVoiceProcessingPlatformAvailable && IsAppleVoiceProcessingRouteCompatible
             ? AppleAudioProcessingModeOptions
             : DvmConsoleAudioProcessingModeOptions;
+
+    public bool IsAppleVoiceProcessingPlatformAvailable
+        => OperatingSystem.IsMacOS();
+
+    public bool IsAppleVoiceProcessingRouteCompatible
+        => IsAppleVoiceProcessingDevicePairCompatible(SelectedAudioInputDevice, SelectedAudioOutputDevice);
+
+    public string AppleVoiceProcessingRouteDescription
+        => IsAppleVoiceProcessingRouteCompatible
+            ? "Apple voice processing supports the system-default input/output pair or one duplex device selected for both input and output."
+            : "Apple voice processing is unavailable for this device combination. Choose the system-default input and output, or the same duplex device for both.";
 
     public string SelectedAudioProcessingMode
     {
         get => selectedAudioProcessingMode;
         set
         {
-            string normalized = OperatingSystem.IsMacOS() && value == AppleVoiceProcessingDisplay
+            string normalized = IsAppleVoiceProcessingPlatformAvailable &&
+                IsAppleVoiceProcessingRouteCompatible &&
+                value == AppleVoiceProcessingDisplay
                 ? AppleVoiceProcessingDisplay
                 : DvmConsoleProcessingDisplay;
             if (selectedAudioProcessingMode == normalized)
                 return;
             SetField(ref selectedAudioProcessingMode, normalized);
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsDvmConsoleProcessingSelected)));
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsAgcTargetEnabled)));
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(AudioProcessingDescription)));
         }
     }
 
     public bool IsDvmConsoleProcessingSelected
         => SelectedAudioProcessingMode == DvmConsoleProcessingDisplay;
+
+    public bool IsAgcTargetEnabled
+        => IsDvmConsoleProcessingSelected && AudioInputAgcEnabled;
 
     public string AudioProcessingDescription
         => IsDvmConsoleProcessingSelected
@@ -4892,11 +4929,12 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         if (string.IsNullOrWhiteSpace(AudioInputDeviceIdText) || AudioInputDeviceIdText.Trim().Length > 256 ||
             string.IsNullOrWhiteSpace(AudioOutputDeviceIdText) || AudioOutputDeviceIdText.Trim().Length > 256 ||
             !TryParseBounded(AudioInputGainText, 0.25, 3.0, out double gain) ||
+            !TryParseBounded(AudioInputAgcTargetDbfsText, -40, -12, out double agcTargetDbfs) ||
             !TryParseBounded(AudioInputLowGainText, -12, 12, out double lowGainDb) ||
             !TryParseBounded(AudioInputMidGainText, -12, 12, out double midGainDb) ||
             !TryParseBounded(AudioInputHighGainText, -12, 12, out double highGainDb))
         {
-            AudioStatusText = "Microphone settings require a device ID, gain 0.25–3.0, and EQ values from -12 to 12 dB.";
+            AudioStatusText = "Microphone settings require a device ID, gain 0.25–3.0, AGC target -40 to -12 dBFS, and EQ values from -12 to 12 dB.";
             return;
         }
 
@@ -4915,6 +4953,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         if (OperatingSystem.IsMacOSVersionAtLeast(26))
             userSettings.HighQualityBluetoothAudioEnabled = HighQualityBluetoothAudioEnabled;
         userSettings.AudioInputAgcEnabled = AudioInputAgcEnabled;
+        userSettings.AudioInputAgcTargetDbfs = agcTargetDbfs;
         userSettings.AudioInputGain = gain;
         userSettings.AudioInputEqLowGainDb = lowGainDb;
         userSettings.AudioInputEqMidGainDb = midGainDb;
@@ -4925,6 +4964,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             DeviceId = deviceId,
             ProcessingMode = processingMode,
             AgcEnabled = AudioInputAgcEnabled,
+            AgcTargetDbfs = agcTargetDbfs,
             Gain = gain,
             LowGainDb = lowGainDb,
             MidGainDb = midGainDb,
@@ -4939,6 +4979,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         AudioInputDeviceIdText = deviceId;
         AudioOutputDeviceIdText = outputDeviceId;
         AudioInputGainText = gain.ToString("0.###", CultureInfo.InvariantCulture);
+        AudioInputAgcTargetDbfsText = agcTargetDbfs.ToString("0.###", CultureInfo.InvariantCulture);
         AudioInputLowGainText = lowGainDb.ToString("0.###", CultureInfo.InvariantCulture);
         AudioInputMidGainText = midGainDb.ToString("0.###", CultureInfo.InvariantCulture);
         AudioInputHighGainText = highGainDb.ToString("0.###", CultureInfo.InvariantCulture);
@@ -4977,6 +5018,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             selectedAudioOutputDevice = ResolveAudioDeviceOption(audioOutputDevices, AudioOutputDeviceIdText);
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SelectedAudioInputDevice)));
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SelectedAudioOutputDevice)));
+            RefreshAppleVoiceProcessingRouteState();
         }
         catch (Exception exception) when (exception is InvalidOperationException or IOException or DllNotFoundException or PlatformNotSupportedException)
         {
@@ -4990,7 +5032,30 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             selectedAudioOutputDevice = null;
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SelectedAudioInputDevice)));
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SelectedAudioOutputDevice)));
+            RefreshAppleVoiceProcessingRouteState();
             AudioStatusText = $"Audio device list unavailable: {exception.Message}";
+        }
+    }
+
+    internal static bool IsAppleVoiceProcessingDevicePairCompatible(
+        AudioDeviceOptionViewModel? input,
+        AudioDeviceOptionViewModel? output)
+    {
+        if (input is null || output is null)
+            return false;
+        return input.Id.Equals(output.Id, StringComparison.OrdinalIgnoreCase) ||
+            (input.IsDefault && output.IsDefault);
+    }
+
+    private void RefreshAppleVoiceProcessingRouteState()
+    {
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(AudioProcessingModeOptions)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsAppleVoiceProcessingRouteCompatible)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(AppleVoiceProcessingRouteDescription)));
+        if (!IsAppleVoiceProcessingRouteCompatible &&
+            selectedAudioProcessingMode == AppleVoiceProcessingDisplay)
+        {
+            SelectedAudioProcessingMode = DvmConsoleProcessingDisplay;
         }
     }
 

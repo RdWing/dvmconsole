@@ -32,8 +32,16 @@ public sealed class BuiltInAlertToneViewModel
     {
         Tone = tone;
         Name = $"ALERT {(int)tone}";
+        Description = tone switch
+        {
+            LegacyAlertTone.Alert1 => "Generate 1 kHz for 3 sec",
+            LegacyAlertTone.Alert2 => "Generate alternating 1.5 kHz / 800 Hz tones for 3.36 sec",
+            LegacyAlertTone.Alert3 => "Generate eight 1 kHz pulses over 3.6 sec",
+            _ => throw new ArgumentOutOfRangeException(nameof(tone))
+        };
     }
 
     public LegacyAlertTone Tone { get; }
     public string Name { get; }
+    public string Description { get; }
 }

@@ -1,7 +1,10 @@
+using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Platform.Storage;
+using Avalonia.Threading;
+using Avalonia.VisualTree;
 using DvmConsole.Audio;
 using DvmConsole.Media;
 
@@ -10,28 +13,73 @@ namespace DvmConsole.Desktop;
 public sealed partial class OperatorToolsWindow : Window
 {
     private readonly MainWindowViewModel viewModel;
+    private readonly DispatcherTimer scrollBarHideTimer;
+    private ScrollViewer? activeScrollViewer;
 
     public OperatorToolsWindow()
     {
         viewModel = null!;
+        scrollBarHideTimer = CreateScrollBarHideTimer();
         InitializeComponent();
     }
 
     public OperatorToolsWindow(MainWindowViewModel viewModel, OperatorToolSection section)
     {
         this.viewModel = viewModel ?? throw new ArgumentNullException(nameof(viewModel));
+        scrollBarHideTimer = CreateScrollBarHideTimer();
         InitializeComponent();
         TabControl tabs = ToolTabs ?? this.FindControl<TabControl>("ToolTabs")
             ?? throw new InvalidOperationException("The operator tools tab control could not be loaded.");
         ToolTabs = tabs;
         DataContext = viewModel;
-        tabs.SelectedIndex = (int)section;
+        SelectSection(section);
         AddHandler(InputElement.KeyDownEvent, HandleKeyDown, RoutingStrategies.Tunnel);
         AddHandler(InputElement.KeyUpEvent, HandleKeyUp, RoutingStrategies.Tunnel);
+        AddHandler(InputElement.PointerWheelChangedEvent, HandlePointerWheelChanged, RoutingStrategies.Tunnel);
     }
 
     public void SelectSection(OperatorToolSection section)
-        => ToolTabs.SelectedIndex = (int)section;
+    {
+        if (section == OperatorToolSection.Clock)
+        {
+            ToolTabs.SelectedIndex = (int)OperatorToolSection.General;
+            Dispatcher.UIThread.Post(
+                () => this.FindControl<TextBlock>("ClockSettingsSection")?.BringIntoView(),
+                DispatcherPriority.Background);
+            return;
+        }
+
+        ToolTabs.SelectedIndex = (int)section;
+    }
+
+    private DispatcherTimer CreateScrollBarHideTimer()
+    {
+        var timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(700) };
+        timer.Tick += (_, _) =>
+        {
+            timer.Stop();
+            if (activeScrollViewer is not null)
+                activeScrollViewer.VerticalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Hidden;
+            activeScrollViewer = null;
+        };
+        return timer;
+    }
+
+    private void HandlePointerWheelChanged(object? sender, PointerWheelEventArgs e)
+    {
+        ScrollViewer? scrollViewer = (e.Source as Visual)?.GetVisualAncestors()
+            .OfType<ScrollViewer>()
+            .FirstOrDefault();
+        if (scrollViewer is null)
+            return;
+
+        if (activeScrollViewer is not null && !ReferenceEquals(activeScrollViewer, scrollViewer))
+            activeScrollViewer.VerticalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Hidden;
+        activeScrollViewer = scrollViewer;
+        scrollViewer.VerticalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Auto;
+        scrollBarHideTimer.Stop();
+        scrollBarHideTimer.Start();
+    }
 
     private void HandleKeyDown(object? sender, KeyEventArgs e)
     {
@@ -303,6 +351,7 @@ public sealed partial class OperatorToolsWindow : Window
 
 public enum OperatorToolSection
 {
+    General,
     Audio,
     Tones,
     Streams,
@@ -310,6 +359,6 @@ public enum OperatorToolSection
     History,
     Groups,
     Connections,
-    General,
-    Ptt
+    Ptt,
+    Clock
 }
