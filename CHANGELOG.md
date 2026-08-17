@@ -6,6 +6,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-08-17
+
+### Added
+
+- Add persistent per-channel stereo balance controls to Console Settings so monitored channels can be routed left, center, or right without changing their configured loudness.
+- Add an Activity sidebar control that filters Event History to the channels in the currently selected zone tab while retaining the system-wide Subscriber Command Audit.
+
+### Changed
+
+- Process receive audio independently per channel with bounded queues so one busy or delayed channel does not serialize other active calls.
+- Mix receive audio as complete 20 ms frames and preserve each channel's configured level unless the combined PCM signal would overflow.
+- Coalesce packet diagnostics, audio meters, and recording-catalog refreshes to keep the operator interface responsive during busy receive periods.
+
+### Fixed
+
+- Prevent garbled, stuttering receive audio and application lockups when many channels are active simultaneously.
+- Keep mono output-device fallback audible regardless of a channel's stored stereo balance.
+- Preserve DMR, P25, and NXDN call-lifecycle and encryption metadata when bounded receive queues discard stale voice traffic.
+
 ## [0.2.1] - 2026-08-17
 
 ### Changed
@@ -91,7 +110,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Add patches, multi-select groups, call history, recordings, web streams, clocks, layouts, themes, startup behavior, and in-application operator documentation.
 - Add support for local and KMM-provided P25 encryption keys while preserving compatibility with existing variable-length AES key material.
 
-[Unreleased]: https://github.com/RdWing/dvmconsole/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/RdWing/dvmconsole/compare/v0.2.2...HEAD
+[0.2.2]: https://github.com/RdWing/dvmconsole/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/RdWing/dvmconsole/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/RdWing/dvmconsole/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/RdWing/dvmconsole/compare/v0.1.0...v0.1.1

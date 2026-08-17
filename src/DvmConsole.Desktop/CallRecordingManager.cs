@@ -314,7 +314,7 @@ public sealed class CallRecordingManager : IDisposable
         }
     }
 
-    public void ObserveTraffic(ChannelViewModel channel, FneTrafficFrame traffic)
+    public bool ObserveTraffic(ChannelViewModel channel, FneTrafficFrame traffic)
     {
         ArgumentNullException.ThrowIfNull(channel);
         ArgumentNullException.ThrowIfNull(traffic);
@@ -329,11 +329,16 @@ public sealed class CallRecordingManager : IDisposable
             }
 
             if (!IsTerminatingTraffic(traffic))
-                return;
+                return false;
 
+            bool closed = false;
             if (active.TryGetValue(channel, out ActiveRecording? recording) && recording.StreamId == traffic.StreamId)
+            {
                 CloseCore(channel);
+                closed = true;
+            }
             streamEncryption.Remove((channel, traffic.StreamId));
+            return closed;
         }
     }
 

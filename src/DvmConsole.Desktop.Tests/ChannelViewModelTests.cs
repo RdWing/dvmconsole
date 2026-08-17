@@ -12,6 +12,25 @@ namespace DvmConsole.Desktop.Tests;
 public sealed class ChannelViewModelTests
 {
     [Fact]
+    public void StereoBalanceDefaultsToCenterAndClampsToTheSupportedRange()
+    {
+        var channel = new ChannelViewModel(new ChannelConfiguration
+        {
+            Name = "Dispatch",
+            System = "Test",
+            Tgid = "100",
+            Mode = "analog"
+        });
+        var property = typeof(ChannelViewModel).GetProperty("StereoBalance");
+
+        Assert.NotNull(property);
+        Assert.Equal(0.0, property.GetValue(channel));
+        property.SetValue(channel, 2.0);
+        Assert.Equal(1.0, property.GetValue(channel));
+        Assert.Equal("Right", typeof(ChannelViewModel).GetProperty("StereoBalanceText")!.GetValue(channel));
+    }
+
+    [Fact]
     public void TransmitMutePreservesLogicalReceiveSelection()
     {
         var channel = new ChannelViewModel(new ChannelConfiguration

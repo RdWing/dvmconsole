@@ -140,7 +140,7 @@
             <Border Classes="panel">
               <StackPanel Spacing="8">
                 <TextBlock FontWeight="SemiBold" Text="Per-channel output routes" />
-                <TextBlock Classes="caption" Text="Each channel follows the main output device above. Choose a different device only for an explicit channel override; System default removes the override and restores inheritance." TextWrapping="Wrap" />
+                <TextBlock Classes="caption" Text="Each channel follows the main output device above. Choose a different device only for an explicit channel override. Balance places RX audio from left through center to right and applies immediately." TextWrapping="Wrap" />
                 <ItemsControl ItemsSource="{Binding Systems}">
                   <ItemsControl.ItemTemplate>
                     <DataTemplate x:DataType="local:SystemViewModel">
@@ -149,12 +149,14 @@
                         <ItemsControl ItemsSource="{Binding Channels}">
                           <ItemsControl.ItemTemplate>
                             <DataTemplate x:DataType="local:ChannelViewModel">
-                              <Grid ColumnDefinitions="*,220,Auto" ColumnSpacing="8" Margin="0,2">
+                              <Grid ColumnDefinitions="*,220,180,72,Auto" ColumnSpacing="8" Margin="0,2">
                                 <TextBlock Text="{Binding Name}" VerticalAlignment="Center" />
                                 <ComboBox Grid.Column="1" ItemsSource="{Binding OutputDeviceOptions}" SelectedItem="{Binding SelectedOutputDevice, Mode=TwoWay}">
                                   <ComboBox.ItemTemplate><DataTemplate x:DataType="local:AudioDeviceOptionViewModel"><TextBlock Text="{Binding DisplayName}" /></DataTemplate></ComboBox.ItemTemplate>
                                 </ComboBox>
-                                <Button Grid.Column="2" Content="Save route" Tag="{Binding}" Click="HandleSaveOutputDeviceClick" />
+                                <Slider Grid.Column="2" Minimum="-1" Maximum="1" TickFrequency="0.1" Value="{Binding StereoBalance, Mode=TwoWay}" ToolTip.Tip="Stereo balance: -1 left, 0 center, +1 right" />
+                                <TextBlock Grid.Column="3" Text="{Binding StereoBalanceText}" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                <Button Grid.Column="4" Content="Save route" Tag="{Binding}" Click="HandleSaveOutputDeviceClick" />
                               </Grid>
                             </DataTemplate>
                           </ItemsControl.ItemTemplate>

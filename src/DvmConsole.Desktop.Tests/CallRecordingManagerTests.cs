@@ -33,8 +33,10 @@ public sealed class CallRecordingManagerTests
             manager.WriteSamples(channel, firstSamples);
             Assert.Single(manager.ActivePaths);
 
-            manager.ObserveTraffic(channel, Traffic("TERMINATOR", "TERMINATOR", 7));
+            Assert.True(manager.ObserveTraffic(channel, Traffic("TERMINATOR", "TERMINATOR", 7)));
             Assert.Empty(manager.ActivePaths);
+
+            Assert.False(manager.ObserveTraffic(channel, Traffic("VOICE", "VOICE", 7)));
 
             string firstPath = Directory.GetFiles(root, "*.opus", SearchOption.AllDirectories).Single();
             byte[] first = File.ReadAllBytes(firstPath);

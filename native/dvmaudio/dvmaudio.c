@@ -13,6 +13,7 @@ struct DvmAudioStream {
     AudioUnit unit;
     int32_t input;
     uint32_t sample_rate;
+    uint32_t channels;
     uint32_t ring_capacity;
     int16_t *ring;
     uint32_t input_buffer_capacity;
@@ -304,8 +305,9 @@ static OSStatus output_callback(
     for (UInt32 buffer_index = 0; buffer_index < data->mNumberBuffers; buffer_index++) {
         AudioBuffer *buffer = &data->mBuffers[buffer_index];
         uint32_t capacity = buffer->mDataByteSize / sizeof(int16_t);
-        if (capacity > number_frames)
-            capacity = number_frames;
+        uint32_t requested = number_frames * stream->channels;
+        if (capacity > requested)
+            capacity = requested;
         if (buffer->mData == NULL)
             continue;
 
@@ -316,17 +318,17 @@ static OSStatus output_callback(
     return noErr;
 }
 
-static AudioStreamBasicDescription pcm_format(int32_t sample_rate)
+static AudioStreamBasicDescription pcm_format(int32_t sample_rate, int32_t channels)
 {
     AudioStreamBasicDescription format;
     memset(&format, 0, sizeof(format));
     format.mSampleRate = sample_rate;
     format.mFormatID = kAudioFormatLinearPCM;
     format.mFormatFlags = kAudioFormatFlagIsSignedInteger | kAudioFormatFlagIsPacked;
-    format.mBytesPerPacket = sizeof(int16_t);
+    format.mBytesPerPacket = sizeof(int16_t) * (uint32_t)channels;
     format.mFramesPerPacket = 1;
-    format.mBytesPerFrame = sizeof(int16_t);
-    format.mChannelsPerFrame = 1;
+    format.mBytesPerFrame = sizeof(int16_t) * (uint32_t)channels;
+    format.mChannelsPerFrame = (uint32_t)channels;
     format.mBitsPerChannel = 16;
     return format;
 }
@@ -501,7 +503,7 @@ DvmVoiceProcessingStream *dvm_audio_voice_processing_create(
         AudioUnitSetProperty(stream->unit, kAudioOutputUnitProperty_CurrentDevice, kAudioUnitScope_Global, 0, &input_device, sizeof(input_device)) != noErr)
         goto fail;
 
-    AudioStreamBasicDescription format = pcm_format(sample_rate);
+    AudioStreamBasicDescription format = pcm_format(sample_rate, 1);
     if (AudioUnitSetProperty(stream->unit, kAudioUnitProperty_StreamFormat, kAudioUnitScope_Input, 0, &format, sizeof(format)) != noErr ||
         AudioUnitSetProperty(stream->unit, kAudioUnitProperty_StreamFormat, kAudioUnitScope_Output, 1, &format, sizeof(format)) != noErr)
         goto fail;
@@ -613,7 +615,8 @@ DvmAudioStream *dvm_audio_stream_create(
     int32_t channels,
     int32_t bits_per_sample)
 {
-    if (sample_rate <= 0 || channels != 1 || bits_per_sample != 16)
+    if (sample_rate <= 0 || bits_per_sample != 16 ||
+        (input && channels != 1) || (!input && channels != 1 && channels != 2))
         return NULL;
 
     AudioDeviceID audio_device = (AudioDeviceID)device_id;
@@ -623,6 +626,7 @@ DvmAudioStream *dvm_audio_stream_create(
         return NULL;
 
     stream->input = input != 0;
+    stream->channels = (uint32_t)channels;
     // The HAL input callback is clocked in hardware frames even when its
     // client format is requested at 8 kHz. Capture at the device rate and let
     // the managed streaming converter produce exactly 8 kHz voice PCM. Output
@@ -630,7 +634,7 @@ DvmAudioStream *dvm_audio_stream_create(
     stream->sample_rate = stream->input && native_sample_rate > 0
         ? native_sample_rate
         : (uint32_t)sample_rate;
-    stream->ring_capacity = stream->sample_rate * DVM_AUDIO_RING_SECONDS + 1;
+    stream->ring_capacity = stream->sample_rate * stream->channels * DVM_AUDIO_RING_SECONDS + 1;
     stream->ring = (int16_t *)calloc(stream->ring_capacity, sizeof(int16_t));
     if (stream->ring == NULL) {
         free(stream);
@@ -660,7 +664,7 @@ DvmAudioStream *dvm_audio_stream_create(
     if (AudioUnitSetProperty(stream->unit, kAudioOutputUnitProperty_CurrentDevice, kAudioUnitScope_Global, 0, &audio_device, sizeof(audio_device)) != noErr)
         goto fail;
 
-    AudioStreamBasicDescription format = pcm_format((int32_t)stream->sample_rate);
+    AudioStreamBasicDescription format = pcm_format((int32_t)stream->sample_rate, channels);
     AudioUnitScope format_scope = stream->input ? kAudioUnitScope_Output : kAudioUnitScope_Input;
     AudioUnitElement format_element = stream->input ? 1 : 0;
     if (AudioUnitSetProperty(stream->unit, kAudioUnitProperty_StreamFormat, format_scope, format_element, &format, sizeof(format)) != noErr)

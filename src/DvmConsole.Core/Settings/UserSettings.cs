@@ -82,6 +82,7 @@ public sealed class UserSettings
     public int RecordingRetentionDays { get; set; } = 7;
     public string RecordingRootPath { get; set; } = string.Empty;
     public Dictionary<string, double> ChannelVolumes { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+    public Dictionary<string, double> ChannelStereoBalances { get; set; } = new(StringComparer.OrdinalIgnoreCase);
     public Dictionary<string, string> ChannelOutputDeviceIds { get; set; } = new(StringComparer.OrdinalIgnoreCase);
     public Dictionary<string, string> WebStreamOutputDeviceIds { get; set; } = new(StringComparer.OrdinalIgnoreCase);
     public Dictionary<string, double> WebStreamVolumes { get; set; } = new(StringComparer.OrdinalIgnoreCase);
@@ -187,6 +188,7 @@ public sealed class UserSettingsStore
                     channelVolumes[channelKey] = NormalizeChannelVolume(entry.Value);
             }
             settings.ChannelVolumes = channelVolumes;
+            settings.ChannelStereoBalances = NormalizeChannelStereoBalances(settings.ChannelStereoBalances);
             var channelOutputDevices = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             foreach (KeyValuePair<string, string> entry in settings.ChannelOutputDeviceIds ?? [])
             {
@@ -410,6 +412,7 @@ public sealed class UserSettingsStore
         settings.AudioInputPresetName = settings.AudioInputPresetName?.Trim() ?? string.Empty;
         settings.AudioInputPresets = NormalizeAudioInputPresets(settings.AudioInputPresets);
         settings.ChannelOutputDeviceIds = NormalizeChannelOutputDevices(settings.ChannelOutputDeviceIds);
+        settings.ChannelStereoBalances = NormalizeChannelStereoBalances(settings.ChannelStereoBalances);
         settings.WebStreamOutputDeviceIds = NormalizeChannelOutputDevices(settings.WebStreamOutputDeviceIds);
         settings.WebStreamVolumes = NormalizeWebStreamVolumes(settings.WebStreamVolumes);
         settings.RecordingRootPath = NormalizeRecordingRootPath(settings.RecordingRootPath);
@@ -492,7 +495,8 @@ public sealed class UserSettingsStore
             settings.HighQualityBluetoothAudioEnabled ||
             settings.AudioInputAgcEnabled || settings.AudioInputAgcTargetDbfs != -25.0 ||
             settings.AudioInputPresets.Count > 0 ||
-            settings.ChannelVolumes.Count > 0 || settings.ChannelOutputDeviceIds.Count > 0 ||
+            settings.ChannelVolumes.Count > 0 || settings.ChannelStereoBalances.Count > 0 ||
+            settings.ChannelOutputDeviceIds.Count > 0 ||
             settings.WebStreamOutputDeviceIds.Count > 0 || settings.WebStreamVolumes.Count > 0)
         {
             sections.Add("Audio");
@@ -582,6 +586,7 @@ public sealed class UserSettingsStore
             target.AudioInputPresets = source.AudioInputPresets.ToList();
             target.MuteRxAudioWhileTransmitting = source.MuteRxAudioWhileTransmitting;
             target.ChannelVolumes = new Dictionary<string, double>(source.ChannelVolumes, StringComparer.OrdinalIgnoreCase);
+            target.ChannelStereoBalances = new Dictionary<string, double>(source.ChannelStereoBalances, StringComparer.OrdinalIgnoreCase);
             target.ChannelOutputDeviceIds = new Dictionary<string, string>(source.ChannelOutputDeviceIds, StringComparer.OrdinalIgnoreCase);
             target.WebStreamOutputDeviceIds = new Dictionary<string, string>(source.WebStreamOutputDeviceIds, StringComparer.OrdinalIgnoreCase);
             target.WebStreamVolumes = new Dictionary<string, double>(source.WebStreamVolumes, StringComparer.OrdinalIgnoreCase);
@@ -800,6 +805,20 @@ public sealed class UserSettingsStore
             string streamName = entry.Key?.Trim() ?? string.Empty;
             if (streamName.Length > 0)
                 normalized[streamName] = NormalizeChannelVolume(entry.Value);
+        }
+
+        return normalized;
+    }
+
+    private static Dictionary<string, double> NormalizeChannelStereoBalances(
+        Dictionary<string, double>? balances)
+    {
+        var normalized = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
+        foreach (KeyValuePair<string, double> entry in balances ?? [])
+        {
+            string channelKey = entry.Key?.Trim() ?? string.Empty;
+            if (channelKey.Length > 0)
+                normalized[channelKey] = NormalizeBounded(entry.Value, 0, -1, 1);
         }
 
         return normalized;

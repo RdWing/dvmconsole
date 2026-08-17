@@ -45,13 +45,13 @@ public sealed class WindowsAudioBackend : IAudioBackend
 
     public IAudioCapture OpenCapture(AudioDeviceInfo device, PcmAudioFormat format)
     {
-        ValidateFormat(format);
+        ValidateFormat(format, allowStereo: false);
         return new WindowsAudioCapture(ParseDeviceNumber(device), format);
     }
 
     public IAudioPlayback OpenPlayback(AudioDeviceInfo device, PcmAudioFormat format)
     {
-        ValidateFormat(format);
+        ValidateFormat(format, allowStereo: true);
         return new WindowsAudioPlayback(ParseDeviceNumber(device), format);
     }
 
@@ -69,11 +69,11 @@ public sealed class WindowsAudioBackend : IAudioBackend
         return deviceNumber;
     }
 
-    private static void ValidateFormat(PcmAudioFormat format)
+    private static void ValidateFormat(PcmAudioFormat format, bool allowStereo)
     {
         ArgumentNullException.ThrowIfNull(format);
-        if (format.Channels != 1 || format.BitsPerSample != 16)
-            throw new NotSupportedException("The Windows voice backend currently supports mono 16-bit PCM only.");
+        if (format.Channels < 1 || format.Channels > (allowStereo ? 2 : 1) || format.BitsPerSample != 16)
+            throw new NotSupportedException("The Windows audio backend supports mono capture and mono or stereo 16-bit playback.");
     }
 
     private static int GetWaveOutDeviceCount() => checked((int)waveOutGetNumDevs());

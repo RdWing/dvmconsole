@@ -203,7 +203,7 @@
             <TabControl.ItemTemplate><DataTemplate x:DataType="local:SystemViewModel"><TextBlock Text="{Binding SystemTabText}" /></DataTemplate></TabControl.ItemTemplate>
             <TabControl.ContentTemplate>
               <DataTemplate x:DataType="local:SystemViewModel">
-                <TabControl Classes="zone-tabs" ItemsSource="{Binding Zones}">
+                <TabControl Classes="zone-tabs" ItemsSource="{Binding Zones}" SelectedItem="{Binding SelectedZone, Mode=TwoWay}">
                   <TabControl.ItemTemplate>
                     <DataTemplate x:DataType="local:ZoneViewModel">
                       <Border Background="{Binding TabBrush}" CornerRadius="4" Padding="5,2">
@@ -253,9 +253,10 @@
       </Border>
       <Border Grid.Row="1" Grid.Column="1" Width="{Binding ActivitySidebarWidth}" Background="{DynamicResource SidebarBackgroundBrush}" Padding="8,10" DoubleTapped="HandleActivityDoubleTapped">
         <Grid RowDefinitions="Auto,*">
-          <Grid ColumnDefinitions="*,Auto" IsVisible="{Binding ShowCallHistoryPane}">
+          <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="4" IsVisible="{Binding ShowCallHistoryPane}">
             <TextBlock FontSize="{Binding UiFontSize}" FontWeight="SemiBold" Text="Activity" VerticalAlignment="Center" />
-            <Button Grid.Column="1" Content="‹" Padding="4,0" ToolTip.Tip="Collapse Activity sidebar" Click="HandleToggleActivitySidebarClick" />
+            <Button Grid.Column="1" Content="{Binding ActivityFilterButtonText}" Padding="6,2" ToolTip.Tip="Filter Event History to channels in the current tab" Click="HandleToggleActivityCurrentZoneFilterClick" />
+            <Button Grid.Column="2" Content="‹" Padding="4,0" ToolTip.Tip="Collapse Activity sidebar" Click="HandleToggleActivitySidebarClick" />
           </Grid>
           <Button Content="›" Padding="0" HorizontalAlignment="Stretch" ToolTip.Tip="Expand Activity sidebar" IsVisible="{Binding IsActivitySidebarCollapsed}" Click="HandleToggleActivitySidebarClick" />
           <ScrollViewer x:Name="activityScrollViewer" Grid.Row="1" Margin="0,8,0,0" HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto" IsVisible="{Binding ShowCallHistoryPane}">

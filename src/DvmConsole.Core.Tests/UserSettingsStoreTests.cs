@@ -29,6 +29,39 @@ public sealed class UserSettingsStoreTests
     }
 
     [Fact]
+    public void NormalizesPersistedChannelStereoBalances()
+    {
+        string path = CreatePath();
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            File.WriteAllText(path, """
+                {
+                  "SchemaVersion": 2,
+                  "ChannelStereoBalances": {
+                    " Alpha\u001FLeft ": -2.0,
+                    "Alpha\u001FRight": 2.0,
+                    " ": 0.5
+                  }
+                }
+                """);
+
+            UserSettings settings = new UserSettingsStore(path).Load();
+            var property = typeof(UserSettings).GetProperty("ChannelStereoBalances");
+
+            Assert.NotNull(property);
+            var balances = Assert.IsType<Dictionary<string, double>>(property.GetValue(settings));
+            Assert.Equal(-1.0, balances["Alpha\u001FLeft"]);
+            Assert.Equal(1.0, balances["Alpha\u001FRight"]);
+            Assert.Equal(2, balances.Count);
+        }
+        finally
+        {
+            Cleanup(path);
+        }
+    }
+
+    [Fact]
     public void LegacyBluetoothDefaultRequiresFreshOptIn()
     {
         string path = CreatePath();

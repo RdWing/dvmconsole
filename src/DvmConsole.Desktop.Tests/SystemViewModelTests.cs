@@ -93,7 +93,7 @@ public sealed class SystemViewModelTests
 
     [Fact]
     public void ReportsUnreleasedSemanticVersion()
-        => Assert.StartsWith("0.2.1", MainWindow.ApplicationVersion, StringComparison.Ordinal);
+        => Assert.StartsWith("0.2.2", MainWindow.ApplicationVersion, StringComparison.Ordinal);
 
     [Theory]
     [InlineData("0.1.0-alpha.1+abcdef123456", "0.1.0-alpha.1 (abcdef1)")]
@@ -341,6 +341,48 @@ public sealed class SystemViewModelTests
     }
 
     [Fact]
+    public async Task ActivitySidebarCanFilterEventHistoryToTheSelectedZone()
+    {
+        string path = Path.Combine(AppContext.BaseDirectory, "TestData", "multiple-systems.yml");
+        string settingsPath = CreateSettingsPath();
+
+        try
+        {
+            await using MainWindowViewModel viewModel = MainWindowViewModel.Load(
+                path,
+                new UserSettingsStore(settingsPath));
+            SystemViewModel alpha = viewModel.Systems[0];
+            viewModel.ProcessTraffic(alpha, new FneTrafficFrame(
+                FneTrafficProtocol.Dmr, 1, 42, 101, 0, "GROUP", "VOICE", "VOICE", 1, 701,
+                new byte[DmrVoicePacketCodec.PacketBytes]));
+            viewModel.ProcessTraffic(alpha, new FneTrafficFrame(
+                FneTrafficProtocol.Dmr, 1, 43, 103, 1, "GROUP", "VOICE", "VOICE", 2, 702,
+                new byte[DmrVoicePacketCodec.PacketBytes]));
+            Assert.False(viewModel.TrySendSubscriberCommand(
+                alpha,
+                P25SubscriberCommand.CallAlert,
+                "2001",
+                out _));
+
+            Assert.Equal(2, viewModel.ActivityCallHistory.Count);
+            Assert.Single(viewModel.ActivitySubscriberCommandAudit);
+            Assert.Equal("All channels", viewModel.ActivityFilterButtonText);
+
+            alpha.SelectedZone = alpha.Zones[1];
+            viewModel.ToggleActivityCurrentZoneFilter();
+
+            Assert.Equal("Current tab", viewModel.ActivityFilterButtonText);
+            Assert.Single(viewModel.ActivityCallHistory);
+            Assert.Equal("Alpha Emergency", viewModel.ActivityCallHistory[0].ChannelName);
+            Assert.Single(viewModel.ActivitySubscriberCommandAudit);
+        }
+        finally
+        {
+            CleanupSettingsPath(settingsPath);
+        }
+    }
+
+    [Fact]
     public async Task TogglesAllTransmitCapableChannelsInTheSelectedSystem()
     {
         string path = Path.Combine(AppContext.BaseDirectory, "TestData", "multiple-systems.yml");
@@ -499,10 +541,10 @@ public sealed class SystemViewModelTests
             Assert.Contains(viewModel.FilteredDebugLogs, entry => entry.Message.Contains("RX call started", StringComparison.Ordinal));
             Assert.Contains(viewModel.FilteredDebugLogs, entry => entry.Message.Contains("RX call ended", StringComparison.Ordinal));
             Assert.Contains(viewModel.FilteredDebugLogs, entry => entry.Message.Contains("FNE BER errors 3/141", StringComparison.Ordinal));
+            Assert.Contains(viewModel.FilteredDebugLogs, entry => entry.Message.Contains("RSSI -72 dBm", StringComparison.Ordinal));
 
             viewModel.DebugLogSeverityFilter = "Debug";
-            Assert.Contains(viewModel.FilteredDebugLogs, entry => entry.Message.Contains("FNE RX DMR", StringComparison.Ordinal));
-            Assert.Contains(viewModel.FilteredDebugLogs, entry => entry.Message.Contains("RSSI -72 dBm", StringComparison.Ordinal));
+            Assert.DoesNotContain(viewModel.DebugLogEntries, entry => entry.Message.Contains("FNE RX DMR", StringComparison.Ordinal));
 
             viewModel.CallHistoryFilterText = "Alpha Dispatch";
             Assert.Equal(2, viewModel.FilteredCallHistory.Count);
@@ -795,6 +837,38 @@ public sealed class SystemViewModelTests
                 "FNE peer connected",
                 DateTimeOffset.UtcNow));
             Assert.Equal("Test ●", system.SystemTabText);
+        }
+        finally
+        {
+            await system.DisposeAsync();
+        }
+    }
+
+    [Fact]
+    public async Task ConnectionDiagnosticsCoalesceRepeatedPacketNotifications()
+    {
+        var system = new SystemViewModel(
+            new FneConnectionOptions("Test", "Console", "127.0.0.1", 62031, 1, null, false, null),
+            "Test",
+            "127.0.0.1:62031");
+        var traffic = new FneTrafficFrame(
+            FneTrafficProtocol.P25, 1, 1001, 2002, null, "GROUP", "VOICE", "LDU1", 7, 42,
+            new byte[] { 1, 2, 3 });
+        int notifications = 0;
+        system.PropertyChanged += (_, args) =>
+        {
+            if (args.PropertyName is nameof(SystemViewModel.PacketDiagnosticsText) or nameof(SystemViewModel.LastPacketText))
+                notifications++;
+        };
+
+        try
+        {
+            for (int index = 0; index < 20; index++)
+                system.RecordTraffic(traffic, publishDiagnostics: false);
+            system.PublishTrafficDiagnostics();
+
+            Assert.Equal(2, notifications);
+            Assert.StartsWith("RX 20 packets / 60 bytes", system.PacketDiagnosticsText, StringComparison.Ordinal);
         }
         finally
         {

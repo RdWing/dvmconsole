@@ -731,6 +731,12 @@ public sealed partial class MainWindow : Window
         e.Handled = true;
     }
 
+    private void HandleToggleActivityCurrentZoneFilterClick(object? sender, RoutedEventArgs e)
+    {
+        viewModel.ToggleActivityCurrentZoneFilter();
+        e.Handled = true;
+    }
+
     private void HandleViewModelPropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
         if (e.PropertyName == nameof(MainWindowViewModel.SnapCallHistoryToWindow))
@@ -1199,6 +1205,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     private static readonly KeyboardPttKey[] GlobalPttKeyOptionValues = Enum.GetValues<KeyboardPttKey>();
     private static readonly int[] SerialPttBaudRateOptions = [1_200, 2_400, 4_800, 9_600, 19_200, 38_400, 57_600, 115_200];
     private readonly ChannelReceiveAudioCoordinator audioCoordinator;
+    private readonly ChannelReceiveWorkQueue receiveAudioWork;
     private readonly UserSettingsStore userSettingsStore;
     private readonly UserSettings userSettings;
     private readonly string codeplugDiagnosticsText;
@@ -1234,16 +1241,20 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     private readonly WebStreamPlaybackCoordinator webStreamPlayback;
     private readonly object patchSourceWorkSync = new();
     private readonly Dictionary<ChannelViewModel, Task> patchSourceWork = [];
-    private readonly object receiveAudioWorkSync = new();
+    private readonly object systemTrafficWorkSync = new();
+    private readonly Dictionary<SystemViewModel, SystemTrafficBuffer> pendingSystemTraffic = [];
+    private readonly HashSet<SystemViewModel> scheduledSystemTraffic = [];
     private readonly object audioLevelLogSync = new();
     private readonly Dictionary<(ChannelViewModel Channel, ChannelAudioDirection Direction), DateTimeOffset> lastAudioLevelLogs = [];
+    private readonly Dictionary<(ChannelViewModel Channel, ChannelAudioDirection Direction), DateTimeOffset> lastAudioMeterUpdates = [];
+    private readonly Dictionary<ChannelViewModel, DateTimeOffset> lastReceiveIssueUpdates = [];
     private readonly SemaphoreSlim audioReconfigurationLock = new(1, 1);
-    private readonly Dictionary<ChannelViewModel, Task> receiveAudioWork = [];
     private readonly Dictionary<string, FneConnectionState> lastConnectionStates = new(StringComparer.OrdinalIgnoreCase);
     private readonly IReadOnlyDictionary<SystemViewModel, IReadOnlyDictionary<(FneTrafficProtocol Protocol, uint DestinationId), ChannelViewModel[]>> trafficRoutes;
     private readonly ConnectionChimeTracker connectionChimeTracker = new();
     private ChannelViewModel[] suspendedAudioChannels = [];
     private bool suspendedAudioKeptActive;
+    private bool activityCurrentZoneOnly;
     private PatchGroupEditorViewModel? activeMultiSelectGroup;
     private readonly CallRecordingManager callRecordings;
     private readonly RecordingPlaybackCoordinator recordingPlayback;
@@ -1432,7 +1443,9 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             GetChannelVolume,
             GetChannelOutputDeviceId,
             dmrKeyResolver: dmrKeyResolver,
-            nxdnKeyResolver: nxdnKeyResolver);
+            nxdnKeyResolver: nxdnKeyResolver,
+            getChannelBalance: GetChannelStereoBalance);
+        receiveAudioWork = new ChannelReceiveWorkQueue(ProcessAudioAsync);
         transmitCoordinator = new ChannelTransmitCoordinator(
             p25KeyResolver,
             new AudioInputProcessingOptions
@@ -1537,6 +1550,10 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
                 userSettings.ChannelVolumes.TryGetValue(channel.SettingsKey, out double savedVolume)
                     ? savedVolume
                     : 1.0);
+            channel.RestoreStereoBalance(
+                userSettings.ChannelStereoBalances.TryGetValue(channel.SettingsKey, out double savedBalance)
+                    ? savedBalance
+                    : 0.0);
             channel.RestoreOutputDeviceId(
                 userSettings.ChannelOutputDeviceIds.TryGetValue(channel.SettingsKey, out string? savedOutputDeviceId)
                     ? savedOutputDeviceId
@@ -1547,6 +1564,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             channel.TransmitEncryptionChanged += HandleChannelEncryptionChanged;
             channel.RecordingStateChanged += HandleChannelRecordingChanged;
             channel.VolumeChanged += HandleChannelVolumeChanged;
+            channel.StereoBalanceChanged += HandleChannelStereoBalanceChanged;
             channel.SetIgnoredSubscriberIds(
                 userSettings.RecordingIgnoredSubscriberIds.TryGetValue(
                     channel.SettingsKey,
@@ -1564,6 +1582,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
 
         foreach (SystemViewModel system in Systems)
         {
+            system.PropertyChanged += HandleSystemPropertyChanged;
             system.StatusChanged += (_, status) => HandleSystemStatus(system, status);
             system.LogReceived += HandleSystemLog;
             system.TrafficReceived += (_, traffic) => HandleSystemTraffic(system, traffic);
@@ -2570,7 +2589,11 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             ? []
             : CallHistory
                 .Where(entry => entry.SystemName.Equals(SelectedSystem.Name, StringComparison.OrdinalIgnoreCase))
+                .Where(entry => !activityCurrentZoneOnly ||
+                    SelectedSystem.SelectedZone?.Channels.Any(channel =>
+                        channel.Name.Equals(entry.ChannelName, StringComparison.OrdinalIgnoreCase)) == true)
                 .ToArray();
+    public string ActivityFilterButtonText => activityCurrentZoneOnly ? "Current tab" : "All channels";
     public IReadOnlyList<SubscriberCommandAuditEntry> ActivitySubscriberCommandAudit
         => SelectedSystem is null
             ? []
@@ -3142,6 +3165,19 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         }
     }
 
+    public void ToggleActivityCurrentZoneFilter()
+    {
+        activityCurrentZoneOnly = !activityCurrentZoneOnly;
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ActivityFilterButtonText)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ActivityCallHistory)));
+    }
+
+    private void HandleSystemPropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(SystemViewModel.SelectedZone) && ReferenceEquals(sender, SelectedSystem))
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ActivityCallHistory)));
+    }
+
     public async ValueTask StartKeyboardPttAsync(CancellationToken cancellationToken = default)
     {
         if (!pttStarted)
@@ -3581,11 +3617,13 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         await transmitCoordinator.DisposeAsync().ConfigureAwait(false);
         foreach (SystemViewModel system in Systems)
         {
+            system.PropertyChanged -= HandleSystemPropertyChanged;
             system.KeyResponseReceived -= HandleSystemKeyResponse;
             system.LogReceived -= HandleSystemLog;
             await system.DisposeAsync().ConfigureAwait(false);
         }
-        await DrainFrameWorkAsync().ConfigureAwait(false);
+        await receiveAudioWork.DisposeAsync().ConfigureAwait(false);
+        await DrainPatchSourceWorkAsync().ConfigureAwait(false);
         await patchSourceDecode.DisposeAsync().ConfigureAwait(false);
         patchForwarding.Dispose();
         await audioCoordinator.DisposeAsync().ConfigureAwait(false);
@@ -3603,6 +3641,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             channel.TransmitEncryptionChanged -= HandleChannelEncryptionChanged;
             channel.RecordingStateChanged -= HandleChannelRecordingChanged;
             channel.VolumeChanged -= HandleChannelVolumeChanged;
+            channel.StereoBalanceChanged -= HandleChannelStereoBalanceChanged;
         }
         foreach (WebStreamViewModel stream in WebStreams)
         {
@@ -3902,6 +3941,16 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         _ = audioCoordinator.SetGainAsync(channel, volume);
     }
 
+    private void HandleChannelStereoBalanceChanged(object? sender, double balance)
+    {
+        if (sender is not ChannelViewModel channel)
+            return;
+
+        userSettings.ChannelStereoBalances[channel.SettingsKey] = balance;
+        PersistUserSettings();
+        _ = audioCoordinator.SetBalanceAsync(channel, balance);
+    }
+
     private async Task StartWebStreamAsync(WebStreamViewModel stream)
     {
         try
@@ -4035,6 +4084,13 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         return userSettings.ChannelVolumes.TryGetValue(channel.SettingsKey, out double volume)
             ? volume
             : 1.0;
+    }
+
+    private double GetChannelStereoBalance(ChannelViewModel channel)
+    {
+        return userSettings.ChannelStereoBalances.TryGetValue(channel.SettingsKey, out double balance)
+            ? balance
+            : 0.0;
     }
 
     // Receive uses plain CoreAudio even when Apple voice processing is selected
@@ -4188,11 +4244,23 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             $"{samples.Length} samples{streamText}.");
     }
 
-    private static void UpdateChannelAudioLevel(
+    private void UpdateChannelAudioLevel(
         ChannelViewModel channel,
         ReadOnlyMemory<short> samples,
         ChannelAudioDirection direction)
     {
+        DateTimeOffset now = DateTimeOffset.UtcNow;
+        lock (audioLevelLogSync)
+        {
+            var key = (channel, direction);
+            if (lastAudioMeterUpdates.TryGetValue(key, out DateTimeOffset previous) &&
+                now - previous < TimeSpan.FromMilliseconds(50))
+            {
+                return;
+            }
+            lastAudioMeterUpdates[key] = now;
+        }
+
         double level = ChannelAudioMeter.Calculate(samples.Span, direction);
         Dispatcher.UIThread.Post(() => channel.SetAudioLevel(level, direction));
     }
@@ -4334,31 +4402,79 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         if (Volatile.Read(ref disposeStarted) != 0)
             return;
 
-        void Apply()
+        if (Dispatcher.UIThread.CheckAccess())
         {
-            if (Volatile.Read(ref disposeStarted) == 0)
-                ProcessTraffic(system, traffic);
+            ProcessTraffic(system, traffic);
+            return;
         }
 
-        if (Dispatcher.UIThread.CheckAccess())
-            Apply();
-        else
-            Dispatcher.UIThread.Post(Apply);
+        bool schedule;
+        lock (systemTrafficWorkSync)
+        {
+            if (!pendingSystemTraffic.TryGetValue(system, out SystemTrafficBuffer? pending))
+            {
+                pending = new SystemTrafficBuffer();
+                pendingSystemTraffic.Add(system, pending);
+            }
+            pending.Enqueue(traffic);
+            schedule = scheduledSystemTraffic.Add(system);
+        }
+
+        if (schedule)
+            Dispatcher.UIThread.Post(() => DrainSystemTraffic(system));
     }
 
-    internal void ProcessTraffic(SystemViewModel system, FneTrafficFrame traffic)
+    private void DrainSystemTraffic(SystemViewModel system)
+    {
+        const int MaximumBatchSize = 64;
+        if (Volatile.Read(ref disposeStarted) != 0)
+        {
+            lock (systemTrafficWorkSync)
+            {
+                pendingSystemTraffic.Remove(system);
+                scheduledSystemTraffic.Remove(system);
+            }
+            return;
+        }
+
+        int processed = 0;
+        while (processed < MaximumBatchSize)
+        {
+            FneTrafficFrame? traffic = null;
+            bool empty;
+            lock (systemTrafficWorkSync)
+            {
+                empty = !pendingSystemTraffic.TryGetValue(system, out SystemTrafficBuffer? pending) ||
+                    !pending.TryDequeue(out traffic);
+                if (empty)
+                {
+                    pendingSystemTraffic.Remove(system);
+                    scheduledSystemTraffic.Remove(system);
+                }
+            }
+
+            if (empty)
+            {
+                system.PublishTrafficDiagnostics();
+                return;
+            }
+
+            ProcessTraffic(system, traffic!, publishTrafficDiagnostics: false);
+            processed++;
+        }
+
+        system.PublishTrafficDiagnostics();
+        Dispatcher.UIThread.Post(() => DrainSystemTraffic(system));
+    }
+
+    internal void ProcessTraffic(
+        SystemViewModel system,
+        FneTrafficFrame traffic,
+        bool publishTrafficDiagnostics = true)
     {
         ArgumentNullException.ThrowIfNull(system);
         ArgumentNullException.ThrowIfNull(traffic);
-        system.RecordTraffic(traffic);
-        AddDebugLog(
-            DateTimeOffset.Now,
-            system.Name,
-            DebugLogSeverity.Debug,
-            $"FNE RX {traffic.Protocol.ToString().ToUpperInvariant()} {traffic.CallType}/{traffic.FrameType}/{traffic.Subtype}; " +
-            $"src {traffic.SourceId}, dst {traffic.DestinationId}, seq {traffic.PacketSequence}, stream {traffic.StreamId}, " +
-            $"{traffic.Payload.Length} bytes{DescribeFneSignalQuality(traffic)}.");
-
+        system.RecordTraffic(traffic, publishTrafficDiagnostics);
         List<ChannelViewModel> activeAudioChannels = [];
         List<ChannelViewModel> activePatchSourceChannels = [];
         bool callHistoryChanged = false;
@@ -4540,6 +4656,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         try
         {
             await Task.Run(() => audioCoordinator.StartAsync(channel)).ConfigureAwait(false);
+            receiveAudioWork.Start(channel);
             await RunOnUiThreadAsync(() =>
             {
                 channel.SetAudioEnabled(true);
@@ -4560,6 +4677,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     {
         try
         {
+            await receiveAudioWork.StopAsync(channel).ConfigureAwait(false);
             await Task.Run(() => audioCoordinator.StopAsync(channel)).ConfigureAwait(false);
         }
         finally
@@ -4580,16 +4698,9 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     {
         try
         {
-            int correctedErrors = await audioCoordinator.ProcessAsync(channel, traffic).ConfigureAwait(false);
+            await audioCoordinator.ProcessAsync(channel, traffic).ConfigureAwait(false);
             ReceiveAudioDiagnostics diagnostics = audioCoordinator.GetDiagnostics(channel);
-            AddDebugLog(
-                DateTimeOffset.Now,
-                channel.Definition.SystemName,
-                DebugLogSeverity.Debug,
-                $"Vocoder RX {traffic.Protocol.ToString().ToUpperInvariant()} on {channel.Name}: " +
-                $"{traffic.FrameType}/{traffic.Subtype}, seq {traffic.PacketSequence}, stream {traffic.StreamId}, " +
-                $"corrected errors {correctedErrors}, {diagnostics.SummaryText} cumulative.");
-            if (diagnostics.HasIssues)
+            if (diagnostics.HasIssues && ShouldPublishReceiveIssue(channel))
             {
                 Dispatcher.UIThread.Post(() =>
                     AudioStatusText = $"RX {channel.Name}: {diagnostics.SummaryText} (audio continues)");
@@ -4620,8 +4731,23 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             // A terminator must close TAR even when the output device failed
             // while decoding the same frame; recording lifecycle is separate
             // from playback recovery.
-            callRecordings.ObserveTraffic(channel, traffic);
-            RefreshRecordings();
+            if (callRecordings.ObserveTraffic(channel, traffic))
+                RefreshRecordings();
+        }
+    }
+
+    private bool ShouldPublishReceiveIssue(ChannelViewModel channel)
+    {
+        DateTimeOffset now = DateTimeOffset.UtcNow;
+        lock (audioLevelLogSync)
+        {
+            if (lastReceiveIssueUpdates.TryGetValue(channel, out DateTimeOffset previous) &&
+                now - previous < TimeSpan.FromMilliseconds(500))
+            {
+                return false;
+            }
+            lastReceiveIssueUpdates[channel] = now;
+            return true;
         }
     }
 
@@ -4630,51 +4756,16 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         if (Volatile.Read(ref disposeStarted) != 0)
             return;
 
-        Task current;
-        lock (receiveAudioWorkSync)
-        {
-            Task previous = receiveAudioWork.TryGetValue(channel, out Task? pending)
-                ? pending
-                : Task.CompletedTask;
-            current = previous
-                .ContinueWith(
-                    _ => ProcessAudioAsync(channel, traffic),
-                    CancellationToken.None,
-                    TaskContinuationOptions.ExecuteSynchronously,
-                    TaskScheduler.Default)
-                .Unwrap();
-            receiveAudioWork[channel] = current;
-        }
-
-        _ = current.ContinueWith(
-            _ => RemoveCompletedWork(receiveAudioWorkSync, receiveAudioWork, channel, current),
-            CancellationToken.None,
-            TaskContinuationOptions.ExecuteSynchronously,
-            TaskScheduler.Default);
+        receiveAudioWork.Enqueue(channel, traffic);
     }
 
-    private async Task DrainFrameWorkAsync()
+    private async Task DrainPatchSourceWorkAsync()
     {
         Task[] pending;
-        lock (receiveAudioWorkSync)
-            pending = receiveAudioWork.Values.ToArray();
         lock (patchSourceWorkSync)
-            pending = pending.Concat(patchSourceWork.Values).ToArray();
+            pending = patchSourceWork.Values.ToArray();
         if (pending.Length > 0)
             await Task.WhenAll(pending).ConfigureAwait(false);
-    }
-
-    private static void RemoveCompletedWork(
-        object sync,
-        Dictionary<ChannelViewModel, Task> work,
-        ChannelViewModel channel,
-        Task completed)
-    {
-        lock (sync)
-        {
-            if (work.TryGetValue(channel, out Task? pending) && ReferenceEquals(pending, completed))
-                work.Remove(channel);
-        }
     }
 
     private static bool IsAudioDeviceFailure(Exception exception)
@@ -6404,6 +6495,7 @@ public sealed class SystemViewModel : IFneTrafficEndpoint, INotifyPropertyChange
     private long nonCallDmrTerminatorCount;
     private string lastPacketText = "No media packets received.";
     private bool isSelected;
+    private ZoneViewModel? selectedZone;
 
     public SystemViewModel(
         FneConnectionOptions options,
@@ -6418,6 +6510,7 @@ public sealed class SystemViewModel : IFneTrafficEndpoint, INotifyPropertyChange
         Endpoint = endpoint;
         Channels = channels?.ToArray() ?? [];
         Zones = zones?.ToArray() ?? [];
+        selectedZone = Zones.FirstOrDefault();
         connection.StatusChanged += HandleConnectionStatus;
         connection.LogReceived += HandleLogReceived;
         connection.TrafficReceived += HandleTrafficReceived;
@@ -6433,6 +6526,17 @@ public sealed class SystemViewModel : IFneTrafficEndpoint, INotifyPropertyChange
     public string Endpoint { get; }
     public IReadOnlyList<ChannelViewModel> Channels { get; }
     public IReadOnlyList<ZoneViewModel> Zones { get; }
+    public ZoneViewModel? SelectedZone
+    {
+        get => selectedZone;
+        set
+        {
+            if (ReferenceEquals(selectedZone, value) || (value is not null && !Zones.Contains(value)))
+                return;
+            selectedZone = value;
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SelectedZone)));
+        }
+    }
     public uint? SourceId => options.SourceId;
     public string Identity => options.Identity;
     public bool IsConnected => connection.Status.State == FneConnectionState.Connected;
@@ -6544,12 +6648,18 @@ public sealed class SystemViewModel : IFneTrafficEndpoint, INotifyPropertyChange
         ConnectionStatus = $"{status.State}: {status.Message}";
     }
 
-    internal void RecordTraffic(FneTrafficFrame traffic)
+    internal void RecordTraffic(FneTrafficFrame traffic, bool publishDiagnostics = true)
     {
         ArgumentNullException.ThrowIfNull(traffic);
         receivedPacketCount++;
         receivedPacketBytes += traffic.Payload.Length;
         lastPacketText = $"{traffic.Protocol.ToString().ToUpperInvariant()} {traffic.CallType}/{traffic.FrameType} · seq {traffic.PacketSequence} · stream {traffic.StreamId} · {traffic.SourceId}→{traffic.DestinationId}";
+        if (publishDiagnostics)
+            PublishTrafficDiagnostics();
+    }
+
+    internal void PublishTrafficDiagnostics()
+    {
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(PacketDiagnosticsText)));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(LastPacketText)));
     }
@@ -6715,6 +6825,7 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
     private string lastCallerText = "--";
     private double audioLevel;
     private double volume = 1.0;
+    private double stereoBalance;
     private string ignoredSubscriberIdsText = string.Empty;
     private string outputDeviceIdText = string.Empty;
     private IReadOnlyList<AudioDeviceOptionViewModel> outputDeviceOptions = [];
@@ -6748,6 +6859,7 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
     public event EventHandler<bool>? TransmitEncryptionChanged;
     public event EventHandler<bool>? RecordingStateChanged;
     public event EventHandler<double>? VolumeChanged;
+    public event EventHandler<double>? StereoBalanceChanged;
 
     public string Name => runtime.Definition.Name;
     public string SettingsKey => $"{runtime.Definition.SystemName}\u001F{runtime.Definition.Name}";
@@ -6822,6 +6934,19 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
         get => volume;
         set => SetVolume(value, raiseChanged: true);
     }
+    public double StereoBalance
+    {
+        get => stereoBalance;
+        set => SetStereoBalance(value, raiseChanged: true);
+    }
+    public string StereoBalanceText => stereoBalance switch
+    {
+        <= -0.9999 => "Left",
+        >= 0.9999 => "Right",
+        > -0.0001 and < 0.0001 => "Center",
+        < 0 => $"{-stereoBalance:P0} left",
+        _ => $"{stereoBalance:P0} right"
+    };
     public string OutputDeviceIdText
     {
         get => outputDeviceIdText;
@@ -7025,6 +7150,9 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
     public void RestoreVolume(double value)
         => SetVolume(value, raiseChanged: false);
 
+    public void RestoreStereoBalance(double value)
+        => SetStereoBalance(value, raiseChanged: false);
+
     public void RestoreOutputDeviceId(string? deviceId)
         => OutputDeviceIdText = deviceId?.Trim() ?? string.Empty;
 
@@ -7059,6 +7187,19 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(Volume)));
             VolumeChanged?.Invoke(this, normalized);
         }
+    }
+
+    private void SetStereoBalance(double value, bool raiseChanged)
+    {
+        double normalized = double.IsFinite(value) ? Math.Clamp(value, -1, 1) : 0;
+        if (Math.Abs(stereoBalance - normalized) < 0.0001)
+            return;
+
+        stereoBalance = normalized;
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(StereoBalance)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(StereoBalanceText)));
+        if (raiseChanged)
+            StereoBalanceChanged?.Invoke(this, normalized);
     }
 
     public void SetIgnoredSubscriberIds(IEnumerable<uint> subscriberIds)

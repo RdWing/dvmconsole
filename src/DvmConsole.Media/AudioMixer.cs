@@ -7,8 +7,9 @@ namespace DvmConsole.Media;
 // no frame ready as silence, so a quiet channel cannot block an active one.
 public sealed class AudioMixer : IAsyncDisposable
 {
-    private const int MaximumBufferedFrames = 100;
+    private const int MaximumBufferedFrames = 12;
     private readonly IAudioPlayback output;
+    private readonly PcmAudioFormat inputFormat;
     private readonly object sync = new();
     private readonly Dictionary<int, ChannelBuffer> channels = [];
     private readonly CancellationTokenSource cancellation = new();
@@ -19,19 +20,21 @@ public sealed class AudioMixer : IAsyncDisposable
     private bool disposed;
     private Exception? failure;
     private long droppedSamples;
+    private long protectedFrames;
 
     public AudioMixer(IAudioPlayback output)
     {
         this.output = output ?? throw new ArgumentNullException(nameof(output));
-        if (output.Format.Channels != 1 || output.Format.BitsPerSample != 16)
-            throw new NotSupportedException("Audio mixing currently supports mono 16-bit PCM only.");
+        if (output.Format.Channels is not (1 or 2) || output.Format.BitsPerSample != 16)
+            throw new NotSupportedException("Audio mixing supports mono or stereo 16-bit PCM output only.");
 
         frameSamples = Math.Max(1, output.Format.SampleRate / 50);
+        inputFormat = new PcmAudioFormat(output.Format.SampleRate, 1, output.Format.BitsPerSample);
         maximumBufferedSamples = checked(frameSamples * MaximumBufferedFrames);
         pump = PumpAsync(cancellation.Token);
     }
 
-    public PcmAudioFormat Format => output.Format;
+    public PcmAudioFormat Format => inputFormat;
 
     public int MaximumBufferedSamples => maximumBufferedSamples;
 
@@ -44,12 +47,21 @@ public sealed class AudioMixer : IAsyncDisposable
         }
     }
 
+    public long ProtectedFrames
+    {
+        get
+        {
+            lock (sync)
+                return protectedFrames;
+        }
+    }
+
     public IAudioPlayback OpenChannel()
     {
         lock (sync)
         {
             ThrowIfUnavailable();
-            var channel = new ChannelBuffer(++nextChannelId);
+            var channel = new ChannelBuffer(++nextChannelId, frameSamples);
             channels.Add(channel.Id, channel);
             return new ChannelPlayback(this, channel);
         }
@@ -107,22 +119,43 @@ public sealed class AudioMixer : IAsyncDisposable
     {
         lock (sync)
         {
-            if (channels.Count == 0 || channels.Values.All(channel => channel.Samples.Count == 0))
+            if (channels.Count == 0 || channels.Values.All(channel => channel.Frames.Count == 0))
                 return null;
 
-            var mixed = new int[frameSamples];
+            var left = new double[frameSamples];
+            double[]? right = output.Format.Channels == 2 ? new double[frameSamples] : null;
             foreach (ChannelBuffer channel in channels.Values)
             {
-                int count = Math.Min(frameSamples, channel.Samples.Count);
+                if (!channel.Frames.TryDequeue(out short[]? source))
+                    continue;
+
+                int count = Math.Min(frameSamples, source.Length);
+                double leftBalance = right is null || channel.Balance <= 0 ? 1.0 : 1.0 - channel.Balance;
+                double rightBalance = channel.Balance >= 0 ? 1.0 : 1.0 + channel.Balance;
                 for (int index = 0; index < count; index++)
-                    mixed[index] += (int)Math.Round(
-                        channel.Samples.Dequeue() * channel.Gain,
-                        MidpointRounding.AwayFromZero);
+                {
+                    double gained = source[index] * channel.Gain;
+                    left[index] += gained * leftBalance;
+                    if (right is not null)
+                        right[index] += gained * rightBalance;
+                }
             }
 
-            var frame = new short[frameSamples];
-            for (int index = 0; index < frame.Length; index++)
-                frame[index] = Saturate(mixed[index]);
+            double peak = left.Select(Math.Abs).DefaultIfEmpty().Max();
+            if (right is not null)
+                peak = Math.Max(peak, right.Select(Math.Abs).DefaultIfEmpty().Max());
+            double protection = peak > short.MaxValue ? short.MaxValue / peak : 1.0;
+            if (protection < 1.0)
+                protectedFrames++;
+
+            var frame = new short[checked(frameSamples * output.Format.Channels)];
+            for (int index = 0; index < frameSamples; index++)
+            {
+                int outputIndex = index * output.Format.Channels;
+                frame[outputIndex] = ToPcm(left[index] * protection);
+                if (right is not null)
+                    frame[outputIndex + 1] = ToPcm(right[index] * protection);
+            }
             return frame;
         }
     }
@@ -140,22 +173,25 @@ public sealed class AudioMixer : IAsyncDisposable
                 throw new ObjectDisposedException(nameof(IAudioPlayback));
 
             ReadOnlySpan<short> incoming = samples.Span;
-            int keepStart = Math.Max(0, incoming.Length - maximumBufferedSamples);
-            int existingToDrop = Math.Min(
-                channel.Samples.Count,
-                Math.Max(0, channel.Samples.Count + incoming.Length - maximumBufferedSamples));
-            for (int index = 0; index < existingToDrop; index++)
-                channel.Samples.Dequeue();
-
-            int discarded = existingToDrop + keepStart;
-            if (discarded > 0)
+            while (!incoming.IsEmpty)
             {
-                channel.DroppedSamples += discarded;
-                droppedSamples += discarded;
-            }
+                int count = Math.Min(frameSamples - channel.PartialCount, incoming.Length);
+                incoming[..count].CopyTo(channel.PartialFrame.AsSpan(channel.PartialCount));
+                channel.PartialCount += count;
+                incoming = incoming[count..];
+                if (channel.PartialCount < frameSamples)
+                    continue;
 
-            foreach (short sample in incoming[keepStart..])
-                channel.Samples.Enqueue(sample);
+                while (channel.Frames.Count >= MaximumBufferedFrames && channel.Frames.TryDequeue(out short[]? discarded))
+                {
+                    channel.DroppedSamples += discarded.Length;
+                    droppedSamples += discarded.Length;
+                }
+
+                channel.Frames.Enqueue(channel.PartialFrame);
+                channel.PartialFrame = new short[frameSamples];
+                channel.PartialCount = 0;
+            }
         }
     }
 
@@ -177,26 +213,25 @@ public sealed class AudioMixer : IAsyncDisposable
             throw new IOException("The shared audio mixer stopped.", failure);
     }
 
-    private static short Saturate(int sample)
-    {
-        return sample switch
-        {
-            > short.MaxValue => short.MaxValue,
-            < short.MinValue => short.MinValue,
-            _ => (short)sample
-        };
-    }
+    private static short ToPcm(double sample)
+        => (short)Math.Clamp(
+            Math.Round(sample, MidpointRounding.AwayFromZero),
+            short.MinValue,
+            short.MaxValue);
 
-    private sealed class ChannelBuffer(int id)
+    private sealed class ChannelBuffer(int id, int frameSamples)
     {
         public int Id { get; } = id;
-        public Queue<short> Samples { get; } = [];
+        public Queue<short[]> Frames { get; } = [];
+        public short[] PartialFrame { get; set; } = new short[frameSamples];
+        public int PartialCount { get; set; }
         public double Gain { get; set; } = 1.0;
+        public double Balance { get; set; }
         public int DroppedSamples { get; set; }
         public bool Disposed { get; set; }
     }
 
-    private sealed class ChannelPlayback(AudioMixer owner, ChannelBuffer channel) : IAudioPlayback, IAudioGainControl
+    private sealed class ChannelPlayback(AudioMixer owner, ChannelBuffer channel) : IAudioPlayback, IAudioGainControl, IAudioBalanceControl
     {
         private bool disposed;
 
@@ -220,6 +255,28 @@ public sealed class AudioMixer : IAsyncDisposable
                     if (channel.Disposed || !owner.channels.ContainsKey(channel.Id))
                         throw new ObjectDisposedException(nameof(IAudioPlayback));
                     channel.Gain = value;
+                }
+            }
+        }
+
+        public double Balance
+        {
+            get
+            {
+                lock (owner.sync)
+                    return channel.Balance;
+            }
+            set
+            {
+                if (!double.IsFinite(value) || value is < -1 or > 1)
+                    throw new ArgumentOutOfRangeException(nameof(value), "Audio balance must be between -1 and 1.");
+                lock (owner.sync)
+                {
+                    ObjectDisposedException.ThrowIf(disposed, this);
+                    owner.ThrowIfUnavailable();
+                    if (channel.Disposed || !owner.channels.ContainsKey(channel.Id))
+                        throw new ObjectDisposedException(nameof(IAudioPlayback));
+                    channel.Balance = value;
                 }
             }
         }

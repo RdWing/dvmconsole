@@ -6,19 +6,23 @@ public sealed class PcmRateConverter
 {
     private readonly int inputRate;
     private readonly int outputRate;
+    private readonly int channels;
     private readonly double step;
     private readonly List<short> pending = [];
     private double sourcePosition;
 
-    public PcmRateConverter(int inputRate, int outputRate)
+    public PcmRateConverter(int inputRate, int outputRate, int channels = 1)
     {
         if (inputRate <= 0)
             throw new ArgumentOutOfRangeException(nameof(inputRate));
         if (outputRate <= 0)
             throw new ArgumentOutOfRangeException(nameof(outputRate));
+        if (channels <= 0)
+            throw new ArgumentOutOfRangeException(nameof(channels));
 
         this.inputRate = inputRate;
         this.outputRate = outputRate;
+        this.channels = channels;
         step = (double)inputRate / outputRate;
     }
 
@@ -26,25 +30,34 @@ public sealed class PcmRateConverter
     {
         if (samples.IsEmpty)
             return [];
+        if (samples.Length % channels != 0)
+            throw new ArgumentException("Interleaved PCM must contain complete channel frames.", nameof(samples));
         if (inputRate == outputRate)
             return samples.ToArray();
 
         pending.AddRange(samples.ToArray());
         var output = new List<short>();
-        while (sourcePosition + 1 < pending.Count)
+        while (sourcePosition + 1 < pending.Count / channels)
         {
-            int index = (int)sourcePosition;
-            double fraction = sourcePosition - index;
-            double value = pending[index] + ((pending[index + 1] - pending[index]) * fraction);
-            output.Add((short)Math.Clamp(Math.Round(value), short.MinValue, short.MaxValue));
+            int frameIndex = (int)sourcePosition;
+            double fraction = sourcePosition - frameIndex;
+            for (int channel = 0; channel < channels; channel++)
+            {
+                int index = (frameIndex * channels) + channel;
+                int nextIndex = index + channels;
+                double value = pending[index] + ((pending[nextIndex] - pending[index]) * fraction);
+                output.Add((short)Math.Clamp(Math.Round(value), short.MinValue, short.MaxValue));
+            }
             sourcePosition += step;
         }
 
-        int removable = Math.Min((int)sourcePosition, Math.Max(0, pending.Count - 1));
-        if (removable > 0)
+        int removableFrames = Math.Min(
+            (int)sourcePosition,
+            Math.Max(0, (pending.Count / channels) - 1));
+        if (removableFrames > 0)
         {
-            pending.RemoveRange(0, removable);
-            sourcePosition -= removable;
+            pending.RemoveRange(0, removableFrames * channels);
+            sourcePosition -= removableFrames;
         }
 
         return output.ToArray();

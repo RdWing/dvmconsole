@@ -57,6 +57,7 @@ public sealed record PcmAudioFormat
     public int BitsPerSample { get; }
 
     public static PcmAudioFormat Voice8KhzMono16Bit { get; } = new(8000, 1, 16);
+    public static PcmAudioFormat Voice8KhzStereo16Bit { get; } = new(8000, 2, 16);
 }
 
 public sealed class PcmSamplesEventArgs(ReadOnlyMemory<short> samples) : EventArgs
@@ -94,6 +95,11 @@ public interface IAudioPlayback : IAsyncDisposable
 public interface IAudioGainControl
 {
     double Gain { get; set; }
+}
+
+public interface IAudioBalanceControl
+{
+    double Balance { get; set; }
 }
 
 public interface IPttSource : IAsyncDisposable

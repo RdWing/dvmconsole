@@ -181,7 +181,7 @@ public sealed class MacCoreAudioBackend : IAudioBackend, IHighQualityBluetoothAu
             bool highQualityBluetoothAudio,
             PcmAudioFormat format)
         {
-            ValidateFormat(format);
+            ValidateVoiceFormat(format);
             this.api = api;
             Format = format;
             highQualitySessionAcquired = highQualityBluetoothAudio &&
@@ -282,14 +282,16 @@ public sealed class MacCoreAudioBackend : IAudioBackend, IHighQualityBluetoothAu
 
         public MacCoreAudioPlayback(NativeCoreAudioApi api, ulong deviceId, PcmAudioFormat format)
         {
-            ValidateFormat(format);
+            ValidatePlaybackFormat(format);
             this.api = api;
             Format = format;
             stream = api.CreateStream(deviceId, input: 0, format.SampleRate, format.Channels, format.BitsPerSample);
             if (stream == IntPtr.Zero)
                 throw new InvalidOperationException("CoreAudio could not create the playback stream.");
             int nativeSampleRate = api.GetSampleRate(stream);
-            rateConverter = nativeSampleRate == format.SampleRate ? null : new PcmRateConverter(format.SampleRate, nativeSampleRate);
+            rateConverter = nativeSampleRate == format.SampleRate
+                ? null
+                : new PcmRateConverter(format.SampleRate, nativeSampleRate, format.Channels);
             EnsureSuccess(api.StartStream(stream), "start CoreAudio playback");
         }
 
@@ -536,7 +538,7 @@ public sealed class MacCoreAudioBackend : IAudioBackend, IHighQualityBluetoothAu
             PcmAudioFormat format,
             VoiceEndpoint endpoint)
         {
-            ValidateFormat(format);
+            ValidateVoiceFormat(format);
             lock (Sync)
             {
                 var key = new VoiceSessionKey(
@@ -712,11 +714,18 @@ public sealed class MacCoreAudioBackend : IAudioBackend, IHighQualityBluetoothAu
         }
     }
 
-    private static void ValidateFormat(PcmAudioFormat format)
+    private static void ValidateVoiceFormat(PcmAudioFormat format)
     {
         ArgumentNullException.ThrowIfNull(format);
         if (format.Channels != 1 || format.BitsPerSample != 16)
             throw new NotSupportedException("The macOS voice backend currently supports mono 16-bit PCM only.");
+    }
+
+    private static void ValidatePlaybackFormat(PcmAudioFormat format)
+    {
+        ArgumentNullException.ThrowIfNull(format);
+        if (format.Channels is not (1 or 2) || format.BitsPerSample != 16)
+            throw new NotSupportedException("The macOS audio backend supports mono or stereo 16-bit playback.");
     }
 
     private sealed class NativeCoreAudioApi : IDisposable

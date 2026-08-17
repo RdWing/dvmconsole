@@ -77,6 +77,62 @@ public sealed class AudioMixerTests
         Assert.Equal((short)160, output.Frames[0][0]);
     }
 
+    [Fact]
+    public async Task RoutesMonoChannelsAcrossStereoAndProtectsBothSidesTogether()
+    {
+        var output = new FakePlayback(new PcmAudioFormat(8_000, 2, 16));
+        await using var mixer = new AudioMixer(output);
+        await using IAudioPlayback left = mixer.OpenChannel();
+        await using IAudioPlayback center = mixer.OpenChannel();
+
+        ((IAudioBalanceControl)left).Balance = -1.0;
+        ((IAudioBalanceControl)center).Balance = 0.0;
+        await left.WriteAsync(CreateSamples(30_000));
+        await center.WriteAsync(CreateSamples(10_000));
+        await WaitForAsync(() => output.Frames.Count > 0);
+
+        Assert.Equal(320, output.Frames[0].Length);
+        Assert.Equal(short.MaxValue, output.Frames[0][0]);
+        Assert.Equal((short)8_192, output.Frames[0][1]);
+        Assert.Equal(short.MaxValue, output.Frames[0][318]);
+        Assert.Equal((short)8_192, output.Frames[0][319]);
+    }
+
+    [Fact]
+    public async Task AccumulatesPartialWritesIntoOneTwentyMillisecondFrame()
+    {
+        var output = new FakePlayback();
+        await using var mixer = new AudioMixer(output);
+        await using IAudioPlayback channel = mixer.OpenChannel();
+
+        await channel.WriteAsync(Enumerable.Repeat((short)100, 80).ToArray());
+        await Task.Delay(40);
+        Assert.Empty(output.Frames);
+
+        await channel.WriteAsync(Enumerable.Repeat((short)200, 80).ToArray());
+        await WaitForAsync(() => output.Frames.Count > 0);
+
+        Assert.Single(output.Frames);
+        Assert.Equal((short)100, output.Frames[0][0]);
+        Assert.Equal((short)100, output.Frames[0][79]);
+        Assert.Equal((short)200, output.Frames[0][80]);
+        Assert.Equal((short)200, output.Frames[0][159]);
+    }
+
+    [Fact]
+    public async Task MonoFallbackKeepsHardRightChannelAudible()
+    {
+        var output = new FakePlayback();
+        await using var mixer = new AudioMixer(output);
+        await using IAudioPlayback channel = mixer.OpenChannel();
+        ((IAudioBalanceControl)channel).Balance = 1.0;
+
+        await channel.WriteAsync(CreateSamples(12_000));
+        await WaitForAsync(() => output.Frames.Count > 0);
+
+        Assert.Equal((short)12_000, output.Frames[0][0]);
+    }
+
     private static short[] CreateSamples(short value)
     {
         var samples = new short[160];
@@ -94,8 +150,13 @@ public sealed class AudioMixerTests
 
     private sealed class FakePlayback : IAudioPlayback
     {
+        public FakePlayback(PcmAudioFormat? format = null)
+        {
+            Format = format ?? PcmAudioFormat.Voice8KhzMono16Bit;
+        }
+
         public List<short[]> Frames { get; } = [];
-        public PcmAudioFormat Format { get; } = PcmAudioFormat.Voice8KhzMono16Bit;
+        public PcmAudioFormat Format { get; }
 
         public ValueTask WriteAsync(ReadOnlyMemory<short> samples, CancellationToken cancellationToken = default)
         {

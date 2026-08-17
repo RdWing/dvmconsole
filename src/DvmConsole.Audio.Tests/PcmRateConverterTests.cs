@@ -39,4 +39,18 @@ public sealed class PcmRateConverterTests
         Assert.Equal(new short[] { 0, 17, 33, 50, 67, 83 }, first);
         Assert.Equal(new short[] { 100, 117, 133, 150, 167, 183 }, second);
     }
+
+    [Fact]
+    public void StereoConversionPreservesInterleavedChannelSeparation()
+    {
+        var converter = Assert.IsType<PcmRateConverter>(Activator.CreateInstance(
+            typeof(PcmRateConverter),
+            8_000,
+            16_000,
+            2));
+
+        short[] output = converter.Convert(new short[] { 0, 1_000, 100, 1_100 });
+
+        Assert.Equal(new short[] { 0, 1_000, 50, 1_050 }, output);
+    }
 }

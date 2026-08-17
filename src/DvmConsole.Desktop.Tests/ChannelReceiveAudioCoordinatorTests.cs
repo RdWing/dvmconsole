@@ -12,6 +12,43 @@ namespace DvmConsole.Desktop.Tests;
 public sealed class ChannelReceiveAudioCoordinatorTests
 {
     [Fact]
+    public async Task ProcessesDifferentChannelsConcurrently()
+    {
+        var backend = new FakeAudioBackend();
+        var vocoder = new BlockingFirstVocoderBackend();
+        await using var coordinator = new ChannelReceiveAudioCoordinator(() => backend, () => vocoder);
+        var first = new ChannelViewModel(new ChannelConfiguration
+        {
+            Name = "Dispatch 1",
+            System = "System 1",
+            Tgid = "100",
+            Mode = "dmr",
+            Slot = 1
+        });
+        var second = new ChannelViewModel(new ChannelConfiguration
+        {
+            Name = "Dispatch 2",
+            System = "System 1",
+            Tgid = "101",
+            Mode = "dmr",
+            Slot = 2
+        });
+        await coordinator.StartAsync(first);
+        await coordinator.StartAsync(second);
+
+        Task<int> firstWork = Task.Run(() => coordinator.ProcessAsync(first, CreateTraffic(100, 0)));
+        await vocoder.FirstDecodeStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        Task<int> secondWork = Task.Run(() => coordinator.ProcessAsync(second, CreateTraffic(101, 1)));
+
+        Task completed = await Task.WhenAny(secondWork, Task.Delay(TimeSpan.FromMilliseconds(500)));
+        vocoder.ReleaseFirstDecode.TrySetResult();
+        await firstWork;
+
+        Assert.Same(secondWork, completed);
+        Assert.Equal(0, await secondWork);
+    }
+
+    [Fact]
     public async Task SharesPlaybackAcrossTwoChannelsAndStopsEachSessionIndividually()
     {
         var backend = new FakeAudioBackend();
@@ -220,6 +257,32 @@ public sealed class ChannelReceiveAudioCoordinatorTests
     }
 
     [Fact]
+    public async Task AppliesConfiguredChannelBalanceToStereoPlayback()
+    {
+        var backend = new StereoAudioBackend();
+        await using var coordinator = new ChannelReceiveAudioCoordinator(
+            () => backend,
+            () => new FakeVocoderBackend(),
+            getChannelBalance: _ => -1.0);
+        var channel = new ChannelViewModel(new ChannelConfiguration
+        {
+            Name = "Left Dispatch",
+            System = "System 1",
+            Tgid = "100",
+            Mode = "dmr",
+            Slot = 1
+        });
+
+        await coordinator.StartAsync(channel);
+        await coordinator.ProcessAsync(channel, CreateTraffic(100, 0));
+        await WaitForAsync(() => backend.Playback.Frames.Count > 0);
+
+        Assert.Equal(320, backend.Playback.Frames[0].Length);
+        Assert.Equal((short)20_000, backend.Playback.Frames[0][0]);
+        Assert.Equal((short)0, backend.Playback.Frames[0][1]);
+    }
+
+    [Fact]
     public async Task RoutesChannelsToSeparateConfiguredOutputDevices()
     {
         var backend = new FakeAudioBackend();
@@ -408,11 +471,37 @@ public sealed class ChannelReceiveAudioCoordinatorTests
         public void Dispose() => IsDisposed = true;
     }
 
+    private sealed class StereoAudioBackend : IAudioBackend
+    {
+        public FakePlayback Playback { get; } = new(PcmAudioFormat.Voice8KhzStereo16Bit);
+        public string Name => "stereo-fake";
+
+        public IReadOnlyList<AudioDeviceInfo> EnumerateDevices(AudioDirection direction)
+            => direction == AudioDirection.Output
+                ? [new AudioDeviceInfo("output", "Stereo output", direction, true)]
+                : [new AudioDeviceInfo("input", "Fake input", direction, true)];
+
+        public IAudioCapture OpenCapture(AudioDeviceInfo device, PcmAudioFormat format)
+            => throw new NotSupportedException();
+
+        public IAudioPlayback OpenPlayback(AudioDeviceInfo device, PcmAudioFormat format)
+            => Playback;
+
+        public void Dispose()
+        {
+        }
+    }
+
     private sealed class FakePlayback : IAudioPlayback
     {
+        public FakePlayback(PcmAudioFormat? format = null)
+        {
+            Format = format ?? PcmAudioFormat.Voice8KhzMono16Bit;
+        }
+
         public List<short[]> Frames { get; } = [];
         public bool IsDisposed { get; private set; }
-        public PcmAudioFormat Format { get; } = PcmAudioFormat.Voice8KhzMono16Bit;
+        public PcmAudioFormat Format { get; }
 
         public ValueTask WriteAsync(ReadOnlyMemory<short> samples, CancellationToken cancellationToken = default)
         {
@@ -469,6 +558,48 @@ public sealed class ChannelReceiveAudioCoordinatorTests
         }
 
         public void Dispose() => IsDisposed = true;
+    }
+
+    private sealed class BlockingFirstVocoderBackend : IVocoderBackend
+    {
+        private int sessionCount;
+
+        public TaskCompletionSource FirstDecodeStarted { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource ReleaseFirstDecode { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public string Name => "blocking-first";
+        public bool IsAvailable => true;
+
+        public IVocoderSession CreateSession(VocoderMode mode)
+            => Interlocked.Increment(ref sessionCount) == 1
+                ? new BlockingVocoderSession(FirstDecodeStarted, ReleaseFirstDecode)
+                : new FakeVocoderSession();
+
+        public void Dispose()
+        {
+            ReleaseFirstDecode.TrySetResult();
+        }
+    }
+
+    private sealed class BlockingVocoderSession(
+        TaskCompletionSource started,
+        TaskCompletionSource release) : IVocoderSession
+    {
+        public int Encode(ReadOnlySpan<short> samples, Span<byte> codeword) => 0;
+
+        public int Decode(ReadOnlySpan<byte> codeword, Span<short> samples)
+        {
+            started.TrySetResult();
+            release.Task.GetAwaiter().GetResult();
+            samples.Fill(20_000);
+            return 0;
+        }
+
+        public void Dispose()
+        {
+            release.TrySetResult();
+        }
     }
 
     private sealed class FakeVocoderSession : IVocoderSession

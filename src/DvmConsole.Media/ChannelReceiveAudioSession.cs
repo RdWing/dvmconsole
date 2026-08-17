@@ -92,6 +92,12 @@ public sealed class ChannelReceiveAudioSession : IAsyncDisposable
             gainControl.Gain = gain;
     }
 
+    public void SetBalance(double balance)
+    {
+        if (playback is IAudioBalanceControl balanceControl)
+            balanceControl.Balance = balance;
+    }
+
     public ValueTask<int> ProcessAsync(
         FneTrafficFrame traffic,
         CancellationToken cancellationToken = default)
