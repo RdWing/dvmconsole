@@ -798,9 +798,13 @@ public sealed class SystemViewModelTests
         try
         {
             await using MainWindowViewModel viewModel = MainWindowViewModel.Load(codeplugPath, store);
+            Assert.Equal(
+                OperatingSystem.IsMacOSVersionAtLeast(26),
+                viewModel.IsHighQualityBluetoothAudioAvailable);
 
             viewModel.AudioInputDeviceIdText = "input-device-42";
             viewModel.AudioOutputDeviceIdText = "output-device-84";
+            viewModel.HighQualityBluetoothAudioEnabled = false;
             viewModel.SelectedAudioProcessingMode = "Apple voice processing";
             viewModel.ApplyAudioInputSettingsCommand.Execute(null);
 
@@ -815,6 +819,7 @@ public sealed class SystemViewModelTests
                 Assert.Equal(UserSettings.DvmConsoleAudioProcessingMode, unsupportedPlatformSettings.AudioProcessingMode);
                 Assert.Equal("input-device-42", unsupportedPlatformSettings.AudioInputDeviceId);
                 Assert.Equal("output-device-84", unsupportedPlatformSettings.AudioOutputDeviceId);
+                Assert.True(unsupportedPlatformSettings.HighQualityBluetoothAudioEnabled);
                 Assert.DoesNotContain("echo cancellation", viewModel.AudioProcessingDescription, StringComparison.OrdinalIgnoreCase);
                 return;
             }
@@ -824,6 +829,9 @@ public sealed class SystemViewModelTests
             Assert.Equal(UserSettings.AppleVoiceProcessingMode, appleSettings.AudioProcessingMode);
             Assert.Equal("input-device-42", appleSettings.AudioInputDeviceId);
             Assert.Equal("output-device-84", appleSettings.AudioOutputDeviceId);
+            Assert.Equal(
+                !OperatingSystem.IsMacOSVersionAtLeast(26),
+                appleSettings.HighQualityBluetoothAudioEnabled);
             Assert.Contains("echo cancellation", viewModel.AudioProcessingDescription, StringComparison.OrdinalIgnoreCase);
             Assert.Contains("receive audio remains unprocessed", viewModel.AudioProcessingDescription, StringComparison.OrdinalIgnoreCase);
 

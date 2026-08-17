@@ -4,18 +4,20 @@ namespace DvmConsole.Audio;
 
 // macOS CoreAudio backend. The native shim is loaded explicitly so the rest of
 // the application remains independent of CoreAudio and Windows audio APIs.
-public sealed class MacCoreAudioBackend : IAudioBackend
+public sealed class MacCoreAudioBackend : IAudioBackend, IHighQualityBluetoothAudioStatus
 {
     private readonly NativeCoreAudioApi api;
     private readonly AudioProcessingMode processingMode;
     private readonly string configuredInputDeviceId;
     private readonly string configuredOutputDeviceId;
+    private readonly bool highQualityBluetoothAudio;
 
     public MacCoreAudioBackend(
         string? libraryPath = null,
         AudioProcessingMode processingMode = AudioProcessingMode.DvmConsole,
         string? inputDeviceId = null,
-        string? outputDeviceId = null)
+        string? outputDeviceId = null,
+        bool highQualityBluetoothAudio = true)
     {
         if (!OperatingSystem.IsMacOS())
             throw new PlatformNotSupportedException("MacCoreAudioBackend requires macOS.");
@@ -23,10 +25,13 @@ public sealed class MacCoreAudioBackend : IAudioBackend
         this.processingMode = processingMode;
         configuredInputDeviceId = NormalizeConfiguredDeviceId(inputDeviceId);
         configuredOutputDeviceId = NormalizeConfiguredDeviceId(outputDeviceId);
+        this.highQualityBluetoothAudio = highQualityBluetoothAudio;
         api = NativeCoreAudioApi.Load(libraryPath);
     }
 
     public string Name => "macOS CoreAudio";
+    public HighQualityBluetoothAudioStatus HighQualityBluetoothStatus
+        => (HighQualityBluetoothAudioStatus)api.GetHighQualityBluetoothStatus();
 
     public IReadOnlyList<AudioDeviceInfo> EnumerateDevices(AudioDirection direction)
     {
@@ -66,21 +71,27 @@ public sealed class MacCoreAudioBackend : IAudioBackend
 
     public IAudioCapture OpenCapture(AudioDeviceInfo device, PcmAudioFormat format)
     {
+        ulong inputDeviceId = ParseDeviceId(device);
+        ulong outputDeviceId = ResolveConfiguredDeviceId(AudioDirection.Output, configuredOutputDeviceId);
         if (processingMode == AudioProcessingMode.AppleVoiceProcessing)
         {
-            ulong inputDeviceId = ParseDeviceId(device);
-            ulong outputDeviceId = ResolveConfiguredDeviceId(AudioDirection.Output, configuredOutputDeviceId);
             EnsureVoiceProcessingPairSupported(inputDeviceId, outputDeviceId);
             return new MacVoiceProcessingCapture(
                 VoiceProcessingSessionRegistry.Acquire(
                     api.LibraryPath,
                     inputDeviceId,
                     outputDeviceId,
+                    highQualityBluetoothAudio,
                     format,
                     VoiceEndpoint.Capture),
                 format);
         }
-        return new MacCoreAudioCapture(api, ParseDeviceId(device), format);
+        return new MacCoreAudioCapture(
+            api,
+            inputDeviceId,
+            outputDeviceId,
+            highQualityBluetoothAudio,
+            format);
     }
 
     public IAudioPlayback OpenPlayback(AudioDeviceInfo device, PcmAudioFormat format)
@@ -96,6 +107,7 @@ public sealed class MacCoreAudioBackend : IAudioBackend
                     api.LibraryPath,
                     inputDeviceId,
                     outputDeviceId,
+                    highQualityBluetoothAudio,
                     format,
                     VoiceEndpoint.Playback),
                 format);
@@ -157,18 +169,30 @@ public sealed class MacCoreAudioBackend : IAudioBackend
         private readonly NativeCoreAudioApi api;
         private readonly IntPtr stream;
         private readonly PcmRateConverter? rateConverter;
+        private readonly bool highQualitySessionAcquired;
         private CancellationTokenSource? pumpCancellation;
         private Task? pumpTask;
         private bool disposed;
 
-        public MacCoreAudioCapture(NativeCoreAudioApi api, ulong deviceId, PcmAudioFormat format)
+        public MacCoreAudioCapture(
+            NativeCoreAudioApi api,
+            ulong deviceId,
+            ulong outputDeviceId,
+            bool highQualityBluetoothAudio,
+            PcmAudioFormat format)
         {
             ValidateFormat(format);
             this.api = api;
             Format = format;
+            highQualitySessionAcquired = highQualityBluetoothAudio &&
+                api.AcquireHighQualityBluetooth(deviceId, outputDeviceId) != 0;
             stream = api.CreateStream(deviceId, input: 1, format.SampleRate, format.Channels, format.BitsPerSample);
             if (stream == IntPtr.Zero)
+            {
+                if (highQualitySessionAcquired)
+                    api.ReleaseHighQualityBluetooth();
                 throw new InvalidOperationException("CoreAudio could not create the capture stream.");
+            }
             int nativeSampleRate = api.GetSampleRate(stream);
             rateConverter = nativeSampleRate == format.SampleRate ? null : new PcmRateConverter(nativeSampleRate, format.SampleRate);
         }
@@ -209,8 +233,16 @@ public sealed class MacCoreAudioBackend : IAudioBackend
             if (disposed)
                 return;
             await StopAsync().ConfigureAwait(false);
-            api.DestroyStream(stream);
-            disposed = true;
+            try
+            {
+                api.DestroyStream(stream);
+            }
+            finally
+            {
+                if (highQualitySessionAcquired)
+                    api.ReleaseHighQualityBluetooth();
+                disposed = true;
+            }
         }
 
         private async Task PumpAsync(CancellationToken cancellationToken)
@@ -500,13 +532,18 @@ public sealed class MacCoreAudioBackend : IAudioBackend
             string libraryPath,
             ulong inputDeviceId,
             ulong outputDeviceId,
+            bool highQualityBluetoothAudio,
             PcmAudioFormat format,
             VoiceEndpoint endpoint)
         {
             ValidateFormat(format);
             lock (Sync)
             {
-                var key = new VoiceSessionKey(libraryPath, inputDeviceId, outputDeviceId);
+                var key = new VoiceSessionKey(
+                    libraryPath,
+                    inputDeviceId,
+                    outputDeviceId,
+                    highQualityBluetoothAudio);
                 if (!Sessions.TryGetValue(key, out VoiceProcessingSession? session))
                 {
                     session = new VoiceProcessingSession(key, format);
@@ -543,7 +580,8 @@ public sealed class MacCoreAudioBackend : IAudioBackend
         public readonly record struct VoiceSessionKey(
             string LibraryPath,
             ulong InputDeviceId,
-            ulong OutputDeviceId);
+            ulong OutputDeviceId,
+            bool HighQualityBluetoothAudio);
     }
 
     private sealed class VoiceProcessingSession : IDisposable
@@ -552,6 +590,7 @@ public sealed class MacCoreAudioBackend : IAudioBackend
         private readonly NativeCoreAudioApi api;
         private readonly IntPtr stream;
         private readonly PcmAudioFormat format;
+        private readonly bool highQualitySessionAcquired;
         private int captureEndpoints;
         private int playbackEndpoints;
         private int runningEndpoints;
@@ -562,6 +601,8 @@ public sealed class MacCoreAudioBackend : IAudioBackend
             Key = key;
             this.format = format;
             api = NativeCoreAudioApi.Load(key.LibraryPath);
+            highQualitySessionAcquired = key.HighQualityBluetoothAudio &&
+                api.AcquireHighQualityBluetooth(key.InputDeviceId, key.OutputDeviceId) != 0;
             stream = api.CreateVoiceProcessingStream(
                 key.InputDeviceId,
                 key.OutputDeviceId,
@@ -570,6 +611,8 @@ public sealed class MacCoreAudioBackend : IAudioBackend
                 format.BitsPerSample);
             if (stream == IntPtr.Zero)
             {
+                if (highQualitySessionAcquired)
+                    api.ReleaseHighQualityBluetooth();
                 api.Dispose();
                 throw new InvalidOperationException(
                     "CoreAudio could not create the Apple Voice Processing I/O stream. " +
@@ -625,8 +668,16 @@ public sealed class MacCoreAudioBackend : IAudioBackend
                     return;
                 if (runningEndpoints > 0)
                     api.StopVoiceProcessing(stream);
-                api.DestroyVoiceProcessingStream(stream);
-                api.Dispose();
+                try
+                {
+                    api.DestroyVoiceProcessingStream(stream);
+                }
+                finally
+                {
+                    if (highQualitySessionAcquired)
+                        api.ReleaseHighQualityBluetooth();
+                    api.Dispose();
+                }
                 runningEndpoints = 0;
                 disposed = true;
             }
@@ -680,6 +731,9 @@ public sealed class MacCoreAudioBackend : IAudioBackend
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate uint StreamQueuedSamplesDelegate(IntPtr stream);
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate void DestroyStreamDelegate(IntPtr stream);
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate IntPtr CreateVoiceProcessingStreamDelegate(ulong inputDeviceId, ulong outputDeviceId, int sampleRate, int channels, int bitsPerSample);
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate int AcquireHighQualityBluetoothDelegate(ulong inputDeviceId, ulong outputDeviceId);
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate void ReleaseHighQualityBluetoothDelegate();
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate int GetHighQualityBluetoothStatusDelegate();
 
         private readonly IntPtr handle;
         private readonly GetDeviceCountDelegate getDeviceCount;
@@ -699,6 +753,9 @@ public sealed class MacCoreAudioBackend : IAudioBackend
         private readonly StreamWriteDelegate writeVoiceProcessing;
         private readonly StreamQueuedSamplesDelegate voiceProcessingQueuedSamples;
         private readonly DestroyStreamDelegate destroyVoiceProcessingStream;
+        private readonly AcquireHighQualityBluetoothDelegate acquireHighQualityBluetooth;
+        private readonly ReleaseHighQualityBluetoothDelegate releaseHighQualityBluetooth;
+        private readonly GetHighQualityBluetoothStatusDelegate getHighQualityBluetoothStatus;
 
         private NativeCoreAudioApi(IntPtr handle, string libraryPath)
         {
@@ -721,6 +778,9 @@ public sealed class MacCoreAudioBackend : IAudioBackend
             writeVoiceProcessing = Get<StreamWriteDelegate>("dvm_audio_voice_processing_write");
             voiceProcessingQueuedSamples = Get<StreamQueuedSamplesDelegate>("dvm_audio_voice_processing_queued_samples");
             destroyVoiceProcessingStream = Get<DestroyStreamDelegate>("dvm_audio_voice_processing_destroy");
+            acquireHighQualityBluetooth = Get<AcquireHighQualityBluetoothDelegate>("dvm_audio_high_quality_bluetooth_acquire");
+            releaseHighQualityBluetooth = Get<ReleaseHighQualityBluetoothDelegate>("dvm_audio_high_quality_bluetooth_release");
+            getHighQualityBluetoothStatus = Get<GetHighQualityBluetoothStatusDelegate>("dvm_audio_high_quality_bluetooth_status");
         }
 
         public string LibraryPath { get; }
@@ -763,6 +823,9 @@ public sealed class MacCoreAudioBackend : IAudioBackend
         public int WriteVoiceProcessing(IntPtr stream, short[] samples, int count) => writeVoiceProcessing(stream, samples, count);
         public uint GetVoiceProcessingQueuedSamples(IntPtr stream) => voiceProcessingQueuedSamples(stream);
         public void DestroyVoiceProcessingStream(IntPtr stream) => destroyVoiceProcessingStream(stream);
+        public int AcquireHighQualityBluetooth(ulong inputDeviceId, ulong outputDeviceId) => acquireHighQualityBluetooth(inputDeviceId, outputDeviceId);
+        public void ReleaseHighQualityBluetooth() => releaseHighQualityBluetooth();
+        public int GetHighQualityBluetoothStatus() => getHighQualityBluetoothStatus();
         public void Dispose() => NativeLibrary.Free(handle);
 
         private T Get<T>(string symbol) where T : Delegate

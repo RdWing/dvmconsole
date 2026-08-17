@@ -102,6 +102,7 @@ public sealed class UserSettingsStoreTests
                 AudioInputDeviceId = " microphone-1 ",
                 AudioOutputDeviceId = " speaker-1 ",
                 AudioProcessingMode = UserSettings.AppleVoiceProcessingMode,
+                HighQualityBluetoothAudioEnabled = false,
                 AudioInputAgcEnabled = true,
                 KeepTransmitMicrophoneWarm = true,
                 AudioInputGain = 1.5,
@@ -223,6 +224,7 @@ public sealed class UserSettingsStoreTests
             Assert.Equal("microphone-1", loaded.AudioInputDeviceId);
             Assert.Equal("speaker-1", loaded.AudioOutputDeviceId);
             Assert.Equal(UserSettings.AppleVoiceProcessingMode, loaded.AudioProcessingMode);
+            Assert.False(loaded.HighQualityBluetoothAudioEnabled);
             Assert.True(loaded.AudioInputAgcEnabled);
             Assert.True(loaded.KeepTransmitMicrophoneWarm);
             Assert.Equal(1.5, loaded.AudioInputGain);

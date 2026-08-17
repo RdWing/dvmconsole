@@ -122,6 +122,22 @@ public sealed class TransmitCoordinatorTests
     }
 
     [Fact]
+    public async Task ReportsHighQualityBluetoothStatusAfterCaptureStarts()
+    {
+        var channel = Channel("Analog", 100);
+        var endpoint = new FakeEndpoint("Test", [channel]);
+        var audio = new FakeAudioBackend(
+            highQualityBluetoothStatus: HighQualityBluetoothAudioStatus.Active);
+        await using var coordinator = new ChannelTransmitCoordinator(createAudioBackend: () => audio);
+        HighQualityBluetoothAudioStatus? reported = null;
+        coordinator.HighQualityBluetoothStatusChanged += (_, status) => reported = status;
+
+        await coordinator.StartAsync(channel, endpoint);
+
+        Assert.Equal(HighQualityBluetoothAudioStatus.Active, reported);
+    }
+
+    [Fact]
     public async Task SessionFaultIsReportedAndCleanupRemainsSafe()
     {
         var channel = Channel("Analog", 100);
@@ -162,12 +178,16 @@ public sealed class TransmitCoordinatorTests
         }
     }
 
-    private sealed class FakeAudioBackend(bool failStart = false) : IAudioBackend
+    private sealed class FakeAudioBackend(
+        bool failStart = false,
+        HighQualityBluetoothAudioStatus highQualityBluetoothStatus = HighQualityBluetoothAudioStatus.Off)
+        : IAudioBackend, IHighQualityBluetoothAudioStatus
     {
         public FakeCapture Capture { get; } = new(failStart);
         public int OpenCaptureCalls { get; private set; }
         public bool IsDisposed { get; private set; }
         public string Name => "test";
+        public HighQualityBluetoothAudioStatus HighQualityBluetoothStatus => highQualityBluetoothStatus;
         public IReadOnlyList<AudioDeviceInfo> EnumerateDevices(AudioDirection direction)
             => [new AudioDeviceInfo(direction == AudioDirection.Input ? "input" : "output", "Test", direction, true)];
         public IAudioCapture OpenCapture(AudioDeviceInfo device, PcmAudioFormat format) { OpenCaptureCalls++; return Capture; }

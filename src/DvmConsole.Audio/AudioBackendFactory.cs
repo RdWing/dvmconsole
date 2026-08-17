@@ -8,10 +8,16 @@ public static class AudioBackendFactory
         string? macLibraryPath = null,
         AudioProcessingMode processingMode = AudioProcessingMode.DvmConsole,
         string? inputDeviceId = null,
-        string? outputDeviceId = null)
+        string? outputDeviceId = null,
+        bool highQualityBluetoothAudio = true)
     {
         if (OperatingSystem.IsMacOS())
-            return new MacCoreAudioBackend(macLibraryPath, processingMode, inputDeviceId, outputDeviceId);
+            return new MacCoreAudioBackend(
+                macLibraryPath,
+                processingMode,
+                inputDeviceId,
+                outputDeviceId,
+                highQualityBluetoothAudio);
         if (processingMode == AudioProcessingMode.AppleVoiceProcessing)
             throw new PlatformNotSupportedException("Apple voice processing requires an Apple audio backend.");
         if (OperatingSystem.IsWindows())

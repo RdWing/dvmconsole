@@ -16,6 +16,20 @@ public enum AudioProcessingMode
     AppleVoiceProcessing
 }
 
+public enum HighQualityBluetoothAudioStatus
+{
+    Off,
+    Unavailable,
+    Requested,
+    Active,
+    Unsupported
+}
+
+public interface IHighQualityBluetoothAudioStatus
+{
+    HighQualityBluetoothAudioStatus HighQualityBluetoothStatus { get; }
+}
+
 public sealed record AudioDeviceInfo(
     string Id,
     string Name,

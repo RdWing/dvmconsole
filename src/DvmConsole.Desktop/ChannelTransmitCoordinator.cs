@@ -25,6 +25,7 @@ public sealed class ChannelTransmitCoordinator : IAsyncDisposable
     private AudioInputProcessingOptions audioInputOptions;
 
     public event EventHandler<Exception>? Faulted;
+    public event EventHandler<HighQualityBluetoothAudioStatus>? HighQualityBluetoothStatusChanged;
     public ChannelViewModel? ActiveChannel => active.FirstOrDefault()?.Channel;
     public IReadOnlyList<ChannelViewModel> ActiveChannels => active.Select(entry => entry.Channel).ToArray();
     public uint ActiveStreamId => active.FirstOrDefault()?.StreamId ?? 0;
@@ -81,6 +82,7 @@ public sealed class ChannelTransmitCoordinator : IAsyncDisposable
             {
                 await lease.StartAsync().ConfigureAwait(false);
                 warmCaptureLease = lease;
+                ReportHighQualityBluetoothStatus(audioBackend);
             }
             catch
             {
@@ -203,6 +205,8 @@ public sealed class ChannelTransmitCoordinator : IAsyncDisposable
                 foreach (ActiveTransmit entry in created)
                     await entry.Session.StartAsync().ConfigureAwait(false);
 
+                ReportHighQualityBluetoothStatus(createdAudioBackend ?? audioBackend);
+
                 audioBackend ??= createdAudioBackend;
                 vocoderBackend = createdVocoderBackend;
                 sharedCapture ??= createdSharedCapture;
@@ -223,6 +227,12 @@ public sealed class ChannelTransmitCoordinator : IAsyncDisposable
         {
             gate.Release();
         }
+    }
+
+    private void ReportHighQualityBluetoothStatus(IAudioBackend? backend)
+    {
+        if (backend is IHighQualityBluetoothAudioStatus statusProvider)
+            HighQualityBluetoothStatusChanged?.Invoke(this, statusProvider.HighQualityBluetoothStatus);
     }
 
     public async Task StopAsync()

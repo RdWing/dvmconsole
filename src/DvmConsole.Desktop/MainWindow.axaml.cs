@@ -1265,6 +1265,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     private string audioInputMidGainText = "0";
     private string audioInputHighGainText = "0";
     private bool audioInputAgcEnabled;
+    private bool highQualityBluetoothAudioEnabled;
     private string selectedAudioProcessingMode = "DVM Console processing";
     private KeyboardPttKey selectedGlobalPttKey;
     private string audioInputPresetNameText = string.Empty;
@@ -1378,6 +1379,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         audioInputMidGainText = userSettings.AudioInputEqMidGainDb.ToString("0.###", CultureInfo.InvariantCulture);
         audioInputHighGainText = userSettings.AudioInputEqHighGainDb.ToString("0.###", CultureInfo.InvariantCulture);
         audioInputAgcEnabled = userSettings.AudioInputAgcEnabled;
+        highQualityBluetoothAudioEnabled = userSettings.HighQualityBluetoothAudioEnabled;
         selectedAudioProcessingMode = ToAudioProcessingModeDisplay(userSettings.AudioProcessingMode);
         audioInputPresetNameText = userSettings.AudioInputPresetName;
         recordingRetentionDaysText = userSettings.RecordingRetentionDays.ToString(CultureInfo.InvariantCulture);
@@ -1436,6 +1438,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             },
             HandleTransmitSamples,
             CreateTransmitAudioBackend);
+        transmitCoordinator.HighQualityBluetoothStatusChanged += HandleHighQualityBluetoothStatusChanged;
         if (userSettings.KeepTransmitMicrophoneWarm)
             _ = WarmTransmitMicrophoneAsync();
         toneTransmitCoordinator = new ToneTransmitCoordinator(p25KeyResolver);
@@ -2068,6 +2071,15 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         get => audioInputAgcEnabled;
         set => SetField(ref audioInputAgcEnabled, value);
     }
+
+    public bool HighQualityBluetoothAudioEnabled
+    {
+        get => highQualityBluetoothAudioEnabled;
+        set => SetField(ref highQualityBluetoothAudioEnabled, value);
+    }
+
+    public bool IsHighQualityBluetoothAudioAvailable
+        => OperatingSystem.IsMacOSVersionAtLeast(26);
 
     public bool KeepTransmitMicrophoneWarm
     {
@@ -3955,7 +3967,30 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             Environment.GetEnvironmentVariable("DVM_AUDIO_LIBRARY"),
             GetConfiguredAudioProcessingMode(),
             userSettings.AudioInputDeviceId,
-            userSettings.AudioOutputDeviceId);
+            userSettings.AudioOutputDeviceId,
+            userSettings.HighQualityBluetoothAudioEnabled);
+
+    private void HandleHighQualityBluetoothStatusChanged(
+        object? sender,
+        HighQualityBluetoothAudioStatus status)
+    {
+        if (!IsHighQualityBluetoothAudioAvailable || !userSettings.HighQualityBluetoothAudioEnabled)
+            return;
+        string? message = status switch
+        {
+            HighQualityBluetoothAudioStatus.Active =>
+                "High-quality AirPods input and output are active at full bandwidth.",
+            HighQualityBluetoothAudioStatus.Requested =>
+                "High-quality AirPods audio was requested; macOS is still confirming the route.",
+            HighQualityBluetoothAudioStatus.Unsupported =>
+                "The selected Bluetooth route does not support high-quality recording; normal Bluetooth audio is active.",
+            HighQualityBluetoothAudioStatus.Unavailable when userSettings.HighQualityBluetoothAudioEnabled =>
+                "High-quality AirPods audio is unavailable for the current route; normal CoreAudio is active.",
+            _ => null
+        };
+        if (message is not null)
+            Dispatcher.UIThread.Post(() => AudioStatusText = message);
+    }
 
     private async Task WarmTransmitMicrophoneAsync()
     {
@@ -4868,6 +4903,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         string previousInputDeviceId = userSettings.AudioInputDeviceId;
         string previousOutputDeviceId = userSettings.AudioOutputDeviceId;
         AudioProcessingMode previousProcessingMode = GetConfiguredAudioProcessingMode();
+        bool previousHighQualityBluetoothAudio = userSettings.HighQualityBluetoothAudioEnabled;
         AudioProcessingMode processingMode = GetSelectedAudioProcessingMode();
         string deviceId = AudioInputDeviceIdText.Trim();
         string outputDeviceId = AudioOutputDeviceIdText.Trim();
@@ -4876,6 +4912,8 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         userSettings.AudioProcessingMode = processingMode == AudioProcessingMode.AppleVoiceProcessing
             ? UserSettings.AppleVoiceProcessingMode
             : UserSettings.DvmConsoleAudioProcessingMode;
+        if (OperatingSystem.IsMacOSVersionAtLeast(26))
+            userSettings.HighQualityBluetoothAudioEnabled = HighQualityBluetoothAudioEnabled;
         userSettings.AudioInputAgcEnabled = AudioInputAgcEnabled;
         userSettings.AudioInputGain = gain;
         userSettings.AudioInputEqLowGainDb = lowGainDb;
@@ -4904,11 +4942,16 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         AudioInputLowGainText = lowGainDb.ToString("0.###", CultureInfo.InvariantCulture);
         AudioInputMidGainText = midGainDb.ToString("0.###", CultureInfo.InvariantCulture);
         AudioInputHighGainText = highGainDb.ToString("0.###", CultureInfo.InvariantCulture);
-        AudioStatusText = processingMode == AudioProcessingMode.AppleVoiceProcessing
+        string bluetoothStatus = userSettings.HighQualityBluetoothAudioEnabled
+            ? " Compatible AirPods will use full-bandwidth Bluetooth audio automatically; unsupported routes fall back safely."
+            : string.Empty;
+        AudioStatusText = (processingMode == AudioProcessingMode.AppleVoiceProcessing
             ? "Apple voice processing saved for microphone transmit capture; receive audio remains unprocessed."
-            : "DVM Console audio processing saved; device routes apply to the next audio session and PTT call.";
+            : "DVM Console audio processing saved; device routes apply to the next audio session and PTT call.") +
+            bluetoothStatus;
 
         bool audioRouteChanged = previousProcessingMode != processingMode ||
+            previousHighQualityBluetoothAudio != userSettings.HighQualityBluetoothAudioEnabled ||
             !previousInputDeviceId.Equals(deviceId, StringComparison.OrdinalIgnoreCase) ||
             !previousOutputDeviceId.Equals(outputDeviceId, StringComparison.OrdinalIgnoreCase);
         if (restartActiveAudio && audioRouteChanged)

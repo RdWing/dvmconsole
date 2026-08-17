@@ -37,6 +37,7 @@ public sealed class UserSettings
     public string AudioInputDeviceId { get; set; } = "default";
     public string AudioOutputDeviceId { get; set; } = "default";
     public string AudioProcessingMode { get; set; } = DvmConsoleAudioProcessingMode;
+    public bool HighQualityBluetoothAudioEnabled { get; set; } = true;
     public bool AudioInputAgcEnabled { get; set; }
     public bool KeepTransmitMicrophoneWarm { get; set; }
     public double AudioInputGain { get; set; } = 1.0;
@@ -478,6 +479,7 @@ public sealed class UserSettingsStore
         if (!string.Equals(settings.AudioInputDeviceId, "default", StringComparison.OrdinalIgnoreCase) ||
             !string.Equals(settings.AudioOutputDeviceId, "default", StringComparison.OrdinalIgnoreCase) ||
             !string.Equals(settings.AudioProcessingMode, UserSettings.DvmConsoleAudioProcessingMode, StringComparison.Ordinal) ||
+            !settings.HighQualityBluetoothAudioEnabled ||
             settings.AudioInputAgcEnabled || settings.AudioInputPresets.Count > 0 ||
             settings.ChannelVolumes.Count > 0 || settings.ChannelOutputDeviceIds.Count > 0 ||
             settings.WebStreamOutputDeviceIds.Count > 0 || settings.WebStreamVolumes.Count > 0)
@@ -557,6 +559,7 @@ public sealed class UserSettingsStore
             target.AudioInputDeviceId = source.AudioInputDeviceId;
             target.AudioOutputDeviceId = source.AudioOutputDeviceId;
             target.AudioProcessingMode = source.AudioProcessingMode;
+            target.HighQualityBluetoothAudioEnabled = source.HighQualityBluetoothAudioEnabled;
             target.AudioInputAgcEnabled = source.AudioInputAgcEnabled;
             target.KeepTransmitMicrophoneWarm = source.KeepTransmitMicrophoneWarm;
             target.AudioInputGain = source.AudioInputGain;

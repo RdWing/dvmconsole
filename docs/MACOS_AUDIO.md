@@ -74,6 +74,31 @@ managed adapter converts to or from the requested voice rate, so common 48 kHz
 devices can feed the 8 kHz vocoder boundary. macOS may request microphone
 permission when capture is first used.
 
+## High-quality AirPods audio
+
+On macOS 26 and later, Audio Settings exposes **Use high-quality AirPods audio
+when supported**. When enabled, the native shim applies the full-bandwidth
+Bluetooth recording method demonstrated by the MIT-licensed BetterMic project:
+it dynamically configures the otherwise macOS-unavailable `AVAudioSession`
+runtime with `playAndRecord`, default mode, Bluetooth HFP fallback, and the
+high-quality Bluetooth recording option before CoreAudio opens the microphone.
+As in BetterMic, a silent `AVAudioEngine` input tap holds that Bluetooth mode
+while DVM Console's existing CoreAudio stream supplies the real transmit audio.
+
+The feature fails open to normal CoreAudio. It is attempted only when both the
+system-default input and output devices use the Bluetooth transport. When the
+runtime exposes Apple's Bluetooth microphone capability object, the shim checks
+`highQualityRecording.isSupported` and later `isEnabled`; it also confirms that
+both active devices reached at least 44.1 kHz. Older macOS versions, unsupported
+AirPods, unavailable regions, split/non-default routes, and runtime API failures
+continue through the existing Bluetooth/HFP path without preventing capture.
+
+Apple notes that high-quality Bluetooth recording can increase input latency.
+Operators can disable it independently from DVM Console processing and Apple
+Voice Processing. Keeping the transmit microphone warm can avoid paying the
+Bluetooth route-switch delay on each PTT press, at the cost of holding the
+microphone route open.
+
 The Windows path is kept behind the same contracts through
 `WindowsAudioBackend`, using NAudio's WinMM event adapters for input and
 output. `AudioBackendFactory.CreateDefault()` selects CoreAudio on macOS and
@@ -129,8 +154,10 @@ for reuse by an iOS/iPadOS host. That mobile backend will additionally need an
 permission with `NSMicrophoneUsageDescription`, and interruption, route-change,
 and media-services-reset handling. On iOS/iPadOS 18 and later,
 `NSAlwaysAllowMicrophoneModeControl` can additionally expose microphone-mode
-selection before capture becomes active. Native macOS does not provide
-`AVAudioSession`; it uses the same Voice Processing I/O Audio Unit directly.
+selection before capture becomes active. The public macOS SDK marks
+`AVAudioSession` unavailable. The optional macOS 26 high-quality AirPods path
+therefore performs guarded runtime lookup, while the normal macOS implementation
+continues to use Voice Processing I/O directly.
 
 Apple references used for this audit:
 
@@ -144,6 +171,8 @@ Apple references used for this audit:
 - [`voiceChat`](https://developer.apple.com/documentation/avfaudio/avaudiosession/mode-swift.struct/voicechat)
 - [Requesting record permission](https://developer.apple.com/documentation/avfaudio/avaudioapplication/requestrecordpermission(completionhandler:))
 - [Responding to audio route changes](https://developer.apple.com/documentation/avfaudio/responding-to-audio-route-changes)
+- [Bluetooth high-quality recording](https://developer.apple.com/documentation/avfaudio/avaudiosession/categoryoptions-swift.struct/bluetoothhighqualityrecording)
+- [BetterMic reference implementation](https://github.com/ygzo/bettermic)
 
 ## Global keyboard PTT
 

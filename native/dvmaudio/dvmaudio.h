@@ -10,6 +10,14 @@ extern "C" {
 typedef struct DvmAudioStream DvmAudioStream;
 typedef struct DvmVoiceProcessingStream DvmVoiceProcessingStream;
 
+enum DvmHighQualityBluetoothStatus {
+    DVM_HIGH_QUALITY_BLUETOOTH_OFF = 0,
+    DVM_HIGH_QUALITY_BLUETOOTH_UNAVAILABLE = 1,
+    DVM_HIGH_QUALITY_BLUETOOTH_REQUESTED = 2,
+    DVM_HIGH_QUALITY_BLUETOOTH_ACTIVE = 3,
+    DVM_HIGH_QUALITY_BLUETOOTH_UNSUPPORTED = 4
+};
+
 int32_t dvm_audio_get_device_count(int32_t input, int32_t *count);
 int32_t dvm_audio_get_device(
     int32_t input,
@@ -18,6 +26,16 @@ int32_t dvm_audio_get_device(
     char *name,
     uint32_t name_capacity,
     int32_t *is_default);
+
+// Attempts the macOS 26 full-bandwidth Bluetooth recording mode for the
+// system-default Bluetooth input/output pair. A zero result means the route is
+// ineligible or unsupported and callers should continue with normal CoreAudio.
+// The session is process-global and reference counted.
+int32_t dvm_audio_high_quality_bluetooth_acquire(
+    uint64_t input_device_id,
+    uint64_t output_device_id);
+void dvm_audio_high_quality_bluetooth_release(void);
+int32_t dvm_audio_high_quality_bluetooth_status(void);
 
 DvmAudioStream *dvm_audio_stream_create(
     uint64_t device_id,

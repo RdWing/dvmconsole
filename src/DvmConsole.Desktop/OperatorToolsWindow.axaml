@@ -57,7 +57,13 @@
                   <CheckBox Content="Keep transmit microphone warm" IsChecked="{Binding KeepTransmitMicrophoneWarm, Mode=TwoWay}" />
                   <Button Content="Apply" Command="{Binding ApplyAudioInputSettingsCommand}" />
                 </StackPanel>
-                <TextBlock Classes="caption" Text="Generally advised only for Bluetooth headsets to reduce PTT latency; it may lower output audio quality while enabled." TextWrapping="Wrap" />
+                <CheckBox Content="Use high-quality AirPods audio when supported"
+                          IsChecked="{Binding HighQualityBluetoothAudioEnabled, Mode=TwoWay}"
+                          IsVisible="{Binding IsHighQualityBluetoothAudioAvailable}" />
+                <TextBlock Classes="caption" IsVisible="{Binding IsHighQualityBluetoothAudioAvailable}"
+                           Text="On macOS 26+, compatible AirPods are detected at runtime and requested at full bandwidth. Unsupported models, regions, and routes use the normal Bluetooth fallback. This mode can add microphone latency."
+                           TextWrapping="Wrap" />
+                <TextBlock Classes="caption" Text="Keeping the microphone warm is generally advised only for Bluetooth headsets to reduce PTT startup latency; without high-quality AirPods support it may lower output audio quality while enabled." TextWrapping="Wrap" />
               </StackPanel>
             </Border>
 
