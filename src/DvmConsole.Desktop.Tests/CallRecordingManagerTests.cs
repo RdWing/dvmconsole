@@ -1,6 +1,8 @@
 using DvmConsole.Core.Configuration;
 using DvmConsole.Desktop;
 using DvmConsole.FneClient;
+using DvmConsole.Media;
+using fnecore.DMR;
 using System.Text.Json;
 using Xunit;
 
@@ -9,7 +11,7 @@ namespace DvmConsole.Desktop.Tests;
 public sealed class CallRecordingManagerTests
 {
     [Fact]
-    public void StartsAndFinalizesOneWaveFilePerVoiceStream()
+    public async Task StartsAndFinalizesOneOpusFilePerVoiceStream()
     {
         string root = Path.Combine(Path.GetTempPath(), "dvmconsole-recording-tests", Guid.NewGuid().ToString("N"));
         var channel = new ChannelViewModel(new ChannelConfiguration
@@ -34,10 +36,14 @@ public sealed class CallRecordingManagerTests
             manager.ObserveTraffic(channel, Traffic("TERMINATOR", "TERMINATOR", 7));
             Assert.Empty(manager.ActivePaths);
 
-            byte[] first = File.ReadAllBytes(Directory.GetFiles(root, "*.wav", SearchOption.AllDirectories).Single());
-            Assert.Equal(1644, first.Length);
-            Assert.Equal((byte)'R', first[0]);
-            Assert.Equal((uint)1600, BitConverter.ToUInt32(first, 40));
+            string firstPath = Directory.GetFiles(root, "*.opus", SearchOption.AllDirectories).Single();
+            byte[] first = File.ReadAllBytes(firstPath);
+            Assert.Equal("OggS", System.Text.Encoding.ASCII.GetString(first, 0, 4));
+            await using (var reader = await DvmConsole.Audio.PcmStreamDecoder.OpenAsync(File.OpenRead(firstPath)))
+            {
+                short[] decoded = new short[1600];
+                Assert.True(await reader.ReadSamplesAsync(decoded) > 0);
+            }
 
             string metadataPath = Directory.GetFiles(root, "*.json", SearchOption.AllDirectories).Single();
             CallRecordingMetadata metadata = JsonSerializer.Deserialize<CallRecordingMetadata>(File.ReadAllText(metadataPath))!;
@@ -48,13 +54,47 @@ public sealed class CallRecordingManagerTests
             Assert.Equal((uint)7, metadata.StreamId);
             Assert.Equal(100L, metadata.DurationMs);
             Assert.Equal(first.Length, metadata.FileSizeBytes);
+            Assert.EndsWith("_System 1_99_42_CLEAR_7.opus", metadata.FileName, StringComparison.Ordinal);
             Assert.Single(manager.LoadRecordings());
 
             Assert.True(channel.TryApplyTraffic("System 1", Traffic("VOICE", "VOICE", 8)));
             manager.WriteSamples(channel, new short[] { 1, 2 });
             manager.ObserveTraffic(channel, Traffic("TERMINATOR", "TERMINATOR", 8));
 
-            Assert.Equal(2, Directory.GetFiles(root, "*.wav", SearchOption.AllDirectories).Length);
+            Assert.Equal(2, Directory.GetFiles(root, "*.opus", SearchOption.AllDirectories).Length);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void OpusRecordingIsSmallerThanTheSourcePcm()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "dvmconsole-recording-tests", Guid.NewGuid().ToString("N"));
+        var channel = new ChannelViewModel(new ChannelConfiguration
+        {
+            Name = "Dispatch",
+            System = "System 1",
+            Tgid = "99",
+            Mode = "analog"
+        });
+        using var manager = new CallRecordingManager(root);
+        channel.SetRecordingEnabled(true);
+
+        try
+        {
+            Assert.True(channel.TryApplyTraffic("System 1", Traffic("VOICE", "VOICE", 9)));
+            short[] samples = Enumerable.Range(0, 8000)
+                .Select(index => (short)(Math.Sin(index * Math.PI / 20) * 6000))
+                .ToArray();
+            manager.WriteSamples(channel, samples);
+            manager.ObserveTraffic(channel, Traffic("TERMINATOR", "TERMINATOR", 9));
+
+            CallRecordingMetadata metadata = manager.LoadRecordings().Single();
+            Assert.True(metadata.FileSizeBytes < samples.Length * sizeof(short));
         }
         finally
         {
@@ -152,8 +192,144 @@ public sealed class CallRecordingManagerTests
             Assert.Equal("ConsoleTx", metadata.RecordingSourceType);
             Assert.Equal((uint)7, metadata.SubscriberId);
             Assert.Equal((uint)44, metadata.StreamId);
-            Assert.EndsWith("_TX.wav", metadata.FileName, StringComparison.OrdinalIgnoreCase);
+            Assert.EndsWith("_System 1_99_7_CLEAR_44.opus", metadata.FileName, StringComparison.Ordinal);
             Assert.Contains("TX · ConsoleTx", metadata.DetailText, StringComparison.Ordinal);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void SelectableTransmitRecordingNamesReflectTheEffectiveSecurityState()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "dvmconsole-recording-tests", Guid.NewGuid().ToString("N"));
+        var keyRing = new DvmConsole.Media.P25KeyRing("System 1", new KeyContainer
+        {
+            Keys =
+            [
+                new KeyEntry
+                {
+                    KeyId = 0x50,
+                    AlgId = fnecore.P25.P25Defines.P25_ALGO_AES,
+                    Key = "00112233445566778899AABBCCDDEEFF"
+                }
+            ]
+        });
+        var channel = new ChannelViewModel(new ChannelConfiguration
+        {
+            Name = "Dispatch",
+            System = "System 1",
+            Tgid = "99",
+            Mode = "p25",
+            Algo = "aes",
+            KeyId = "0x50",
+            SelectableEncryption = true
+        }, keyRing);
+        using var manager = new CallRecordingManager(root);
+        channel.SetRecordingEnabled(true);
+
+        try
+        {
+            manager.WriteTransmitSamples(channel, streamId: 51, sourceId: 7, new short[] { 100, -100 });
+            manager.StopTransmit(channel);
+
+            channel.RestoreTransmitEncryption(false);
+            manager.WriteTransmitSamples(channel, streamId: 52, sourceId: 7, new short[] { 100, -100 });
+            manager.StopTransmit(channel);
+
+            CallRecordingMetadata secure = manager.LoadRecordings().Single(recording => recording.StreamId == 51);
+            CallRecordingMetadata clear = manager.LoadRecordings().Single(recording => recording.StreamId == 52);
+            Assert.True(secure.IsEncrypted);
+            Assert.Equal("AES", secure.EncryptionAlgorithm);
+            Assert.EndsWith("_System 1_99_7_SECURE_AES_51.opus", secure.FileName, StringComparison.Ordinal);
+            Assert.False(clear.IsEncrypted);
+            Assert.Equal(string.Empty, clear.EncryptionAlgorithm);
+            Assert.EndsWith("_System 1_99_7_CLEAR_52.opus", clear.FileName, StringComparison.Ordinal);
+        }
+        finally
+        {
+            keyRing.Dispose();
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void ReceiveRecordingUsesProtocolSecurityMetadataInItsName()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "dvmconsole-recording-tests", Guid.NewGuid().ToString("N"));
+        var channel = new ChannelViewModel(new ChannelConfiguration
+        {
+            Name = "Dispatch",
+            System = "System 1",
+            Tgid = "99",
+            Mode = "dmr",
+            Slot = 1
+        });
+        using var manager = new CallRecordingManager(root);
+        channel.SetRecordingEnabled(true);
+
+        try
+        {
+            byte[] dmrFrame = new byte[DmrVoicePacketCodec.FrameBytes];
+            var privacy = new PrivacyLC
+            {
+                AlgId = DmrPrivacyAlgorithms.Arc4,
+                KId = 3,
+                FID = DmrPrivacyAlgorithms.FeatureId,
+                Group = true,
+                DstId = 99
+            };
+            FullLC.EncodePI(privacy, ref dmrFrame);
+            new SlotType { ColorCode = 0, DataType = (byte)DMRDataType.VOICE_PI_HEADER }.GetData(ref dmrFrame);
+            byte[] packet = new byte[DmrVoicePacketCodec.PacketBytes];
+            dmrFrame.CopyTo(packet, DmrVoicePacketCodec.HeaderBytes);
+            manager.ObserveTraffic(channel, new FneTrafficFrame(
+                FneTrafficProtocol.Dmr,
+                peerId: 1,
+                sourceId: 42,
+                destinationId: 99,
+                slot: 0,
+                callType: "GROUP",
+                frameType: "DATA_SYNC",
+                subtype: "VOICE_PI_HEADER",
+                packetSequence: 1,
+                streamId: 61,
+                payload: packet));
+
+            Assert.True(channel.TryApplyTraffic("System 1", new FneTrafficFrame(
+                FneTrafficProtocol.Dmr,
+                1,
+                42,
+                99,
+                0,
+                "GROUP",
+                "VOICE",
+                "VOICE",
+                2,
+                61,
+                new byte[DmrVoicePacketCodec.PacketBytes])));
+            manager.WriteSamples(channel, new short[] { 100, -100 });
+            manager.ObserveTraffic(channel, new FneTrafficFrame(
+                FneTrafficProtocol.Dmr,
+                1,
+                42,
+                99,
+                0,
+                "GROUP",
+                "TERMINATOR",
+                "TERMINATOR_WITH_LC",
+                3,
+                61,
+                []));
+
+            CallRecordingMetadata metadata = manager.LoadRecordings().Single();
+            Assert.True(metadata.IsEncrypted);
+            Assert.Equal("RC4", metadata.EncryptionAlgorithm);
+            Assert.EndsWith("_System 1_99_42_SECURE_RC4_61.opus", metadata.FileName, StringComparison.Ordinal);
         }
         finally
         {

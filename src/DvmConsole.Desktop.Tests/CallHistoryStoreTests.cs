@@ -50,7 +50,7 @@ public sealed class CallHistoryStoreTests
 
         Assert.True(store.UpdateEncryption("System 1", FneTrafficProtocol.Dmr, 42, encrypted: true));
         Assert.True(entry.Encrypted);
-        Assert.Equal("Encrypted", entry.EncryptionText);
+        Assert.Equal("Secure", entry.EncryptionText);
         Assert.False(store.UpdateEncryption("System 1", FneTrafficProtocol.Dmr, 42, encrypted: true));
     }
 
@@ -66,12 +66,12 @@ public sealed class CallHistoryStoreTests
             FneTrafficProtocol.Dmr,
             42,
             encrypted: true,
-            algorithmId: 0x81,
+            algorithmId: DvmConsole.Media.DmrPrivacyAlgorithms.DesOfb,
             keyId: 0x0050));
 
-        Assert.Equal((byte)0x81, entry.EncryptionAlgorithmId);
+        Assert.Equal(DvmConsole.Media.DmrPrivacyAlgorithms.DesOfb, entry.EncryptionAlgorithmId);
         Assert.Equal((ushort)0x0050, entry.EncryptionKeyId);
-        Assert.Equal("Encrypted (alg 0x81, key 0x50)", entry.EncryptionText);
+        Assert.Equal("Secure · DES", entry.EncryptionText);
     }
 
     [Fact]

@@ -84,19 +84,9 @@ public sealed class CallHistoryEntry : INotifyPropertyChanged
         : IsEvent ? "—" : "Active";
     public byte? EncryptionAlgorithmId => encryptionAlgorithmId;
     public ushort? EncryptionKeyId => encryptionKeyId;
-    public string EncryptionText
-    {
-        get
-        {
-            if (IsEvent)
-                return "—";
-            if (!Encrypted)
-                return "Clear";
-            if (encryptionAlgorithmId is not byte algorithmId || encryptionKeyId is not ushort keyId)
-                return "Encrypted";
-            return $"Encrypted (alg 0x{algorithmId:X2}, key 0x{keyId:X})";
-        }
-    }
+    public string EncryptionText => IsEvent
+        ? "—"
+        : EncryptionPresentation.StatusText(Encrypted, Protocol, encryptionAlgorithmId);
 
     public bool HasRecording => recording is not null;
     public CallRecordingMetadata? Recording => recording;
@@ -146,8 +136,11 @@ public sealed class CallHistoryEntry : INotifyPropertyChanged
         FneTrafficProtocol protocol,
         uint streamId,
         string? callerText = null,
-        bool encrypted = false)
-        => new(
+        bool encrypted = false,
+        byte? encryptionAlgorithmId = null,
+        ushort? encryptionKeyId = null)
+    {
+        var entry = new CallHistoryEntry(
             timestamp,
             systemName,
             channelName,
@@ -158,6 +151,10 @@ public sealed class CallHistoryEntry : INotifyPropertyChanged
             callerText,
             encrypted,
             isConsoleTransmission: true);
+        if (encrypted)
+            entry.UpdateEncryption(true, encryptionAlgorithmId, encryptionKeyId);
+        return entry;
+    }
 
     public void Complete(DateTimeOffset timestamp)
     {
@@ -274,7 +271,9 @@ public sealed class CallHistoryStore
         FneTrafficProtocol protocol,
         uint streamId,
         string? callerText = null,
-        bool encrypted = false)
+        bool encrypted = false,
+        byte? encryptionAlgorithmId = null,
+        ushort? encryptionKeyId = null)
         => Add(CallHistoryEntry.CreateConsoleTransmission(
             timestamp,
             systemName,
@@ -284,7 +283,9 @@ public sealed class CallHistoryStore
             protocol,
             streamId,
             callerText,
-            encrypted));
+            encrypted,
+            encryptionAlgorithmId,
+            encryptionKeyId));
 
     public bool CompleteConsoleTransmission(
         string systemName,

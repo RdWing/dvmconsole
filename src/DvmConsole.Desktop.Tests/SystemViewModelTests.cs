@@ -677,7 +677,7 @@ public sealed class SystemViewModelTests
             Assert.Equal(2, viewModel.CallHistory.Count);
             Assert.True(viewModel.CallHistory.Single(entry => entry.Protocol == FneTrafficProtocol.Dmr).Encrypted);
             Assert.Equal(
-                "Encrypted (alg 0x01, key 0x55)",
+                "Secure · RC4",
                 viewModel.CallHistory.Single(entry => entry.Protocol == FneTrafficProtocol.Dmr).EncryptionText);
         }
         finally

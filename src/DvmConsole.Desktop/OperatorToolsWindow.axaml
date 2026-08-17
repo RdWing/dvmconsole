@@ -99,7 +99,7 @@
                 </Grid>
                 <TextBlock Classes="caption" Text="{Binding AudioProcessingDescription}" TextWrapping="Wrap" />
                 <TextBlock Classes="caption" Text="{Binding AppleVoiceProcessingRouteDescription}" TextWrapping="Wrap" IsVisible="{Binding IsAppleVoiceProcessingPlatformAvailable}" />
-                <Grid ColumnDefinitions="Auto,100,Auto,100,Auto,100,Auto,100" ColumnSpacing="8" IsEnabled="{Binding IsDvmConsoleProcessingSelected}">
+                <Grid ColumnDefinitions="Auto,116,Auto,116,Auto,116,Auto,116" ColumnSpacing="8" IsEnabled="{Binding IsDvmConsoleProcessingSelected}">
                   <TextBlock Text="Gain" VerticalAlignment="Center" />
                   <NumericUpDown Grid.Column="1" Minimum="0.25" Maximum="3.0" Increment="0.1" FormatString="0.0" ClipValueToMinMax="True" Text="{Binding AudioInputGainText, Mode=TwoWay}" />
                   <TextBlock Grid.Column="2" Text="Low dB" VerticalAlignment="Center" />
@@ -112,7 +112,7 @@
                 <StackPanel Orientation="Horizontal" Spacing="10">
                   <CheckBox Content="Automatic gain control" IsChecked="{Binding AudioInputAgcEnabled, Mode=TwoWay}" IsEnabled="{Binding IsDvmConsoleProcessingSelected}" />
                   <TextBlock Text="AGC target (dBFS)" VerticalAlignment="Center" IsEnabled="{Binding IsAgcTargetEnabled}" />
-                  <NumericUpDown Width="90" Minimum="-40" Maximum="-12" Increment="0.1" FormatString="0.0" ClipValueToMinMax="True" Text="{Binding AudioInputAgcTargetDbfsText, Mode=TwoWay}" IsEnabled="{Binding IsAgcTargetEnabled}" />
+                  <NumericUpDown Width="116" Minimum="-40" Maximum="-12" Increment="0.1" FormatString="0.0" ClipValueToMinMax="True" Text="{Binding AudioInputAgcTargetDbfsText, Mode=TwoWay}" IsEnabled="{Binding IsAgcTargetEnabled}" />
                   <CheckBox Content="Keep transmit microphone warm" IsChecked="{Binding KeepTransmitMicrophoneWarm, Mode=TwoWay}" />
                   <Button Content="Apply" Command="{Binding ApplyAudioInputSettingsCommand}" />
                 </StackPanel>

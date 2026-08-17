@@ -25,6 +25,7 @@ public sealed class CallRecordingManager : IDisposable
     private int retentionDays;
     private readonly Dictionary<ChannelViewModel, ActiveRecording> active = [];
     private readonly Dictionary<ChannelViewModel, ActiveRecording> activeTransmit = [];
+    private readonly Dictionary<(ChannelViewModel Channel, uint StreamId), TrafficEncryptionMetadata> streamEncryption = [];
     private bool disposed;
 
     public CallRecordingManager(
@@ -256,13 +257,12 @@ public sealed class CallRecordingManager : IDisposable
                 if (!active.TryGetValue(channel, out ActiveRecording? recording) || recording.StreamId != streamId)
                 {
                     CloseCore(channel);
-                    recording = new ActiveRecording(
+                    recording = CreateActiveRecording(
+                        channel,
                         streamId,
-                        DateTimeOffset.UtcNow,
                         sourceId == 0 ? null : sourceId,
                         "RX",
-                        "InboundRadio",
-                        new PcmWavFileWriter(CreateRecordingPath(channel, streamId, "RX"), PcmAudioFormat.Voice8KhzMono16Bit));
+                        "InboundRadio");
                     active[channel] = recording;
                 }
 
@@ -295,13 +295,12 @@ public sealed class CallRecordingManager : IDisposable
                     recording.StreamId != streamId)
                 {
                     CloseTransmitCore(channel);
-                    recording = new ActiveRecording(
+                    recording = CreateActiveRecording(
+                        channel,
                         streamId,
-                        DateTimeOffset.UtcNow,
                         sourceId == 0 ? null : sourceId,
                         "TX",
-                        "ConsoleTx",
-                        new PcmWavFileWriter(CreateRecordingPath(channel, streamId, "TX"), PcmAudioFormat.Voice8KhzMono16Bit));
+                        "ConsoleTx");
                     activeTransmit[channel] = recording;
                 }
 
@@ -319,13 +318,22 @@ public sealed class CallRecordingManager : IDisposable
     {
         ArgumentNullException.ThrowIfNull(channel);
         ArgumentNullException.ThrowIfNull(traffic);
-        if (!traffic.FrameType.Equals("TERMINATOR", StringComparison.OrdinalIgnoreCase))
-            return;
-
         lock (sync)
         {
+            TrafficEncryptionMetadata? encryption = TrafficEncryptionMetadataResolver.TryResolve(traffic);
+            if (encryption is TrafficEncryptionMetadata resolved)
+            {
+                streamEncryption[(channel, traffic.StreamId)] = resolved;
+                if (active.TryGetValue(channel, out ActiveRecording? current) && current.StreamId == traffic.StreamId)
+                    current.SetEncryption(resolved);
+            }
+
+            if (!IsTerminatingTraffic(traffic))
+                return;
+
             if (active.TryGetValue(channel, out ActiveRecording? recording) && recording.StreamId == traffic.StreamId)
                 CloseCore(channel);
+            streamEncryption.Remove((channel, traffic.StreamId));
         }
     }
 
@@ -362,26 +370,90 @@ public sealed class CallRecordingManager : IDisposable
         }
     }
 
-    private string CreateRecordingPath(ChannelViewModel channel, uint streamId, string direction)
+    private ActiveRecording CreateActiveRecording(
+        ChannelViewModel channel,
+        uint streamId,
+        uint? sourceId,
+        string direction,
+        string recordingSourceType)
     {
-        DateTimeOffset now = DateTimeOffset.Now;
-        string dateFolder = now.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
-        string directionSuffix = direction.Equals("RX", StringComparison.OrdinalIgnoreCase)
-            ? string.Empty
-            : $"_{SanitizeSegment(direction)}";
+        var recording = new ActiveRecording(
+            streamId,
+            DateTimeOffset.UtcNow,
+            sourceId,
+            direction,
+            recordingSourceType,
+            new PcmWavFileWriter(CreateTemporaryWavePath(), PcmAudioFormat.Voice8KhzMono16Bit));
+
+        if (direction.Equals("TX", StringComparison.OrdinalIgnoreCase))
+        {
+            bool secure = channel.Definition.IsEncrypted && channel.IsTransmitEncrypted;
+            if (secure && EncryptionPresentation.TryParseConfiguredAlgorithm(
+                    channel.Definition,
+                    out byte algorithmId,
+                    out ushort keyId))
+            {
+                recording.SetEncryption(new TrafficEncryptionMetadata(true, algorithmId, keyId));
+            }
+            else
+            {
+                recording.SetEncryption(new TrafficEncryptionMetadata(secure, 0, 0));
+            }
+        }
+        else if (streamEncryption.TryGetValue((channel, streamId), out TrafficEncryptionMetadata encryption))
+        {
+            recording.SetEncryption(encryption);
+        }
+        else if (channel.Definition.IsEncrypted && EncryptionPresentation.TryParseConfiguredAlgorithm(
+                     channel.Definition,
+                     out byte algorithmId,
+                     out ushort keyId))
+        {
+            recording.SetEncryption(new TrafficEncryptionMetadata(true, algorithmId, keyId));
+        }
+
+        return recording;
+    }
+
+    private string CreateTemporaryWavePath()
+    {
+        string directory = Path.Combine(rootPath, ".active");
+        Directory.CreateDirectory(directory);
+        return Path.Combine(directory, $"{Guid.NewGuid():N}.wav");
+    }
+
+    private string CreateRecordingPath(ChannelViewModel channel, ActiveRecording recording)
+    {
+        DateTimeOffset localStart = recording.UtcStartTime.ToLocalTime();
+        string dateFolder = localStart.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+        FneTrafficProtocol protocol = channel.Definition.Mode switch
+        {
+            "p25" => FneTrafficProtocol.P25,
+            "nxdn" => FneTrafficProtocol.Nxdn,
+            "analog" => FneTrafficProtocol.Analog,
+            _ => FneTrafficProtocol.Dmr
+        };
+        string security = recording.IsSecure
+            ? EncryptionPresentation.AlgorithmAbbreviation(protocol, recording.EncryptionAlgorithmId) is string algorithm &&
+              !string.IsNullOrEmpty(algorithm)
+                ? $"SECURE_{algorithm}"
+                : "SECURE"
+            : "CLEAR";
         string filename = string.Join(
             "_",
-            now.ToString("HHmmssfff", CultureInfo.InvariantCulture),
+            localStart.ToString("HHmmssfff", CultureInfo.InvariantCulture),
             SanitizeSegment(channel.Definition.SystemName),
-            SanitizeSegment(channel.Name),
-            streamId.ToString(CultureInfo.InvariantCulture)) + directionSuffix;
+            channel.Definition.DestinationId.ToString(CultureInfo.InvariantCulture),
+            (recording.SourceId ?? 0).ToString(CultureInfo.InvariantCulture),
+            security,
+            recording.StreamId.ToString(CultureInfo.InvariantCulture));
         string directory = System.IO.Path.Combine(rootPath, dateFolder, SanitizeSegment(channel.Definition.SystemName));
         Directory.CreateDirectory(directory);
 
-        string path = System.IO.Path.Combine(directory, $"{filename}.wav");
+        string path = System.IO.Path.Combine(directory, $"{filename}.opus");
         int suffix = 1;
         while (File.Exists(path))
-            path = System.IO.Path.Combine(directory, $"{filename}-{suffix++}.wav");
+            path = System.IO.Path.Combine(directory, $"{filename}-{suffix++}.opus");
         return path;
     }
 
@@ -389,6 +461,7 @@ public sealed class CallRecordingManager : IDisposable
     {
         if (!active.Remove(channel, out ActiveRecording? recording))
             return;
+        streamEncryption.Remove((channel, recording.StreamId));
 
         try
         {
@@ -396,7 +469,7 @@ public sealed class CallRecordingManager : IDisposable
             PcmWavTrimResult trim = PcmWavSilenceTrimmer.TrimFile(
                 recording.Writer.Path,
                 recording.Writer.Format);
-            WriteMetadata(channel, recording, trim);
+            FinalizeOpusRecording(channel, recording, trim);
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or InvalidOperationException or JsonException)
         {
@@ -404,10 +477,47 @@ public sealed class CallRecordingManager : IDisposable
         }
     }
 
-    private void WriteMetadata(ChannelViewModel channel, ActiveRecording recording, PcmWavTrimResult trim)
+    private void FinalizeOpusRecording(
+        ChannelViewModel channel,
+        ActiveRecording recording,
+        PcmWavTrimResult trim)
+    {
+        string finalPath = CreateRecordingPath(channel, recording);
+        string temporaryOpusPath = $"{finalPath}.{Environment.ProcessId}.{Guid.NewGuid():N}.tmp";
+        try
+        {
+            OpusRecordingEncoder.EncodeWaveFileAsync(
+                    recording.Writer.Path,
+                    temporaryOpusPath)
+                .GetAwaiter()
+                .GetResult();
+            File.Move(temporaryOpusPath, finalPath);
+            WriteMetadata(channel, recording, trim, finalPath);
+        }
+        finally
+        {
+            if (File.Exists(temporaryOpusPath))
+                File.Delete(temporaryOpusPath);
+            if (File.Exists(recording.Writer.Path))
+                File.Delete(recording.Writer.Path);
+        }
+    }
+
+    private void WriteMetadata(
+        ChannelViewModel channel,
+        ActiveRecording recording,
+        PcmWavTrimResult trim,
+        string recordingPath)
     {
         DateTimeOffset end = DateTimeOffset.UtcNow;
-        FileInfo fileInfo = new(recording.Writer.Path);
+        FileInfo fileInfo = new(recordingPath);
+        FneTrafficProtocol protocol = channel.Definition.Mode switch
+        {
+            "p25" => FneTrafficProtocol.P25,
+            "nxdn" => FneTrafficProtocol.Nxdn,
+            "analog" => FneTrafficProtocol.Analog,
+            _ => FneTrafficProtocol.Dmr
+        };
         CallRecordingMetadata metadata = new()
         {
             Protocol = channel.Definition.Mode.ToUpperInvariant(),
@@ -418,8 +528,8 @@ public sealed class CallRecordingManager : IDisposable
             DurationMs = (long)Math.Round(
                 trim.OutputSamples * 1000d / recording.Writer.Format.SampleRate,
                 MidpointRounding.AwayFromZero),
-            FilePath = recording.Writer.Path,
-            FileName = Path.GetFileName(recording.Writer.Path),
+            FilePath = recordingPath,
+            FileName = Path.GetFileName(recordingPath),
             FileSizeBytes = fileInfo.Length,
             SampleRate = recording.Writer.Format.SampleRate,
             BitsPerSample = recording.Writer.Format.BitsPerSample,
@@ -442,13 +552,17 @@ public sealed class CallRecordingManager : IDisposable
                 ? channel.LastCallerText
                 : string.Empty,
             StreamId = recording.StreamId,
-            IsEncrypted = channel.Definition.IsEncrypted,
-            EncryptionAlgorithm = channel.Definition.EncryptionAlgorithm,
-            EncryptionKeyId = channel.Definition.EncryptionKeyId,
+            IsEncrypted = recording.IsSecure,
+            EncryptionAlgorithm = EncryptionPresentation.AlgorithmAbbreviation(
+                protocol,
+                recording.EncryptionAlgorithmId),
+            EncryptionKeyId = recording.IsSecure && recording.EncryptionKeyId is ushort keyId
+                ? $"0x{keyId:X}"
+                : null,
             RetentionDaysAtRecordTime = retentionDays > 0 ? retentionDays : null
         };
 
-        string sidecarPath = Path.ChangeExtension(recording.Writer.Path, ".json");
+        string sidecarPath = Path.ChangeExtension(recordingPath, ".json");
         string temporaryPath = $"{sidecarPath}.{Environment.ProcessId}.{Guid.NewGuid():N}.tmp";
         try
         {
@@ -465,7 +579,12 @@ public sealed class CallRecordingManager : IDisposable
     private bool TryNormalizeRecordingPath(string sidecarPath, CallRecordingMetadata metadata)
     {
         if (string.IsNullOrWhiteSpace(metadata.FilePath))
-            metadata.FilePath = Path.ChangeExtension(sidecarPath, ".wav");
+        {
+            string opusPath = Path.ChangeExtension(sidecarPath, ".opus");
+            metadata.FilePath = File.Exists(opusPath)
+                ? opusPath
+                : Path.ChangeExtension(sidecarPath, ".wav");
+        }
         else if (!Path.IsPathRooted(metadata.FilePath))
             metadata.FilePath = Path.GetFullPath(Path.Combine(Path.GetDirectoryName(sidecarPath) ?? rootPath, metadata.FilePath));
         else
@@ -492,13 +611,39 @@ public sealed class CallRecordingManager : IDisposable
         return sanitized.Length <= 64 ? sanitized : sanitized[..64];
     }
 
-    private sealed record ActiveRecording(
-        uint StreamId,
-        DateTimeOffset UtcStartTime,
-        uint? SourceId,
-        string Direction,
-        string RecordingSourceType,
-        PcmWavFileWriter Writer);
+    private static bool IsTerminatingTraffic(FneTrafficFrame traffic)
+        => traffic.FrameType.Equals("TERMINATOR", StringComparison.OrdinalIgnoreCase) ||
+           (traffic.Protocol == FneTrafficProtocol.Dmr &&
+            traffic.Subtype.Equals("TERMINATOR_WITH_LC", StringComparison.OrdinalIgnoreCase)) ||
+           (traffic.Protocol == FneTrafficProtocol.P25 &&
+            (traffic.Subtype.Equals("TDU", StringComparison.OrdinalIgnoreCase) ||
+             traffic.Subtype.Equals("TDULC", StringComparison.OrdinalIgnoreCase)));
+
+    private sealed class ActiveRecording(
+        uint streamId,
+        DateTimeOffset utcStartTime,
+        uint? sourceId,
+        string direction,
+        string recordingSourceType,
+        PcmWavFileWriter writer)
+    {
+        public uint StreamId { get; } = streamId;
+        public DateTimeOffset UtcStartTime { get; } = utcStartTime;
+        public uint? SourceId { get; } = sourceId;
+        public string Direction { get; } = direction;
+        public string RecordingSourceType { get; } = recordingSourceType;
+        public PcmWavFileWriter Writer { get; } = writer;
+        public bool IsSecure { get; private set; }
+        public byte? EncryptionAlgorithmId { get; private set; }
+        public ushort? EncryptionKeyId { get; private set; }
+
+        public void SetEncryption(TrafficEncryptionMetadata encryption)
+        {
+            IsSecure = encryption.Secure;
+            EncryptionAlgorithmId = encryption.Secure ? encryption.AlgorithmId : null;
+            EncryptionKeyId = encryption.Secure ? encryption.KeyId : null;
+        }
+    }
 
     private void CloseTransmitCore(ChannelViewModel channel)
     {
@@ -511,7 +656,7 @@ public sealed class CallRecordingManager : IDisposable
             PcmWavTrimResult trim = PcmWavSilenceTrimmer.TrimFile(
                 recording.Writer.Path,
                 recording.Writer.Format);
-            WriteMetadata(channel, recording, trim);
+            FinalizeOpusRecording(channel, recording, trim);
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or InvalidOperationException or JsonException)
         {
