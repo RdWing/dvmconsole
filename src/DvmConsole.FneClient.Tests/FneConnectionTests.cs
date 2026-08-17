@@ -56,7 +56,7 @@ public sealed class FneConnectionTests
 
         Assert.Equal("TYF_OP1", peer.Information.Details.Identity);
         Assert.Equal(FneConnection.SoftwareIdentifier, peer.Information.Details.Software);
-        Assert.Equal("DVMC_AV_0.2.0", peer.Information.Details.Software);
+        Assert.Equal("DVMC_AV_0.2.1", peer.Information.Details.Software);
         Assert.Equal(options.PeerId, peer.Information.PeerID);
         Assert.Equal(fnecore.ConnectionState.WAITING_LOGIN, peer.Information.State);
         Assert.Equal(fnecore.LogLevel.DEBUG, peer.LogLevel);
@@ -65,7 +65,7 @@ public sealed class FneConnectionTests
 
     [Theory]
     [InlineData("0.1.0", "DVMC_AV_0.1.0")]
-    [InlineData("0.2.0-beta.1+abcdef123456", "DVMC_AV_0.2.0-beta.1")]
+    [InlineData("0.2.1-beta.1+abcdef123456", "DVMC_AV_0.2.1-beta.1")]
     [InlineData(null, "DVMC_AV_UNKNOWN")]
     public void FormatsVersionedFneSoftwareIdentifier(string? informationalVersion, string expected)
         => Assert.Equal(expected, FneConnection.FormatSoftwareIdentifier(informationalVersion));

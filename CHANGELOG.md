@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-08-17
+
 ### Changed
 
 - Store talkgroup audio recordings as Ogg Opus and include the source radio ID in each recording filename.
@@ -89,7 +91,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Add patches, multi-select groups, call history, recordings, web streams, clocks, layouts, themes, startup behavior, and in-application operator documentation.
 - Add support for local and KMM-provided P25 encryption keys while preserving compatibility with existing variable-length AES key material.
 
-[Unreleased]: https://github.com/RdWing/dvmconsole/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/RdWing/dvmconsole/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/RdWing/dvmconsole/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/RdWing/dvmconsole/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/RdWing/dvmconsole/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/RdWing/dvmconsole/releases/tag/v0.1.0
