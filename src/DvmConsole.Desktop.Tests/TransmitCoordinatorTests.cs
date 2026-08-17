@@ -85,6 +85,43 @@ public sealed class TransmitCoordinatorTests
     }
 
     [Fact]
+    public async Task WarmMicrophoneStaysRunningBetweenCallsUntilDisabled()
+    {
+        var channel = Channel("Analog", 100);
+        var endpoint = new FakeEndpoint("Test", [channel]);
+        var audio = new FakeAudioBackend();
+        await using var coordinator = new ChannelTransmitCoordinator(createAudioBackend: () => audio);
+
+        await coordinator.SetKeepMicrophoneWarmAsync(true);
+        Assert.True(audio.Capture.IsRunning);
+        Assert.Equal(1, audio.OpenCaptureCalls);
+
+        await coordinator.StartAsync(channel, endpoint);
+        await coordinator.StopAsync();
+
+        Assert.True(audio.Capture.IsRunning);
+        Assert.False(audio.Capture.IsDisposed);
+        Assert.False(audio.IsDisposed);
+
+        await coordinator.SetKeepMicrophoneWarmAsync(false);
+
+        Assert.True(audio.Capture.IsDisposed);
+        Assert.True(audio.IsDisposed);
+    }
+
+    [Fact]
+    public async Task WarmMicrophoneStartFailureRollsBackInfrastructure()
+    {
+        var audio = new FakeAudioBackend(failStart: true);
+        await using var coordinator = new ChannelTransmitCoordinator(createAudioBackend: () => audio);
+
+        await Assert.ThrowsAsync<IOException>(() => coordinator.SetKeepMicrophoneWarmAsync(true));
+
+        Assert.True(audio.Capture.IsDisposed);
+        Assert.True(audio.IsDisposed);
+    }
+
+    [Fact]
     public async Task SessionFaultIsReportedAndCleanupRemainsSafe()
     {
         var channel = Channel("Analog", 100);

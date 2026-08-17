@@ -71,13 +71,22 @@ public sealed class ChannelTransmitCoordinator : IAsyncDisposable
                 return;
             }
 
-            if (warmCaptureLease is not null || active.Count != 0)
+            if (warmCaptureLease is not null)
                 return;
 
             audioBackend ??= createAudioBackend();
             sharedCapture ??= CreateSharedCapture(audioBackend);
-            warmCaptureLease = sharedCapture.CreateLease();
-            await warmCaptureLease.StartAsync().ConfigureAwait(false);
+            SharedAudioCapture.Lease lease = sharedCapture.CreateLease();
+            try
+            {
+                await lease.StartAsync().ConfigureAwait(false);
+                warmCaptureLease = lease;
+            }
+            catch
+            {
+                await lease.DisposeAsync().ConfigureAwait(false);
+                throw;
+            }
         }
         catch
         {
@@ -303,6 +312,36 @@ public sealed class ChannelTransmitCoordinator : IAsyncDisposable
             audioBackend?.Dispose();
             audioBackend = null;
         }
+        if (failure is not null)
+            throw failure;
+    }
+
+    private async Task StopInfrastructureCoreAsync()
+    {
+        Exception? failure = null;
+        if (sharedCapture is not null)
+        {
+            try
+            {
+                await sharedCapture.DisposeAsync().ConfigureAwait(false);
+            }
+            catch (Exception exception)
+            {
+                failure = exception;
+            }
+            sharedCapture = null;
+        }
+
+        try
+        {
+            audioBackend?.Dispose();
+        }
+        catch (Exception exception)
+        {
+            failure ??= exception;
+        }
+        audioBackend = null;
+
         if (failure is not null)
             throw failure;
     }
