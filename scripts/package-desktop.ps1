@@ -6,9 +6,7 @@ param(
     [Parameter(Mandatory = $true)]
     [string] $PublishDirectory,
 
-    [string] $OutputArchive,
-
-    [switch] $AllowMissingVocoder
+    [string] $OutputArchive
 )
 
 $ErrorActionPreference = "Stop"
@@ -44,13 +42,12 @@ if ([string]::IsNullOrWhiteSpace($OutputArchive)) {
 
 $PublishDirectory = [IO.Path]::GetFullPath($PublishDirectory)
 $OutputArchive = [IO.Path]::GetFullPath($OutputArchive)
-$AllowMissingVocoder = $AllowMissingVocoder -or ($env:DVM_ALLOW_MISSING_VOCODER -eq "1")
 if (-not (Test-Path -LiteralPath $PublishDirectory -PathType Container)) {
     throw "Publish directory does not exist: $PublishDirectory"
 }
 
 foreach ($FileName in @(
-    "DvmConsole.Desktop.exe"
+    "DvmConsole.exe"
 )) {
     if (-not (Test-Path -LiteralPath (Join-Path $PublishDirectory $FileName) -PathType Leaf)) {
         throw "Published output is missing required file: $FileName"
@@ -68,13 +65,12 @@ foreach ($LegacyAlert in @("alert1.wav", "alert2.wav", "alert3.wav")) {
     }
 }
 
-Assert-X64PeFile (Join-Path $PublishDirectory "DvmConsole.Desktop.exe")
+Assert-X64PeFile (Join-Path $PublishDirectory "DvmConsole.exe")
 
-if (-not (Test-Path -LiteralPath (Join-Path $PublishDirectory "libvocoder.dll") -PathType Leaf) -and -not $AllowMissingVocoder) {
-    throw "Published output is missing libvocoder.dll. Set DVMVOCODER_LIBRARY before publishing or pass -AllowMissingVocoder for a UI-only artifact."
-}
-if (Test-Path -LiteralPath (Join-Path $PublishDirectory "libvocoder.dll") -PathType Leaf) {
-    Assert-X64PeFile (Join-Path $PublishDirectory "libvocoder.dll")
+foreach ($SidecarName in @("libvocoder.dll", "dvmconsole_vocoder.dll")) {
+    if (Test-Path -LiteralPath (Join-Path $PublishDirectory $SidecarName) -PathType Leaf) {
+        throw "The required vocoder must be embedded in DvmConsole.exe, not shipped as $SidecarName."
+    }
 }
 
 $PrivateCodeplug = Get-ChildItem -LiteralPath $PublishDirectory -Recurse -File -ErrorAction SilentlyContinue |

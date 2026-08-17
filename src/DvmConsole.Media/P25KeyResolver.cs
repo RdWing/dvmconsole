@@ -49,6 +49,8 @@ public sealed class P25KeyRing : IP25KeyResolver, IDisposable
         var loaded = new Dictionary<(byte AlgorithmId, ushort KeyId), byte[]>();
         foreach (KeyEntry entry in container.Keys ?? [])
         {
+            if (!string.Equals(entry.Protocol, "p25", StringComparison.OrdinalIgnoreCase))
+                continue;
             if (entry.KeyId == 0)
                 throw new FormatException("P25 key IDs must be non-zero.");
             if (entry.AlgId is < byte.MinValue or > byte.MaxValue)

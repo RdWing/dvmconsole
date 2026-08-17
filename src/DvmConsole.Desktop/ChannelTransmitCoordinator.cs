@@ -12,6 +12,8 @@ public sealed record TransmitTarget(ChannelViewModel Channel, IFneTrafficEndpoin
 public sealed class ChannelTransmitCoordinator : IAsyncDisposable
 {
     private readonly IP25KeyResolver? p25KeyResolver;
+    private readonly IDmrKeyResolver? dmrKeyResolver;
+    private readonly INxdnKeyResolver? nxdnKeyResolver;
     private readonly Action<ChannelViewModel, uint, uint, ReadOnlyMemory<short>>? samplesObserver;
     private readonly Func<IAudioBackend> createAudioBackend;
     private readonly Func<IVocoderBackend> createVocoderBackend;
@@ -35,15 +37,19 @@ public sealed class ChannelTransmitCoordinator : IAsyncDisposable
         AudioInputProcessingOptions? audioInputOptions = null,
         Action<ChannelViewModel, uint, uint, ReadOnlyMemory<short>>? samplesObserver = null,
         Func<IAudioBackend>? createAudioBackend = null,
-        Func<IVocoderBackend>? createVocoderBackend = null)
+        Func<IVocoderBackend>? createVocoderBackend = null,
+        IDmrKeyResolver? dmrKeyResolver = null,
+        INxdnKeyResolver? nxdnKeyResolver = null)
     {
         this.p25KeyResolver = p25KeyResolver;
+        this.dmrKeyResolver = dmrKeyResolver;
+        this.nxdnKeyResolver = nxdnKeyResolver;
         this.audioInputOptions = (audioInputOptions ?? new AudioInputProcessingOptions()).Normalize();
         this.samplesObserver = samplesObserver;
         this.createAudioBackend = createAudioBackend ??
             (() => AudioBackendFactory.CreateDefault(Environment.GetEnvironmentVariable("DVM_AUDIO_LIBRARY")));
         this.createVocoderBackend = createVocoderBackend ??
-            (() => new SoftwareVocoderBackend(Environment.GetEnvironmentVariable("DVMVOCODER_LIBRARY")));
+            (() => new SoftwareVocoderBackend());
     }
 
     public void UpdateAudioInputOptions(AudioInputProcessingOptions options)
@@ -151,6 +157,7 @@ public sealed class ChannelTransmitCoordinator : IAsyncDisposable
                 foreach (TransmitTarget target in requested)
                 {
                     bool isDmr = target.Channel.Definition.Mode == "dmr";
+                    bool isNxdn = target.Channel.Definition.Mode == "nxdn";
                     bool isAnalog = target.Channel.Definition.Mode == "analog";
                     uint sourceId = target.System.SourceId!.Value;
                     uint streamId = target.System.CreateStreamId();
@@ -158,6 +165,8 @@ public sealed class ChannelTransmitCoordinator : IAsyncDisposable
                     Action<ReadOnlyMemory<byte>, ushort, uint> send = (payload, sequence, stream) => target.System.SendTraffic(
                         isDmr
                             ? FneTrafficProtocol.Dmr
+                            : isNxdn
+                                ? FneTrafficProtocol.Nxdn
                             : isAnalog
                                 ? FneTrafficProtocol.Analog
                                 : FneTrafficProtocol.P25,
@@ -178,7 +187,11 @@ public sealed class ChannelTransmitCoordinator : IAsyncDisposable
                     else
                     {
                         IVocoderSession vocoder = createdVocoderBackend!.CreateSession(
-                            isDmr ? VocoderMode.DmrAmbe : VocoderMode.P25Imbe);
+                            isDmr
+                                ? VocoderMode.DmrAmbe
+                                : isNxdn
+                                    ? VocoderMode.NxdnAmbe
+                                    : VocoderMode.P25Imbe);
                         session = isDmr
                             ? new DmrTransmitCaptureSession(
                                 lease,
@@ -187,7 +200,17 @@ public sealed class ChannelTransmitCoordinator : IAsyncDisposable
                                 target.Channel.Definition.DestinationId,
                                 target.Channel.Definition.Slot,
                                 streamId,
-                                send)
+                                send,
+                                CreateDmrPrivacyOptions(target.Channel))
+                            : isNxdn
+                                ? new NxdnTransmitCaptureSession(
+                                    lease,
+                                    vocoder,
+                                    sourceId,
+                                    target.Channel.Definition.DestinationId,
+                                    streamId,
+                                    send,
+                                    privacy: CreateNxdnPrivacyOptions(target.Channel))
                             : new P25TransmitCaptureSession(
                                 lease,
                                 vocoder,
@@ -286,6 +309,11 @@ public sealed class ChannelTransmitCoordinator : IAsyncDisposable
                 throw new InvalidOperationException($"The FNE system '{target.System.Name}' is not connected.");
             if (target.System.SourceId is not uint sourceId || sourceId == 0)
                 throw new InvalidOperationException($"The FNE system '{target.System.Name}' has no valid transmit RID.");
+            if (target.Channel.Definition.Mode == "nxdn" &&
+                (sourceId > ushort.MaxValue || target.Channel.Definition.DestinationId > ushort.MaxValue))
+            {
+                throw new InvalidOperationException("NXDN transmit requires 16-bit source and destination IDs.");
+            }
         }
     }
 
@@ -419,6 +447,44 @@ public sealed class ChannelTransmitCoordinator : IAsyncDisposable
                 $"P25 encrypted transmit requires a configured key for {channel.Definition.EncryptionAlgorithm}/{channel.Definition.EncryptionKeyId}.");
         }
         return P25TxEncryptionOptions.CreateRandom(algorithmId, keyId, key);
+    }
+
+    private DmrPrivacyOptions? CreateDmrPrivacyOptions(ChannelViewModel channel)
+    {
+        if (!channel.Definition.IsEncrypted || !channel.IsTransmitEncrypted)
+            return null;
+        if (dmrKeyResolver is null ||
+            !DmrKeyRing.TryParseAlgorithmId(channel.Definition.EncryptionAlgorithm, out byte algorithmId) ||
+            !DmrKeyRing.TryParseKeyId(channel.Definition.EncryptionKeyId, out byte keyId) ||
+            !dmrKeyResolver.TryResolve(
+                channel.Definition.SystemName,
+                algorithmId,
+                keyId,
+                out ReadOnlyMemory<byte> key))
+        {
+            throw new NotSupportedException(
+                $"DMR encrypted transmit requires a configured key for {channel.Definition.EncryptionAlgorithm}/{channel.Definition.EncryptionKeyId}.");
+        }
+        return DmrPrivacyOptions.CreateRandom(algorithmId, keyId, key);
+    }
+
+    private NxdnPrivacyOptions? CreateNxdnPrivacyOptions(ChannelViewModel channel)
+    {
+        if (!channel.Definition.IsEncrypted || !channel.IsTransmitEncrypted)
+            return null;
+        if (nxdnKeyResolver is null ||
+            !NxdnKeyRing.TryParseAlgorithmId(channel.Definition.EncryptionAlgorithm, out byte algorithmId) ||
+            !NxdnKeyRing.TryParseKeyId(channel.Definition.EncryptionKeyId, out byte keyId) ||
+            !nxdnKeyResolver.TryResolve(
+                channel.Definition.SystemName,
+                algorithmId,
+                keyId,
+                out ReadOnlyMemory<byte> key))
+        {
+            throw new NotSupportedException(
+                $"NXDN encrypted transmit requires a configured key for {channel.Definition.EncryptionAlgorithm}/{channel.Definition.EncryptionKeyId}.");
+        }
+        return NxdnPrivacyOptions.CreateRandom(algorithmId, keyId, key);
     }
 
     private sealed record ActiveTransmit(

@@ -75,6 +75,6 @@ public sealed class KeyStatusItemViewModelTests
         });
 
         Assert.Equal("Key unavailable", KeyStatusItemViewModel.From(p25Channel, new P25KeyRing()).StatusText);
-        Assert.Equal("Unsupported protocol", KeyStatusItemViewModel.From(dmrChannel, null).StatusText);
+        Assert.Equal("Key unavailable", KeyStatusItemViewModel.From(dmrChannel, null).StatusText);
     }
 }

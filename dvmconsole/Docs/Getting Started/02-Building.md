@@ -9,6 +9,7 @@ Most users should download a release package instead of building from source. A 
 # Supported Targets
 
 - Apple Silicon macOS: `osx-arm64`
+- Intel macOS: `osx-x64`
 - 64-bit Windows: `win-x64`
 
 The first public Avalonia release is version `0.1.0`.
@@ -20,10 +21,10 @@ The first public Avalonia release is version `0.1.0`.
 Both build platforms require:
 
 - Git
-- .NET 8 SDK selected by `global.json`
+- .NET 10 SDK selected by `global.json`
+- Rust 1.85 or newer
 - CMake
 - a C/C++ toolchain
-- a matching native `dvmvocoder` library
 
 On macOS, install Xcode Command Line Tools. On Windows, install Visual Studio 2022 Build Tools with the **Desktop development with C++** workload.
 
@@ -51,18 +52,9 @@ dotnet build src/DvmConsole.Rebuild.sln
 
 # Native Vocoder
 
-DMR and P25 voice require `dvmvocoder` from:
-
-```
-https://github.com/DVMProject/dvmvocoder
-```
-
-Build a library that matches the target platform:
-
-- macOS: `libvocoder.dylib`
-- Windows: `libvocoder.dll`
-
-Set `DVMVOCODER_LIBRARY` to its full path while testing or publishing. The publisher refuses to create a normal package without the matching vocoder because that package would not provide working digital voice.
+The required native vocoder adapter is built automatically from the locked
+Rust dependency when the solution is built or published. A separate native
+library path is not supported or required.
 
 ---
 
@@ -71,12 +63,9 @@ Set `DVMVOCODER_LIBRARY` to its full path while testing or publishing. The publi
 Run the complete solution tests before packaging:
 
 ```sh
-DVMVOCODER_LIBRARY=/full/path/to/libvocoder.dylib \
-  dotnet test src/DvmConsole.Rebuild.sln --no-restore \
+dotnet test src/DvmConsole.Rebuild.sln --no-restore \
   /p:UseSharedCompilation=false
 ```
-
-Use the Windows DLL path in PowerShell when testing on Windows.
 
 ---
 
@@ -85,8 +74,7 @@ Use the Windows DLL path in PowerShell when testing on Windows.
 Publish and verify the Apple Silicon application:
 
 ```sh
-DVMVOCODER_LIBRARY=/full/path/to/libvocoder.dylib \
-  scripts/publish-desktop.sh osx-arm64 /tmp/dvmconsole-osx-arm64
+scripts/publish-desktop.sh osx-arm64 /tmp/dvmconsole-osx-arm64
 
 scripts/verify-publish.sh osx-arm64 /tmp/dvmconsole-osx-arm64
 scripts/package-desktop.sh osx-arm64 \
@@ -115,7 +103,6 @@ permission for FNE connections, transmit, and OS-global PTT.
 From PowerShell:
 
 ```powershell
-$env:DVMVOCODER_LIBRARY = "C:\full\path\to\libvocoder.dll"
 .\scripts\publish-desktop.ps1 `
   -Runtime win-x64 `
   -OutputDirectory C:\Temp\dvmconsole-win-x64
@@ -125,9 +112,8 @@ $env:DVMVOCODER_LIBRARY = "C:\full\path\to\libvocoder.dll"
   -OutputArchive C:\Temp\dvmconsole-win-x64.zip
 ```
 
-Extract the ZIP before launching `DvmConsole.Desktop.exe`. The managed
-application and .NET runtime are bundled into the single EXE. Keep the adjacent
-`libvocoder.dll` with it for DMR and P25 voice.
+Extract the ZIP before launching `DvmConsole.exe`. The managed application,
+.NET runtime, and required native vocoder are bundled into the single EXE.
 
 ---
 

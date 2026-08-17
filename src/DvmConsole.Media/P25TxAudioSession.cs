@@ -125,6 +125,8 @@ public sealed class P25TxAudioSession : IDisposable
         if (pendingPcmSamples > 0)
             Process(new short[VocoderFrameSizes.PcmSamplesPerFrame - pendingPcmSamples]);
 
+        encoder.Flush(EmitCodeword);
+
         while (pendingImbe.Count > 0)
             Process(new short[VocoderFrameSizes.PcmSamplesPerFrame]);
 

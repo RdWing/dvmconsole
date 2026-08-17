@@ -1,8 +1,12 @@
 # Encryption Keys
 
-Encryption keys allow the console to decrypt and transmit encrypted P25 voice traffic when supported by the connected FNE system.
+Encryption keys allow the console to decrypt and transmit protected P25, DMR,
+and NXDN 4800 voice traffic when supported by the connected FNE system.
 
-The console uses two automatic key-material pathways. After an FNE connects, it requests every configured P25 algorithm/key ID through KMM. A valid key delivered by that FNE takes precedence. If KMM has not supplied the key, the console falls back to the local YAML key file referenced by the codeplug.
+The console uses two P25 key-material pathways. After an FNE connects, it
+requests every configured P25 algorithm/key ID through KMM. A valid key
+delivered by that FNE takes precedence over the local YAML fallback. DMR and
+NXDN privacy keys are loaded from the local YAML file.
 
 Keys are isolated by FNE system. Two systems can safely use the same algorithm and key ID with different key material. KMM-delivered material is retained only in memory and is cleared when that system disconnects, revealing the local fallback again.
 
@@ -34,20 +38,32 @@ Example:
 
 ```yaml
 keys:
-  - keyId: 0x1
+  - protocol: "p25"
+    keyId: 0x1
     algId: 0x84
     key: "000102030405060708090A0B0C0D0E0F101112131415161718191A1B1C1D1E1F"
 
-  - keyId: 0x2
-    algId: 0xAA
-    key: "0011223344"
+  - protocol: "dmr"
+    keyId: 0x2
+    algId: 0x05
+    key: "000102030405060708090A0B0C0D0E0F101112131415161718191A1B1C1D1E1F"
+
+  - protocol: "nxdn"
+    keyId: 0x3
+    algId: 0x01
+    key: "1234"
 ```
 
 Fields:
 
-- `keyId`: key ID referenced by channels.
+- `protocol`: `p25`, `dmr`, or `nxdn`. Entries without this field remain P25
+  for compatibility with existing key files.
+- `keyId`: key ID referenced by channels. NXDN key IDs are 1 through 63.
 - `algId`: algorithm ID.
-- `key`: key material as hexadecimal without spaces or separators. AES-256 normally uses 32 bytes (64 hexadecimal characters); for legacy WPF compatibility, shorter AES material is accepted and zero-padded on the right to 32 bytes. DES-OFB requires 8 bytes (16 hexadecimal characters), and ARC4/ADP requires 5 bytes (10 hexadecimal characters).
+- `key`: key material as hexadecimal without spaces or separators. P25 keeps
+  its established compatibility rules. DMR ARC4 uses 5 bytes, DES-OFB uses 8,
+  and AES-256 uses 32. NXDN EHR uses a non-zero 15-bit seed stored in 2 bytes,
+  DES uses 8 bytes, and AES-256 uses 32.
 
 ---
 
@@ -67,13 +83,15 @@ Supported `algo` values include:
 - `arc4` or `adp`
 - `none`
 
+For NXDN, use `ehr`, `des`, or `aes`. NXDN 9600/EFR is not implemented in dvmhost.
+
 If `keyId` is blank or zero, the channel is treated as clear for normal operation.
 
 ---
 
 # Selectable Encryption
 
-P25 secure-capable channels can expose an in-card encryption toggle:
+P25, DMR, and NXDN secure-capable channels can expose an in-card encryption toggle:
 
 ```yaml
 keyId: 0x50

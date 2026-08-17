@@ -1,0 +1,18 @@
+[package]
+name = "dvmconsole-vocoder-native"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+license = "MIT"
+description = "Private native vocoder adapter for DVM Console"
+
+[lib]
+name = "dvmconsole_vocoder"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+blip25-vocoder = "=1.0.0"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1

@@ -7,11 +7,13 @@ using DvmConsole.Vocoder;
 namespace DvmConsole.Desktop;
 
 // Sends generated 8 kHz PCM tone sequences through the selected channel's
-// normal DMR, P25, or analog call lifecycle. It deliberately does not open a
+// normal DMR, P25, NXDN, or analog call lifecycle. It deliberately does not open a
 // microphone; generated audio is paced as 20 ms media frames instead.
 public sealed class ToneTransmitCoordinator : IAsyncDisposable
 {
     private readonly IP25KeyResolver? p25KeyResolver;
+    private readonly IDmrKeyResolver? dmrKeyResolver;
+    private readonly INxdnKeyResolver? nxdnKeyResolver;
     private readonly Func<IVocoderBackend> createVocoderBackend;
     private readonly SemaphoreSlim gate = new(1, 1);
     private bool disposed;
@@ -19,11 +21,15 @@ public sealed class ToneTransmitCoordinator : IAsyncDisposable
 
     public ToneTransmitCoordinator(
         IP25KeyResolver? p25KeyResolver = null,
-        Func<IVocoderBackend>? createVocoderBackend = null)
+        Func<IVocoderBackend>? createVocoderBackend = null,
+        IDmrKeyResolver? dmrKeyResolver = null,
+        INxdnKeyResolver? nxdnKeyResolver = null)
     {
         this.p25KeyResolver = p25KeyResolver;
+        this.dmrKeyResolver = dmrKeyResolver;
+        this.nxdnKeyResolver = nxdnKeyResolver;
         this.createVocoderBackend = createVocoderBackend ??
-            (() => new SoftwareVocoderBackend(Environment.GetEnvironmentVariable("DVMVOCODER_LIBRARY")));
+            (() => new SoftwareVocoderBackend());
     }
 
     public bool IsSending => sending;
@@ -117,17 +123,29 @@ public sealed class ToneTransmitCoordinator : IAsyncDisposable
             channel,
             definition,
             p25KeyResolver);
+        DmrPrivacyOptions? dmrPrivacy = ChannelTransmitDefinitionFactory.CreateDmrPrivacyOptions(
+            channel,
+            definition,
+            dmrKeyResolver);
+        NxdnPrivacyOptions? nxdnPrivacy = ChannelTransmitDefinitionFactory.CreateNxdnPrivacyOptions(
+            channel,
+            definition,
+            nxdnKeyResolver);
         IVocoderBackend? vocoderBackend = null;
         IVocoderSession? vocoderSession = null;
         PatchTransmitSession? session = null;
 
         try
         {
-            if (definition.Mode is "dmr" or "p25")
+            if (definition.Mode is "dmr" or "p25" or "nxdn")
             {
                 vocoderBackend = createVocoderBackend();
                 vocoderSession = vocoderBackend.CreateSession(
-                    definition.Mode == "dmr" ? VocoderMode.DmrAmbe : VocoderMode.P25Imbe);
+                    definition.Mode == "dmr"
+                        ? VocoderMode.DmrAmbe
+                        : definition.Mode == "nxdn"
+                            ? VocoderMode.NxdnAmbe
+                            : VocoderMode.P25Imbe);
             }
 
             uint streamId = system.CreateStreamId();
@@ -141,7 +159,9 @@ public sealed class ToneTransmitCoordinator : IAsyncDisposable
                     payload.Span,
                     sequence,
                     stream),
-                encryption);
+                encryption,
+                dmrPrivacy,
+                nxdnPrivacy);
             vocoderSession = null;
             session.Start();
             await SetTransmitStateAsync(channel, enabled: true, streamId).ConfigureAwait(false);
@@ -190,6 +210,7 @@ public sealed class ToneTransmitCoordinator : IAsyncDisposable
         {
             "dmr" => FneTrafficProtocol.Dmr,
             "p25" => FneTrafficProtocol.P25,
+            "nxdn" => FneTrafficProtocol.Nxdn,
             "analog" => FneTrafficProtocol.Analog,
             _ => throw new ArgumentOutOfRangeException(nameof(mode))
         };

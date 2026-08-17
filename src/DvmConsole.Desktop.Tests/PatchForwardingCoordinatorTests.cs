@@ -3,6 +3,7 @@ using DvmConsole.Core.Runtime;
 using DvmConsole.Desktop;
 using DvmConsole.FneClient;
 using DvmConsole.Media;
+using DvmConsole.Vocoder;
 using Xunit;
 
 namespace DvmConsole.Desktop.Tests;
@@ -78,6 +79,37 @@ public sealed class PatchForwardingCoordinatorTests
         Assert.Empty(targetSystem.Sent);
     }
 
+    [Fact]
+    public void ForwardsDecodedAudioToNxdnTargetLifecycle()
+    {
+        (ChannelViewModel source, FakeEndpoint sourceSystem) = Create("Source", 100, 1001);
+        var target = new ChannelViewModel(new ChannelConfiguration
+        {
+            Name = "NXDN target",
+            System = "Target",
+            Tgid = "200",
+            Mode = "nxdn"
+        });
+        var targetSystem = new FakeEndpoint("Target", [target], 2002, true);
+        using var coordinator = new PatchForwardingCoordinator(
+            [sourceSystem, targetSystem],
+            createVocoderBackend: () => new FakeVocoderBackend());
+        coordinator.ApplyMemberships(new Dictionary<string, IReadOnlyList<PatchMemberAddress>>
+        {
+            ["Patch"] = [new("Source", 100), new("Target", 200)]
+        });
+
+        ObserveVoice(coordinator, source, 77, 7001);
+        for (int index = 0; index < NxdnVoicePacketCodec.CodewordsPerFrame; index++)
+            coordinator.ObserveDecodedSamples(source, ActiveSamples());
+        coordinator.ObserveTraffic(source, Terminator(100, 77));
+
+        Assert.Equal(3, targetSystem.Sent.Count);
+        Assert.All(targetSystem.Sent, sent => Assert.Equal(FneTrafficProtocol.Nxdn, sent.Protocol));
+        Assert.Equal(NxdnVoicePacketCodec.VoiceCallMessageType, targetSystem.Sent[0].Payload[4]);
+        Assert.Equal(NxdnVoicePacketCodec.TransmitReleaseMessageType, targetSystem.Sent[2].Payload[4]);
+    }
+
     private static (ChannelViewModel Channel, FakeEndpoint System) Create(string system, uint talkgroup, uint sourceId, bool connected = true)
     {
         var channel = new ChannelViewModel(new ChannelConfiguration { Name = system, System = system, Tgid = talkgroup.ToString(), Mode = "analog" });
@@ -114,5 +146,25 @@ public sealed class PatchForwardingCoordinatorTests
         public uint CreateStreamId() => ++streamId;
         public void SendTraffic(FneTrafficProtocol protocol, ReadOnlySpan<byte> payload, ushort sequence, uint outboundStreamId)
             => Sent.Add((protocol, payload.ToArray()));
+    }
+
+    private sealed class FakeVocoderBackend : IVocoderBackend
+    {
+        public string Name => "fake";
+        public bool IsAvailable => true;
+        public IVocoderSession CreateSession(VocoderMode mode) => new FakeVocoderSession();
+        public void Dispose() { }
+    }
+
+    private sealed class FakeVocoderSession : IVocoderSession
+    {
+        public int Encode(ReadOnlySpan<short> samples, Span<byte> codeword)
+        {
+            codeword.Clear();
+            return codeword.Length;
+        }
+        public int Decode(ReadOnlySpan<byte> codeword, Span<short> samples) => 0;
+        public int FlushEncode(Span<byte> codeword) => 0;
+        public void Dispose() { }
     }
 }

@@ -12,6 +12,8 @@ public sealed class PatchSourceDecodeCoordinator : IAsyncDisposable
 {
     private readonly SemaphoreSlim gate = new(1, 1);
     private readonly IP25KeyResolver? p25KeyResolver;
+    private readonly IDmrKeyResolver? dmrKeyResolver;
+    private readonly INxdnKeyResolver? nxdnKeyResolver;
     private readonly Action<ChannelViewModel, ReadOnlyMemory<short>> observer;
     private readonly Func<IVocoderBackend> createVocoderBackend;
     private readonly object sync = new();
@@ -22,12 +24,16 @@ public sealed class PatchSourceDecodeCoordinator : IAsyncDisposable
     public PatchSourceDecodeCoordinator(
         IP25KeyResolver? p25KeyResolver,
         Action<ChannelViewModel, ReadOnlyMemory<short>> observer,
-        Func<IVocoderBackend>? createVocoderBackend = null)
+        Func<IVocoderBackend>? createVocoderBackend = null,
+        IDmrKeyResolver? dmrKeyResolver = null,
+        INxdnKeyResolver? nxdnKeyResolver = null)
     {
         this.p25KeyResolver = p25KeyResolver;
+        this.dmrKeyResolver = dmrKeyResolver;
+        this.nxdnKeyResolver = nxdnKeyResolver;
         this.observer = observer ?? throw new ArgumentNullException(nameof(observer));
         this.createVocoderBackend = createVocoderBackend ??
-            (() => new SoftwareVocoderBackend(Environment.GetEnvironmentVariable("DVMVOCODER_LIBRARY")));
+            (() => new SoftwareVocoderBackend());
     }
 
     public bool IsActive(ChannelViewModel channel)
@@ -46,7 +52,7 @@ public sealed class PatchSourceDecodeCoordinator : IAsyncDisposable
 
         ChannelViewModel[] requested = channels
             .Where(channel => channel is not null &&
-                (channel.Definition.Mode is "dmr" or "p25" or "analog"))
+                (channel.Definition.Mode is "dmr" or "p25" or "nxdn" or "analog"))
             .Distinct()
             .ToArray();
         await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
@@ -85,12 +91,14 @@ public sealed class PatchSourceDecodeCoordinator : IAsyncDisposable
                 IVocoderSession? createdVocoderSession = null;
                 try
                 {
-                    if (channel.Definition.Mode is "dmr" or "p25")
+                    if (channel.Definition.Mode is "dmr" or "p25" or "nxdn")
                     {
                         vocoderBackend ??= createVocoderBackend();
                         createdVocoderSession = vocoderBackend.CreateSession(
                             channel.Definition.Mode == "dmr"
                                 ? VocoderMode.DmrAmbe
+                                : channel.Definition.Mode == "nxdn"
+                                    ? VocoderMode.NxdnAmbe
                                 : VocoderMode.P25Imbe);
                     }
 
@@ -100,7 +108,9 @@ public sealed class PatchSourceDecodeCoordinator : IAsyncDisposable
                         new ObservedDiscardPlayback(
                             PcmAudioFormat.Voice8KhzMono16Bit,
                             samples => observer(channel, samples)),
-                        p25KeyResolver);
+                        p25KeyResolver,
+                        dmrKeyResolver,
+                        nxdnKeyResolver);
                     createdVocoderSession = null;
                     lock (sync)
                         sessions.Add(channel, session);
@@ -206,15 +216,24 @@ public sealed class PatchSourceDecodeCoordinator : IAsyncDisposable
 
     private bool CanDecode(ChannelViewModel channel)
     {
-        if (channel.Definition.Mode == "nxdn")
-            return false;
-        return !channel.Definition.IsEncrypted ||
-            (channel.Definition.Mode == "p25" &&
-             p25KeyResolver is not null &&
-             p25KeyResolver.CanResolve(
-                 channel.Definition.SystemName,
-                 channel.Definition.EncryptionAlgorithm,
-                 channel.Definition.EncryptionKeyId));
+        if (!channel.Definition.IsEncrypted)
+            return true;
+        return channel.Definition.Mode switch
+        {
+            "p25" => p25KeyResolver?.CanResolve(
+                channel.Definition.SystemName,
+                channel.Definition.EncryptionAlgorithm,
+                channel.Definition.EncryptionKeyId) == true,
+            "dmr" => dmrKeyResolver?.CanResolve(
+                channel.Definition.SystemName,
+                channel.Definition.EncryptionAlgorithm,
+                channel.Definition.EncryptionKeyId) == true,
+            "nxdn" => nxdnKeyResolver?.CanResolve(
+                channel.Definition.SystemName,
+                channel.Definition.EncryptionAlgorithm,
+                channel.Definition.EncryptionKeyId) == true,
+            _ => false
+        };
     }
 
     private sealed class ObservedDiscardPlayback(

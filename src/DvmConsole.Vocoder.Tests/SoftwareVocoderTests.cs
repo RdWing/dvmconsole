@@ -8,40 +8,101 @@ public sealed class SoftwareVocoderTests
     [Theory]
     [InlineData(VocoderMode.DmrAmbe, 9)]
     [InlineData(VocoderMode.P25Imbe, 11)]
-    public void ReportsLegacyFrameSizes(VocoderMode mode, int expectedCodewordBytes)
+    [InlineData(VocoderMode.NxdnAmbe, 9)]
+    [InlineData(VocoderMode.P25Phase2Ambe, 9)]
+    public void ReportsWireFrameSizes(VocoderMode mode, int expectedCodewordBytes)
     {
         Assert.Equal(160, VocoderFrameSizes.PcmSamplesPerFrame);
         Assert.Equal(expectedCodewordBytes, VocoderFrameSizes.CodewordBytes(mode));
     }
 
-    [NativeVocoderTheory]
+    [Theory]
     [InlineData(VocoderMode.DmrAmbe)]
     [InlineData(VocoderMode.P25Imbe)]
-    public void EncodesAndDecodesWhenNativeLibraryIsProvided(VocoderMode mode)
+    [InlineData(VocoderMode.NxdnAmbe)]
+    [InlineData(VocoderMode.P25Phase2Ambe)]
+    public void RequiredNativeBackendEncodesDecodesAndFlushes(VocoderMode mode)
     {
-        string libraryPath = Environment.GetEnvironmentVariable("DVMVOCODER_LIBRARY")!;
-
         short[] samples = Enumerable.Range(0, VocoderFrameSizes.PcmSamplesPerFrame)
             .Select(index => (short)(Math.Sin(index * 0.15) * 12000))
             .ToArray();
         byte[] codeword = new byte[VocoderFrameSizes.CodewordBytes(mode)];
         short[] decodedSamples = new short[VocoderFrameSizes.PcmSamplesPerFrame];
 
-        using var backend = new SoftwareVocoderBackend(libraryPath);
+        using var backend = new SoftwareVocoderBackend();
         using IVocoderSession session = backend.CreateSession(mode);
 
         Assert.Equal(codeword.Length, session.Encode(samples, codeword));
         Assert.Equal(0, session.Decode(codeword, decodedSamples));
-        Assert.Contains(decodedSamples, sample => sample != 0);
+        Assert.Equal(0, session.DecodeLost(decodedSamples));
+        Assert.Equal(codeword.Length, session.FlushEncode(codeword));
+        Assert.Equal(0, session.FlushEncode(codeword));
     }
-}
 
-public sealed class NativeVocoderTheoryAttribute : TheoryAttribute
-{
-    public NativeVocoderTheoryAttribute()
+    [Theory]
+    [InlineData(VocoderMode.DmrAmbe)]
+    [InlineData(VocoderMode.NxdnAmbe)]
+    [InlineData(VocoderMode.P25Phase2Ambe)]
+    public void HalfRateParameterBoundaryRoundTrips(VocoderMode mode)
     {
-        string? libraryPath = Environment.GetEnvironmentVariable("DVMVOCODER_LIBRARY");
-        if (string.IsNullOrWhiteSpace(libraryPath) || !File.Exists(libraryPath))
-            Skip = "Set DVMVOCODER_LIBRARY to run the native software vocoder test.";
+        using var backend = new SoftwareVocoderBackend();
+        using var session = Assert.IsAssignableFrom<IHalfRateVocoderSession>(backend.CreateSession(mode));
+        short[] samples = Enumerable.Range(0, VocoderFrameSizes.PcmSamplesPerFrame)
+            .Select(index => (short)(Math.Sin(index * 0.11) * 14000))
+            .ToArray();
+        byte[] parameters = new byte[VocoderFrameSizes.HalfRateParameterBytes];
+        byte[] codeword = new byte[VocoderFrameSizes.HalfRateCodewordBytes];
+        byte[] recovered = new byte[VocoderFrameSizes.HalfRateParameterBytes];
+        short[] decoded = new short[VocoderFrameSizes.PcmSamplesPerFrame];
+
+        Assert.Equal(parameters.Length, session.EncodeParameters(samples, parameters));
+        session.BuildCodeword(parameters, codeword);
+        Assert.Equal(0, session.ExtractParameters(codeword, recovered));
+        Assert.Equal(parameters, recovered);
+        Assert.Equal(0, session.DecodeParameters(recovered, decoded));
+        Assert.Equal(parameters.Length, session.FlushEncodeParameters(parameters));
+        Assert.Equal(0, session.FlushEncodeParameters(parameters));
+    }
+
+    [Fact]
+    public void DmrUncorrectableC0IsReportedAsLostFecStatus()
+    {
+        using var backend = new SoftwareVocoderBackend();
+        using var session = Assert.IsAssignableFrom<IHalfRateVocoderSession>(
+            backend.CreateSession(VocoderMode.DmrAmbe));
+        byte[] parameters = Convert.FromHexString("123456789ABC80");
+        byte[] codeword = new byte[VocoderFrameSizes.HalfRateCodewordBytes];
+        session.BuildCodeword(parameters, codeword);
+        // DMR c0 positions begin 0,4,8,12. Four flips are detected as an
+        // extended-Golay erasure rather than misreported as a numeric count.
+        codeword[0] ^= 0x88;
+        codeword[1] ^= 0x88;
+        byte[] recovered = new byte[VocoderFrameSizes.HalfRateParameterBytes];
+
+        HalfRateFecStatus status = session.ExtractParametersWithStatus(codeword, recovered);
+
+        Assert.True(status.Unrecoverable);
+        Assert.Equal(15u, status.DecoderErrorMetric);
+        short[] decoded = new short[VocoderFrameSizes.PcmSamplesPerFrame];
+        Assert.Equal(0, session.DecodeParameters(
+            recovered,
+            decoded,
+            status.DecoderErrorMetric,
+            status.Unrecoverable));
+    }
+
+    [Fact]
+    public void SessionKeepsNativeLibraryAliveAfterBackendIsDisposed()
+    {
+        var backend = new SoftwareVocoderBackend();
+        IVocoderSession session = backend.CreateSession(VocoderMode.DmrAmbe);
+        backend.Dispose();
+        short[] samples = new short[VocoderFrameSizes.PcmSamplesPerFrame];
+        byte[] codeword = new byte[VocoderFrameSizes.HalfRateCodewordBytes];
+
+        Assert.Equal(codeword.Length, session.Encode(samples, codeword));
+        Assert.Equal(0, session.Decode(codeword, samples));
+        session.Dispose();
+        Assert.Throws<ObjectDisposedException>(() => backend.CreateSession(VocoderMode.DmrAmbe));
     }
 }

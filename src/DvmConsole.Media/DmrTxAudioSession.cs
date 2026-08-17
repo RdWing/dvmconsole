@@ -17,9 +17,12 @@ public sealed class DmrTxAudioSession : IDisposable
     private readonly VoiceFrameEncoder encoder;
     private readonly DmrTxPacketSequence sequence;
     private readonly EmbeddedData? embeddedData;
+    private readonly DmrPrivacyOptions? privacy;
+    private readonly DmrPrivacyProcessor? privacyProcessor;
     private readonly List<byte> pendingAmbe = [];
     private byte embeddedSequence;
     private int pendingPcmSamples;
+    private bool privacyHeaderPending;
     private bool disposed;
 
     public DmrTxAudioSession(
@@ -32,7 +35,8 @@ public sealed class DmrTxAudioSession : IDisposable
         ushort packetSequence = 0,
         byte frameSequence = 0,
         byte embeddedSequence = 0,
-        EmbeddedData? embeddedData = null)
+        EmbeddedData? embeddedData = null,
+        DmrPrivacyOptions? privacy = null)
         : this(
             sourceId,
             destinationId,
@@ -42,7 +46,8 @@ public sealed class DmrTxAudioSession : IDisposable
             send,
             new DmrTxPacketSequence(packetSequence, frameSequence),
             embeddedSequence,
-            embeddedData)
+            embeddedData,
+            privacy)
     {
     }
 
@@ -55,7 +60,8 @@ public sealed class DmrTxAudioSession : IDisposable
         Action<ReadOnlyMemory<byte>, ushort, uint> send,
         DmrTxPacketSequence sequence,
         byte embeddedSequence,
-        EmbeddedData? embeddedData)
+        EmbeddedData? embeddedData,
+        DmrPrivacyOptions? privacy = null)
     {
         if (sourceId == 0 || sourceId > 0xFFFFFF)
             throw new ArgumentOutOfRangeException(nameof(sourceId));
@@ -76,6 +82,16 @@ public sealed class DmrTxAudioSession : IDisposable
             throw new ArgumentOutOfRangeException(nameof(embeddedSequence));
         this.embeddedSequence = embeddedSequence;
         this.embeddedData = embeddedData;
+        this.privacy = privacy;
+        if (privacy is not null)
+        {
+            if (vocoder is not IHalfRateVocoderSession halfRateVocoder)
+            {
+                throw new NotSupportedException(
+                    "DMR privacy requires a vocoder with half-rate parameter access.");
+            }
+            privacyProcessor = new DmrPrivacyProcessor(halfRateVocoder, privacy);
+        }
         encoder = new VoiceFrameEncoder(vocoder ?? throw new ArgumentNullException(nameof(vocoder)), VocoderMode.DmrAmbe);
     }
 
@@ -104,6 +120,8 @@ public sealed class DmrTxAudioSession : IDisposable
         if (pendingPcmSamples > 0)
             Process(new short[VocoderFrameSizes.PcmSamplesPerFrame - pendingPcmSamples]);
 
+        encoder.Flush(EmitCodeword);
+
         while (pendingAmbe.Count > 0)
             Process(new short[VocoderFrameSizes.PcmSamplesPerFrame]);
 
@@ -117,6 +135,7 @@ public sealed class DmrTxAudioSession : IDisposable
     {
         if (disposed)
             return;
+        privacyProcessor?.Dispose();
         encoder.Dispose();
         pendingAmbe.Clear();
         pendingPcmSamples = 0;
@@ -125,7 +144,17 @@ public sealed class DmrTxAudioSession : IDisposable
 
     private void EmitCodeword(ReadOnlyMemory<byte> codeword)
     {
-        pendingAmbe.AddRange(codeword.ToArray());
+        if (privacyHeaderPending)
+            SendPrivacyHeader();
+
+        byte[] wireCodeword = codeword.ToArray();
+        if (privacyProcessor is not null)
+        {
+            byte[] encrypted = new byte[VocoderFrameSizes.HalfRateCodewordBytes];
+            privacyProcessor.ProcessCodeword(wireCodeword, encrypted);
+            wireCodeword = encrypted;
+        }
+        pendingAmbe.AddRange(wireCodeword);
         CodewordsEncoded++;
         if (pendingAmbe.Count < DmrVoicePacketCodec.AmbeBytes)
             return;
@@ -149,6 +178,31 @@ public sealed class DmrTxAudioSession : IDisposable
             this.embeddedSequence = 0;
         else
             this.embeddedSequence++;
+
+        if (privacyProcessor is not null &&
+            CodewordsEncoded % (CodewordsPerPacket * 6) == 0)
+        {
+            privacyHeaderPending = true;
+        }
+    }
+
+    private void SendPrivacyHeader()
+    {
+        DmrPrivacyOptions configured = privacy!;
+        var current = new DmrPrivacyOptions(
+            configured.AlgorithmId,
+            configured.KeyId,
+            configured.Key,
+            privacyProcessor!.MessageIndicator);
+        byte[] header = DmrVoicePacketCodec.CreatePrivacyIndicatorPacket(
+            sourceId,
+            destinationId,
+            slot,
+            sequence.FrameSequence,
+            current);
+        send(header, sequence.PacketSequence, streamId);
+        sequence.Advance();
+        privacyHeaderPending = false;
     }
 }
 

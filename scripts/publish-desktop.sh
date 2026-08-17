@@ -6,19 +6,20 @@ PROJECT="$ROOT_DIR/src/DvmConsole.Desktop/DvmConsole.Desktop.csproj"
 RID="${1:-osx-arm64}"
 OUTPUT_DIR="${2:-$ROOT_DIR/artifacts/$RID}"
 CONFIGURATION="${CONFIGURATION:-Release}"
-VOCODER_LIBRARY="${DVMVOCODER_LIBRARY:-}"
-ALLOW_MISSING_VOCODER="${DVM_ALLOW_MISSING_VOCODER:-0}"
 MACOS_DEPLOYMENT_TARGET="14.0"
 
 case "$RID" in
     osx-arm64)
         MACOS_ARCHITECTURE="arm64"
+        VOCODER_TARGET="aarch64-apple-darwin"
         ;;
     osx-x64)
         MACOS_ARCHITECTURE="x86_64"
+        VOCODER_TARGET="x86_64-apple-darwin"
         ;;
     win-x64)
         MACOS_ARCHITECTURE=""
+        VOCODER_TARGET="x86_64-pc-windows-msvc"
         ;;
     *)
         printf 'Supported runtime identifiers: osx-arm64, osx-x64, win-x64\n' >&2
@@ -37,17 +38,13 @@ fi
 
 mkdir -p "$OUTPUT_DIR"
 rm -f "$OUTPUT_DIR/Audio/alert1.wav" "$OUTPUT_DIR/Audio/alert2.wav" "$OUTPUT_DIR/Audio/alert3.wav"
-case "$RID" in
-    osx-arm64|osx-x64)
-        rm -f "$OUTPUT_DIR/libvocoder.dylib"
-        ;;
-    win-x64)
-        rm -f "$OUTPUT_DIR/libvocoder.dll"
-        ;;
-esac
+rm -f "$OUTPUT_DIR/libvocoder.dylib" "$OUTPUT_DIR/libvocoder.dll"
 
 dotnet restore "$PROJECT" --runtime "$RID" --ignore-failed-sources -p:NuGetAudit=false --verbosity minimal
-PUBLISH_PROPERTIES=(-p:UseAppHost=true)
+PUBLISH_PROPERTIES=(
+    -p:UseAppHost=true
+    -p:NativeVocoderTarget="$VOCODER_TARGET"
+)
 if [[ "$RID" == "win-x64" ]]; then
     PUBLISH_PROPERTIES+=(
         -p:PublishSingleFile=true
@@ -67,32 +64,6 @@ dotnet publish "$PROJECT" \
 
 if [[ -n "$MACOS_ARCHITECTURE" ]]; then
     cp "$AUDIO_BUILD_DIR/libdvmaudio.dylib" "$OUTPUT_DIR/libdvmaudio.dylib"
-fi
-
-if [[ -n "$VOCODER_LIBRARY" ]]; then
-    if [[ ! -f "$VOCODER_LIBRARY" ]]; then
-        printf 'DVMVOCODER_LIBRARY does not point to a file: %s\n' "$VOCODER_LIBRARY" >&2
-        exit 3
-    fi
-
-    case "$RID" in
-        osx-arm64|osx-x64)
-            VOCODER_OUTPUT="libvocoder.dylib"
-            ;;
-        win-x64)
-            VOCODER_OUTPUT="libvocoder.dll"
-            ;;
-    esac
-
-    cp "$VOCODER_LIBRARY" "$OUTPUT_DIR/$VOCODER_OUTPUT"
-else
-    if [[ "$ALLOW_MISSING_VOCODER" != "1" ]]; then
-        printf 'DVMVOCODER_LIBRARY is required for a working digital-voice package.\n' >&2
-        printf 'Build the native vocoder, set DVMVOCODER_LIBRARY, or set DVM_ALLOW_MISSING_VOCODER=1 for a UI-only artifact.\n' >&2
-        exit 4
-    fi
-
-    printf 'Warning: no native vocoder was copied; this is a UI-only artifact.\n' >&2
 fi
 
 printf 'Published %s to %s\n' "$RID" "$OUTPUT_DIR"

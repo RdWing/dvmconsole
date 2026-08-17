@@ -5,7 +5,7 @@ using DvmConsole.Vocoder;
 
 namespace DvmConsole.Desktop;
 
-// Owns explicitly selected receive-audio channels. Clear DMR/P25/analog sessions
+// Owns explicitly selected receive-audio channels. DMR/P25/NXDN/analog sessions
 // share one output stream through a fixed-rate PCM mixer, and the coordinator
 // serializes traffic processing so decoded PCM frames remain ordered per
 // channel before mixing.
@@ -19,14 +19,14 @@ public sealed class ChannelReceiveAudioCoordinator : IAsyncDisposable
     private readonly Func<IAudioBackend> createAudioBackend;
     private readonly Func<IVocoderBackend> createVocoderBackend;
     private readonly IP25KeyResolver? p25KeyResolver;
+    private readonly IDmrKeyResolver? dmrKeyResolver;
+    private readonly INxdnKeyResolver? nxdnKeyResolver;
     private readonly Action<ChannelViewModel, ReadOnlyMemory<short>>? samplesObserver;
     private readonly Func<ChannelViewModel, double>? getChannelGain;
     private readonly Func<ChannelViewModel, string?>? getOutputDeviceId;
-    private readonly Func<INxdnVocoderBackend?>? createNxdnVocoderBackend;
     private volatile ChannelViewModel[] activeChannels = [];
     private IAudioBackend? audioBackend;
     private IVocoderBackend? vocoderBackend;
-    private INxdnVocoderBackend? nxdnVocoderBackend;
     private bool disposed;
 
     public ChannelReceiveAudioCoordinator()
@@ -44,15 +44,17 @@ public sealed class ChannelReceiveAudioCoordinator : IAsyncDisposable
         Action<ChannelViewModel, ReadOnlyMemory<short>>? samplesObserver,
         Func<ChannelViewModel, double>? getChannelGain = null,
         Func<ChannelViewModel, string?>? getOutputDeviceId = null,
-        Func<INxdnVocoderBackend?>? createNxdnVocoderBackend = null)
+        IDmrKeyResolver? dmrKeyResolver = null,
+        INxdnKeyResolver? nxdnKeyResolver = null)
         : this(
             () => AudioBackendFactory.CreateDefault(Environment.GetEnvironmentVariable("DVM_AUDIO_LIBRARY")),
-            () => new SoftwareVocoderBackend(Environment.GetEnvironmentVariable("DVMVOCODER_LIBRARY")),
+            () => new SoftwareVocoderBackend(),
             p25KeyResolver,
             samplesObserver,
             getChannelGain,
             getOutputDeviceId,
-            createNxdnVocoderBackend)
+            dmrKeyResolver,
+            nxdnKeyResolver)
     {
     }
 
@@ -63,15 +65,17 @@ public sealed class ChannelReceiveAudioCoordinator : IAsyncDisposable
         Action<ChannelViewModel, ReadOnlyMemory<short>>? samplesObserver = null,
         Func<ChannelViewModel, double>? getChannelGain = null,
         Func<ChannelViewModel, string?>? getOutputDeviceId = null,
-        Func<INxdnVocoderBackend?>? createNxdnVocoderBackend = null)
+        IDmrKeyResolver? dmrKeyResolver = null,
+        INxdnKeyResolver? nxdnKeyResolver = null)
     {
         this.createAudioBackend = createAudioBackend ?? throw new ArgumentNullException(nameof(createAudioBackend));
         this.createVocoderBackend = createVocoderBackend ?? throw new ArgumentNullException(nameof(createVocoderBackend));
         this.p25KeyResolver = p25KeyResolver;
+        this.dmrKeyResolver = dmrKeyResolver;
+        this.nxdnKeyResolver = nxdnKeyResolver;
         this.samplesObserver = samplesObserver;
         this.getChannelGain = getChannelGain;
         this.getOutputDeviceId = getOutputDeviceId;
-        this.createNxdnVocoderBackend = createNxdnVocoderBackend;
     }
 
     public ChannelViewModel? ActiveChannel => activeChannels.FirstOrDefault();
@@ -138,19 +142,11 @@ public sealed class ChannelReceiveAudioCoordinator : IAsyncDisposable
         {
             if (sessions.ContainsKey(channel))
                 return;
-            if (channel.Definition.Mode == "nxdn" && createNxdnVocoderBackend is null)
-                throw new NotSupportedException(
-                    "NXDN receive audio requires an injected FEC/AMBE+2 decoder.");
             if (channel.Definition.IsEncrypted &&
-                (channel.Definition.Mode != "p25" ||
-                 p25KeyResolver is null ||
-                 !p25KeyResolver.CanResolve(
-                     channel.Definition.SystemName,
-                     channel.Definition.EncryptionAlgorithm,
-                     channel.Definition.EncryptionKeyId)))
+                !CanResolveEncryption(channel.Definition))
             {
                 throw new NotSupportedException(
-                    "Encrypted receive audio requires a configured P25 key; this channel cannot be opened safely.");
+                    "Encrypted receive audio requires a configured key for this protocol; this channel cannot be opened safely.");
             }
 
             IAudioBackend? createdAudio = null;
@@ -158,24 +154,12 @@ public sealed class ChannelReceiveAudioCoordinator : IAsyncDisposable
             AudioRoute? createdRoute = null;
             IAudioPlayback? createdChannelPlayback = null;
             IVocoderSession? vocoderSession = null;
-            INxdnVocoderSession? nxdnVocoderSession = null;
-            INxdnVocoderBackend? createdNxdnVocoder = null;
             ChannelReceiveAudioSession? nextSession = null;
 
             try
             {
-                INxdnVocoderBackend? activeNxdnVocoder = channel.Definition.Mode == "nxdn"
-                    ? nxdnVocoderBackend ??= createdNxdnVocoder = createNxdnVocoderBackend!()
-                    : null;
-                if (channel.Definition.Mode == "nxdn" &&
-                    (activeNxdnVocoder is null || !activeNxdnVocoder.IsAvailable))
-                {
-                    throw new NotSupportedException(
-                        "NXDN receive audio requires an available FEC/AMBE+2 decoder.");
-                }
-
                 IAudioBackend activeAudio = audioBackend ??= createdAudio = createAudioBackend();
-                IVocoderBackend? activeVocoder = channel.Definition.Mode is "dmr" or "p25"
+                IVocoderBackend? activeVocoder = channel.Definition.Mode is "dmr" or "p25" or "nxdn"
                     ? vocoderBackend ??= createdVocoder = createVocoderBackend()
                     : null;
                 AudioRoute activeRoute = GetOrCreateRoute(
@@ -193,20 +177,20 @@ public sealed class ChannelReceiveAudioCoordinator : IAsyncDisposable
                 {
                     VocoderMode mode = channel.Definition.Mode == "dmr"
                         ? VocoderMode.DmrAmbe
-                        : VocoderMode.P25Imbe;
+                        : channel.Definition.Mode == "nxdn"
+                            ? VocoderMode.NxdnAmbe
+                            : VocoderMode.P25Imbe;
                     vocoderSession = activeVocoder.CreateSession(mode);
                 }
-                if (activeNxdnVocoder is not null)
-                    nxdnVocoderSession = activeNxdnVocoder.CreateSession();
                 nextSession = new ChannelReceiveAudioSession(
                     channel.Definition,
                     vocoderSession,
                     createdChannelPlayback,
                     p25KeyResolver,
-                    nxdnVocoderSession);
+                    dmrKeyResolver,
+                    nxdnKeyResolver);
                 nextSession.SetGain(getChannelGain?.Invoke(channel) ?? 1.0);
                 vocoderSession = null;
-                nxdnVocoderSession = null;
                 createdChannelPlayback = null;
 
                 sessions.Add(channel, nextSession);
@@ -226,7 +210,6 @@ public sealed class ChannelReceiveAudioCoordinator : IAsyncDisposable
                     if (createdChannelPlayback is not null)
                         await createdChannelPlayback.DisposeAsync().ConfigureAwait(false);
                     vocoderSession?.Dispose();
-                    nxdnVocoderSession?.Dispose();
                 }
 
                 if (createdRoute is not null)
@@ -236,13 +219,10 @@ public sealed class ChannelReceiveAudioCoordinator : IAsyncDisposable
                 }
                 createdVocoder?.Dispose();
                 createdAudio?.Dispose();
-                createdNxdnVocoder?.Dispose();
                 if (createdAudio is not null)
                     audioBackend = null;
                 if (createdVocoder is not null)
                     vocoderBackend = null;
-                if (createdNxdnVocoder is not null)
-                    nxdnVocoderBackend = null;
 
                 throw;
             }
@@ -251,6 +231,26 @@ public sealed class ChannelReceiveAudioCoordinator : IAsyncDisposable
         {
             gate.Release();
         }
+    }
+
+    private bool CanResolveEncryption(DvmConsole.Core.Runtime.ChannelRuntimeDefinition definition)
+    {
+        return definition.Mode switch
+        {
+            "p25" => p25KeyResolver?.CanResolve(
+                definition.SystemName,
+                definition.EncryptionAlgorithm,
+                definition.EncryptionKeyId) == true,
+            "dmr" => dmrKeyResolver?.CanResolve(
+                definition.SystemName,
+                definition.EncryptionAlgorithm,
+                definition.EncryptionKeyId) == true,
+            "nxdn" => nxdnKeyResolver?.CanResolve(
+                definition.SystemName,
+                definition.EncryptionAlgorithm,
+                definition.EncryptionKeyId) == true,
+            _ => false
+        };
     }
 
     public async Task<int> ProcessAsync(
@@ -420,12 +420,10 @@ public sealed class ChannelReceiveAudioCoordinator : IAsyncDisposable
     private async Task StopInfrastructureCoreAsync()
     {
         IVocoderBackend? oldVocoder = vocoderBackend;
-        INxdnVocoderBackend? oldNxdnVocoder = nxdnVocoderBackend;
         IAudioBackend? oldAudio = audioBackend;
         AudioRoute[] oldRoutes = audioRoutes.Values.ToArray();
         audioRoutes.Clear();
         vocoderBackend = null;
-        nxdnVocoderBackend = null;
         audioBackend = null;
 
         Exception? failure = null;
@@ -442,7 +440,6 @@ public sealed class ChannelReceiveAudioCoordinator : IAsyncDisposable
         }
 
         oldVocoder?.Dispose();
-        oldNxdnVocoder?.Dispose();
         oldAudio?.Dispose();
 
         if (failure is not null)

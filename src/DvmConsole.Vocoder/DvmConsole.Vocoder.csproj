@@ -5,5 +5,39 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <RootNamespace>DvmConsole.Vocoder</RootNamespace>
+    <NativeVocoderRoot>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)../../native/vocoder'))</NativeVocoderRoot>
+    <NativeVocoderCargoManifest>$(NativeVocoderRoot)/Cargo.toml</NativeVocoderCargoManifest>
+    <NativeVocoderProfile Condition="'$(Configuration)' == 'Release'">release</NativeVocoderProfile>
+    <NativeVocoderProfile Condition="'$(NativeVocoderProfile)' == ''">debug</NativeVocoderProfile>
+    <NativeVocoderReleaseArgument Condition="'$(Configuration)' == 'Release'">--release</NativeVocoderReleaseArgument>
+    <NativeVocoderTarget Condition="'$(RuntimeIdentifier)' == 'osx-arm64'">aarch64-apple-darwin</NativeVocoderTarget>
+    <NativeVocoderTarget Condition="'$(RuntimeIdentifier)' == 'osx-x64'">x86_64-apple-darwin</NativeVocoderTarget>
+    <NativeVocoderTarget Condition="'$(RuntimeIdentifier)' == 'win-x64'">x86_64-pc-windows-msvc</NativeVocoderTarget>
+    <NativeVocoderTargetArgument Condition="'$(NativeVocoderTarget)' != ''">--target $(NativeVocoderTarget)</NativeVocoderTargetArgument>
+    <NativeVocoderLibraryName Condition="'$(RuntimeIdentifier)' == 'win-x64'">dvmconsole_vocoder.dll</NativeVocoderLibraryName>
+    <NativeVocoderLibraryName Condition="'$(RuntimeIdentifier)' == 'osx-arm64' or '$(RuntimeIdentifier)' == 'osx-x64'">libdvmconsole_vocoder.dylib</NativeVocoderLibraryName>
+    <NativeVocoderLibraryName Condition="'$(NativeVocoderLibraryName)' == '' and $([MSBuild]::IsOSPlatform('Windows'))">dvmconsole_vocoder.dll</NativeVocoderLibraryName>
+    <NativeVocoderLibraryName Condition="'$(NativeVocoderLibraryName)' == '' and $([MSBuild]::IsOSPlatform('OSX'))">libdvmconsole_vocoder.dylib</NativeVocoderLibraryName>
+    <NativeVocoderLibraryName Condition="'$(NativeVocoderLibraryName)' == ''">libdvmconsole_vocoder.so</NativeVocoderLibraryName>
+    <NativeVocoderOutputDirectory Condition="'$(NativeVocoderTarget)' == ''">$(NativeVocoderRoot)/target/$(NativeVocoderProfile)</NativeVocoderOutputDirectory>
+    <NativeVocoderOutputDirectory Condition="'$(NativeVocoderTarget)' != ''">$(NativeVocoderRoot)/target/$(NativeVocoderTarget)/$(NativeVocoderProfile)</NativeVocoderOutputDirectory>
+    <NativeVocoderOutputPath>$(NativeVocoderOutputDirectory)/$(NativeVocoderLibraryName)</NativeVocoderOutputPath>
+    <NativeVocoderEnvironment Condition="'$(NativeVocoderTarget)' == 'aarch64-apple-darwin'">MACOSX_DEPLOYMENT_TARGET=14.0;CARGO_TARGET_AARCH64_APPLE_DARWIN_RUSTFLAGS=-C link-arg=-mmacosx-version-min=14.0</NativeVocoderEnvironment>
+    <NativeVocoderEnvironment Condition="'$(NativeVocoderTarget)' == 'x86_64-apple-darwin'">MACOSX_DEPLOYMENT_TARGET=14.0;CARGO_TARGET_X86_64_APPLE_DARWIN_RUSTFLAGS=-C link-arg=-mmacosx-version-min=14.0</NativeVocoderEnvironment>
   </PropertyGroup>
+
+  <ItemGroup>
+    <Content Include="$(NativeVocoderOutputPath)"
+             Link="$(NativeVocoderLibraryName)"
+             CopyToOutputDirectory="PreserveNewest"
+             CopyToPublishDirectory="PreserveNewest"
+             Visible="false" />
+  </ItemGroup>
+
+  <Target Name="BuildRequiredNativeVocoder" BeforeTargets="PrepareForBuild">
+    <Exec Command="cargo build --manifest-path &quot;$(NativeVocoderCargoManifest)&quot; --locked $(NativeVocoderReleaseArgument) $(NativeVocoderTargetArgument)"
+          EnvironmentVariables="$(NativeVocoderEnvironment)" />
+    <Error Condition="!Exists('$(NativeVocoderOutputPath)')"
+           Text="Required built-in vocoder was not produced at $(NativeVocoderOutputPath)." />
+  </Target>
 </Project>

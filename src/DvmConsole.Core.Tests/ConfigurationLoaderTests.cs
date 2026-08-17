@@ -65,8 +65,11 @@ public sealed class ConfigurationLoaderTests
         KeyContainer keys = KeyFileLoader.Load(Path.Combine(testData, "keys.example.clear"));
         List<RadioAlias> aliases = AliasFileLoader.Load(Path.Combine(testData, "alias.example.yml"));
 
-        Assert.Equal(2, keys.Keys.Count);
+        Assert.Equal(4, keys.Keys.Count);
         Assert.Equal((ushort)1, keys.Keys[0].KeyId);
+        Assert.Equal("p25", keys.Keys[0].Protocol);
+        Assert.Equal("dmr", keys.Keys[2].Protocol);
+        Assert.Equal("nxdn", keys.Keys[3].Protocol);
         Assert.Single(aliases);
         Assert.Equal("Radio 1", AliasFileLoader.FindAlias(aliases, 1));
     }

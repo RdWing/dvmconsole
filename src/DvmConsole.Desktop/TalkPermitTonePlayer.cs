@@ -3,17 +3,14 @@ using DvmConsole.Audio;
 namespace DvmConsole.Desktop;
 
 // Plays the short local talk-permit indication without sending it over the
-// selected radio channel. The backend and output device are created lazily
-// and reused for the lifetime of the desktop view model.
+// selected radio channel. Its playback endpoint exists only for the tone so a
+// dormant CoreAudio output stream cannot delay the next duplex PTT startup.
 public sealed class TalkPermitTonePlayer : IAsyncDisposable
 {
     private static readonly TimeSpan ToneDuration = TimeSpan.FromMilliseconds(120);
     private readonly Func<IAudioBackend> createAudioBackend;
     private readonly Func<string?> getOutputDeviceId;
     private readonly SemaphoreSlim gate = new(1, 1);
-    private IAudioBackend? audioBackend;
-    private IAudioPlayback? playback;
-    private string? playbackDeviceId;
     private bool disposed;
 
     public TalkPermitTonePlayer(
@@ -38,25 +35,28 @@ public sealed class TalkPermitTonePlayer : IAsyncDisposable
         try
         {
             ObjectDisposedException.ThrowIf(disposed, this);
-            IAudioBackend backend = audioBackend ??= createAudioBackend();
-            AudioDeviceInfo output = ResolveOutputDevice(backend, getOutputDeviceId());
-            if (playback is null || !string.Equals(playbackDeviceId, output.Id, StringComparison.OrdinalIgnoreCase))
+            IAudioBackend backend = createAudioBackend();
+            try
             {
-                if (playback is not null)
-                    await playback.DisposeAsync().ConfigureAwait(false);
-                playback = backend.OpenPlayback(output, PcmAudioFormat.Voice8KhzMono16Bit);
-                playbackDeviceId = output.Id;
-            }
+                AudioDeviceInfo output = ResolveOutputDevice(backend, getOutputDeviceId());
+                await using IAudioPlayback playback = backend.OpenPlayback(
+                    output,
+                    PcmAudioFormat.Voice8KhzMono16Bit);
 
-            short[] samples = new PcmToneGenerator().GenerateTone(
-                frequency,
-                duration ?? ToneDuration,
-                amplitude);
-            ApplyFade(samples, PcmAudioFormat.Voice8KhzMono16Bit.SampleRate / 100);
-            await playback.WriteAsync(samples, cancellationToken).ConfigureAwait(false);
-            LastQueuedSamples = playback.QueuedSamples;
-            LastConsumedSamples = await playback.DrainAsync(cancellationToken).ConfigureAwait(false);
-            return output;
+                short[] samples = new PcmToneGenerator().GenerateTone(
+                    frequency,
+                    duration ?? ToneDuration,
+                    amplitude);
+                ApplyFade(samples, PcmAudioFormat.Voice8KhzMono16Bit.SampleRate / 100);
+                await playback.WriteAsync(samples, cancellationToken).ConfigureAwait(false);
+                LastQueuedSamples = playback.QueuedSamples;
+                LastConsumedSamples = await playback.DrainAsync(cancellationToken).ConfigureAwait(false);
+                return output;
+            }
+            finally
+            {
+                backend.Dispose();
+            }
         }
         finally
         {
@@ -72,12 +72,6 @@ public sealed class TalkPermitTonePlayer : IAsyncDisposable
             if (disposed)
                 return;
             disposed = true;
-            if (playback is not null)
-                await playback.DisposeAsync().ConfigureAwait(false);
-            playback = null;
-            playbackDeviceId = null;
-            audioBackend?.Dispose();
-            audioBackend = null;
         }
         finally
         {

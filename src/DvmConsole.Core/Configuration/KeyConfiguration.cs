@@ -10,6 +10,9 @@ public sealed class KeyContainer
 
 public sealed class KeyEntry
 {
+    // Existing key files predate multi-protocol support and are P25 unless
+    // they explicitly opt into another protocol.
+    public string Protocol { get; set; } = "p25";
     public ushort KeyId { get; set; }
     public int AlgId { get; set; }
     public string Key { get; set; } = string.Empty;

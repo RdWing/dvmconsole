@@ -77,6 +77,8 @@ public static class ConfigurationLoader
 
                 if (!uint.TryParse(channel.Tgid, out uint destinationId) || destinationId == 0)
                     errors.Add($"Channel '{channel.Name}' must have a non-zero numeric destination ID.");
+                else if (channel.Mode == "nxdn" && destinationId > ushort.MaxValue)
+                    errors.Add($"NXDN channel '{channel.Name}' must use a 16-bit destination ID.");
 
                 if (channel.Mode == "dmr" && channel.Slot is < 1 or > 2)
                     errors.Add($"DMR channel '{channel.Name}' must use slot 1 or 2.");

@@ -6,11 +6,7 @@ param(
     [string] $OutputDirectory,
 
     [ValidateSet("Debug", "Release")]
-    [string] $Configuration = "Release",
-
-    [string] $VocoderLibrary = $env:DVMVOCODER_LIBRARY,
-
-    [switch] $AllowMissingVocoder
+    [string] $Configuration = "Release"
 )
 
 $ErrorActionPreference = "Stop"
@@ -45,13 +41,11 @@ if ([string]::IsNullOrWhiteSpace($OutputDirectory)) {
     $OutputDirectory = Join-Path $RootDirectory "artifacts/$Runtime"
 }
 
-if ($env:DVM_ALLOW_MISSING_VOCODER -eq "1") {
-    $AllowMissingVocoder = $true
-}
-
-$ExistingVocoder = Join-Path $OutputDirectory "libvocoder.dll"
-if (Test-Path -LiteralPath $ExistingVocoder -PathType Leaf) {
-    Remove-Item -LiteralPath $ExistingVocoder -Force
+foreach ($ExistingVocoderName in @("libvocoder.dll", "dvmconsole_vocoder.dll")) {
+    $ExistingVocoder = Join-Path $OutputDirectory $ExistingVocoderName
+    if (Test-Path -LiteralPath $ExistingVocoder -PathType Leaf) {
+        Remove-Item -LiteralPath $ExistingVocoder -Force
+    }
 }
 foreach ($LegacyAlert in @("alert1.wav", "alert2.wav", "alert3.wav")) {
     $LegacyAlertPath = Join-Path $OutputDirectory "Audio/$LegacyAlert"
@@ -65,7 +59,10 @@ if ($LASTEXITCODE -ne 0) {
     throw "dotnet restore failed with exit code $LASTEXITCODE."
 }
 
-$PublishProperties = @("-p:UseAppHost=true")
+$PublishProperties = @(
+    "-p:UseAppHost=true",
+    "-p:NativeVocoderTarget=x86_64-pc-windows-msvc"
+)
 $PublishProperties += @(
     "-p:PublishSingleFile=true",
     "-p:IncludeNativeLibrariesForSelfExtract=true",
@@ -84,18 +81,8 @@ if ($LASTEXITCODE -ne 0) {
     throw "dotnet publish failed with exit code $LASTEXITCODE."
 }
 
-if (-not [string]::IsNullOrWhiteSpace($VocoderLibrary)) {
-    if (-not (Test-Path -LiteralPath $VocoderLibrary -PathType Leaf)) {
-        throw "DVMVOCODER_LIBRARY does not point to a file: $VocoderLibrary"
-    }
-
-    Copy-Item -LiteralPath $VocoderLibrary -Destination (Join-Path $OutputDirectory "libvocoder.dll") -Force
-} elseif (-not $AllowMissingVocoder) {
-    throw "DVMVOCODER_LIBRARY is required for a working digital-voice package. Build the native vocoder, set DVMVOCODER_LIBRARY, or pass -AllowMissingVocoder for a UI-only artifact."
-}
-
 $RequiredFiles = @(
-    "DvmConsole.Desktop.exe"
+    "DvmConsole.exe"
 )
 foreach ($FileName in $RequiredFiles) {
     $Path = Join-Path $OutputDirectory $FileName
@@ -115,9 +102,11 @@ foreach ($LegacyAlert in @("alert1.wav", "alert2.wav", "alert3.wav")) {
     }
 }
 
-Assert-X64PeFile (Join-Path $OutputDirectory "DvmConsole.Desktop.exe")
-if (Test-Path -LiteralPath (Join-Path $OutputDirectory "libvocoder.dll") -PathType Leaf) {
-    Assert-X64PeFile (Join-Path $OutputDirectory "libvocoder.dll")
+Assert-X64PeFile (Join-Path $OutputDirectory "DvmConsole.exe")
+foreach ($SidecarName in @("libvocoder.dll", "dvmconsole_vocoder.dll")) {
+    if (Test-Path -LiteralPath (Join-Path $OutputDirectory $SidecarName) -PathType Leaf) {
+        throw "The required vocoder must be embedded in DvmConsole.exe, not shipped as $SidecarName."
+    }
 }
 
 $PrivateCodeplug = Get-ChildItem -LiteralPath $OutputDirectory -Recurse -File -ErrorAction SilentlyContinue |
@@ -128,6 +117,3 @@ if ($null -ne $PrivateCodeplug) {
 }
 
 Write-Host "Published $Runtime to $OutputDirectory"
-if ([string]::IsNullOrWhiteSpace($VocoderLibrary)) {
-    Write-Warning "No native vocoder was copied. This is a UI-only artifact; DMR/P25 voice is unavailable."
-}

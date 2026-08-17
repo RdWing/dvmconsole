@@ -23,10 +23,13 @@ jobs:
         include:
           - os: macos-14
             rid: osx-arm64
+            rust_target: aarch64-apple-darwin
           - os: macos-15-intel
             rid: osx-x64
+            rust_target: x86_64-apple-darwin
           - os: windows-latest
             rid: win-x64
+            rust_target: x86_64-pc-windows-msvc
 
     steps:
       - name: Check out source and fnecore
@@ -38,6 +41,12 @@ jobs:
         uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 10.0.x
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@1.85.0
+        with:
+          components: rustfmt, clippy
+          targets: ${{ matrix.rust_target }}
 
       - name: Resolve package version
         shell: bash
@@ -59,37 +68,12 @@ jobs:
           fi
           printf 'DVM_PACKAGE_VERSION=%s\n' "$package_version" >> "$GITHUB_ENV"
 
-      - name: Check out pinned dvmvocoder source
-        uses: actions/checkout@v4
-        with:
-          repository: DVMProject/dvmvocoder
-          ref: 80ec5b66c0cfeff7b3f9ea9e1a8249f2b3ac3767
-          path: .native/dvmvocoder
-
-      - name: Build native software vocoder
-        shell: pwsh
+      - name: Verify native vocoder
+        shell: bash
         run: |
-          $buildDirectory = Join-Path $env:RUNNER_TEMP "dvmvocoder-build"
-          if ("${{ matrix.rid }}" -like "osx-*") {
-            $architecture = if ("${{ matrix.rid }}" -eq "osx-arm64") { "arm64" } else { "x86_64" }
-            $cmakeArguments = @(
-              "-S", ".native/dvmvocoder",
-              "-B", $buildDirectory,
-              "-DCMAKE_BUILD_TYPE=Release",
-              "-DCMAKE_OSX_ARCHITECTURES=$architecture",
-              "-DCMAKE_OSX_DEPLOYMENT_TARGET=14.0"
-            )
-            cmake @cmakeArguments
-            $library = Join-Path $buildDirectory "libvocoder.dylib"
-          } else {
-            cmake -S .native/dvmvocoder -B $buildDirectory -A x64
-            $library = Join-Path $buildDirectory "Release/libvocoder.dll"
-          }
-          if ($LASTEXITCODE -ne 0) { throw "dvmvocoder configure failed with exit code $LASTEXITCODE." }
-          cmake --build $buildDirectory --config Release
-          if ($LASTEXITCODE -ne 0) { throw "dvmvocoder build failed with exit code $LASTEXITCODE." }
-          if (-not (Test-Path -LiteralPath $library -PathType Leaf)) { throw "Native vocoder output was not found at $library." }
-          "DVMVOCODER_LIBRARY=$library" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          cargo fmt --manifest-path native/vocoder/Cargo.toml -- --check
+          cargo clippy --manifest-path native/vocoder/Cargo.toml --locked --all-targets -- -D warnings
+          cargo test --manifest-path native/vocoder/Cargo.toml --locked
 
       - name: Restore rebuild solution
         shell: bash

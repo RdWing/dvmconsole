@@ -93,7 +93,7 @@ public sealed class SystemViewModelTests
 
     [Fact]
     public void ReportsUnreleasedSemanticVersion()
-        => Assert.StartsWith("0.1.1", MainWindow.ApplicationVersion, StringComparison.Ordinal);
+        => Assert.StartsWith("0.2.0", MainWindow.ApplicationVersion, StringComparison.Ordinal);
 
     [Theory]
     [InlineData("0.1.0-alpha.1+abcdef123456", "0.1.0-alpha.1 (abcdef1)")]
@@ -422,6 +422,9 @@ public sealed class SystemViewModelTests
         {
             await using MainWindowViewModel viewModel = MainWindowViewModel.Load(path, new UserSettingsStore(settingsPath));
             SystemViewModel system = viewModel.Systems[0];
+            byte[] dmrWithQuality = new byte[DvmConsole.Media.DmrVoicePacketCodec.PacketBytes];
+            dmrWithQuality[53] = 3;
+            dmrWithQuality[54] = 72;
 
             viewModel.ProcessTraffic(system, new FneTrafficFrame(
                 FneTrafficProtocol.Dmr,
@@ -434,7 +437,7 @@ public sealed class SystemViewModelTests
                 "VOICE",
                 1,
                 77,
-                new byte[DvmConsole.Media.DmrVoicePacketCodec.PacketBytes]));
+                dmrWithQuality));
             viewModel.ProcessTraffic(system, new FneTrafficFrame(
                 FneTrafficProtocol.Dmr,
                 1,
@@ -491,6 +494,15 @@ public sealed class SystemViewModelTests
             Assert.NotNull(viewModel.CallHistory[0].Duration);
             Assert.Equal((uint)77, viewModel.CallHistory[1].StreamId);
             Assert.Equal("Alpha Dispatch", viewModel.CallHistory[1].ChannelName);
+            Assert.Equal("Info", viewModel.DebugLogSeverityFilter);
+            Assert.All(viewModel.FilteredDebugLogs, entry => Assert.Equal(DvmConsole.Core.Diagnostics.DebugLogSeverity.Info, entry.Severity));
+            Assert.Contains(viewModel.FilteredDebugLogs, entry => entry.Message.Contains("RX call started", StringComparison.Ordinal));
+            Assert.Contains(viewModel.FilteredDebugLogs, entry => entry.Message.Contains("RX call ended", StringComparison.Ordinal));
+            Assert.Contains(viewModel.FilteredDebugLogs, entry => entry.Message.Contains("FNE BER errors 3/141", StringComparison.Ordinal));
+
+            viewModel.DebugLogSeverityFilter = "Debug";
+            Assert.Contains(viewModel.FilteredDebugLogs, entry => entry.Message.Contains("FNE RX DMR", StringComparison.Ordinal));
+            Assert.Contains(viewModel.FilteredDebugLogs, entry => entry.Message.Contains("RSSI -72 dBm", StringComparison.Ordinal));
 
             viewModel.CallHistoryFilterText = "Alpha Dispatch";
             Assert.Equal(2, viewModel.FilteredCallHistory.Count);
@@ -637,8 +649,16 @@ public sealed class SystemViewModelTests
                 new byte[DmrVoicePacketCodec.PacketBytes]));
 
             byte[] dmrFrame = new byte[DmrVoicePacketCodec.FrameBytes];
-            var privacy = new PrivacyLC { AlgId = 3, KId = 0x55, Group = true, DstId = 101 };
+            var privacy = new PrivacyLC
+            {
+                AlgId = DmrPrivacyAlgorithms.Arc4,
+                KId = 0x55,
+                FID = DmrPrivacyAlgorithms.FeatureId,
+                Group = true,
+                DstId = 101
+            };
             FullLC.EncodePI(privacy, ref dmrFrame);
+            new SlotType { ColorCode = 0, DataType = (byte)DMRDataType.VOICE_PI_HEADER }.GetData(ref dmrFrame);
             byte[] dmrPacket = new byte[DmrVoicePacketCodec.PacketBytes];
             dmrFrame.CopyTo(dmrPacket, DmrVoicePacketCodec.HeaderBytes);
             viewModel.ProcessTraffic(system, new FneTrafficFrame(
@@ -657,7 +677,7 @@ public sealed class SystemViewModelTests
             Assert.Equal(2, viewModel.CallHistory.Count);
             Assert.True(viewModel.CallHistory.Single(entry => entry.Protocol == FneTrafficProtocol.Dmr).Encrypted);
             Assert.Equal(
-                "Encrypted (alg 0x03, key 0x55)",
+                "Encrypted (alg 0x01, key 0x55)",
                 viewModel.CallHistory.Single(entry => entry.Protocol == FneTrafficProtocol.Dmr).EncryptionText);
         }
         finally
@@ -864,7 +884,7 @@ public sealed class SystemViewModelTests
                 Assert.Equal(UserSettings.DvmConsoleAudioProcessingMode, unsupportedPlatformSettings.AudioProcessingMode);
                 Assert.Equal("input-device-42", unsupportedPlatformSettings.AudioInputDeviceId);
                 Assert.Equal("output-device-84", unsupportedPlatformSettings.AudioOutputDeviceId);
-                Assert.True(unsupportedPlatformSettings.HighQualityBluetoothAudioEnabled);
+                Assert.False(unsupportedPlatformSettings.HighQualityBluetoothAudioEnabled);
                 Assert.True(unsupportedPlatformSettings.AudioInputAgcEnabled);
                 Assert.Equal(-30, unsupportedPlatformSettings.AudioInputAgcTargetDbfs);
                 Assert.DoesNotContain("echo cancellation", viewModel.AudioProcessingDescription, StringComparison.OrdinalIgnoreCase);
@@ -887,9 +907,7 @@ public sealed class SystemViewModelTests
             Assert.Equal("output-device-84", appleSettings.AudioOutputDeviceId);
             Assert.True(appleSettings.AudioInputAgcEnabled);
             Assert.Equal(-30, appleSettings.AudioInputAgcTargetDbfs);
-            Assert.Equal(
-                !OperatingSystem.IsMacOSVersionAtLeast(26),
-                appleSettings.HighQualityBluetoothAudioEnabled);
+            Assert.False(appleSettings.HighQualityBluetoothAudioEnabled);
             Assert.Contains("echo cancellation", viewModel.AudioProcessingDescription, StringComparison.OrdinalIgnoreCase);
             Assert.Contains("receive audio remains unprocessed", viewModel.AudioProcessingDescription, StringComparison.OrdinalIgnoreCase);
 

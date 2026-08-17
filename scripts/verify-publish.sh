@@ -3,7 +3,6 @@ set -euo pipefail
 
 RID="${1:-}"
 OUTPUT_DIR="${2:-}"
-ALLOW_MISSING_VOCODER="${DVM_ALLOW_MISSING_VOCODER:-0}"
 
 verify_macos_deployment_target() {
     local description="$1"
@@ -50,7 +49,7 @@ if [[ ! -d "$OUTPUT_DIR" ]]; then
 fi
 
 if [[ -n "$EXPECTED_MACOS_ARCHITECTURE" ]]; then
-    for file_name in DvmConsole.Desktop.dll DvmConsole.Desktop.deps.json DvmConsole.Desktop.runtimeconfig.json; do
+    for file_name in DvmConsole.dll DvmConsole.deps.json DvmConsole.runtimeconfig.json; do
         if [[ ! -f "$OUTPUT_DIR/$file_name" ]]; then
             printf 'Missing required publish file: %s\n' "$OUTPUT_DIR/$file_name" >&2
             exit 4
@@ -72,29 +71,29 @@ done
 
 case "$RID" in
     osx-arm64|osx-x64)
-        if [[ ! -x "$OUTPUT_DIR/DvmConsole.Desktop" ]]; then
-            printf 'macOS publish is missing an executable apphost: %s\n' "$OUTPUT_DIR/DvmConsole.Desktop" >&2
+        if [[ ! -x "$OUTPUT_DIR/DvmConsole" ]]; then
+            printf 'macOS publish is missing an executable apphost: %s\n' "$OUTPUT_DIR/DvmConsole" >&2
             exit 4
         fi
-        apphost_description=$(/usr/bin/file "$OUTPUT_DIR/DvmConsole.Desktop")
+        apphost_description=$(/usr/bin/file "$OUTPUT_DIR/DvmConsole")
         if [[ "$apphost_description" != *"$EXPECTED_MACOS_ARCHITECTURE"* ]]; then
             printf 'macOS apphost is not %s: %s\n' "$EXPECTED_MACOS_ARCHITECTURE" "$apphost_description" >&2
             exit 4
         fi
         ;;
     win-x64)
-        if [[ ! -f "$OUTPUT_DIR/DvmConsole.Desktop.exe" ]]; then
-            printf 'Windows publish is missing an executable apphost: %s\n' "$OUTPUT_DIR/DvmConsole.Desktop.exe" >&2
+        if [[ ! -f "$OUTPUT_DIR/DvmConsole.exe" ]]; then
+            printf 'Windows publish is missing an executable apphost: %s\n' "$OUTPUT_DIR/DvmConsole.exe" >&2
             exit 4
         fi
-        apphost_description=$(/usr/bin/file "$OUTPUT_DIR/DvmConsole.Desktop.exe")
+        apphost_description=$(/usr/bin/file "$OUTPUT_DIR/DvmConsole.exe")
         if [[ "$apphost_description" != *x86-64* && "$apphost_description" != *x86_64* ]]; then
             printf 'Windows apphost is not x64: %s\n' "$apphost_description" >&2
             exit 4
         fi
-        if [[ -e "$OUTPUT_DIR/DvmConsole.Desktop.dll" ||
-              -e "$OUTPUT_DIR/DvmConsole.Desktop.deps.json" ||
-              -e "$OUTPUT_DIR/DvmConsole.Desktop.runtimeconfig.json" ]]; then
+        if [[ -e "$OUTPUT_DIR/DvmConsole.dll" ||
+              -e "$OUTPUT_DIR/DvmConsole.deps.json" ||
+              -e "$OUTPUT_DIR/DvmConsole.runtimeconfig.json" ]]; then
             printf 'Windows publish is not a clean single-file application.\n' >&2
             exit 4
         fi
@@ -131,21 +130,17 @@ case "$RID" in
         fi
         verify_macos_deployment_target "macOS audio shim" "$native_library"
 
-        native_vocoder="$OUTPUT_DIR/libvocoder.dylib"
+        native_vocoder="$OUTPUT_DIR/libdvmconsole_vocoder.dylib"
         if [[ ! -f "$native_vocoder" ]]; then
-            if [[ "$ALLOW_MISSING_VOCODER" != "1" ]]; then
-                printf 'Missing macOS vocoder: %s\n' "$native_vocoder" >&2
-                printf 'Set DVMVOCODER_LIBRARY or DVM_ALLOW_MISSING_VOCODER=1 for a UI-only artifact.\n' >&2
-                exit 9
-            fi
-        else
-            native_description=$(/usr/bin/file "$native_vocoder")
-            if [[ "$native_description" != *"$EXPECTED_MACOS_ARCHITECTURE"* ]]; then
-                printf 'macOS vocoder is not %s: %s\n' "$EXPECTED_MACOS_ARCHITECTURE" "$native_description" >&2
-                exit 9
-            fi
-            verify_macos_deployment_target "macOS vocoder" "$native_vocoder"
+            printf 'Missing required macOS vocoder: %s\n' "$native_vocoder" >&2
+            exit 9
         fi
+        native_description=$(/usr/bin/file "$native_vocoder")
+        if [[ "$native_description" != *"$EXPECTED_MACOS_ARCHITECTURE"* ]]; then
+            printf 'macOS vocoder is not %s: %s\n' "$EXPECTED_MACOS_ARCHITECTURE" "$native_description" >&2
+            exit 9
+        fi
+        verify_macos_deployment_target "macOS vocoder" "$native_vocoder"
         ;;
     win-x64)
         if [[ -e "$OUTPUT_DIR/libdvmaudio.dylib" ]]; then
@@ -153,19 +148,9 @@ case "$RID" in
             exit 11
         fi
 
-        native_vocoder="$OUTPUT_DIR/libvocoder.dll"
-        if [[ ! -f "$native_vocoder" ]]; then
-            if [[ "$ALLOW_MISSING_VOCODER" != "1" ]]; then
-                printf 'Missing Windows vocoder: %s\n' "$native_vocoder" >&2
-                printf 'Set DVMVOCODER_LIBRARY or DVM_ALLOW_MISSING_VOCODER=1 for a UI-only artifact.\n' >&2
-                exit 10
-            fi
-        else
-            optional_description=$(/usr/bin/file "$native_vocoder")
-            if [[ "$optional_description" != *x86-64* && "$optional_description" != *x86_64* ]]; then
-                printf 'Windows vocoder is not x64: %s\n' "$optional_description" >&2
-                exit 10
-            fi
+        if [[ -e "$OUTPUT_DIR/dvmconsole_vocoder.dll" || -e "$OUTPUT_DIR/libvocoder.dll" ]]; then
+            printf 'Windows vocoder must be embedded in DvmConsole.exe, not shipped as a sidecar.\n' >&2
+            exit 10
         fi
         ;;
 esac

@@ -17,6 +17,9 @@ public sealed class P25RxAudioSession : IAsyncDisposable
     private readonly string systemName;
     private readonly VoicePacketSequenceTracker sequenceTracker = new();
     private P25CryptoState? cryptoState;
+    private uint activeStreamId;
+    private bool encryptedStream;
+    private bool hasDecodedVoiceInActiveStream;
     private bool disposed;
 
     public P25RxAudioSession(
@@ -44,21 +47,32 @@ public sealed class P25RxAudioSession : IAsyncDisposable
         ArgumentNullException.ThrowIfNull(traffic);
         if (!selector.Matches(traffic))
             return 0;
+        if (activeStreamId != traffic.StreamId)
+        {
+            activeStreamId = traffic.StreamId;
+            cryptoState = null;
+            encryptedStream = false;
+            hasDecodedVoiceInActiveStream = false;
+        }
         long lostBefore = sequenceTracker.LostPackets;
         if (!sequenceTracker.TryAccept(traffic.StreamId, traffic.PacketSequence))
             return 0;
-        if (sequenceTracker.LostPackets > lostBefore)
+        long lostPackets = sequenceTracker.LostPackets - lostBefore;
+        if (lostPackets > 0)
         {
+            await ConcealLostPacketsAsync(lostPackets, cancellationToken).ConfigureAwait(false);
             // An encrypted P25 keystream cannot be safely advanced across a
             // missing LDU. Wait for a fresh LDU1 rather than emitting
             // plausible-looking but incorrectly decrypted audio.
-            cryptoState = null;
+            MarkEncryptionDesynchronized();
         }
 
         byte[] imbe = new byte[P25DfsiFrameCodec.ImbeBytes];
         if (!P25DfsiFrameCodec.TryExtractImbe(traffic, imbe))
         {
             MalformedPackets++;
+            MarkEncryptionDesynchronized();
+            await ConcealCurrentLduAsync(cancellationToken).ConfigureAwait(false);
             return 0;
         }
 
@@ -70,16 +84,43 @@ public sealed class P25RxAudioSession : IAsyncDisposable
             cryptoState = null;
 
         if (ldu1)
+        {
             PrepareForLdu1(traffic);
+            if (encryptedStream && cryptoState is null)
+            {
+                // Sustained encrypted calls often omit HDU metadata after the
+                // first LDU1. If loss destroyed the prepared stream, fail
+                // closed until an LDU1 carries fresh HDU data or an LDU2 ESS
+                // prepares the following LDU1.
+                MalformedPackets++;
+                await ConcealCurrentLduAsync(cancellationToken).ConfigureAwait(false);
+                return 0;
+            }
+        }
+        else if (hasEncryptionMetadata &&
+                 encryptionMetadata.AlgorithmId == P25Defines.P25_ALGO_UNENCRYPT)
+        {
+            cryptoState = null;
+            encryptedStream = false;
+        }
         else if (cryptoState is null &&
                  hasEncryptionMetadata &&
                  encryptionMetadata.AlgorithmId != P25Defines.P25_ALGO_UNENCRYPT)
         {
-            // A lost or malformed LDU1 makes the encrypted LDU2 unsafe to
-            // decode. Drop only this frame and wait for the next LDU1 so a
-            // sustained call can recover without tearing down the audio
-            // session or emitting plausible-looking garbage.
+            // The current LDU2 cannot be decrypted without the preceding
+            // state, but its ESS describes the keystream for the following
+            // LDU1. Prepare that next boundary, conceal this LDU, and recover
+            // without ever sending ciphertext to the vocoder.
+            encryptedStream = true;
+            TryCreateCryptoState(traffic.StreamId, encryptionMetadata, out cryptoState);
             MalformedPackets++;
+            await ConcealCurrentLduAsync(cancellationToken).ConfigureAwait(false);
+            return 0;
+        }
+        else if (!ldu1 && encryptedStream && cryptoState is null)
+        {
+            MalformedPackets++;
+            await ConcealCurrentLduAsync(cancellationToken).ConfigureAwait(false);
             return 0;
         }
 
@@ -96,6 +137,7 @@ public sealed class P25RxAudioSession : IAsyncDisposable
                 decoded => samples = decoded.ToArray());
             await playback.WriteAsync(samples, cancellationToken).ConfigureAwait(false);
             FramesDecoded++;
+            hasDecodedVoiceInActiveStream = true;
         }
 
         if (!ldu1 && cryptoState is not null)
@@ -103,6 +145,30 @@ public sealed class P25RxAudioSession : IAsyncDisposable
 
         return errors;
     }
+
+    private async ValueTask ConcealLostPacketsAsync(
+        long lostPackets,
+        CancellationToken cancellationToken)
+    {
+        if (!hasDecodedVoiceInActiveStream)
+            return;
+
+        const int maximumConcealedPackets = 10;
+        int frameCount = checked((int)Math.Min(lostPackets, maximumConcealedPackets)) *
+            P25DfsiFrameCodec.CodewordsPerLdu;
+        for (int index = 0; index < frameCount; index++)
+        {
+            short[] samples = [];
+            decoder.ProcessLost(decoded => samples = decoded.ToArray());
+            await playback.WriteAsync(samples, cancellationToken).ConfigureAwait(false);
+            FramesDecoded++;
+        }
+        if (lostPackets > maximumConcealedPackets)
+            decoder.Reset();
+    }
+
+    private ValueTask ConcealCurrentLduAsync(CancellationToken cancellationToken)
+        => ConcealLostPacketsAsync(1, cancellationToken);
 
     public async ValueTask DisposeAsync()
     {
@@ -127,19 +193,35 @@ public sealed class P25RxAudioSession : IAsyncDisposable
         if (metadata.AlgorithmId == P25Defines.P25_ALGO_UNENCRYPT)
         {
             cryptoState = null;
+            encryptedStream = false;
             return;
         }
 
         cryptoState = CreateCryptoState(traffic.StreamId, metadata);
+        encryptedStream = true;
     }
 
     private P25CryptoState CreateCryptoState(uint streamId, P25DfsiFrameCodec.P25EncryptionMetadata metadata)
     {
-        if (keyResolver is null ||
-            !keyResolver.TryResolve(systemName, metadata.AlgorithmId, metadata.KeyId, out ReadOnlyMemory<byte> key))
+        if (!TryCreateCryptoState(streamId, metadata, out P25CryptoState? state))
         {
             throw new NotSupportedException(
                 $"P25 encrypted receive requires key 0x{metadata.KeyId:X} for algorithm 0x{metadata.AlgorithmId:X2}.");
+        }
+
+        return state!;
+    }
+
+    private bool TryCreateCryptoState(
+        uint streamId,
+        P25DfsiFrameCodec.P25EncryptionMetadata metadata,
+        out P25CryptoState? state)
+    {
+        state = null;
+        if (keyResolver is null ||
+            !keyResolver.TryResolve(systemName, metadata.AlgorithmId, metadata.KeyId, out ReadOnlyMemory<byte> key))
+        {
+            return false;
         }
 
         var crypto = new P25Crypto();
@@ -150,12 +232,13 @@ public sealed class P25RxAudioSession : IAsyncDisposable
                 $"P25 algorithm 0x{metadata.AlgorithmId:X2} could not prepare the configured key stream.");
         }
 
-        return new P25CryptoState(
+        state = new P25CryptoState(
             streamId,
             metadata.AlgorithmId,
             metadata.KeyId,
             metadata.MessageIndicator.ToArray(),
             crypto);
+        return true;
     }
 
     private void ProcessEncryption(byte[] codeword, P25DUID duid)
@@ -175,6 +258,7 @@ public sealed class P25RxAudioSession : IAsyncDisposable
             if (metadata.AlgorithmId == P25Defines.P25_ALGO_UNENCRYPT)
             {
                 cryptoState = null;
+                encryptedStream = false;
                 return;
             }
 
@@ -211,6 +295,7 @@ public sealed class P25RxAudioSession : IAsyncDisposable
                 metadata.KeyId,
                 nextMessageIndicator,
                 nextCrypto);
+            encryptedStream = true;
             return;
         }
 
@@ -222,6 +307,13 @@ public sealed class P25RxAudioSession : IAsyncDisposable
             cryptoState.KeyId,
             cycledMessageIndicator);
         cryptoState = cryptoState with { MessageIndicator = cycledMessageIndicator };
+    }
+
+    private void MarkEncryptionDesynchronized()
+    {
+        if (cryptoState is not null)
+            encryptedStream = true;
+        cryptoState = null;
     }
 
     private sealed record P25CryptoState(

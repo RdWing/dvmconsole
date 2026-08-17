@@ -102,14 +102,13 @@ public sealed class ChannelReceiveAudioSessionTests
     [Fact]
     public async Task DropsMalformedNxdnFramesAndRecoversOnTheNextFrame()
     {
-        var vocoder = new FakeNxdnVocoderSession();
+        var vocoder = new FakeVocoderSession();
         var playback = new FakePlayback();
         var definition = new ChannelRuntimeDefinition("NXDN", "System 1", "nxdn", 100, 0);
         await using var session = new ChannelReceiveAudioSession(
             definition,
-            vocoder: null,
-            playback,
-            nxdnVocoder: vocoder);
+            vocoder,
+            playback);
 
         Assert.Equal(0, await session.ProcessAsync(new FneTrafficFrame(
             FneTrafficProtocol.Nxdn,
@@ -127,8 +126,8 @@ public sealed class ChannelReceiveAudioSessionTests
         Assert.Empty(playback.Frames);
 
         Assert.Equal(0, await session.ProcessAsync(CreateNxdnTraffic()));
-        Assert.Equal(1, session.FramesDecoded);
-        Assert.Single(playback.Frames);
+        Assert.Equal(4, session.FramesDecoded);
+        Assert.Equal(4, playback.Frames.Count);
     }
 
     [Fact]
@@ -144,36 +143,35 @@ public sealed class ChannelReceiveAudioSessionTests
     }
 
     [Fact]
-    public void KeepsNxdnReceiveFailClosedUntilAnNxdnVocoderExists()
+    public void RequiresTheMandatoryVocoderForNxdnReceive()
     {
         var definition = new ChannelRuntimeDefinition("NXDN", "System 1", "nxdn", 100, 0);
 
-        Assert.Throws<NotSupportedException>(() => new ChannelReceiveAudioSession(
+        Assert.Throws<ArgumentNullException>(() => new ChannelReceiveAudioSession(
             definition,
             vocoder: null,
             new FakePlayback()));
     }
 
     [Fact]
-    public async Task RoutesNxdnFramesOnlyThroughTheInjectedNxdnDecoder()
+    public async Task RoutesAllFourNxdnCodewordsThroughTheMandatoryVocoder()
     {
-        var vocoder = new FakeNxdnVocoderSession();
+        var vocoder = new FakeVocoderSession();
         var playback = new FakePlayback();
         var definition = new ChannelRuntimeDefinition("NXDN", "System 1", "nxdn", 100, 0);
         await using var session = new ChannelReceiveAudioSession(
             definition,
-            vocoder: null,
-            playback,
-            nxdnVocoder: vocoder);
+            vocoder,
+            playback);
 
         int errors = await session.ProcessAsync(CreateNxdnTraffic());
 
         Assert.Equal(0, errors);
-        Assert.Equal(1, session.FramesDecoded);
-        Assert.Equal(1, vocoder.DecodeCalls);
-        Assert.Single(playback.Frames);
+        Assert.Equal(4, session.FramesDecoded);
+        Assert.Equal(4, vocoder.DecodeCalls);
+        Assert.Equal(4, playback.Frames.Count);
         Assert.Equal(160, playback.Frames[0].Length);
-        Assert.Equal((short)30_000, playback.Frames[0][0]);
+        Assert.Equal((short)1, playback.Frames[0][0]);
     }
 
     [Fact]
@@ -254,9 +252,10 @@ public sealed class ChannelReceiveAudioSessionTests
 
     private static FneTrafficFrame CreateNxdnTraffic()
     {
-        byte[] payload = new byte[NxdnVoicePacketCodec.PacketBytes];
-        for (int index = 0; index < NxdnVoicePacketCodec.FrameBytes; index++)
-            payload[NxdnVoicePacketCodec.HeaderBytes + index] = (byte)(index + 1);
+        byte[] ambe = Enumerable.Range(1, NxdnVoicePacketCodec.AmbeBytes)
+            .Select(value => (byte)value)
+            .ToArray();
+        byte[] payload = NxdnVoicePacketCodec.CreateVoicePacket(1, 100, true, 0, ambe);
 
         return new FneTrafficFrame(
             FneTrafficProtocol.Nxdn,
@@ -267,7 +266,7 @@ public sealed class ChannelReceiveAudioSessionTests
             "GROUP",
             "VOICE",
             "VCALL",
-            1,
+            2,
             99,
             payload);
     }
@@ -281,22 +280,6 @@ public sealed class ChannelReceiveAudioSessionTests
         {
             DecodeCalls++;
             samples.Fill((short)DecodeCalls);
-            return 0;
-        }
-
-        public void Dispose()
-        {
-        }
-    }
-
-    private sealed class FakeNxdnVocoderSession : INxdnVocoderSession
-    {
-        public int DecodeCalls { get; private set; }
-
-        public int Decode(ReadOnlySpan<byte> frame, Span<short> samples)
-        {
-            DecodeCalls++;
-            samples.Fill(30_000);
             return 0;
         }
 

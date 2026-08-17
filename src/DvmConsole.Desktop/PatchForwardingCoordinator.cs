@@ -15,6 +15,8 @@ public sealed class PatchForwardingCoordinator : IDisposable
     private readonly IReadOnlyList<IFneTrafficEndpoint> systems;
     private readonly Dictionary<string, ChannelViewModel> channels;
     private readonly IP25KeyResolver? p25KeyResolver;
+    private readonly IDmrKeyResolver? dmrKeyResolver;
+    private readonly INxdnKeyResolver? nxdnKeyResolver;
     private readonly Func<IVocoderBackend> createVocoderBackend;
     private readonly Dictionary<string, ActiveTarget> activeTargets = new(StringComparer.OrdinalIgnoreCase);
     private readonly PatchRoutingTable router;
@@ -24,12 +26,16 @@ public sealed class PatchForwardingCoordinator : IDisposable
     public PatchForwardingCoordinator(
         IEnumerable<IFneTrafficEndpoint> systems,
         IP25KeyResolver? p25KeyResolver = null,
-        Func<IVocoderBackend>? createVocoderBackend = null)
+        Func<IVocoderBackend>? createVocoderBackend = null,
+        IDmrKeyResolver? dmrKeyResolver = null,
+        INxdnKeyResolver? nxdnKeyResolver = null)
     {
         this.systems = systems?.ToArray() ?? throw new ArgumentNullException(nameof(systems));
         this.p25KeyResolver = p25KeyResolver;
+        this.dmrKeyResolver = dmrKeyResolver;
+        this.nxdnKeyResolver = nxdnKeyResolver;
         this.createVocoderBackend = createVocoderBackend ??
-            (() => new SoftwareVocoderBackend(Environment.GetEnvironmentVariable("DVMVOCODER_LIBRARY")));
+            (() => new SoftwareVocoderBackend());
         channels = this.systems
             .SelectMany(system => system.Channels)
             .GroupBy(channel => BuildKey(channel.Definition.SystemName, channel.Definition.DestinationId), StringComparer.OrdinalIgnoreCase)
@@ -128,9 +134,21 @@ public sealed class PatchForwardingCoordinator : IDisposable
                 channel,
                 transmitDefinition,
                 p25KeyResolver);
-            createdVocoderSession = transmitDefinition.Mode is "dmr" or "p25"
+            DmrPrivacyOptions? dmrPrivacy = ChannelTransmitDefinitionFactory.CreateDmrPrivacyOptions(
+                channel,
+                transmitDefinition,
+                dmrKeyResolver);
+            NxdnPrivacyOptions? nxdnPrivacy = ChannelTransmitDefinitionFactory.CreateNxdnPrivacyOptions(
+                channel,
+                transmitDefinition,
+                nxdnKeyResolver);
+            createdVocoderSession = transmitDefinition.Mode is "dmr" or "p25" or "nxdn"
                 ? (vocoderBackend ??= createVocoderBackend()).CreateSession(
-                    transmitDefinition.Mode == "dmr" ? VocoderMode.DmrAmbe : VocoderMode.P25Imbe)
+                    transmitDefinition.Mode == "dmr"
+                        ? VocoderMode.DmrAmbe
+                        : transmitDefinition.Mode == "nxdn"
+                            ? VocoderMode.NxdnAmbe
+                            : VocoderMode.P25Imbe)
                 : null;
             session = new PatchTransmitSession(
                 transmitDefinition,
@@ -142,7 +160,9 @@ public sealed class PatchForwardingCoordinator : IDisposable
                     payload.Span,
                     sequence,
                     stream),
-                encryption);
+                encryption,
+                dmrPrivacy,
+                nxdnPrivacy);
             createdVocoderSession = null;
             session.Start();
             lock (sync)
@@ -219,6 +239,7 @@ public sealed class PatchForwardingCoordinator : IDisposable
         {
             "dmr" => FneTrafficProtocol.Dmr,
             "p25" => FneTrafficProtocol.P25,
+            "nxdn" => FneTrafficProtocol.Nxdn,
             "analog" => FneTrafficProtocol.Analog,
             _ => throw new ArgumentOutOfRangeException(nameof(mode))
         };

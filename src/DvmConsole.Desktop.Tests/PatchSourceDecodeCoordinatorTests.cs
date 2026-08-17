@@ -46,7 +46,7 @@ public sealed class PatchSourceDecodeCoordinatorTests
     }
 
     [Fact]
-    public async Task KeepsUnsupportedAndUnresolvedSourcesInactive()
+    public async Task EnablesClearNxdnAndKeepsUnresolvedEncryptedSourcesInactive()
     {
         var vocoder = new FakeVocoderBackend();
         var nxdn = new ChannelViewModel(new ChannelConfiguration
@@ -72,9 +72,52 @@ public sealed class PatchSourceDecodeCoordinatorTests
 
         await coordinator.ApplyChannelsAsync([nxdn, encryptedP25]);
 
-        Assert.False(coordinator.IsActive(nxdn));
+        Assert.True(coordinator.IsActive(nxdn));
         Assert.False(coordinator.IsActive(encryptedP25));
-        Assert.Equal(0, vocoder.CreateSessionCalls);
+        Assert.Equal(1, vocoder.CreateSessionCalls);
+    }
+
+    [Fact]
+    public async Task EnablesEncryptedDmrAndNxdnSourcesWhenLocalKeysResolve()
+    {
+        using var dmrKeys = new DmrKeyRing("System 1", new KeyContainer
+        {
+            Keys = [new KeyEntry { Protocol = "dmr", AlgId = 1, KeyId = 2, Key = "0102030405" }]
+        });
+        using var nxdnKeys = new NxdnKeyRing("System 1", new KeyContainer
+        {
+            Keys = [new KeyEntry { Protocol = "nxdn", AlgId = 1, KeyId = 3, Key = "1234" }]
+        });
+        var dmr = new ChannelViewModel(new ChannelConfiguration
+        {
+            Name = "DMR privacy",
+            System = "System 1",
+            Tgid = "100",
+            Mode = "dmr",
+            Slot = 1,
+            Algo = "arc4",
+            KeyId = "2"
+        });
+        var nxdn = new ChannelViewModel(new ChannelConfiguration
+        {
+            Name = "NXDN privacy",
+            System = "System 1",
+            Tgid = "101",
+            Mode = "nxdn",
+            Algo = "ehr",
+            KeyId = "3"
+        });
+        await using var coordinator = new PatchSourceDecodeCoordinator(
+            null,
+            (_, _) => { },
+            () => new FakeVocoderBackend(),
+            dmrKeys,
+            nxdnKeys);
+
+        await coordinator.ApplyChannelsAsync([dmr, nxdn]);
+
+        Assert.True(coordinator.IsActive(dmr));
+        Assert.True(coordinator.IsActive(nxdn));
     }
 
     private static FneTrafficFrame CreateDmrTraffic()
@@ -109,7 +152,7 @@ public sealed class PatchSourceDecodeCoordinatorTests
         public void Dispose() => IsDisposed = true;
     }
 
-    private sealed class FakeVocoderSession : IVocoderSession
+    private sealed class FakeVocoderSession : IHalfRateVocoderSession
     {
         public int Encode(ReadOnlySpan<short> samples, Span<byte> codeword) => 0;
 
@@ -117,6 +160,21 @@ public sealed class PatchSourceDecodeCoordinatorTests
         {
             samples.Fill(20_000);
             return 0;
+        }
+
+        public int FlushEncode(Span<byte> codeword) => 0;
+        public int EncodeParameters(ReadOnlySpan<short> samples, Span<byte> parameters) => 0;
+        public int DecodeParameters(ReadOnlySpan<byte> parameters, Span<short> samples, uint correctedErrors = 0, bool lost = false) => 0;
+        public int FlushEncodeParameters(Span<byte> parameters) => 0;
+        public int ExtractParameters(ReadOnlySpan<byte> codeword, Span<byte> parameters)
+        {
+            codeword[..parameters.Length].CopyTo(parameters);
+            return parameters.Length;
+        }
+        public void BuildCodeword(ReadOnlySpan<byte> parameters, Span<byte> codeword)
+        {
+            codeword.Clear();
+            parameters.CopyTo(codeword);
         }
 
         public void Dispose()

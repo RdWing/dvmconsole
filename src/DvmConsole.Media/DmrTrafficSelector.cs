@@ -27,7 +27,8 @@ public sealed record DmrTrafficSelector
         return traffic.Protocol == FneTrafficProtocol.Dmr &&
             traffic.DestinationId == DestinationId &&
             traffic.Slot == Slot &&
-            IsVoiceFrame(traffic.FrameType);
+            (IsVoiceFrame(traffic.FrameType) ||
+             DmrVoicePacketCodec.IsPrivacyIndicator(traffic.Payload));
     }
 
     private static bool IsVoiceFrame(string? frameType)

@@ -34,6 +34,8 @@ public sealed record ChannelRuntimeDefinition
             throw new ArgumentException($"Unsupported channel mode '{mode}'.", nameof(mode));
         if (destinationId == 0)
             throw new ArgumentOutOfRangeException(nameof(destinationId), "A channel destination ID must be non-zero.");
+        if (Mode == "nxdn" && destinationId > ushort.MaxValue)
+            throw new ArgumentOutOfRangeException(nameof(destinationId), "An NXDN destination ID must fit in 16 bits.");
         if (Mode == "dmr" && slot > 1)
             throw new ArgumentOutOfRangeException(nameof(slot), "A DMR runtime slot must be zero or one.");
 

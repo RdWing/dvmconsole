@@ -6,6 +6,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <RootNamespace>DvmConsole.Desktop</RootNamespace>
+    <AssemblyName>DvmConsole</AssemblyName>
     <AvaloniaUseCompiledBindingsByDefault>true</AvaloniaUseCompiledBindingsByDefault>
     <ApplicationIcon>Assets/DVMConsole.ico</ApplicationIcon>
     <Authors>RdWing</Authors>
@@ -15,6 +16,7 @@
     <Copyright>Copyright © 2025-2026 RdWing</Copyright>
     <PackageLicenseExpression>AGPL-3.0-only</PackageLicenseExpression>
     <RepositoryUrl>https://github.com/RdWing/dvmconsole</RepositoryUrl>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
   </PropertyGroup>
 
   <ItemGroup>

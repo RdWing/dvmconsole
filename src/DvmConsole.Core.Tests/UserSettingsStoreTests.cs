@@ -18,8 +18,34 @@ public sealed class UserSettingsStoreTests
             Assert.Null(settings.LastCodeplugPath);
             Assert.Null(settings.LastSelectedChannelKey);
             Assert.True(settings.ConnectionChimes);
+            Assert.False(settings.HighQualityBluetoothAudioEnabled);
             Assert.Equal(14, settings.UiFontSize);
             Assert.Equal(1.0, settings.UiScale);
+        }
+        finally
+        {
+            Cleanup(path);
+        }
+    }
+
+    [Fact]
+    public void LegacyBluetoothDefaultRequiresFreshOptIn()
+    {
+        string path = CreatePath();
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            File.WriteAllText(path, """
+                {
+                  "SchemaVersion": 1,
+                  "HighQualityBluetoothAudioEnabled": true
+                }
+                """);
+
+            UserSettings settings = new UserSettingsStore(path).Load();
+
+            Assert.Equal(UserSettings.CurrentSchemaVersion, settings.SchemaVersion);
+            Assert.False(settings.HighQualityBluetoothAudioEnabled);
         }
         finally
         {

@@ -3,11 +3,11 @@
         x:Class="DvmConsole.Desktop.AboutWindow"
         Title="About DVM Console" Width="500" Height="330" CanResize="False"
         Background="{DynamicResource ShellBackgroundBrush}"
-        Icon="avares://DvmConsole.Desktop/Assets/DVMConsole.png"
+        Icon="avares://DvmConsole/Assets/DVMConsole.png"
         WindowStartupLocation="CenterOwner">
   <Grid Margin="18" RowDefinitions="Auto,Auto,*,Auto" RowSpacing="12">
     <StackPanel Orientation="Horizontal" Spacing="12">
-      <Image Source="avares://DvmConsole.Desktop/Assets/DVMConsole.png" Width="64" Height="64" />
+      <Image Source="avares://DvmConsole/Assets/DVMConsole.png" Width="64" Height="64" />
       <StackPanel VerticalAlignment="Center" Spacing="2">
         <TextBlock Text="Digital Voice Modem" FontSize="20" FontWeight="Bold" />
         <TextBlock Text="Desktop Dispatch Console" FontSize="14" />

@@ -1,4 +1,5 @@
 using Avalonia;
+using DvmConsole.Vocoder;
 
 namespace DvmConsole.Desktop;
 
@@ -10,6 +11,7 @@ internal static class Program
         DesktopCrashLog.Install();
         try
         {
+            ValidateBuiltInVocoder();
             App.SmokeWindows = args.Contains("--smoke-windows", StringComparer.Ordinal);
             App.ConfigurationPath = args.FirstOrDefault(argument => !argument.StartsWith("-", StringComparison.Ordinal));
             BuildAvaloniaApp().StartWithClassicDesktopLifetime(args);
@@ -18,6 +20,15 @@ internal static class Program
         {
             DesktopCrashLog.Write("Desktop main loop", exception);
             throw;
+        }
+    }
+
+    private static void ValidateBuiltInVocoder()
+    {
+        using var backend = new SoftwareVocoderBackend();
+        foreach (VocoderMode mode in Enum.GetValues<VocoderMode>())
+        {
+            using IVocoderSession session = backend.CreateSession(mode);
         }
     }
 

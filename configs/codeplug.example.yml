@@ -22,9 +22,10 @@
 # file.
 #
 
-# Optional local fallback key YAML file (see keys.example.clear for formatting).
+# Optional local key YAML file (see keys.example.clear for formatting).
 # After each FNE connects, configured P25 keys are requested through KMM first;
-# a valid KMM key takes precedence until that system disconnects.
+# a valid KMM key takes precedence until that system disconnects. DMR and NXDN
+# privacy keys are loaded locally from this file.
 #keyFile: "Full/Path/To/Keyfile.clear"
 
 #
@@ -103,7 +104,7 @@ zones:
         selectable_encryption: true
         # Legacy field; ignored. KMM is preferred automatically and keyFile is the fallback.
         encryptionKey: null
-        # Voice mode DMR ("dmr"), P25 ("p25")
+        # Voice mode DMR ("dmr"), P25 ("p25"), NXDN 4800 ("nxdn"), or analog ("analog")
         mode: "p25"
         # Optional resource color for this channel widget, in hex
         # resourceColor: "#150282"

@@ -73,7 +73,7 @@ internal static class Program
             ?? audio.EnumerateDevices(AudioDirection.Output).FirstOrDefault()
             ?? throw new InvalidOperationException("No audio output device is available.");
         IAudioPlayback playback = audio.OpenPlayback(output, PcmAudioFormat.Voice8KhzMono16Bit);
-        using var vocoder = new SoftwareVocoderBackend(Environment.GetEnvironmentVariable("DVMVOCODER_LIBRARY"));
+        using var vocoder = new SoftwareVocoderBackend();
 
         IAsyncDisposable mediaSession;
         Func<FneTrafficFrame, CancellationToken, ValueTask<int>> processTraffic;

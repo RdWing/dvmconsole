@@ -9,7 +9,7 @@ public static class AudioBackendFactory
         AudioProcessingMode processingMode = AudioProcessingMode.DvmConsole,
         string? inputDeviceId = null,
         string? outputDeviceId = null,
-        bool highQualityBluetoothAudio = true)
+        bool highQualityBluetoothAudio = false)
     {
         if (OperatingSystem.IsMacOS())
             return new MacCoreAudioBackend(

@@ -1,4 +1,5 @@
 using DvmConsole.Audio;
+using DvmConsole.Core.Configuration;
 using DvmConsole.FneClient;
 using DvmConsole.Media;
 using DvmConsole.Vocoder;
@@ -56,20 +57,22 @@ public sealed class DmrVoicePacketCodecTests
         byte[] frame = new byte[DmrVoicePacketCodec.FrameBytes];
         var privacy = new PrivacyLC
         {
-            AlgId = 3,
+            AlgId = DmrPrivacyAlgorithms.Arc4,
             KId = 0x55,
             Group = true,
             DstId = 100
         };
         FullLC.EncodePI(privacy, ref frame);
+        new SlotType { ColorCode = 0, DataType = (byte)DMRDataType.VOICE_PI_HEADER }.GetData(ref frame);
         byte[] packet = new byte[DmrVoicePacketCodec.PacketBytes];
         frame.CopyTo(packet, DmrVoicePacketCodec.HeaderBytes);
 
         Assert.True(DmrVoicePacketCodec.TryExtractEncryptionMetadata(
             packet,
             out DmrVoicePacketCodec.DmrEncryptionMetadata metadata));
-        Assert.Equal((byte)3, metadata.AlgorithmId);
+        Assert.Equal(DmrPrivacyAlgorithms.Arc4, metadata.AlgorithmId);
         Assert.Equal((byte)0x55, metadata.KeyId);
+        Assert.Equal(new byte[4], metadata.MessageIndicator);
     }
 
     [Theory]
@@ -185,6 +188,54 @@ public sealed class DmrVoicePacketCodecTests
     }
 
     [Fact]
+    public async Task RouterDeliversPrivacyIndicatorWithoutInventingPacketLoss()
+    {
+        byte[] key = Convert.FromHexString("0102030405");
+        var options = new DmrPrivacyOptions(
+            DmrPrivacyAlgorithms.Arc4,
+            keyId: 7,
+            key,
+            Convert.FromHexString("12345678"));
+        using var keys = new DmrKeyRing("System A", new KeyContainer
+        {
+            Keys =
+            [
+                new KeyEntry
+                {
+                    Protocol = "dmr",
+                    AlgId = DmrPrivacyAlgorithms.Arc4,
+                    KeyId = 7,
+                    Key = Convert.ToHexString(key)
+                }
+            ]
+        });
+        var vocoder = new FakeVocoderSession();
+        var playback = new FakePlayback();
+        await using var router = new DmrRxAudioRouter(
+            new DmrTrafficSelector(100, 1),
+            vocoder,
+            playback,
+            keys,
+            "System A",
+            privacyExpected: true);
+        byte[] privacy = DmrVoicePacketCodec.CreatePrivacyIndicatorPacket(
+            1, 100, 1, 1, options);
+        byte[] voice = DmrVoicePacketCodec.CreateVoicePacket(
+            1, 100, 1, true, 0, 2, new byte[DmrVoicePacketCodec.AmbeBytes]);
+
+        Assert.Equal(0, await router.ProcessAsync(CreateTraffic(
+            100, 1, "DATA_SYNC", packetSequence: 10, payload: privacy)));
+        Assert.Equal(0, await router.ProcessAsync(CreateTraffic(
+            100, 1, "VOICE_SYNC", packetSequence: 11, payload: voice)));
+
+        Assert.Equal(0, router.LostPackets);
+        Assert.Equal(0, router.MalformedPackets);
+        Assert.Equal(3, router.FramesDecoded);
+        Assert.Equal(3, vocoder.ParameterDecodeCalls);
+        Assert.Equal(0, vocoder.DecodeCalls);
+    }
+
+    [Fact]
     public async Task RouterDecodesOnlySelectedTraffic()
     {
         var vocoder = new FakeVocoderSession();
@@ -212,7 +263,43 @@ public sealed class DmrVoicePacketCodecTests
 
         Assert.Equal(1, router.LostPackets);
         Assert.Equal(1, router.DuplicateOrLatePackets);
-        Assert.Equal(6, router.FramesDecoded);
+        Assert.Equal(9, router.FramesDecoded);
+    }
+
+    [Fact]
+    public async Task RouterConcealsMalformedVoiceWithoutSkippingCodecTime()
+    {
+        var vocoder = new FakeVocoderSession();
+        var playback = new FakePlayback();
+        await using var router = new DmrRxAudioRouter(new DmrTrafficSelector(100, 1), vocoder, playback);
+
+        Assert.Equal(0, await router.ProcessAsync(CreateTraffic(100, 1, "VOICE", packetSequence: 1)));
+        Assert.Equal(0, await router.ProcessAsync(CreateTraffic(
+            100, 1, "VOICE", packetSequence: 2, payload: new byte[10])));
+        Assert.Equal(0, await router.ProcessAsync(CreateTraffic(100, 1, "VOICE", packetSequence: 3)));
+
+        Assert.Equal(0, router.LostPackets);
+        Assert.Equal(1, router.MalformedPackets);
+        Assert.Equal(3, vocoder.DecodeLostCalls);
+        Assert.Equal(9, router.FramesDecoded);
+    }
+
+    [Fact]
+    public async Task RouterResetsDecoderAfterBoundedLongLossConcealment()
+    {
+        var vocoder = new FakeVocoderSession();
+        await using var router = new DmrRxAudioRouter(
+            new DmrTrafficSelector(100, 1),
+            vocoder,
+            new FakePlayback());
+
+        Assert.Equal(0, await router.ProcessAsync(CreateTraffic(100, 1, "VOICE", packetSequence: 1)));
+        Assert.Equal(0, await router.ProcessAsync(CreateTraffic(100, 1, "VOICE", packetSequence: 13)));
+
+        Assert.Equal(11, router.LostPackets);
+        Assert.Equal(30, vocoder.DecodeLostCalls);
+        Assert.Equal(1, vocoder.ResetCalls);
+        Assert.Equal(36, router.FramesDecoded);
     }
 
     [Fact]
@@ -267,7 +354,8 @@ public sealed class DmrVoicePacketCodecTests
         byte slot,
         string frameType,
         ushort packetSequence = 1,
-        uint streamId = 99)
+        uint streamId = 99,
+        byte[]? payload = null)
     {
         return new FneTrafficFrame(
             FneTrafficProtocol.Dmr,
@@ -280,12 +368,15 @@ public sealed class DmrVoicePacketCodecTests
             frameType,
             packetSequence,
             streamId,
-            new byte[DmrVoicePacketCodec.PacketBytes]);
+            payload ?? new byte[DmrVoicePacketCodec.PacketBytes]);
     }
 
-    private sealed class FakeVocoderSession : IVocoderSession
+    private sealed class FakeVocoderSession : IHalfRateVocoderSession
     {
         public int DecodeCalls { get; private set; }
+        public int DecodeLostCalls { get; private set; }
+        public int ParameterDecodeCalls { get; private set; }
+        public int ResetCalls { get; private set; }
 
         public int Encode(ReadOnlySpan<short> samples, Span<byte> codeword) => codeword.Length;
 
@@ -295,6 +386,38 @@ public sealed class DmrVoicePacketCodecTests
             samples.Fill((short)DecodeCalls);
             return 0;
         }
+
+        public int DecodeLost(Span<short> samples)
+        {
+            DecodeLostCalls++;
+            samples.Clear();
+            return 0;
+        }
+
+        public int FlushEncode(Span<byte> codeword) => 0;
+        public int EncodeParameters(ReadOnlySpan<short> samples, Span<byte> parameters) => 0;
+        public int DecodeParameters(
+            ReadOnlySpan<byte> parameters,
+            Span<short> samples,
+            uint correctedErrors = 0,
+            bool lost = false)
+        {
+            ParameterDecodeCalls++;
+            samples.Clear();
+            return 0;
+        }
+        public int FlushEncodeParameters(Span<byte> parameters) => 0;
+        public int ExtractParameters(ReadOnlySpan<byte> codeword, Span<byte> parameters)
+        {
+            codeword[..parameters.Length].CopyTo(parameters);
+            return 0;
+        }
+        public void BuildCodeword(ReadOnlySpan<byte> parameters, Span<byte> codeword)
+        {
+            codeword.Clear();
+            parameters.CopyTo(codeword);
+        }
+        public void Reset() => ResetCalls++;
 
         public void Dispose()
         {

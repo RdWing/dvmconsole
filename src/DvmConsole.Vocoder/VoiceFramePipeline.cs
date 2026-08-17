@@ -7,6 +7,7 @@ public sealed class VoiceFrameEncoder : IDisposable
     private readonly IVocoderSession session;
     private readonly VocoderMode mode;
     private readonly List<short> pending = [];
+    private bool hasUnflushedFrame;
     private bool disposed;
 
     public VoiceFrameEncoder(IVocoderSession session, VocoderMode mode)
@@ -29,10 +30,35 @@ public sealed class VoiceFrameEncoder : IDisposable
             byte[] codeword = new byte[VocoderFrameSizes.CodewordBytes(mode)];
             session.Encode(frame, codeword);
             emit(codeword);
+            hasUnflushedFrame = true;
             emitted++;
         }
 
         return emitted;
+    }
+
+    // Emits the frame retained by a delayed encoder. Callers must pad any
+    // incomplete PCM frame before flushing; an empty stream does not invent a
+    // voice frame. A second flush is a no-op until more complete PCM arrives.
+    public int Flush(Action<ReadOnlyMemory<byte>> emit)
+    {
+        ObjectDisposedException.ThrowIf(disposed, this);
+        ArgumentNullException.ThrowIfNull(emit);
+        if (pending.Count != 0)
+            throw new InvalidOperationException("Pad the incomplete PCM frame before flushing the vocoder.");
+        if (!hasUnflushedFrame)
+            return 0;
+
+        byte[] codeword = new byte[VocoderFrameSizes.CodewordBytes(mode)];
+        int encoded = session.FlushEncode(codeword);
+        hasUnflushedFrame = false;
+        if (encoded == 0)
+            return 0;
+        if (encoded != codeword.Length)
+            throw new InvalidOperationException("The vocoder returned an invalid flushed codeword length.");
+
+        emit(codeword);
+        return 1;
     }
 
     public void Dispose()
@@ -69,6 +95,22 @@ public sealed class VoiceFrameDecoder : IDisposable
         int errors = session.Decode(codeword, samples);
         emit(samples);
         return errors;
+    }
+
+    public int ProcessLost(Action<ReadOnlyMemory<short>> emit)
+    {
+        ObjectDisposedException.ThrowIf(disposed, this);
+        ArgumentNullException.ThrowIfNull(emit);
+        short[] samples = new short[VocoderFrameSizes.PcmSamplesPerFrame];
+        int errors = session.DecodeLost(samples);
+        emit(samples);
+        return errors;
+    }
+
+    public void Reset()
+    {
+        ObjectDisposedException.ThrowIf(disposed, this);
+        session.Reset();
     }
 
     public void Dispose()

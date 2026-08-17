@@ -4,13 +4,13 @@
         x:Class="DvmConsole.Desktop.MainWindow"
         x:DataType="local:MainWindowViewModel"
         Title="DVM Console" Width="1260" Height="760" MinWidth="880" MinHeight="560"
-        Icon="avares://DvmConsole.Desktop/Assets/DVMConsole.png"
+        Icon="avares://DvmConsole/Assets/DVMConsole.png"
         Background="{DynamicResource ShellBackgroundBrush}" Topmost="{Binding KeepWindowOnTop, Mode=TwoWay}" FontSize="{Binding UiFontSize}">
   <Window.Styles>
     <Style Selector="TextBlock"><Setter Property="Foreground" Value="{DynamicResource PrimaryTextBrush}" /></Style>
     <Style Selector="TextBlock.muted"><Setter Property="Foreground" Value="{DynamicResource MutedTextBrush}" /></Style>
     <Style Selector="TextBlock.eyebrow"><Setter Property="FontSize" Value="{Binding $parent[Window].((local:MainWindowViewModel)DataContext).UiCompactFontSize}" /><Setter Property="Foreground" Value="{DynamicResource MutedTextBrush}" /></Style>
-    <Style Selector="Button"><Setter Property="Background" Value="{DynamicResource ButtonBackgroundBrush}" /><Setter Property="Foreground" Value="{DynamicResource PrimaryTextBrush}" /><Setter Property="BorderBrush" Value="{DynamicResource ControlBorderBrush}" /><Setter Property="Padding" Value="10,6" /></Style>
+    <Style Selector="Button"><Setter Property="Background" Value="{DynamicResource ButtonBackgroundBrush}" /><Setter Property="Foreground" Value="{DynamicResource PrimaryTextBrush}" /><Setter Property="BorderBrush" Value="{DynamicResource ControlBorderBrush}" /><Setter Property="Padding" Value="10,6" /><Setter Property="HorizontalContentAlignment" Value="Center" /><Setter Property="VerticalContentAlignment" Value="Center" /></Style>
     <Style Selector="Button:not(.tx-select):pointerover"><Setter Property="Background" Value="{DynamicResource ButtonHoverBrush}" /></Style>
     <Style Selector="Button.ptt"><Setter Property="Height" Value="24" /><Setter Property="HorizontalAlignment" Value="Stretch" /><Setter Property="HorizontalContentAlignment" Value="Center" /><Setter Property="VerticalContentAlignment" Value="Center" /><Setter Property="Padding" Value="3,0" /><Setter Property="FontWeight" Value="SemiBold" /><Setter Property="Background" Value="{DynamicResource PttBackgroundBrush}" /></Style>
     <Style Selector="Button.ptt:pressed"><Setter Property="Background" Value="#0A9B48" /></Style>
@@ -33,10 +33,13 @@
     <Style Selector="Button.tar-select.armed:pointerover /template/ ContentPresenter#PART_ContentPresenter" x:DataType="local:ChannelViewModel"><Setter Property="Background" Value="{Binding RecordingSelectionBrush}" /><Setter Property="BorderBrush" Value="{Binding RecordingSelectionBorderBrush}" /></Style>
     <Style Selector="Button.tar-select.armed:pressed /template/ ContentPresenter#PART_ContentPresenter" x:DataType="local:ChannelViewModel"><Setter Property="Background" Value="{Binding RecordingSelectionBrush}" /><Setter Property="BorderBrush" Value="{Binding RecordingSelectionBorderBrush}" /></Style>
     <Style Selector="Button.status-card"><Setter Property="HorizontalAlignment" Value="Left" /><Setter Property="Background" Value="{DynamicResource ButtonBackgroundBrush}" /><Setter Property="BorderThickness" Value="2" /><Setter Property="CornerRadius" Value="7" /><Setter Property="Padding" Value="8,4" /></Style>
-    <Style Selector="Button.status-card:pointerover"><Setter Property="Background" Value="{DynamicResource ButtonHoverBrush}" /></Style>
-    <Style Selector="ToggleButton.mic-warm"><Setter Property="Width" Value="30" /><Setter Property="Height" Value="26" /><Setter Property="Padding" Value="2,0" /><Setter Property="HorizontalContentAlignment" Value="Center" /><Setter Property="VerticalContentAlignment" Value="Center" /><Setter Property="Opacity" Value="0.72" /></Style>
-    <Style Selector="ToggleButton.mic-warm:checked"><Setter Property="Background" Value="#0A9B48" /><Setter Property="BorderBrush" Value="#60D394" /><Setter Property="Opacity" Value="1" /></Style>
-    <Style Selector="ToggleButton.mic-warm:checked:pointerover"><Setter Property="Background" Value="#087F3B" /></Style>
+    <Style Selector="Button.status-card:pointerover" x:DataType="local:SystemViewModel"><Setter Property="Background" Value="{DynamicResource ButtonHoverBrush}" /><Setter Property="BorderBrush" Value="{Binding ConnectionBrush}" /></Style>
+    <Style Selector="Button.status-card:pointerover /template/ ContentPresenter#PART_ContentPresenter" x:DataType="local:SystemViewModel"><Setter Property="BorderBrush" Value="{Binding ConnectionBrush}" /><Setter Property="BorderThickness" Value="2" /></Style>
+    <Style Selector="Button.status-card:pressed" x:DataType="local:SystemViewModel"><Setter Property="BorderBrush" Value="{Binding ConnectionBrush}" /></Style>
+    <Style Selector="Button.status-card:pressed /template/ ContentPresenter#PART_ContentPresenter" x:DataType="local:SystemViewModel"><Setter Property="BorderBrush" Value="{Binding ConnectionBrush}" /><Setter Property="BorderThickness" Value="2" /></Style>
+    <Style Selector="ToggleButton.mic-warm"><Setter Property="Width" Value="30" /><Setter Property="Height" Value="26" /><Setter Property="Padding" Value="2,0" /><Setter Property="HorizontalContentAlignment" Value="Center" /><Setter Property="VerticalContentAlignment" Value="Center" /><Setter Property="Background" Value="{DynamicResource ButtonBackgroundBrush}" /><Setter Property="BorderBrush" Value="{DynamicResource ControlBorderBrush}" /><Setter Property="Opacity" Value="1" /></Style>
+    <Style Selector="ToggleButton.mic-warm:checked"><Setter Property="Background" Value="#B45309" /><Setter Property="BorderBrush" Value="#F59E0B" /></Style>
+    <Style Selector="ToggleButton.mic-warm:checked:pointerover"><Setter Property="Background" Value="#92400E" /><Setter Property="BorderBrush" Value="#F59E0B" /></Style>
     <Style Selector="TabItem"><Setter Property="Foreground" Value="{DynamicResource TabTextBrush}" /><Setter Property="Padding" Value="6,8" /><Setter Property="FontSize" Value="{Binding $parent[Window].((local:MainWindowViewModel)DataContext).UiFontSize}" /></Style>
     <Style Selector="TabItem:selected"><Setter Property="Foreground" Value="{DynamicResource SelectedTabTextBrush}" /></Style>
     <Style Selector="ScrollViewer"><Setter Property="AllowAutoHide" Value="True" /></Style>
@@ -47,7 +50,7 @@
 
   <LayoutTransformControl LayoutTransform="{Binding UiScaleTransform}">
   <Grid RowDefinitions="Auto,*,Auto" ColumnDefinitions="*,Auto">
-    <Border Grid.Row="0" Grid.Column="0" Background="{DynamicResource ShellHeaderBrush}" Padding="6,0">
+    <Border Grid.Row="0" Grid.Column="0" Grid.ColumnSpan="2" Background="{DynamicResource ShellHeaderBrush}" Padding="6,0">
       <DockPanel LastChildFill="False">
         <Menu Background="Transparent" Foreground="{DynamicResource PrimaryTextBrush}">
           <MenuItem Header="File">
@@ -241,7 +244,7 @@
           </TabControl>
         </Grid>
       </Border>
-      <Border Grid.Row="0" Grid.RowSpan="2" Grid.Column="1" Width="{Binding ActivitySidebarWidth}" Background="{DynamicResource SidebarBackgroundBrush}" Padding="8,10" DoubleTapped="HandleActivityDoubleTapped">
+      <Border Grid.Row="1" Grid.Column="1" Width="{Binding ActivitySidebarWidth}" Background="{DynamicResource SidebarBackgroundBrush}" Padding="8,10" DoubleTapped="HandleActivityDoubleTapped">
         <Grid RowDefinitions="Auto,*">
           <Grid ColumnDefinitions="*,Auto" IsVisible="{Binding ShowCallHistoryPane}">
             <TextBlock FontSize="{Binding UiFontSize}" FontWeight="SemiBold" Text="Activity" VerticalAlignment="Center" />

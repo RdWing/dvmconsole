@@ -2,8 +2,7 @@ using DvmConsole.FneClient;
 
 namespace DvmConsole.Media;
 
-// Selects one NXDN destination for an injected NXDN decoder. Message framing
-// and codec interpretation remain separate from destination selection.
+// Selects voice and call-control traffic for one NXDN destination.
 public sealed record NxdnTrafficSelector
 {
     public NxdnTrafficSelector(uint destinationId)
@@ -20,6 +19,7 @@ public sealed record NxdnTrafficSelector
         ArgumentNullException.ThrowIfNull(traffic);
         return traffic.Protocol == FneTrafficProtocol.Nxdn &&
             traffic.DestinationId == DestinationId &&
-            string.Equals(traffic.FrameType, "VOICE", StringComparison.OrdinalIgnoreCase);
+            (string.Equals(traffic.FrameType, "VOICE", StringComparison.OrdinalIgnoreCase) ||
+             string.Equals(traffic.FrameType, "TERMINATOR", StringComparison.OrdinalIgnoreCase));
     }
 }

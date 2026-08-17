@@ -1208,6 +1208,8 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     private readonly PatchForwardingCoordinator patchForwarding;
     private readonly PatchSourceDecodeCoordinator patchSourceDecode;
     private readonly P25KeyRing? p25KeyRing;
+    private readonly DmrKeyRing? dmrKeyRing;
+    private readonly NxdnKeyRing? nxdnKeyRing;
     private KeyboardPttSource keyboardPtt;
     private GlobalKeyboardPttSource? globalKeyboardPtt;
     private IPttSource? serialPtt;
@@ -1233,6 +1235,8 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     private readonly object patchSourceWorkSync = new();
     private readonly Dictionary<ChannelViewModel, Task> patchSourceWork = [];
     private readonly object receiveAudioWorkSync = new();
+    private readonly object audioLevelLogSync = new();
+    private readonly Dictionary<(ChannelViewModel Channel, ChannelAudioDirection Direction), DateTimeOffset> lastAudioLevelLogs = [];
     private readonly SemaphoreSlim audioReconfigurationLock = new(1, 1);
     private readonly Dictionary<ChannelViewModel, Task> receiveAudioWork = [];
     private readonly Dictionary<string, FneConnectionState> lastConnectionStates = new(StringComparer.OrdinalIgnoreCase);
@@ -1295,7 +1299,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     private bool recordingDiagnosticsColumnVisible = true;
     private string clockText = string.Empty;
     private string debugLogFilterText = string.Empty;
-    private string debugLogSeverityFilter = "All";
+    private string debugLogSeverityFilter = "Info";
     private string callHistoryFilterText = string.Empty;
     private string recordingFilterText = string.Empty;
     private bool busy;
@@ -1320,7 +1324,9 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         IEnumerable<GroupConfiguration>? groupDefinitions = null,
         bool patchSourceIdPassthrough = false,
         Func<IReadOnlyList<string>>? serialPortProvider = null,
-        Func<string, int, IPttSource>? serialPttFactory = null)
+        Func<string, int, IPttSource>? serialPttFactory = null,
+        IDmrKeyResolver? dmrKeyResolver = null,
+        INxdnKeyResolver? nxdnKeyResolver = null)
     {
         this.statusText = statusText;
         codeplugDiagnosticsText = statusText;
@@ -1407,6 +1413,8 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         foreach (AudioInputPresetSetting preset in userSettings.AudioInputPresets)
             audioInputPresets.Add(new AudioInputPresetViewModel(preset));
         p25KeyRing = p25KeyResolver as P25KeyRing;
+        dmrKeyRing = dmrKeyResolver as DmrKeyRing;
+        nxdnKeyRing = nxdnKeyResolver as NxdnKeyRing;
         callRecordings = new CallRecordingManager(
             recordingRootPathText,
             HandleRecordingFaulted,
@@ -1418,11 +1426,13 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             HandleRecordingPlaybackFaulted);
         audioCoordinator = new ChannelReceiveAudioCoordinator(
             CreateReceiveAudioBackend,
-            () => new SoftwareVocoderBackend(Environment.GetEnvironmentVariable("DVMVOCODER_LIBRARY")),
+            () => new SoftwareVocoderBackend(),
             p25KeyResolver,
             HandleDecodedSamples,
             GetChannelVolume,
-            GetChannelOutputDeviceId);
+            GetChannelOutputDeviceId,
+            dmrKeyResolver: dmrKeyResolver,
+            nxdnKeyResolver: nxdnKeyResolver);
         transmitCoordinator = new ChannelTransmitCoordinator(
             p25KeyResolver,
             new AudioInputProcessingOptions
@@ -1437,13 +1447,18 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
                 HighGainDb = userSettings.AudioInputEqHighGainDb
             },
             HandleTransmitSamples,
-            CreateTransmitAudioBackend);
+            CreateTransmitAudioBackend,
+            dmrKeyResolver: dmrKeyResolver,
+            nxdnKeyResolver: nxdnKeyResolver);
         transmitCoordinator.HighQualityBluetoothStatusChanged += HandleHighQualityBluetoothStatusChanged;
         if (userSettings.KeepTransmitMicrophoneWarm)
             _ = WarmTransmitMicrophoneAsync();
-        toneTransmitCoordinator = new ToneTransmitCoordinator(p25KeyResolver);
+        toneTransmitCoordinator = new ToneTransmitCoordinator(
+            p25KeyResolver,
+            dmrKeyResolver: dmrKeyResolver,
+            nxdnKeyResolver: nxdnKeyResolver);
         talkPermitTonePlayer = new TalkPermitTonePlayer(
-            () => AudioBackendFactory.CreateDefault(Environment.GetEnvironmentVariable("DVM_AUDIO_LIBRARY")),
+            CreateTransmitAudioBackend,
             () => userSettings.AudioOutputDeviceId);
         Systems = systems.ToArray();
         Zones = zones.ToArray();
@@ -1460,11 +1475,19 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         foreach (ZoneViewModel zone in Zones)
             zone.SetDarkMode(userSettings.DarkMode);
         GroupConfiguration[] configuredGroups = (groupDefinitions ?? []).ToArray();
-        patchForwarding = new PatchForwardingCoordinator(Systems, p25KeyResolver)
+        patchForwarding = new PatchForwardingCoordinator(
+            Systems,
+            p25KeyResolver,
+            dmrKeyResolver: dmrKeyResolver,
+            nxdnKeyResolver: nxdnKeyResolver)
         {
             SourceIdPassthrough = patchSourceIdPassthrough
         };
-        patchSourceDecode = new PatchSourceDecodeCoordinator(p25KeyResolver, ObservePatchDecodedSamples);
+        patchSourceDecode = new PatchSourceDecodeCoordinator(
+            p25KeyResolver,
+            ObservePatchDecodedSamples,
+            dmrKeyResolver: dmrKeyResolver,
+            nxdnKeyResolver: nxdnKeyResolver);
         RestorePatchState(configuredGroups);
         PatchGroups = BuildPatchGroups(configuredGroups);
         RefreshPatchMembershipConflicts();
@@ -2524,7 +2547,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         => Systems
             .SelectMany(system => system.Channels)
             .Where(channel => channel.Definition.IsEncrypted)
-            .Select(channel => KeyStatusItemViewModel.From(channel, p25KeyRing))
+            .Select(channel => KeyStatusItemViewModel.From(channel, p25KeyRing, dmrKeyRing, nxdnKeyRing))
             .ToArray();
     public bool HasNoKeyStatusItems => KeyStatusItems.Count == 0;
     public IReadOnlyList<ZoneViewModel> Zones { get; }
@@ -3400,7 +3423,9 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         {
             ConsoleConfiguration configuration = ConfigurationLoader.Load(configurationPath);
             IReadOnlyList<string> errors = ConfigurationLoader.Validate(configuration);
-            P25KeyRing p25KeyRing = LoadP25KeyRing(configuration, out string? keyWarning);
+            (P25KeyRing p25KeyRing, DmrKeyRing dmrKeyRing, NxdnKeyRing nxdnKeyRing) = LoadKeyRings(
+                configuration,
+                out string? keyWarning);
             IReadOnlyList<ZoneViewModel> zones = configuration.Zones.Select(zone => new ZoneViewModel(
                 zone.Name,
                 zone.Channels.Select(channel => new ChannelViewModel(
@@ -3408,7 +3433,9 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
                     p25KeyRing,
                     configuration.Systems
                         .FirstOrDefault(system => system.Name.Equals(channel.System, StringComparison.OrdinalIgnoreCase))
-                        ?.RidAlias)).ToArray(),
+                        ?.RidAlias,
+                    dmrKeyRing,
+                    nxdnKeyRing)).ToArray(),
                 zone.WebStreams.Select(stream => new WebStreamViewModel(stream)).ToArray(),
                 zone.TabColor,
                 zone.TabTextColor)).ToArray();
@@ -3429,7 +3456,9 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
                 configuration.EffectiveGroups(),
                 configuration.PatchSourceIdPassthrough,
                 serialPortProvider,
-                serialPttFactory);
+                serialPttFactory,
+                dmrKeyRing,
+                nxdnKeyRing);
             if (errors.Count == 0)
                 viewModel.RecordLoadedCodeplug(configuration.SourcePath ?? Path.GetFullPath(configurationPath));
             return viewModel;
@@ -3447,27 +3476,37 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         }
     }
 
-    private static P25KeyRing LoadP25KeyRing(
+    private static (P25KeyRing P25, DmrKeyRing Dmr, NxdnKeyRing Nxdn) LoadKeyRings(
         ConsoleConfiguration configuration,
         out string? warning)
     {
-        var ring = new P25KeyRing();
+        var p25Ring = new P25KeyRing();
+        var dmrRing = new DmrKeyRing();
+        var nxdnRing = new NxdnKeyRing();
         warning = null;
         if (string.IsNullOrWhiteSpace(configuration.KeyFile))
-            return ring;
+            return (p25Ring, dmrRing, nxdnRing);
 
         try
         {
             KeyContainer localKeys = KeyFileLoader.Load(
                 ConfigurationLoader.ResolvePath(configuration, configuration.KeyFile));
             foreach (SystemConfiguration system in configuration.Systems)
-                ring.AddLocalKeys(system.Name, localKeys);
+            {
+                p25Ring.AddLocalKeys(system.Name, localKeys);
+                dmrRing.AddLocalKeys(system.Name, localKeys);
+                nxdnRing.AddLocalKeys(system.Name, localKeys);
+            }
         }
         catch (Exception exception) when (exception is IOException or InvalidDataException or FormatException or YamlDotNet.Core.YamlException)
         {
-            warning = $"Encryption keys unavailable: {exception.Message} Encrypted P25 channels are disabled until FNE/KMM supplies their keys.";
+            warning = $"Encryption keys unavailable: {exception.Message} Encrypted P25 channels are disabled until FNE/KMM supplies their keys. Encrypted DMR and NXDN channels require local keys.";
+            p25Ring.Dispose();
+            dmrRing.Dispose();
+            nxdnRing.Dispose();
+            return (new P25KeyRing(), new DmrKeyRing(), new NxdnKeyRing());
         }
-        return ring;
+        return (p25Ring, dmrRing, nxdnRing);
     }
 
     private static IReadOnlyList<SystemViewModel> CreateSystemViewModels(
@@ -3555,6 +3594,8 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         audioReconfigurationLock.Dispose();
         callRecordings.Dispose();
         p25KeyRing?.Dispose();
+        dmrKeyRing?.Dispose();
+        nxdnKeyRing?.Dispose();
         userBackgroundBitmap?.Dispose();
         userBackgroundBitmap = null;
         foreach (ChannelViewModel channel in Systems.SelectMany(system => system.Channels))
@@ -3710,6 +3751,13 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     }
 
     private void HandleSystemLog(object? sender, FneLogEntry entry)
+        => AddDebugLog(entry.Timestamp, entry.SystemName, entry.Severity, entry.Message);
+
+    private void AddDebugLog(
+        DateTimeOffset timestamp,
+        string source,
+        DebugLogSeverity severity,
+        string message)
     {
         void Apply()
         {
@@ -3717,10 +3765,10 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
                 debugLogEntries.RemoveAt(debugLogEntries.Count - 1);
 
             debugLogEntries.Insert(0, new DebugLogEntry(
-                entry.Timestamp,
-                entry.SystemName,
-                entry.Severity,
-                entry.Message));
+                timestamp,
+                source,
+                severity,
+                DebugLogRedactor.Redact(message)));
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(FilteredDebugLogs)));
         }
 
@@ -4084,6 +4132,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         patchForwarding.ObserveDecodedSamples(channel, samples);
         callRecordings.WriteSamples(channel, samples);
         UpdateChannelAudioLevel(channel, samples, ChannelAudioDirection.Receive);
+        LogVocoderAudioLevel(channel, samples, ChannelAudioDirection.Receive);
     }
 
     private void HandleTransmitSamples(
@@ -4094,6 +4143,49 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     {
         callRecordings.WriteTransmitSamples(channel, streamId, sourceId, samples);
         UpdateChannelAudioLevel(channel, samples, ChannelAudioDirection.Transmit);
+        LogVocoderAudioLevel(channel, samples, ChannelAudioDirection.Transmit, streamId);
+    }
+
+    private void LogVocoderAudioLevel(
+        ChannelViewModel channel,
+        ReadOnlyMemory<short> samples,
+        ChannelAudioDirection direction,
+        uint streamId = 0)
+    {
+        if (samples.IsEmpty)
+            return;
+
+        DateTimeOffset now = DateTimeOffset.Now;
+        lock (audioLevelLogSync)
+        {
+            var key = (channel, direction);
+            if (lastAudioLevelLogs.TryGetValue(key, out DateTimeOffset previous) &&
+                now - previous < TimeSpan.FromSeconds(1))
+            {
+                return;
+            }
+            lastAudioLevelLogs[key] = now;
+        }
+
+        double squares = 0;
+        int peak = 0;
+        foreach (short sample in samples.Span)
+        {
+            double value = sample;
+            squares += value * value;
+            peak = Math.Max(peak, Math.Abs((int)sample));
+        }
+        double rms = Math.Sqrt(squares / samples.Length);
+        double rmsDbfs = 20 * Math.Log10(Math.Max(rms / 32768.0, 1e-9));
+        double peakDbfs = 20 * Math.Log10(Math.Max(peak / 32768.0, 1e-9));
+        string streamText = streamId == 0 ? string.Empty : $", stream {streamId}";
+        AddDebugLog(
+            now,
+            channel.Definition.SystemName,
+            DebugLogSeverity.Debug,
+            $"Vocoder {direction.ToString().ToUpperInvariant()} {ProtocolFor(channel).ToString().ToUpperInvariant()} " +
+            $"on {channel.Name}: PCM RMS {rmsDbfs:0.0} dBFS, peak {peakDbfs:0.0} dBFS, " +
+            $"{samples.Length} samples{streamText}.");
     }
 
     private static void UpdateChannelAudioLevel(
@@ -4259,6 +4351,13 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         ArgumentNullException.ThrowIfNull(system);
         ArgumentNullException.ThrowIfNull(traffic);
         system.RecordTraffic(traffic);
+        AddDebugLog(
+            DateTimeOffset.Now,
+            system.Name,
+            DebugLogSeverity.Debug,
+            $"FNE RX {traffic.Protocol.ToString().ToUpperInvariant()} {traffic.CallType}/{traffic.FrameType}/{traffic.Subtype}; " +
+            $"src {traffic.SourceId}, dst {traffic.DestinationId}, seq {traffic.PacketSequence}, stream {traffic.StreamId}, " +
+            $"{traffic.Payload.Length} bytes{DescribeFneSignalQuality(traffic)}.");
 
         List<ChannelViewModel> activeAudioChannels = [];
         List<ChannelViewModel> activePatchSourceChannels = [];
@@ -4281,6 +4380,12 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
 
             if (sameActiveStream && channel.State != ChannelRuntimeState.Receiving)
             {
+                AddDebugLog(
+                    DateTimeOffset.Now,
+                    system.Name,
+                    DebugLogSeverity.Info,
+                    $"RX call ended on {channel.Name}: {traffic.Protocol.ToString().ToUpperInvariant()} " +
+                    $"{traffic.SourceId}→{traffic.DestinationId}, stream {traffic.StreamId}.");
                 callHistoryChanged = callHistory.Complete(
                     system.Name,
                     traffic.Protocol,
@@ -4289,6 +4394,14 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             }
             else if (!sameActiveStream)
             {
+                AddDebugLog(
+                    DateTimeOffset.Now,
+                    system.Name,
+                    DebugLogSeverity.Info,
+                    $"RX call started on {channel.Name}: {traffic.Protocol.ToString().ToUpperInvariant()} " +
+                    $"{traffic.CallType}, {traffic.SourceId}→{traffic.DestinationId}, stream {traffic.StreamId}" +
+                    (protocolEncrypted ?? channel.Definition.IsEncrypted ? ", encrypted" : ", clear") +
+                    $"{DescribeFneSignalQuality(traffic)}.");
                 callHistory.Add(new CallHistoryEntry(
                     DateTimeOffset.Now,
                     system.Name,
@@ -4358,6 +4471,18 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
                 dmrMetadata.KeyId);
         }
 
+        if (traffic.Protocol == FneTrafficProtocol.Nxdn &&
+            NxdnVoicePacketCodec.TryExtractCallMetadata(
+                traffic.Payload,
+                out NxdnVoicePacketCodec.CallMetadata nxdnMetadata) &&
+            nxdnMetadata.MessageType == NxdnVoicePacketCodec.VoiceCallMessageType)
+        {
+            return new ProtocolEncryptionMetadata(
+                nxdnMetadata.CipherType != 0,
+                nxdnMetadata.CipherType,
+                nxdnMetadata.KeyId);
+        }
+
         return null;
     }
 
@@ -4370,6 +4495,24 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     {
         return traffic.FrameType.Equals("TERMINATOR", StringComparison.OrdinalIgnoreCase) ||
             traffic.Subtype.Equals("TERMINATOR_WITH_LC", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string DescribeFneSignalQuality(FneTrafficFrame traffic)
+    {
+        // dvmhost appends the DMR FEC error count and positive RSSI
+        // magnitude after the 33-byte burst (network offsets 53 and 54).
+        // Zero means the source did not report that measurement.
+        if (traffic.Protocol != FneTrafficProtocol.Dmr ||
+            traffic.Payload.Length < DmrVoicePacketCodec.PacketBytes)
+        {
+            return string.Empty;
+        }
+
+        byte errors = traffic.Payload[53];
+        byte rssi = traffic.Payload[54];
+        string errorText = errors == 0 ? string.Empty : $", FNE BER errors {errors}/141";
+        string rssiText = rssi == 0 ? string.Empty : $", RSSI -{rssi} dBm";
+        return errorText + rssiText;
     }
 
     private IReadOnlyList<ChannelViewModel> ResolveTrafficCandidates(
@@ -4474,8 +4617,15 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     {
         try
         {
-            await audioCoordinator.ProcessAsync(channel, traffic).ConfigureAwait(false);
+            int correctedErrors = await audioCoordinator.ProcessAsync(channel, traffic).ConfigureAwait(false);
             ReceiveAudioDiagnostics diagnostics = audioCoordinator.GetDiagnostics(channel);
+            AddDebugLog(
+                DateTimeOffset.Now,
+                channel.Definition.SystemName,
+                DebugLogSeverity.Debug,
+                $"Vocoder RX {traffic.Protocol.ToString().ToUpperInvariant()} on {channel.Name}: " +
+                $"{traffic.FrameType}/{traffic.Subtype}, seq {traffic.PacketSequence}, stream {traffic.StreamId}, " +
+                $"corrected errors {correctedErrors}, {diagnostics.SummaryText} cumulative.");
             if (diagnostics.HasIssues)
             {
                 Dispatcher.UIThread.Post(() =>
@@ -4611,6 +4761,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
 
         try
         {
+            var startupTimer = Stopwatch.StartNew();
             // Keep the Apple duplex unit alive across PTT so its output mix
             // remains the AEC reference and macOS does not repeatedly remove
             // and recreate the system microphone-mode control.
@@ -4623,6 +4774,22 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             foreach (ChannelViewModel channel in transmitCoordinator.ActiveChannels)
             {
                 TransmitTarget target = targets.First(candidate => ReferenceEquals(candidate.Channel, channel));
+                uint streamId = transmitCoordinator.GetActiveStreamId(channel);
+                AddDebugLog(
+                    DateTimeOffset.Now,
+                    target.System.Name,
+                    DebugLogSeverity.Info,
+                    $"TX call started on {channel.Name}: {ProtocolFor(channel).ToString().ToUpperInvariant()} " +
+                    $"{target.System.SourceId ?? 0}→{channel.Definition.DestinationId}, stream {streamId}" +
+                    (channel.Definition.IsEncrypted ? ", encrypted." : ", clear."));
+                AddDebugLog(
+                    DateTimeOffset.Now,
+                    target.System.Name,
+                    DebugLogSeverity.Debug,
+                    $"Vocoder TX initialized for {channel.Name}: mode {channel.Definition.Mode}, " +
+                    $"stream {streamId}, audio processing {userSettings.AudioProcessingMode}, " +
+                    $"warm microphone {(userSettings.KeepTransmitMicrophoneWarm ? "enabled" : "disabled")}, " +
+                    $"all TX paths ready in {startupTimer.Elapsed.TotalMilliseconds:0} ms.");
                 callHistory.AddConsoleTransmission(
                     DateTimeOffset.Now,
                     target.System.Name,
@@ -4630,7 +4797,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
                     target.System.SourceId ?? 0,
                     channel.Definition.DestinationId,
                     ProtocolFor(channel),
-                    transmitCoordinator.GetActiveStreamId(channel),
+                    streamId,
                     callerText: "Console",
                     encrypted: channel.Definition.IsEncrypted);
             }
@@ -4638,6 +4805,11 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             TransmitStatusText = transmitCoordinator.ActiveChannels.Count == 1
                 ? $"Transmitting on {transmitCoordinator.ActiveChannel!.Name}."
                 : $"Transmitting on {transmitCoordinator.ActiveChannels.Count} selected channels.";
+            // A permit tone is an operational readiness indication. Play it
+            // only after every selected call and the shared microphone path
+            // have started successfully. In Apple processing mode this also
+            // lets Voice Processing I/O claim and initialize the duplex route
+            // before the local permit-tone playback path is opened.
             if (TalkPermitTone)
                 await PlayTalkPermitToneAsync(reportSuccess: false).ConfigureAwait(false);
         }
@@ -4686,11 +4858,19 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             {
                 SystemViewModel? system = Systems.FirstOrDefault(candidate => candidate.Channels.Contains(channel));
                 if (system is not null)
+                {
+                    AddDebugLog(
+                        DateTimeOffset.Now,
+                        system.Name,
+                        DebugLogSeverity.Info,
+                        $"TX call ended on {channel.Name}: {ProtocolFor(channel).ToString().ToUpperInvariant()} " +
+                        $"stream {streamId}.");
                     callHistory.CompleteConsoleTransmission(
                         system.Name,
                         ProtocolFor(channel),
                         streamId,
                         DateTimeOffset.Now);
+                }
             }
             if (activeStreams.Length > 0)
                 NotifyCallHistoryChanged();
@@ -4984,7 +5164,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         AudioInputMidGainText = midGainDb.ToString("0.###", CultureInfo.InvariantCulture);
         AudioInputHighGainText = highGainDb.ToString("0.###", CultureInfo.InvariantCulture);
         string bluetoothStatus = userSettings.HighQualityBluetoothAudioEnabled
-            ? " Compatible AirPods will use full-bandwidth Bluetooth audio automatically; unsupported routes fall back safely."
+            ? " High-quality Bluetooth audio is enabled for compatible AirPods; unsupported routes fall back safely."
             : string.Empty;
         AudioStatusText = (processingMode == AudioProcessingMode.AppleVoiceProcessing
             ? "Apple voice processing saved for microphone transmit capture; receive audio remains unprocessed."
@@ -6299,6 +6479,12 @@ public sealed class SystemViewModel : IFneTrafficEndpoint, INotifyPropertyChange
         connection.SendTraffic(protocol, payload, packetSequence, streamId);
         sentPacketCount++;
         sentPacketBytes += payload.Length;
+        LogReceived?.Invoke(this, new FneLogEntry(
+            Name,
+            DebugLogSeverity.Debug,
+            $"FNE TX {protocol.ToString().ToUpperInvariant()} vocoder packet; seq {packetSequence}, " +
+            $"stream {streamId}, {payload.Length} bytes.",
+            DateTimeOffset.Now));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(PacketDiagnosticsText)));
     }
 
@@ -6481,6 +6667,8 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
     private readonly ChannelConfiguration configuration;
     private readonly ChannelRuntime runtime;
     private readonly IP25KeyResolver? p25KeyResolver;
+    private readonly IDmrKeyResolver? dmrKeyResolver;
+    private readonly INxdnKeyResolver? nxdnKeyResolver;
     private readonly IReadOnlyList<RadioAlias> aliases;
     private Func<ChannelViewModel, Task>? startAudio;
     private Func<ChannelViewModel, Task>? stopAudio;
@@ -6509,11 +6697,15 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
     public ChannelViewModel(
         ChannelConfiguration configuration,
         IP25KeyResolver? p25KeyResolver = null,
-        IEnumerable<RadioAlias>? aliases = null)
+        IEnumerable<RadioAlias>? aliases = null,
+        IDmrKeyResolver? dmrKeyResolver = null,
+        INxdnKeyResolver? nxdnKeyResolver = null)
     {
         ArgumentNullException.ThrowIfNull(configuration);
         this.configuration = configuration;
         this.p25KeyResolver = p25KeyResolver;
+        this.dmrKeyResolver = dmrKeyResolver;
+        this.nxdnKeyResolver = nxdnKeyResolver;
         this.aliases = aliases?.ToArray() ?? [];
         runtime = new ChannelRuntime(ChannelRuntimeDefinition.FromConfiguration(configuration));
         transmitEncrypted = runtime.Definition.IsEncrypted;
@@ -6635,47 +6827,54 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IgnoredSubscriberIdsText)));
         }
     }
-    public bool CanRecord => runtime.Definition.Mode is ("dmr" or "p25" or "analog") && CanListen;
+    public bool CanRecord => runtime.Definition.Mode is ("dmr" or "p25" or "nxdn" or "analog") && CanListen;
     public bool CanToggleEncryption =>
-        runtime.Definition.Mode == "p25" &&
+        runtime.Definition.Mode is ("p25" or "dmr" or "nxdn") &&
         runtime.Definition.IsEncrypted &&
         runtime.Definition.SelectableEncryption &&
-        (p25KeyResolver?.CanResolve(
-            runtime.Definition.SystemName,
-            runtime.Definition.EncryptionAlgorithm,
-            runtime.Definition.EncryptionKeyId) ?? false);
+        CanResolveConfiguredKey();
     public string EncryptionStatusText => !runtime.Definition.IsEncrypted
         ? "Clear"
-        : p25KeyResolver?.CanResolve(
-            runtime.Definition.SystemName,
-            runtime.Definition.EncryptionAlgorithm,
-            runtime.Definition.EncryptionKeyId) == true
+        : CanResolveConfiguredKey()
             ? "Key available"
             : "Key unavailable";
     public string EncryptionButtonText => transmitEncrypted ? "Secure" : "Clear";
     public bool CanListen => runtime.Definition.Mode switch
     {
-        "dmr" or "analog" => !runtime.Definition.IsEncrypted,
-        "p25" => !runtime.Definition.IsEncrypted ||
-                 (p25KeyResolver?.CanResolve(
-                     runtime.Definition.SystemName,
-                     runtime.Definition.EncryptionAlgorithm,
-                     runtime.Definition.EncryptionKeyId) ?? false),
+        "dmr" or "p25" or "nxdn" => !runtime.Definition.IsEncrypted || CanResolveConfiguredKey(),
+        "analog" => !runtime.Definition.IsEncrypted,
         _ => false
     };
     public bool CanTransmit =>
         !runtime.Definition.RxOnly &&
         runtime.Definition.Mode switch
         {
-            "dmr" or "analog" => !runtime.Definition.IsEncrypted,
-            "p25" => !runtime.Definition.IsEncrypted ||
-                     (p25KeyResolver?.CanResolve(
-                         runtime.Definition.SystemName,
-                         runtime.Definition.EncryptionAlgorithm,
-                         runtime.Definition.EncryptionKeyId) ?? false),
+            "dmr" or "p25" or "nxdn" => !runtime.Definition.IsEncrypted || CanResolveConfiguredKey(),
+            "analog" => !runtime.Definition.IsEncrypted,
             _ => false
         };
     public string PttButtonText => transmitEnabled ? "Release" : "PTT";
+
+    private bool CanResolveConfiguredKey()
+    {
+        return runtime.Definition.Mode switch
+        {
+            "p25" => p25KeyResolver?.CanResolve(
+                runtime.Definition.SystemName,
+                runtime.Definition.EncryptionAlgorithm,
+                runtime.Definition.EncryptionKeyId) == true,
+            "dmr" => dmrKeyResolver?.CanResolve(
+                runtime.Definition.SystemName,
+                runtime.Definition.EncryptionAlgorithm,
+                runtime.Definition.EncryptionKeyId) == true,
+            "nxdn" => nxdnKeyResolver?.CanResolve(
+                runtime.Definition.SystemName,
+                runtime.Definition.EncryptionAlgorithm,
+                runtime.Definition.EncryptionKeyId) == true,
+            _ => false
+        };
+    }
+
     public string TransmitSelectionText => "TX";
     public string PageSelectionText => "PAGE";
     public string AlertSelectionText => "ALERT";

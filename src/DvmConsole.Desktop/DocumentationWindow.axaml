@@ -4,7 +4,7 @@
         x:Class="DvmConsole.Desktop.DocumentationWindow"
         Title="DVM Console Documentation" Width="1080" Height="720" MinWidth="760" MinHeight="480"
         Background="{DynamicResource ShellBackgroundBrush}"
-        Icon="avares://DvmConsole.Desktop/Assets/DVMConsole.png"
+        Icon="avares://DvmConsole/Assets/DVMConsole.png"
         WindowStartupLocation="CenterOwner">
   <Grid Margin="12" RowDefinitions="Auto,*" ColumnDefinitions="250,10,*">
     <TextBox x:Name="searchBox" Grid.ColumnSpan="3" Watermark="Search documentation…" Margin="0,0,0,10" TextChanged="HandleSearchTextChanged" />

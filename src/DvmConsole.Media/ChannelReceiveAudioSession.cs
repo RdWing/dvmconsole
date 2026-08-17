@@ -22,7 +22,8 @@ public sealed class ChannelReceiveAudioSession : IAsyncDisposable
         IVocoderSession? vocoder,
         IAudioPlayback playback,
         IP25KeyResolver? keyResolver = null,
-        INxdnVocoderSession? nxdnVocoder = null)
+        IDmrKeyResolver? dmrKeyResolver = null,
+        INxdnKeyResolver? nxdnKeyResolver = null)
     {
         ArgumentNullException.ThrowIfNull(definition);
         ArgumentNullException.ThrowIfNull(playback);
@@ -36,7 +37,10 @@ public sealed class ChannelReceiveAudioSession : IAsyncDisposable
                 dmrRouter = new DmrRxAudioRouter(
                     new DmrTrafficSelector(definition.DestinationId, definition.Slot),
                     vocoder,
-                    playback);
+                    playback,
+                    dmrKeyResolver,
+                    definition.SystemName,
+                    definition.IsEncrypted);
                 break;
             case "p25":
                 ArgumentNullException.ThrowIfNull(vocoder);
@@ -48,12 +52,15 @@ public sealed class ChannelReceiveAudioSession : IAsyncDisposable
                     definition.SystemName);
                 break;
             case "nxdn":
-                if (nxdnVocoder is null)
-                    throw new NotSupportedException("NXDN receive audio requires an injected FEC/AMBE+2 decoder.");
+                ArgumentNullException.ThrowIfNull(vocoder);
                 nxdnSession = new NxdnRxAudioSession(
                     new NxdnTrafficSelector(definition.DestinationId),
-                    nxdnVocoder,
-                    playback);
+                    vocoder,
+                    playback,
+                    nxdnKeyResolver,
+                    definition.SystemName,
+                    definition.IsEncrypted ? definition.EncryptionAlgorithm : null,
+                    definition.IsEncrypted ? definition.EncryptionKeyId : null);
                 break;
             case "analog":
                 analogSession = new AnalogRxAudioSession(
@@ -72,9 +79,9 @@ public sealed class ChannelReceiveAudioSession : IAsyncDisposable
     public long MalformedPackets
         => dmrRouter?.MalformedPackets ?? p25Session?.MalformedPackets ?? nxdnSession?.MalformedPackets ?? analogSession?.MalformedPackets ?? 0;
 
-    public long LostPackets => dmrRouter?.LostPackets ?? p25Session?.LostPackets ?? 0;
+    public long LostPackets => dmrRouter?.LostPackets ?? p25Session?.LostPackets ?? nxdnSession?.LostPackets ?? 0;
 
-    public long DuplicateOrLatePackets => dmrRouter?.DuplicateOrLatePackets ?? p25Session?.DuplicateOrLatePackets ?? 0;
+    public long DuplicateOrLatePackets => dmrRouter?.DuplicateOrLatePackets ?? p25Session?.DuplicateOrLatePackets ?? nxdnSession?.DuplicateOrLatePackets ?? 0;
 
     public ReceiveAudioDiagnostics GetDiagnostics()
         => new(FramesDecoded, LostPackets, DuplicateOrLatePackets, MalformedPackets);

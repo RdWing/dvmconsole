@@ -23,7 +23,8 @@ public sealed class DmrTransmitCaptureSession : ITransmitCaptureSession
         uint destinationId,
         byte slot,
         uint streamId,
-        Action<ReadOnlyMemory<byte>, ushort, uint> send)
+        Action<ReadOnlyMemory<byte>, ushort, uint> send,
+        DmrPrivacyOptions? privacy = null)
     {
         this.capture = capture ?? throw new ArgumentNullException(nameof(capture));
         call = new DmrTxCallSession(
@@ -32,7 +33,8 @@ public sealed class DmrTransmitCaptureSession : ITransmitCaptureSession
             slot,
             streamId,
             vocoder ?? throw new ArgumentNullException(nameof(vocoder)),
-            send ?? throw new ArgumentNullException(nameof(send)));
+            send ?? throw new ArgumentNullException(nameof(send)),
+            privacy: privacy);
     }
 
     public event EventHandler<Exception>? Faulted;

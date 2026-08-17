@@ -24,7 +24,7 @@ public sealed class WidgetPositionSetting
 // codeplug. Protocol credentials and encryption keys remain codeplug-owned.
 public sealed class UserSettings
 {
-    public const int CurrentSchemaVersion = 1;
+    public const int CurrentSchemaVersion = 2;
     public const string DvmConsoleAudioProcessingMode = "DvmConsole";
     public const string AppleVoiceProcessingMode = "AppleVoiceProcessing";
     public const int MaximumToolbarClocks = 8;
@@ -37,7 +37,7 @@ public sealed class UserSettings
     public string AudioInputDeviceId { get; set; } = "default";
     public string AudioOutputDeviceId { get; set; } = "default";
     public string AudioProcessingMode { get; set; } = DvmConsoleAudioProcessingMode;
-    public bool HighQualityBluetoothAudioEnabled { get; set; } = true;
+    public bool HighQualityBluetoothAudioEnabled { get; set; }
     public bool AudioInputAgcEnabled { get; set; }
     public double AudioInputAgcTargetDbfs { get; set; } = -25.0;
     public bool KeepTransmitMicrophoneWarm { get; set; }
@@ -149,6 +149,11 @@ public sealed class UserSettingsStore
         {
             UserSettings settings = JsonSerializer.Deserialize<UserSettings>(File.ReadAllText(Path), SerializerOptions)
                 ?? new UserSettings();
+            if (settings.SchemaVersion < 2)
+            {
+                settings.HighQualityBluetoothAudioEnabled = false;
+                settings.SchemaVersion = UserSettings.CurrentSchemaVersion;
+            }
             settings.TransmitEncryptionStates ??= new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
             settings.CallHistoryWindowPlacement = NormalizeWindowPlacement(settings.CallHistoryWindowPlacement);
             settings.GlobalPttKey = NormalizeGlobalPttKey(settings.GlobalPttKey);
@@ -389,8 +394,12 @@ public sealed class UserSettingsStore
 
     private static void NormalizeSettingsForWrite(UserSettings settings)
     {
-        if (settings.SchemaVersion <= 0)
-            settings.SchemaVersion = UserSettings.CurrentSchemaVersion;
+        // Schema 1 defaulted this option on, so a stored true value does not
+        // prove that the operator selected it. Require a fresh opt-in after
+        // migration; schema 2 true values are always an explicit selection.
+        if (settings.SchemaVersion < 2)
+            settings.HighQualityBluetoothAudioEnabled = false;
+        settings.SchemaVersion = UserSettings.CurrentSchemaVersion;
         settings.DtmfPresets = NormalizeDtmfPresets(settings.DtmfPresets);
         settings.TonePresets = NormalizeTonePresets(settings.TonePresets);
         settings.CallHistoryWindowPlacement = NormalizeWindowPlacement(settings.CallHistoryWindowPlacement);
@@ -480,7 +489,7 @@ public sealed class UserSettingsStore
         if (!string.Equals(settings.AudioInputDeviceId, "default", StringComparison.OrdinalIgnoreCase) ||
             !string.Equals(settings.AudioOutputDeviceId, "default", StringComparison.OrdinalIgnoreCase) ||
             !string.Equals(settings.AudioProcessingMode, UserSettings.DvmConsoleAudioProcessingMode, StringComparison.Ordinal) ||
-            !settings.HighQualityBluetoothAudioEnabled ||
+            settings.HighQualityBluetoothAudioEnabled ||
             settings.AudioInputAgcEnabled || settings.AudioInputAgcTargetDbfs != -25.0 ||
             settings.AudioInputPresets.Count > 0 ||
             settings.ChannelVolumes.Count > 0 || settings.ChannelOutputDeviceIds.Count > 0 ||

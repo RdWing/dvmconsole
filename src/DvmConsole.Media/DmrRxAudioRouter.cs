@@ -18,10 +18,13 @@ public sealed class DmrRxAudioRouter : IAsyncDisposable
     public DmrRxAudioRouter(
         DmrTrafficSelector selector,
         IVocoderSession vocoder,
-        IAudioPlayback playback)
+        IAudioPlayback playback,
+        IDmrKeyResolver? keyResolver = null,
+        string systemName = "",
+        bool privacyExpected = false)
     {
         this.selector = selector ?? throw new ArgumentNullException(nameof(selector));
-        session = new DmrRxAudioSession(vocoder, playback);
+        session = new DmrRxAudioSession(vocoder, playback, keyResolver, systemName, privacyExpected);
     }
 
     public int FramesDecoded => session.FramesDecoded;
@@ -41,8 +44,15 @@ public sealed class DmrRxAudioRouter : IAsyncDisposable
         await processing.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
+            long lostBefore = sequenceTracker.LostPackets;
             if (!sequenceTracker.TryAccept(traffic.StreamId, traffic.PacketSequence))
                 return 0;
+            long lostPackets = sequenceTracker.LostPackets - lostBefore;
+            if (lostPackets > 0)
+            {
+                await session.ConcealLostPacketsAsync(lostPackets, cancellationToken).ConfigureAwait(false);
+                session.InvalidateEncryption();
+            }
             return await session.ProcessAsync(traffic, cancellationToken).ConfigureAwait(false);
         }
         finally

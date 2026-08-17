@@ -4,28 +4,54 @@ using DvmConsole.Vocoder;
 
 namespace DvmConsole.Media;
 
-// Routes selected NXDN frames through an explicitly supplied NXDN decoder.
-// No default backend is provided until the required FEC/AMBE+2 implementation
-// is available, so normal application construction remains fail-closed.
+// Extracts the AMBE+2 codewords from selected 4800-baud NXDN frames and routes
+// them through the mandatory software vocoder.
 public sealed class NxdnRxAudioSession : IAsyncDisposable
 {
     private readonly NxdnTrafficSelector selector;
-    private readonly INxdnVocoderSession vocoder;
+    private readonly VoiceFrameDecoder decoder;
+    private readonly IHalfRateVocoderSession? halfRateVocoder;
     private readonly IAudioPlayback playback;
+    private readonly INxdnKeyResolver? keyResolver;
+    private readonly string systemName;
+    private readonly VoicePacketSequenceTracker sequenceTracker = new();
+    private NxdnPrivacyProcessor? privacyProcessor;
+    private byte privacyAlgorithm;
+    private byte privacyKeyId;
+    private byte[] privacyKey = [];
+    private byte configuredPrivacyAlgorithm;
+    private byte configuredPrivacyKeyId;
     private bool disposed;
 
     public NxdnRxAudioSession(
         NxdnTrafficSelector selector,
-        INxdnVocoderSession vocoder,
-        IAudioPlayback playback)
+        IVocoderSession vocoder,
+        IAudioPlayback playback,
+        INxdnKeyResolver? keyResolver = null,
+        string? systemName = null,
+        string? configuredAlgorithm = null,
+        string? configuredKeyId = null)
     {
         this.selector = selector ?? throw new ArgumentNullException(nameof(selector));
-        this.vocoder = vocoder ?? throw new ArgumentNullException(nameof(vocoder));
+        ArgumentNullException.ThrowIfNull(vocoder);
+        halfRateVocoder = vocoder as IHalfRateVocoderSession;
+        decoder = new VoiceFrameDecoder(vocoder, VocoderMode.NxdnAmbe);
         this.playback = playback ?? throw new ArgumentNullException(nameof(playback));
+        this.keyResolver = keyResolver;
+        this.systemName = systemName ?? string.Empty;
+        if (NxdnKeyRing.TryParseAlgorithmId(configuredAlgorithm, out byte algorithm) &&
+            NxdnKeyRing.TryParseKeyId(configuredKeyId, out byte keyId))
+        {
+            configuredPrivacyAlgorithm = algorithm;
+            configuredPrivacyKeyId = keyId;
+            ConfigurePrivacy(algorithm, keyId);
+        }
     }
 
     public int FramesDecoded { get; private set; }
     public long MalformedPackets { get; private set; }
+    public long LostPackets => sequenceTracker.LostPackets;
+    public long DuplicateOrLatePackets => sequenceTracker.DuplicateOrLatePackets;
 
     public async ValueTask<int> ProcessAsync(
         FneTrafficFrame traffic,
@@ -35,17 +61,62 @@ public sealed class NxdnRxAudioSession : IAsyncDisposable
         ArgumentNullException.ThrowIfNull(traffic);
         if (!selector.Matches(traffic))
             return 0;
+        long lostBefore = sequenceTracker.LostPackets;
+        if (!sequenceTracker.TryAccept(traffic.StreamId, traffic.PacketSequence))
+            return 0;
+        if (sequenceTracker.LostPackets > lostBefore && privacyAlgorithm != 0)
+        {
+            privacyProcessor?.Dispose();
+            privacyProcessor = null;
+        }
 
-        byte[] frame = new byte[NxdnVoicePacketCodec.FrameBytes];
-        if (!NxdnVoicePacketCodec.TryExtractFrame(traffic.Payload, frame))
+        if (NxdnVoicePacketCodec.TryExtractCallMetadata(traffic.Payload, out var metadata))
+        {
+            HandleCallMetadata(metadata);
+            return 0;
+        }
+
+        byte[] ambe = new byte[NxdnVoicePacketCodec.AmbeBytes];
+        if (!NxdnVoicePacketCodec.TryExtractAmbe(traffic.Payload, ambe, out int codewordCount))
         {
             MalformedPackets++;
             return 0;
         }
-        short[] samples = new short[VocoderFrameSizes.PcmSamplesPerFrame];
-        int errors = vocoder.Decode(frame, samples);
-        await playback.WriteAsync(samples, cancellationToken).ConfigureAwait(false);
-        FramesDecoded++;
+        int errors = 0;
+        for (int index = 0; index < codewordCount; index++)
+        {
+            ReadOnlySpan<byte> codeword = ambe.AsSpan(
+                index * NxdnVoicePacketCodec.CodewordBytes,
+                NxdnVoicePacketCodec.CodewordBytes);
+            if (privacyAlgorithm != 0)
+            {
+                if (privacyProcessor is null)
+                {
+                    MalformedPackets++;
+                    continue;
+                }
+                byte[] parameters = new byte[VocoderFrameSizes.HalfRateParameterBytes];
+                HalfRateFecStatus status = privacyProcessor.ExtractAndProcessParameters(
+                    codeword,
+                    parameters);
+                short[] decryptedSamples = new short[VocoderFrameSizes.PcmSamplesPerFrame];
+                halfRateVocoder!.DecodeParameters(
+                    parameters,
+                    decryptedSamples,
+                    status.DecoderErrorMetric,
+                    status.Unrecoverable);
+                errors += checked((int)status.DecoderErrorMetric);
+                await playback.WriteAsync(decryptedSamples, cancellationToken).ConfigureAwait(false);
+                FramesDecoded++;
+                continue;
+            }
+            short[]? samples = null;
+            errors += decoder.Process(
+                codeword,
+                decoded => samples = decoded.ToArray());
+            await playback.WriteAsync(samples!, cancellationToken).ConfigureAwait(false);
+            FramesDecoded++;
+        }
         return errors;
     }
 
@@ -54,8 +125,82 @@ public sealed class NxdnRxAudioSession : IAsyncDisposable
         if (disposed)
             return;
 
-        vocoder.Dispose();
+        privacyProcessor?.Dispose();
+        if (privacyKey.Length > 0)
+            System.Security.Cryptography.CryptographicOperations.ZeroMemory(privacyKey);
+        decoder.Dispose();
         await playback.DisposeAsync().ConfigureAwait(false);
         disposed = true;
+    }
+
+    private void HandleCallMetadata(NxdnVoicePacketCodec.CallMetadata metadata)
+    {
+        if (metadata.MessageType == NxdnVoicePacketCodec.TransmitReleaseMessageType)
+        {
+            ClearPrivacy();
+            return;
+        }
+        if (metadata.MessageType == NxdnVoicePacketCodec.VoiceCallMessageType)
+        {
+            ClearPrivacy(restoreConfigured: false);
+            if (metadata.CipherType == 0)
+            {
+                RestoreConfiguredPrivacy();
+                return;
+            }
+            ConfigurePrivacy(metadata.CipherType, metadata.KeyId);
+            return;
+        }
+        if (metadata.MessageType == NxdnVoicePacketCodec.VoiceCallIvMessageType &&
+            privacyAlgorithm is NxdnPrivacyAlgorithms.Des or NxdnPrivacyAlgorithms.Aes256 &&
+            privacyKey.Length > 0 && halfRateVocoder is not null)
+        {
+            privacyProcessor?.Dispose();
+            privacyProcessor = new NxdnPrivacyProcessor(
+                halfRateVocoder,
+                new NxdnPrivacyOptions(privacyAlgorithm, privacyKeyId, privacyKey, metadata.MessageIndicator));
+        }
+    }
+
+    private void ClearPrivacy(bool restoreConfigured = true)
+    {
+        privacyProcessor?.Dispose();
+        privacyProcessor = null;
+        privacyAlgorithm = 0;
+        privacyKeyId = 0;
+        if (privacyKey.Length > 0)
+            System.Security.Cryptography.CryptographicOperations.ZeroMemory(privacyKey);
+        privacyKey = [];
+        if (restoreConfigured)
+            RestoreConfiguredPrivacy();
+    }
+
+    private void ConfigurePrivacy(byte algorithm, byte keyId)
+    {
+        privacyProcessor?.Dispose();
+        privacyProcessor = null;
+        if (privacyKey.Length > 0)
+            System.Security.Cryptography.CryptographicOperations.ZeroMemory(privacyKey);
+        privacyKey = [];
+        privacyAlgorithm = algorithm;
+        privacyKeyId = keyId;
+        if (halfRateVocoder is null || keyResolver is null ||
+            !keyResolver.TryResolve(systemName, privacyAlgorithm, privacyKeyId, out ReadOnlyMemory<byte> resolved))
+        {
+            return;
+        }
+        privacyKey = resolved.ToArray();
+        if (privacyAlgorithm == NxdnPrivacyAlgorithms.Ehr)
+        {
+            privacyProcessor = new NxdnPrivacyProcessor(
+                halfRateVocoder,
+                new NxdnPrivacyOptions(privacyAlgorithm, privacyKeyId, privacyKey));
+        }
+    }
+
+    private void RestoreConfiguredPrivacy()
+    {
+        if (configuredPrivacyAlgorithm != 0 && configuredPrivacyKeyId != 0)
+            ConfigurePrivacy(configuredPrivacyAlgorithm, configuredPrivacyKeyId);
     }
 }

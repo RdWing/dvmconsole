@@ -31,9 +31,9 @@ internal static class ChannelTransmitDefinitionFactory
     {
         ArgumentNullException.ThrowIfNull(channel);
         ArgumentNullException.ThrowIfNull(transmitDefinition);
-        if (!transmitDefinition.IsEncrypted)
+        if (!transmitDefinition.IsEncrypted || transmitDefinition.Mode != "p25")
             return null;
-        if (transmitDefinition.Mode != "p25" || p25KeyResolver is null ||
+        if (p25KeyResolver is null ||
             !P25KeyRing.TryParseAlgorithmId(transmitDefinition.EncryptionAlgorithm, out byte algorithmId) ||
             !P25KeyRing.TryParseKeyId(transmitDefinition.EncryptionKeyId, out ushort keyId) ||
             !p25KeyResolver.TryResolve(
@@ -47,5 +47,55 @@ internal static class ChannelTransmitDefinitionFactory
         }
 
         return P25TxEncryptionOptions.CreateRandom(algorithmId, keyId, key);
+    }
+
+    public static DmrPrivacyOptions? CreateDmrPrivacyOptions(
+        ChannelViewModel channel,
+        ChannelRuntimeDefinition transmitDefinition,
+        IDmrKeyResolver? keyResolver)
+    {
+        ArgumentNullException.ThrowIfNull(channel);
+        ArgumentNullException.ThrowIfNull(transmitDefinition);
+        if (!transmitDefinition.IsEncrypted || transmitDefinition.Mode != "dmr")
+            return null;
+        if (keyResolver is null ||
+            !DmrKeyRing.TryParseAlgorithmId(transmitDefinition.EncryptionAlgorithm, out byte algorithmId) ||
+            !DmrKeyRing.TryParseKeyId(transmitDefinition.EncryptionKeyId, out byte keyId) ||
+            !keyResolver.TryResolve(
+                transmitDefinition.SystemName,
+                algorithmId,
+                keyId,
+                out ReadOnlyMemory<byte> key))
+        {
+            throw new InvalidOperationException(
+                $"DMR transmit requires a configured key for {channel.Definition.EncryptionAlgorithm}/{channel.Definition.EncryptionKeyId}.");
+        }
+
+        return DmrPrivacyOptions.CreateRandom(algorithmId, keyId, key);
+    }
+
+    public static NxdnPrivacyOptions? CreateNxdnPrivacyOptions(
+        ChannelViewModel channel,
+        ChannelRuntimeDefinition transmitDefinition,
+        INxdnKeyResolver? keyResolver)
+    {
+        ArgumentNullException.ThrowIfNull(channel);
+        ArgumentNullException.ThrowIfNull(transmitDefinition);
+        if (!transmitDefinition.IsEncrypted || transmitDefinition.Mode != "nxdn")
+            return null;
+        if (keyResolver is null ||
+            !NxdnKeyRing.TryParseAlgorithmId(transmitDefinition.EncryptionAlgorithm, out byte algorithmId) ||
+            !NxdnKeyRing.TryParseKeyId(transmitDefinition.EncryptionKeyId, out byte keyId) ||
+            !keyResolver.TryResolve(
+                transmitDefinition.SystemName,
+                algorithmId,
+                keyId,
+                out ReadOnlyMemory<byte> key))
+        {
+            throw new InvalidOperationException(
+                $"NXDN transmit requires a configured key for {channel.Definition.EncryptionAlgorithm}/{channel.Definition.EncryptionKeyId}.");
+        }
+
+        return NxdnPrivacyOptions.CreateRandom(algorithmId, keyId, key);
     }
 }

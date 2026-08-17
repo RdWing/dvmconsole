@@ -15,6 +15,7 @@ public sealed class DmrTxCallSession : IDisposable
     private readonly Action<ReadOnlyMemory<byte>, ushort, uint> send;
     private readonly DmrTxPacketSequence sequence;
     private readonly DmrTxAudioSession audio;
+    private readonly DmrPrivacyOptions? privacy;
     private bool started;
     private bool ended;
     private bool disposed;
@@ -27,7 +28,8 @@ public sealed class DmrTxCallSession : IDisposable
         IVocoderSession vocoder,
         Action<ReadOnlyMemory<byte>, ushort, uint> send,
         ushort packetSequence = 0,
-        byte frameSequence = 0)
+        byte frameSequence = 0,
+        DmrPrivacyOptions? privacy = null)
     {
         if (sourceId == 0 || sourceId > 0xFFFFFF)
             throw new ArgumentOutOfRangeException(nameof(sourceId));
@@ -43,11 +45,14 @@ public sealed class DmrTxCallSession : IDisposable
         this.slot = slot;
         this.streamId = streamId;
         this.send = send ?? throw new ArgumentNullException(nameof(send));
+        this.privacy = privacy;
         sequence = new DmrTxPacketSequence(packetSequence, frameSequence);
 
         var lc = new LC
         {
             FLCO = (byte)DMRFLCO.FLCO_GROUP,
+            FID = privacy is null ? (byte)0 : DmrPrivacyAlgorithms.FeatureId,
+            Encrypted = privacy is not null,
             SrcId = sourceId,
             DstId = destinationId
         };
@@ -66,7 +71,8 @@ public sealed class DmrTxCallSession : IDisposable
             // at one produces an embedded-data burst before the FNE has seen
             // voice sync and causes some masters to drop the call.
             embeddedSequence: 0,
-            embeddedData: embedded);
+            embeddedData: embedded,
+            privacy: privacy);
     }
 
     public bool IsStarted => started;
@@ -84,9 +90,21 @@ public sealed class DmrTxCallSession : IDisposable
             sourceId,
             destinationId,
             slot,
-            sequence.FrameSequence);
+            sequence.FrameSequence,
+            encrypted: privacy is not null);
         send(header, sequence.PacketSequence, streamId);
         sequence.Advance();
+        if (privacy is not null)
+        {
+            byte[] privacyHeader = DmrVoicePacketCodec.CreatePrivacyIndicatorPacket(
+                sourceId,
+                destinationId,
+                slot,
+                sequence.FrameSequence,
+                privacy);
+            send(privacyHeader, sequence.PacketSequence, streamId);
+            sequence.Advance();
+        }
         started = true;
     }
 

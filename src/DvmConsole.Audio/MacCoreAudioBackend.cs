@@ -17,7 +17,7 @@ public sealed class MacCoreAudioBackend : IAudioBackend, IHighQualityBluetoothAu
         AudioProcessingMode processingMode = AudioProcessingMode.DvmConsole,
         string? inputDeviceId = null,
         string? outputDeviceId = null,
-        bool highQualityBluetoothAudio = true)
+        bool highQualityBluetoothAudio = false)
     {
         if (!OperatingSystem.IsMacOS())
             throw new PlatformNotSupportedException("MacCoreAudioBackend requires macOS.");

@@ -20,15 +20,16 @@ Codeplugs created for R01A00 should be reviewed before use with R02A00. There ha
 ## Building the Avalonia application
 
 This project utilizes the Avalonia desktop framework for the Apple Silicon
-macOS, Intel macOS, and Windows x64 builds. A .NET 10 SDK installation, CMake, and a
-platform C/C++ toolchain are required to compile the application.
+macOS, Intel macOS, and Windows x64 builds. A .NET 10 SDK installation, Rust
+1.85 or newer, CMake, and a platform C/C++ toolchain are required to compile
+the application.
 
 ### Dependencies
 
 - .NET 10 SDK
+- Rust 1.85 or newer
 - CMake
 - A platform C/C++ toolchain
-- dvmvocoder (libvocoder)
 
 ### Build Instructions
 
@@ -46,14 +47,9 @@ dotnet build src/DvmConsole.Rebuild.sln
 2. Use `src/DvmConsole.Rebuild.sln` for the Avalonia application. The root
 `dvmconsole.sln` is the original Windows-only WPF solution.
 
-Please note that digital voice requires a matching native `dvmvocoder` library.
-macOS also requires the included CoreAudio shim. The macOS publishing script
-builds the CoreAudio shim automatically. See [Desktop building and
-publishing](docs/PUBLISHING.md) and [Software vocoder](docs/VOCODER.md) for
-additional information.
-
-Set `DVMVOCODER_LIBRARY` before running the complete solution test suite. The
-test suite includes native encode/decode integration tests.
+The build automatically compiles the required native vocoder adapter. macOS
+also requires the included CoreAudio shim, which the publishing script builds
+automatically. See [Desktop building and publishing](docs/PUBLISHING.md).
 
 ## End User Packages
 
@@ -92,10 +88,9 @@ starting it again and include that file with the problem report.
 
 1. Download the `dvmconsole-<version>-win-x64.zip` release file and choose
 **Extract All** in File Explorer.
-2. Keep `DvmConsole.Desktop.exe` and `libvocoder.dll` together. The managed
-application and runtime are bundled into the single EXE; the native vocoder
-remains beside it.
-3. Start `DvmConsole.Desktop.exe`. If Microsoft Defender SmartScreen warns
+2. Start `DvmConsole.exe`. The managed application, runtime, and required
+native vocoder are bundled into this single executable.
+3. If Microsoft Defender SmartScreen warns
 about the unsigned build, use **More info**, verify the publisher/source, and
 choose **Run anyway** only if the archive came from the project release.
 4. Use **Open Codeplug** within the application to load `codeplug.yml`.
@@ -106,8 +101,8 @@ include that file with the problem report.
 
 Maintainers creating these packages should follow [Desktop building and
 publishing](docs/PUBLISHING.md). The `Avalonia rebuild` GitHub Actions workflow
-builds a pinned native vocoder for each target and includes it in the unsigned
-Apple Silicon macOS, Intel macOS, and Windows test packages.
+builds the pinned native dependency for each target and includes it in the
+unsigned Apple Silicon macOS, Intel macOS, and Windows test packages.
 
 ## Documentation
 
@@ -134,7 +129,7 @@ release archives do not contain a stale copy of the documentation.
    The full file paths for both `keys.clear` and `alias.yml` must be defined within `codeplug.yml` if used.
 
 2. **Configure Encryption Keys (`keys.clear`)**  
-   For encrypted P25 talkgroups, the console requests configured keys from each connected FNE through KMM. An optional `keys.clear` file supplies the automatic local fallback. KMM-delivered keys take precedence for their originating system until it disconnects.
+   For encrypted P25 talkgroups, the console requests configured keys from each connected FNE through KMM. A `keys.clear` file supplies the automatic P25 fallback and the local keys required for DMR and NXDN privacy. KMM-delivered P25 keys take precedence for their originating system until it disconnects.
 
 3. **Configure RID Aliases (`alias.yml`)**  
    To display friendly names instead of raw RIDs, populate `alias.yml` with your Radio ID to alias mappings.  
@@ -146,6 +141,8 @@ release archives do not contain a stale copy of the documentation.
 
 ## Project Notes
 
+- DMR supports clear voice plus ARC4, DES-OFB, and AES-256 privacy. NXDN supports 4800-baud clear voice plus EHR, DES, and AES-256 privacy for receive and transmit.
+- NXDN 9600/EFR is not implemented in dvmhost.
 - The Desktop Dispatch Console does not support interfacing to base station or mobile radios. For a DVM-compatible console that supports base/mobile radio interfacing, see: https://github.com/W3AXL/RadioConsole2 and https://github.com/W3AXL/rc2-dvm.
 
 ## IMPORTANT NOTICE REGARDING AI / LLM-GENERATED CONFIGURATIONS

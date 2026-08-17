@@ -79,7 +79,7 @@ public sealed class ChannelReceiveAudioCoordinatorTests
         NotSupportedException exception = await Assert.ThrowsAsync<NotSupportedException>(
             () => coordinator.StartAsync(channel));
 
-        Assert.Contains("configured P25 key", exception.Message);
+        Assert.Contains("configured key for this protocol", exception.Message);
 
         Assert.Empty(coordinator.ActiveChannels);
         Assert.False(backend.IsDisposed);
@@ -88,7 +88,7 @@ public sealed class ChannelReceiveAudioCoordinatorTests
     }
 
     [Fact]
-    public async Task RejectsNxdnReceiveUntilAnInjectedDecoderIsAvailable()
+    public async Task OpensNxdnReceiveThroughTheMandatoryVocoder()
     {
         var backend = new FakeAudioBackend();
         var vocoder = new FakeVocoderBackend();
@@ -101,26 +101,19 @@ public sealed class ChannelReceiveAudioCoordinatorTests
             Mode = "nxdn"
         });
 
-        NotSupportedException exception = await Assert.ThrowsAsync<NotSupportedException>(
-            () => coordinator.StartAsync(channel));
+        await coordinator.StartAsync(channel);
 
-        Assert.Contains("FEC/AMBE+2 decoder", exception.Message);
-        Assert.Empty(coordinator.ActiveChannels);
-        Assert.False(backend.IsDisposed);
-        Assert.False(vocoder.IsDisposed);
-        Assert.False(channel.CanListen);
+        Assert.True(coordinator.IsActive(channel));
+        Assert.Equal(VocoderMode.NxdnAmbe, vocoder.LastMode);
+        Assert.Equal(1, vocoder.CreateSessionCalls);
     }
 
     [Fact]
-    public async Task RoutesNxdnReceiveThroughAnInjectedDecoderBackend()
+    public async Task RoutesNxdnReceiveThroughTheMandatoryVocoderBackend()
     {
         var backend = new FakeAudioBackend();
         var vocoder = new FakeVocoderBackend();
-        var nxdn = new FakeNxdnVocoderBackend();
-        await using var coordinator = new ChannelReceiveAudioCoordinator(
-            () => backend,
-            () => vocoder,
-            createNxdnVocoderBackend: () => nxdn);
+        await using var coordinator = new ChannelReceiveAudioCoordinator(() => backend, () => vocoder);
         var channel = new ChannelViewModel(new ChannelConfiguration
         {
             Name = "NXDN Dispatch",
@@ -135,11 +128,11 @@ public sealed class ChannelReceiveAudioCoordinatorTests
         await WaitForAsync(() => backend.Playback.Frames.Count > 0);
 
         Assert.Equal(160, backend.Playback.Frames[0].Length);
-        Assert.Equal((short)30_000, backend.Playback.Frames[0][0]);
-        Assert.Equal(1, nxdn.Session.DecodeCalls);
+        Assert.Equal((short)20_000, backend.Playback.Frames[0][0]);
+        Assert.Equal(4, vocoder.LastSession!.DecodeCalls);
 
         await coordinator.StopAsync(channel);
-        Assert.True(nxdn.IsDisposed);
+        Assert.True(vocoder.IsDisposed);
     }
 
     [Fact]
@@ -344,6 +337,9 @@ public sealed class ChannelReceiveAudioCoordinatorTests
 
     private static FneTrafficFrame CreateNxdnTraffic(uint destinationId)
     {
+        byte[] ambe = Enumerable.Range(0, NxdnVoicePacketCodec.AmbeBytes)
+            .Select(value => (byte)value)
+            .ToArray();
         return new FneTrafficFrame(
             FneTrafficProtocol.Nxdn,
             peerId: 1,
@@ -355,7 +351,7 @@ public sealed class ChannelReceiveAudioCoordinatorTests
             subtype: "VOICE",
             packetSequence: 1,
             streamId: 99,
-            payload: new byte[NxdnVoicePacketCodec.PacketBytes]);
+            payload: NxdnVoicePacketCodec.CreateVoicePacket(2, destinationId, true, 0, ambe));
     }
 
     private static async Task WaitForAsync(Func<bool> condition)
@@ -460,13 +456,16 @@ public sealed class ChannelReceiveAudioCoordinatorTests
     {
         public int CreateSessionCalls { get; private set; }
         public bool IsDisposed { get; private set; }
+        public VocoderMode? LastMode { get; private set; }
+        public FakeVocoderSession? LastSession { get; private set; }
         public string Name => "fake";
         public bool IsAvailable => true;
 
         public IVocoderSession CreateSession(VocoderMode mode)
         {
             CreateSessionCalls++;
-            return new FakeVocoderSession();
+            LastMode = mode;
+            return LastSession = new FakeVocoderSession();
         }
 
         public void Dispose() => IsDisposed = true;
@@ -474,10 +473,12 @@ public sealed class ChannelReceiveAudioCoordinatorTests
 
     private sealed class FakeVocoderSession : IVocoderSession
     {
+        public int DecodeCalls { get; private set; }
         public int Encode(ReadOnlySpan<short> samples, Span<byte> codeword) => 0;
 
         public int Decode(ReadOnlySpan<byte> codeword, Span<short> samples)
         {
+            DecodeCalls++;
             samples.Fill(20_000);
             return 0;
         }
@@ -487,31 +488,4 @@ public sealed class ChannelReceiveAudioCoordinatorTests
         }
     }
 
-    private sealed class FakeNxdnVocoderBackend : INxdnVocoderBackend
-    {
-        public FakeNxdnVocoderSession Session { get; } = new();
-        public bool IsDisposed { get; private set; }
-        public string Name => "fake-nxdn";
-        public bool IsAvailable => !IsDisposed;
-
-        public INxdnVocoderSession CreateSession() => Session;
-
-        public void Dispose() => IsDisposed = true;
-    }
-
-    private sealed class FakeNxdnVocoderSession : INxdnVocoderSession
-    {
-        public int DecodeCalls { get; private set; }
-
-        public int Decode(ReadOnlySpan<byte> frame, Span<short> samples)
-        {
-            DecodeCalls++;
-            samples.Fill(30_000);
-            return 0;
-        }
-
-        public void Dispose()
-        {
-        }
-    }
 }

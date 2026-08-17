@@ -50,6 +50,7 @@ public sealed class TransmitCoordinatorTests
     [Theory]
     [InlineData("dmr", FneTrafficProtocol.Dmr)]
     [InlineData("p25", FneTrafficProtocol.P25)]
+    [InlineData("nxdn", FneTrafficProtocol.Nxdn)]
     public async Task DigitalModesCreateTheMatchingProtocolPipeline(string mode, FneTrafficProtocol expectedProtocol)
     {
         var channel = Channel("Digital", 100, mode);
