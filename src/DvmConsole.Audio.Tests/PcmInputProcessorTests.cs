@@ -40,6 +40,20 @@ public sealed class PcmInputProcessorTests
     }
 
     [Fact]
+    public void OptionalAgcTargetsP25NominalActiveSpeechLevel()
+    {
+        var processor = new PcmInputProcessor(new AudioInputProcessingOptions { AgcEnabled = true, Gain = 3 });
+        short[] input = Enumerable.Repeat((short)1_000, 320).ToArray();
+        short[] output = new short[input.Length];
+
+        for (int block = 0; block < 64; block++)
+            processor.Process(input, output);
+
+        double rms = Math.Sqrt(output.Select(sample => Math.Pow(sample / (double)short.MaxValue, 2)).Average());
+        Assert.InRange(rms, 0.054, 0.058);
+    }
+
+    [Fact]
     public void NormalizesDeviceAndProcessingBounds()
     {
         AudioInputProcessingOptions normalized = new AudioInputProcessingOptions

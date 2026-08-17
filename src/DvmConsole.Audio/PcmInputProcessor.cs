@@ -33,7 +33,11 @@ public sealed class AudioInputProcessingOptions
 // block AGC without coupling the capture path to a platform audio API.
 public sealed class PcmInputProcessor
 {
-    private const double AgcTargetRms = 0.18;
+    // TIA P25 codec-test guidance calibrates nominal active speech to 25 dB
+    // below A/D overload. This is deliberately an input-only target; decoded
+    // receive PCM retains its native level until the receive mixer applies the
+    // operator's channel gain.
+    private const double AgcTargetRms = 0.05623413251903491; // 10^(-25 / 20)
     private readonly AudioInputProcessingOptions options;
     private readonly double lowGain;
     private readonly double midGain;
@@ -77,8 +81,11 @@ public sealed class PcmInputProcessor
 
         if (options.AgcEnabled)
         {
-            double rms = Math.Sqrt(sumSquares / input.Length);
-            double requestedGain = AgcTargetRms / Math.Max(rms, 0.001);
+            // Include the operator's preamp setting so the final PCM delivered
+            // to the vocoder, rather than an intermediate signal, converges on
+            // the P25 reference level.
+            double inputAdjustedRms = Math.Sqrt(sumSquares / input.Length) * options.Gain;
+            double requestedGain = AgcTargetRms / Math.Max(inputAdjustedRms, 0.001);
             requestedGain = Math.Clamp(requestedGain, 0.25, 3.0);
             agcGain = (agcGain * 0.8) + (requestedGain * 0.2);
         }

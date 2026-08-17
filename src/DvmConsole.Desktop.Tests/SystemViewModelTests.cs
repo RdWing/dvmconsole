@@ -825,6 +825,7 @@ public sealed class SystemViewModelTests
             Assert.Equal("input-device-42", appleSettings.AudioInputDeviceId);
             Assert.Equal("output-device-84", appleSettings.AudioOutputDeviceId);
             Assert.Contains("echo cancellation", viewModel.AudioProcessingDescription, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("receive audio remains unprocessed", viewModel.AudioProcessingDescription, StringComparison.OrdinalIgnoreCase);
 
             viewModel.SelectedAudioProcessingMode = "DVM Console processing";
             viewModel.ApplyAudioInputSettingsCommand.Execute(null);

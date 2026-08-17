@@ -1416,7 +1416,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             () => userSettings.AudioOutputDeviceId,
             HandleRecordingPlaybackFaulted);
         audioCoordinator = new ChannelReceiveAudioCoordinator(
-            CreateRadioAudioBackend,
+            CreateReceiveAudioBackend,
             () => new SoftwareVocoderBackend(Environment.GetEnvironmentVariable("DVMVOCODER_LIBRARY")),
             p25KeyResolver,
             HandleDecodedSamples,
@@ -1435,7 +1435,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
                 HighGainDb = userSettings.AudioInputEqHighGainDb
             },
             HandleTransmitSamples,
-            CreateRadioAudioBackend);
+            CreateTransmitAudioBackend);
         toneTransmitCoordinator = new ToneTransmitCoordinator(p25KeyResolver);
         talkPermitTonePlayer = new TalkPermitTonePlayer(
             () => AudioBackendFactory.CreateDefault(Environment.GetEnvironmentVariable("DVM_AUDIO_LIBRARY")),
@@ -2094,7 +2094,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     public string AudioProcessingDescription
         => IsDvmConsoleProcessingSelected
             ? "DVM Console applies its gain, EQ, and optional AGC after microphone capture."
-            : "Apple Voice Processing I/O applies acoustic echo cancellation and automatic gain control to the selected input/output pair. The final mixed radio output supplies the echo reference.";
+            : "Apple Voice Processing applies acoustic echo cancellation and automatic gain control to the microphone capture used for transmit. Receive audio remains unprocessed.";
 
     public string AudioInputPresetNameText
     {
@@ -3924,7 +3924,17 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             : 1.0;
     }
 
-    private IAudioBackend CreateRadioAudioBackend()
+    // Receive uses plain CoreAudio even when Apple voice processing is selected
+    // for the microphone. This prevents platform AEC/AGC from altering decoded
+    // radio audio or the operator's output level.
+    private IAudioBackend CreateReceiveAudioBackend()
+        => AudioBackendFactory.CreateDefault(
+            Environment.GetEnvironmentVariable("DVM_AUDIO_LIBRARY"));
+
+    // The selected processing mode is intentionally scoped to microphone
+    // capture for transmit. ProcessedAudioCapture further confines the
+    // DVM Console gain/EQ/AGC path to this capture stream.
+    private IAudioBackend CreateTransmitAudioBackend()
         => AudioBackendFactory.CreateDefault(
             Environment.GetEnvironmentVariable("DVM_AUDIO_LIBRARY"),
             GetConfiguredAudioProcessingMode(),
@@ -4647,21 +4657,12 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         if (receivingChannels.Length == 0)
             return;
 
-        bool keepActive = GetConfiguredAudioProcessingMode() == AudioProcessingMode.AppleVoiceProcessing;
         suspendedAudioChannels = receivingChannels;
-        suspendedAudioKeptActive = keepActive;
+        suspendedAudioKeptActive = false;
         foreach (ChannelViewModel receivingChannel in receivingChannels)
             receivingChannel.SetAudioSuspended(true);
 
-        if (keepActive)
-        {
-            foreach (ChannelViewModel receivingChannel in receivingChannels)
-                await audioCoordinator.SetGainAsync(receivingChannel, 0).ConfigureAwait(false);
-        }
-        else
-        {
-            await audioCoordinator.StopAsync().ConfigureAwait(false);
-        }
+        await audioCoordinator.StopAsync().ConfigureAwait(false);
 
         AudioStatusText = statusText;
     }
@@ -4869,7 +4870,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         AudioInputMidGainText = midGainDb.ToString("0.###", CultureInfo.InvariantCulture);
         AudioInputHighGainText = highGainDb.ToString("0.###", CultureInfo.InvariantCulture);
         AudioStatusText = processingMode == AudioProcessingMode.AppleVoiceProcessing
-            ? "Apple voice processing saved. The selected input/output pair and final radio mix will use Apple AEC/AGC."
+            ? "Apple voice processing saved for microphone transmit capture; receive audio remains unprocessed."
             : "DVM Console audio processing saved; device routes apply to the next audio session and PTT call.";
 
         bool audioRouteChanged = previousProcessingMode != processingMode ||
