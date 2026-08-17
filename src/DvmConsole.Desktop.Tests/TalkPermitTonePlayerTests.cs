@@ -18,17 +18,19 @@ public sealed class TalkPermitTonePlayerTests
             Assert.Equal("alternate", output.Id);
             Assert.Equal(1, backend.OpenPlaybackCount);
             Assert.True(backend.Playback.IsDisposed);
-            Assert.Equal(960, player.LastQueuedSamples);
-            Assert.Equal(960, player.LastConsumedSamples);
+            Assert.Equal(1120, player.LastQueuedSamples);
+            Assert.Equal(1120, player.LastConsumedSamples);
         }
 
         Assert.Equal("alternate", backend.LastOutputDeviceId);
         Assert.Single(backend.Playback.Frames);
         short[] samples = backend.Playback.Frames[0];
-        Assert.Equal(960, samples.Length);
+        Assert.Equal(1120, samples.Length);
         Assert.Contains(samples, sample => sample != 0);
         Assert.InRange(samples.Max(), 12_000, 14_000);
-        Assert.Equal(0, samples[0]);
+        Assert.All(samples[..160], sample => Assert.Equal((short)0, sample));
+        Assert.Contains(samples[160..800], sample => sample != 0);
+        Assert.All(samples[800..], sample => Assert.Equal((short)0, sample));
         Assert.False(backend.Playback.WasFlushed);
         Assert.Equal(1, backend.Playback.DrainCount);
         Assert.True(backend.Playback.IsDisposed);

@@ -2,7 +2,7 @@
 
 This page covers the built-in **Talkgroup Audio Recorder (TAR)** feature.
 
-TAR records selected talkgroups to local `.wav` files and stores a matching `.json` metadata sidecar for each recording.
+TAR records selected talkgroups to compact local `.opus` files and stores a matching `.json` metadata sidecar for each recording.
 
 ---
 
@@ -155,7 +155,7 @@ Behavior:
 - TAR scans saved recording metadata
 - TAR checks the current configured retention for that TGID
 - if a recording is older than the allowed age, TAR deletes:
-  - the `.wav` audio file
+  - the `.opus` audio file
   - the matching `.json` metadata file
 
 Important notes:
@@ -174,17 +174,16 @@ Cleanup runs when:
 
 # Recording Folder Structure
 
-TAR stores recordings in UTC-organized folders for easier browsing.
+TAR stores recordings in date- and system-organized folders for easier browsing.
 
 Folder layout:
 
 ```text
 <TAR Root>\
   YYYY-MM-DD\
-    <TalkgroupName>_TG<id>\
-      HH\
-        <recording>.wav
-        <recording>.json
+    <SystemName>\
+      <time>_<system>_<talkgroup>_<rid>_<CLEAR-or-SECURE_algorithm>_<stream>.opus
+      <time>_<system>_<talkgroup>_<rid>_<CLEAR-or-SECURE_algorithm>_<stream>.json
 ```
 
 Example structure:
@@ -192,19 +191,18 @@ Example structure:
 ```text
 TAR\
   2026-05-02\
-    Dispatch 1_TG3100\
-      22\
-        20260502T221530.125Z_RX_System1_Dispatch1_TG3100_SRC1001_ab12cd34.wav
-        20260502T221530.125Z_RX_System1_Dispatch1_TG3100_SRC1001_ab12cd34.json
+    System1\
+      221530125_System1_3100_1001_SECURE_AES_42.opus
+      221530125_System1_3100_1001_SECURE_AES_42.json
 ```
 
-The Viewer shows timestamps in the local system timezone, but TAR filenames and metadata timestamps are stored in UTC.
+The date folder and filename time use the local system timezone. The metadata retains UTC start and end timestamps.
 
 ---
 
 # Metadata
 
-Each recording writes a `.json` file alongside the `.wav`.
+Each recording writes a `.json` file alongside the `.opus` audio.
 
 Metadata includes:
 
@@ -234,8 +232,8 @@ This metadata is used by the TAR Viewer and also makes the raw archive easier to
 
 # Notes
 
-- TAR records to `.wav`
+- TAR records to `.opus` without requiring an external media process
 - TAR writes a `.json` sidecar for each recording
 - TAR trims leading and trailing silence before finalizing the saved file
 - TAR viewer playback uses the configured master output device
-- deleting a recording from the Viewer removes both the `.wav` and `.json`
+- deleting a recording from the Viewer removes both the `.opus` and `.json`

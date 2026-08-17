@@ -12,6 +12,7 @@ internal sealed class SharedAudioCapture : IAsyncDisposable
     private readonly IAudioCapture source;
     private readonly object sync = new();
     private readonly List<Lease> leases = [];
+    private bool samplesSuppressed;
     private bool disposed;
 
     public SharedAudioCapture(IAudioCapture source)
@@ -28,6 +29,15 @@ internal sealed class SharedAudioCapture : IAsyncDisposable
             var lease = new Lease(this, source.Format);
             leases.Add(lease);
             return lease;
+        }
+    }
+
+    public void SetSamplesSuppressed(bool suppressed)
+    {
+        lock (sync)
+        {
+            ObjectDisposedException.ThrowIf(disposed, this);
+            samplesSuppressed = suppressed;
         }
     }
 
@@ -103,12 +113,17 @@ internal sealed class SharedAudioCapture : IAsyncDisposable
 
     private void HandleSamplesAvailable(object? sender, PcmSamplesEventArgs args)
     {
-        Lease[] recipients;
         lock (sync)
-            recipients = leases.Where(lease => lease.IsRunning).ToArray();
+        {
+            if (samplesSuppressed)
+                return;
 
-        foreach (Lease lease in recipients)
-            lease.Publish(args);
+            // Keep suppression changes serialized with publication. Once
+            // SetSamplesSuppressed(true) returns, no callback that began just
+            // before it can publish a trailing microphone frame.
+            foreach (Lease lease in leases.Where(lease => lease.IsRunning).ToArray())
+                lease.Publish(args);
+        }
     }
 
     private void ThrowIfUnavailable(Lease lease)

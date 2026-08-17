@@ -7,10 +7,15 @@ use std::cell::RefCell;
 use std::ffi::c_char;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
+use blip25_vocoder::fullrate::frame::{decode_frame as decode_full_rate_frame, INFO_WIDTHS};
+use blip25_vocoder::halfrate::dequantize::{
+    encode_tone_frame_info, TONE_AMPLITUDE_EXPONENT_STEP, TONE_AMPLITUDE_PEAK,
+};
 use blip25_vocoder::halfrate::frame::{
-    decode_code_vectors, decode_frame, encode_code_vectors, encode_frame, DIBITS_PER_FRAME,
+    decode_code_vectors, decode_frame, encode_code_vectors, encode_frame, ANNEX_T, DIBITS_PER_FRAME,
 };
 use blip25_vocoder::halfrate::{pack_natural, unpack_natural};
+use blip25_vocoder::rate_conversion::HalfToFullConverter;
 use blip25_vocoder::vocoder::{FrameStatus, Rate, Vocoder};
 
 const ABI_VERSION: u32 = 4;
@@ -54,7 +59,15 @@ thread_local! {
 pub struct Session {
     mode: u32,
     vocoder: Vocoder,
+    tone_converter: HalfToFullConverter,
+    pending_tone: Option<DetectedTone>,
     flushed: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct DetectedTone {
+    id: u8,
+    amplitude: u8,
 }
 
 fn set_error(message: &str) {
@@ -109,6 +122,96 @@ fn write_bit(bytes: &mut [u8], bit: usize, value: u32) {
         bytes[bit / 8] |= mask;
     } else {
         bytes[bit / 8] &= !mask;
+    }
+}
+
+fn pack_full_rate_natural(info: &[u16; 8]) -> [u8; P25_CODEWORD_BYTES] {
+    let mut output = [0u8; P25_CODEWORD_BYTES];
+    let mut bit = 0usize;
+    for (vector, width) in INFO_WIDTHS.into_iter().enumerate() {
+        for shift in (0..usize::from(width)).rev() {
+            write_bit(&mut output, bit, u32::from(info[vector]) >> shift);
+            bit += 1;
+        }
+    }
+    output
+}
+
+fn tone_component(samples: &[f64; PCM_SAMPLES], frequency: f64) -> (f64, f64) {
+    let step = std::f64::consts::TAU * frequency / 8000.0;
+    let (step_sin, step_cos) = step.sin_cos();
+    let (mut sin, mut cos) = (0.0, 1.0);
+    let (mut sin_sum, mut cos_sum) = (0.0, 0.0);
+    for sample in samples {
+        cos_sum += sample * cos;
+        sin_sum += sample * sin;
+        (sin, cos) = (
+            sin * step_cos + cos * step_sin,
+            cos * step_cos - sin * step_sin,
+        );
+    }
+    let magnitude_squared = cos_sum * cos_sum + sin_sum * sin_sum;
+    let explained_energy = 2.0 * magnitude_squared / PCM_SAMPLES as f64;
+    let peak = 2.0 * magnitude_squared.sqrt() / PCM_SAMPLES as f64;
+    (explained_energy, peak)
+}
+
+/// Recognize only frames overwhelmingly explained by a representable single
+/// or dual tone. Normal speech continues through the ordinary speech encoder.
+fn detect_tone(samples: &[i16]) -> Option<DetectedTone> {
+    let mean = samples.iter().map(|&sample| f64::from(sample)).sum::<f64>() / PCM_SAMPLES as f64;
+    let centered: [f64; PCM_SAMPLES] =
+        std::array::from_fn(|index| f64::from(samples[index]) - mean);
+    let total_energy = centered.iter().map(|sample| sample * sample).sum::<f64>();
+    if total_energy < PCM_SAMPLES as f64 * 256.0f64.powi(2) {
+        return None;
+    }
+
+    let mut best: Option<(f64, u8, f64)> = None;
+    for (id, row) in ANNEX_T.iter().enumerate() {
+        let Some(tone) = row else {
+            continue;
+        };
+        let frequency1 = f64::from(tone.f0) * f64::from(tone.l1);
+        let frequency2 = f64::from(tone.f0) * f64::from(tone.l2);
+        let (energy1, peak1) = tone_component(&centered, frequency1);
+        let (explained, peak) = if tone.l1 == tone.l2 {
+            (energy1, peak1)
+        } else {
+            let (energy2, peak2) = tone_component(&centered, frequency2);
+            let balance = energy1.min(energy2) / energy1.max(energy2).max(1.0);
+            if balance < 0.15 {
+                continue;
+            }
+            (energy1 + energy2, peak1.max(peak2))
+        };
+        let score = explained / total_energy;
+        if best.is_none_or(|(best_score, _, _)| score > best_score) {
+            best = Some((score, id as u8, peak));
+        }
+    }
+
+    let (score, id, peak) = best?;
+    if score < 0.72 {
+        return None;
+    }
+    let amplitude = ((peak / TONE_AMPLITUDE_PEAK).log10() / TONE_AMPLITUDE_EXPONENT_STEP + 127.0)
+        .round()
+        .clamp(0.0, 127.0) as u8;
+    Some(DetectedTone { id, amplitude })
+}
+
+fn encode_detected_tone(session: &mut Session, tone: DetectedTone) -> Vec<u8> {
+    let info = encode_tone_frame_info(tone.id, tone.amplitude);
+    if is_half_rate(session.mode) {
+        pack_natural(&info).to_vec()
+    } else {
+        let half_rate_dibits = encode_frame(&info);
+        let full_rate_dibits = session
+            .tone_converter
+            .convert(&half_rate_dibits)
+            .expect("valid Annex T tone conversion");
+        pack_full_rate_natural(&decode_full_rate_frame(&full_rate_dibits).info).to_vec()
     }
 }
 
@@ -241,20 +344,27 @@ fn codeword_to_natural(mode: u32, codeword: &[u8]) -> HalfRateDecode {
 }
 
 fn encode_natural(session: &mut Session, samples: &[i16]) -> Result<Vec<u8>, String> {
-    if is_half_rate(session.mode) {
+    let detected_tone = detect_tone(samples);
+    let ordinary = if is_half_rate(session.mode) {
         let info: [u16; 4] = session
             .vocoder
             .encode_info(samples)
             .map_err(|error| error.to_string())?
             .try_into()
             .map_err(|_| "invalid half-rate parameter count".to_string())?;
-        Ok(pack_natural(&info).to_vec())
+        pack_natural(&info).to_vec()
     } else {
         session
             .vocoder
             .encode_pcm(samples)
-            .map_err(|error| error.to_string())
-    }
+            .map_err(|error| error.to_string())?
+    };
+    let encoded = session
+        .pending_tone
+        .map(|tone| encode_detected_tone(session, tone))
+        .unwrap_or(ordinary);
+    session.pending_tone = detected_tone;
+    Ok(encoded)
 }
 
 fn flush_natural(session: &mut Session) -> Option<Vec<u8>> {
@@ -262,17 +372,24 @@ fn flush_natural(session: &mut Session) -> Option<Vec<u8>> {
         return None;
     }
     session.flushed = true;
-    if is_half_rate(session.mode) {
+    let ordinary = if is_half_rate(session.mode) {
         let info: [u16; 4] = session
             .vocoder
             .encode_info(&[0i16; PCM_SAMPLES])
             .ok()?
             .try_into()
             .ok()?;
-        Some(pack_natural(&info).to_vec())
+        pack_natural(&info).to_vec()
     } else {
-        session.vocoder.flush_encode().into_iter().next()
-    }
+        session.vocoder.flush_encode().into_iter().next()?
+    };
+    Some(
+        session
+            .pending_tone
+            .take()
+            .map(|tone| encode_detected_tone(session, tone))
+            .unwrap_or(ordinary),
+    )
 }
 
 #[no_mangle]
@@ -302,6 +419,8 @@ pub extern "C" fn dvmconsole_vocoder_session_create(mode: u32) -> *mut Session {
             Box::into_raw(Box::new(Session {
                 mode,
                 vocoder: Vocoder::new(rate),
+                tone_converter: HalfToFullConverter::new(),
+                pending_tone: None,
                 flushed: false,
             }))
         },
@@ -337,6 +456,8 @@ pub unsafe extern "C" fn dvmconsole_vocoder_session_reset(session: *mut Session)
                 return ERR_STATE;
             };
             session.vocoder.reset();
+            session.tone_converter = HalfToFullConverter::new();
+            session.pending_tone = None;
             session.flushed = false;
             set_error("ok");
             OK
@@ -843,6 +964,111 @@ mod tests {
         assert_eq!(decoded.corrected_errors, 15);
     }
 
+    fn test_session(mode: u32) -> Session {
+        Session {
+            mode,
+            vocoder: Vocoder::new(rate(mode).expect("test mode")),
+            tone_converter: HalfToFullConverter::new(),
+            pending_tone: None,
+            flushed: false,
+        }
+    }
+
+    fn tone(frequency: f64, frame: usize) -> [i16; PCM_SAMPLES] {
+        std::array::from_fn(|sample| {
+            let position = frame * PCM_SAMPLES + sample;
+            ((std::f64::consts::TAU * frequency * position as f64 / 8000.0).sin()
+                * 0.35
+                * f64::from(i16::MAX)) as i16
+        })
+    }
+
+    fn dual_tone(frequency1: f64, frequency2: f64) -> [i16; PCM_SAMPLES] {
+        std::array::from_fn(|sample| {
+            let time = sample as f64 / 8000.0;
+            (((std::f64::consts::TAU * frequency1 * time).sin()
+                + (std::f64::consts::TAU * frequency2 * time).sin())
+                * 0.175
+                * f64::from(i16::MAX)) as i16
+        })
+    }
+
+    #[test]
+    fn generated_alert_tones_use_nearest_annex_t_rows() {
+        for (frequency, expected_id) in [(800.0, 26), (1000.0, 32), (1500.0, 48)] {
+            let detected = detect_tone(&tone(frequency, 0)).expect("pure tone");
+            assert_eq!(detected.id, expected_id, "{frequency} Hz");
+        }
+        assert_eq!(detect_tone(&[0; PCM_SAMPLES]), None);
+
+        let mut state = 0x1234_5678u32;
+        let noise: [i16; PCM_SAMPLES] = std::array::from_fn(|_| {
+            state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            (state >> 16) as i16
+        });
+        assert_eq!(detect_tone(&noise), None);
+    }
+
+    #[test]
+    fn generated_dtmf_uses_a_dual_tone_row() {
+        let detected = detect_tone(&dual_tone(697.0, 1209.0)).expect("DTMF tone");
+        let row = ANNEX_T[detected.id as usize].expect("Annex T row");
+        assert_ne!(row.l1, row.l2);
+        let mut frequencies = [
+            f64::from(row.f0) * f64::from(row.l1),
+            f64::from(row.f0) * f64::from(row.l2),
+        ];
+        frequencies.sort_by(f64::total_cmp);
+        assert!(
+            (frequencies[0] - 697.0).abs() < 6.0,
+            "detected {} and {} Hz",
+            frequencies[0],
+            frequencies[1]
+        );
+        assert!(
+            (frequencies[1] - 1209.0).abs() < 6.0,
+            "detected {} and {} Hz",
+            frequencies[0],
+            frequencies[1]
+        );
+    }
+
+    #[test]
+    fn generated_alert_tones_are_stable_half_rate_tone_frames() {
+        use blip25_vocoder::halfrate::dequantize::parse_tone_frame;
+
+        for mode in [MODE_DMR, MODE_NXDN, MODE_P25_PHASE2] {
+            let mut session = test_session(mode);
+            let _pre_roll = encode_natural(&mut session, &tone(1000.0, 0)).expect("pre-roll");
+            let first = encode_natural(&mut session, &tone(1000.0, 1)).expect("first tone");
+            let second = encode_natural(&mut session, &tone(1000.0, 2)).expect("second tone");
+            assert_eq!(first, second, "mode {mode}");
+            let fields = parse_tone_frame(&unpack_natural(&first)).expect("tone parameters");
+            assert_eq!(fields.id, 32);
+        }
+    }
+
+    #[test]
+    fn p25_tone_bridge_produces_stable_decodable_full_rate_frames() {
+        let mut tx = test_session(MODE_P25);
+        let mut rx = Vocoder::new(Rate::FullRate4400x4400);
+        let _pre_roll = encode_natural(&mut tx, &tone(1000.0, 0)).expect("pre-roll");
+        let mut payloads = std::collections::BTreeSet::new();
+        for frame in 1..50 {
+            let encoded = encode_natural(&mut tx, &tone(1000.0, frame)).expect("tone encode");
+            if frame >= 20 {
+                payloads.insert(encoded.clone());
+            }
+            let decoded = rx.decode_bits(&encoded).expect("tone decode");
+            assert_eq!(decoded.len(), PCM_SAMPLES);
+        }
+        assert!(
+            payloads.len() <= 4,
+            "{} steady-state payloads",
+            payloads.len()
+        );
+    }
+
     #[test]
     fn flush_is_one_shot() {
         let handle = dvmconsole_vocoder_session_create(MODE_P25);
@@ -881,11 +1107,15 @@ mod tests {
         let mut tx = Session {
             mode,
             vocoder: Vocoder::new(rate(mode).unwrap()),
+            tone_converter: HalfToFullConverter::new(),
+            pending_tone: None,
             flushed: false,
         };
         let mut rx = Session {
             mode,
             vocoder: Vocoder::new(rate(mode).unwrap()),
+            tone_converter: HalfToFullConverter::new(),
+            pending_tone: None,
             flushed: false,
         };
         let mut energy = 0.0f64;

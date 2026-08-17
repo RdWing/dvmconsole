@@ -1,8 +1,8 @@
 namespace DvmConsole.Audio;
 
 // Chooses a portable decoder from the beginning of a stream. WAV remains
-// handled by the in-box PCM reader; MPEG Layer I/II/III audio is decoded by
-// the managed NLayer adapter. Other formats can opt into an explicitly
+// handled by the in-box PCM reader; MPEG Layer I/II/III and Ogg Opus audio are
+// decoded by managed adapters. Other formats can opt into an explicitly
 // configured FFmpeg process through `DVM_FFMPEG`.
 public static class PcmStreamDecoder
 {
@@ -30,6 +30,8 @@ public static class PcmStreamDecoder
         {
             if (prefix.AsSpan().SequenceEqual("RIFF"u8))
                 return await WavPcmStreamReader.OpenAsync(replay, cancellationToken).ConfigureAwait(false);
+            if (prefix.AsSpan().SequenceEqual("OggS"u8))
+                return await OpusOggPcmStreamReader.OpenAsync(replay, cancellationToken).ConfigureAwait(false);
             if (LooksLikeMpeg(prefix))
                 return await MpegPcmStreamReader.OpenAsync(replay, cancellationToken).ConfigureAwait(false);
             if (!string.IsNullOrWhiteSpace(ffmpegExecutable))
@@ -41,7 +43,7 @@ public static class PcmStreamDecoder
             }
 
             throw new NotSupportedException(
-                "Only PCM WAV and MPEG audio streams are supported unless DVM_FFMPEG is configured.");
+                "Only PCM WAV, MPEG, and Ogg Opus audio streams are supported unless DVM_FFMPEG is configured.");
         }
         catch
         {

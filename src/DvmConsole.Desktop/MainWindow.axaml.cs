@@ -4363,8 +4363,8 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         List<ChannelViewModel> activePatchSourceChannels = [];
         bool callHistoryChanged = false;
         bool matchedAnyChannel = false;
-        ProtocolEncryptionMetadata? protocolEncryption = TryResolveProtocolEncryption(traffic);
-        bool? protocolEncrypted = protocolEncryption?.Encrypted;
+        TrafficEncryptionMetadata? protocolEncryption = TrafficEncryptionMetadataResolver.TryResolve(traffic);
+        bool? protocolEncrypted = protocolEncryption?.Secure;
         foreach (ChannelViewModel channel in ResolveTrafficCandidates(system, traffic))
         {
             bool sameActiveStream = channel.State == ChannelRuntimeState.Receiving &&
@@ -4444,52 +4444,6 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         if (callHistoryChanged)
             NotifyCallHistoryChanged();
     }
-
-    private static ProtocolEncryptionMetadata? TryResolveProtocolEncryption(FneTrafficFrame traffic)
-    {
-        if (traffic.Protocol == FneTrafficProtocol.P25 &&
-            P25DfsiFrameCodec.TryExtractEncryptionMetadata(
-                traffic,
-                out P25DfsiFrameCodec.P25EncryptionMetadata p25Metadata))
-        {
-            return new ProtocolEncryptionMetadata(
-                p25Metadata.AlgorithmId != P25Defines.P25_ALGO_UNENCRYPT,
-                p25Metadata.AlgorithmId,
-                p25Metadata.KeyId);
-        }
-
-        if (traffic.Protocol == FneTrafficProtocol.Dmr &&
-            traffic.FrameType.Equals("DATA_SYNC", StringComparison.OrdinalIgnoreCase) &&
-            traffic.Subtype.Equals("VOICE_PI_HEADER", StringComparison.OrdinalIgnoreCase) &&
-            DmrVoicePacketCodec.TryExtractEncryptionMetadata(
-                traffic.Payload,
-                out DmrVoicePacketCodec.DmrEncryptionMetadata dmrMetadata))
-        {
-            return new ProtocolEncryptionMetadata(
-                dmrMetadata.AlgorithmId != 0,
-                dmrMetadata.AlgorithmId,
-                dmrMetadata.KeyId);
-        }
-
-        if (traffic.Protocol == FneTrafficProtocol.Nxdn &&
-            NxdnVoicePacketCodec.TryExtractCallMetadata(
-                traffic.Payload,
-                out NxdnVoicePacketCodec.CallMetadata nxdnMetadata) &&
-            nxdnMetadata.MessageType == NxdnVoicePacketCodec.VoiceCallMessageType)
-        {
-            return new ProtocolEncryptionMetadata(
-                nxdnMetadata.CipherType != 0,
-                nxdnMetadata.CipherType,
-                nxdnMetadata.KeyId);
-        }
-
-        return null;
-    }
-
-    private readonly record struct ProtocolEncryptionMetadata(
-        bool Encrypted,
-        byte AlgorithmId,
-        ushort KeyId);
 
     private static bool IsDmrTerminator(FneTrafficFrame traffic)
     {
@@ -4768,6 +4722,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             return;
         }
 
+        bool suppressMicrophoneForPermitTone = TalkPermitTone;
         try
         {
             var startupTimer = Stopwatch.StartNew();
@@ -4777,6 +4732,10 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             if (userSettings.MuteRxAudioWhileTransmitting)
                 await MuteReceiveAudioAsync("RX audio muted while transmitting.");
 
+            // Bring capture, processing, and every selected call fully online,
+            // but discard captured microphone frames until the local readiness
+            // indication and its device tail have completed.
+            transmitCoordinator.SetMicrophoneAudioSuppressed(suppressMicrophoneForPermitTone);
             await Task.Run(() => transmitCoordinator.StartAsync(targets)).ConfigureAwait(false);
             ChannelViewModel[] activeChannels = transmitCoordinator.ActiveChannels.ToArray();
             await RunOnUiThreadAsync(() =>
@@ -4787,13 +4746,24 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
                 {
                     TransmitTarget target = targets.First(candidate => ReferenceEquals(candidate.Channel, channel));
                     uint streamId = transmitCoordinator.GetActiveStreamId(channel);
+                    bool secure = channel.Definition.IsEncrypted && channel.IsTransmitEncrypted;
+                    byte? algorithmId = null;
+                    ushort? keyId = null;
+                    if (secure && EncryptionPresentation.TryParseConfiguredAlgorithm(
+                            channel.Definition,
+                            out byte parsedAlgorithmId,
+                            out ushort parsedKeyId))
+                    {
+                        algorithmId = parsedAlgorithmId;
+                        keyId = parsedKeyId;
+                    }
                     AddDebugLog(
                         DateTimeOffset.Now,
                         target.System.Name,
                         DebugLogSeverity.Info,
                         $"TX call started on {channel.Name}: {ProtocolFor(channel).ToString().ToUpperInvariant()} " +
                         $"{target.System.SourceId ?? 0}→{channel.Definition.DestinationId}, stream {streamId}" +
-                        (channel.Definition.IsEncrypted ? ", encrypted." : ", clear."));
+                        (secure ? ", secure." : ", clear."));
                     AddDebugLog(
                         DateTimeOffset.Now,
                         target.System.Name,
@@ -4811,7 +4781,9 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
                         ProtocolFor(channel),
                         streamId,
                         callerText: "Console",
-                        encrypted: channel.Definition.IsEncrypted);
+                        encrypted: secure,
+                        encryptionAlgorithmId: algorithmId,
+                        encryptionKeyId: keyId);
                 }
                 NotifyCallHistoryChanged();
                 TransmitStatusText = activeChannels.Length == 1
@@ -4823,11 +4795,21 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             // have started successfully. In Apple processing mode this also
             // lets Voice Processing I/O claim and initialize the duplex route
             // before the local permit-tone playback path is opened.
-            if (TalkPermitTone)
-                await PlayTalkPermitToneAsync(reportSuccess: false).ConfigureAwait(false);
+            if (suppressMicrophoneForPermitTone)
+            {
+                try
+                {
+                    await PlayTalkPermitToneAsync(reportSuccess: false).ConfigureAwait(false);
+                }
+                finally
+                {
+                    transmitCoordinator.SetMicrophoneAudioSuppressed(false);
+                }
+            }
         }
         catch (Exception exception)
         {
+            transmitCoordinator.SetMicrophoneAudioSuppressed(false);
             Exception startupFailure = exception;
             try
             {
@@ -6884,7 +6866,7 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
         : CanResolveConfiguredKey()
             ? "Key available"
             : "Key unavailable";
-    public string EncryptionButtonText => transmitEncrypted ? "Secure" : "Clear";
+    public string EncryptionButtonText => transmitEncrypted ? "SECURE" : "CLEAR";
     public bool CanListen => runtime.Definition.Mode switch
     {
         "dmr" or "p25" or "nxdn" => !runtime.Definition.IsEncrypted || CanResolveConfiguredKey(),
@@ -6956,6 +6938,18 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
         recordingEnabled
             ? darkMode ? "#E58A8A" : "#A84343"
             : darkMode ? "#3A4555" : "#8996A3"));
+    public IBrush EncryptionSelectionBrush => new SolidColorBrush(Color.Parse(
+        transmitEncrypted
+            ? "#B45309"
+            : darkMode ? "#242938" : "#E8EDF3"));
+    public IBrush EncryptionSelectionBorderBrush => new SolidColorBrush(Color.Parse(
+        transmitEncrypted
+            ? "#F59E0B"
+            : darkMode ? "#3A4555" : "#8996A3"));
+    public IBrush EncryptionSelectionTextBrush => new SolidColorBrush(Color.Parse(
+        transmitEncrypted
+            ? "#FFFFFF"
+            : darkMode ? "#DCE3EB" : "#18212B"));
     public ICommand AudioCommand { get; private set; }
     public ICommand PttCommand { get; private set; }
     public ICommand EncryptionCommand { get; }
@@ -7001,6 +6995,7 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
         transmitEncrypted = encrypted;
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsTransmitEncrypted)));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(EncryptionButtonText)));
+        NotifyEncryptionAppearanceChanged();
         (PttCommand as AsyncRelayCommand)?.RaiseCanExecuteChanged();
         (EncryptionCommand as AsyncRelayCommand)?.RaiseCanExecuteChanged();
     }
@@ -7209,6 +7204,14 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(AlertSelectionBorderBrush)));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(RecordingSelectionBrush)));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(RecordingSelectionBorderBrush)));
+        NotifyEncryptionAppearanceChanged();
+    }
+
+    private void NotifyEncryptionAppearanceChanged()
+    {
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(EncryptionSelectionBrush)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(EncryptionSelectionBorderBrush)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(EncryptionSelectionTextBrush)));
     }
 
     public bool TryApplyTraffic(string systemName, FneTrafficFrame traffic)
@@ -7376,6 +7379,7 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
         transmitEncrypted = !transmitEncrypted;
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsTransmitEncrypted)));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(EncryptionButtonText)));
+        NotifyEncryptionAppearanceChanged();
         TransmitEncryptionChanged?.Invoke(this, transmitEncrypted);
         (PttCommand as AsyncRelayCommand)?.RaiseCanExecuteChanged();
         return Task.CompletedTask;

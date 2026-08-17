@@ -24,6 +24,7 @@ public sealed class ChannelTransmitCoordinator : IAsyncDisposable
     private SharedAudioCapture.Lease? warmCaptureLease;
     private readonly List<ActiveTransmit> active = [];
     private bool disposed;
+    private volatile bool microphoneAudioSuppressed;
     private AudioInputProcessingOptions audioInputOptions;
 
     public event EventHandler<Exception>? Faulted;
@@ -56,6 +57,16 @@ public sealed class ChannelTransmitCoordinator : IAsyncDisposable
     {
         ArgumentNullException.ThrowIfNull(options);
         audioInputOptions = options.Normalize();
+    }
+
+    // PTT startup may need the capture and call paths running before operator
+    // audio is allowed onto the channel. Captured frames are discarded while
+    // suppressed; they are never buffered and replayed later.
+    public void SetMicrophoneAudioSuppressed(bool suppressed)
+    {
+        ObjectDisposedException.ThrowIf(disposed, this);
+        microphoneAudioSuppressed = suppressed;
+        sharedCapture?.SetSamplesSuppressed(suppressed);
     }
 
     // Keeps the selected capture device active between calls. This is useful
@@ -133,7 +144,7 @@ public sealed class ChannelTransmitCoordinator : IAsyncDisposable
         try
         {
             ValidateTargets(requested);
-            await StopCoreAsync().ConfigureAwait(false);
+            await StopCoreAsync(clearMicrophoneSuppression: false).ConfigureAwait(false);
 
             IAudioBackend? createdAudioBackend = null;
             IVocoderBackend? createdVocoderBackend = null;
@@ -264,7 +275,7 @@ public sealed class ChannelTransmitCoordinator : IAsyncDisposable
         await gate.WaitAsync().ConfigureAwait(false);
         try
         {
-            await StopCoreAsync().ConfigureAwait(false);
+            await StopCoreAsync(clearMicrophoneSuppression: true).ConfigureAwait(false);
         }
         finally
         {
@@ -284,7 +295,7 @@ public sealed class ChannelTransmitCoordinator : IAsyncDisposable
                 await warmCaptureLease.DisposeAsync().ConfigureAwait(false);
                 warmCaptureLease = null;
             }
-            await StopCoreAsync().ConfigureAwait(false);
+            await StopCoreAsync(clearMicrophoneSuppression: true).ConfigureAwait(false);
             disposed = true;
         }
         finally
@@ -317,8 +328,13 @@ public sealed class ChannelTransmitCoordinator : IAsyncDisposable
         }
     }
 
-    private async Task StopCoreAsync()
+    private async Task StopCoreAsync(bool clearMicrophoneSuppression)
     {
+        if (clearMicrophoneSuppression)
+        {
+            microphoneAudioSuppressed = false;
+            sharedCapture?.SetSamplesSuppressed(false);
+        }
         ActiveTransmit[] current = active.ToArray();
         active.Clear();
         Exception? failure = null;
@@ -417,11 +433,15 @@ public sealed class ChannelTransmitCoordinator : IAsyncDisposable
         {
             capture.SamplesAvailable += (_, args) =>
             {
+                if (microphoneAudioSuppressed)
+                    return;
                 foreach (ActiveTransmit entry in active)
                     samplesObserver(entry.Channel, entry.StreamId, entry.SourceId, args.Samples);
             };
         }
-        return new SharedAudioCapture(capture);
+        var shared = new SharedAudioCapture(capture);
+        shared.SetSamplesSuppressed(microphoneAudioSuppressed);
+        return shared;
     }
 
     private static AudioDeviceInfo SelectInput(IReadOnlyList<AudioDeviceInfo> devices, string deviceId)
@@ -431,61 +451,22 @@ public sealed class ChannelTransmitCoordinator : IAsyncDisposable
             ?? throw new InvalidOperationException("No audio input device is available.");
 
     private P25TxEncryptionOptions? CreateP25EncryptionOptions(ChannelViewModel channel)
-    {
-        if (!channel.Definition.IsEncrypted || !channel.IsTransmitEncrypted)
-            return null;
-        if (p25KeyResolver is null ||
-            !P25KeyRing.TryParseAlgorithmId(channel.Definition.EncryptionAlgorithm, out byte algorithmId) ||
-            !P25KeyRing.TryParseKeyId(channel.Definition.EncryptionKeyId, out ushort keyId) ||
-            !p25KeyResolver.TryResolve(
-                channel.Definition.SystemName,
-                algorithmId,
-                keyId,
-                out ReadOnlyMemory<byte> key))
-        {
-            throw new NotSupportedException(
-                $"P25 encrypted transmit requires a configured key for {channel.Definition.EncryptionAlgorithm}/{channel.Definition.EncryptionKeyId}.");
-        }
-        return P25TxEncryptionOptions.CreateRandom(algorithmId, keyId, key);
-    }
+        => ChannelTransmitDefinitionFactory.CreateEncryptionOptions(
+            channel,
+            ChannelTransmitDefinitionFactory.Create(channel),
+            p25KeyResolver);
 
     private DmrPrivacyOptions? CreateDmrPrivacyOptions(ChannelViewModel channel)
-    {
-        if (!channel.Definition.IsEncrypted || !channel.IsTransmitEncrypted)
-            return null;
-        if (dmrKeyResolver is null ||
-            !DmrKeyRing.TryParseAlgorithmId(channel.Definition.EncryptionAlgorithm, out byte algorithmId) ||
-            !DmrKeyRing.TryParseKeyId(channel.Definition.EncryptionKeyId, out byte keyId) ||
-            !dmrKeyResolver.TryResolve(
-                channel.Definition.SystemName,
-                algorithmId,
-                keyId,
-                out ReadOnlyMemory<byte> key))
-        {
-            throw new NotSupportedException(
-                $"DMR encrypted transmit requires a configured key for {channel.Definition.EncryptionAlgorithm}/{channel.Definition.EncryptionKeyId}.");
-        }
-        return DmrPrivacyOptions.CreateRandom(algorithmId, keyId, key);
-    }
+        => ChannelTransmitDefinitionFactory.CreateDmrPrivacyOptions(
+            channel,
+            ChannelTransmitDefinitionFactory.Create(channel),
+            dmrKeyResolver);
 
     private NxdnPrivacyOptions? CreateNxdnPrivacyOptions(ChannelViewModel channel)
-    {
-        if (!channel.Definition.IsEncrypted || !channel.IsTransmitEncrypted)
-            return null;
-        if (nxdnKeyResolver is null ||
-            !NxdnKeyRing.TryParseAlgorithmId(channel.Definition.EncryptionAlgorithm, out byte algorithmId) ||
-            !NxdnKeyRing.TryParseKeyId(channel.Definition.EncryptionKeyId, out byte keyId) ||
-            !nxdnKeyResolver.TryResolve(
-                channel.Definition.SystemName,
-                algorithmId,
-                keyId,
-                out ReadOnlyMemory<byte> key))
-        {
-            throw new NotSupportedException(
-                $"NXDN encrypted transmit requires a configured key for {channel.Definition.EncryptionAlgorithm}/{channel.Definition.EncryptionKeyId}.");
-        }
-        return NxdnPrivacyOptions.CreateRandom(algorithmId, keyId, key);
-    }
+        => ChannelTransmitDefinitionFactory.CreateNxdnPrivacyOptions(
+            channel,
+            ChannelTransmitDefinitionFactory.Create(channel),
+            nxdnKeyResolver);
 
     private sealed record ActiveTransmit(
         ChannelViewModel Channel,

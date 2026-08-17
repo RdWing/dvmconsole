@@ -7,7 +7,9 @@ namespace DvmConsole.Desktop;
 // dormant CoreAudio output stream cannot delay the next duplex PTT startup.
 public sealed class TalkPermitTonePlayer : IAsyncDisposable
 {
-    private static readonly TimeSpan ToneDuration = TimeSpan.FromMilliseconds(120);
+    private static readonly TimeSpan LeadSilenceDuration = TimeSpan.FromMilliseconds(20);
+    private static readonly TimeSpan ToneDuration = TimeSpan.FromMilliseconds(80);
+    private static readonly TimeSpan TailSilenceDuration = TimeSpan.FromMilliseconds(40);
     private readonly Func<IAudioBackend> createAudioBackend;
     private readonly Func<string?> getOutputDeviceId;
     private readonly SemaphoreSlim gate = new(1, 1);
@@ -43,11 +45,18 @@ public sealed class TalkPermitTonePlayer : IAsyncDisposable
                     output,
                     PcmAudioFormat.Voice8KhzMono16Bit);
 
-                short[] samples = new PcmToneGenerator().GenerateTone(
+                var generator = new PcmToneGenerator();
+                short[] tone = generator.GenerateTone(
                     frequency,
                     duration ?? ToneDuration,
                     amplitude);
-                ApplyFade(samples, PcmAudioFormat.Voice8KhzMono16Bit.SampleRate / 100);
+                ApplyFade(tone, PcmAudioFormat.Voice8KhzMono16Bit.SampleRate / 200);
+                short[] samples =
+                [
+                    .. generator.GenerateSilence(LeadSilenceDuration),
+                    .. tone,
+                    .. generator.GenerateSilence(TailSilenceDuration)
+                ];
                 await playback.WriteAsync(samples, cancellationToken).ConfigureAwait(false);
                 LastQueuedSamples = playback.QueuedSamples;
                 LastConsumedSamples = await playback.DrainAsync(cancellationToken).ConfigureAwait(false);
