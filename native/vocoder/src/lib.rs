@@ -175,7 +175,7 @@ fn sequential_vectors_to_codeword(vectors: &[u32; 4]) -> [u8; HALF_RATE_CODEWORD
 fn unpack_dibits(codeword: &[u8]) -> [u8; DIBITS_PER_FRAME] {
     std::array::from_fn(|index| {
         let bit = index * 2;
-        ((codeword[bit / 8] >> (6 - bit % 8)) & 0x03) as u8
+        (codeword[bit / 8] >> (6 - bit % 8)) & 0x03
     })
 }
 

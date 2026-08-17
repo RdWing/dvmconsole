@@ -68,12 +68,12 @@ jobs:
           fi
           printf 'DVM_PACKAGE_VERSION=%s\n' "$package_version" >> "$GITHUB_ENV"
 
-      - name: Verify native vocoder
+      - name: Verify native digital voice
         shell: bash
         run: |
           cargo fmt --manifest-path native/vocoder/Cargo.toml -- --check
-          cargo clippy --manifest-path native/vocoder/Cargo.toml --locked --all-targets -- -D warnings
-          cargo test --manifest-path native/vocoder/Cargo.toml --locked
+          cargo clippy --manifest-path native/vocoder/Cargo.toml --locked --all-targets --target "${{ matrix.rust_target }}" -- -D warnings
+          cargo test --manifest-path native/vocoder/Cargo.toml --locked --target "${{ matrix.rust_target }}"
 
       - name: Restore rebuild solution
         shell: bash
@@ -174,27 +174,39 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           shopt -s nullglob
+          release_version="${GITHUB_REF_NAME#v}"
+          notes_file="docs/releases/${GITHUB_REF_NAME}.md"
+          if [[ ! -f "$notes_file" ]]; then
+            printf 'Release notes are required for %s: %s\n' "$GITHUB_REF_NAME" "$notes_file" >&2
+            exit 1
+          fi
+
           packages=(release-artifacts/*.zip)
           if (( ${#packages[@]} != 3 )); then
             printf 'Expected three release packages, found %s.\n' "${#packages[@]}" >&2
             exit 1
           fi
-          notes_file="docs/releases/${GITHUB_REF_NAME}.md"
-          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
-            gh release upload "$GITHUB_REF_NAME" "${packages[@]}" --clobber
-            if [[ -f "$notes_file" ]]; then
-              gh release edit "$GITHUB_REF_NAME" \
-                --title "DVM Console ${GITHUB_REF_NAME}" \
-                --notes-file "$notes_file"
+
+          expected_packages=(
+            "release-artifacts/dvmconsole-${release_version}-osx-arm64.zip"
+            "release-artifacts/dvmconsole-${release_version}-osx-x64.zip"
+            "release-artifacts/dvmconsole-${release_version}-win-x64.zip"
+          )
+          for package in "${expected_packages[@]}"; do
+            if [[ ! -f "$package" ]]; then
+              printf 'Expected release package is missing: %s\n' "$package" >&2
+              exit 1
             fi
-          elif [[ -f "$notes_file" ]]; then
-            gh release create "$GITHUB_REF_NAME" "${packages[@]}" \
+          done
+
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" "${expected_packages[@]}" --clobber
+            gh release edit "$GITHUB_REF_NAME" \
+              --title "DVM Console ${GITHUB_REF_NAME}" \
+              --notes-file "$notes_file"
+          else
+            gh release create "$GITHUB_REF_NAME" "${expected_packages[@]}" \
               --title "DVM Console ${GITHUB_REF_NAME}" \
               --notes-file "$notes_file" \
-              --verify-tag
-          else
-            gh release create "$GITHUB_REF_NAME" "${packages[@]}" \
-              --title "DVM Console ${GITHUB_REF_NAME}" \
-              --generate-notes \
               --verify-tag
           fi
