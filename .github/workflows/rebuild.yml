@@ -33,12 +33,12 @@ jobs:
 
     steps:
       - name: Check out source and fnecore
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           submodules: recursive
 
       - name: Set up .NET 10
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@v6
         with:
           dotnet-version: 10.0.x
 
@@ -97,7 +97,7 @@ jobs:
 
       - name: Upload Avalonia smoke diagnostics
         if: always() && matrix.rid == 'win-x64'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: avalonia-window-smoke-${{ matrix.rid }}
           path: ${{ runner.temp }}/avalonia-window-smoke.log
@@ -125,7 +125,7 @@ jobs:
         run: .\scripts\package-desktop.ps1 -PublishDirectory "$env:RUNNER_TEMP\dvmconsole-publish\${{ matrix.rid }}" -OutputArchive "$env:RUNNER_TEMP\dvmconsole-publish\dvmconsole-$($env:DVM_PACKAGE_VERSION)-${{ matrix.rid }}.zip"
 
       - name: Upload unsigned publish artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: dvmconsole-${{ matrix.rid }}
           path: ${{ runner.temp }}/dvmconsole-publish/${{ matrix.rid }}
@@ -133,7 +133,7 @@ jobs:
           retention-days: 7
 
       - name: Upload unsigned package artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: dvmconsole-package-${{ matrix.rid }}
           path: ${{ runner.temp }}/dvmconsole-publish/dvmconsole-${{ env.DVM_PACKAGE_VERSION }}-${{ matrix.rid }}.zip
@@ -142,7 +142,7 @@ jobs:
 
       - name: Upload test results
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: test-results-${{ matrix.rid }}
           path: ${{ github.workspace }}/**/*.trx
@@ -159,10 +159,10 @@ jobs:
 
     steps:
       - name: Check out release notes
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Download verified release packages
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: dvmconsole-package-*
           path: release-artifacts
