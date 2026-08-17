@@ -202,14 +202,14 @@ public sealed class ChannelReceiveAudioCoordinatorTests
     }
 
     [Fact]
-    public async Task AppliesConfiguredChannelGainToSharedPlayback()
+    public async Task AppliesMaximumConfiguredChannelGainToSharedPlayback()
     {
         var backend = new FakeAudioBackend();
         var vocoder = new FakeVocoderBackend();
         await using var coordinator = new ChannelReceiveAudioCoordinator(
             () => backend,
             () => vocoder,
-            getChannelGain: _ => 0.5);
+            getChannelGain: _ => 4);
         var channel = new ChannelViewModel(new ChannelConfiguration
         {
             Name = "Quiet Dispatch",
@@ -223,7 +223,7 @@ public sealed class ChannelReceiveAudioCoordinatorTests
         await coordinator.ProcessAsync(channel, CreateTraffic(100, 0));
         await WaitForAsync(() => backend.Playback.Frames.Count > 0);
 
-        Assert.Equal((short)10_000, backend.Playback.Frames[0][0]);
+        Assert.Equal(short.MaxValue, backend.Playback.Frames[0][0]);
     }
 
     [Fact]
