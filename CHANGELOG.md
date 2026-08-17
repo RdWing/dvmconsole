@@ -6,23 +6,44 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-08-17
+
 ### Added
 
+- Add required built-in digital-voice support for P25 and DMR without a separately installed codec library.
+- Add NXDN 4800-baud clear and encrypted voice receive and transmit, including EHR, DES, and AES-256 privacy.
+- Add DMR ARC4, DES-OFB, and AES-256 privacy for receive and transmit using protocol-scoped local keys.
 - Add an option to keep the transmit microphone warm, with a main-toolbar microphone toggle for changing the setting without opening Console Settings.
 - Add high-quality AirPods input and output on supported macOS and AirPods combinations without requiring a separate helper application.
 - Add an adjustable AGC target level while preserving the existing default.
 - Add clearer guidance and gating for Apple Voice Processing routes that require the input and output to use the system-default pair or the same duplex device.
+- Add detailed FNE and codec call diagnostics at Debug severity, with call start and end summaries at Info severity.
+- Add 0.1-step controls for microphone gain, equalizer levels, and the AGC target.
 
 ### Changed
 
+- Make digital-voice support a required build, test, and packaging component on every supported platform.
+- Package Windows as one self-contained `DvmConsole.exe`, including its required native components.
+- Derive the `DVMC_AV_<version>` FNE software identifier from the application version.
+- Default the Debug Logs viewer to Info severity.
+- Acquire high-quality Bluetooth audio only when the operator explicitly enables it.
+- Play the talk-permit tone only after every selected transmit and audio path is ready.
 - Apply AGC only to transmit microphone capture.
 - Expand receive volume controls to expose the full supported range.
 - Reorganize Console Settings tabs and streamline the Settings, Commands, View, and Channels menus.
 - Show Console Settings scrollbars only while the window is actively scrolling.
 - Clarify the built-in alert-tone tooltips with each tone's frequency and duration.
+- Center text and content vertically and horizontally in buttons and editable fields.
 
 ### Fixed
 
+- Preserve half-rate forward-error-correction status through clear and encrypted DMR and NXDN receive paths, and conceal uncorrectable frames instead of decoding damaged voice data.
+- Keep DMR privacy state synchronized across voice privacy headers, sequence gaps, and lost frames.
+- Keep P25 encrypted receive fail-closed after loss and recover encryption state from subsequent signaling.
+- Avoid retaining the local permit-tone output path so Apple Voice Processing can acquire its duplex route without the previous startup delay.
+- Keep FNE connection-pill borders visible while hovering or pressing.
+- Keep the Tones toolbar control clear of the Activity pane.
+- Give the warm-microphone toolbar control a distinct orange enabled state and the normal button background when disabled.
 - Restore microphone cleanup when the warm-microphone option is disabled or no longer needed.
 
 ## [0.1.1] - 2026-08-16
@@ -55,6 +76,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Add patches, multi-select groups, call history, recordings, web streams, clocks, layouts, themes, startup behavior, and in-application operator documentation.
 - Add support for local and KMM-provided P25 encryption keys while preserving compatibility with existing variable-length AES key material.
 
-[Unreleased]: https://github.com/RdWing/dvmconsole/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/RdWing/dvmconsole/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/RdWing/dvmconsole/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/RdWing/dvmconsole/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/RdWing/dvmconsole/releases/tag/v0.1.0
