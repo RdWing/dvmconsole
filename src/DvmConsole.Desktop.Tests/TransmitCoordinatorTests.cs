@@ -34,6 +34,33 @@ public sealed class TransmitCoordinatorTests
     }
 
     [Fact]
+    public async Task SuppressedMicrophoneFramesAreDroppedUntilOperatorAudioMayTransmit()
+    {
+        var channel = Channel("A", 100);
+        var endpoint = new FakeEndpoint("Test", [channel]);
+        var audio = new FakeAudioBackend();
+        var observed = new List<short[]>();
+        await using var coordinator = new ChannelTransmitCoordinator(
+            samplesObserver: (_, _, _, samples) => observed.Add(samples.ToArray()),
+            createAudioBackend: () => audio);
+
+        coordinator.SetMicrophoneAudioSuppressed(true);
+        await coordinator.StartAsync(channel, endpoint);
+        int startupFrameCount = endpoint.Sent.Count;
+        audio.Capture.Emit(Enumerable.Repeat((short)1000, 160).ToArray());
+
+        Assert.Equal(startupFrameCount, endpoint.Sent.Count);
+        Assert.Empty(observed);
+
+        coordinator.SetMicrophoneAudioSuppressed(false);
+        audio.Capture.Emit(Enumerable.Repeat((short)2000, 160).ToArray());
+
+        Assert.Equal(startupFrameCount + 1, endpoint.Sent.Count);
+        Assert.Single(observed);
+        Assert.All(observed[0], sample => Assert.Equal((short)2000, sample));
+    }
+
+    [Fact]
     public async Task PreflightRejectionDoesNotOpenAudio()
     {
         var receiveOnly = new ChannelViewModel(new ChannelConfiguration { Name = "RX", System = "Test", Tgid = "100", Mode = "analog", RxOnly = true });

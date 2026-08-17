@@ -4722,6 +4722,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             return;
         }
 
+        bool suppressMicrophoneForPermitTone = TalkPermitTone;
         try
         {
             var startupTimer = Stopwatch.StartNew();
@@ -4731,6 +4732,10 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             if (userSettings.MuteRxAudioWhileTransmitting)
                 await MuteReceiveAudioAsync("RX audio muted while transmitting.");
 
+            // Bring capture, processing, and every selected call fully online,
+            // but discard captured microphone frames until the local readiness
+            // indication and its device tail have completed.
+            transmitCoordinator.SetMicrophoneAudioSuppressed(suppressMicrophoneForPermitTone);
             await Task.Run(() => transmitCoordinator.StartAsync(targets)).ConfigureAwait(false);
             ChannelViewModel[] activeChannels = transmitCoordinator.ActiveChannels.ToArray();
             await RunOnUiThreadAsync(() =>
@@ -4790,11 +4795,21 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             // have started successfully. In Apple processing mode this also
             // lets Voice Processing I/O claim and initialize the duplex route
             // before the local permit-tone playback path is opened.
-            if (TalkPermitTone)
-                await PlayTalkPermitToneAsync(reportSuccess: false).ConfigureAwait(false);
+            if (suppressMicrophoneForPermitTone)
+            {
+                try
+                {
+                    await PlayTalkPermitToneAsync(reportSuccess: false).ConfigureAwait(false);
+                }
+                finally
+                {
+                    transmitCoordinator.SetMicrophoneAudioSuppressed(false);
+                }
+            }
         }
         catch (Exception exception)
         {
+            transmitCoordinator.SetMicrophoneAudioSuppressed(false);
             Exception startupFailure = exception;
             try
             {

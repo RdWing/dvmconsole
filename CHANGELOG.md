@@ -6,6 +6,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Changed
+
+- Store talkgroup audio recordings as Ogg Opus and include the source radio ID in each recording filename.
+- Show call security as Secure or Clear with compact algorithm labels, and use a standard play icon for playable recordings.
+- Shorten the talk-permit tone while retaining startup and trailing silence for Bluetooth output reliability.
+- Send generated alert, QCII, and DTMF audio through stable tone frames across supported digital voice modes.
+
+### Fixed
+
+- Make CLEAR transmissions unencrypted and SECURE transmissions use the channel's configured algorithm and key, with an orange all-caps SECURE state.
+- Prevent the local talk-permit tone from entering transmitted microphone audio by discarding capture frames until the cue and its output tail have drained.
+- Preserve the displayed color of channel-card controls while hovering or pressing, including SECURE and selected TX, PAGE, ALERT, and TAR states.
+- Keep the AGC target value visible beside its spinner controls.
+
 ## [0.2.0] - 2026-08-17
 
 ### Added

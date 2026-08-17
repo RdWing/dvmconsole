@@ -24,6 +24,7 @@ public sealed class ChannelTransmitCoordinator : IAsyncDisposable
     private SharedAudioCapture.Lease? warmCaptureLease;
     private readonly List<ActiveTransmit> active = [];
     private bool disposed;
+    private volatile bool microphoneAudioSuppressed;
     private AudioInputProcessingOptions audioInputOptions;
 
     public event EventHandler<Exception>? Faulted;
@@ -56,6 +57,16 @@ public sealed class ChannelTransmitCoordinator : IAsyncDisposable
     {
         ArgumentNullException.ThrowIfNull(options);
         audioInputOptions = options.Normalize();
+    }
+
+    // PTT startup may need the capture and call paths running before operator
+    // audio is allowed onto the channel. Captured frames are discarded while
+    // suppressed; they are never buffered and replayed later.
+    public void SetMicrophoneAudioSuppressed(bool suppressed)
+    {
+        ObjectDisposedException.ThrowIf(disposed, this);
+        microphoneAudioSuppressed = suppressed;
+        sharedCapture?.SetSamplesSuppressed(suppressed);
     }
 
     // Keeps the selected capture device active between calls. This is useful
@@ -133,7 +144,7 @@ public sealed class ChannelTransmitCoordinator : IAsyncDisposable
         try
         {
             ValidateTargets(requested);
-            await StopCoreAsync().ConfigureAwait(false);
+            await StopCoreAsync(clearMicrophoneSuppression: false).ConfigureAwait(false);
 
             IAudioBackend? createdAudioBackend = null;
             IVocoderBackend? createdVocoderBackend = null;
@@ -264,7 +275,7 @@ public sealed class ChannelTransmitCoordinator : IAsyncDisposable
         await gate.WaitAsync().ConfigureAwait(false);
         try
         {
-            await StopCoreAsync().ConfigureAwait(false);
+            await StopCoreAsync(clearMicrophoneSuppression: true).ConfigureAwait(false);
         }
         finally
         {
@@ -284,7 +295,7 @@ public sealed class ChannelTransmitCoordinator : IAsyncDisposable
                 await warmCaptureLease.DisposeAsync().ConfigureAwait(false);
                 warmCaptureLease = null;
             }
-            await StopCoreAsync().ConfigureAwait(false);
+            await StopCoreAsync(clearMicrophoneSuppression: true).ConfigureAwait(false);
             disposed = true;
         }
         finally
@@ -317,8 +328,13 @@ public sealed class ChannelTransmitCoordinator : IAsyncDisposable
         }
     }
 
-    private async Task StopCoreAsync()
+    private async Task StopCoreAsync(bool clearMicrophoneSuppression)
     {
+        if (clearMicrophoneSuppression)
+        {
+            microphoneAudioSuppressed = false;
+            sharedCapture?.SetSamplesSuppressed(false);
+        }
         ActiveTransmit[] current = active.ToArray();
         active.Clear();
         Exception? failure = null;
@@ -417,11 +433,15 @@ public sealed class ChannelTransmitCoordinator : IAsyncDisposable
         {
             capture.SamplesAvailable += (_, args) =>
             {
+                if (microphoneAudioSuppressed)
+                    return;
                 foreach (ActiveTransmit entry in active)
                     samplesObserver(entry.Channel, entry.StreamId, entry.SourceId, args.Samples);
             };
         }
-        return new SharedAudioCapture(capture);
+        var shared = new SharedAudioCapture(capture);
+        shared.SetSamplesSuppressed(microphoneAudioSuppressed);
+        return shared;
     }
 
     private static AudioDeviceInfo SelectInput(IReadOnlyList<AudioDeviceInfo> devices, string deviceId)

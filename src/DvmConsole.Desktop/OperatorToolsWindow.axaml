@@ -112,7 +112,7 @@
                 <StackPanel Orientation="Horizontal" Spacing="10">
                   <CheckBox Content="Automatic gain control" IsChecked="{Binding AudioInputAgcEnabled, Mode=TwoWay}" IsEnabled="{Binding IsDvmConsoleProcessingSelected}" />
                   <TextBlock Text="AGC target (dBFS)" VerticalAlignment="Center" IsEnabled="{Binding IsAgcTargetEnabled}" />
-                  <NumericUpDown Width="116" Minimum="-40" Maximum="-12" Increment="0.1" FormatString="0.0" ClipValueToMinMax="True" Text="{Binding AudioInputAgcTargetDbfsText, Mode=TwoWay}" IsEnabled="{Binding IsAgcTargetEnabled}" />
+                  <NumericUpDown Width="136" Minimum="-40" Maximum="-12" Increment="0.1" FormatString="0.0" ClipValueToMinMax="True" Text="{Binding AudioInputAgcTargetDbfsText, Mode=TwoWay}" IsEnabled="{Binding IsAgcTargetEnabled}" />
                   <CheckBox Content="Keep transmit microphone warm" IsChecked="{Binding KeepTransmitMicrophoneWarm, Mode=TwoWay}" />
                   <Button Content="Apply" Command="{Binding ApplyAudioInputSettingsCommand}" />
                 </StackPanel>
