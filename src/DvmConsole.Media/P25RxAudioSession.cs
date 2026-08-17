@@ -116,10 +116,17 @@ public sealed class P25RxAudioSession : IAsyncDisposable
 
     private void PrepareForLdu1(FneTrafficFrame traffic)
     {
-        cryptoState = null;
-        if (!P25DfsiFrameCodec.TryExtractEncryptionMetadata(traffic, out P25DfsiFrameCodec.P25EncryptionMetadata metadata) ||
-            metadata.AlgorithmId == P25Defines.P25_ALGO_UNENCRYPT)
+        // dvmhost emits HDU encryption metadata only at call start. Later
+        // LDU1 DATA_UNIT frames rely on the next MI carried by the preceding
+        // LDU2, so retain that prepared state when no fresh HDU is present.
+        if (!P25DfsiFrameCodec.TryExtractEncryptionMetadata(
+                traffic,
+                out P25DfsiFrameCodec.P25EncryptionMetadata metadata))
+            return;
+
+        if (metadata.AlgorithmId == P25Defines.P25_ALGO_UNENCRYPT)
         {
+            cryptoState = null;
             return;
         }
 

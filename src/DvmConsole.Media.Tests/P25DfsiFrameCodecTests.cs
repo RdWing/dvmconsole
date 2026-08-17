@@ -307,7 +307,7 @@ public sealed class P25DfsiFrameCodecTests
     }
 
     [Fact]
-    public async Task P25SessionMaintainsEncryptedDecodeAcrossMultipleLduPairs()
+    public async Task P25SessionMaintainsEncryptedDecodeWhenLaterLdu1OmitsHduMetadata()
     {
         const ushort keyId = 0x50;
         const byte algorithmId = P25Defines.P25_ALGO_AES;
@@ -352,12 +352,23 @@ public sealed class P25DfsiFrameCodecTests
             byte[] encryptedLdu2 = ProcessLdu(encryptor, clearLdu2, P25DUID.LDU2);
 
             byte[] ldu1Payload = P25DfsiFrameCodec.CreateLdu1Payload(99, 100, encryptedLdu1);
-            ldu1Payload[P25DfsiFrameCodec.RecordLengthOffset] = (byte)P25DfsiFrameCodec.ClearLduPayloadLength;
-            ldu1Payload[180] = P25Defines.P25_FT_HDU_VALID;
-            ldu1Payload[181] = algorithmId;
-            ldu1Payload[182] = (byte)(keyId >> 8);
-            ldu1Payload[183] = (byte)keyId;
-            messageIndicator.CopyTo(ldu1Payload, 184);
+            if (pair == 0)
+            {
+                ldu1Payload[180] = P25Defines.P25_FT_HDU_VALID;
+                ldu1Payload[181] = algorithmId;
+                ldu1Payload[182] = (byte)(keyId >> 8);
+                ldu1Payload[183] = (byte)keyId;
+                messageIndicator.CopyTo(ldu1Payload, 184);
+            }
+            else
+            {
+                // Real dvmhost calls carry HDU metadata only on the first
+                // LDU1. Later DATA_UNIT frames depend on the ESS MI from the
+                // preceding LDU2.
+                ldu1Payload[14] &= 0xF7;
+                ldu1Payload[180] = P25Defines.P25_FT_DATA_UNIT;
+                ldu1Payload.AsSpan(181, 12).Clear();
+            }
 
             byte[] ldu2Payload = P25DfsiFrameCodec.CreateLdu2Payload(99, 100, encryptedLdu2);
             nextMessageIndicator.AsSpan(0, 3).CopyTo(ldu2Payload.AsSpan(61, 3));
