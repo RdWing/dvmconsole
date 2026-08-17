@@ -103,6 +103,7 @@ public sealed class UserSettingsStoreTests
                 AudioOutputDeviceId = " speaker-1 ",
                 AudioProcessingMode = UserSettings.AppleVoiceProcessingMode,
                 AudioInputAgcEnabled = true,
+                KeepTransmitMicrophoneWarm = true,
                 AudioInputGain = 1.5,
                 AudioInputEqLowGainDb = -3,
                 AudioInputEqMidGainDb = 2,
@@ -223,6 +224,7 @@ public sealed class UserSettingsStoreTests
             Assert.Equal("speaker-1", loaded.AudioOutputDeviceId);
             Assert.Equal(UserSettings.AppleVoiceProcessingMode, loaded.AudioProcessingMode);
             Assert.True(loaded.AudioInputAgcEnabled);
+            Assert.True(loaded.KeepTransmitMicrophoneWarm);
             Assert.Equal(1.5, loaded.AudioInputGain);
             Assert.Equal(-3, loaded.AudioInputEqLowGainDb);
             Assert.Equal(2, loaded.AudioInputEqMidGainDb);

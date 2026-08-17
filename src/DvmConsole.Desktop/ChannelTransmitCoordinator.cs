@@ -19,6 +19,7 @@ public sealed class ChannelTransmitCoordinator : IAsyncDisposable
     private IAudioBackend? audioBackend;
     private IVocoderBackend? vocoderBackend;
     private SharedAudioCapture? sharedCapture;
+    private SharedAudioCapture.Lease? warmCaptureLease;
     private readonly List<ActiveTransmit> active = [];
     private bool disposed;
     private AudioInputProcessingOptions audioInputOptions;
@@ -48,6 +49,46 @@ public sealed class ChannelTransmitCoordinator : IAsyncDisposable
     {
         ArgumentNullException.ThrowIfNull(options);
         audioInputOptions = options.Normalize();
+    }
+
+    // Keeps the selected capture device active between calls. This is useful
+    // for Bluetooth headsets, whose microphone profile can take time to wake.
+    public async Task SetKeepMicrophoneWarmAsync(bool enabled)
+    {
+        ObjectDisposedException.ThrowIf(disposed, this);
+        await gate.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            if (!enabled)
+            {
+                if (warmCaptureLease is not null)
+                {
+                    await warmCaptureLease.DisposeAsync().ConfigureAwait(false);
+                    warmCaptureLease = null;
+                }
+                if (active.Count == 0)
+                    await StopInfrastructureCoreAsync().ConfigureAwait(false);
+                return;
+            }
+
+            if (warmCaptureLease is not null || active.Count != 0)
+                return;
+
+            audioBackend ??= createAudioBackend();
+            sharedCapture ??= CreateSharedCapture(audioBackend);
+            warmCaptureLease = sharedCapture.CreateLease();
+            await warmCaptureLease.StartAsync().ConfigureAwait(false);
+        }
+        catch
+        {
+            if (active.Count == 0 && warmCaptureLease is null)
+                await StopInfrastructureCoreAsync().ConfigureAwait(false);
+            throw;
+        }
+        finally
+        {
+            gate.Release();
+        }
     }
 
     public uint GetActiveStreamId(ChannelViewModel channel)
@@ -80,30 +121,18 @@ public sealed class ChannelTransmitCoordinator : IAsyncDisposable
             IAudioBackend? createdAudioBackend = null;
             IVocoderBackend? createdVocoderBackend = null;
             SharedAudioCapture? createdSharedCapture = null;
+            bool reusedWarmCapture = sharedCapture is not null;
             var created = new List<ActiveTransmit>();
             try
             {
-                createdAudioBackend = createAudioBackend();
-                AudioDeviceInfo input = SelectInput(
-                    createdAudioBackend.EnumerateDevices(AudioDirection.Input),
-                    audioInputOptions.DeviceId);
-                var capture = new ProcessedAudioCapture(
-                    createdAudioBackend.OpenCapture(input, PcmAudioFormat.Voice8KhzMono16Bit),
-                    audioInputOptions);
-                if (samplesObserver is not null)
+                if (sharedCapture is null)
                 {
-                    capture.SamplesAvailable += (_, args) =>
-                    {
-                        foreach (TransmitTarget target in requested)
-                        {
-                            ActiveTransmit? entry = created.FirstOrDefault(
-                                candidate => ReferenceEquals(candidate.Channel, target.Channel));
-                            if (entry is not null)
-                                samplesObserver(target.Channel, entry.StreamId, entry.SourceId, args.Samples);
-                        }
-                    };
+                    IAudioBackend backend = audioBackend ??= createAudioBackend();
+                    createdAudioBackend = backend;
+                    createdSharedCapture = CreateSharedCapture(backend);
                 }
-                createdSharedCapture = new SharedAudioCapture(capture);
+                else
+                    createdSharedCapture = sharedCapture;
 
                 if (requested.Any(target => target.Channel.Definition.Mode != "analog"))
                     createdVocoderBackend = createVocoderBackend();
@@ -114,7 +143,7 @@ public sealed class ChannelTransmitCoordinator : IAsyncDisposable
                     bool isAnalog = target.Channel.Definition.Mode == "analog";
                     uint sourceId = target.System.SourceId!.Value;
                     uint streamId = target.System.CreateStreamId();
-                    SharedAudioCapture.Lease lease = createdSharedCapture.CreateLease();
+                    SharedAudioCapture.Lease lease = createdSharedCapture!.CreateLease();
                     Action<ReadOnlyMemory<byte>, ushort, uint> send = (payload, sequence, stream) => target.System.SendTraffic(
                         isDmr
                             ? FneTrafficProtocol.Dmr
@@ -165,18 +194,19 @@ public sealed class ChannelTransmitCoordinator : IAsyncDisposable
                 foreach (ActiveTransmit entry in created)
                     await entry.Session.StartAsync().ConfigureAwait(false);
 
-                audioBackend = createdAudioBackend;
+                audioBackend ??= createdAudioBackend;
                 vocoderBackend = createdVocoderBackend;
-                sharedCapture = createdSharedCapture;
+                sharedCapture ??= createdSharedCapture;
                 active.AddRange(created);
             }
             catch
             {
                 await DisposeEntriesAsync(created).ConfigureAwait(false);
-                if (createdSharedCapture is not null)
+                if (!reusedWarmCapture && createdSharedCapture is not null)
                     await createdSharedCapture.DisposeAsync().ConfigureAwait(false);
                 createdVocoderBackend?.Dispose();
-                createdAudioBackend?.Dispose();
+                if (!reusedWarmCapture)
+                    createdAudioBackend?.Dispose();
                 throw;
             }
         }
@@ -207,6 +237,11 @@ public sealed class ChannelTransmitCoordinator : IAsyncDisposable
         await gate.WaitAsync().ConfigureAwait(false);
         try
         {
+            if (warmCaptureLease is not null)
+            {
+                await warmCaptureLease.DisposeAsync().ConfigureAwait(false);
+                warmCaptureLease = null;
+            }
             await StopCoreAsync().ConfigureAwait(false);
             disposed = true;
         }
@@ -249,7 +284,7 @@ public sealed class ChannelTransmitCoordinator : IAsyncDisposable
             failure = exception;
         }
 
-        if (sharedCapture is not null)
+        if (sharedCapture is not null && warmCaptureLease is null)
         {
             try
             {
@@ -263,8 +298,11 @@ public sealed class ChannelTransmitCoordinator : IAsyncDisposable
         }
         vocoderBackend?.Dispose();
         vocoderBackend = null;
-        audioBackend?.Dispose();
-        audioBackend = null;
+        if (warmCaptureLease is null)
+        {
+            audioBackend?.Dispose();
+            audioBackend = null;
+        }
         if (failure is not null)
             throw failure;
     }
@@ -289,6 +327,25 @@ public sealed class ChannelTransmitCoordinator : IAsyncDisposable
     }
 
     private void HandleSessionFaulted(object? sender, Exception exception) => Faulted?.Invoke(this, exception);
+
+    private SharedAudioCapture CreateSharedCapture(IAudioBackend backend)
+    {
+        AudioDeviceInfo input = SelectInput(
+            backend.EnumerateDevices(AudioDirection.Input),
+            audioInputOptions.DeviceId);
+        var capture = new ProcessedAudioCapture(
+            backend.OpenCapture(input, PcmAudioFormat.Voice8KhzMono16Bit),
+            audioInputOptions);
+        if (samplesObserver is not null)
+        {
+            capture.SamplesAvailable += (_, args) =>
+            {
+                foreach (ActiveTransmit entry in active)
+                    samplesObserver(entry.Channel, entry.StreamId, entry.SourceId, args.Samples);
+            };
+        }
+        return new SharedAudioCapture(capture);
+    }
 
     private static AudioDeviceInfo SelectInput(IReadOnlyList<AudioDeviceInfo> devices, string deviceId)
         => devices.FirstOrDefault(device => device.Id.Equals(deviceId, StringComparison.OrdinalIgnoreCase))

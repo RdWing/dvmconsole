@@ -1436,6 +1436,8 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             },
             HandleTransmitSamples,
             CreateTransmitAudioBackend);
+        if (userSettings.KeepTransmitMicrophoneWarm)
+            _ = WarmTransmitMicrophoneAsync();
         toneTransmitCoordinator = new ToneTransmitCoordinator(p25KeyResolver);
         talkPermitTonePlayer = new TalkPermitTonePlayer(
             () => AudioBackendFactory.CreateDefault(Environment.GetEnvironmentVariable("DVM_AUDIO_LIBRARY")),
@@ -2065,6 +2067,20 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     {
         get => audioInputAgcEnabled;
         set => SetField(ref audioInputAgcEnabled, value);
+    }
+
+    public bool KeepTransmitMicrophoneWarm
+    {
+        get => userSettings.KeepTransmitMicrophoneWarm;
+        set
+        {
+            if (userSettings.KeepTransmitMicrophoneWarm == value)
+                return;
+            userSettings.KeepTransmitMicrophoneWarm = value;
+            PersistUserSettings();
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(KeepTransmitMicrophoneWarm)));
+            _ = WarmTransmitMicrophoneAsync();
+        }
     }
 
     public IReadOnlyList<string> AudioProcessingModeOptions
@@ -3941,6 +3957,20 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             userSettings.AudioInputDeviceId,
             userSettings.AudioOutputDeviceId);
 
+    private async Task WarmTransmitMicrophoneAsync()
+    {
+        try
+        {
+            await transmitCoordinator.SetKeepMicrophoneWarmAsync(userSettings.KeepTransmitMicrophoneWarm).ConfigureAwait(false);
+            if (userSettings.KeepTransmitMicrophoneWarm)
+                AudioStatusText = "Transmit microphone is warm. This is generally useful only for Bluetooth headsets to reduce PTT latency and may lower output audio quality.";
+        }
+        catch (Exception exception)
+        {
+            AudioStatusText = $"Unable to keep the transmit microphone warm: {exception.Message}";
+        }
+    }
+
     private AudioProcessingMode GetConfiguredAudioProcessingMode()
         => OperatingSystem.IsMacOS() &&
            userSettings.AudioProcessingMode == UserSettings.AppleVoiceProcessingMode
@@ -4862,6 +4892,11 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             MidGainDb = midGainDb,
             HighGainDb = highGainDb
         });
+        if (userSettings.KeepTransmitMicrophoneWarm)
+        {
+            await transmitCoordinator.SetKeepMicrophoneWarmAsync(false).ConfigureAwait(false);
+            await transmitCoordinator.SetKeepMicrophoneWarmAsync(true).ConfigureAwait(false);
+        }
         PersistUserSettings();
         AudioInputDeviceIdText = deviceId;
         AudioOutputDeviceIdText = outputDeviceId;

@@ -38,6 +38,7 @@ public sealed class UserSettings
     public string AudioOutputDeviceId { get; set; } = "default";
     public string AudioProcessingMode { get; set; } = DvmConsoleAudioProcessingMode;
     public bool AudioInputAgcEnabled { get; set; }
+    public bool KeepTransmitMicrophoneWarm { get; set; }
     public double AudioInputGain { get; set; } = 1.0;
     public double AudioInputEqLowGainDb { get; set; }
     public double AudioInputEqMidGainDb { get; set; }
@@ -557,6 +558,7 @@ public sealed class UserSettingsStore
             target.AudioOutputDeviceId = source.AudioOutputDeviceId;
             target.AudioProcessingMode = source.AudioProcessingMode;
             target.AudioInputAgcEnabled = source.AudioInputAgcEnabled;
+            target.KeepTransmitMicrophoneWarm = source.KeepTransmitMicrophoneWarm;
             target.AudioInputGain = source.AudioInputGain;
             target.AudioInputEqLowGainDb = source.AudioInputEqLowGainDb;
             target.AudioInputEqMidGainDb = source.AudioInputEqMidGainDb;
