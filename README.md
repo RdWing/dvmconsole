@@ -47,9 +47,8 @@ dotnet build src/DvmConsole.Rebuild.sln
 2. Use `src/DvmConsole.Rebuild.sln` for the Avalonia application. The root
 `dvmconsole.sln` is the original Windows-only WPF solution.
 
-The build automatically compiles the required native vocoder adapter. macOS
-also requires the included CoreAudio shim, which the publishing script builds
-automatically. See [Desktop building and publishing](docs/PUBLISHING.md).
+Native components are built automatically. See [Desktop building and
+publishing](docs/PUBLISHING.md).
 
 ## End User Packages
 
@@ -88,8 +87,7 @@ starting it again and include that file with the problem report.
 
 1. Download the `dvmconsole-<version>-win-x64.zip` release file and choose
 **Extract All** in File Explorer.
-2. Start `DvmConsole.exe`. The managed application, runtime, and required
-native vocoder are bundled into this single executable.
+2. Start the self-contained `DvmConsole.exe`.
 3. If Microsoft Defender SmartScreen warns
 about the unsigned build, use **More info**, verify the publisher/source, and
 choose **Run anyway** only if the archive came from the project release.
@@ -101,8 +99,8 @@ include that file with the problem report.
 
 Maintainers creating these packages should follow [Desktop building and
 publishing](docs/PUBLISHING.md). The `Avalonia rebuild` GitHub Actions workflow
-builds the pinned native dependency for each target and includes it in the
-unsigned Apple Silicon macOS, Intel macOS, and Windows test packages.
+builds and verifies the unsigned Apple Silicon macOS, Intel macOS, and Windows
+packages.
 
 ## Documentation
 

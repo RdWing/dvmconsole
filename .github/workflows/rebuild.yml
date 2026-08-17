@@ -56,6 +56,13 @@ jobs:
             printf 'VersionPrefix was not found in src/Directory.Build.props.\n' >&2
             exit 1
           fi
+          plist_short_version="$(sed -n '/<key>CFBundleShortVersionString<\/key>/{n;s:.*<string>\(.*\)</string>.*:\1:p;q;}' packaging/macos/Info.plist)"
+          plist_bundle_version="$(sed -n '/<key>CFBundleVersion<\/key>/{n;s:.*<string>\(.*\)</string>.*:\1:p;q;}' packaging/macos/Info.plist)"
+          if [[ "$plist_short_version" != "$source_version" || "$plist_bundle_version" != "$source_version" ]]; then
+            printf 'Info.plist versions (%s, %s) do not match source version %s.\n' \
+              "$plist_short_version" "$plist_bundle_version" "$source_version" >&2
+            exit 1
+          fi
           if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
             package_version="${GITHUB_REF_NAME#v}"
             if [[ "$package_version" != "$source_version" ]]; then

@@ -10,7 +10,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
-- Add required built-in digital-voice support for P25 and DMR without a separately installed codec library.
 - Add NXDN 4800-baud clear and encrypted voice receive and transmit, including EHR, DES, and AES-256 privacy.
 - Add DMR ARC4, DES-OFB, and AES-256 privacy for receive and transmit using protocol-scoped local keys.
 - Add an option to keep the transmit microphone warm, with a main-toolbar microphone toggle for changing the setting without opening Console Settings.
@@ -22,8 +21,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Changed
 
-- Make digital-voice support a required build, test, and packaging component on every supported platform.
-- Package Windows as one self-contained `DvmConsole.exe`, including its required native components.
+- Package Windows as one self-contained `DvmConsole.exe` with native components embedded.
 - Derive the `DVMC_AV_<version>` FNE software identifier from the application version.
 - Default the Debug Logs viewer to Info severity.
 - Acquire high-quality Bluetooth audio only when the operator explicitly enables it.
@@ -37,6 +35,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+- Prevent transmit startup and failure cleanup from terminating the desktop when background audio or FNE initialization completes outside the UI thread, while retaining the original startup failure in Debug Logs.
 - Preserve half-rate forward-error-correction status through clear and encrypted DMR and NXDN receive paths, and conceal uncorrectable frames instead of decoding damaged voice data.
 - Keep DMR privacy state synchronized across voice privacy headers, sequence gaps, and lost frames.
 - Keep P25 encrypted receive fail-closed after loss and recover encryption state from subsequent signaling.

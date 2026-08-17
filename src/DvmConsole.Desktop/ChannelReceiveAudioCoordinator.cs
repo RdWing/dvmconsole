@@ -9,7 +9,7 @@ namespace DvmConsole.Desktop;
 // share one output stream through a fixed-rate PCM mixer, and the coordinator
 // serializes traffic processing so decoded PCM frames remain ordered per
 // channel before mixing.
-// Audio devices and the native vocoder are created only when Listen is used.
+// Audio devices and the vocoder are created only when Listen is used.
 public sealed class ChannelReceiveAudioCoordinator : IAsyncDisposable
 {
     private readonly SemaphoreSlim gate = new(1, 1);

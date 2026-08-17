@@ -50,14 +50,6 @@ dotnet build src/DvmConsole.Rebuild.sln
 
 ---
 
-# Native Vocoder
-
-The required native vocoder adapter is built automatically from the locked
-Rust dependency when the solution is built or published. A separate native
-library path is not supported or required.
-
----
-
 # Test
 
 Run the complete solution tests before packaging:
@@ -112,8 +104,7 @@ From PowerShell:
   -OutputArchive C:\Temp\dvmconsole-win-x64.zip
 ```
 
-Extract the ZIP before launching `DvmConsole.exe`. The managed application,
-.NET runtime, and required native vocoder are bundled into the single EXE.
+Extract the ZIP before launching the self-contained `DvmConsole.exe`.
 
 ---
 

@@ -71,7 +71,7 @@ packaged application has not been granted Accessibility or Input Monitoring.
 The first implementation targets the console voice format: 8 kHz, mono,
 16-bit PCM. The native stream uses the device's nominal CoreAudio rate and the
 managed adapter converts to or from the requested voice rate, so common 48 kHz
-devices can feed the 8 kHz vocoder boundary. macOS may request microphone
+devices can feed the 8 kHz transmit path. macOS may request microphone
 permission when capture is first used.
 
 ## High-quality AirPods audio

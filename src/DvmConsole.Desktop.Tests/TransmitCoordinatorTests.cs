@@ -61,12 +61,35 @@ public sealed class TransmitCoordinatorTests
             createAudioBackend: () => audio,
             createVocoderBackend: () => vocoder);
 
-        await coordinator.StartAsync(channel, endpoint);
+        await Task.Run(() => coordinator.StartAsync(channel, endpoint));
         audio.Capture.Emit(new short[160]);
 
         Assert.True(vocoder.CreateSessionCalls > 0);
         Assert.Contains(endpoint.Sent, sent => sent.Protocol == expectedProtocol);
         await coordinator.StopAsync();
+        Assert.True(vocoder.IsDisposed);
+    }
+
+    [Theory]
+    [InlineData("dmr")]
+    [InlineData("p25")]
+    [InlineData("nxdn")]
+    public async Task DigitalModeStartupFailureRollsBackAfterBackgroundStart(string mode)
+    {
+        var channel = Channel("Digital", 100, mode);
+        var endpoint = new FakeEndpoint("Test", [channel]);
+        var audio = new FakeAudioBackend();
+        var vocoder = new FakeVocoderBackend(failCreateSession: true);
+        await using var coordinator = new ChannelTransmitCoordinator(
+            createAudioBackend: () => audio,
+            createVocoderBackend: () => vocoder);
+
+        await Assert.ThrowsAsync<IOException>(() =>
+            Task.Run(() => coordinator.StartAsync(channel, endpoint)));
+
+        Assert.Empty(coordinator.ActiveChannels);
+        Assert.True(audio.Capture.IsDisposed);
+        Assert.True(audio.IsDisposed);
         Assert.True(vocoder.IsDisposed);
     }
 
@@ -214,13 +237,19 @@ public sealed class TransmitCoordinatorTests
         public void Emit(short[] samples) => SamplesAvailable?.Invoke(this, new PcmSamplesEventArgs(samples));
     }
 
-    private sealed class FakeVocoderBackend : IVocoderBackend
+    private sealed class FakeVocoderBackend(bool failCreateSession = false) : IVocoderBackend
     {
         public int CreateSessionCalls { get; private set; }
         public bool IsDisposed { get; private set; }
         public string Name => "test";
         public bool IsAvailable => !IsDisposed;
-        public IVocoderSession CreateSession(VocoderMode mode) { CreateSessionCalls++; return new FakeVocoderSession(); }
+        public IVocoderSession CreateSession(VocoderMode mode)
+        {
+            CreateSessionCalls++;
+            if (failCreateSession)
+                throw new IOException("test vocoder startup failure");
+            return new FakeVocoderSession();
+        }
         public void Dispose() => IsDisposed = true;
     }
 

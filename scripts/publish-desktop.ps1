@@ -105,7 +105,7 @@ foreach ($LegacyAlert in @("alert1.wav", "alert2.wav", "alert3.wav")) {
 Assert-X64PeFile (Join-Path $OutputDirectory "DvmConsole.exe")
 foreach ($SidecarName in @("libvocoder.dll", "dvmconsole_vocoder.dll")) {
     if (Test-Path -LiteralPath (Join-Path $OutputDirectory $SidecarName) -PathType Leaf) {
-        throw "The required vocoder must be embedded in DvmConsole.exe, not shipped as $SidecarName."
+        throw "The vocoder must be embedded in DvmConsole.exe, not shipped as $SidecarName."
     }
 }
 

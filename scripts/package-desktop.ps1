@@ -69,7 +69,7 @@ Assert-X64PeFile (Join-Path $PublishDirectory "DvmConsole.exe")
 
 foreach ($SidecarName in @("libvocoder.dll", "dvmconsole_vocoder.dll")) {
     if (Test-Path -LiteralPath (Join-Path $PublishDirectory $SidecarName) -PathType Leaf) {
-        throw "The required vocoder must be embedded in DvmConsole.exe, not shipped as $SidecarName."
+        throw "The vocoder must be embedded in DvmConsole.exe, not shipped as $SidecarName."
     }
 }
 

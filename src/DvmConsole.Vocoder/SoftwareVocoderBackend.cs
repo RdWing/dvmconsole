@@ -254,7 +254,7 @@ public sealed class SoftwareVocoderBackend : IVocoderBackend
             if (result < 0)
                 throw Failure(operation);
             if (result != expected)
-                throw new InvalidOperationException($"The native vocoder returned {result} bytes for {operation}; expected {expected}.");
+                throw new InvalidOperationException($"The vocoder returned {result} bytes for {operation}; expected {expected}.");
         }
 
         private InvalidOperationException Failure(string operation)

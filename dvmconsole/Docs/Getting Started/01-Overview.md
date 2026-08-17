@@ -112,8 +112,7 @@ If the application closes without an error dialog, inspect `LastCrash.log` befor
 # Project Notes
 
 - DVMConsole connects to DVM FNE peers; it does not directly control base or mobile radios.
-- DMR and P25 voice require the native DVM vocoder included in a complete release package.
-- NXDN operator audio is not enabled until a compatible NXDN vocoder backend is supplied.
+- Operator audio supports DMR, P25 Phase 1, and NXDN 4800. NXDN 9600/EFR and P25 Phase 2 transport are not implemented.
 - This software is intended for amateur and educational use. Any other use is at the user's discretion and risk.
 
 ---

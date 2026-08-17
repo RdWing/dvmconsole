@@ -24,10 +24,7 @@ dotnet restore src/DvmConsole.Rebuild.sln
 dotnet build src/DvmConsole.Rebuild.sln
 ```
 
-The build automatically compiles the locked native vocoder adapter. It is a
-required component: there is no environment-variable override, allow-missing
-mode, or UI-only package path. Native tests run as part of the normal solution
-test suite.
+Native components and their tests are part of the normal solution build.
 
 ## Versioning
 
@@ -79,10 +76,9 @@ Run the PowerShell publisher and package the verified output:
   -OutputArchive C:\Temp\dvmconsole-win-x64.zip
 ```
 
-The delivery application is `DvmConsole.exe`. It is a self-contained
-single-file executable, including the required native vocoder; a vocoder DLL
-beside the EXE is a packaging failure. Windows audio does not include the
-macOS audio shim.
+The delivery application is the self-contained, single-file `DvmConsole.exe`.
+Unexpected native DLL sidecars are a packaging failure. Windows audio does not
+include the macOS audio shim.
 
 ## Release acceptance
 
@@ -114,8 +110,8 @@ remains optional for additional media formats through `DVM_FFMPEG`.
 The `Avalonia rebuild` workflow installs the pinned Rust toolchain, runs
 formatting, lint, native tests, and the full .NET test matrix on all three
 targets, then publishes and verifies unsigned packages. It checks native
-architecture, the macOS deployment floor, Windows single-file layout, notices,
-and exclusion of private test material.
+architecture, the macOS deployment floor, Windows single-file layout, and
+exclusion of private test material.
 
 A tag matching the central source version runs the same matrix and publishes
 the three packages after all jobs pass. Do not push a release tag until release

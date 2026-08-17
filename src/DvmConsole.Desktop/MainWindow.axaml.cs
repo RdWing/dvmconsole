@@ -4585,14 +4585,20 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     {
         try
         {
-            await Task.Run(() => audioCoordinator.StartAsync(channel));
-            channel.SetAudioEnabled(true);
-            AudioStatusText = $"Listening to {channel.Name} ({channel.ModeText}); {audioCoordinator.ActiveChannels.Count} channel(s) active.";
+            await Task.Run(() => audioCoordinator.StartAsync(channel)).ConfigureAwait(false);
+            await RunOnUiThreadAsync(() =>
+            {
+                channel.SetAudioEnabled(true);
+                AudioStatusText = $"Listening to {channel.Name} ({channel.ModeText}); {audioCoordinator.ActiveChannels.Count} channel(s) active.";
+            }).ConfigureAwait(false);
         }
         catch (Exception exception)
         {
-            channel.SetAudioEnabled(false);
-            AudioStatusText = $"RX audio unavailable: {exception.Message}";
+            await RunOnUiThreadAsync(() =>
+            {
+                channel.SetAudioEnabled(false);
+                AudioStatusText = $"RX audio unavailable: {exception.Message}";
+            }).ConfigureAwait(false);
         }
     }
 
@@ -4600,16 +4606,19 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     {
         try
         {
-            await Task.Run(() => audioCoordinator.StopAsync(channel));
+            await Task.Run(() => audioCoordinator.StopAsync(channel)).ConfigureAwait(false);
         }
         finally
         {
-            callRecordings.StopChannel(channel);
-            RefreshRecordings();
-            channel.SetAudioEnabled(false);
-            AudioStatusText = audioCoordinator.ActiveChannels.Count == 0
-                ? "RX audio disabled."
-                : $"Listening to {audioCoordinator.ActiveChannels.Count} channel(s).";
+            await RunOnUiThreadAsync(() =>
+            {
+                callRecordings.StopChannel(channel);
+                RefreshRecordings();
+                channel.SetAudioEnabled(false);
+                AudioStatusText = audioCoordinator.ActiveChannels.Count == 0
+                    ? "RX audio disabled."
+                    : $"Listening to {audioCoordinator.ActiveChannels.Count} channel(s).";
+            }).ConfigureAwait(false);
         }
     }
 
@@ -4768,43 +4777,47 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             if (userSettings.MuteRxAudioWhileTransmitting)
                 await MuteReceiveAudioAsync("RX audio muted while transmitting.");
 
-            await Task.Run(() => transmitCoordinator.StartAsync(targets));
-            foreach (ChannelViewModel channel in transmitCoordinator.ActiveChannels)
-                channel.SetTransmitEnabled(true, transmitCoordinator.GetActiveStreamId(channel));
-            foreach (ChannelViewModel channel in transmitCoordinator.ActiveChannels)
+            await Task.Run(() => transmitCoordinator.StartAsync(targets)).ConfigureAwait(false);
+            ChannelViewModel[] activeChannels = transmitCoordinator.ActiveChannels.ToArray();
+            await RunOnUiThreadAsync(() =>
             {
-                TransmitTarget target = targets.First(candidate => ReferenceEquals(candidate.Channel, channel));
-                uint streamId = transmitCoordinator.GetActiveStreamId(channel);
-                AddDebugLog(
-                    DateTimeOffset.Now,
-                    target.System.Name,
-                    DebugLogSeverity.Info,
-                    $"TX call started on {channel.Name}: {ProtocolFor(channel).ToString().ToUpperInvariant()} " +
-                    $"{target.System.SourceId ?? 0}→{channel.Definition.DestinationId}, stream {streamId}" +
-                    (channel.Definition.IsEncrypted ? ", encrypted." : ", clear."));
-                AddDebugLog(
-                    DateTimeOffset.Now,
-                    target.System.Name,
-                    DebugLogSeverity.Debug,
-                    $"Vocoder TX initialized for {channel.Name}: mode {channel.Definition.Mode}, " +
-                    $"stream {streamId}, audio processing {userSettings.AudioProcessingMode}, " +
-                    $"warm microphone {(userSettings.KeepTransmitMicrophoneWarm ? "enabled" : "disabled")}, " +
-                    $"all TX paths ready in {startupTimer.Elapsed.TotalMilliseconds:0} ms.");
-                callHistory.AddConsoleTransmission(
-                    DateTimeOffset.Now,
-                    target.System.Name,
-                    channel.Name,
-                    target.System.SourceId ?? 0,
-                    channel.Definition.DestinationId,
-                    ProtocolFor(channel),
-                    streamId,
-                    callerText: "Console",
-                    encrypted: channel.Definition.IsEncrypted);
-            }
-            NotifyCallHistoryChanged();
-            TransmitStatusText = transmitCoordinator.ActiveChannels.Count == 1
-                ? $"Transmitting on {transmitCoordinator.ActiveChannel!.Name}."
-                : $"Transmitting on {transmitCoordinator.ActiveChannels.Count} selected channels.";
+                foreach (ChannelViewModel channel in activeChannels)
+                    channel.SetTransmitEnabled(true, transmitCoordinator.GetActiveStreamId(channel));
+                foreach (ChannelViewModel channel in activeChannels)
+                {
+                    TransmitTarget target = targets.First(candidate => ReferenceEquals(candidate.Channel, channel));
+                    uint streamId = transmitCoordinator.GetActiveStreamId(channel);
+                    AddDebugLog(
+                        DateTimeOffset.Now,
+                        target.System.Name,
+                        DebugLogSeverity.Info,
+                        $"TX call started on {channel.Name}: {ProtocolFor(channel).ToString().ToUpperInvariant()} " +
+                        $"{target.System.SourceId ?? 0}→{channel.Definition.DestinationId}, stream {streamId}" +
+                        (channel.Definition.IsEncrypted ? ", encrypted." : ", clear."));
+                    AddDebugLog(
+                        DateTimeOffset.Now,
+                        target.System.Name,
+                        DebugLogSeverity.Debug,
+                        $"Vocoder TX initialized for {channel.Name}: mode {channel.Definition.Mode}, " +
+                        $"stream {streamId}, audio processing {userSettings.AudioProcessingMode}, " +
+                        $"warm microphone {(userSettings.KeepTransmitMicrophoneWarm ? "enabled" : "disabled")}, " +
+                        $"all TX paths ready in {startupTimer.Elapsed.TotalMilliseconds:0} ms.");
+                    callHistory.AddConsoleTransmission(
+                        DateTimeOffset.Now,
+                        target.System.Name,
+                        channel.Name,
+                        target.System.SourceId ?? 0,
+                        channel.Definition.DestinationId,
+                        ProtocolFor(channel),
+                        streamId,
+                        callerText: "Console",
+                        encrypted: channel.Definition.IsEncrypted);
+                }
+                NotifyCallHistoryChanged();
+                TransmitStatusText = activeChannels.Length == 1
+                    ? $"Transmitting on {activeChannels[0].Name}."
+                    : $"Transmitting on {activeChannels.Length} selected channels.";
+            }).ConfigureAwait(false);
             // A permit tone is an operational readiness indication. Play it
             // only after every selected call and the shared microphone path
             // have started successfully. In Apple processing mode this also
@@ -4815,14 +4828,39 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         }
         catch (Exception exception)
         {
-            foreach (ChannelViewModel channel in channels)
+            Exception startupFailure = exception;
+            try
             {
-                channel.SetTransmitEnabled(false);
-                callRecordings.StopTransmit(channel);
+                await Task.Run(() => transmitCoordinator.StopAsync()).ConfigureAwait(false);
             }
-            RefreshRecordings();
-            await RestoreSuspendedAudioAsync();
-            TransmitStatusText = $"PTT unavailable: {exception.Message}";
+            catch (Exception cleanupException)
+            {
+                AddDebugLog(DateTimeOffset.Now, "TX", DebugLogSeverity.Warning,
+                    $"Transmit startup cleanup also failed: {cleanupException.Message}");
+            }
+
+            try
+            {
+                await RestoreSuspendedAudioAsync().ConfigureAwait(false);
+            }
+            catch (Exception cleanupException)
+            {
+                AddDebugLog(DateTimeOffset.Now, "TX", DebugLogSeverity.Warning,
+                    $"Receive-audio restoration after transmit startup failure also failed: {cleanupException.Message}");
+            }
+
+            await RunOnUiThreadAsync(() =>
+            {
+                foreach (ChannelViewModel channel in channels)
+                {
+                    channel.SetTransmitEnabled(false);
+                    callRecordings.StopTransmit(channel);
+                }
+                RefreshRecordings();
+                AddDebugLog(DateTimeOffset.Now, "TX", DebugLogSeverity.Error,
+                    $"Transmit startup failed: {startupFailure}");
+                TransmitStatusText = $"PTT unavailable: {startupFailure.Message}";
+            }).ConfigureAwait(false);
         }
     }
 
@@ -4838,7 +4876,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         Exception? stopFailure = null;
         try
         {
-            await Task.Run(() => transmitCoordinator.StopAsync());
+            await Task.Run(() => transmitCoordinator.StopAsync()).ConfigureAwait(false);
         }
         catch (Exception exception)
         {
@@ -4849,43 +4887,46 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         }
         finally
         {
-            foreach (ChannelViewModel channel in channels)
-            {
-                channel.SetTransmitEnabled(false);
-                callRecordings.StopTransmit(channel);
-            }
-            foreach ((ChannelViewModel channel, uint streamId) in activeStreams)
-            {
-                SystemViewModel? system = Systems.FirstOrDefault(candidate => candidate.Channels.Contains(channel));
-                if (system is not null)
-                {
-                    AddDebugLog(
-                        DateTimeOffset.Now,
-                        system.Name,
-                        DebugLogSeverity.Info,
-                        $"TX call ended on {channel.Name}: {ProtocolFor(channel).ToString().ToUpperInvariant()} " +
-                        $"stream {streamId}.");
-                    callHistory.CompleteConsoleTransmission(
-                        system.Name,
-                        ProtocolFor(channel),
-                        streamId,
-                        DateTimeOffset.Now);
-                }
-            }
-            if (activeStreams.Length > 0)
-                NotifyCallHistoryChanged();
-            RefreshRecordings();
             try
             {
-                await RestoreSuspendedAudioAsync();
+                await RestoreSuspendedAudioAsync().ConfigureAwait(false);
             }
             catch (Exception exception)
             {
                 stopFailure ??= exception;
             }
-            TransmitStatusText = stopFailure is null
-                ? "PTT idle."
-                : $"Transmission stopped safely after an error: {stopFailure.Message}";
+            await RunOnUiThreadAsync(() =>
+            {
+                foreach (ChannelViewModel channel in channels)
+                {
+                    channel.SetTransmitEnabled(false);
+                    callRecordings.StopTransmit(channel);
+                }
+                foreach ((ChannelViewModel channel, uint streamId) in activeStreams)
+                {
+                    SystemViewModel? system = Systems.FirstOrDefault(candidate => candidate.Channels.Contains(channel));
+                    if (system is not null)
+                    {
+                        AddDebugLog(
+                            DateTimeOffset.Now,
+                            system.Name,
+                            DebugLogSeverity.Info,
+                            $"TX call ended on {channel.Name}: {ProtocolFor(channel).ToString().ToUpperInvariant()} " +
+                            $"stream {streamId}.");
+                        callHistory.CompleteConsoleTransmission(
+                            system.Name,
+                            ProtocolFor(channel),
+                            streamId,
+                            DateTimeOffset.Now);
+                    }
+                }
+                if (activeStreams.Length > 0)
+                    NotifyCallHistoryChanged();
+                RefreshRecordings();
+                TransmitStatusText = stopFailure is null
+                    ? "PTT idle."
+                    : $"Transmission stopped safely after an error: {stopFailure.Message}";
+            }).ConfigureAwait(false);
         }
     }
 
@@ -4903,12 +4944,14 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
                                     talkPermitTonePlayer.LastConsumedSamples is int consumed
                     ? $" queued {queued} / consumed {consumed} samples"
                     : string.Empty;
-                AudioStatusText = $"Talk permit tone sent to {output.Name}.{drainText}";
+                await RunOnUiThreadAsync(() =>
+                    AudioStatusText = $"Talk permit tone sent to {output.Name}.{drainText}").ConfigureAwait(false);
             }
         }
         catch (Exception exception)
         {
-            AudioStatusText = $"Talk permit tone unavailable: {exception.Message}";
+            await RunOnUiThreadAsync(() =>
+                AudioStatusText = $"Talk permit tone unavailable: {exception.Message}").ConfigureAwait(false);
         }
     }
 
@@ -4926,7 +4969,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             if (keptActive && audioCoordinator.IsActive(channel))
             {
                 await audioCoordinator.SetGainAsync(channel, GetChannelVolume(channel)).ConfigureAwait(false);
-                channel.SetAudioSuspended(false);
+                await RunOnUiThreadAsync(() => channel.SetAudioSuspended(false)).ConfigureAwait(false);
             }
             else
                 await StartAudioAsync(channel).ConfigureAwait(false);
@@ -4941,12 +4984,15 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
 
         suspendedAudioChannels = receivingChannels;
         suspendedAudioKeptActive = false;
-        foreach (ChannelViewModel receivingChannel in receivingChannels)
-            receivingChannel.SetAudioSuspended(true);
+        await RunOnUiThreadAsync(() =>
+        {
+            foreach (ChannelViewModel receivingChannel in receivingChannels)
+                receivingChannel.SetAudioSuspended(true);
+        }).ConfigureAwait(false);
 
         await audioCoordinator.StopAsync().ConfigureAwait(false);
 
-        AudioStatusText = statusText;
+        await RunOnUiThreadAsync(() => AudioStatusText = statusText).ConfigureAwait(false);
     }
 
     private bool CanSendGeneratedAudio()
@@ -7396,12 +7442,29 @@ internal sealed class AsyncRelayCommand : ICommand
 {
     private readonly Func<Task> execute;
     private readonly Func<bool> canExecute;
+    private readonly Func<bool> checkUiAccess;
+    private readonly Action<Action> postToUi;
     private bool running;
 
     public AsyncRelayCommand(Func<Task> execute, Func<bool> canExecute)
+        : this(
+            execute,
+            canExecute,
+            Dispatcher.UIThread.CheckAccess,
+            action => Dispatcher.UIThread.Post(action))
     {
-        this.execute = execute;
-        this.canExecute = canExecute;
+    }
+
+    internal AsyncRelayCommand(
+        Func<Task> execute,
+        Func<bool> canExecute,
+        Func<bool> checkUiAccess,
+        Action<Action> postToUi)
+    {
+        this.execute = execute ?? throw new ArgumentNullException(nameof(execute));
+        this.canExecute = canExecute ?? throw new ArgumentNullException(nameof(canExecute));
+        this.checkUiAccess = checkUiAccess ?? throw new ArgumentNullException(nameof(checkUiAccess));
+        this.postToUi = postToUi ?? throw new ArgumentNullException(nameof(postToUi));
     }
 
     public event EventHandler? CanExecuteChanged;
@@ -7424,7 +7487,18 @@ internal sealed class AsyncRelayCommand : ICommand
         }
     }
 
-    public void RaiseCanExecuteChanged() => CanExecuteChanged?.Invoke(this, EventArgs.Empty);
+    public void RaiseCanExecuteChanged()
+    {
+        if (checkUiAccess())
+        {
+            RaiseCanExecuteChangedCore();
+            return;
+        }
+
+        postToUi(RaiseCanExecuteChangedCore);
+    }
+
+    private void RaiseCanExecuteChangedCore() => CanExecuteChanged?.Invoke(this, EventArgs.Empty);
 }
 
 internal sealed class RelayCommand : ICommand
