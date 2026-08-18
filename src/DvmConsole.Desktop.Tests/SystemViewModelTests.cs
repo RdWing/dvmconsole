@@ -561,6 +561,7 @@ public sealed class SystemViewModelTests
             Assert.NotNull(viewModel.CallHistory[0].Duration);
             Assert.Equal((uint)77, viewModel.CallHistory[1].StreamId);
             Assert.Equal("Alpha Dispatch", viewModel.CallHistory[1].ChannelName);
+            Assert.False(viewModel.CallHistory[1].IsActive);
             Assert.Equal("Info", viewModel.DebugLogSeverityFilter);
             Assert.All(viewModel.FilteredDebugLogs, entry => Assert.Equal(DvmConsole.Core.Diagnostics.DebugLogSeverity.Info, entry.Severity));
             Assert.Contains(viewModel.FilteredDebugLogs, entry => entry.Message.Contains("RX call started", StringComparison.Ordinal));
@@ -577,6 +578,53 @@ public sealed class SystemViewModelTests
             Assert.Single(viewModel.FilteredCallHistory);
             viewModel.CallHistoryFilterText = "not present";
             Assert.Empty(viewModel.FilteredCallHistory);
+        }
+        finally
+        {
+            CleanupSettingsPath(settingsPath);
+        }
+    }
+
+    [Fact]
+    public async Task TimeoutGraceResumesOneHistoryCallAndExplicitEndRejectsLateVoice()
+    {
+        string path = Path.Combine(AppContext.BaseDirectory, "TestData", "multiple-systems.yml");
+        string settingsPath = CreateSettingsPath();
+        DateTimeOffset now = DateTimeOffset.UnixEpoch;
+
+        try
+        {
+            await using MainWindowViewModel viewModel = MainWindowViewModel.Load(
+                path,
+                new UserSettingsStore(settingsPath));
+            SystemViewModel system = viewModel.Systems[0];
+            ChannelViewModel channel = system.Channels.Single(candidate => candidate.Name == "Alpha Dispatch");
+
+            viewModel.ProcessTraffic(system, CreateDmrTraffic(77, "VOICE", "VOICE"), receivedAt: now);
+            viewModel.ExpireStaleReceiveStates(now.AddSeconds(2.5));
+
+            Assert.Equal(ChannelRuntimeState.Receiving, channel.State);
+            Assert.True(Assert.Single(viewModel.CallHistory).IsActive);
+
+            viewModel.ProcessTraffic(
+                system,
+                CreateDmrTraffic(77, "VOICE", "VOICE", packetSequence: 2),
+                receivedAt: now.AddSeconds(3));
+
+            Assert.True(Assert.Single(viewModel.CallHistory).IsActive);
+
+            viewModel.ProcessTraffic(
+                system,
+                CreateDmrTraffic(77, "TERMINATOR", "TERMINATOR_WITH_LC", packetSequence: 3),
+                receivedAt: now.AddSeconds(4));
+            viewModel.ProcessTraffic(
+                system,
+                CreateDmrTraffic(77, "VOICE", "VOICE", packetSequence: 4),
+                receivedAt: now.AddSeconds(4.5));
+
+            Assert.Single(viewModel.CallHistory);
+            Assert.False(viewModel.CallHistory[0].IsActive);
+            Assert.Equal(ChannelRuntimeState.Idle, channel.State);
         }
         finally
         {
@@ -1481,6 +1529,24 @@ public sealed class SystemViewModelTests
             CleanupSettingsPath(settingsPath);
         }
     }
+
+    private static FneTrafficFrame CreateDmrTraffic(
+        uint streamId,
+        string frameType,
+        string subtype,
+        ushort packetSequence = 1)
+        => new(
+            FneTrafficProtocol.Dmr,
+            peerId: 1,
+            sourceId: 42,
+            destinationId: 101,
+            slot: 0,
+            callType: "GROUP",
+            frameType,
+            subtype,
+            packetSequence,
+            streamId,
+            new byte[DmrVoicePacketCodec.PacketBytes]);
 
     private static string CreateSettingsPath()
         => Path.Combine(Path.GetTempPath(), "dvmconsole-settings-tests", $"{Guid.NewGuid():N}", "UserSettings.json");

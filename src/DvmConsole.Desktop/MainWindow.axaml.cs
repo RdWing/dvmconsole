@@ -4387,10 +4387,12 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     internal void ProcessTraffic(
         SystemViewModel system,
         FneTrafficFrame traffic,
-        bool publishTrafficDiagnostics = true)
+        bool publishTrafficDiagnostics = true,
+        DateTimeOffset? receivedAt = null)
     {
         ArgumentNullException.ThrowIfNull(system);
         ArgumentNullException.ThrowIfNull(traffic);
+        DateTimeOffset now = receivedAt ?? DateTimeOffset.Now;
         system.RecordTraffic(traffic, publishTrafficDiagnostics);
         List<ChannelViewModel> activeAudioChannels = [];
         List<ChannelViewModel> activePatchSourceChannels = [];
@@ -4400,35 +4402,36 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         bool? protocolEncrypted = protocolEncryption?.Secure;
         foreach (ChannelViewModel channel in ResolveTrafficCandidates(system, traffic))
         {
-            bool sameActiveStream = channel.State == ChannelRuntimeState.Receiving &&
-                channel.StreamId == traffic.StreamId;
-            bool matched = channel.TryApplyTraffic(system.Name, traffic);
-            if (!matched)
+            ChannelTrafficApplyResult applied = channel.ApplyTraffic(system.Name, traffic, now);
+            if (!applied.Matched)
                 continue;
             matchedAnyChannel = true;
+            if (applied.Transition == ReceiveStreamTransition.IgnoredLate)
+                continue;
 
             patchForwarding.ObserveTraffic(channel, traffic);
             if (patchSourceDecode.IsActive(channel))
                 activePatchSourceChannels.Add(channel);
 
-            if (sameActiveStream && channel.State != ChannelRuntimeState.Receiving)
+            if (applied.EndedStreamId is uint endedStreamId)
             {
                 AddDebugLog(
-                    DateTimeOffset.Now,
+                    now,
                     system.Name,
                     DebugLogSeverity.Info,
                     $"RX call ended on {channel.Name}: {traffic.Protocol.ToString().ToUpperInvariant()} " +
-                    $"{traffic.SourceId}→{traffic.DestinationId}, stream {traffic.StreamId}.");
+                    $"{traffic.SourceId}→{traffic.DestinationId}, stream {endedStreamId}.");
                 callHistoryChanged = callHistory.Complete(
                     system.Name,
                     traffic.Protocol,
-                    traffic.StreamId,
-                    DateTimeOffset.Now) || callHistoryChanged;
+                    endedStreamId,
+                    now) || callHistoryChanged;
             }
-            else if (!sameActiveStream)
+
+            if (applied.Transition is ReceiveStreamTransition.Started or ReceiveStreamTransition.Superseded)
             {
                 AddDebugLog(
-                    DateTimeOffset.Now,
+                    now,
                     system.Name,
                     DebugLogSeverity.Info,
                     $"RX call started on {channel.Name}: {traffic.Protocol.ToString().ToUpperInvariant()} " +
@@ -4436,7 +4439,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
                     (protocolEncrypted ?? channel.Definition.IsEncrypted ? ", encrypted" : ", clear") +
                     $"{DescribeFneSignalQuality(traffic)}.");
                 callHistory.Add(new CallHistoryEntry(
-                    DateTimeOffset.Now,
+                    now,
                     system.Name,
                     channel.Name,
                     traffic.SourceId,
@@ -6007,29 +6010,30 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         ExpireStaleReceiveStates(DateTimeOffset.UtcNow);
     }
 
-    private void ExpireStaleReceiveStates(DateTimeOffset now)
+    internal void ExpireStaleReceiveStates(DateTimeOffset now)
     {
         bool recordingStateChanged = false;
         bool callHistoryChanged = false;
         foreach (ChannelViewModel channel in Systems.SelectMany(system => system.Channels))
         {
-            uint? activeStreamId = channel.StreamId;
-            if (!channel.TryExpireReceiveState(now, TimeSpan.FromSeconds(2)))
-                continue;
-            if (activeStreamId is uint streamId)
+            ChannelTrafficApplyResult applied = channel.AdvanceReceiveLifecycle(now);
+            if (applied.Transition != ReceiveStreamTransition.GraceExpired ||
+                applied.EndedStreamId is not uint streamId)
             {
-                callHistoryChanged = callHistory.Complete(
-                    channel.Definition.SystemName,
-                    channel.Definition.Mode switch
-                    {
-                        "dmr" => FneTrafficProtocol.Dmr,
-                        "p25" => FneTrafficProtocol.P25,
-                        "nxdn" => FneTrafficProtocol.Nxdn,
-                        _ => FneTrafficProtocol.Analog
-                    },
-                    streamId,
-                    now) || callHistoryChanged;
+                continue;
             }
+
+            callHistoryChanged = callHistory.Complete(
+                channel.Definition.SystemName,
+                channel.Definition.Mode switch
+                {
+                    "dmr" => FneTrafficProtocol.Dmr,
+                    "p25" => FneTrafficProtocol.P25,
+                    "nxdn" => FneTrafficProtocol.Nxdn,
+                    _ => FneTrafficProtocol.Analog
+                },
+                streamId,
+                now) || callHistoryChanged;
             callRecordings.StopChannel(channel);
             recordingStateChanged = true;
         }
@@ -6748,6 +6752,15 @@ public sealed record AudioDeviceOptionViewModel(string Id, string Name, bool IsD
     public string DisplayName => IsDefault ? $"{Name} (default)" : Name;
 }
 
+internal readonly record struct ChannelTrafficApplyResult(
+    bool Matched,
+    ReceiveStreamTransition Transition,
+    uint? ActiveStreamId = null,
+    uint? EndedStreamId = null)
+{
+    public static ChannelTrafficApplyResult NoMatch => new(false, ReceiveStreamTransition.None);
+}
+
 public sealed class ChannelViewModel : INotifyPropertyChanged
 {
     private readonly ChannelConfiguration configuration;
@@ -6756,6 +6769,10 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
     private readonly IDmrKeyResolver? dmrKeyResolver;
     private readonly INxdnKeyResolver? nxdnKeyResolver;
     private readonly IReadOnlyList<RadioAlias> aliases;
+    private readonly ReceiveStreamLifecycle receiveLifecycle = new(
+        TimeSpan.FromSeconds(2),
+        TimeSpan.FromSeconds(2),
+        TimeSpan.FromSeconds(5));
     private Func<ChannelViewModel, Task>? startAudio;
     private Func<ChannelViewModel, Task>? stopAudio;
     private Func<ChannelViewModel, Task>? startTransmit;
@@ -7304,6 +7321,12 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
     }
 
     public bool TryApplyTraffic(string systemName, FneTrafficFrame traffic)
+        => ApplyTraffic(systemName, traffic, DateTimeOffset.UtcNow).Matched;
+
+    internal ChannelTrafficApplyResult ApplyTraffic(
+        string systemName,
+        FneTrafficFrame traffic,
+        DateTimeOffset now)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(systemName);
         ArgumentNullException.ThrowIfNull(traffic);
@@ -7312,54 +7335,74 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
             !MatchesProtocol(traffic.Protocol) ||
             traffic.StreamId == 0)
         {
-            return false;
+            return ChannelTrafficApplyResult.NoMatch;
         }
 
         if (runtime.State == ChannelRuntimeState.Transmitting)
-            return false;
+            return ChannelTrafficApplyResult.NoMatch;
 
         if (IsTerminator(traffic))
         {
-            if (runtime.StreamId != traffic.StreamId)
-                return false;
+            ReceiveStreamDecision decision = receiveLifecycle.ObserveTerminator(traffic.StreamId, now);
+            if (decision.Transition != ReceiveStreamTransition.Ended)
+                return decision.Transition == ReceiveStreamTransition.IgnoredLate
+                    ? ToApplyResult(decision)
+                    : ChannelTrafficApplyResult.NoMatch;
 
-            runtime.MarkIdle();
-            return true;
+            runtime.MarkIdle(now);
+            return ToApplyResult(decision);
         }
 
         if (IsDmrPrivacyHeader(traffic))
         {
-            return runtime.State == ChannelRuntimeState.Receiving &&
-                runtime.StreamId == traffic.StreamId &&
-                runtime.SourceId == traffic.SourceId &&
-                runtime.Definition.DestinationId == traffic.DestinationId &&
-                runtime.Definition.Slot == traffic.Slot;
+            if (runtime.State != ChannelRuntimeState.Receiving ||
+                runtime.StreamId != traffic.StreamId ||
+                runtime.SourceId != traffic.SourceId ||
+                runtime.Definition.DestinationId != traffic.DestinationId ||
+                runtime.Definition.Slot != traffic.Slot)
+            {
+                return ChannelTrafficApplyResult.NoMatch;
+            }
+
+            ReceiveStreamDecision decision = receiveLifecycle.ObserveVoice(traffic.StreamId, now);
+            if (decision.Transition is ReceiveStreamTransition.Continued or ReceiveStreamTransition.Resumed)
+                runtime.MarkReceiving(traffic.SourceId, traffic.StreamId, now);
+            return ToApplyResult(decision);
         }
 
         if (traffic.DestinationId != runtime.Definition.DestinationId)
-            return false;
+            return ChannelTrafficApplyResult.NoMatch;
 
         if (!MatchesVoiceTraffic(traffic) || traffic.SourceId == 0)
-            return false;
+            return ChannelTrafficApplyResult.NoMatch;
 
-        runtime.MarkReceiving(traffic.SourceId, traffic.StreamId);
-        return true;
+        ReceiveStreamDecision voiceDecision = receiveLifecycle.ObserveVoice(traffic.StreamId, now);
+        if (voiceDecision.Transition != ReceiveStreamTransition.IgnoredLate)
+            runtime.MarkReceiving(traffic.SourceId, traffic.StreamId, now);
+        return ToApplyResult(voiceDecision);
     }
 
     public bool TryExpireReceiveState(DateTimeOffset now, TimeSpan timeout)
     {
         if (timeout <= TimeSpan.Zero)
             throw new ArgumentOutOfRangeException(nameof(timeout));
-        if (runtime.State != ChannelRuntimeState.Receiving ||
-            runtime.LastActivity is not DateTimeOffset lastActivity ||
-            now - lastActivity <= timeout)
-        {
-            return false;
-        }
-
-        runtime.MarkIdle(now);
-        return true;
+        return AdvanceReceiveLifecycle(now).Transition == ReceiveStreamTransition.GraceExpired;
     }
+
+    internal ChannelTrafficApplyResult AdvanceReceiveLifecycle(DateTimeOffset now)
+    {
+        ReceiveStreamDecision decision = receiveLifecycle.Advance(now);
+        if (decision.Transition == ReceiveStreamTransition.GraceExpired)
+            runtime.MarkIdle(now);
+        return ToApplyResult(decision);
+    }
+
+    private static ChannelTrafficApplyResult ToApplyResult(ReceiveStreamDecision decision)
+        => new(
+            Matched: decision.Transition is not ReceiveStreamTransition.None,
+            decision.Transition,
+            decision.ActiveStreamId,
+            decision.EndedStreamId);
 
     private bool MatchesVoiceTraffic(FneTrafficFrame traffic)
     {
