@@ -70,6 +70,10 @@ artifacts/
 
 # Local agent planning artifacts; never include these in source distributions.
 docs/superpowers/
+docs/MACOS_AUDIO.md
+docs/LIVE_FNE_TESTING.md
+docs/macos_audio.md
+docs/live_fne_testing.md
 
 # Local live-FNE configuration; may contain credentials and private endpoints.
 configs/codeplug_testing.yml

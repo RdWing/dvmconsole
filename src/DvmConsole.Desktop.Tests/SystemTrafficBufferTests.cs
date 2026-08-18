@@ -57,7 +57,27 @@ public sealed class SystemTrafficBufferTests
         Assert.Same(callIv, retained);
     }
 
-    private static FneTrafficFrame Traffic(ushort sequence, bool terminator = false)
+    [Fact]
+    public void TerminatorRetainsAQueuedVoiceFrameForItsShortStream()
+    {
+        var buffer = new SystemTrafficBuffer(maximumCount: 2);
+
+        buffer.Enqueue(Traffic(1, streamId: 100));
+        buffer.Enqueue(Traffic(2, streamId: 200));
+        buffer.Enqueue(Traffic(3, terminator: true, streamId: 100));
+
+        Assert.True(buffer.TryDequeue(out FneTrafficFrame? first));
+        Assert.True(buffer.TryDequeue(out FneTrafficFrame? second));
+        Assert.Equal((uint)100, first!.StreamId);
+        Assert.Equal((uint)100, second!.StreamId);
+        Assert.Equal("VOICE", first.FrameType);
+        Assert.Equal("TERMINATOR", second.FrameType);
+    }
+
+    private static FneTrafficFrame Traffic(
+        ushort sequence,
+        bool terminator = false,
+        uint streamId = 99)
         => new(
             FneTrafficProtocol.Dmr,
             1,
@@ -68,6 +88,6 @@ public sealed class SystemTrafficBufferTests
             terminator ? "TERMINATOR" : "VOICE",
             terminator ? "TERMINATOR_WITH_LC" : "VOICE",
             sequence,
-            99,
+            streamId,
             []);
 }

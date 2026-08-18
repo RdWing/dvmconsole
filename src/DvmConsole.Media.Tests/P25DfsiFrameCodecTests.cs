@@ -11,6 +11,34 @@ namespace DvmConsole.Media.Tests;
 public sealed class P25DfsiFrameCodecTests
 {
     [Fact]
+    public void ExtractsLinkControlIdentifiersAheadOfPlaceholderEventIdentity()
+    {
+        byte[] payload = P25DfsiFrameCodec.CreateLdu1Payload(
+            sourceId: 4_500_355,
+            destinationId: 2_964,
+            imbe: new byte[P25DfsiFrameCodec.ImbeBytes]);
+        var traffic = new FneTrafficFrame(
+            FneTrafficProtocol.P25,
+            peerId: 1,
+            sourceId: P25Defines.WUID_FNE,
+            destinationId: 2_964,
+            slot: null,
+            callType: "GROUP",
+            frameType: "VOICE",
+            subtype: "LDU1",
+            packetSequence: 1,
+            streamId: 99,
+            payload);
+
+        Assert.True(P25DfsiFrameCodec.TryExtractCallIdentifiers(
+            traffic,
+            out uint sourceId,
+            out uint destinationId));
+        Assert.Equal((uint)4_500_355, sourceId);
+        Assert.Equal((uint)2_964, destinationId);
+    }
+
+    [Fact]
     public void ClearTransmitPayloadsCarryExplicitUnencryptedMetadata()
     {
         byte[] ldu1 = P25DfsiFrameCodec.CreateLdu1Payload(99, 100, new byte[P25DfsiFrameCodec.ImbeBytes]);
@@ -83,7 +111,7 @@ public sealed class P25DfsiFrameCodecTests
     }
 
     [Fact]
-    public async Task P25SessionIgnoresMalformedLduAndRecoversOnNextLdu()
+    public async Task P25SessionConcealsEveryMalformedAndMissingFrameSlotBeforeRecovery()
     {
         var vocoder = new FakeVocoderSession();
         var playback = new FakePlayback();
@@ -92,12 +120,15 @@ public sealed class P25DfsiFrameCodecTests
         Assert.Equal(
             0,
             await session.ProcessAsync(CreateTraffic("LDU1", new byte[P25DfsiFrameCodec.HeaderBytes])));
-        Assert.Equal(0, session.FramesDecoded);
+        Assert.Equal(9, session.FramesDecoded);
+        Assert.Equal(9, vocoder.DecodeLostCalls);
+        Assert.Equal(9, playback.Frames.Count);
         Assert.Equal(1, session.MalformedPackets);
 
         Assert.Equal(0, await session.ProcessAsync(CreateTraffic("LDU1", CreatePayload(0x62), packetSequence: 2)));
-        Assert.Equal(9, session.FramesDecoded);
-        Assert.Equal(9, playback.Frames.Count);
+        Assert.Equal(18, session.FramesDecoded);
+        Assert.Equal(9, vocoder.DecodeLostCalls);
+        Assert.Equal(18, playback.Frames.Count);
     }
 
     [Fact]
@@ -163,7 +194,8 @@ public sealed class P25DfsiFrameCodecTests
             ldu2Payload,
             packetSequence: 1)));
         Assert.Equal(1, session.MalformedPackets);
-        Assert.Empty(playback.Frames);
+        Assert.Equal(9, vocoder.DecodeLostCalls);
+        Assert.Equal(9, playback.Frames.Count);
 
         Assert.Equal(0, await session.ProcessAsync(CreateTraffic(
             "LDU1",
@@ -172,8 +204,9 @@ public sealed class P25DfsiFrameCodecTests
                 100,
                 new byte[P25DfsiFrameCodec.ImbeBytes]),
             packetSequence: 2)));
-        Assert.Equal(9, session.FramesDecoded);
-        Assert.Equal(9, playback.Frames.Count);
+        Assert.Equal(18, session.FramesDecoded);
+        Assert.Equal(9, vocoder.DecodeCalls);
+        Assert.Equal(18, playback.Frames.Count);
     }
 
     [Fact]

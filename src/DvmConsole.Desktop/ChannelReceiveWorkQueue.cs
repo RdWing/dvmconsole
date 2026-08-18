@@ -16,7 +16,7 @@ internal sealed class ChannelReceiveWorkQueue : IAsyncDisposable
 
     public ChannelReceiveWorkQueue(
         Func<ChannelViewModel, FneTrafficFrame, Task> process,
-        int maxPendingFramesPerChannel = 12)
+        int maxPendingFramesPerChannel = 64)
     {
         this.process = process ?? throw new ArgumentNullException(nameof(process));
         if (maxPendingFramesPerChannel < 1)
@@ -145,6 +145,26 @@ internal sealed class ChannelReceiveWorkQueue : IAsyncDisposable
         private bool MakeRoomFor(FneTrafficFrame incoming)
         {
             LinkedListNode<FneTrafficFrame>? candidate = pending.First;
+            while (candidate is not null)
+            {
+                if (!IsTerminator(candidate.Value) && HasLaterVoiceForSameStream(candidate))
+                {
+                    break;
+                }
+                candidate = candidate.Next;
+            }
+
+            if (candidate is null && IsTerminator(incoming))
+            {
+                candidate = pending.First;
+                while (candidate is not null &&
+                       (IsTerminator(candidate.Value) || candidate.Value.StreamId == incoming.StreamId))
+                {
+                    candidate = candidate.Next;
+                }
+            }
+
+            candidate ??= pending.First;
             while (candidate is not null && IsTerminator(candidate.Value))
                 candidate = candidate.Next;
 
@@ -159,6 +179,16 @@ internal sealed class ChannelReceiveWorkQueue : IAsyncDisposable
 
             pending.RemoveFirst();
             return true;
+        }
+
+        private static bool HasLaterVoiceForSameStream(LinkedListNode<FneTrafficFrame> candidate)
+        {
+            for (LinkedListNode<FneTrafficFrame>? later = candidate.Next; later is not null; later = later.Next)
+            {
+                if (!IsTerminator(later.Value) && later.Value.StreamId == candidate.Value.StreamId)
+                    return true;
+            }
+            return false;
         }
 
         private async Task ProcessLoopAsync()

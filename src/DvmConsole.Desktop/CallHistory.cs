@@ -259,6 +259,21 @@ public sealed class CallHistoryStore
 
     public ObservableCollection<CallHistoryEntry> Entries { get; } = [];
 
+    public bool HasActiveReceiveCall(
+        string systemName,
+        FneTrafficProtocol protocol,
+        uint streamId,
+        string channelName,
+        uint destinationId)
+        => Entries.Any(candidate =>
+            candidate.IsActive &&
+            !candidate.IsConsoleTransmission &&
+            candidate.StreamId == streamId &&
+            candidate.Protocol == protocol &&
+            candidate.DestinationId == destinationId &&
+            candidate.ChannelName.Equals(channelName, StringComparison.OrdinalIgnoreCase) &&
+            candidate.SystemName.Equals(systemName, StringComparison.OrdinalIgnoreCase));
+
     public void Add(CallHistoryEntry entry)
     {
         ArgumentNullException.ThrowIfNull(entry);

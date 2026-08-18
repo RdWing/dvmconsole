@@ -63,6 +63,17 @@ public sealed class CallHistoryStoreTests
     }
 
     [Fact]
+    public void DetectsAnExistingActiveReceiveCallByFullRouteIdentity()
+    {
+        var store = new CallHistoryStore();
+        store.Add(CreateEntry(42));
+
+        Assert.True(store.HasActiveReceiveCall("System 1", FneTrafficProtocol.Dmr, 42, "Dispatch", 100));
+        Assert.False(store.HasActiveReceiveCall("System 1", FneTrafficProtocol.Dmr, 43, "Dispatch", 100));
+        Assert.False(store.HasActiveReceiveCall("System 1", FneTrafficProtocol.Dmr, 42, "Tactical", 100));
+    }
+
+    [Fact]
     public void UpdatesEncryptionWhenProtocolMetadataArrivesLater()
     {
         var store = new CallHistoryStore();

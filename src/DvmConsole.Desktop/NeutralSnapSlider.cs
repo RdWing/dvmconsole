@@ -31,7 +31,7 @@ public static class NeutralSliderMath
             return value;
         }
 
-        double threshold = (maximum - minimum) * Math.Clamp(snapFraction, 0, 0.5) / 2;
+        double threshold = (maximum - minimum) * Math.Clamp(snapFraction, 0, 0.5);
         return Math.Abs(value - neutral) <= threshold ? neutral : value;
     }
 }
@@ -45,6 +45,7 @@ public sealed class NeutralSnapSlider : Slider
         AvaloniaProperty.Register<NeutralSnapSlider, double>(nameof(SnapFraction), 0.05);
 
     private bool isPointerInteraction;
+    private bool isApplyingSnap;
 
     // Custom controls use their own theme key by default. Reuse Slider's Fluent
     // template so the track and thumb remain visible while adding only behavior.
@@ -88,11 +89,32 @@ public sealed class NeutralSnapSlider : Slider
         isPointerInteraction = false;
     }
 
+    protected override void OnPropertyChanged(AvaloniaPropertyChangedEventArgs change)
+    {
+        base.OnPropertyChanged(change);
+        if (change.Property == ValueProperty && isPointerInteraction && !isApplyingSnap)
+            SnapPointerValue();
+    }
+
     private void SnapPointerValue()
-        => Value = NeutralSliderMath.SnapToNeutral(
+    {
+        double snapped = NeutralSliderMath.SnapToNeutral(
             Value,
             Minimum,
             Maximum,
             NeutralValue,
             SnapFraction);
+        if (Math.Abs(snapped - Value) < double.Epsilon)
+            return;
+
+        isApplyingSnap = true;
+        try
+        {
+            Value = snapped;
+        }
+        finally
+        {
+            isApplyingSnap = false;
+        }
+    }
 }

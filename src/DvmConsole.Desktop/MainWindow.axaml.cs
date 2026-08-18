@@ -4677,6 +4677,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     {
         ArgumentNullException.ThrowIfNull(system);
         ArgumentNullException.ThrowIfNull(traffic);
+        traffic = NormalizeP25CallIdentity(traffic);
         DateTimeOffset now = receivedAt ?? DateTimeOffset.Now;
         system.RecordTraffic(traffic, publishTrafficDiagnostics);
         List<ChannelViewModel> activeAudioChannels = [];
@@ -4719,7 +4720,19 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
                     traffic.DestinationId) || callHistoryChanged;
             }
 
-            if (applied.Transition is ReceiveStreamTransition.Started or ReceiveStreamTransition.Superseded)
+            bool canStartHistory = applied.Transition is
+                ReceiveStreamTransition.Started or
+                ReceiveStreamTransition.Superseded or
+                ReceiveStreamTransition.Continued or
+                ReceiveStreamTransition.Resumed;
+            if (canStartHistory &&
+                HasMeaningfulHistorySource(traffic) &&
+                !callHistory.HasActiveReceiveCall(
+                    system.Name,
+                    traffic.Protocol,
+                    traffic.StreamId,
+                    channel.Name,
+                    traffic.DestinationId))
             {
                 AddDebugLog(
                     now,
@@ -4772,6 +4785,35 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             EnqueuePatchSource(channel, traffic);
         if (callHistoryChanged)
             NotifyCallHistoryChanged();
+    }
+
+    private static bool HasMeaningfulHistorySource(FneTrafficFrame traffic)
+        => traffic.SourceId != 0 &&
+           (traffic.Protocol != FneTrafficProtocol.P25 || traffic.SourceId < 0xFFFFFC);
+
+    private static FneTrafficFrame NormalizeP25CallIdentity(FneTrafficFrame traffic)
+    {
+        if (!P25DfsiFrameCodec.TryExtractCallIdentifiers(
+                traffic,
+                out uint sourceId,
+                out uint destinationId) ||
+            (sourceId == traffic.SourceId && destinationId == traffic.DestinationId))
+        {
+            return traffic;
+        }
+
+        return new FneTrafficFrame(
+            traffic.Protocol,
+            traffic.PeerId,
+            sourceId,
+            destinationId,
+            traffic.Slot,
+            traffic.CallType,
+            traffic.FrameType,
+            traffic.Subtype,
+            traffic.PacketSequence,
+            traffic.StreamId,
+            traffic.Payload);
     }
 
     private static bool IsDmrTerminator(FneTrafficFrame traffic)

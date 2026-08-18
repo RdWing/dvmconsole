@@ -3,10 +3,14 @@ using fnecore.P25;
 
 namespace DvmConsole.Media;
 
-// Extracts the nine 88-bit IMBE codewords from one complete P25 DFSI LDU.
-// The FNE payload contains a 24-byte network header followed by the DFSI
-// records whose lengths and codeword offsets are defined by the P25 wire
-// format.
+// Extracts the nine 88-bit IMBE information frames from one complete P25
+// DFSI LDU. P25 Phase 1 carries 18-byte Annex-H FEC frames over the air, but
+// the FNE DFSI records contain only the 11-byte post-FEC information layer.
+// Do not manufacture 18-byte frames here: re-encoding already-recovered bits
+// would falsely report a clean channel. Missing or malformed DFSI frame slots
+// are instead submitted to the stateful vocoder as erasures by
+// P25RxAudioSession, allowing its native repeat/fade/mute concealment to feed
+// both live playback and TAR.
 public static class P25DfsiFrameCodec
 {
     public const int HeaderBytes = 24;
@@ -51,6 +55,49 @@ public static class P25DfsiFrameCodec
         if (!TryExtractImbe(traffic, imbe))
             throw new ArgumentException("The P25 packet does not contain a complete voice LDU.", nameof(traffic));
         return imbe;
+    }
+
+    // Prefer the identifiers carried inside the DFSI records over placeholder
+    // values in the outer FNE event. Some peers use WUID_FNE in the event
+    // header until link control arrives, even though LDU1 contains the real
+    // subscriber and talkgroup identifiers.
+    public static bool TryExtractCallIdentifiers(
+        FneTrafficFrame traffic,
+        out uint sourceId,
+        out uint destinationId)
+    {
+        ArgumentNullException.ThrowIfNull(traffic);
+        sourceId = 0;
+        destinationId = 0;
+        if (traffic.Protocol != FneTrafficProtocol.P25 || !IsVoiceLdu(traffic))
+            return false;
+
+        ReadOnlySpan<byte> payload = traffic.Payload;
+        if (payload.Length < HeaderBytes ||
+            payload[0] != (byte)'P' ||
+            payload[1] != (byte)'2' ||
+            payload[2] != (byte)'5' ||
+            payload[3] != (byte)'D')
+        {
+            return false;
+        }
+
+        bool ldu1 = traffic.Subtype.Equals("LDU1", StringComparison.OrdinalIgnoreCase);
+        if (ldu1)
+        {
+            Span<byte> imbe = stackalloc byte[ImbeBytes];
+            if (!TryExtractImbe(payload, ldu1: true, imbe))
+                return false;
+
+            destinationId = ReadThreeBytes(payload, 78);
+            sourceId = ReadThreeBytes(payload, 95);
+        }
+
+        if (sourceId == 0)
+            sourceId = ReadThreeBytes(payload, 5);
+        if (destinationId == 0)
+            destinationId = ReadThreeBytes(payload, 8);
+        return sourceId != 0 && destinationId != 0;
     }
 
     // Extracts the legacy P25 encryption metadata carried by a voice LDU.
@@ -330,5 +377,12 @@ public static class P25DfsiFrameCodec
         target[offset] = (byte)(value >> 16);
         target[offset + 1] = (byte)(value >> 8);
         target[offset + 2] = (byte)value;
+    }
+
+    private static uint ReadThreeBytes(ReadOnlySpan<byte> source, int offset)
+    {
+        if (offset < 0 || source.Length < offset + 3)
+            return 0;
+        return (uint)((source[offset] << 16) | (source[offset + 1] << 8) | source[offset + 2]);
     }
 }

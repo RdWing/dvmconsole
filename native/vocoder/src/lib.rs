@@ -1070,6 +1070,23 @@ mod tests {
     }
 
     #[test]
+    fn p25_info_only_erasure_uses_native_concealment() {
+        let mut rx = Vocoder::new(Rate::FullRate4400x4400);
+        let erasure = Rate::FullRate4400x4400.erasure_frame();
+
+        let decoded = rx.decode_bits(&erasure).expect("erasure decode");
+
+        assert_eq!(decoded.len(), PCM_SAMPLES);
+        assert!(rx
+            .last_stats()
+            .decode
+            .as_ref()
+            .expect("decode stats")
+            .disposition
+            .is_concealed());
+    }
+
+    #[test]
     fn flush_is_one_shot() {
         let handle = dvmconsole_vocoder_session_create(MODE_P25);
         assert!(!handle.is_null());

@@ -9,6 +9,7 @@ using DvmConsole.Media;
 using System.Collections.Specialized;
 using System.Globalization;
 using fnecore.DMR;
+using fnecore.P25;
 using Xunit;
 
 namespace DvmConsole.Desktop.Tests;
@@ -709,6 +710,61 @@ public sealed class SystemViewModelTests
         finally
         {
             Directory.Delete(directory, recursive: true);
+            CleanupSettingsPath(settingsPath);
+        }
+    }
+
+    [Fact]
+    public async Task P25HistoryUsesEmbeddedSubscriberAndSkipsPlaceholderOnlyRows()
+    {
+        string path = Path.Combine(AppContext.BaseDirectory, "TestData", "multiple-systems.yml");
+        string settingsPath = CreateSettingsPath();
+
+        try
+        {
+            await using MainWindowViewModel viewModel = MainWindowViewModel.Load(
+                path,
+                new UserSettingsStore(settingsPath));
+            SystemViewModel system = viewModel.Systems.Single(candidate => candidate.Name == "Alpha");
+            byte[] identifiedPayload = P25DfsiFrameCodec.CreateLdu1Payload(
+                sourceId: 4_500_355,
+                destinationId: 102,
+                imbe: new byte[P25DfsiFrameCodec.ImbeBytes]);
+
+            viewModel.ProcessTraffic(system, new FneTrafficFrame(
+                FneTrafficProtocol.P25,
+                peerId: 1,
+                sourceId: P25Defines.WUID_FNE,
+                destinationId: 102,
+                slot: null,
+                callType: "GROUP",
+                frameType: "VOICE",
+                subtype: "LDU1",
+                packetSequence: 1,
+                streamId: 77,
+                payload: identifiedPayload));
+
+            CallHistoryEntry identified = Assert.Single(viewModel.CallHistory);
+            Assert.Equal((uint)4_500_355, identified.SourceId);
+            Assert.Equal((uint)102, identified.DestinationId);
+
+            viewModel.ProcessTraffic(system, new FneTrafficFrame(
+                FneTrafficProtocol.P25,
+                peerId: 1,
+                sourceId: P25Defines.WUID_FNE,
+                destinationId: 102,
+                slot: null,
+                callType: "GROUP",
+                frameType: "VOICE",
+                subtype: "LDU1",
+                packetSequence: 2,
+                streamId: 78,
+                payload: new byte[P25DfsiFrameCodec.ClearLduPayloadLength]));
+
+            Assert.Single(viewModel.CallHistory);
+        }
+        finally
+        {
             CleanupSettingsPath(settingsPath);
         }
     }

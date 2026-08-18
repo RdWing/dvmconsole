@@ -19,7 +19,6 @@ public sealed class P25RxAudioSession : IAsyncDisposable
     private P25CryptoState? cryptoState;
     private uint activeStreamId;
     private bool encryptedStream;
-    private bool hasDecodedVoiceInActiveStream;
     private bool disposed;
 
     public P25RxAudioSession(
@@ -52,7 +51,6 @@ public sealed class P25RxAudioSession : IAsyncDisposable
             activeStreamId = traffic.StreamId;
             cryptoState = null;
             encryptedStream = false;
-            hasDecodedVoiceInActiveStream = false;
         }
         long lostBefore = sequenceTracker.LostPackets;
         if (!sequenceTracker.TryAccept(traffic.StreamId, traffic.PacketSequence))
@@ -137,7 +135,6 @@ public sealed class P25RxAudioSession : IAsyncDisposable
                 decoded => samples = decoded.ToArray());
             await playback.WriteAsync(samples, cancellationToken).ConfigureAwait(false);
             FramesDecoded++;
-            hasDecodedVoiceInActiveStream = true;
         }
 
         if (!ldu1 && cryptoState is not null)
@@ -150,9 +147,6 @@ public sealed class P25RxAudioSession : IAsyncDisposable
         long lostPackets,
         CancellationToken cancellationToken)
     {
-        if (!hasDecodedVoiceInActiveStream)
-            return;
-
         const int maximumConcealedPackets = 10;
         int frameCount = checked((int)Math.Min(lostPackets, maximumConcealedPackets)) *
             P25DfsiFrameCodec.CodewordsPerLdu;

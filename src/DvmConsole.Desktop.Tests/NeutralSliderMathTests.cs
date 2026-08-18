@@ -18,10 +18,10 @@ public sealed class NeutralSliderMathTests
     }
 
     [Theory]
-    [InlineData(-0.051, -0.051)]
-    [InlineData(-0.05, 0)]
-    [InlineData(0.049, 0)]
-    [InlineData(0.051, 0.051)]
+    [InlineData(-0.101, -0.101)]
+    [InlineData(-0.1, 0)]
+    [InlineData(0.099, 0)]
+    [InlineData(0.101, 0.101)]
     public void SnapZoneUsesFivePercentOfSliderTravel(double value, double expected)
     {
         Assert.Equal(expected, NeutralSliderMath.SnapToNeutral(value, -1, 1, 0, 0.05), 6);

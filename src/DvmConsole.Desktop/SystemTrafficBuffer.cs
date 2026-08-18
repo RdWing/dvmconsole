@@ -44,6 +44,24 @@ internal sealed class SystemTrafficBuffer
     private bool MakeRoomFor(FneTrafficFrame incoming)
     {
         LinkedListNode<FneTrafficFrame>? candidate = pending.First;
+        while (candidate is not null)
+        {
+            if (!IsLifecycleTraffic(candidate.Value) && HasLaterVoiceForSameStream(candidate))
+                break;
+            candidate = candidate.Next;
+        }
+
+        if (candidate is null && IsTerminator(incoming))
+        {
+            candidate = pending.First;
+            while (candidate is not null &&
+                   (IsLifecycleTraffic(candidate.Value) || candidate.Value.StreamId == incoming.StreamId))
+            {
+                candidate = candidate.Next;
+            }
+        }
+
+        candidate ??= pending.First;
         while (candidate is not null && IsLifecycleTraffic(candidate.Value))
             candidate = candidate.Next;
 
@@ -59,6 +77,27 @@ internal sealed class SystemTrafficBuffer
         pending.RemoveFirst();
         return true;
     }
+
+    private static bool HasLaterVoiceForSameStream(LinkedListNode<FneTrafficFrame> candidate)
+    {
+        for (LinkedListNode<FneTrafficFrame>? later = candidate.Next; later is not null; later = later.Next)
+        {
+            if (!IsLifecycleTraffic(later.Value) && later.Value.StreamId == candidate.Value.StreamId)
+                return true;
+        }
+        return false;
+    }
+
+    private static bool IsTerminator(FneTrafficFrame traffic)
+        => traffic.FrameType.Equals("TERMINATOR", StringComparison.OrdinalIgnoreCase) ||
+           (traffic.Protocol switch
+            {
+                FneTrafficProtocol.Dmr => traffic.Subtype.Equals("TERMINATOR_WITH_LC", StringComparison.OrdinalIgnoreCase),
+                FneTrafficProtocol.P25 => traffic.Subtype.Equals("TDU", StringComparison.OrdinalIgnoreCase) ||
+                                           traffic.Subtype.Equals("TDULC", StringComparison.OrdinalIgnoreCase),
+                FneTrafficProtocol.Analog => traffic.Subtype.Equals("TERMINATOR", StringComparison.OrdinalIgnoreCase),
+                _ => false
+            });
 
     private static bool IsLifecycleTraffic(FneTrafficFrame traffic)
     {

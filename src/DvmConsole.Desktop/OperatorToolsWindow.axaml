@@ -14,6 +14,12 @@
     <Style Selector="Button.tar-select:pressed" x:DataType="local:ChannelViewModel"><Setter Property="Background" Value="{Binding RecordingSelectionBrush}" /><Setter Property="BorderBrush" Value="{Binding RecordingSelectionBorderBrush}" /></Style>
     <Style Selector="Border.history-row"><Setter Property="Background" Value="{DynamicResource CardBackgroundBrush}" /><Setter Property="BorderBrush" Value="{DynamicResource ControlBorderBrush}" /><Setter Property="BorderThickness" Value="1" /><Setter Property="CornerRadius" Value="4" /><Setter Property="Padding" Value="6,4" /><Setter Property="Margin" Value="0,0,0,3" /></Style>
     <Style Selector="Button.history-action"><Setter Property="Padding" Value="7,3" /><Setter Property="MinHeight" Value="0" /></Style>
+    <Style Selector="ToggleButton.recorder-system-toggle"><Setter Property="Background" Value="Transparent" /><Setter Property="BorderBrush" Value="Transparent" /><Setter Property="BorderThickness" Value="0" /><Setter Property="MinHeight" Value="0" /><Setter Property="Padding" Value="0,6" /><Setter Property="HorizontalContentAlignment" Value="Stretch" /></Style>
+    <Style Selector="ToggleButton.recorder-system-toggle:pointerover"><Setter Property="Background" Value="Transparent" /><Setter Property="BorderBrush" Value="Transparent" /></Style>
+    <Style Selector="ToggleButton.recorder-system-toggle:pressed"><Setter Property="Background" Value="Transparent" /><Setter Property="BorderBrush" Value="Transparent" /></Style>
+    <Style Selector="ToggleButton.recorder-system-toggle:checked"><Setter Property="Background" Value="Transparent" /><Setter Property="BorderBrush" Value="Transparent" /></Style>
+    <Style Selector="ToggleButton.recorder-system-toggle TextBlock.recorder-system-chevron"><Setter Property="Text" Value="▸" /></Style>
+    <Style Selector="ToggleButton.recorder-system-toggle:checked TextBlock.recorder-system-chevron"><Setter Property="Text" Value="▾" /></Style>
     <Style Selector="ListBox.history-list > ListBoxItem"><Setter Property="HorizontalContentAlignment" Value="Stretch" /><Setter Property="Padding" Value="0" /><Setter Property="Margin" Value="0" /><Setter Property="MinHeight" Value="0" /></Style>
     <Style Selector="ScrollViewer"><Setter Property="AllowAutoHide" Value="True" /><Setter Property="VerticalScrollBarVisibility" Value="Hidden" /></Style>
     <Style Selector="ScrollBar"><Setter Property="AllowAutoHide" Value="True" /><Setter Property="ShowDelay" Value="0:0:0" /><Setter Property="HideDelay" Value="0:0:0.7" /></Style>
@@ -213,27 +219,31 @@
             <ItemsControl ItemsSource="{Binding Systems}">
               <ItemsControl.ItemTemplate>
                 <DataTemplate x:DataType="local:SystemViewModel">
-                  <Expander Header="{Binding Name}" IsExpanded="True" Margin="0,2,0,6">
-                    <StackPanel Margin="0,4,0,0">
-                      <ItemsControl ItemsSource="{Binding Channels}">
-                        <ItemsControl.ItemTemplate>
-                          <DataTemplate x:DataType="local:ChannelViewModel">
-                            <Border Classes="panel">
-                              <Grid ColumnDefinitions="*,Auto,220,Auto" ColumnSpacing="8">
-                                <StackPanel>
-                                  <TextBlock Text="{Binding Name}" />
-                                  <TextBlock Classes="caption" Text="{Binding DestinationText}" />
-                                </StackPanel>
-                                <Button Grid.Column="1" Classes="tar-select" Content="{Binding RecordingConfigurationButtonText}" Background="{Binding RecordingSelectionBrush}" BorderBrush="{Binding RecordingSelectionBorderBrush}" Command="{Binding RecordingCommand}" />
-                                <TextBox Grid.Column="2" Watermark="Ignored RIDs, comma separated" Text="{Binding IgnoredSubscriberIdsText, Mode=TwoWay}" />
-                                <Button Grid.Column="3" Content="Save ignored RIDs" Tag="{Binding}" Click="HandleSaveIgnoredSubscribersClick" />
-                              </Grid>
-                            </Border>
-                          </DataTemplate>
-                        </ItemsControl.ItemTemplate>
-                      </ItemsControl>
-                    </StackPanel>
-                  </Expander>
+                  <StackPanel Margin="0,2,0,6">
+                    <ToggleButton x:Name="SystemToggle" Classes="recorder-system-toggle" IsChecked="True">
+                      <Grid ColumnDefinitions="*,Auto">
+                        <TextBlock FontWeight="SemiBold" Text="{Binding Name}" />
+                        <TextBlock Grid.Column="1" Classes="recorder-system-chevron" Opacity="0.72" />
+                      </Grid>
+                    </ToggleButton>
+                    <ItemsControl ItemsSource="{Binding Channels}" IsVisible="{Binding IsChecked, ElementName=SystemToggle}">
+                      <ItemsControl.ItemTemplate>
+                        <DataTemplate x:DataType="local:ChannelViewModel">
+                          <Border Classes="panel">
+                            <Grid ColumnDefinitions="*,Auto,220,Auto" ColumnSpacing="8">
+                              <StackPanel>
+                                <TextBlock Text="{Binding Name}" />
+                                <TextBlock Classes="caption" Text="{Binding DestinationText}" />
+                              </StackPanel>
+                              <Button Grid.Column="1" Classes="tar-select" Content="{Binding RecordingConfigurationButtonText}" Background="{Binding RecordingSelectionBrush}" BorderBrush="{Binding RecordingSelectionBorderBrush}" Command="{Binding RecordingCommand}" />
+                              <TextBox Grid.Column="2" Watermark="Ignored RIDs, comma separated" Text="{Binding IgnoredSubscriberIdsText, Mode=TwoWay}" />
+                              <Button Grid.Column="3" Content="Save ignored RIDs" Tag="{Binding}" Click="HandleSaveIgnoredSubscribersClick" />
+                            </Grid>
+                          </Border>
+                        </DataTemplate>
+                      </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                  </StackPanel>
                 </DataTemplate>
               </ItemsControl.ItemTemplate>
             </ItemsControl>
@@ -281,22 +291,22 @@
             <ListBox.ItemTemplate>
               <DataTemplate x:DataType="local:CallHistoryEntry">
                 <Border Classes="history-row">
-                  <Grid RowDefinitions="Auto,Auto" ColumnDefinitions="80,*,100,75,90,55,Auto" ColumnSpacing="7" RowSpacing="1">
+                  <Grid RowDefinitions="Auto,Auto" ColumnDefinitions="80,*,190,100,75,90,55" ColumnSpacing="7" RowSpacing="1">
                     <TextBlock Text="{Binding TimestampText}" VerticalAlignment="Center" />
                     <TextBlock Grid.Column="1" FontWeight="SemiBold" Text="{Binding DisplayChannelText}" TextTrimming="CharacterEllipsis" />
-                    <TextBlock Grid.Column="2" Text="{Binding SystemName}" TextTrimming="CharacterEllipsis" />
-                    <TextBlock Grid.Column="3" Text="{Binding DirectionText}" />
-                    <TextBlock Grid.Column="4" Text="{Binding ProtocolText}" />
-                    <TextBlock Grid.Column="5" Text="{Binding DurationText}" />
-                    <StackPanel Grid.Column="6" Grid.RowSpan="2" Orientation="Horizontal" Spacing="4" VerticalAlignment="Center" IsVisible="{Binding HasRecording}">
+                    <StackPanel Grid.Column="2" Grid.RowSpan="2" Orientation="Horizontal" Spacing="4" VerticalAlignment="Center" IsVisible="{Binding HasRecording}">
                       <Button Classes="history-action" Content="Play" Tag="{Binding}" IsEnabled="{Binding HasPlayableRecording}" ToolTip.Tip="Play validated TAR recording" Click="HandlePlayCallHistoryRecordingClick" />
                       <Button Classes="history-action" Content="Stop" Click="HandleStopRecordingClick" />
                       <Button Classes="history-action" Content="Open" Tag="{Binding Recording}" IsEnabled="{Binding HasPlayableRecording}" Click="HandleOpenRecordingClick" />
                       <Button Classes="history-action" Content="Delete" Tag="{Binding Recording}" Click="HandleDeleteRecordingClick" />
                     </StackPanel>
-                    <TextBlock Grid.Row="1" Grid.Column="1" Grid.ColumnSpan="2" Classes="caption" Text="{Binding RouteText}" TextTrimming="CharacterEllipsis" />
+                    <TextBlock Grid.Column="3" Text="{Binding SystemName}" TextTrimming="CharacterEllipsis" />
+                    <TextBlock Grid.Column="4" Text="{Binding DirectionText}" />
+                    <TextBlock Grid.Column="5" Text="{Binding ProtocolText}" />
+                    <TextBlock Grid.Column="6" Text="{Binding DurationText}" />
+                    <TextBlock Grid.Row="1" Grid.Column="1" Classes="caption" Text="{Binding RouteText}" TextTrimming="CharacterEllipsis" />
                     <TextBlock Grid.Row="1" Grid.Column="3" Classes="caption" Text="{Binding EncryptionText}" TextTrimming="CharacterEllipsis" />
-                    <TextBlock Grid.Row="1" Grid.Column="4" Grid.ColumnSpan="2" Classes="caption" Text="{Binding RecordingFileName}" TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding RecordingPath}" />
+                    <TextBlock Grid.Row="1" Grid.Column="4" Grid.ColumnSpan="3" Classes="caption" Text="{Binding RecordingFileName}" TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding RecordingPath}" />
                   </Grid>
                 </Border>
               </DataTemplate>
