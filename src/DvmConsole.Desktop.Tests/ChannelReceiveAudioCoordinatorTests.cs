@@ -49,6 +49,42 @@ public sealed class ChannelReceiveAudioCoordinatorTests
     }
 
     [Fact]
+    public async Task DecodedSamplesRetainTheProcessedFrameIdentityWhenChannelStateChanges()
+    {
+        var backend = new FakeAudioBackend();
+        var vocoder = new BlockingFirstVocoderBackend();
+        var observed = new TaskCompletionSource<(uint StreamId, uint SourceId)>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var coordinator = new ChannelReceiveAudioCoordinator(
+            () => backend,
+            () => vocoder,
+            samplesObserver: (_, streamId, sourceId, _) => observed.TrySetResult((streamId, sourceId)));
+        var channel = new ChannelViewModel(new ChannelConfiguration
+        {
+            Name = "Dispatch",
+            System = "System 1",
+            Tgid = "100",
+            Mode = "dmr",
+            Slot = 1
+        });
+        DateTimeOffset now = DateTimeOffset.UnixEpoch;
+        FneTrafficFrame first = CreateTraffic(100, 0, streamId: 41);
+        FneTrafficFrame second = CreateTraffic(100, 0, packetSequence: 2, streamId: 42);
+        channel.ApplyTraffic("System 1", first, now);
+        await coordinator.StartAsync(channel);
+
+        Task<int> processing = Task.Run(() => coordinator.ProcessAsync(channel, first));
+        await vocoder.FirstDecodeStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        channel.ApplyTraffic("System 1", second, now.AddMilliseconds(100));
+        vocoder.ReleaseFirstDecode.TrySetResult();
+
+        await processing;
+        (uint streamId, uint sourceId) = await observed.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        Assert.Equal((uint)41, streamId);
+        Assert.Equal((uint)2, sourceId);
+    }
+
+    [Fact]
     public async Task SharesPlaybackAcrossTwoChannelsAndStopsEachSessionIndividually()
     {
         var backend = new FakeAudioBackend();

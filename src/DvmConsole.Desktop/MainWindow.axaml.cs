@@ -4100,12 +4100,16 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             await StartAudioAsync(channel);
     }
 
-    private void HandleDecodedSamples(ChannelViewModel channel, ReadOnlyMemory<short> samples)
+    private void HandleDecodedSamples(
+        ChannelViewModel channel,
+        uint streamId,
+        uint sourceId,
+        ReadOnlyMemory<short> samples)
     {
-        patchForwarding.ObserveDecodedSamples(channel, samples);
-        callRecordings.WriteSamples(channel, samples);
+        patchForwarding.ObserveDecodedSamples(channel, streamId, sourceId, samples);
+        callRecordings.WriteSamples(channel, streamId, sourceId, samples);
         UpdateChannelAudioLevel(channel, samples, ChannelAudioDirection.Receive);
-        LogVocoderAudioLevel(channel, samples, ChannelAudioDirection.Receive);
+        LogVocoderAudioLevel(channel, samples, ChannelAudioDirection.Receive, streamId);
     }
 
     private void HandleTransmitSamples(
@@ -4182,9 +4186,13 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         Dispatcher.UIThread.Post(() => channel.SetAudioLevel(level, direction));
     }
 
-    private void ObservePatchDecodedSamples(ChannelViewModel channel, ReadOnlyMemory<short> samples)
+    private void ObservePatchDecodedSamples(
+        ChannelViewModel channel,
+        uint streamId,
+        uint sourceId,
+        ReadOnlyMemory<short> samples)
     {
-        patchForwarding.ObserveDecodedSamples(channel, samples);
+        patchForwarding.ObserveDecodedSamples(channel, streamId, sourceId, samples);
     }
 
     private async Task SyncPatchSourceDecodeAsync()

@@ -11,6 +11,37 @@ namespace DvmConsole.Desktop.Tests;
 public sealed class CallRecordingManagerTests
 {
     [Fact]
+    public void ReceiveSamplesUseSuppliedIdentityInsteadOfMutableChannelState()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "dvmconsole-recording-tests", Guid.NewGuid().ToString("N"));
+        var channel = new ChannelViewModel(new ChannelConfiguration
+        {
+            Name = "Dispatch",
+            System = "System 1",
+            Tgid = "99",
+            Mode = "analog"
+        });
+        using var manager = new CallRecordingManager(root);
+        channel.SetRecordingEnabled(true);
+
+        try
+        {
+            Assert.True(channel.TryApplyTraffic("System 1", Traffic("VOICE", "VOICE", 42)));
+            manager.WriteSamples(channel, streamId: 41, sourceId: 7, new short[] { 100, -100 });
+            manager.StopChannel(channel);
+
+            CallRecordingMetadata metadata = Assert.Single(manager.LoadRecordings());
+            Assert.Equal((uint)41, metadata.StreamId);
+            Assert.Equal((uint)7, metadata.SubscriberId);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task StartsAndFinalizesOneOpusFilePerVoiceStream()
     {
         string root = Path.Combine(Path.GetTempPath(), "dvmconsole-recording-tests", Guid.NewGuid().ToString("N"));

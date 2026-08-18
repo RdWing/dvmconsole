@@ -33,6 +33,39 @@ public sealed class PatchForwardingCoordinatorTests
     }
 
     [Fact]
+    public void DecodedSamplesUseSuppliedStreamIdentityAfterChannelChanges()
+    {
+        (ChannelViewModel source, FakeEndpoint sourceSystem) = Create("Source", 100, 1001);
+        (ChannelViewModel target, FakeEndpoint targetSystem) = Create("Target", 200, 2002);
+        using var coordinator = new PatchForwardingCoordinator([sourceSystem, targetSystem]);
+        coordinator.ApplyMemberships(new Dictionary<string, IReadOnlyList<PatchMemberAddress>>
+        {
+            ["Patch"] = [new("Source", 100), new("Target", 200)]
+        });
+
+        ObserveVoice(coordinator, source, 77, 7001);
+        Assert.True(source.TryApplyTraffic(
+            "Source",
+            new FneTrafficFrame(
+                FneTrafficProtocol.Analog,
+                1,
+                8001,
+                100,
+                null,
+                "GROUP",
+                "VOICE",
+                "VOICE",
+                2,
+                78,
+                new byte[AnalogVoicePacketCodec.PacketBytes])));
+
+        coordinator.ObserveDecodedSamples(source, streamId: 77, sourceId: 7001, ActiveSamples());
+
+        Assert.Single(targetSystem.Sent);
+        Assert.Equal((byte)AnalogAudioFrameType.VoiceStart, targetSystem.Sent[0].Payload[AnalogVoicePacketCodec.FrameTypeOffset]);
+    }
+
+    [Fact]
     public void UsesFallbackOrPassthroughSourceIdAndHonorsOneWayRoutes()
     {
         (ChannelViewModel first, FakeEndpoint firstSystem) = Create("First", 100, 1001);

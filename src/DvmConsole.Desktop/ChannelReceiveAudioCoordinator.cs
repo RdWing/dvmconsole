@@ -22,7 +22,7 @@ public sealed class ChannelReceiveAudioCoordinator : IAsyncDisposable
     private readonly IP25KeyResolver? p25KeyResolver;
     private readonly IDmrKeyResolver? dmrKeyResolver;
     private readonly INxdnKeyResolver? nxdnKeyResolver;
-    private readonly Action<ChannelViewModel, ReadOnlyMemory<short>>? samplesObserver;
+    private readonly Action<ChannelViewModel, uint, uint, ReadOnlyMemory<short>>? samplesObserver;
     private readonly Func<ChannelViewModel, double>? getChannelGain;
     private readonly Func<ChannelViewModel, double>? getChannelBalance;
     private readonly Func<ChannelViewModel, string?>? getOutputDeviceId;
@@ -43,7 +43,7 @@ public sealed class ChannelReceiveAudioCoordinator : IAsyncDisposable
 
     public ChannelReceiveAudioCoordinator(
         IP25KeyResolver? p25KeyResolver,
-        Action<ChannelViewModel, ReadOnlyMemory<short>>? samplesObserver,
+        Action<ChannelViewModel, uint, uint, ReadOnlyMemory<short>>? samplesObserver,
         Func<ChannelViewModel, double>? getChannelGain = null,
         Func<ChannelViewModel, string?>? getOutputDeviceId = null,
         IDmrKeyResolver? dmrKeyResolver = null,
@@ -66,7 +66,7 @@ public sealed class ChannelReceiveAudioCoordinator : IAsyncDisposable
         Func<IAudioBackend> createAudioBackend,
         Func<IVocoderBackend> createVocoderBackend,
         IP25KeyResolver? p25KeyResolver = null,
-        Action<ChannelViewModel, ReadOnlyMemory<short>>? samplesObserver = null,
+        Action<ChannelViewModel, uint, uint, ReadOnlyMemory<short>>? samplesObserver = null,
         Func<ChannelViewModel, double>? getChannelGain = null,
         Func<ChannelViewModel, string?>? getOutputDeviceId = null,
         IDmrKeyResolver? dmrKeyResolver = null,
@@ -161,6 +161,7 @@ public sealed class ChannelReceiveAudioCoordinator : IAsyncDisposable
             IAudioPlayback? createdChannelPlayback = null;
             IVocoderSession? vocoderSession = null;
             ChannelReceiveAudioSession? nextSession = null;
+            var sampleContext = new ReceiveSampleContext();
 
             try
             {
@@ -177,7 +178,11 @@ public sealed class ChannelReceiveAudioCoordinator : IAsyncDisposable
                     ? mixerChannelPlayback
                     : new ObservedAudioPlayback(
                         mixerChannelPlayback,
-                        samples => samplesObserver(channel, samples));
+                        samples =>
+                        {
+                            if (sampleContext.TryGet(out uint streamId, out uint sourceId))
+                                samplesObserver(channel, streamId, sourceId, samples);
+                        });
 
                 if (activeVocoder is not null)
                 {
@@ -200,7 +205,7 @@ public sealed class ChannelReceiveAudioCoordinator : IAsyncDisposable
                 vocoderSession = null;
                 createdChannelPlayback = null;
 
-                sessions.TryAdd(channel, new SessionState(nextSession));
+                sessions.TryAdd(channel, new SessionState(nextSession, sampleContext));
                 sessionRoutes.Add(channel, activeRoute.DeviceId);
                 activeChannels = sessions.Keys.ToArray();
                 nextSession = null;
@@ -277,7 +282,15 @@ public sealed class ChannelReceiveAudioCoordinator : IAsyncDisposable
         {
             await state.ProcessGate.WaitAsync(cancellationToken).ConfigureAwait(false);
             entered = true;
-            return await state.Session.ProcessAsync(traffic, cancellationToken).ConfigureAwait(false);
+            state.SampleContext.Set(traffic.StreamId, traffic.SourceId);
+            try
+            {
+                return await state.Session.ProcessAsync(traffic, cancellationToken).ConfigureAwait(false);
+            }
+            finally
+            {
+                state.SampleContext.Clear();
+            }
         }
         finally
         {
@@ -517,7 +530,9 @@ public sealed class ChannelReceiveAudioCoordinator : IAsyncDisposable
 
     private sealed record AudioRoute(string DeviceId, AudioMixer Mixer);
 
-    private sealed class SessionState(ChannelReceiveAudioSession session) : IAsyncDisposable
+    private sealed class SessionState(
+        ChannelReceiveAudioSession session,
+        ReceiveSampleContext sampleContext) : IAsyncDisposable
     {
         private readonly object sync = new();
         private readonly TaskCompletionSource idle =
@@ -526,6 +541,7 @@ public sealed class ChannelReceiveAudioCoordinator : IAsyncDisposable
         private bool stopping;
 
         public ChannelReceiveAudioSession Session { get; } = session;
+        public ReceiveSampleContext SampleContext { get; } = sampleContext;
         public SemaphoreSlim ProcessGate { get; } = new(1, 1);
 
         public bool TryAcquire()
@@ -566,6 +582,31 @@ public sealed class ChannelReceiveAudioCoordinator : IAsyncDisposable
         {
             await Session.DisposeAsync().ConfigureAwait(false);
             ProcessGate.Dispose();
+        }
+    }
+
+    private sealed class ReceiveSampleContext
+    {
+        private uint streamId;
+        private uint sourceId;
+
+        public void Set(uint nextStreamId, uint nextSourceId)
+        {
+            streamId = nextStreamId;
+            sourceId = nextSourceId;
+        }
+
+        public void Clear()
+        {
+            streamId = 0;
+            sourceId = 0;
+        }
+
+        public bool TryGet(out uint currentStreamId, out uint currentSourceId)
+        {
+            currentStreamId = streamId;
+            currentSourceId = sourceId;
+            return currentStreamId != 0 && currentSourceId != 0;
         }
     }
 

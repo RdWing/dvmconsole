@@ -14,16 +14,32 @@ public sealed class PatchSourceDecodeCoordinator : IAsyncDisposable
     private readonly IP25KeyResolver? p25KeyResolver;
     private readonly IDmrKeyResolver? dmrKeyResolver;
     private readonly INxdnKeyResolver? nxdnKeyResolver;
-    private readonly Action<ChannelViewModel, ReadOnlyMemory<short>> observer;
+    private readonly Action<ChannelViewModel, uint, uint, ReadOnlyMemory<short>> observer;
     private readonly Func<IVocoderBackend> createVocoderBackend;
     private readonly object sync = new();
-    private readonly Dictionary<ChannelViewModel, ChannelReceiveAudioSession> sessions = [];
+    private readonly Dictionary<ChannelViewModel, SessionState> sessions = [];
     private IVocoderBackend? vocoderBackend;
     private bool disposed;
 
     public PatchSourceDecodeCoordinator(
         IP25KeyResolver? p25KeyResolver,
         Action<ChannelViewModel, ReadOnlyMemory<short>> observer,
+        Func<IVocoderBackend>? createVocoderBackend = null,
+        IDmrKeyResolver? dmrKeyResolver = null,
+        INxdnKeyResolver? nxdnKeyResolver = null)
+        : this(
+            p25KeyResolver,
+            (channel, _, _, samples) => observer(channel, samples),
+            createVocoderBackend,
+            dmrKeyResolver,
+            nxdnKeyResolver)
+    {
+        ArgumentNullException.ThrowIfNull(observer);
+    }
+
+    public PatchSourceDecodeCoordinator(
+        IP25KeyResolver? p25KeyResolver,
+        Action<ChannelViewModel, uint, uint, ReadOnlyMemory<short>> observer,
         Func<IVocoderBackend>? createVocoderBackend = null,
         IDmrKeyResolver? dmrKeyResolver = null,
         INxdnKeyResolver? nxdnKeyResolver = null)
@@ -69,11 +85,11 @@ public sealed class PatchSourceDecodeCoordinator : IAsyncDisposable
 
             foreach (ChannelViewModel channel in removedChannels)
             {
-                ChannelReceiveAudioSession? session;
+                SessionState? state;
                 lock (sync)
-                    sessions.Remove(channel, out session);
-                if (session is not null)
-                    await session.DisposeAsync().ConfigureAwait(false);
+                    sessions.Remove(channel, out state);
+                if (state is not null)
+                    await state.Session.DisposeAsync().ConfigureAwait(false);
             }
 
             foreach (ChannelViewModel channel in requested)
@@ -89,6 +105,7 @@ public sealed class PatchSourceDecodeCoordinator : IAsyncDisposable
 
                 ChannelReceiveAudioSession? session = null;
                 IVocoderSession? createdVocoderSession = null;
+                var sampleContext = new ReceiveSampleContext();
                 try
                 {
                     if (channel.Definition.Mode is "dmr" or "p25" or "nxdn")
@@ -107,13 +124,17 @@ public sealed class PatchSourceDecodeCoordinator : IAsyncDisposable
                         createdVocoderSession,
                         new ObservedDiscardPlayback(
                             PcmAudioFormat.Voice8KhzMono16Bit,
-                            samples => observer(channel, samples)),
+                            samples =>
+                            {
+                                if (sampleContext.TryGet(out uint streamId, out uint sourceId))
+                                    observer(channel, streamId, sourceId, samples);
+                            }),
                         p25KeyResolver,
                         dmrKeyResolver,
                         nxdnKeyResolver);
                     createdVocoderSession = null;
                     lock (sync)
-                        sessions.Add(channel, session);
+                        sessions.Add(channel, new SessionState(session, sampleContext));
                 }
                 catch
                 {
@@ -151,12 +172,21 @@ public sealed class PatchSourceDecodeCoordinator : IAsyncDisposable
         await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            ChannelReceiveAudioSession? session;
+            SessionState? state;
             lock (sync)
-                sessions.TryGetValue(channel, out session);
-            return session is not null
-                ? await session.ProcessAsync(traffic, cancellationToken).ConfigureAwait(false)
-                : 0;
+                sessions.TryGetValue(channel, out state);
+            if (state is null)
+                return 0;
+
+            state.SampleContext.Set(traffic.StreamId, traffic.SourceId);
+            try
+            {
+                return await state.Session.ProcessAsync(traffic, cancellationToken).ConfigureAwait(false);
+            }
+            finally
+            {
+                state.SampleContext.Clear();
+            }
         }
         finally
         {
@@ -201,15 +231,15 @@ public sealed class PatchSourceDecodeCoordinator : IAsyncDisposable
 
     private async Task StopCoreAsync()
     {
-        ChannelReceiveAudioSession[] activeSessions;
+        SessionState[] activeSessions;
         lock (sync)
         {
             activeSessions = sessions.Values.ToArray();
             sessions.Clear();
         }
 
-        foreach (ChannelReceiveAudioSession session in activeSessions)
-            await session.DisposeAsync().ConfigureAwait(false);
+        foreach (SessionState state in activeSessions)
+            await state.Session.DisposeAsync().ConfigureAwait(false);
         vocoderBackend?.Dispose();
         vocoderBackend = null;
     }
@@ -256,5 +286,34 @@ public sealed class PatchSourceDecodeCoordinator : IAsyncDisposable
         }
 
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
+    private sealed record SessionState(
+        ChannelReceiveAudioSession Session,
+        ReceiveSampleContext SampleContext);
+
+    private sealed class ReceiveSampleContext
+    {
+        private uint streamId;
+        private uint sourceId;
+
+        public void Set(uint nextStreamId, uint nextSourceId)
+        {
+            streamId = nextStreamId;
+            sourceId = nextSourceId;
+        }
+
+        public void Clear()
+        {
+            streamId = 0;
+            sourceId = 0;
+        }
+
+        public bool TryGet(out uint currentStreamId, out uint currentSourceId)
+        {
+            currentStreamId = streamId;
+            currentSourceId = sourceId;
+            return currentStreamId != 0 && currentSourceId != 0;
+        }
     }
 }

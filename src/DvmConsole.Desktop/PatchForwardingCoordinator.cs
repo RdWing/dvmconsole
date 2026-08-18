@@ -81,6 +81,17 @@ public sealed class PatchForwardingCoordinator : IDisposable
     {
         ArgumentNullException.ThrowIfNull(source);
         if (source.StreamId is uint streamId && source.SourceId is uint sourceId)
+            ObserveDecodedSamples(source, streamId, sourceId, samples);
+    }
+
+    public void ObserveDecodedSamples(
+        ChannelViewModel source,
+        uint streamId,
+        uint sourceId,
+        ReadOnlyMemory<short> samples)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        if (streamId != 0 && sourceId != 0)
             router.HandleAudio(ToAddress(source), streamId, sourceId, samples);
     }
 

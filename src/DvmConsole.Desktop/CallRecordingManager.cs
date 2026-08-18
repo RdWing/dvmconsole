@@ -232,16 +232,18 @@ public sealed class CallRecordingManager : IDisposable
     }
 
     public void WriteSamples(ChannelViewModel channel, ReadOnlyMemory<short> samples)
+        => WriteSamples(channel, channel.StreamId ?? 0, channel.SourceId ?? 0, samples);
+
+    public void WriteSamples(
+        ChannelViewModel channel,
+        uint streamId,
+        uint sourceId,
+        ReadOnlyMemory<short> samples)
     {
         ArgumentNullException.ThrowIfNull(channel);
-        if (samples.IsEmpty || !channel.IsRecordingEnabled)
+        if (samples.IsEmpty || !channel.IsRecordingEnabled || streamId == 0)
             return;
 
-        uint streamId = channel.StreamId ?? 0;
-        if (streamId == 0)
-            return;
-
-        uint sourceId = channel.SourceId ?? 0;
         if (sourceId != 0 && !shouldRecordSource(channel, sourceId))
         {
             lock (sync)
