@@ -5700,7 +5700,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         ArgumentNullException.ThrowIfNull(tone);
         try
         {
-            short[] samples = LegacyAlertToneGenerator.Generate(tone.Tone, amplitude: 0.35);
+            short[] samples = tone.GenerateSamples();
             await SendGeneratedToneAsync(
                 samples,
                 tone.Name,
