@@ -5,7 +5,7 @@ Status: Approved
 
 ## Scope
 
-This change addresses the reported channel-card input and visual-state regressions, adds bulk receive actions, stabilizes concurrent receive/call lifecycle handling, makes recording finalization and playback reliable under load, and consolidates completed recordings into Event History. BER reporting is explicitly out of scope.
+This change addresses the reported channel-card input and visual-state regressions, adds bulk receive and global-PTT choices, exposes live receive activity on system/zone tabs, stabilizes concurrent receive and microphone/audio lifecycle handling, corrects built-in alert tones, makes recording finalization and playback reliable under load, consolidates completed recordings into Event History, and fixes transient-dialog and recent-path layout. BER reporting is explicitly out of scope.
 
 ## Channel-card interaction
 
@@ -24,6 +24,42 @@ The existing global disable action remains. Add these actions and labels:
 - Disable all receive (zone): disable channels in the selected system's current zone.
 
 The zone actions will be unavailable when there is no selected system or zone. Each action will update the same receive state used by individual cards and will preserve unrelated channel selections such as TX, PAGE, ALERT, and TAR.
+
+## Global PTT binding
+
+The operator can explicitly configure or clear the global keyboard PTT binding. The portable preset set includes Space and F1 through F19. Selecting None disables keyboard global PTT without disabling the on-screen or optional serial PTT sources. Changing or clearing the binding safely releases any active keyboard-driven PTT before replacing its input source, persists the selection, and updates both the main-window menu and Console Settings.
+
+Focused-window and OS-global capture will use the same mapping on Windows and macOS. Unsupported or malformed persisted values normalize to None rather than unexpectedly assigning Space. The UI will describe the configured key, or show Keyboard PTT disabled when no key is assigned.
+
+## System tab status accents
+
+The system tab header will render the system name and status glyph as separate elements. Each configured system receives a deterministic accent from an accessible palette in codeplug order, so its status dot remains visually distinct from the other systems across launches. The existing filled-versus-hollow glyph continues to communicate connected versus disconnected state; detailed transitional and fault status remains available from the system status card and tooltip.
+
+System and zone tab headers will also include a narrow activity bar below the label. The system bar becomes active whenever any channel in that system is receiving; each zone bar becomes active whenever any channel in that zone is receiving. Activity must update for tabs that are not selected so simultaneous calls remain visible. Selection continues to use the normal tab selection treatment, connection continues to use the status glyph, and receive activity uses the bar, avoiding one color or marker carrying multiple meanings. The activity state changes immediately at call start and end without animation or flashing that could be mistaken for an alert.
+
+## macOS application identity
+
+The Avalonia `Application.Name` will be `DVM Console`, matching `CFBundleName`, `CFBundleDisplayName`, and the main-window title. The macOS application menu must show `DVM Console` for both unbundled development launches and packaged `.app` launches; it must not fall back to `Avalonia Application`.
+
+## Alert-tone fidelity
+
+Alert 1, 2, and 3 will match the documented legacy signaling patterns: Alert 1 is continuous 1004 Hz for 3 seconds; Alert 2 alternates 1500 Hz and 800 Hz in 250 ms steps for seven cycles; Alert 3 uses eight 250 ms bursts of 1004 Hz separated by 250 ms silence. Generated peak level will target -25 dBFS. No call site may override that calibrated level with a louder amplitude.
+
+Tone segments will preserve clean boundaries so the generator does not introduce clicks between frequency or silence transitions. Tests will verify frequency, timing, sample length, peak level, and segment-boundary continuity against the documented patterns.
+
+## Receive health and warm-microphone transitions
+
+Desired receive selection is separate from the health of the current decoder and playback session. A recoverable shared-output-route failure must not clear the operator's RX selections. When traffic is still arriving while the FNE remains connected, the application will reconcile selected channels with active receive sessions and recover the shared route for all affected channels with bounded retry and visible diagnostics. A persistent per-channel decode fault remains isolated to that channel.
+
+Changing Keep transmit microphone warm is a serialized desired-state transition. Disabling it releases only the warm capture lease; it cannot stop capture while a transmission lease is active, stop an active receive endpoint, or tear down a shared macOS voice-processing session still used by playback. Rapid setting changes cannot allow an older asynchronous request to overwrite the newest selection.
+
+Tests will simulate a shared output-route interruption across multiple selected channels, continued incoming traffic, disabling warm capture during a transmission, and stopping capture while receive playback remains active.
+
+## Dialog and recent-codeplug layout
+
+Transient message, confirmation, and text-entry windows will size to their content within practical minimum and maximum bounds. Long messages will wrap and become internally scrollable rather than stretching the window beyond the work area. The Unable to open codeplug dialog will no longer inherit an excessive fixed vertical minimum. The shared dialog construction path will be used for equivalent ad hoc windows so their sizing behavior remains consistent.
+
+Open Recent entries will render as bounded, path-aware menu content: the filename remains prominent, the parent path is middle-elided when necessary, and the full unmodified path is available in a tooltip. The exact full path remains the menu item's command value, so display shortening cannot change which codeplug is opened. Entries must remain usable without horizontal clipping on macOS and other supported desktop platforms.
 
 ## Receive stream and call lifecycle
 
@@ -86,6 +122,14 @@ Automated tests will cover:
 - nested button-content input never toggling the parent channel card;
 - immediate, stable button colors across enabled, hover, pressed, and disabled transitions;
 - global and selected-zone receive actions;
+- optional global PTT binding with portable Space and F1-F19 presets;
+- stable, distinct system-tab status accents with connected/disconnected glyphs;
+- system and zone activity bars tracking receive state independently of tab selection;
+- `DVM Console` as the macOS application-menu name in development and packaged launches;
+- exact alert patterns and a -25 dBFS peak target without call-site gain overrides;
+- route-wide RX recovery without losing desired channel selections;
+- disabling warm microphone capture without interrupting active TX or RX;
+- content-sized bounded dialogs and path-aware Open Recent entries that preserve full paths;
 - independent concurrent streams and deterministic same-channel ownership;
 - duplicate, late, timeout-resume, terminator, and superseding-stream sequences;
 - no duplicate History entries or split recordings for a resumed logical call;
