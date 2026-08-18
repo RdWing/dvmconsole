@@ -305,7 +305,7 @@ public sealed partial class MainWindow : Window
     }
 
     private void RefreshRecentCodeplugMenu()
-        => MainWindowMenuBuilder.ReplaceItems(
+        => MainWindowMenuBuilder.ReplaceRecentCodeplugItems(
             recentCodeplugsMenu,
             viewModel.RecentCodeplugPaths,
             "No recent codeplugs",
@@ -560,80 +560,29 @@ public sealed partial class MainWindow : Window
     private async Task<bool> ConfirmAsync(string title, string message, string confirmLabel = "Reset")
     {
         bool confirmed = false;
-        var cancelButton = new Button { Content = "Cancel", MinWidth = 88 };
-        var confirmButton = new Button { Content = confirmLabel, MinWidth = 88 };
-        var dialog = new Window
-        {
-            Title = title,
-            Width = 500,
-            MinHeight = 220,
-            CanResize = false,
-            WindowStartupLocation = WindowStartupLocation.CenterOwner,
-            Content = new StackPanel
-            {
-                Margin = new Thickness(20),
-                Spacing = 18,
-                Children =
-                {
-                    new TextBlock { Text = message, TextWrapping = TextWrapping.Wrap },
-                    new StackPanel
-                    {
-                        Orientation = Avalonia.Layout.Orientation.Horizontal,
-                        HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Right,
-                        Spacing = 8,
-                        Children = { cancelButton, confirmButton }
-                    }
-                }
-            }
-        };
-        cancelButton.Click += (_, _) => dialog.Close();
-        confirmButton.Click += (_, _) => { confirmed = true; dialog.Close(); };
-        await dialog.ShowDialog(this);
+        OperatorDialogParts parts = OperatorDialogFactory.CreateConfirmation(title, message, confirmLabel);
+        parts.CancelButton!.Click += (_, _) => parts.Window.Close();
+        parts.PrimaryButton.Click += (_, _) => { confirmed = true; parts.Window.Close(); };
+        await parts.Window.ShowDialog(this);
         return confirmed;
     }
 
     private async Task<string?> PromptForTextAsync(string title, string message, string confirmLabel)
     {
         bool confirmed = false;
-        var input = new TextBox { Watermark = "Profile name", MinWidth = 320 };
-        var cancelButton = new Button { Content = "Cancel", MinWidth = 88 };
-        var confirmButton = new Button { Content = confirmLabel, MinWidth = 88 };
-        var dialog = new Window
-        {
-            Title = title,
-            Width = 500,
-            MinHeight = 240,
-            CanResize = false,
-            WindowStartupLocation = WindowStartupLocation.CenterOwner,
-            Content = new StackPanel
-            {
-                Margin = new Thickness(20),
-                Spacing = 14,
-                Children =
-                {
-                    new TextBlock { Text = message, TextWrapping = TextWrapping.Wrap },
-                    input,
-                    new StackPanel
-                    {
-                        Orientation = Avalonia.Layout.Orientation.Horizontal,
-                        HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Right,
-                        Spacing = 8,
-                        Children = { cancelButton, confirmButton }
-                    }
-                }
-            }
-        };
-        cancelButton.Click += (_, _) => dialog.Close();
-        confirmButton.Click += (_, _) =>
+        OperatorDialogParts parts = OperatorDialogFactory.CreateTextPrompt(title, message, confirmLabel, "Profile name");
+        TextBox input = parts.Input!;
+        parts.CancelButton!.Click += (_, _) => parts.Window.Close();
+        parts.PrimaryButton.Click += (_, _) =>
         {
             if (!string.IsNullOrWhiteSpace(input.Text))
             {
                 confirmed = true;
-                dialog.Close();
+                parts.Window.Close();
             }
         };
-        dialog.Opened += (_, _) => input.Focus();
-        await dialog.ShowDialog(this);
+        parts.Window.Opened += (_, _) => input.Focus();
+        await parts.Window.ShowDialog(this);
         return confirmed ? input.Text?.Trim() : null;
     }
 
@@ -646,36 +595,9 @@ public sealed partial class MainWindow : Window
 
     private async Task ShowCodeplugErrorAsync(string message)
     {
-        var closeButton = new Button
-        {
-            Content = "OK",
-            HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Right,
-            MinWidth = 80
-        };
-        var dialog = new Window
-        {
-            Title = "Unable to open codeplug",
-            Width = 520,
-            MinHeight = 220,
-            CanResize = false,
-            WindowStartupLocation = WindowStartupLocation.CenterOwner,
-            Content = new StackPanel
-            {
-                Margin = new Thickness(20),
-                Spacing = 18,
-                Children =
-                {
-                    new TextBlock
-                    {
-                        Text = message,
-                        TextWrapping = TextWrapping.Wrap
-                    },
-                    closeButton
-                }
-            }
-        };
-        closeButton.Click += (_, _) => dialog.Close();
-        await dialog.ShowDialog(this);
+        OperatorDialogParts parts = OperatorDialogFactory.CreateMessage("Unable to open codeplug", message, "OK");
+        parts.PrimaryButton.Click += (_, _) => parts.Window.Close();
+        await parts.Window.ShowDialog(this);
     }
 
     private async void HandleDisableAllReceiveClick(object? sender, RoutedEventArgs e)
@@ -837,32 +759,9 @@ public sealed partial class MainWindow : Window
 
     private async Task ShowInformationAsync(string title, string message)
     {
-        var closeButton = new Button
-        {
-            Content = "OK",
-            HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Right,
-            MinWidth = 80
-        };
-        var dialog = new Window
-        {
-            Title = title,
-            Width = 500,
-            MinHeight = 210,
-            CanResize = false,
-            WindowStartupLocation = WindowStartupLocation.CenterOwner,
-            Content = new StackPanel
-            {
-                Margin = new Thickness(20),
-                Spacing = 18,
-                Children =
-                {
-                    new TextBlock { Text = message, TextWrapping = TextWrapping.Wrap },
-                    closeButton
-                }
-            }
-        };
-        closeButton.Click += (_, _) => dialog.Close();
-        await dialog.ShowDialog(this);
+        OperatorDialogParts parts = OperatorDialogFactory.CreateMessage(title, message, "OK");
+        parts.PrimaryButton.Click += (_, _) => parts.Window.Close();
+        await parts.Window.ShowDialog(this);
     }
 
     private void HandleTransmitSelectionClick(object? sender, RoutedEventArgs e)
