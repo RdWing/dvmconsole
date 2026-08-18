@@ -43,9 +43,9 @@ The Avalonia `Application.Name` will be `DVM Console`, matching `CFBundleName`, 
 
 ## Alert-tone fidelity
 
-Alert 1, 2, and 3 will match the documented legacy signaling patterns: Alert 1 is continuous 1004 Hz for 3 seconds; Alert 2 alternates 1500 Hz and 800 Hz in 250 ms steps for seven cycles; Alert 3 uses eight 250 ms bursts of 1004 Hz separated by 250 ms silence. Generated peak level will target -25 dBFS. No call site may override that calibrated level with a louder amplitude.
+Alert 1, 2, and 3 will match the established vocoder-aligned signaling patterns: Alert 1 is continuous 1000 Hz for 3 seconds; Alert 2 alternates 1500 Hz and 800 Hz in 240 ms steps for seven cycles; Alert 3 uses eight 240 ms bursts of 1000 Hz separated by 240 ms silence. The 240 ms segments are exact multiples of the 20 ms vocoder frame window and end on whole tone cycles, preventing boundary artifacts. Generated peak level will target -25 dBFS. No call site may override that calibrated level with a louder amplitude.
 
-Tone segments will preserve clean boundaries so the generator does not introduce clicks between frequency or silence transitions. Tests will verify frequency, timing, sample length, peak level, and segment-boundary continuity against the documented patterns.
+Tone segments will preserve clean boundaries so the generator does not introduce clicks between frequency or silence transitions. Tests will verify 1000 Hz Alert 1/3 output, frequency, vocoder-frame alignment, timing, sample length, peak level, and segment-boundary continuity against the established patterns.
 
 ## Receive health and warm-microphone transitions
 

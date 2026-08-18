@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Make built-in Alert 1/2/3 match the documented timing and frequency patterns at a calibrated -25 dBFS peak without clicks or a louder toolbar-only path.
+**Goal:** Keep built-in Alert 1/2/3 aligned to the established vocoder timing windows, use 1 kHz for Alert 1/3, and transmit them at a calibrated -25 dBFS peak without clicks or a louder toolbar-only path.
 
 **Architecture:** Keep one calibrated generator as the only source of built-in alert PCM. Express the documented constants directly, verify the generated signal numerically, and remove call-site amplitude overrides so every UI path transmits identical samples.
 
@@ -12,16 +12,17 @@
 
 ## Global Constraints
 
-- Alert 1: 1004 Hz for 3 seconds.
-- Alert 2: 1500 Hz then 800 Hz, 250 ms each, seven cycles.
-- Alert 3: eight 250 ms 1004 Hz bursts with seven intervening 250 ms silences.
+- Alert 1: 1000 Hz for 3 seconds.
+- Alert 2: 1500 Hz then 800 Hz, 240 ms each, seven cycles.
+- Alert 3: eight 240 ms 1000 Hz bursts with seven intervening 240 ms silences.
+- Each Alert 2/3 segment is twelve 20 ms vocoder frames and ends on a whole tone cycle.
 - Peak target: -25 dBFS; no UI path may override it.
 - Segment boundaries must not introduce discontinuity clicks.
 - Do not normalize, compress, or apply microphone AGC to generated alert PCM.
 
 ---
 
-### Task 1: Lock the documented waveform contract in tests
+### Task 1: Lock the vocoder-aligned waveform contract in tests
 
 **Files:**
 - Modify: `src/DvmConsole.Audio.Tests/LegacyAlertToneGeneratorTests.cs`
@@ -31,20 +32,20 @@
 - Consumes: `LegacyAlertToneGenerator.Generate(LegacyAlertTone)`.
 - Verifies: sample count, frequency, peak dBFS, silence, and transition continuity.
 
-- [ ] **Step 1: Replace the current 1000 Hz / 240 ms expectations**
+- [ ] **Step 1: Make the 1000 Hz / 240 ms contract explicit**
 
-Assert the documented lengths at 8 kHz:
+Assert the established vocoder-aligned lengths at 8 kHz:
 
 ```csharp
 [Theory]
 [InlineData(LegacyAlertTone.Alert1, 24_000)]
-[InlineData(LegacyAlertTone.Alert2, 28_000)]
-[InlineData(LegacyAlertTone.Alert3, 30_000)]
+[InlineData(LegacyAlertTone.Alert2, 26_880)]
+[InlineData(LegacyAlertTone.Alert3, 28_800)]
 public void UsesDocumentedDuration(LegacyAlertTone tone, int expectedSamples)
     => Assert.Equal(expectedSamples, LegacyAlertToneGenerator.Generate(tone).Length);
 ```
 
-Update frequency assertions to 1004 Hz for Alert 1/3 and retain 1500/800 Hz for Alert 2. Use 2,000-sample segments for 250 ms steps.
+Assert 1000 Hz for Alert 1/3 and retain 1500/800 Hz for Alert 2. Use 1,920-sample segments for 240 ms steps and assert each segment is divisible by the 160 samples in a 20 ms vocoder frame.
 
 - [ ] **Step 2: Add calibrated-level and boundary tests**
 
@@ -62,7 +63,7 @@ For every step boundary, assert the sample immediately before and at the boundar
 
 Run: `dotnet test src/DvmConsole.Audio.Tests/DvmConsole.Audio.Tests.csproj --no-restore --filter FullyQualifiedName~LegacyAlertToneGeneratorTests /m:1 /p:UseSharedCompilation=false`
 
-Expected: FAIL on 1000 Hz, 240 ms, and current Alert 2/3 sample counts.
+Expected: existing frequency and alignment assertions PASS as characterization coverage; the new desktop transmission-path test in Task 2 provides the required RED regression for the level defect.
 
 - [ ] **Step 4: Commit the waveform contract tests**
 
@@ -71,44 +72,45 @@ git add src/DvmConsole.Audio.Tests/LegacyAlertToneGeneratorTests.cs
 git commit -m "test: specify alert tone waveforms"
 ```
 
-### Task 2: Correct the generator and remove the loud call-site override
+### Task 2: Preserve the generator and remove the loud call-site override
 
 **Files:**
 - Modify: `src/DvmConsole.Audio/LegacyAlertToneGenerator.cs`
+- Modify: `src/DvmConsole.Desktop/AlertToneViewModel.cs`
 - Modify: `src/DvmConsole.Desktop/MainWindow.axaml.cs:5690-5710`
 - Modify: `src/DvmConsole.Audio.Tests/LegacyAlertToneGeneratorTests.cs`
-- Test: `src/DvmConsole.Desktop.Tests/SystemViewModelTests.cs`
+- Create: `src/DvmConsole.Desktop.Tests/BuiltInAlertToneViewModelTests.cs`
 
 **Interfaces:**
 - Produces: a single default alert amplitude of `10^(-25/20)` (approximately `0.056234`).
 - Consumes: generated PCM through `SendGeneratedToneAsync` without gain replacement.
 
-- [ ] **Step 1: Implement the documented generator constants**
+- [ ] **Step 1: Add a desktop regression test for the exact generator path**
 
-Set:
+Write `BuiltInAlertToneViewModelTests` against a wished-for `GenerateSamples()` method and assert Alert 1 yields 24,000 samples at -25 dBFS, while Alert 3 yields 28,800 vocoder-aligned samples at -25 dBFS. Run it and verify RED because the method does not exist. Do not make the test send FNE traffic merely to inspect sample amplitude.
+
+- [ ] **Step 2: Keep the vocoder-aligned generator constants and expose its calibrated output**
+
+Retain the vocoder-aligned frequency and timing constants:
 
 ```csharp
-public const double ToneFrequencyHz = 1004;
+public const double ToneFrequencyHz = 1000;
 public const double TargetPeakDbfs = -25;
 public static readonly double Amplitude = Math.Pow(10, TargetPeakDbfs / 20);
-public static readonly TimeSpan StepDuration = TimeSpan.FromMilliseconds(250);
+public static readonly TimeSpan StepDuration = TimeSpan.FromMilliseconds(240);
 ```
 
-Keep the seven Alert 2 cycles and eight Alert 3 bursts. Because all listed frequencies complete an integer number of cycles in 250 ms, each generated tone step returns to a zero crossing. Preserve step-local phase or explicitly carry phase only if the boundary tests show a discontinuity.
+Keep the seven Alert 2 cycles and eight Alert 3 bursts. All listed frequencies complete an integer number of cycles in 240 ms, and every segment spans exactly twelve 20 ms vocoder frames, so each generated tone step returns to a zero crossing without splitting the intended timing window.
 
-- [ ] **Step 2: Remove the toolbar transmission-level override**
+- [ ] **Step 3: Remove the toolbar transmission-level override**
 
-Change built-in alert transmission to:
+Implement `BuiltInAlertToneViewModel.GenerateSamples()` as the single default-calibrated generator call, and change built-in alert transmission to:
 
 ```csharp
-short[] samples = LegacyAlertToneGenerator.Generate(tone.Tone);
+short[] samples = tone.GenerateSamples();
 ```
 
 Delete the test that legitimizes `amplitude: 0.35`. Keep the public amplitude overload only if another verified caller needs deliberate test generation; no product call site may use it for built-in alerts.
-
-- [ ] **Step 3: Add a desktop regression test for the exact generator path**
-
-Extract or expose an internal pure helper used by `SendBuiltInAlertToneAsync` so the desktop test can assert it returns the default calibrated waveform. Do not make the test send FNE traffic merely to inspect sample amplitude.
 
 - [ ] **Step 4: Run audio and desktop alert tests**
 
@@ -121,7 +123,7 @@ Expected: PASS with -25 dBFS peak and exact documented lengths.
 - [ ] **Step 5: Commit the calibrated alert path**
 
 ```bash
-git add src/DvmConsole.Audio/LegacyAlertToneGenerator.cs src/DvmConsole.Desktop/MainWindow.axaml.cs src/DvmConsole.Audio.Tests/LegacyAlertToneGeneratorTests.cs src/DvmConsole.Desktop.Tests/SystemViewModelTests.cs
+git add src/DvmConsole.Audio/LegacyAlertToneGenerator.cs src/DvmConsole.Desktop/AlertToneViewModel.cs src/DvmConsole.Desktop/MainWindow.axaml.cs src/DvmConsole.Audio.Tests/LegacyAlertToneGeneratorTests.cs src/DvmConsole.Desktop.Tests/BuiltInAlertToneViewModelTests.cs
 git commit -m "fix: calibrate built-in alert tones"
 ```
 
