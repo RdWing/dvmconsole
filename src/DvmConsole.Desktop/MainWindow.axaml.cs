@@ -1120,6 +1120,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     private readonly Dictionary<(ChannelViewModel Channel, ChannelAudioDirection Direction), DateTimeOffset> lastAudioMeterUpdates = [];
     private readonly ReceiveDiagnosticsReporter receiveDiagnosticsReporter = new(TimeSpan.FromMilliseconds(500));
     private readonly SemaphoreSlim audioReconfigurationLock = new(1, 1);
+    private readonly Dictionary<ChannelViewModel, DateTimeOffset> receiveRetryAfter = [];
     private readonly Dictionary<string, FneConnectionState> lastConnectionStates = new(StringComparer.OrdinalIgnoreCase);
     private readonly IReadOnlyDictionary<SystemViewModel, IReadOnlyDictionary<(FneTrafficProtocol Protocol, uint DestinationId), ChannelViewModel[]>> trafficRoutes;
     private readonly ConnectionChimeTracker connectionChimeTracker = new();
@@ -3655,7 +3656,10 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             StatusText = $"{system.Name}: {status.State} — {status.Message}";
             NotifyConnectionPresentationChanged();
             if (status.State == FneConnectionState.Connected)
+            {
                 RequestConfiguredP25Keys(system);
+                _ = ReconcileReceiveSessionsAsync();
+            }
             bool stateChanged = !lastConnectionStates.TryGetValue(system.Name, out FneConnectionState previousState) ||
                 previousState != status.State;
             lastConnectionStates[system.Name] = status.State;
@@ -4638,6 +4642,81 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         }
     }
 
+    private async Task<ReceiveRouteRecoveryResult> RecoverSelectedReceiveAudioAsync()
+    {
+        await audioReconfigurationLock.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            ChannelViewModel[] desired = Systems
+                .SelectMany(system => system.Channels)
+                .Where(channel => channel.IsAudioEnabled)
+                .Distinct()
+                .ToArray();
+            ReceiveRouteRecoveryResult result = await audioCoordinator
+                .RecoverSelectedAsync(desired)
+                .ConfigureAwait(false);
+            DateTimeOffset retryAt = DateTimeOffset.UtcNow.AddSeconds(5);
+            foreach (ChannelViewModel channel in result.Restarted)
+            {
+                receiveRetryAfter.Remove(channel);
+                receiveAudioWork.Start(channel);
+            }
+            foreach (ChannelViewModel channel in result.Failed)
+                receiveRetryAfter[channel] = retryAt;
+            return result;
+        }
+        finally
+        {
+            audioReconfigurationLock.Release();
+        }
+    }
+
+    internal async Task ReconcileReceiveSessionsAsync()
+    {
+        if (Volatile.Read(ref disposeStarted) != 0)
+            return;
+
+        await audioReconfigurationLock.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            DateTimeOffset now = DateTimeOffset.UtcNow;
+            ChannelViewModel[] missing = Systems
+                .SelectMany(system => system.Channels)
+                .Where(channel => channel.IsAudioEnabled &&
+                    !audioCoordinator.IsActive(channel) &&
+                    (!receiveRetryAfter.TryGetValue(channel, out DateTimeOffset retryAt) || retryAt <= now))
+                .Distinct()
+                .ToArray();
+            if (missing.Length == 0)
+                return;
+
+            int restarted = 0;
+            foreach (ChannelViewModel channel in missing)
+            {
+                try
+                {
+                    await audioCoordinator.StartAsync(channel).ConfigureAwait(false);
+                    receiveAudioWork.Start(channel);
+                    receiveRetryAfter.Remove(channel);
+                    restarted++;
+                }
+                catch
+                {
+                    receiveRetryAfter[channel] = now.AddSeconds(5);
+                }
+            }
+
+            Dispatcher.UIThread.Post(() =>
+                AudioStatusText = restarted == missing.Length
+                    ? $"Restored {restarted} selected receive channel(s)."
+                    : $"RX audio unavailable; retrying {missing.Length - restarted} selected channel(s).");
+        }
+        finally
+        {
+            audioReconfigurationLock.Release();
+        }
+    }
+
     private async Task StopAudioAsync(ChannelViewModel channel)
     {
         try
@@ -4672,13 +4751,14 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         }
         catch (Exception exception)
         {
-            if (IsAudioDeviceFailure(exception) &&
-                await audioCoordinator.TryRecoverAsync(channel).ConfigureAwait(false))
+            if (IsAudioDeviceFailure(exception))
             {
+                ReceiveRouteRecoveryResult recovery = await RecoverSelectedReceiveAudioAsync().ConfigureAwait(false);
                 Dispatcher.UIThread.Post(() =>
                 {
-                    channel.SetAudioEnabled(true);
-                    AudioStatusText = $"RX audio restarted for {channel.Name} after an output-device interruption.";
+                    AudioStatusText = recovery.Failed.Count == 0
+                        ? $"RX audio restarted for {recovery.Restarted.Count} selected channel(s) after an output-device interruption."
+                        : recovery.Diagnostic ?? "RX audio unavailable; retrying selected channels.";
                 });
                 return;
             }
@@ -6033,6 +6113,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     {
         RefreshClock();
         ExpireStaleReceiveStates(DateTimeOffset.UtcNow);
+        _ = ReconcileReceiveSessionsAsync();
     }
 
     internal void ExpireStaleReceiveStates(DateTimeOffset now)

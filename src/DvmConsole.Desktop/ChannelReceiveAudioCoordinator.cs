@@ -14,6 +14,7 @@ namespace DvmConsole.Desktop;
 public sealed class ChannelReceiveAudioCoordinator : IAsyncDisposable
 {
     private readonly SemaphoreSlim gate = new(1, 1);
+    private readonly SemaphoreSlim recoveryGate = new(1, 1);
     private readonly ConcurrentDictionary<ChannelViewModel, SessionState> sessions = [];
     private readonly Dictionary<ChannelViewModel, string> sessionRoutes = [];
     private readonly Dictionary<string, AudioRoute> audioRoutes = new(StringComparer.OrdinalIgnoreCase);
@@ -112,29 +113,62 @@ public sealed class ChannelReceiveAudioCoordinator : IAsyncDisposable
         ArgumentNullException.ThrowIfNull(channel);
         if (!IsActive(channel))
             return false;
+        ReceiveRouteRecoveryResult result = await RecoverSelectedAsync([channel], cancellationToken).ConfigureAwait(false);
+        return result.Restarted.Contains(channel);
+    }
 
+    public async Task<ReceiveRouteRecoveryResult> RecoverSelectedAsync(
+        IReadOnlyCollection<ChannelViewModel> desiredChannels,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(desiredChannels);
+        ChannelViewModel[] desired = desiredChannels
+            .Where(channel => channel is not null)
+            .Distinct()
+            .ToArray();
+        if (desired.Length == 0)
+            return new ReceiveRouteRecoveryResult([], [], null);
+
+        await recoveryGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            await StopAsync(channel, cancellationToken).ConfigureAwait(false);
-            await StartAsync(channel, cancellationToken).ConfigureAwait(false);
-            return true;
-        }
-        catch
-        {
-            if (IsActive(channel))
+            Exception? stopFailure = null;
+            try
+            {
+                await StopAsync(cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception exception)
+            {
+                stopFailure = exception;
+            }
+
+            var restarted = new List<ChannelViewModel>();
+            var failed = new List<ChannelViewModel>();
+            foreach (ChannelViewModel channel in desired)
             {
                 try
                 {
-                    await StopAsync(channel, cancellationToken).ConfigureAwait(false);
+                    await StartAsync(channel, cancellationToken).ConfigureAwait(false);
+                    if (IsActive(channel))
+                        restarted.Add(channel);
+                    else
+                        failed.Add(channel);
                 }
                 catch
                 {
-                    // The failed recovery is already surfaced to the caller;
-                    // keep cleanup best-effort and require an explicit retry.
+                    failed.Add(channel);
                 }
             }
 
-            return false;
+            string? diagnostic = failed.Count > 0 || stopFailure is not null
+                ? $"Restarted {restarted.Count} selected receive channel(s); {failed.Count} remain unavailable" +
+                  (stopFailure is null ? "." : $" after cleanup reported: {stopFailure.Message}")
+                : null;
+            return new ReceiveRouteRecoveryResult(restarted, failed, diagnostic);
+        }
+        finally
+        {
+            recoveryGate.Release();
         }
     }
 
@@ -425,6 +459,7 @@ public sealed class ChannelReceiveAudioCoordinator : IAsyncDisposable
         {
             gate.Release();
             gate.Dispose();
+            recoveryGate.Dispose();
         }
     }
 
@@ -649,3 +684,8 @@ public sealed class ChannelReceiveAudioCoordinator : IAsyncDisposable
             => inner.DisposeAsync();
     }
 }
+
+public sealed record ReceiveRouteRecoveryResult(
+    IReadOnlyList<ChannelViewModel> Restarted,
+    IReadOnlyList<ChannelViewModel> Failed,
+    string? Diagnostic);
