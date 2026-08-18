@@ -6199,9 +6199,10 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         IEnumerable<CallHistoryEntry> desiredEntries)
     {
         CallHistoryEntry[] desired = desiredEntries.ToArray();
+        var desiredSet = new HashSet<CallHistoryEntry>(desired, ReferenceEqualityComparer.Instance);
         for (int index = target.Count - 1; index >= 0; index--)
         {
-            if (!desired.Contains(target[index]))
+            if (!desiredSet.Contains(target[index]))
                 target.RemoveAt(index);
         }
 
