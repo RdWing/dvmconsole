@@ -109,10 +109,11 @@ public sealed partial class MainWindow : Window
 
     private async void HandleChannelPointerPressed(object? sender, PointerPressedEventArgs e)
     {
-        if (e.Source is Button or Slider)
+        if (sender is not Control control ||
+            ChannelCardInput.IsInteractiveSource(e.Source, control))
             return;
 
-        if (sender is Control { DataContext: ChannelViewModel channel } control &&
+        if (control.DataContext is ChannelViewModel channel &&
             DataContext is MainWindowViewModel viewModel)
         {
             PointerPointProperties properties = e.GetCurrentPoint(control).Properties;
@@ -680,6 +681,15 @@ public sealed partial class MainWindow : Window
     private async void HandleDisableAllReceiveClick(object? sender, RoutedEventArgs e)
         => await viewModel.DisableAllReceiveAsync();
 
+    private async void HandleEnableAllReceiveClick(object? sender, RoutedEventArgs e)
+        => await viewModel.EnableAllReceiveAsync();
+
+    private async void HandleEnableZoneReceiveClick(object? sender, RoutedEventArgs e)
+        => await viewModel.EnableSelectedZoneReceiveAsync();
+
+    private async void HandleDisableZoneReceiveClick(object? sender, RoutedEventArgs e)
+        => await viewModel.DisableSelectedZoneReceiveAsync();
+
     private async void HandleSubscriberCommandClick(object? sender, RoutedEventArgs e)
     {
         if (sender is not MenuItem { Tag: string value } ||
@@ -857,53 +867,20 @@ public sealed partial class MainWindow : Window
 
     private void HandleTransmitSelectionClick(object? sender, RoutedEventArgs e)
     {
-        if (sender is Button { DataContext: ChannelViewModel channel } button)
-        {
+        if (sender is Button { DataContext: ChannelViewModel channel })
             viewModel.ToggleChannelTransmitSelection(channel);
-            ApplyTransmitSelectionButtonBrush(button, channel);
-        }
-    }
-
-    private static void HandleTransmitSelectionPointerEntered(object? sender, PointerEventArgs e)
-    {
-        if (sender is Button { DataContext: ChannelViewModel channel } button)
-            ApplyTransmitSelectionButtonBrush(button, channel);
-    }
-
-    private static void ApplyTransmitSelectionButtonBrush(Button button, ChannelViewModel channel)
-    {
-        button.Background = channel.TransmitSelectionBrush;
-        button.BorderBrush = channel.TransmitSelectionBorderBrush;
     }
 
     private void HandlePageSelectionClick(object? sender, RoutedEventArgs e)
     {
-        if (sender is Button { DataContext: ChannelViewModel channel } button)
-        {
+        if (sender is Button { DataContext: ChannelViewModel channel })
             viewModel.ToggleChannelPageSelection(channel);
-            ApplyPageSelectionButtonBrush(button, channel);
-        }
-    }
-
-    private static void HandlePageSelectionPointerEntered(object? sender, PointerEventArgs e)
-    {
-        if (sender is Button { DataContext: ChannelViewModel channel } button)
-            ApplyPageSelectionButtonBrush(button, channel);
-    }
-
-    private static void ApplyPageSelectionButtonBrush(Button button, ChannelViewModel channel)
-    {
-        button.Background = channel.PageSelectionBrush;
-        button.BorderBrush = channel.PageSelectionBorderBrush;
     }
 
     private void HandleAlertSelectionClick(object? sender, RoutedEventArgs e)
     {
-        if (sender is Button { DataContext: ChannelViewModel channel } button)
-        {
+        if (sender is Button { DataContext: ChannelViewModel channel })
             viewModel.ToggleChannelAlertSelection(channel);
-            ApplyAlertSelectionButtonBrush(button, channel);
-        }
     }
 
     private async void HandleSystemStatusClick(object? sender, RoutedEventArgs e)
@@ -915,18 +892,6 @@ public sealed partial class MainWindow : Window
     private void HandleDismissCodeplugDiagnosticsClick(object? sender, RoutedEventArgs e)
     {
         viewModel.DismissCodeplugDiagnostics();
-    }
-
-    private static void HandleAlertSelectionPointerEntered(object? sender, PointerEventArgs e)
-    {
-        if (sender is Button { DataContext: ChannelViewModel channel } button)
-            ApplyAlertSelectionButtonBrush(button, channel);
-    }
-
-    private static void ApplyAlertSelectionButtonBrush(Button button, ChannelViewModel channel)
-    {
-        button.Background = channel.AlertSelectionBrush;
-        button.BorderBrush = channel.AlertSelectionBorderBrush;
     }
 
     private void HandleToggleAllTransmitSelectionClick(object? sender, RoutedEventArgs e)
@@ -994,9 +959,16 @@ public sealed partial class MainWindow : Window
             Key.F10 => KeyboardPttKey.F10,
             Key.F11 => KeyboardPttKey.F11,
             Key.F12 => KeyboardPttKey.F12,
+            Key.F13 => KeyboardPttKey.F13,
+            Key.F14 => KeyboardPttKey.F14,
+            Key.F15 => KeyboardPttKey.F15,
+            Key.F16 => KeyboardPttKey.F16,
+            Key.F17 => KeyboardPttKey.F17,
+            Key.F18 => KeyboardPttKey.F18,
+            Key.F19 => KeyboardPttKey.F19,
             _ => default
         };
-        return key is Key.Space or (>= Key.F1 and <= Key.F12);
+        return key is Key.Space or (>= Key.F1 and <= Key.F19);
     }
 
     private void ConfigureTransientScrollBars(ScrollViewer? viewer)
@@ -2350,7 +2322,9 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         }
     }
 
-    public string GlobalPttKeyText => keyboardPtt.ActivationKey.ToString();
+    public string GlobalPttKeyText => keyboardPtt.ActivationKey == KeyboardPttKey.None
+        ? "Keyboard PTT disabled"
+        : keyboardPtt.ActivationKey.ToString();
 
     public IReadOnlyList<KeyboardPttKey> GlobalPttKeyOptions => GlobalPttKeyOptionValues;
 
@@ -2558,7 +2532,9 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     }
 
     public string SelectionStatusText => selectedChannel is null
-        ? $"Choose TX on one or more cards, then hold {GlobalPttKeyText}."
+        ? keyboardPtt.ActivationKey == KeyboardPttKey.None
+            ? "Choose TX on one or more cards. Keyboard PTT is disabled."
+            : $"Choose TX on one or more cards, then hold {GlobalPttKeyText}."
         : $"RX focus: {selectedChannel.Name}. Global PTT: {GlobalPttKeyText}.";
 
     public IReadOnlyList<SystemViewModel> Systems { get; }
@@ -3143,6 +3119,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     }
 
     public ChannelViewModel? SelectedChannel => selectedChannel;
+    public bool HasSelectedZone => SelectedSystem?.SelectedZone is not null;
 
     public SystemViewModel? SelectedSystem
     {
@@ -3158,6 +3135,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             userSettings.LastSelectedSystemName = value?.Name;
             PersistUserSettings();
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SelectedSystem)));
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(HasSelectedZone)));
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ActivityCallHistory)));
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ActivitySubscriberCommandAudit)));
             NotifyConnectionPresentationChanged();
@@ -3175,7 +3153,10 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     private void HandleSystemPropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
         if (e.PropertyName == nameof(SystemViewModel.SelectedZone) && ReferenceEquals(sender, SelectedSystem))
+        {
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ActivityCallHistory)));
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(HasSelectedZone)));
+        }
     }
 
     public async ValueTask StartKeyboardPttAsync(CancellationToken cancellationToken = default)
@@ -3225,6 +3206,12 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
 
     private async ValueTask StartKeyboardPttSourceAsync(CancellationToken cancellationToken)
     {
+        if (keyboardPtt.ActivationKey == KeyboardPttKey.None)
+        {
+            TransmitStatusText = "PTT idle; keyboard PTT disabled.";
+            return;
+        }
+
         if (GlobalKeyboardPttSource.IsPlatformSupported)
         {
             var candidate = new GlobalKeyboardPttSource(keyboardPtt.ActivationKey)
@@ -3373,7 +3360,9 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         PersistUserSettings();
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(GlobalPttKeyText)));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SelectionStatusText)));
-        TransmitStatusText = $"Global PTT key set to {key}.";
+        TransmitStatusText = key == KeyboardPttKey.None
+            ? "Keyboard global PTT disabled."
+            : $"Global PTT key set to {key}.";
     }
 
     public async Task ToggleChannelReceiveAsync(ChannelViewModel channel)
@@ -3387,13 +3376,39 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     }
 
     public async Task DisableAllReceiveAsync()
+        => await SetReceiveAsync(ReceiveSelectionScope.All, enabled: false).ConfigureAwait(false);
+
+    public async Task EnableAllReceiveAsync()
+        => await SetReceiveAsync(ReceiveSelectionScope.All, enabled: true).ConfigureAwait(false);
+
+    public async Task EnableSelectedZoneReceiveAsync()
+        => await SetReceiveAsync(ReceiveSelectionScope.SelectedZone, enabled: true).ConfigureAwait(false);
+
+    public async Task DisableSelectedZoneReceiveAsync()
+        => await SetReceiveAsync(ReceiveSelectionScope.SelectedZone, enabled: false).ConfigureAwait(false);
+
+    internal IReadOnlyList<ChannelViewModel> GetReceiveScopeChannels(ReceiveSelectionScope scope)
+        => scope switch
+        {
+            ReceiveSelectionScope.All => Systems
+                .SelectMany(system => system.Channels)
+                .Distinct()
+                .ToArray(),
+            ReceiveSelectionScope.SelectedZone => SelectedSystem?.SelectedZone?.Channels
+                .Distinct()
+                .ToArray() ?? [],
+            _ => throw new ArgumentOutOfRangeException(nameof(scope))
+        };
+
+    private async Task SetReceiveAsync(ReceiveSelectionScope scope, bool enabled)
     {
-        ChannelViewModel[] activeChannels = Systems
-            .SelectMany(system => system.Channels)
-            .Where(channel => channel.IsAudioEnabled)
-            .ToArray();
-        foreach (ChannelViewModel channel in activeChannels)
-            await StopAudioAsync(channel).ConfigureAwait(false);
+        foreach (ChannelViewModel channel in GetReceiveScopeChannels(scope))
+        {
+            if (enabled && !channel.IsAudioEnabled)
+                await StartAudioAsync(channel).ConfigureAwait(false);
+            else if (!enabled && channel.IsAudioEnabled)
+                await StopAudioAsync(channel).ConfigureAwait(false);
+        }
     }
 
     public async Task StartChannelTransmitAsync(ChannelViewModel channel)
@@ -3561,8 +3576,9 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             channels.Add(channel);
         }
 
-        return configuration.Systems.Select(system =>
+        return configuration.Systems.Select((system, systemIndex) =>
         {
+            IBrush systemAccent = SystemAccentPalette.GetBrush(systemIndex);
             IReadOnlyList<ZoneViewModel> systemZones = zones
                 .Select(zone => new ZoneViewModel(
                     zone.Name,
@@ -3571,7 +3587,8 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
                         StringComparison.OrdinalIgnoreCase)).ToArray(),
                     zone.WebStreams,
                     zone.TabColor,
-                    zone.TabTextColor))
+                    zone.TabTextColor,
+                    systemAccent))
                 .Where(zone => zone.Channels.Count > 0)
                 .ToArray();
 
@@ -3582,7 +3599,8 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
                 channelsBySystem.TryGetValue(system.Name, out List<ChannelViewModel>? channels)
                     ? channels
                     : [],
-                systemZones);
+                systemZones,
+                systemIndex);
         }).ToArray();
     }
 
@@ -5915,7 +5933,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     private static KeyboardPttKey ParseGlobalPttKey(string? value)
         => Enum.TryParse(value, ignoreCase: true, out KeyboardPttKey key)
             ? key
-            : KeyboardPttKey.Space;
+            : KeyboardPttKey.None;
 
     private void HandleTransmitFaulted(object? sender, Exception exception)
     {
@@ -6502,7 +6520,8 @@ public sealed class SystemViewModel : IFneTrafficEndpoint, INotifyPropertyChange
         string name,
         string endpoint,
         IEnumerable<ChannelViewModel>? channels = null,
-        IEnumerable<ZoneViewModel>? zones = null)
+        IEnumerable<ZoneViewModel>? zones = null,
+        int accentIndex = 0)
     {
         this.options = options ?? throw new ArgumentNullException(nameof(options));
         connection = new FneConnection(this.options);
@@ -6510,7 +6529,10 @@ public sealed class SystemViewModel : IFneTrafficEndpoint, INotifyPropertyChange
         Endpoint = endpoint;
         Channels = channels?.ToArray() ?? [];
         Zones = zones?.ToArray() ?? [];
+        StatusAccentBrush = SystemAccentPalette.GetBrush(accentIndex);
         selectedZone = Zones.FirstOrDefault();
+        foreach (ChannelViewModel channel in Channels)
+            channel.PropertyChanged += HandleChannelPropertyChanged;
         connection.StatusChanged += HandleConnectionStatus;
         connection.LogReceived += HandleLogReceived;
         connection.TrafficReceived += HandleTrafficReceived;
@@ -6542,6 +6564,10 @@ public sealed class SystemViewModel : IFneTrafficEndpoint, INotifyPropertyChange
     public bool IsConnected => connection.Status.State == FneConnectionState.Connected;
     public bool IsConnectionActive => connection.Status.State is not (FneConnectionState.Disconnected or FneConnectionState.Faulted);
     public bool IsSelected => isSelected;
+    public bool IsReceiving => Channels.Any(channel => channel.State == ChannelRuntimeState.Receiving);
+    public double ActivityBarOpacity => IsReceiving ? 1.0 : 0.12;
+    public IBrush StatusAccentBrush { get; }
+    public string StatusGlyph => IsConnected ? "●" : "○";
     public string ConnectionPillText => connection.Status.State.ToString().ToUpperInvariant();
     public string ConnectionActionText => IsConnectionActive ? $"Disconnect {Name}" : $"Start {Name}";
     public IBrush ConnectionBrush => new SolidColorBrush(Color.Parse(connection.Status.State switch
@@ -6577,6 +6603,7 @@ public sealed class SystemViewModel : IFneTrafficEndpoint, INotifyPropertyChange
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ConnectionActionText)));
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ConnectionBrush)));
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SystemTabText)));
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(StatusGlyph)));
         }
     }
 
@@ -6672,6 +6699,8 @@ public sealed class SystemViewModel : IFneTrafficEndpoint, INotifyPropertyChange
 
     public async ValueTask DisposeAsync()
     {
+        foreach (ChannelViewModel channel in Channels)
+            channel.PropertyChanged -= HandleChannelPropertyChanged;
         connection.StatusChanged -= HandleConnectionStatus;
         connection.LogReceived -= HandleLogReceived;
         connection.TrafficReceived -= HandleTrafficReceived;
@@ -6715,24 +6744,36 @@ public sealed class SystemViewModel : IFneTrafficEndpoint, INotifyPropertyChange
     {
         KeyResponseReceived?.Invoke(this, response);
     }
+
+    private void HandleChannelPropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName != nameof(ChannelViewModel.State))
+            return;
+
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsReceiving)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ActivityBarOpacity)));
+    }
 }
 
 public sealed class ZoneViewModel : INotifyPropertyChanged
 {
     private bool darkMode;
+    private readonly IBrush activityBrush;
 
     public ZoneViewModel(
         string name,
         IReadOnlyList<ChannelViewModel> channels,
         IReadOnlyList<WebStreamViewModel> webStreams,
         string? tabColor = null,
-        string? tabTextColor = null)
+        string? tabTextColor = null,
+        IBrush? activityBrush = null)
     {
         Name = name;
         Channels = channels;
         WebStreams = webStreams;
         TabColor = tabColor;
         TabTextColor = tabTextColor;
+        this.activityBrush = activityBrush ?? new SolidColorBrush(Color.Parse("#00BE5A"));
         foreach (ChannelViewModel channel in Channels)
             channel.PropertyChanged += HandleChannelPropertyChanged;
     }
@@ -6745,6 +6786,9 @@ public sealed class ZoneViewModel : INotifyPropertyChanged
     public string? TabTextColor { get; }
     public IBrush TabBrush => CreateBrush(TabColor, darkMode ? "#151D26" : "#E8EDF3");
     public IBrush TabTextBrush => CreateBrush(TabTextColor, darkMode ? "#DCE3EB" : "#18212B");
+    public IBrush ActivityBrush => activityBrush;
+    public bool IsReceiving => Channels.Any(channel => channel.State == ChannelRuntimeState.Receiving);
+    public double ActivityBarOpacity => IsReceiving ? 1.0 : 0.12;
     private double widgetCardHeight = 122;
     public double WidgetCanvasWidth => Math.Max(1, Channels.Count == 0 ? 0 : Channels.Max(channel => channel.WidgetX + channel.CardWidth + 12));
     public double WidgetCanvasHeight => Math.Max(1, Channels.Count == 0 ? 0 : Channels.Max(channel => channel.WidgetY + widgetCardHeight + 12));
@@ -6778,6 +6822,11 @@ public sealed class ZoneViewModel : INotifyPropertyChanged
         {
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(WidgetCanvasWidth)));
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(WidgetCanvasHeight)));
+        }
+        else if (e.PropertyName == nameof(ChannelViewModel.State))
+        {
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsReceiving)));
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ActivityBarOpacity)));
         }
     }
 

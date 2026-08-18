@@ -1,5 +1,6 @@
 using DvmConsole.Audio;
 using Avalonia.Media;
+using DvmConsole.Core.Configuration;
 using DvmConsole.Core.Settings;
 using DvmConsole.Core.Runtime;
 using DvmConsole.Desktop;
@@ -114,6 +115,30 @@ public sealed class SystemViewModelTests
 
         Assert.Equal(Color.Parse("#151D26"), Assert.IsType<SolidColorBrush>(zone.TabBrush).Color);
         Assert.Equal(Color.Parse("#DCE3EB"), Assert.IsType<SolidColorBrush>(zone.TabTextBrush).Color);
+    }
+
+    [Fact]
+    public async Task ReceiveScopesDistinguishAllSystemsFromSelectedZone()
+    {
+        string codeplugPath = Path.Combine(AppContext.BaseDirectory, "TestData", "multiple-systems.yml");
+        string settingsPath = CreateSettingsPath();
+        try
+        {
+            await using MainWindowViewModel viewModel = MainWindowViewModel.Load(
+                codeplugPath,
+                new UserSettingsStore(settingsPath));
+            viewModel.SelectedSystem = viewModel.Systems[0];
+            viewModel.Systems[0].SelectedZone = viewModel.Systems[0].Zones[1];
+
+            Assert.Equal(5, viewModel.GetReceiveScopeChannels(ReceiveSelectionScope.All).Count);
+            Assert.Equal(
+                viewModel.Systems[0].Zones[1].Channels,
+                viewModel.GetReceiveScopeChannels(ReceiveSelectionScope.SelectedZone));
+        }
+        finally
+        {
+            CleanupSettingsPath(settingsPath);
+        }
     }
 
     [Fact]
@@ -845,6 +870,53 @@ public sealed class SystemViewModelTests
     }
 
     [Fact]
+    public async Task SystemReceiveActivityTracksChannelsIndependentlyOfSelection()
+    {
+        var channel = new ChannelViewModel(new ChannelConfiguration
+        {
+            Name = "Dispatch",
+            System = "Test",
+            Tgid = "2002",
+            Mode = "p25"
+        });
+        var system = new SystemViewModel(
+            new FneConnectionOptions("Test", "Console", "127.0.0.1", 62031, 1, null, false, null),
+            "Test",
+            "127.0.0.1:62031",
+            [channel],
+            [],
+            accentIndex: 1);
+        var traffic = new FneTrafficFrame(
+            FneTrafficProtocol.P25,
+            1,
+            1001,
+            2002,
+            null,
+            "GROUP",
+            "VOICE",
+            "LDU1",
+            7,
+            42,
+            []);
+
+        try
+        {
+            Assert.Equal("○", system.StatusGlyph);
+            Assert.False(system.IsReceiving);
+            Assert.True(channel.TryApplyTraffic("Test", traffic));
+            Assert.True(system.IsReceiving);
+            Assert.Equal(1.0, system.ActivityBarOpacity);
+            Assert.Equal(
+                Assert.IsType<SolidColorBrush>(SystemAccentPalette.GetBrush(1)).Color,
+                Assert.IsType<SolidColorBrush>(system.StatusAccentBrush).Color);
+        }
+        finally
+        {
+            await system.DisposeAsync();
+        }
+    }
+
+    [Fact]
     public async Task ConnectionDiagnosticsCoalesceRepeatedPacketNotifications()
     {
         var system = new SystemViewModel(
@@ -1026,6 +1098,8 @@ public sealed class SystemViewModelTests
             viewModel.KeepWindowOnTop = true;
             viewModel.TogglePttMode = true;
             Assert.Contains(KeyboardPttKey.F3, viewModel.GlobalPttKeyOptions);
+            Assert.Contains(KeyboardPttKey.F19, viewModel.GlobalPttKeyOptions);
+            Assert.Contains(KeyboardPttKey.None, viewModel.GlobalPttKeyOptions);
             viewModel.SelectedGlobalPttKey = KeyboardPttKey.F3;
             await viewModel.ApplyGlobalPttKeySelectionAsync();
 
@@ -1036,6 +1110,11 @@ public sealed class SystemViewModelTests
             Assert.True(saved.TogglePttMode);
             Assert.Equal("F3", saved.GlobalPttKey);
             Assert.True(viewModel.IsConfiguredPttKey(KeyboardPttKey.F3));
+
+            viewModel.SelectedGlobalPttKey = KeyboardPttKey.None;
+            await viewModel.ApplyGlobalPttKeySelectionAsync();
+            Assert.Equal("None", store.Load().GlobalPttKey);
+            Assert.Equal("Keyboard PTT disabled", viewModel.GlobalPttKeyText);
             Assert.NotEmpty(viewModel.ClockText);
         }
         finally

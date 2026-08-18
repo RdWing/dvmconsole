@@ -455,7 +455,7 @@ git commit -m "feat: show system and zone receive activity"
 
 Extend the keyboard tests with Windows F13/F19 and macOS F13/F19 mappings, plus a theory covering every enum value from F1 through F19. In desktop tests, assert `GlobalPttKeyOptions` starts with None and contains F13-F19. Add a disabled test that applies None, confirms `GlobalPttKeyText == "Keyboard PTT disabled"`, confirms focused key events do not trigger PTT, and confirms serial/on-screen sources remain available.
 
-In settings tests, assert `F19` round-trips, `None` round-trips, a missing value uses the new-install default, and an unsupported value normalizes to None rather than Space.
+In settings tests, assert `F19` round-trips, `None` round-trips, a missing value preserves the existing new-install Space default, and an unsupported explicit value normalizes to None rather than unexpectedly assigning Space.
 
 - [ ] **Step 2: Run the focused tests and observe the missing enum values**
 
@@ -471,7 +471,7 @@ Expected: FAIL because None and F13-F19 are not represented or mapped.
 
 Add `None` and F13-F19 to `KeyboardPttKey`. Extend Windows mapping through virtual key `0x82` and macOS mapping through the platform function-key codes. Extend `MainWindow.TryMapPttKey` through Avalonia `Key.F19`. Keep mapping tests as the source of truth; do not infer function-key values arithmetically on macOS.
 
-Change settings normalization to accept only None, Space, and F1-F19. Use None as the no-binding value and new-install default. Preserve all valid existing Space/F1-F12 values.
+Change settings normalization to accept only None, Space, and F1-F19. Preserve Space as the new-install default and preserve all valid existing Space/F1-F12 values; None is the explicit no-binding value.
 
 - [ ] **Step 4: Make source replacement safe and expose the complete choices**
 

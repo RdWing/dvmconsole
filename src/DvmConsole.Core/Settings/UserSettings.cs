@@ -714,15 +714,17 @@ public sealed class UserSettingsStore
     private static string NormalizeGlobalPttKey(string? key)
     {
         string candidate = key?.Trim() ?? string.Empty;
-        return candidate.Equals("Space", StringComparison.OrdinalIgnoreCase) ||
+        return candidate.Equals("None", StringComparison.OrdinalIgnoreCase) ||
+               candidate.Equals("Space", StringComparison.OrdinalIgnoreCase) ||
                (candidate.Length is 2 or 3 && candidate.StartsWith("F", StringComparison.OrdinalIgnoreCase) &&
-                int.TryParse(candidate[1..], out int functionKey) && functionKey is >= 1 and <= 12)
+                int.TryParse(candidate[1..], out int functionKey) && functionKey is >= 1 and <= 19)
             ? candidate.ToUpperInvariant() switch
             {
                 "SPACE" => "Space",
+                "NONE" => "None",
                 var value => value
             }
-            : "Space";
+            : "None";
     }
 
     private static void NormalizeSerialPttSettings(UserSettings settings)

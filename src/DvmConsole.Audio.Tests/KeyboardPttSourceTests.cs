@@ -55,10 +55,32 @@ public sealed class KeyboardPttSourceTests
     [InlineData(0x20, KeyboardPttKey.Space)]
     [InlineData(0x70, KeyboardPttKey.F1)]
     [InlineData(0x7B, KeyboardPttKey.F12)]
+    [InlineData(0x7C, KeyboardPttKey.F13)]
+    [InlineData(0x82, KeyboardPttKey.F19)]
     public void MapsWindowsVirtualKeys(uint virtualKey, KeyboardPttKey expected)
     {
         Assert.True(KeyboardPttKeyMapping.TryFromWindowsVirtualKey(virtualKey, out KeyboardPttKey actual));
         Assert.Equal(expected, actual);
+    }
+
+    [Theory]
+    [InlineData(105, KeyboardPttKey.F13)]
+    [InlineData(80, KeyboardPttKey.F19)]
+    public void MapsMacFunctionKeys(long keyCode, KeyboardPttKey expected)
+    {
+        Assert.True(KeyboardPttKeyMapping.TryFromMacKeyCode(keyCode, out KeyboardPttKey actual));
+        Assert.Equal(expected, actual);
+    }
+
+    [Fact]
+    public async Task NoneDisablesKeyboardActivation()
+    {
+        await using var ptt = new KeyboardPttSource(KeyboardPttKey.None);
+        await ptt.StartAsync();
+
+        Assert.False(ptt.HandleKeyDown(KeyboardPttKey.Space));
+        Assert.False(ptt.HandleKeyDown(KeyboardPttKey.F19));
+        Assert.False(ptt.IsPressed);
     }
 
     [Fact]
