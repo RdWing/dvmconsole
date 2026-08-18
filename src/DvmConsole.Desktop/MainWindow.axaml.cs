@@ -1081,6 +1081,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     private readonly UserSettings userSettings;
     private readonly string codeplugDiagnosticsText;
     private readonly ChannelTransmitCoordinator transmitCoordinator;
+    private readonly LatestBooleanStateReconciler warmMicrophoneReconciler;
     private readonly ToneTransmitCoordinator toneTransmitCoordinator;
     private readonly TalkPermitTonePlayer talkPermitTonePlayer;
     private readonly PatchForwardingCoordinator patchForwarding;
@@ -1336,9 +1337,12 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             CreateTransmitAudioBackend,
             dmrKeyResolver: dmrKeyResolver,
             nxdnKeyResolver: nxdnKeyResolver);
+        warmMicrophoneReconciler = new LatestBooleanStateReconciler(
+            transmitCoordinator.SetKeepMicrophoneWarmAsync);
+        warmMicrophoneReconciler.Reconciled += HandleWarmMicrophoneReconciled;
         transmitCoordinator.HighQualityBluetoothStatusChanged += HandleHighQualityBluetoothStatusChanged;
         if (userSettings.KeepTransmitMicrophoneWarm)
-            _ = WarmTransmitMicrophoneAsync();
+            _ = warmMicrophoneReconciler.SetDesired(true);
         toneTransmitCoordinator = new ToneTransmitCoordinator(
             p25KeyResolver,
             dmrKeyResolver: dmrKeyResolver,
@@ -2021,7 +2025,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             PersistUserSettings();
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(KeepTransmitMicrophoneWarm)));
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(KeepTransmitMicrophoneWarmToolTip)));
-            _ = WarmTransmitMicrophoneAsync();
+            _ = warmMicrophoneReconciler.SetDesired(value);
         }
     }
 
@@ -3535,6 +3539,8 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         }
         await toneTransmitCoordinator.DisposeAsync().ConfigureAwait(false);
         await talkPermitTonePlayer.DisposeAsync().ConfigureAwait(false);
+        warmMicrophoneReconciler.Reconciled -= HandleWarmMicrophoneReconciled;
+        await warmMicrophoneReconciler.WhenIdleAsync().ConfigureAwait(false);
         await transmitCoordinator.DisposeAsync().ConfigureAwait(false);
         foreach (SystemViewModel system in Systems)
         {
@@ -4057,18 +4063,25 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             Dispatcher.UIThread.Post(() => AudioStatusText = message);
     }
 
-    private async Task WarmTransmitMicrophoneAsync()
+    private void HandleWarmMicrophoneReconciled(object? sender, LatestBooleanStateResult result)
     {
-        try
+        Dispatcher.UIThread.Post(() =>
         {
-            await transmitCoordinator.SetKeepMicrophoneWarmAsync(userSettings.KeepTransmitMicrophoneWarm).ConfigureAwait(false);
-            if (userSettings.KeepTransmitMicrophoneWarm)
+            if (result.Error is not null)
+            {
+                AudioStatusText = $"Unable to change warm microphone state: {result.Error.Message}";
+            }
+            else if (result.Desired)
+            {
                 AudioStatusText = "Transmit microphone is warm. This is generally useful only for Bluetooth headsets to reduce PTT latency and may lower output audio quality.";
-        }
-        catch (Exception exception)
-        {
-            AudioStatusText = $"Unable to keep the transmit microphone warm: {exception.Message}";
-        }
+            }
+            else
+            {
+                AudioStatusText = transmitCoordinator.ActiveChannels.Count > 0
+                    ? "Warm microphone mode disabled; the active transmission continues."
+                    : "Warm microphone mode disabled; the microphone will open on PTT.";
+            }
+        });
     }
 
     private AudioProcessingMode GetConfiguredAudioProcessingMode()
