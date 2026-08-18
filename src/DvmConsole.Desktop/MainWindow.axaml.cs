@@ -6425,27 +6425,30 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         SynchronizeHistoryView(activityCallHistoryEntries, desired);
     }
 
-    private static void SynchronizeHistoryView(
+    internal static void SynchronizeHistoryView(
         ObservableCollection<CallHistoryEntry> target,
         IEnumerable<CallHistoryEntry> desiredEntries)
     {
         CallHistoryEntry[] desired = desiredEntries.ToArray();
         var desiredSet = new HashSet<CallHistoryEntry>(desired, ReferenceEqualityComparer.Instance);
-        for (int index = target.Count - 1; index >= 0; index--)
+        lock (target)
         {
-            if (!desiredSet.Contains(target[index]))
-                target.RemoveAt(index);
-        }
+            for (int index = target.Count - 1; index >= 0; index--)
+            {
+                if (!desiredSet.Contains(target[index]))
+                    target.RemoveAt(index);
+            }
 
-        for (int index = 0; index < desired.Length; index++)
-        {
-            if (index < target.Count && ReferenceEquals(target[index], desired[index]))
-                continue;
-            int existingIndex = target.IndexOf(desired[index]);
-            if (existingIndex >= 0)
-                target.Move(existingIndex, index);
-            else
-                target.Insert(index, desired[index]);
+            for (int index = 0; index < desired.Length; index++)
+            {
+                if (index < target.Count && ReferenceEquals(target[index], desired[index]))
+                    continue;
+                int existingIndex = target.IndexOf(desired[index]);
+                if (existingIndex >= 0)
+                    target.Move(existingIndex, index);
+                else
+                    target.Insert(index, desired[index]);
+            }
         }
     }
 

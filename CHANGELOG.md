@@ -12,12 +12,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - Add zone-scoped enable-all and disable-all receive actions to the Channels menu.
 - Add optional global keyboard PTT selection through F19, including F13–F19, and allow keyboard PTT to be disabled.
-- Add receive-activity indicators for systems and zones, distinct system status accents, and centered zero detents for channel volume and balance.
+- Add receive-activity indicators for systems and zones, distinct system status accents, and center snapping for channel volume and balance.
 - Add recording catalog search, filters, and technical details to Event History while keeping TAR setup and channel recording configuration in Recorder.
 
 ### Changed
 
-- Keep completed recordings in the unified Event History catalog and reconcile catalog changes incrementally in the background.
+- Present completed recordings in compact, space-efficient Event History rows with playback, open, and delete actions available inline.
+- List Recorder channel configuration directly by system, expanded by default with each system independently collapsible.
+- Keep standard slider thumbs without separate center markers while retaining the neutral snap behavior.
+- Reconcile recording catalog changes incrementally in the background.
 - Preserve one call identity across late, delayed, duplicate, and concurrent audio traffic, including independent output-device recovery.
 - Calibrate built-in Alert 1 and Alert 3 tones to the requested frequencies, durations, vocoder windows, and −25 dBFS target.
 - Preserve active transmit and receive paths while changing the warm-microphone setting.
@@ -27,7 +30,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Prevent TX, PAGE, ALERT, and TAR card buttons from conflicting with card selection, flickering on hover, or losing their enabled colors while pressed.
 - Prevent busy-system playback stalls, silent playable recordings, duplicate History rows, and stale recording-only entries.
 - Preserve legacy recordings as stable, playable catalog entries when their sidecars are upgraded.
-- Size codeplug and recording dialogs for long paths and readable error content, and identify the macOS application as DVM Console.
+- Prevent concurrent History refreshes from racing on Windows and stopping the release build before packaging.
+- Size codeplug and recording dialogs for long paths, keep Commands subscriber dialogs content-sized, and identify the macOS application as DVM Console.
 
 ## [0.2.2] - 2026-08-17
 

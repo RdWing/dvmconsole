@@ -1,6 +1,5 @@
 using Avalonia;
 using Avalonia.Controls;
-using Avalonia.Controls.Primitives;
 using Avalonia.Input;
 
 namespace DvmConsole.Desktop;
@@ -37,7 +36,7 @@ public static class NeutralSliderMath
     }
 }
 
-// Adds a neutral detent only while the operator is actively pointer-dragging the thumb.
+// Adds a neutral detent while the operator clicks or drags the slider.
 public sealed class NeutralSnapSlider : Slider
 {
     public static readonly StyledProperty<double> NeutralValueProperty =
@@ -45,7 +44,11 @@ public sealed class NeutralSnapSlider : Slider
     public static readonly StyledProperty<double> SnapFractionProperty =
         AvaloniaProperty.Register<NeutralSnapSlider, double>(nameof(SnapFraction), 0.05);
 
-    private bool isThumbDrag;
+    private bool isPointerInteraction;
+
+    // Custom controls use their own theme key by default. Reuse Slider's Fluent
+    // template so the track and thumb remain visible while adding only behavior.
+    protected override Type StyleKeyOverride => typeof(Slider);
 
     public double NeutralValue
     {
@@ -61,38 +64,35 @@ public sealed class NeutralSnapSlider : Slider
 
     protected override void OnPointerPressed(PointerPressedEventArgs e)
     {
-        isThumbDrag = e.GetCurrentPoint(this).Properties.IsLeftButtonPressed && HasThumbAncestor(e.Source);
+        isPointerInteraction = e.GetCurrentPoint(this).Properties.IsLeftButtonPressed;
         base.OnPointerPressed(e);
+        SnapPointerValue();
     }
 
     protected override void OnPointerMoved(PointerEventArgs e)
     {
         base.OnPointerMoved(e);
-        if (!isThumbDrag || !e.GetCurrentPoint(this).Properties.IsLeftButtonPressed)
+        if (!isPointerInteraction || !e.GetCurrentPoint(this).Properties.IsLeftButtonPressed)
         {
-            isThumbDrag = false;
+            isPointerInteraction = false;
             return;
         }
 
-        Value = NeutralSliderMath.SnapToNeutral(Value, Minimum, Maximum, NeutralValue, SnapFraction);
+        SnapPointerValue();
     }
 
     protected override void OnPointerReleased(PointerReleasedEventArgs e)
     {
         base.OnPointerReleased(e);
-        isThumbDrag = false;
+        SnapPointerValue();
+        isPointerInteraction = false;
     }
 
-    private static bool HasThumbAncestor(object? source)
-    {
-        for (StyledElement? element = source as StyledElement;
-             element is not null;
-             element = element.Parent as StyledElement)
-        {
-            if (element is Thumb)
-                return true;
-        }
-
-        return false;
-    }
+    private void SnapPointerValue()
+        => Value = NeutralSliderMath.SnapToNeutral(
+            Value,
+            Minimum,
+            Maximum,
+            NeutralValue,
+            SnapFraction);
 }

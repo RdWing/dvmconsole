@@ -1,3 +1,4 @@
+using System.Collections.ObjectModel;
 using DvmConsole.Desktop;
 using DvmConsole.FneClient;
 using Xunit;
@@ -6,6 +7,26 @@ namespace DvmConsole.Desktop.Tests;
 
 public sealed class CallHistoryStoreTests
 {
+    [Fact]
+    public void SynchronizesSharedHistoryViewAtomicallyAcrossRefreshes()
+    {
+        CallHistoryEntry[] entries = Enumerable.Range(1, 12)
+            .Select(streamId => CreateEntry((uint)streamId))
+            .ToArray();
+        var target = new ObservableCollection<CallHistoryEntry>(entries);
+        CallHistoryEntry[] firstView = entries.Take(4).ToArray();
+        CallHistoryEntry[] secondView = entries.Skip(4).Take(6).ToArray();
+
+        Parallel.For(0, 2_000, index =>
+            MainWindowViewModel.SynchronizeHistoryView(
+                target,
+                index % 2 == 0 ? firstView : secondView));
+
+        Assert.True(
+            target.SequenceEqual(firstView) || target.SequenceEqual(secondView),
+            "The final view should match one complete refresh rather than interleaved mutations.");
+    }
+
     [Fact]
     public void AddsNewestCallsFirstAndTrimsOldEntries()
     {

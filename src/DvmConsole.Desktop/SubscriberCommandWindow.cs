@@ -6,8 +6,16 @@ using DvmConsole.FneClient;
 
 namespace DvmConsole.Desktop;
 
+internal sealed record SubscriberCommandWindowLayout(
+    SizeToContent SizeToContent,
+    double MaxHeight,
+    bool CanResize);
+
 public sealed class SubscriberCommandWindow : Window
 {
+    internal static SubscriberCommandWindowLayout Layout { get; } =
+        new(SizeToContent.Height, 440, false);
+
     private readonly MainWindowViewModel viewModel;
     private readonly P25SubscriberCommand command;
     private readonly ComboBox systemSelector;
@@ -20,8 +28,9 @@ public sealed class SubscriberCommandWindow : Window
         this.command = command;
         Title = CommandTitle(command);
         Width = 520;
-        MinHeight = command is P25SubscriberCommand.Inhibit or P25SubscriberCommand.Uninhibit ? 340 : 280;
-        CanResize = false;
+        SizeToContent = Layout.SizeToContent;
+        MaxHeight = Layout.MaxHeight;
+        CanResize = Layout.CanResize;
         WindowStartupLocation = WindowStartupLocation.CenterOwner;
 
         systemSelector = new ComboBox

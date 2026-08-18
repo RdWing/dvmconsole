@@ -14,4 +14,14 @@ public sealed class OperatorDialogFactoryTests
         Assert.InRange(layout.MessageMaxHeight, 200, 500);
         Assert.False(layout.CanResize);
     }
+
+    [Fact]
+    public void SubscriberCommandDialogsUseBoundedContentHeight()
+    {
+        SubscriberCommandWindowLayout layout = SubscriberCommandWindow.Layout;
+
+        Assert.Equal(Avalonia.Controls.SizeToContent.Height, layout.SizeToContent);
+        Assert.InRange(layout.MaxHeight, 300, 500);
+        Assert.False(layout.CanResize);
+    }
 }
