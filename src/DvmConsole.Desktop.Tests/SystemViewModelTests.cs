@@ -16,6 +16,15 @@ namespace DvmConsole.Desktop.Tests;
 public sealed class SystemViewModelTests
 {
     [Fact]
+    public void RecordingCatalogSnapshotRejectsConcurrentCompletionDeletionAndNewerScans()
+    {
+        Assert.True(MainWindowViewModel.IsRecordingCatalogSnapshotCurrent(4, 4, 10, 10, false));
+        Assert.False(MainWindowViewModel.IsRecordingCatalogSnapshotCurrent(4, 4, 10, 11, false));
+        Assert.False(MainWindowViewModel.IsRecordingCatalogSnapshotCurrent(4, 5, 10, 10, false));
+        Assert.False(MainWindowViewModel.IsRecordingCatalogSnapshotCurrent(4, 4, 10, 10, true));
+    }
+
+    [Fact]
     public void OperatorToolSectionsFollowConsoleSettingsTabOrder()
     {
         Assert.Equal(
@@ -631,6 +640,8 @@ public sealed class SystemViewModelTests
             Assert.Single(viewModel.CallHistory);
             Assert.False(viewModel.CallHistory[0].IsActive);
             Assert.Equal(ChannelRuntimeState.Idle, channel.State);
+            Assert.Equal(1, channel.IgnoredLatePacketCount);
+            Assert.Contains("late/duplicate 1", viewModel.AudioStatusText, StringComparison.OrdinalIgnoreCase);
         }
         finally
         {
@@ -693,6 +704,7 @@ public sealed class SystemViewModelTests
 
             Assert.Single(viewModel.CallHistory);
             Assert.Single(system.Channels, channel => channel.State == ChannelRuntimeState.Receiving);
+            Assert.All(system.Zones, zone => Assert.True(zone.IsReceiving));
         }
         finally
         {

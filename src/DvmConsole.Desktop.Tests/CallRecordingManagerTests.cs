@@ -1,4 +1,5 @@
 using DvmConsole.Core.Configuration;
+using DvmConsole.Audio;
 using DvmConsole.Desktop;
 using DvmConsole.FneClient;
 using DvmConsole.Media;
@@ -542,6 +543,131 @@ public sealed class CallRecordingManagerTests
             Assert.False(File.Exists(wavPath));
             Assert.False(File.Exists(sidecarPath));
             Assert.Empty(manager.LoadRecordings());
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void MigratesLegacySidecarToStablePlayableMetadata()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "dvmconsole-recording-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        string wavPath = Path.Combine(root, "legacy.wav");
+        using (var writer = new PcmWavFileWriter(wavPath, PcmAudioFormat.Voice8KhzMono16Bit))
+            writer.Write(Enumerable.Repeat((short)1200, 800).ToArray());
+        string sidecarPath = Path.ChangeExtension(wavPath, ".json");
+        File.WriteAllText(sidecarPath, JsonSerializer.Serialize(new
+        {
+            SchemaVersion = 1,
+            Direction = "RX",
+            Protocol = "ANALOG",
+            UtcStartTime = DateTimeOffset.UnixEpoch,
+            UtcEndTime = DateTimeOffset.UnixEpoch.AddMilliseconds(100),
+            DurationMs = 100,
+            FilePath = wavPath,
+            FileName = "legacy.wav",
+            SystemName = "System 1",
+            ChannelName = "Dispatch",
+            TalkgroupId = 99,
+            SubscriberId = 42,
+            StreamId = 7
+        }));
+        using var manager = new CallRecordingManager(root);
+
+        try
+        {
+            CallRecordingMetadata first = Assert.Single(manager.LoadRecordings());
+            CallRecordingMetadata second = Assert.Single(manager.LoadRecordings());
+
+            Assert.True(first.IsPlayable);
+            Assert.Equal(first.RecordingId, second.RecordingId);
+            Assert.False(string.IsNullOrWhiteSpace(first.RecordingId));
+            Assert.Equal(2, first.SchemaVersion);
+            string migratedJson = File.ReadAllText(sidecarPath);
+            Assert.Contains("\"PlaybackValidated\": true", migratedJson, StringComparison.Ordinal);
+            Assert.Contains(first.RecordingId, migratedJson, StringComparison.Ordinal);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void RetriesLegacyValidationAfterAInitiallyInvalidAudioFile()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "dvmconsole-recording-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        string wavPath = Path.Combine(root, "retry.wav");
+        File.WriteAllBytes(wavPath, [1, 2, 3]);
+        string sidecarPath = Path.ChangeExtension(wavPath, ".json");
+        File.WriteAllText(sidecarPath, JsonSerializer.Serialize(new
+        {
+            SchemaVersion = 1,
+            Direction = "RX",
+            Protocol = "ANALOG",
+            UtcStartTime = DateTimeOffset.UnixEpoch,
+            UtcEndTime = DateTimeOffset.UnixEpoch.AddMilliseconds(100),
+            DurationMs = 100,
+            FilePath = wavPath,
+            SystemName = "System 1",
+            ChannelName = "Dispatch",
+            TalkgroupId = 99,
+            StreamId = 7
+        }));
+        using var manager = new CallRecordingManager(root);
+
+        try
+        {
+            CallRecordingMetadata first = Assert.Single(manager.LoadRecordings());
+            Assert.Equal(1, first.SchemaVersion);
+            Assert.False(first.IsPlayable);
+            Assert.Contains("\"SchemaVersion\":1", File.ReadAllText(sidecarPath), StringComparison.Ordinal);
+
+            File.Delete(wavPath);
+            using (var writer = new PcmWavFileWriter(wavPath, PcmAudioFormat.Voice8KhzMono16Bit))
+                writer.Write(Enumerable.Repeat((short)1200, 800).ToArray());
+
+            CallRecordingMetadata retried = Assert.Single(manager.LoadRecordings());
+            Assert.Equal(2, retried.SchemaVersion);
+            Assert.True(retried.IsPlayable);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void DeduplicatesCopiedSidecarsWithTheSameRecordingIdentity()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "dvmconsole-recording-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        string wavPath = Path.Combine(root, "dispatch.wav");
+        File.WriteAllBytes(wavPath, [1, 2, 3]);
+        var metadata = new CallRecordingMetadata
+        {
+            SchemaVersion = 2,
+            RecordingId = "same-recording",
+            PlaybackValidated = true,
+            UtcStartTime = DateTimeOffset.UnixEpoch,
+            FilePath = wavPath,
+            FileName = "dispatch.wav"
+        };
+        string json = JsonSerializer.Serialize(metadata);
+        File.WriteAllText(Path.Combine(root, "dispatch.json"), json);
+        File.WriteAllText(Path.Combine(root, "dispatch-copy.json"), json);
+        using var manager = new CallRecordingManager(root);
+
+        try
+        {
+            Assert.Single(manager.LoadRecordings());
         }
         finally
         {

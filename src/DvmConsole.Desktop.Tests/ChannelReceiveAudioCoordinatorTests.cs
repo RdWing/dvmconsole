@@ -448,6 +448,57 @@ public sealed class ChannelReceiveAudioCoordinatorTests
         await WaitForAsync(() => replacementBackend.Playback.Frames.Count >= 2);
     }
 
+    [Fact]
+    public async Task RouteRecoveryDoesNotInterruptASeparateOutputDevice()
+    {
+        var failedBackend = new RecoveringAudioBackend(failWrites: true);
+        var alternateBackend = new FakeAudioBackend();
+        var replacementBackend = new RecoveringAudioBackend(failWrites: false);
+        IAudioBackend[] backends = [failedBackend, alternateBackend, replacementBackend];
+        int backendIndex = 0;
+        var failed = new ChannelViewModel(new ChannelConfiguration
+        {
+            Name = "Failed route",
+            System = "System 1",
+            Tgid = "100",
+            Mode = "dmr",
+            Slot = 1
+        });
+        var unaffected = new ChannelViewModel(new ChannelConfiguration
+        {
+            Name = "Separate route",
+            System = "System 1",
+            Tgid = "101",
+            Mode = "dmr",
+            Slot = 2
+        });
+        await using var coordinator = new ChannelReceiveAudioCoordinator(
+            () => backends[backendIndex++],
+            () => new FakeVocoderBackend(),
+            getOutputDeviceId: channel => ReferenceEquals(channel, unaffected) ? "alternate" : null);
+        await coordinator.StartAsync(failed);
+        await coordinator.StartAsync(unaffected);
+        await coordinator.ProcessAsync(unaffected, CreateTraffic(101, 1, streamId: 200));
+        await WaitForAsync(() => alternateBackend.AlternatePlayback.Frames.Count > 0);
+
+        await coordinator.ProcessAsync(failed, CreateTraffic(100, 0));
+        await WaitForAsync(() => failedBackend.Playback.WriteAttempts > 0);
+        await Assert.ThrowsAsync<IOException>(() => coordinator.ProcessAsync(
+            failed,
+            CreateTraffic(100, 0, packetSequence: 2)));
+        ReceiveRouteRecoveryResult recovery = await coordinator.RecoverSelectedAsync([failed]);
+
+        Assert.Single(recovery.Restarted);
+        Assert.Same(failed, recovery.Restarted[0]);
+        Assert.True(coordinator.IsActive(unaffected));
+        Assert.False(alternateBackend.AlternatePlayback.IsDisposed);
+        int framesBefore = alternateBackend.AlternatePlayback.Frames.Count;
+        await coordinator.ProcessAsync(unaffected, CreateTraffic(101, 1, packetSequence: 2, streamId: 200));
+        await WaitForAsync(() => alternateBackend.AlternatePlayback.Frames.Count > framesBefore);
+        await coordinator.ProcessAsync(failed, CreateTraffic(100, 0, packetSequence: 3));
+        await WaitForAsync(() => replacementBackend.Playback.Frames.Count > 0);
+    }
+
     private static FneTrafficFrame CreateTraffic(
         uint destinationId,
         byte slot,

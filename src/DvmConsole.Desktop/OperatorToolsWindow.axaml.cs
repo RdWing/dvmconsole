@@ -288,8 +288,26 @@ public sealed partial class OperatorToolsWindow : Window
 
     private async void HandleDeleteRecordingClick(object? sender, RoutedEventArgs e)
     {
-        if (sender is Button { Tag: CallRecordingMetadata metadata })
+        if (sender is Button { Tag: CallRecordingMetadata metadata } &&
+            await ConfirmAsync(
+                "Delete recording",
+                $"Delete '{metadata.FileName}' and its catalog metadata? This cannot be undone.",
+                "Delete"))
             await viewModel.DeleteRecordingAsync(metadata);
+    }
+
+    private async Task<bool> ConfirmAsync(string title, string message, string confirmLabel)
+    {
+        bool confirmed = false;
+        OperatorDialogParts parts = OperatorDialogFactory.CreateConfirmation(title, message, confirmLabel);
+        parts.CancelButton!.Click += (_, _) => parts.Window.Close();
+        parts.PrimaryButton.Click += (_, _) =>
+        {
+            confirmed = true;
+            parts.Window.Close();
+        };
+        await parts.Window.ShowDialog(this);
+        return confirmed;
     }
 
     private void HandleApplyPatchGroupClick(object? sender, RoutedEventArgs e)

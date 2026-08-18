@@ -67,8 +67,16 @@ public sealed class CallHistoryWindow : Window
                         }
                     };
                     var system = new TextBlock { Text = entry.SystemName };
-                    var encryption = new TextBlock { Text = entry.EncryptionText };
-                    var duration = new TextBlock { Text = entry.DurationText };
+                    var encryption = new TextBlock();
+                    encryption.Bind(TextBlock.TextProperty, new Binding(nameof(CallHistoryEntry.EncryptionText))
+                    {
+                        Source = entry
+                    });
+                    var duration = new TextBlock();
+                    duration.Bind(TextBlock.TextProperty, new Binding(nameof(CallHistoryEntry.DurationText))
+                    {
+                        Source = entry
+                    });
                     var play = new Button
                     {
                         Content = "Play",
