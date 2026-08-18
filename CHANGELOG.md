@@ -6,6 +6,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.2.3] - 2026-08-17
+
+### Added
+
+- Add zone-scoped enable-all and disable-all receive actions to the Channels menu.
+- Add optional global keyboard PTT selection through F19, including F13–F19, and allow keyboard PTT to be disabled.
+- Add receive-activity indicators for systems and zones, distinct system status accents, and centered zero detents for channel volume and balance.
+- Add recording catalog search, filters, and technical details to Event History while keeping TAR setup and channel recording configuration in Recorder.
+
+### Changed
+
+- Keep completed recordings in the unified Event History catalog and reconcile catalog changes incrementally in the background.
+- Preserve one call identity across late, delayed, duplicate, and concurrent audio traffic, including independent output-device recovery.
+- Calibrate built-in Alert 1 and Alert 3 tones to the requested frequencies, durations, vocoder windows, and −25 dBFS target.
+- Preserve active transmit and receive paths while changing the warm-microphone setting.
+
+### Fixed
+
+- Prevent TX, PAGE, ALERT, and TAR card buttons from conflicting with card selection, flickering on hover, or losing their enabled colors while pressed.
+- Prevent busy-system playback stalls, silent playable recordings, duplicate History rows, and stale recording-only entries.
+- Preserve legacy recordings as stable, playable catalog entries when their sidecars are upgraded.
+- Size codeplug and recording dialogs for long paths and readable error content, and identify the macOS application as DVM Console.
+
 ## [0.2.2] - 2026-08-17
 
 ### Added
@@ -110,7 +133,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Add patches, multi-select groups, call history, recordings, web streams, clocks, layouts, themes, startup behavior, and in-application operator documentation.
 - Add support for local and KMM-provided P25 encryption keys while preserving compatibility with existing variable-length AES key material.
 
-[Unreleased]: https://github.com/RdWing/dvmconsole/compare/v0.2.2...HEAD
+[Unreleased]: https://github.com/RdWing/dvmconsole/compare/v0.2.3...HEAD
+[0.2.3]: https://github.com/RdWing/dvmconsole/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/RdWing/dvmconsole/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/RdWing/dvmconsole/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/RdWing/dvmconsole/compare/v0.1.1...v0.2.0
