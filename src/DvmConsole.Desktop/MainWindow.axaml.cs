@@ -109,10 +109,11 @@ public sealed partial class MainWindow : Window
 
     private async void HandleChannelPointerPressed(object? sender, PointerPressedEventArgs e)
     {
-        if (e.Source is Button or Slider)
+        if (sender is not Control control ||
+            ChannelCardInput.IsInteractiveSource(e.Source, control))
             return;
 
-        if (sender is Control { DataContext: ChannelViewModel channel } control &&
+        if (control.DataContext is ChannelViewModel channel &&
             DataContext is MainWindowViewModel viewModel)
         {
             PointerPointProperties properties = e.GetCurrentPoint(control).Properties;
@@ -304,7 +305,7 @@ public sealed partial class MainWindow : Window
     }
 
     private void RefreshRecentCodeplugMenu()
-        => MainWindowMenuBuilder.ReplaceItems(
+        => MainWindowMenuBuilder.ReplaceRecentCodeplugItems(
             recentCodeplugsMenu,
             viewModel.RecentCodeplugPaths,
             "No recent codeplugs",
@@ -559,80 +560,29 @@ public sealed partial class MainWindow : Window
     private async Task<bool> ConfirmAsync(string title, string message, string confirmLabel = "Reset")
     {
         bool confirmed = false;
-        var cancelButton = new Button { Content = "Cancel", MinWidth = 88 };
-        var confirmButton = new Button { Content = confirmLabel, MinWidth = 88 };
-        var dialog = new Window
-        {
-            Title = title,
-            Width = 500,
-            MinHeight = 220,
-            CanResize = false,
-            WindowStartupLocation = WindowStartupLocation.CenterOwner,
-            Content = new StackPanel
-            {
-                Margin = new Thickness(20),
-                Spacing = 18,
-                Children =
-                {
-                    new TextBlock { Text = message, TextWrapping = TextWrapping.Wrap },
-                    new StackPanel
-                    {
-                        Orientation = Avalonia.Layout.Orientation.Horizontal,
-                        HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Right,
-                        Spacing = 8,
-                        Children = { cancelButton, confirmButton }
-                    }
-                }
-            }
-        };
-        cancelButton.Click += (_, _) => dialog.Close();
-        confirmButton.Click += (_, _) => { confirmed = true; dialog.Close(); };
-        await dialog.ShowDialog(this);
+        OperatorDialogParts parts = OperatorDialogFactory.CreateConfirmation(title, message, confirmLabel);
+        parts.CancelButton!.Click += (_, _) => parts.Window.Close();
+        parts.PrimaryButton.Click += (_, _) => { confirmed = true; parts.Window.Close(); };
+        await parts.Window.ShowDialog(this);
         return confirmed;
     }
 
     private async Task<string?> PromptForTextAsync(string title, string message, string confirmLabel)
     {
         bool confirmed = false;
-        var input = new TextBox { Watermark = "Profile name", MinWidth = 320 };
-        var cancelButton = new Button { Content = "Cancel", MinWidth = 88 };
-        var confirmButton = new Button { Content = confirmLabel, MinWidth = 88 };
-        var dialog = new Window
-        {
-            Title = title,
-            Width = 500,
-            MinHeight = 240,
-            CanResize = false,
-            WindowStartupLocation = WindowStartupLocation.CenterOwner,
-            Content = new StackPanel
-            {
-                Margin = new Thickness(20),
-                Spacing = 14,
-                Children =
-                {
-                    new TextBlock { Text = message, TextWrapping = TextWrapping.Wrap },
-                    input,
-                    new StackPanel
-                    {
-                        Orientation = Avalonia.Layout.Orientation.Horizontal,
-                        HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Right,
-                        Spacing = 8,
-                        Children = { cancelButton, confirmButton }
-                    }
-                }
-            }
-        };
-        cancelButton.Click += (_, _) => dialog.Close();
-        confirmButton.Click += (_, _) =>
+        OperatorDialogParts parts = OperatorDialogFactory.CreateTextPrompt(title, message, confirmLabel, "Profile name");
+        TextBox input = parts.Input!;
+        parts.CancelButton!.Click += (_, _) => parts.Window.Close();
+        parts.PrimaryButton.Click += (_, _) =>
         {
             if (!string.IsNullOrWhiteSpace(input.Text))
             {
                 confirmed = true;
-                dialog.Close();
+                parts.Window.Close();
             }
         };
-        dialog.Opened += (_, _) => input.Focus();
-        await dialog.ShowDialog(this);
+        parts.Window.Opened += (_, _) => input.Focus();
+        await parts.Window.ShowDialog(this);
         return confirmed ? input.Text?.Trim() : null;
     }
 
@@ -645,40 +595,22 @@ public sealed partial class MainWindow : Window
 
     private async Task ShowCodeplugErrorAsync(string message)
     {
-        var closeButton = new Button
-        {
-            Content = "OK",
-            HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Right,
-            MinWidth = 80
-        };
-        var dialog = new Window
-        {
-            Title = "Unable to open codeplug",
-            Width = 520,
-            MinHeight = 220,
-            CanResize = false,
-            WindowStartupLocation = WindowStartupLocation.CenterOwner,
-            Content = new StackPanel
-            {
-                Margin = new Thickness(20),
-                Spacing = 18,
-                Children =
-                {
-                    new TextBlock
-                    {
-                        Text = message,
-                        TextWrapping = TextWrapping.Wrap
-                    },
-                    closeButton
-                }
-            }
-        };
-        closeButton.Click += (_, _) => dialog.Close();
-        await dialog.ShowDialog(this);
+        OperatorDialogParts parts = OperatorDialogFactory.CreateMessage("Unable to open codeplug", message, "OK");
+        parts.PrimaryButton.Click += (_, _) => parts.Window.Close();
+        await parts.Window.ShowDialog(this);
     }
 
     private async void HandleDisableAllReceiveClick(object? sender, RoutedEventArgs e)
         => await viewModel.DisableAllReceiveAsync();
+
+    private async void HandleEnableAllReceiveClick(object? sender, RoutedEventArgs e)
+        => await viewModel.EnableAllReceiveAsync();
+
+    private async void HandleEnableZoneReceiveClick(object? sender, RoutedEventArgs e)
+        => await viewModel.EnableSelectedZoneReceiveAsync();
+
+    private async void HandleDisableZoneReceiveClick(object? sender, RoutedEventArgs e)
+        => await viewModel.DisableSelectedZoneReceiveAsync();
 
     private async void HandleSubscriberCommandClick(object? sender, RoutedEventArgs e)
     {
@@ -827,83 +759,27 @@ public sealed partial class MainWindow : Window
 
     private async Task ShowInformationAsync(string title, string message)
     {
-        var closeButton = new Button
-        {
-            Content = "OK",
-            HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Right,
-            MinWidth = 80
-        };
-        var dialog = new Window
-        {
-            Title = title,
-            Width = 500,
-            MinHeight = 210,
-            CanResize = false,
-            WindowStartupLocation = WindowStartupLocation.CenterOwner,
-            Content = new StackPanel
-            {
-                Margin = new Thickness(20),
-                Spacing = 18,
-                Children =
-                {
-                    new TextBlock { Text = message, TextWrapping = TextWrapping.Wrap },
-                    closeButton
-                }
-            }
-        };
-        closeButton.Click += (_, _) => dialog.Close();
-        await dialog.ShowDialog(this);
+        OperatorDialogParts parts = OperatorDialogFactory.CreateMessage(title, message, "OK");
+        parts.PrimaryButton.Click += (_, _) => parts.Window.Close();
+        await parts.Window.ShowDialog(this);
     }
 
     private void HandleTransmitSelectionClick(object? sender, RoutedEventArgs e)
     {
-        if (sender is Button { DataContext: ChannelViewModel channel } button)
-        {
+        if (sender is Button { DataContext: ChannelViewModel channel })
             viewModel.ToggleChannelTransmitSelection(channel);
-            ApplyTransmitSelectionButtonBrush(button, channel);
-        }
-    }
-
-    private static void HandleTransmitSelectionPointerEntered(object? sender, PointerEventArgs e)
-    {
-        if (sender is Button { DataContext: ChannelViewModel channel } button)
-            ApplyTransmitSelectionButtonBrush(button, channel);
-    }
-
-    private static void ApplyTransmitSelectionButtonBrush(Button button, ChannelViewModel channel)
-    {
-        button.Background = channel.TransmitSelectionBrush;
-        button.BorderBrush = channel.TransmitSelectionBorderBrush;
     }
 
     private void HandlePageSelectionClick(object? sender, RoutedEventArgs e)
     {
-        if (sender is Button { DataContext: ChannelViewModel channel } button)
-        {
+        if (sender is Button { DataContext: ChannelViewModel channel })
             viewModel.ToggleChannelPageSelection(channel);
-            ApplyPageSelectionButtonBrush(button, channel);
-        }
-    }
-
-    private static void HandlePageSelectionPointerEntered(object? sender, PointerEventArgs e)
-    {
-        if (sender is Button { DataContext: ChannelViewModel channel } button)
-            ApplyPageSelectionButtonBrush(button, channel);
-    }
-
-    private static void ApplyPageSelectionButtonBrush(Button button, ChannelViewModel channel)
-    {
-        button.Background = channel.PageSelectionBrush;
-        button.BorderBrush = channel.PageSelectionBorderBrush;
     }
 
     private void HandleAlertSelectionClick(object? sender, RoutedEventArgs e)
     {
-        if (sender is Button { DataContext: ChannelViewModel channel } button)
-        {
+        if (sender is Button { DataContext: ChannelViewModel channel })
             viewModel.ToggleChannelAlertSelection(channel);
-            ApplyAlertSelectionButtonBrush(button, channel);
-        }
     }
 
     private async void HandleSystemStatusClick(object? sender, RoutedEventArgs e)
@@ -915,18 +791,6 @@ public sealed partial class MainWindow : Window
     private void HandleDismissCodeplugDiagnosticsClick(object? sender, RoutedEventArgs e)
     {
         viewModel.DismissCodeplugDiagnostics();
-    }
-
-    private static void HandleAlertSelectionPointerEntered(object? sender, PointerEventArgs e)
-    {
-        if (sender is Button { DataContext: ChannelViewModel channel } button)
-            ApplyAlertSelectionButtonBrush(button, channel);
-    }
-
-    private static void ApplyAlertSelectionButtonBrush(Button button, ChannelViewModel channel)
-    {
-        button.Background = channel.AlertSelectionBrush;
-        button.BorderBrush = channel.AlertSelectionBorderBrush;
     }
 
     private void HandleToggleAllTransmitSelectionClick(object? sender, RoutedEventArgs e)
@@ -994,9 +858,16 @@ public sealed partial class MainWindow : Window
             Key.F10 => KeyboardPttKey.F10,
             Key.F11 => KeyboardPttKey.F11,
             Key.F12 => KeyboardPttKey.F12,
+            Key.F13 => KeyboardPttKey.F13,
+            Key.F14 => KeyboardPttKey.F14,
+            Key.F15 => KeyboardPttKey.F15,
+            Key.F16 => KeyboardPttKey.F16,
+            Key.F17 => KeyboardPttKey.F17,
+            Key.F18 => KeyboardPttKey.F18,
+            Key.F19 => KeyboardPttKey.F19,
             _ => default
         };
-        return key is Key.Space or (>= Key.F1 and <= Key.F12);
+        return key is Key.Space or (>= Key.F1 and <= Key.F19);
     }
 
     private void ConfigureTransientScrollBars(ScrollViewer? viewer)
@@ -1052,12 +923,16 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private void HandleDeleteRecordingClick(object? sender, RoutedEventArgs e)
+    private async void HandleDeleteRecordingClick(object? sender, RoutedEventArgs e)
     {
         if (sender is Button { Tag: CallRecordingMetadata metadata } &&
-            DataContext is MainWindowViewModel viewModel)
+            DataContext is MainWindowViewModel viewModel &&
+            await ConfirmAsync(
+                "Delete recording",
+                $"Delete '{metadata.FileName}' and its catalog metadata? This cannot be undone.",
+                "Delete"))
         {
-            _ = viewModel.DeleteRecordingAsync(metadata);
+            await viewModel.DeleteRecordingAsync(metadata);
         }
     }
 
@@ -1196,6 +1071,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     internal const double ChannelWidgetSpacing = 8;
     internal const double DefaultWidgetCanvasWidth = 900;
     private const int MaximumSubscriberCommandAuditEntries = 50;
+    private const int RecordingCatalogUiBatchSize = 64;
     private const string DvmConsoleProcessingDisplay = "DVM Console processing";
     private const string AppleVoiceProcessingDisplay = "Apple voice processing";
     private static readonly string[] AppleAudioProcessingModeOptions =
@@ -1210,6 +1086,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     private readonly UserSettings userSettings;
     private readonly string codeplugDiagnosticsText;
     private readonly ChannelTransmitCoordinator transmitCoordinator;
+    private readonly LatestBooleanStateReconciler warmMicrophoneReconciler;
     private readonly ToneTransmitCoordinator toneTransmitCoordinator;
     private readonly TalkPermitTonePlayer talkPermitTonePlayer;
     private readonly PatchForwardingCoordinator patchForwarding;
@@ -1225,7 +1102,14 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     private readonly SemaphoreSlim serialPttChangeLock = new(1, 1);
     private readonly ObservableCollection<string> serialPttPortOptions = [];
     private readonly CallHistoryStore callHistory = new();
+    private readonly ObservableCollection<CallHistoryEntry> filteredCallHistoryEntries = [];
+    private readonly ObservableCollection<CallHistoryEntry> activityCallHistoryEntries = [];
     private readonly ObservableCollection<CallRecordingMetadata> recordingEntries = [];
+    private readonly object recordingCatalogScanSync = new();
+    private CancellationTokenSource? recordingCatalogScanCancellation;
+    private int recordingCatalogScanGeneration;
+    private long recordingCatalogMutationRevision;
+    private Task recordingCatalogScanTask = Task.CompletedTask;
     private readonly ObservableCollection<DtmfPresetViewModel> dtmfPresets = [];
     private readonly ObservableCollection<TonePresetViewModel> tonePresets = [];
     private readonly ObservableCollection<AlertToneViewModel> alertTones = [];
@@ -1247,8 +1131,9 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     private readonly object audioLevelLogSync = new();
     private readonly Dictionary<(ChannelViewModel Channel, ChannelAudioDirection Direction), DateTimeOffset> lastAudioLevelLogs = [];
     private readonly Dictionary<(ChannelViewModel Channel, ChannelAudioDirection Direction), DateTimeOffset> lastAudioMeterUpdates = [];
-    private readonly Dictionary<ChannelViewModel, DateTimeOffset> lastReceiveIssueUpdates = [];
+    private readonly ReceiveDiagnosticsReporter receiveDiagnosticsReporter = new(TimeSpan.FromMilliseconds(500));
     private readonly SemaphoreSlim audioReconfigurationLock = new(1, 1);
+    private readonly Dictionary<ChannelViewModel, DateTimeOffset> receiveRetryAfter = [];
     private readonly Dictionary<string, FneConnectionState> lastConnectionStates = new(StringComparer.OrdinalIgnoreCase);
     private readonly IReadOnlyDictionary<SystemViewModel, IReadOnlyDictionary<(FneTrafficProtocol Protocol, uint DestinationId), ChannelViewModel[]>> trafficRoutes;
     private readonly ConnectionChimeTracker connectionChimeTracker = new();
@@ -1431,6 +1316,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             HandleRecordingFaulted,
             userSettings.RecordingRetentionDays,
             ShouldRecordSource);
+        callRecordings.RecordingFinalized += HandleRecordingFinalized;
         recordingPlayback = new RecordingPlaybackCoordinator(
             () => AudioBackendFactory.CreateDefault(Environment.GetEnvironmentVariable("DVM_AUDIO_LIBRARY")),
             () => userSettings.AudioOutputDeviceId,
@@ -1463,9 +1349,12 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             CreateTransmitAudioBackend,
             dmrKeyResolver: dmrKeyResolver,
             nxdnKeyResolver: nxdnKeyResolver);
+        warmMicrophoneReconciler = new LatestBooleanStateReconciler(
+            transmitCoordinator.SetKeepMicrophoneWarmAsync);
+        warmMicrophoneReconciler.Reconciled += HandleWarmMicrophoneReconciled;
         transmitCoordinator.HighQualityBluetoothStatusChanged += HandleHighQualityBluetoothStatusChanged;
         if (userSettings.KeepTransmitMicrophoneWarm)
-            _ = WarmTransmitMicrophoneAsync();
+            _ = warmMicrophoneReconciler.SetDesired(true);
         toneTransmitCoordinator = new ToneTransmitCoordinator(
             p25KeyResolver,
             dmrKeyResolver: dmrKeyResolver,
@@ -1505,6 +1394,8 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         PatchGroups = BuildPatchGroups(configuredGroups);
         RefreshPatchMembershipConflicts();
         CallHistory = new System.Collections.ObjectModel.ReadOnlyObservableCollection<CallHistoryEntry>(callHistory.Entries);
+        FilteredCallHistory = new ReadOnlyObservableCollection<CallHistoryEntry>(filteredCallHistoryEntries);
+        ActivityCallHistory = new ReadOnlyObservableCollection<CallHistoryEntry>(activityCallHistoryEntries);
         Recordings = new ReadOnlyObservableCollection<CallRecordingMetadata>(recordingEntries);
         DtmfPresets = new ReadOnlyObservableCollection<DtmfPresetViewModel>(dtmfPresets);
         TonePresets = new ReadOnlyObservableCollection<TonePresetViewModel>(tonePresets);
@@ -1535,8 +1426,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             webStreams.Add(stream);
         }
         _ = RestoreSelectedWebStreamsAsync();
-        callRecordings.PruneExpired();
-        RefreshRecordingsCore();
+        RefreshRecordings(pruneExpired: true);
         foreach (ChannelViewModel channel in Systems.SelectMany(system => system.Channels))
         {
             channel.SetOutputDeviceOptions(AudioOutputDevices);
@@ -1605,6 +1495,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             : Systems.FirstOrDefault();
         foreach (SystemViewModel system in Systems)
             system.SetSelected(ReferenceEquals(system, selectedSystem));
+        RefreshActivityCallHistory();
 
         ConnectCommand = new AsyncRelayCommand(ConnectAsync, () => !busy && Systems.Count > 0);
         DisconnectCommand = new AsyncRelayCommand(DisconnectAsync, () => !busy && Systems.Count > 0);
@@ -2148,7 +2039,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             PersistUserSettings();
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(KeepTransmitMicrophoneWarm)));
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(KeepTransmitMicrophoneWarmToolTip)));
-            _ = WarmTransmitMicrophoneAsync();
+            _ = warmMicrophoneReconciler.SetDesired(value);
         }
     }
 
@@ -2350,7 +2241,9 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         }
     }
 
-    public string GlobalPttKeyText => keyboardPtt.ActivationKey.ToString();
+    public string GlobalPttKeyText => keyboardPtt.ActivationKey == KeyboardPttKey.None
+        ? "Keyboard PTT disabled"
+        : keyboardPtt.ActivationKey.ToString();
 
     public IReadOnlyList<KeyboardPttKey> GlobalPttKeyOptions => GlobalPttKeyOptionValues;
 
@@ -2558,7 +2451,9 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     }
 
     public string SelectionStatusText => selectedChannel is null
-        ? $"Choose TX on one or more cards, then hold {GlobalPttKeyText}."
+        ? keyboardPtt.ActivationKey == KeyboardPttKey.None
+            ? "Choose TX on one or more cards. Keyboard PTT is disabled."
+            : $"Choose TX on one or more cards, then hold {GlobalPttKeyText}."
         : $"RX focus: {selectedChannel.Name}. Global PTT: {GlobalPttKeyText}.";
 
     public IReadOnlyList<SystemViewModel> Systems { get; }
@@ -2584,15 +2479,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     public ReadOnlyObservableCollection<DebugLogEntry> DebugLogEntries { get; }
     public ReadOnlyObservableCollection<WebStreamViewModel> WebStreams { get; }
     public System.Collections.ObjectModel.ReadOnlyObservableCollection<CallHistoryEntry> CallHistory { get; }
-    public IReadOnlyList<CallHistoryEntry> ActivityCallHistory
-        => SelectedSystem is null
-            ? []
-            : CallHistory
-                .Where(entry => entry.SystemName.Equals(SelectedSystem.Name, StringComparison.OrdinalIgnoreCase))
-                .Where(entry => !activityCurrentZoneOnly ||
-                    SelectedSystem.SelectedZone?.Channels.Any(channel =>
-                        channel.Name.Equals(entry.ChannelName, StringComparison.OrdinalIgnoreCase)) == true)
-                .ToArray();
+    public ReadOnlyObservableCollection<CallHistoryEntry> ActivityCallHistory { get; }
     public string ActivityFilterButtonText => activityCurrentZoneOnly ? "Current tab" : "All channels";
     public IReadOnlyList<SubscriberCommandAuditEntry> ActivitySubscriberCommandAudit
         => SelectedSystem is null
@@ -2600,25 +2487,36 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             : SubscriberCommandAudit
                 .Where(entry => entry.SystemName.Equals(SelectedSystem.Name, StringComparison.OrdinalIgnoreCase))
                 .ToArray();
-    public IReadOnlyList<CallHistoryEntry> FilteredCallHistory
-        => CallHistory
-            .Where(entry =>
-            {
-                if (string.IsNullOrWhiteSpace(CallHistoryFilterText))
-                    return true;
-
-                string filter = CallHistoryFilterText.Trim();
-                return entry.SystemName.Contains(filter, StringComparison.OrdinalIgnoreCase) ||
-                    entry.DisplayChannelText.Contains(filter, StringComparison.OrdinalIgnoreCase) ||
-                    entry.EventMessage.Contains(filter, StringComparison.OrdinalIgnoreCase) ||
-                    entry.CallerText.Contains(filter, StringComparison.OrdinalIgnoreCase) ||
-                    entry.DisplaySourceText.Contains(filter, StringComparison.OrdinalIgnoreCase) ||
-                    entry.DisplayDestinationText.Contains(filter, StringComparison.OrdinalIgnoreCase) ||
-                    entry.StreamId.ToString(CultureInfo.InvariantCulture).Contains(filter, StringComparison.OrdinalIgnoreCase) ||
-                    entry.ProtocolText.Contains(filter, StringComparison.OrdinalIgnoreCase) ||
-                    entry.EncryptionText.Contains(filter, StringComparison.OrdinalIgnoreCase);
-            })
-            .ToArray();
+    public ReadOnlyObservableCollection<CallHistoryEntry> FilteredCallHistory { get; }
+    public bool HasAdvancedHistoryFilters =>
+        RecordingDirectionFilter != "All" ||
+        RecordingProtocolFilter != "All" ||
+        RecordingEncryptionFilter != "All" ||
+        !string.IsNullOrWhiteSpace(RecordingSystemFilterText) ||
+        !string.IsNullOrWhiteSpace(RecordingChannelFilterText) ||
+        !string.IsNullOrWhiteSpace(RecordingTalkgroupFilterText) ||
+        !string.IsNullOrWhiteSpace(RecordingSubscriberFilterText) ||
+        !string.IsNullOrWhiteSpace(RecordingAliasFilterText) ||
+        RecordingStartDateFilter is not null ||
+        RecordingEndDateFilter is not null;
+    public string HistoryFilterSummary
+    {
+        get
+        {
+            var filters = new List<string>();
+            if (RecordingDirectionFilter != "All") filters.Add(RecordingDirectionFilter);
+            if (RecordingProtocolFilter != "All") filters.Add(RecordingProtocolFilter);
+            if (RecordingEncryptionFilter != "All") filters.Add(RecordingEncryptionFilter);
+            if (!string.IsNullOrWhiteSpace(RecordingSystemFilterText)) filters.Add($"system {RecordingSystemFilterText}");
+            if (!string.IsNullOrWhiteSpace(RecordingChannelFilterText)) filters.Add($"channel {RecordingChannelFilterText}");
+            if (!string.IsNullOrWhiteSpace(RecordingTalkgroupFilterText)) filters.Add($"TG {RecordingTalkgroupFilterText}");
+            if (!string.IsNullOrWhiteSpace(RecordingSubscriberFilterText)) filters.Add($"RID {RecordingSubscriberFilterText}");
+            if (!string.IsNullOrWhiteSpace(RecordingAliasFilterText)) filters.Add($"alias {RecordingAliasFilterText}");
+            if (RecordingStartDateFilter is DateTimeOffset start) filters.Add($"from {start:yyyy-MM-dd}");
+            if (RecordingEndDateFilter is DateTimeOffset end) filters.Add($"to {end:yyyy-MM-dd}");
+            return string.Join(" · ", filters);
+        }
+    }
     public ReadOnlyObservableCollection<CallRecordingMetadata> Recordings { get; }
     public ICommand ConnectCommand { get; }
     public ICommand DisconnectCommand { get; }
@@ -2680,7 +2578,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
                 return;
             callHistoryFilterText = normalized;
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CallHistoryFilterText)));
-            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(FilteredCallHistory)));
+            RefreshFilteredCallHistory();
         }
     }
 
@@ -2858,6 +2756,12 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         RecordingEndDateFilter = null;
     }
 
+    public void ClearHistoryFilters()
+    {
+        CallHistoryFilterText = string.Empty;
+        ClearRecordingFilters();
+    }
+
     public bool ApplyRecordingRoot()
     {
         if (!callRecordings.TrySetRootPath(RecordingRootPathText, out string errorMessage))
@@ -2869,8 +2773,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
 
         userSettings.RecordingRootPath = callRecordings.RootPath;
         PersistUserSettings();
-        callRecordings.PruneExpired();
-        RefreshRecordings();
+        RefreshRecordings(pruneExpired: true);
         RecordingRootPathText = callRecordings.RootPath;
         AudioStatusText = $"TAR recordings now use {callRecordings.RootPath}.";
         return true;
@@ -2905,6 +2808,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         field = normalized;
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(FilteredRecordings)));
+        NotifyHistoryFilterChanged();
     }
 
     private void SetRecordingColumnVisibility(ref bool field, bool value, string propertyName)
@@ -2929,6 +2833,28 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         field = normalized;
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(FilteredRecordings)));
+        NotifyHistoryFilterChanged();
+    }
+
+    private HistoryCatalogFilter CreateHistoryFilter()
+        => new(
+            CallHistoryFilterText,
+            RecordingDirectionFilter,
+            RecordingProtocolFilter,
+            RecordingEncryptionFilter,
+            RecordingSystemFilterText,
+            RecordingChannelFilterText,
+            RecordingTalkgroupFilterText,
+            RecordingSubscriberFilterText,
+            RecordingAliasFilterText,
+            RecordingStartDateFilter,
+            RecordingEndDateFilter);
+
+    private void NotifyHistoryFilterChanged()
+    {
+        RefreshFilteredCallHistory();
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(HasAdvancedHistoryFilters)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(HistoryFilterSummary)));
     }
 
     public void ClearDebugLogs()
@@ -3024,7 +2950,8 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     public void OpenRecording(CallRecordingMetadata metadata)
     {
         ArgumentNullException.ThrowIfNull(metadata);
-        if (!callRecordings.TryGetRecordingPath(metadata, out string recordingPath))
+        if (!metadata.IsPlayable ||
+            !callRecordings.TryGetRecordingPath(metadata, out string recordingPath))
         {
             AudioStatusText = "The selected recording file is no longer available.";
             RefreshRecordings();
@@ -3048,7 +2975,8 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     public async Task PlayRecordingAsync(CallRecordingMetadata metadata)
     {
         ArgumentNullException.ThrowIfNull(metadata);
-        if (!callRecordings.TryGetRecordingPath(metadata, out string recordingPath))
+        if (!metadata.IsPlayable ||
+            !callRecordings.TryGetRecordingPath(metadata, out string recordingPath))
         {
             AudioStatusText = "The selected recording file is no longer available.";
             RefreshRecordings();
@@ -3101,7 +3029,11 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         }
 
         AudioStatusText = $"Deleted recording: {metadata.FileName}";
-        RefreshRecordings();
+        RecordRecordingCatalogMutation();
+        recordingEntries.Remove(metadata);
+        callHistory.RemoveRecording(metadata);
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(FilteredRecordings)));
+        NotifyCallHistoryChanged();
     }
 
     public void SetRecordingIgnoredSubscribers(ChannelViewModel channel, IEnumerable<uint> subscriberIds)
@@ -3143,6 +3075,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     }
 
     public ChannelViewModel? SelectedChannel => selectedChannel;
+    public bool HasSelectedZone => SelectedSystem?.SelectedZone is not null;
 
     public SystemViewModel? SelectedSystem
     {
@@ -3158,7 +3091,8 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             userSettings.LastSelectedSystemName = value?.Name;
             PersistUserSettings();
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SelectedSystem)));
-            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ActivityCallHistory)));
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(HasSelectedZone)));
+            RefreshActivityCallHistory();
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ActivitySubscriberCommandAudit)));
             NotifyConnectionPresentationChanged();
             RaiseGeneratedAudioCanExecuteChanged();
@@ -3169,13 +3103,16 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     {
         activityCurrentZoneOnly = !activityCurrentZoneOnly;
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ActivityFilterButtonText)));
-        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ActivityCallHistory)));
+        RefreshActivityCallHistory();
     }
 
     private void HandleSystemPropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
         if (e.PropertyName == nameof(SystemViewModel.SelectedZone) && ReferenceEquals(sender, SelectedSystem))
-            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ActivityCallHistory)));
+        {
+            RefreshActivityCallHistory();
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(HasSelectedZone)));
+        }
     }
 
     public async ValueTask StartKeyboardPttAsync(CancellationToken cancellationToken = default)
@@ -3225,6 +3162,12 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
 
     private async ValueTask StartKeyboardPttSourceAsync(CancellationToken cancellationToken)
     {
+        if (keyboardPtt.ActivationKey == KeyboardPttKey.None)
+        {
+            TransmitStatusText = "PTT idle; keyboard PTT disabled.";
+            return;
+        }
+
         if (GlobalKeyboardPttSource.IsPlatformSupported)
         {
             var candidate = new GlobalKeyboardPttSource(keyboardPtt.ActivationKey)
@@ -3353,8 +3296,16 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         if (keyboardPtt.ActivationKey == key &&
             (globalKeyboardPtt is null || globalKeyboardPtt.ActivationKey == key))
             return;
-        if (AnyPttSourcePressed)
-            await HandleKeyboardPttStateChangedAsync(false).ConfigureAwait(false);
+        bool keyboardWasPressed = globalKeyboardPtt?.IsPressed ?? keyboardPtt.IsPressed;
+        if (keyboardWasPressed && serialPtt?.IsPressed != true)
+        {
+            // A release routed through the normal handler would still see the
+            // old source as pressed and deliberately ignore it. Stop active TX
+            // before detaching that source so rebinding can never latch PTT.
+            ChannelViewModel[] active = transmitCoordinator.ActiveChannels.ToArray();
+            if (active.Length > 0)
+                await StopTransmitAsync(active).ConfigureAwait(false);
+        }
 
         keyboardPtt.StateChanged -= HandleKeyboardPttStateChanged;
         await keyboardPtt.DisposeAsync().ConfigureAwait(false);
@@ -3373,7 +3324,9 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         PersistUserSettings();
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(GlobalPttKeyText)));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SelectionStatusText)));
-        TransmitStatusText = $"Global PTT key set to {key}.";
+        TransmitStatusText = key == KeyboardPttKey.None
+            ? "Keyboard global PTT disabled."
+            : $"Global PTT key set to {key}.";
     }
 
     public async Task ToggleChannelReceiveAsync(ChannelViewModel channel)
@@ -3387,13 +3340,39 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     }
 
     public async Task DisableAllReceiveAsync()
+        => await SetReceiveAsync(ReceiveSelectionScope.All, enabled: false).ConfigureAwait(false);
+
+    public async Task EnableAllReceiveAsync()
+        => await SetReceiveAsync(ReceiveSelectionScope.All, enabled: true).ConfigureAwait(false);
+
+    public async Task EnableSelectedZoneReceiveAsync()
+        => await SetReceiveAsync(ReceiveSelectionScope.SelectedZone, enabled: true).ConfigureAwait(false);
+
+    public async Task DisableSelectedZoneReceiveAsync()
+        => await SetReceiveAsync(ReceiveSelectionScope.SelectedZone, enabled: false).ConfigureAwait(false);
+
+    internal IReadOnlyList<ChannelViewModel> GetReceiveScopeChannels(ReceiveSelectionScope scope)
+        => scope switch
+        {
+            ReceiveSelectionScope.All => Systems
+                .SelectMany(system => system.Channels)
+                .Distinct()
+                .ToArray(),
+            ReceiveSelectionScope.SelectedZone => SelectedSystem?.SelectedZone?.Channels
+                .Distinct()
+                .ToArray() ?? [],
+            _ => throw new ArgumentOutOfRangeException(nameof(scope))
+        };
+
+    private async Task SetReceiveAsync(ReceiveSelectionScope scope, bool enabled)
     {
-        ChannelViewModel[] activeChannels = Systems
-            .SelectMany(system => system.Channels)
-            .Where(channel => channel.IsAudioEnabled)
-            .ToArray();
-        foreach (ChannelViewModel channel in activeChannels)
-            await StopAudioAsync(channel).ConfigureAwait(false);
+        foreach (ChannelViewModel channel in GetReceiveScopeChannels(scope))
+        {
+            if (enabled && !channel.IsAudioEnabled)
+                await StartAudioAsync(channel).ConfigureAwait(false);
+            else if (!enabled && channel.IsAudioEnabled)
+                await StopAudioAsync(channel).ConfigureAwait(false);
+        }
     }
 
     public async Task StartChannelTransmitAsync(ChannelViewModel channel)
@@ -3561,8 +3540,9 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             channels.Add(channel);
         }
 
-        return configuration.Systems.Select(system =>
+        return configuration.Systems.Select((system, systemIndex) =>
         {
+            IBrush systemAccent = SystemAccentPalette.GetBrush(systemIndex);
             IReadOnlyList<ZoneViewModel> systemZones = zones
                 .Select(zone => new ZoneViewModel(
                     zone.Name,
@@ -3571,7 +3551,8 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
                         StringComparison.OrdinalIgnoreCase)).ToArray(),
                     zone.WebStreams,
                     zone.TabColor,
-                    zone.TabTextColor))
+                    zone.TabTextColor,
+                    systemAccent))
                 .Where(zone => zone.Channels.Count > 0)
                 .ToArray();
 
@@ -3582,7 +3563,8 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
                 channelsBySystem.TryGetValue(system.Name, out List<ChannelViewModel>? channels)
                     ? channels
                     : [],
-                systemZones);
+                systemZones,
+                systemIndex);
         }).ToArray();
     }
 
@@ -3593,6 +3575,17 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
 
         clockTimer.Stop();
         clockTimer.Tick -= HandleClockTick;
+        Task recordingScan;
+        CancellationTokenSource? recordingScanCancellation;
+        lock (recordingCatalogScanSync)
+        {
+            recordingScanCancellation = recordingCatalogScanCancellation;
+            recordingScanCancellation?.Cancel();
+            recordingCatalogScanCancellation = null;
+            recordingScan = recordingCatalogScanTask;
+        }
+        await recordingScan.ConfigureAwait(false);
+        recordingScanCancellation?.Dispose();
         transmitCoordinator.Faulted -= HandleTransmitFaulted;
         keyboardPtt.StateChanged -= HandleKeyboardPttStateChanged;
         if (globalKeyboardPtt is not null)
@@ -3614,6 +3607,8 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         }
         await toneTransmitCoordinator.DisposeAsync().ConfigureAwait(false);
         await talkPermitTonePlayer.DisposeAsync().ConfigureAwait(false);
+        warmMicrophoneReconciler.Reconciled -= HandleWarmMicrophoneReconciled;
+        await warmMicrophoneReconciler.WhenIdleAsync().ConfigureAwait(false);
         await transmitCoordinator.DisposeAsync().ConfigureAwait(false);
         foreach (SystemViewModel system in Systems)
         {
@@ -3630,7 +3625,8 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         await webStreamPlayback.DisposeAsync().ConfigureAwait(false);
         await recordingPlayback.DisposeAsync().ConfigureAwait(false);
         audioReconfigurationLock.Dispose();
-        callRecordings.Dispose();
+        callRecordings.RecordingFinalized -= HandleRecordingFinalized;
+        await callRecordings.DisposeAsync().ConfigureAwait(false);
         p25KeyRing?.Dispose();
         dmrKeyRing?.Dispose();
         nxdnKeyRing?.Dispose();
@@ -3734,7 +3730,10 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             StatusText = $"{system.Name}: {status.State} — {status.Message}";
             NotifyConnectionPresentationChanged();
             if (status.State == FneConnectionState.Connected)
+            {
                 RequestConfiguredP25Keys(system);
+                _ = ReconcileReceiveSessionsAsync();
+            }
             bool stateChanged = !lastConnectionStates.TryGetValue(system.Name, out FneConnectionState previousState) ||
                 previousState != status.State;
             lastConnectionStates[system.Name] = status.State;
@@ -3924,7 +3923,6 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         if (!enabled)
         {
             callRecordings.StopChannel(channel);
-            RefreshRecordings();
             return;
         }
 
@@ -4133,18 +4131,25 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             Dispatcher.UIThread.Post(() => AudioStatusText = message);
     }
 
-    private async Task WarmTransmitMicrophoneAsync()
+    private void HandleWarmMicrophoneReconciled(object? sender, LatestBooleanStateResult result)
     {
-        try
+        Dispatcher.UIThread.Post(() =>
         {
-            await transmitCoordinator.SetKeepMicrophoneWarmAsync(userSettings.KeepTransmitMicrophoneWarm).ConfigureAwait(false);
-            if (userSettings.KeepTransmitMicrophoneWarm)
+            if (result.Error is not null)
+            {
+                AudioStatusText = $"Unable to change warm microphone state: {result.Error.Message}";
+            }
+            else if (result.Desired)
+            {
                 AudioStatusText = "Transmit microphone is warm. This is generally useful only for Bluetooth headsets to reduce PTT latency and may lower output audio quality.";
-        }
-        catch (Exception exception)
-        {
-            AudioStatusText = $"Unable to keep the transmit microphone warm: {exception.Message}";
-        }
+            }
+            else
+            {
+                AudioStatusText = transmitCoordinator.ActiveChannels.Count > 0
+                    ? "Warm microphone mode disabled; the active transmission continues."
+                    : "Warm microphone mode disabled; the microphone will open on PTT.";
+            }
+        });
     }
 
     private AudioProcessingMode GetConfiguredAudioProcessingMode()
@@ -4183,12 +4188,16 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             await StartAudioAsync(channel);
     }
 
-    private void HandleDecodedSamples(ChannelViewModel channel, ReadOnlyMemory<short> samples)
+    private void HandleDecodedSamples(
+        ChannelViewModel channel,
+        uint streamId,
+        uint sourceId,
+        ReadOnlyMemory<short> samples)
     {
-        patchForwarding.ObserveDecodedSamples(channel, samples);
-        callRecordings.WriteSamples(channel, samples);
+        patchForwarding.ObserveDecodedSamples(channel, streamId, sourceId, samples);
+        callRecordings.WriteSamples(channel, streamId, sourceId, samples);
         UpdateChannelAudioLevel(channel, samples, ChannelAudioDirection.Receive);
-        LogVocoderAudioLevel(channel, samples, ChannelAudioDirection.Receive);
+        LogVocoderAudioLevel(channel, samples, ChannelAudioDirection.Receive, streamId);
     }
 
     private void HandleTransmitSamples(
@@ -4265,9 +4274,13 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         Dispatcher.UIThread.Post(() => channel.SetAudioLevel(level, direction));
     }
 
-    private void ObservePatchDecodedSamples(ChannelViewModel channel, ReadOnlyMemory<short> samples)
+    private void ObservePatchDecodedSamples(
+        ChannelViewModel channel,
+        uint streamId,
+        uint sourceId,
+        ReadOnlyMemory<short> samples)
     {
-        patchForwarding.ObserveDecodedSamples(channel, samples);
+        patchForwarding.ObserveDecodedSamples(channel, streamId, sourceId, samples);
     }
 
     private async Task SyncPatchSourceDecodeAsync()
@@ -4355,47 +4368,236 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         });
     }
 
+    private void HandleRecordingFinalized(object? sender, RecordingFinalizationResult result)
+    {
+        Dispatcher.UIThread.Post(() =>
+        {
+            if (result.Metadata is CallRecordingMetadata metadata && metadata.IsPlayable)
+            {
+                RecordRecordingCatalogMutation();
+                CallRecordingMetadata? existing = recordingEntries.FirstOrDefault(candidate =>
+                    candidate.FilePath.Equals(metadata.FilePath, StringComparison.OrdinalIgnoreCase));
+                if (existing is not null)
+                    recordingEntries.Remove(existing);
+                recordingEntries.Insert(0, metadata);
+                callHistory.AddOrAttachRecording(metadata);
+
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(FilteredRecordings)));
+                NotifyCallHistoryChanged();
+            }
+            else if (result.Error is null && !string.IsNullOrWhiteSpace(result.Diagnostic))
+            {
+                AudioStatusText = $"TAR recording skipped: {result.Diagnostic}";
+            }
+        });
+    }
+
     private void HandleRecordingPlaybackFaulted(Exception exception)
     {
         Dispatcher.UIThread.Post(() =>
             AudioStatusText = $"Recording playback stopped: {exception.Message}");
     }
 
-    private void RefreshRecordings()
+    private void RefreshRecordings(bool pruneExpired = false)
     {
-        if (Dispatcher.UIThread.CheckAccess())
+        CancellationTokenSource cancellation = new();
+        int generation;
+        long mutationRevision;
+        lock (recordingCatalogScanSync)
         {
-            RefreshRecordingsCore();
-            return;
+            recordingCatalogScanCancellation?.Cancel();
+            recordingCatalogScanCancellation?.Dispose();
+            recordingCatalogScanCancellation = cancellation;
+            generation = ++recordingCatalogScanGeneration;
+            mutationRevision = recordingCatalogMutationRevision;
+        }
+        Task scan = RefreshRecordingsAsync(generation, mutationRevision, pruneExpired, cancellation.Token);
+        lock (recordingCatalogScanSync)
+        {
+            if (generation == recordingCatalogScanGeneration)
+                recordingCatalogScanTask = scan;
+        }
+    }
+
+    private async Task RefreshRecordingsAsync(
+        int generation,
+        long mutationRevision,
+        bool pruneExpired,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            if (pruneExpired)
+                await Task.Run(() => callRecordings.PruneExpired(), cancellationToken).ConfigureAwait(false);
+            IReadOnlyList<CallRecordingMetadata> loaded = await callRecordings
+                .LoadRecordingsAsync(cancellationToken)
+                .ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
+            bool applied = await ApplyRecordingCatalogAsync(
+                loaded,
+                generation,
+                mutationRevision,
+                cancellationToken).ConfigureAwait(false);
+            if (!applied && !cancellationToken.IsCancellationRequested)
+            {
+                bool restart;
+                lock (recordingCatalogScanSync)
+                {
+                    restart = generation == recordingCatalogScanGeneration &&
+                        mutationRevision != recordingCatalogMutationRevision;
+                }
+                if (restart)
+                    RefreshRecordings();
+            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or InvalidDataException)
+        {
+            await RunOnUiThreadAsync(() =>
+                AudioStatusText = $"Unable to refresh recording catalog: {exception.Message}").ConfigureAwait(false);
+        }
+    }
+
+    private async Task<bool> ApplyRecordingCatalogAsync(
+        IReadOnlyList<CallRecordingMetadata> loaded,
+        int generation,
+        long mutationRevision,
+        CancellationToken cancellationToken)
+    {
+        var desiredIds = new HashSet<string>(loaded.Select(RecordingCatalogKey), StringComparer.OrdinalIgnoreCase);
+        CallRecordingMetadata[] existing = [];
+        if (!await ApplyRecordingCatalogUiBatchAsync(
+                generation,
+                mutationRevision,
+                cancellationToken,
+                () => existing = recordingEntries.ToArray()).ConfigureAwait(false))
+        {
+            return false;
         }
 
-        Dispatcher.UIThread.Post(RefreshRecordingsCore);
+        string[] removedKeys = existing
+            .Select(RecordingCatalogKey)
+            .Where(key => !desiredIds.Contains(key))
+            .ToArray();
+        foreach (string[] batch in removedKeys.Chunk(RecordingCatalogUiBatchSize))
+        {
+            if (!await ApplyRecordingCatalogUiBatchAsync(generation, mutationRevision, cancellationToken, () =>
+                {
+                    var keys = new HashSet<string>(batch, StringComparer.OrdinalIgnoreCase);
+                    for (int index = recordingEntries.Count - 1; index >= 0; index--)
+                    {
+                        if (keys.Contains(RecordingCatalogKey(recordingEntries[index])))
+                            recordingEntries.RemoveAt(index);
+                    }
+                    callHistory.RemoveRecordingsByKey(keys);
+                }).ConfigureAwait(false))
+            {
+                return false;
+            }
+        }
+
+        for (int batchStart = 0; batchStart < loaded.Count; batchStart += RecordingCatalogUiBatchSize)
+        {
+            int startIndex = batchStart;
+            CallRecordingMetadata[] batch = loaded
+                .Skip(batchStart)
+                .Take(RecordingCatalogUiBatchSize)
+                .ToArray();
+            if (!await ApplyRecordingCatalogUiBatchAsync(generation, mutationRevision, cancellationToken, () =>
+            {
+                for (int offset = 0; offset < batch.Length; offset++)
+                {
+                    int desiredIndex = startIndex + offset;
+                    CallRecordingMetadata metadata = batch[offset];
+                    string key = RecordingCatalogKey(metadata);
+                    if (desiredIndex < recordingEntries.Count && RecordingCatalogKey(recordingEntries[desiredIndex])
+                            .Equals(key, StringComparison.OrdinalIgnoreCase))
+                    {
+                        recordingEntries[desiredIndex] = metadata;
+                        continue;
+                    }
+
+                    int existingIndex = -1;
+                    for (int candidate = desiredIndex + 1; candidate < recordingEntries.Count; candidate++)
+                    {
+                        if (!RecordingCatalogKey(recordingEntries[candidate])
+                                .Equals(key, StringComparison.OrdinalIgnoreCase))
+                        {
+                            continue;
+                        }
+                        existingIndex = candidate;
+                        break;
+                    }
+
+                    if (existingIndex < 0)
+                    {
+                        recordingEntries.Insert(Math.Min(desiredIndex, recordingEntries.Count), metadata);
+                        continue;
+                    }
+
+                    recordingEntries[existingIndex] = metadata;
+                    if (existingIndex != desiredIndex)
+                        recordingEntries.Move(existingIndex, desiredIndex);
+                }
+                callHistory.AddOrAttachRecordings(batch);
+            }).ConfigureAwait(false))
+            {
+                return false;
+            }
+        }
+
+        return await ApplyRecordingCatalogUiBatchAsync(generation, mutationRevision, cancellationToken, () =>
+        {
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(FilteredRecordings)));
+            NotifyCallHistoryChanged();
+        }).ConfigureAwait(false);
     }
 
-    private void RefreshRecordingsCore()
+    private async Task<bool> ApplyRecordingCatalogUiBatchAsync(
+        int generation,
+        long mutationRevision,
+        CancellationToken cancellationToken,
+        Action action)
     {
-        recordingEntries.Clear();
-        foreach (CallRecordingMetadata metadata in callRecordings.LoadRecordings())
-            recordingEntries.Add(metadata);
-        foreach (CallHistoryEntry entry in callHistory.Entries)
-            entry.SetRecording(FindRecordingForHistoryEntry(entry));
-        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(FilteredRecordings)));
+        bool applied = false;
+        await RunOnUiThreadAsync(() =>
+        {
+            lock (recordingCatalogScanSync)
+            {
+                if (!IsRecordingCatalogSnapshotCurrent(
+                        generation,
+                        recordingCatalogScanGeneration,
+                        mutationRevision,
+                        recordingCatalogMutationRevision,
+                        cancellationToken.IsCancellationRequested))
+                    return;
+                action();
+                applied = true;
+            }
+        }).ConfigureAwait(false);
+        return applied;
     }
 
-    private CallRecordingMetadata? FindRecordingForHistoryEntry(CallHistoryEntry entry)
+    private void RecordRecordingCatalogMutation()
     {
-        if (entry.IsEvent || entry.StreamId == 0)
-            return null;
-
-        string direction = entry.IsConsoleTransmission ? "TX" : "RX";
-        return recordingEntries
-            .Where(metadata => metadata.StreamId == entry.StreamId &&
-                metadata.Direction.Equals(direction, StringComparison.OrdinalIgnoreCase) &&
-                metadata.SystemName.Equals(entry.SystemName, StringComparison.OrdinalIgnoreCase) &&
-                metadata.Protocol.Equals(entry.ProtocolText, StringComparison.OrdinalIgnoreCase))
-            .OrderBy(metadata => Math.Abs((metadata.UtcStartTime - entry.Timestamp).TotalMilliseconds))
-            .FirstOrDefault();
+        lock (recordingCatalogScanSync)
+            recordingCatalogMutationRevision++;
     }
+
+    internal static bool IsRecordingCatalogSnapshotCurrent(
+        int snapshotGeneration,
+        int currentGeneration,
+        long snapshotMutationRevision,
+        long currentMutationRevision,
+        bool isCancellationRequested)
+        => !isCancellationRequested &&
+           snapshotGeneration == currentGeneration &&
+           snapshotMutationRevision == currentMutationRevision;
+
+    private static string RecordingCatalogKey(CallRecordingMetadata metadata)
+        => !string.IsNullOrWhiteSpace(metadata.RecordingId) ? metadata.RecordingId : metadata.FilePath;
 
     private void HandleSystemTraffic(SystemViewModel system, FneTrafficFrame traffic)
     {
@@ -4470,10 +4672,12 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     internal void ProcessTraffic(
         SystemViewModel system,
         FneTrafficFrame traffic,
-        bool publishTrafficDiagnostics = true)
+        bool publishTrafficDiagnostics = true,
+        DateTimeOffset? receivedAt = null)
     {
         ArgumentNullException.ThrowIfNull(system);
         ArgumentNullException.ThrowIfNull(traffic);
+        DateTimeOffset now = receivedAt ?? DateTimeOffset.Now;
         system.RecordTraffic(traffic, publishTrafficDiagnostics);
         List<ChannelViewModel> activeAudioChannels = [];
         List<ChannelViewModel> activePatchSourceChannels = [];
@@ -4483,35 +4687,42 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         bool? protocolEncrypted = protocolEncryption?.Secure;
         foreach (ChannelViewModel channel in ResolveTrafficCandidates(system, traffic))
         {
-            bool sameActiveStream = channel.State == ChannelRuntimeState.Receiving &&
-                channel.StreamId == traffic.StreamId;
-            bool matched = channel.TryApplyTraffic(system.Name, traffic);
-            if (!matched)
+            ChannelTrafficApplyResult applied = channel.ApplyTraffic(system.Name, traffic, now);
+            if (!applied.Matched)
                 continue;
             matchedAnyChannel = true;
+            if (applied.Transition == ReceiveStreamTransition.IgnoredLate)
+            {
+                channel.RecordIgnoredLatePacket();
+                PublishReceiveDiagnostics(channel, now);
+                continue;
+            }
 
             patchForwarding.ObserveTraffic(channel, traffic);
             if (patchSourceDecode.IsActive(channel))
                 activePatchSourceChannels.Add(channel);
 
-            if (sameActiveStream && channel.State != ChannelRuntimeState.Receiving)
+            if (applied.EndedStreamId is uint endedStreamId)
             {
                 AddDebugLog(
-                    DateTimeOffset.Now,
+                    now,
                     system.Name,
                     DebugLogSeverity.Info,
                     $"RX call ended on {channel.Name}: {traffic.Protocol.ToString().ToUpperInvariant()} " +
-                    $"{traffic.SourceId}→{traffic.DestinationId}, stream {traffic.StreamId}.");
+                    $"{traffic.SourceId}→{traffic.DestinationId}, stream {endedStreamId}.");
                 callHistoryChanged = callHistory.Complete(
                     system.Name,
                     traffic.Protocol,
-                    traffic.StreamId,
-                    DateTimeOffset.Now) || callHistoryChanged;
+                    endedStreamId,
+                    now,
+                    channel.Name,
+                    traffic.DestinationId) || callHistoryChanged;
             }
-            else if (!sameActiveStream)
+
+            if (applied.Transition is ReceiveStreamTransition.Started or ReceiveStreamTransition.Superseded)
             {
                 AddDebugLog(
-                    DateTimeOffset.Now,
+                    now,
                     system.Name,
                     DebugLogSeverity.Info,
                     $"RX call started on {channel.Name}: {traffic.Protocol.ToString().ToUpperInvariant()} " +
@@ -4519,7 +4730,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
                     (protocolEncrypted ?? channel.Definition.IsEncrypted ? ", encrypted" : ", clear") +
                     $"{DescribeFneSignalQuality(traffic)}.");
                 callHistory.Add(new CallHistoryEntry(
-                    DateTimeOffset.Now,
+                    now,
                     system.Name,
                     channel.Name,
                     traffic.SourceId,
@@ -4539,7 +4750,9 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
                     traffic.StreamId,
                     encrypted,
                     protocolEncryption?.AlgorithmId,
-                    protocolEncryption?.KeyId) || callHistoryChanged;
+                    protocolEncryption?.KeyId,
+                    channel.Name,
+                    traffic.DestinationId) || callHistoryChanged;
             }
 
             if (audioCoordinator.IsActive(channel))
@@ -4673,6 +4886,76 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         }
     }
 
+    private async Task<ReceiveRouteRecoveryResult> RecoverSelectedReceiveAudioAsync(ChannelViewModel failedChannel)
+    {
+        await audioReconfigurationLock.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            ReceiveRouteRecoveryResult result = await audioCoordinator
+                .RecoverSelectedAsync([failedChannel])
+                .ConfigureAwait(false);
+            DateTimeOffset retryAt = DateTimeOffset.UtcNow.AddSeconds(5);
+            foreach (ChannelViewModel channel in result.Restarted)
+            {
+                receiveRetryAfter.Remove(channel);
+                receiveAudioWork.Start(channel);
+            }
+            foreach (ChannelViewModel channel in result.Failed)
+                receiveRetryAfter[channel] = retryAt;
+            return result;
+        }
+        finally
+        {
+            audioReconfigurationLock.Release();
+        }
+    }
+
+    internal async Task ReconcileReceiveSessionsAsync()
+    {
+        if (Volatile.Read(ref disposeStarted) != 0)
+            return;
+
+        await audioReconfigurationLock.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            DateTimeOffset now = DateTimeOffset.UtcNow;
+            ChannelViewModel[] missing = Systems
+                .SelectMany(system => system.Channels)
+                .Where(channel => channel.IsAudioEnabled &&
+                    !audioCoordinator.IsActive(channel) &&
+                    (!receiveRetryAfter.TryGetValue(channel, out DateTimeOffset retryAt) || retryAt <= now))
+                .Distinct()
+                .ToArray();
+            if (missing.Length == 0)
+                return;
+
+            int restarted = 0;
+            foreach (ChannelViewModel channel in missing)
+            {
+                try
+                {
+                    await audioCoordinator.StartAsync(channel).ConfigureAwait(false);
+                    receiveAudioWork.Start(channel);
+                    receiveRetryAfter.Remove(channel);
+                    restarted++;
+                }
+                catch
+                {
+                    receiveRetryAfter[channel] = now.AddSeconds(5);
+                }
+            }
+
+            Dispatcher.UIThread.Post(() =>
+                AudioStatusText = restarted == missing.Length
+                    ? $"Restored {restarted} selected receive channel(s)."
+                    : $"RX audio unavailable; retrying {missing.Length - restarted} selected channel(s).");
+        }
+        finally
+        {
+            audioReconfigurationLock.Release();
+        }
+    }
+
     private async Task StopAudioAsync(ChannelViewModel channel)
     {
         try
@@ -4685,7 +4968,6 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             await RunOnUiThreadAsync(() =>
             {
                 callRecordings.StopChannel(channel);
-                RefreshRecordings();
                 channel.SetAudioEnabled(false);
                 AudioStatusText = audioCoordinator.ActiveChannels.Count == 0
                     ? "RX audio disabled."
@@ -4699,22 +4981,18 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         try
         {
             await audioCoordinator.ProcessAsync(channel, traffic).ConfigureAwait(false);
-            ReceiveAudioDiagnostics diagnostics = audioCoordinator.GetDiagnostics(channel);
-            if (diagnostics.HasIssues && ShouldPublishReceiveIssue(channel))
-            {
-                Dispatcher.UIThread.Post(() =>
-                    AudioStatusText = $"RX {channel.Name}: {diagnostics.SummaryText} (audio continues)");
-            }
+            PublishReceiveDiagnostics(channel, DateTimeOffset.UtcNow);
         }
         catch (Exception exception)
         {
-            if (IsAudioDeviceFailure(exception) &&
-                await audioCoordinator.TryRecoverAsync(channel).ConfigureAwait(false))
+            if (IsAudioDeviceFailure(exception))
             {
+                ReceiveRouteRecoveryResult recovery = await RecoverSelectedReceiveAudioAsync(channel).ConfigureAwait(false);
                 Dispatcher.UIThread.Post(() =>
                 {
-                    channel.SetAudioEnabled(true);
-                    AudioStatusText = $"RX audio restarted for {channel.Name} after an output-device interruption.";
+                    AudioStatusText = recovery.Failed.Count == 0
+                        ? $"RX audio restarted for {recovery.Restarted.Count} selected channel(s) after an output-device interruption."
+                        : recovery.Diagnostic ?? "RX audio unavailable; retrying selected channels.";
                 });
                 return;
             }
@@ -4731,24 +5009,26 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             // A terminator must close TAR even when the output device failed
             // while decoding the same frame; recording lifecycle is separate
             // from playback recovery.
-            if (callRecordings.ObserveTraffic(channel, traffic))
-                RefreshRecordings();
+            callRecordings.ObserveTraffic(channel, traffic);
         }
     }
 
-    private bool ShouldPublishReceiveIssue(ChannelViewModel channel)
+    private void PublishReceiveDiagnostics(ChannelViewModel channel, DateTimeOffset now)
     {
-        DateTimeOffset now = DateTimeOffset.UtcNow;
-        lock (audioLevelLogSync)
-        {
-            if (lastReceiveIssueUpdates.TryGetValue(channel, out DateTimeOffset previous) &&
-                now - previous < TimeSpan.FromMilliseconds(500))
-            {
-                return false;
-            }
-            lastReceiveIssueUpdates[channel] = now;
-            return true;
-        }
+        ReceiveAudioDiagnostics audio = audioCoordinator.GetDiagnostics(channel);
+        var combined = new ReceiveAudioDiagnostics(
+            audio.FramesDecoded,
+            audio.LostPackets,
+            audio.DuplicateOrLatePackets + channel.IgnoredLatePacketCount,
+            audio.MalformedPackets);
+        if (!receiveDiagnosticsReporter.ShouldPublish(channel, combined, now))
+            return;
+        string stateText = audioCoordinator.IsActive(channel) ? "audio continues" : "late traffic ignored";
+        void Publish() => AudioStatusText = $"RX {channel.Name}: {combined.SummaryText} ({stateText})";
+        if (Dispatcher.UIThread.CheckAccess())
+            Publish();
+        else
+            Dispatcher.UIThread.Post(Publish);
     }
 
     private void EnqueueReceiveAudio(ChannelViewModel channel, FneTrafficFrame traffic)
@@ -4929,7 +5209,6 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
                     channel.SetTransmitEnabled(false);
                     callRecordings.StopTransmit(channel);
                 }
-                RefreshRecordings();
                 AddDebugLog(DateTimeOffset.Now, "TX", DebugLogSeverity.Error,
                     $"Transmit startup failed: {startupFailure}");
                 TransmitStatusText = $"PTT unavailable: {startupFailure.Message}";
@@ -4990,12 +5269,13 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
                             system.Name,
                             ProtocolFor(channel),
                             streamId,
-                            DateTimeOffset.Now);
+                            DateTimeOffset.Now,
+                            channel.Name,
+                            channel.Definition.DestinationId);
                     }
                 }
                 if (activeStreams.Length > 0)
                     NotifyCallHistoryChanged();
-                RefreshRecordings();
                 TransmitStatusText = stopFailure is null
                     ? "PTT idle."
                     : $"Transmission stopped safely after an error: {stopFailure.Message}";
@@ -5147,8 +5427,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         userSettings.RecordingRetentionDays = days;
         callRecordings.RetentionDays = days;
         PersistUserSettings();
-        callRecordings.PruneExpired();
-        RefreshRecordings();
+        RefreshRecordings(pruneExpired: true);
         RecordingRetentionDaysText = days.ToString(CultureInfo.InvariantCulture);
         AudioStatusText = days == 0
             ? "TAR retention pruning disabled."
@@ -5700,7 +5979,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         ArgumentNullException.ThrowIfNull(tone);
         try
         {
-            short[] samples = LegacyAlertToneGenerator.Generate(tone.Tone, amplitude: 0.35);
+            short[] samples = tone.GenerateSamples();
             await SendGeneratedToneAsync(
                 samples,
                 tone.Name,
@@ -5915,7 +6194,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     private static KeyboardPttKey ParseGlobalPttKey(string? value)
         => Enum.TryParse(value, ignoreCase: true, out KeyboardPttKey key)
             ? key
-            : KeyboardPttKey.Space;
+            : KeyboardPttKey.None;
 
     private void HandleTransmitFaulted(object? sender, Exception exception)
     {
@@ -5953,11 +6232,12 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
                             system.Name,
                             ProtocolFor(channel),
                             streamId,
-                            DateTimeOffset.Now);
+                            DateTimeOffset.Now,
+                            channel.Name,
+                            channel.Definition.DestinationId);
                 }
                 if (activeStreams.Length > 0)
                     Dispatcher.UIThread.Post(NotifyCallHistoryChanged);
-                RefreshRecordings();
             }
             try
             {
@@ -6088,44 +6368,85 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     {
         RefreshClock();
         ExpireStaleReceiveStates(DateTimeOffset.UtcNow);
+        _ = ReconcileReceiveSessionsAsync();
     }
 
-    private void ExpireStaleReceiveStates(DateTimeOffset now)
+    internal void ExpireStaleReceiveStates(DateTimeOffset now)
     {
-        bool recordingStateChanged = false;
         bool callHistoryChanged = false;
         foreach (ChannelViewModel channel in Systems.SelectMany(system => system.Channels))
         {
-            uint? activeStreamId = channel.StreamId;
-            if (!channel.TryExpireReceiveState(now, TimeSpan.FromSeconds(2)))
-                continue;
-            if (activeStreamId is uint streamId)
+            ChannelTrafficApplyResult applied = channel.AdvanceReceiveLifecycle(now);
+            if (applied.Transition != ReceiveStreamTransition.GraceExpired ||
+                applied.EndedStreamId is not uint streamId)
             {
-                callHistoryChanged = callHistory.Complete(
-                    channel.Definition.SystemName,
-                    channel.Definition.Mode switch
-                    {
-                        "dmr" => FneTrafficProtocol.Dmr,
-                        "p25" => FneTrafficProtocol.P25,
-                        "nxdn" => FneTrafficProtocol.Nxdn,
-                        _ => FneTrafficProtocol.Analog
-                    },
-                    streamId,
-                    now) || callHistoryChanged;
+                continue;
             }
+
+            callHistoryChanged = callHistory.Complete(
+                channel.Definition.SystemName,
+                channel.Definition.Mode switch
+                {
+                    "dmr" => FneTrafficProtocol.Dmr,
+                    "p25" => FneTrafficProtocol.P25,
+                    "nxdn" => FneTrafficProtocol.Nxdn,
+                    _ => FneTrafficProtocol.Analog
+                },
+                streamId,
+                now,
+                channel.Name,
+                channel.Definition.DestinationId) || callHistoryChanged;
             callRecordings.StopChannel(channel);
-            recordingStateChanged = true;
         }
-        if (recordingStateChanged)
-            RefreshRecordings();
         if (callHistoryChanged)
             NotifyCallHistoryChanged();
     }
 
     private void NotifyCallHistoryChanged()
     {
-        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(FilteredCallHistory)));
-        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ActivityCallHistory)));
+        RefreshFilteredCallHistory();
+        RefreshActivityCallHistory();
+    }
+
+    private void RefreshFilteredCallHistory()
+        => SynchronizeHistoryView(filteredCallHistoryEntries, CallHistory.Where(CreateHistoryFilter().Matches));
+
+    private void RefreshActivityCallHistory()
+    {
+        IEnumerable<CallHistoryEntry> desired = SelectedSystem is null
+            ? []
+            : CallHistory
+                .Where(entry => !entry.IsRecordingOnly)
+                .Where(entry => entry.SystemName.Equals(SelectedSystem.Name, StringComparison.OrdinalIgnoreCase))
+                .Where(entry => !activityCurrentZoneOnly ||
+                    SelectedSystem.SelectedZone?.Channels.Any(channel =>
+                        channel.Name.Equals(entry.ChannelName, StringComparison.OrdinalIgnoreCase)) == true)
+                .Take(CallHistoryStore.DefaultMaxEntries);
+        SynchronizeHistoryView(activityCallHistoryEntries, desired);
+    }
+
+    private static void SynchronizeHistoryView(
+        ObservableCollection<CallHistoryEntry> target,
+        IEnumerable<CallHistoryEntry> desiredEntries)
+    {
+        CallHistoryEntry[] desired = desiredEntries.ToArray();
+        var desiredSet = new HashSet<CallHistoryEntry>(desired, ReferenceEqualityComparer.Instance);
+        for (int index = target.Count - 1; index >= 0; index--)
+        {
+            if (!desiredSet.Contains(target[index]))
+                target.RemoveAt(index);
+        }
+
+        for (int index = 0; index < desired.Length; index++)
+        {
+            if (index < target.Count && ReferenceEquals(target[index], desired[index]))
+                continue;
+            int existingIndex = target.IndexOf(desired[index]);
+            if (existingIndex >= 0)
+                target.Move(existingIndex, index);
+            else
+                target.Insert(index, desired[index]);
+        }
     }
 
     private void RefreshClock()
@@ -6502,7 +6823,8 @@ public sealed class SystemViewModel : IFneTrafficEndpoint, INotifyPropertyChange
         string name,
         string endpoint,
         IEnumerable<ChannelViewModel>? channels = null,
-        IEnumerable<ZoneViewModel>? zones = null)
+        IEnumerable<ZoneViewModel>? zones = null,
+        int accentIndex = 0)
     {
         this.options = options ?? throw new ArgumentNullException(nameof(options));
         connection = new FneConnection(this.options);
@@ -6510,7 +6832,16 @@ public sealed class SystemViewModel : IFneTrafficEndpoint, INotifyPropertyChange
         Endpoint = endpoint;
         Channels = channels?.ToArray() ?? [];
         Zones = zones?.ToArray() ?? [];
+        StatusAccentBrush = SystemAccentPalette.GetBrush(accentIndex);
         selectedZone = Zones.FirstOrDefault();
+        foreach (ZoneViewModel zone in Zones)
+        {
+            zone.SetReceiveActivityResolver(() => Channels.Any(active =>
+                active.State == ChannelRuntimeState.Receiving &&
+                zone.Channels.Any(member => SameResource(active, member))));
+        }
+        foreach (ChannelViewModel channel in Channels)
+            channel.PropertyChanged += HandleChannelPropertyChanged;
         connection.StatusChanged += HandleConnectionStatus;
         connection.LogReceived += HandleLogReceived;
         connection.TrafficReceived += HandleTrafficReceived;
@@ -6542,6 +6873,12 @@ public sealed class SystemViewModel : IFneTrafficEndpoint, INotifyPropertyChange
     public bool IsConnected => connection.Status.State == FneConnectionState.Connected;
     public bool IsConnectionActive => connection.Status.State is not (FneConnectionState.Disconnected or FneConnectionState.Faulted);
     public bool IsSelected => isSelected;
+    public bool IsReceiving => Channels.Any(channel => channel.State == ChannelRuntimeState.Receiving);
+    public double ActivityBarOpacity => IsReceiving ? 1.0 : 0.12;
+    public string RecordingConfigurationHeader
+        => $"{Name} · {Channels.Count(channel => channel.IsRecordingEnabled)} of {Channels.Count} TAR enabled";
+    public IBrush StatusAccentBrush { get; }
+    public string StatusGlyph => IsConnected ? "●" : "○";
     public string ConnectionPillText => connection.Status.State.ToString().ToUpperInvariant();
     public string ConnectionActionText => IsConnectionActive ? $"Disconnect {Name}" : $"Start {Name}";
     public IBrush ConnectionBrush => new SolidColorBrush(Color.Parse(connection.Status.State switch
@@ -6577,6 +6914,7 @@ public sealed class SystemViewModel : IFneTrafficEndpoint, INotifyPropertyChange
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ConnectionActionText)));
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ConnectionBrush)));
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SystemTabText)));
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(StatusGlyph)));
         }
     }
 
@@ -6672,6 +7010,8 @@ public sealed class SystemViewModel : IFneTrafficEndpoint, INotifyPropertyChange
 
     public async ValueTask DisposeAsync()
     {
+        foreach (ChannelViewModel channel in Channels)
+            channel.PropertyChanged -= HandleChannelPropertyChanged;
         connection.StatusChanged -= HandleConnectionStatus;
         connection.LogReceived -= HandleLogReceived;
         connection.TrafficReceived -= HandleTrafficReceived;
@@ -6715,24 +7055,49 @@ public sealed class SystemViewModel : IFneTrafficEndpoint, INotifyPropertyChange
     {
         KeyResponseReceived?.Invoke(this, response);
     }
+
+    private void HandleChannelPropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(ChannelViewModel.State))
+        {
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsReceiving)));
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ActivityBarOpacity)));
+            foreach (ZoneViewModel zone in Zones)
+                zone.RefreshReceiveActivity();
+        }
+        else if (e.PropertyName == nameof(ChannelViewModel.IsRecordingEnabled))
+        {
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(RecordingConfigurationHeader)));
+        }
+    }
+
+    private static bool SameResource(ChannelViewModel left, ChannelViewModel right)
+        => left.Definition.SystemName.Equals(right.Definition.SystemName, StringComparison.OrdinalIgnoreCase) &&
+           left.Definition.Mode.Equals(right.Definition.Mode, StringComparison.OrdinalIgnoreCase) &&
+           left.Definition.DestinationId == right.Definition.DestinationId &&
+           (left.Definition.Mode != "dmr" || left.Definition.Slot == right.Definition.Slot);
 }
 
 public sealed class ZoneViewModel : INotifyPropertyChanged
 {
     private bool darkMode;
+    private readonly IBrush activityBrush;
+    private Func<bool>? receiveActivityResolver;
 
     public ZoneViewModel(
         string name,
         IReadOnlyList<ChannelViewModel> channels,
         IReadOnlyList<WebStreamViewModel> webStreams,
         string? tabColor = null,
-        string? tabTextColor = null)
+        string? tabTextColor = null,
+        IBrush? activityBrush = null)
     {
         Name = name;
         Channels = channels;
         WebStreams = webStreams;
         TabColor = tabColor;
         TabTextColor = tabTextColor;
+        this.activityBrush = activityBrush ?? new SolidColorBrush(Color.Parse("#00BE5A"));
         foreach (ChannelViewModel channel in Channels)
             channel.PropertyChanged += HandleChannelPropertyChanged;
     }
@@ -6745,6 +7110,10 @@ public sealed class ZoneViewModel : INotifyPropertyChanged
     public string? TabTextColor { get; }
     public IBrush TabBrush => CreateBrush(TabColor, darkMode ? "#151D26" : "#E8EDF3");
     public IBrush TabTextBrush => CreateBrush(TabTextColor, darkMode ? "#DCE3EB" : "#18212B");
+    public IBrush ActivityBrush => activityBrush;
+    public bool IsReceiving => receiveActivityResolver?.Invoke() ??
+        Channels.Any(channel => channel.State == ChannelRuntimeState.Receiving);
+    public double ActivityBarOpacity => IsReceiving ? 1.0 : 0.12;
     private double widgetCardHeight = 122;
     public double WidgetCanvasWidth => Math.Max(1, Channels.Count == 0 ? 0 : Channels.Max(channel => channel.WidgetX + channel.CardWidth + 12));
     public double WidgetCanvasHeight => Math.Max(1, Channels.Count == 0 ? 0 : Channels.Max(channel => channel.WidgetY + widgetCardHeight + 12));
@@ -6772,12 +7141,29 @@ public sealed class ZoneViewModel : INotifyPropertyChanged
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(TabTextBrush)));
     }
 
+    internal void SetReceiveActivityResolver(Func<bool> resolver)
+    {
+        receiveActivityResolver = resolver ?? throw new ArgumentNullException(nameof(resolver));
+        RefreshReceiveActivity();
+    }
+
+    internal void RefreshReceiveActivity()
+    {
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsReceiving)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ActivityBarOpacity)));
+    }
+
     private void HandleChannelPropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
         if (e.PropertyName is nameof(ChannelViewModel.WidgetX) or nameof(ChannelViewModel.WidgetY))
         {
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(WidgetCanvasWidth)));
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(WidgetCanvasHeight)));
+        }
+        else if (e.PropertyName == nameof(ChannelViewModel.State))
+        {
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsReceiving)));
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ActivityBarOpacity)));
         }
     }
 
@@ -6800,6 +7186,15 @@ public sealed record AudioDeviceOptionViewModel(string Id, string Name, bool IsD
     public string DisplayName => IsDefault ? $"{Name} (default)" : Name;
 }
 
+internal readonly record struct ChannelTrafficApplyResult(
+    bool Matched,
+    ReceiveStreamTransition Transition,
+    uint? ActiveStreamId = null,
+    uint? EndedStreamId = null)
+{
+    public static ChannelTrafficApplyResult NoMatch => new(false, ReceiveStreamTransition.None);
+}
+
 public sealed class ChannelViewModel : INotifyPropertyChanged
 {
     private readonly ChannelConfiguration configuration;
@@ -6808,6 +7203,10 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
     private readonly IDmrKeyResolver? dmrKeyResolver;
     private readonly INxdnKeyResolver? nxdnKeyResolver;
     private readonly IReadOnlyList<RadioAlias> aliases;
+    private readonly ReceiveStreamLifecycle receiveLifecycle = new(
+        TimeSpan.FromSeconds(2),
+        TimeSpan.FromSeconds(2),
+        TimeSpan.FromSeconds(5));
     private Func<ChannelViewModel, Task>? startAudio;
     private Func<ChannelViewModel, Task>? stopAudio;
     private Func<ChannelViewModel, Task>? startTransmit;
@@ -6826,6 +7225,7 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
     private double audioLevel;
     private double volume = 1.0;
     private double stereoBalance;
+    private long ignoredLatePacketCount;
     private string ignoredSubscriberIdsText = string.Empty;
     private string outputDeviceIdText = string.Empty;
     private IReadOnlyList<AudioDeviceOptionViewModel> outputDeviceOptions = [];
@@ -6934,11 +7334,20 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
         get => volume;
         set => SetVolume(value, raiseChanged: true);
     }
+    public double VolumeSliderValue
+    {
+        get => NeutralSliderMath.VolumeGainToPosition(volume);
+        set => SetVolume(NeutralSliderMath.VolumePositionToGain(value), raiseChanged: true);
+    }
     public double StereoBalance
     {
         get => stereoBalance;
         set => SetStereoBalance(value, raiseChanged: true);
     }
+    public long IgnoredLatePacketCount => Interlocked.Read(ref ignoredLatePacketCount);
+
+    internal void RecordIgnoredLatePacket()
+        => Interlocked.Increment(ref ignoredLatePacketCount);
     public string StereoBalanceText => stereoBalance switch
     {
         <= -0.9999 => "Left",
@@ -7185,6 +7594,7 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
         if (raiseChanged)
         {
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(Volume)));
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(VolumeSliderValue)));
             VolumeChanged?.Invoke(this, normalized);
         }
     }
@@ -7356,6 +7766,12 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
     }
 
     public bool TryApplyTraffic(string systemName, FneTrafficFrame traffic)
+        => ApplyTraffic(systemName, traffic, DateTimeOffset.UtcNow).Matched;
+
+    internal ChannelTrafficApplyResult ApplyTraffic(
+        string systemName,
+        FneTrafficFrame traffic,
+        DateTimeOffset now)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(systemName);
         ArgumentNullException.ThrowIfNull(traffic);
@@ -7364,54 +7780,74 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
             !MatchesProtocol(traffic.Protocol) ||
             traffic.StreamId == 0)
         {
-            return false;
+            return ChannelTrafficApplyResult.NoMatch;
         }
 
         if (runtime.State == ChannelRuntimeState.Transmitting)
-            return false;
+            return ChannelTrafficApplyResult.NoMatch;
 
         if (IsTerminator(traffic))
         {
-            if (runtime.StreamId != traffic.StreamId)
-                return false;
+            ReceiveStreamDecision decision = receiveLifecycle.ObserveTerminator(traffic.StreamId, now);
+            if (decision.Transition != ReceiveStreamTransition.Ended)
+                return decision.Transition == ReceiveStreamTransition.IgnoredLate
+                    ? ToApplyResult(decision)
+                    : ChannelTrafficApplyResult.NoMatch;
 
-            runtime.MarkIdle();
-            return true;
+            runtime.MarkIdle(now);
+            return ToApplyResult(decision);
         }
 
         if (IsDmrPrivacyHeader(traffic))
         {
-            return runtime.State == ChannelRuntimeState.Receiving &&
-                runtime.StreamId == traffic.StreamId &&
-                runtime.SourceId == traffic.SourceId &&
-                runtime.Definition.DestinationId == traffic.DestinationId &&
-                runtime.Definition.Slot == traffic.Slot;
+            if (runtime.State != ChannelRuntimeState.Receiving ||
+                runtime.StreamId != traffic.StreamId ||
+                runtime.SourceId != traffic.SourceId ||
+                runtime.Definition.DestinationId != traffic.DestinationId ||
+                runtime.Definition.Slot != traffic.Slot)
+            {
+                return ChannelTrafficApplyResult.NoMatch;
+            }
+
+            ReceiveStreamDecision decision = receiveLifecycle.ObserveVoice(traffic.StreamId, now);
+            if (decision.Transition is ReceiveStreamTransition.Continued or ReceiveStreamTransition.Resumed)
+                runtime.MarkReceiving(traffic.SourceId, traffic.StreamId, now);
+            return ToApplyResult(decision);
         }
 
         if (traffic.DestinationId != runtime.Definition.DestinationId)
-            return false;
+            return ChannelTrafficApplyResult.NoMatch;
 
         if (!MatchesVoiceTraffic(traffic) || traffic.SourceId == 0)
-            return false;
+            return ChannelTrafficApplyResult.NoMatch;
 
-        runtime.MarkReceiving(traffic.SourceId, traffic.StreamId);
-        return true;
+        ReceiveStreamDecision voiceDecision = receiveLifecycle.ObserveVoice(traffic.StreamId, now);
+        if (voiceDecision.Transition != ReceiveStreamTransition.IgnoredLate)
+            runtime.MarkReceiving(traffic.SourceId, traffic.StreamId, now);
+        return ToApplyResult(voiceDecision);
     }
 
     public bool TryExpireReceiveState(DateTimeOffset now, TimeSpan timeout)
     {
         if (timeout <= TimeSpan.Zero)
             throw new ArgumentOutOfRangeException(nameof(timeout));
-        if (runtime.State != ChannelRuntimeState.Receiving ||
-            runtime.LastActivity is not DateTimeOffset lastActivity ||
-            now - lastActivity <= timeout)
-        {
-            return false;
-        }
-
-        runtime.MarkIdle(now);
-        return true;
+        return AdvanceReceiveLifecycle(now).Transition == ReceiveStreamTransition.GraceExpired;
     }
+
+    internal ChannelTrafficApplyResult AdvanceReceiveLifecycle(DateTimeOffset now)
+    {
+        ReceiveStreamDecision decision = receiveLifecycle.Advance(now);
+        if (decision.Transition == ReceiveStreamTransition.GraceExpired)
+            runtime.MarkIdle(now);
+        return ToApplyResult(decision);
+    }
+
+    private static ChannelTrafficApplyResult ToApplyResult(ReceiveStreamDecision decision)
+        => new(
+            Matched: decision.Transition is not ReceiveStreamTransition.None,
+            decision.Transition,
+            decision.ActiveStreamId,
+            decision.EndedStreamId);
 
     private bool MatchesVoiceTraffic(FneTrafficFrame traffic)
     {

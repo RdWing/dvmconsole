@@ -1,5 +1,6 @@
 using System.Collections.ObjectModel;
 using System.ComponentModel;
+using System.Globalization;
 using DvmConsole.FneClient;
 
 namespace DvmConsole.Desktop;
@@ -13,6 +14,7 @@ public sealed class CallHistoryEntry : INotifyPropertyChanged
     private ushort? encryptionKeyId;
     private readonly bool isEvent;
     private readonly bool isConsoleTransmission;
+    private readonly bool isRecordingOnly;
     private readonly string eventSource;
     private readonly string eventMessage;
     private readonly string eventRidText;
@@ -31,6 +33,7 @@ public sealed class CallHistoryEntry : INotifyPropertyChanged
         bool encrypted = false,
         bool isEvent = false,
         bool isConsoleTransmission = false,
+        bool isRecordingOnly = false,
         string? eventSource = null,
         string? eventMessage = null,
         string? eventRidText = null,
@@ -47,6 +50,7 @@ public sealed class CallHistoryEntry : INotifyPropertyChanged
         this.encrypted = encrypted;
         this.isEvent = isEvent;
         this.isConsoleTransmission = isConsoleTransmission;
+        this.isRecordingOnly = isRecordingOnly;
         this.eventSource = eventSource?.Trim() ?? string.Empty;
         this.eventMessage = eventMessage?.Trim() ?? string.Empty;
         this.eventRidText = eventRidText?.Trim() ?? string.Empty;
@@ -65,6 +69,8 @@ public sealed class CallHistoryEntry : INotifyPropertyChanged
     public string CallerText { get; }
     public bool IsEvent => isEvent;
     public bool IsConsoleTransmission => isConsoleTransmission;
+    public bool IsRecordingOnly => isRecordingOnly;
+    public string DirectionText => IsEvent ? "EVENT" : IsConsoleTransmission ? "TX" : "RX";
     public string EventSource => eventSource;
     public string EventMessage => eventMessage;
     public string EventRidText => eventRidText;
@@ -78,8 +84,14 @@ public sealed class CallHistoryEntry : INotifyPropertyChanged
     public string RouteText => IsEvent ? EventMessage : $"{CallerText} → TG {DestinationId}";
     public string StreamText => IsEvent ? "Event" : $"{ProtocolText} · stream {StreamId}";
     public bool IsActive => !IsEvent && endTimestamp is null;
-    public TimeSpan? Duration => IsEvent ? null : endTimestamp - Timestamp;
-    public string DurationText => Duration is TimeSpan duration
+    public TimeSpan? Duration => IsEvent
+        ? null
+        : endTimestamp - Timestamp ?? (recording is null
+            ? null
+            : TimeSpan.FromMilliseconds(Math.Max(0, recording.DurationMs)));
+    public string DurationText => IsRecordingOnly && recording is not null
+        ? recording.DurationText
+        : Duration is TimeSpan duration
         ? $"{duration.TotalSeconds:0.0}s"
         : IsEvent ? "—" : "Active";
     public byte? EncryptionAlgorithmId => encryptionAlgorithmId;
@@ -89,7 +101,11 @@ public sealed class CallHistoryEntry : INotifyPropertyChanged
         : EncryptionPresentation.StatusText(Encrypted, Protocol, encryptionAlgorithmId);
 
     public bool HasRecording => recording is not null;
+    public bool HasPlayableRecording => recording?.IsPlayable == true;
     public CallRecordingMetadata? Recording => recording;
+    public string RecordingFileName => recording?.FileName ?? string.Empty;
+    public string RecordingDetailsText => recording?.TechnicalDetailsText ?? string.Empty;
+    public string RecordingPath => recording?.FilePath ?? string.Empty;
 
     public void SetRecording(CallRecordingMetadata? value)
     {
@@ -98,6 +114,45 @@ public sealed class CallHistoryEntry : INotifyPropertyChanged
         recording = value;
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(Recording)));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(HasRecording)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(HasPlayableRecording)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(RecordingFileName)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(RecordingDetailsText)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(RecordingPath)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(Duration)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(DurationText)));
+    }
+
+    public static CallHistoryEntry CreateRecordingOnly(CallRecordingMetadata metadata)
+    {
+        ArgumentNullException.ThrowIfNull(metadata);
+        bool isTx = metadata.Direction.Equals("TX", StringComparison.OrdinalIgnoreCase);
+        FneTrafficProtocol protocol = metadata.Protocol.Trim().ToUpperInvariant() switch
+        {
+            "P25" => FneTrafficProtocol.P25,
+            "NXDN" => FneTrafficProtocol.Nxdn,
+            "ANALOG" => FneTrafficProtocol.Analog,
+            _ => FneTrafficProtocol.Dmr
+        };
+        string caller = string.IsNullOrWhiteSpace(metadata.SubscriberAlias)
+            ? metadata.SubscriberId?.ToString() ?? "Unknown"
+            : metadata.SubscriberAlias.Trim();
+        var entry = new CallHistoryEntry(
+            metadata.UtcStartTime,
+            metadata.SystemName,
+            metadata.ChannelName,
+            metadata.SubscriberId ?? 0,
+            metadata.TalkgroupId ?? 0,
+            protocol,
+            metadata.StreamId ?? 0,
+            caller,
+            metadata.IsEncrypted,
+            isConsoleTransmission: isTx,
+            isRecordingOnly: true);
+        entry.endTimestamp = metadata.UtcEndTime >= metadata.UtcStartTime
+            ? metadata.UtcEndTime
+            : metadata.UtcStartTime.AddMilliseconds(Math.Max(0, metadata.DurationMs));
+        entry.SetRecording(metadata);
+        return entry;
     }
 
     public static CallHistoryEntry CreateEvent(
@@ -207,22 +262,221 @@ public sealed class CallHistoryStore
     public void Add(CallHistoryEntry entry)
     {
         ArgumentNullException.ThrowIfNull(entry);
-        Entries.Insert(0, entry);
-        while (Entries.Count > maxEntries)
-            Entries.RemoveAt(Entries.Count - 1);
+        if (!entry.IsEvent && !entry.IsRecordingOnly)
+        {
+            CallHistoryEntry? archived = Entries.FirstOrDefault(candidate =>
+                candidate.IsRecordingOnly &&
+                candidate.Recording is not null &&
+                RecordingMatchesCall(candidate.Recording, entry));
+            if (archived is not null)
+            {
+                entry.SetRecording(archived.Recording);
+                Entries.Remove(archived);
+            }
+        }
+        InsertNewestFirst(entry);
+        TrimSessionEntries();
+    }
+
+    public CallHistoryEntry AddOrAttachRecording(CallRecordingMetadata metadata)
+    {
+        ArgumentNullException.ThrowIfNull(metadata);
+        CallHistoryEntry? byRecordingId = Entries.FirstOrDefault(entry => RecordingEquals(entry.Recording, metadata));
+        if (byRecordingId is not null)
+        {
+            byRecordingId.SetRecording(metadata);
+            return byRecordingId;
+        }
+
+        string direction = metadata.Direction.Equals("TX", StringComparison.OrdinalIgnoreCase) ? "TX" : "RX";
+        CallHistoryEntry? call = Entries.FirstOrDefault(entry =>
+            !entry.IsEvent &&
+            !entry.IsRecordingOnly &&
+            entry.StreamId == metadata.StreamId &&
+            entry.DirectionText == direction &&
+            entry.ChannelName.Equals(metadata.ChannelName, StringComparison.OrdinalIgnoreCase) &&
+            entry.DestinationId == metadata.TalkgroupId &&
+            entry.SystemName.Equals(metadata.SystemName, StringComparison.OrdinalIgnoreCase) &&
+            entry.ProtocolText.Equals(metadata.Protocol, StringComparison.OrdinalIgnoreCase) &&
+            Math.Abs((entry.Timestamp - metadata.UtcStartTime).TotalSeconds) <= 5);
+        if (call is not null)
+        {
+            call.SetRecording(metadata);
+            return call;
+        }
+
+        CallHistoryEntry archived = CallHistoryEntry.CreateRecordingOnly(metadata);
+        InsertNewestFirst(archived);
+        return archived;
+    }
+
+    public void RemoveRecording(CallRecordingMetadata metadata)
+    {
+        ArgumentNullException.ThrowIfNull(metadata);
+        CallHistoryEntry? entry = Entries.FirstOrDefault(candidate => RecordingEquals(candidate.Recording, metadata));
+        if (entry is null)
+            return;
+        if (entry.IsRecordingOnly)
+            Entries.Remove(entry);
+        else
+            entry.SetRecording(null);
+    }
+
+    public void ReplaceRecordingCatalog(IEnumerable<CallRecordingMetadata> recordings)
+    {
+        ArgumentNullException.ThrowIfNull(recordings);
+        CallRecordingMetadata[] desired = recordings.ToArray();
+        var desiredIds = new HashSet<string>(
+            desired.Select(RecordingKey),
+            StringComparer.OrdinalIgnoreCase);
+        string[] removedKeys = Entries
+            .Where(entry => entry.Recording is not null)
+            .Select(entry => RecordingKey(entry.Recording!))
+            .Where(key => !desiredIds.Contains(key))
+            .ToArray();
+        RemoveRecordingsByKey(removedKeys);
+        AddOrAttachRecordings(desired);
+    }
+
+    public void RemoveRecordingsByKey(IEnumerable<string> recordingKeys)
+    {
+        ArgumentNullException.ThrowIfNull(recordingKeys);
+        var keys = new HashSet<string>(recordingKeys, StringComparer.OrdinalIgnoreCase);
+        if (keys.Count == 0)
+            return;
+
+        foreach (CallHistoryEntry entry in Entries
+                     .Where(entry => entry.Recording is not null &&
+                         keys.Contains(RecordingKey(entry.Recording!)))
+                     .ToArray())
+        {
+            if (entry.IsRecordingOnly)
+                Entries.Remove(entry);
+            else
+                entry.SetRecording(null);
+        }
+    }
+
+    public void AddOrAttachRecordings(IEnumerable<CallRecordingMetadata> recordings)
+    {
+        ArgumentNullException.ThrowIfNull(recordings);
+        CallRecordingMetadata[] batch = recordings.ToArray();
+        if (batch.Length == 0)
+            return;
+
+        Dictionary<string, CallHistoryEntry> byRecording = Entries
+            .Where(entry => entry.Recording is not null)
+            .GroupBy(entry => RecordingKey(entry.Recording!), StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase);
+        Dictionary<string, CallHistoryEntry[]> callsByIdentity = Entries
+            .Where(entry => !entry.IsEvent && !entry.IsRecordingOnly)
+            .GroupBy(CallIdentityKey, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group => group.Key, group => group.ToArray(), StringComparer.OrdinalIgnoreCase);
+
+        foreach (CallRecordingMetadata metadata in batch)
+        {
+            string recordingKey = RecordingKey(metadata);
+            if (byRecording.TryGetValue(recordingKey, out CallHistoryEntry? existing))
+            {
+                existing.SetRecording(metadata);
+                continue;
+            }
+
+            CallHistoryEntry? call = callsByIdentity
+                .GetValueOrDefault(RecordingIdentityKey(metadata))?
+                .FirstOrDefault(candidate => Math.Abs((candidate.Timestamp - metadata.UtcStartTime).TotalSeconds) <= 5);
+            if (call is null)
+            {
+                call = CallHistoryEntry.CreateRecordingOnly(metadata);
+                InsertNewestFirst(call);
+            }
+            else
+            {
+                call.SetRecording(metadata);
+            }
+            byRecording[recordingKey] = call;
+        }
+    }
+
+    private void InsertNewestFirst(CallHistoryEntry entry)
+    {
+        int index = 0;
+        while (index < Entries.Count && Entries[index].Timestamp > entry.Timestamp)
+            index++;
+        Entries.Insert(index, entry);
+    }
+
+    private void TrimSessionEntries()
+    {
+        while (Entries.Count(entry => !entry.IsRecordingOnly) > maxEntries)
+        {
+            CallHistoryEntry? oldest = Entries.LastOrDefault(entry => !entry.IsRecordingOnly);
+            if (oldest is null)
+                break;
+            Entries.Remove(oldest);
+        }
+    }
+
+    private static bool RecordingEquals(CallRecordingMetadata? left, CallRecordingMetadata right)
+    {
+        if (left is null)
+            return false;
+        if (!string.IsNullOrWhiteSpace(left.RecordingId) && !string.IsNullOrWhiteSpace(right.RecordingId))
+            return left.RecordingId.Equals(right.RecordingId, StringComparison.OrdinalIgnoreCase);
+        return !string.IsNullOrWhiteSpace(left.FilePath) &&
+            left.FilePath.Equals(right.FilePath, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string RecordingKey(CallRecordingMetadata recording)
+        => !string.IsNullOrWhiteSpace(recording.RecordingId)
+            ? recording.RecordingId
+            : recording.FilePath;
+
+    private static string CallIdentityKey(CallHistoryEntry call)
+        => string.Join('\u001f',
+            call.SystemName,
+            call.ProtocolText,
+            call.DirectionText,
+            call.ChannelName,
+            call.DestinationId.ToString(CultureInfo.InvariantCulture),
+            call.StreamId.ToString(CultureInfo.InvariantCulture));
+
+    private static string RecordingIdentityKey(CallRecordingMetadata recording)
+        => string.Join('\u001f',
+            recording.SystemName,
+            recording.Protocol.Trim().ToUpperInvariant(),
+            recording.Direction.Equals("TX", StringComparison.OrdinalIgnoreCase) ? "TX" : "RX",
+            recording.ChannelName,
+            recording.TalkgroupId?.ToString(CultureInfo.InvariantCulture) ?? string.Empty,
+            recording.StreamId?.ToString(CultureInfo.InvariantCulture) ?? string.Empty);
+
+    private static bool RecordingMatchesCall(CallRecordingMetadata recording, CallHistoryEntry call)
+    {
+        string direction = recording.Direction.Equals("TX", StringComparison.OrdinalIgnoreCase) ? "TX" : "RX";
+        return call.StreamId == recording.StreamId &&
+            call.DirectionText == direction &&
+            call.ChannelName.Equals(recording.ChannelName, StringComparison.OrdinalIgnoreCase) &&
+            call.DestinationId == recording.TalkgroupId &&
+            call.SystemName.Equals(recording.SystemName, StringComparison.OrdinalIgnoreCase) &&
+            call.ProtocolText.Equals(recording.Protocol, StringComparison.OrdinalIgnoreCase) &&
+            Math.Abs((call.Timestamp - recording.UtcStartTime).TotalSeconds) <= 5;
     }
 
     public bool Complete(
         string systemName,
         FneTrafficProtocol protocol,
         uint streamId,
-        DateTimeOffset timestamp)
+        DateTimeOffset timestamp,
+        string? channelName = null,
+        uint? destinationId = null)
     {
         CallHistoryEntry? entry = Entries.FirstOrDefault(candidate =>
             candidate.IsActive &&
             !candidate.IsConsoleTransmission &&
             candidate.StreamId == streamId &&
             candidate.Protocol == protocol &&
+            (channelName is null || candidate.ChannelName.Equals(channelName, StringComparison.OrdinalIgnoreCase)) &&
+            (destinationId is null || candidate.DestinationId == destinationId) &&
             candidate.SystemName.Equals(systemName, StringComparison.OrdinalIgnoreCase));
         if (entry is null)
             return false;
@@ -243,13 +497,17 @@ public sealed class CallHistoryStore
         uint streamId,
         bool encrypted,
         byte? algorithmId,
-        ushort? keyId)
+        ushort? keyId,
+        string? channelName = null,
+        uint? destinationId = null)
     {
         CallHistoryEntry? entry = Entries.FirstOrDefault(candidate =>
             candidate.IsActive &&
             !candidate.IsConsoleTransmission &&
             candidate.StreamId == streamId &&
             candidate.Protocol == protocol &&
+            (channelName is null || candidate.ChannelName.Equals(channelName, StringComparison.OrdinalIgnoreCase)) &&
+            (destinationId is null || candidate.DestinationId == destinationId) &&
             candidate.SystemName.Equals(systemName, StringComparison.OrdinalIgnoreCase));
         return entry?.UpdateEncryption(encrypted, algorithmId, keyId) == true;
     }
@@ -291,13 +549,17 @@ public sealed class CallHistoryStore
         string systemName,
         FneTrafficProtocol protocol,
         uint streamId,
-        DateTimeOffset timestamp)
+        DateTimeOffset timestamp,
+        string? channelName = null,
+        uint? destinationId = null)
     {
         CallHistoryEntry? entry = Entries.FirstOrDefault(candidate =>
             candidate.IsActive &&
             candidate.IsConsoleTransmission &&
             candidate.StreamId == streamId &&
             candidate.Protocol == protocol &&
+            (channelName is null || candidate.ChannelName.Equals(channelName, StringComparison.OrdinalIgnoreCase)) &&
+            (destinationId is null || candidate.DestinationId == destinationId) &&
             candidate.SystemName.Equals(systemName, StringComparison.OrdinalIgnoreCase));
         if (entry is null)
             return false;
@@ -305,5 +567,15 @@ public sealed class CallHistoryStore
         return true;
     }
 
-    public void Clear() => Entries.Clear();
+    public void Clear()
+    {
+        CallRecordingMetadata[] attachedRecordings = Entries
+            .Where(entry => !entry.IsRecordingOnly && entry.Recording is not null)
+            .Select(entry => entry.Recording!)
+            .ToArray();
+        foreach (CallHistoryEntry entry in Entries.Where(entry => !entry.IsRecordingOnly).ToArray())
+            Entries.Remove(entry);
+        foreach (CallRecordingMetadata recording in attachedRecordings)
+            AddOrAttachRecording(recording);
+    }
 }

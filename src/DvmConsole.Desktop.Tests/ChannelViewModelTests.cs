@@ -204,6 +204,40 @@ public sealed class ChannelViewModelTests
     }
 
     [Fact]
+    public void LateVoiceAfterTerminatorDoesNotReopenChannel()
+    {
+        var channel = new ChannelViewModel(new ChannelConfiguration
+        {
+            Name = "Dispatch",
+            System = "System 1",
+            Tgid = "99",
+            Mode = "dmr",
+            Slot = 2
+        });
+        DateTimeOffset now = DateTimeOffset.UnixEpoch;
+
+        Assert.Equal(
+            ReceiveStreamTransition.Started,
+            channel.ApplyTraffic(
+                "System 1",
+                CreateTraffic(FneTrafficProtocol.Dmr, 42, 99, 1, "VOICE", "VOICE", 7),
+                now).Transition);
+        Assert.Equal(
+            ReceiveStreamTransition.Ended,
+            channel.ApplyTraffic(
+                "System 1",
+                CreateTraffic(FneTrafficProtocol.Dmr, 42, 99, 1, "TERMINATOR", "TERMINATOR", 7),
+                now.AddSeconds(1)).Transition);
+        Assert.Equal(
+            ReceiveStreamTransition.IgnoredLate,
+            channel.ApplyTraffic(
+                "System 1",
+                CreateTraffic(FneTrafficProtocol.Dmr, 42, 99, 1, "VOICE", "VOICE", 7),
+                now.AddSeconds(2)).Transition);
+        Assert.Equal(ChannelRuntimeState.Idle, channel.State);
+    }
+
+    [Fact]
     public void DmrDataSyncTerminatorWithLinkControlReturnsTheActiveChannelToIdle()
     {
         var channel = new ChannelViewModel(new ChannelConfiguration
@@ -262,7 +296,7 @@ public sealed class ChannelViewModelTests
     }
 
     [Fact]
-    public void StaleReceiveStateExpiresWithoutATerminator()
+    public void StaleReceiveStateWaitsThroughGraceBeforeExpiring()
     {
         var channel = new ChannelViewModel(new ChannelConfiguration
         {
@@ -271,11 +305,59 @@ public sealed class ChannelViewModelTests
             Tgid = "99",
             Mode = "p25"
         });
-        Assert.True(channel.TryApplyTraffic("System 1", CreateTraffic(
-            FneTrafficProtocol.P25, 42, 99, null, "VOICE", "LDU1", 7)));
+        DateTimeOffset now = DateTimeOffset.UnixEpoch;
+        Assert.Equal(ReceiveStreamTransition.Started, channel.ApplyTraffic(
+            "System 1",
+            CreateTraffic(FneTrafficProtocol.P25, 42, 99, null, "VOICE", "LDU1", 7),
+            now).Transition);
 
-        Assert.True(channel.TryExpireReceiveState(DateTimeOffset.UtcNow.AddSeconds(3), TimeSpan.FromSeconds(2)));
+        Assert.Equal(
+            ReceiveStreamTransition.GraceStarted,
+            channel.AdvanceReceiveLifecycle(now.AddSeconds(2)).Transition);
+        Assert.Equal(ChannelRuntimeState.Receiving, channel.State);
+        Assert.Equal(
+            ReceiveStreamTransition.Resumed,
+            channel.ApplyTraffic(
+                "System 1",
+                CreateTraffic(FneTrafficProtocol.P25, 42, 99, null, "VOICE", "LDU2", 7),
+                now.AddSeconds(3)).Transition);
+        Assert.Equal(
+            ReceiveStreamTransition.GraceExpired,
+            channel.AdvanceReceiveLifecycle(now.AddSeconds(7)).Transition);
         Assert.Equal(ChannelRuntimeState.Idle, channel.State);
+    }
+
+    [Fact]
+    public void NewVoiceStreamSupersedesAndTombstonesTheOldStream()
+    {
+        var channel = new ChannelViewModel(new ChannelConfiguration
+        {
+            Name = "Dispatch",
+            System = "System 1",
+            Tgid = "99",
+            Mode = "p25"
+        });
+        DateTimeOffset now = DateTimeOffset.UnixEpoch;
+
+        channel.ApplyTraffic(
+            "System 1",
+            CreateTraffic(FneTrafficProtocol.P25, 42, 99, null, "VOICE", "LDU1", 10),
+            now);
+        ChannelTrafficApplyResult superseded = channel.ApplyTraffic(
+            "System 1",
+            CreateTraffic(FneTrafficProtocol.P25, 43, 99, null, "VOICE", "LDU1", 11),
+            now.AddMilliseconds(100));
+
+        Assert.Equal(ReceiveStreamTransition.Superseded, superseded.Transition);
+        Assert.Equal((uint)10, superseded.EndedStreamId);
+        Assert.Equal((uint)11, superseded.ActiveStreamId);
+        Assert.Equal(
+            ReceiveStreamTransition.IgnoredLate,
+            channel.ApplyTraffic(
+                "System 1",
+                CreateTraffic(FneTrafficProtocol.P25, 42, 99, null, "VOICE", "LDU2", 10),
+                now.AddSeconds(1)).Transition);
+        Assert.Equal((uint)11, channel.StreamId);
     }
 
     [Fact]

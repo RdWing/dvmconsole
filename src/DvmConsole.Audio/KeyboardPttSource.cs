@@ -2,6 +2,7 @@ namespace DvmConsole.Audio;
 
 public enum KeyboardPttKey
 {
+    None,
     Space,
     F1,
     F2,
@@ -14,7 +15,14 @@ public enum KeyboardPttKey
     F9,
     F10,
     F11,
-    F12
+    F12,
+    F13,
+    F14,
+    F15,
+    F16,
+    F17,
+    F18,
+    F19
 }
 
 // Lifecycle-bound keyboard PTT adapter. The host maps its platform key

@@ -372,6 +372,9 @@ public sealed class ChannelTransmitCoordinator : IAsyncDisposable
 
     private async Task StopInfrastructureCoreAsync()
     {
+        if (active.Count > 0 || warmCaptureLease is not null)
+            throw new InvalidOperationException("Transmit audio infrastructure still has an active capture lease.");
+
         Exception? failure = null;
         if (sharedCapture is not null)
         {

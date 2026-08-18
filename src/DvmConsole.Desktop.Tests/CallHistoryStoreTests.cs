@@ -124,6 +124,23 @@ public sealed class CallHistoryStoreTests
     }
 
     [Fact]
+    public void CompletesOnlyTheMatchingConcurrentConsoleTransmission()
+    {
+        var store = new CallHistoryStore();
+        store.AddConsoleTransmission(DateTimeOffset.UnixEpoch, "System 1", "Dispatch A", 42, 100,
+            FneTrafficProtocol.Dmr, 77);
+        store.AddConsoleTransmission(DateTimeOffset.UnixEpoch, "System 1", "Dispatch B", 42, 200,
+            FneTrafficProtocol.Dmr, 77);
+
+        Assert.True(store.CompleteConsoleTransmission(
+            "System 1", FneTrafficProtocol.Dmr, 77, DateTimeOffset.UnixEpoch.AddSeconds(1),
+            "Dispatch B", 200));
+
+        Assert.True(store.Entries.Single(entry => entry.ChannelName == "Dispatch A").IsActive);
+        Assert.False(store.Entries.Single(entry => entry.ChannelName == "Dispatch B").IsActive);
+    }
+
+    [Fact]
     public void ExposesAnAttachedTarRecordingToHistoryViews()
     {
         CallHistoryEntry entry = CreateEntry(42);
@@ -138,6 +155,164 @@ public sealed class CallHistoryStoreTests
 
         Assert.True(entry.HasRecording);
         Assert.Same(metadata, entry.Recording);
+    }
+
+    [Fact]
+    public void AttachesCompletedRecordingToExistingCallWithoutAddingDuplicateRow()
+    {
+        var store = new CallHistoryStore();
+        CallHistoryEntry entry = CreateEntry(42);
+        store.Add(entry);
+        CallRecordingMetadata recording = CreatePlayableRecording(streamId: 42);
+
+        CallHistoryEntry attached = store.AddOrAttachRecording(recording);
+
+        Assert.Same(entry, attached);
+        Assert.Same(recording, entry.Recording);
+        Assert.True(entry.HasPlayableRecording);
+        Assert.Single(store.Entries);
+    }
+
+    [Fact]
+    public void AddsOlderCompletedRecordingAsHistoryRowWithCatalogDetails()
+    {
+        var store = new CallHistoryStore();
+        CallRecordingMetadata recording = CreatePlayableRecording(streamId: 99);
+        recording.Direction = "TX";
+        recording.SubscriberAlias = "Dispatch console";
+
+        CallHistoryEntry entry = store.AddOrAttachRecording(recording);
+
+        Assert.True(entry.IsRecordingOnly);
+        Assert.True(entry.IsConsoleTransmission);
+        Assert.Equal("Dispatch console → TG 100", entry.RouteText);
+        Assert.Equal(recording.DurationText, entry.DurationText);
+        Assert.Equal(recording.TechnicalDetailsText, entry.RecordingDetailsText);
+        Assert.True(entry.HasPlayableRecording);
+    }
+
+    [Fact]
+    public void RemovingRecordingKeepsLiveCallButRemovesRecordingOnlyRow()
+    {
+        var store = new CallHistoryStore();
+        CallHistoryEntry liveCall = CreateEntry(42);
+        store.Add(liveCall);
+        CallRecordingMetadata liveRecording = CreatePlayableRecording(streamId: 42);
+        store.AddOrAttachRecording(liveRecording);
+        CallRecordingMetadata archivedRecording = CreatePlayableRecording(streamId: 99);
+        CallHistoryEntry archived = store.AddOrAttachRecording(archivedRecording);
+
+        store.RemoveRecording(liveRecording);
+        store.RemoveRecording(archivedRecording);
+
+        Assert.Contains(liveCall, store.Entries);
+        Assert.Null(liveCall.Recording);
+        Assert.DoesNotContain(archived, store.Entries);
+    }
+
+    [Fact]
+    public void SessionLimitDoesNotDiscardRecordingCatalogRows()
+    {
+        var store = new CallHistoryStore(maxEntries: 1);
+        CallHistoryEntry archived = store.AddOrAttachRecording(CreatePlayableRecording(streamId: 99));
+
+        store.Add(CreateEntry(1));
+        store.Add(CreateEntry(2));
+
+        Assert.Contains(archived, store.Entries);
+        Assert.Equal(2, store.Entries.Count);
+        Assert.Equal((uint)2, store.Entries[0].StreamId);
+    }
+
+    [Fact]
+    public void SameStreamIdOnConcurrentChannelsDoesNotCompleteOrAttachWrongCall()
+    {
+        var store = new CallHistoryStore();
+        CallHistoryEntry dispatch = CreateEntry(42);
+        var tactical = new CallHistoryEntry(
+            DateTimeOffset.UnixEpoch,
+            "System 1",
+            "Tactical",
+            84,
+            200,
+            FneTrafficProtocol.Dmr,
+            42);
+        store.Add(dispatch);
+        store.Add(tactical);
+
+        Assert.True(store.Complete(
+            "System 1",
+            FneTrafficProtocol.Dmr,
+            42,
+            DateTimeOffset.UnixEpoch.AddSeconds(1),
+            channelName: "Tactical",
+            destinationId: 200));
+        CallRecordingMetadata recording = CreatePlayableRecording(42);
+        CallHistoryEntry attached = store.AddOrAttachRecording(recording);
+
+        Assert.True(dispatch.IsActive);
+        Assert.False(tactical.IsActive);
+        Assert.Same(dispatch, attached);
+        Assert.Null(tactical.Recording);
+    }
+
+    [Fact]
+    public void ClearingSessionKeepsAttachedRecordingsInCatalog()
+    {
+        var store = new CallHistoryStore();
+        CallHistoryEntry call = CreateEntry(42);
+        store.Add(call);
+        CallRecordingMetadata recording = CreatePlayableRecording(42);
+        store.AddOrAttachRecording(recording);
+
+        store.Clear();
+
+        CallHistoryEntry archived = Assert.Single(store.Entries);
+        Assert.True(archived.IsRecordingOnly);
+        Assert.Same(recording, archived.Recording);
+    }
+
+    [Fact]
+    public void LiveCallMergesARecordingCatalogRowLoadedFirst()
+    {
+        var store = new CallHistoryStore();
+        CallRecordingMetadata recording = CreatePlayableRecording(42);
+        CallHistoryEntry archived = store.AddOrAttachRecording(recording);
+        CallHistoryEntry live = CreateEntry(42);
+
+        store.Add(live);
+
+        Assert.Single(store.Entries);
+        Assert.DoesNotContain(archived, store.Entries);
+        Assert.Same(recording, live.Recording);
+    }
+
+    private static CallRecordingMetadata CreatePlayableRecording(uint streamId)
+    {
+        return new CallRecordingMetadata
+        {
+            RecordingId = $"recording-{streamId}",
+            Direction = "RX",
+            Protocol = "DMR",
+            UtcStartTime = DateTimeOffset.UnixEpoch,
+            UtcEndTime = DateTimeOffset.UnixEpoch.AddSeconds(10),
+            DurationMs = 10_000,
+            FilePath = $"/tmp/{streamId}.wav",
+            FileName = $"{streamId}.wav",
+            FileSizeBytes = 160_000,
+            SampleRate = 8_000,
+            BitsPerSample = 16,
+            ChannelCount = 1,
+            OriginalSampleCount = 80_000,
+            ActiveSampleCount = 70_000,
+            PeakAmplitude = 12_000,
+            SystemName = "System 1",
+            ChannelName = "Dispatch",
+            TalkgroupId = 100,
+            SubscriberId = 42,
+            StreamId = streamId,
+            PlaybackValidated = true
+        };
     }
 
     private static CallHistoryEntry CreateEntry(uint streamId)

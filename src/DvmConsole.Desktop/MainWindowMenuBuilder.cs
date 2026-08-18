@@ -1,5 +1,6 @@
 using Avalonia.Controls;
 using Avalonia.Interactivity;
+using Avalonia.Media;
 
 namespace DvmConsole.Desktop;
 
@@ -30,6 +31,58 @@ internal static class MainWindowMenuBuilder
         foreach (string value in values)
         {
             var item = new MenuItem { Header = value, Tag = value };
+            item.Click += clickHandler;
+            menu.Items.Add(item);
+        }
+
+        menu.IsEnabled = true;
+    }
+
+    public static void ReplaceRecentCodeplugItems(
+        MenuItem menu,
+        IEnumerable<string> entries,
+        string emptyHeader,
+        EventHandler<RoutedEventArgs> clickHandler)
+    {
+        ArgumentNullException.ThrowIfNull(menu);
+        ArgumentNullException.ThrowIfNull(entries);
+        ArgumentNullException.ThrowIfNull(clickHandler);
+
+        string[] values = entries.ToArray();
+        menu.Items.Clear();
+        if (values.Length == 0)
+        {
+            menu.Items.Add(new MenuItem { Header = emptyHeader, IsEnabled = false });
+            menu.IsEnabled = false;
+            return;
+        }
+
+        foreach (string value in values)
+        {
+            RecentCodeplugPresentation presentation = RecentCodeplugPresentation.FromPath(value);
+            var header = new StackPanel
+            {
+                MaxWidth = 520,
+                Spacing = 1,
+                Children =
+                {
+                    new TextBlock
+                    {
+                        Text = presentation.FileName,
+                        FontWeight = FontWeight.SemiBold,
+                        TextTrimming = TextTrimming.CharacterEllipsis
+                    },
+                    new TextBlock
+                    {
+                        Text = presentation.ParentPath,
+                        Opacity = 0.7,
+                        FontSize = 11,
+                        TextTrimming = TextTrimming.CharacterEllipsis
+                    }
+                }
+            };
+            var item = new MenuItem { Header = header, Tag = presentation.FullPath };
+            ToolTip.SetTip(item, presentation.FullPath);
             item.Click += clickHandler;
             menu.Items.Add(item);
         }

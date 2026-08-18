@@ -631,9 +631,16 @@ internal static class KeyboardPttKeyMapping
             0x79 => KeyboardPttKey.F10,
             0x7A => KeyboardPttKey.F11,
             0x7B => KeyboardPttKey.F12,
+            0x7C => KeyboardPttKey.F13,
+            0x7D => KeyboardPttKey.F14,
+            0x7E => KeyboardPttKey.F15,
+            0x7F => KeyboardPttKey.F16,
+            0x80 => KeyboardPttKey.F17,
+            0x81 => KeyboardPttKey.F18,
+            0x82 => KeyboardPttKey.F19,
             _ => default
         };
-        return virtualKey is >= 0x70 and <= 0x7B || virtualKey == 0x20;
+        return virtualKey is >= 0x70 and <= 0x82 || virtualKey == 0x20;
     }
 
     public static bool TryFromMacKeyCode(long keyCode, out KeyboardPttKey key)
@@ -653,8 +660,15 @@ internal static class KeyboardPttKeyMapping
             109 => KeyboardPttKey.F10,
             103 => KeyboardPttKey.F11,
             111 => KeyboardPttKey.F12,
+            105 => KeyboardPttKey.F13,
+            107 => KeyboardPttKey.F14,
+            113 => KeyboardPttKey.F15,
+            106 => KeyboardPttKey.F16,
+            64 => KeyboardPttKey.F17,
+            79 => KeyboardPttKey.F18,
+            80 => KeyboardPttKey.F19,
             _ => default
         };
-        return keyCode is 49 or 122 or 120 or 99 or 118 or 96 or 97 or 98 or 100 or 101 or 109 or 103 or 111;
+        return keyCode is 49 or 122 or 120 or 99 or 118 or 96 or 97 or 98 or 100 or 101 or 109 or 103 or 111 or 105 or 107 or 113 or 106 or 64 or 79 or 80;
     }
 }

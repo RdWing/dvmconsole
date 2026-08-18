@@ -5,6 +5,26 @@ namespace DvmConsole.Core.Tests;
 
 public sealed class UserSettingsStoreTests
 {
+    [Theory]
+    [InlineData("F19", "F19")]
+    [InlineData("None", "None")]
+    [InlineData("unsupported", "None")]
+    public void NormalizesOptionalGlobalPttKeys(string configured, string expected)
+    {
+        string path = CreatePath();
+        try
+        {
+            var store = new UserSettingsStore(path);
+            store.Save(new UserSettings { GlobalPttKey = configured });
+
+            Assert.Equal(expected, store.Load().GlobalPttKey);
+        }
+        finally
+        {
+            Cleanup(path);
+        }
+    }
+
     [Fact]
     public void MissingSettingsReturnDefaults()
     {

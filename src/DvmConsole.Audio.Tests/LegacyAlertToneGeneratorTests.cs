@@ -24,10 +24,12 @@ public sealed class LegacyAlertToneGeneratorTests
         Assert.Equal(26_880, samples.Length);
         for (int step = 0; step < 14; step++)
         {
-            Assert.Equal((short)0, samples[step * 1920]);
+            short[] segment = samples[(step * 1920)..((step + 1) * 1920)];
+            Assert.Equal(0, segment.Length % 160);
+            Assert.Equal((short)0, segment[0]);
             double expected = step % 2 == 0 ? 1500 : 800;
             Assert.InRange(
-                EstimateFrequency(samples[(step * 1920)..((step + 1) * 1920)]),
+                EstimateFrequency(segment),
                 expected - 0.1,
                 expected + 0.1);
         }
@@ -42,6 +44,7 @@ public sealed class LegacyAlertToneGeneratorTests
         for (int step = 0; step < 15; step++)
         {
             short[] segment = samples[(step * 1920)..((step + 1) * 1920)];
+            Assert.Equal(0, segment.Length % 160);
             if (step % 2 == 0)
                 Assert.InRange(EstimateFrequency(segment), 999.9, 1000.1);
             else
@@ -49,14 +52,17 @@ public sealed class LegacyAlertToneGeneratorTests
         }
     }
 
-    [Fact]
-    public void CanGenerateLegacyPatternAtTransmissionLevel()
+    [Theory]
+    [InlineData(LegacyAlertTone.Alert1)]
+    [InlineData(LegacyAlertTone.Alert2)]
+    [InlineData(LegacyAlertTone.Alert3)]
+    public void DefaultPatternTargetsMinusTwentyFiveDbfs(LegacyAlertTone tone)
     {
-        short[] samples = LegacyAlertToneGenerator.Generate(LegacyAlertTone.Alert1, amplitude: 0.35);
+        short[] samples = LegacyAlertToneGenerator.Generate(tone);
 
-        Assert.Equal(24_000, samples.Length);
-        Assert.InRange(samples.Max(), (short)11_460, (short)11_475);
-        Assert.InRange(EstimateFrequency(samples), 999.9, 1000.1);
+        double peak = samples.Max(sample => Math.Abs((double)sample)) / short.MaxValue;
+        double peakDbfs = 20 * Math.Log10(peak);
+        Assert.InRange(peakDbfs, -25.1, -24.9);
     }
 
     private static double EstimateFrequency(ReadOnlySpan<short> samples)

@@ -1,10 +1,12 @@
 using DvmConsole.Audio;
 using Avalonia.Media;
+using DvmConsole.Core.Configuration;
 using DvmConsole.Core.Settings;
 using DvmConsole.Core.Runtime;
 using DvmConsole.Desktop;
 using DvmConsole.FneClient;
 using DvmConsole.Media;
+using System.Collections.Specialized;
 using System.Globalization;
 using fnecore.DMR;
 using Xunit;
@@ -13,6 +15,15 @@ namespace DvmConsole.Desktop.Tests;
 
 public sealed class SystemViewModelTests
 {
+    [Fact]
+    public void RecordingCatalogSnapshotRejectsConcurrentCompletionDeletionAndNewerScans()
+    {
+        Assert.True(MainWindowViewModel.IsRecordingCatalogSnapshotCurrent(4, 4, 10, 10, false));
+        Assert.False(MainWindowViewModel.IsRecordingCatalogSnapshotCurrent(4, 4, 10, 11, false));
+        Assert.False(MainWindowViewModel.IsRecordingCatalogSnapshotCurrent(4, 5, 10, 10, false));
+        Assert.False(MainWindowViewModel.IsRecordingCatalogSnapshotCurrent(4, 4, 10, 10, true));
+    }
+
     [Fact]
     public void OperatorToolSectionsFollowConsoleSettingsTabOrder()
     {
@@ -93,7 +104,7 @@ public sealed class SystemViewModelTests
 
     [Fact]
     public void ReportsUnreleasedSemanticVersion()
-        => Assert.StartsWith("0.2.2", MainWindow.ApplicationVersion, StringComparison.Ordinal);
+        => Assert.StartsWith("0.2.3", MainWindow.ApplicationVersion, StringComparison.Ordinal);
 
     [Theory]
     [InlineData("0.1.0-alpha.1+abcdef123456", "0.1.0-alpha.1 (abcdef1)")]
@@ -114,6 +125,30 @@ public sealed class SystemViewModelTests
 
         Assert.Equal(Color.Parse("#151D26"), Assert.IsType<SolidColorBrush>(zone.TabBrush).Color);
         Assert.Equal(Color.Parse("#DCE3EB"), Assert.IsType<SolidColorBrush>(zone.TabTextBrush).Color);
+    }
+
+    [Fact]
+    public async Task ReceiveScopesDistinguishAllSystemsFromSelectedZone()
+    {
+        string codeplugPath = Path.Combine(AppContext.BaseDirectory, "TestData", "multiple-systems.yml");
+        string settingsPath = CreateSettingsPath();
+        try
+        {
+            await using MainWindowViewModel viewModel = MainWindowViewModel.Load(
+                codeplugPath,
+                new UserSettingsStore(settingsPath));
+            viewModel.SelectedSystem = viewModel.Systems[0];
+            viewModel.Systems[0].SelectedZone = viewModel.Systems[0].Zones[1];
+
+            Assert.Equal(5, viewModel.GetReceiveScopeChannels(ReceiveSelectionScope.All).Count);
+            Assert.Equal(
+                viewModel.Systems[0].Zones[1].Channels,
+                viewModel.GetReceiveScopeChannels(ReceiveSelectionScope.SelectedZone));
+        }
+        finally
+        {
+            CleanupSettingsPath(settingsPath);
+        }
     }
 
     [Fact]
@@ -464,6 +499,9 @@ public sealed class SystemViewModelTests
         {
             await using MainWindowViewModel viewModel = MainWindowViewModel.Load(path, new UserSettingsStore(settingsPath));
             SystemViewModel system = viewModel.Systems[0];
+            var historyChanges = new List<NotifyCollectionChangedAction>();
+            ((INotifyCollectionChanged)viewModel.FilteredCallHistory).CollectionChanged +=
+                (_, args) => historyChanges.Add(args.Action);
             byte[] dmrWithQuality = new byte[DvmConsole.Media.DmrVoicePacketCodec.PacketBytes];
             dmrWithQuality[53] = 3;
             dmrWithQuality[54] = 72;
@@ -529,13 +567,15 @@ public sealed class SystemViewModelTests
                 999,
                 new byte[DvmConsole.Media.DmrVoicePacketCodec.PacketBytes]));
 
-            Assert.Equal(2, viewModel.CallHistory.Count);
+            CallHistoryEntry[] sessionHistory = viewModel.CallHistory.Where(entry => !entry.IsRecordingOnly).ToArray();
+            Assert.Equal(2, sessionHistory.Length);
             Assert.Contains("non-call DMR terminators 1", system.PacketDiagnosticsText);
-            Assert.Equal((uint)78, viewModel.CallHistory[0].StreamId);
-            Assert.False(viewModel.CallHistory[0].IsActive);
-            Assert.NotNull(viewModel.CallHistory[0].Duration);
-            Assert.Equal((uint)77, viewModel.CallHistory[1].StreamId);
-            Assert.Equal("Alpha Dispatch", viewModel.CallHistory[1].ChannelName);
+            Assert.Equal((uint)78, sessionHistory[0].StreamId);
+            Assert.False(sessionHistory[0].IsActive);
+            Assert.NotNull(sessionHistory[0].Duration);
+            Assert.Equal((uint)77, sessionHistory[1].StreamId);
+            Assert.Equal("Alpha Dispatch", sessionHistory[1].ChannelName);
+            Assert.False(sessionHistory[1].IsActive);
             Assert.Equal("Info", viewModel.DebugLogSeverityFilter);
             Assert.All(viewModel.FilteredDebugLogs, entry => Assert.Equal(DvmConsole.Core.Diagnostics.DebugLogSeverity.Info, entry.Severity));
             Assert.Contains(viewModel.FilteredDebugLogs, entry => entry.Message.Contains("RX call started", StringComparison.Ordinal));
@@ -547,11 +587,61 @@ public sealed class SystemViewModelTests
             Assert.DoesNotContain(viewModel.DebugLogEntries, entry => entry.Message.Contains("FNE RX DMR", StringComparison.Ordinal));
 
             viewModel.CallHistoryFilterText = "Alpha Dispatch";
-            Assert.Equal(2, viewModel.FilteredCallHistory.Count);
+            Assert.Equal(2, viewModel.FilteredCallHistory.Count(entry => !entry.IsRecordingOnly));
             viewModel.CallHistoryFilterText = "78";
-            Assert.Single(viewModel.FilteredCallHistory);
+            Assert.Single(viewModel.FilteredCallHistory, entry => !entry.IsRecordingOnly);
             viewModel.CallHistoryFilterText = "not present";
             Assert.Empty(viewModel.FilteredCallHistory);
+            Assert.DoesNotContain(NotifyCollectionChangedAction.Reset, historyChanges);
+        }
+        finally
+        {
+            CleanupSettingsPath(settingsPath);
+        }
+    }
+
+    [Fact]
+    public async Task TimeoutGraceResumesOneHistoryCallAndExplicitEndRejectsLateVoice()
+    {
+        string path = Path.Combine(AppContext.BaseDirectory, "TestData", "multiple-systems.yml");
+        string settingsPath = CreateSettingsPath();
+        DateTimeOffset now = DateTimeOffset.UnixEpoch;
+
+        try
+        {
+            await using MainWindowViewModel viewModel = MainWindowViewModel.Load(
+                path,
+                new UserSettingsStore(settingsPath));
+            SystemViewModel system = viewModel.Systems[0];
+            ChannelViewModel channel = system.Channels.Single(candidate => candidate.Name == "Alpha Dispatch");
+
+            viewModel.ProcessTraffic(system, CreateDmrTraffic(77, "VOICE", "VOICE"), receivedAt: now);
+            viewModel.ExpireStaleReceiveStates(now.AddSeconds(2.5));
+
+            Assert.Equal(ChannelRuntimeState.Receiving, channel.State);
+            Assert.True(Assert.Single(viewModel.CallHistory).IsActive);
+
+            viewModel.ProcessTraffic(
+                system,
+                CreateDmrTraffic(77, "VOICE", "VOICE", packetSequence: 2),
+                receivedAt: now.AddSeconds(3));
+
+            Assert.True(Assert.Single(viewModel.CallHistory).IsActive);
+
+            viewModel.ProcessTraffic(
+                system,
+                CreateDmrTraffic(77, "TERMINATOR", "TERMINATOR_WITH_LC", packetSequence: 3),
+                receivedAt: now.AddSeconds(4));
+            viewModel.ProcessTraffic(
+                system,
+                CreateDmrTraffic(77, "VOICE", "VOICE", packetSequence: 4),
+                receivedAt: now.AddSeconds(4.5));
+
+            Assert.Single(viewModel.CallHistory);
+            Assert.False(viewModel.CallHistory[0].IsActive);
+            Assert.Equal(ChannelRuntimeState.Idle, channel.State);
+            Assert.Equal(1, channel.IgnoredLatePacketCount);
+            Assert.Contains("late/duplicate 1", viewModel.AudioStatusText, StringComparison.OrdinalIgnoreCase);
         }
         finally
         {
@@ -614,6 +704,7 @@ public sealed class SystemViewModelTests
 
             Assert.Single(viewModel.CallHistory);
             Assert.Single(system.Channels, channel => channel.State == ChannelRuntimeState.Receiving);
+            Assert.All(system.Zones, zone => Assert.True(zone.IsReceiving));
         }
         finally
         {
@@ -845,6 +936,53 @@ public sealed class SystemViewModelTests
     }
 
     [Fact]
+    public async Task SystemReceiveActivityTracksChannelsIndependentlyOfSelection()
+    {
+        var channel = new ChannelViewModel(new ChannelConfiguration
+        {
+            Name = "Dispatch",
+            System = "Test",
+            Tgid = "2002",
+            Mode = "p25"
+        });
+        var system = new SystemViewModel(
+            new FneConnectionOptions("Test", "Console", "127.0.0.1", 62031, 1, null, false, null),
+            "Test",
+            "127.0.0.1:62031",
+            [channel],
+            [],
+            accentIndex: 1);
+        var traffic = new FneTrafficFrame(
+            FneTrafficProtocol.P25,
+            1,
+            1001,
+            2002,
+            null,
+            "GROUP",
+            "VOICE",
+            "LDU1",
+            7,
+            42,
+            []);
+
+        try
+        {
+            Assert.Equal("○", system.StatusGlyph);
+            Assert.False(system.IsReceiving);
+            Assert.True(channel.TryApplyTraffic("Test", traffic));
+            Assert.True(system.IsReceiving);
+            Assert.Equal(1.0, system.ActivityBarOpacity);
+            Assert.Equal(
+                Assert.IsType<SolidColorBrush>(SystemAccentPalette.GetBrush(1)).Color,
+                Assert.IsType<SolidColorBrush>(system.StatusAccentBrush).Color);
+        }
+        finally
+        {
+            await system.DisposeAsync();
+        }
+    }
+
+    [Fact]
     public async Task ConnectionDiagnosticsCoalesceRepeatedPacketNotifications()
     {
         var system = new SystemViewModel(
@@ -1026,6 +1164,8 @@ public sealed class SystemViewModelTests
             viewModel.KeepWindowOnTop = true;
             viewModel.TogglePttMode = true;
             Assert.Contains(KeyboardPttKey.F3, viewModel.GlobalPttKeyOptions);
+            Assert.Contains(KeyboardPttKey.F19, viewModel.GlobalPttKeyOptions);
+            Assert.Contains(KeyboardPttKey.None, viewModel.GlobalPttKeyOptions);
             viewModel.SelectedGlobalPttKey = KeyboardPttKey.F3;
             await viewModel.ApplyGlobalPttKeySelectionAsync();
 
@@ -1036,6 +1176,11 @@ public sealed class SystemViewModelTests
             Assert.True(saved.TogglePttMode);
             Assert.Equal("F3", saved.GlobalPttKey);
             Assert.True(viewModel.IsConfiguredPttKey(KeyboardPttKey.F3));
+
+            viewModel.SelectedGlobalPttKey = KeyboardPttKey.None;
+            await viewModel.ApplyGlobalPttKeySelectionAsync();
+            Assert.Equal("None", store.Load().GlobalPttKey);
+            Assert.Equal("Keyboard PTT disabled", viewModel.GlobalPttKeyText);
             Assert.NotEmpty(viewModel.ClockText);
         }
         finally
@@ -1403,8 +1548,35 @@ public sealed class SystemViewModelTests
         }
     }
 
+    private static FneTrafficFrame CreateDmrTraffic(
+        uint streamId,
+        string frameType,
+        string subtype,
+        ushort packetSequence = 1)
+        => new(
+            FneTrafficProtocol.Dmr,
+            peerId: 1,
+            sourceId: 42,
+            destinationId: 101,
+            slot: 0,
+            callType: "GROUP",
+            frameType,
+            subtype,
+            packetSequence,
+            streamId,
+            new byte[DmrVoicePacketCodec.PacketBytes]);
+
     private static string CreateSettingsPath()
-        => Path.Combine(Path.GetTempPath(), "dvmconsole-settings-tests", $"{Guid.NewGuid():N}", "UserSettings.json");
+    {
+        string path = Path.Combine(
+            Path.GetTempPath(),
+            "dvmconsole-settings-tests",
+            $"{Guid.NewGuid():N}",
+            "UserSettings.json");
+        string recordingRoot = Path.Combine(Path.GetDirectoryName(path)!, "recordings");
+        new UserSettingsStore(path).Save(new UserSettings { RecordingRootPath = recordingRoot });
+        return path;
+    }
 
     private sealed class TestPttSource : IPttSource
     {

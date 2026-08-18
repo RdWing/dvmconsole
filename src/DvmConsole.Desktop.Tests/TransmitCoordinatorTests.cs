@@ -161,6 +161,31 @@ public sealed class TransmitCoordinatorTests
     }
 
     [Fact]
+    public async Task DisablingWarmMicrophoneDuringTransmitPreservesTheActiveLease()
+    {
+        var channel = Channel("Analog", 100);
+        var endpoint = new FakeEndpoint("Test", [channel]);
+        var audio = new FakeAudioBackend();
+        await using var coordinator = new ChannelTransmitCoordinator(createAudioBackend: () => audio);
+
+        await coordinator.SetKeepMicrophoneWarmAsync(true);
+        await coordinator.StartAsync(channel, endpoint);
+        int before = endpoint.Sent.Count;
+
+        await coordinator.SetKeepMicrophoneWarmAsync(false);
+        audio.Capture.Emit(Enumerable.Repeat((short)1000, 160).ToArray());
+
+        Assert.True(audio.Capture.IsRunning);
+        Assert.False(audio.Capture.IsDisposed);
+        Assert.False(audio.IsDisposed);
+        Assert.Equal(before + 1, endpoint.Sent.Count);
+
+        await coordinator.StopAsync();
+        Assert.True(audio.Capture.IsDisposed);
+        Assert.True(audio.IsDisposed);
+    }
+
+    [Fact]
     public async Task WarmMicrophoneStartFailureRollsBackInfrastructure()
     {
         var audio = new FakeAudioBackend(failStart: true);

@@ -11,6 +11,30 @@ namespace DvmConsole.Desktop.Tests;
 public sealed class PatchSourceDecodeCoordinatorTests
 {
     [Fact]
+    public async Task PatchDecodeObserverReceivesProcessedTrafficIdentity()
+    {
+        var observed = new List<(uint StreamId, uint SourceId)>();
+        var channel = new ChannelViewModel(new ChannelConfiguration
+        {
+            Name = "Dispatch",
+            System = "System 1",
+            Tgid = "100",
+            Mode = "dmr",
+            Slot = 1
+        });
+        await using var coordinator = new PatchSourceDecodeCoordinator(
+            null,
+            (_, streamId, sourceId, _) => observed.Add((streamId, sourceId)),
+            () => new FakeVocoderBackend());
+
+        await coordinator.ApplyChannelsAsync([channel]);
+        await coordinator.ProcessAsync(channel, CreateDmrTraffic());
+
+        Assert.NotEmpty(observed);
+        Assert.All(observed, identity => Assert.Equal(((uint)99, (uint)2), identity));
+    }
+
+    [Fact]
     public async Task DecodesEnabledDmrSourceWithoutOpeningAnAudioBackend()
     {
         var vocoder = new FakeVocoderBackend();
