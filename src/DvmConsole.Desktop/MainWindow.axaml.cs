@@ -1302,6 +1302,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             HandleRecordingFaulted,
             userSettings.RecordingRetentionDays,
             ShouldRecordSource);
+        callRecordings.RecordingFinalized += HandleRecordingFinalized;
         recordingPlayback = new RecordingPlaybackCoordinator(
             () => AudioBackendFactory.CreateDefault(Environment.GetEnvironmentVariable("DVM_AUDIO_LIBRARY")),
             () => userSettings.AudioOutputDeviceId,
@@ -2899,7 +2900,8 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     public void OpenRecording(CallRecordingMetadata metadata)
     {
         ArgumentNullException.ThrowIfNull(metadata);
-        if (!callRecordings.TryGetRecordingPath(metadata, out string recordingPath))
+        if (!metadata.IsPlayable ||
+            !callRecordings.TryGetRecordingPath(metadata, out string recordingPath))
         {
             AudioStatusText = "The selected recording file is no longer available.";
             RefreshRecordings();
@@ -2923,7 +2925,8 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     public async Task PlayRecordingAsync(CallRecordingMetadata metadata)
     {
         ArgumentNullException.ThrowIfNull(metadata);
-        if (!callRecordings.TryGetRecordingPath(metadata, out string recordingPath))
+        if (!metadata.IsPlayable ||
+            !callRecordings.TryGetRecordingPath(metadata, out string recordingPath))
         {
             AudioStatusText = "The selected recording file is no longer available.";
             RefreshRecordings();
@@ -3547,7 +3550,8 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         await webStreamPlayback.DisposeAsync().ConfigureAwait(false);
         await recordingPlayback.DisposeAsync().ConfigureAwait(false);
         audioReconfigurationLock.Dispose();
-        callRecordings.Dispose();
+        callRecordings.RecordingFinalized -= HandleRecordingFinalized;
+        await callRecordings.DisposeAsync().ConfigureAwait(false);
         p25KeyRing?.Dispose();
         dmrKeyRing?.Dispose();
         nxdnKeyRing?.Dispose();
@@ -3841,7 +3845,6 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         if (!enabled)
         {
             callRecordings.StopChannel(channel);
-            RefreshRecordings();
             return;
         }
 
@@ -4280,6 +4283,39 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         });
     }
 
+    private void HandleRecordingFinalized(object? sender, RecordingFinalizationResult result)
+    {
+        Dispatcher.UIThread.Post(() =>
+        {
+            if (result.Metadata is CallRecordingMetadata metadata && metadata.IsPlayable)
+            {
+                CallRecordingMetadata? existing = recordingEntries.FirstOrDefault(candidate =>
+                    candidate.FilePath.Equals(metadata.FilePath, StringComparison.OrdinalIgnoreCase));
+                if (existing is not null)
+                    recordingEntries.Remove(existing);
+                recordingEntries.Insert(0, metadata);
+
+                string direction = metadata.Direction.Equals("TX", StringComparison.OrdinalIgnoreCase)
+                    ? "TX"
+                    : "RX";
+                foreach (CallHistoryEntry entry in callHistory.Entries.Where(entry =>
+                             entry.StreamId == metadata.StreamId &&
+                             entry.SystemName.Equals(metadata.SystemName, StringComparison.OrdinalIgnoreCase) &&
+                             entry.ProtocolText.Equals(metadata.Protocol, StringComparison.OrdinalIgnoreCase) &&
+                             (entry.IsConsoleTransmission ? "TX" : "RX") == direction))
+                {
+                    entry.SetRecording(metadata);
+                }
+
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(FilteredRecordings)));
+            }
+            else if (result.Error is null && !string.IsNullOrWhiteSpace(result.Diagnostic))
+            {
+                AudioStatusText = $"TAR recording skipped: {result.Diagnostic}";
+            }
+        });
+    }
+
     private void HandleRecordingPlaybackFaulted(Exception exception)
     {
         Dispatcher.UIThread.Post(() =>
@@ -4314,7 +4350,8 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
 
         string direction = entry.IsConsoleTransmission ? "TX" : "RX";
         return recordingEntries
-            .Where(metadata => metadata.StreamId == entry.StreamId &&
+            .Where(metadata => metadata.IsPlayable &&
+                metadata.StreamId == entry.StreamId &&
                 metadata.Direction.Equals(direction, StringComparison.OrdinalIgnoreCase) &&
                 metadata.SystemName.Equals(entry.SystemName, StringComparison.OrdinalIgnoreCase) &&
                 metadata.Protocol.Equals(entry.ProtocolText, StringComparison.OrdinalIgnoreCase))
@@ -4613,7 +4650,6 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             await RunOnUiThreadAsync(() =>
             {
                 callRecordings.StopChannel(channel);
-                RefreshRecordings();
                 channel.SetAudioEnabled(false);
                 AudioStatusText = audioCoordinator.ActiveChannels.Count == 0
                     ? "RX audio disabled."
@@ -4659,8 +4695,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             // A terminator must close TAR even when the output device failed
             // while decoding the same frame; recording lifecycle is separate
             // from playback recovery.
-            if (callRecordings.ObserveTraffic(channel, traffic))
-                RefreshRecordings();
+            callRecordings.ObserveTraffic(channel, traffic);
         }
     }
 
@@ -4842,7 +4877,6 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
                     channel.SetTransmitEnabled(false);
                     callRecordings.StopTransmit(channel);
                 }
-                RefreshRecordings();
                 AddDebugLog(DateTimeOffset.Now, "TX", DebugLogSeverity.Error,
                     $"Transmit startup failed: {startupFailure}");
                 TransmitStatusText = $"PTT unavailable: {startupFailure.Message}";
@@ -4908,7 +4942,6 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
                 }
                 if (activeStreams.Length > 0)
                     NotifyCallHistoryChanged();
-                RefreshRecordings();
                 TransmitStatusText = stopFailure is null
                     ? "PTT idle."
                     : $"Transmission stopped safely after an error: {stopFailure.Message}";
@@ -5870,7 +5903,6 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
                 }
                 if (activeStreams.Length > 0)
                     Dispatcher.UIThread.Post(NotifyCallHistoryChanged);
-                RefreshRecordings();
             }
             try
             {
@@ -6005,7 +6037,6 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
 
     internal void ExpireStaleReceiveStates(DateTimeOffset now)
     {
-        bool recordingStateChanged = false;
         bool callHistoryChanged = false;
         foreach (ChannelViewModel channel in Systems.SelectMany(system => system.Channels))
         {
@@ -6028,10 +6059,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
                 streamId,
                 now) || callHistoryChanged;
             callRecordings.StopChannel(channel);
-            recordingStateChanged = true;
         }
-        if (recordingStateChanged)
-            RefreshRecordings();
         if (callHistoryChanged)
             NotifyCallHistoryChanged();
     }

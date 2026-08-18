@@ -11,7 +11,41 @@ namespace DvmConsole.Desktop.Tests;
 public sealed class CallRecordingManagerTests
 {
     [Fact]
-    public void ReceiveSamplesUseSuppliedIdentityInsteadOfMutableChannelState()
+    public async Task SilentOnlyRecordingFinalizesWithoutAPlayAction()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "dvmconsole-recording-tests", Guid.NewGuid().ToString("N"));
+        var channel = new ChannelViewModel(new ChannelConfiguration
+        {
+            Name = "Dispatch",
+            System = "System 1",
+            Tgid = "99",
+            Mode = "analog"
+        });
+        using var manager = new CallRecordingManager(root);
+        channel.SetRecordingEnabled(true);
+
+        try
+        {
+            Assert.True(channel.TryApplyTraffic("System 1", Traffic("VOICE", "VOICE", 40)));
+            manager.WriteSamples(channel, streamId: 40, sourceId: 7, new short[160]);
+            Task<RecordingFinalizationResult> finalized = NextFinalizationAsync(manager);
+            manager.ObserveTraffic(channel, Traffic("TERMINATOR", "TERMINATOR", 40));
+
+            RecordingFinalizationResult result = await finalized;
+            Assert.False(result.IsPlayable);
+            Assert.Null(result.Metadata);
+            Assert.Contains("no playable voice activity", result.Diagnostic, StringComparison.OrdinalIgnoreCase);
+            Assert.Empty(manager.LoadRecordings());
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task ReceiveSamplesUseSuppliedIdentityInsteadOfMutableChannelState()
     {
         string root = Path.Combine(Path.GetTempPath(), "dvmconsole-recording-tests", Guid.NewGuid().ToString("N"));
         var channel = new ChannelViewModel(new ChannelConfiguration
@@ -27,8 +61,10 @@ public sealed class CallRecordingManagerTests
         try
         {
             Assert.True(channel.TryApplyTraffic("System 1", Traffic("VOICE", "VOICE", 42)));
-            manager.WriteSamples(channel, streamId: 41, sourceId: 7, new short[] { 100, -100 });
+            manager.WriteSamples(channel, streamId: 41, sourceId: 7, ActiveSamples());
+            Task<RecordingFinalizationResult> finalized = NextFinalizationAsync(manager);
             manager.StopChannel(channel);
+            Assert.True((await finalized).IsPlayable);
 
             CallRecordingMetadata metadata = Assert.Single(manager.LoadRecordings());
             Assert.Equal((uint)41, metadata.StreamId);
@@ -59,13 +95,15 @@ public sealed class CallRecordingManagerTests
         {
             Assert.True(channel.TryApplyTraffic("System 1", Traffic("VOICE", "VOICE", 7)));
             short[] firstSamples = new short[800];
-            firstSamples[0] = -100;
-            firstSamples[1] = 100;
+            firstSamples[0] = -900;
+            firstSamples[1] = 900;
             manager.WriteSamples(channel, firstSamples);
             Assert.Single(manager.ActivePaths);
 
+            Task<RecordingFinalizationResult> firstFinalized = NextFinalizationAsync(manager);
             Assert.True(manager.ObserveTraffic(channel, Traffic("TERMINATOR", "TERMINATOR", 7)));
             Assert.Empty(manager.ActivePaths);
+            Assert.True((await firstFinalized).IsPlayable);
 
             Assert.False(manager.ObserveTraffic(channel, Traffic("VOICE", "VOICE", 7)));
 
@@ -86,13 +124,17 @@ public sealed class CallRecordingManagerTests
             Assert.Equal((uint)42, metadata.SubscriberId);
             Assert.Equal((uint)7, metadata.StreamId);
             Assert.Equal(100L, metadata.DurationMs);
+            Assert.True(metadata.PlaybackValidated);
+            Assert.True(metadata.IsPlayable);
             Assert.Equal(first.Length, metadata.FileSizeBytes);
             Assert.EndsWith("_System 1_99_42_CLEAR_7.opus", metadata.FileName, StringComparison.Ordinal);
             Assert.Single(manager.LoadRecordings());
 
             Assert.True(channel.TryApplyTraffic("System 1", Traffic("VOICE", "VOICE", 8)));
-            manager.WriteSamples(channel, new short[] { 1, 2 });
+            manager.WriteSamples(channel, ActiveSamples());
+            Task<RecordingFinalizationResult> secondFinalized = NextFinalizationAsync(manager);
             manager.ObserveTraffic(channel, Traffic("TERMINATOR", "TERMINATOR", 8));
+            Assert.True((await secondFinalized).IsPlayable);
 
             Assert.Equal(2, Directory.GetFiles(root, "*.opus", SearchOption.AllDirectories).Length);
         }
@@ -104,7 +146,7 @@ public sealed class CallRecordingManagerTests
     }
 
     [Fact]
-    public void OpusRecordingIsSmallerThanTheSourcePcm()
+    public async Task OpusRecordingIsSmallerThanTheSourcePcm()
     {
         string root = Path.Combine(Path.GetTempPath(), "dvmconsole-recording-tests", Guid.NewGuid().ToString("N"));
         var channel = new ChannelViewModel(new ChannelConfiguration
@@ -124,7 +166,9 @@ public sealed class CallRecordingManagerTests
                 .Select(index => (short)(Math.Sin(index * Math.PI / 20) * 6000))
                 .ToArray();
             manager.WriteSamples(channel, samples);
+            Task<RecordingFinalizationResult> finalized = NextFinalizationAsync(manager);
             manager.ObserveTraffic(channel, Traffic("TERMINATOR", "TERMINATOR", 9));
+            Assert.True((await finalized).IsPlayable);
 
             CallRecordingMetadata metadata = manager.LoadRecordings().Single();
             Assert.True(metadata.FileSizeBytes < samples.Length * sizeof(short));
@@ -160,7 +204,7 @@ public sealed class CallRecordingManagerTests
     }
 
     [Fact]
-    public void PersistsTrimAndActivityAnalysisForCompletedRecording()
+    public async Task PersistsTrimAndActivityAnalysisForCompletedRecording()
     {
         string root = Path.Combine(Path.GetTempPath(), "dvmconsole-recording-tests", Guid.NewGuid().ToString("N"));
         var channel = new ChannelViewModel(new ChannelConfiguration
@@ -180,7 +224,9 @@ public sealed class CallRecordingManagerTests
             samples[2000] = 1000;
             samples[5000] = -1000;
             manager.WriteSamples(channel, samples);
+            Task<RecordingFinalizationResult> finalized = NextFinalizationAsync(manager);
             manager.ObserveTraffic(channel, Traffic("TERMINATOR", "TERMINATOR", 22));
+            Assert.True((await finalized).IsPlayable);
 
             CallRecordingMetadata metadata = manager.LoadRecordings().Single();
             Assert.Equal(8000, metadata.OriginalSampleCount);
@@ -200,7 +246,7 @@ public sealed class CallRecordingManagerTests
     }
 
     [Fact]
-    public void StartsAndFinalizesConsoleTransmitRecordingWithDirectionMetadata()
+    public async Task StartsAndFinalizesConsoleTransmitRecordingWithDirectionMetadata()
     {
         string root = Path.Combine(Path.GetTempPath(), "dvmconsole-recording-tests", Guid.NewGuid().ToString("N"));
         var channel = new ChannelViewModel(new ChannelConfiguration
@@ -215,10 +261,12 @@ public sealed class CallRecordingManagerTests
 
         try
         {
-            manager.WriteTransmitSamples(channel, streamId: 44, sourceId: 7, new short[] { 100, -100 });
+            manager.WriteTransmitSamples(channel, streamId: 44, sourceId: 7, ActiveSamples());
             Assert.Single(manager.ActivePaths);
 
+            Task<RecordingFinalizationResult> finalized = NextFinalizationAsync(manager);
             manager.StopChannel(channel);
+            Assert.True((await finalized).IsPlayable);
 
             CallRecordingMetadata metadata = manager.LoadRecordings().Single();
             Assert.Equal("TX", metadata.Direction);
@@ -236,7 +284,7 @@ public sealed class CallRecordingManagerTests
     }
 
     [Fact]
-    public void SelectableTransmitRecordingNamesReflectTheEffectiveSecurityState()
+    public async Task SelectableTransmitRecordingNamesReflectTheEffectiveSecurityState()
     {
         string root = Path.Combine(Path.GetTempPath(), "dvmconsole-recording-tests", Guid.NewGuid().ToString("N"));
         var keyRing = new DvmConsole.Media.P25KeyRing("System 1", new KeyContainer
@@ -266,12 +314,16 @@ public sealed class CallRecordingManagerTests
 
         try
         {
-            manager.WriteTransmitSamples(channel, streamId: 51, sourceId: 7, new short[] { 100, -100 });
+            manager.WriteTransmitSamples(channel, streamId: 51, sourceId: 7, ActiveSamples());
+            Task<RecordingFinalizationResult> secureFinalized = NextFinalizationAsync(manager);
             manager.StopTransmit(channel);
+            Assert.True((await secureFinalized).IsPlayable);
 
             channel.RestoreTransmitEncryption(false);
-            manager.WriteTransmitSamples(channel, streamId: 52, sourceId: 7, new short[] { 100, -100 });
+            manager.WriteTransmitSamples(channel, streamId: 52, sourceId: 7, ActiveSamples());
+            Task<RecordingFinalizationResult> clearFinalized = NextFinalizationAsync(manager);
             manager.StopTransmit(channel);
+            Assert.True((await clearFinalized).IsPlayable);
 
             CallRecordingMetadata secure = manager.LoadRecordings().Single(recording => recording.StreamId == 51);
             CallRecordingMetadata clear = manager.LoadRecordings().Single(recording => recording.StreamId == 52);
@@ -291,7 +343,7 @@ public sealed class CallRecordingManagerTests
     }
 
     [Fact]
-    public void ReceiveRecordingUsesProtocolSecurityMetadataInItsName()
+    public async Task ReceiveRecordingUsesProtocolSecurityMetadataInItsName()
     {
         string root = Path.Combine(Path.GetTempPath(), "dvmconsole-recording-tests", Guid.NewGuid().ToString("N"));
         var channel = new ChannelViewModel(new ChannelConfiguration
@@ -345,7 +397,8 @@ public sealed class CallRecordingManagerTests
                 2,
                 61,
                 new byte[DmrVoicePacketCodec.PacketBytes])));
-            manager.WriteSamples(channel, new short[] { 100, -100 });
+            manager.WriteSamples(channel, ActiveSamples());
+            Task<RecordingFinalizationResult> finalized = NextFinalizationAsync(manager);
             manager.ObserveTraffic(channel, new FneTrafficFrame(
                 FneTrafficProtocol.Dmr,
                 1,
@@ -358,6 +411,7 @@ public sealed class CallRecordingManagerTests
                 3,
                 61,
                 []));
+            Assert.True((await finalized).IsPlayable);
 
             CallRecordingMetadata metadata = manager.LoadRecordings().Single();
             Assert.True(metadata.IsEncrypted);
@@ -420,7 +474,7 @@ public sealed class CallRecordingManagerTests
     }
 
     [Fact]
-    public void ChangesRecordingRootOnlyWhenNoStreamIsActive()
+    public async Task ChangesRecordingRootOnlyWhenNoStreamIsActive()
     {
         string root = Path.Combine(Path.GetTempPath(), "dvmconsole-recording-tests", Guid.NewGuid().ToString("N"));
         string nextRoot = Path.Combine(Path.GetTempPath(), "dvmconsole-recording-tests", Guid.NewGuid().ToString("N"));
@@ -441,11 +495,13 @@ public sealed class CallRecordingManagerTests
             Assert.Equal(Path.GetFullPath(nextRoot), manager.RootPath);
 
             Assert.True(channel.TryApplyTraffic("System 1", Traffic("VOICE", "VOICE", 31)));
-            manager.WriteSamples(channel, new short[] { 1, 2, 3 });
+            manager.WriteSamples(channel, ActiveSamples());
             Assert.False(manager.TrySetRootPath(root, out error));
             Assert.Contains("active recordings", error, StringComparison.OrdinalIgnoreCase);
 
+            Task<RecordingFinalizationResult> finalized = NextFinalizationAsync(manager);
             manager.StopChannel(channel);
+            Assert.True((await finalized).IsPlayable);
             Assert.True(manager.TrySetRootPath(root, out error));
             Assert.Equal(string.Empty, error);
             Assert.Equal(Path.GetFullPath(root), manager.RootPath);
@@ -530,4 +586,21 @@ public sealed class CallRecordingManagerTests
             packetSequence: 1,
             streamId,
             payload: []);
+
+    private static Task<RecordingFinalizationResult> NextFinalizationAsync(CallRecordingManager manager)
+    {
+        var completion = new TaskCompletionSource<RecordingFinalizationResult>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        EventHandler<RecordingFinalizationResult>? handler = null;
+        handler = (_, result) =>
+        {
+            manager.RecordingFinalized -= handler;
+            completion.TrySetResult(result);
+        };
+        manager.RecordingFinalized += handler;
+        return completion.Task.WaitAsync(TimeSpan.FromSeconds(5));
+    }
+
+    private static short[] ActiveSamples()
+        => Enumerable.Repeat((short)900, 160).ToArray();
 }

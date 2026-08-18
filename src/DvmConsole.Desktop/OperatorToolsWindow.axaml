@@ -310,9 +310,9 @@
                         <TextBlock IsVisible="{Binding $parent[Window].((local:MainWindowViewModel)DataContext).ShowRecordingDiagnosticsColumn}" Classes="caption" Text="{Binding TechnicalDetailsText}" TextTrimming="CharacterEllipsis" />
                         <TextBlock Classes="caption" Text="{Binding FileName}" TextTrimming="CharacterEllipsis" />
                       </StackPanel>
-                      <Button Grid.Column="1" Content="Play" Tag="{Binding}" Click="HandlePlayRecordingClick" />
+                      <Button Grid.Column="1" Content="Play" Tag="{Binding}" IsEnabled="{Binding IsPlayable}" Click="HandlePlayRecordingClick" />
                       <Button Grid.Column="2" Content="Stop" Click="HandleStopRecordingClick" />
-                      <Button Grid.Column="3" Content="Open" Tag="{Binding}" Click="HandleOpenRecordingClick" />
+                      <Button Grid.Column="3" Content="Open" Tag="{Binding}" IsEnabled="{Binding IsPlayable}" Click="HandleOpenRecordingClick" />
                       <Button Grid.Column="4" Content="Delete" Tag="{Binding}" Click="HandleDeleteRecordingClick" />
                     </Grid>
                   </Border>

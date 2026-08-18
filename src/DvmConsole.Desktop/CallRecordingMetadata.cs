@@ -36,6 +36,16 @@ public sealed class CallRecordingMetadata
     public string EncryptionAlgorithm { get; set; } = string.Empty;
     public string? EncryptionKeyId { get; set; }
     public int? RetentionDaysAtRecordTime { get; set; }
+    public bool PlaybackValidated { get; set; }
+
+    [JsonIgnore]
+    public bool IsPlayable =>
+        PlaybackValidated &&
+        DurationMs > 0 &&
+        FileSizeBytes > 0 &&
+        ActiveSampleCount > 0 &&
+        PeakAmplitude > 0 &&
+        !string.IsNullOrWhiteSpace(FilePath);
 
     [JsonIgnore]
     public string SidecarPath => string.IsNullOrWhiteSpace(FilePath)
