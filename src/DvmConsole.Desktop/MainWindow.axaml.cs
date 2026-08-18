@@ -1118,7 +1118,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     private readonly object audioLevelLogSync = new();
     private readonly Dictionary<(ChannelViewModel Channel, ChannelAudioDirection Direction), DateTimeOffset> lastAudioLevelLogs = [];
     private readonly Dictionary<(ChannelViewModel Channel, ChannelAudioDirection Direction), DateTimeOffset> lastAudioMeterUpdates = [];
-    private readonly Dictionary<ChannelViewModel, DateTimeOffset> lastReceiveIssueUpdates = [];
+    private readonly ReceiveDiagnosticsReporter receiveDiagnosticsReporter = new(TimeSpan.FromMilliseconds(500));
     private readonly SemaphoreSlim audioReconfigurationLock = new(1, 1);
     private readonly Dictionary<string, FneConnectionState> lastConnectionStates = new(StringComparer.OrdinalIgnoreCase);
     private readonly IReadOnlyDictionary<SystemViewModel, IReadOnlyDictionary<(FneTrafficProtocol Protocol, uint DestinationId), ChannelViewModel[]>> trafficRoutes;
@@ -4620,7 +4620,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         {
             await audioCoordinator.ProcessAsync(channel, traffic).ConfigureAwait(false);
             ReceiveAudioDiagnostics diagnostics = audioCoordinator.GetDiagnostics(channel);
-            if (diagnostics.HasIssues && ShouldPublishReceiveIssue(channel))
+            if (receiveDiagnosticsReporter.ShouldPublish(channel, diagnostics, DateTimeOffset.UtcNow))
             {
                 Dispatcher.UIThread.Post(() =>
                     AudioStatusText = $"RX {channel.Name}: {diagnostics.SummaryText} (audio continues)");
@@ -4653,21 +4653,6 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             // from playback recovery.
             if (callRecordings.ObserveTraffic(channel, traffic))
                 RefreshRecordings();
-        }
-    }
-
-    private bool ShouldPublishReceiveIssue(ChannelViewModel channel)
-    {
-        DateTimeOffset now = DateTimeOffset.UtcNow;
-        lock (audioLevelLogSync)
-        {
-            if (lastReceiveIssueUpdates.TryGetValue(channel, out DateTimeOffset previous) &&
-                now - previous < TimeSpan.FromMilliseconds(500))
-            {
-                return false;
-            }
-            lastReceiveIssueUpdates[channel] = now;
-            return true;
         }
     }
 
