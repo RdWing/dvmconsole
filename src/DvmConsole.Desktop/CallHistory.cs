@@ -13,6 +13,7 @@ public sealed class CallHistoryEntry : INotifyPropertyChanged
     private ushort? encryptionKeyId;
     private readonly bool isEvent;
     private readonly bool isConsoleTransmission;
+    private readonly bool isRecordingOnly;
     private readonly string eventSource;
     private readonly string eventMessage;
     private readonly string eventRidText;
@@ -31,6 +32,7 @@ public sealed class CallHistoryEntry : INotifyPropertyChanged
         bool encrypted = false,
         bool isEvent = false,
         bool isConsoleTransmission = false,
+        bool isRecordingOnly = false,
         string? eventSource = null,
         string? eventMessage = null,
         string? eventRidText = null,
@@ -47,6 +49,7 @@ public sealed class CallHistoryEntry : INotifyPropertyChanged
         this.encrypted = encrypted;
         this.isEvent = isEvent;
         this.isConsoleTransmission = isConsoleTransmission;
+        this.isRecordingOnly = isRecordingOnly;
         this.eventSource = eventSource?.Trim() ?? string.Empty;
         this.eventMessage = eventMessage?.Trim() ?? string.Empty;
         this.eventRidText = eventRidText?.Trim() ?? string.Empty;
@@ -65,6 +68,8 @@ public sealed class CallHistoryEntry : INotifyPropertyChanged
     public string CallerText { get; }
     public bool IsEvent => isEvent;
     public bool IsConsoleTransmission => isConsoleTransmission;
+    public bool IsRecordingOnly => isRecordingOnly;
+    public string DirectionText => IsEvent ? "EVENT" : IsConsoleTransmission ? "TX" : "RX";
     public string EventSource => eventSource;
     public string EventMessage => eventMessage;
     public string EventRidText => eventRidText;
@@ -78,8 +83,14 @@ public sealed class CallHistoryEntry : INotifyPropertyChanged
     public string RouteText => IsEvent ? EventMessage : $"{CallerText} → TG {DestinationId}";
     public string StreamText => IsEvent ? "Event" : $"{ProtocolText} · stream {StreamId}";
     public bool IsActive => !IsEvent && endTimestamp is null;
-    public TimeSpan? Duration => IsEvent ? null : endTimestamp - Timestamp;
-    public string DurationText => Duration is TimeSpan duration
+    public TimeSpan? Duration => IsEvent
+        ? null
+        : endTimestamp - Timestamp ?? (recording is null
+            ? null
+            : TimeSpan.FromMilliseconds(Math.Max(0, recording.DurationMs)));
+    public string DurationText => IsRecordingOnly && recording is not null
+        ? recording.DurationText
+        : Duration is TimeSpan duration
         ? $"{duration.TotalSeconds:0.0}s"
         : IsEvent ? "—" : "Active";
     public byte? EncryptionAlgorithmId => encryptionAlgorithmId;
@@ -89,7 +100,11 @@ public sealed class CallHistoryEntry : INotifyPropertyChanged
         : EncryptionPresentation.StatusText(Encrypted, Protocol, encryptionAlgorithmId);
 
     public bool HasRecording => recording is not null;
+    public bool HasPlayableRecording => recording?.IsPlayable == true;
     public CallRecordingMetadata? Recording => recording;
+    public string RecordingFileName => recording?.FileName ?? string.Empty;
+    public string RecordingDetailsText => recording?.TechnicalDetailsText ?? string.Empty;
+    public string RecordingPath => recording?.FilePath ?? string.Empty;
 
     public void SetRecording(CallRecordingMetadata? value)
     {
@@ -98,6 +113,45 @@ public sealed class CallHistoryEntry : INotifyPropertyChanged
         recording = value;
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(Recording)));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(HasRecording)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(HasPlayableRecording)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(RecordingFileName)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(RecordingDetailsText)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(RecordingPath)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(Duration)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(DurationText)));
+    }
+
+    public static CallHistoryEntry CreateRecordingOnly(CallRecordingMetadata metadata)
+    {
+        ArgumentNullException.ThrowIfNull(metadata);
+        bool isTx = metadata.Direction.Equals("TX", StringComparison.OrdinalIgnoreCase);
+        FneTrafficProtocol protocol = metadata.Protocol.Trim().ToUpperInvariant() switch
+        {
+            "P25" => FneTrafficProtocol.P25,
+            "NXDN" => FneTrafficProtocol.Nxdn,
+            "ANALOG" => FneTrafficProtocol.Analog,
+            _ => FneTrafficProtocol.Dmr
+        };
+        string caller = string.IsNullOrWhiteSpace(metadata.SubscriberAlias)
+            ? metadata.SubscriberId?.ToString() ?? "Unknown"
+            : metadata.SubscriberAlias.Trim();
+        var entry = new CallHistoryEntry(
+            metadata.UtcStartTime,
+            metadata.SystemName,
+            metadata.ChannelName,
+            metadata.SubscriberId ?? 0,
+            metadata.TalkgroupId ?? 0,
+            protocol,
+            metadata.StreamId ?? 0,
+            caller,
+            metadata.IsEncrypted,
+            isConsoleTransmission: isTx,
+            isRecordingOnly: true);
+        entry.endTimestamp = metadata.UtcEndTime >= metadata.UtcStartTime
+            ? metadata.UtcEndTime
+            : metadata.UtcStartTime.AddMilliseconds(Math.Max(0, metadata.DurationMs));
+        entry.SetRecording(metadata);
+        return entry;
     }
 
     public static CallHistoryEntry CreateEvent(
@@ -207,9 +261,90 @@ public sealed class CallHistoryStore
     public void Add(CallHistoryEntry entry)
     {
         ArgumentNullException.ThrowIfNull(entry);
-        Entries.Insert(0, entry);
-        while (Entries.Count > maxEntries)
-            Entries.RemoveAt(Entries.Count - 1);
+        InsertNewestFirst(entry);
+        TrimSessionEntries();
+    }
+
+    public CallHistoryEntry AddOrAttachRecording(CallRecordingMetadata metadata)
+    {
+        ArgumentNullException.ThrowIfNull(metadata);
+        CallHistoryEntry? byRecordingId = Entries.FirstOrDefault(entry => RecordingEquals(entry.Recording, metadata));
+        if (byRecordingId is not null)
+        {
+            byRecordingId.SetRecording(metadata);
+            return byRecordingId;
+        }
+
+        string direction = metadata.Direction.Equals("TX", StringComparison.OrdinalIgnoreCase) ? "TX" : "RX";
+        CallHistoryEntry? call = Entries.FirstOrDefault(entry =>
+            !entry.IsEvent &&
+            !entry.IsRecordingOnly &&
+            entry.StreamId == metadata.StreamId &&
+            entry.DirectionText == direction &&
+            entry.SystemName.Equals(metadata.SystemName, StringComparison.OrdinalIgnoreCase) &&
+            entry.ProtocolText.Equals(metadata.Protocol, StringComparison.OrdinalIgnoreCase) &&
+            Math.Abs((entry.Timestamp - metadata.UtcStartTime).TotalSeconds) <= 5);
+        if (call is not null)
+        {
+            call.SetRecording(metadata);
+            return call;
+        }
+
+        CallHistoryEntry archived = CallHistoryEntry.CreateRecordingOnly(metadata);
+        InsertNewestFirst(archived);
+        return archived;
+    }
+
+    public void RemoveRecording(CallRecordingMetadata metadata)
+    {
+        ArgumentNullException.ThrowIfNull(metadata);
+        CallHistoryEntry? entry = Entries.FirstOrDefault(candidate => RecordingEquals(candidate.Recording, metadata));
+        if (entry is null)
+            return;
+        if (entry.IsRecordingOnly)
+            Entries.Remove(entry);
+        else
+            entry.SetRecording(null);
+    }
+
+    public void ReplaceRecordingCatalog(IEnumerable<CallRecordingMetadata> recordings)
+    {
+        ArgumentNullException.ThrowIfNull(recordings);
+        foreach (CallHistoryEntry entry in Entries.Where(entry => entry.IsRecordingOnly).ToArray())
+            Entries.Remove(entry);
+        foreach (CallHistoryEntry entry in Entries.Where(entry => entry.HasRecording))
+            entry.SetRecording(null);
+        foreach (CallRecordingMetadata recording in recordings)
+            AddOrAttachRecording(recording);
+    }
+
+    private void InsertNewestFirst(CallHistoryEntry entry)
+    {
+        int index = 0;
+        while (index < Entries.Count && Entries[index].Timestamp > entry.Timestamp)
+            index++;
+        Entries.Insert(index, entry);
+    }
+
+    private void TrimSessionEntries()
+    {
+        while (Entries.Count(entry => !entry.IsRecordingOnly) > maxEntries)
+        {
+            CallHistoryEntry? oldest = Entries.LastOrDefault(entry => !entry.IsRecordingOnly);
+            if (oldest is null)
+                break;
+            Entries.Remove(oldest);
+        }
+    }
+
+    private static bool RecordingEquals(CallRecordingMetadata? left, CallRecordingMetadata right)
+    {
+        if (left is null)
+            return false;
+        if (!string.IsNullOrWhiteSpace(left.RecordingId) && !string.IsNullOrWhiteSpace(right.RecordingId))
+            return left.RecordingId.Equals(right.RecordingId, StringComparison.OrdinalIgnoreCase);
+        return !string.IsNullOrWhiteSpace(left.FilePath) &&
+            left.FilePath.Equals(right.FilePath, StringComparison.OrdinalIgnoreCase);
     }
 
     public bool Complete(
@@ -305,5 +440,9 @@ public sealed class CallHistoryStore
         return true;
     }
 
-    public void Clear() => Entries.Clear();
+    public void Clear()
+    {
+        foreach (CallHistoryEntry entry in Entries.Where(entry => !entry.IsRecordingOnly).ToArray())
+            Entries.Remove(entry);
+    }
 }

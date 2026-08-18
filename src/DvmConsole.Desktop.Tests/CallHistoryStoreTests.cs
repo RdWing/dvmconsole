@@ -140,6 +140,101 @@ public sealed class CallHistoryStoreTests
         Assert.Same(metadata, entry.Recording);
     }
 
+    [Fact]
+    public void AttachesCompletedRecordingToExistingCallWithoutAddingDuplicateRow()
+    {
+        var store = new CallHistoryStore();
+        CallHistoryEntry entry = CreateEntry(42);
+        store.Add(entry);
+        CallRecordingMetadata recording = CreatePlayableRecording(streamId: 42);
+
+        CallHistoryEntry attached = store.AddOrAttachRecording(recording);
+
+        Assert.Same(entry, attached);
+        Assert.Same(recording, entry.Recording);
+        Assert.True(entry.HasPlayableRecording);
+        Assert.Single(store.Entries);
+    }
+
+    [Fact]
+    public void AddsOlderCompletedRecordingAsHistoryRowWithCatalogDetails()
+    {
+        var store = new CallHistoryStore();
+        CallRecordingMetadata recording = CreatePlayableRecording(streamId: 99);
+        recording.Direction = "TX";
+        recording.SubscriberAlias = "Dispatch console";
+
+        CallHistoryEntry entry = store.AddOrAttachRecording(recording);
+
+        Assert.True(entry.IsRecordingOnly);
+        Assert.True(entry.IsConsoleTransmission);
+        Assert.Equal("Dispatch console → TG 100", entry.RouteText);
+        Assert.Equal(recording.DurationText, entry.DurationText);
+        Assert.Equal(recording.TechnicalDetailsText, entry.RecordingDetailsText);
+        Assert.True(entry.HasPlayableRecording);
+    }
+
+    [Fact]
+    public void RemovingRecordingKeepsLiveCallButRemovesRecordingOnlyRow()
+    {
+        var store = new CallHistoryStore();
+        CallHistoryEntry liveCall = CreateEntry(42);
+        store.Add(liveCall);
+        CallRecordingMetadata liveRecording = CreatePlayableRecording(streamId: 42);
+        store.AddOrAttachRecording(liveRecording);
+        CallRecordingMetadata archivedRecording = CreatePlayableRecording(streamId: 99);
+        CallHistoryEntry archived = store.AddOrAttachRecording(archivedRecording);
+
+        store.RemoveRecording(liveRecording);
+        store.RemoveRecording(archivedRecording);
+
+        Assert.Contains(liveCall, store.Entries);
+        Assert.Null(liveCall.Recording);
+        Assert.DoesNotContain(archived, store.Entries);
+    }
+
+    [Fact]
+    public void SessionLimitDoesNotDiscardRecordingCatalogRows()
+    {
+        var store = new CallHistoryStore(maxEntries: 1);
+        CallHistoryEntry archived = store.AddOrAttachRecording(CreatePlayableRecording(streamId: 99));
+
+        store.Add(CreateEntry(1));
+        store.Add(CreateEntry(2));
+
+        Assert.Contains(archived, store.Entries);
+        Assert.Equal(2, store.Entries.Count);
+        Assert.Equal((uint)2, store.Entries[0].StreamId);
+    }
+
+    private static CallRecordingMetadata CreatePlayableRecording(uint streamId)
+    {
+        return new CallRecordingMetadata
+        {
+            RecordingId = $"recording-{streamId}",
+            Direction = "RX",
+            Protocol = "DMR",
+            UtcStartTime = DateTimeOffset.UnixEpoch,
+            UtcEndTime = DateTimeOffset.UnixEpoch.AddSeconds(10),
+            DurationMs = 10_000,
+            FilePath = $"/tmp/{streamId}.wav",
+            FileName = $"{streamId}.wav",
+            FileSizeBytes = 160_000,
+            SampleRate = 8_000,
+            BitsPerSample = 16,
+            ChannelCount = 1,
+            OriginalSampleCount = 80_000,
+            ActiveSampleCount = 70_000,
+            PeakAmplitude = 12_000,
+            SystemName = "System 1",
+            ChannelName = "Dispatch",
+            TalkgroupId = 100,
+            SubscriberId = 42,
+            StreamId = streamId,
+            PlaybackValidated = true
+        };
+    }
+
     private static CallHistoryEntry CreateEntry(uint streamId)
     {
         return new CallHistoryEntry(

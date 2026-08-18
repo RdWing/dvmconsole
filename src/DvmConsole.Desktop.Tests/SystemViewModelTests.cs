@@ -6,6 +6,7 @@ using DvmConsole.Core.Runtime;
 using DvmConsole.Desktop;
 using DvmConsole.FneClient;
 using DvmConsole.Media;
+using System.Collections.Specialized;
 using System.Globalization;
 using fnecore.DMR;
 using Xunit;
@@ -489,6 +490,9 @@ public sealed class SystemViewModelTests
         {
             await using MainWindowViewModel viewModel = MainWindowViewModel.Load(path, new UserSettingsStore(settingsPath));
             SystemViewModel system = viewModel.Systems[0];
+            var historyChanges = new List<NotifyCollectionChangedAction>();
+            ((INotifyCollectionChanged)viewModel.FilteredCallHistory).CollectionChanged +=
+                (_, args) => historyChanges.Add(args.Action);
             byte[] dmrWithQuality = new byte[DvmConsole.Media.DmrVoicePacketCodec.PacketBytes];
             dmrWithQuality[53] = 3;
             dmrWithQuality[54] = 72;
@@ -554,14 +558,15 @@ public sealed class SystemViewModelTests
                 999,
                 new byte[DvmConsole.Media.DmrVoicePacketCodec.PacketBytes]));
 
-            Assert.Equal(2, viewModel.CallHistory.Count);
+            CallHistoryEntry[] sessionHistory = viewModel.CallHistory.Where(entry => !entry.IsRecordingOnly).ToArray();
+            Assert.Equal(2, sessionHistory.Length);
             Assert.Contains("non-call DMR terminators 1", system.PacketDiagnosticsText);
-            Assert.Equal((uint)78, viewModel.CallHistory[0].StreamId);
-            Assert.False(viewModel.CallHistory[0].IsActive);
-            Assert.NotNull(viewModel.CallHistory[0].Duration);
-            Assert.Equal((uint)77, viewModel.CallHistory[1].StreamId);
-            Assert.Equal("Alpha Dispatch", viewModel.CallHistory[1].ChannelName);
-            Assert.False(viewModel.CallHistory[1].IsActive);
+            Assert.Equal((uint)78, sessionHistory[0].StreamId);
+            Assert.False(sessionHistory[0].IsActive);
+            Assert.NotNull(sessionHistory[0].Duration);
+            Assert.Equal((uint)77, sessionHistory[1].StreamId);
+            Assert.Equal("Alpha Dispatch", sessionHistory[1].ChannelName);
+            Assert.False(sessionHistory[1].IsActive);
             Assert.Equal("Info", viewModel.DebugLogSeverityFilter);
             Assert.All(viewModel.FilteredDebugLogs, entry => Assert.Equal(DvmConsole.Core.Diagnostics.DebugLogSeverity.Info, entry.Severity));
             Assert.Contains(viewModel.FilteredDebugLogs, entry => entry.Message.Contains("RX call started", StringComparison.Ordinal));
@@ -573,11 +578,12 @@ public sealed class SystemViewModelTests
             Assert.DoesNotContain(viewModel.DebugLogEntries, entry => entry.Message.Contains("FNE RX DMR", StringComparison.Ordinal));
 
             viewModel.CallHistoryFilterText = "Alpha Dispatch";
-            Assert.Equal(2, viewModel.FilteredCallHistory.Count);
+            Assert.Equal(2, viewModel.FilteredCallHistory.Count(entry => !entry.IsRecordingOnly));
             viewModel.CallHistoryFilterText = "78";
-            Assert.Single(viewModel.FilteredCallHistory);
+            Assert.Single(viewModel.FilteredCallHistory, entry => !entry.IsRecordingOnly);
             viewModel.CallHistoryFilterText = "not present";
             Assert.Empty(viewModel.FilteredCallHistory);
+            Assert.DoesNotContain(NotifyCollectionChangedAction.Reset, historyChanges);
         }
         finally
         {
@@ -1549,7 +1555,16 @@ public sealed class SystemViewModelTests
             new byte[DmrVoicePacketCodec.PacketBytes]);
 
     private static string CreateSettingsPath()
-        => Path.Combine(Path.GetTempPath(), "dvmconsole-settings-tests", $"{Guid.NewGuid():N}", "UserSettings.json");
+    {
+        string path = Path.Combine(
+            Path.GetTempPath(),
+            "dvmconsole-settings-tests",
+            $"{Guid.NewGuid():N}",
+            "UserSettings.json");
+        string recordingRoot = Path.Combine(Path.GetDirectoryName(path)!, "recordings");
+        new UserSettingsStore(path).Save(new UserSettings { RecordingRootPath = recordingRoot });
+        return path;
+    }
 
     private sealed class TestPttSource : IPttSource
     {

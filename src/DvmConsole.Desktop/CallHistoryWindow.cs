@@ -47,7 +47,7 @@ public sealed class CallHistoryWindow : Window
             Mode = BindingMode.TwoWay
         });
 
-        var history = new ItemsControl
+        var history = new ListBox
         {
             ItemTemplate = new FuncDataTemplate<CallHistoryEntry>(
                 (entry, _) =>
@@ -72,10 +72,10 @@ public sealed class CallHistoryWindow : Window
                     var play = new Button
                     {
                         Content = "Play",
-                        IsVisible = entry.HasRecording,
+                        IsVisible = entry.HasPlayableRecording,
                         VerticalAlignment = VerticalAlignment.Center
                     };
-                    play.Bind(IsVisibleProperty, new Binding(nameof(CallHistoryEntry.HasRecording))
+                    play.Bind(IsVisibleProperty, new Binding(nameof(CallHistoryEntry.HasPlayableRecording))
                     {
                         Source = entry
                     });
@@ -142,7 +142,7 @@ public sealed class CallHistoryWindow : Window
             BorderBrush = new SolidColorBrush(Color.Parse("#293847")),
             BorderThickness = new Thickness(1),
             Padding = new Thickness(10),
-            Child = new ScrollViewer { Content = history }
+            Child = history
         };
         var footer = new TextBlock
         {

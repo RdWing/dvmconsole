@@ -1097,6 +1097,8 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     private readonly SemaphoreSlim serialPttChangeLock = new(1, 1);
     private readonly ObservableCollection<string> serialPttPortOptions = [];
     private readonly CallHistoryStore callHistory = new();
+    private readonly ObservableCollection<CallHistoryEntry> filteredCallHistoryEntries = [];
+    private readonly ObservableCollection<CallHistoryEntry> activityCallHistoryEntries = [];
     private readonly ObservableCollection<CallRecordingMetadata> recordingEntries = [];
     private readonly ObservableCollection<DtmfPresetViewModel> dtmfPresets = [];
     private readonly ObservableCollection<TonePresetViewModel> tonePresets = [];
@@ -1382,6 +1384,8 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         PatchGroups = BuildPatchGroups(configuredGroups);
         RefreshPatchMembershipConflicts();
         CallHistory = new System.Collections.ObjectModel.ReadOnlyObservableCollection<CallHistoryEntry>(callHistory.Entries);
+        FilteredCallHistory = new ReadOnlyObservableCollection<CallHistoryEntry>(filteredCallHistoryEntries);
+        ActivityCallHistory = new ReadOnlyObservableCollection<CallHistoryEntry>(activityCallHistoryEntries);
         Recordings = new ReadOnlyObservableCollection<CallRecordingMetadata>(recordingEntries);
         DtmfPresets = new ReadOnlyObservableCollection<DtmfPresetViewModel>(dtmfPresets);
         TonePresets = new ReadOnlyObservableCollection<TonePresetViewModel>(tonePresets);
@@ -1482,6 +1486,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             : Systems.FirstOrDefault();
         foreach (SystemViewModel system in Systems)
             system.SetSelected(ReferenceEquals(system, selectedSystem));
+        RefreshActivityCallHistory();
 
         ConnectCommand = new AsyncRelayCommand(ConnectAsync, () => !busy && Systems.Count > 0);
         DisconnectCommand = new AsyncRelayCommand(DisconnectAsync, () => !busy && Systems.Count > 0);
@@ -2465,15 +2470,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     public ReadOnlyObservableCollection<DebugLogEntry> DebugLogEntries { get; }
     public ReadOnlyObservableCollection<WebStreamViewModel> WebStreams { get; }
     public System.Collections.ObjectModel.ReadOnlyObservableCollection<CallHistoryEntry> CallHistory { get; }
-    public IReadOnlyList<CallHistoryEntry> ActivityCallHistory
-        => SelectedSystem is null
-            ? []
-            : CallHistory
-                .Where(entry => entry.SystemName.Equals(SelectedSystem.Name, StringComparison.OrdinalIgnoreCase))
-                .Where(entry => !activityCurrentZoneOnly ||
-                    SelectedSystem.SelectedZone?.Channels.Any(channel =>
-                        channel.Name.Equals(entry.ChannelName, StringComparison.OrdinalIgnoreCase)) == true)
-                .ToArray();
+    public ReadOnlyObservableCollection<CallHistoryEntry> ActivityCallHistory { get; }
     public string ActivityFilterButtonText => activityCurrentZoneOnly ? "Current tab" : "All channels";
     public IReadOnlyList<SubscriberCommandAuditEntry> ActivitySubscriberCommandAudit
         => SelectedSystem is null
@@ -2481,25 +2478,36 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             : SubscriberCommandAudit
                 .Where(entry => entry.SystemName.Equals(SelectedSystem.Name, StringComparison.OrdinalIgnoreCase))
                 .ToArray();
-    public IReadOnlyList<CallHistoryEntry> FilteredCallHistory
-        => CallHistory
-            .Where(entry =>
-            {
-                if (string.IsNullOrWhiteSpace(CallHistoryFilterText))
-                    return true;
-
-                string filter = CallHistoryFilterText.Trim();
-                return entry.SystemName.Contains(filter, StringComparison.OrdinalIgnoreCase) ||
-                    entry.DisplayChannelText.Contains(filter, StringComparison.OrdinalIgnoreCase) ||
-                    entry.EventMessage.Contains(filter, StringComparison.OrdinalIgnoreCase) ||
-                    entry.CallerText.Contains(filter, StringComparison.OrdinalIgnoreCase) ||
-                    entry.DisplaySourceText.Contains(filter, StringComparison.OrdinalIgnoreCase) ||
-                    entry.DisplayDestinationText.Contains(filter, StringComparison.OrdinalIgnoreCase) ||
-                    entry.StreamId.ToString(CultureInfo.InvariantCulture).Contains(filter, StringComparison.OrdinalIgnoreCase) ||
-                    entry.ProtocolText.Contains(filter, StringComparison.OrdinalIgnoreCase) ||
-                    entry.EncryptionText.Contains(filter, StringComparison.OrdinalIgnoreCase);
-            })
-            .ToArray();
+    public ReadOnlyObservableCollection<CallHistoryEntry> FilteredCallHistory { get; }
+    public bool HasAdvancedHistoryFilters =>
+        RecordingDirectionFilter != "All" ||
+        RecordingProtocolFilter != "All" ||
+        RecordingEncryptionFilter != "All" ||
+        !string.IsNullOrWhiteSpace(RecordingSystemFilterText) ||
+        !string.IsNullOrWhiteSpace(RecordingChannelFilterText) ||
+        !string.IsNullOrWhiteSpace(RecordingTalkgroupFilterText) ||
+        !string.IsNullOrWhiteSpace(RecordingSubscriberFilterText) ||
+        !string.IsNullOrWhiteSpace(RecordingAliasFilterText) ||
+        RecordingStartDateFilter is not null ||
+        RecordingEndDateFilter is not null;
+    public string HistoryFilterSummary
+    {
+        get
+        {
+            var filters = new List<string>();
+            if (RecordingDirectionFilter != "All") filters.Add(RecordingDirectionFilter);
+            if (RecordingProtocolFilter != "All") filters.Add(RecordingProtocolFilter);
+            if (RecordingEncryptionFilter != "All") filters.Add(RecordingEncryptionFilter);
+            if (!string.IsNullOrWhiteSpace(RecordingSystemFilterText)) filters.Add($"system {RecordingSystemFilterText}");
+            if (!string.IsNullOrWhiteSpace(RecordingChannelFilterText)) filters.Add($"channel {RecordingChannelFilterText}");
+            if (!string.IsNullOrWhiteSpace(RecordingTalkgroupFilterText)) filters.Add($"TG {RecordingTalkgroupFilterText}");
+            if (!string.IsNullOrWhiteSpace(RecordingSubscriberFilterText)) filters.Add($"RID {RecordingSubscriberFilterText}");
+            if (!string.IsNullOrWhiteSpace(RecordingAliasFilterText)) filters.Add($"alias {RecordingAliasFilterText}");
+            if (RecordingStartDateFilter is DateTimeOffset start) filters.Add($"from {start:yyyy-MM-dd}");
+            if (RecordingEndDateFilter is DateTimeOffset end) filters.Add($"to {end:yyyy-MM-dd}");
+            return string.Join(" · ", filters);
+        }
+    }
     public ReadOnlyObservableCollection<CallRecordingMetadata> Recordings { get; }
     public ICommand ConnectCommand { get; }
     public ICommand DisconnectCommand { get; }
@@ -2561,7 +2569,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
                 return;
             callHistoryFilterText = normalized;
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CallHistoryFilterText)));
-            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(FilteredCallHistory)));
+            RefreshFilteredCallHistory();
         }
     }
 
@@ -2739,6 +2747,12 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         RecordingEndDateFilter = null;
     }
 
+    public void ClearHistoryFilters()
+    {
+        CallHistoryFilterText = string.Empty;
+        ClearRecordingFilters();
+    }
+
     public bool ApplyRecordingRoot()
     {
         if (!callRecordings.TrySetRootPath(RecordingRootPathText, out string errorMessage))
@@ -2786,6 +2800,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         field = normalized;
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(FilteredRecordings)));
+        NotifyHistoryFilterChanged();
     }
 
     private void SetRecordingColumnVisibility(ref bool field, bool value, string propertyName)
@@ -2810,6 +2825,28 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         field = normalized;
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(FilteredRecordings)));
+        NotifyHistoryFilterChanged();
+    }
+
+    private HistoryCatalogFilter CreateHistoryFilter()
+        => new(
+            CallHistoryFilterText,
+            RecordingDirectionFilter,
+            RecordingProtocolFilter,
+            RecordingEncryptionFilter,
+            RecordingSystemFilterText,
+            RecordingChannelFilterText,
+            RecordingTalkgroupFilterText,
+            RecordingSubscriberFilterText,
+            RecordingAliasFilterText,
+            RecordingStartDateFilter,
+            RecordingEndDateFilter);
+
+    private void NotifyHistoryFilterChanged()
+    {
+        RefreshFilteredCallHistory();
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(HasAdvancedHistoryFilters)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(HistoryFilterSummary)));
     }
 
     public void ClearDebugLogs()
@@ -2984,7 +3021,10 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         }
 
         AudioStatusText = $"Deleted recording: {metadata.FileName}";
-        RefreshRecordings();
+        recordingEntries.Remove(metadata);
+        callHistory.RemoveRecording(metadata);
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(FilteredRecordings)));
+        NotifyCallHistoryChanged();
     }
 
     public void SetRecordingIgnoredSubscribers(ChannelViewModel channel, IEnumerable<uint> subscriberIds)
@@ -3043,7 +3083,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             PersistUserSettings();
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SelectedSystem)));
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(HasSelectedZone)));
-            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ActivityCallHistory)));
+            RefreshActivityCallHistory();
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ActivitySubscriberCommandAudit)));
             NotifyConnectionPresentationChanged();
             RaiseGeneratedAudioCanExecuteChanged();
@@ -3054,14 +3094,14 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     {
         activityCurrentZoneOnly = !activityCurrentZoneOnly;
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ActivityFilterButtonText)));
-        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ActivityCallHistory)));
+        RefreshActivityCallHistory();
     }
 
     private void HandleSystemPropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
         if (e.PropertyName == nameof(SystemViewModel.SelectedZone) && ReferenceEquals(sender, SelectedSystem))
         {
-            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ActivityCallHistory)));
+            RefreshActivityCallHistory();
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(HasSelectedZone)));
         }
     }
@@ -4311,20 +4351,10 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
                 if (existing is not null)
                     recordingEntries.Remove(existing);
                 recordingEntries.Insert(0, metadata);
-
-                string direction = metadata.Direction.Equals("TX", StringComparison.OrdinalIgnoreCase)
-                    ? "TX"
-                    : "RX";
-                foreach (CallHistoryEntry entry in callHistory.Entries.Where(entry =>
-                             entry.StreamId == metadata.StreamId &&
-                             entry.SystemName.Equals(metadata.SystemName, StringComparison.OrdinalIgnoreCase) &&
-                             entry.ProtocolText.Equals(metadata.Protocol, StringComparison.OrdinalIgnoreCase) &&
-                             (entry.IsConsoleTransmission ? "TX" : "RX") == direction))
-                {
-                    entry.SetRecording(metadata);
-                }
+                callHistory.AddOrAttachRecording(metadata);
 
                 PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(FilteredRecordings)));
+                NotifyCallHistoryChanged();
             }
             else if (result.Error is null && !string.IsNullOrWhiteSpace(result.Diagnostic))
             {
@@ -4352,28 +4382,13 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
 
     private void RefreshRecordingsCore()
     {
+        CallRecordingMetadata[] loaded = callRecordings.LoadRecordings().ToArray();
         recordingEntries.Clear();
-        foreach (CallRecordingMetadata metadata in callRecordings.LoadRecordings())
+        foreach (CallRecordingMetadata metadata in loaded)
             recordingEntries.Add(metadata);
-        foreach (CallHistoryEntry entry in callHistory.Entries)
-            entry.SetRecording(FindRecordingForHistoryEntry(entry));
+        callHistory.ReplaceRecordingCatalog(loaded);
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(FilteredRecordings)));
-    }
-
-    private CallRecordingMetadata? FindRecordingForHistoryEntry(CallHistoryEntry entry)
-    {
-        if (entry.IsEvent || entry.StreamId == 0)
-            return null;
-
-        string direction = entry.IsConsoleTransmission ? "TX" : "RX";
-        return recordingEntries
-            .Where(metadata => metadata.IsPlayable &&
-                metadata.StreamId == entry.StreamId &&
-                metadata.Direction.Equals(direction, StringComparison.OrdinalIgnoreCase) &&
-                metadata.SystemName.Equals(entry.SystemName, StringComparison.OrdinalIgnoreCase) &&
-                metadata.Protocol.Equals(entry.ProtocolText, StringComparison.OrdinalIgnoreCase))
-            .OrderBy(metadata => Math.Abs((metadata.UtcStartTime - entry.Timestamp).TotalMilliseconds))
-            .FirstOrDefault();
+        NotifyCallHistoryChanged();
     }
 
     private void HandleSystemTraffic(SystemViewModel system, FneTrafficFrame traffic)
@@ -6160,8 +6175,46 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
 
     private void NotifyCallHistoryChanged()
     {
-        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(FilteredCallHistory)));
-        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ActivityCallHistory)));
+        RefreshFilteredCallHistory();
+        RefreshActivityCallHistory();
+    }
+
+    private void RefreshFilteredCallHistory()
+        => SynchronizeHistoryView(filteredCallHistoryEntries, CallHistory.Where(CreateHistoryFilter().Matches));
+
+    private void RefreshActivityCallHistory()
+    {
+        IEnumerable<CallHistoryEntry> desired = SelectedSystem is null
+            ? []
+            : CallHistory
+                .Where(entry => entry.SystemName.Equals(SelectedSystem.Name, StringComparison.OrdinalIgnoreCase))
+                .Where(entry => !activityCurrentZoneOnly ||
+                    SelectedSystem.SelectedZone?.Channels.Any(channel =>
+                        channel.Name.Equals(entry.ChannelName, StringComparison.OrdinalIgnoreCase)) == true);
+        SynchronizeHistoryView(activityCallHistoryEntries, desired);
+    }
+
+    private static void SynchronizeHistoryView(
+        ObservableCollection<CallHistoryEntry> target,
+        IEnumerable<CallHistoryEntry> desiredEntries)
+    {
+        CallHistoryEntry[] desired = desiredEntries.ToArray();
+        for (int index = target.Count - 1; index >= 0; index--)
+        {
+            if (!desired.Contains(target[index]))
+                target.RemoveAt(index);
+        }
+
+        for (int index = 0; index < desired.Length; index++)
+        {
+            if (index < target.Count && ReferenceEquals(target[index], desired[index]))
+                continue;
+            int existingIndex = target.IndexOf(desired[index]);
+            if (existingIndex >= 0)
+                target.Move(existingIndex, index);
+            else
+                target.Insert(index, desired[index]);
+        }
     }
 
     private void RefreshClock()
@@ -6584,6 +6637,8 @@ public sealed class SystemViewModel : IFneTrafficEndpoint, INotifyPropertyChange
     public bool IsSelected => isSelected;
     public bool IsReceiving => Channels.Any(channel => channel.State == ChannelRuntimeState.Receiving);
     public double ActivityBarOpacity => IsReceiving ? 1.0 : 0.12;
+    public string RecordingConfigurationHeader
+        => $"{Name} · {Channels.Count(channel => channel.IsRecordingEnabled)} of {Channels.Count} TAR enabled";
     public IBrush StatusAccentBrush { get; }
     public string StatusGlyph => IsConnected ? "●" : "○";
     public string ConnectionPillText => connection.Status.State.ToString().ToUpperInvariant();
@@ -6765,11 +6820,15 @@ public sealed class SystemViewModel : IFneTrafficEndpoint, INotifyPropertyChange
 
     private void HandleChannelPropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
-        if (e.PropertyName != nameof(ChannelViewModel.State))
-            return;
-
-        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsReceiving)));
-        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ActivityBarOpacity)));
+        if (e.PropertyName == nameof(ChannelViewModel.State))
+        {
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsReceiving)));
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ActivityBarOpacity)));
+        }
+        else if (e.PropertyName == nameof(ChannelViewModel.IsRecordingEnabled))
+        {
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(RecordingConfigurationHeader)));
+        }
     }
 }
 
@@ -7013,6 +7072,11 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
     {
         get => volume;
         set => SetVolume(value, raiseChanged: true);
+    }
+    public double VolumeSliderValue
+    {
+        get => NeutralSliderMath.VolumeGainToPosition(volume);
+        set => SetVolume(NeutralSliderMath.VolumePositionToGain(value), raiseChanged: true);
     }
     public double StereoBalance
     {
@@ -7265,6 +7329,7 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
         if (raiseChanged)
         {
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(Volume)));
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(VolumeSliderValue)));
             VolumeChanged?.Invoke(this, normalized);
         }
     }
