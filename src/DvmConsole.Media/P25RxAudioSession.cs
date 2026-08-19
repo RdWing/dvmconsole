@@ -66,13 +66,16 @@ public sealed class P25RxAudioSession : IAsyncDisposable
         }
 
         byte[] imbe = new byte[P25DfsiFrameCodec.ImbeBytes];
-        if (!P25DfsiFrameCodec.TryExtractImbe(traffic, imbe))
+        bool[] available = new bool[P25DfsiFrameCodec.CodewordsPerLdu];
+        if (!P25DfsiFrameCodec.TryExtractImbeFrames(traffic, imbe, available))
         {
             MalformedPackets++;
             MarkEncryptionDesynchronized();
             await ConcealCurrentLduAsync(cancellationToken).ConfigureAwait(false);
             return 0;
         }
+        if (available.Contains(false))
+            MalformedPackets++;
 
         bool ldu1 = traffic.Subtype.Equals("LDU1", StringComparison.OrdinalIgnoreCase);
         bool hasEncryptionMetadata = P25DfsiFrameCodec.TryExtractEncryptionMetadata(
@@ -125,10 +128,22 @@ public sealed class P25RxAudioSession : IAsyncDisposable
         int errors = 0;
         for (int index = 0; index < P25DfsiFrameCodec.CodewordsPerLdu; index++)
         {
+            P25DUID duid = ldu1 ? P25DUID.LDU1 : P25DUID.LDU2;
+            if (!available[index])
+            {
+                // Encryption is a continuous per-LDU keystream. Consume and
+                // discard the missing slot's keystream so later valid records
+                // stay aligned, then let the vocoder conceal exactly 20 ms.
+                if (cryptoState is not null)
+                    ProcessEncryption(new byte[P25DfsiFrameCodec.CodewordBytes], duid);
+                await ConcealFrameAsync(cancellationToken).ConfigureAwait(false);
+                continue;
+            }
+
             byte[] codeword = imbe.AsSpan(
                 index * P25DfsiFrameCodec.CodewordBytes,
                 P25DfsiFrameCodec.CodewordBytes).ToArray();
-            ProcessEncryption(codeword, ldu1 ? P25DUID.LDU1 : P25DUID.LDU2);
+            ProcessEncryption(codeword, duid);
             short[] samples = [];
             errors += decoder.Process(
                 codeword,
@@ -151,14 +166,17 @@ public sealed class P25RxAudioSession : IAsyncDisposable
         int frameCount = checked((int)Math.Min(lostPackets, maximumConcealedPackets)) *
             P25DfsiFrameCodec.CodewordsPerLdu;
         for (int index = 0; index < frameCount; index++)
-        {
-            short[] samples = [];
-            decoder.ProcessLost(decoded => samples = decoded.ToArray());
-            await playback.WriteAsync(samples, cancellationToken).ConfigureAwait(false);
-            FramesDecoded++;
-        }
+            await ConcealFrameAsync(cancellationToken).ConfigureAwait(false);
         if (lostPackets > maximumConcealedPackets)
             decoder.Reset();
+    }
+
+    private async ValueTask ConcealFrameAsync(CancellationToken cancellationToken)
+    {
+        short[] samples = [];
+        decoder.ProcessLost(decoded => samples = decoded.ToArray());
+        await playback.WriteAsync(samples, cancellationToken).ConfigureAwait(false);
+        FramesDecoded++;
     }
 
     private ValueTask ConcealCurrentLduAsync(CancellationToken cancellationToken)
@@ -294,8 +312,11 @@ public sealed class P25RxAudioSession : IAsyncDisposable
         }
 
         byte[] cycledMessageIndicator = cryptoState!.MessageIndicator.ToArray();
-        if (errors > 0)
-            P25Crypto.CycleP25Lfsr(cycledMessageIndicator);
+        // An encrypted LDU2 normally carries the next message indicator in
+        // ESS. If those records are unavailable, advance the known indicator
+        // with the standard P25 LFSR instead of reusing the just-consumed
+        // keystream for the following LDU1.
+        P25Crypto.CycleP25Lfsr(cycledMessageIndicator);
         cryptoState.Crypto.Prepare(
             cryptoState.AlgorithmId,
             cryptoState.KeyId,

@@ -21,6 +21,9 @@ public sealed class NxdnRxAudioSession : IAsyncDisposable
     private byte[] privacyKey = [];
     private byte configuredPrivacyAlgorithm;
     private byte configuredPrivacyKeyId;
+    private uint activeStreamId;
+    private int lastVoiceCodewordCount;
+    private bool hasDecodedVoiceInActiveStream;
     private bool disposed;
 
     public NxdnRxAudioSession(
@@ -61,13 +64,20 @@ public sealed class NxdnRxAudioSession : IAsyncDisposable
         ArgumentNullException.ThrowIfNull(traffic);
         if (!selector.Matches(traffic))
             return 0;
+        if (activeStreamId != traffic.StreamId)
+        {
+            activeStreamId = traffic.StreamId;
+            lastVoiceCodewordCount = 0;
+            hasDecodedVoiceInActiveStream = false;
+        }
         long lostBefore = sequenceTracker.LostPackets;
         if (!sequenceTracker.TryAccept(traffic.StreamId, traffic.PacketSequence))
             return 0;
-        if (sequenceTracker.LostPackets > lostBefore && privacyAlgorithm != 0)
+        long lostPackets = sequenceTracker.LostPackets - lostBefore;
+        if (lostPackets > 0)
         {
-            privacyProcessor?.Dispose();
-            privacyProcessor = null;
+            await ConcealLostPacketsAsync(lostPackets, cancellationToken).ConfigureAwait(false);
+            InvalidatePrivacyAfterLoss();
         }
 
         if (NxdnVoicePacketCodec.TryExtractCallMetadata(traffic.Payload, out var metadata))
@@ -80,9 +90,13 @@ public sealed class NxdnRxAudioSession : IAsyncDisposable
         if (!NxdnVoicePacketCodec.TryExtractAmbe(traffic.Payload, ambe, out int codewordCount))
         {
             MalformedPackets++;
+            await ConcealCurrentPacketAsync(cancellationToken).ConfigureAwait(false);
+            InvalidatePrivacyAfterLoss();
             return 0;
         }
+        lastVoiceCodewordCount = codewordCount;
         int errors = 0;
+        bool missingPrivacy = false;
         for (int index = 0; index < codewordCount; index++)
         {
             ReadOnlySpan<byte> codeword = ambe.AsSpan(
@@ -92,7 +106,8 @@ public sealed class NxdnRxAudioSession : IAsyncDisposable
             {
                 if (privacyProcessor is null)
                 {
-                    MalformedPackets++;
+                    missingPrivacy = true;
+                    await ConcealFrameAsync(cancellationToken).ConfigureAwait(false);
                     continue;
                 }
                 byte[] parameters = new byte[VocoderFrameSizes.HalfRateParameterBytes];
@@ -108,6 +123,7 @@ public sealed class NxdnRxAudioSession : IAsyncDisposable
                 errors += checked((int)status.DecoderErrorMetric);
                 await playback.WriteAsync(decryptedSamples, cancellationToken).ConfigureAwait(false);
                 FramesDecoded++;
+                hasDecodedVoiceInActiveStream = true;
                 continue;
             }
             short[]? samples = null;
@@ -116,8 +132,46 @@ public sealed class NxdnRxAudioSession : IAsyncDisposable
                 decoded => samples = decoded.ToArray());
             await playback.WriteAsync(samples!, cancellationToken).ConfigureAwait(false);
             FramesDecoded++;
+            hasDecodedVoiceInActiveStream = true;
         }
+        if (missingPrivacy)
+            MalformedPackets++;
         return errors;
+    }
+
+    private async ValueTask ConcealLostPacketsAsync(
+        long lostPackets,
+        CancellationToken cancellationToken)
+    {
+        if (!hasDecodedVoiceInActiveStream || lostPackets <= 0 || lastVoiceCodewordCount <= 0)
+            return;
+
+        const int maximumConcealedPackets = 10;
+        int frameCount = checked((int)Math.Min(lostPackets, maximumConcealedPackets)) *
+            lastVoiceCodewordCount;
+        for (int index = 0; index < frameCount; index++)
+            await ConcealFrameAsync(cancellationToken).ConfigureAwait(false);
+        if (lostPackets > maximumConcealedPackets)
+            decoder.Reset();
+    }
+
+    private ValueTask ConcealCurrentPacketAsync(CancellationToken cancellationToken)
+        => ConcealLostPacketsAsync(1, cancellationToken);
+
+    private async ValueTask ConcealFrameAsync(CancellationToken cancellationToken)
+    {
+        short[] samples = [];
+        decoder.ProcessLost(decoded => samples = decoded.ToArray());
+        await playback.WriteAsync(samples, cancellationToken).ConfigureAwait(false);
+        FramesDecoded++;
+    }
+
+    private void InvalidatePrivacyAfterLoss()
+    {
+        if (privacyAlgorithm == 0)
+            return;
+        privacyProcessor?.Dispose();
+        privacyProcessor = null;
     }
 
     public async ValueTask DisposeAsync()

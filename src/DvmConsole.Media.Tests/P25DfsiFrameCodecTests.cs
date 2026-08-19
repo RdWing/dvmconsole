@@ -111,6 +111,30 @@ public sealed class P25DfsiFrameCodecTests
     }
 
     [Fact]
+    public async Task P25SessionConcealsOnlyTheMalformedDfsiRecord()
+    {
+        byte[] payload = CreatePayload(0x62);
+        payload[94] = 0xFF; // Voice record 5 starts at network offset 94.
+        var vocoder = new FakeVocoderSession();
+        var playback = new FakePlayback();
+        await using var session = new P25RxAudioSession(
+            new P25TrafficSelector(100),
+            vocoder,
+            playback);
+
+        Assert.Equal(0, await session.ProcessAsync(CreateTraffic("LDU1", payload)));
+
+        Assert.Equal(1, session.MalformedPackets);
+        Assert.Equal(9, session.FramesDecoded);
+        Assert.Equal(8, vocoder.DecodeCalls);
+        Assert.Equal(1, vocoder.DecodeLostCalls);
+        Assert.Equal(9, playback.Frames.Count);
+        Assert.Equal(
+            [1, 2, 3, 4, 6, 7, 8, 9],
+            vocoder.Codewords.Select(codeword => (int)codeword[0]).ToArray());
+    }
+
+    [Fact]
     public async Task P25SessionConcealsEveryMalformedAndMissingFrameSlotBeforeRecovery()
     {
         var vocoder = new FakeVocoderSession();
@@ -352,6 +376,123 @@ public sealed class P25DfsiFrameCodecTests
                 clearImbe.AsSpan(index * P25DfsiFrameCodec.CodewordBytes, P25DfsiFrameCodec.CodewordBytes).ToArray(),
                 vocoder.Codewords[index]);
         }
+    }
+
+    [Fact]
+    public async Task P25SessionKeepsEncryptionAlignedAcrossOneMalformedRecord()
+    {
+        const ushort keyId = 0x50;
+        const byte algorithmId = P25Defines.P25_ALGO_AES;
+        byte[] key = Enumerable.Range(1, 32).Select(static value => (byte)value).ToArray();
+        byte[] messageIndicator = Enumerable.Range(0x10, 9).Select(static value => (byte)value).ToArray();
+        byte[] clearImbe = Enumerable.Range(1, P25DfsiFrameCodec.ImbeBytes)
+            .Select(static value => (byte)value)
+            .ToArray();
+        byte[] encryptedImbe = EncryptLdu(clearImbe, keyId, algorithmId, key, messageIndicator, P25DUID.LDU1);
+        byte[] payload = P25DfsiFrameCodec.CreateLdu1Payload(99, 100, encryptedImbe);
+        payload[180] = P25Defines.P25_FT_HDU_VALID;
+        payload[181] = algorithmId;
+        payload[182] = (byte)(keyId >> 8);
+        payload[183] = (byte)keyId;
+        messageIndicator.CopyTo(payload, 184);
+        payload[94] = 0xFF;
+
+        var resolver = new P25KeyRing(string.Empty, new KeyContainer
+        {
+            Keys = [new KeyEntry { KeyId = keyId, AlgId = algorithmId, Key = Convert.ToHexString(key) }]
+        });
+        var vocoder = new FakeVocoderSession();
+        await using var session = new P25RxAudioSession(
+            new P25TrafficSelector(100),
+            vocoder,
+            new FakePlayback(),
+            resolver);
+
+        Assert.Equal(0, await session.ProcessAsync(CreateTraffic("LDU1", payload)));
+
+        Assert.Equal(1, session.MalformedPackets);
+        Assert.Equal(8, vocoder.DecodeCalls);
+        Assert.Equal(1, vocoder.DecodeLostCalls);
+        byte[][] expected = SplitCodewords(clearImbe).Where((_, index) => index != 4).ToArray();
+        Assert.Equal(expected.Length, vocoder.Codewords.Count);
+        for (int index = 0; index < expected.Length; index++)
+            Assert.Equal(expected[index], vocoder.Codewords[index]);
+    }
+
+    [Fact]
+    public async Task P25SessionCyclesEncryptionWhenOneLdu2EssRecordIsMalformed()
+    {
+        const ushort keyId = 0x50;
+        const byte algorithmId = P25Defines.P25_ALGO_AES;
+        byte[] key = Enumerable.Range(1, 32).Select(static value => (byte)value).ToArray();
+        byte[] messageIndicator = Enumerable.Range(0x10, 9).Select(static value => (byte)value).ToArray();
+        byte[] nextMessageIndicator = messageIndicator.ToArray();
+        P25Crypto.CycleP25Lfsr(nextMessageIndicator);
+        byte[] clearLdu1 = Enumerable.Range(1, P25DfsiFrameCodec.ImbeBytes)
+            .Select(static value => (byte)value)
+            .ToArray();
+        byte[] clearLdu2 = Enumerable.Range(101, P25DfsiFrameCodec.ImbeBytes)
+            .Select(static value => (byte)value)
+            .ToArray();
+        byte[] clearNextLdu1 = Enumerable.Range(201, P25DfsiFrameCodec.ImbeBytes)
+            .Select(static value => (byte)value)
+            .ToArray();
+
+        var encryptor = new P25Crypto();
+        encryptor.SetKey(keyId, algorithmId, key);
+        Assert.True(encryptor.Prepare(algorithmId, keyId, messageIndicator));
+        byte[] encryptedLdu1 = ProcessLdu(encryptor, clearLdu1, P25DUID.LDU1);
+        byte[] encryptedLdu2 = ProcessLdu(encryptor, clearLdu2, P25DUID.LDU2);
+        byte[] encryptedNextLdu1 = EncryptLdu(
+            clearNextLdu1,
+            keyId,
+            algorithmId,
+            key,
+            nextMessageIndicator,
+            P25DUID.LDU1);
+
+        byte[] ldu1Payload = P25DfsiFrameCodec.CreateLdu1Payload(99, 100, encryptedLdu1);
+        ldu1Payload[180] = P25Defines.P25_FT_HDU_VALID;
+        ldu1Payload[181] = algorithmId;
+        ldu1Payload[182] = (byte)(keyId >> 8);
+        ldu1Payload[183] = (byte)keyId;
+        messageIndicator.CopyTo(ldu1Payload, 184);
+
+        byte[] ldu2Payload = P25DfsiFrameCodec.CreateLdu2Payload(99, 100, encryptedLdu2);
+        nextMessageIndicator.AsSpan(0, 3).CopyTo(ldu2Payload.AsSpan(61, 3));
+        nextMessageIndicator.AsSpan(3, 3).CopyTo(ldu2Payload.AsSpan(78, 3));
+        nextMessageIndicator.AsSpan(6, 3).CopyTo(ldu2Payload.AsSpan(95, 3));
+        ldu2Payload[112] = algorithmId;
+        ldu2Payload[113] = (byte)(keyId >> 8);
+        ldu2Payload[114] = (byte)keyId;
+        ldu2Payload[60] = 0xFF; // Voice record 3 contains the first ESS MI segment.
+
+        byte[] nextLdu1Payload = P25DfsiFrameCodec.CreateLdu1Payload(99, 100, encryptedNextLdu1);
+        nextLdu1Payload[14] &= 0xF7;
+        nextLdu1Payload[180] = P25Defines.P25_FT_DATA_UNIT;
+        nextLdu1Payload.AsSpan(181, 12).Clear();
+
+        var resolver = new P25KeyRing(string.Empty, new KeyContainer
+        {
+            Keys = [new KeyEntry { KeyId = keyId, AlgId = algorithmId, Key = Convert.ToHexString(key) }]
+        });
+        var vocoder = new FakeVocoderSession();
+        await using var session = new P25RxAudioSession(
+            new P25TrafficSelector(100),
+            vocoder,
+            new FakePlayback(),
+            resolver);
+
+        Assert.Equal(0, await session.ProcessAsync(CreateTraffic("LDU1", ldu1Payload, packetSequence: 1)));
+        Assert.Equal(0, await session.ProcessAsync(CreateTraffic("LDU2", ldu2Payload, packetSequence: 2)));
+        Assert.Equal(0, await session.ProcessAsync(CreateTraffic("LDU1", nextLdu1Payload, packetSequence: 3)));
+
+        Assert.Equal(1, session.MalformedPackets);
+        Assert.Equal(26, vocoder.DecodeCalls);
+        Assert.Equal(1, vocoder.DecodeLostCalls);
+        byte[][] decodedNextLdu1 = vocoder.Codewords.Skip(17).ToArray();
+        Assert.Equal(9, decodedNextLdu1.Length);
+        Assert.Equal(clearNextLdu1, decodedNextLdu1.SelectMany(static value => value).ToArray());
     }
 
     [Fact]

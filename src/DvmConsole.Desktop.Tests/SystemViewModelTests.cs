@@ -17,6 +17,97 @@ namespace DvmConsole.Desktop.Tests;
 public sealed class SystemViewModelTests
 {
     [Fact]
+    public void RevealRecordingUsesFinderSelectionOnMacOS()
+    {
+        string path = Path.Combine(Path.GetTempPath(), "recording with spaces.wav");
+
+        System.Diagnostics.ProcessStartInfo startInfo =
+            MainWindowViewModel.CreateRevealRecordingStartInfo(path, isWindows: false, isMacOS: true);
+
+        Assert.Equal("/usr/bin/open", startInfo.FileName);
+        Assert.False(startInfo.UseShellExecute);
+        Assert.Equal(["-R", Path.GetFullPath(path)], startInfo.ArgumentList);
+    }
+
+    [Fact]
+    public void RevealRecordingUsesExplorerSelectionOnWindows()
+    {
+        string path = Path.Combine(Path.GetTempPath(), "recording with spaces.wav");
+
+        System.Diagnostics.ProcessStartInfo startInfo =
+            MainWindowViewModel.CreateRevealRecordingStartInfo(path, isWindows: true, isMacOS: false);
+
+        Assert.Equal("explorer.exe", startInfo.FileName);
+        Assert.False(startInfo.UseShellExecute);
+        Assert.Equal(["/select,", Path.GetFullPath(path)], startInfo.ArgumentList);
+    }
+
+    [Fact]
+    public void RevealRecordingOpensContainingFolderOnOtherPlatforms()
+    {
+        string folder = Path.Combine(Path.GetTempPath(), "recordings");
+        string path = Path.Combine(folder, "call.wav");
+
+        System.Diagnostics.ProcessStartInfo startInfo =
+            MainWindowViewModel.CreateRevealRecordingStartInfo(path, isWindows: false, isMacOS: false);
+
+        Assert.Equal(Path.GetFullPath(folder), startInfo.FileName);
+        Assert.True(startInfo.UseShellExecute);
+        Assert.Empty(startInfo.ArgumentList);
+    }
+
+    [Theory]
+    [InlineData(400, 44, 2000, 600, 444)]
+    [InlineData(1380, 44, 2000, 600, 1400)]
+    [InlineData(20, -44, 2000, 600, 0)]
+    [InlineData(100, 44, 500, 600, 0)]
+    public void HistoryViewportAnchorOffsetTracksInsertedRowsAndClampsToBounds(
+        double currentOffset,
+        double itemDelta,
+        double extentHeight,
+        double viewportHeight,
+        double expected)
+    {
+        Assert.Equal(
+            expected,
+            OperatorToolsWindow.CalculateAnchoredHistoryOffset(
+                currentOffset,
+                itemDelta,
+                extentHeight,
+                viewportHeight));
+    }
+
+    [Fact]
+    public void ActivityHistoryIncludesRecordingOnlyCatalogEntries()
+    {
+        var recordingOnly = new CallHistoryEntry(
+            DateTimeOffset.UtcNow,
+            "SKYNET",
+            "CHP Maroon/Bronze",
+            P25Defines.WUID_FNE,
+            2947,
+            FneTrafficProtocol.P25,
+            77,
+            isRecordingOnly: true);
+        var otherSystem = new CallHistoryEntry(
+            DateTimeOffset.UtcNow,
+            "OTHER",
+            "Dispatch",
+            42,
+            100,
+            FneTrafficProtocol.Dmr,
+            78);
+
+        CallHistoryEntry[] selected = MainWindowViewModel.SelectActivityHistory(
+            [recordingOnly, otherSystem],
+            "SKYNET",
+            selectedZoneChannelNames: null);
+
+        Assert.Same(recordingOnly, Assert.Single(selected));
+        Assert.True(selected[0].IsRecordingOnly);
+    }
+
+    [Fact]
     public void RecordingCatalogSnapshotRejectsConcurrentCompletionDeletionAndNewerScans()
     {
         Assert.True(MainWindowViewModel.IsRecordingCatalogSnapshotCurrent(4, 4, 10, 10, false));
@@ -105,7 +196,7 @@ public sealed class SystemViewModelTests
 
     [Fact]
     public void ReportsUnreleasedSemanticVersion()
-        => Assert.StartsWith("0.2.3", MainWindow.ApplicationVersion, StringComparison.Ordinal);
+        => Assert.StartsWith("0.2.4", MainWindow.ApplicationVersion, StringComparison.Ordinal);
 
     [Theory]
     [InlineData("0.1.0-alpha.1+abcdef123456", "0.1.0-alpha.1 (abcdef1)")]
@@ -503,6 +594,7 @@ public sealed class SystemViewModelTests
             var historyChanges = new List<NotifyCollectionChangedAction>();
             ((INotifyCollectionChanged)viewModel.FilteredCallHistory).CollectionChanged +=
                 (_, args) => historyChanges.Add(args.Action);
+            DateTimeOffset start = DateTimeOffset.UnixEpoch;
             byte[] dmrWithQuality = new byte[DvmConsole.Media.DmrVoicePacketCodec.PacketBytes];
             dmrWithQuality[53] = 3;
             dmrWithQuality[54] = 72;
@@ -518,7 +610,8 @@ public sealed class SystemViewModelTests
                 "VOICE",
                 1,
                 77,
-                dmrWithQuality));
+                dmrWithQuality),
+                receivedAt: start);
             viewModel.ProcessTraffic(system, new FneTrafficFrame(
                 FneTrafficProtocol.Dmr,
                 1,
@@ -530,7 +623,8 @@ public sealed class SystemViewModelTests
                 "VOICE",
                 2,
                 77,
-                new byte[DvmConsole.Media.DmrVoicePacketCodec.PacketBytes]));
+                new byte[DvmConsole.Media.DmrVoicePacketCodec.PacketBytes]),
+                receivedAt: start.AddMilliseconds(20));
             viewModel.ProcessTraffic(system, new FneTrafficFrame(
                 FneTrafficProtocol.Dmr,
                 1,
@@ -542,7 +636,8 @@ public sealed class SystemViewModelTests
                 "VOICE",
                 3,
                 78,
-                new byte[DvmConsole.Media.DmrVoicePacketCodec.PacketBytes]));
+                new byte[DvmConsole.Media.DmrVoicePacketCodec.PacketBytes]),
+                receivedAt: start.AddSeconds(1));
             viewModel.ProcessTraffic(system, new FneTrafficFrame(
                 FneTrafficProtocol.Dmr,
                 1,
@@ -554,7 +649,8 @@ public sealed class SystemViewModelTests
                 "TERMINATOR_WITH_LC",
                 4,
                 78,
-                new byte[DvmConsole.Media.DmrVoicePacketCodec.PacketBytes]));
+                new byte[DvmConsole.Media.DmrVoicePacketCodec.PacketBytes]),
+                receivedAt: start.AddSeconds(2));
             viewModel.ProcessTraffic(system, new FneTrafficFrame(
                 FneTrafficProtocol.Dmr,
                 1,
@@ -566,7 +662,8 @@ public sealed class SystemViewModelTests
                 "TERMINATOR_WITH_LC",
                 5,
                 999,
-                new byte[DvmConsole.Media.DmrVoicePacketCodec.PacketBytes]));
+                new byte[DvmConsole.Media.DmrVoicePacketCodec.PacketBytes]),
+                receivedAt: start.AddSeconds(3));
 
             CallHistoryEntry[] sessionHistory = viewModel.CallHistory.Where(entry => !entry.IsRecordingOnly).ToArray();
             Assert.Equal(2, sessionHistory.Length);
@@ -715,7 +812,7 @@ public sealed class SystemViewModelTests
     }
 
     [Fact]
-    public async Task P25HistoryUsesEmbeddedSubscriberAndSkipsPlaceholderOnlyRows()
+    public async Task P25HistoryUsesEmbeddedSubscriberAndKeepsPlaceholderCallsVisible()
     {
         string path = Path.Combine(AppContext.BaseDirectory, "TestData", "multiple-systems.yml");
         string settingsPath = CreateSettingsPath();
@@ -730,6 +827,7 @@ public sealed class SystemViewModelTests
                 sourceId: 4_500_355,
                 destinationId: 102,
                 imbe: new byte[P25DfsiFrameCodec.ImbeBytes]);
+            DateTimeOffset start = DateTimeOffset.UnixEpoch;
 
             viewModel.ProcessTraffic(system, new FneTrafficFrame(
                 FneTrafficProtocol.P25,
@@ -742,7 +840,8 @@ public sealed class SystemViewModelTests
                 subtype: "LDU1",
                 packetSequence: 1,
                 streamId: 77,
-                payload: identifiedPayload));
+                payload: identifiedPayload),
+                receivedAt: start);
 
             CallHistoryEntry identified = Assert.Single(viewModel.CallHistory);
             Assert.Equal((uint)4_500_355, identified.SourceId);
@@ -759,9 +858,15 @@ public sealed class SystemViewModelTests
                 subtype: "LDU1",
                 packetSequence: 2,
                 streamId: 78,
-                payload: new byte[P25DfsiFrameCodec.ClearLduPayloadLength]));
+                payload: new byte[P25DfsiFrameCodec.ClearLduPayloadLength]),
+                receivedAt: start.AddSeconds(1));
 
-            Assert.Single(viewModel.CallHistory);
+            Assert.Equal(2, viewModel.CallHistory.Count);
+            CallHistoryEntry placeholder = Assert.Single(
+                viewModel.CallHistory,
+                entry => entry.StreamId == 78);
+            Assert.Equal(P25Defines.WUID_FNE, placeholder.SourceId);
+            Assert.Contains(placeholder, viewModel.ActivityCallHistory);
         }
         finally
         {

@@ -6,6 +6,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.2.4] - 2026-08-18
+
+### Added
+
+- Add per-frame vocoder erasure handling for damaged P25 DFSI records and missing or malformed NXDN voice packets so decoder concealment is included in live audio and TAR recordings.
+- Add support for the current dvmhost NXDN FNE packet layout while retaining compatibility with legacy header-only packets.
+
+### Changed
+
+- Consolidate Event History into Console Settings, route the Activity header and TAR Viewer there, and return the Talkgroup Audio Recorder menu to Tools.
+- Reveal a recording selected in History in Finder or Explorer instead of opening it in the operating system's media player.
+- Keep the inspected History row anchored while incoming calls are inserted, while retaining live-follow behavior when already at the top.
+
+### Fixed
+
+- Preserve usable P25 voice records when another record in the same LDU is damaged, keep encrypted IMBE keystream alignment across concealed slots, and advance missing LDU2 encryption state safely.
+- Preserve NXDN audio cadence across bounded packet loss, reset privacy state after loss, and reject invalid frame offsets instead of decoding padding as voice.
+- Keep P25 calls that use the FNE placeholder source ID visible in the Activity sidebar so their completed TAR recordings remain accessible.
+- Remove sub-frame zero-duration History shells without discarding a playable recording that is finalized later.
+- Remove the detached Event History window and its connected-traffic crash path.
+
 ## [0.2.3] - 2026-08-17
 
 ### Added
@@ -137,7 +158,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Add patches, multi-select groups, call history, recordings, web streams, clocks, layouts, themes, startup behavior, and in-application operator documentation.
 - Add support for local and KMM-provided P25 encryption keys while preserving compatibility with existing variable-length AES key material.
 
-[Unreleased]: https://github.com/RdWing/dvmconsole/compare/v0.2.3...HEAD
+[Unreleased]: https://github.com/RdWing/dvmconsole/compare/v0.2.4...HEAD
+[0.2.4]: https://github.com/RdWing/dvmconsole/compare/v0.2.3...v0.2.4
 [0.2.3]: https://github.com/RdWing/dvmconsole/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/RdWing/dvmconsole/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/RdWing/dvmconsole/compare/v0.2.0...v0.2.1

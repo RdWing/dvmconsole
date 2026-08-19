@@ -10,7 +10,9 @@ namespace DvmConsole.Media;
 // would falsely report a clean channel. Missing or malformed DFSI frame slots
 // are instead submitted to the stateful vocoder as erasures by
 // P25RxAudioSession, allowing its native repeat/fade/mute concealment to feed
-// both live playback and TAR.
+// both live playback and TAR. DVMHost does not populate reliable per-record
+// FEC status in this layout, so reserved/trailing bytes must not be treated as
+// erasure flags without a new explicit peer contract.
 public static class P25DfsiFrameCodec
 {
     public const int HeaderBytes = 24;
@@ -35,18 +37,35 @@ public static class P25DfsiFrameCodec
     private static readonly byte[] Ldu1RecordTypes = [0x62, 0x63, 0x64, 0x65, 0x66, 0x67, 0x68, 0x69, 0x6A];
     private static readonly byte[] Ldu2RecordTypes = [0x6B, 0x6C, 0x6D, 0x6E, 0x6F, 0x70, 0x71, 0x72, 0x73];
     private static readonly int[] RecordLengths = [22, 14, 17, 17, 17, 17, 17, 17, 16];
+    private static readonly int[] RecordOffsets = [0, 22, 36, 53, 70, 87, 104, 121, 138];
     private static readonly int[] CodewordOffsets = [10, 1, 5, 5, 5, 5, 5, 5, 4];
 
     public static bool TryExtractImbe(FneTrafficFrame traffic, Span<byte> imbe)
     {
+        Span<bool> available = stackalloc bool[CodewordsPerLdu];
+        return TryExtractImbeFrames(traffic, imbe, available) &&
+            !available.Contains(false);
+    }
+
+    // Extracts every independently valid 20 ms voice record from an LDU.
+    // A damaged DFSI record must not discard the other eight codewords: the
+    // receive session submits only the unavailable slot as a decoder erasure.
+    public static bool TryExtractImbeFrames(
+        FneTrafficFrame traffic,
+        Span<byte> imbe,
+        Span<bool> available)
+    {
         ArgumentNullException.ThrowIfNull(traffic);
         if (traffic.Protocol != FneTrafficProtocol.P25 ||
             !IsVoiceLdu(traffic) ||
-            imbe.Length < ImbeBytes)
+            imbe.Length < ImbeBytes ||
+            available.Length < CodewordsPerLdu)
+        {
             return false;
+        }
 
         bool ldu1 = string.Equals(traffic.Subtype, "LDU1", StringComparison.OrdinalIgnoreCase);
-        return TryExtractImbe(traffic.Payload, ldu1, imbe);
+        return TryExtractImbeFrames(traffic.Payload, ldu1, imbe, available);
     }
 
     public static byte[] ExtractImbe(FneTrafficFrame traffic)
@@ -86,8 +105,13 @@ public static class P25DfsiFrameCodec
         if (ldu1)
         {
             Span<byte> imbe = stackalloc byte[ImbeBytes];
-            if (!TryExtractImbe(payload, ldu1: true, imbe))
+            Span<bool> available = stackalloc bool[CodewordsPerLdu];
+            if (!TryExtractImbeFrames(payload, ldu1: true, imbe, available) ||
+                !available[3] ||
+                !available[4])
+            {
                 return false;
+            }
 
             destinationId = ReadThreeBytes(payload, 78);
             sourceId = ReadThreeBytes(payload, 95);
@@ -113,12 +137,14 @@ public static class P25DfsiFrameCodec
         if (traffic.Protocol != FneTrafficProtocol.P25 || !IsVoiceLdu(traffic))
             return false;
 
+        bool ldu1 = string.Equals(traffic.Subtype, "LDU1", StringComparison.OrdinalIgnoreCase);
         Span<byte> imbe = stackalloc byte[ImbeBytes];
-        if (!TryExtractImbe(traffic.Payload, string.Equals(traffic.Subtype, "LDU1", StringComparison.OrdinalIgnoreCase), imbe))
+        Span<bool> available = stackalloc bool[CodewordsPerLdu];
+        if (!TryExtractImbeFrames(traffic.Payload, ldu1, imbe, available))
             return false;
 
         ReadOnlySpan<byte> payload = traffic.Payload;
-        if (string.Equals(traffic.Subtype, "LDU1", StringComparison.OrdinalIgnoreCase))
+        if (ldu1)
         {
             if (payload.Length < 193 || payload[180] != 0x01)
                 return false;
@@ -137,7 +163,10 @@ public static class P25DfsiFrameCodec
             return true;
         }
 
-        if (payload.Length <= 114 || payload[112] == 0)
+        // LDU2 ESS fields span voice records 12 through 15. Do not prepare a
+        // future key stream from metadata whose containing record was damaged.
+        if (!available[2] || !available[3] || !available[4] || !available[5] ||
+            payload.Length <= 114 || payload[112] == 0)
             return false;
 
         byte[] messageIndicator = new byte[9];
@@ -259,9 +288,16 @@ public static class P25DfsiFrameCodec
         return payload;
     }
 
-    private static bool TryExtractImbe(ReadOnlySpan<byte> payload, bool ldu1, Span<byte> imbe)
+    private static bool TryExtractImbeFrames(
+        ReadOnlySpan<byte> payload,
+        bool ldu1,
+        Span<byte> imbe,
+        Span<bool> available)
     {
+        imbe[..ImbeBytes].Clear();
+        available[..CodewordsPerLdu].Clear();
         if (payload.Length <= RecordLengthOffset ||
+            payload.Length < HeaderBytes ||
             payload[RecordLengthOffset] < HeaderBytes ||
             payload[RecordLengthOffset] > payload.Length)
             return false;
@@ -272,20 +308,21 @@ public static class P25DfsiFrameCodec
 
         ReadOnlySpan<byte> records = payload.Slice(HeaderBytes, recordBytes);
         ReadOnlySpan<byte> expectedTypes = ldu1 ? Ldu1RecordTypes : Ldu2RecordTypes;
-        int recordOffset = 0;
-        int imbeOffset = 0;
-
         for (int index = 0; index < RecordLengths.Length; index++)
         {
             int recordLength = RecordLengths[index];
-            if (records[recordOffset] != expectedTypes[index] ||
-                recordLength <= CodewordOffsets[index] + CodewordBytes)
-                return false;
+            int recordOffset = RecordOffsets[index];
+            int codewordOffset = CodewordOffsets[index];
+            if (recordOffset + recordLength > records.Length ||
+                records[recordOffset] != expectedTypes[index] ||
+                codewordOffset + CodewordBytes > recordLength)
+            {
+                continue;
+            }
 
-            records.Slice(recordOffset + CodewordOffsets[index], CodewordBytes)
-                .CopyTo(imbe[imbeOffset..]);
-            recordOffset += recordLength;
-            imbeOffset += CodewordBytes;
+            records.Slice(recordOffset + codewordOffset, CodewordBytes)
+                .CopyTo(imbe[(index * CodewordBytes)..]);
+            available[index] = true;
         }
 
         return true;

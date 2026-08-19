@@ -135,8 +135,7 @@
             <MenuItem Header="Lock widgets" IsChecked="{Binding LockWidgets, Mode=TwoWay}" ToggleType="CheckBox" />
             <MenuItem Header="Reset widget layout" Click="HandleResetLayoutClick" />
             <Separator />
-            <MenuItem Header="Event History window…" Click="HandleOpenCallHistoryClick" />
-            <MenuItem Header="Call History tools…" Tag="History" Click="HandleOpenOperatorToolsClick" />
+            <MenuItem Header="History…" Tag="History" Click="HandleOpenOperatorToolsClick" />
             <MenuItem Header="Groups…" Tag="Groups" Click="HandleOpenOperatorToolsClick" />
             <MenuItem Header="Debug Logs…" Click="HandleOpenDebugLogsClick" />
             <Separator />
@@ -144,9 +143,10 @@
           </MenuItem>
           <MenuItem Header="Tools">
             <MenuItem Header="Talkgroup Audio Recorder">
-              <MenuItem Header="Viewer…" Tag="Recorder" Click="HandleOpenOperatorToolsClick" />
+              <MenuItem Header="Viewer…" Tag="History" Click="HandleOpenOperatorToolsClick" />
               <MenuItem Header="Configuration…" Tag="Recorder" Click="HandleOpenOperatorToolsClick" />
             </MenuItem>
+            <Separator />
             <MenuItem Header="FNE Connection Manager…" Tag="Connections" Click="HandleOpenOperatorToolsClick" />
             <MenuItem Header="Encryption Key Status…" Tag="Connections" Click="HandleOpenOperatorToolsClick" />
           </MenuItem>
@@ -259,9 +259,9 @@
           </TabControl>
         </Grid>
       </Border>
-      <Border Grid.Row="1" Grid.Column="1" Width="{Binding ActivitySidebarWidth}" Background="{DynamicResource SidebarBackgroundBrush}" Padding="8,10" DoubleTapped="HandleActivityDoubleTapped">
+      <Border Grid.Row="1" Grid.Column="1" Width="{Binding ActivitySidebarWidth}" Background="{DynamicResource SidebarBackgroundBrush}" Padding="8,10">
         <Grid RowDefinitions="Auto,*">
-          <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="4" IsVisible="{Binding ShowCallHistoryPane}">
+          <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="4" IsVisible="{Binding ShowCallHistoryPane}" DoubleTapped="HandleActivityDoubleTapped">
             <TextBlock FontSize="{Binding UiFontSize}" FontWeight="SemiBold" Text="Activity" VerticalAlignment="Center" />
             <Button Grid.Column="1" Content="{Binding ActivityFilterButtonText}" Padding="6,2" ToolTip.Tip="Filter Event History to channels in the current tab" Click="HandleToggleActivityCurrentZoneFilterClick" />
             <Button Grid.Column="2" Content="‹" Padding="4,0" ToolTip.Tip="Collapse Activity sidebar" Click="HandleToggleActivitySidebarClick" />

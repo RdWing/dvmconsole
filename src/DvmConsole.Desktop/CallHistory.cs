@@ -247,6 +247,7 @@ public sealed class CallHistoryEntry : INotifyPropertyChanged
 public sealed class CallHistoryStore
 {
     public const int DefaultMaxEntries = 100;
+    private static readonly TimeSpan MinimumVisibleCallDuration = TimeSpan.FromMilliseconds(50);
 
     private readonly int maxEntries;
 
@@ -496,6 +497,12 @@ public sealed class CallHistoryStore
         if (entry is null)
             return false;
         entry.Complete(timestamp);
+        // Busy FNEs can announce and immediately replace a stream before one
+        // complete voice frame arrives. Do not leave those sub-frame shells as
+        // duplicate-looking 0.0s calls. If TAR later finalizes playable audio,
+        // AddOrAttachRecording restores it as a recording-backed catalog row.
+        if (!entry.HasRecording && entry.Duration < MinimumVisibleCallDuration)
+            Entries.Remove(entry);
         return true;
     }
 

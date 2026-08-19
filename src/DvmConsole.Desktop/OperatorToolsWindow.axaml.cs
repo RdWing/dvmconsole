@@ -7,6 +7,7 @@ using Avalonia.Threading;
 using Avalonia.VisualTree;
 using DvmConsole.Audio;
 using DvmConsole.Media;
+using System.Collections.Specialized;
 
 namespace DvmConsole.Desktop;
 
@@ -15,6 +16,11 @@ public sealed partial class OperatorToolsWindow : Window
     private readonly MainWindowViewModel viewModel;
     private readonly DispatcherTimer scrollBarHideTimer;
     private ScrollViewer? activeScrollViewer;
+    private INotifyCollectionChanged? historyCollection;
+    private CallHistoryEntry? pendingHistoryAnchor;
+    private double pendingHistoryAnchorY;
+    private double pendingHistoryExtentHeight;
+    private bool restoringHistoryViewport;
 
     public OperatorToolsWindow()
     {
@@ -36,6 +42,10 @@ public sealed partial class OperatorToolsWindow : Window
         AddHandler(InputElement.KeyDownEvent, HandleKeyDown, RoutingStrategies.Tunnel);
         AddHandler(InputElement.KeyUpEvent, HandleKeyUp, RoutingStrategies.Tunnel);
         AddHandler(InputElement.PointerWheelChangedEvent, HandlePointerWheelChanged, RoutingStrategies.Tunnel);
+        historyCollection = viewModel.FilteredCallHistory;
+        historyCollection.CollectionChanged += HandleHistoryCollectionChanged;
+        HistoryList.LayoutUpdated += HandleHistoryListLayoutUpdated;
+        Closed += HandleClosed;
     }
 
     public void SelectSection(OperatorToolSection section)
@@ -79,6 +89,101 @@ public sealed partial class OperatorToolsWindow : Window
         scrollViewer.VerticalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Auto;
         scrollBarHideTimer.Stop();
         scrollBarHideTimer.Start();
+    }
+
+    private void HandleHistoryCollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
+    {
+        if (pendingHistoryAnchor is not null || restoringHistoryViewport)
+            return;
+
+        ScrollViewer? scrollViewer = GetHistoryScrollViewer();
+        if (scrollViewer is null || scrollViewer.Offset.Y <= 0.5)
+            return;
+
+        var visibleItems = HistoryList.GetVisualDescendants()
+            .OfType<ListBoxItem>()
+            .Select(item => new
+            {
+                Item = item,
+                Entry = item.DataContext as CallHistoryEntry ?? item.Content as CallHistoryEntry,
+                Position = item.TranslatePoint(default, scrollViewer)
+            })
+            .Where(candidate =>
+                candidate.Entry is not null &&
+                candidate.Position is Point position &&
+                position.Y + candidate.Item.Bounds.Height > 0 &&
+                position.Y < scrollViewer.Viewport.Height)
+            .OrderBy(candidate => candidate.Position!.Value.Y)
+            .FirstOrDefault();
+
+        if (visibleItems?.Entry is null || visibleItems.Position is not Point anchorPosition)
+            return;
+
+        pendingHistoryAnchor = visibleItems.Entry;
+        pendingHistoryAnchorY = anchorPosition.Y;
+        pendingHistoryExtentHeight = scrollViewer.Extent.Height;
+    }
+
+    private void HandleHistoryListLayoutUpdated(object? sender, EventArgs e)
+    {
+        if (pendingHistoryAnchor is not CallHistoryEntry anchor)
+            return;
+
+        ScrollViewer? scrollViewer = GetHistoryScrollViewer();
+        if (scrollViewer is null)
+            return;
+
+        ListBoxItem? anchorItem = HistoryList.GetVisualDescendants()
+            .OfType<ListBoxItem>()
+            .FirstOrDefault(item =>
+                ReferenceEquals(item.DataContext, anchor) ||
+                ReferenceEquals(item.Content, anchor));
+        Point? anchorPosition = anchorItem?.TranslatePoint(default, scrollViewer);
+        double itemDelta = anchorPosition is Point position
+            ? position.Y - pendingHistoryAnchorY
+            : scrollViewer.Extent.Height - pendingHistoryExtentHeight;
+
+        pendingHistoryAnchor = null;
+        if (Math.Abs(itemDelta) <= 0.25)
+            return;
+
+        double desiredOffset = CalculateAnchoredHistoryOffset(
+            scrollViewer.Offset.Y,
+            itemDelta,
+            scrollViewer.Extent.Height,
+            scrollViewer.Viewport.Height);
+        restoringHistoryViewport = true;
+        try
+        {
+            scrollViewer.Offset = new Vector(scrollViewer.Offset.X, desiredOffset);
+        }
+        finally
+        {
+            restoringHistoryViewport = false;
+        }
+    }
+
+    private ScrollViewer? GetHistoryScrollViewer()
+        => HistoryList.GetVisualDescendants().OfType<ScrollViewer>().FirstOrDefault();
+
+    internal static double CalculateAnchoredHistoryOffset(
+        double currentOffset,
+        double itemDelta,
+        double extentHeight,
+        double viewportHeight)
+    {
+        double maximumOffset = Math.Max(0, extentHeight - viewportHeight);
+        return Math.Clamp(currentOffset + itemDelta, 0, maximumOffset);
+    }
+
+    private void HandleClosed(object? sender, EventArgs e)
+    {
+        scrollBarHideTimer.Stop();
+        HistoryList.LayoutUpdated -= HandleHistoryListLayoutUpdated;
+        if (historyCollection is not null)
+            historyCollection.CollectionChanged -= HandleHistoryCollectionChanged;
+        historyCollection = null;
+        pendingHistoryAnchor = null;
     }
 
     private void HandleKeyDown(object? sender, KeyEventArgs e)

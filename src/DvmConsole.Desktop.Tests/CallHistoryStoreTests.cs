@@ -63,6 +63,28 @@ public sealed class CallHistoryStoreTests
     }
 
     [Fact]
+    public void RemovesSubFrameHistoryShellButRestoresAnyPlayableTarRecording()
+    {
+        var store = new CallHistoryStore();
+        CallHistoryEntry entry = CreateEntry(42);
+        store.Add(entry);
+
+        Assert.True(store.Complete(
+            "System 1",
+            FneTrafficProtocol.Dmr,
+            42,
+            DateTimeOffset.UnixEpoch.AddMilliseconds(20)));
+        Assert.Empty(store.Entries);
+
+        CallRecordingMetadata recording = CreatePlayableRecording(42);
+        CallHistoryEntry restored = store.AddOrAttachRecording(recording);
+
+        Assert.Same(restored, Assert.Single(store.Entries));
+        Assert.True(restored.IsRecordingOnly);
+        Assert.Same(recording, restored.Recording);
+    }
+
+    [Fact]
     public void DetectsAnExistingActiveReceiveCallByFullRouteIdentity()
     {
         var store = new CallHistoryStore();

@@ -4,10 +4,18 @@ namespace DvmConsole.Media;
 // 9600/EFR is not implemented in dvmhost.
 public static class NxdnVoicePacketCodec
 {
-    public const int HeaderBytes = 20;
+    // Current dvmhost uses the common 24-byte FNE message header, followed by
+    // the two modem tag bytes and the 48-byte scrambled NXDN RF frame. Older
+    // peers used a 20-byte header with the RF frame directly at offset 20.
+    public const int LegacyHeaderBytes = 20;
+    public const int HeaderBytes = 24;
+    public const int ModemPrefixBytes = 2;
+    public const int FrameOffset = HeaderBytes + ModemPrefixBytes;
     public const int FrameBytes = 48;
-    public const int TrailerBytes = 2;
-    public const int PacketBytes = HeaderBytes + FrameBytes + TrailerBytes;
+    public const int DeclaredPacketBytes = FrameOffset + FrameBytes;
+    public const int PacketPadBytes = 4;
+    public const int PacketBytes = DeclaredPacketBytes + PacketPadBytes;
+    public const int LegacyPacketBytes = LegacyHeaderBytes + FrameBytes + 2;
     public const int CodewordBytes = 9;
     public const int CodewordsPerFrame = 4;
     public const int AmbeBytes = CodewordBytes * CodewordsPerFrame;
@@ -62,15 +70,19 @@ public static class NxdnVoicePacketCodec
 
     public static bool TryExtractFrame(ReadOnlySpan<byte> packet, Span<byte> frame)
     {
-        if (packet.Length < PacketBytes || frame.Length < FrameBytes ||
+        if (packet.Length < LegacyPacketBytes || frame.Length < FrameBytes ||
             packet[0] != (byte)'N' || packet[1] != (byte)'X' ||
             packet[2] != (byte)'D' || packet[3] != (byte)'D')
         {
             return false;
         }
 
-        packet.Slice(HeaderBytes, FrameBytes).CopyTo(frame);
-        return true;
+        // Prefer the current dvmhost layout, then the documented header-only
+        // variant and finally the legacy 20-byte layout. Validate the
+        // descrambled sync and LICH so padding cannot be mistaken for a frame.
+        return TryExtractFrameAt(packet, FrameOffset, frame) ||
+            TryExtractFrameAt(packet, HeaderBytes, frame) ||
+            TryExtractFrameAt(packet, LegacyHeaderBytes, frame);
     }
 
     public static byte[] ExtractFrame(ReadOnlySpan<byte> packet)
@@ -138,7 +150,7 @@ public static class NxdnVoicePacketCodec
             throw new ArgumentOutOfRangeException(nameof(keyId));
 
         byte[] packet = CreatePacketHeader(sourceId, destinationId, group, VoiceCallMessageType, frameSequence);
-        Span<byte> frame = packet.AsSpan(HeaderBytes, FrameBytes);
+        Span<byte> frame = packet.AsSpan(FrameOffset, FrameBytes);
         AddSync(frame);
         EncodeLich(frame, functionChannelType: 2, option: 3);
         Span<byte> linkControl = stackalloc byte[10];
@@ -177,7 +189,7 @@ public static class NxdnVoicePacketCodec
             throw new ArgumentOutOfRangeException(nameof(ran));
 
         byte[] packet = CreatePacketHeader(sourceId, destinationId, group, messageType, frameSequence);
-        Span<byte> frame = packet.AsSpan(HeaderBytes, FrameBytes);
+        Span<byte> frame = packet.AsSpan(FrameOffset, FrameBytes);
         AddSync(frame);
         EncodeLich(frame, functionChannelType: 0, option: 0);
         EncodeSacch(frame, ran, structure: 0, [0x10, 0x00, 0x00]);
@@ -247,7 +259,29 @@ public static class NxdnVoicePacketCodec
         packet[14] = frameSequence;
         if (!group)
             packet[15] = 0x40;
+        packet[23] = (byte)DeclaredPacketBytes;
+        packet[24] = 0x01; // dvmhost modem::TAG_DATA
+        packet[25] = 0x00;
         return packet;
+    }
+
+    private static bool TryExtractFrameAt(ReadOnlySpan<byte> packet, int offset, Span<byte> frame)
+    {
+        if (offset < 0 || packet.Length < offset + FrameBytes)
+            return false;
+
+        Span<byte> candidate = stackalloc byte[FrameBytes];
+        packet.Slice(offset, FrameBytes).CopyTo(candidate);
+        Scramble(candidate);
+        if (candidate[0] != 0xCD || candidate[1] != 0xF5 || (candidate[2] & 0xF0) != 0x90)
+            return false;
+
+        byte lich = DecodeLich(candidate);
+        if (!HasValidLichParity(lich))
+            return false;
+
+        packet.Slice(offset, FrameBytes).CopyTo(frame);
+        return true;
     }
 
     private static void AddSync(Span<byte> frame)

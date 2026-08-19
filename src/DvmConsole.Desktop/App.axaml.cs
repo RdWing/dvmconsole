@@ -59,11 +59,6 @@ public sealed class App : Application
                 window.Close();
             }
 
-            var history = new CallHistoryWindow(viewModel);
-            history.Show(mainWindow);
-            await Task.Delay(75);
-            history.Close();
-
             var logs = new DebugLogWindow(viewModel);
             logs.Show(mainWindow);
             await Task.Delay(75);

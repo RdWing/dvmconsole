@@ -3,6 +3,7 @@ using DvmConsole.Audio;
 using DvmConsole.Desktop;
 using DvmConsole.FneClient;
 using DvmConsole.Media;
+using DvmConsole.Vocoder;
 using fnecore.DMR;
 using System.Text.Json;
 using Xunit;
@@ -238,6 +239,47 @@ public sealed class CallRecordingManagerTests
             Assert.Equal(640L, metadata.DurationMs);
             Assert.Contains("activity 0.0%", metadata.AudioAnalysisText);
             Assert.Contains("trim -120/+240 ms", metadata.AudioAnalysisText);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task ConcealedP25SlotsRemainInTheRecordingUntilTheTerminator()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "dvmconsole-recording-tests", Guid.NewGuid().ToString("N"));
+        var channel = new ChannelViewModel(new ChannelConfiguration
+        {
+            Name = "Dispatch",
+            System = "System 1",
+            Tgid = "99",
+            Mode = "p25"
+        });
+        using var manager = new CallRecordingManager(root);
+        channel.SetRecordingEnabled(true);
+
+        try
+        {
+            const uint streamId = 77;
+            manager.WriteSamples(channel, streamId, sourceId: 42, ActiveSamples());
+            Assert.False(manager.ObserveTraffic(channel, P25Traffic("VOICE", "LDU1", streamId)));
+            manager.WriteSamples(
+                channel,
+                streamId,
+                sourceId: 42,
+                new short[P25DfsiFrameCodec.CodewordsPerLdu * VocoderFrameSizes.PcmSamplesPerFrame]);
+            manager.WriteSamples(channel, streamId, sourceId: 42, ActiveSamples());
+
+            Task<RecordingFinalizationResult> finalized = NextFinalizationAsync(manager);
+            Assert.True(manager.ObserveTraffic(channel, P25Traffic("TERMINATOR", "TDU", streamId)));
+            Assert.True((await finalized).IsPlayable);
+
+            CallRecordingMetadata metadata = Assert.Single(manager.LoadRecordings());
+            Assert.Equal(11 * VocoderFrameSizes.PcmSamplesPerFrame, metadata.OriginalSampleCount);
+            Assert.Equal(220, metadata.DurationMs);
         }
         finally
         {
@@ -702,6 +744,20 @@ public sealed class CallRecordingManagerTests
     private static FneTrafficFrame Traffic(string frameType, string subtype, uint streamId)
         => new(
             FneTrafficProtocol.Analog,
+            peerId: 1,
+            sourceId: 42,
+            destinationId: 99,
+            slot: null,
+            callType: "GROUP",
+            frameType,
+            subtype,
+            packetSequence: 1,
+            streamId,
+            payload: []);
+
+    private static FneTrafficFrame P25Traffic(string frameType, string subtype, uint streamId)
+        => new(
+            FneTrafficProtocol.P25,
             peerId: 1,
             sourceId: 42,
             destinationId: 99,

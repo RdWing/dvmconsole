@@ -286,18 +286,18 @@
               </Grid>
             </StackPanel>
           </Expander>
-          <ListBox Grid.Row="2" Classes="history-list" ItemsSource="{Binding FilteredCallHistory}" Background="Transparent" BorderThickness="0">
+          <ListBox x:Name="HistoryList" Grid.Row="2" Classes="history-list" ItemsSource="{Binding FilteredCallHistory}" Background="Transparent" BorderThickness="0" AutoScrollToSelectedItem="False" ScrollViewer.BringIntoViewOnFocusChange="False">
             <ListBox.ItemsPanel><ItemsPanelTemplate><VirtualizingStackPanel /></ItemsPanelTemplate></ListBox.ItemsPanel>
             <ListBox.ItemTemplate>
               <DataTemplate x:DataType="local:CallHistoryEntry">
                 <Border Classes="history-row">
-                  <Grid RowDefinitions="Auto,Auto" ColumnDefinitions="80,*,190,100,75,90,55" ColumnSpacing="7" RowSpacing="1">
+                  <Grid RowDefinitions="Auto,Auto" ColumnDefinitions="80,*,220,100,75,90,55" ColumnSpacing="7" RowSpacing="1">
                     <TextBlock Text="{Binding TimestampText}" VerticalAlignment="Center" />
                     <TextBlock Grid.Column="1" FontWeight="SemiBold" Text="{Binding DisplayChannelText}" TextTrimming="CharacterEllipsis" />
                     <StackPanel Grid.Column="2" Grid.RowSpan="2" Orientation="Horizontal" Spacing="4" VerticalAlignment="Center" IsVisible="{Binding HasRecording}">
                       <Button Classes="history-action" Content="Play" Tag="{Binding}" IsEnabled="{Binding HasPlayableRecording}" ToolTip.Tip="Play validated TAR recording" Click="HandlePlayCallHistoryRecordingClick" />
                       <Button Classes="history-action" Content="Stop" Click="HandleStopRecordingClick" />
-                      <Button Classes="history-action" Content="Open" Tag="{Binding Recording}" IsEnabled="{Binding HasPlayableRecording}" Click="HandleOpenRecordingClick" />
+                      <Button Classes="history-action" Content="Open" Tag="{Binding Recording}" IsEnabled="{Binding HasPlayableRecording}" ToolTip.Tip="Show recording in Finder or Explorer" Click="HandleOpenRecordingClick" />
                       <Button Classes="history-action" Content="Delete" Tag="{Binding Recording}" Click="HandleDeleteRecordingClick" />
                     </StackPanel>
                     <TextBlock Grid.Column="3" Text="{Binding SystemName}" TextTrimming="CharacterEllipsis" />

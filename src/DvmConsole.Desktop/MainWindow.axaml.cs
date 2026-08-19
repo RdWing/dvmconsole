@@ -31,9 +31,7 @@ namespace DvmConsole.Desktop;
 public sealed partial class MainWindow : Window
 {
     private MainWindowViewModel viewModel;
-    private readonly ViewModelPropertySubscription<MainWindowViewModel> viewModelPropertySubscription;
     private readonly PressAndHoldPttController cardPtt;
-    private CallHistoryWindow? callHistoryWindow;
     private OperatorToolsWindow? operatorToolsWindow;
     private DebugLogWindow? debugLogWindow;
     private DocumentationWindow? documentationWindow;
@@ -67,9 +65,6 @@ public sealed partial class MainWindow : Window
             channel => viewModel.StartChannelTransmitAsync(channel),
             channel => viewModel.StopChannelTransmitAsync(channel));
         DataContext = viewModel;
-        viewModelPropertySubscription = new ViewModelPropertySubscription<MainWindowViewModel>(
-            viewModel,
-            HandleViewModelPropertyChanged);
         AddHandler(InputElement.KeyDownEvent, HandleKeyDown, RoutingStrategies.Tunnel);
         AddHandler(InputElement.KeyUpEvent, HandleKeyUp, RoutingStrategies.Tunnel);
         AddHandler(InputElement.PointerPressedEvent, HandlePttPointerPressed, RoutingStrategies.Tunnel, true);
@@ -84,14 +79,10 @@ public sealed partial class MainWindow : Window
             await viewModel.StartKeyboardPttAsync().ConfigureAwait(false);
         };
         LayoutUpdated += (_, _) => ConfigureTransientChannelScrollBars();
-        PositionChanged += (_, _) => SnapCallHistoryWindowIfNeeded();
-        SizeChanged += (_, _) => SnapCallHistoryWindowIfNeeded();
         Closed += async (_, _) =>
         {
             try
             {
-                viewModelPropertySubscription.Dispose();
-                callHistoryWindow?.Close();
                 operatorToolsWindow?.Close();
                 debugLogWindow?.Close();
                 documentationWindow?.Close();
@@ -535,7 +526,6 @@ public sealed partial class MainWindow : Window
         CloseModelessViewModelWindows();
         viewModel = replacement;
         DataContext = replacement;
-        viewModelPropertySubscription.Rebind(replacement);
         RefreshRecentCodeplugMenu();
         RefreshNamedSettingsProfileMenus();
         await previous.DisposeAsync();
@@ -544,10 +534,6 @@ public sealed partial class MainWindow : Window
 
     private void CloseModelessViewModelWindows()
     {
-        CallHistoryWindow? history = callHistoryWindow;
-        callHistoryWindow = null;
-        history?.Close();
-
         OperatorToolsWindow? tools = operatorToolsWindow;
         operatorToolsWindow = null;
         tools?.Close();
@@ -637,23 +623,9 @@ public sealed partial class MainWindow : Window
         debugLogWindow.Activate();
     }
 
-    private void HandleOpenCallHistoryClick(object? sender, RoutedEventArgs e)
-    {
-        if (callHistoryWindow is null)
-        {
-            callHistoryWindow = new CallHistoryWindow(viewModel);
-            callHistoryWindow.Closed += (_, _) => callHistoryWindow = null;
-        }
-
-        if (!callHistoryWindow.IsVisible)
-            callHistoryWindow.Show(this);
-        SnapCallHistoryWindowIfNeeded();
-        callHistoryWindow.Activate();
-    }
-
     private void HandleActivityDoubleTapped(object? sender, TappedEventArgs e)
     {
-        HandleOpenCallHistoryClick(sender, e);
+        OpenOperatorTools(OperatorToolSection.History);
         e.Handled = true;
     }
 
@@ -667,19 +639,6 @@ public sealed partial class MainWindow : Window
     {
         viewModel.ToggleActivityCurrentZoneFilter();
         e.Handled = true;
-    }
-
-    private void HandleViewModelPropertyChanged(object? sender, PropertyChangedEventArgs e)
-    {
-        if (e.PropertyName == nameof(MainWindowViewModel.SnapCallHistoryToWindow))
-            SnapCallHistoryWindowIfNeeded();
-    }
-
-    private void SnapCallHistoryWindowIfNeeded()
-    {
-        if (callHistoryWindow is null || !callHistoryWindow.IsVisible)
-            return;
-        callHistoryWindow.SetSnapToWindow(viewModel.SnapCallHistoryToWindow, this);
     }
 
     private void HandleOpenOperatorToolsClick(object? sender, RoutedEventArgs e)
@@ -1570,19 +1529,6 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
 
     public double ActivitySidebarWidth => ShowCallHistoryPane ? 250 : 34;
 
-    public bool SnapCallHistoryToWindow
-    {
-        get => userSettings.SnapCallHistoryToWindow;
-        set
-        {
-            if (userSettings.SnapCallHistoryToWindow == value)
-                return;
-            userSettings.SnapCallHistoryToWindow = value;
-            PersistUserSettings();
-            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SnapCallHistoryToWindow)));
-        }
-    }
-
     public bool ShowSystemStatus
     {
         get => userSettings.ShowSystemStatus;
@@ -1743,8 +1689,6 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         userSettings.ShowAlertTones = true;
         userSettings.LockWidgets = true;
         userSettings.ShowCallHistoryPane = true;
-        userSettings.SnapCallHistoryToWindow = false;
-        userSettings.CallHistoryWindowPlacement = new WindowPlacementSetting();
         userSettings.ChannelWidgetPositions.Clear();
         ApplyDefaultChannelWidgetLayout();
         PersistUserSettings();
@@ -1755,8 +1699,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
                      nameof(ShowAlertTones),
                      nameof(LockWidgets),
                      nameof(CanResizeLayout),
-                     nameof(ShowCallHistoryPane),
-                     nameof(SnapCallHistoryToWindow)
+                     nameof(ShowCallHistoryPane)
                  })
         {
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
@@ -1782,31 +1725,6 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         };
         PersistUserSettings();
         StatusText = $"Moved {channel.Name} to {channel.WidgetX:0}, {channel.WidgetY:0}.";
-    }
-
-    public WindowPlacementSetting GetCallHistoryWindowPlacement()
-    {
-        WindowPlacementSetting placement = userSettings.CallHistoryWindowPlacement;
-        return new WindowPlacementSetting
-        {
-            Left = placement.Left,
-            Top = placement.Top,
-            Width = placement.Width,
-            Height = placement.Height
-        };
-    }
-
-    public void SaveCallHistoryWindowPlacement(WindowPlacementSetting placement)
-    {
-        ArgumentNullException.ThrowIfNull(placement);
-        userSettings.CallHistoryWindowPlacement = new WindowPlacementSetting
-        {
-            Left = placement.Left,
-            Top = placement.Top,
-            Width = placement.Width,
-            Height = placement.Height
-        };
-        PersistUserSettings();
     }
 
     public void ExportSettings(string path)
@@ -2960,16 +2878,55 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
 
         try
         {
-            Process.Start(new ProcessStartInfo
-            {
-                FileName = recordingPath,
-                UseShellExecute = true
-            });
+            Process.Start(CreateRevealRecordingStartInfo(
+                recordingPath,
+                OperatingSystem.IsWindows(),
+                OperatingSystem.IsMacOS()));
+            AudioStatusText = $"Opened recording location: {metadata.FileName}";
         }
         catch (Exception exception) when (exception is InvalidOperationException or Win32Exception)
         {
-            AudioStatusText = $"Unable to open recording: {exception.Message}";
+            AudioStatusText = $"Unable to show recording in its folder: {exception.Message}";
         }
+    }
+
+    internal static ProcessStartInfo CreateRevealRecordingStartInfo(
+        string recordingPath,
+        bool isWindows,
+        bool isMacOS)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(recordingPath);
+        string fullPath = Path.GetFullPath(recordingPath);
+
+        if (isWindows)
+        {
+            var startInfo = new ProcessStartInfo
+            {
+                FileName = "explorer.exe",
+                UseShellExecute = false
+            };
+            startInfo.ArgumentList.Add("/select,");
+            startInfo.ArgumentList.Add(fullPath);
+            return startInfo;
+        }
+
+        if (isMacOS)
+        {
+            var startInfo = new ProcessStartInfo
+            {
+                FileName = "/usr/bin/open",
+                UseShellExecute = false
+            };
+            startInfo.ArgumentList.Add("-R");
+            startInfo.ArgumentList.Add(fullPath);
+            return startInfo;
+        }
+
+        return new ProcessStartInfo
+        {
+            FileName = Path.GetDirectoryName(fullPath) ?? fullPath,
+            UseShellExecute = true
+        };
     }
 
     public async Task PlayRecordingAsync(CallRecordingMetadata metadata)
@@ -4726,7 +4683,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
                 ReceiveStreamTransition.Continued or
                 ReceiveStreamTransition.Resumed;
             if (canStartHistory &&
-                HasMeaningfulHistorySource(traffic) &&
+                traffic.SourceId != 0 &&
                 !callHistory.HasActiveReceiveCall(
                     system.Name,
                     traffic.Protocol,
@@ -4787,10 +4744,6 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             NotifyCallHistoryChanged();
     }
 
-    private static bool HasMeaningfulHistorySource(FneTrafficFrame traffic)
-        => traffic.SourceId != 0 &&
-           (traffic.Protocol != FneTrafficProtocol.P25 || traffic.SourceId < 0xFFFFFC);
-
     private static FneTrafficFrame NormalizeP25CallIdentity(FneTrafficFrame traffic)
     {
         if (!P25DfsiFrameCodec.TryExtractCallIdentifiers(
@@ -4824,9 +4777,11 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
 
     private static string DescribeFneSignalQuality(FneTrafficFrame traffic)
     {
-        // dvmhost appends the DMR FEC error count and positive RSSI
-        // magnitude after the 33-byte burst (network offsets 53 and 54).
-        // Zero means the source did not report that measurement.
+        // dvmhost appends one aggregate FEC error count for all three DMR
+        // AMBE frames, plus positive RSSI magnitude, after the 33-byte burst
+        // (network offsets 53 and 54). The aggregate must not be assigned to
+        // an individual 20 ms decoder slot. Zero means the source did not
+        // report that measurement.
         if (traffic.Protocol != FneTrafficProtocol.Dmr ||
             traffic.Payload.Length < DmrVoicePacketCodec.PacketBytes)
         {
@@ -6455,16 +6410,31 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
 
     private void RefreshActivityCallHistory()
     {
-        IEnumerable<CallHistoryEntry> desired = SelectedSystem is null
-            ? []
-            : CallHistory
-                .Where(entry => !entry.IsRecordingOnly)
-                .Where(entry => entry.SystemName.Equals(SelectedSystem.Name, StringComparison.OrdinalIgnoreCase))
-                .Where(entry => !activityCurrentZoneOnly ||
-                    SelectedSystem.SelectedZone?.Channels.Any(channel =>
-                        channel.Name.Equals(entry.ChannelName, StringComparison.OrdinalIgnoreCase)) == true)
-                .Take(CallHistoryStore.DefaultMaxEntries);
+        CallHistoryEntry[] desired = SelectActivityHistory(
+            CallHistory,
+            SelectedSystem?.Name,
+            activityCurrentZoneOnly
+                ? SelectedSystem?.SelectedZone?.Channels.Select(channel => channel.Name)
+                : null);
         SynchronizeHistoryView(activityCallHistoryEntries, desired);
+    }
+
+    internal static CallHistoryEntry[] SelectActivityHistory(
+        IEnumerable<CallHistoryEntry> history,
+        string? selectedSystemName,
+        IEnumerable<string>? selectedZoneChannelNames)
+    {
+        if (selectedSystemName is null)
+            return [];
+
+        HashSet<string>? selectedChannels = selectedZoneChannelNames is null
+            ? null
+            : new HashSet<string>(selectedZoneChannelNames, StringComparer.OrdinalIgnoreCase);
+        return history
+            .Where(entry => entry.SystemName.Equals(selectedSystemName, StringComparison.OrdinalIgnoreCase))
+            .Where(entry => selectedChannels is null || selectedChannels.Contains(entry.ChannelName))
+            .Take(CallHistoryStore.DefaultMaxEntries)
+            .ToArray();
     }
 
     internal static void SynchronizeHistoryView(
