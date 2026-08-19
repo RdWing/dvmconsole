@@ -72,7 +72,6 @@ Fields:
 - `password`: FNE password.
 - `encrypted`: whether the FNE connection uses transport encryption.
 - `presharedKey`: key used when `encrypted` is enabled.
-- `kmfPresharedKey`: optional separate key used only to decrypt peer-encrypted P25 KMM responses; it is never inferred from `presharedKey`.
 - `aliasPath`: optional RID alias YAML file.
 
 ---

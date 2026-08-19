@@ -64,7 +64,7 @@ Toggle PTT is off by default. If changed, the preference is saved.
 
 # Selectable Encryption
 
-Some P25 secure-capable resources may show **SELECT** in the card text area.
+Secure-capable P25, DMR, and NXDN resources may show **SELECT** in the card text area.
 
 Click **SELECT** to toggle that resource between encrypted and clear console transmit. The choice is saved by system/talkgroup and restored on the next startup.
 

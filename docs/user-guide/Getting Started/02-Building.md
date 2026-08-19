@@ -72,9 +72,11 @@ scripts/package-desktop.sh osx-arm64 \
   /tmp/dvmconsole-osx-arm64 /tmp/dvmconsole-osx-arm64.zip
 ```
 
+Use `osx-x64` instead of `osx-arm64` when packaging for an Intel Mac.
+
 This creates `DVMConsole.app` and a ZIP containing that application bundle.
 
-Do not move or rename files inside the application bundle. The managed assemblies, native libraries, and icon are loaded relative to the bundled executable. Documentation is read from GitHub and is not copied into the bundle.
+Do not move or rename files inside the application bundle. The managed assemblies, native libraries, and icon are loaded relative to the bundled executable. The license and third-party notices are included in the package; user-guide documentation is read from GitHub and is not copied into the bundle.
 
 The package is unsigned. After moving an official release to Applications,
 remove its download quarantine before launching:
@@ -125,7 +127,7 @@ connection is required.
 # Tagged Releases
 
 Pushing a version tag such as `v0.3.0` starts the macOS and Windows test and
-packaging matrix. The workflow publishes a GitHub release only after both
+packaging matrix. The workflow publishes a GitHub release only after all three
 target jobs pass, and attaches the three versioned ZIP files. Release notes can
 be supplied in `docs/releases/v<version>.md` before the tag is pushed.
 

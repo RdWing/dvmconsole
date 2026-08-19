@@ -48,6 +48,13 @@ if [[ ! -d "$OUTPUT_DIR" ]]; then
     exit 3
 fi
 
+for legal_file in LICENSE NOTICES.md; do
+    if [[ ! -f "$OUTPUT_DIR/$legal_file" ]]; then
+        printf 'Publish is missing required legal notice: %s\n' "$OUTPUT_DIR/$legal_file" >&2
+        exit 4
+    fi
+done
+
 if [[ -n "$EXPECTED_MACOS_ARCHITECTURE" ]]; then
     for file_name in DvmConsole.dll DvmConsole.deps.json DvmConsole.runtimeconfig.json; do
         if [[ ! -f "$OUTPUT_DIR/$file_name" ]]; then
@@ -59,6 +66,11 @@ fi
 
 if [[ -e "$OUTPUT_DIR/Docs" ]]; then
     printf 'Publish contains documentation that must be read live from GitHub.\n' >&2
+    exit 4
+fi
+
+if /usr/bin/find "$OUTPUT_DIR" -type f -name 'AvaloniaUI.DiagnosticsSupport*' -print -quit | /usr/bin/grep -q .; then
+    printf 'Publish contains the Debug-only Avalonia diagnostics package.\n' >&2
     exit 4
 fi
 

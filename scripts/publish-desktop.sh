@@ -40,7 +40,13 @@ mkdir -p "$OUTPUT_DIR"
 rm -f "$OUTPUT_DIR/Audio/alert1.wav" "$OUTPUT_DIR/Audio/alert2.wav" "$OUTPUT_DIR/Audio/alert3.wav"
 rm -f "$OUTPUT_DIR/libvocoder.dylib" "$OUTPUT_DIR/libvocoder.dll"
 
-dotnet restore "$PROJECT" --runtime "$RID" --ignore-failed-sources -p:NuGetAudit=false --verbosity minimal
+dotnet restore "$PROJECT" \
+    --runtime "$RID" \
+    --force-evaluate \
+    --ignore-failed-sources \
+    -p:Configuration="$CONFIGURATION" \
+    -p:NuGetAudit=false \
+    --verbosity minimal
 PUBLISH_PROPERTIES=(
     -p:UseAppHost=true
     -p:NativeVocoderTarget="$VOCODER_TARGET"

@@ -47,8 +47,8 @@ dotnet build dvmconsole.sln
 2. Use the root `dvmconsole.sln` for application, library, probe, and test
 projects.
 
-Native components are built automatically. See [Desktop building and
-publishing](docs/PUBLISHING.md).
+Native components are built automatically. See [Building and
+Packaging](docs/user-guide/Getting%20Started/02-Building.md).
 
 ## End User Packages
 
@@ -97,10 +97,10 @@ If the application closes unexpectedly, copy
 `%APPDATA%\DVMProject\dvmconsole\LastCrash.log` before starting it again and
 include that file with the problem report.
 
-Maintainers creating these packages should follow [Desktop building and
-publishing](docs/PUBLISHING.md). The `Build and package` GitHub Actions workflow
-builds and verifies the unsigned Apple Silicon macOS, Intel macOS, and Windows
-packages.
+Maintainers creating these packages should follow [Building and
+Packaging](docs/user-guide/Getting%20Started/02-Building.md). The `Build and
+package` GitHub Actions workflow builds and verifies the unsigned Apple Silicon
+macOS, Intel macOS, and Windows packages.
 
 ## Documentation
 
@@ -155,7 +155,9 @@ This notice is informational and is intentionally included in the example config
 
 ## License
 
-This project is licensed under the AGPLv3 License - see the [LICENSE](LICENSE) file for details.
+This project is licensed under the AGPLv3 License. See [LICENSE](LICENSE) for
+the project and third-party license texts, and [NOTICES.md](NOTICES.md) for the
+third-party software inventory.
 
 **THIS SOFTWARE MUST NEVER BE USED IN PUBLIC SAFETY OR LIFE SAFETY CRITICAL APPLICATIONS! This software project is provided solely for personal, non-commercial, hobbyist use; any commercial, professional, governmental, or other non-hobbyist use is strictly discouraged, fully unsupported and expressly disclaimed by the authors.**
 

@@ -84,7 +84,7 @@ jobs:
 
       - name: Restore solution
         shell: bash
-        run: dotnet restore dvmconsole.sln --ignore-failed-sources -p:NuGetAudit=false --verbosity minimal
+        run: dotnet restore dvmconsole.sln --force-evaluate --ignore-failed-sources -p:Configuration=Release -p:NuGetAudit=false --verbosity minimal
 
       - name: Run solution tests
         shell: bash
