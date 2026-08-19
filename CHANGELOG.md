@@ -26,6 +26,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Keep P25 calls that use the FNE placeholder source ID visible in the Activity sidebar so their completed TAR recordings remain accessible.
 - Remove sub-frame zero-duration History shells without discarding a playable recording that is finalized later.
 - Remove the detached Event History window and its connected-traffic crash path.
+- Initialize the consolidated History viewport only after its deferred tab content exists, and require an application-authored result from macOS package smoke tests.
 
 ## [0.2.3] - 2026-08-17
 

@@ -10,6 +10,7 @@ public sealed class App : Application
 {
     public static string? ConfigurationPath { get; set; }
     public static bool SmokeWindows { get; set; }
+    public static string? SmokeResultPath { get; set; }
 
     public override void Initialize()
     {
@@ -56,6 +57,8 @@ public sealed class App : Application
                 var window = new OperatorToolsWindow(viewModel, section);
                 window.Show(mainWindow);
                 await Task.Delay(75);
+                if (section == OperatorToolSection.History && !window.IsHistoryViewportHookAttached)
+                    throw new InvalidOperationException("The deferred History list did not initialize its viewport handling.");
                 window.Close();
             }
 
@@ -74,13 +77,41 @@ public sealed class App : Application
             await Task.Delay(75);
             about.Close();
 
+            WriteSmokeResult("PASS");
             Console.WriteLine("Desktop window smoke passed.");
             desktop.Shutdown(0);
         }
         catch (Exception exception)
         {
+            WriteSmokeResult($"FAIL{Environment.NewLine}{exception}");
             Console.Error.WriteLine($"Desktop window smoke failed: {exception}");
             desktop.Shutdown(10);
+        }
+    }
+
+    internal static void InitializeSmokeResult()
+        => WriteSmokeResult("RUNNING");
+
+    internal static void RecordSmokeFailure(Exception exception)
+    {
+        ArgumentNullException.ThrowIfNull(exception);
+        WriteSmokeResult($"FAIL{Environment.NewLine}{exception}");
+    }
+
+    private static void WriteSmokeResult(string value)
+    {
+        if (string.IsNullOrWhiteSpace(SmokeResultPath))
+            return;
+
+        try
+        {
+            string path = Path.GetFullPath(SmokeResultPath);
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            File.WriteAllText(path, value + Environment.NewLine);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or ArgumentException)
+        {
+            Console.Error.WriteLine($"Unable to write desktop smoke result: {exception.Message}");
         }
     }
 

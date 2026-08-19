@@ -16,11 +16,14 @@ public sealed partial class OperatorToolsWindow : Window
     private readonly MainWindowViewModel viewModel;
     private readonly DispatcherTimer scrollBarHideTimer;
     private ScrollViewer? activeScrollViewer;
+    private ListBox? historyList;
     private INotifyCollectionChanged? historyCollection;
     private CallHistoryEntry? pendingHistoryAnchor;
     private double pendingHistoryAnchorY;
     private double pendingHistoryExtentHeight;
     private bool restoringHistoryViewport;
+
+    internal bool IsHistoryViewportHookAttached => historyList is not null;
 
     public OperatorToolsWindow()
     {
@@ -44,8 +47,10 @@ public sealed partial class OperatorToolsWindow : Window
         AddHandler(InputElement.PointerWheelChangedEvent, HandlePointerWheelChanged, RoutingStrategies.Tunnel);
         historyCollection = viewModel.FilteredCallHistory;
         historyCollection.CollectionChanged += HandleHistoryCollectionChanged;
-        HistoryList.LayoutUpdated += HandleHistoryListLayoutUpdated;
+        Opened += HandleOpened;
+        ToolTabs.SelectionChanged += HandleToolTabsSelectionChanged;
         Closed += HandleClosed;
+        ScheduleHistoryViewportHook();
     }
 
     public void SelectSection(OperatorToolSection section)
@@ -91,16 +96,43 @@ public sealed partial class OperatorToolsWindow : Window
         scrollBarHideTimer.Start();
     }
 
+    private void HandleOpened(object? sender, EventArgs e)
+        => ScheduleHistoryViewportHook();
+
+    private void HandleToolTabsSelectionChanged(object? sender, SelectionChangedEventArgs e)
+        => ScheduleHistoryViewportHook();
+
+    private void ScheduleHistoryViewportHook()
+        => Dispatcher.UIThread.Post(TryAttachHistoryViewportHook, DispatcherPriority.Background);
+
+    private void TryAttachHistoryViewportHook()
+    {
+        if (historyList is not null)
+            return;
+
+        ListBox? list = HistoryList ??
+            this.FindControl<ListBox>("HistoryList") ??
+            this.GetVisualDescendants()
+                .OfType<ListBox>()
+                .FirstOrDefault(candidate => candidate.Name == "HistoryList");
+        if (list is null)
+            return;
+
+        historyList = list;
+        historyList.LayoutUpdated += HandleHistoryListLayoutUpdated;
+    }
+
     private void HandleHistoryCollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
     {
         if (pendingHistoryAnchor is not null || restoringHistoryViewport)
             return;
 
         ScrollViewer? scrollViewer = GetHistoryScrollViewer();
-        if (scrollViewer is null || scrollViewer.Offset.Y <= 0.5)
+        ListBox? list = historyList;
+        if (list is null || scrollViewer is null || scrollViewer.Offset.Y <= 0.5)
             return;
 
-        var visibleItems = HistoryList.GetVisualDescendants()
+        var visibleItems = list.GetVisualDescendants()
             .OfType<ListBoxItem>()
             .Select(item => new
             {
@@ -130,10 +162,11 @@ public sealed partial class OperatorToolsWindow : Window
             return;
 
         ScrollViewer? scrollViewer = GetHistoryScrollViewer();
-        if (scrollViewer is null)
+        ListBox? list = historyList;
+        if (list is null || scrollViewer is null)
             return;
 
-        ListBoxItem? anchorItem = HistoryList.GetVisualDescendants()
+        ListBoxItem? anchorItem = list.GetVisualDescendants()
             .OfType<ListBoxItem>()
             .FirstOrDefault(item =>
                 ReferenceEquals(item.DataContext, anchor) ||
@@ -164,7 +197,7 @@ public sealed partial class OperatorToolsWindow : Window
     }
 
     private ScrollViewer? GetHistoryScrollViewer()
-        => HistoryList.GetVisualDescendants().OfType<ScrollViewer>().FirstOrDefault();
+        => historyList?.GetVisualDescendants().OfType<ScrollViewer>().FirstOrDefault();
 
     internal static double CalculateAnchoredHistoryOffset(
         double currentOffset,
@@ -179,7 +212,11 @@ public sealed partial class OperatorToolsWindow : Window
     private void HandleClosed(object? sender, EventArgs e)
     {
         scrollBarHideTimer.Stop();
-        HistoryList.LayoutUpdated -= HandleHistoryListLayoutUpdated;
+        Opened -= HandleOpened;
+        ToolTabs.SelectionChanged -= HandleToolTabsSelectionChanged;
+        if (historyList is not null)
+            historyList.LayoutUpdated -= HandleHistoryListLayoutUpdated;
+        historyList = null;
         if (historyCollection is not null)
             historyCollection.CollectionChanged -= HandleHistoryCollectionChanged;
         historyCollection = null;

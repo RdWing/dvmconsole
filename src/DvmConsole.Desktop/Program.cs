@@ -13,14 +13,27 @@ internal static class Program
         {
             ValidateBuiltInVocoder();
             App.SmokeWindows = args.Contains("--smoke-windows", StringComparer.Ordinal);
+            App.SmokeResultPath = ReadOption(args, "--smoke-result=");
+            if (App.SmokeWindows)
+                App.InitializeSmokeResult();
             App.ConfigurationPath = args.FirstOrDefault(argument => !argument.StartsWith("-", StringComparison.Ordinal));
             BuildAvaloniaApp().StartWithClassicDesktopLifetime(args);
         }
         catch (Exception exception)
         {
+            if (App.SmokeWindows)
+                App.RecordSmokeFailure(exception);
             DesktopCrashLog.Write("Desktop main loop", exception);
             throw;
         }
+    }
+
+    internal static string? ReadOption(IEnumerable<string> args, string prefix)
+    {
+        ArgumentNullException.ThrowIfNull(args);
+        ArgumentException.ThrowIfNullOrWhiteSpace(prefix);
+        string? argument = args.FirstOrDefault(value => value.StartsWith(prefix, StringComparison.Ordinal));
+        return argument is null ? null : argument[prefix.Length..];
     }
 
     private static void ValidateBuiltInVocoder()

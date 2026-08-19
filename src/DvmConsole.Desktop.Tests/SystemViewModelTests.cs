@@ -17,6 +17,24 @@ namespace DvmConsole.Desktop.Tests;
 public sealed class SystemViewModelTests
 {
     [Fact]
+    public void SmokeResultOptionDoesNotBecomeTheConfigurationPath()
+    {
+        string[] arguments =
+        [
+            "--smoke-windows",
+            "--smoke-result=/tmp/dvmconsole smoke.txt",
+            "/tmp/codeplug.yml"
+        ];
+
+        Assert.Equal(
+            "/tmp/dvmconsole smoke.txt",
+            Program.ReadOption(arguments, "--smoke-result="));
+        Assert.Equal(
+            "/tmp/codeplug.yml",
+            arguments.First(argument => !argument.StartsWith("-", StringComparison.Ordinal)));
+    }
+
+    [Fact]
     public void RevealRecordingUsesFinderSelectionOnMacOS()
     {
         string path = Path.Combine(Path.GetTempPath(), "recording with spaces.wav");
