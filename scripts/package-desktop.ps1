@@ -47,7 +47,9 @@ if (-not (Test-Path -LiteralPath $PublishDirectory -PathType Container)) {
 }
 
 foreach ($FileName in @(
-    "DvmConsole.exe"
+    "DvmConsole.exe",
+    "LICENSE",
+    "NOTICES.md"
 )) {
     if (-not (Test-Path -LiteralPath (Join-Path $PublishDirectory $FileName) -PathType Leaf)) {
         throw "Published output is missing required file: $FileName"

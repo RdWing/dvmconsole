@@ -21,6 +21,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Embed TAR catalog metadata in each Opus recording instead of creating JSON sidecars, with verified migration of existing Opus sidecars without re-encoding audio.
 - Promote the cross-platform solution to the repository root and relocate the
   live user guide under `docs/user-guide` for a standalone project layout.
+- Restrict Avalonia developer diagnostics to Debug builds and exclude them from release packages.
+- Consolidate build and packaging instructions in the live user guide and include the project and third-party license notices in every release package.
 
 ### Fixed
 

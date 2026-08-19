@@ -1,6 +1,6 @@
 # Alert Tones
 
-The console supports three built-in legacy alert tones, custom alert audio,
+The console supports three built-in alert tones, custom alert audio,
 generated tones, DTMF, and QCII paging.
 
 Alert tones are used for operator alerting workflows such as page/alert tones and channel hold tone behavior.
@@ -9,20 +9,19 @@ Alert tones are used for operator alerting workflows such as page/alert tones an
 
 # Sending Alert Tones
 
-The toolbar buttons **ALERT 1**, **ALERT 2**, and **ALERT 3** recreate the
-original DVMConsole alert patterns with the console tone generator. They do not
-depend on external WAV files and are not shortcuts to the QCII or DTMF tools.
+The toolbar buttons **ALERT 1**, **ALERT 2**, and **ALERT 3** use the built-in
+console tone generator. They do not depend on external audio files.
 
-- **ALERT 1:** continuous 1004 Hz for 3 seconds.
+- **ALERT 1:** continuous 1000 Hz for 3 seconds.
 - **ALERT 2:** alternating 1500 Hz and 800 Hz every 250 milliseconds for seven cycles.
-- **ALERT 3:** eight 250-millisecond bursts of 1004 Hz, separated by 250 milliseconds of silence.
+- **ALERT 3:** eight 250-millisecond bursts of 1000 Hz, separated by 250 milliseconds of silence.
 
-The generated level matches the original files at approximately -25 dBFS.
+The tone generator outputs approximately -25 dBFS.
 
 Arm `ALERT` on every resource that should carry Alert 1 through 3, custom alert
 audio, generated tones, tone presets, or DTMF. Arm `PAGE` on every resource
 that should carry a QCII page. Sending uses all armed resources in the selected
-route; it does not silently choose the last channel clicked.
+route.
 
 Alert tone transmit still uses the configured resource, system, talkgroup, mode, and validation rules.
 

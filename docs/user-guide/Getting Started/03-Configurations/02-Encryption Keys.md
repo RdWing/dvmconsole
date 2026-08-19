@@ -109,6 +109,11 @@ The selected encrypted/clear state is saved and restored across restarts. The ke
 
 After each FNE connection completes, the console requests the distinct algorithm/key IDs configured by that system's encrypted P25 channels. The system `rid` is used as the requesting console identity and must be a valid nonzero 24-bit ID.
 
+The console does not request or consume the FNE key inventory. Each automatic
+KMM request therefore requires a nonzero `keyId` and supported `algo` on at
+least one P25 channel. KMM supplies the requested key material; it does not
+assign keys to channels or send a channel-to-key list.
+
 If the FNE delivers a valid KMM key, it becomes the active key for that system. A response from one FNE is never applied to another FNE, even when both use the same algorithm and key ID. When the connection is lost, its KMM keys are removed and local keys become active again where available.
 
 Clear and MI-instruction KMM responses are accepted. Peer-encrypted KMM responses require the system's separate `kmfPresharedKey`; the FNE transport `presharedKey` is never reused for this purpose.

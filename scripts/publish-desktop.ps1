@@ -54,7 +54,13 @@ foreach ($LegacyAlert in @("alert1.wav", "alert2.wav", "alert3.wav")) {
     }
 }
 
-dotnet restore $Project --runtime $Runtime --ignore-failed-sources -p:NuGetAudit=false --verbosity minimal
+dotnet restore $Project `
+    --runtime $Runtime `
+    --force-evaluate `
+    --ignore-failed-sources `
+    -p:Configuration=$Configuration `
+    -p:NuGetAudit=false `
+    --verbosity minimal
 if ($LASTEXITCODE -ne 0) {
     throw "dotnet restore failed with exit code $LASTEXITCODE."
 }
@@ -82,7 +88,9 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 $RequiredFiles = @(
-    "DvmConsole.exe"
+    "DvmConsole.exe",
+    "LICENSE",
+    "NOTICES.md"
 )
 foreach ($FileName in $RequiredFiles) {
     $Path = Join-Path $OutputDirectory $FileName

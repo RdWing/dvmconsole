@@ -52,10 +52,6 @@ systems:
     transportEncryptionMode: auto
     # Preshared FNE encryption key
     presharedKey: "123ABC1234"
-    # Optional separate KMF key for peer-encrypted P25 KMM responses.
-    # Never reuse presharedKey implicitly; leave unset unless the FNE/KMF
-    # deployment explicitly supplies this secret.
-    #kmfPresharedKey: "Full/Length/KMF/Secret"
     # Path to Radio Alias file for this system
     #aliasPath: "Full/Path/To/alias.yml"
     
