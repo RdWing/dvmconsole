@@ -7,6 +7,21 @@ namespace DvmConsole.Desktop.Tests;
 public sealed class DocumentationCatalogTests
 {
     [Fact]
+    public async Task DefaultCatalogUsesStandaloneUserGuideLocation()
+    {
+        DocumentationCatalog catalog = DocumentationCatalog.OpenDefault();
+
+        IReadOnlyList<DocumentationPage> pages = await catalog.FindAsync();
+
+        Assert.NotEmpty(pages);
+        Assert.All(pages, page =>
+            Assert.StartsWith(
+                DocumentationCatalog.DefaultDocumentationRoot.AbsoluteUri,
+                page.ContentUri.AbsoluteUri,
+                StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task FindsRemotePagesInDisplayOrderAndSearchesCurrentContent()
     {
         var content = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)

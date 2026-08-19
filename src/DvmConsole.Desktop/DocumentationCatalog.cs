@@ -7,7 +7,7 @@ internal sealed record DocumentationPage(string Title, string RelativePath, Uri 
 
 internal sealed class DocumentationCatalog
 {
-    private static readonly Regex SortPrefix = new(@"^\d+\s*-\s*", RegexOptions.Compiled);
+    private static readonly Regex SortPrefixRegex = new(@"^\d+\s*-\s*", RegexOptions.Compiled);
     private static readonly string[] DefaultPagePaths =
     [
         "Getting Started/01-Overview.md",
@@ -22,33 +22,38 @@ internal sealed class DocumentationCatalog
         "Getting Started/04-Operations/03-Audio Settings.md",
         "Getting Started/04-Operations/04-Alert Tones.md"
     ];
-    private static readonly Uri DefaultRoot = new(
-        "https://raw.githubusercontent.com/RdWing/dvmconsole/avalonia_v2/dvmconsole/Docs/");
-    private static readonly HttpClient SharedClient = CreateSharedClient();
+    internal static readonly Uri DefaultDocumentationRoot = new(
+        "https://raw.githubusercontent.com/RdWing/dvmconsole/neo/docs/user-guide/");
+    private static readonly HttpClient SharedHttpClient = CreateSharedClient();
 
     private readonly HttpClient httpClient;
     private readonly IReadOnlyList<DocumentationPage> pages;
 
     public DocumentationCatalog(
         HttpClient httpClient,
-        Uri root,
-        IEnumerable<string>? relativePaths = null)
+        Uri documentationRoot,
+        IEnumerable<string>? pagePaths = null)
     {
         this.httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
-        ArgumentNullException.ThrowIfNull(root);
-        if (!root.IsAbsoluteUri || root.Scheme != Uri.UriSchemeHttps)
-            throw new ArgumentException("The documentation root must be an absolute HTTPS URL.", nameof(root));
+        ArgumentNullException.ThrowIfNull(documentationRoot);
+        if (!documentationRoot.IsAbsoluteUri || documentationRoot.Scheme != Uri.UriSchemeHttps)
+            throw new ArgumentException(
+                "The documentation root must be an absolute HTTPS URL.",
+                nameof(documentationRoot));
 
-        pages = (relativePaths ?? DefaultPagePaths)
+        pages = (pagePaths ?? DefaultPagePaths)
             .Select(NormalizeRelativePath)
             .Distinct(StringComparer.OrdinalIgnoreCase)
-            .Select(path => new DocumentationPage(FormatTitle(Path.GetFileName(path)), path, new Uri(root, path)))
+            .Select(path => new DocumentationPage(
+                FormatTitle(Path.GetFileName(path)),
+                path,
+                new Uri(documentationRoot, path)))
             .OrderBy(page => page.RelativePath, DocumentationPathComparer.Instance)
             .ToArray();
     }
 
     public static DocumentationCatalog OpenDefault()
-        => new(SharedClient, DefaultRoot);
+        => new(SharedHttpClient, DefaultDocumentationRoot);
 
     public async Task<IReadOnlyList<DocumentationPage>> FindAsync(
         string? searchText = null,
@@ -93,7 +98,7 @@ internal sealed class DocumentationCatalog
     public static string FormatTitle(string value)
     {
         string name = Path.GetFileNameWithoutExtension(value ?? string.Empty);
-        return SortPrefix.Replace(name, string.Empty).Trim();
+        return SortPrefixRegex.Replace(name, string.Empty).Trim();
     }
 
     private static string NormalizeRelativePath(string value)

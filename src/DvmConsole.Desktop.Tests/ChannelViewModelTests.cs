@@ -236,6 +236,7 @@ public sealed class ChannelViewModelTests
             Tgid = "99",
             Mode = "p25"
         });
+        channel.SetAudioEnabled(true);
         Assert.True(channel.TryApplyTraffic(
             "System 1",
             CreateTraffic(FneTrafficProtocol.P25, 42, 99, null, "VOICE", "LDU1", 7)));
@@ -246,6 +247,7 @@ public sealed class ChannelViewModelTests
             ChannelAudioDirection.Receive);
 
         Assert.InRange(channel.AudioLevel, 1, 100);
+        Assert.Equal(channel.AudioLevel / 100, channel.AudioLevelScale);
         Assert.True(channel.TryApplyTraffic(
             "System 1",
             CreateTraffic(FneTrafficProtocol.P25, 42, 0, null, "DATA_SYNC", "TDU", 7)));
@@ -253,6 +255,29 @@ public sealed class ChannelViewModelTests
 
         channel.SetAudioLevel(75, ChannelAudioDirection.Receive);
         Assert.Equal(0, channel.AudioLevel);
+    }
+
+    [Fact]
+    public void ContinuedVoiceTrafficDoesNotRaiseNonVisualActivityNotifications()
+    {
+        var channel = new ChannelViewModel(new ChannelConfiguration
+        {
+            Name = "Dispatch",
+            System = "System 1",
+            Tgid = "99",
+            Mode = "p25"
+        });
+        Assert.True(channel.TryApplyTraffic(
+            "System 1",
+            CreateTraffic(FneTrafficProtocol.P25, 42, 99, null, "VOICE", "LDU1", 7)));
+        var changedProperties = new List<string?>();
+        channel.PropertyChanged += (_, args) => changedProperties.Add(args.PropertyName);
+
+        Assert.True(channel.TryApplyTraffic(
+            "System 1",
+            CreateTraffic(FneTrafficProtocol.P25, 42, 99, null, "VOICE", "LDU2", 7)));
+
+        Assert.Empty(changedProperties);
     }
 
     [Fact]

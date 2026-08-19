@@ -1,0 +1,938 @@
+using Avalonia.Media;
+using DvmConsole.Core.Configuration;
+using DvmConsole.Core.Runtime;
+using DvmConsole.FneClient;
+using DvmConsole.Media;
+using System.ComponentModel;
+using System.Globalization;
+using System.Windows.Input;
+
+namespace DvmConsole.Desktop;
+
+public sealed class ChannelViewModel : INotifyPropertyChanged
+{
+    private readonly ChannelConfiguration configuration;
+    private readonly ChannelRuntime runtime;
+    private readonly IP25KeyResolver? p25KeyResolver;
+    private readonly IDmrKeyResolver? dmrKeyResolver;
+    private readonly INxdnKeyResolver? nxdnKeyResolver;
+    private readonly IReadOnlyList<RadioAlias> aliases;
+    private readonly ReceiveStreamLifecycle receiveLifecycle = new(
+        TimeSpan.FromSeconds(2),
+        TimeSpan.FromSeconds(2),
+        TimeSpan.FromSeconds(5));
+    private Func<ChannelViewModel, Task>? startAudio;
+    private Func<ChannelViewModel, Task>? stopAudio;
+    private Func<ChannelViewModel, Task>? startTransmit;
+    private Func<ChannelViewModel, Task>? stopTransmit;
+    private Func<ChannelViewModel?>? receivePresentationOwnerResolver;
+    private bool audioEnabled;
+    private bool audioSuspended;
+    private bool audioBusy;
+    private bool transmitEnabled;
+    private bool transmitSelected;
+    private bool pageSelected;
+    private bool alertSelected;
+    private bool transmitBusy;
+    private bool transmitEncrypted;
+    private bool recordingEnabled;
+    private string lastCallerText = "--";
+    private double audioLevel;
+    private double volume = 1.0;
+    private double stereoBalance;
+    private long ignoredLatePacketCount;
+    private long droppedReceiveFrameCount;
+    private uint? receivePlaybackSourceId;
+    private uint? receivePlaybackStreamId;
+    private string ignoredSubscriberIdsText = string.Empty;
+    private string outputDeviceIdText = string.Empty;
+    private IReadOnlyList<AudioDeviceOptionViewModel> outputDeviceOptions = [];
+    private double widgetX;
+    private double widgetY;
+    private bool darkMode;
+
+    public ChannelViewModel(
+        ChannelConfiguration configuration,
+        IP25KeyResolver? p25KeyResolver = null,
+        IEnumerable<RadioAlias>? aliases = null,
+        IDmrKeyResolver? dmrKeyResolver = null,
+        INxdnKeyResolver? nxdnKeyResolver = null)
+    {
+        ArgumentNullException.ThrowIfNull(configuration);
+        this.configuration = configuration;
+        this.p25KeyResolver = p25KeyResolver;
+        this.dmrKeyResolver = dmrKeyResolver;
+        this.nxdnKeyResolver = nxdnKeyResolver;
+        this.aliases = aliases?.ToArray() ?? [];
+        runtime = new ChannelRuntime(ChannelRuntimeDefinition.FromConfiguration(configuration));
+        transmitEncrypted = runtime.Definition.IsEncrypted;
+        runtime.PropertyChanged += HandleRuntimePropertyChanged;
+        AudioCommand = new AsyncRelayCommand(() => Task.CompletedTask, () => false);
+        PttCommand = new AsyncRelayCommand(() => Task.CompletedTask, () => false);
+        EncryptionCommand = new AsyncRelayCommand(ToggleEncryptionAsync, () => CanToggleEncryption && !transmitBusy && !audioBusy);
+        RecordingCommand = new AsyncRelayCommand(ToggleRecordingAsync, () => CanRecord);
+    }
+
+    public event PropertyChangedEventHandler? PropertyChanged;
+    public event EventHandler<bool>? TransmitEncryptionChanged;
+    public event EventHandler<bool>? RecordingStateChanged;
+    public event EventHandler<double>? VolumeChanged;
+    public event EventHandler<double>? StereoBalanceChanged;
+
+    public string Name => runtime.Definition.Name;
+    public string SettingsKey => $"{runtime.Definition.SystemName}\u001F{runtime.Definition.Name}";
+    public string ModeText => runtime.Definition.Mode.ToUpperInvariant();
+    public string TalkgroupText => $"TG {runtime.Definition.DestinationId} - {ModeText}";
+    public string DestinationText => $"{runtime.Definition.SystemName} / TGID {runtime.Definition.DestinationId}";
+    public string LastCallerText => lastCallerText;
+    public string LastCallerDisplayText => $"Last: {lastCallerText}";
+    public double AudioLevel => audioLevel;
+    public double AudioLevelScale => audioLevel / 100;
+    public double CardWidth => (configuration.CardSize ?? "normal").Trim().ToLowerInvariant() switch
+    {
+        "small" => 180,
+        "large" => 330,
+        _ => 235
+    };
+    public double CardContentWidth => CardWidth - 12;
+    public double AudioMeterWidth => CardWidth - (CardWidth == 180 ? 20 : 12);
+    public double WidgetX => widgetX;
+    public double WidgetY => widgetY;
+    public IBrush CardBackgroundBrush => runtime.State == ChannelRuntimeState.Transmitting
+        ? new SolidColorBrush(Color.Parse("#0B6B9C"))
+        : IsReceivePresentationActive
+            ? new SolidColorBrush(Color.Parse("#008A3A"))
+            : audioEnabled
+                ? new SolidColorBrush(Color.Parse(darkMode ? "#1B2B22" : "#E2F3E8"))
+                : new SolidColorBrush(Color.Parse(darkMode ? "#151D26" : "#FFFFFF"));
+    public IBrush CardBorderBrush => runtime.State == ChannelRuntimeState.Transmitting
+        ? new SolidColorBrush(Color.Parse("#2497D3"))
+        : IsReceivePresentationActive
+            ? new SolidColorBrush(Color.Parse("#00C86A"))
+            : audioEnabled
+                ? new SolidColorBrush(Color.Parse("#4E8060"))
+                : CreateBrush(configuration.ResourceColor, darkMode ? "#2A3A4B" : "#9BA8B5");
+    public IBrush CardTextBrush => new SolidColorBrush(Color.Parse(
+        IsReceivePresentationActive || runtime.State == ChannelRuntimeState.Transmitting
+            ? "#FFFFFF"
+            : darkMode ? "#DCE3EB" : "#18212B"));
+    public string StateText
+    {
+        get
+        {
+            if (runtime.State == ChannelRuntimeState.Transmitting)
+                return runtime.StateText;
+
+            if (audioSuspended)
+                return "RX muted during console transmit";
+
+            ChannelViewModel? owner = ReceivePresentationOwner;
+            if (owner?.PresentationSourceId is uint sourceId)
+            {
+                string alias = AliasFileLoader.FindAlias(aliases, sourceId);
+                if (!string.IsNullOrWhiteSpace(alias))
+                    return $"Receiving from {alias} ({sourceId}) (stream {owner.PresentationStreamId})";
+                return $"Receiving from {sourceId} (stream {owner.PresentationStreamId})";
+            }
+
+            if (!audioEnabled && runtime.State == ChannelRuntimeState.Receiving)
+                return "Receive disabled";
+
+            return runtime.StateText;
+        }
+    }
+    public ChannelRuntimeState State => runtime.State;
+    public uint? SourceId => runtime.SourceId;
+    public uint? StreamId => runtime.StreamId;
+    public ChannelRuntimeDefinition Definition => runtime.Definition;
+    public bool IsAudioEnabled => audioEnabled;
+    public bool IsAudioSuspended => audioSuspended;
+    public bool IsReceivePresentationActive => ReceivePresentationOwner is not null;
+    public string AudioButtonText => audioSuspended ? "RX muted" : audioEnabled ? "Stop audio" : "Listen";
+    public bool IsTransmitting => transmitEnabled;
+    public bool IsTransmitSelected => transmitSelected;
+    public bool IsPageSelected => pageSelected;
+    public bool IsAlertSelected => alertSelected;
+    public bool IsTransmitEncrypted => transmitEncrypted;
+    public bool IsRecordingEnabled => recordingEnabled;
+    public string RecordButtonText => "TAR";
+    public string RecordingConfigurationButtonText => recordingEnabled ? "Disable TAR" : "Enable TAR";
+    public double Volume
+    {
+        get => volume;
+        set => SetVolume(value, raiseChanged: true);
+    }
+    public double VolumeSliderValue
+    {
+        get => NeutralSliderMath.VolumeGainToPosition(volume);
+        set => SetVolume(NeutralSliderMath.VolumePositionToGain(value), raiseChanged: true);
+    }
+    public double StereoBalance
+    {
+        get => stereoBalance;
+        set => SetStereoBalance(value, raiseChanged: true);
+    }
+    public long IgnoredLatePacketCount => Interlocked.Read(ref ignoredLatePacketCount);
+    public long DroppedReceiveFrameCount => Interlocked.Read(ref droppedReceiveFrameCount);
+
+    internal bool HasLocalReceivePresentation =>
+        audioEnabled &&
+        !audioSuspended &&
+        (runtime.State == ChannelRuntimeState.Receiving || receivePlaybackStreamId is not null);
+
+    private ChannelViewModel? ReceivePresentationOwner => !audioEnabled || audioSuspended
+        ? null
+        : HasLocalReceivePresentation
+            ? this
+            : receivePresentationOwnerResolver?.Invoke();
+
+    private uint? PresentationSourceId => receivePlaybackStreamId is not null
+        ? receivePlaybackSourceId
+        : runtime.SourceId;
+
+    private uint? PresentationStreamId => receivePlaybackStreamId ?? runtime.StreamId;
+
+    internal void RecordIgnoredLatePacket()
+        => Interlocked.Increment(ref ignoredLatePacketCount);
+
+    internal void RecordDroppedReceiveFrame()
+        => Interlocked.Increment(ref droppedReceiveFrameCount);
+    public string StereoBalanceText => stereoBalance switch
+    {
+        <= -0.9999 => "Left",
+        >= 0.9999 => "Right",
+        > -0.0001 and < 0.0001 => "Center",
+        < 0 => $"{-stereoBalance:P0} left",
+        _ => $"{stereoBalance:P0} right"
+    };
+    public string OutputDeviceIdText
+    {
+        get => outputDeviceIdText;
+        set
+        {
+            string normalized = value ?? string.Empty;
+            if (outputDeviceIdText == normalized)
+                return;
+            outputDeviceIdText = normalized;
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(OutputDeviceIdText)));
+        }
+    }
+    public IReadOnlyList<AudioDeviceOptionViewModel> OutputDeviceOptions => outputDeviceOptions;
+    public AudioDeviceOptionViewModel? SelectedOutputDevice
+    {
+        get => ResolveOutputDevice();
+        set
+        {
+            if (value is not null)
+                OutputDeviceIdText = value.Id;
+        }
+    }
+    public string IgnoredSubscriberIdsText
+    {
+        get => ignoredSubscriberIdsText;
+        set
+        {
+            if (ignoredSubscriberIdsText == value)
+                return;
+            ignoredSubscriberIdsText = value ?? string.Empty;
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IgnoredSubscriberIdsText)));
+        }
+    }
+    public bool CanRecord => runtime.Definition.Mode is ("dmr" or "p25" or "nxdn" or "analog") && CanListen;
+    public bool CanToggleEncryption =>
+        runtime.Definition.Mode is ("p25" or "dmr" or "nxdn") &&
+        runtime.Definition.IsEncrypted &&
+        runtime.Definition.SelectableEncryption &&
+        CanResolveConfiguredKey();
+    public string EncryptionStatusText => !runtime.Definition.IsEncrypted
+        ? "Clear"
+        : CanResolveConfiguredKey()
+            ? "Key available"
+            : "Key unavailable";
+    public string EncryptionButtonText => transmitEncrypted ? "SECURE" : "CLEAR";
+    public bool CanListen => runtime.Definition.Mode switch
+    {
+        "dmr" or "p25" or "nxdn" => !runtime.Definition.IsEncrypted || CanResolveConfiguredKey(),
+        "analog" => !runtime.Definition.IsEncrypted,
+        _ => false
+    };
+    public bool CanTransmit =>
+        !runtime.Definition.RxOnly &&
+        runtime.Definition.Mode switch
+        {
+            "dmr" or "p25" or "nxdn" => !runtime.Definition.IsEncrypted || CanResolveConfiguredKey(),
+            "analog" => !runtime.Definition.IsEncrypted,
+            _ => false
+        };
+    public string PttButtonText => transmitEnabled ? "Release" : "PTT";
+
+    private bool CanResolveConfiguredKey()
+    {
+        return runtime.Definition.Mode switch
+        {
+            "p25" => p25KeyResolver?.CanResolve(
+                runtime.Definition.SystemName,
+                runtime.Definition.EncryptionAlgorithm,
+                runtime.Definition.EncryptionKeyId) == true,
+            "dmr" => dmrKeyResolver?.CanResolve(
+                runtime.Definition.SystemName,
+                runtime.Definition.EncryptionAlgorithm,
+                runtime.Definition.EncryptionKeyId) == true,
+            "nxdn" => nxdnKeyResolver?.CanResolve(
+                runtime.Definition.SystemName,
+                runtime.Definition.EncryptionAlgorithm,
+                runtime.Definition.EncryptionKeyId) == true,
+            _ => false
+        };
+    }
+
+    public string TransmitSelectionText => "TX";
+    public string PageSelectionText => "PAGE";
+    public string AlertSelectionText => "ALERT";
+    public IBrush TransmitSelectionBrush => new SolidColorBrush(Color.Parse(
+        transmitSelected
+            ? darkMode ? "#694BB0" : "#D7C9F2"
+            : darkMode ? "#242938" : "#E8EDF3"));
+    public IBrush TransmitSelectionBorderBrush => new SolidColorBrush(Color.Parse(
+        transmitSelected
+            ? darkMode ? "#B69AF4" : "#7655B8"
+            : darkMode ? "#3A4555" : "#8996A3"));
+    public IBrush PageSelectionBrush => new SolidColorBrush(Color.Parse(
+        pageSelected
+            ? darkMode ? "#A15B2A" : "#F2D1B8"
+            : darkMode ? "#242938" : "#E8EDF3"));
+    public IBrush PageSelectionBorderBrush => new SolidColorBrush(Color.Parse(
+        pageSelected
+            ? darkMode ? "#F0A15C" : "#A95C26"
+            : darkMode ? "#3A4555" : "#8996A3"));
+    public IBrush AlertSelectionBrush => new SolidColorBrush(Color.Parse(
+        alertSelected
+            ? darkMode ? "#8A3D68" : "#F0C7DE"
+            : darkMode ? "#242938" : "#E8EDF3"));
+    public IBrush AlertSelectionBorderBrush => new SolidColorBrush(Color.Parse(
+        alertSelected
+            ? darkMode ? "#E58BBC" : "#A84479"
+            : darkMode ? "#3A4555" : "#8996A3"));
+    public IBrush RecordingSelectionBrush => new SolidColorBrush(Color.Parse(
+        recordingEnabled
+            ? darkMode ? "#8A3A3A" : "#F2CCCC"
+            : darkMode ? "#242938" : "#E8EDF3"));
+    public IBrush RecordingSelectionBorderBrush => new SolidColorBrush(Color.Parse(
+        recordingEnabled
+            ? darkMode ? "#E58A8A" : "#A84343"
+            : darkMode ? "#3A4555" : "#8996A3"));
+    public IBrush EncryptionSelectionBrush => new SolidColorBrush(Color.Parse(
+        transmitEncrypted
+            ? "#B45309"
+            : darkMode ? "#242938" : "#E8EDF3"));
+    public IBrush EncryptionSelectionBorderBrush => new SolidColorBrush(Color.Parse(
+        transmitEncrypted
+            ? "#F59E0B"
+            : darkMode ? "#3A4555" : "#8996A3"));
+    public IBrush EncryptionSelectionTextBrush => new SolidColorBrush(Color.Parse(
+        transmitEncrypted
+            ? "#FFFFFF"
+            : darkMode ? "#DCE3EB" : "#18212B"));
+    public ICommand AudioCommand { get; private set; }
+    public ICommand PttCommand { get; private set; }
+    public ICommand EncryptionCommand { get; }
+    public ICommand RecordingCommand { get; }
+
+    public void ConfigureAudio(
+        Func<ChannelViewModel, Task> start,
+        Func<ChannelViewModel, Task> stop)
+    {
+        startAudio = start ?? throw new ArgumentNullException(nameof(start));
+        stopAudio = stop ?? throw new ArgumentNullException(nameof(stop));
+        AudioCommand = new AsyncRelayCommand(ToggleAudioAsync, () => CanListen && !audioBusy);
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(AudioCommand)));
+    }
+
+    public void ConfigureTransmit(
+        Func<ChannelViewModel, Task> start,
+        Func<ChannelViewModel, Task> stop)
+    {
+        startTransmit = start ?? throw new ArgumentNullException(nameof(start));
+        stopTransmit = stop ?? throw new ArgumentNullException(nameof(stop));
+        PttCommand = new AsyncRelayCommand(ToggleTransmitAsync, () => CanTransmit && !transmitBusy);
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(PttCommand)));
+        (EncryptionCommand as AsyncRelayCommand)?.RaiseCanExecuteChanged();
+    }
+
+    public void RefreshEncryptionState()
+    {
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CanListen)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CanTransmit)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CanToggleEncryption)));
+        (AudioCommand as AsyncRelayCommand)?.RaiseCanExecuteChanged();
+        (PttCommand as AsyncRelayCommand)?.RaiseCanExecuteChanged();
+        (EncryptionCommand as AsyncRelayCommand)?.RaiseCanExecuteChanged();
+        (RecordingCommand as AsyncRelayCommand)?.RaiseCanExecuteChanged();
+    }
+
+    public void RestoreTransmitEncryption(bool encrypted)
+    {
+        if (!runtime.Definition.IsEncrypted || !runtime.Definition.SelectableEncryption)
+            return;
+
+        transmitEncrypted = encrypted;
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsTransmitEncrypted)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(EncryptionButtonText)));
+        NotifyEncryptionAppearanceChanged();
+        (PttCommand as AsyncRelayCommand)?.RaiseCanExecuteChanged();
+        (EncryptionCommand as AsyncRelayCommand)?.RaiseCanExecuteChanged();
+    }
+
+    public void SetRecordingEnabled(bool enabled)
+        => SetRecordingEnabledCore(enabled, raiseStateChanged: true);
+
+    public void RestoreRecordingEnabled(bool enabled)
+        => SetRecordingEnabledCore(enabled, raiseStateChanged: false);
+
+    private void SetRecordingEnabledCore(bool enabled, bool raiseStateChanged)
+    {
+        if (recordingEnabled == enabled)
+            return;
+
+        recordingEnabled = enabled;
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsRecordingEnabled)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(RecordButtonText)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(RecordingConfigurationButtonText)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(RecordingSelectionBrush)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(RecordingSelectionBorderBrush)));
+        if (raiseStateChanged)
+            RecordingStateChanged?.Invoke(this, enabled);
+        (RecordingCommand as AsyncRelayCommand)?.RaiseCanExecuteChanged();
+    }
+
+    public void RestoreVolume(double value)
+        => SetVolume(value, raiseChanged: false);
+
+    public void RestoreStereoBalance(double value)
+        => SetStereoBalance(value, raiseChanged: false);
+
+    public void RestoreOutputDeviceId(string? deviceId)
+        => OutputDeviceIdText = deviceId?.Trim() ?? string.Empty;
+
+    public void SetOutputDeviceOptions(IReadOnlyList<AudioDeviceOptionViewModel> options)
+    {
+        outputDeviceOptions = options ?? [];
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(OutputDeviceOptions)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SelectedOutputDevice)));
+    }
+
+    public void RefreshOutputDeviceSelection()
+        => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SelectedOutputDevice)));
+
+    private AudioDeviceOptionViewModel? ResolveOutputDevice()
+    {
+        return outputDeviceOptions.FirstOrDefault(device =>
+                   !string.IsNullOrWhiteSpace(OutputDeviceIdText) &&
+                   device.Id.Equals(OutputDeviceIdText, StringComparison.OrdinalIgnoreCase)) ??
+               outputDeviceOptions.FirstOrDefault(device => device.IsDefault) ??
+               outputDeviceOptions.FirstOrDefault();
+    }
+
+    private void SetVolume(double value, bool raiseChanged)
+    {
+        double normalized = double.IsFinite(value) ? Math.Clamp(value, 0, 4) : 1.0;
+        if (Math.Abs(volume - normalized) < 0.0001)
+            return;
+
+        volume = normalized;
+        if (raiseChanged)
+        {
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(Volume)));
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(VolumeSliderValue)));
+            VolumeChanged?.Invoke(this, normalized);
+        }
+    }
+
+    private void SetStereoBalance(double value, bool raiseChanged)
+    {
+        double normalized = double.IsFinite(value) ? Math.Clamp(value, -1, 1) : 0;
+        if (Math.Abs(stereoBalance - normalized) < 0.0001)
+            return;
+
+        stereoBalance = normalized;
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(StereoBalance)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(StereoBalanceText)));
+        if (raiseChanged)
+            StereoBalanceChanged?.Invoke(this, normalized);
+    }
+
+    public void SetIgnoredSubscriberIds(IEnumerable<uint> subscriberIds)
+    {
+        ArgumentNullException.ThrowIfNull(subscriberIds);
+        IgnoredSubscriberIdsText = string.Join(", ", subscriberIds.Where(id => id != 0).Distinct().OrderBy(id => id));
+    }
+
+    internal void SetReceivePresentationOwnerResolver(Func<ChannelViewModel?> resolver)
+    {
+        receivePresentationOwnerResolver = resolver ?? throw new ArgumentNullException(nameof(resolver));
+        RefreshReceivePresentation();
+    }
+
+    internal void MarkReceivePlaybackActive(uint sourceId, uint streamId)
+    {
+        if (!audioEnabled || audioSuspended || streamId == 0)
+            return;
+        if (receivePlaybackSourceId == sourceId && receivePlaybackStreamId == streamId)
+            return;
+
+        receivePlaybackSourceId = sourceId;
+        receivePlaybackStreamId = streamId;
+        NotifyReceivePresentationChanged();
+    }
+
+    internal void MarkReceivePlaybackEnded(uint streamId)
+    {
+        if (receivePlaybackStreamId != streamId)
+            return;
+
+        receivePlaybackSourceId = null;
+        receivePlaybackStreamId = null;
+        NotifyReceivePresentationChanged();
+    }
+
+    internal void RefreshReceivePresentation()
+    {
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(StateText)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CardBackgroundBrush)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CardBorderBrush)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CardTextBrush)));
+    }
+
+    private void NotifyReceivePresentationChanged()
+    {
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsReceivePresentationActive)));
+        RefreshReceivePresentation();
+    }
+
+    private void ClearReceivePlayback()
+    {
+        if (receivePlaybackStreamId is null)
+            return;
+        receivePlaybackSourceId = null;
+        receivePlaybackStreamId = null;
+    }
+
+    public void SetAudioEnabled(bool enabled)
+    {
+        bool suspensionChanged = audioSuspended;
+        audioSuspended = false;
+        if (audioEnabled == enabled && !suspensionChanged)
+            return;
+        audioEnabled = enabled;
+        if (!enabled)
+            ClearReceivePlayback();
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsAudioEnabled)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsAudioSuspended)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(AudioButtonText)));
+        NotifyReceivePresentationChanged();
+        if (!enabled)
+            SetAudioLevel(0);
+    }
+
+    public void SetAudioSuspended(bool suspended)
+    {
+        if (!audioEnabled || audioSuspended == suspended)
+            return;
+        audioSuspended = suspended;
+        if (suspended)
+            ClearReceivePlayback();
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsAudioSuspended)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(AudioButtonText)));
+        NotifyReceivePresentationChanged();
+        if (suspended)
+            SetAudioLevel(0);
+    }
+
+    public void SetAudioLevel(
+        double value,
+        ChannelAudioDirection? direction = null,
+        uint? streamId = null)
+    {
+        double normalized = double.IsFinite(value) ? Math.Clamp(value, 0, 100) : 0;
+        if ((direction == ChannelAudioDirection.Receive &&
+             (!audioEnabled || audioSuspended || runtime.State != ChannelRuntimeState.Receiving)) ||
+            (direction == ChannelAudioDirection.Transmit && runtime.State != ChannelRuntimeState.Transmitting) ||
+            (streamId is uint expectedStreamId && runtime.StreamId != expectedStreamId))
+        {
+            normalized = 0;
+        }
+        if (normalized == 0 ? audioLevel == 0 : Math.Abs(audioLevel - normalized) < 0.25)
+            return;
+
+        audioLevel = normalized;
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(AudioLevel)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(AudioLevelScale)));
+    }
+
+    public void SetTransmitEnabled(bool enabled, uint streamId = 0)
+    {
+        if (enabled)
+        {
+            if (streamId == 0)
+                throw new ArgumentOutOfRangeException(nameof(streamId));
+            runtime.MarkTransmitting(streamId);
+        }
+        else
+        {
+            runtime.MarkIdle();
+        }
+
+        if (transmitEnabled == enabled)
+        {
+            (EncryptionCommand as AsyncRelayCommand)?.RaiseCanExecuteChanged();
+            return;
+        }
+        transmitEnabled = enabled;
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsTransmitting)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(PttButtonText)));
+        (EncryptionCommand as AsyncRelayCommand)?.RaiseCanExecuteChanged();
+    }
+
+    public void SetTransmitSelected(bool selected)
+    {
+        if (transmitSelected == selected)
+            return;
+        transmitSelected = selected;
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsTransmitSelected)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(TransmitSelectionText)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(TransmitSelectionBrush)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(TransmitSelectionBorderBrush)));
+    }
+
+    public void SetPageSelected(bool selected)
+    {
+        if (pageSelected == selected)
+            return;
+        pageSelected = selected;
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsPageSelected)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(PageSelectionText)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(PageSelectionBrush)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(PageSelectionBorderBrush)));
+    }
+
+    public void SetAlertSelected(bool selected)
+    {
+        if (alertSelected == selected)
+            return;
+        alertSelected = selected;
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsAlertSelected)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(AlertSelectionText)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(AlertSelectionBrush)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(AlertSelectionBorderBrush)));
+    }
+
+    public void RestoreTransmitSelection(bool selected) => SetTransmitSelected(selected);
+
+    public void SetWidgetPosition(double x, double y)
+    {
+        double nextX = double.IsFinite(x) ? Math.Clamp(x, 0, 10_000) : 0;
+        double nextY = double.IsFinite(y) ? Math.Clamp(y, 0, 10_000) : 0;
+        if (Math.Abs(widgetX - nextX) >= 0.01)
+        {
+            widgetX = nextX;
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(WidgetX)));
+        }
+        if (Math.Abs(widgetY - nextY) >= 0.01)
+        {
+            widgetY = nextY;
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(WidgetY)));
+        }
+    }
+
+    public void SetDarkMode(bool enabled)
+    {
+        if (darkMode == enabled)
+            return;
+        darkMode = enabled;
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CardBackgroundBrush)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CardBorderBrush)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CardTextBrush)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(TransmitSelectionBrush)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(TransmitSelectionBorderBrush)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(PageSelectionBrush)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(PageSelectionBorderBrush)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(AlertSelectionBrush)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(AlertSelectionBorderBrush)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(RecordingSelectionBrush)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(RecordingSelectionBorderBrush)));
+        NotifyEncryptionAppearanceChanged();
+    }
+
+    private void NotifyEncryptionAppearanceChanged()
+    {
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(EncryptionSelectionBrush)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(EncryptionSelectionBorderBrush)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(EncryptionSelectionTextBrush)));
+    }
+
+    public bool TryApplyTraffic(string systemName, FneTrafficFrame traffic)
+        => ApplyTraffic(systemName, traffic, DateTimeOffset.UtcNow).Matched;
+
+    internal ChannelTrafficApplyResult ApplyTraffic(
+        string systemName,
+        FneTrafficFrame traffic,
+        DateTimeOffset now)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(systemName);
+        ArgumentNullException.ThrowIfNull(traffic);
+
+        if (!runtime.Definition.SystemName.Equals(systemName, StringComparison.OrdinalIgnoreCase) ||
+            !MatchesProtocol(traffic.Protocol) ||
+            traffic.StreamId == 0)
+        {
+            return ChannelTrafficApplyResult.NoMatch;
+        }
+
+        if (runtime.State == ChannelRuntimeState.Transmitting)
+            return ChannelTrafficApplyResult.NoMatch;
+
+        if (IsTerminator(traffic))
+        {
+            ReceiveStreamDecision decision = receiveLifecycle.ObserveTerminator(traffic.StreamId, now);
+            if (decision.Transition != ReceiveStreamTransition.Ended)
+                return decision.Transition == ReceiveStreamTransition.IgnoredLate
+                    ? ToApplyResult(decision)
+                    : ChannelTrafficApplyResult.NoMatch;
+
+            runtime.MarkIdle(now);
+            return ToApplyResult(decision);
+        }
+
+        if (IsDmrPrivacyHeader(traffic))
+        {
+            if (runtime.State != ChannelRuntimeState.Receiving ||
+                runtime.StreamId != traffic.StreamId ||
+                runtime.SourceId != traffic.SourceId ||
+                runtime.Definition.DestinationId != traffic.DestinationId ||
+                runtime.Definition.Slot != traffic.Slot)
+            {
+                return ChannelTrafficApplyResult.NoMatch;
+            }
+
+            ReceiveStreamDecision decision = receiveLifecycle.ObserveVoice(traffic.StreamId, now);
+            if (decision.Transition is ReceiveStreamTransition.Continued or ReceiveStreamTransition.Resumed)
+                runtime.MarkReceiving(traffic.SourceId, traffic.StreamId, now);
+            return ToApplyResult(decision);
+        }
+
+        if (traffic.DestinationId != runtime.Definition.DestinationId)
+            return ChannelTrafficApplyResult.NoMatch;
+
+        bool isDmrVoiceLcHeader = IsDmrVoiceLcHeader(traffic);
+        if ((!MatchesVoiceTraffic(traffic) && !isDmrVoiceLcHeader) || traffic.SourceId == 0)
+            return ChannelTrafficApplyResult.NoMatch;
+
+        ReceiveStreamDecision voiceDecision = isDmrVoiceLcHeader
+            ? receiveLifecycle.ObserveDefinitiveStart(traffic.StreamId, now)
+            : receiveLifecycle.ObserveVoice(traffic.StreamId, now);
+        if (voiceDecision.Transition != ReceiveStreamTransition.IgnoredLate)
+            runtime.MarkReceiving(traffic.SourceId, traffic.StreamId, now);
+        return ToApplyResult(voiceDecision);
+    }
+
+    public bool TryExpireReceiveState(DateTimeOffset now, TimeSpan timeout)
+    {
+        if (timeout <= TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(nameof(timeout));
+        return AdvanceReceiveLifecycle(now).Transition == ReceiveStreamTransition.GraceExpired;
+    }
+
+    internal ChannelTrafficApplyResult AdvanceReceiveLifecycle(DateTimeOffset now)
+    {
+        ReceiveStreamDecision decision = receiveLifecycle.Advance(now);
+        if (decision.Transition == ReceiveStreamTransition.GraceExpired)
+        {
+            runtime.MarkIdle(now);
+            if (decision.EndedStreamId is uint endedStreamId)
+                MarkReceivePlaybackEnded(endedStreamId);
+        }
+        return ToApplyResult(decision);
+    }
+
+    private static ChannelTrafficApplyResult ToApplyResult(ReceiveStreamDecision decision)
+        => new(
+            Matched: decision.Transition is not ReceiveStreamTransition.None,
+            decision.Transition,
+            decision.ActiveStreamId,
+            decision.EndedStreamId);
+
+    private bool MatchesVoiceTraffic(FneTrafficFrame traffic)
+    {
+        return runtime.Definition.Mode switch
+        {
+            "dmr" => traffic.Slot == runtime.Definition.Slot &&
+                     IsVoiceFrame(traffic.FrameType),
+            "p25" => IsVoiceFrame(traffic.FrameType) &&
+                     (traffic.Subtype.Equals("LDU1", StringComparison.OrdinalIgnoreCase) ||
+                      traffic.Subtype.Equals("LDU2", StringComparison.OrdinalIgnoreCase)),
+            "nxdn" => IsVoiceFrame(traffic.FrameType),
+            "analog" => IsVoiceFrame(traffic.FrameType),
+            _ => false
+        };
+    }
+
+    private bool MatchesProtocol(FneTrafficProtocol protocol)
+    {
+        return runtime.Definition.Mode switch
+        {
+            "dmr" => protocol == FneTrafficProtocol.Dmr,
+            "p25" => protocol == FneTrafficProtocol.P25,
+            "nxdn" => protocol == FneTrafficProtocol.Nxdn,
+            "analog" => protocol == FneTrafficProtocol.Analog,
+            _ => false
+        };
+    }
+
+    private static bool IsTerminator(FneTrafficFrame traffic)
+    {
+        if (traffic.FrameType.Equals("TERMINATOR", StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        return traffic.Protocol switch
+        {
+            FneTrafficProtocol.Dmr => traffic.Subtype.Equals(
+                "TERMINATOR_WITH_LC",
+                StringComparison.OrdinalIgnoreCase),
+            FneTrafficProtocol.P25 => traffic.Subtype.Equals("TDU", StringComparison.OrdinalIgnoreCase) ||
+                                       traffic.Subtype.Equals("TDULC", StringComparison.OrdinalIgnoreCase),
+            FneTrafficProtocol.Analog => traffic.Subtype.Equals("TERMINATOR", StringComparison.OrdinalIgnoreCase),
+            _ => false
+        };
+    }
+
+    private static bool IsDmrPrivacyHeader(FneTrafficFrame traffic)
+    {
+        return traffic.Protocol == FneTrafficProtocol.Dmr &&
+            traffic.FrameType.Equals("DATA_SYNC", StringComparison.OrdinalIgnoreCase) &&
+            traffic.Subtype.Equals("VOICE_PI_HEADER", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsDmrVoiceLcHeader(FneTrafficFrame traffic)
+    {
+        return traffic.Protocol == FneTrafficProtocol.Dmr &&
+            traffic.FrameType.Equals("DATA_SYNC", StringComparison.OrdinalIgnoreCase) &&
+            traffic.Subtype.Equals("VOICE_LC_HEADER", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsVoiceFrame(string frameType)
+    {
+        return frameType.Equals("VOICE", StringComparison.OrdinalIgnoreCase) ||
+            frameType.Equals("VOICE_SYNC", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private async Task ToggleAudioAsync()
+    {
+        if (startAudio is null || stopAudio is null)
+            return;
+
+        audioBusy = true;
+        (AudioCommand as AsyncRelayCommand)?.RaiseCanExecuteChanged();
+        try
+        {
+            if (audioEnabled)
+                await stopAudio(this);
+            else
+                await startAudio(this);
+        }
+        finally
+        {
+            audioBusy = false;
+            (AudioCommand as AsyncRelayCommand)?.RaiseCanExecuteChanged();
+        }
+    }
+
+    private async Task ToggleTransmitAsync()
+    {
+        if (startTransmit is null || stopTransmit is null)
+            return;
+
+        transmitBusy = true;
+        (PttCommand as AsyncRelayCommand)?.RaiseCanExecuteChanged();
+        try
+        {
+            if (transmitEnabled)
+                await stopTransmit(this);
+            else
+                await startTransmit(this);
+        }
+        finally
+        {
+            transmitBusy = false;
+            (PttCommand as AsyncRelayCommand)?.RaiseCanExecuteChanged();
+        }
+    }
+
+    private Task ToggleEncryptionAsync()
+    {
+        if (!CanToggleEncryption || transmitEnabled)
+            return Task.CompletedTask;
+
+        transmitEncrypted = !transmitEncrypted;
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsTransmitEncrypted)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(EncryptionButtonText)));
+        NotifyEncryptionAppearanceChanged();
+        TransmitEncryptionChanged?.Invoke(this, transmitEncrypted);
+        (PttCommand as AsyncRelayCommand)?.RaiseCanExecuteChanged();
+        return Task.CompletedTask;
+    }
+
+    private Task ToggleRecordingAsync()
+    {
+        if (!CanRecord && !recordingEnabled)
+            return Task.CompletedTask;
+
+        SetRecordingEnabled(!recordingEnabled);
+        return Task.CompletedTask;
+    }
+
+    private void HandleRuntimePropertyChanged(object? sender, PropertyChangedEventArgs args)
+    {
+        if (args.PropertyName == nameof(ChannelRuntime.LastActivity))
+            return;
+        PropertyChanged?.Invoke(this, args);
+
+        bool callerChanged = args.PropertyName is nameof(ChannelRuntime.State) or nameof(ChannelRuntime.SourceId);
+        if (callerChanged && runtime.State == ChannelRuntimeState.Receiving && runtime.SourceId is uint sourceId)
+        {
+            string alias = AliasFileLoader.FindAlias(aliases, sourceId).Trim();
+            lastCallerText = string.IsNullOrWhiteSpace(alias)
+                ? sourceId.ToString(CultureInfo.InvariantCulture)
+                : alias;
+        }
+        else if (args.PropertyName == nameof(ChannelRuntime.State) &&
+            runtime.State is not (ChannelRuntimeState.Receiving or ChannelRuntimeState.Transmitting))
+        {
+            SetAudioLevel(0);
+        }
+
+        if (callerChanged)
+        {
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(LastCallerText)));
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(LastCallerDisplayText)));
+        }
+
+        if (args.PropertyName == nameof(ChannelRuntime.State))
+        {
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsReceivePresentationActive)));
+            RefreshReceivePresentation();
+        }
+    }
+
+    private static IBrush CreateBrush(string? color, string fallback)
+    {
+        try
+        {
+            return new SolidColorBrush(Color.Parse(
+                string.IsNullOrWhiteSpace(color) ? fallback : color.Trim()));
+        }
+        catch (FormatException)
+        {
+            return new SolidColorBrush(Color.Parse(fallback));
+        }
+    }
+}

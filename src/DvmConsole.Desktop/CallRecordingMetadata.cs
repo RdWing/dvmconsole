@@ -3,7 +3,8 @@ using System.Text.Json.Serialization;
 
 namespace DvmConsole.Desktop;
 
-// Portable metadata written beside each completed receive or console transmit recording.
+// Portable catalog metadata embedded in new Opus recordings. JSON sidecars are
+// still supported for legacy recordings and are migrated when it is safe.
 // Encryption identifiers are descriptive only; key material is never stored.
 public sealed class CallRecordingMetadata
 {

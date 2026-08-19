@@ -89,6 +89,20 @@ public sealed class NeutralSnapSlider : Slider
         isPointerInteraction = false;
     }
 
+    protected override void OnThumbDragStarted(VectorEventArgs e)
+    {
+        isPointerInteraction = true;
+        base.OnThumbDragStarted(e);
+        SnapPointerValue();
+    }
+
+    protected override void OnThumbDragCompleted(VectorEventArgs e)
+    {
+        base.OnThumbDragCompleted(e);
+        SnapPointerValue();
+        isPointerInteraction = false;
+    }
+
     protected override void OnPropertyChanged(AvaloniaPropertyChangedEventArgs change)
     {
         base.OnPropertyChanged(change);
@@ -110,7 +124,9 @@ public sealed class NeutralSnapSlider : Slider
         isApplyingSnap = true;
         try
         {
-            Value = snapped;
+            // Keep the existing two-way binding intact while moving the thumb
+            // to the detent during pointer and thumb-drag interactions.
+            SetCurrentValue(ValueProperty, snapped);
         }
         finally
         {
