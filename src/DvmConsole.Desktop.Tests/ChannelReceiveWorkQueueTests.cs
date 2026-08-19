@@ -56,10 +56,14 @@ public sealed class ChannelReceiveWorkQueueTests
 
         queue.Enqueue(channel, CreateTraffic(1));
         await firstStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
-        queue.Enqueue(channel, CreateTraffic(2));
-        queue.Enqueue(channel, CreateTraffic(3));
-        queue.Enqueue(channel, CreateTraffic(4));
-        queue.Enqueue(channel, CreateTraffic(5, terminator: true));
+        Assert.True(queue.Enqueue(channel, CreateTraffic(2), out bool droppedSecond));
+        Assert.False(droppedSecond);
+        Assert.True(queue.Enqueue(channel, CreateTraffic(3), out bool droppedThird));
+        Assert.False(droppedThird);
+        Assert.True(queue.Enqueue(channel, CreateTraffic(4), out bool droppedFourth));
+        Assert.True(droppedFourth);
+        Assert.True(queue.Enqueue(channel, CreateTraffic(5, terminator: true), out bool droppedFifth));
+        Assert.True(droppedFifth);
         releaseFirst.TrySetResult();
         await queue.StopAsync(channel);
 

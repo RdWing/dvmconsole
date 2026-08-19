@@ -669,8 +669,10 @@ public sealed class FneConnection : IAsyncDisposable
             return;
         }
 
-        if (level is LogLevel.ERROR or LogLevel.FATAL)
-            Publish(FneConnectionState.Faulted, "FNE protocol error");
+        // Individual malformed packets and unknown opcodes are protocol
+        // diagnostics, not proof that the transport disconnected. The peer
+        // state monitor remains authoritative unless the log explicitly
+        // identifies a connection failure above.
     }
 
     private static DebugLogSeverity MapLogSeverity(LogLevel level)
@@ -724,7 +726,7 @@ public sealed class FneConnection : IAsyncDisposable
                     _ => FneConnectionState.WaitingForLogin
                 };
 
-                if (nextState == lastState)
+                if (!ShouldPublishMonitoredState(nextState, lastState, Status.State))
                     continue;
 
                 lastState = nextState;
@@ -742,6 +744,12 @@ public sealed class FneConnection : IAsyncDisposable
             // Expected during shutdown.
         }
     }
+
+    internal static bool ShouldPublishMonitoredState(
+        FneConnectionState nextState,
+        FneConnectionState? lastState,
+        FneConnectionState publishedState)
+        => nextState != lastState || nextState != publishedState;
 
     private async Task<IPEndPoint> ResolveEndpointAsync(CancellationToken cancellationToken)
     {

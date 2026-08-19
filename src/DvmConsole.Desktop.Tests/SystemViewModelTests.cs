@@ -804,6 +804,8 @@ public sealed class SystemViewModelTests
                 codeplugPath,
                 new UserSettingsStore(settingsPath));
             SystemViewModel system = Assert.Single(viewModel.Systems);
+            foreach (ChannelViewModel channel in system.Channels)
+                channel.SetAudioEnabled(true);
 
             viewModel.ProcessTraffic(system, new FneTrafficFrame(
                 FneTrafficProtocol.Dmr,
@@ -821,6 +823,20 @@ public sealed class SystemViewModelTests
             Assert.Single(viewModel.CallHistory);
             Assert.Single(system.Channels, channel => channel.State == ChannelRuntimeState.Receiving);
             Assert.All(system.Zones, zone => Assert.True(zone.IsReceiving));
+            Assert.All(system.Channels, channel =>
+            {
+                Assert.True(channel.IsReceivePresentationActive);
+                Assert.Equal(
+                    Color.Parse("#008A3A"),
+                    Assert.IsType<SolidColorBrush>(channel.CardBackgroundBrush).Color);
+            });
+
+            system.Channels[1].SetAudioEnabled(false);
+
+            Assert.False(system.Channels[1].IsReceivePresentationActive);
+            Assert.NotEqual(
+                Color.Parse("#008A3A"),
+                Assert.IsType<SolidColorBrush>(system.Channels[1].CardBackgroundBrush).Color);
         }
         finally
         {

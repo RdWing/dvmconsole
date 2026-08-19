@@ -21,6 +21,24 @@ public sealed class ReceiveStreamLifecycleTests
     }
 
     [Fact]
+    public void DefinitiveStartReopensAReusedTombstonedStreamId()
+    {
+        var lifecycle = CreateLifecycle();
+        DateTimeOffset now = DateTimeOffset.UnixEpoch;
+
+        lifecycle.ObserveVoice(7, now);
+        lifecycle.ObserveTerminator(7, now.AddSeconds(1));
+
+        Assert.Equal(
+            ReceiveStreamTransition.IgnoredLate,
+            lifecycle.ObserveVoice(7, now.AddSeconds(2)).Transition);
+        Assert.Equal(
+            ReceiveStreamTransition.Started,
+            lifecycle.ObserveDefinitiveStart(7, now.AddSeconds(2.1)).Transition);
+        Assert.Equal((uint)7, lifecycle.ActiveStreamId);
+    }
+
+    [Fact]
     public void TimeoutGraceResumesTheSameStream()
     {
         var lifecycle = CreateLifecycle();

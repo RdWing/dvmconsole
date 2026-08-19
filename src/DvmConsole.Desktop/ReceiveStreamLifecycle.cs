@@ -83,6 +83,43 @@ internal sealed class ReceiveStreamLifecycle
             activeStreamId);
     }
 
+    // A DMR voice LC header is an unambiguous start-of-call signal. The FNE
+    // may reuse a stream ID before the late-packet tombstone expires, so a
+    // definitive header is allowed to reopen that ID while ordinary late
+    // voice remains suppressed.
+    public ReceiveStreamDecision ObserveDefinitiveStart(uint streamId, DateTimeOffset now)
+    {
+        if (streamId == 0)
+            throw new ArgumentOutOfRangeException(nameof(streamId));
+
+        PurgeTombstones(now);
+        ExpireActiveIfPastGrace(now);
+        tombstones.Remove(streamId);
+
+        if (ActiveStreamId is not uint activeStreamId)
+        {
+            Start(streamId, now);
+            return new ReceiveStreamDecision(ReceiveStreamTransition.Started, streamId);
+        }
+
+        if (activeStreamId == streamId)
+        {
+            bool resumed = graceDeadline is not null;
+            lastActivity = now;
+            graceDeadline = null;
+            return new ReceiveStreamDecision(
+                resumed ? ReceiveStreamTransition.Resumed : ReceiveStreamTransition.Continued,
+                streamId);
+        }
+
+        Tombstone(activeStreamId, now);
+        Start(streamId, now);
+        return new ReceiveStreamDecision(
+            ReceiveStreamTransition.Superseded,
+            streamId,
+            activeStreamId);
+    }
+
     public ReceiveStreamDecision ObserveTerminator(uint streamId, DateTimeOffset now)
     {
         if (streamId == 0)

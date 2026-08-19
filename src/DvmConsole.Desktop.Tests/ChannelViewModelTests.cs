@@ -68,6 +68,7 @@ public sealed class ChannelViewModelTests
             Mode = "dmr",
             Slot = 2
         });
+        channel.SetAudioEnabled(true);
 
         bool applied = channel.TryApplyTraffic(
             "System 1",
@@ -77,6 +78,108 @@ public sealed class ChannelViewModelTests
         Assert.Equal(ChannelRuntimeState.Receiving, channel.State);
         Assert.Equal("Receiving from 42 (stream 7)", channel.StateText);
         Assert.Equal("42", channel.LastCallerText);
+    }
+
+    [Fact]
+    public void ReceiveDisabledCardDoesNotPresentReceivingAudioState()
+    {
+        var channel = new ChannelViewModel(new ChannelConfiguration
+        {
+            Name = "Dispatch",
+            System = "System 1",
+            Tgid = "99",
+            Mode = "dmr",
+            Slot = 1
+        });
+
+        Assert.True(channel.TryApplyTraffic(
+            "System 1",
+            CreateTraffic(FneTrafficProtocol.Dmr, 42, 99, 0, "VOICE", "VOICE", 7)));
+
+        Assert.Equal(ChannelRuntimeState.Receiving, channel.State);
+        Assert.False(channel.IsReceivePresentationActive);
+        Assert.Equal("Receive disabled", channel.StateText);
+        Assert.NotEqual(
+            Color.Parse("#008A3A"),
+            Assert.IsType<SolidColorBrush>(channel.CardBackgroundBrush).Color);
+    }
+
+    [Fact]
+    public void ReceiveCardStaysActiveUntilQueuedTerminatorIsProcessed()
+    {
+        var channel = new ChannelViewModel(new ChannelConfiguration
+        {
+            Name = "Dispatch",
+            System = "System 1",
+            Tgid = "99",
+            Mode = "dmr",
+            Slot = 1
+        });
+        channel.SetAudioEnabled(true);
+        DateTimeOffset now = DateTimeOffset.UnixEpoch;
+
+        channel.ApplyTraffic(
+            "System 1",
+            CreateTraffic(FneTrafficProtocol.Dmr, 42, 99, 0, "VOICE", "VOICE", 7),
+            now);
+        channel.MarkReceivePlaybackActive(42, 7);
+        channel.ApplyTraffic(
+            "System 1",
+            CreateTraffic(FneTrafficProtocol.Dmr, 42, 99, 0, "DATA_SYNC", "TERMINATOR_WITH_LC", 7),
+            now.AddSeconds(1));
+
+        Assert.Equal(ChannelRuntimeState.Idle, channel.State);
+        Assert.True(channel.IsReceivePresentationActive);
+        Assert.Equal(
+            Color.Parse("#008A3A"),
+            Assert.IsType<SolidColorBrush>(channel.CardBackgroundBrush).Color);
+
+        channel.MarkReceivePlaybackEnded(7);
+
+        Assert.False(channel.IsReceivePresentationActive);
+        Assert.NotEqual(
+            Color.Parse("#008A3A"),
+            Assert.IsType<SolidColorBrush>(channel.CardBackgroundBrush).Color);
+    }
+
+    [Fact]
+    public void DmrVoiceLinkControlHeaderStartsAndCanReopenAReusedStream()
+    {
+        var channel = new ChannelViewModel(new ChannelConfiguration
+        {
+            Name = "Dispatch",
+            System = "System 1",
+            Tgid = "99",
+            Mode = "dmr",
+            Slot = 1
+        });
+        DateTimeOffset now = DateTimeOffset.UnixEpoch;
+
+        Assert.Equal(
+            ReceiveStreamTransition.Started,
+            channel.ApplyTraffic(
+                "System 1",
+                CreateTraffic(FneTrafficProtocol.Dmr, 42, 99, 0, "DATA_SYNC", "VOICE_LC_HEADER", 7),
+                now).Transition);
+        Assert.Equal(
+            ReceiveStreamTransition.Ended,
+            channel.ApplyTraffic(
+                "System 1",
+                CreateTraffic(FneTrafficProtocol.Dmr, 42, 99, 0, "DATA_SYNC", "TERMINATOR_WITH_LC", 7),
+                now.AddSeconds(1)).Transition);
+        Assert.Equal(
+            ReceiveStreamTransition.IgnoredLate,
+            channel.ApplyTraffic(
+                "System 1",
+                CreateTraffic(FneTrafficProtocol.Dmr, 42, 99, 0, "VOICE", "VOICE", 7),
+                now.AddSeconds(2)).Transition);
+        Assert.Equal(
+            ReceiveStreamTransition.Started,
+            channel.ApplyTraffic(
+                "System 1",
+                CreateTraffic(FneTrafficProtocol.Dmr, 43, 99, 0, "DATA_SYNC", "VOICE_LC_HEADER", 7),
+                now.AddSeconds(2.1)).Transition);
+        Assert.Equal((uint)43, channel.SourceId);
     }
 
     [Fact]
@@ -91,6 +194,7 @@ public sealed class ChannelViewModelTests
                 Mode = "analog"
             },
             aliases: [new RadioAlias { Alias = "Unit 42", Rid = 42 }]);
+        channel.SetAudioEnabled(true);
 
         Assert.True(channel.TryApplyTraffic(
             "System 1",
@@ -473,6 +577,7 @@ public sealed class ChannelViewModelTests
             Tgid = "101",
             Mode = "p25"
         });
+        channel.SetAudioEnabled(true);
 
         bool applied = channel.TryApplyTraffic(
             "System 1",

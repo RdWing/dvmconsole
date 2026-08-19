@@ -35,6 +35,12 @@ internal sealed class ChannelReceiveWorkQueue : IAsyncDisposable
     }
 
     public bool Enqueue(ChannelViewModel channel, FneTrafficFrame traffic)
+        => Enqueue(channel, traffic, out _);
+
+    public bool Enqueue(
+        ChannelViewModel channel,
+        FneTrafficFrame traffic,
+        out bool droppedFrame)
     {
         ArgumentNullException.ThrowIfNull(channel);
         ArgumentNullException.ThrowIfNull(traffic);
@@ -42,7 +48,10 @@ internal sealed class ChannelReceiveWorkQueue : IAsyncDisposable
         lock (sync)
         {
             if (disposed || stoppedChannels.Contains(channel))
+            {
+                droppedFrame = true;
                 return false;
+            }
 
             if (!workers.TryGetValue(channel, out ChannelWorker? worker))
             {
@@ -50,7 +59,7 @@ internal sealed class ChannelReceiveWorkQueue : IAsyncDisposable
                 workers.Add(channel, worker);
             }
 
-            return worker.Enqueue(traffic);
+            return worker.Enqueue(traffic, out droppedFrame);
         }
     }
 
@@ -112,14 +121,18 @@ internal sealed class ChannelReceiveWorkQueue : IAsyncDisposable
 
         public Task Completion => completion.Task;
 
-        public bool Enqueue(FneTrafficFrame traffic)
+        public bool Enqueue(FneTrafficFrame traffic, out bool droppedFrame)
         {
             lock (sync)
             {
                 if (!accepting)
+                {
+                    droppedFrame = true;
                     return false;
+                }
 
-                if (pending.Count >= maxPendingFrames && !MakeRoomFor(traffic))
+                droppedFrame = pending.Count >= maxPendingFrames;
+                if (droppedFrame && !MakeRoomFor(traffic))
                     return false;
 
                 pending.AddLast(traffic);

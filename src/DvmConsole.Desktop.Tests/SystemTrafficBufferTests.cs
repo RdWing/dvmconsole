@@ -18,6 +18,7 @@ public sealed class SystemTrafficBufferTests
         buffer.Enqueue(Traffic(4, terminator: true));
 
         Assert.Equal(2, buffer.Count);
+        Assert.Equal(2, buffer.DroppedCount);
         Assert.True(buffer.TryDequeue(out FneTrafficFrame? first));
         Assert.True(buffer.TryDequeue(out FneTrafficFrame? second));
         Assert.Contains(new[] { first!, second! }, traffic => traffic.PacketSequence == 4);
@@ -35,6 +36,7 @@ public sealed class SystemTrafficBufferTests
         buffer.Enqueue(Traffic(2));
         buffer.Enqueue(Traffic(3));
 
+        Assert.Equal(1, buffer.DroppedCount);
         Assert.True(buffer.TryDequeue(out FneTrafficFrame? retained));
         Assert.Same(metadata, retained);
     }
@@ -55,6 +57,21 @@ public sealed class SystemTrafficBufferTests
 
         Assert.True(buffer.TryDequeue(out FneTrafficFrame? retained));
         Assert.Same(callIv, retained);
+    }
+
+    [Fact]
+    public void RetainsDmrVoiceLinkControlHeaderAheadOfStaleVoice()
+    {
+        var buffer = new SystemTrafficBuffer(maximumCount: 2);
+        var header = new FneTrafficFrame(
+            FneTrafficProtocol.Dmr, 1, 2, 100, 0, "GROUP", "DATA_SYNC", "VOICE_LC_HEADER", 1, 99, []);
+
+        buffer.Enqueue(header);
+        buffer.Enqueue(Traffic(2));
+        buffer.Enqueue(Traffic(3));
+
+        Assert.True(buffer.TryDequeue(out FneTrafficFrame? retained));
+        Assert.Same(header, retained);
     }
 
     [Fact]

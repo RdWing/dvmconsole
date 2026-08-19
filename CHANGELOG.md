@@ -18,6 +18,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Consolidate Event History into Console Settings, route the Activity header and TAR Viewer there, and return the Talkgroup Audio Recorder menu to Tools.
 - Reveal a recording selected in History in Finder or Explorer instead of opening it in the operating system's media player.
 - Keep the inspected History row anchored while incoming calls are inserted, while retaining live-follow behavior when already at the top.
+- Fix P25 tone generation for alerts and signaling.
 
 ### Fixed
 
@@ -27,6 +28,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Remove sub-frame zero-duration History shells without discarding a playable recording that is finalized later.
 - Remove the detached Event History window and its connected-traffic crash path.
 - Initialize the consolidated History viewport only after its deferred tab content exists, and require an application-authored result from macOS package smoke tests.
+- Start DMR receive state from voice LC headers, allow an explicit new header to reuse a recently ended stream ID, and retain those headers when bounded traffic queues shed stale voice.
+- Keep receive-disabled channel cards out of the green audio-receive state, mirror active audio presentation across enabled copies of the same resource, and keep the indication active until queued audio reaches its terminator.
+- Avoid treating recoverable FNE protocol-packet errors as connection loss, and restore the authoritative peer state after a transient status override.
+- Surface bounded UI and decoder queue drops in receive diagnostics instead of silently discarding them.
 
 ## [0.2.3] - 2026-08-17
 

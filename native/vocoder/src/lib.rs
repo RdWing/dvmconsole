@@ -3,6 +3,8 @@
 //! The ABI uses caller-owned buffers. Rust allocations, error values, and
 //! panics never cross the boundary.
 
+mod legacy_p25_tone_frames;
+
 use std::cell::RefCell;
 use std::ffi::c_char;
 use std::panic::{catch_unwind, AssertUnwindSafe};
@@ -204,15 +206,21 @@ fn detect_tone(samples: &[i16]) -> Option<DetectedTone> {
 fn encode_detected_tone(session: &mut Session, tone: DetectedTone) -> Vec<u8> {
     let info = encode_tone_frame_info(tone.id, tone.amplitude);
     if is_half_rate(session.mode) {
-        pack_natural(&info).to_vec()
-    } else {
-        let half_rate_dibits = encode_frame(&info);
-        let full_rate_dibits = session
-            .tone_converter
-            .convert(&half_rate_dibits)
-            .expect("valid Annex T tone conversion");
-        pack_full_rate_natural(&decode_full_rate_frame(&full_rate_dibits).info).to_vec()
+        return pack_natural(&info).to_vec();
     }
+    if session.mode == MODE_P25 {
+        let row = ANNEX_T[tone.id as usize].expect("detected Annex T tone");
+        if row.l1 == row.l2 {
+            let frequency = f64::from(row.f0) * f64::from(row.l1);
+            return legacy_p25_tone_frames::nearest(frequency).to_vec();
+        }
+    }
+    let half_rate_dibits = encode_frame(&info);
+    let full_rate_dibits = session
+        .tone_converter
+        .convert(&half_rate_dibits)
+        .expect("valid Annex T tone conversion");
+    pack_full_rate_natural(&decode_full_rate_frame(&full_rate_dibits).info).to_vec()
 }
 
 fn dmr_codeword_to_vectors(codeword: &[u8]) -> [u32; 4] {
@@ -1034,6 +1042,62 @@ mod tests {
     }
 
     #[test]
+    fn p25_single_alerts_use_legacy_vp8000_frames() {
+        for &(frequency, expected) in legacy_p25_tone_frames::SINGLE_TONES {
+            assert_eq!(
+                legacy_p25_tone_frames::nearest(f64::from(frequency)),
+                expected,
+                "{frequency} Hz table entry"
+            );
+        }
+
+        for (frequency, expected) in [
+            (
+                800.0,
+                [
+                    0x15, 0x47, 0x9D, 0x1B, 0xDC, 0xED, 0x82, 0x20, 0x71, 0x1E, 0x98,
+                ],
+            ),
+            (
+                1000.0,
+                [
+                    0x09, 0x23, 0x0B, 0x0D, 0xC4, 0xA5, 0xCA, 0xE8, 0x28, 0x0A, 0x32,
+                ],
+            ),
+            (
+                1500.0,
+                [
+                    0x01, 0x2D, 0xA7, 0x2A, 0xDD, 0xA8, 0x5C, 0xC8, 0x5C, 0x49, 0x46,
+                ],
+            ),
+        ] {
+            let detected = detect_tone(&tone(frequency, 0)).expect("generated alert tone");
+            let mut session = test_session(MODE_P25);
+            assert_eq!(
+                encode_detected_tone(&mut session, detected),
+                expected,
+                "{frequency} Hz generated alert"
+            );
+        }
+    }
+
+    #[test]
+    fn p25_dtmf_stays_on_annex_t_bridge() {
+        let detected = detect_tone(&dual_tone(697.0, 1209.0)).expect("DTMF tone");
+        let row = ANNEX_T[detected.id as usize].expect("Annex T row");
+        assert_ne!(row.l1, row.l2);
+
+        let info = encode_tone_frame_info(detected.id, detected.amplitude);
+        let mut converter = HalfToFullConverter::new();
+        let expected_dibits = converter
+            .convert(&encode_frame(&info))
+            .expect("valid Annex T tone conversion");
+        let expected = pack_full_rate_natural(&decode_full_rate_frame(&expected_dibits).info);
+        let mut session = test_session(MODE_P25);
+        assert_eq!(encode_detected_tone(&mut session, detected), expected);
+    }
+
+    #[test]
     fn generated_alert_tones_are_stable_half_rate_tone_frames() {
         use blip25_vocoder::halfrate::dequantize::parse_tone_frame;
 
@@ -1049,7 +1113,7 @@ mod tests {
     }
 
     #[test]
-    fn p25_tone_bridge_produces_stable_decodable_full_rate_frames() {
+    fn p25_legacy_tones_produce_stable_decodable_full_rate_frames() {
         let mut tx = test_session(MODE_P25);
         let mut rx = Vocoder::new(Rate::FullRate4400x4400);
         let _pre_roll = encode_natural(&mut tx, &tone(1000.0, 0)).expect("pre-roll");

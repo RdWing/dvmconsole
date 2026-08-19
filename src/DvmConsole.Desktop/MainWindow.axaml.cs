@@ -4575,7 +4575,9 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
                 pending = new SystemTrafficBuffer();
                 pendingSystemTraffic.Add(system, pending);
             }
+            long droppedBefore = pending.DroppedCount;
             pending.Enqueue(traffic);
+            system.RecordDroppedSystemTraffic(pending.DroppedCount - droppedBefore);
             schedule = scheduledSystemTraffic.Add(system);
         }
 
@@ -5007,6 +5009,11 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             // while decoding the same frame; recording lifecycle is separate
             // from playback recovery.
             callRecordings.ObserveTraffic(channel, traffic);
+            if (IsTerminatingTraffic(traffic))
+            {
+                Dispatcher.UIThread.Post(() =>
+                    channel.MarkReceivePlaybackEnded(traffic.StreamId));
+            }
         }
     }
 
@@ -5015,7 +5022,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         ReceiveAudioDiagnostics audio = audioCoordinator.GetDiagnostics(channel);
         var combined = new ReceiveAudioDiagnostics(
             audio.FramesDecoded,
-            audio.LostPackets,
+            audio.LostPackets + channel.DroppedReceiveFrameCount,
             audio.DuplicateOrLatePackets + channel.IgnoredLatePacketCount,
             audio.MalformedPackets);
         if (!receiveDiagnosticsReporter.ShouldPublish(channel, combined, now))
@@ -5033,7 +5040,20 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         if (Volatile.Read(ref disposeStarted) != 0)
             return;
 
-        receiveAudioWork.Enqueue(channel, traffic);
+        bool accepted = receiveAudioWork.Enqueue(channel, traffic, out bool droppedFrame);
+        if (droppedFrame)
+            channel.RecordDroppedReceiveFrame();
+        if (!accepted)
+        {
+            PublishReceiveDiagnostics(channel, DateTimeOffset.UtcNow);
+            return;
+        }
+
+        if (droppedFrame)
+            PublishReceiveDiagnostics(channel, DateTimeOffset.UtcNow);
+
+        if (!IsTerminatingTraffic(traffic))
+            channel.MarkReceivePlaybackActive(traffic.SourceId, traffic.StreamId);
     }
 
     private async Task DrainPatchSourceWorkAsync()
@@ -6829,6 +6849,7 @@ public sealed class SystemViewModel : IFneTrafficEndpoint, INotifyPropertyChange
     private long sentPacketCount;
     private long sentPacketBytes;
     private long nonCallDmrTerminatorCount;
+    private long droppedSystemTrafficCount;
     private string lastPacketText = "No media packets received.";
     private bool isSelected;
     private ZoneViewModel? selectedZone;
@@ -6856,7 +6877,11 @@ public sealed class SystemViewModel : IFneTrafficEndpoint, INotifyPropertyChange
                 zone.Channels.Any(member => SameResource(active, member))));
         }
         foreach (ChannelViewModel channel in Channels)
+        {
+            channel.SetReceivePresentationOwnerResolver(() => Channels.FirstOrDefault(candidate =>
+                SameResource(channel, candidate) && candidate.HasLocalReceivePresentation));
             channel.PropertyChanged += HandleChannelPropertyChanged;
+        }
         connection.StatusChanged += HandleConnectionStatus;
         connection.LogReceived += HandleLogReceived;
         connection.TrafficReceived += HandleTrafficReceived;
@@ -6912,6 +6937,9 @@ public sealed class SystemViewModel : IFneTrafficEndpoint, INotifyPropertyChange
         => $"RX {receivedPacketCount:N0} packets / {receivedPacketBytes:N0} bytes · TX {sentPacketCount:N0} packets / {sentPacketBytes:N0} bytes" +
             (nonCallDmrTerminatorCount > 0
                 ? $" · non-call DMR terminators {nonCallDmrTerminatorCount:N0}"
+                : string.Empty) +
+            (Interlocked.Read(ref droppedSystemTrafficCount) > 0
+                ? $" · UI backlog drops {Interlocked.Read(ref droppedSystemTrafficCount):N0}"
                 : string.Empty);
     public string LastPacketText => lastPacketText;
     public string ConnectionStatus
@@ -7023,6 +7051,12 @@ public sealed class SystemViewModel : IFneTrafficEndpoint, INotifyPropertyChange
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(PacketDiagnosticsText)));
     }
 
+    internal void RecordDroppedSystemTraffic(long count)
+    {
+        if (count > 0)
+            Interlocked.Add(ref droppedSystemTrafficCount, count);
+    }
+
     public async ValueTask DisposeAsync()
     {
         foreach (ChannelViewModel channel in Channels)
@@ -7061,6 +7095,7 @@ public sealed class SystemViewModel : IFneTrafficEndpoint, INotifyPropertyChange
         sentPacketCount = 0;
         sentPacketBytes = 0;
         nonCallDmrTerminatorCount = 0;
+        Interlocked.Exchange(ref droppedSystemTrafficCount, 0);
         lastPacketText = "No media packets received.";
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(PacketDiagnosticsText)));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(LastPacketText)));
@@ -7080,7 +7115,16 @@ public sealed class SystemViewModel : IFneTrafficEndpoint, INotifyPropertyChange
             foreach (ZoneViewModel zone in Zones)
                 zone.RefreshReceiveActivity();
         }
-        else if (e.PropertyName == nameof(ChannelViewModel.IsRecordingEnabled))
+
+        if (sender is ChannelViewModel changed &&
+            e.PropertyName is nameof(ChannelViewModel.State) or
+                nameof(ChannelViewModel.IsReceivePresentationActive))
+        {
+            foreach (ChannelViewModel channel in Channels.Where(candidate => SameResource(changed, candidate)))
+                channel.RefreshReceivePresentation();
+        }
+
+        if (e.PropertyName == nameof(ChannelViewModel.IsRecordingEnabled))
         {
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(RecordingConfigurationHeader)));
         }
@@ -7226,6 +7270,7 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
     private Func<ChannelViewModel, Task>? stopAudio;
     private Func<ChannelViewModel, Task>? startTransmit;
     private Func<ChannelViewModel, Task>? stopTransmit;
+    private Func<ChannelViewModel?>? receivePresentationOwnerResolver;
     private bool audioEnabled;
     private bool audioSuspended;
     private bool audioBusy;
@@ -7241,6 +7286,9 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
     private double volume = 1.0;
     private double stereoBalance;
     private long ignoredLatePacketCount;
+    private long droppedReceiveFrameCount;
+    private uint? receivePlaybackSourceId;
+    private uint? receivePlaybackStreamId;
     private string ignoredSubscriberIdsText = string.Empty;
     private string outputDeviceIdText = string.Empty;
     private IReadOnlyList<AudioDeviceOptionViewModel> outputDeviceOptions = [];
@@ -7294,37 +7342,45 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
     public double AudioMeterWidth => CardWidth - (CardWidth == 180 ? 20 : 12);
     public double WidgetX => widgetX;
     public double WidgetY => widgetY;
-    public IBrush CardBackgroundBrush => runtime.State switch
-    {
-        ChannelRuntimeState.Receiving => new SolidColorBrush(Color.Parse("#008A3A")),
-        ChannelRuntimeState.Transmitting => new SolidColorBrush(Color.Parse("#0B6B9C")),
-        _ when audioEnabled => new SolidColorBrush(Color.Parse(darkMode ? "#1B2B22" : "#E2F3E8")),
-        _ => new SolidColorBrush(Color.Parse(darkMode ? "#151D26" : "#FFFFFF"))
-    };
-    public IBrush CardBorderBrush => runtime.State switch
-    {
-        ChannelRuntimeState.Receiving => new SolidColorBrush(Color.Parse("#00C86A")),
-        ChannelRuntimeState.Transmitting => new SolidColorBrush(Color.Parse("#2497D3")),
-        _ when audioEnabled => new SolidColorBrush(Color.Parse("#4E8060")),
-        _ => CreateBrush(configuration.ResourceColor, darkMode ? "#2A3A4B" : "#9BA8B5")
-    };
+    public IBrush CardBackgroundBrush => runtime.State == ChannelRuntimeState.Transmitting
+        ? new SolidColorBrush(Color.Parse("#0B6B9C"))
+        : IsReceivePresentationActive
+            ? new SolidColorBrush(Color.Parse("#008A3A"))
+            : audioEnabled
+                ? new SolidColorBrush(Color.Parse(darkMode ? "#1B2B22" : "#E2F3E8"))
+                : new SolidColorBrush(Color.Parse(darkMode ? "#151D26" : "#FFFFFF"));
+    public IBrush CardBorderBrush => runtime.State == ChannelRuntimeState.Transmitting
+        ? new SolidColorBrush(Color.Parse("#2497D3"))
+        : IsReceivePresentationActive
+            ? new SolidColorBrush(Color.Parse("#00C86A"))
+            : audioEnabled
+                ? new SolidColorBrush(Color.Parse("#4E8060"))
+                : CreateBrush(configuration.ResourceColor, darkMode ? "#2A3A4B" : "#9BA8B5");
     public IBrush CardTextBrush => new SolidColorBrush(Color.Parse(
-        runtime.State is ChannelRuntimeState.Receiving or ChannelRuntimeState.Transmitting
+        IsReceivePresentationActive || runtime.State == ChannelRuntimeState.Transmitting
             ? "#FFFFFF"
             : darkMode ? "#DCE3EB" : "#18212B"));
     public string StateText
     {
         get
         {
-            if (audioSuspended && runtime.State != ChannelRuntimeState.Transmitting)
+            if (runtime.State == ChannelRuntimeState.Transmitting)
+                return runtime.StateText;
+
+            if (audioSuspended)
                 return "RX muted during console transmit";
 
-            if (runtime.State == ChannelRuntimeState.Receiving && runtime.SourceId is uint sourceId)
+            ChannelViewModel? owner = ReceivePresentationOwner;
+            if (owner?.PresentationSourceId is uint sourceId)
             {
                 string alias = AliasFileLoader.FindAlias(aliases, sourceId);
                 if (!string.IsNullOrWhiteSpace(alias))
-                    return $"Receiving from {alias} ({sourceId}) (stream {runtime.StreamId})";
+                    return $"Receiving from {alias} ({sourceId}) (stream {owner.PresentationStreamId})";
+                return $"Receiving from {sourceId} (stream {owner.PresentationStreamId})";
             }
+
+            if (!audioEnabled && runtime.State == ChannelRuntimeState.Receiving)
+                return "Receive disabled";
 
             return runtime.StateText;
         }
@@ -7335,6 +7391,7 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
     public ChannelRuntimeDefinition Definition => runtime.Definition;
     public bool IsAudioEnabled => audioEnabled;
     public bool IsAudioSuspended => audioSuspended;
+    public bool IsReceivePresentationActive => ReceivePresentationOwner is not null;
     public string AudioButtonText => audioSuspended ? "RX muted" : audioEnabled ? "Stop audio" : "Listen";
     public bool IsTransmitting => transmitEnabled;
     public bool IsTransmitSelected => transmitSelected;
@@ -7360,9 +7417,30 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
         set => SetStereoBalance(value, raiseChanged: true);
     }
     public long IgnoredLatePacketCount => Interlocked.Read(ref ignoredLatePacketCount);
+    public long DroppedReceiveFrameCount => Interlocked.Read(ref droppedReceiveFrameCount);
+
+    internal bool HasLocalReceivePresentation =>
+        audioEnabled &&
+        !audioSuspended &&
+        (runtime.State == ChannelRuntimeState.Receiving || receivePlaybackStreamId is not null);
+
+    private ChannelViewModel? ReceivePresentationOwner => !audioEnabled || audioSuspended
+        ? null
+        : HasLocalReceivePresentation
+            ? this
+            : receivePresentationOwnerResolver?.Invoke();
+
+    private uint? PresentationSourceId => receivePlaybackStreamId is not null
+        ? receivePlaybackSourceId
+        : runtime.SourceId;
+
+    private uint? PresentationStreamId => receivePlaybackStreamId ?? runtime.StreamId;
 
     internal void RecordIgnoredLatePacket()
         => Interlocked.Increment(ref ignoredLatePacketCount);
+
+    internal void RecordDroppedReceiveFrame()
+        => Interlocked.Increment(ref droppedReceiveFrameCount);
     public string StereoBalanceText => stereoBalance switch
     {
         <= -0.9999 => "Left",
@@ -7633,6 +7711,56 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
         IgnoredSubscriberIdsText = string.Join(", ", subscriberIds.Where(id => id != 0).Distinct().OrderBy(id => id));
     }
 
+    internal void SetReceivePresentationOwnerResolver(Func<ChannelViewModel?> resolver)
+    {
+        receivePresentationOwnerResolver = resolver ?? throw new ArgumentNullException(nameof(resolver));
+        RefreshReceivePresentation();
+    }
+
+    internal void MarkReceivePlaybackActive(uint sourceId, uint streamId)
+    {
+        if (!audioEnabled || audioSuspended || streamId == 0)
+            return;
+        if (receivePlaybackSourceId == sourceId && receivePlaybackStreamId == streamId)
+            return;
+
+        receivePlaybackSourceId = sourceId;
+        receivePlaybackStreamId = streamId;
+        NotifyReceivePresentationChanged();
+    }
+
+    internal void MarkReceivePlaybackEnded(uint streamId)
+    {
+        if (receivePlaybackStreamId != streamId)
+            return;
+
+        receivePlaybackSourceId = null;
+        receivePlaybackStreamId = null;
+        NotifyReceivePresentationChanged();
+    }
+
+    internal void RefreshReceivePresentation()
+    {
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(StateText)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CardBackgroundBrush)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CardBorderBrush)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CardTextBrush)));
+    }
+
+    private void NotifyReceivePresentationChanged()
+    {
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsReceivePresentationActive)));
+        RefreshReceivePresentation();
+    }
+
+    private void ClearReceivePlayback()
+    {
+        if (receivePlaybackStreamId is null)
+            return;
+        receivePlaybackSourceId = null;
+        receivePlaybackStreamId = null;
+    }
+
     public void SetAudioEnabled(bool enabled)
     {
         bool suspensionChanged = audioSuspended;
@@ -7640,12 +7768,12 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
         if (audioEnabled == enabled && !suspensionChanged)
             return;
         audioEnabled = enabled;
+        if (!enabled)
+            ClearReceivePlayback();
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsAudioEnabled)));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsAudioSuspended)));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(AudioButtonText)));
-        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(StateText)));
-        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CardBackgroundBrush)));
-        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CardBorderBrush)));
+        NotifyReceivePresentationChanged();
         if (!enabled)
             SetAudioLevel(0);
     }
@@ -7655,11 +7783,11 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
         if (!audioEnabled || audioSuspended == suspended)
             return;
         audioSuspended = suspended;
+        if (suspended)
+            ClearReceivePlayback();
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsAudioSuspended)));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(AudioButtonText)));
-        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(StateText)));
-        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CardBackgroundBrush)));
-        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CardBorderBrush)));
+        NotifyReceivePresentationChanged();
         if (suspended)
             SetAudioLevel(0);
     }
@@ -7833,10 +7961,13 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
         if (traffic.DestinationId != runtime.Definition.DestinationId)
             return ChannelTrafficApplyResult.NoMatch;
 
-        if (!MatchesVoiceTraffic(traffic) || traffic.SourceId == 0)
+        bool isDmrVoiceLcHeader = IsDmrVoiceLcHeader(traffic);
+        if ((!MatchesVoiceTraffic(traffic) && !isDmrVoiceLcHeader) || traffic.SourceId == 0)
             return ChannelTrafficApplyResult.NoMatch;
 
-        ReceiveStreamDecision voiceDecision = receiveLifecycle.ObserveVoice(traffic.StreamId, now);
+        ReceiveStreamDecision voiceDecision = isDmrVoiceLcHeader
+            ? receiveLifecycle.ObserveDefinitiveStart(traffic.StreamId, now)
+            : receiveLifecycle.ObserveVoice(traffic.StreamId, now);
         if (voiceDecision.Transition != ReceiveStreamTransition.IgnoredLate)
             runtime.MarkReceiving(traffic.SourceId, traffic.StreamId, now);
         return ToApplyResult(voiceDecision);
@@ -7853,7 +7984,11 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
     {
         ReceiveStreamDecision decision = receiveLifecycle.Advance(now);
         if (decision.Transition == ReceiveStreamTransition.GraceExpired)
+        {
             runtime.MarkIdle(now);
+            if (decision.EndedStreamId is uint endedStreamId)
+                MarkReceivePlaybackEnded(endedStreamId);
+        }
         return ToApplyResult(decision);
     }
 
@@ -7913,6 +8048,13 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
         return traffic.Protocol == FneTrafficProtocol.Dmr &&
             traffic.FrameType.Equals("DATA_SYNC", StringComparison.OrdinalIgnoreCase) &&
             traffic.Subtype.Equals("VOICE_PI_HEADER", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsDmrVoiceLcHeader(FneTrafficFrame traffic)
+    {
+        return traffic.Protocol == FneTrafficProtocol.Dmr &&
+            traffic.FrameType.Equals("DATA_SYNC", StringComparison.OrdinalIgnoreCase) &&
+            traffic.Subtype.Equals("VOICE_LC_HEADER", StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool IsVoiceFrame(string frameType)
@@ -8014,9 +8156,8 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
 
         if (args.PropertyName == nameof(ChannelRuntime.State))
         {
-            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CardBackgroundBrush)));
-            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CardBorderBrush)));
-            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CardTextBrush)));
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsReceivePresentationActive)));
+            RefreshReceivePresentation();
         }
     }
 

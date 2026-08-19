@@ -100,6 +100,45 @@ public sealed class FneConnectionTests
     }
 
     [Fact]
+    public async Task ProtocolErrorLogDoesNotMasqueradeAsConnectionLoss()
+    {
+        var options = new FneConnectionOptions(
+            "Test FNE", "TYF_OP1", "127.0.0.1", 62031, 1000001, null, false, null);
+        await using var connection = new FneConnection(options);
+        fnecore.FnePeer peer = connection.CreatePeer(new IPEndPoint(IPAddress.Loopback, 62031));
+
+        peer.Logger(fnecore.LogLevel.ERROR, "Unknown master opcode 7F / 00");
+
+        Assert.Equal(FneConnectionState.Disconnected, connection.Status.State);
+    }
+
+    [Fact]
+    public async Task ExplicitSocketErrorStillPublishesConnectionFault()
+    {
+        var options = new FneConnectionOptions(
+            "Test FNE", "TYF_OP1", "127.0.0.1", 62031, 1000001, null, false, null);
+        await using var connection = new FneConnection(options);
+        fnecore.FnePeer peer = connection.CreatePeer(new IPEndPoint(IPAddress.Loopback, 62031));
+
+        peer.Logger(fnecore.LogLevel.ERROR, "SOCKET ERROR: connection reset");
+
+        Assert.Equal(FneConnectionState.Faulted, connection.Status.State);
+    }
+
+    [Fact]
+    public void StateMonitorRepublishesAuthoritativeStateAfterTransientOverride()
+    {
+        Assert.True(FneConnection.ShouldPublishMonitoredState(
+            FneConnectionState.Connected,
+            FneConnectionState.Connected,
+            FneConnectionState.Faulted));
+        Assert.False(FneConnection.ShouldPublishMonitoredState(
+            FneConnectionState.Connected,
+            FneConnectionState.Connected,
+            FneConnectionState.Connected));
+    }
+
+    [Fact]
     public void KeepsKmfKeySeparateFromTransportKey()
     {
         var system = new SystemConfiguration

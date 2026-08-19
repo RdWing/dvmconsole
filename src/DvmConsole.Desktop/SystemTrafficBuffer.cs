@@ -18,12 +18,17 @@ internal sealed class SystemTrafficBuffer
     }
 
     public int Count => pending.Count;
+    public long DroppedCount { get; private set; }
 
     public bool Enqueue(FneTrafficFrame traffic)
     {
         ArgumentNullException.ThrowIfNull(traffic);
-        if (pending.Count >= maximumCount && !MakeRoomFor(traffic))
-            return false;
+        if (pending.Count >= maximumCount)
+        {
+            DroppedCount++;
+            if (!MakeRoomFor(traffic))
+                return false;
+        }
         pending.AddLast(traffic);
         return true;
     }
@@ -119,7 +124,8 @@ internal sealed class SystemTrafficBuffer
             return true;
         if (traffic.Protocol == FneTrafficProtocol.Dmr &&
             traffic.FrameType.Equals("DATA_SYNC", StringComparison.OrdinalIgnoreCase) &&
-            traffic.Subtype.Equals("VOICE_PI_HEADER", StringComparison.OrdinalIgnoreCase))
+            (traffic.Subtype.Equals("VOICE_PI_HEADER", StringComparison.OrdinalIgnoreCase) ||
+             traffic.Subtype.Equals("VOICE_LC_HEADER", StringComparison.OrdinalIgnoreCase)))
         {
             return true;
         }
