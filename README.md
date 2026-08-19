@@ -1,11 +1,12 @@
-# Digital Voice Modem Desktop Dispatch Console
+# DVM Console
 
-The Digital Voice Modem Desktop Dispatch Console ("DDC") is a desktop application that operates similarly to a traditional dispatch console, allowing DVM users to monitor multiple talkgroups on a DVM FNE from a single application. The `avalonia_v2` branch contains the cross-platform Avalonia rebuild for Apple Silicon and Intel macOS plus Windows x64; the original WPF application remains in the repository as the feature and behavior reference.
+DVM Console is a cross-platform desktop dispatch application for monitoring
+multiple talkgroups across one or more DVM FNE systems. The standalone Avalonia
+application supports Apple Silicon and Intel macOS plus Windows x64.
 
-The first public Avalonia release is version `0.1.0`. Release packages are
-self-contained for Apple Silicon macOS, Intel macOS, and Windows x64.
+Release packages are self-contained for all supported platforms.
 
-![Dark Mode Console](./repo/Screenshot-3.png)
+![DVM Console Neo dark theme](./repo/neo-dark.png)
 
 ## Compatibility Warning
 
@@ -17,7 +18,7 @@ Older FNE builds are not recommended and may behave unpredictably with this cons
 
 Codeplugs created for R01A00 should be reviewed before use with R02A00. There have been major changes to resource configuration.
 
-## Building the Avalonia application
+## Building DVM Console
 
 This project utilizes the Avalonia desktop framework for the Apple Silicon
 macOS, Intel macOS, and Windows x64 builds. A .NET 10 SDK installation, Rust
@@ -38,14 +39,13 @@ the application.
 ```sh
 git clone --recurse-submodules https://github.com/RdWing/dvmconsole.git
 cd dvmconsole
-git checkout avalonia_v2
 git submodule update --init --recursive
-dotnet restore src/DvmConsole.Rebuild.sln
-dotnet build src/DvmConsole.Rebuild.sln
+dotnet restore dvmconsole.sln
+dotnet build dvmconsole.sln
 ```
 
-2. Use `src/DvmConsole.Rebuild.sln` for the Avalonia application. The root
-`dvmconsole.sln` is the original Windows-only WPF solution.
+2. Use the root `dvmconsole.sln` for application, library, probe, and test
+projects.
 
 Native components are built automatically. See [Desktop building and
 publishing](docs/PUBLISHING.md).
@@ -98,7 +98,7 @@ If the application closes unexpectedly, copy
 include that file with the problem report.
 
 Maintainers creating these packages should follow [Desktop building and
-publishing](docs/PUBLISHING.md). The `Avalonia rebuild` GitHub Actions workflow
+publishing](docs/PUBLISHING.md). The `Build and package` GitHub Actions workflow
 builds and verifies the unsigned Apple Silicon macOS, Intel macOS, and Windows
 packages.
 
@@ -108,19 +108,19 @@ packages.
 repository. An internet connection is required to use the in-app viewer; the
 release archives do not contain a stale copy of the documentation.
 
-- [Overview](dvmconsole/Docs/Getting%20Started/01-Overview.md)
-- [Building](dvmconsole/Docs/Getting%20Started/02-Building.md)
-- [Codeplug Creation](dvmconsole/Docs/Getting%20Started/03-Configurations/01-Codeplug%20Creation.md)
-- [Encryption Keys](dvmconsole/Docs/Getting%20Started/03-Configurations/02-Encryption%20Keys.md)
-- [RID Aliases](dvmconsole/Docs/Getting%20Started/03-Configurations/03-RID%20Aliases.md)
-- [Groups and Patching](dvmconsole/Docs/Getting%20Started/03-Configurations/04-Groups%20and%20Patching.md)
-- [Talkgroup Audio Recorder](dvmconsole/Docs/Getting%20Started/03-Configurations/05-Talkgroup%20Audio%20Recorder.md)
-- [Console Operation](dvmconsole/Docs/Getting%20Started/04-Operations/01-Console%20Operation.md)
-- [Settings Reference](dvmconsole/Docs/Getting%20Started/04-Operations/02-Settings%20Reference.md)
-- [Audio Settings](dvmconsole/Docs/Getting%20Started/04-Operations/03-Audio%20Settings.md)
-- [Alert Tones](dvmconsole/Docs/Getting%20Started/04-Operations/04-Alert%20Tones.md)
+- [Overview](docs/user-guide/Getting%20Started/01-Overview.md)
+- [Building](docs/user-guide/Getting%20Started/02-Building.md)
+- [Codeplug Creation](docs/user-guide/Getting%20Started/03-Configurations/01-Codeplug%20Creation.md)
+- [Encryption Keys](docs/user-guide/Getting%20Started/03-Configurations/02-Encryption%20Keys.md)
+- [RID Aliases](docs/user-guide/Getting%20Started/03-Configurations/03-RID%20Aliases.md)
+- [Groups and Patching](docs/user-guide/Getting%20Started/03-Configurations/04-Groups%20and%20Patching.md)
+- [Talkgroup Audio Recorder](docs/user-guide/Getting%20Started/03-Configurations/05-Talkgroup%20Audio%20Recorder.md)
+- [Console Operation](docs/user-guide/Getting%20Started/04-Operations/01-Console%20Operation.md)
+- [Settings Reference](docs/user-guide/Getting%20Started/04-Operations/02-Settings%20Reference.md)
+- [Audio Settings](docs/user-guide/Getting%20Started/04-Operations/03-Audio%20Settings.md)
+- [Alert Tones](docs/user-guide/Getting%20Started/04-Operations/04-Alert%20Tones.md)
 
-## dvmconsole Configuration
+## Configuration
 
 1. **Create/Edit `codeplug.yml`**  
    An example codeplug is provided in the `configs` directory. Configure system parameters, network settings, and talkgroups as needed.  
@@ -133,7 +133,7 @@ release archives do not contain a stale copy of the documentation.
    To display friendly names instead of raw RIDs, populate `alias.yml` with your Radio ID to alias mappings.  
    This allows the console to show readable identifiers for subscriber units.
 
-4. Start `dvmconsole`.
+4. Start DVM Console.
 
 5. Use **"Open Codeplug"** within the application to load your configuration.
 

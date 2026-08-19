@@ -1,8 +1,0 @@
-{
-  "profiles": {
-    "dvmconsole": {
-      "commandName": "Project",
-      "commandLineArgs": "--userprofile=."
-    }
-  }
-}

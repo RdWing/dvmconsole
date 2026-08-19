@@ -251,10 +251,9 @@ public sealed class FneConnection : IAsyncDisposable
             LCO = message.LinkControlOpcode
         };
 
-        // FneSystemBase owns this helper in the legacy WPF application, but
-        // FnePeer intentionally exposes only raw traffic. Keep the same
-        // TSDU framing here rather than adding a desktop-specific API to
-        // fnecore.
+        // FnePeer intentionally exposes only raw traffic. Build the TSDU
+        // framing at this client boundary instead of adding a console-specific
+        // API to fnecore.
         byte[] payload = new byte[200];
         FneUtils.StringToBytes(Constants.TAG_P25_DATA, payload, 0, Constants.TAG_P25_DATA.Length);
         payload[4] = callData.LCO;

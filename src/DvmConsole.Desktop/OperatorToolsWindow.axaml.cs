@@ -247,6 +247,12 @@ public sealed partial class OperatorToolsWindow : Window
     private async void HandleTestPermitToneClick(object? sender, RoutedEventArgs e)
         => await viewModel.TestTalkPermitToneAsync();
 
+    private void HandleRequestMacOsMicrophonePermissionClick(object? sender, RoutedEventArgs e)
+        => viewModel.RequestMacOsMicrophonePermission();
+
+    private void HandleRequestMacOsKeyboardPermissionClick(object? sender, RoutedEventArgs e)
+        => viewModel.RequestMacOsKeyboardPermission();
+
     private void HandleSaveAudioInputPresetClick(object? sender, RoutedEventArgs e)
         => viewModel.SaveAudioInputPreset();
 

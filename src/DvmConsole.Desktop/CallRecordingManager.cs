@@ -19,8 +19,8 @@ public sealed class CallRecordingManager : IDisposable, IAsyncDisposable
     {
         WriteIndented = true
     };
-
     private readonly object sync = new();
+    private readonly OpusRecordingMetadataStore opusMetadataStore = new();
     private string rootPath;
     private readonly Action<ChannelViewModel, Exception>? faultHandler;
     private readonly Func<ChannelViewModel, uint, bool> shouldRecordSource;
@@ -127,9 +127,11 @@ public sealed class CallRecordingManager : IDisposable, IAsyncDisposable
             return [];
 
         List<CallRecordingMetadata> recordings = [];
+        string[] opusPaths;
         string[] sidecarPaths;
         try
         {
+            opusPaths = Directory.EnumerateFiles(rootPath, "*.opus", SearchOption.AllDirectories).ToArray();
             sidecarPaths = Directory.EnumerateFiles(rootPath, "*.json", SearchOption.AllDirectories).ToArray();
         }
         catch (IOException)
@@ -139,6 +141,22 @@ public sealed class CallRecordingManager : IDisposable, IAsyncDisposable
         catch (UnauthorizedAccessException)
         {
             return [];
+        }
+
+        foreach (string opusPath in opusPaths)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            try
+            {
+                if (opusMetadataStore.TryRead(opusPath, rootPath, out CallRecordingMetadata metadata))
+                    recordings.Add(metadata);
+            }
+            catch (Exception exception) when (exception is InvalidDataException or JsonException or FormatException or IOException or UnauthorizedAccessException)
+            {
+                // A damaged or unrelated Opus file must not hide the rest of
+                // the recording catalog. A matching legacy sidecar may still
+                // recover it in the pass below.
+            }
         }
 
         foreach (string sidecarPath in sidecarPaths)
@@ -153,6 +171,7 @@ public sealed class CallRecordingManager : IDisposable, IAsyncDisposable
                     continue;
                 if (metadata.SchemaVersion < 2)
                     UpgradeLegacyMetadata(sidecarPath, metadata, cancellationToken);
+                opusMetadataStore.TryMigrateSidecar(sidecarPath, metadata, rootPath);
 
                 recordings.Add(metadata);
             }
@@ -640,6 +659,7 @@ public sealed class CallRecordingManager : IDisposable, IAsyncDisposable
             recording.Direction,
             recording.RecordingSourceType,
             recording.UtcStartTime,
+            DateTimeOffset.UtcNow,
             channel.Definition.SystemName,
             channel.Definition.Name,
             channel.Definition.DestinationId,
@@ -652,7 +672,7 @@ public sealed class CallRecordingManager : IDisposable, IAsyncDisposable
             retentionDays > 0 ? retentionDays : null);
     }
 
-    private static async Task<RecordingFinalizationResult> FinalizeRecordingAsync(
+    private async Task<RecordingFinalizationResult> FinalizeRecordingAsync(
         RecordingSnapshot snapshot,
         ChannelViewModel channel,
         CancellationToken cancellationToken)
@@ -675,8 +695,13 @@ public sealed class CallRecordingManager : IDisposable, IAsyncDisposable
             }
 
             finalPath = CreateRecordingPath(snapshot);
+            CallRecordingMetadata metadata = CreateMetadata(snapshot, trim, finalPath);
             temporaryOpusPath = $"{finalPath}.{Environment.ProcessId}.{Guid.NewGuid():N}.tmp";
-            await OpusRecordingEncoder.EncodeWaveFileAsync(snapshot.WavePath, temporaryOpusPath).ConfigureAwait(false);
+            await OpusRecordingEncoder.EncodeWaveFileAsync(
+                snapshot.WavePath,
+                temporaryOpusPath,
+                opusMetadataStore.CreateTags(metadata),
+                cancellationToken: cancellationToken).ConfigureAwait(false);
             if (!await ContainsDecodableAudioAsync(temporaryOpusPath, cancellationToken).ConfigureAwait(false))
             {
                 return new RecordingFinalizationResult(
@@ -689,12 +714,19 @@ public sealed class CallRecordingManager : IDisposable, IAsyncDisposable
 
             File.Move(temporaryOpusPath, finalPath);
             temporaryOpusPath = null;
-            CallRecordingMetadata metadata = WriteMetadata(snapshot, trim, finalPath);
+            if (!opusMetadataStore.TryRead(finalPath, snapshot.RootPath, out CallRecordingMetadata persistedMetadata) ||
+                !RecordingCatalogKey(persistedMetadata).Equals(
+                    RecordingCatalogKey(metadata),
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidDataException("The embedded TAR metadata could not be verified.");
+            }
+            metadata.FileSizeBytes = new FileInfo(finalPath).Length;
             completed = true;
             return new RecordingFinalizationResult(metadata, snapshot.StreamId, null, null)
             { Channel = channel };
         }
-        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or InvalidOperationException or InvalidDataException or JsonException or NotSupportedException)
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or InvalidOperationException or InvalidDataException or JsonException or FormatException or NotSupportedException)
         {
             return new RecordingFinalizationResult(null, snapshot.StreamId, exception.Message, exception)
             { Channel = channel };
@@ -729,27 +761,25 @@ public sealed class CallRecordingManager : IDisposable, IAsyncDisposable
         }
     }
 
-    private static CallRecordingMetadata WriteMetadata(
+    private static CallRecordingMetadata CreateMetadata(
         RecordingSnapshot snapshot,
         PcmWavTrimResult trim,
         string recordingPath)
     {
-        DateTimeOffset end = DateTimeOffset.UtcNow;
-        FileInfo fileInfo = new(recordingPath);
-        CallRecordingMetadata metadata = new()
+        return new CallRecordingMetadata
         {
             SchemaVersion = 2,
             Protocol = snapshot.ProtocolText,
             Direction = snapshot.Direction,
             RecordingSourceType = snapshot.RecordingSourceType,
             UtcStartTime = snapshot.UtcStartTime,
-            UtcEndTime = end,
+            UtcEndTime = snapshot.UtcEndTime,
             DurationMs = (long)Math.Round(
                 trim.OutputSamples * 1000d / snapshot.Format.SampleRate,
                 MidpointRounding.AwayFromZero),
             FilePath = recordingPath,
             FileName = Path.GetFileName(recordingPath),
-            FileSizeBytes = fileInfo.Length,
+            FileSizeBytes = 0,
             SampleRate = snapshot.Format.SampleRate,
             BitsPerSample = snapshot.Format.BitsPerSample,
             ChannelCount = snapshot.Format.Channels,
@@ -774,21 +804,6 @@ public sealed class CallRecordingManager : IDisposable, IAsyncDisposable
             RetentionDaysAtRecordTime = snapshot.RetentionDays,
             PlaybackValidated = true
         };
-
-        string sidecarPath = Path.ChangeExtension(recordingPath, ".json");
-        string temporaryPath = $"{sidecarPath}.{Environment.ProcessId}.{Guid.NewGuid():N}.tmp";
-        try
-        {
-            File.WriteAllText(temporaryPath, JsonSerializer.Serialize(metadata, MetadataJsonOptions));
-            File.Move(temporaryPath, sidecarPath, overwrite: true);
-        }
-        finally
-        {
-            if (File.Exists(temporaryPath))
-                File.Delete(temporaryPath);
-        }
-
-        return metadata;
     }
 
     private static void TryDelete(string path)
@@ -886,6 +901,7 @@ public sealed class CallRecordingManager : IDisposable, IAsyncDisposable
         string Direction,
         string RecordingSourceType,
         DateTimeOffset UtcStartTime,
+        DateTimeOffset UtcEndTime,
         string SystemName,
         string ChannelName,
         uint TalkgroupId,

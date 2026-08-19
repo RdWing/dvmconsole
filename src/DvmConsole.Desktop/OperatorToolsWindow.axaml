@@ -96,6 +96,7 @@
               <StackPanel Grid.Row="1" Grid.ColumnSpan="4" Orientation="Horizontal" Spacing="8" Margin="0,8,0,0">
                 <Button Content="Refresh devices" Command="{Binding RefreshAudioDevicesCommand}" />
                 <Button Content="Test talk permit tone" Click="HandleTestPermitToneClick" />
+                <Button Content="Request macOS microphone access" Click="HandleRequestMacOsMicrophonePermissionClick" IsVisible="{Binding IsMacOsPermissionRequestAvailable}" />
               </StackPanel>
             </Grid>
 
@@ -315,11 +316,11 @@
                 <TextBox Grid.Column="3" Watermark="Subscriber ID" Text="{Binding RecordingSubscriberFilterText, Mode=TwoWay}" />
                 <TextBox Grid.Column="4" Watermark="Alias" Text="{Binding RecordingAliasFilterText, Mode=TwoWay}" />
               </Grid>
-              <Grid ColumnDefinitions="Auto,180,Auto,180,*" ColumnSpacing="8">
+              <Grid ColumnDefinitions="Auto,Auto,Auto,Auto,*" ColumnSpacing="8">
                 <TextBlock Text="From" VerticalAlignment="Center" />
-                <DatePicker Grid.Column="1" SelectedDate="{Binding RecordingStartDateFilter, Mode=TwoWay}" />
+                <DatePicker Grid.Column="1" MinWidth="240" SelectedDate="{Binding RecordingStartDateFilter, Mode=TwoWay}" />
                 <TextBlock Grid.Column="2" Text="Through" VerticalAlignment="Center" />
-                <DatePicker Grid.Column="3" SelectedDate="{Binding RecordingEndDateFilter, Mode=TwoWay}" />
+                <DatePicker Grid.Column="3" MinWidth="240" SelectedDate="{Binding RecordingEndDateFilter, Mode=TwoWay}" />
                 <TextBlock Grid.Column="4" Classes="caption" Text="{Binding HistoryFilterSummary}" TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
               </Grid>
             </StackPanel>
@@ -414,6 +415,7 @@
                   <Button Grid.Column="2" Content="Apply" Click="HandleApplyGlobalPttKeyClick" />
                 </Grid>
                 <CheckBox Content="Toggle global PTT instead of hold-to-talk" IsChecked="{Binding TogglePttMode, Mode=TwoWay}" />
+                <Button Content="Request macOS keyboard access" HorizontalAlignment="Left" Click="HandleRequestMacOsKeyboardPermissionClick" IsVisible="{Binding IsMacOsPermissionRequestAvailable}" />
                 <TextBlock Classes="caption" Text="This is the same global key available from Settings → Global PTT key in the main window." TextWrapping="Wrap" />
               </StackPanel>
             </Border>

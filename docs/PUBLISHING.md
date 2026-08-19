@@ -1,6 +1,6 @@
 # Desktop building and publishing
 
-The Avalonia application supports Apple Silicon macOS (`osx-arm64`), Intel
+DVM Console supports Apple Silicon macOS (`osx-arm64`), Intel
 macOS (`osx-x64`), and 64-bit Windows (`win-x64`). Release packages are
 self-contained; end users do not need .NET or Rust installed.
 
@@ -13,15 +13,14 @@ self-contained; end users do not need .NET or Rust installed.
 - Xcode Command Line Tools on macOS, or Visual Studio Build Tools with the
   Desktop development with C++ workload on Windows
 
-Clone recursively, then restore and build the Avalonia solution:
+Clone recursively, then restore and build the solution:
 
 ```sh
 git clone --recurse-submodules https://github.com/RdWing/dvmconsole.git
 cd dvmconsole
-git checkout avalonia_v2
 git submodule update --init --recursive
-dotnet restore src/DvmConsole.Rebuild.sln
-dotnet build src/DvmConsole.Rebuild.sln
+dotnet restore dvmconsole.sln
+dotnet build dvmconsole.sln
 ```
 
 Native components and their tests are part of the normal solution build.
@@ -107,7 +106,7 @@ remains optional for additional media formats through `DVM_FFMPEG`.
 
 ## CI and tagged releases
 
-The `Avalonia rebuild` workflow installs the pinned Rust toolchain, runs
+The `Build and package` workflow installs the pinned Rust toolchain, runs
 formatting, lint, native tests, and the full .NET test matrix on all three
 targets, then publishes and verifies unsigned packages. It checks native
 architecture, the macOS deployment floor, Windows single-file layout, and

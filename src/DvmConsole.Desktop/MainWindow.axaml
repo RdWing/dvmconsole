@@ -42,7 +42,6 @@
     <Style Selector="ScrollViewer"><Setter Property="AllowAutoHide" Value="True" /></Style>
     <Style Selector="ScrollBar"><Setter Property="AllowAutoHide" Value="True" /><Setter Property="ShowDelay" Value="0:0:0" /><Setter Property="HideDelay" Value="0:0:0.7" /></Style>
     <Style Selector="TabControl.zone-tabs TabItem"><Setter Property="FontSize" Value="{Binding $parent[Window].((local:MainWindowViewModel)DataContext).UiSmallFontSize}" /><Setter Property="Padding" Value="5,5" /></Style>
-    <Style Selector="ProgressBar.receive-level /template/ Border#PART_Indicator"><Setter Property="Background" Value="#00BE5A" /></Style>
   </Window.Styles>
 
   <LayoutTransformControl LayoutTransform="{Binding UiScaleTransform}">
@@ -236,7 +235,13 @@
                                   <Grid RowDefinitions="Auto,Auto,Auto,*,24" RowSpacing="3">
                                   <StackPanel Spacing="2"><TextBlock Foreground="{Binding CardTextBrush}" FontWeight="Bold" FontSize="{Binding $parent[Window].((local:MainWindowViewModel)DataContext).UiFontSize}" Text="{Binding Name}" TextTrimming="CharacterEllipsis" /><TextBlock Foreground="{Binding CardTextBrush}" FontSize="{Binding $parent[Window].((local:MainWindowViewModel)DataContext).UiSmallFontSize}" Text="{Binding TalkgroupText}" /></StackPanel>
                                   <TextBlock Grid.Row="1" Foreground="{Binding CardTextBrush}" FontSize="{Binding $parent[Window].((local:MainWindowViewModel)DataContext).UiSmallFontSize}" Text="{Binding LastCallerDisplayText}" TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
-                                  <ProgressBar Grid.Row="2" Classes="receive-level" Width="{Binding AudioMeterWidth}" Height="4" Minimum="0" Maximum="100" Value="{Binding AudioLevel}" HorizontalAlignment="Center" />
+                                  <Border Grid.Row="2" Width="{Binding AudioMeterWidth}" Height="4" Background="#24303B" CornerRadius="2" ClipToBounds="True" HorizontalAlignment="Center">
+                                    <Border Background="#00BE5A" CornerRadius="2" RenderTransformOrigin="0%,50%">
+                                      <Border.RenderTransform>
+                                        <ScaleTransform ScaleX="{Binding AudioLevelScale}" />
+                                      </Border.RenderTransform>
+                                    </Border>
+                                  </Border>
                                   <Grid Grid.Row="3" MinHeight="23" ClipToBounds="False" ColumnDefinitions="*,Auto" ColumnSpacing="4"><local:NeutralSnapSlider Height="36" Minimum="-1" Maximum="1" NeutralValue="0" Value="{Binding VolumeSliderValue, Mode=TwoWay}" VerticalAlignment="Center" ToolTip.Tip="Channel gain: center is 0 dB (1×)"><local:NeutralSnapSlider.RenderTransform><TranslateTransform Y="-4" /></local:NeutralSnapSlider.RenderTransform></local:NeutralSnapSlider><Button Grid.Column="1" Classes="card-action channel-action encryption-select" Content="{Binding EncryptionButtonText}" Background="{Binding EncryptionSelectionBrush}" BorderBrush="{Binding EncryptionSelectionBorderBrush}" Foreground="{Binding EncryptionSelectionTextBrush}" Command="{Binding EncryptionCommand}" IsVisible="{Binding CanToggleEncryption}" IsEnabled="{Binding CanToggleEncryption}" /></Grid>
                                   <Grid Grid.Row="4" ColumnDefinitions="*,Auto,Auto,Auto,Auto" ColumnSpacing="2">
                                     <Button Classes="ptt" Content="{Binding PttButtonText}" IsEnabled="{Binding CanTransmit}" />

@@ -1,4 +1,4 @@
-//! P25 Phase 1 single-tone frames copied from the legacy WPF
+//! P25 Phase 1 single-tone frames retained from the original DVM Console
 //! `VocoderToneLookupTable`.
 //!
 //! The legacy table was captured from an EF Johnson VP8000. Keep the frame

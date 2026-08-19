@@ -10,7 +10,7 @@ namespace DvmConsole.Desktop;
 public sealed partial class AboutWindow : Window
 {
     private const string RepositoryUrl = "https://github.com/RdWing/dvmconsole";
-    private const string LicenseUrl = "https://github.com/RdWing/dvmconsole/blob/avalonia_v2/LICENSE";
+    private const string LicenseUrl = "https://github.com/RdWing/dvmconsole/blob/neo/LICENSE";
 
     public AboutWindow()
     {

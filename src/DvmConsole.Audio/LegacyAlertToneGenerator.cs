@@ -7,7 +7,7 @@ public enum LegacyAlertTone
     Alert3 = 3
 }
 
-// Recreates the three alert patterns bundled with the original WPF console.
+// Recreates the three compatibility alert patterns from earlier DVM Console releases.
 // Frequencies and step boundaries are aligned to 20 ms vocoder frames so the
 // generated version stays clean after DMR/P25 encoding.
 public static class LegacyAlertToneGenerator

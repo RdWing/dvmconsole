@@ -118,8 +118,10 @@ public sealed class CallRecordingManagerTests
                 Assert.True(await reader.ReadSamplesAsync(decoded) > 0);
             }
 
-            string metadataPath = Directory.GetFiles(root, "*.json", SearchOption.AllDirectories).Single();
-            CallRecordingMetadata metadata = JsonSerializer.Deserialize<CallRecordingMetadata>(File.ReadAllText(metadataPath))!;
+            Assert.Empty(Directory.GetFiles(root, "*.json", SearchOption.AllDirectories));
+            OggOpusTagSet tags = OggOpusTags.Read(firstPath);
+            Assert.True(tags.Fields.ContainsKey(OpusRecordingMetadataStore.MetadataTag));
+            CallRecordingMetadata metadata = Assert.Single(manager.LoadRecordings());
             Assert.Equal("ANALOG", metadata.Protocol);
             Assert.Equal("System 1", metadata.SystemName);
             Assert.Equal("Dispatch", metadata.ChannelName);
@@ -632,6 +634,100 @@ public sealed class CallRecordingManagerTests
             string migratedJson = File.ReadAllText(sidecarPath);
             Assert.Contains("\"PlaybackValidated\": true", migratedJson, StringComparison.Ordinal);
             Assert.Contains(first.RecordingId, migratedJson, StringComparison.Ordinal);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task MigratesOpusSidecarIntoTagsWithoutReencodingAudio()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "dvmconsole-recording-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        string wavPath = Path.Combine(root, "source.wav");
+        string opusPath = Path.Combine(root, "legacy.opus");
+        using (var writer = new PcmWavFileWriter(wavPath, PcmAudioFormat.Voice8KhzMono16Bit))
+            writer.Write(Enumerable.Repeat((short)1200, 800).ToArray());
+        await OpusRecordingEncoder.EncodeWaveFileAsync(wavPath, opusPath);
+        File.Delete(wavPath);
+
+        string sidecarPath = Path.ChangeExtension(opusPath, ".json");
+        var legacyMetadata = new CallRecordingMetadata
+        {
+            SchemaVersion = 2,
+            RecordingId = "legacy-opus-recording",
+            Direction = "RX",
+            Protocol = "ANALOG",
+            UtcStartTime = DateTimeOffset.UnixEpoch,
+            UtcEndTime = DateTimeOffset.UnixEpoch.AddMilliseconds(100),
+            DurationMs = 100,
+            FilePath = opusPath,
+            FileName = Path.GetFileName(opusPath),
+            FileSizeBytes = new FileInfo(opusPath).Length,
+            SampleRate = 8000,
+            BitsPerSample = 16,
+            ChannelCount = 1,
+            OriginalSampleCount = 800,
+            ActiveSampleCount = 800,
+            PeakAmplitude = 1200,
+            SystemName = "System 1",
+            ChannelName = "Dispatch",
+            TalkgroupId = 99,
+            SubscriberId = 42,
+            StreamId = 7,
+            PlaybackValidated = true
+        };
+        File.WriteAllText(sidecarPath, JsonSerializer.Serialize(legacyMetadata));
+        using var manager = new CallRecordingManager(root);
+
+        try
+        {
+            CallRecordingMetadata migrated = Assert.Single(manager.LoadRecordings());
+
+            Assert.Equal(legacyMetadata.RecordingId, migrated.RecordingId);
+            Assert.True(migrated.IsPlayable);
+            Assert.False(File.Exists(sidecarPath));
+            Assert.True(OggOpusTags.Read(opusPath).Fields.ContainsKey(OpusRecordingMetadataStore.MetadataTag));
+            Assert.Equal(legacyMetadata.RecordingId, Assert.Single(manager.LoadRecordings()).RecordingId);
+
+            await using IAudioPcmStreamReader reader = await PcmStreamDecoder.OpenAsync(File.OpenRead(opusPath));
+            short[] decoded = new short[1600];
+            Assert.True(await reader.ReadSamplesAsync(decoded) > 0);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void KeepsOpusSidecarWhenEmbeddingCannotBeVerified()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "dvmconsole-recording-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        string opusPath = Path.Combine(root, "damaged.opus");
+        string sidecarPath = Path.ChangeExtension(opusPath, ".json");
+        File.WriteAllBytes(opusPath, [1, 2, 3]);
+        File.WriteAllText(sidecarPath, JsonSerializer.Serialize(new CallRecordingMetadata
+        {
+            SchemaVersion = 2,
+            RecordingId = "damaged-opus-recording",
+            FilePath = opusPath,
+            FileName = Path.GetFileName(opusPath),
+            UtcStartTime = DateTimeOffset.UnixEpoch,
+            UtcEndTime = DateTimeOffset.UnixEpoch.AddSeconds(1)
+        }));
+        using var manager = new CallRecordingManager(root);
+
+        try
+        {
+            Assert.Single(manager.LoadRecordings());
+            Assert.True(File.Exists(sidecarPath));
+            Assert.Equal(new byte[] { 1, 2, 3 }, File.ReadAllBytes(opusPath));
         }
         finally
         {

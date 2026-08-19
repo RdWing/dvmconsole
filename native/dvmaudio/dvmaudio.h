@@ -18,6 +18,18 @@ enum DvmHighQualityBluetoothStatus {
     DVM_HIGH_QUALITY_BLUETOOTH_UNSUPPORTED = 4
 };
 
+enum DvmPermissionRequestResult {
+    DVM_PERMISSION_UNAVAILABLE = 0,
+    DVM_PERMISSION_GRANTED = 1,
+    DVM_PERMISSION_REQUESTED = 2,
+    DVM_PERMISSION_DENIED = 3,
+    DVM_PERMISSION_RESTRICTED = 4
+};
+
+// Requests macOS microphone authorization. A REQUESTED result means the
+// system prompt was started asynchronously and the user has not responded yet.
+int32_t dvm_audio_request_microphone_permission(void);
+
 int32_t dvm_audio_get_device_count(int32_t input, int32_t *count);
 int32_t dvm_audio_get_device(
     int32_t input,

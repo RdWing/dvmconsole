@@ -75,7 +75,7 @@ groups:
 patchSourceIdPassthrough: false
 
 #
-# Zones group codeplug channels. The Avalonia rebuild presents one tab per
+# Zones group codeplug channels. DVM Console presents one tab per
 # configured system and places every system-linked channel in that system tab.
 # A variable number of systems and channels is supported.
 #

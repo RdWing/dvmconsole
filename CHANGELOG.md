@@ -6,19 +6,33 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-08-19
+
 ### Added
 
 - Add an ordered custom tone-pattern editor with reusable 300–2500 Hz tone and silence steps that remain within one transmitted call.
+- Add macOS-only actions for requesting Input Monitoring and microphone access from Console Settings.
 
 ### Changed
 
 - Send P25 DTMF through the normal voice encoder, while decoded custom alert assets use corrected single-tone generation only for confidently detected sustained tones.
 - Keep Quick Call II tone A and tone B in one call with frame-aligned setup and trailing time for reliable paging.
+- Reduce the TAR Opus target bitrate from 16 kbps to 9 kbps while retaining VOIP mode and variable bitrate encoding.
+- Embed TAR catalog metadata in each Opus recording instead of creating JSON sidecars, with verified migration of existing Opus sidecars without re-encoding audio.
+- Promote the cross-platform solution to the repository root and relocate the
+  live user guide under `docs/user-guide` for a standalone project layout.
 
 ### Fixed
 
 - Apply corrected P25 single-tone generation consistently to built-in alerts, the Tones panel, saved patterns, and both Quick Call II tones.
 - Play the talk-permit cue only after the selected microphone produces audio, allowing Bluetooth headsets to finish switching profiles before the operator begins speaking.
+- Keep the History date filters from overlapping at compact window sizes and apply the center detent while dragging slider thumbs with the mouse.
+- Stabilize receiving channel cards by avoiding non-visual per-packet notifications, using render-only meter updates, and presenting DMR and P25 levels at the same PCM-based cadence.
+
+### Removed
+
+- Remove the retired Windows-only WPF project and its unused image and audio
+  assets now that the Avalonia application is the standalone product.
 
 ## [0.2.4] - 2026-08-18
 
@@ -178,7 +192,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Add patches, multi-select groups, call history, recordings, web streams, clocks, layouts, themes, startup behavior, and in-application operator documentation.
 - Add support for local and KMM-provided P25 encryption keys while preserving compatibility with existing variable-length AES key material.
 
-[Unreleased]: https://github.com/RdWing/dvmconsole/compare/v0.2.4...HEAD
+[Unreleased]: https://github.com/RdWing/dvmconsole/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/RdWing/dvmconsole/compare/v0.2.4...v0.3.0
 [0.2.4]: https://github.com/RdWing/dvmconsole/compare/v0.2.3...v0.2.4
 [0.2.3]: https://github.com/RdWing/dvmconsole/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/RdWing/dvmconsole/compare/v0.2.1...v0.2.2

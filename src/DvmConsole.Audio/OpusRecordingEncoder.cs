@@ -8,11 +8,24 @@ namespace DvmConsole.Audio;
 // portable Ogg Opus recording without requiring a platform codec or process.
 public static class OpusRecordingEncoder
 {
-    public const int DefaultBitrate = 16_000;
+    public const int DefaultBitrate = 9_000;
 
     public static async Task EncodeWaveFileAsync(
         string wavePath,
         string opusPath,
+        int bitrate = DefaultBitrate,
+        CancellationToken cancellationToken = default)
+        => await EncodeWaveFileAsync(
+            wavePath,
+            opusPath,
+            tags: null,
+            bitrate,
+            cancellationToken).ConfigureAwait(false);
+
+    public static async Task EncodeWaveFileAsync(
+        string wavePath,
+        string opusPath,
+        IReadOnlyDictionary<string, string>? tags,
         int bitrate = DefaultBitrate,
         CancellationToken cancellationToken = default)
     {
@@ -50,11 +63,19 @@ public static class OpusRecordingEncoder
         encoder.Bitrate = bitrate;
         encoder.UseVBR = true;
 
-        var tags = new OpusTags { Comment = "DVM Console TAR" };
+        var opusTags = new OpusTags { Comment = "DVM Console TAR" };
+        if (tags is not null)
+        {
+            foreach ((string name, string value) in tags)
+            {
+                if (!string.IsNullOrWhiteSpace(name) && !string.IsNullOrEmpty(value))
+                    opusTags.Fields[name] = value;
+            }
+        }
         var ogg = new OpusOggWriteStream(
             encoder,
             output,
-            tags,
+            opusTags,
             inputSampleRate: pcm.SampleRate,
             leaveOpen: true);
         short[] samples = new short[1600];
