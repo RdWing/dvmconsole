@@ -51,6 +51,14 @@ public interface IVocoderSession : IDisposable
     }
 }
 
+// Explicit generated-tone access for P25 Phase 1. UI-authored tone metadata
+// reaches the fixed frame tables directly; ordinary voice PCM is never
+// classified as a tone by this interface.
+public interface IP25GeneratedToneVocoderSession : IVocoderSession
+{
+    int EncodeSingleTone(double frequencyHz, Span<byte> codeword);
+}
+
 public readonly record struct HalfRateFecStatus(uint CorrectedErrors, bool Unrecoverable)
 {
     public const int NativeUnrecoverableMarker = ushort.MaxValue;

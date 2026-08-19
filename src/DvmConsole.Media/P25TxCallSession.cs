@@ -75,6 +75,14 @@ public sealed class P25TxCallSession : IDisposable
         return audio.Process(samples);
     }
 
+    public int ProcessSingleTone(double frequencyHz)
+    {
+        ObjectDisposedException.ThrowIf(disposed, this);
+        if (!started || ended)
+            throw new InvalidOperationException("The P25 call must be active before processing audio.");
+        return audio.ProcessSingleTone(frequencyHz);
+    }
+
     public void End()
     {
         ObjectDisposedException.ThrowIf(disposed, this);

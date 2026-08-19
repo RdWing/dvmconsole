@@ -102,6 +102,16 @@ public sealed class PatchTransmitSession : IDisposable
         return analog!.Process(samples);
     }
 
+    public int ProcessP25SingleTone(double frequencyHz)
+    {
+        ObjectDisposedException.ThrowIf(disposed, this);
+        if (!started || ended)
+            throw new InvalidOperationException("The patch call must be active before processing audio.");
+        if (p25 is null)
+            throw new InvalidOperationException("P25 tone lookup is available only for P25 patch targets.");
+        return p25.ProcessSingleTone(frequencyHz);
+    }
+
     public void End()
     {
         ObjectDisposedException.ThrowIf(disposed, this);

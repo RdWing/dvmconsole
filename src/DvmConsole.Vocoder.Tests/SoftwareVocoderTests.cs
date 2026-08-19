@@ -39,6 +39,19 @@ public sealed class SoftwareVocoderTests
         Assert.Equal(0, session.FlushEncode(codeword));
     }
 
+    [Fact]
+    public void P25GeneratedTonesUseExplicitLookupFrames()
+    {
+        using var backend = new SoftwareVocoderBackend();
+        using var session = Assert.IsAssignableFrom<IP25GeneratedToneVocoderSession>(
+            backend.CreateSession(VocoderMode.P25Imbe));
+        byte[] codeword = new byte[VocoderFrameSizes.CodewordBytes(VocoderMode.P25Imbe)];
+
+        Assert.Equal(codeword.Length, session.EncodeSingleTone(1000, codeword));
+        Assert.Equal("09230B0DC4A5CAE8280A32", Convert.ToHexString(codeword));
+
+    }
+
     [Theory]
     [InlineData(VocoderMode.DmrAmbe)]
     [InlineData(VocoderMode.NxdnAmbe)]

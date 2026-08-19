@@ -1,4 +1,5 @@
 using Avalonia.Threading;
+using DvmConsole.Audio;
 using DvmConsole.Core.Runtime;
 using DvmConsole.FneClient;
 using DvmConsole.Media;
@@ -63,6 +64,7 @@ public sealed class ToneTransmitCoordinator : IAsyncDisposable
         {
             ObjectDisposedException.ThrowIf(disposed, this);
             ValidateTargets(requested);
+            double?[] detectedSingleTones = PcmSingleToneAnalyzer.Analyze(samples.Span);
 
             sending = true;
             await Task.WhenAll(requested.Select(target => SendCoreAsync(
@@ -70,6 +72,47 @@ public sealed class ToneTransmitCoordinator : IAsyncDisposable
                 target.System,
                 target.System.SourceId!.Value,
                 samples,
+                sequence: null,
+                detectedSingleTones,
+                cancellationToken))).ConfigureAwait(false);
+        }
+        finally
+        {
+            sending = false;
+            gate.Release();
+        }
+    }
+
+    public async Task SendAsync(
+        IEnumerable<TransmitTarget> targets,
+        GeneratedToneSequence sequence,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(targets);
+        ArgumentNullException.ThrowIfNull(sequence);
+        ObjectDisposedException.ThrowIf(disposed, this);
+
+        TransmitTarget[] requested = targets
+            .GroupBy(target => target.Channel)
+            .Select(group => group.First())
+            .ToArray();
+        if (requested.Length == 0)
+            throw new InvalidOperationException("Select at least one transmit-capable channel.");
+
+        await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            ObjectDisposedException.ThrowIf(disposed, this);
+            ValidateTargets(requested);
+
+            sending = true;
+            await Task.WhenAll(requested.Select(target => SendCoreAsync(
+                target.Channel,
+                target.System,
+                target.System.SourceId!.Value,
+                samples: default,
+                sequence,
+                detectedSingleTones: null,
                 cancellationToken))).ConfigureAwait(false);
         }
         finally
@@ -116,6 +159,8 @@ public sealed class ToneTransmitCoordinator : IAsyncDisposable
         IFneTrafficEndpoint system,
         uint sourceId,
         ReadOnlyMemory<short> samples,
+        GeneratedToneSequence? sequence,
+        IReadOnlyList<double?>? detectedSingleTones,
         CancellationToken cancellationToken)
     {
         ChannelRuntimeDefinition definition = ChannelTransmitDefinitionFactory.Create(channel);
@@ -168,14 +213,30 @@ public sealed class ToneTransmitCoordinator : IAsyncDisposable
 
             try
             {
-                for (int offset = 0; offset < samples.Length; offset += VocoderFrameSizes.PcmSamplesPerFrame)
+                if (sequence is not null && definition.Mode == "p25")
                 {
-                    cancellationToken.ThrowIfCancellationRequested();
-                    short[] frame = new short[VocoderFrameSizes.PcmSamplesPerFrame];
-                    int count = Math.Min(frame.Length, samples.Length - offset);
-                    samples.Span.Slice(offset, count).CopyTo(frame);
-                    session.Process(frame);
-                    await Task.Delay(TimeSpan.FromMilliseconds(20), cancellationToken).ConfigureAwait(false);
+                    await SendP25SequenceAsync(session, sequence, cancellationToken).ConfigureAwait(false);
+                }
+                else if (detectedSingleTones is not null && definition.Mode == "p25")
+                {
+                    await SendP25DecodedAudioAsync(
+                        session,
+                        samples,
+                        detectedSingleTones,
+                        cancellationToken).ConfigureAwait(false);
+                }
+                else
+                {
+                    ReadOnlyMemory<short> pcm = sequence?.RenderPcm() ?? samples;
+                    for (int offset = 0; offset < pcm.Length; offset += VocoderFrameSizes.PcmSamplesPerFrame)
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+                        short[] frame = new short[VocoderFrameSizes.PcmSamplesPerFrame];
+                        int count = Math.Min(frame.Length, pcm.Length - offset);
+                        pcm.Span.Slice(offset, count).CopyTo(frame);
+                        session.Process(frame);
+                        await Task.Delay(TimeSpan.FromMilliseconds(20), cancellationToken).ConfigureAwait(false);
+                    }
                 }
 
                 session.End();
@@ -202,6 +263,57 @@ public sealed class ToneTransmitCoordinator : IAsyncDisposable
 
             vocoderSession?.Dispose();
             vocoderBackend?.Dispose();
+        }
+    }
+
+    private static async Task SendP25SequenceAsync(
+        PatchTransmitSession session,
+        GeneratedToneSequence sequence,
+        CancellationToken cancellationToken)
+    {
+        short[] pcm = sequence.RenderPcm();
+        int pcmOffset = 0;
+        foreach (GeneratedToneStep step in sequence.Steps)
+        {
+            for (int frameIndex = 0; frameIndex < step.FrameCount; frameIndex++)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (step.Kind == GeneratedToneStepKind.SingleTone)
+                    session.ProcessP25SingleTone(step.FrequencyHz);
+                else
+                    session.Process(pcm.AsSpan(pcmOffset, VocoderFrameSizes.PcmSamplesPerFrame));
+                pcmOffset += VocoderFrameSizes.PcmSamplesPerFrame;
+                await Task.Delay(TimeSpan.FromMilliseconds(20), cancellationToken).ConfigureAwait(false);
+            }
+        }
+    }
+
+    private static async Task SendP25DecodedAudioAsync(
+        PatchTransmitSession session,
+        ReadOnlyMemory<short> samples,
+        IReadOnlyList<double?> detectedSingleTones,
+        CancellationToken cancellationToken)
+    {
+        int frameIndex = 0;
+        for (int offset = 0; offset < samples.Length; offset += VocoderFrameSizes.PcmSamplesPerFrame)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            short[] frame = new short[VocoderFrameSizes.PcmSamplesPerFrame];
+            int count = Math.Min(frame.Length, samples.Length - offset);
+            samples.Span.Slice(offset, count).CopyTo(frame);
+            if (count == frame.Length &&
+                frameIndex < detectedSingleTones.Count &&
+                detectedSingleTones[frameIndex] is double frequencyHz)
+            {
+                session.ProcessP25SingleTone(frequencyHz);
+            }
+            else
+            {
+                session.Process(frame);
+            }
+
+            frameIndex++;
+            await Task.Delay(TimeSpan.FromMilliseconds(20), cancellationToken).ConfigureAwait(false);
         }
     }
 

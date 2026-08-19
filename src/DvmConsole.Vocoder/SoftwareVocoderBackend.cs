@@ -33,7 +33,7 @@ public sealed class SoftwareVocoderBackend : IVocoderBackend
         disposed = true;
     }
 
-    private sealed class SoftwareVocoderSession : IHalfRateVocoderSession
+    private sealed class SoftwareVocoderSession : IHalfRateVocoderSession, IP25GeneratedToneVocoderSession
     {
         private readonly NativeVocoderApi api;
         private readonly VocoderMode mode;
@@ -105,6 +105,16 @@ public sealed class SoftwareVocoderBackend : IVocoderBackend
             if (result == 0)
                 return 0;
             RequireLength(result, expected, "flush");
+            output.CopyTo(codeword);
+            return result;
+        }
+
+        public int EncodeSingleTone(double frequencyHz, Span<byte> codeword)
+        {
+            ValidateP25GeneratedCodeword(codeword.Length);
+            byte[] output = new byte[VocoderFrameSizes.CodewordBytes(VocoderMode.P25Imbe)];
+            int result = api.EncodeP25SingleTone(handle, frequencyHz, output);
+            RequireLength(result, output.Length, "P25 single-tone lookup");
             output.CopyTo(codeword);
             return result;
         }
@@ -243,6 +253,15 @@ public sealed class SoftwareVocoderBackend : IVocoderBackend
                 throw new NotSupportedException("Parameter access is available only for half-rate sessions.");
         }
 
+        private void ValidateP25GeneratedCodeword(int codewordLength)
+        {
+            ThrowIfDisposed();
+            if (mode != VocoderMode.P25Imbe)
+                throw new NotSupportedException("Generated P25 lookup frames require a P25 Phase 1 session.");
+            if (codewordLength != VocoderFrameSizes.CodewordBytes(VocoderMode.P25Imbe))
+                throw new ArgumentException("A P25 Phase 1 codeword must be 11 bytes.", nameof(codewordLength));
+        }
+
         private void ThrowIfDisposed()
         {
             if (handle == IntPtr.Zero)
@@ -263,7 +282,7 @@ public sealed class SoftwareVocoderBackend : IVocoderBackend
 
     private sealed class NativeVocoderApi : IDisposable
     {
-        private const uint RequiredAbiVersion = 4;
+        private const uint RequiredAbiVersion = 5;
         private const string LibraryBaseName = "dvmconsole_vocoder";
 
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate uint VersionDelegate();
@@ -273,6 +292,7 @@ public sealed class SoftwareVocoderBackend : IVocoderBackend
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate void DestroyDelegate(IntPtr session);
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate int ResetDelegate(IntPtr session);
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate int EncodeDelegate(IntPtr session, short[] samples, nuint sampleCount, byte[] output, nuint outputCapacity);
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate int EncodeP25SingleToneDelegate(IntPtr session, double frequencyHz, byte[] output, nuint outputCapacity);
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate int FlushDelegate(IntPtr session, byte[] output, nuint outputCapacity);
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate int DecodeDelegate(IntPtr session, byte[] input, nuint inputLength, short[] samples, nuint sampleCapacity);
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate int DecodeLostDelegate(IntPtr session, short[] samples, nuint sampleCapacity);
@@ -296,6 +316,7 @@ public sealed class SoftwareVocoderBackend : IVocoderBackend
         private readonly DestroyDelegate destroy;
         private readonly ResetDelegate reset;
         private readonly EncodeDelegate encode;
+        private readonly EncodeP25SingleToneDelegate encodeP25SingleTone;
         private readonly FlushDelegate flush;
         private readonly DecodeDelegate decode;
         private readonly DecodeLostDelegate decodeLost;
@@ -317,6 +338,7 @@ public sealed class SoftwareVocoderBackend : IVocoderBackend
             destroy = Get<DestroyDelegate>("dvmconsole_vocoder_session_destroy");
             reset = Get<ResetDelegate>("dvmconsole_vocoder_session_reset");
             encode = Get<EncodeDelegate>("dvmconsole_vocoder_encode");
+            encodeP25SingleTone = Get<EncodeP25SingleToneDelegate>("dvmconsole_vocoder_encode_p25_single_tone");
             flush = Get<FlushDelegate>("dvmconsole_vocoder_flush_encode");
             decode = Get<DecodeDelegate>("dvmconsole_vocoder_decode");
             decodeLost = Get<DecodeLostDelegate>("dvmconsole_vocoder_decode_lost");
@@ -385,6 +407,8 @@ public sealed class SoftwareVocoderBackend : IVocoderBackend
         public int ResetSession(IntPtr session) => reset(session);
         public int Encode(IntPtr session, short[] samples, byte[] output)
             => encode(session, samples, (nuint)samples.Length, output, (nuint)output.Length);
+        public int EncodeP25SingleTone(IntPtr session, double frequencyHz, byte[] output)
+            => encodeP25SingleTone(session, frequencyHz, output, (nuint)output.Length);
         public int FlushEncode(IntPtr session, byte[] output)
             => flush(session, output, (nuint)output.Length);
         public int Decode(IntPtr session, byte[] input, short[] samples)

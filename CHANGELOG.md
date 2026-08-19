@@ -6,6 +6,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- Add an ordered custom tone-pattern editor with reusable 300–2500 Hz tone and silence steps that remain within one transmitted call.
+
+### Changed
+
+- Send P25 DTMF through the normal voice encoder, while decoded custom alert assets use corrected single-tone generation only for confidently detected sustained tones.
+- Keep Quick Call II tone A and tone B in one call with frame-aligned setup and trailing time for reliable paging.
+
+### Fixed
+
+- Apply corrected P25 single-tone generation consistently to built-in alerts, the Tones panel, saved patterns, and both Quick Call II tones.
+- Play the talk-permit cue only after the selected microphone produces audio, allowing Bluetooth headsets to finish switching profiles before the operator begins speaking.
+
 ## [0.2.4] - 2026-08-18
 
 ### Added

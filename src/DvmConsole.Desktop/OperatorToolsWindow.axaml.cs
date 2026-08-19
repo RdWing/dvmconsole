@@ -295,6 +295,30 @@ public sealed partial class OperatorToolsWindow : Window
     private async void HandleSendQuickCallClick(object? sender, RoutedEventArgs e)
         => await viewModel.SendQuickCallAsync();
 
+    private void HandleAddToneStepClick(object? sender, RoutedEventArgs e)
+        => viewModel.AddToneSequenceStep(silence: false);
+
+    private void HandleAddSilenceStepClick(object? sender, RoutedEventArgs e)
+        => viewModel.AddToneSequenceStep(silence: true);
+
+    private void HandleRemoveToneStepClick(object? sender, RoutedEventArgs e)
+    {
+        if (sender is Button { Tag: ToneSequenceStepViewModel step })
+            viewModel.RemoveToneSequenceStep(step);
+    }
+
+    private void HandleMoveToneStepUpClick(object? sender, RoutedEventArgs e)
+    {
+        if (sender is Button { Tag: ToneSequenceStepViewModel step })
+            viewModel.MoveToneSequenceStep(step, -1);
+    }
+
+    private void HandleMoveToneStepDownClick(object? sender, RoutedEventArgs e)
+    {
+        if (sender is Button { Tag: ToneSequenceStepViewModel step })
+            viewModel.MoveToneSequenceStep(step, 1);
+    }
+
     private void HandleSaveToolbarClocksClick(object? sender, RoutedEventArgs e)
         => viewModel.SaveToolbarClocks();
 
@@ -321,11 +345,11 @@ public sealed partial class OperatorToolsWindow : Window
             AllowMultiple = false,
             FileTypeFilter =
             [
-                new FilePickerFileType("WAV or MPEG audio")
+                new FilePickerFileType("WAV, MPEG, or Ogg Opus audio")
                 {
-                    Patterns = ["*.wav", "*.mp3", "*.mpeg", "*.mp2"],
-                    MimeTypes = ["audio/wav", "audio/x-wav", "audio/mpeg"],
-                    AppleUniformTypeIdentifiers = ["com.microsoft.waveform-audio", "public.mp3", "public.mpeg-4-audio"]
+                    Patterns = ["*.wav", "*.mp3", "*.mpeg", "*.mp2", "*.ogg", "*.opus"],
+                    MimeTypes = ["audio/wav", "audio/x-wav", "audio/mpeg", "audio/ogg", "audio/opus"],
+                    AppleUniformTypeIdentifiers = ["com.microsoft.waveform-audio", "public.mp3", "public.mpeg-4-audio", "org.xiph.ogg"]
                 }
             ]
         });

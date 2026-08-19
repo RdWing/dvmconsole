@@ -1071,6 +1071,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     private Task recordingCatalogScanTask = Task.CompletedTask;
     private readonly ObservableCollection<DtmfPresetViewModel> dtmfPresets = [];
     private readonly ObservableCollection<TonePresetViewModel> tonePresets = [];
+    private readonly ObservableCollection<ToneSequenceStepViewModel> toneSequenceSteps = [];
     private readonly ObservableCollection<AlertToneViewModel> alertTones = [];
     private readonly ObservableCollection<BuiltInAlertToneViewModel> builtInAlertTones = [];
     private readonly ObservableCollection<ToolbarClockViewModel> toolbarClocks = [];
@@ -1229,6 +1230,9 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         dtmfDigits = userSettings.LastDtmfDigits;
         toneFrequencyText = userSettings.ToneFrequencyHz.ToString("0.###", CultureInfo.InvariantCulture);
         toneDurationText = userSettings.ToneDurationSeconds.ToString("0.###", CultureInfo.InvariantCulture);
+        toneSequenceSteps.Add(new ToneSequenceStepViewModel(
+            userSettings.ToneFrequencyHz,
+            userSettings.ToneDurationSeconds));
         quickCallToneAText = userSettings.QuickCallToneAFrequencyHz.ToString("0.###", CultureInfo.InvariantCulture);
         quickCallToneBText = userSettings.QuickCallToneBFrequencyHz.ToString("0.###", CultureInfo.InvariantCulture);
         audioInputDeviceIdText = userSettings.AudioInputDeviceId;
@@ -1358,6 +1362,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         Recordings = new ReadOnlyObservableCollection<CallRecordingMetadata>(recordingEntries);
         DtmfPresets = new ReadOnlyObservableCollection<DtmfPresetViewModel>(dtmfPresets);
         TonePresets = new ReadOnlyObservableCollection<TonePresetViewModel>(tonePresets);
+        ToneSequenceSteps = new ReadOnlyObservableCollection<ToneSequenceStepViewModel>(toneSequenceSteps);
         AlertTones = new ReadOnlyObservableCollection<AlertToneViewModel>(alertTones);
         BuiltInAlertTones = new ReadOnlyObservableCollection<BuiltInAlertToneViewModel>(builtInAlertTones);
         ToolbarClocks = new ReadOnlyObservableCollection<ToolbarClockViewModel>(toolbarClocks);
@@ -2387,6 +2392,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     public IReadOnlyList<PatchGroupEditorViewModel> PatchGroups { get; }
     public ReadOnlyObservableCollection<DtmfPresetViewModel> DtmfPresets { get; }
     public ReadOnlyObservableCollection<TonePresetViewModel> TonePresets { get; }
+    public ReadOnlyObservableCollection<ToneSequenceStepViewModel> ToneSequenceSteps { get; }
     public ReadOnlyObservableCollection<AlertToneViewModel> AlertTones { get; }
     public ReadOnlyObservableCollection<BuiltInAlertToneViewModel> BuiltInAlertTones { get; }
     public ReadOnlyObservableCollection<ToolbarClockViewModel> ToolbarClocks { get; }
@@ -5120,11 +5126,14 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             if (userSettings.MuteRxAudioWhileTransmitting)
                 await MuteReceiveAudioAsync("RX audio muted while transmitting.");
 
-            // Bring capture, processing, and every selected call fully online,
-            // but discard captured microphone frames until the local readiness
-            // indication and its device tail have completed.
+            // Bring capture, processing, and every selected call fully online.
+            // When a permit tone is enabled, discard microphone frames until
+            // the first real callback proves the selected capture path is
+            // ready and the local readiness indication has completed.
             transmitCoordinator.SetMicrophoneAudioSuppressed(suppressMicrophoneForPermitTone);
             await Task.Run(() => transmitCoordinator.StartAsync(targets)).ConfigureAwait(false);
+            if (suppressMicrophoneForPermitTone)
+                await transmitCoordinator.WaitForMicrophoneReadyAsync().ConfigureAwait(false);
             ChannelViewModel[] activeChannels = transmitCoordinator.ActiveChannels.ToArray();
             await RunOnUiThreadAsync(() =>
             {
@@ -5719,11 +5728,15 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
 
     private void SaveTonePreset()
     {
-        if (!TryParseTone(out double frequency, out double durationSeconds, out string? error))
+        if (!TryBuildToneSequence(out GeneratedToneSequence? sequence, out string? error))
         {
             TransmitStatusText = error!;
             return;
         }
+
+        ToneSequenceStepViewModel firstTone = toneSequenceSteps.First(step => !step.IsSilence);
+        double frequency = double.Parse(firstTone.FrequencyText, CultureInfo.InvariantCulture);
+        double durationSeconds = double.Parse(firstTone.DurationText, CultureInfo.InvariantCulture);
 
         string name = string.IsNullOrWhiteSpace(TonePresetName)
             ? $"Tone preset {tonePresets.Count + 1}"
@@ -5739,15 +5752,14 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             Name = name,
             FrequencyHz = frequency,
             DurationSeconds = durationSeconds,
-            Steps =
-            [
-                new TonePresetStepSetting
-                {
-                    Kind = AudioPresetStepKinds.Tone,
-                    FrequencyHz = frequency,
-                    DurationSeconds = durationSeconds
-                }
-            ]
+            Steps = toneSequenceSteps.Select(step => new TonePresetStepSetting
+            {
+                Kind = step.IsSilence ? AudioPresetStepKinds.Hold : AudioPresetStepKinds.Tone,
+                FrequencyHz = step.IsSilence
+                    ? 0
+                    : double.Parse(step.FrequencyText, CultureInfo.InvariantCulture),
+                DurationSeconds = double.Parse(step.DurationText, CultureInfo.InvariantCulture)
+            }).ToList()
         });
         int existingIndex = tonePresets
             .Select((preset, index) => (preset, index))
@@ -5765,7 +5777,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             .ToList();
         PersistUserSettings();
         TonePresetName = string.Empty;
-        TransmitStatusText = $"Tone preset '{name}' saved.";
+        TransmitStatusText = $"Tone preset '{name}' saved ({sequence!.Duration.TotalSeconds:0.##} sec).";
     }
 
     public void UseDtmfPreset(DtmfPresetViewModel preset)
@@ -5790,9 +5802,44 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     public void UseTonePreset(TonePresetViewModel preset)
     {
         ArgumentNullException.ThrowIfNull(preset);
-        ToneFrequencyText = preset.FrequencyHz.ToString("0.###", CultureInfo.InvariantCulture);
-        ToneDurationText = preset.DurationSeconds.ToString("0.###", CultureInfo.InvariantCulture);
+        toneSequenceSteps.Clear();
+        foreach (TonePresetStepSetting step in preset.Steps)
+        {
+            bool isSilence = string.Equals(step.Kind, AudioPresetStepKinds.Hold, StringComparison.OrdinalIgnoreCase);
+            toneSequenceSteps.Add(new ToneSequenceStepViewModel(
+                isSilence ? GeneratedToneStep.MinimumSingleToneFrequencyHz : step.FrequencyHz,
+                step.DurationSeconds,
+                isSilence));
+        }
         TransmitStatusText = $"Tone preset '{preset.Name}' loaded.";
+    }
+
+    public void AddToneSequenceStep(bool silence)
+    {
+        toneSequenceSteps.Add(new ToneSequenceStepViewModel(
+            silence ? GeneratedToneStep.MinimumSingleToneFrequencyHz : userSettings.ToneFrequencyHz,
+            silence ? 0.2 : userSettings.ToneDurationSeconds,
+            silence));
+    }
+
+    public void RemoveToneSequenceStep(ToneSequenceStepViewModel step)
+    {
+        ArgumentNullException.ThrowIfNull(step);
+        if (toneSequenceSteps.Count <= 1)
+        {
+            TransmitStatusText = "A custom tone pattern must retain at least one step.";
+            return;
+        }
+        toneSequenceSteps.Remove(step);
+    }
+
+    public void MoveToneSequenceStep(ToneSequenceStepViewModel step, int offset)
+    {
+        ArgumentNullException.ThrowIfNull(step);
+        int current = toneSequenceSteps.IndexOf(step);
+        int next = Math.Clamp(current + offset, 0, toneSequenceSteps.Count - 1);
+        if (current >= 0 && next != current)
+            toneSequenceSteps.Move(current, next);
     }
 
     public void DeleteTonePreset(TonePresetViewModel preset)
@@ -5812,15 +5859,16 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         try
         {
             string normalizedDigits = NormalizeDtmfInput(DtmfDigits);
-            var generator = new DtmfToneGenerator();
-            short[] samples = generator.GenerateSequence(
-                normalizedDigits,
-                TimeSpan.FromMilliseconds(240),
-                TimeSpan.FromMilliseconds(60),
-                amplitude: 0.35);
+            List<GeneratedToneStep> steps = [];
+            foreach (char digit in normalizedDigits)
+            {
+                if (steps.Count > 0)
+                    steps.Add(GeneratedToneStep.Silence(TimeSpan.FromMilliseconds(60)));
+                steps.Add(GeneratedToneStep.Dtmf(digit, TimeSpan.FromMilliseconds(240)));
+            }
             userSettings.LastDtmfDigits = normalizedDigits;
             PersistUserSettings();
-            await SendGeneratedToneAsync(samples, "DTMF");
+            await SendGeneratedToneAsync(new GeneratedToneSequence(steps), "DTMF");
         }
         catch (Exception exception)
         {
@@ -5833,13 +5881,13 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         ArgumentNullException.ThrowIfNull(preset);
         try
         {
-            short[] samples = new DtmfToneGenerator().GenerateSteps(
-                preset.Steps.Select(step => new DtmfToneStep(
-                    string.IsNullOrWhiteSpace(step.Digit) ? '1' : step.Digit[0],
-                    TimeSpan.FromSeconds(step.DurationSeconds),
-                    string.Equals(step.Kind, AudioPresetStepKinds.Hold, StringComparison.OrdinalIgnoreCase))),
-                amplitude: 0.35);
-            await SendGeneratedToneAsync(samples, $"DTMF preset '{preset.Name}'");
+            var sequence = new GeneratedToneSequence(preset.Steps.Select(step =>
+                string.Equals(step.Kind, AudioPresetStepKinds.Hold, StringComparison.OrdinalIgnoreCase)
+                    ? GeneratedToneStep.Silence(TimeSpan.FromSeconds(step.DurationSeconds))
+                    : GeneratedToneStep.Dtmf(
+                        string.IsNullOrWhiteSpace(step.Digit) ? '1' : step.Digit[0],
+                        TimeSpan.FromSeconds(step.DurationSeconds))));
+            await SendGeneratedToneAsync(sequence, $"DTMF preset '{preset.Name}'");
         }
         catch (Exception exception)
         {
@@ -5849,7 +5897,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
 
     private async Task SendToneAsync()
     {
-        if (!TryParseTone(out double frequency, out double durationSeconds, out string? error))
+        if (!TryBuildToneSequence(out GeneratedToneSequence? sequence, out string? error))
         {
             TransmitStatusText = error!;
             return;
@@ -5857,14 +5905,13 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
 
         try
         {
-            short[] samples = new PcmToneGenerator().GenerateTone(
-                frequency,
-                TimeSpan.FromSeconds(durationSeconds),
-                amplitude: 0.35);
+            ToneSequenceStepViewModel firstTone = toneSequenceSteps.First(step => !step.IsSilence);
+            double frequency = double.Parse(firstTone.FrequencyText, CultureInfo.InvariantCulture);
+            double durationSeconds = double.Parse(firstTone.DurationText, CultureInfo.InvariantCulture);
             userSettings.ToneFrequencyHz = frequency;
             userSettings.ToneDurationSeconds = durationSeconds;
             PersistUserSettings();
-            await SendGeneratedToneAsync(samples, "Alert tone");
+            await SendGeneratedToneAsync(sequence!, "Alert tone pattern");
         }
         catch (Exception exception)
         {
@@ -5877,13 +5924,11 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         ArgumentNullException.ThrowIfNull(preset);
         try
         {
-            short[] samples = new PcmToneGenerator().GenerateSteps(
-                preset.Steps.Select(step => new PcmToneStep(
-                    step.FrequencyHz,
-                    TimeSpan.FromSeconds(step.DurationSeconds),
-                    string.Equals(step.Kind, AudioPresetStepKinds.Hold, StringComparison.OrdinalIgnoreCase))),
-                amplitude: 0.35);
-            await SendGeneratedToneAsync(samples, $"Tone preset '{preset.Name}'");
+            var sequence = new GeneratedToneSequence(preset.Steps.Select(step =>
+                string.Equals(step.Kind, AudioPresetStepKinds.Hold, StringComparison.OrdinalIgnoreCase)
+                    ? GeneratedToneStep.Silence(TimeSpan.FromSeconds(step.DurationSeconds))
+                    : GeneratedToneStep.Tone(step.FrequencyHz, TimeSpan.FromSeconds(step.DurationSeconds))));
+            await SendGeneratedToneAsync(sequence, $"Tone preset '{preset.Name}'");
         }
         catch (Exception exception)
         {
@@ -5913,11 +5958,11 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
 
         try
         {
-            short[] samples = QuickCallToneGenerator.Generate(toneAFrequencyHz, toneBFrequencyHz);
+            GeneratedToneSequence sequence = QuickCallToneGenerator.CreateSequence(toneAFrequencyHz, toneBFrequencyHz);
             userSettings.QuickCallToneAFrequencyHz = toneAFrequencyHz;
             userSettings.QuickCallToneBFrequencyHz = toneBFrequencyHz;
             PersistUserSettings();
-            await SendGeneratedToneAsync(samples, "QCII page", pageTargets);
+            await SendGeneratedToneAsync(sequence, "QCII page", pageTargets);
             foreach (ChannelViewModel channel in pageTargets)
                 channel.SetPageSelected(false);
         }
@@ -5996,9 +6041,8 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         ArgumentNullException.ThrowIfNull(tone);
         try
         {
-            short[] samples = tone.GenerateSamples();
             await SendGeneratedToneAsync(
-                samples,
+                tone.CreateSequence(),
                 tone.Name,
                 ResolveGeneratedToneChannels());
         }
@@ -6039,27 +6083,60 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
                 .ToList()
         };
 
-    private bool TryParseTone(out double frequency, out double durationSeconds, out string? error)
+    private bool TryBuildToneSequence(out GeneratedToneSequence? sequence, out string? error)
     {
-        frequency = 0;
-        durationSeconds = 0;
+        sequence = null;
         error = null;
-        if (!double.TryParse(
-                ToneFrequencyText,
-                NumberStyles.Float,
-                CultureInfo.InvariantCulture,
-                out frequency) ||
-            !double.TryParse(
-                ToneDurationText,
-                NumberStyles.Float,
-                CultureInfo.InvariantCulture,
-                out durationSeconds) ||
-            frequency < 1 || frequency >= 4000 || durationSeconds <= 0 || durationSeconds > 10)
+        var steps = new List<GeneratedToneStep>(toneSequenceSteps.Count);
+        bool hasTone = false;
+        foreach ((ToneSequenceStepViewModel step, int index) in toneSequenceSteps.Select((step, index) => (step, index)))
         {
-            error = "Tone frequency must be 1–3999 Hz and duration must be 0–10 seconds.";
+            if (!double.TryParse(
+                    step.DurationText,
+                    NumberStyles.Float,
+                    CultureInfo.InvariantCulture,
+                    out double durationSeconds) ||
+                durationSeconds <= 0 || durationSeconds > 10)
+            {
+                error = $"Step {index + 1} duration must be greater than 0 and no more than 10 seconds.";
+                return false;
+            }
+
+            if (step.IsSilence)
+            {
+                steps.Add(GeneratedToneStep.Silence(TimeSpan.FromSeconds(durationSeconds)));
+                continue;
+            }
+
+            if (!double.TryParse(
+                    step.FrequencyText,
+                    NumberStyles.Float,
+                    CultureInfo.InvariantCulture,
+                    out double frequency) ||
+                frequency < GeneratedToneStep.MinimumSingleToneFrequencyHz ||
+                frequency > GeneratedToneStep.MaximumSingleToneFrequencyHz)
+            {
+                error = $"Step {index + 1} frequency must be 300–2500 Hz.";
+                return false;
+            }
+
+            steps.Add(GeneratedToneStep.Tone(frequency, TimeSpan.FromSeconds(durationSeconds)));
+            hasTone = true;
+        }
+
+        if (!hasTone)
+        {
+            error = "A custom tone pattern must contain at least one tone step.";
             return false;
         }
 
+        sequence = new GeneratedToneSequence(steps);
+        if (sequence.Duration > TimeSpan.FromSeconds(30))
+        {
+            sequence = null;
+            error = "A custom tone pattern cannot exceed 30 seconds.";
+            return false;
+        }
         return true;
     }
 
@@ -6100,6 +6177,43 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         try
         {
             await toneTransmitCoordinator.SendAsync(targets, samples);
+            string targetText = FormatToneTargetText(targets.Select(target => target.Channel));
+            await RunOnUiThreadAsync(() => TransmitStatusText = $"{label} sent on {targetText}.");
+        }
+        finally
+        {
+            await RestoreSuspendedAudioAsync();
+            await RunOnUiThreadAsync(RaiseGeneratedAudioCanExecuteChanged);
+        }
+    }
+
+    private async Task SendGeneratedToneAsync(
+        GeneratedToneSequence sequence,
+        string label,
+        IReadOnlyCollection<ChannelViewModel>? explicitTargets = null)
+    {
+        ArgumentNullException.ThrowIfNull(sequence);
+        ChannelViewModel[] channels = explicitTargets?.ToArray() ?? ResolveGeneratedToneChannels();
+        if (channels.Length == 0)
+            throw new InvalidOperationException("Arm ALERT on one or more channel cards before sending DTMF or alert audio.");
+
+        TransmitTarget[] targets = channels
+            .Distinct()
+            .Select(channel => new TransmitTarget(
+                channel,
+                Systems.FirstOrDefault(candidate => candidate.Name.Equals(
+                    channel.Definition.SystemName,
+                    StringComparison.OrdinalIgnoreCase)) ?? throw new InvalidOperationException(
+                        $"The system '{channel.Definition.SystemName}' was not found.")))
+            .ToArray();
+        if (transmitCoordinator.ActiveChannel is not null)
+            throw new InvalidOperationException("Release PTT before sending generated audio.");
+
+        await MuteReceiveAudioAsync("RX audio muted while sending generated audio.");
+
+        try
+        {
+            await toneTransmitCoordinator.SendAsync(targets, sequence);
             string targetText = FormatToneTargetText(targets.Select(target => target.Channel));
             await RunOnUiThreadAsync(() => TransmitStatusText = $"{label} sent on {targetText}.");
         }

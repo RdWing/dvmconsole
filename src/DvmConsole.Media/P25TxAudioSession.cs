@@ -56,6 +56,7 @@ public sealed class P25TxAudioSession : IDisposable
     private readonly uint streamId;
     private readonly Action<ReadOnlyMemory<byte>, ushort, uint> send;
     private readonly VoiceFrameEncoder encoder;
+    private readonly IP25GeneratedToneVocoderSession? generatedToneVocoder;
     private readonly P25TxEncryptionOptions? encryption;
     private readonly P25Crypto? crypto;
     private readonly byte[] messageIndicator;
@@ -100,7 +101,9 @@ public sealed class P25TxAudioSession : IDisposable
                     $"P25 algorithm 0x{encryption.AlgorithmId:X2} could not prepare the transmit key stream.");
             }
         }
-        encoder = new VoiceFrameEncoder(vocoder ?? throw new ArgumentNullException(nameof(vocoder)), VocoderMode.P25Imbe);
+        ArgumentNullException.ThrowIfNull(vocoder);
+        generatedToneVocoder = vocoder as IP25GeneratedToneVocoderSession;
+        encoder = new VoiceFrameEncoder(vocoder, VocoderMode.P25Imbe);
     }
 
     public int CodewordsEncoded { get; private set; }
@@ -112,6 +115,19 @@ public sealed class P25TxAudioSession : IDisposable
         int packetsBefore = LdusSent;
         pendingPcmSamples = (pendingPcmSamples + samples.Length) % VocoderFrameSizes.PcmSamplesPerFrame;
         encoder.Process(samples, EmitCodeword);
+        return LdusSent - packetsBefore;
+    }
+
+    public int ProcessSingleTone(double frequencyHz)
+    {
+        ObjectDisposedException.ThrowIf(disposed, this);
+        EnsureFrameAlignedGeneratedAudio();
+        byte[] codeword = new byte[P25DfsiFrameCodec.CodewordBytes];
+        IP25GeneratedToneVocoderSession toneVocoder = generatedToneVocoder ??
+            throw new NotSupportedException("The active P25 vocoder does not provide generated-tone lookup frames.");
+        toneVocoder.EncodeSingleTone(frequencyHz, codeword);
+        int packetsBefore = LdusSent;
+        EmitCodeword(codeword);
         return LdusSent - packetsBefore;
     }
 
@@ -141,6 +157,12 @@ public sealed class P25TxAudioSession : IDisposable
         pendingImbe.Clear();
         pendingPcmSamples = 0;
         disposed = true;
+    }
+
+    private void EnsureFrameAlignedGeneratedAudio()
+    {
+        if (pendingPcmSamples != 0)
+            throw new InvalidOperationException("Generated P25 lookup frames require frame-aligned PCM boundaries.");
     }
 
     private void EmitCodeword(ReadOnlyMemory<byte> codeword)

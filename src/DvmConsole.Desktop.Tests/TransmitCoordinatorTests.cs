@@ -61,6 +61,24 @@ public sealed class TransmitCoordinatorTests
     }
 
     [Fact]
+    public async Task MicrophoneReadinessWaitsForFirstSelectedCaptureSample()
+    {
+        var channel = Channel("A", 100);
+        var endpoint = new FakeEndpoint("Test", [channel]);
+        var audio = new FakeAudioBackend();
+        await using var coordinator = new ChannelTransmitCoordinator(createAudioBackend: () => audio);
+
+        coordinator.SetMicrophoneAudioSuppressed(true);
+        await coordinator.StartAsync(channel, endpoint);
+        Task ready = coordinator.WaitForMicrophoneReadyAsync(TimeSpan.FromSeconds(1));
+        Assert.False(ready.IsCompleted);
+
+        audio.Capture.Emit(new short[160]);
+
+        await ready;
+    }
+
+    [Fact]
     public async Task PreflightRejectionDoesNotOpenAudio()
     {
         var receiveOnly = new ChannelViewModel(new ChannelConfiguration { Name = "RX", System = "Test", Tgid = "100", Mode = "analog", RxOnly = true });

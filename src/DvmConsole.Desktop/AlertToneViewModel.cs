@@ -47,4 +47,7 @@ public sealed class BuiltInAlertToneViewModel
 
     public short[] GenerateSamples()
         => LegacyAlertToneGenerator.Generate(Tone);
+
+    public GeneratedToneSequence CreateSequence()
+        => LegacyAlertToneGenerator.CreateSequence(Tone);
 }

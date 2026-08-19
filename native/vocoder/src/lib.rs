@@ -20,7 +20,7 @@ use blip25_vocoder::halfrate::{pack_natural, unpack_natural};
 use blip25_vocoder::rate_conversion::HalfToFullConverter;
 use blip25_vocoder::vocoder::{FrameStatus, Rate, Vocoder};
 
-const ABI_VERSION: u32 = 4;
+const ABI_VERSION: u32 = 5;
 const MODE_DMR: u32 = 0;
 const MODE_P25: u32 = 1;
 const MODE_NXDN: u32 = 2;
@@ -352,7 +352,13 @@ fn codeword_to_natural(mode: u32, codeword: &[u8]) -> HalfRateDecode {
 }
 
 fn encode_natural(session: &mut Session, samples: &[i16]) -> Result<Vec<u8>, String> {
-    let detected_tone = detect_tone(samples);
+    // Generated P25 tones carry explicit metadata through the dedicated ABI
+    // below. Do not inspect ordinary Phase 1 voice PCM for tone-like content.
+    let detected_tone = if session.mode == MODE_P25 {
+        None
+    } else {
+        detect_tone(samples)
+    };
     let ordinary = if is_half_rate(session.mode) {
         let info: [u16; 4] = session
             .vocoder
@@ -373,6 +379,46 @@ fn encode_natural(session: &mut Session, samples: &[i16]) -> Result<Vec<u8>, Str
         .unwrap_or(ordinary);
     session.pending_tone = detected_tone;
     Ok(encoded)
+}
+
+#[no_mangle]
+/// Returns one explicitly requested P25 Phase 1 single-tone lookup frame.
+///
+/// # Safety
+/// The session and output buffer must be live and valid for the supplied size.
+pub unsafe extern "C" fn dvmconsole_vocoder_encode_p25_single_tone(
+    session: *mut Session,
+    frequency_hz: f64,
+    output: *mut u8,
+    output_capacity: usize,
+) -> i32 {
+    checked(
+        || {
+            let Some(session) = (unsafe { session.as_mut() }) else {
+                set_error("null P25 single-tone session");
+                return ERR_INVALID;
+            };
+            if session.mode != MODE_P25 {
+                set_error("single-tone lookup requires a P25 Phase 1 session");
+                return ERR_STATE;
+            }
+            if !frequency_hz.is_finite() || !(300.0..=2500.0).contains(&frequency_hz) {
+                set_error("P25 single-tone frequency must be 300 through 2500 Hz");
+                return ERR_INVALID;
+            }
+            if output.is_null() || output_capacity < P25_CODEWORD_BYTES {
+                set_error("P25 single-tone output buffer is too small");
+                return ERR_LENGTH;
+            }
+            let codeword = legacy_p25_tone_frames::nearest(frequency_hz);
+            unsafe { std::slice::from_raw_parts_mut(output, P25_CODEWORD_BYTES) }
+                .copy_from_slice(&codeword);
+            session.pending_tone = None;
+            set_error("ok");
+            P25_CODEWORD_BYTES as i32
+        },
+        ERR_STATE,
+    )
 }
 
 fn flush_natural(session: &mut Session) -> Option<Vec<u8>> {
@@ -898,7 +944,7 @@ mod tests {
 
     #[test]
     fn abi_reports_all_required_modes() {
-        assert_eq!(dvmconsole_vocoder_abi_version(), 4);
+        assert_eq!(dvmconsole_vocoder_abi_version(), 5);
         assert_eq!(dvmconsole_vocoder_capabilities(), 15);
     }
 
@@ -1082,19 +1128,40 @@ mod tests {
     }
 
     #[test]
-    fn p25_dtmf_stays_on_annex_t_bridge() {
-        let detected = detect_tone(&dual_tone(697.0, 1209.0)).expect("DTMF tone");
-        let row = ANNEX_T[detected.id as usize].expect("Annex T row");
-        assert_ne!(row.l1, row.l2);
+    fn explicit_p25_generated_tone_abi_uses_fixed_frames() {
+        let handle = dvmconsole_vocoder_session_create(MODE_P25);
+        assert!(!handle.is_null());
+        let mut output = [0u8; P25_CODEWORD_BYTES];
 
-        let info = encode_tone_frame_info(detected.id, detected.amplitude);
-        let mut converter = HalfToFullConverter::new();
-        let expected_dibits = converter
-            .convert(&encode_frame(&info))
-            .expect("valid Annex T tone conversion");
-        let expected = pack_full_rate_natural(&decode_full_rate_frame(&expected_dibits).info);
+        assert_eq!(
+            unsafe {
+                dvmconsole_vocoder_encode_p25_single_tone(
+                    handle,
+                    1000.0,
+                    output.as_mut_ptr(),
+                    output.len(),
+                )
+            },
+            P25_CODEWORD_BYTES as i32
+        );
+        assert_eq!(
+            output,
+            [0x09, 0x23, 0x0B, 0x0D, 0xC4, 0xA5, 0xCA, 0xE8, 0x28, 0x0A, 0x32,]
+        );
+
+        unsafe { dvmconsole_vocoder_session_destroy(handle) };
+    }
+
+    #[test]
+    fn p25_dtmf_stays_on_regular_voice_encoder_path() {
+        let detected = detect_tone(&dual_tone(697.0, 1209.0)).expect("DTMF tone");
         let mut session = test_session(MODE_P25);
-        assert_eq!(encode_detected_tone(&mut session, detected), expected);
+        let encoded = encode_natural(&mut session, &dual_tone(697.0, 1209.0))
+            .expect("ordinary P25 DTMF voice encode");
+        let bridged = encode_detected_tone(&mut session, detected);
+
+        assert!(session.pending_tone.is_none());
+        assert_ne!(encoded, bridged);
     }
 
     #[test]
@@ -1114,23 +1181,15 @@ mod tests {
 
     #[test]
     fn p25_legacy_tones_produce_stable_decodable_full_rate_frames() {
-        let mut tx = test_session(MODE_P25);
         let mut rx = Vocoder::new(Rate::FullRate4400x4400);
-        let _pre_roll = encode_natural(&mut tx, &tone(1000.0, 0)).expect("pre-roll");
         let mut payloads = std::collections::BTreeSet::new();
-        for frame in 1..50 {
-            let encoded = encode_natural(&mut tx, &tone(1000.0, frame)).expect("tone encode");
-            if frame >= 20 {
-                payloads.insert(encoded.clone());
-            }
+        for _frame in 0..50 {
+            let encoded = legacy_p25_tone_frames::nearest(1000.0).to_vec();
+            payloads.insert(encoded.clone());
             let decoded = rx.decode_bits(&encoded).expect("tone decode");
             assert_eq!(decoded.len(), PCM_SAMPLES);
         }
-        assert!(
-            payloads.len() <= 4,
-            "{} steady-state payloads",
-            payloads.len()
-        );
+        assert_eq!(payloads.len(), 1);
     }
 
     #[test]

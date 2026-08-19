@@ -12,6 +12,7 @@ internal sealed class SharedAudioCapture : IAsyncDisposable
     private readonly IAudioCapture source;
     private readonly object sync = new();
     private readonly List<Lease> leases = [];
+    private TaskCompletionSource<bool> samplesReady = CreateReadinessSource();
     private bool samplesSuppressed;
     private bool disposed;
 
@@ -41,6 +42,23 @@ internal sealed class SharedAudioCapture : IAsyncDisposable
         }
     }
 
+    public async Task WaitForSamplesAsync(
+        TimeSpan timeout,
+        CancellationToken cancellationToken = default)
+    {
+        if (timeout <= TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(nameof(timeout));
+
+        Task ready;
+        lock (sync)
+        {
+            ObjectDisposedException.ThrowIf(disposed, this);
+            ready = samplesReady.Task;
+        }
+
+        await ready.WaitAsync(timeout, cancellationToken).ConfigureAwait(false);
+    }
+
     public async ValueTask DisposeAsync()
     {
         Lease[] current;
@@ -55,6 +73,7 @@ internal sealed class SharedAudioCapture : IAsyncDisposable
 
         foreach (Lease lease in current)
             lease.MarkDisposed();
+        samplesReady.TrySetCanceled();
         source.SamplesAvailable -= HandleSamplesAvailable;
         await source.DisposeAsync().ConfigureAwait(false);
     }
@@ -68,6 +87,8 @@ internal sealed class SharedAudioCapture : IAsyncDisposable
             if (lease.IsRunning)
                 return;
             startSource = !leases.Any(candidate => candidate.IsRunning);
+            if (startSource)
+                samplesReady = CreateReadinessSource();
             lease.SetRunning(true);
         }
 
@@ -78,10 +99,13 @@ internal sealed class SharedAudioCapture : IAsyncDisposable
         {
             await source.StartAsync(cancellationToken).ConfigureAwait(false);
         }
-        catch
+        catch (Exception exception)
         {
             lock (sync)
+            {
                 lease.SetRunning(false);
+                samplesReady.TrySetException(exception);
+            }
             throw;
         }
     }
@@ -113,8 +137,16 @@ internal sealed class SharedAudioCapture : IAsyncDisposable
 
     private void HandleSamplesAvailable(object? sender, PcmSamplesEventArgs args)
     {
+        if (args.Samples.IsEmpty)
+            return;
+
         lock (sync)
         {
+            // Signal readiness before honoring suppression. PTT intentionally
+            // discards microphone samples while the permit tone is pending,
+            // but the first real callback still proves that a Bluetooth
+            // profile switch and the selected capture route are complete.
+            samplesReady.TrySetResult(true);
             if (samplesSuppressed)
                 return;
 
@@ -132,6 +164,9 @@ internal sealed class SharedAudioCapture : IAsyncDisposable
         if (!leases.Contains(lease) || lease.IsDisposed)
             throw new ObjectDisposedException(nameof(Lease));
     }
+
+    private static TaskCompletionSource<bool> CreateReadinessSource()
+        => new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     internal sealed class Lease : IAudioCapture
     {

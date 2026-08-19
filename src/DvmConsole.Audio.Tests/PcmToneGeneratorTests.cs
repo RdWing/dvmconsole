@@ -56,15 +56,18 @@ public sealed class PcmToneGeneratorTests
     {
         short[] samples = QuickCallToneGenerator.Generate(600, 1200);
 
-        Assert.Equal(32_000, samples.Length);
-        Assert.Contains(samples[..8_000], sample => sample != 0);
-        Assert.Contains(samples[8_000..], sample => sample != 0);
+        Assert.Equal(44_160, samples.Length);
+        Assert.All(samples[..6_080], sample => Assert.Equal((short)0, sample));
+        Assert.Contains(samples[6_080..14_080], sample => sample != 0);
+        Assert.Contains(samples[14_080..38_080], sample => sample != 0);
+        Assert.All(samples[38_080..], sample => Assert.Equal((short)0, sample));
     }
 
     [Theory]
     [InlineData("600", "1200", true)]
     [InlineData("0", "1200", false)]
-    [InlineData("600", "4000", false)]
+    [InlineData("600", "2501", false)]
+    [InlineData("299", "1200", false)]
     [InlineData("", "1200", false)]
     public void ValidatesQuickCallIiFrequencyInputs(
         string toneAText,

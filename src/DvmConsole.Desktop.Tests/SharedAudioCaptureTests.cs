@@ -35,6 +35,28 @@ public sealed class SharedAudioCaptureTests
         Assert.Equal(1, source.StopCalls);
     }
 
+    [Fact]
+    public async Task ReportsMicrophoneReadyFromFirstPhysicalSampleEvenWhenSuppressed()
+    {
+        var source = new FakeCapture();
+        await using var shared = new SharedAudioCapture(source);
+        await using SharedAudioCapture.Lease lease = shared.CreateLease();
+        var published = new List<short[]>();
+        lease.SamplesAvailable += (_, args) => published.Add(args.Samples.ToArray());
+
+        shared.SetSamplesSuppressed(true);
+        await lease.StartAsync();
+        Task ready = shared.WaitForSamplesAsync(TimeSpan.FromSeconds(1));
+        Assert.False(ready.IsCompleted);
+
+        source.Emit([]);
+        Assert.False(ready.IsCompleted);
+        source.Emit([1, 2, 3]);
+
+        await ready;
+        Assert.Empty(published);
+    }
+
     private sealed class FakeCapture : IAudioCapture
     {
         public event EventHandler<PcmSamplesEventArgs>? SamplesAvailable;

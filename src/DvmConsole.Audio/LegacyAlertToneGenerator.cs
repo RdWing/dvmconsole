@@ -22,50 +22,42 @@ public static class LegacyAlertToneGenerator
         => Generate(tone, Amplitude);
 
     public static short[] Generate(LegacyAlertTone tone, double amplitude)
-        => tone switch
+        => CreateSequence(tone).RenderPcm(amplitude);
+
+    public static GeneratedToneSequence CreateSequence(LegacyAlertTone tone)
+        => new(tone switch
         {
-            LegacyAlertTone.Alert1 => GenerateAlert1(amplitude),
-            LegacyAlertTone.Alert2 => GenerateAlert2(amplitude),
-            LegacyAlertTone.Alert3 => GenerateAlert3(amplitude),
+            LegacyAlertTone.Alert1 => CreateAlert1(),
+            LegacyAlertTone.Alert2 => CreateAlert2(),
+            LegacyAlertTone.Alert3 => CreateAlert3(),
             _ => throw new ArgumentOutOfRangeException(nameof(tone))
-        };
+        });
 
-    private static short[] GenerateAlert1(double amplitude)
-        => new PcmToneGenerator().GenerateTone(
-            ToneFrequencyHz,
-            TimeSpan.FromSeconds(3),
-            amplitude);
+    private static IEnumerable<GeneratedToneStep> CreateAlert1()
+        => [GeneratedToneStep.Tone(ToneFrequencyHz, TimeSpan.FromSeconds(3))];
 
-    private static short[] GenerateAlert2(double amplitude)
+    private static IEnumerable<GeneratedToneStep> CreateAlert2()
     {
-        var generator = new PcmToneGenerator();
-        List<short> samples = [];
+        List<GeneratedToneStep> steps = [];
         for (int cycle = 0; cycle < 7; cycle++)
         {
-            samples.AddRange(generator.GenerateTone(
-                AlternatingHighFrequencyHz,
-                StepDuration,
-                amplitude));
-            samples.AddRange(generator.GenerateTone(
-                AlternatingLowFrequencyHz,
-                StepDuration,
-                amplitude));
+            steps.Add(GeneratedToneStep.Tone(AlternatingHighFrequencyHz, StepDuration));
+            steps.Add(GeneratedToneStep.Tone(AlternatingLowFrequencyHz, StepDuration));
         }
 
-        return samples.ToArray();
+        return steps;
     }
 
-    private static short[] GenerateAlert3(double amplitude)
+    private static IEnumerable<GeneratedToneStep> CreateAlert3()
     {
-        var generator = new PcmToneGenerator();
-        List<PcmToneStep> steps = [];
+        List<GeneratedToneStep> steps = [];
         for (int pulse = 0; pulse < 8; pulse++)
         {
-            steps.Add(new PcmToneStep(ToneFrequencyHz, StepDuration));
+            steps.Add(GeneratedToneStep.Tone(ToneFrequencyHz, StepDuration));
             if (pulse < 7)
-                steps.Add(new PcmToneStep(0, StepDuration, IsHold: true));
+                steps.Add(GeneratedToneStep.Silence(StepDuration));
         }
 
-        return generator.GenerateSteps(steps, amplitude);
+        return steps;
     }
 }

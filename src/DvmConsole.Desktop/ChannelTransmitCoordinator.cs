@@ -125,6 +125,21 @@ public sealed class ChannelTransmitCoordinator : IAsyncDisposable
         return active.FirstOrDefault(entry => ReferenceEquals(entry.Channel, channel))?.StreamId ?? 0;
     }
 
+    public async Task WaitForMicrophoneReadyAsync(
+        TimeSpan? timeout = null,
+        CancellationToken cancellationToken = default)
+    {
+        ObjectDisposedException.ThrowIf(disposed, this);
+        SharedAudioCapture capture = sharedCapture ??
+            throw new InvalidOperationException("The transmit microphone path has not been started.");
+        if (active.Count == 0)
+            throw new InvalidOperationException("No transmit call is waiting for microphone audio.");
+
+        await capture.WaitForSamplesAsync(
+            timeout ?? TimeSpan.FromSeconds(5),
+            cancellationToken).ConfigureAwait(false);
+    }
+
     public Task StartAsync(ChannelViewModel channel, IFneTrafficEndpoint system)
         => StartAsync([new TransmitTarget(channel, system)]);
 

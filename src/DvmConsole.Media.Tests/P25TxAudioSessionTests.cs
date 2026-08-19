@@ -9,6 +9,51 @@ namespace DvmConsole.Media.Tests;
 public sealed class P25TxAudioSessionTests
 {
     [Fact]
+    public void AggregatesExplicitGeneratedToneFramesWithoutPcmDetection()
+    {
+        var packets = new List<byte[]>();
+        var vocoder = new FakeVocoderSession();
+        using var session = new P25TxAudioSession(
+            sourceId: 1,
+            destinationId: 2,
+            streamId: 3,
+            vocoder: vocoder,
+            send: (payload, _, _) => packets.Add(payload.ToArray()));
+
+        for (int frame = 0; frame < P25DfsiFrameCodec.CodewordsPerLdu; frame++)
+            session.ProcessSingleTone(1000);
+
+        Assert.Single(packets);
+        byte[] extracted = P25DfsiFrameCodec.ExtractImbe(CreateTraffic("LDU1", packets[0]));
+        Assert.Equal(
+            Enumerable.Range(0, P25DfsiFrameCodec.CodewordsPerLdu)
+                .SelectMany(_ => Enumerable.Repeat((byte)0xA5, P25DfsiFrameCodec.CodewordBytes)),
+            extracted);
+        Assert.All(vocoder.RequestedToneFrequencies, frequency => Assert.Equal(1000, frequency));
+    }
+
+    [Fact]
+    public void RoutesBothQuickCallIiFrequenciesThroughGeneratedToneLookup()
+    {
+        var vocoder = new FakeVocoderSession();
+        using var session = new P25TxAudioSession(
+            sourceId: 1,
+            destinationId: 2,
+            streamId: 3,
+            vocoder: vocoder,
+            send: (_, _, _) => { });
+
+        for (int frame = 0; frame < 50; frame++)
+            session.ProcessSingleTone(600);
+        for (int frame = 0; frame < 150; frame++)
+            session.ProcessSingleTone(1200);
+
+        Assert.Equal(200, vocoder.RequestedToneFrequencies.Count);
+        Assert.All(vocoder.RequestedToneFrequencies.Take(50), frequency => Assert.Equal(600, frequency));
+        Assert.All(vocoder.RequestedToneFrequencies.Skip(50), frequency => Assert.Equal(1200, frequency));
+    }
+
+    [Fact]
     public void CreatesRoundTrippableLdu1AndLdu2PayloadsFromPcmFrames()
     {
         var packets = new List<(byte[] Payload, ushort Sequence, uint Stream)>();
@@ -118,9 +163,10 @@ public sealed class P25TxAudioSessionTests
         return encrypted;
     }
 
-    private sealed class FakeVocoderSession : IVocoderSession
+    private sealed class FakeVocoderSession : IP25GeneratedToneVocoderSession
     {
         private byte nextValue = 1;
+        public List<double> RequestedToneFrequencies { get; } = [];
 
         public int Encode(ReadOnlySpan<short> samples, Span<byte> codeword)
         {
@@ -130,6 +176,14 @@ public sealed class P25TxAudioSessionTests
         }
 
         public int Decode(ReadOnlySpan<byte> codeword, Span<short> samples) => 0;
+
+        public int EncodeSingleTone(double frequencyHz, Span<byte> codeword)
+        {
+            RequestedToneFrequencies.Add(frequencyHz);
+            codeword.Fill(0xA5);
+            return codeword.Length;
+        }
+
         public void Dispose()
         {
         }

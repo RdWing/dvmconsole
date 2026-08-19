@@ -838,7 +838,7 @@ public sealed class UserSettingsStore
     }
 
     private static double NormalizeToneFrequency(double frequency, double fallback = 1000)
-        => double.IsFinite(frequency) && frequency is >= 1 and < 4000 ? frequency : fallback;
+        => double.IsFinite(frequency) && frequency is >= 300 and <= 2500 ? frequency : fallback;
 
     private static double NormalizeToneDuration(double duration)
         => double.IsFinite(duration) && duration is > 0 and <= 10 ? duration : 1.0;
