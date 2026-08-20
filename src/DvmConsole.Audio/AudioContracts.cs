@@ -73,6 +73,14 @@ public interface IAudioBackend : IDisposable
     IAudioPlayback OpenPlayback(AudioDeviceInfo device, PcmAudioFormat format);
 }
 
+// Provides a stable identity for the physical endpoint currently selected by
+// the operating system. Backends expose this separately because some portable
+// device lists represent the default route with a synthetic "default" entry.
+public interface IDefaultAudioDeviceIdentityProvider
+{
+    string? GetDefaultDeviceIdentity(AudioDirection direction);
+}
+
 public interface IAudioCapture : IAsyncDisposable
 {
     event EventHandler<PcmSamplesEventArgs>? SamplesAvailable;

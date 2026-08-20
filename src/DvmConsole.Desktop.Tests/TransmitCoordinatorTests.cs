@@ -179,6 +179,68 @@ public sealed class TransmitCoordinatorTests
     }
 
     [Fact]
+    public async Task RefreshesAWarmSystemDefaultMicrophone()
+    {
+        var firstAudio = new FakeAudioBackend(inputDeviceId: "built-in");
+        var headsetAudio = new FakeAudioBackend(inputDeviceId: "headset");
+        IAudioBackend[] backends = [firstAudio, headsetAudio];
+        int backendIndex = 0;
+        await using var coordinator = new ChannelTransmitCoordinator(
+            audioInputOptions: new AudioInputProcessingOptions { DeviceId = "default" },
+            createAudioBackend: () => backends[backendIndex++]);
+        await coordinator.SetKeepMicrophoneWarmAsync(true);
+
+        DefaultInputRefreshResult result = await coordinator.RefreshSystemDefaultInputAsync();
+
+        Assert.Equal(DefaultInputRefreshResult.Refreshed, result);
+        Assert.True(firstAudio.Capture.IsDisposed);
+        Assert.True(firstAudio.IsDisposed);
+        Assert.True(headsetAudio.Capture.IsRunning);
+        Assert.Equal("headset", headsetAudio.LastInputDeviceId);
+    }
+
+    [Fact]
+    public async Task DefersDefaultMicrophoneRefreshUntilPttEnds()
+    {
+        var channel = Channel("Analog", 100);
+        var endpoint = new FakeEndpoint("Test", [channel]);
+        var firstAudio = new FakeAudioBackend(inputDeviceId: "built-in");
+        var headsetAudio = new FakeAudioBackend(inputDeviceId: "headset");
+        IAudioBackend[] backends = [firstAudio, headsetAudio];
+        int backendIndex = 0;
+        await using var coordinator = new ChannelTransmitCoordinator(
+            audioInputOptions: new AudioInputProcessingOptions { DeviceId = "default" },
+            createAudioBackend: () => backends[backendIndex++]);
+        await coordinator.SetKeepMicrophoneWarmAsync(true);
+        await coordinator.StartAsync(channel, endpoint);
+
+        DefaultInputRefreshResult result = await coordinator.RefreshSystemDefaultInputAsync();
+
+        Assert.Equal(DefaultInputRefreshResult.DeferredUntilIdle, result);
+        Assert.False(firstAudio.IsDisposed);
+        await coordinator.StopAsync();
+        Assert.True(firstAudio.IsDisposed);
+        Assert.True(headsetAudio.Capture.IsRunning);
+        Assert.Equal("headset", headsetAudio.LastInputDeviceId);
+    }
+
+    [Fact]
+    public async Task DoesNotRefreshAFixedMicrophone()
+    {
+        var audio = new FakeAudioBackend(inputDeviceId: "fixed-input");
+        await using var coordinator = new ChannelTransmitCoordinator(
+            audioInputOptions: new AudioInputProcessingOptions { DeviceId = "fixed-input" },
+            createAudioBackend: () => audio);
+        await coordinator.SetKeepMicrophoneWarmAsync(true);
+
+        DefaultInputRefreshResult result = await coordinator.RefreshSystemDefaultInputAsync();
+
+        Assert.Equal(DefaultInputRefreshResult.NotRequired, result);
+        Assert.False(audio.IsDisposed);
+        Assert.True(audio.Capture.IsRunning);
+    }
+
+    [Fact]
     public async Task DisablingWarmMicrophoneDuringTransmitPreservesTheActiveLease()
     {
         var channel = Channel("Analog", 100);
@@ -274,17 +336,24 @@ public sealed class TransmitCoordinatorTests
 
     private sealed class FakeAudioBackend(
         bool failStart = false,
-        HighQualityBluetoothAudioStatus highQualityBluetoothStatus = HighQualityBluetoothAudioStatus.Off)
+        HighQualityBluetoothAudioStatus highQualityBluetoothStatus = HighQualityBluetoothAudioStatus.Off,
+        string inputDeviceId = "input")
         : IAudioBackend, IHighQualityBluetoothAudioStatus
     {
         public FakeCapture Capture { get; } = new(failStart);
         public int OpenCaptureCalls { get; private set; }
         public bool IsDisposed { get; private set; }
+        public string? LastInputDeviceId { get; private set; }
         public string Name => "test";
         public HighQualityBluetoothAudioStatus HighQualityBluetoothStatus => highQualityBluetoothStatus;
         public IReadOnlyList<AudioDeviceInfo> EnumerateDevices(AudioDirection direction)
-            => [new AudioDeviceInfo(direction == AudioDirection.Input ? "input" : "output", "Test", direction, true)];
-        public IAudioCapture OpenCapture(AudioDeviceInfo device, PcmAudioFormat format) { OpenCaptureCalls++; return Capture; }
+            => [new AudioDeviceInfo(direction == AudioDirection.Input ? inputDeviceId : "output", "Test", direction, true)];
+        public IAudioCapture OpenCapture(AudioDeviceInfo device, PcmAudioFormat format)
+        {
+            OpenCaptureCalls++;
+            LastInputDeviceId = device.Id;
+            return Capture;
+        }
         public IAudioPlayback OpenPlayback(AudioDeviceInfo device, PcmAudioFormat format) => throw new NotSupportedException();
         public void Dispose() => IsDisposed = true;
     }

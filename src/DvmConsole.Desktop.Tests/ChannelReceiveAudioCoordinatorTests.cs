@@ -499,6 +499,107 @@ public sealed class ChannelReceiveAudioCoordinatorTests
         await WaitForAsync(() => replacementBackend.Playback.Frames.Count > 0);
     }
 
+    [Fact]
+    public async Task RefreshesAReceiveRouteThatFollowsTheSystemDefault()
+    {
+        var builtInBackend = new RoutingAudioBackend(defaultDeviceId: "built-in");
+        var headsetBackend = new RoutingAudioBackend(defaultDeviceId: "headset");
+        IAudioBackend[] backends = [builtInBackend, headsetBackend];
+        int backendIndex = 0;
+        var channel = new ChannelViewModel(new ChannelConfiguration
+        {
+            Name = "Dispatch",
+            System = "System 1",
+            Tgid = "100",
+            Mode = "analog"
+        });
+        await using var coordinator = new ChannelReceiveAudioCoordinator(
+            () => backends[backendIndex++],
+            () => new FakeVocoderBackend(),
+            getOutputDeviceId: _ => "default");
+        await coordinator.StartAsync(channel);
+        Assert.Equal("built-in", builtInBackend.LastOutputDeviceId);
+
+        ReceiveRouteRecoveryResult result = await coordinator.RefreshSystemDefaultOutputAsync();
+
+        Assert.Single(result.Restarted);
+        Assert.Empty(result.Failed);
+        Assert.True(builtInBackend.IsDisposed);
+        Assert.Equal("headset", headsetBackend.LastOutputDeviceId);
+        Assert.True(coordinator.IsActive(channel));
+    }
+
+    [Fact]
+    public async Task DoesNotRefreshAFixedReceiveOutput()
+    {
+        var backend = new RoutingAudioBackend(defaultDeviceId: "built-in");
+        int backendCreations = 0;
+        var channel = new ChannelViewModel(new ChannelConfiguration
+        {
+            Name = "Dispatch",
+            System = "System 1",
+            Tgid = "100",
+            Mode = "analog"
+        });
+        await using var coordinator = new ChannelReceiveAudioCoordinator(
+            () =>
+            {
+                backendCreations++;
+                return backend;
+            },
+            () => new FakeVocoderBackend(),
+            getOutputDeviceId: _ => "built-in");
+        await coordinator.StartAsync(channel);
+
+        ReceiveRouteRecoveryResult result = await coordinator.RefreshSystemDefaultOutputAsync();
+
+        Assert.Empty(result.Restarted);
+        Assert.Empty(result.Failed);
+        Assert.Equal(1, backendCreations);
+        Assert.False(backend.IsDisposed);
+        Assert.True(coordinator.IsActive(channel));
+    }
+
+    [Fact]
+    public async Task DefaultRefreshDoesNotInterruptAFixedSessionOnTheOldEndpoint()
+    {
+        var sharedBackend = new RoutingAudioBackend(defaultDeviceId: "built-in");
+        var duplicateBackend = new RoutingAudioBackend(defaultDeviceId: "built-in");
+        var headsetBackend = new RoutingAudioBackend(defaultDeviceId: "headset");
+        IAudioBackend[] backends = [sharedBackend, duplicateBackend, headsetBackend];
+        int backendIndex = 0;
+        var fixedChannel = new ChannelViewModel(new ChannelConfiguration
+        {
+            Name = "Fixed",
+            System = "System 1",
+            Tgid = "100",
+            Mode = "analog"
+        });
+        var defaultChannel = new ChannelViewModel(new ChannelConfiguration
+        {
+            Name = "Default",
+            System = "System 1",
+            Tgid = "101",
+            Mode = "analog"
+        });
+        await using var coordinator = new ChannelReceiveAudioCoordinator(
+            () => backends[backendIndex++],
+            () => new FakeVocoderBackend(),
+            getOutputDeviceId: channel => ReferenceEquals(channel, fixedChannel) ? "built-in" : "default");
+        await coordinator.StartAsync(fixedChannel);
+        await coordinator.StartAsync(defaultChannel);
+        Assert.True(duplicateBackend.IsDisposed);
+
+        ReceiveRouteRecoveryResult result = await coordinator.RefreshSystemDefaultOutputAsync();
+
+        Assert.Single(result.Restarted);
+        Assert.Same(defaultChannel, result.Restarted[0]);
+        Assert.False(sharedBackend.IsDisposed);
+        Assert.True(coordinator.IsActive(fixedChannel));
+        Assert.True(coordinator.IsActive(defaultChannel));
+        Assert.Equal("headset", headsetBackend.LastOutputDeviceId);
+    }
+
     private static FneTrafficFrame CreateTraffic(
         uint destinationId,
         byte slot,
@@ -605,6 +706,40 @@ public sealed class ChannelReceiveAudioCoordinatorTests
 
         public IAudioPlayback OpenPlayback(AudioDeviceInfo device, PcmAudioFormat format)
             => Playback;
+
+        public void Dispose() => IsDisposed = true;
+    }
+
+    private sealed class RoutingAudioBackend(string defaultDeviceId) : IAudioBackend
+    {
+        public string? LastOutputDeviceId { get; private set; }
+        public bool IsDisposed { get; private set; }
+        public string Name => "routing-fake";
+
+        public IReadOnlyList<AudioDeviceInfo> EnumerateDevices(AudioDirection direction)
+            => direction == AudioDirection.Output
+                ? [
+                    new AudioDeviceInfo(
+                        "built-in",
+                        "Built-in output",
+                        direction,
+                        defaultDeviceId == "built-in"),
+                    new AudioDeviceInfo(
+                        "headset",
+                        "Headset output",
+                        direction,
+                        defaultDeviceId == "headset")
+                ]
+                : [new AudioDeviceInfo("input", "Fake input", direction, true)];
+
+        public IAudioCapture OpenCapture(AudioDeviceInfo device, PcmAudioFormat format)
+            => throw new NotSupportedException();
+
+        public IAudioPlayback OpenPlayback(AudioDeviceInfo device, PcmAudioFormat format)
+        {
+            LastOutputDeviceId = device.Id;
+            return new FakePlayback(format);
+        }
 
         public void Dispose() => IsDisposed = true;
     }

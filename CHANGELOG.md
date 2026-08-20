@@ -12,6 +12,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+- Follow system-default microphone and speaker changes without restarting DVM Console, while preserving fixed-device routes and deferring microphone migration until an active PTT call ends.
 - Keep the inspected Debug Logs row anchored while new entries are inserted above it, and let the window participate in normal application window stacking.
 - Warm and drain the selected output route before the talk-permit cue, and briefly wait for a selected Bluetooth output that is changing profiles.
 - Stop active TAR playback before deletion and marshal the resulting History/catalog changes back to the UI thread.

@@ -7,6 +7,13 @@ namespace DvmConsole.Desktop;
 
 public sealed record TransmitTarget(ChannelViewModel Channel, IFneTrafficEndpoint System);
 
+public enum DefaultInputRefreshResult
+{
+    NotRequired,
+    Refreshed,
+    DeferredUntilIdle
+}
+
 // Lazily owns explicit transmit calls. Direct PTT starts one target; global
 // PTT may start several targets, all fed by one microphone capture stream.
 public sealed class ChannelTransmitCoordinator : IAsyncDisposable
@@ -22,6 +29,8 @@ public sealed class ChannelTransmitCoordinator : IAsyncDisposable
     private IVocoderBackend? vocoderBackend;
     private SharedAudioCapture? sharedCapture;
     private SharedAudioCapture.Lease? warmCaptureLease;
+    private bool sharedCaptureFollowsSystemDefault;
+    private bool refreshDefaultInputWhenIdle;
     private readonly List<ActiveTransmit> active = [];
     private bool disposed;
     private volatile bool microphoneAudioSuppressed;
@@ -79,6 +88,7 @@ public sealed class ChannelTransmitCoordinator : IAsyncDisposable
         {
             if (!enabled)
             {
+                refreshDefaultInputWhenIdle = false;
                 if (warmCaptureLease is not null)
                 {
                     await warmCaptureLease.DisposeAsync().ConfigureAwait(false);
@@ -92,26 +102,40 @@ public sealed class ChannelTransmitCoordinator : IAsyncDisposable
             if (warmCaptureLease is not null)
                 return;
 
-            audioBackend ??= createAudioBackend();
-            sharedCapture ??= CreateSharedCapture(audioBackend);
-            SharedAudioCapture.Lease lease = sharedCapture.CreateLease();
-            try
-            {
-                await lease.StartAsync().ConfigureAwait(false);
-                warmCaptureLease = lease;
-                ReportHighQualityBluetoothStatus(audioBackend);
-            }
-            catch
-            {
-                await lease.DisposeAsync().ConfigureAwait(false);
-                throw;
-            }
+            await StartWarmCaptureCoreAsync().ConfigureAwait(false);
         }
         catch
         {
             if (active.Count == 0 && warmCaptureLease is null)
                 await StopInfrastructureCoreAsync().ConfigureAwait(false);
             throw;
+        }
+        finally
+        {
+            gate.Release();
+        }
+    }
+
+    // Rebuilds a capture that is following the system-default microphone. An
+    // active PTT call is never interrupted; warm capture is refreshed as soon
+    // as that call ends. Fixed-device capture is left untouched.
+    public async Task<DefaultInputRefreshResult> RefreshSystemDefaultInputAsync(
+        CancellationToken cancellationToken = default)
+    {
+        ObjectDisposedException.ThrowIf(disposed, this);
+        await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            if (sharedCapture is null || !sharedCaptureFollowsSystemDefault)
+                return DefaultInputRefreshResult.NotRequired;
+            if (active.Count > 0)
+            {
+                refreshDefaultInputWhenIdle = true;
+                return DefaultInputRefreshResult.DeferredUntilIdle;
+            }
+
+            await RestartSharedCaptureCoreAsync().ConfigureAwait(false);
+            return DefaultInputRefreshResult.Refreshed;
         }
         finally
         {
@@ -373,6 +397,7 @@ public sealed class ChannelTransmitCoordinator : IAsyncDisposable
                 failure ??= exception;
             }
             sharedCapture = null;
+            sharedCaptureFollowsSystemDefault = false;
         }
         vocoderBackend?.Dispose();
         vocoderBackend = null;
@@ -380,6 +405,19 @@ public sealed class ChannelTransmitCoordinator : IAsyncDisposable
         {
             audioBackend?.Dispose();
             audioBackend = null;
+            refreshDefaultInputWhenIdle = false;
+        }
+        else if (refreshDefaultInputWhenIdle)
+        {
+            refreshDefaultInputWhenIdle = false;
+            try
+            {
+                await RestartSharedCaptureCoreAsync().ConfigureAwait(false);
+            }
+            catch (Exception exception)
+            {
+                failure ??= exception;
+            }
         }
         if (failure is not null)
             throw failure;
@@ -402,6 +440,7 @@ public sealed class ChannelTransmitCoordinator : IAsyncDisposable
                 failure = exception;
             }
             sharedCapture = null;
+            sharedCaptureFollowsSystemDefault = false;
         }
 
         try
@@ -413,6 +452,7 @@ public sealed class ChannelTransmitCoordinator : IAsyncDisposable
             failure ??= exception;
         }
         audioBackend = null;
+        refreshDefaultInputWhenIdle = false;
 
         if (failure is not null)
             throw failure;
@@ -439,11 +479,57 @@ public sealed class ChannelTransmitCoordinator : IAsyncDisposable
 
     private void HandleSessionFaulted(object? sender, Exception exception) => Faulted?.Invoke(this, exception);
 
+    private async Task StartWarmCaptureCoreAsync()
+    {
+        audioBackend ??= createAudioBackend();
+        sharedCapture ??= CreateSharedCapture(audioBackend);
+        SharedAudioCapture.Lease lease = sharedCapture.CreateLease();
+        try
+        {
+            await lease.StartAsync().ConfigureAwait(false);
+            warmCaptureLease = lease;
+            ReportHighQualityBluetoothStatus(audioBackend);
+        }
+        catch
+        {
+            await lease.DisposeAsync().ConfigureAwait(false);
+            throw;
+        }
+    }
+
+    private async Task RestartSharedCaptureCoreAsync()
+    {
+        if (active.Count > 0)
+            throw new InvalidOperationException("Transmit audio is still active.");
+
+        bool keepMicrophoneWarm = warmCaptureLease is not null;
+        if (warmCaptureLease is not null)
+        {
+            await warmCaptureLease.DisposeAsync().ConfigureAwait(false);
+            warmCaptureLease = null;
+        }
+        await StopInfrastructureCoreAsync().ConfigureAwait(false);
+        if (!keepMicrophoneWarm)
+            return;
+
+        try
+        {
+            await StartWarmCaptureCoreAsync().ConfigureAwait(false);
+        }
+        catch
+        {
+            await StopInfrastructureCoreAsync().ConfigureAwait(false);
+            throw;
+        }
+    }
+
     private SharedAudioCapture CreateSharedCapture(IAudioBackend backend)
     {
-        AudioDeviceInfo input = SelectInput(
+        AudioDeviceSelection selection = AudioDeviceSelector.Select(
             backend.EnumerateDevices(AudioDirection.Input),
+            AudioDirection.Input,
             audioInputOptions.DeviceId);
+        AudioDeviceInfo input = selection.Device;
         var capture = new ProcessedAudioCapture(
             backend.OpenCapture(input, PcmAudioFormat.Voice8KhzMono16Bit),
             audioInputOptions);
@@ -459,14 +545,9 @@ public sealed class ChannelTransmitCoordinator : IAsyncDisposable
         }
         var shared = new SharedAudioCapture(capture);
         shared.SetSamplesSuppressed(microphoneAudioSuppressed);
+        sharedCaptureFollowsSystemDefault = selection.FollowsSystemDefault;
         return shared;
     }
-
-    private static AudioDeviceInfo SelectInput(IReadOnlyList<AudioDeviceInfo> devices, string deviceId)
-        => devices.FirstOrDefault(device => device.Id.Equals(deviceId, StringComparison.OrdinalIgnoreCase))
-            ?? devices.FirstOrDefault(device => device.IsDefault)
-            ?? devices.FirstOrDefault()
-            ?? throw new InvalidOperationException("No audio input device is available.");
 
     private P25TxEncryptionOptions? CreateP25EncryptionOptions(ChannelViewModel channel)
         => ChannelTransmitDefinitionFactory.CreateEncryptionOptions(

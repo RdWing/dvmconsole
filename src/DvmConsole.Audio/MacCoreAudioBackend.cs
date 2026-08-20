@@ -4,7 +4,10 @@ namespace DvmConsole.Audio;
 
 // macOS CoreAudio backend. The native shim is loaded explicitly so the rest of
 // the application remains independent of CoreAudio and Windows audio APIs.
-public sealed class MacCoreAudioBackend : IAudioBackend, IHighQualityBluetoothAudioStatus
+public sealed class MacCoreAudioBackend :
+    IAudioBackend,
+    IDefaultAudioDeviceIdentityProvider,
+    IHighQualityBluetoothAudioStatus
 {
     private readonly NativeCoreAudioApi api;
     private readonly AudioProcessingMode processingMode;
@@ -68,6 +71,9 @@ public sealed class MacCoreAudioBackend : IAudioBackend, IHighQualityBluetoothAu
 
         throw new InvalidOperationException("Unable to read the audio device list because CoreAudio is changing routes. Try again after the microphone mode finishes changing.");
     }
+
+    public string? GetDefaultDeviceIdentity(AudioDirection direction)
+        => EnumerateDevices(direction).FirstOrDefault(device => device.IsDefault)?.Id;
 
     public IAudioCapture OpenCapture(AudioDeviceInfo device, PcmAudioFormat format)
     {

@@ -41,6 +41,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
     private readonly UserSettings userSettings;
     private readonly string codeplugDiagnosticsText;
     private readonly ChannelTransmitCoordinator transmitCoordinator;
+    private readonly DefaultAudioDeviceMonitor defaultAudioDeviceMonitor;
     private readonly LatestBooleanStateReconciler warmMicrophoneReconciler;
     private readonly ToneTransmitCoordinator toneTransmitCoordinator;
     private readonly LocalTonePlayer localTonePlayer;
@@ -475,7 +476,11 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
             () => !busy && transmitCoordinator.ActiveChannel is null);
         ApplyRecordingRetentionCommand = new RelayCommand(ApplyRecordingRetention);
         RefreshAudioDevicesCommand = new RelayCommand(RefreshAudioDevices);
+        defaultAudioDeviceMonitor = new DefaultAudioDeviceMonitor(
+            new AudioBackendDeviceTopologyProvider(CreateReceiveAudioBackend),
+            HandleAudioDeviceTopologyChangedAsync);
         RefreshAudioDevices();
+        defaultAudioDeviceMonitor.Start();
         transmitCoordinator.Faulted += HandleTransmitFaulted;
         keyboardPtt.StateChanged += HandleKeyboardPttStateChanged;
         if (serialPtt is not null)
@@ -2606,6 +2611,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
         clockTimer.Tick -= HandleClockTick;
         audioMeterTimer.Stop();
         audioMeterTimer.Tick -= HandleAudioMeterTick;
+        await defaultAudioDeviceMonitor.DisposeAsync().ConfigureAwait(false);
         Task recordingScan;
         CancellationTokenSource? recordingScanCancellation;
         lock (recordingCatalogScanSync)
