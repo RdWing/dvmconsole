@@ -60,7 +60,6 @@ internal sealed class ReceiveStreamLifecycle
             throw new ArgumentOutOfRangeException(nameof(streamId));
 
         PurgeTombstones(now);
-        ExpireActiveIfPastGrace(now);
         if (tombstones.ContainsKey(streamId))
             return new ReceiveStreamDecision(ReceiveStreamTransition.IgnoredLate, ActiveStreamId);
 
@@ -98,7 +97,6 @@ internal sealed class ReceiveStreamLifecycle
             throw new ArgumentOutOfRangeException(nameof(streamId));
 
         PurgeTombstones(now);
-        ExpireActiveIfPastGrace(now);
         tombstones.Remove(streamId);
 
         if (activeStreams.TryGetValue(streamId, out StreamActivity? activity))
@@ -131,7 +129,6 @@ internal sealed class ReceiveStreamLifecycle
             throw new ArgumentOutOfRangeException(nameof(streamId));
 
         PurgeTombstones(now);
-        ExpireActiveIfPastGrace(now);
         if (tombstones.ContainsKey(streamId))
             return new ReceiveStreamDecision(ReceiveStreamTransition.IgnoredLate, ActiveStreamId);
         if (!activeStreams.Remove(streamId))
@@ -202,15 +199,6 @@ internal sealed class ReceiveStreamLifecycle
         Tombstone(streamId, now);
         if (primaryStreamId == streamId)
             primaryStreamId = MostRecentlyActiveStreamId();
-    }
-
-    private void ExpireActiveIfPastGrace(DateTimeOffset now)
-    {
-        foreach ((uint streamId, StreamActivity activity) in activeStreams.ToArray())
-        {
-            if (now >= activity.LastActivity + inactivityTimeout + gracePeriod)
-                End(streamId, now);
-        }
     }
 
     private uint? MostRecentlyActiveStreamId()

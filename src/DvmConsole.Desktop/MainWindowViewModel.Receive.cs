@@ -99,6 +99,7 @@ public sealed partial class MainWindowViewModel
         bool? protocolEncrypted = protocolEncryption?.Secure;
         foreach (ChannelViewModel channel in ResolveTrafficCandidates(system, traffic))
         {
+            callHistoryChanged = ExpireStaleReceiveStreams(channel, now) || callHistoryChanged;
             ChannelTrafficApplyResult applied = channel.ApplyTraffic(system.Name, traffic, now);
             if (!applied.Matched)
                 continue;
@@ -196,6 +197,36 @@ public sealed partial class MainWindowViewModel
             EnqueuePatchSource(channel, traffic);
         if (callHistoryChanged)
             NotifyCallHistoryChanged();
+    }
+
+    private bool ExpireStaleReceiveStreams(ChannelViewModel channel, DateTimeOffset now)
+    {
+        bool callHistoryChanged = false;
+        while (true)
+        {
+            ChannelTrafficApplyResult applied = channel.AdvanceReceiveLifecycle(now);
+            if (applied.Transition == ReceiveStreamTransition.GraceStarted)
+                continue;
+            if (applied.Transition != ReceiveStreamTransition.GraceExpired ||
+                applied.EndedStreamId is not uint streamId)
+            {
+                return callHistoryChanged;
+            }
+
+            AddDebugLog(
+                now,
+                channel.Definition.SystemName,
+                DebugLogSeverity.Info,
+                $"RX call timed out on {channel.Name}: stream {streamId}.");
+            callHistoryChanged = callHistory.Complete(
+                channel.Definition.SystemName,
+                ProtocolFor(channel),
+                streamId,
+                now,
+                channel.Name,
+                channel.Definition.DestinationId) || callHistoryChanged;
+            callRecordings.StopStream(channel, streamId);
+        }
     }
 
     private static FneTrafficFrame NormalizeP25CallIdentity(FneTrafficFrame traffic)

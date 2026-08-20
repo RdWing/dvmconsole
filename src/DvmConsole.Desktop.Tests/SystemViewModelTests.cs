@@ -112,6 +112,13 @@ public sealed class SystemViewModelTests
         Assert.Equal(timestamp.ToLocalTime().ToString("yyyy-MM-dd"), entry.DateText);
     }
 
+    [Theory]
+    [InlineData(8_000, "1.0 s")]
+    [InlineData(4_000, "0.5 s")]
+    [InlineData(8_160, "1.02 s")]
+    public void VocoderLevelDiagnosticsDescribeElapsedTime(int sampleCount, string expected)
+        => Assert.Equal(expected, MainWindowViewModel.FormatAudioLevelDuration(sampleCount));
+
     [Fact]
     public void ActivityHistoryIncludesRecordingOnlyCatalogEntries()
     {
@@ -271,6 +278,32 @@ public sealed class SystemViewModelTests
             Assert.Equal(
                 viewModel.Systems[0].Zones[1].Channels,
                 viewModel.GetReceiveScopeChannels(ReceiveSelectionScope.SelectedZone));
+        }
+        finally
+        {
+            CleanupSettingsPath(settingsPath);
+        }
+    }
+
+    [Fact]
+    public async Task SelectedZoneDoesNotGateTrafficForAChannelOnAnotherTab()
+    {
+        string codeplugPath = Path.Combine(AppContext.BaseDirectory, "TestData", "multiple-systems.yml");
+        string settingsPath = CreateSettingsPath();
+        try
+        {
+            await using MainWindowViewModel viewModel = MainWindowViewModel.Load(
+                codeplugPath,
+                new UserSettingsStore(settingsPath));
+            SystemViewModel system = viewModel.Systems[0];
+            viewModel.SelectedSystem = system;
+            system.SelectedZone = system.Zones.Single(zone => zone.Name == "Operations");
+
+            viewModel.ProcessTraffic(system, CreateDmrTraffic(77, "VOICE", "VOICE"));
+
+            ChannelViewModel dispatch = system.Channels.Single(channel => channel.Name == "Alpha Dispatch");
+            Assert.Equal(ChannelRuntimeState.Receiving, dispatch.State);
+            Assert.Contains(viewModel.CallHistory, entry => entry.ChannelName == "Alpha Dispatch" && entry.IsActive);
         }
         finally
         {
@@ -775,6 +808,45 @@ public sealed class SystemViewModelTests
             Assert.Equal(ChannelRuntimeState.Idle, channel.State);
             Assert.Equal(1, channel.IgnoredLatePacketCount);
             Assert.Contains("late/duplicate 1", viewModel.AudioStatusText, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            CleanupSettingsPath(settingsPath);
+        }
+    }
+
+    [Fact]
+    public async Task NewCallAfterDelayedTimeoutCleanupReplacesTheOldReceivePresentation()
+    {
+        string path = Path.Combine(AppContext.BaseDirectory, "TestData", "multiple-systems.yml");
+        string settingsPath = CreateSettingsPath();
+        DateTimeOffset now = DateTimeOffset.UnixEpoch;
+
+        try
+        {
+            await using MainWindowViewModel viewModel = MainWindowViewModel.Load(
+                path,
+                new UserSettingsStore(settingsPath));
+            SystemViewModel system = viewModel.Systems[0];
+            ChannelViewModel channel = system.Channels.Single(candidate => candidate.Name == "Alpha Dispatch");
+            channel.SetAudioEnabled(true);
+
+            viewModel.ProcessTraffic(system, CreateDmrTraffic(77, "VOICE", "VOICE"), receivedAt: now);
+            channel.MarkReceivePlaybackActive(42, 77);
+            Assert.Contains("stream 77", channel.StateText, StringComparison.Ordinal);
+
+            viewModel.ProcessTraffic(
+                system,
+                CreateDmrTraffic(78, "VOICE", "VOICE", packetSequence: 2),
+                receivedAt: now.AddSeconds(5));
+
+            Assert.Contains("stream 78", channel.StateText, StringComparison.Ordinal);
+            Assert.DoesNotContain("stream 77", channel.StateText, StringComparison.Ordinal);
+            Assert.False(viewModel.CallHistory.Single(entry => entry.StreamId == 77).IsActive);
+            Assert.True(viewModel.CallHistory.Single(entry => entry.StreamId == 78).IsActive);
+            Assert.Contains(viewModel.DebugLogEntries, entry =>
+                entry.Message.Contains("RX call timed out", StringComparison.Ordinal) &&
+                entry.Message.Contains("stream 77", StringComparison.Ordinal));
         }
         finally
         {

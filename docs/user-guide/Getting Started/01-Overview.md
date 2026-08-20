@@ -102,7 +102,9 @@ Open the live debug log viewer from:
 View > Debug Logs
 ```
 
-The viewer captures FNE messages, supports filtering, and can export a redacted log for troubleshooting.
+The viewer captures FNE messages, supports an all-terms search across each log
+entry, and can export a redacted log for troubleshooting. **Clear Text** clears
+the entered search without deleting the captured entries.
 
 If the application closes without an error dialog, inspect `LastCrash.log` before restarting:
 

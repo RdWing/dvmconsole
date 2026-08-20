@@ -6,25 +6,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
-### Fixed
-
-- Load and prune TAR catalog entries only from metadata embedded in Opus recordings, without scanning or deleting legacy JSON sidecars.
-- Accept FNE/KMM P25 key material only once for the matching algorithm and key ID requested during the current bounded response window, without requiring codeplug changes.
-- Reject truncated, length-inconsistent, and parser-unsafe FNE datagrams before they reach the pinned upstream decoder, and discard exact encrypted wire replays within a bounded receive window.
-- Disable unused inbound FNE metadata inventory and master talkgroup-announcement inputs so they cannot accumulate unbounded upstream state.
-- Restore a selected web stream automatically only when its codeplug path, canonical URL, and credentials match the stream the operator previously started; legacy name-only selections remain off until manually selected again.
-
 ## [0.3.2] - 2026-08-19
 
 ### Changed
 
 - Replace the single RX audio-processing toggle with per-mode high-pass, peaking-EQ, and soft-knee compressor controls. Keep decoder boundary smoothing fixed on, and raise the fixed DMR, NXDN, and P25 Phase 2 presentation gain from 6 dB to 9 dB while leaving P25 Phase 1 at unity gain.
+- Document that the current FNE plaintext and legacy encrypted transports should be used only across a trusted network or an authenticated VPN because they do not mutually authenticate the master.
 
 ### Fixed
 
+- Let Debug Logs search for multiple space-separated terms anywhere in an entry, make Clear Text reset only the entered search, and describe vocoder level windows by elapsed time instead of sample count.
+- Close timed-out receive streams before applying later traffic so channel cards, History, and TAR state cannot remain pinned to an ended call when a UI cleanup tick is delayed.
 - Keep every RX audio-processing spinner value visible and list the mode rows as P25 Phase 1, P25 Phase 2, DMR, and NXDN.
 - Preserve simultaneous calls that share one talkgroup with independent receive lifecycles, decoder state, mixer lanes, and TAR writers, while refilling ready live-audio frames when the output buffer falls behind.
 - Keep microphone audio suppressed until a Bluetooth talk-permit cue completes after sustained cold-microphone capture and extended output settling, classify the physical macOS route so known non-Bluetooth devices keep the shorter cue, revalidate and retry transient route changes, and stop PTT instead of transmitting without the requested indication.
+- Load and prune TAR catalog entries only from metadata embedded in Opus recordings, without scanning or deleting legacy JSON sidecars.
+- Accept FNE/KMM P25 key material only once for the matching algorithm and key ID requested during the current bounded response window, without requiring codeplug changes.
+- Reject truncated, length-inconsistent, and parser-unsafe FNE datagrams before they reach the pinned upstream decoder, and discard exact encrypted wire replays within a bounded receive window.
+- Disable unused inbound FNE metadata inventory and master talkgroup-announcement inputs so they cannot accumulate unbounded upstream state.
+- Restore a selected web stream automatically only when its codeplug path, canonical URL, and credentials match the stream the operator previously started; legacy name-only selections remain off until manually selected again.
 
 ## [0.3.1] - 2026-08-19
 

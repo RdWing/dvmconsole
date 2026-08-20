@@ -74,11 +74,6 @@ Each mode has independent controls for:
   1:1 to 10:1, threshold from -40 dBFS to 0 dBFS, and makeup gain from 0 dB to
   +10 dB. Attack and release remain fixed at 10 ms and 250 ms.
 
-Boundary smoothing after concealed or muted frames is always active and is not
-user selectable. DMR, NXDN, and P25 Phase 2 always receive +9 dB of final
-presentation gain; P25 Phase 1 remains at unity gain. These fixed stages remain
-active even when all optional filter and compressor checkboxes are cleared.
-
 Choose **Apply RX options** to save the table and safely recreate active
 listening and patch-source decode sessions; channels do not need to be toggled
 manually.

@@ -27,7 +27,8 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
     internal const double DefaultWidgetCanvasWidth = 900;
     private const int MaximumSubscriberCommandAuditEntries = 50;
     private const int RecordingCatalogUiBatchSize = 64;
-    private const int VocoderAudioLevelWindowSamples = 8_000;
+    private const int VoiceSampleRate = 8_000;
+    private const int VocoderAudioLevelWindowSamples = VoiceSampleRate;
     private const string DvmConsoleProcessingDisplay = "DVM Console processing";
     private const string AppleVoiceProcessingDisplay = "Apple voice processing";
     private static readonly string[] AppleAudioProcessingModeOptions =
@@ -1545,7 +1546,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
         => DebugLogEntries
             .Where(entry =>
                 (DebugLogSeverityFilter == "All" || entry.Severity.ToString().Equals(DebugLogSeverityFilter, StringComparison.OrdinalIgnoreCase)) &&
-                (string.IsNullOrWhiteSpace(DebugLogFilterText) || entry.Summary.Contains(DebugLogFilterText, StringComparison.OrdinalIgnoreCase)))
+                DebugLogSearch.Matches(entry, DebugLogFilterText))
             .ToArray();
 
     public string DebugLogFilterText
@@ -1863,13 +1864,6 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
         RefreshFilteredCallHistory();
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(HasAdvancedHistoryFilters)));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(HistoryFilterSummary)));
-    }
-
-    public void ClearDebugLogs()
-    {
-        debugLogEntries.Clear();
-        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(FilteredDebugLogs)));
-        StatusText = "Debug log capture cleared.";
     }
 
     public void ExportDebugLogs(string path)
@@ -3330,8 +3324,15 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
             DebugLogSeverity.Debug,
             $"Vocoder {direction.ToString().ToUpperInvariant()} {ProtocolFor(channel).ToString().ToUpperInvariant()} " +
             $"on {channel.Name}: PCM RMS {measurement.RmsDbfs:0.0} dBFS, " +
-            $"peak {measurement.PeakDbfs:0.0} dBFS, " +
-            $"{measurement.SampleCount} samples{streamText}.");
+            $"peak {measurement.PeakDbfs:0.0} dBFS over " +
+            $"{FormatAudioLevelDuration(measurement.SampleCount)}{streamText}.");
+    }
+
+    internal static string FormatAudioLevelDuration(long sampleCount)
+    {
+        if (sampleCount < 0)
+            throw new ArgumentOutOfRangeException(nameof(sampleCount));
+        return $"{sampleCount / (double)VoiceSampleRate:0.0##} s";
     }
 
     private void HandleAudioMeterTick(object? sender, EventArgs e)
@@ -3937,29 +3938,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
     {
         bool callHistoryChanged = false;
         foreach (ChannelViewModel channel in Systems.SelectMany(system => system.Channels))
-        {
-            ChannelTrafficApplyResult applied = channel.AdvanceReceiveLifecycle(now);
-            if (applied.Transition != ReceiveStreamTransition.GraceExpired ||
-                applied.EndedStreamId is not uint streamId)
-            {
-                continue;
-            }
-
-            callHistoryChanged = callHistory.Complete(
-                channel.Definition.SystemName,
-                channel.Definition.Mode switch
-                {
-                    "dmr" => FneTrafficProtocol.Dmr,
-                    "p25" => FneTrafficProtocol.P25,
-                    "nxdn" => FneTrafficProtocol.Nxdn,
-                    _ => FneTrafficProtocol.Analog
-                },
-                streamId,
-                now,
-                channel.Name,
-                channel.Definition.DestinationId) || callHistoryChanged;
-            callRecordings.StopStream(channel, streamId);
-        }
+            callHistoryChanged = ExpireStaleReceiveStreams(channel, now) || callHistoryChanged;
         if (callHistoryChanged)
             NotifyCallHistoryChanged();
     }

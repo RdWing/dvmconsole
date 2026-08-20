@@ -106,6 +106,25 @@ public sealed class ReceiveStreamLifecycleTests
         Assert.Equal(ReceiveStreamTransition.GraceStarted, lifecycle.Advance(now.AddSeconds(3.5)).Transition);
     }
 
+    [Fact]
+    public void NewTrafficDoesNotSilentlyDiscardAStreamWhoseTimerTickWasDelayed()
+    {
+        var lifecycle = CreateLifecycle();
+        DateTimeOffset now = DateTimeOffset.UnixEpoch;
+
+        lifecycle.ObserveVoice(20, now);
+        ReceiveStreamDecision collision = lifecycle.ObserveVoice(21, now.AddSeconds(5));
+
+        Assert.Equal(ReceiveStreamTransition.Colliding, collision.Transition);
+        Assert.True(lifecycle.IsActive(20));
+        Assert.True(lifecycle.IsActive(21));
+
+        ReceiveStreamDecision expired = lifecycle.Advance(now.AddSeconds(5));
+        Assert.Equal(ReceiveStreamTransition.GraceExpired, expired.Transition);
+        Assert.Equal((uint)20, expired.EndedStreamId);
+        Assert.Equal((uint)21, lifecycle.ActiveStreamId);
+    }
+
     private static ReceiveStreamLifecycle CreateLifecycle()
         => new(InactivityTimeout, GracePeriod, TombstoneLifetime);
 }

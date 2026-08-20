@@ -35,7 +35,7 @@ public sealed class DebugLogWindow : Window
 
         var filterInput = new TextBox
         {
-            Watermark = "Filter source or message",
+            Watermark = "Filter source or message (all terms)",
             MinWidth = 260
         };
         filterInput.Bind(TextBox.TextProperty, new Binding(nameof(MainWindowViewModel.DebugLogFilterText))
@@ -73,7 +73,7 @@ public sealed class DebugLogWindow : Window
             control => control.DataContext as DebugLogEntry);
 
         var closeButton = new Button { Content = "Close", MinWidth = 88 };
-        var clearButton = new Button { Content = "Clear", MinWidth = 88 };
+        var clearTextButton = new Button { Content = "Clear Text", MinWidth = 100 };
         var exportButton = new Button { Content = "Export redacted…", MinWidth = 140 };
         var controls = new Grid
         {
@@ -91,7 +91,7 @@ public sealed class DebugLogWindow : Window
                     Orientation = Orientation.Horizontal,
                     Spacing = 8,
                     HorizontalAlignment = HorizontalAlignment.Right,
-                    Children = { clearButton, exportButton, closeButton }
+                    Children = { clearTextButton, exportButton, closeButton }
                 }
             }
         };
@@ -135,7 +135,11 @@ public sealed class DebugLogWindow : Window
         Content = content;
 
         closeButton.Click += (_, _) => Close();
-        clearButton.Click += (_, _) => viewModel.ClearDebugLogs();
+        clearTextButton.Click += (_, _) =>
+        {
+            viewModel.DebugLogFilterText = string.Empty;
+            filterInput.Focus();
+        };
         exportButton.Click += HandleExportClick;
         debugLogCollection.CollectionChanged += HandleDebugLogCollectionChanged;
         logs.LayoutUpdated += HandleLogsLayoutUpdated;
