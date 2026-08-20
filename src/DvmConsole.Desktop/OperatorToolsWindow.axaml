@@ -104,11 +104,11 @@
               <StackPanel Spacing="8">
                 <TextBlock FontWeight="SemiBold" Text="RX audio processing options" />
                 <TextBlock Classes="caption"
-                           Text="Configure each decoded digital voice mode independently. Boundary smoothing is always active; DMR, NXDN, and P25 Phase 2 also use a fixed +9 dB output gain while P25 Phase 1 remains at unity gain."
+                           Text="Configure each decoded digital voice mode independently."
                            TextWrapping="Wrap" />
                 <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled">
                   <StackPanel Spacing="4">
-                    <Grid ColumnDefinitions="125,44,76,44,80,76,44,70,86,76" ColumnSpacing="6">
+                    <Grid ColumnDefinitions="125,44,116,44,116,116,44,116,116,116" ColumnSpacing="6">
                       <TextBlock Text="Mode" FontWeight="SemiBold" VerticalAlignment="Center" />
                       <TextBlock Grid.Column="1" Text="HPF" FontWeight="SemiBold" HorizontalAlignment="Center" />
                       <TextBlock Grid.Column="2" Text="HPF Hz" FontWeight="SemiBold" HorizontalAlignment="Center" />
@@ -123,7 +123,7 @@
                     <ItemsControl ItemsSource="{Binding RxAudioProcessingModes}">
                       <ItemsControl.ItemTemplate>
                         <DataTemplate x:DataType="local:RxAudioProcessingModeViewModel">
-                          <Grid ColumnDefinitions="125,44,76,44,80,76,44,70,86,76" ColumnSpacing="6" Margin="0,2">
+                          <Grid ColumnDefinitions="125,44,116,44,116,116,44,116,116,116" ColumnSpacing="6" Margin="0,2">
                             <TextBlock Text="{Binding ModeName}" VerticalAlignment="Center" />
                             <CheckBox Grid.Column="1" IsChecked="{Binding HighPassFilterEnabled, Mode=TwoWay}" HorizontalAlignment="Center" />
                             <NumericUpDown Grid.Column="2" Minimum="0" Maximum="500" Increment="25" FormatString="0" ClipValueToMinMax="True" Value="{Binding HighPassFrequencyHz, Mode=TwoWay}" IsEnabled="{Binding HighPassFilterEnabled}" />

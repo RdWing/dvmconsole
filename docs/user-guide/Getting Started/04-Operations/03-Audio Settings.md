@@ -58,8 +58,8 @@ If System Default Output is selected, the console follows the current macOS or W
 # RX Audio Processing
 
 The **RX audio processing options** table configures the built-in decoder's
-optional post-processing independently for DMR, P25 Phase 1, NXDN, and P25
-Phase 2. These options affect receive playback and patch-source decoding only;
+optional post-processing independently for P25 Phase 1, P25 Phase 2, DMR, and
+NXDN. These options affect receive playback and patch-source decoding only;
 microphone capture and the transmitted vocoder signal are unchanged.
 
 Each mode has independent controls for:
