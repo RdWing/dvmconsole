@@ -40,15 +40,38 @@ public sealed class SoftwareVocoderTests
     }
 
     [Fact]
-    public void ReceiveProcessingCanBeDisabledForSpecFaithfulDecode()
+    public void ReceiveProcessingStagesCanBeConfiguredPerMode()
     {
-        using var backend = new SoftwareVocoderBackend(receiveAudioProcessingEnabled: false);
+        var options = new Dictionary<VocoderMode, ReceiveAudioProcessingOptions>
+        {
+            [VocoderMode.DmrAmbe] = new()
+            {
+                HighPassFilterEnabled = false,
+                PeakingFilterEnabled = false,
+                CompressorEnabled = true,
+                CompressorRatio = 4,
+                CompressorThresholdDbfs = -22,
+                CompressorMakeupGainDb = 5
+            }
+        };
+        using var backend = new SoftwareVocoderBackend(options);
         using IVocoderSession session = backend.CreateSession(VocoderMode.DmrAmbe);
         short[] samples = new short[VocoderFrameSizes.PcmSamplesPerFrame];
 
         Assert.Equal(0, session.Decode(
             Convert.FromHexString("ACAA40200044408080"),
             samples));
+    }
+
+    [Fact]
+    public void ReceiveProcessingRejectsUnsupportedValues()
+    {
+        var options = new Dictionary<VocoderMode, ReceiveAudioProcessingOptions>
+        {
+            [VocoderMode.DmrAmbe] = new() { HighPassFrequencyHz = 525 }
+        };
+
+        Assert.Throws<ArgumentOutOfRangeException>(() => new SoftwareVocoderBackend(options));
     }
 
     [Fact]

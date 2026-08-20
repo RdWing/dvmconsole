@@ -84,7 +84,7 @@
         <ScrollViewer Margin="10">
           <StackPanel Spacing="12" Margin="0,0,0,20">
             <TextBlock Classes="heading" Text="Audio Settings" />
-            <Grid ColumnDefinitions="Auto,*,Auto,*" ColumnSpacing="8" RowDefinitions="Auto,Auto,Auto,Auto">
+            <Grid ColumnDefinitions="Auto,*,Auto,*" ColumnSpacing="8" RowDefinitions="Auto,Auto">
               <TextBlock Text="Input device" VerticalAlignment="Center" />
               <ComboBox Grid.Column="1" ItemsSource="{Binding AudioInputDevices}" SelectedItem="{Binding SelectedAudioInputDevice, Mode=TwoWay}">
                 <ComboBox.ItemTemplate><DataTemplate x:DataType="local:AudioDeviceOptionViewModel"><TextBlock Text="{Binding DisplayName}" /></DataTemplate></ComboBox.ItemTemplate>
@@ -93,18 +93,59 @@
               <ComboBox Grid.Column="3" ItemsSource="{Binding AudioOutputDevices}" SelectedItem="{Binding SelectedAudioOutputDevice, Mode=TwoWay}">
                 <ComboBox.ItemTemplate><DataTemplate x:DataType="local:AudioDeviceOptionViewModel"><TextBlock Text="{Binding DisplayName}" /></DataTemplate></ComboBox.ItemTemplate>
               </ComboBox>
-              <CheckBox Grid.Row="1" Grid.Column="3" Margin="0,4,0,0"
-                        Content="RX audio processing"
-                        IsChecked="{Binding RxAudioProcessingEnabled, Mode=TwoWay}" />
-              <TextBlock Grid.Row="2" Grid.Column="2" Grid.ColumnSpan="2" Classes="caption" Margin="0,2,0,0"
-                         Text="Enabled applies a classic LMR receiver post-decoder enhancement stage. Disabled produces TIA-102.BABA-A §1.12-faithful output."
-                         TextWrapping="Wrap" />
-              <StackPanel Grid.Row="3" Grid.ColumnSpan="4" Orientation="Horizontal" Spacing="8" Margin="0,8,0,0">
+              <StackPanel Grid.Row="1" Grid.ColumnSpan="4" Orientation="Horizontal" Spacing="8" Margin="0,8,0,0">
                 <Button Content="Refresh devices" Command="{Binding RefreshAudioDevicesCommand}" />
                 <Button Content="Test talk permit tone" Click="HandleTestPermitToneClick" />
                 <Button Content="Request macOS microphone access" Click="HandleRequestMacOsMicrophonePermissionClick" IsVisible="{Binding IsMacOsPermissionRequestAvailable}" />
               </StackPanel>
             </Grid>
+
+            <Border Classes="panel">
+              <StackPanel Spacing="8">
+                <TextBlock FontWeight="SemiBold" Text="RX audio processing options" />
+                <TextBlock Classes="caption"
+                           Text="Configure each decoded digital voice mode independently. Boundary smoothing is always active; DMR, NXDN, and P25 Phase 2 also use a fixed +9 dB output gain while P25 Phase 1 remains at unity gain."
+                           TextWrapping="Wrap" />
+                <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled">
+                  <StackPanel Spacing="4">
+                    <Grid ColumnDefinitions="125,44,76,44,80,76,44,70,86,76" ColumnSpacing="6">
+                      <TextBlock Text="Mode" FontWeight="SemiBold" VerticalAlignment="Center" />
+                      <TextBlock Grid.Column="1" Text="HPF" FontWeight="SemiBold" HorizontalAlignment="Center" />
+                      <TextBlock Grid.Column="2" Text="HPF Hz" FontWeight="SemiBold" HorizontalAlignment="Center" />
+                      <TextBlock Grid.Column="3" Text="Peak" FontWeight="SemiBold" HorizontalAlignment="Center" />
+                      <TextBlock Grid.Column="4" Text="Peak Hz" FontWeight="SemiBold" HorizontalAlignment="Center" />
+                      <TextBlock Grid.Column="5" Text="Peak dB" FontWeight="SemiBold" HorizontalAlignment="Center" />
+                      <TextBlock Grid.Column="6" Text="Comp" FontWeight="SemiBold" HorizontalAlignment="Center" />
+                      <TextBlock Grid.Column="7" Text="Ratio" FontWeight="SemiBold" HorizontalAlignment="Center" />
+                      <TextBlock Grid.Column="8" Text="Thresh dBFS" FontWeight="SemiBold" HorizontalAlignment="Center" />
+                      <TextBlock Grid.Column="9" Text="Makeup dB" FontWeight="SemiBold" HorizontalAlignment="Center" />
+                    </Grid>
+                    <ItemsControl ItemsSource="{Binding RxAudioProcessingModes}">
+                      <ItemsControl.ItemTemplate>
+                        <DataTemplate x:DataType="local:RxAudioProcessingModeViewModel">
+                          <Grid ColumnDefinitions="125,44,76,44,80,76,44,70,86,76" ColumnSpacing="6" Margin="0,2">
+                            <TextBlock Text="{Binding ModeName}" VerticalAlignment="Center" />
+                            <CheckBox Grid.Column="1" IsChecked="{Binding HighPassFilterEnabled, Mode=TwoWay}" HorizontalAlignment="Center" />
+                            <NumericUpDown Grid.Column="2" Minimum="0" Maximum="500" Increment="25" FormatString="0" ClipValueToMinMax="True" Value="{Binding HighPassFrequencyHz, Mode=TwoWay}" IsEnabled="{Binding HighPassFilterEnabled}" />
+                            <CheckBox Grid.Column="3" IsChecked="{Binding PeakingFilterEnabled, Mode=TwoWay}" HorizontalAlignment="Center" />
+                            <NumericUpDown Grid.Column="4" Minimum="250" Maximum="3000" Increment="25" FormatString="0" ClipValueToMinMax="True" Value="{Binding PeakingFrequencyHz, Mode=TwoWay}" IsEnabled="{Binding PeakingFilterEnabled}" />
+                            <NumericUpDown Grid.Column="5" Minimum="-10" Maximum="10" Increment="0.5" FormatString="0.0" ClipValueToMinMax="True" Value="{Binding PeakingGainDb, Mode=TwoWay}" IsEnabled="{Binding PeakingFilterEnabled}" />
+                            <CheckBox Grid.Column="6" IsChecked="{Binding CompressorEnabled, Mode=TwoWay}" HorizontalAlignment="Center" />
+                            <NumericUpDown Grid.Column="7" Minimum="1" Maximum="10" Increment="0.1" FormatString="0.0" ClipValueToMinMax="True" Value="{Binding CompressorRatio, Mode=TwoWay}" IsEnabled="{Binding CompressorEnabled}" />
+                            <NumericUpDown Grid.Column="8" Minimum="-40" Maximum="0" Increment="1" FormatString="0" ClipValueToMinMax="True" Value="{Binding CompressorThresholdDbfs, Mode=TwoWay}" IsEnabled="{Binding CompressorEnabled}" />
+                            <NumericUpDown Grid.Column="9" Minimum="0" Maximum="10" Increment="0.5" FormatString="0.0" ClipValueToMinMax="True" Value="{Binding CompressorMakeupGainDb, Mode=TwoWay}" IsEnabled="{Binding CompressorEnabled}" />
+                          </Grid>
+                        </DataTemplate>
+                      </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                  </StackPanel>
+                </ScrollViewer>
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                  <Button Content="Apply RX options" Command="{Binding ApplyRxAudioProcessingOptionsCommand}" />
+                  <TextBlock Classes="caption" Text="Defaults: 250 Hz HPF, 2.5 kHz / +3 dB peak, compressor off (3:1, -18 dBFS, +3 dB when enabled)." VerticalAlignment="Center" TextWrapping="Wrap" />
+                </StackPanel>
+              </StackPanel>
+            </Border>
 
             <Border Classes="panel">
               <StackPanel Spacing="8">

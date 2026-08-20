@@ -1,5 +1,6 @@
 using DvmConsole.Audio;
 using DvmConsole.Core.Settings;
+using DvmConsole.Vocoder;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Globalization;
@@ -311,9 +312,36 @@ public sealed partial class MainWindowViewModel
         }
     }
 
-    private async Task RestartReceiveVocoderSessionsAsync(bool enabled)
+    private async Task ApplyRxAudioProcessingOptionsAsync()
     {
-        Volatile.Write(ref rxAudioProcessingEnabled, enabled);
+        userSettings.RxAudioProcessingOptions = rxAudioProcessingModes.ToDictionary(
+            mode => mode.SettingsKey,
+            mode => mode.ToSetting(),
+            StringComparer.OrdinalIgnoreCase);
+        PersistUserSettings();
+        foreach (RxAudioProcessingModeViewModel mode in rxAudioProcessingModes)
+            mode.Restore(userSettings.RxAudioProcessingOptions[mode.SettingsKey]);
+        Volatile.Write(ref receiveAudioProcessingOptions, BuildReceiveAudioProcessingOptions());
+
+        try
+        {
+            await RestartReceiveVocoderSessionsAsync();
+            AudioStatusText = "RX audio processing options saved and applied to receive sessions.";
+        }
+        catch (Exception exception)
+        {
+            AudioStatusText = $"RX audio processing options were saved, but active sessions could not restart: {exception.Message}";
+        }
+    }
+
+    private IReadOnlyDictionary<VocoderMode, ReceiveAudioProcessingOptions>
+        BuildReceiveAudioProcessingOptions()
+        => rxAudioProcessingModes.ToDictionary(
+            mode => mode.VocoderMode,
+            mode => mode.ToVocoderOptions());
+
+    private async Task RestartReceiveVocoderSessionsAsync()
+    {
         if (Volatile.Read(ref disposeStarted) != 0)
             return;
 

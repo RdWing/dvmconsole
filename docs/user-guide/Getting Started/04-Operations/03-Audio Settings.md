@@ -57,22 +57,31 @@ If System Default Output is selected, the console follows the current macOS or W
 
 # RX Audio Processing
 
-The **RX audio processing** checkbox below the master output device is enabled
-by default. It controls a post-decoder stage only; microphone capture and the
-transmitted vocoder signal are unchanged.
+The **RX audio processing options** table configures the built-in decoder's
+optional post-processing independently for DMR, P25 Phase 1, NXDN, and P25
+Phase 2. These options affect receive playback and patch-source decoding only;
+microphone capture and the transmitted vocoder signal are unchanged.
 
-When enabled, receive sessions use a classic LMR receiver post-decoder
-enhancement stage: a 250 Hz high-pass filter, a small 2.5 kHz intelligibility
-boost, and boundary smoothing after concealed or muted frames. DMR, NXDN, and
-P25 Phase 2 also receive 6 dB of output gain. P25 Phase 1 keeps the stage's
-default output gain.
+Each mode has independent controls for:
 
-When disabled, the post-decoder stage is bypassed and the console produces
-TIA-102.BABA-A §1.12-faithful vocoder output. Changing the checkbox safely
-recreates active listening and patch-source decode sessions; channels do not
-need to be toggled manually.
+- A high-pass filter, enabled by default at 250 Hz. Its cutoff is selectable
+  from 0 to 500 Hz in 25 Hz steps.
+- A peaking filter, enabled by default at 2.5 kHz and +3 dB. Its center
+  frequency is selectable from 250 Hz to 3 kHz in 25 Hz steps, and its gain is
+  bounded from -10 dB to +10 dB.
+- A soft-knee compressor, disabled by default. When enabled it defaults to a
+  3:1 ratio, -18 dBFS threshold, and +3 dB makeup gain. Ratio is bounded from
+  1:1 to 10:1, threshold from -40 dBFS to 0 dBFS, and makeup gain from 0 dB to
+  +10 dB. Attack and release remain fixed at 10 ms and 250 ms.
 
-This setting is saved.
+Boundary smoothing after concealed or muted frames is always active and is not
+user selectable. DMR, NXDN, and P25 Phase 2 always receive +9 dB of final
+presentation gain; P25 Phase 1 remains at unity gain. These fixed stages remain
+active even when all optional filter and compressor checkboxes are cleared.
+
+Choose **Apply RX options** to save the table and safely recreate active
+listening and patch-source decode sessions; channels do not need to be toggled
+manually.
 
 ---
 

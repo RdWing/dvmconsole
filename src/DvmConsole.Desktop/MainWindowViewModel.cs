@@ -44,7 +44,6 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
     private readonly ChannelTransmitCoordinator transmitCoordinator;
     private readonly DefaultAudioDeviceMonitor defaultAudioDeviceMonitor;
     private readonly LatestBooleanStateReconciler warmMicrophoneReconciler;
-    private readonly LatestBooleanStateReconciler rxAudioProcessingReconciler;
     private readonly ToneTransmitCoordinator toneTransmitCoordinator;
     private readonly LocalTonePlayer localTonePlayer;
     private readonly PatchForwardingCoordinator patchForwarding;
@@ -75,6 +74,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
     private readonly ObservableCollection<BuiltInAlertToneViewModel> builtInAlertTones = [];
     private readonly ObservableCollection<ToolbarClockViewModel> toolbarClocks = [];
     private readonly ObservableCollection<AudioInputPresetViewModel> audioInputPresets = [];
+    private readonly ObservableCollection<RxAudioProcessingModeViewModel> rxAudioProcessingModes = [];
     private readonly ObservableCollection<AudioDeviceOptionViewModel> audioInputDevices = [];
     private readonly ObservableCollection<AudioDeviceOptionViewModel> audioOutputDevices = [];
     private readonly ObservableCollection<SubscriberCommandAuditEntry> subscriberCommandAudit = [];
@@ -124,7 +124,8 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
     private string audioInputAgcTargetDbfsText = "-25";
     private bool audioInputAgcEnabled;
     private bool highQualityBluetoothAudioEnabled;
-    private bool rxAudioProcessingEnabled;
+    private IReadOnlyDictionary<VocoderMode, ReceiveAudioProcessingOptions> receiveAudioProcessingOptions =
+        new Dictionary<VocoderMode, ReceiveAudioProcessingOptions>();
     private string selectedAudioProcessingMode = "DVM Console processing";
     private KeyboardPttKey selectedGlobalPttKey;
     private string audioInputPresetNameText = string.Empty;
@@ -251,7 +252,21 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
         audioInputAgcTargetDbfsText = userSettings.AudioInputAgcTargetDbfs.ToString("0.###", CultureInfo.InvariantCulture);
         audioInputAgcEnabled = userSettings.AudioInputAgcEnabled;
         highQualityBluetoothAudioEnabled = userSettings.HighQualityBluetoothAudioEnabled;
-        rxAudioProcessingEnabled = userSettings.RxAudioProcessingEnabled;
+        foreach ((string key, string label, VocoderMode mode) in new[]
+        {
+            (RxAudioProcessingModeSetting.DmrMode, "DMR", VocoderMode.DmrAmbe),
+            (RxAudioProcessingModeSetting.P25Phase1Mode, "P25 Phase 1", VocoderMode.P25Imbe),
+            (RxAudioProcessingModeSetting.NxdnMode, "NXDN", VocoderMode.NxdnAmbe),
+            (RxAudioProcessingModeSetting.P25Phase2Mode, "P25 Phase 2", VocoderMode.P25Phase2Ambe)
+        })
+        {
+            rxAudioProcessingModes.Add(new RxAudioProcessingModeViewModel(
+                key,
+                label,
+                mode,
+                userSettings.RxAudioProcessingOptions[key]));
+        }
+        receiveAudioProcessingOptions = BuildReceiveAudioProcessingOptions();
         selectedAudioProcessingMode = ToAudioProcessingModeDisplay(userSettings.AudioProcessingMode);
         audioInputPresetNameText = userSettings.AudioInputPresetName;
         recordingRetentionDaysText = userSettings.RecordingRetentionDays.ToString(CultureInfo.InvariantCulture);
@@ -362,9 +377,6 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
             createVocoderBackend: CreateReceiveVocoderBackend,
             dmrKeyResolver: dmrKeyResolver,
             nxdnKeyResolver: nxdnKeyResolver);
-        rxAudioProcessingReconciler = new LatestBooleanStateReconciler(
-            RestartReceiveVocoderSessionsAsync);
-        rxAudioProcessingReconciler.Reconciled += HandleRxAudioProcessingReconciled;
         RestorePatchState(configuredGroups);
         PatchGroups = BuildPatchGroups(configuredGroups);
         RefreshPatchMembershipConflicts();
@@ -379,6 +391,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
         BuiltInAlertTones = new ReadOnlyObservableCollection<BuiltInAlertToneViewModel>(builtInAlertTones);
         ToolbarClocks = new ReadOnlyObservableCollection<ToolbarClockViewModel>(toolbarClocks);
         AudioInputPresets = new ReadOnlyObservableCollection<AudioInputPresetViewModel>(audioInputPresets);
+        RxAudioProcessingModes = new ReadOnlyObservableCollection<RxAudioProcessingModeViewModel>(rxAudioProcessingModes);
         AudioInputDevices = new ReadOnlyObservableCollection<AudioDeviceOptionViewModel>(audioInputDevices);
         AudioOutputDevices = new ReadOnlyObservableCollection<AudioDeviceOptionViewModel>(audioOutputDevices);
         SubscriberCommandAudit = new ReadOnlyObservableCollection<SubscriberCommandAuditEntry>(subscriberCommandAudit);
@@ -482,6 +495,9 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
         ApplyAudioInputSettingsCommand = new AsyncRelayCommand(
             () => ApplyAudioInputSettingsAsync(restartActiveAudio: true),
             () => !busy && transmitCoordinator.ActiveChannel is null);
+        ApplyRxAudioProcessingOptionsCommand = new AsyncRelayCommand(
+            ApplyRxAudioProcessingOptionsAsync,
+            () => !busy);
         ApplyRecordingRetentionCommand = new RelayCommand(ApplyRecordingRetention);
         RefreshAudioDevicesCommand = new RelayCommand(RefreshAudioDevices);
         defaultAudioDeviceMonitor = new DefaultAudioDeviceMonitor(
@@ -913,21 +929,6 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
             if (value is not null)
                 AudioOutputDeviceIdText = value.Id;
             RefreshAppleVoiceProcessingRouteState();
-        }
-    }
-
-    public bool RxAudioProcessingEnabled
-    {
-        get => userSettings.RxAudioProcessingEnabled;
-        set
-        {
-            if (userSettings.RxAudioProcessingEnabled == value)
-                return;
-            userSettings.RxAudioProcessingEnabled = value;
-            Volatile.Write(ref rxAudioProcessingEnabled, value);
-            PersistUserSettings();
-            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(RxAudioProcessingEnabled)));
-            _ = rxAudioProcessingReconciler.SetDesired(value);
         }
     }
 
@@ -1473,6 +1474,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
     public ReadOnlyObservableCollection<BuiltInAlertToneViewModel> BuiltInAlertTones { get; }
     public ReadOnlyObservableCollection<ToolbarClockViewModel> ToolbarClocks { get; }
     public ReadOnlyObservableCollection<AudioInputPresetViewModel> AudioInputPresets { get; }
+    public ReadOnlyObservableCollection<RxAudioProcessingModeViewModel> RxAudioProcessingModes { get; }
     public ReadOnlyObservableCollection<AudioDeviceOptionViewModel> AudioInputDevices { get; }
     public ReadOnlyObservableCollection<AudioDeviceOptionViewModel> AudioOutputDevices { get; }
     public ReadOnlyObservableCollection<SubscriberCommandAuditEntry> SubscriberCommandAudit { get; }
@@ -1525,6 +1527,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
     public ICommand SaveDtmfPresetCommand { get; }
     public ICommand SaveTonePresetCommand { get; }
     public ICommand ApplyAudioInputSettingsCommand { get; }
+    public ICommand ApplyRxAudioProcessingOptionsCommand { get; }
     public ICommand ApplyRecordingRetentionCommand { get; }
     public ICommand RefreshAudioDevicesCommand { get; }
     public ICommand ConnectionCommand => SelectedSystem?.IsConnected == true ? DisconnectCommand : ConnectCommand;
@@ -2669,8 +2672,6 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
         await localTonePlayer.DisposeAsync().ConfigureAwait(false);
         warmMicrophoneReconciler.Reconciled -= HandleWarmMicrophoneReconciled;
         await warmMicrophoneReconciler.WhenIdleAsync().ConfigureAwait(false);
-        rxAudioProcessingReconciler.Reconciled -= HandleRxAudioProcessingReconciled;
-        await rxAudioProcessingReconciler.WhenIdleAsync().ConfigureAwait(false);
         await transmitCoordinator.DisposeAsync().ConfigureAwait(false);
         foreach (SystemViewModel system in Systems)
         {
@@ -3152,14 +3153,14 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
     }
 
     // Receive uses plain CoreAudio even when Apple voice processing is selected
-    // for the microphone. The optional vocoder enhancement remains a separate,
+    // for the microphone. Vocoder receive processing remains a separate,
     // protocol-aware stage rather than leaking microphone AEC/AGC into RX.
     private IAudioBackend CreateReceiveAudioBackend()
         => AudioBackendFactory.CreateDefault(
             Environment.GetEnvironmentVariable("DVM_AUDIO_LIBRARY"));
 
     private IVocoderBackend CreateReceiveVocoderBackend()
-        => new SoftwareVocoderBackend(Volatile.Read(ref rxAudioProcessingEnabled));
+        => new SoftwareVocoderBackend(Volatile.Read(ref receiveAudioProcessingOptions));
 
     // The selected processing mode is intentionally scoped to microphone
     // capture for transmit. ProcessedAudioCapture further confines the
@@ -3212,18 +3213,6 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
                     ? "Warm microphone mode disabled; the active transmission continues."
                     : "Warm microphone mode disabled; the microphone will open on PTT.";
             }
-        });
-    }
-
-    private void HandleRxAudioProcessingReconciled(object? sender, LatestBooleanStateResult result)
-    {
-        Dispatcher.UIThread.Post(() =>
-        {
-            AudioStatusText = result.Error is not null
-                ? $"Unable to change RX audio processing: {result.Error.Message}"
-                : result.Desired
-                    ? "RX audio processing enabled; receive sessions use a classic LMR receiver post-decoder enhancement stage."
-                    : "RX audio processing disabled; receive sessions use TIA-102.BABA-A §1.12-faithful output.";
         });
     }
 
