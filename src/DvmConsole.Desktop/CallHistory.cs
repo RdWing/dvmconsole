@@ -77,6 +77,7 @@ public sealed class CallHistoryEntry : INotifyPropertyChanged
     public string EventTgidText => eventTgidText;
     public bool Encrypted => !IsEvent && encrypted;
     public string TimestampText => Timestamp.ToLocalTime().ToString("HH:mm:ss");
+    public string DateText => Timestamp.ToLocalTime().ToString("yyyy-MM-dd");
     public string ProtocolText => IsEvent ? "EVENT" : Protocol.ToString().ToUpperInvariant();
     public string DisplayChannelText => IsEvent ? EventSource : ChannelName;
     public string DisplaySourceText => IsEvent ? EventRidText : SourceId.ToString();

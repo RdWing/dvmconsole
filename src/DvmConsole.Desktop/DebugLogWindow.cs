@@ -5,23 +5,30 @@ using Avalonia.Data;
 using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Platform.Storage;
+using Avalonia.VisualTree;
 using DvmConsole.Core.Diagnostics;
+using System.Collections.Specialized;
 
 namespace DvmConsole.Desktop;
 
 public sealed class DebugLogWindow : Window
 {
     private readonly MainWindowViewModel viewModel;
+    private readonly INotifyCollectionChanged debugLogCollection;
+    private readonly ItemsControl logs;
+    private readonly ScrollViewer logScroller;
+    private readonly ScrollViewportAnchor<DebugLogEntry> logViewportAnchor;
 
     public DebugLogWindow(MainWindowViewModel viewModel)
     {
         this.viewModel = viewModel ?? throw new ArgumentNullException(nameof(viewModel));
+        debugLogCollection = (INotifyCollectionChanged)viewModel.DebugLogEntries;
         Title = "Debug Logs";
         Width = 920;
         Height = 580;
         MinWidth = 720;
         MinHeight = 420;
-        WindowStartupLocation = WindowStartupLocation.CenterOwner;
+        WindowStartupLocation = WindowStartupLocation.CenterScreen;
         this.Bind(BackgroundProperty, new Binding(nameof(MainWindowViewModel.MainBackgroundBrush)));
         DataContext = viewModel;
         Bind(FontSizeProperty, new Binding(nameof(MainWindowViewModel.UiFontSize)));
@@ -47,7 +54,7 @@ public sealed class DebugLogWindow : Window
             Mode = BindingMode.TwoWay
         });
 
-        var logs = new ItemsControl
+        logs = new ItemsControl
         {
             ItemTemplate = new FuncDataTemplate<DebugLogEntry>(
                 (entry, _) => new TextBlock
@@ -59,6 +66,11 @@ public sealed class DebugLogWindow : Window
                 })
         };
         logs.Bind(ItemsControl.ItemsSourceProperty, new Binding(nameof(MainWindowViewModel.FilteredDebugLogs)));
+        logScroller = new ScrollViewer { Content = logs };
+        logViewportAnchor = new ScrollViewportAnchor<DebugLogEntry>(
+            () => logScroller,
+            () => logs.GetVisualDescendants().OfType<TextBlock>(),
+            control => control.DataContext as DebugLogEntry);
 
         var closeButton = new Button { Content = "Close", MinWidth = 88 };
         var clearButton = new Button { Content = "Clear", MinWidth = 88 };
@@ -107,7 +119,7 @@ public sealed class DebugLogWindow : Window
                     BorderBrush = new SolidColorBrush(Color.Parse("#293847")),
                     BorderThickness = new Thickness(1),
                     Padding = new Thickness(10),
-                    Child = new ScrollViewer { Content = logs }
+                    Child = logScroller
                 },
                 new TextBlock
                 {
@@ -125,6 +137,28 @@ public sealed class DebugLogWindow : Window
         closeButton.Click += (_, _) => Close();
         clearButton.Click += (_, _) => viewModel.ClearDebugLogs();
         exportButton.Click += HandleExportClick;
+        debugLogCollection.CollectionChanged += HandleDebugLogCollectionChanged;
+        logs.LayoutUpdated += HandleLogsLayoutUpdated;
+        Closed += HandleClosed;
+    }
+
+    private void HandleDebugLogCollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
+    {
+        if (e.Action == NotifyCollectionChangedAction.Reset)
+            logViewportAnchor.Reset();
+        if (e.Action == NotifyCollectionChangedAction.Add && e.NewStartingIndex == 0)
+            logViewportAnchor.Capture();
+    }
+
+    private void HandleLogsLayoutUpdated(object? sender, EventArgs e)
+        => logViewportAnchor.Restore();
+
+    private void HandleClosed(object? sender, EventArgs e)
+    {
+        Closed -= HandleClosed;
+        logs.LayoutUpdated -= HandleLogsLayoutUpdated;
+        debugLogCollection.CollectionChanged -= HandleDebugLogCollectionChanged;
+        logViewportAnchor.Reset();
     }
 
     private async void HandleExportClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)

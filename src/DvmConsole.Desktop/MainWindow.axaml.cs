@@ -604,7 +604,7 @@ public sealed partial class MainWindow : Window
         }
 
         if (!debugLogWindow.IsVisible)
-            debugLogWindow.Show(this);
+            debugLogWindow.Show();
         debugLogWindow.Activate();
     }
 

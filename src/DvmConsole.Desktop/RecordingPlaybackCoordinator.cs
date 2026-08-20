@@ -7,6 +7,7 @@ namespace DvmConsole.Desktop;
 // recording catalog lifetime remain separate.
 public sealed class RecordingPlaybackCoordinator : IAsyncDisposable
 {
+    private readonly object sync = new();
     private readonly SemaphoreSlim gate = new(1, 1);
     private readonly Func<IAudioBackend> createAudioBackend;
     private readonly Func<string?> getOutputDeviceId;
@@ -28,7 +29,7 @@ public sealed class RecordingPlaybackCoordinator : IAsyncDisposable
 
     public bool IsPlaying(string? path = null)
     {
-        lock (this)
+        lock (sync)
         {
             return activeSession is not null &&
                 (path is null || string.Equals(currentPath, path, StringComparison.OrdinalIgnoreCase));
@@ -69,7 +70,7 @@ public sealed class RecordingPlaybackCoordinator : IAsyncDisposable
                         : new PcmRateConverter(reader.SampleRate, PcmAudioFormat.Voice8KhzMono16Bit.SampleRate));
                 reader = null;
                 playback = null;
-                lock (this)
+                lock (sync)
                 {
                     activeSession = session;
                     currentPath = fullPath;
@@ -108,6 +109,38 @@ public sealed class RecordingPlaybackCoordinator : IAsyncDisposable
         }
     }
 
+    public async Task<bool> StopIfPlayingAsync(
+        string path,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+        string fullPath = Path.GetFullPath(path);
+        await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            PlaybackSession? session;
+            lock (sync)
+            {
+                if (activeSession is null ||
+                    !string.Equals(currentPath, fullPath, StringComparison.OrdinalIgnoreCase))
+                {
+                    return false;
+                }
+
+                session = activeSession;
+                activeSession = null;
+                currentPath = null;
+            }
+
+            await session.StopAsync(cancellationToken).ConfigureAwait(false);
+            return true;
+        }
+        finally
+        {
+            gate.Release();
+        }
+    }
+
     public async ValueTask DisposeAsync()
     {
         await gate.WaitAsync().ConfigureAwait(false);
@@ -129,7 +162,7 @@ public sealed class RecordingPlaybackCoordinator : IAsyncDisposable
     private async Task StopActiveCoreAsync(CancellationToken cancellationToken = default)
     {
         PlaybackSession? session;
-        lock (this)
+        lock (sync)
         {
             session = activeSession;
             activeSession = null;
@@ -195,7 +228,7 @@ public sealed class RecordingPlaybackCoordinator : IAsyncDisposable
                 failure ??= exception;
             }
 
-            lock (this)
+            lock (sync)
             {
                 if (ReferenceEquals(activeSession, session))
                 {
@@ -204,8 +237,15 @@ public sealed class RecordingPlaybackCoordinator : IAsyncDisposable
                 }
             }
 
-            if (failure is not null)
-                faultHandler?.Invoke(failure);
+            try
+            {
+                if (failure is not null)
+                    faultHandler?.Invoke(failure);
+            }
+            finally
+            {
+                session.CompleteLifecycle();
+            }
         }
     }
 
@@ -246,6 +286,9 @@ public sealed class RecordingPlaybackCoordinator : IAsyncDisposable
         IAudioPlayback playback,
         PcmRateConverter? rateConverter)
     {
+        private readonly object sync = new();
+        private bool cancellationDisposed;
+
         public IAudioPcmStreamReader Reader { get; } = reader;
         public IAudioPlayback Playback { get; } = playback;
         public PcmRateConverter? RateConverter { get; } = rateConverter;
@@ -254,11 +297,21 @@ public sealed class RecordingPlaybackCoordinator : IAsyncDisposable
 
         public async Task StopAsync(CancellationToken cancellationToken)
         {
-            Cancellation.Cancel();
-            if (RunTask is not null)
-                await RunTask.WaitAsync(cancellationToken).ConfigureAwait(false);
+            Task? runTask;
+            lock (sync)
+            {
+                if (!cancellationDisposed)
+                    Cancellation.Cancel();
+                runTask = RunTask;
+            }
+
+            if (runTask is not null)
+                await runTask.WaitAsync(cancellationToken).ConfigureAwait(false);
             else
+            {
                 await DisposeResourcesAsync().ConfigureAwait(false);
+                CompleteLifecycle();
+            }
         }
 
         public async Task DisposeResourcesAsync()
@@ -269,14 +322,18 @@ public sealed class RecordingPlaybackCoordinator : IAsyncDisposable
             }
             finally
             {
-                try
-                {
-                    await Reader.DisposeAsync().ConfigureAwait(false);
-                }
-                finally
-                {
-                    Cancellation.Dispose();
-                }
+                await Reader.DisposeAsync().ConfigureAwait(false);
+            }
+        }
+
+        public void CompleteLifecycle()
+        {
+            lock (sync)
+            {
+                if (cancellationDisposed)
+                    return;
+                Cancellation.Dispose();
+                cancellationDisposed = true;
             }
         }
     }

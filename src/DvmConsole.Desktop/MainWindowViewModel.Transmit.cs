@@ -231,21 +231,33 @@ public sealed partial class MainWindowViewModel
     {
         try
         {
-            AudioDeviceInfo output = await talkPermitTonePlayer.PlayAsync().ConfigureAwait(false);
+            LocalTonePlaybackResult result = await localTonePlayer.PlayAsync(LocalToneCues.TalkPermit).ConfigureAwait(false);
+            string drainText = result.QueuedSamples is int queued &&
+                               result.ConsumedSamples is int consumed
+                ? $" queued {queued} / consumed {consumed} samples"
+                : string.Empty;
+            await RunOnUiThreadAsync(() => AddDebugLog(
+                DateTimeOffset.Now,
+                "TX",
+                DebugLogSeverity.Debug,
+                $"Talk permit tone completed on {result.Output.Name} ({result.Output.Id}).{drainText}")).ConfigureAwait(false);
             if (reportSuccess)
             {
-                string drainText = talkPermitTonePlayer.LastQueuedSamples is int queued &&
-                                    talkPermitTonePlayer.LastConsumedSamples is int consumed
-                    ? $" queued {queued} / consumed {consumed} samples"
-                    : string.Empty;
                 await RunOnUiThreadAsync(() =>
-                    AudioStatusText = $"Talk permit tone sent to {output.Name}.{drainText}").ConfigureAwait(false);
+                    AudioStatusText = $"Talk permit tone sent to {result.Output.Name}.{drainText}").ConfigureAwait(false);
             }
         }
         catch (Exception exception)
         {
             await RunOnUiThreadAsync(() =>
-                AudioStatusText = $"Talk permit tone unavailable: {exception.Message}").ConfigureAwait(false);
+            {
+                AddDebugLog(
+                    DateTimeOffset.Now,
+                    "TX",
+                    DebugLogSeverity.Warning,
+                    $"Talk permit tone unavailable: {exception}");
+                AudioStatusText = $"Talk permit tone unavailable: {exception.Message}";
+            }).ConfigureAwait(false);
         }
     }
 

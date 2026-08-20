@@ -43,7 +43,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
     private readonly ChannelTransmitCoordinator transmitCoordinator;
     private readonly LatestBooleanStateReconciler warmMicrophoneReconciler;
     private readonly ToneTransmitCoordinator toneTransmitCoordinator;
-    private readonly TalkPermitTonePlayer talkPermitTonePlayer;
+    private readonly LocalTonePlayer localTonePlayer;
     private readonly PatchForwardingCoordinator patchForwarding;
     private readonly PatchSourceDecodeCoordinator patchSourceDecode;
     private readonly P25KeyRing? p25KeyRing;
@@ -325,7 +325,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
             p25KeyResolver,
             dmrKeyResolver: dmrKeyResolver,
             nxdnKeyResolver: nxdnKeyResolver);
-        talkPermitTonePlayer = new TalkPermitTonePlayer(
+        localTonePlayer = new LocalTonePlayer(
             CreateTransmitAudioBackend,
             () => userSettings.AudioOutputDeviceId);
         Systems = systems.ToArray();
@@ -2026,25 +2026,43 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
     public async Task DeleteRecordingAsync(CallRecordingMetadata metadata)
     {
         ArgumentNullException.ThrowIfNull(metadata);
-        if (callRecordings.TryGetRecordingPath(metadata, out string recordingPath) &&
-            recordingPlayback.IsPlaying(recordingPath))
+        try
         {
-            await recordingPlayback.StopAsync().ConfigureAwait(false);
+            if (callRecordings.TryGetRecordingPath(metadata, out string recordingPath))
+            {
+                // Match and stop under the playback coordinator's gate. The
+                // stop must finish before the recording file is removed.
+                await recordingPlayback.StopIfPlayingAsync(recordingPath).ConfigureAwait(false);
+            }
+        }
+        catch (Exception exception)
+        {
+            await RunOnUiThreadAsync(() =>
+                AudioStatusText = $"Unable to stop recording playback for deletion: {exception.Message}").ConfigureAwait(false);
+            return;
         }
 
         if (!callRecordings.DeleteRecording(metadata))
         {
-            AudioStatusText = "The selected recording could not be deleted.";
-            RefreshRecordings();
+            await RunOnUiThreadAsync(() =>
+            {
+                AudioStatusText = "The selected recording could not be deleted.";
+                RefreshRecordings();
+            }).ConfigureAwait(false);
             return;
         }
 
-        AudioStatusText = $"Deleted recording: {metadata.FileName}";
-        RecordRecordingCatalogMutation();
-        recordingEntries.Remove(metadata);
-        callHistory.RemoveRecording(metadata);
-        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(FilteredRecordings)));
-        NotifyCallHistoryChanged();
+        // Active playback shutdown resumes on a pool thread. Marshal every
+        // observable History/catalog mutation back to Avalonia's UI thread.
+        await RunOnUiThreadAsync(() =>
+        {
+            AudioStatusText = $"Deleted recording: {metadata.FileName}";
+            RecordRecordingCatalogMutation();
+            recordingEntries.Remove(metadata);
+            callHistory.RemoveRecording(metadata);
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(FilteredRecordings)));
+            NotifyCallHistoryChanged();
+        }).ConfigureAwait(false);
     }
 
     public void SetRecordingIgnoredSubscribers(ChannelViewModel channel, IEnumerable<uint> subscriberIds)
@@ -2619,7 +2637,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
             serialPttChangeLock.Release();
         }
         await toneTransmitCoordinator.DisposeAsync().ConfigureAwait(false);
-        await talkPermitTonePlayer.DisposeAsync().ConfigureAwait(false);
+        await localTonePlayer.DisposeAsync().ConfigureAwait(false);
         warmMicrophoneReconciler.Reconciled -= HandleWarmMicrophoneReconciled;
         await warmMicrophoneReconciler.WhenIdleAsync().ConfigureAwait(false);
         await transmitCoordinator.DisposeAsync().ConfigureAwait(false);
@@ -2787,12 +2805,10 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
 
         try
         {
-            await talkPermitTonePlayer.PlayAsync(
-                frequency: state == FneConnectionState.Connected ? 1500 : 500,
-                duration: state == FneConnectionState.Connected
-                    ? TimeSpan.FromMilliseconds(80)
-                    : TimeSpan.FromMilliseconds(160),
-                amplitude: 0.25).ConfigureAwait(false);
+            LocalTonePlaybackRequest cue = state == FneConnectionState.Connected
+                ? LocalToneCues.ConnectionEstablished
+                : LocalToneCues.ConnectionLost;
+            await localTonePlayer.PlayAsync(cue).ConfigureAwait(false);
         }
         catch (Exception exception)
         {
