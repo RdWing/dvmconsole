@@ -63,7 +63,7 @@ public sealed class App : Application
             }
 
             var logs = new DebugLogWindow(viewModel);
-            logs.Show(mainWindow);
+            logs.Show();
             await Task.Delay(75);
             logs.Close();
 

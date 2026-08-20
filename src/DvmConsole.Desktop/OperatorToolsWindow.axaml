@@ -343,6 +343,7 @@
                     <TextBlock Grid.Column="4" Text="{Binding DirectionText}" />
                     <TextBlock Grid.Column="5" Text="{Binding ProtocolText}" />
                     <TextBlock Grid.Column="6" Text="{Binding DurationText}" />
+                    <TextBlock Grid.Row="1" Grid.Column="0" Classes="caption" Text="{Binding DateText}" />
                     <TextBlock Grid.Row="1" Grid.Column="1" Classes="caption" Text="{Binding RouteText}" TextTrimming="CharacterEllipsis" />
                     <TextBlock Grid.Row="1" Grid.Column="3" Classes="caption" Text="{Binding EncryptionText}" TextTrimming="CharacterEllipsis" />
                     <TextBlock Grid.Row="1" Grid.Column="4" Grid.ColumnSpan="3" Classes="caption" Text="{Binding RecordingFileName}" TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding RecordingPath}" />

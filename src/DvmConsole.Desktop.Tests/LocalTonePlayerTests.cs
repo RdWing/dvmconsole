@@ -4,37 +4,65 @@ using Xunit;
 
 namespace DvmConsole.Desktop.Tests;
 
-public sealed class TalkPermitTonePlayerTests
+public sealed class LocalTonePlayerTests
 {
     [Fact]
-    public async Task PlaysShortLocalToneOnRequestedOutput()
+    public async Task PlaysTalkPermitCueOnRequestedOutputWithPreparedRoute()
     {
         var backend = new FakeAudioBackend();
-        var player = new TalkPermitTonePlayer(() => backend, () => "alternate");
+        var player = new LocalTonePlayer(() => backend, () => "alternate");
         await using (player)
         {
-            AudioDeviceInfo output = await player.PlayAsync();
+            LocalTonePlaybackResult result = await player.PlayAsync(LocalToneCues.TalkPermit);
 
-            Assert.Equal("alternate", output.Id);
+            Assert.Equal("alternate", result.Output.Id);
             Assert.Equal(1, backend.OpenPlaybackCount);
             Assert.True(backend.Playback.IsDisposed);
-            Assert.Equal(1120, player.LastQueuedSamples);
-            Assert.Equal(1120, player.LastConsumedSamples);
+            Assert.Equal(2560, result.QueuedSamples);
+            Assert.Equal(2560, result.ConsumedSamples);
         }
 
         Assert.Equal("alternate", backend.LastOutputDeviceId);
-        Assert.Single(backend.Playback.Frames);
-        short[] samples = backend.Playback.Frames[0];
-        Assert.Equal(1120, samples.Length);
+        Assert.Equal(2, backend.Playback.Frames.Count);
+        Assert.Equal(1600, backend.Playback.Frames[0].Length);
+        Assert.All(backend.Playback.Frames[0], sample => Assert.Equal((short)0, sample));
+        short[] samples = backend.Playback.Frames[1];
+        Assert.Equal(960, samples.Length);
         Assert.Contains(samples, sample => sample != 0);
         Assert.InRange(samples.Max(), 12_000, 14_000);
-        Assert.All(samples[..160], sample => Assert.Equal((short)0, sample));
-        Assert.Contains(samples[160..800], sample => sample != 0);
-        Assert.All(samples[800..], sample => Assert.Equal((short)0, sample));
+        Assert.Contains(samples[..640], sample => sample != 0);
+        Assert.All(samples[640..], sample => Assert.Equal((short)0, sample));
         Assert.False(backend.Playback.WasFlushed);
-        Assert.Equal(1, backend.Playback.DrainCount);
+        Assert.Equal(2, backend.Playback.DrainCount);
         Assert.True(backend.Playback.IsDisposed);
         Assert.True(backend.IsDisposed);
+    }
+
+    [Fact]
+    public async Task WaitsForTemporarilyMissingSelectedOutputDuringRouteChange()
+    {
+        var backend = new FakeAudioBackend { MissingAlternateEnumerations = 2 };
+        var routeResolver = new AudioOutputRouteResolver((_, _) => Task.CompletedTask);
+        await using var player = new LocalTonePlayer(
+            () => backend,
+            () => "alternate",
+            routeResolver);
+
+        LocalTonePlaybackResult result = await player.PlayAsync(LocalToneCues.ConnectionEstablished);
+
+        Assert.Equal("alternate", result.Output.Id);
+        Assert.Equal(3, backend.OutputEnumerationCount);
+        Assert.Equal("alternate", backend.LastOutputDeviceId);
+        Assert.Single(backend.Playback.Frames);
+        Assert.Equal(1, backend.Playback.DrainCount);
+    }
+
+    [Fact]
+    public void CueDefinitionsDeclareTheirOutputPreparationPolicy()
+    {
+        Assert.True(LocalToneCues.TalkPermit.OutputWarmupDuration > TimeSpan.Zero);
+        Assert.Equal(TimeSpan.Zero, LocalToneCues.ConnectionEstablished.OutputWarmupDuration);
+        Assert.Equal(TimeSpan.Zero, LocalToneCues.ConnectionLost.OutputWarmupDuration);
     }
 
     private sealed class FakeAudioBackend : IAudioBackend
@@ -42,16 +70,25 @@ public sealed class TalkPermitTonePlayerTests
         public FakePlayback Playback { get; } = new();
         public string? LastOutputDeviceId { get; private set; }
         public int OpenPlaybackCount { get; private set; }
+        public int MissingAlternateEnumerations { get; init; }
+        public int OutputEnumerationCount { get; private set; }
         public bool IsDisposed { get; private set; }
         public string Name => "fake";
 
         public IReadOnlyList<AudioDeviceInfo> EnumerateDevices(AudioDirection direction)
-            => direction == AudioDirection.Output
-                ? [
-                    new AudioDeviceInfo("output", "Fake output", direction, true),
-                    new AudioDeviceInfo("alternate", "Fake alternate output", direction, false)
-                ]
-                : [new AudioDeviceInfo("input", "Fake input", direction, true)];
+        {
+            if (direction != AudioDirection.Output)
+                return [new AudioDeviceInfo("input", "Fake input", direction, true)];
+
+            OutputEnumerationCount++;
+            if (OutputEnumerationCount <= MissingAlternateEnumerations)
+                return [new AudioDeviceInfo("output", "Fake output", direction, true)];
+            return
+            [
+                new AudioDeviceInfo("output", "Fake output", direction, true),
+                new AudioDeviceInfo("alternate", "Fake alternate output", direction, false)
+            ];
+        }
 
         public IAudioCapture OpenCapture(AudioDeviceInfo device, PcmAudioFormat format)
             => throw new NotSupportedException();

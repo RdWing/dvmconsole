@@ -78,6 +78,74 @@ public sealed class RecordingPlaybackCoordinatorTests
     }
 
     [Fact]
+    public async Task StopIfPlayingWaitsForTheMatchingSessionBeforeFileDeletion()
+    {
+        string path = Path.Combine(
+            Path.GetTempPath(),
+            "dvmconsole-recording-playback-tests",
+            Guid.NewGuid().ToString("N"),
+            "call.wav");
+        var backend = new FakeAudioBackend { BlockWrites = true };
+        try
+        {
+            using (var writer = new PcmWavFileWriter(path, PcmAudioFormat.Voice8KhzMono16Bit))
+                writer.Write(Enumerable.Repeat<short>(1200, 1600).ToArray());
+
+            await using var coordinator = new RecordingPlaybackCoordinator(
+                () => backend,
+                () => "output");
+            await coordinator.StartAsync(path);
+            await WaitForAsync(() => coordinator.IsPlaying(path));
+
+            Assert.True(await coordinator.StopIfPlayingAsync(path));
+            Assert.False(coordinator.IsPlaying());
+            Assert.True(backend.Playback.IsDisposed);
+
+            File.Delete(path);
+            Assert.False(File.Exists(path));
+        }
+        finally
+        {
+            string? directory = Path.GetDirectoryName(path);
+            if (Directory.Exists(directory))
+                Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task StopIfPlayingDoesNotStopADifferentRecording()
+    {
+        string root = Path.Combine(
+            Path.GetTempPath(),
+            "dvmconsole-recording-playback-tests",
+            Guid.NewGuid().ToString("N"));
+        string playingPath = Path.Combine(root, "playing.wav");
+        string otherPath = Path.Combine(root, "other.wav");
+        var backend = new FakeAudioBackend { BlockWrites = true };
+        try
+        {
+            using (var writer = new PcmWavFileWriter(playingPath, PcmAudioFormat.Voice8KhzMono16Bit))
+                writer.Write(Enumerable.Repeat<short>(1200, 1600).ToArray());
+            using (var writer = new PcmWavFileWriter(otherPath, PcmAudioFormat.Voice8KhzMono16Bit))
+                writer.Write(Enumerable.Repeat<short>(1200, 1600).ToArray());
+
+            await using var coordinator = new RecordingPlaybackCoordinator(
+                () => backend,
+                () => "output");
+            await coordinator.StartAsync(playingPath);
+            await WaitForAsync(() => coordinator.IsPlaying(playingPath));
+
+            Assert.False(await coordinator.StopIfPlayingAsync(otherPath));
+            Assert.True(coordinator.IsPlaying(playingPath));
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task ReportsPlaybackFailureAfterDisposingTheSession()
     {
         string path = Path.Combine(

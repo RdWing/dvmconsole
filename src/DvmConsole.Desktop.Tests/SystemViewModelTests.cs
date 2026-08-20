@@ -79,7 +79,7 @@ public sealed class SystemViewModelTests
     [InlineData(1380, 44, 2000, 600, 1400)]
     [InlineData(20, -44, 2000, 600, 0)]
     [InlineData(100, 44, 500, 600, 0)]
-    public void HistoryViewportAnchorOffsetTracksInsertedRowsAndClampsToBounds(
+    public void ScrollViewportAnchorOffsetTracksInsertedRowsAndClampsToBounds(
         double currentOffset,
         double itemDelta,
         double extentHeight,
@@ -88,11 +88,28 @@ public sealed class SystemViewModelTests
     {
         Assert.Equal(
             expected,
-            OperatorToolsWindow.CalculateAnchoredHistoryOffset(
+            ScrollViewportAnchorMath.CalculateOffset(
                 currentOffset,
                 itemDelta,
                 extentHeight,
                 viewportHeight));
+    }
+
+    [Fact]
+    public void CallHistoryExposesCompactLocalDateBelowTheTime()
+    {
+        DateTimeOffset timestamp = new DateTimeOffset(2026, 8, 19, 21, 22, 23, TimeSpan.Zero);
+        var entry = new CallHistoryEntry(
+            timestamp,
+            "Test",
+            "Dispatch",
+            1001,
+            100,
+            FneTrafficProtocol.P25,
+            42);
+
+        Assert.Equal(timestamp.ToLocalTime().ToString("HH:mm:ss"), entry.TimestampText);
+        Assert.Equal(timestamp.ToLocalTime().ToString("yyyy-MM-dd"), entry.DateText);
     }
 
     [Fact]
