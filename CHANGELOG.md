@@ -14,6 +14,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+- Keep every RX audio-processing spinner value visible and list the mode rows as P25 Phase 1, P25 Phase 2, DMR, and NXDN.
 - Preserve simultaneous calls that share one talkgroup with independent receive lifecycles, decoder state, mixer lanes, and TAR writers, while refilling ready live-audio frames when the output buffer falls behind.
 - Keep microphone audio suppressed until a Bluetooth talk-permit cue completes after sustained cold-microphone capture and extended output settling, classify the physical macOS route so known non-Bluetooth devices keep the shorter cue, revalidate and retry transient route changes, and stop PTT instead of transmitting without the requested indication.
 

@@ -254,10 +254,10 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
         highQualityBluetoothAudioEnabled = userSettings.HighQualityBluetoothAudioEnabled;
         foreach ((string key, string label, VocoderMode mode) in new[]
         {
-            (RxAudioProcessingModeSetting.DmrMode, "DMR", VocoderMode.DmrAmbe),
             (RxAudioProcessingModeSetting.P25Phase1Mode, "P25 Phase 1", VocoderMode.P25Imbe),
-            (RxAudioProcessingModeSetting.NxdnMode, "NXDN", VocoderMode.NxdnAmbe),
-            (RxAudioProcessingModeSetting.P25Phase2Mode, "P25 Phase 2", VocoderMode.P25Phase2Ambe)
+            (RxAudioProcessingModeSetting.P25Phase2Mode, "P25 Phase 2", VocoderMode.P25Phase2Ambe),
+            (RxAudioProcessingModeSetting.DmrMode, "DMR", VocoderMode.DmrAmbe),
+            (RxAudioProcessingModeSetting.NxdnMode, "NXDN", VocoderMode.NxdnAmbe)
         })
         {
             rxAudioProcessingModes.Add(new RxAudioProcessingModeViewModel(
