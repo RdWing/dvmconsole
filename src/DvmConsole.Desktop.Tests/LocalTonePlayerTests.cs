@@ -10,7 +10,17 @@ public sealed class LocalTonePlayerTests
     public async Task PlaysTalkPermitCueOnRequestedOutputWithPreparedRoute()
     {
         var backend = new FakeAudioBackend();
-        var player = new LocalTonePlayer(() => backend, () => "alternate");
+        var routeResolver = new AudioOutputRouteResolver((_, _) => Task.CompletedTask);
+        var delays = new List<TimeSpan>();
+        var player = new LocalTonePlayer(
+            () => backend,
+            () => "alternate",
+            routeResolver,
+            (delay, _) =>
+            {
+                delays.Add(delay);
+                return Task.CompletedTask;
+            });
         await using (player)
         {
             LocalTonePlaybackResult result = await player.PlayAsync(LocalToneCues.TalkPermit);
@@ -18,20 +28,22 @@ public sealed class LocalTonePlayerTests
             Assert.Equal("alternate", result.Output.Id);
             Assert.Equal(1, backend.OpenPlaybackCount);
             Assert.True(backend.Playback.IsDisposed);
-            Assert.Equal(2560, result.QueuedSamples);
-            Assert.Equal(2560, result.ConsumedSamples);
+            Assert.Equal(3680, result.QueuedSamples);
+            Assert.Equal(3680, result.ConsumedSamples);
+            Assert.Equal(1, result.Attempts);
         }
 
         Assert.Equal("alternate", backend.LastOutputDeviceId);
         Assert.Equal(2, backend.Playback.Frames.Count);
-        Assert.Equal(1600, backend.Playback.Frames[0].Length);
+        Assert.Equal(2400, backend.Playback.Frames[0].Length);
         Assert.All(backend.Playback.Frames[0], sample => Assert.Equal((short)0, sample));
         short[] samples = backend.Playback.Frames[1];
-        Assert.Equal(960, samples.Length);
+        Assert.Equal(1280, samples.Length);
         Assert.Contains(samples, sample => sample != 0);
         Assert.InRange(samples.Max(), 12_000, 14_000);
         Assert.Contains(samples[..640], sample => sample != 0);
         Assert.All(samples[640..], sample => Assert.Equal((short)0, sample));
+        Assert.Equal([TimeSpan.FromMilliseconds(200)], delays);
         Assert.False(backend.Playback.WasFlushed);
         Assert.Equal(2, backend.Playback.DrainCount);
         Assert.True(backend.Playback.IsDisposed);
@@ -51,16 +63,74 @@ public sealed class LocalTonePlayerTests
         LocalTonePlaybackResult result = await player.PlayAsync(LocalToneCues.ConnectionEstablished);
 
         Assert.Equal("alternate", result.Output.Id);
-        Assert.Equal(3, backend.OutputEnumerationCount);
+        Assert.Equal(4, backend.OutputEnumerationCount);
         Assert.Equal("alternate", backend.LastOutputDeviceId);
         Assert.Single(backend.Playback.Frames);
         Assert.Equal(1, backend.Playback.DrainCount);
     }
 
     [Fact]
+    public async Task WaitsForSystemDefaultOutputIdentityToStabilize()
+    {
+        var backend = new ChangingDefaultAudioBackend(["old-default", "new-default", "new-default"]);
+        var routeResolver = new AudioOutputRouteResolver((_, _) => Task.CompletedTask);
+
+        AudioDeviceInfo output = await routeResolver.ResolveAsync(
+            backend,
+            "default",
+            new AudioOutputRoutePolicy(4, TimeSpan.Zero),
+            CancellationToken.None);
+
+        Assert.Equal("new-default", output.Id);
+        Assert.Equal(3, backend.OutputEnumerationCount);
+    }
+
+    [Fact]
+    public async Task DoesNotFallBackWhenSelectedOutputNeverReturns()
+    {
+        var backend = new FakeAudioBackend { MissingAlternateEnumerations = int.MaxValue };
+        var routeResolver = new AudioOutputRouteResolver((_, _) => Task.CompletedTask);
+
+        InvalidOperationException exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            routeResolver.ResolveAsync(
+                backend,
+                "alternate",
+                new AudioOutputRoutePolicy(3, TimeSpan.Zero),
+                CancellationToken.None));
+
+        Assert.Contains("selected audio output 'alternate'", exception.Message);
+        Assert.Equal(3, backend.OutputEnumerationCount);
+        Assert.Null(backend.LastOutputDeviceId);
+    }
+
+    [Fact]
+    public async Task RetriesTransientPlaybackOpenFailureBeforeCompletingCue()
+    {
+        var failed = new FakeAudioBackend { FailOpenPlayback = true };
+        var recovered = new FakeAudioBackend();
+        var backends = new Queue<FakeAudioBackend>([failed, recovered]);
+        var routeResolver = new AudioOutputRouteResolver((_, _) => Task.CompletedTask);
+        await using var player = new LocalTonePlayer(
+            () => backends.Dequeue(),
+            () => "alternate",
+            routeResolver,
+            (_, _) => Task.CompletedTask);
+
+        LocalTonePlaybackResult result = await player.PlayAsync(LocalToneCues.TalkPermit);
+
+        Assert.Equal(2, result.Attempts);
+        Assert.True(failed.IsDisposed);
+        Assert.Equal(1, failed.OpenPlaybackCount);
+        Assert.Equal(1, recovered.OpenPlaybackCount);
+        Assert.True(recovered.Playback.IsDisposed);
+    }
+
+    [Fact]
     public void CueDefinitionsDeclareTheirOutputPreparationPolicy()
     {
         Assert.True(LocalToneCues.TalkPermit.OutputWarmupDuration > TimeSpan.Zero);
+        Assert.True(LocalToneCues.TalkPermit.OutputPostDrainDuration > TimeSpan.Zero);
+        Assert.True(LocalToneCues.TalkPermit.MaximumPlaybackAttempts > 1);
         Assert.Equal(TimeSpan.Zero, LocalToneCues.ConnectionEstablished.OutputWarmupDuration);
         Assert.Equal(TimeSpan.Zero, LocalToneCues.ConnectionLost.OutputWarmupDuration);
     }
@@ -71,6 +141,7 @@ public sealed class LocalTonePlayerTests
         public string? LastOutputDeviceId { get; private set; }
         public int OpenPlaybackCount { get; private set; }
         public int MissingAlternateEnumerations { get; init; }
+        public bool FailOpenPlayback { get; init; }
         public int OutputEnumerationCount { get; private set; }
         public bool IsDisposed { get; private set; }
         public string Name => "fake";
@@ -97,10 +168,39 @@ public sealed class LocalTonePlayerTests
         {
             LastOutputDeviceId = device.Id;
             OpenPlaybackCount++;
+            if (FailOpenPlayback)
+                throw new IOException("test output route changed while opening playback");
             return Playback;
         }
 
         public void Dispose() => IsDisposed = true;
+    }
+
+    private sealed class ChangingDefaultAudioBackend(IReadOnlyList<string> outputIds) : IAudioBackend
+    {
+        public string Name => "changing-default";
+        public int OutputEnumerationCount { get; private set; }
+
+        public IReadOnlyList<AudioDeviceInfo> EnumerateDevices(AudioDirection direction)
+        {
+            if (direction != AudioDirection.Output)
+                return [new AudioDeviceInfo("input", "Fake input", direction, true)];
+
+            int index = Math.Min(OutputEnumerationCount, outputIds.Count - 1);
+            OutputEnumerationCount++;
+            string id = outputIds[index];
+            return [new AudioDeviceInfo(id, id, direction, true)];
+        }
+
+        public IAudioCapture OpenCapture(AudioDeviceInfo device, PcmAudioFormat format)
+            => throw new NotSupportedException();
+
+        public IAudioPlayback OpenPlayback(AudioDeviceInfo device, PcmAudioFormat format)
+            => throw new NotSupportedException();
+
+        public void Dispose()
+        {
+        }
     }
 
     private sealed class FakePlayback : IAudioPlayback

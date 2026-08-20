@@ -25,7 +25,7 @@ public sealed class CallRecordingManager : IDisposable, IAsyncDisposable
     private readonly Action<ChannelViewModel, Exception>? faultHandler;
     private readonly Func<ChannelViewModel, uint, bool> shouldRecordSource;
     private int retentionDays;
-    private readonly Dictionary<ChannelViewModel, ActiveRecording> active = [];
+    private readonly Dictionary<(ChannelViewModel Channel, uint StreamId), ActiveRecording> active = [];
     private readonly Dictionary<ChannelViewModel, ActiveRecording> activeTransmit = [];
     private readonly Dictionary<(ChannelViewModel Channel, uint StreamId), TrafficEncryptionMetadata> streamEncryption = [];
     private readonly RecordingFinalizationQueue finalizationQueue = new();
@@ -386,7 +386,7 @@ public sealed class CallRecordingManager : IDisposable, IAsyncDisposable
         if (sourceId != 0 && !shouldRecordSource(channel, sourceId))
         {
             lock (sync)
-                CloseCore(channel);
+                CloseCore(channel, streamId);
             return;
         }
 
@@ -395,23 +395,23 @@ public sealed class CallRecordingManager : IDisposable, IAsyncDisposable
             ObjectDisposedException.ThrowIf(disposed, this);
             try
             {
-                if (!active.TryGetValue(channel, out ActiveRecording? recording) || recording.StreamId != streamId)
+                var key = (channel, streamId);
+                if (!active.TryGetValue(key, out ActiveRecording? recording))
                 {
-                    CloseCore(channel);
                     recording = CreateActiveRecording(
                         channel,
                         streamId,
                         sourceId == 0 ? null : sourceId,
                         "RX",
                         "InboundRadio");
-                    active[channel] = recording;
+                    active[key] = recording;
                 }
 
                 recording.Writer.Write(samples.Span);
             }
             catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or InvalidOperationException)
             {
-                CloseCore(channel);
+                CloseCore(channel, streamId);
                 faultHandler?.Invoke(channel, exception);
             }
         }
@@ -465,19 +465,15 @@ public sealed class CallRecordingManager : IDisposable, IAsyncDisposable
             if (encryption is TrafficEncryptionMetadata resolved)
             {
                 streamEncryption[(channel, traffic.StreamId)] = resolved;
-                if (active.TryGetValue(channel, out ActiveRecording? current) && current.StreamId == traffic.StreamId)
+                if (active.TryGetValue((channel, traffic.StreamId), out ActiveRecording? current))
                     current.SetEncryption(resolved);
             }
 
             if (!IsTerminatingTraffic(traffic))
                 return false;
 
-            bool closed = false;
-            if (active.TryGetValue(channel, out ActiveRecording? recording) && recording.StreamId == traffic.StreamId)
-            {
-                CloseCore(channel);
-                closed = true;
-            }
+            bool closed = active.ContainsKey((channel, traffic.StreamId));
+            CloseCore(channel, traffic.StreamId);
             streamEncryption.Remove((channel, traffic.StreamId));
             return closed;
         }
@@ -491,6 +487,15 @@ public sealed class CallRecordingManager : IDisposable, IAsyncDisposable
             CloseCore(channel);
             CloseTransmitCore(channel);
         }
+    }
+
+    public void StopStream(ChannelViewModel channel, uint streamId)
+    {
+        ArgumentNullException.ThrowIfNull(channel);
+        if (streamId == 0)
+            return;
+        lock (sync)
+            CloseCore(channel, streamId);
     }
 
     public void StopTransmit(ChannelViewModel channel)
@@ -510,7 +515,11 @@ public sealed class CallRecordingManager : IDisposable, IAsyncDisposable
             if (disposed)
                 return;
 
-            foreach (ChannelViewModel channel in active.Keys.Concat(activeTransmit.Keys).Distinct().ToArray())
+            foreach (ChannelViewModel channel in active.Keys
+                         .Select(key => key.Channel)
+                         .Concat(activeTransmit.Keys)
+                         .Distinct()
+                         .ToArray())
             {
                 CloseCore(channel);
                 CloseTransmitCore(channel);
@@ -539,10 +548,8 @@ public sealed class CallRecordingManager : IDisposable, IAsyncDisposable
             streamId,
             DateTimeOffset.UtcNow,
             sourceId,
-            direction.Equals("RX", StringComparison.OrdinalIgnoreCase) &&
-            sourceId is uint callerId &&
-            !string.Equals(channel.LastCallerText, callerId.ToString(CultureInfo.InvariantCulture), StringComparison.Ordinal)
-                ? channel.LastCallerText
+            direction.Equals("RX", StringComparison.OrdinalIgnoreCase) && sourceId is uint callerId
+                ? channel.ResolveSubscriberAlias(callerId)
                 : string.Empty,
             direction,
             recordingSourceType,
@@ -615,9 +622,20 @@ public sealed class CallRecordingManager : IDisposable, IAsyncDisposable
 
     private void CloseCore(ChannelViewModel channel)
     {
-        if (!active.Remove(channel, out ActiveRecording? recording))
+        foreach (uint streamId in active.Keys
+                     .Where(key => ReferenceEquals(key.Channel, channel))
+                     .Select(key => key.StreamId)
+                     .ToArray())
+        {
+            CloseCore(channel, streamId);
+        }
+    }
+
+    private void CloseCore(ChannelViewModel channel, uint streamId)
+    {
+        if (!active.Remove((channel, streamId), out ActiveRecording? recording))
             return;
-        streamEncryption.Remove((channel, recording.StreamId));
+        streamEncryption.Remove((channel, streamId));
         EnqueueFinalization(channel, recording);
     }
 

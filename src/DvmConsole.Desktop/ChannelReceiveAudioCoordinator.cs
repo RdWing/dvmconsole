@@ -98,7 +98,7 @@ public sealed class ChannelReceiveAudioCoordinator : IAsyncDisposable
     {
         ArgumentNullException.ThrowIfNull(channel);
         return sessions.TryGetValue(channel, out SessionState? state)
-            ? state.Session.GetDiagnostics()
+            ? state.GetDiagnostics()
             : new ReceiveAudioDiagnostics(0, 0, 0, 0);
     }
 
@@ -254,10 +254,8 @@ public sealed class ChannelReceiveAudioCoordinator : IAsyncDisposable
             IAudioBackend? createdAudio = null;
             IVocoderBackend? createdVocoder = null;
             AudioRoute? createdRoute = null;
-            IAudioPlayback? createdChannelPlayback = null;
-            IVocoderSession? vocoderSession = null;
-            ChannelReceiveAudioSession? nextSession = null;
-            var sampleContext = new ReceiveSampleContext();
+            StreamSessionState? createdStreamSession = null;
+            SessionState? nextState = null;
 
             try
             {
@@ -285,57 +283,36 @@ public sealed class ChannelReceiveAudioCoordinator : IAsyncDisposable
                         createdAudio = null;
                     }
                 }
-                IAudioPlayback mixerChannelPlayback = activeRoute.Mixer.OpenChannel();
-                createdChannelPlayback = samplesObserver is null
-                    ? mixerChannelPlayback
-                    : new ObservedAudioPlayback(
-                        mixerChannelPlayback,
-                        samples =>
-                        {
-                            if (sampleContext.TryGet(out uint streamId, out uint sourceId))
-                                samplesObserver(channel, streamId, sourceId, samples);
-                        });
+                double gain = getChannelGain?.Invoke(channel) ?? 1.0;
+                double balance = getChannelBalance?.Invoke(channel) ?? 0.0;
+                createdStreamSession = await CreateStreamSessionAsync(
+                    channel,
+                    activeRoute,
+                    activeVocoder,
+                    gain,
+                    balance).ConfigureAwait(false);
+                nextState = new SessionState(
+                    createdStreamSession,
+                    () => CreateStreamSessionAsync(channel, activeRoute, activeVocoder, gain, balance),
+                    gain,
+                    balance);
+                createdStreamSession = null;
 
-                if (activeVocoder is not null)
-                {
-                    VocoderMode mode = channel.Definition.Mode == "dmr"
-                        ? VocoderMode.DmrAmbe
-                        : channel.Definition.Mode == "nxdn"
-                            ? VocoderMode.NxdnAmbe
-                            : VocoderMode.P25Imbe;
-                    vocoderSession = activeVocoder.CreateSession(mode);
-                }
-                nextSession = new ChannelReceiveAudioSession(
-                    channel.Definition,
-                    vocoderSession,
-                    createdChannelPlayback,
-                    p25KeyResolver,
-                    dmrKeyResolver,
-                    nxdnKeyResolver);
-                nextSession.SetGain(getChannelGain?.Invoke(channel) ?? 1.0);
-                nextSession.SetBalance(getChannelBalance?.Invoke(channel) ?? 0.0);
-                vocoderSession = null;
-                createdChannelPlayback = null;
-
-                sessions.TryAdd(channel, new SessionState(nextSession, sampleContext));
+                sessions.TryAdd(channel, nextState);
                 sessionRoutes.Add(channel, activeRoute.DeviceId);
                 sessionFollowsSystemDefault.Add(channel, followsSystemDefault);
                 activeChannels = sessions.Keys.ToArray();
-                nextSession = null;
+                nextState = null;
                 createdAudio = null;
                 createdVocoder = null;
                 createdRoute = null;
             }
             catch
             {
-                if (nextSession is not null)
-                    await nextSession.DisposeAsync().ConfigureAwait(false);
-                else
-                {
-                    if (createdChannelPlayback is not null)
-                        await createdChannelPlayback.DisposeAsync().ConfigureAwait(false);
-                    vocoderSession?.Dispose();
-                }
+                if (nextState is not null)
+                    await nextState.DisposeAsync().ConfigureAwait(false);
+                else if (createdStreamSession is not null)
+                    await createdStreamSession.DisposeAsync().ConfigureAwait(false);
 
                 if (createdRoute is not null)
                 {
@@ -354,6 +331,67 @@ public sealed class ChannelReceiveAudioCoordinator : IAsyncDisposable
         finally
         {
             gate.Release();
+        }
+    }
+
+    private async ValueTask<StreamSessionState> CreateStreamSessionAsync(
+        ChannelViewModel channel,
+        AudioRoute route,
+        IVocoderBackend? activeVocoder,
+        double gain,
+        double balance)
+    {
+        IAudioPlayback? playback = null;
+        IVocoderSession? vocoderSession = null;
+        ChannelReceiveAudioSession? session = null;
+        var sampleContext = new ReceiveSampleContext();
+        try
+        {
+            IAudioPlayback mixerPlayback = route.Mixer.OpenChannel();
+            playback = samplesObserver is null
+                ? mixerPlayback
+                : new ObservedAudioPlayback(
+                    mixerPlayback,
+                    samples =>
+                    {
+                        if (sampleContext.TryGet(out uint streamId, out uint sourceId))
+                            samplesObserver(channel, streamId, sourceId, samples);
+                    });
+
+            if (activeVocoder is not null)
+            {
+                VocoderMode mode = channel.Definition.Mode == "dmr"
+                    ? VocoderMode.DmrAmbe
+                    : channel.Definition.Mode == "nxdn"
+                        ? VocoderMode.NxdnAmbe
+                        : VocoderMode.P25Imbe;
+                vocoderSession = activeVocoder.CreateSession(mode);
+            }
+
+            session = new ChannelReceiveAudioSession(
+                channel.Definition,
+                vocoderSession,
+                playback,
+                p25KeyResolver,
+                dmrKeyResolver,
+                nxdnKeyResolver);
+            session.SetGain(gain);
+            session.SetBalance(balance);
+            vocoderSession = null;
+            playback = null;
+            return new StreamSessionState(session, sampleContext);
+        }
+        catch
+        {
+            if (session is not null)
+                await session.DisposeAsync().ConfigureAwait(false);
+            else
+            {
+                vocoderSession?.Dispose();
+                if (playback is not null)
+                    await playback.DisposeAsync().ConfigureAwait(false);
+            }
+            throw;
         }
     }
 
@@ -377,6 +415,21 @@ public sealed class ChannelReceiveAudioCoordinator : IAsyncDisposable
         };
     }
 
+    private static bool IsTerminatingTraffic(FneTrafficFrame traffic)
+    {
+        if (traffic.FrameType.Equals("TERMINATOR", StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        return traffic.Protocol switch
+        {
+            FneTrafficProtocol.Dmr => traffic.Subtype.Equals("TERMINATOR_WITH_LC", StringComparison.OrdinalIgnoreCase),
+            FneTrafficProtocol.P25 => traffic.Subtype.Equals("TDU", StringComparison.OrdinalIgnoreCase) ||
+                                      traffic.Subtype.Equals("TDULC", StringComparison.OrdinalIgnoreCase),
+            FneTrafficProtocol.Analog => traffic.Subtype.Equals("TERMINATOR", StringComparison.OrdinalIgnoreCase),
+            _ => false
+        };
+    }
+
     public async Task<int> ProcessAsync(
         ChannelViewModel channel,
         FneTrafficFrame traffic,
@@ -394,15 +447,7 @@ public sealed class ChannelReceiveAudioCoordinator : IAsyncDisposable
         {
             await state.ProcessGate.WaitAsync(cancellationToken).ConfigureAwait(false);
             entered = true;
-            state.SampleContext.Set(traffic.StreamId, traffic.SourceId);
-            try
-            {
-                return await state.Session.ProcessAsync(traffic, cancellationToken).ConfigureAwait(false);
-            }
-            finally
-            {
-                state.SampleContext.Clear();
-            }
+            return await state.ProcessAsync(traffic, cancellationToken).ConfigureAwait(false);
         }
         finally
         {
@@ -481,7 +526,7 @@ public sealed class ChannelReceiveAudioCoordinator : IAsyncDisposable
         try
         {
             if (sessions.TryGetValue(channel, out SessionState? state))
-                state.Session.SetGain(gain);
+                state.SetGain(gain);
         }
         finally
         {
@@ -498,7 +543,7 @@ public sealed class ChannelReceiveAudioCoordinator : IAsyncDisposable
         try
         {
             if (sessions.TryGetValue(channel, out SessionState? state))
-                state.Session.SetBalance(balance);
+                state.SetBalance(balance);
         }
         finally
         {
@@ -667,19 +712,118 @@ public sealed class ChannelReceiveAudioCoordinator : IAsyncDisposable
 
     private sealed record AudioRoute(string DeviceId, IAudioBackend Backend, AudioMixer Mixer);
 
-    private sealed class SessionState(
-        ChannelReceiveAudioSession session,
-        ReceiveSampleContext sampleContext) : IAsyncDisposable
+    private sealed class SessionState : IAsyncDisposable
     {
+        private const int MaximumStreamSessions = 8;
+        private static readonly TimeSpan CompletedStreamRetention = TimeSpan.FromSeconds(1);
         private readonly object sync = new();
+        private readonly object streamSync = new();
         private readonly TaskCompletionSource idle =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly Dictionary<uint, StreamSessionState> streams = [];
+        private readonly Func<ValueTask<StreamSessionState>> createStreamSession;
+        private StreamSessionState? unboundStream;
+        private ReceiveAudioDiagnostics completedDiagnostics = new(0, 0, 0, 0);
+        private double gain;
+        private double balance;
         private int operations;
         private bool stopping;
 
-        public ChannelReceiveAudioSession Session { get; } = session;
-        public ReceiveSampleContext SampleContext { get; } = sampleContext;
+        public SessionState(
+            StreamSessionState initialStream,
+            Func<ValueTask<StreamSessionState>> createStreamSession,
+            double gain,
+            double balance)
+        {
+            unboundStream = initialStream ?? throw new ArgumentNullException(nameof(initialStream));
+            this.createStreamSession = createStreamSession ?? throw new ArgumentNullException(nameof(createStreamSession));
+            this.gain = gain;
+            this.balance = balance;
+        }
+
         public SemaphoreSlim ProcessGate { get; } = new(1, 1);
+
+        public async ValueTask<int> ProcessAsync(
+            FneTrafficFrame traffic,
+            CancellationToken cancellationToken)
+        {
+            DateTimeOffset now = DateTimeOffset.UtcNow;
+            await RemoveExpiredCompletedStreamsAsync(now).ConfigureAwait(false);
+            bool terminating = IsTerminatingTraffic(traffic);
+            StreamSessionState? stream = terminating
+                ? FindStream(traffic.StreamId)
+                : await GetOrCreateStreamAsync(traffic.StreamId).ConfigureAwait(false);
+            if (stream is null)
+                return 0;
+
+            stream.SampleContext.Set(traffic.StreamId, traffic.SourceId);
+            try
+            {
+                return await stream.Session.ProcessAsync(traffic, cancellationToken).ConfigureAwait(false);
+            }
+            finally
+            {
+                stream.SampleContext.Clear();
+                stream.LastActivity = now;
+                if (terminating)
+                    stream.CompletedAt = now;
+            }
+        }
+
+        public ReceiveAudioDiagnostics GetDiagnostics()
+        {
+            StreamSessionState[] snapshot;
+            ReceiveAudioDiagnostics completed;
+            lock (streamSync)
+            {
+                snapshot = streams.Values
+                    .Concat(unboundStream is null ? [] : [unboundStream])
+                    .ToArray();
+                completed = completedDiagnostics;
+            }
+
+            int decoded = completed.FramesDecoded;
+            long lost = completed.LostPackets;
+            long late = completed.DuplicateOrLatePackets;
+            long malformed = completed.MalformedPackets;
+            foreach (StreamSessionState stream in snapshot)
+            {
+                ReceiveAudioDiagnostics current = stream.Session.GetDiagnostics();
+                decoded = checked(decoded + current.FramesDecoded);
+                lost = checked(lost + current.LostPackets);
+                late = checked(late + current.DuplicateOrLatePackets);
+                malformed = checked(malformed + current.MalformedPackets);
+            }
+            return new ReceiveAudioDiagnostics(decoded, lost, late, malformed);
+        }
+
+        public void SetGain(double nextGain)
+        {
+            StreamSessionState[] snapshot;
+            lock (streamSync)
+            {
+                gain = nextGain;
+                snapshot = streams.Values
+                    .Concat(unboundStream is null ? [] : [unboundStream])
+                    .ToArray();
+            }
+            foreach (StreamSessionState stream in snapshot)
+                stream.Session.SetGain(nextGain);
+        }
+
+        public void SetBalance(double nextBalance)
+        {
+            StreamSessionState[] snapshot;
+            lock (streamSync)
+            {
+                balance = nextBalance;
+                snapshot = streams.Values
+                    .Concat(unboundStream is null ? [] : [unboundStream])
+                    .ToArray();
+            }
+            foreach (StreamSessionState stream in snapshot)
+                stream.Session.SetBalance(nextBalance);
+        }
 
         public bool TryAcquire()
         {
@@ -717,9 +861,122 @@ public sealed class ChannelReceiveAudioCoordinator : IAsyncDisposable
 
         public async ValueTask DisposeAsync()
         {
-            await Session.DisposeAsync().ConfigureAwait(false);
+            StreamSessionState[] oldStreams;
+            lock (streamSync)
+            {
+                oldStreams = streams.Values
+                    .Concat(unboundStream is null ? [] : [unboundStream])
+                    .Distinct()
+                    .ToArray();
+                streams.Clear();
+                unboundStream = null;
+            }
+            foreach (StreamSessionState stream in oldStreams)
+                await stream.DisposeAsync().ConfigureAwait(false);
             ProcessGate.Dispose();
         }
+
+        private StreamSessionState? FindStream(uint streamId)
+        {
+            lock (streamSync)
+                return streams.GetValueOrDefault(streamId);
+        }
+
+        private async ValueTask<StreamSessionState> GetOrCreateStreamAsync(uint streamId)
+        {
+            StreamSessionState? evicted = null;
+            lock (streamSync)
+            {
+                if (streams.TryGetValue(streamId, out StreamSessionState? existing) &&
+                    existing.CompletedAt is null)
+                {
+                    return existing;
+                }
+
+                if (existing is not null)
+                {
+                    streams.Remove(streamId);
+                    AccumulateDiagnostics(existing);
+                    evicted = existing;
+                }
+                else if (unboundStream is not null)
+                {
+                    StreamSessionState initial = unboundStream;
+                    unboundStream = null;
+                    initial.StreamId = streamId;
+                    initial.LastActivity = DateTimeOffset.UtcNow;
+                    streams.Add(streamId, initial);
+                    return initial;
+                }
+                else if (streams.Count >= MaximumStreamSessions)
+                {
+                    KeyValuePair<uint, StreamSessionState> oldest = streams
+                        .OrderBy(pair => pair.Value.CompletedAt is null ? 1 : 0)
+                        .ThenBy(pair => pair.Value.LastActivity)
+                        .First();
+                    streams.Remove(oldest.Key);
+                    AccumulateDiagnostics(oldest.Value);
+                    evicted = oldest.Value;
+                }
+            }
+
+            if (evicted is not null)
+                await evicted.DisposeAsync().ConfigureAwait(false);
+
+            StreamSessionState created = await createStreamSession().ConfigureAwait(false);
+            lock (streamSync)
+            {
+                created.StreamId = streamId;
+                created.LastActivity = DateTimeOffset.UtcNow;
+                created.Session.SetGain(gain);
+                created.Session.SetBalance(balance);
+                streams.Add(streamId, created);
+            }
+            return created;
+        }
+
+        private async ValueTask RemoveExpiredCompletedStreamsAsync(DateTimeOffset now)
+        {
+            StreamSessionState[] expired;
+            lock (streamSync)
+            {
+                expired = streams.Values
+                    .Where(stream => stream.CompletedAt is DateTimeOffset completedAt &&
+                        now - completedAt >= CompletedStreamRetention)
+                    .ToArray();
+                foreach (StreamSessionState stream in expired)
+                {
+                    streams.Remove(stream.StreamId);
+                    AccumulateDiagnostics(stream);
+                }
+            }
+            foreach (StreamSessionState stream in expired)
+                await stream.DisposeAsync().ConfigureAwait(false);
+        }
+
+        // Called only while streamSync is held.
+        private void AccumulateDiagnostics(StreamSessionState stream)
+        {
+            ReceiveAudioDiagnostics current = stream.Session.GetDiagnostics();
+            completedDiagnostics = new ReceiveAudioDiagnostics(
+                checked(completedDiagnostics.FramesDecoded + current.FramesDecoded),
+                checked(completedDiagnostics.LostPackets + current.LostPackets),
+                checked(completedDiagnostics.DuplicateOrLatePackets + current.DuplicateOrLatePackets),
+                checked(completedDiagnostics.MalformedPackets + current.MalformedPackets));
+        }
+    }
+
+    private sealed class StreamSessionState(
+        ChannelReceiveAudioSession session,
+        ReceiveSampleContext sampleContext) : IAsyncDisposable
+    {
+        public ChannelReceiveAudioSession Session { get; } = session;
+        public ReceiveSampleContext SampleContext { get; } = sampleContext;
+        public uint StreamId { get; set; }
+        public DateTimeOffset LastActivity { get; set; } = DateTimeOffset.UtcNow;
+        public DateTimeOffset? CompletedAt { get; set; }
+
+        public ValueTask DisposeAsync() => Session.DisposeAsync();
     }
 
     private sealed class ReceiveSampleContext

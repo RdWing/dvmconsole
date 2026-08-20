@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+
+- Preserve simultaneous calls that share one talkgroup with independent receive lifecycles, decoder state, mixer lanes, and TAR writers, while refilling ready live-audio frames when the output buffer falls behind.
+- Keep microphone audio suppressed until a Bluetooth talk-permit cue completes on a stable selected output, retry transient route failures, and stop PTT instead of transmitting without the requested indication.
+
 ## [0.3.1] - 2026-08-19
 
 ### Added

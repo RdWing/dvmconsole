@@ -708,7 +708,7 @@ public sealed class SystemViewModelTests
             Assert.NotNull(sessionHistory[0].Duration);
             Assert.Equal((uint)77, sessionHistory[1].StreamId);
             Assert.Equal("Alpha Dispatch", sessionHistory[1].ChannelName);
-            Assert.False(sessionHistory[1].IsActive);
+            Assert.True(sessionHistory[1].IsActive);
             Assert.Equal("Info", viewModel.DebugLogSeverityFilter);
             Assert.All(viewModel.FilteredDebugLogs, entry => Assert.Equal(DvmConsole.Core.Diagnostics.DebugLogSeverity.Info, entry.Severity));
             Assert.Contains(viewModel.FilteredDebugLogs, entry => entry.Message.Contains("RX call started", StringComparison.Ordinal));
@@ -775,6 +775,45 @@ public sealed class SystemViewModelTests
             Assert.Equal(ChannelRuntimeState.Idle, channel.State);
             Assert.Equal(1, channel.IgnoredLatePacketCount);
             Assert.Contains("late/duplicate 1", viewModel.AudioStatusText, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            CleanupSettingsPath(settingsPath);
+        }
+    }
+
+    [Fact]
+    public async Task CollidingP25StreamsOnOneTalkgroupRemainIndependentUntilTheirTerminators()
+    {
+        string path = Path.Combine(AppContext.BaseDirectory, "TestData", "multiple-systems.yml");
+        string settingsPath = CreateSettingsPath();
+        DateTimeOffset now = DateTimeOffset.UnixEpoch;
+
+        try
+        {
+            await using MainWindowViewModel viewModel = MainWindowViewModel.Load(
+                path,
+                new UserSettingsStore(settingsPath));
+            SystemViewModel system = viewModel.Systems[0];
+            ChannelViewModel channel = system.Channels.Single(candidate => candidate.Name == "Alpha Operations");
+
+            viewModel.ProcessTraffic(system, CreateP25Traffic(100, 3_206_227, "VOICE", "LDU1", 1), receivedAt: now);
+            viewModel.ProcessTraffic(system, CreateP25Traffic(200, 3_213_659, "VOICE", "LDU1", 1), receivedAt: now.AddMilliseconds(100));
+            viewModel.ProcessTraffic(system, CreateP25Traffic(100, 3_206_227, "VOICE", "LDU2", 2), receivedAt: now.AddMilliseconds(200));
+
+            Assert.Equal(2, viewModel.CallHistory.Count(entry => entry.IsActive));
+            Assert.Equal((uint)100, channel.StreamId);
+
+            viewModel.ProcessTraffic(system, CreateP25Traffic(200, 0, "TERMINATOR", "TDU", 2, destinationId: 0), receivedAt: now.AddSeconds(1));
+
+            Assert.True(viewModel.CallHistory.Single(entry => entry.StreamId == 100).IsActive);
+            Assert.False(viewModel.CallHistory.Single(entry => entry.StreamId == 200).IsActive);
+            Assert.Equal(ChannelRuntimeState.Receiving, channel.State);
+
+            viewModel.ProcessTraffic(system, CreateP25Traffic(100, 0, "TERMINATOR", "TDU", 3, destinationId: 0), receivedAt: now.AddSeconds(1.1));
+
+            Assert.All(viewModel.CallHistory, entry => Assert.False(entry.IsActive));
+            Assert.Equal(ChannelRuntimeState.Idle, channel.State);
         }
         finally
         {
@@ -1777,6 +1816,26 @@ public sealed class SystemViewModelTests
             packetSequence,
             streamId,
             new byte[DmrVoicePacketCodec.PacketBytes]);
+
+    private static FneTrafficFrame CreateP25Traffic(
+        uint streamId,
+        uint sourceId,
+        string frameType,
+        string subtype,
+        ushort packetSequence,
+        uint destinationId = 102)
+        => new(
+            FneTrafficProtocol.P25,
+            peerId: 1,
+            sourceId,
+            destinationId,
+            slot: null,
+            callType: "GROUP",
+            frameType,
+            subtype,
+            packetSequence,
+            streamId,
+            new byte[P25DfsiFrameCodec.NetworkPayloadBytes]);
 
     private static string CreateSettingsPath()
     {

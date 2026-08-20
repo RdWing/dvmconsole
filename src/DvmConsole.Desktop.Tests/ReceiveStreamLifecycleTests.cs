@@ -66,7 +66,7 @@ public sealed class ReceiveStreamLifecycleTests
     }
 
     [Fact]
-    public void NewStreamSupersedesOldStreamWithoutAllowingItBack()
+    public void ConcurrentStreamsRemainActiveUntilEachOneEnds()
     {
         var lifecycle = CreateLifecycle();
         DateTimeOffset now = DateTimeOffset.UnixEpoch;
@@ -74,10 +74,12 @@ public sealed class ReceiveStreamLifecycleTests
         lifecycle.ObserveVoice(10, now);
         ReceiveStreamDecision decision = lifecycle.ObserveVoice(11, now.AddMilliseconds(100));
 
-        Assert.Equal(ReceiveStreamTransition.Superseded, decision.Transition);
-        Assert.Equal((uint)10, decision.EndedStreamId);
-        Assert.Equal((uint)11, decision.ActiveStreamId);
-        Assert.Equal(ReceiveStreamTransition.IgnoredLate, lifecycle.ObserveVoice(10, now.AddSeconds(1)).Transition);
+        Assert.Equal(ReceiveStreamTransition.Colliding, decision.Transition);
+        Assert.Null(decision.EndedStreamId);
+        Assert.Equal((uint)10, decision.ActiveStreamId);
+        Assert.Equal(ReceiveStreamTransition.Continued, lifecycle.ObserveVoice(10, now.AddSeconds(1)).Transition);
+        Assert.Equal(ReceiveStreamTransition.Ended, lifecycle.ObserveTerminator(11, now.AddSeconds(1.1)).Transition);
+        Assert.Equal((uint)10, lifecycle.ActiveStreamId);
     }
 
     [Fact]

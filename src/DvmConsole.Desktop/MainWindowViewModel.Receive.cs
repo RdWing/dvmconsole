@@ -128,12 +128,12 @@ public sealed partial class MainWindowViewModel
                     endedStreamId,
                     now,
                     channel.Name,
-                    traffic.DestinationId) || callHistoryChanged;
+                    channel.Definition.DestinationId) || callHistoryChanged;
             }
 
             bool canStartHistory = applied.Transition is
                 ReceiveStreamTransition.Started or
-                ReceiveStreamTransition.Superseded or
+                ReceiveStreamTransition.Colliding or
                 ReceiveStreamTransition.Continued or
                 ReceiveStreamTransition.Resumed;
             if (canStartHistory &&
@@ -262,8 +262,7 @@ public sealed partial class MainWindowViewModel
             return SelectResourceRepresentatives(routedChannels, traffic);
 
         ChannelViewModel[] activeStreamChannels = system.Channels
-            .Where(channel => channel.State == ChannelRuntimeState.Receiving &&
-                channel.StreamId == traffic.StreamId)
+            .Where(channel => channel.IsTrackingReceiveStream(traffic.StreamId))
             .ToArray();
         if (activeStreamChannels.Length == 0)
             return routedChannels;

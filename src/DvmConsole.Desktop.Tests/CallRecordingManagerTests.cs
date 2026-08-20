@@ -80,6 +80,48 @@ public sealed class CallRecordingManagerTests
     }
 
     [Fact]
+    public async Task ConcurrentReceiveStreamsKeepIndependentRecordingWriters()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "dvmconsole-recording-tests", Guid.NewGuid().ToString("N"));
+        var channel = new ChannelViewModel(new ChannelConfiguration
+        {
+            Name = "Dispatch",
+            System = "System 1",
+            Tgid = "99",
+            Mode = "p25"
+        });
+        using var manager = new CallRecordingManager(root);
+        channel.SetRecordingEnabled(true);
+
+        try
+        {
+            manager.WriteSamples(channel, streamId: 41, sourceId: 7, ActiveSamples());
+            manager.WriteSamples(channel, streamId: 42, sourceId: 8, ActiveSamples());
+
+            Assert.Equal(2, manager.ActivePaths.Count);
+
+            Task<RecordingFinalizationResult> firstFinalized = NextFinalizationAsync(manager);
+            Assert.True(manager.ObserveTraffic(channel, P25Traffic("TERMINATOR", "TDU", 41)));
+            Assert.True((await firstFinalized).IsPlayable);
+            Assert.Single(manager.ActivePaths);
+
+            Task<RecordingFinalizationResult> secondFinalized = NextFinalizationAsync(manager);
+            Assert.True(manager.ObserveTraffic(channel, P25Traffic("TERMINATOR", "TDU", 42)));
+            Assert.True((await secondFinalized).IsPlayable);
+
+            Assert.Empty(manager.ActivePaths);
+            Assert.Equal(
+                new uint?[] { 41, 42 },
+                manager.LoadRecordings().Select(item => item.StreamId).Order().ToArray());
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task StartsAndFinalizesOneOpusFilePerVoiceStream()
     {
         string root = Path.Combine(Path.GetTempPath(), "dvmconsole-recording-tests", Guid.NewGuid().ToString("N"));
@@ -135,7 +177,7 @@ public sealed class CallRecordingManagerTests
             Assert.Single(manager.LoadRecordings());
 
             Assert.True(channel.TryApplyTraffic("System 1", Traffic("VOICE", "VOICE", 8)));
-            manager.WriteSamples(channel, ActiveSamples());
+            manager.WriteSamples(channel, streamId: 8, sourceId: 42, ActiveSamples());
             Task<RecordingFinalizationResult> secondFinalized = NextFinalizationAsync(manager);
             manager.ObserveTraffic(channel, Traffic("TERMINATOR", "TERMINATOR", 8));
             Assert.True((await secondFinalized).IsPlayable);
