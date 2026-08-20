@@ -66,19 +66,6 @@ static AudioDeviceID dvmDefaultDevice(BOOL input)
     return device;
 }
 
-static BOOL dvmIsBluetoothDevice(AudioDeviceID device)
-{
-    UInt32 transport = 0;
-    UInt32 size = sizeof(transport);
-    AudioObjectPropertyAddress address = {
-        kAudioDevicePropertyTransportType,
-        kAudioObjectPropertyScopeGlobal,
-        kAudioObjectPropertyElementMain};
-    return AudioObjectGetPropertyData(device, &address, 0, NULL, &size,
-                                      &transport) == noErr &&
-           transport == kAudioDeviceTransportTypeBluetooth;
-}
-
 static double dvmDeviceRate(AudioDeviceID device)
 {
     Float64 rate = 0;
@@ -142,7 +129,8 @@ int32_t dvm_audio_high_quality_bluetooth_acquire(
         AudioDeviceID output = (AudioDeviceID)output_device_id;
         if (input == kAudioObjectUnknown || output == kAudioObjectUnknown ||
             input != dvmDefaultDevice(YES) || output != dvmDefaultDevice(NO) ||
-            !dvmIsBluetoothDevice(input) || !dvmIsBluetoothDevice(output)) {
+            dvm_audio_device_is_bluetooth(input) != 1 ||
+            dvm_audio_device_is_bluetooth(output) != 1) {
             dvmSessionStatus = DVM_HIGH_QUALITY_BLUETOOTH_OFF;
             return 0;
         }

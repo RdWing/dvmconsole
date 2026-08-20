@@ -12,13 +12,26 @@ internal sealed class SharedAudioCapture : IAsyncDisposable
     private readonly IAudioCapture source;
     private readonly object sync = new();
     private readonly List<Lease> leases = [];
+    private readonly long requiredReadinessSamples;
     private TaskCompletionSource<bool> samplesReady = CreateReadinessSource();
+    private long observedReadinessSamples;
     private bool samplesSuppressed;
     private bool disposed;
 
-    public SharedAudioCapture(IAudioCapture source)
+    public SharedAudioCapture(
+        IAudioCapture source,
+        TimeSpan? minimumReadinessDuration = null)
     {
         this.source = source ?? throw new ArgumentNullException(nameof(source));
+        TimeSpan duration = minimumReadinessDuration ?? TimeSpan.Zero;
+        if (duration < TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(nameof(minimumReadinessDuration));
+        requiredReadinessSamples = Math.Max(
+            1,
+            checked((long)Math.Ceiling(
+                source.Format.SampleRate *
+                source.Format.Channels *
+                duration.TotalSeconds)));
         source.SamplesAvailable += HandleSamplesAvailable;
     }
 
@@ -30,6 +43,18 @@ internal sealed class SharedAudioCapture : IAsyncDisposable
             var lease = new Lease(this, source.Format);
             leases.Add(lease);
             return lease;
+        }
+    }
+
+    public bool IsReady
+    {
+        get
+        {
+            lock (sync)
+            {
+                ObjectDisposedException.ThrowIf(disposed, this);
+                return samplesReady.Task.IsCompletedSuccessfully;
+            }
         }
     }
 
@@ -88,7 +113,10 @@ internal sealed class SharedAudioCapture : IAsyncDisposable
                 return;
             startSource = !leases.Any(candidate => candidate.IsRunning);
             if (startSource)
+            {
                 samplesReady = CreateReadinessSource();
+                observedReadinessSamples = 0;
+            }
             lease.SetRunning(true);
         }
 
@@ -142,11 +170,16 @@ internal sealed class SharedAudioCapture : IAsyncDisposable
 
         lock (sync)
         {
-            // Signal readiness before honoring suppression. PTT intentionally
-            // discards microphone samples while the permit tone is pending,
-            // but the first real callback still proves that a Bluetooth
-            // profile switch and the selected capture route are complete.
-            samplesReady.TrySetResult(true);
+            // Count physical capture before honoring suppression. A cold
+            // Bluetooth endpoint can produce one callback while its duplex
+            // profile is still changing, so transmit readiness can require a
+            // sustained interval rather than treating that callback as proof
+            // that the route has settled.
+            observedReadinessSamples = Math.Min(
+                requiredReadinessSamples,
+                observedReadinessSamples + args.Samples.Length);
+            if (observedReadinessSamples >= requiredReadinessSamples)
+                samplesReady.TrySetResult(true);
             if (samplesSuppressed)
                 return;
 

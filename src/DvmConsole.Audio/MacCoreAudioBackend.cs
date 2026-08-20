@@ -60,7 +60,13 @@ public sealed class MacCoreAudioBackend :
                 string deviceName = System.Text.Encoding.UTF8.GetString(name).TrimEnd('\0');
                 if (string.IsNullOrWhiteSpace(deviceName))
                     deviceName = $"Audio device {deviceId}";
-                devices.Add(new AudioDeviceInfo(deviceId.ToString(), deviceName, direction, isDefault != 0));
+                int bluetooth = api.IsBluetoothDevice(deviceId);
+                devices.Add(new AudioDeviceInfo(
+                    deviceId.ToString(),
+                    deviceName,
+                    direction,
+                    isDefault != 0,
+                    bluetooth < 0 ? null : bluetooth != 0));
             }
 
             if (!changedDuringEnumeration)
@@ -738,6 +744,7 @@ public sealed class MacCoreAudioBackend :
     {
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate int GetDeviceCountDelegate(int input, out int count);
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate int GetDeviceDelegate(int input, int index, out ulong deviceId, byte[] name, int nameCapacity, out int isDefault);
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate int IsBluetoothDeviceDelegate(ulong deviceId);
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate IntPtr CreateStreamDelegate(ulong deviceId, int input, int sampleRate, int channels, int bitsPerSample);
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate int StreamStatusDelegate(IntPtr stream);
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate int GetSampleRateDelegate(IntPtr stream);
@@ -753,6 +760,7 @@ public sealed class MacCoreAudioBackend :
         private readonly IntPtr handle;
         private readonly GetDeviceCountDelegate getDeviceCount;
         private readonly GetDeviceDelegate getDevice;
+        private readonly IsBluetoothDeviceDelegate? isBluetoothDevice;
         private readonly CreateStreamDelegate createStream;
         private readonly StreamStatusDelegate startStream;
         private readonly StreamStatusDelegate stopStream;
@@ -778,6 +786,7 @@ public sealed class MacCoreAudioBackend :
             LibraryPath = libraryPath;
             getDeviceCount = Get<GetDeviceCountDelegate>("dvm_audio_get_device_count");
             getDevice = Get<GetDeviceDelegate>("dvm_audio_get_device");
+            isBluetoothDevice = TryGet<IsBluetoothDeviceDelegate>("dvm_audio_device_is_bluetooth");
             createStream = Get<CreateStreamDelegate>("dvm_audio_stream_create");
             startStream = Get<StreamStatusDelegate>("dvm_audio_stream_start");
             stopStream = Get<StreamStatusDelegate>("dvm_audio_stream_stop");
@@ -823,6 +832,7 @@ public sealed class MacCoreAudioBackend :
 
         public int GetDeviceCount(int input, out int count) => getDeviceCount(input, out count);
         public int GetDevice(int input, int index, out ulong deviceId, byte[] name, int capacity, out int isDefault) => getDevice(input, index, out deviceId, name, capacity, out isDefault);
+        public int IsBluetoothDevice(ulong deviceId) => isBluetoothDevice?.Invoke(deviceId) ?? -1;
         public IntPtr CreateStream(ulong id, int input, int sampleRate, int channels, int bits) => createStream(id, input, sampleRate, channels, bits);
         public int StartStream(IntPtr stream) => startStream(stream);
         public int StopStream(IntPtr stream) => stopStream(stream);
@@ -846,6 +856,13 @@ public sealed class MacCoreAudioBackend :
         private T Get<T>(string symbol) where T : Delegate
         {
             return Marshal.GetDelegateForFunctionPointer<T>(NativeLibrary.GetExport(handle, symbol));
+        }
+
+        private T? TryGet<T>(string symbol) where T : Delegate
+        {
+            return NativeLibrary.TryGetExport(handle, symbol, out IntPtr address)
+                ? Marshal.GetDelegateForFunctionPointer<T>(address)
+                : null;
         }
     }
 }

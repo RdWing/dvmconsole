@@ -18,6 +18,10 @@ public enum DefaultInputRefreshResult
 // PTT may start several targets, all fed by one microphone capture stream.
 public sealed class ChannelTransmitCoordinator : IAsyncDisposable
 {
+    internal static TimeSpan ColdMicrophoneSettlingDuration { get; } =
+        TimeSpan.FromMilliseconds(750);
+    private static TimeSpan MicrophoneReadyTimeout { get; } =
+        TimeSpan.FromSeconds(8);
     private readonly IP25KeyResolver? p25KeyResolver;
     private readonly IDmrKeyResolver? dmrKeyResolver;
     private readonly INxdnKeyResolver? nxdnKeyResolver;
@@ -29,6 +33,7 @@ public sealed class ChannelTransmitCoordinator : IAsyncDisposable
     private IVocoderBackend? vocoderBackend;
     private SharedAudioCapture? sharedCapture;
     private SharedAudioCapture.Lease? warmCaptureLease;
+    private bool? sharedCaptureIsBluetooth;
     private bool sharedCaptureFollowsSystemDefault;
     private bool refreshDefaultInputWhenIdle;
     private readonly List<ActiveTransmit> active = [];
@@ -41,6 +46,8 @@ public sealed class ChannelTransmitCoordinator : IAsyncDisposable
     public ChannelViewModel? ActiveChannel => active.FirstOrDefault()?.Channel;
     public IReadOnlyList<ChannelViewModel> ActiveChannels => active.Select(entry => entry.Channel).ToArray();
     public uint ActiveStreamId => active.FirstOrDefault()?.StreamId ?? 0;
+    public bool ActiveMicrophoneStartedCold { get; private set; }
+    public bool? ActiveMicrophoneIsBluetooth { get; private set; }
 
     public ChannelTransmitCoordinator(
         IP25KeyResolver? p25KeyResolver = null,
@@ -160,7 +167,7 @@ public sealed class ChannelTransmitCoordinator : IAsyncDisposable
             throw new InvalidOperationException("No transmit call is waiting for microphone audio.");
 
         await capture.WaitForSamplesAsync(
-            timeout ?? TimeSpan.FromSeconds(5),
+            timeout ?? MicrophoneReadyTimeout,
             cancellationToken).ConfigureAwait(false);
     }
 
@@ -189,6 +196,7 @@ public sealed class ChannelTransmitCoordinator : IAsyncDisposable
             IVocoderBackend? createdVocoderBackend = null;
             SharedAudioCapture? createdSharedCapture = null;
             bool reusedWarmCapture = sharedCapture is not null;
+            bool reusedReadyCapture = sharedCapture?.IsReady == true;
             var created = new List<ActiveTransmit>();
             try
             {
@@ -284,6 +292,8 @@ public sealed class ChannelTransmitCoordinator : IAsyncDisposable
                 vocoderBackend = createdVocoderBackend;
                 sharedCapture ??= createdSharedCapture;
                 active.AddRange(created);
+                ActiveMicrophoneStartedCold = !reusedReadyCapture;
+                ActiveMicrophoneIsBluetooth = sharedCaptureIsBluetooth;
             }
             catch
             {
@@ -371,6 +381,8 @@ public sealed class ChannelTransmitCoordinator : IAsyncDisposable
     {
         ActiveTransmit[] current = active.ToArray();
         active.Clear();
+        ActiveMicrophoneStartedCold = false;
+        ActiveMicrophoneIsBluetooth = null;
         Exception? failure = null;
         try
         {
@@ -402,6 +414,7 @@ public sealed class ChannelTransmitCoordinator : IAsyncDisposable
             }
             sharedCapture = null;
             sharedCaptureFollowsSystemDefault = false;
+            sharedCaptureIsBluetooth = null;
         }
         vocoderBackend?.Dispose();
         vocoderBackend = null;
@@ -446,6 +459,7 @@ public sealed class ChannelTransmitCoordinator : IAsyncDisposable
             sharedCapture = null;
             sharedCaptureFollowsSystemDefault = false;
         }
+        sharedCaptureIsBluetooth = null;
 
         try
         {
@@ -547,9 +561,13 @@ public sealed class ChannelTransmitCoordinator : IAsyncDisposable
                     samplesObserver(entry.Channel, entry.StreamId, entry.SourceId, args.Samples);
             };
         }
-        var shared = new SharedAudioCapture(capture);
+        TimeSpan readinessDuration = input.IsBluetooth == false
+            ? TimeSpan.Zero
+            : ColdMicrophoneSettlingDuration;
+        var shared = new SharedAudioCapture(capture, readinessDuration);
         shared.SetSamplesSuppressed(microphoneAudioSuppressed);
         sharedCaptureFollowsSystemDefault = selection.FollowsSystemDefault;
+        sharedCaptureIsBluetooth = input.IsBluetooth;
         return shared;
     }
 

@@ -50,6 +50,37 @@ internal static class LocalToneCues
         MaximumPlaybackAttempts: 3,
         RoutePolicy: AudioOutputRoutePolicy.TransientRouteChanges);
 
+    // A microphone that was opened for this PTT may start delivering samples
+    // before a Bluetooth headset's output side has finished entering its
+    // duplex profile. Keep this deliberately more conservative than the warm
+    // path so the short operator cue is not presented into a disappearing
+    // A2DP route.
+    public static LocalTonePlaybackRequest ColdStartTalkPermit { get; } = new(
+        Frequency: 1200,
+        ToneDuration: TimeSpan.FromMilliseconds(160),
+        Amplitude: 0.40,
+        OutputWarmupDuration: TimeSpan.FromMilliseconds(1000),
+        TailSilenceDuration: TimeSpan.FromMilliseconds(200),
+        OutputPostDrainDuration: TimeSpan.FromMilliseconds(500),
+        MaximumPlaybackAttempts: 3,
+        RoutePolicy: AudioOutputRoutePolicy.TransientRouteChanges);
+
+    public static LocalTonePlaybackRequest SelectTalkPermit(
+        bool microphoneStartedCold,
+        bool? microphoneIsBluetooth,
+        bool? outputIsBluetooth)
+    {
+        if (!microphoneStartedCold)
+            return TalkPermit;
+
+        // A temporarily unclassified CoreAudio endpoint is expected while a
+        // Bluetooth profile changes. Treat unknown as Bluetooth so uncertainty
+        // cannot reopen the microphone after an inaudible short cue.
+        return microphoneIsBluetooth != false || outputIsBluetooth != false
+            ? ColdStartTalkPermit
+            : TalkPermit;
+    }
+
     public static LocalTonePlaybackRequest ConnectionEstablished { get; } = new(
         Frequency: 1500,
         ToneDuration: TimeSpan.FromMilliseconds(80),
@@ -170,30 +201,53 @@ internal sealed class LocalTonePlayer : IAsyncDisposable
     public async Task<LocalTonePlaybackResult> PlayAsync(
         LocalTonePlaybackRequest request,
         CancellationToken cancellationToken = default)
+        => await PlayCoreAsync(request, _ => request, cancellationToken).ConfigureAwait(false);
+
+    public async Task<LocalTonePlaybackResult> PlayTalkPermitAsync(
+        bool microphoneStartedCold,
+        bool? microphoneIsBluetooth,
+        CancellationToken cancellationToken = default)
+        => await PlayCoreAsync(
+            LocalToneCues.TalkPermit,
+            output => LocalToneCues.SelectTalkPermit(
+                microphoneStartedCold,
+                microphoneIsBluetooth,
+                output.IsBluetooth),
+            cancellationToken).ConfigureAwait(false);
+
+    private async Task<LocalTonePlaybackResult> PlayCoreAsync(
+        LocalTonePlaybackRequest routeRequest,
+        Func<AudioDeviceInfo, LocalTonePlaybackRequest> selectRequest,
+        CancellationToken cancellationToken)
     {
-        ArgumentNullException.ThrowIfNull(request);
-        if (request.MaximumPlaybackAttempts <= 0)
-            throw new ArgumentOutOfRangeException(nameof(request), "A local cue requires at least one playback attempt.");
-        if (request.OutputPostDrainDuration < TimeSpan.Zero)
-            throw new ArgumentOutOfRangeException(nameof(request), "A local cue cannot have a negative post-drain duration.");
+        ArgumentNullException.ThrowIfNull(routeRequest);
+        ArgumentNullException.ThrowIfNull(selectRequest);
+        if (routeRequest.MaximumPlaybackAttempts <= 0)
+            throw new ArgumentOutOfRangeException(nameof(routeRequest), "A local cue requires at least one playback attempt.");
+        if (routeRequest.OutputPostDrainDuration < TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(nameof(routeRequest), "A local cue cannot have a negative post-drain duration.");
         ObjectDisposedException.ThrowIf(disposed, this);
         await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
             ObjectDisposedException.ThrowIf(disposed, this);
             Exception? lastFailure = null;
-            for (int attempt = 1; attempt <= request.MaximumPlaybackAttempts; attempt++)
+            for (int attempt = 1; attempt <= routeRequest.MaximumPlaybackAttempts; attempt++)
             {
                 try
                 {
-                    return await PlayOnceAsync(request, attempt, cancellationToken).ConfigureAwait(false);
+                    return await PlayOnceAsync(
+                        routeRequest,
+                        selectRequest,
+                        attempt,
+                        cancellationToken).ConfigureAwait(false);
                 }
                 catch (Exception exception) when (
                     exception is not OperationCanceledException &&
-                    attempt < request.MaximumPlaybackAttempts)
+                    attempt < routeRequest.MaximumPlaybackAttempts)
                 {
                     lastFailure = exception;
-                    await delayAsync(request.RoutePolicy.RetryInterval, cancellationToken).ConfigureAwait(false);
+                    await delayAsync(routeRequest.RoutePolicy.RetryInterval, cancellationToken).ConfigureAwait(false);
                 }
                 catch (Exception exception) when (exception is not OperationCanceledException)
                 {
@@ -202,7 +256,7 @@ internal sealed class LocalTonePlayer : IAsyncDisposable
             }
 
             throw new InvalidOperationException(
-                $"The local cue could not complete after {request.MaximumPlaybackAttempts} playback attempts.",
+                $"The local cue could not complete after {routeRequest.MaximumPlaybackAttempts} playback attempts.",
                 lastFailure);
         }
         finally
@@ -212,16 +266,20 @@ internal sealed class LocalTonePlayer : IAsyncDisposable
     }
 
     private async Task<LocalTonePlaybackResult> PlayOnceAsync(
-        LocalTonePlaybackRequest request,
+        LocalTonePlaybackRequest routeRequest,
+        Func<AudioDeviceInfo, LocalTonePlaybackRequest> selectRequest,
         int attempt,
         CancellationToken cancellationToken)
     {
         using IAudioBackend backend = createAudioBackend();
+        string? requestedOutputDeviceId = getOutputDeviceId();
         AudioDeviceInfo output = await outputRouteResolver.ResolveAsync(
             backend,
-            getOutputDeviceId(),
-            request.RoutePolicy,
+            requestedOutputDeviceId,
+            routeRequest.RoutePolicy,
             cancellationToken).ConfigureAwait(false);
+        LocalTonePlaybackRequest request = selectRequest(output) ??
+            throw new InvalidOperationException("The local cue route did not select a playback request.");
         await using IAudioPlayback playback = backend.OpenPlayback(
             output,
             PcmAudioFormat.Voice8KhzMono16Bit);
@@ -239,6 +297,22 @@ internal sealed class LocalTonePlayer : IAsyncDisposable
             warmupQueued = playback.QueuedSamples;
             warmupConsumed = await playback.DrainAsync(cancellationToken).ConfigureAwait(false);
             EnsurePlaybackDrained("warm-up", warmupQueued, warmupConsumed);
+
+            // The endpoint can change after OpenPlayback succeeds and while
+            // its silent pre-roll drains. Re-resolve the same route policy
+            // before emitting the audible cue; a changed endpoint retries the
+            // complete attempt with a fresh backend and playback stream.
+            AudioDeviceInfo confirmedOutput = await outputRouteResolver.ResolveAsync(
+                backend,
+                requestedOutputDeviceId,
+                routeRequest.RoutePolicy,
+                cancellationToken).ConfigureAwait(false);
+            if (!confirmedOutput.Id.Equals(output.Id, StringComparison.OrdinalIgnoreCase) ||
+                confirmedOutput.IsBluetooth != output.IsBluetooth)
+            {
+                throw new IOException(
+                    $"The local cue output changed from '{output.Name}' to '{confirmedOutput.Name}' during route warm-up.");
+            }
         }
 
         short[] tone = generator.GenerateTone(

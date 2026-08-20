@@ -42,7 +42,15 @@ internal static class Program
             {
                 Console.WriteLine($"{direction} devices:");
                 foreach (AudioDeviceInfo device in backend.EnumerateDevices(direction))
-                    Console.WriteLine($"  {(device.IsDefault ? "*" : " ")} {device.Id}: {device.Name}");
+                {
+                    string transport = device.IsBluetooth switch
+                    {
+                        true => "Bluetooth",
+                        false => "non-Bluetooth",
+                        null => "transport unknown"
+                    };
+                    Console.WriteLine($"  {(device.IsDefault ? "*" : " ")} {device.Id}: {device.Name} [{transport}]");
+                }
             }
             return 0;
         }

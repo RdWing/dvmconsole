@@ -60,22 +60,53 @@ public sealed class TransmitCoordinatorTests
         Assert.All(observed[0], sample => Assert.Equal((short)2000, sample));
     }
 
-    [Fact]
-    public async Task MicrophoneReadinessWaitsForFirstSelectedCaptureSample()
+    [Theory]
+    [InlineData(true)]
+    [InlineData(null)]
+    public async Task ColdBluetoothOrUnknownMicrophoneReadinessWaitsForSustainedSelectedCaptureSamples(
+        bool? inputIsBluetooth)
     {
         var channel = Channel("A", 100);
         var endpoint = new FakeEndpoint("Test", [channel]);
-        var audio = new FakeAudioBackend();
+        var audio = new FakeAudioBackend(inputIsBluetooth: inputIsBluetooth);
+        await using var coordinator = new ChannelTransmitCoordinator(createAudioBackend: () => audio);
+
+        coordinator.SetMicrophoneAudioSuppressed(true);
+        await coordinator.StartAsync(channel, endpoint);
+        Assert.True(coordinator.ActiveMicrophoneStartedCold);
+        Assert.Equal(inputIsBluetooth, coordinator.ActiveMicrophoneIsBluetooth);
+        Task ready = coordinator.WaitForMicrophoneReadyAsync(TimeSpan.FromSeconds(1));
+        Assert.False(ready.IsCompleted);
+
+        audio.Capture.Emit(new short[160]);
+        Assert.False(ready.IsCompleted);
+        int requiredSamples = checked((int)Math.Ceiling(
+            PcmAudioFormat.Voice8KhzMono16Bit.SampleRate *
+            ChannelTransmitCoordinator.ColdMicrophoneSettlingDuration.TotalSeconds));
+        audio.Capture.Emit(new short[requiredSamples - 160]);
+
+        await ready;
+        await coordinator.StopAsync();
+        Assert.False(coordinator.ActiveMicrophoneStartedCold);
+        Assert.Null(coordinator.ActiveMicrophoneIsBluetooth);
+    }
+
+    [Fact]
+    public async Task KnownNonBluetoothMicrophoneReadinessUsesFirstSelectedCaptureSample()
+    {
+        var channel = Channel("A", 100);
+        var endpoint = new FakeEndpoint("Test", [channel]);
+        var audio = new FakeAudioBackend(inputIsBluetooth: false);
         await using var coordinator = new ChannelTransmitCoordinator(createAudioBackend: () => audio);
 
         coordinator.SetMicrophoneAudioSuppressed(true);
         await coordinator.StartAsync(channel, endpoint);
         Task ready = coordinator.WaitForMicrophoneReadyAsync(TimeSpan.FromSeconds(1));
-        Assert.False(ready.IsCompleted);
 
         audio.Capture.Emit(new short[160]);
 
         await ready;
+        Assert.False(coordinator.ActiveMicrophoneIsBluetooth);
     }
 
     [Fact]
@@ -165,7 +196,10 @@ public sealed class TransmitCoordinatorTests
         Assert.True(audio.Capture.IsRunning);
         Assert.Equal(1, audio.OpenCaptureCalls);
 
+        audio.Capture.Emit(new short[160]);
+
         await coordinator.StartAsync(channel, endpoint);
+        Assert.False(coordinator.ActiveMicrophoneStartedCold);
         await coordinator.StopAsync();
 
         Assert.True(audio.Capture.IsRunning);
@@ -176,6 +210,34 @@ public sealed class TransmitCoordinatorTests
 
         Assert.True(audio.Capture.IsDisposed);
         Assert.True(audio.IsDisposed);
+    }
+
+    [Fact]
+    public async Task UnsettledWarmMicrophoneStillUsesColdPermitPolicy()
+    {
+        var channel = Channel("Analog", 100);
+        var endpoint = new FakeEndpoint("Test", [channel]);
+        var audio = new FakeAudioBackend(inputIsBluetooth: true);
+        await using var coordinator = new ChannelTransmitCoordinator(createAudioBackend: () => audio);
+
+        await coordinator.SetKeepMicrophoneWarmAsync(true);
+        await coordinator.StartAsync(channel, endpoint);
+
+        Assert.True(coordinator.ActiveMicrophoneStartedCold);
+        Assert.True(coordinator.ActiveMicrophoneIsBluetooth);
+    }
+
+    [Fact]
+    public async Task ReportsPhysicalBluetoothInputForPermitPolicy()
+    {
+        var channel = Channel("Analog", 100);
+        var endpoint = new FakeEndpoint("Test", [channel]);
+        var audio = new FakeAudioBackend(inputIsBluetooth: true);
+        await using var coordinator = new ChannelTransmitCoordinator(createAudioBackend: () => audio);
+
+        await coordinator.StartAsync(channel, endpoint);
+
+        Assert.True(coordinator.ActiveMicrophoneIsBluetooth);
     }
 
     [Fact]
@@ -337,7 +399,8 @@ public sealed class TransmitCoordinatorTests
     private sealed class FakeAudioBackend(
         bool failStart = false,
         HighQualityBluetoothAudioStatus highQualityBluetoothStatus = HighQualityBluetoothAudioStatus.Off,
-        string inputDeviceId = "input")
+        string inputDeviceId = "input",
+        bool? inputIsBluetooth = false)
         : IAudioBackend, IHighQualityBluetoothAudioStatus
     {
         public FakeCapture Capture { get; } = new(failStart);
@@ -347,7 +410,12 @@ public sealed class TransmitCoordinatorTests
         public string Name => "test";
         public HighQualityBluetoothAudioStatus HighQualityBluetoothStatus => highQualityBluetoothStatus;
         public IReadOnlyList<AudioDeviceInfo> EnumerateDevices(AudioDirection direction)
-            => [new AudioDeviceInfo(direction == AudioDirection.Input ? inputDeviceId : "output", "Test", direction, true)];
+            => [new AudioDeviceInfo(
+                direction == AudioDirection.Input ? inputDeviceId : "output",
+                "Test",
+                direction,
+                true,
+                direction == AudioDirection.Input ? inputIsBluetooth : false)];
         public IAudioCapture OpenCapture(AudioDeviceInfo device, PcmAudioFormat format)
         {
             OpenCaptureCalls++;
