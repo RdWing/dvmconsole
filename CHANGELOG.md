@@ -6,6 +6,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-08-19
+
+### Added
+
+- Add a default-on RX audio-processing control below the master output device. Enabled receive sessions use a classic LMR receiver post-decoder enhancement stage; disabling it restores TIA-102.BABA-A §1.12-faithful vocoder output.
+
+### Changed
+
+- Apply an LMR receiver-style post-decoder enhancement stage to receive audio, with an additional 6 dB output gain for DMR, NXDN, and P25 Phase 2 while P25 Phase 1 retains the stage's default gain.
+- Aggregate RX and TX vocoder level diagnostics over complete 8,000-sample windows instead of reporting one arbitrary 20 ms frame.
+
+### Fixed
+
+- Stop treating DMR voice burst sequence 2 as a privacy-indicator header when its payload happens to decode to the same slot-type value, preventing intermittent 60 ms receive dropouts.
+
 ## [0.3.0] - 2026-08-19
 
 ### Added
@@ -194,7 +209,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Add patches, multi-select groups, call history, recordings, web streams, clocks, layouts, themes, startup behavior, and in-application operator documentation.
 - Add support for local and KMM-provided P25 encryption keys while preserving compatibility with existing variable-length AES key material.
 
-[Unreleased]: https://github.com/RdWing/dvmconsole/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/RdWing/dvmconsole/compare/v0.3.1...HEAD
+[0.3.1]: https://github.com/RdWing/dvmconsole/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/RdWing/dvmconsole/compare/v0.2.4...v0.3.0
 [0.2.4]: https://github.com/RdWing/dvmconsole/compare/v0.2.3...v0.2.4
 [0.2.3]: https://github.com/RdWing/dvmconsole/compare/v0.2.2...v0.2.3

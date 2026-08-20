@@ -96,7 +96,7 @@ public static class DmrVoicePacketCodec
     {
         if (packet.Length < PacketBytes)
             return false;
-        if ((packet[15] & 0x0F) != (byte)fnecore.FrameType.DATA_SYNC)
+        if ((packet[15] & 0x30) != ((byte)fnecore.FrameType.DATA_SYNC << 4))
             return false;
 
         try

@@ -27,6 +27,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
     internal const double DefaultWidgetCanvasWidth = 900;
     private const int MaximumSubscriberCommandAuditEntries = 50;
     private const int RecordingCatalogUiBatchSize = 64;
+    private const int VocoderAudioLevelWindowSamples = 8_000;
     private const string DvmConsoleProcessingDisplay = "DVM Console processing";
     private const string AppleVoiceProcessingDisplay = "Apple voice processing";
     private static readonly string[] AppleAudioProcessingModeOptions =
@@ -42,6 +43,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
     private readonly string codeplugDiagnosticsText;
     private readonly ChannelTransmitCoordinator transmitCoordinator;
     private readonly LatestBooleanStateReconciler warmMicrophoneReconciler;
+    private readonly LatestBooleanStateReconciler rxAudioProcessingReconciler;
     private readonly ToneTransmitCoordinator toneTransmitCoordinator;
     private readonly TalkPermitTonePlayer talkPermitTonePlayer;
     private readonly PatchForwardingCoordinator patchForwarding;
@@ -85,7 +87,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
     private readonly Dictionary<SystemViewModel, SystemTrafficBuffer> pendingSystemTraffic = [];
     private readonly HashSet<SystemViewModel> scheduledSystemTraffic = [];
     private readonly object audioLevelLogSync = new();
-    private readonly Dictionary<(ChannelViewModel Channel, ChannelAudioDirection Direction), DateTimeOffset> lastAudioLevelLogs = [];
+    private readonly Dictionary<(ChannelViewModel Channel, ChannelAudioDirection Direction), PcmLevelLogState> audioLevelLogs = [];
     private readonly ChannelAudioMeterPipeline audioMeterPipeline = new();
     private readonly ReceiveDiagnosticsReporter receiveDiagnosticsReporter = new(TimeSpan.FromMilliseconds(500));
     private readonly SemaphoreSlim audioReconfigurationLock = new(1, 1);
@@ -121,6 +123,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
     private string audioInputAgcTargetDbfsText = "-25";
     private bool audioInputAgcEnabled;
     private bool highQualityBluetoothAudioEnabled;
+    private bool rxAudioProcessingEnabled;
     private string selectedAudioProcessingMode = "DVM Console processing";
     private KeyboardPttKey selectedGlobalPttKey;
     private string audioInputPresetNameText = string.Empty;
@@ -247,6 +250,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
         audioInputAgcTargetDbfsText = userSettings.AudioInputAgcTargetDbfs.ToString("0.###", CultureInfo.InvariantCulture);
         audioInputAgcEnabled = userSettings.AudioInputAgcEnabled;
         highQualityBluetoothAudioEnabled = userSettings.HighQualityBluetoothAudioEnabled;
+        rxAudioProcessingEnabled = userSettings.RxAudioProcessingEnabled;
         selectedAudioProcessingMode = ToAudioProcessingModeDisplay(userSettings.AudioProcessingMode);
         audioInputPresetNameText = userSettings.AudioInputPresetName;
         recordingRetentionDaysText = userSettings.RecordingRetentionDays.ToString(CultureInfo.InvariantCulture);
@@ -289,7 +293,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
             HandleRecordingPlaybackFaulted);
         audioCoordinator = new ChannelReceiveAudioCoordinator(
             CreateReceiveAudioBackend,
-            () => new SoftwareVocoderBackend(),
+            CreateReceiveVocoderBackend,
             p25KeyResolver,
             HandleDecodedSamples,
             GetChannelVolume,
@@ -354,8 +358,12 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
         patchSourceDecode = new PatchSourceDecodeCoordinator(
             p25KeyResolver,
             ObservePatchDecodedSamples,
+            createVocoderBackend: CreateReceiveVocoderBackend,
             dmrKeyResolver: dmrKeyResolver,
             nxdnKeyResolver: nxdnKeyResolver);
+        rxAudioProcessingReconciler = new LatestBooleanStateReconciler(
+            RestartReceiveVocoderSessionsAsync);
+        rxAudioProcessingReconciler.Reconciled += HandleRxAudioProcessingReconciled;
         RestorePatchState(configuredGroups);
         PatchGroups = BuildPatchGroups(configuredGroups);
         RefreshPatchMembershipConflicts();
@@ -903,6 +911,21 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
         }
     }
 
+    public bool RxAudioProcessingEnabled
+    {
+        get => userSettings.RxAudioProcessingEnabled;
+        set
+        {
+            if (userSettings.RxAudioProcessingEnabled == value)
+                return;
+            userSettings.RxAudioProcessingEnabled = value;
+            Volatile.Write(ref rxAudioProcessingEnabled, value);
+            PersistUserSettings();
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(RxAudioProcessingEnabled)));
+            _ = rxAudioProcessingReconciler.SetDesired(value);
+        }
+    }
+
     public string AudioInputGainText
     {
         get => audioInputGainText;
@@ -1063,7 +1086,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
     public string AudioProcessingDescription
         => IsDvmConsoleProcessingSelected
             ? "DVM Console applies its gain, EQ, and optional AGC after microphone capture."
-            : "Apple Voice Processing applies acoustic echo cancellation and automatic gain control to the microphone capture used for transmit. Receive audio remains unprocessed.";
+            : "Apple Voice Processing applies acoustic echo cancellation and automatic gain control to the microphone capture used for transmit. RX vocoder processing is controlled separately.";
 
     public string AudioInputPresetNameText
     {
@@ -2622,6 +2645,8 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
         await talkPermitTonePlayer.DisposeAsync().ConfigureAwait(false);
         warmMicrophoneReconciler.Reconciled -= HandleWarmMicrophoneReconciled;
         await warmMicrophoneReconciler.WhenIdleAsync().ConfigureAwait(false);
+        rxAudioProcessingReconciler.Reconciled -= HandleRxAudioProcessingReconciled;
+        await rxAudioProcessingReconciler.WhenIdleAsync().ConfigureAwait(false);
         await transmitCoordinator.DisposeAsync().ConfigureAwait(false);
         foreach (SystemViewModel system in Systems)
         {
@@ -3105,11 +3130,14 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
     }
 
     // Receive uses plain CoreAudio even when Apple voice processing is selected
-    // for the microphone. This prevents platform AEC/AGC from altering decoded
-    // radio audio or the operator's output level.
+    // for the microphone. The optional vocoder enhancement remains a separate,
+    // protocol-aware stage rather than leaking microphone AEC/AGC into RX.
     private IAudioBackend CreateReceiveAudioBackend()
         => AudioBackendFactory.CreateDefault(
             Environment.GetEnvironmentVariable("DVM_AUDIO_LIBRARY"));
+
+    private IVocoderBackend CreateReceiveVocoderBackend()
+        => new SoftwareVocoderBackend(Volatile.Read(ref rxAudioProcessingEnabled));
 
     // The selected processing mode is intentionally scoped to microphone
     // capture for transmit. ProcessedAudioCapture further confines the
@@ -3162,6 +3190,18 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
                     ? "Warm microphone mode disabled; the active transmission continues."
                     : "Warm microphone mode disabled; the microphone will open on PTT.";
             }
+        });
+    }
+
+    private void HandleRxAudioProcessingReconciled(object? sender, LatestBooleanStateResult result)
+    {
+        Dispatcher.UIThread.Post(() =>
+        {
+            AudioStatusText = result.Error is not null
+                ? $"Unable to change RX audio processing: {result.Error.Message}"
+                : result.Desired
+                    ? "RX audio processing enabled; receive sessions use a classic LMR receiver post-decoder enhancement stage."
+                    : "RX audio processing disabled; receive sessions use TIA-102.BABA-A §1.12-faithful output.";
         });
     }
 
@@ -3233,37 +3273,36 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
         if (samples.IsEmpty)
             return;
 
-        DateTimeOffset now = DateTimeOffset.Now;
+        PcmLevelMeasurement measurement;
         lock (audioLevelLogSync)
         {
             var key = (channel, direction);
-            if (lastAudioLevelLogs.TryGetValue(key, out DateTimeOffset previous) &&
-                now - previous < TimeSpan.FromSeconds(1))
+            if (!audioLevelLogs.TryGetValue(key, out PcmLevelLogState? state))
             {
-                return;
+                state = new PcmLevelLogState(streamId);
+                audioLevelLogs.Add(key, state);
             }
-            lastAudioLevelLogs[key] = now;
+            else if (streamId != 0 && state.StreamId != streamId)
+            {
+                state.Reset(streamId);
+            }
+
+            state.Levels.Add(samples.Span);
+            if (state.Levels.SampleCount < VocoderAudioLevelWindowSamples ||
+                !state.Levels.TryMeasureAndReset(out measurement))
+                return;
         }
 
-        double squares = 0;
-        int peak = 0;
-        foreach (short sample in samples.Span)
-        {
-            double value = sample;
-            squares += value * value;
-            peak = Math.Max(peak, Math.Abs((int)sample));
-        }
-        double rms = Math.Sqrt(squares / samples.Length);
-        double rmsDbfs = 20 * Math.Log10(Math.Max(rms / 32768.0, 1e-9));
-        double peakDbfs = 20 * Math.Log10(Math.Max(peak / 32768.0, 1e-9));
+        DateTimeOffset now = DateTimeOffset.Now;
         string streamText = streamId == 0 ? string.Empty : $", stream {streamId}";
         AddDebugLog(
             now,
             channel.Definition.SystemName,
             DebugLogSeverity.Debug,
             $"Vocoder {direction.ToString().ToUpperInvariant()} {ProtocolFor(channel).ToString().ToUpperInvariant()} " +
-            $"on {channel.Name}: PCM RMS {rmsDbfs:0.0} dBFS, peak {peakDbfs:0.0} dBFS, " +
-            $"{samples.Length} samples{streamText}.");
+            $"on {channel.Name}: PCM RMS {measurement.RmsDbfs:0.0} dBFS, " +
+            $"peak {measurement.PeakDbfs:0.0} dBFS, " +
+            $"{measurement.SampleCount} samples{streamText}.");
     }
 
     private void HandleAudioMeterTick(object? sender, EventArgs e)
@@ -3285,19 +3324,33 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
     {
         try
         {
-            ChannelViewModel[] channels = PatchGroups
-                .Where(group => group.IsEnabled)
-                .SelectMany(group => group.Members
-                    .Where(member => member.IsMember)
-                    .Select(member => member.Channel))
-                .Distinct()
-                .ToArray();
-            await patchSourceDecode.ApplyChannelsAsync(channels).ConfigureAwait(false);
+            await patchSourceDecode.ApplyChannelsAsync(GetActivePatchSourceChannels()).ConfigureAwait(false);
         }
         catch (Exception exception)
         {
             Dispatcher.UIThread.Post(() =>
                 AudioStatusText = $"Patch source decode unavailable: {exception.Message}");
+        }
+    }
+
+    private ChannelViewModel[] GetActivePatchSourceChannels()
+        => PatchGroups
+            .Where(group => group.IsEnabled)
+            .SelectMany(group => group.Members
+                .Where(member => member.IsMember)
+                .Select(member => member.Channel))
+            .Distinct()
+            .ToArray();
+
+    private sealed class PcmLevelLogState(uint streamId)
+    {
+        public uint StreamId { get; private set; } = streamId;
+        public PcmLevelAccumulator Levels { get; } = new();
+
+        public void Reset(uint nextStreamId)
+        {
+            StreamId = nextStreamId;
+            Levels.Reset();
         }
     }
 

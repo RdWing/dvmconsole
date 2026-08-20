@@ -39,6 +39,7 @@ public sealed class UserSettingsStoreTests
             Assert.Null(settings.LastSelectedChannelKey);
             Assert.True(settings.ConnectionChimes);
             Assert.False(settings.HighQualityBluetoothAudioEnabled);
+            Assert.True(settings.RxAudioProcessingEnabled);
             Assert.Equal(14, settings.UiFontSize);
             Assert.Equal(1.0, settings.UiScale);
         }
@@ -180,6 +181,7 @@ public sealed class UserSettingsStoreTests
                 LastSelectedChannelKey = "System 1\u001FDispatch",
                 AudioInputDeviceId = " microphone-1 ",
                 AudioOutputDeviceId = " speaker-1 ",
+                RxAudioProcessingEnabled = false,
                 AudioProcessingMode = UserSettings.AppleVoiceProcessingMode,
                 HighQualityBluetoothAudioEnabled = false,
                 AudioInputAgcEnabled = true,
@@ -303,6 +305,7 @@ public sealed class UserSettingsStoreTests
             Assert.Equal("System 1\u001FDispatch", loaded.LastSelectedChannelKey);
             Assert.Equal("microphone-1", loaded.AudioInputDeviceId);
             Assert.Equal("speaker-1", loaded.AudioOutputDeviceId);
+            Assert.False(loaded.RxAudioProcessingEnabled);
             Assert.Equal(UserSettings.AppleVoiceProcessingMode, loaded.AudioProcessingMode);
             Assert.False(loaded.HighQualityBluetoothAudioEnabled);
             Assert.True(loaded.AudioInputAgcEnabled);

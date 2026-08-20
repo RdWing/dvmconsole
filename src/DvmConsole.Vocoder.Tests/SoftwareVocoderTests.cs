@@ -40,6 +40,18 @@ public sealed class SoftwareVocoderTests
     }
 
     [Fact]
+    public void ReceiveProcessingCanBeDisabledForSpecFaithfulDecode()
+    {
+        using var backend = new SoftwareVocoderBackend(receiveAudioProcessingEnabled: false);
+        using IVocoderSession session = backend.CreateSession(VocoderMode.DmrAmbe);
+        short[] samples = new short[VocoderFrameSizes.PcmSamplesPerFrame];
+
+        Assert.Equal(0, session.Decode(
+            Convert.FromHexString("ACAA40200044408080"),
+            samples));
+    }
+
+    [Fact]
     public void P25GeneratedTonesUseExplicitLookupFrames()
     {
         using var backend = new SoftwareVocoderBackend();

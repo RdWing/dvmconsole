@@ -75,6 +75,32 @@ public sealed class DmrVoicePacketCodecTests
         Assert.Equal(new byte[4], metadata.MessageIndicator);
     }
 
+    [Fact]
+    public async Task VoiceBurstTwoIsNotMisclassifiedAsPrivacyIndicator()
+    {
+        byte[] packet = DmrVoicePacketCodec.CreateVoicePacket(
+            sourceId: 1,
+            destinationId: 100,
+            slot: 1,
+            voiceSync: false,
+            embeddedSequence: 2,
+            frameSequence: 1,
+            new byte[DmrVoicePacketCodec.AmbeBytes]);
+        var vocoder = new FakeVocoderSession();
+        var playback = new FakePlayback();
+        await using var session = new DmrRxAudioSession(vocoder, playback);
+
+        Assert.False(DmrVoicePacketCodec.IsPrivacyIndicator(packet));
+
+        Assert.Equal(0, await session.ProcessAsync(CreateTraffic(
+            100,
+            1,
+            "VOICE",
+            payload: packet)));
+        Assert.Equal(DmrVoicePacketCodec.CodewordsPerPacket, session.FramesDecoded);
+        Assert.Equal(DmrVoicePacketCodec.CodewordsPerPacket, vocoder.DecodeCalls);
+    }
+
     [Theory]
     [InlineData((byte)0, (byte)0x10)]
     [InlineData((byte)1, (byte)0x90)]
