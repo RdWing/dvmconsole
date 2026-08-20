@@ -1,4 +1,5 @@
 using NAudio.Wave;
+using NAudio.CoreAudioApi;
 using System.Runtime.InteropServices;
 
 namespace DvmConsole.Audio;
@@ -6,7 +7,7 @@ namespace DvmConsole.Audio;
 // Windows audio backend using NAudio's WinMM wave input/output adapters.
 // The managed contract remains independent of NAudio and the implementation
 // is only constructible on Windows.
-public sealed class WindowsAudioBackend : IAudioBackend
+public sealed class WindowsAudioBackend : IAudioBackend, IDefaultAudioDeviceIdentityProvider
 {
     private const string DefaultDeviceId = "default";
 
@@ -41,6 +42,19 @@ public sealed class WindowsAudioBackend : IAudioBackend
         }
 
         return devices;
+    }
+
+    public string? GetDefaultDeviceIdentity(AudioDirection direction)
+    {
+        using var enumerator = new MMDeviceEnumerator();
+        DataFlow dataFlow = direction == AudioDirection.Input
+            ? DataFlow.Capture
+            : DataFlow.Render;
+        if (!enumerator.HasDefaultAudioEndpoint(dataFlow, Role.Multimedia))
+            return null;
+
+        using MMDevice device = enumerator.GetDefaultAudioEndpoint(dataFlow, Role.Multimedia);
+        return device.ID;
     }
 
     public IAudioCapture OpenCapture(AudioDeviceInfo device, PcmAudioFormat format)

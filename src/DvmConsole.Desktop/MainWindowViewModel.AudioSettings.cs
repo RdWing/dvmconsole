@@ -189,6 +189,82 @@ public sealed partial class MainWindowViewModel
         }
     }
 
+    private async Task HandleAudioDeviceTopologyChangedAsync(
+        AudioDeviceTopologyChange change,
+        CancellationToken cancellationToken)
+    {
+        if (Volatile.Read(ref disposeStarted) != 0)
+            return;
+
+        await audioReconfigurationLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            ReceiveRouteRecoveryResult outputRefresh = new([], [], null);
+            if (change.OutputChanged)
+            {
+                outputRefresh = await audioCoordinator
+                    .RefreshSystemDefaultOutputAsync(cancellationToken)
+                    .ConfigureAwait(false);
+                DateTimeOffset retryAt = DateTimeOffset.UtcNow.AddSeconds(5);
+                foreach (ChannelViewModel channel in outputRefresh.Restarted)
+                {
+                    receiveRetryAfter.Remove(channel);
+                    receiveAudioWork.Start(channel);
+                }
+                foreach (ChannelViewModel channel in outputRefresh.Failed)
+                    receiveRetryAfter[channel] = retryAt;
+            }
+
+            DefaultInputRefreshResult inputRefresh = change.InputChanged
+                ? await transmitCoordinator
+                    .RefreshSystemDefaultInputAsync(cancellationToken)
+                    .ConfigureAwait(false)
+                : DefaultInputRefreshResult.NotRequired;
+
+            await RunOnUiThreadAsync(() =>
+            {
+                RefreshAudioDevices();
+                AudioStatusText = DescribeAudioDeviceRefresh(outputRefresh, inputRefresh);
+            }).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            await RunOnUiThreadAsync(() =>
+                AudioStatusText = $"Audio devices changed, but a route could not be refreshed: {exception.Message}")
+                .ConfigureAwait(false);
+            throw;
+        }
+        finally
+        {
+            audioReconfigurationLock.Release();
+        }
+    }
+
+    private static string DescribeAudioDeviceRefresh(
+        ReceiveRouteRecoveryResult outputRefresh,
+        DefaultInputRefreshResult inputRefresh)
+    {
+        if (outputRefresh.Failed.Count > 0)
+        {
+            return $"Audio defaults changed; restarted {outputRefresh.Restarted.Count} receive route(s), " +
+                $"and {outputRefresh.Failed.Count} will be retried.";
+        }
+        if (inputRefresh == DefaultInputRefreshResult.DeferredUntilIdle)
+        {
+            return "Audio defaults changed; receive routes were updated and the microphone will switch after PTT ends.";
+        }
+
+        int refreshedRoutes = outputRefresh.Restarted.Count +
+            (inputRefresh == DefaultInputRefreshResult.Refreshed ? 1 : 0);
+        return refreshedRoutes > 0
+            ? $"Audio defaults changed; refreshed {refreshedRoutes} active default route(s)."
+            : "Audio devices changed; new sessions will use the current system defaults.";
+    }
+
     internal static bool IsAppleVoiceProcessingDevicePairCompatible(
         AudioDeviceOptionViewModel? input,
         AudioDeviceOptionViewModel? output)
