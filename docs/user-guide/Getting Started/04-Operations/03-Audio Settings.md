@@ -55,6 +55,27 @@ If System Default Output is selected, the console follows the current macOS or W
 
 ---
 
+# RX Audio Processing
+
+The **RX audio processing** checkbox below the master output device is enabled
+by default. It controls a post-decoder stage only; microphone capture and the
+transmitted vocoder signal are unchanged.
+
+When enabled, receive sessions use a classic LMR receiver post-decoder
+enhancement stage: a 250 Hz high-pass filter, a small 2.5 kHz intelligibility
+boost, and boundary smoothing after concealed or muted frames. DMR, NXDN, and
+P25 Phase 2 also receive 6 dB of output gain. P25 Phase 1 keeps the stage's
+default output gain.
+
+When disabled, the post-decoder stage is bypassed and the console produces
+TIA-102.BABA-A §1.12-faithful vocoder output. Changing the checkbox safely
+recreates active listening and patch-source decode sessions; channels do not
+need to be toggled manually.
+
+This setting is saved.
+
+---
+
 # Per-Resource Output Overrides
 
 Audio Settings is organized by the same zones/tabs used on the main console.

@@ -126,7 +126,7 @@ connection is required.
 
 # Tagged Releases
 
-Pushing a version tag such as `v0.3.0` starts the macOS and Windows test and
+Pushing a version tag such as `v0.3.1` starts the macOS and Windows test and
 packaging matrix. The workflow publishes a GitHub release only after all three
 target jobs pass, and attaches the three versioned ZIP files. Release notes can
 be supplied in `docs/releases/v<version>.md` before the tag is pushed.

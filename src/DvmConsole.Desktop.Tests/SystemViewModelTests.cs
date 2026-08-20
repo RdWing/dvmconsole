@@ -231,7 +231,7 @@ public sealed class SystemViewModelTests
 
     [Fact]
     public void ReportsUnreleasedSemanticVersion()
-        => Assert.StartsWith("0.3.0", MainWindow.ApplicationVersion, StringComparison.Ordinal);
+        => Assert.StartsWith("0.3.1", MainWindow.ApplicationVersion, StringComparison.Ordinal);
 
     [Theory]
     [InlineData("0.1.0-alpha.1+abcdef123456", "0.1.0-alpha.1 (abcdef1)")]
@@ -1333,7 +1333,7 @@ public sealed class SystemViewModelTests
             Assert.Equal(-30, appleSettings.AudioInputAgcTargetDbfs);
             Assert.False(appleSettings.HighQualityBluetoothAudioEnabled);
             Assert.Contains("echo cancellation", viewModel.AudioProcessingDescription, StringComparison.OrdinalIgnoreCase);
-            Assert.Contains("receive audio remains unprocessed", viewModel.AudioProcessingDescription, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("RX vocoder processing is controlled separately", viewModel.AudioProcessingDescription, StringComparison.OrdinalIgnoreCase);
 
             viewModel.SelectedAudioProcessingMode = "DVM Console processing";
             viewModel.ApplyAudioInputSettingsCommand.Execute(null);

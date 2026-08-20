@@ -9,6 +9,7 @@ use std::cell::RefCell;
 use std::ffi::c_char;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
+use blip25_vocoder::enhancement::{ClassicalConfig, EnhancementMode};
 use blip25_vocoder::fullrate::frame::{decode_frame as decode_full_rate_frame, INFO_WIDTHS};
 use blip25_vocoder::halfrate::dequantize::{
     encode_tone_frame_info, TONE_AMPLITUDE_EXPONENT_STEP, TONE_AMPLITUDE_PEAK,
@@ -20,7 +21,7 @@ use blip25_vocoder::halfrate::{pack_natural, unpack_natural};
 use blip25_vocoder::rate_conversion::HalfToFullConverter;
 use blip25_vocoder::vocoder::{FrameStatus, Rate, Vocoder};
 
-const ABI_VERSION: u32 = 5;
+const ABI_VERSION: u32 = 6;
 const MODE_DMR: u32 = 0;
 const MODE_P25: u32 = 1;
 const MODE_NXDN: u32 = 2;
@@ -33,6 +34,10 @@ const PCM_SAMPLES: usize = 160;
 const HALF_RATE_CODEWORD_BYTES: usize = 9;
 const HALF_RATE_PARAMETER_BYTES: usize = 7;
 const P25_CODEWORD_BYTES: usize = 11;
+
+// Half-rate modes need presentation gain beyond the crate's classical
+// defaults. P25 Phase 1 uses ClassicalConfig::default without overrides.
+const RX_OUTPUT_GAIN_DB: f32 = 6.0;
 
 const OK: i32 = 0;
 const ERR_INVALID: i32 = -1;
@@ -64,6 +69,25 @@ pub struct Session {
     tone_converter: HalfToFullConverter,
     pending_tone: Option<DetectedTone>,
     flushed: bool,
+}
+
+impl Session {
+    fn new(mode: u32) -> Option<Self> {
+        let mut session = Self {
+            mode,
+            vocoder: Vocoder::new(rate(mode)?),
+            tone_converter: HalfToFullConverter::new(),
+            pending_tone: None,
+            flushed: false,
+        };
+        session.set_receive_audio_processing(true);
+        Some(session)
+    }
+
+    fn set_receive_audio_processing(&mut self, enabled: bool) {
+        self.vocoder
+            .set_enhancement(receive_enhancement(self.mode, enabled));
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -112,6 +136,18 @@ fn rate(mode: u32) -> Option<Rate> {
         MODE_P25 => Some(Rate::FullRate4400x4400),
         _ => None,
     }
+}
+
+fn receive_enhancement(mode: u32, enabled: bool) -> EnhancementMode {
+    if !enabled {
+        return EnhancementMode::None;
+    }
+
+    let mut config = ClassicalConfig::default();
+    if matches!(mode, MODE_DMR | MODE_NXDN | MODE_P25_PHASE2) {
+        config.output_gain_db = RX_OUTPUT_GAIN_DB;
+    }
+    EnhancementMode::Classical(config)
 }
 
 fn read_bit(bytes: &[u8], bit: usize) -> u32 {
@@ -465,20 +501,37 @@ pub extern "C" fn dvmconsole_vocoder_last_error() -> *const c_char {
 pub extern "C" fn dvmconsole_vocoder_session_create(mode: u32) -> *mut Session {
     checked(
         || {
-            let Some(rate) = rate(mode) else {
+            let Some(session) = Session::new(mode) else {
                 set_error("unsupported vocoder mode");
                 return std::ptr::null_mut();
             };
             set_error("ok");
-            Box::into_raw(Box::new(Session {
-                mode,
-                vocoder: Vocoder::new(rate),
-                tone_converter: HalfToFullConverter::new(),
-                pending_tone: None,
-                flushed: false,
-            }))
+            Box::into_raw(Box::new(session))
         },
         std::ptr::null_mut(),
+    )
+}
+
+#[no_mangle]
+/// Enables the classical post-decoder stage or restores spec-faithful output.
+///
+/// # Safety
+/// `session` must point to a live session for the duration of the call.
+pub unsafe extern "C" fn dvmconsole_vocoder_set_rx_audio_processing(
+    session: *mut Session,
+    enabled: bool,
+) -> i32 {
+    checked(
+        || {
+            let Some(session) = (unsafe { session.as_mut() }) else {
+                set_error("null receive-processing session");
+                return ERR_STATE;
+            };
+            session.set_receive_audio_processing(enabled);
+            set_error("ok");
+            OK
+        },
+        ERR_STATE,
     )
 }
 
@@ -944,7 +997,7 @@ mod tests {
 
     #[test]
     fn abi_reports_all_required_modes() {
-        assert_eq!(dvmconsole_vocoder_abi_version(), 5);
+        assert_eq!(dvmconsole_vocoder_abi_version(), 6);
         assert_eq!(dvmconsole_vocoder_capabilities(), 15);
     }
 
@@ -1019,12 +1072,66 @@ mod tests {
     }
 
     fn test_session(mode: u32) -> Session {
-        Session {
-            mode,
-            vocoder: Vocoder::new(rate(mode).expect("test mode")),
-            tone_converter: HalfToFullConverter::new(),
-            pending_tone: None,
-            flushed: false,
+        Session::new(mode).expect("test mode")
+    }
+
+    #[test]
+    fn receive_vocoder_uses_protocol_specific_classical_defaults() {
+        for (mode, expected_gain_db) in [
+            (MODE_DMR, RX_OUTPUT_GAIN_DB),
+            (MODE_NXDN, RX_OUTPUT_GAIN_DB),
+            (MODE_P25, 0.0),
+            (MODE_P25_PHASE2, RX_OUTPUT_GAIN_DB),
+        ] {
+            let session = test_session(mode);
+            let EnhancementMode::Classical(config) = session.vocoder.enhancement() else {
+                panic!("receive enhancement must be enabled for mode {mode}");
+            };
+            let defaults = ClassicalConfig::default();
+            assert_eq!(
+                config
+                    .biquads
+                    .iter()
+                    .map(Option::is_some)
+                    .collect::<Vec<_>>(),
+                defaults
+                    .biquads
+                    .iter()
+                    .map(Option::is_some)
+                    .collect::<Vec<_>>()
+            );
+            assert!(config.compressor.is_none());
+            assert_eq!(config.boundary_fade_samples, defaults.boundary_fade_samples);
+            assert_eq!(config.output_gain_db, expected_gain_db);
+        }
+    }
+
+    #[test]
+    fn receive_processing_can_restore_spec_faithful_output() {
+        let mut session = test_session(MODE_DMR);
+        session.set_receive_audio_processing(false);
+
+        assert!(matches!(
+            session.vocoder.enhancement(),
+            EnhancementMode::None
+        ));
+    }
+
+    #[test]
+    fn receive_enhancement_does_not_change_transmit_frames() {
+        for mode in [MODE_DMR, MODE_NXDN, MODE_P25, MODE_P25_PHASE2] {
+            let rate = rate(mode).expect("test mode rate");
+            let mut enhanced = test_session(mode).vocoder;
+            let mut reference = Vocoder::new(rate);
+
+            for frame in 0..3 {
+                let samples = tone(1_000.0, frame);
+                assert_eq!(
+                    enhanced.encode_info(&samples).expect("enhanced encode"),
+                    reference.encode_info(&samples).expect("reference encode"),
+                    "rate {rate:?}, frame {frame}"
+                );
+            }
         }
     }
 
@@ -1244,20 +1351,8 @@ mod tests {
     }
 
     fn loopback_rms(mode: u32) -> f64 {
-        let mut tx = Session {
-            mode,
-            vocoder: Vocoder::new(rate(mode).unwrap()),
-            tone_converter: HalfToFullConverter::new(),
-            pending_tone: None,
-            flushed: false,
-        };
-        let mut rx = Session {
-            mode,
-            vocoder: Vocoder::new(rate(mode).unwrap()),
-            tone_converter: HalfToFullConverter::new(),
-            pending_tone: None,
-            flushed: false,
-        };
+        let mut tx = test_session(mode);
+        let mut rx = test_session(mode);
         let mut energy = 0.0f64;
         let mut count = 0usize;
         for frame_index in 0..24 {

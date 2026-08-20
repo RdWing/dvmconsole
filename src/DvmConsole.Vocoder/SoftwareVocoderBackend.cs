@@ -7,10 +7,12 @@ namespace DvmConsole.Vocoder;
 public sealed class SoftwareVocoderBackend : IVocoderBackend
 {
     private readonly NativeVocoderApi api;
+    private readonly bool receiveAudioProcessingEnabled;
     private bool disposed;
 
-    public SoftwareVocoderBackend()
+    public SoftwareVocoderBackend(bool receiveAudioProcessingEnabled = true)
     {
+        this.receiveAudioProcessingEnabled = receiveAudioProcessingEnabled;
         api = NativeVocoderApi.Load();
     }
 
@@ -22,7 +24,7 @@ public sealed class SoftwareVocoderBackend : IVocoderBackend
         ObjectDisposedException.ThrowIf(disposed, this);
         if (!api.Supports(mode))
             throw new NotSupportedException($"The built-in vocoder does not support {mode}.");
-        return new SoftwareVocoderSession(api, mode);
+        return new SoftwareVocoderSession(api, mode, receiveAudioProcessingEnabled);
     }
 
     public void Dispose()
@@ -39,7 +41,10 @@ public sealed class SoftwareVocoderBackend : IVocoderBackend
         private readonly VocoderMode mode;
         private IntPtr handle;
 
-        public SoftwareVocoderSession(NativeVocoderApi api, VocoderMode mode)
+        public SoftwareVocoderSession(
+            NativeVocoderApi api,
+            VocoderMode mode,
+            bool receiveAudioProcessingEnabled)
         {
             this.api = api;
             this.mode = mode;
@@ -49,10 +54,22 @@ public sealed class SoftwareVocoderBackend : IVocoderBackend
                 handle = api.CreateSession(mode);
                 if (handle == IntPtr.Zero)
                     throw Failure("create");
+                if (api.SetReceiveAudioProcessing(handle, receiveAudioProcessingEnabled) < 0)
+                    throw Failure("receive-processing configuration");
             }
             catch
             {
-                api.ReleaseReference();
+                IntPtr createdHandle = handle;
+                handle = IntPtr.Zero;
+                try
+                {
+                    if (createdHandle != IntPtr.Zero)
+                        api.DestroySession(createdHandle);
+                }
+                finally
+                {
+                    api.ReleaseReference();
+                }
                 throw;
             }
         }
@@ -282,7 +299,7 @@ public sealed class SoftwareVocoderBackend : IVocoderBackend
 
     private sealed class NativeVocoderApi : IDisposable
     {
-        private const uint RequiredAbiVersion = 5;
+        private const uint RequiredAbiVersion = 6;
         private const string LibraryBaseName = "dvmconsole_vocoder";
 
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate uint VersionDelegate();
@@ -290,6 +307,9 @@ public sealed class SoftwareVocoderBackend : IVocoderBackend
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate IntPtr ErrorDelegate();
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate IntPtr CreateDelegate(uint mode);
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate void DestroyDelegate(IntPtr session);
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate int SetReceiveAudioProcessingDelegate(
+            IntPtr session,
+            [MarshalAs(UnmanagedType.I1)] bool enabled);
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate int ResetDelegate(IntPtr session);
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate int EncodeDelegate(IntPtr session, short[] samples, nuint sampleCount, byte[] output, nuint outputCapacity);
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate int EncodeP25SingleToneDelegate(IntPtr session, double frequencyHz, byte[] output, nuint outputCapacity);
@@ -314,6 +334,7 @@ public sealed class SoftwareVocoderBackend : IVocoderBackend
         private readonly ErrorDelegate error;
         private readonly CreateDelegate create;
         private readonly DestroyDelegate destroy;
+        private readonly SetReceiveAudioProcessingDelegate setReceiveAudioProcessing;
         private readonly ResetDelegate reset;
         private readonly EncodeDelegate encode;
         private readonly EncodeP25SingleToneDelegate encodeP25SingleTone;
@@ -336,6 +357,8 @@ public sealed class SoftwareVocoderBackend : IVocoderBackend
             error = Get<ErrorDelegate>("dvmconsole_vocoder_last_error");
             create = Get<CreateDelegate>("dvmconsole_vocoder_session_create");
             destroy = Get<DestroyDelegate>("dvmconsole_vocoder_session_destroy");
+            setReceiveAudioProcessing = Get<SetReceiveAudioProcessingDelegate>(
+                "dvmconsole_vocoder_set_rx_audio_processing");
             reset = Get<ResetDelegate>("dvmconsole_vocoder_session_reset");
             encode = Get<EncodeDelegate>("dvmconsole_vocoder_encode");
             encodeP25SingleTone = Get<EncodeP25SingleToneDelegate>("dvmconsole_vocoder_encode_p25_single_tone");
@@ -404,6 +427,8 @@ public sealed class SoftwareVocoderBackend : IVocoderBackend
                 NativeLibrary.Free(libraryHandle);
         }
         public void DestroySession(IntPtr session) => destroy(session);
+        public int SetReceiveAudioProcessing(IntPtr session, bool enabled)
+            => setReceiveAudioProcessing(session, enabled);
         public int ResetSession(IntPtr session) => reset(session);
         public int Encode(IntPtr session, short[] samples, byte[] output)
             => encode(session, samples, (nuint)samples.Length, output, (nuint)output.Length);

@@ -36,6 +36,7 @@ public sealed class UserSettings
     public string? LastSelectedChannelKey { get; set; }
     public string AudioInputDeviceId { get; set; } = "default";
     public string AudioOutputDeviceId { get; set; } = "default";
+    public bool RxAudioProcessingEnabled { get; set; } = true;
     public string AudioProcessingMode { get; set; } = DvmConsoleAudioProcessingMode;
     public bool HighQualityBluetoothAudioEnabled { get; set; }
     public bool AudioInputAgcEnabled { get; set; }
@@ -491,6 +492,7 @@ public sealed class UserSettingsStore
 
         if (!string.Equals(settings.AudioInputDeviceId, "default", StringComparison.OrdinalIgnoreCase) ||
             !string.Equals(settings.AudioOutputDeviceId, "default", StringComparison.OrdinalIgnoreCase) ||
+            !settings.RxAudioProcessingEnabled ||
             !string.Equals(settings.AudioProcessingMode, UserSettings.DvmConsoleAudioProcessingMode, StringComparison.Ordinal) ||
             settings.HighQualityBluetoothAudioEnabled ||
             settings.AudioInputAgcEnabled || settings.AudioInputAgcTargetDbfs != -25.0 ||
@@ -573,6 +575,7 @@ public sealed class UserSettingsStore
         {
             target.AudioInputDeviceId = source.AudioInputDeviceId;
             target.AudioOutputDeviceId = source.AudioOutputDeviceId;
+            target.RxAudioProcessingEnabled = source.RxAudioProcessingEnabled;
             target.AudioProcessingMode = source.AudioProcessingMode;
             target.HighQualityBluetoothAudioEnabled = source.HighQualityBluetoothAudioEnabled;
             target.AudioInputAgcEnabled = source.AudioInputAgcEnabled;

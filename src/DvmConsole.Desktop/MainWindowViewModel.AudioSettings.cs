@@ -139,7 +139,7 @@ public sealed partial class MainWindowViewModel
             ? " High-quality Bluetooth audio is enabled for compatible AirPods; unsupported routes fall back safely."
             : string.Empty;
         AudioStatusText = (processingMode == AudioProcessingMode.AppleVoiceProcessing
-            ? "Apple voice processing saved for microphone transmit capture; receive audio remains unprocessed."
+            ? "Apple voice processing saved for microphone transmit capture; RX vocoder processing remains independently controlled."
             : "DVM Console audio processing saved; device routes apply to the next audio session and PTT call.") +
             bluetoothStatus;
 
@@ -304,6 +304,33 @@ public sealed partial class MainWindowViewModel
             AudioStatusText = restarted == activeChannels.Length
                 ? $"Audio settings changed; restarted {restarted} active listening channel(s)."
                 : $"Audio settings changed; restarted {restarted} of {activeChannels.Length} listening channel(s).";
+        }
+        finally
+        {
+            audioReconfigurationLock.Release();
+        }
+    }
+
+    private async Task RestartReceiveVocoderSessionsAsync(bool enabled)
+    {
+        Volatile.Write(ref rxAudioProcessingEnabled, enabled);
+        if (Volatile.Read(ref disposeStarted) != 0)
+            return;
+
+        await audioReconfigurationLock.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            ChannelViewModel[] activeChannels = audioCoordinator.ActiveChannels.ToArray();
+            if (activeChannels.Length > 0)
+            {
+                await audioCoordinator.StopAsync().ConfigureAwait(false);
+                foreach (ChannelViewModel channel in activeChannels)
+                    await StartAudioAsync(channel).ConfigureAwait(false);
+            }
+
+            ChannelViewModel[] patchChannels = GetActivePatchSourceChannels();
+            await patchSourceDecode.StopAllAsync().ConfigureAwait(false);
+            await patchSourceDecode.ApplyChannelsAsync(patchChannels).ConfigureAwait(false);
         }
         finally
         {
