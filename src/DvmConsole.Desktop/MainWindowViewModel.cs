@@ -40,6 +40,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
     private readonly ChannelReceiveWorkQueue receiveAudioWork;
     private readonly UserSettingsStore userSettingsStore;
     private readonly UserSettings userSettings;
+    private readonly string loadedCodeplugPath;
     private readonly string codeplugDiagnosticsText;
     private readonly ChannelTransmitCoordinator transmitCoordinator;
     private readonly DefaultAudioDeviceMonitor defaultAudioDeviceMonitor;
@@ -184,12 +185,16 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
         Func<IReadOnlyList<string>>? serialPortProvider = null,
         Func<string, int, IPttSource>? serialPttFactory = null,
         IDmrKeyResolver? dmrKeyResolver = null,
-        INxdnKeyResolver? nxdnKeyResolver = null)
+        INxdnKeyResolver? nxdnKeyResolver = null,
+        string? codeplugPath = null)
     {
         this.statusText = statusText;
         codeplugDiagnosticsText = statusText;
         this.userSettingsStore = userSettingsStore ?? new UserSettingsStore(UserSettingsStore.DefaultPath);
         userSettings = this.userSettingsStore.Load();
+        loadedCodeplugPath = string.IsNullOrWhiteSpace(codeplugPath)
+            ? string.Empty
+            : Path.GetFullPath(codeplugPath);
         this.serialPortProvider = serialPortProvider ?? SerialPttSource.GetAvailablePortNames;
         this.serialPttFactory = serialPttFactory ?? ((portName, baudRate) => new SerialPttSource(portName, baudRate));
         uiScaleTransform = new ScaleTransform
@@ -2520,6 +2525,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
             if (!string.IsNullOrWhiteSpace(keyWarning))
                 status = $"{status}\n{keyWarning}";
 
+            string loadedCodeplugPath = configuration.SourcePath ?? Path.GetFullPath(configurationPath);
             var viewModel = new MainWindowViewModel(
                 status,
                 errors.Count == 0
@@ -2533,9 +2539,10 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
                 serialPortProvider,
                 serialPttFactory,
                 dmrKeyRing,
-                nxdnKeyRing);
+                nxdnKeyRing,
+                loadedCodeplugPath);
             if (errors.Count == 0)
-                viewModel.RecordLoadedCodeplug(configuration.SourcePath ?? Path.GetFullPath(configurationPath));
+                viewModel.RecordLoadedCodeplug(loadedCodeplugPath);
             return viewModel;
         }
         catch (Exception exception) when (exception is IOException or InvalidDataException or FormatException or YamlDotNet.Core.YamlException)
@@ -3071,10 +3078,14 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
         if (!userSettings.RestoreSelectedChannelsOnStartup || userSettings.SelectedWebStreams.Count == 0)
             return;
 
-        HashSet<string> selectedNames = userSettings.SelectedWebStreams
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
-        foreach (WebStreamViewModel stream in webStreams.Where(stream => selectedNames.Contains(stream.Name)))
+        foreach (WebStreamViewModel stream in webStreams.Where(stream =>
+            WebStreamSelectionIdentity.IsAuthorized(
+                userSettings.SelectedWebStreams,
+                loadedCodeplugPath,
+                stream)))
+        {
             await StartWebStreamAsync(stream).ConfigureAwait(false);
+        }
     }
 
     private void PersistSelectedWebStreamState(WebStreamViewModel stream)
@@ -3082,13 +3093,20 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
         if (!userSettings.RestoreSelectedChannelsOnStartup)
             return;
 
-        HashSet<string> selectedNames = userSettings.SelectedWebStreams
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        HashSet<string> selectedIdentities = userSettings.SelectedWebStreams
+            .Where(WebStreamSelectionIdentity.IsVersioned)
+            .ToHashSet(StringComparer.Ordinal);
+        string identity = WebStreamSelectionIdentity.Create(loadedCodeplugPath, stream);
         if (stream.IsActive && !stream.IsFailed)
-            selectedNames.Add(stream.Name);
+        {
+            if (identity.Length > 0)
+                selectedIdentities.Add(identity);
+        }
         else
-            selectedNames.Remove(stream.Name);
-        userSettings.SelectedWebStreams = selectedNames.ToList();
+        {
+            selectedIdentities.Remove(identity);
+        }
+        userSettings.SelectedWebStreams = selectedIdentities.ToList();
         PersistUserSettings();
     }
 

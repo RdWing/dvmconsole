@@ -13,6 +13,7 @@
   <ItemGroup>
     <Compile Include="../../fnecore/**/*.cs" Exclude="../../fnecore/obj/**/*.cs;../../fnecore/bin/**/*.cs;../../fnecore/Udp.cs" />
     <Compile Include="CompatibleUdp.cs" />
+    <Compile Include="Properties/AssemblyInfo.cs" />
     <PackageReference Include="SharpZipLib" Version="1.4.2" />
   </ItemGroup>
 </Project>

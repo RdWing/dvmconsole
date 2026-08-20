@@ -152,10 +152,9 @@ For each TAR-enabled talkgroup, **Keep Days** controls how long recordings are k
 
 Behavior:
 
-- TAR scans metadata embedded in saved recordings, plus supported legacy sidecars
+- TAR scans metadata embedded in saved `.opus` recordings
 - TAR checks the current configured retention for that TGID
 - if a recording is older than the allowed age, TAR deletes the `.opus` file
-- legacy metadata sidecars are also removed when their associated recording is deleted
 
 Important notes:
 
@@ -201,7 +200,7 @@ The date folder and filename time use the local system timezone. The metadata re
 
 Each new recording stores its catalog metadata in an OpusTags field inside the `.opus` file.
 
-When TAR scans an older `.opus` recording with a matching `.json` sidecar, it copies that metadata into the Opus file and reads it back before deleting the sidecar. If migration cannot be verified, the sidecar is retained and TAR retries on a later scan. Legacy non-Opus recordings continue to use their existing sidecars.
+Legacy `.json` sidecars are not scanned, migrated, or deleted. Older recordings appear in the TAR Viewer only when their metadata is already embedded in the `.opus` file.
 
 Metadata includes:
 
@@ -231,7 +230,6 @@ This metadata is used by the TAR Viewer and can also be read by tools that inspe
 - TAR records to `.opus` without requiring an external media process
 - TAR targets 9 kbps mono Opus in VOIP mode with variable bitrate enabled
 - TAR embeds catalog metadata in each new `.opus` recording
-- supported legacy Opus sidecars are migrated without re-encoding the audio
 - TAR trims leading and trailing silence before finalizing the saved file
 - TAR viewer playback uses the configured master output device
-- deleting a recording from the Viewer removes the `.opus` file and any legacy sidecar that remains
+- deleting a recording from the Viewer removes only its `.opus` file

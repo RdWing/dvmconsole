@@ -3,9 +3,9 @@ using System.Text.Json;
 
 namespace DvmConsole.Desktop;
 
-// Owns the on-disk representation and migration of TAR metadata. Recording
-// lifecycle code can work with CallRecordingMetadata without knowing how an
-// OpusTags packet is encoded or rewritten.
+// Owns the embedded on-disk representation of TAR metadata. Recording lifecycle
+// code can work with CallRecordingMetadata without knowing how an OpusTags
+// packet is encoded or read.
 internal sealed class OpusRecordingMetadataStore
 {
     internal const string MetadataTag = "DVMCONSOLE_METADATA";
@@ -54,45 +54,6 @@ internal sealed class OpusRecordingMetadataStore
         return true;
     }
 
-    public void TryMigrateSidecar(
-        string sidecarPath,
-        CallRecordingMetadata metadata,
-        string recordingRoot)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(sidecarPath);
-        ArgumentNullException.ThrowIfNull(metadata);
-        ArgumentException.ThrowIfNullOrWhiteSpace(recordingRoot);
-        if (!metadata.FilePath.EndsWith(".opus", StringComparison.OrdinalIgnoreCase) ||
-            !File.Exists(metadata.FilePath))
-        {
-            return;
-        }
-
-        try
-        {
-            if (TryRead(metadata.FilePath, recordingRoot, out CallRecordingMetadata existing))
-            {
-                if (HasSameIdentity(existing, metadata))
-                    File.Delete(sidecarPath);
-                return;
-            }
-
-            OggOpusTags.Set(metadata.FilePath, MetadataTag, Serialize(metadata));
-            if (!TryRead(metadata.FilePath, recordingRoot, out CallRecordingMetadata migrated) ||
-                !HasSameIdentity(migrated, metadata))
-            {
-                return;
-            }
-
-            metadata.FileSizeBytes = migrated.FileSizeBytes;
-            File.Delete(sidecarPath);
-        }
-        catch (Exception exception) when (exception is InvalidDataException or JsonException or FormatException or IOException or UnauthorizedAccessException)
-        {
-            // Preserve the sidecar and retry during a later catalog scan.
-        }
-    }
-
     private static string Serialize(CallRecordingMetadata metadata)
     {
         byte[] json = JsonSerializer.SerializeToUtf8Bytes(metadata, JsonOptions);
@@ -117,14 +78,6 @@ internal sealed class OpusRecordingMetadataStore
         };
         return Convert.FromBase64String(base64);
     }
-
-    private static bool HasSameIdentity(CallRecordingMetadata left, CallRecordingMetadata right)
-        => CatalogKey(left).Equals(CatalogKey(right), StringComparison.OrdinalIgnoreCase);
-
-    private static string CatalogKey(CallRecordingMetadata metadata)
-        => !string.IsNullOrWhiteSpace(metadata.RecordingId)
-            ? metadata.RecordingId
-            : metadata.FilePath;
 
     private static bool IsUnderRoot(string path, string root)
     {

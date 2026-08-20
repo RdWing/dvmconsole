@@ -233,6 +233,91 @@ public sealed class FneConnectionTests
     }
 
     [Fact]
+    public async Task RejectsUnsolicitedP25KeyResponse()
+    {
+        await using var connection = new FneConnection(new FneConnectionOptions(
+            "Test", "Test", "127.0.0.1", 62031, 1, null, false, null));
+        int published = 0;
+        connection.KeyResponseReceived += (_, _) => published++;
+
+        bool accepted = connection.TryPublishRequestedP25KeyResponse(
+            fnecore.P25.P25Defines.P25_ALGO_AES,
+            0x50,
+            new byte[32]);
+
+        Assert.False(accepted);
+        Assert.Equal(0, published);
+    }
+
+    [Fact]
+    public async Task AcceptsOnlyTheMatchingRequestedP25KeyResponseOnce()
+    {
+        await using var connection = new FneConnection(new FneConnectionOptions(
+            "Test", "Test", "127.0.0.1", 62031, 1, null, false, null));
+        FneKeyResponse? received = null;
+        connection.KeyResponseReceived += (_, response) => received = response;
+        connection.RegisterPendingP25KeyRequest(fnecore.P25.P25Defines.P25_ALGO_AES, 0x50);
+
+        Assert.False(connection.TryPublishRequestedP25KeyResponse(
+            fnecore.P25.P25Defines.P25_ALGO_DES,
+            0x50,
+            new byte[8]));
+        Assert.False(connection.TryPublishRequestedP25KeyResponse(
+            fnecore.P25.P25Defines.P25_ALGO_AES,
+            0x51,
+            new byte[32]));
+        Assert.True(connection.TryPublishRequestedP25KeyResponse(
+            fnecore.P25.P25Defines.P25_ALGO_AES,
+            0x50,
+            new byte[32]));
+        Assert.False(connection.TryPublishRequestedP25KeyResponse(
+            fnecore.P25.P25Defines.P25_ALGO_AES,
+            0x50,
+            new byte[32]));
+
+        Assert.NotNull(received);
+        Assert.Equal((ushort)0x50, received!.KeyId);
+        Assert.Equal(fnecore.P25.P25Defines.P25_ALGO_AES, received.AlgorithmId);
+    }
+
+    [Fact]
+    public async Task RejectsExpiredP25KeyResponse()
+    {
+        var timeProvider = new ManualTimeProvider(DateTimeOffset.UnixEpoch);
+        await using var connection = new FneConnection(
+            new FneConnectionOptions("Test", "Test", "127.0.0.1", 62031, 1, null, false, null),
+            timeProvider);
+        connection.RegisterPendingP25KeyRequest(fnecore.P25.P25Defines.P25_ALGO_AES, 0x50);
+        timeProvider.Advance(FneConnection.P25KeyResponseWindow + TimeSpan.FromTicks(1));
+
+        Assert.False(connection.TryPublishRequestedP25KeyResponse(
+            fnecore.P25.P25Defines.P25_ALGO_AES,
+            0x50,
+            new byte[32]));
+    }
+
+    [Fact]
+    public async Task InvalidP25KeyMaterialDoesNotConsumeMatchingRequest()
+    {
+        await using var connection = new FneConnection(new FneConnectionOptions(
+            "Test", "Test", "127.0.0.1", 62031, 1, null, false, null));
+        connection.RegisterPendingP25KeyRequest(fnecore.P25.P25Defines.P25_ALGO_AES, 0x50);
+
+        Assert.False(connection.TryPublishRequestedP25KeyResponse(
+            fnecore.P25.P25Defines.P25_ALGO_AES,
+            0x50,
+            ReadOnlyMemory<byte>.Empty));
+        Assert.False(connection.TryPublishRequestedP25KeyResponse(
+            fnecore.P25.P25Defines.P25_ALGO_AES,
+            0x50,
+            new byte[33]));
+        Assert.True(connection.TryPublishRequestedP25KeyResponse(
+            fnecore.P25.P25Defines.P25_ALGO_AES,
+            0x50,
+            new byte[32]));
+    }
+
+    [Fact]
     public void ExposesConnectedState()
     {
         Assert.Contains(FneConnectionState.Connected, Enum.GetValues<FneConnectionState>());
@@ -261,5 +346,14 @@ public sealed class FneConnectionTests
         Assert.Equal((byte)2, frame.Slot);
         Assert.Equal((byte)1, frame.Payload[0]);
         Assert.Equal((uint)5, frame.StreamId);
+    }
+
+    private sealed class ManualTimeProvider(DateTimeOffset initialUtcNow) : TimeProvider
+    {
+        private DateTimeOffset utcNow = initialUtcNow;
+
+        public override DateTimeOffset GetUtcNow() => utcNow;
+
+        public void Advance(TimeSpan duration) => utcNow = utcNow.Add(duration);
     }
 }
