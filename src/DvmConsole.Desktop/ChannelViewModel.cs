@@ -186,6 +186,12 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
             ? this
             : receivePresentationOwnerResolver?.Invoke();
 
+    internal bool IsTrackingReceiveStream(uint streamId)
+        => receiveLifecycle.IsActive(streamId);
+
+    internal string ResolveSubscriberAlias(uint sourceId)
+        => AliasFileLoader.FindAlias(aliases, sourceId);
+
     private uint? PresentationSourceId => receivePlaybackStreamId is not null
         ? receivePlaybackSourceId
         : runtime.SourceId;
@@ -479,6 +485,8 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
             return;
         if (receivePlaybackSourceId == sourceId && receivePlaybackStreamId == streamId)
             return;
+        if (receivePlaybackStreamId is not null)
+            return;
 
         receivePlaybackSourceId = sourceId;
         receivePlaybackStreamId = streamId;
@@ -699,15 +707,14 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
                     ? ToApplyResult(decision)
                     : ChannelTrafficApplyResult.NoMatch;
 
-            runtime.MarkIdle(now);
+            if (runtime.StreamId == traffic.StreamId)
+                runtime.MarkIdle(now);
             return ToApplyResult(decision);
         }
 
         if (IsDmrPrivacyHeader(traffic))
         {
-            if (runtime.State != ChannelRuntimeState.Receiving ||
-                runtime.StreamId != traffic.StreamId ||
-                runtime.SourceId != traffic.SourceId ||
+            if (!receiveLifecycle.IsActive(traffic.StreamId) ||
                 runtime.Definition.DestinationId != traffic.DestinationId ||
                 runtime.Definition.Slot != traffic.Slot)
             {
@@ -715,8 +722,11 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
             }
 
             ReceiveStreamDecision decision = receiveLifecycle.ObserveVoice(traffic.StreamId, now);
-            if (decision.Transition is ReceiveStreamTransition.Continued or ReceiveStreamTransition.Resumed)
+            if (decision.Transition is (ReceiveStreamTransition.Continued or ReceiveStreamTransition.Resumed) &&
+                runtime.StreamId == traffic.StreamId)
+            {
                 runtime.MarkReceiving(traffic.SourceId, traffic.StreamId, now);
+            }
             return ToApplyResult(decision);
         }
 
@@ -730,8 +740,12 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
         ReceiveStreamDecision voiceDecision = isDmrVoiceLcHeader
             ? receiveLifecycle.ObserveDefinitiveStart(traffic.StreamId, now)
             : receiveLifecycle.ObserveVoice(traffic.StreamId, now);
-        if (voiceDecision.Transition != ReceiveStreamTransition.IgnoredLate)
+        if (voiceDecision.Transition != ReceiveStreamTransition.IgnoredLate &&
+            (voiceDecision.Transition != ReceiveStreamTransition.Colliding ||
+             runtime.State != ChannelRuntimeState.Receiving))
+        {
             runtime.MarkReceiving(traffic.SourceId, traffic.StreamId, now);
+        }
         return ToApplyResult(voiceDecision);
     }
 
@@ -747,9 +761,12 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
         ReceiveStreamDecision decision = receiveLifecycle.Advance(now);
         if (decision.Transition == ReceiveStreamTransition.GraceExpired)
         {
-            runtime.MarkIdle(now);
             if (decision.EndedStreamId is uint endedStreamId)
+            {
+                if (runtime.StreamId == endedStreamId)
+                    runtime.MarkIdle(now);
                 MarkReceivePlaybackEnded(endedStreamId);
+            }
         }
         return ToApplyResult(decision);
     }

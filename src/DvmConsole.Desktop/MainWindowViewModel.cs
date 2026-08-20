@@ -3951,7 +3951,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
                 now,
                 channel.Name,
                 channel.Definition.DestinationId) || callHistoryChanged;
-            callRecordings.StopChannel(channel);
+            callRecordings.StopStream(channel, streamId);
         }
         if (callHistoryChanged)
             NotifyCallHistoryChanged();

@@ -8,6 +8,7 @@ namespace DvmConsole.Media;
 public sealed class AudioMixer : IAsyncDisposable
 {
     private const int MaximumBufferedFrames = 12;
+    private const int TargetOutputBufferedFrames = 4;
     private readonly IAudioPlayback output;
     private readonly PcmAudioFormat inputFormat;
     private readonly object sync = new();
@@ -15,6 +16,8 @@ public sealed class AudioMixer : IAsyncDisposable
     private readonly CancellationTokenSource cancellation = new();
     private readonly Task pump;
     private readonly int frameSamples;
+    private readonly int outputFrameSamples;
+    private readonly int targetOutputBufferedSamples;
     private readonly int maximumBufferedSamples;
     private int nextChannelId;
     private bool disposed;
@@ -29,6 +32,8 @@ public sealed class AudioMixer : IAsyncDisposable
             throw new NotSupportedException("Audio mixing supports mono or stereo 16-bit PCM output only.");
 
         frameSamples = Math.Max(1, output.Format.SampleRate / 50);
+        outputFrameSamples = checked(frameSamples * output.Format.Channels);
+        targetOutputBufferedSamples = checked(outputFrameSamples * TargetOutputBufferedFrames);
         inputFormat = new PcmAudioFormat(output.Format.SampleRate, 1, output.Format.BitsPerSample);
         maximumBufferedSamples = checked(frameSamples * MaximumBufferedFrames);
         pump = PumpAsync(cancellation.Token);
@@ -99,9 +104,14 @@ public sealed class AudioMixer : IAsyncDisposable
         {
             while (await timer.WaitForNextTickAsync(cancellationToken).ConfigureAwait(false))
             {
-                short[]? frame = TakeFrame();
-                if (frame is not null)
+                int framesToWrite = FramesNeededForOutputBuffer();
+                for (int index = 0; index < framesToWrite; index++)
+                {
+                    short[]? frame = TakeFrame();
+                    if (frame is null)
+                        break;
                     await output.WriteAsync(frame, cancellationToken).ConfigureAwait(false);
+                }
             }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -113,6 +123,22 @@ public sealed class AudioMixer : IAsyncDisposable
             lock (sync)
                 failure = exception;
         }
+    }
+
+    private int FramesNeededForOutputBuffer()
+    {
+        if (output.QueuedSamples is not int queuedSamples)
+            return 1;
+
+        // PeriodicTimer coalesces missed ticks. Use the device's actual queue
+        // depth to refill several already-decoded frames after a delayed wake,
+        // instead of remaining permanently behind by all of the missed ticks.
+        int deficit = targetOutputBufferedSamples - Math.Max(0, queuedSamples);
+        if (deficit <= 0)
+            return 0;
+        return Math.Min(
+            TargetOutputBufferedFrames,
+            (deficit + outputFrameSamples - 1) / outputFrameSamples);
     }
 
     private short[]? TakeFrame()

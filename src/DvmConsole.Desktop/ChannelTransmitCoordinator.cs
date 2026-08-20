@@ -369,11 +369,6 @@ public sealed class ChannelTransmitCoordinator : IAsyncDisposable
 
     private async Task StopCoreAsync(bool clearMicrophoneSuppression)
     {
-        if (clearMicrophoneSuppression)
-        {
-            microphoneAudioSuppressed = false;
-            sharedCapture?.SetSamplesSuppressed(false);
-        }
         ActiveTransmit[] current = active.ToArray();
         active.Clear();
         Exception? failure = null;
@@ -384,6 +379,15 @@ public sealed class ChannelTransmitCoordinator : IAsyncDisposable
         catch (Exception exception)
         {
             failure = exception;
+        }
+
+        // Keep startup frames gated until every transmit session has stopped.
+        // Clearing suppression first creates a window where a failed permit
+        // cue can leak microphone audio before cleanup sends terminators.
+        if (clearMicrophoneSuppression)
+        {
+            microphoneAudioSuppressed = false;
+            sharedCapture?.SetSamplesSuppressed(false);
         }
 
         if (sharedCapture is not null && warmCaptureLease is null)

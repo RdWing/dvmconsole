@@ -109,19 +109,14 @@ public sealed partial class MainWindowViewModel
             // before the local permit-tone playback path is opened.
             if (suppressMicrophoneForPermitTone)
             {
-                try
-                {
-                    await PlayTalkPermitToneAsync(reportSuccess: false).ConfigureAwait(false);
-                }
-                finally
-                {
-                    transmitCoordinator.SetMicrophoneAudioSuppressed(false);
-                }
+                await PlayTalkPermitToneAsync(
+                    reportSuccess: false,
+                    requiredForTransmit: true).ConfigureAwait(false);
+                transmitCoordinator.SetMicrophoneAudioSuppressed(false);
             }
         }
         catch (Exception exception)
         {
-            transmitCoordinator.SetMicrophoneAudioSuppressed(false);
             Exception startupFailure = exception;
             try
             {
@@ -131,6 +126,10 @@ public sealed partial class MainWindowViewModel
             {
                 AddDebugLog(DateTimeOffset.Now, "TX", DebugLogSeverity.Warning,
                     $"Transmit startup cleanup also failed: {cleanupException.Message}");
+            }
+            finally
+            {
+                transmitCoordinator.SetMicrophoneAudioSuppressed(false);
             }
 
             try
@@ -227,7 +226,9 @@ public sealed partial class MainWindowViewModel
     public async Task TestTalkPermitToneAsync()
         => await PlayTalkPermitToneAsync(reportSuccess: true).ConfigureAwait(false);
 
-    private async Task PlayTalkPermitToneAsync(bool reportSuccess)
+    private async Task PlayTalkPermitToneAsync(
+        bool reportSuccess,
+        bool requiredForTransmit = false)
     {
         try
         {
@@ -240,7 +241,8 @@ public sealed partial class MainWindowViewModel
                 DateTimeOffset.Now,
                 "TX",
                 DebugLogSeverity.Debug,
-                $"Talk permit tone completed on {result.Output.Name} ({result.Output.Id}).{drainText}")).ConfigureAwait(false);
+                $"Talk permit tone completed on {result.Output.Name} ({result.Output.Id}) " +
+                $"after {result.Attempts} playback attempt(s).{drainText}")).ConfigureAwait(false);
             if (reportSuccess)
             {
                 await RunOnUiThreadAsync(() =>
@@ -258,6 +260,12 @@ public sealed partial class MainWindowViewModel
                     $"Talk permit tone unavailable: {exception}");
                 AudioStatusText = $"Talk permit tone unavailable: {exception.Message}";
             }).ConfigureAwait(false);
+            if (requiredForTransmit)
+            {
+                throw new InvalidOperationException(
+                    "The talk-permit tone could not be completed, so microphone audio remained muted.",
+                    exception);
+            }
         }
     }
 

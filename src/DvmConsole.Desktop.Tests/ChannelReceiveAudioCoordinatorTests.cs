@@ -85,6 +85,39 @@ public sealed class ChannelReceiveAudioCoordinatorTests
     }
 
     [Fact]
+    public async Task ConcurrentStreamsOnOneTalkgroupUseIndependentVocoderAndMixerLanes()
+    {
+        var backend = new FakeAudioBackend();
+        var vocoder = new DistinctVocoderBackend();
+        var observedStreams = new HashSet<uint>();
+        await using var coordinator = new ChannelReceiveAudioCoordinator(
+            () => backend,
+            () => vocoder,
+            samplesObserver: (_, streamId, _, _) =>
+            {
+                lock (observedStreams)
+                    observedStreams.Add(streamId);
+            });
+        var channel = new ChannelViewModel(new ChannelConfiguration
+        {
+            Name = "TAC",
+            System = "System 1",
+            Tgid = "100",
+            Mode = "dmr",
+            Slot = 1
+        });
+        await coordinator.StartAsync(channel);
+
+        await coordinator.ProcessAsync(channel, CreateTraffic(100, 0, streamId: 41));
+        await coordinator.ProcessAsync(channel, CreateTraffic(100, 0, streamId: 42));
+        await WaitForAsync(() => backend.Playback.Frames.Count > 0);
+
+        Assert.Equal(2, vocoder.CreateSessionCalls);
+        Assert.Equal(new uint[] { 41, 42 }, observedStreams.Order().ToArray());
+        Assert.Equal((short)3_000, backend.Playback.Frames[0][0]);
+    }
+
+    [Fact]
     public async Task SharesPlaybackAcrossTwoChannelsAndStopsEachSessionIndividually()
     {
         var backend = new FakeAudioBackend();
@@ -852,6 +885,35 @@ public sealed class ChannelReceiveAudioCoordinatorTests
         public void Dispose()
         {
             ReleaseFirstDecode.TrySetResult();
+        }
+    }
+
+    private sealed class DistinctVocoderBackend : IVocoderBackend
+    {
+        public int CreateSessionCalls { get; private set; }
+        public string Name => "distinct";
+        public bool IsAvailable => true;
+
+        public IVocoderSession CreateSession(VocoderMode mode)
+            => new ConstantVocoderSession((short)(++CreateSessionCalls * 1_000));
+
+        public void Dispose()
+        {
+        }
+    }
+
+    private sealed class ConstantVocoderSession(short value) : IVocoderSession
+    {
+        public int Encode(ReadOnlySpan<short> samples, Span<byte> codeword) => 0;
+
+        public int Decode(ReadOnlySpan<byte> codeword, Span<short> samples)
+        {
+            samples.Fill(value);
+            return 0;
+        }
+
+        public void Dispose()
+        {
         }
     }
 

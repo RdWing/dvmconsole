@@ -8,7 +8,7 @@ internal enum ReceiveStreamTransition
     Continued,
     Resumed,
     Ended,
-    Superseded,
+    Colliding,
     GraceStarted,
     GraceExpired
 }
@@ -27,8 +27,11 @@ internal sealed class ReceiveStreamLifecycle
     private readonly TimeSpan gracePeriod;
     private readonly TimeSpan tombstoneLifetime;
     private readonly Dictionary<uint, DateTimeOffset> tombstones = [];
-    private DateTimeOffset? lastActivity;
-    private DateTimeOffset? graceDeadline;
+    // A busy talkgroup can legitimately carry two FNE stream IDs at once.
+    // Keep each alive independently; primaryStreamId is presentation policy,
+    // not an ownership claim over decode, recording, or call history.
+    private readonly Dictionary<uint, StreamActivity> activeStreams = [];
+    private uint? primaryStreamId;
 
     public ReceiveStreamLifecycle(
         TimeSpan inactivityTimeout,
@@ -47,7 +50,9 @@ internal sealed class ReceiveStreamLifecycle
         this.tombstoneLifetime = tombstoneLifetime;
     }
 
-    public uint? ActiveStreamId { get; private set; }
+    public uint? ActiveStreamId => primaryStreamId;
+
+    public bool IsActive(uint streamId) => activeStreams.ContainsKey(streamId);
 
     public ReceiveStreamDecision ObserveVoice(uint streamId, DateTimeOffset now)
     {
@@ -59,28 +64,28 @@ internal sealed class ReceiveStreamLifecycle
         if (tombstones.ContainsKey(streamId))
             return new ReceiveStreamDecision(ReceiveStreamTransition.IgnoredLate, ActiveStreamId);
 
-        if (ActiveStreamId is not uint activeStreamId)
+        if (activeStreams.TryGetValue(streamId, out StreamActivity? activity))
+        {
+            bool resumed = activity.GraceDeadline is not null;
+            activity.LastActivity = now;
+            activity.GraceDeadline = null;
+            return new ReceiveStreamDecision(
+                streamId == primaryStreamId
+                    ? resumed ? ReceiveStreamTransition.Resumed : ReceiveStreamTransition.Continued
+                    : ReceiveStreamTransition.Colliding,
+                primaryStreamId);
+        }
+
+        if (primaryStreamId is null)
         {
             Start(streamId, now);
             return new ReceiveStreamDecision(ReceiveStreamTransition.Started, streamId);
         }
 
-        if (activeStreamId == streamId)
-        {
-            bool resumed = graceDeadline is not null;
-            lastActivity = now;
-            graceDeadline = null;
-            return new ReceiveStreamDecision(
-                resumed ? ReceiveStreamTransition.Resumed : ReceiveStreamTransition.Continued,
-                streamId);
-        }
-
-        Tombstone(activeStreamId, now);
-        Start(streamId, now);
+        activeStreams.Add(streamId, new StreamActivity(now));
         return new ReceiveStreamDecision(
-            ReceiveStreamTransition.Superseded,
-            streamId,
-            activeStreamId);
+            ReceiveStreamTransition.Colliding,
+            primaryStreamId);
     }
 
     // A DMR voice LC header is an unambiguous start-of-call signal. The FNE
@@ -96,28 +101,28 @@ internal sealed class ReceiveStreamLifecycle
         ExpireActiveIfPastGrace(now);
         tombstones.Remove(streamId);
 
-        if (ActiveStreamId is not uint activeStreamId)
+        if (activeStreams.TryGetValue(streamId, out StreamActivity? activity))
+        {
+            bool resumed = activity.GraceDeadline is not null;
+            activity.LastActivity = now;
+            activity.GraceDeadline = null;
+            return new ReceiveStreamDecision(
+                streamId == primaryStreamId
+                    ? resumed ? ReceiveStreamTransition.Resumed : ReceiveStreamTransition.Continued
+                    : ReceiveStreamTransition.Colliding,
+                primaryStreamId);
+        }
+
+        if (primaryStreamId is null)
         {
             Start(streamId, now);
             return new ReceiveStreamDecision(ReceiveStreamTransition.Started, streamId);
         }
 
-        if (activeStreamId == streamId)
-        {
-            bool resumed = graceDeadline is not null;
-            lastActivity = now;
-            graceDeadline = null;
-            return new ReceiveStreamDecision(
-                resumed ? ReceiveStreamTransition.Resumed : ReceiveStreamTransition.Continued,
-                streamId);
-        }
-
-        Tombstone(activeStreamId, now);
-        Start(streamId, now);
+        activeStreams.Add(streamId, new StreamActivity(now));
         return new ReceiveStreamDecision(
-            ReceiveStreamTransition.Superseded,
-            streamId,
-            activeStreamId);
+            ReceiveStreamTransition.Colliding,
+            primaryStreamId);
     }
 
     public ReceiveStreamDecision ObserveTerminator(uint streamId, DateTimeOffset now)
@@ -129,70 +134,89 @@ internal sealed class ReceiveStreamLifecycle
         ExpireActiveIfPastGrace(now);
         if (tombstones.ContainsKey(streamId))
             return new ReceiveStreamDecision(ReceiveStreamTransition.IgnoredLate, ActiveStreamId);
-        if (ActiveStreamId != streamId)
+        if (!activeStreams.Remove(streamId))
             return new ReceiveStreamDecision(ReceiveStreamTransition.None, ActiveStreamId);
 
-        EndActive(now);
-        return new ReceiveStreamDecision(ReceiveStreamTransition.Ended, EndedStreamId: streamId);
+        Tombstone(streamId, now);
+        if (primaryStreamId == streamId)
+            primaryStreamId = MostRecentlyActiveStreamId();
+        return new ReceiveStreamDecision(
+            ReceiveStreamTransition.Ended,
+            primaryStreamId,
+            streamId);
     }
 
     public ReceiveStreamDecision Advance(DateTimeOffset now)
     {
         PurgeTombstones(now);
-        if (ActiveStreamId is not uint activeStreamId || lastActivity is not DateTimeOffset activity)
+        if (activeStreams.Count == 0)
             return default;
 
-        DateTimeOffset inactivityDeadline = activity + inactivityTimeout;
-        if (graceDeadline is null)
+        foreach ((uint streamId, StreamActivity activity) in activeStreams
+                     .OrderBy(pair => pair.Value.LastActivity)
+                     .ToArray())
         {
-            if (now < inactivityDeadline)
-                return default;
-
-            DateTimeOffset deadline = inactivityDeadline + gracePeriod;
-            if (now >= deadline)
+            DateTimeOffset inactivityDeadline = activity.LastActivity + inactivityTimeout;
+            if (activity.GraceDeadline is null)
             {
-                EndActive(now);
+                if (now < inactivityDeadline)
+                    continue;
+
+                DateTimeOffset deadline = inactivityDeadline + gracePeriod;
+                if (now < deadline)
+                {
+                    activity.GraceDeadline = deadline;
+                    return new ReceiveStreamDecision(ReceiveStreamTransition.GraceStarted, primaryStreamId);
+                }
+
+                End(streamId, now);
                 return new ReceiveStreamDecision(
                     ReceiveStreamTransition.GraceExpired,
-                    EndedStreamId: activeStreamId);
+                    primaryStreamId,
+                    streamId);
             }
 
-            graceDeadline = deadline;
-            return new ReceiveStreamDecision(ReceiveStreamTransition.GraceStarted, activeStreamId);
+            if (now < activity.GraceDeadline.Value)
+                continue;
+
+            End(streamId, now);
+            return new ReceiveStreamDecision(
+                ReceiveStreamTransition.GraceExpired,
+                primaryStreamId,
+                streamId);
         }
 
-        if (now < graceDeadline.Value)
-            return default;
-
-        EndActive(now);
-        return new ReceiveStreamDecision(
-            ReceiveStreamTransition.GraceExpired,
-            EndedStreamId: activeStreamId);
+        return default;
     }
 
     private void Start(uint streamId, DateTimeOffset now)
     {
-        ActiveStreamId = streamId;
-        lastActivity = now;
-        graceDeadline = null;
+        activeStreams.Add(streamId, new StreamActivity(now));
+        primaryStreamId = streamId;
     }
 
-    private void EndActive(DateTimeOffset now)
+    private void End(uint streamId, DateTimeOffset now)
     {
-        if (ActiveStreamId is uint activeStreamId)
-            Tombstone(activeStreamId, now);
-        ActiveStreamId = null;
-        lastActivity = null;
-        graceDeadline = null;
+        if (!activeStreams.Remove(streamId))
+            return;
+        Tombstone(streamId, now);
+        if (primaryStreamId == streamId)
+            primaryStreamId = MostRecentlyActiveStreamId();
     }
 
     private void ExpireActiveIfPastGrace(DateTimeOffset now)
     {
-        if (ActiveStreamId is null || lastActivity is not DateTimeOffset activity)
-            return;
-        if (now >= activity + inactivityTimeout + gracePeriod)
-            EndActive(now);
+        foreach ((uint streamId, StreamActivity activity) in activeStreams.ToArray())
+        {
+            if (now >= activity.LastActivity + inactivityTimeout + gracePeriod)
+                End(streamId, now);
+        }
     }
+
+    private uint? MostRecentlyActiveStreamId()
+        => activeStreams.Count == 0
+            ? null
+            : activeStreams.MaxBy(pair => pair.Value.LastActivity).Key;
 
     private void Tombstone(uint streamId, DateTimeOffset now)
         => tombstones[streamId] = now + tombstoneLifetime;
@@ -206,5 +230,11 @@ internal sealed class ReceiveStreamLifecycle
         {
             tombstones.Remove(streamId);
         }
+    }
+
+    private sealed class StreamActivity(DateTimeOffset lastActivity)
+    {
+        public DateTimeOffset LastActivity { get; set; } = lastActivity;
+        public DateTimeOffset? GraceDeadline { get; set; }
     }
 }

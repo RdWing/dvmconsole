@@ -457,7 +457,7 @@ public sealed class ChannelViewModelTests
     }
 
     [Fact]
-    public void NewVoiceStreamSupersedesAndTombstonesTheOldStream()
+    public void ConcurrentVoiceStreamsDoNotSupersedeOrTombstoneEachOther()
     {
         var channel = new ChannelViewModel(new ChannelConfiguration
         {
@@ -472,21 +472,21 @@ public sealed class ChannelViewModelTests
             "System 1",
             CreateTraffic(FneTrafficProtocol.P25, 42, 99, null, "VOICE", "LDU1", 10),
             now);
-        ChannelTrafficApplyResult superseded = channel.ApplyTraffic(
+        ChannelTrafficApplyResult collision = channel.ApplyTraffic(
             "System 1",
             CreateTraffic(FneTrafficProtocol.P25, 43, 99, null, "VOICE", "LDU1", 11),
             now.AddMilliseconds(100));
 
-        Assert.Equal(ReceiveStreamTransition.Superseded, superseded.Transition);
-        Assert.Equal((uint)10, superseded.EndedStreamId);
-        Assert.Equal((uint)11, superseded.ActiveStreamId);
+        Assert.Equal(ReceiveStreamTransition.Colliding, collision.Transition);
+        Assert.Null(collision.EndedStreamId);
+        Assert.Equal((uint)10, collision.ActiveStreamId);
         Assert.Equal(
-            ReceiveStreamTransition.IgnoredLate,
+            ReceiveStreamTransition.Continued,
             channel.ApplyTraffic(
                 "System 1",
                 CreateTraffic(FneTrafficProtocol.P25, 42, 99, null, "VOICE", "LDU2", 10),
                 now.AddSeconds(1)).Transition);
-        Assert.Equal((uint)11, channel.StreamId);
+        Assert.Equal((uint)10, channel.StreamId);
     }
 
     [Fact]

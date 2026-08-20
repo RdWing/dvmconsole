@@ -78,6 +78,21 @@ public sealed class AudioMixerTests
     }
 
     [Fact]
+    public async Task RefillsAStarvedDeviceBufferWithMultipleReadyFrames()
+    {
+        var output = new BufferedFakePlayback();
+        await using var mixer = new AudioMixer(output);
+        await using IAudioPlayback channel = mixer.OpenChannel();
+        short[] samples = Enumerable.Repeat((short)500, 8 * 160).ToArray();
+
+        await channel.WriteAsync(samples);
+        await WaitForAsync(() => output.Frames.Count >= 4);
+
+        Assert.Equal(4, output.Frames.Count);
+        Assert.Equal(4 * 160, output.QueuedSamples);
+    }
+
+    [Fact]
     public async Task RoutesMonoChannelsAcrossStereoAndProtectsBothSidesTogether()
     {
         var output = new FakePlayback(new PcmAudioFormat(8_000, 2, 16));
@@ -167,6 +182,30 @@ public sealed class AudioMixerTests
 
         public ValueTask FlushAsync(CancellationToken cancellationToken = default)
             => ValueTask.CompletedTask;
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
+    private sealed class BufferedFakePlayback : IAudioPlayback
+    {
+        public List<short[]> Frames { get; } = [];
+        public PcmAudioFormat Format { get; } = PcmAudioFormat.Voice8KhzMono16Bit;
+        public int? QueuedSamples { get; private set; } = 0;
+
+        public ValueTask WriteAsync(ReadOnlyMemory<short> samples, CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            Frames.Add(samples.ToArray());
+            QueuedSamples += samples.Length;
+            return ValueTask.CompletedTask;
+        }
+
+        public ValueTask FlushAsync(CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            QueuedSamples = 0;
+            return ValueTask.CompletedTask;
+        }
 
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
