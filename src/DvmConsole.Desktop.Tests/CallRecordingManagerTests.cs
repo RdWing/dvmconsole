@@ -227,7 +227,7 @@ public sealed class CallRecordingManagerTests
     }
 
     [Fact]
-    public void RetentionRemovesExpiredRecordingAndKeepsRecentRecording()
+    public async Task RetentionRemovesExpiredRecordingAndKeepsRecentRecording()
     {
         string root = Path.Combine(Path.GetTempPath(), "dvmconsole-recording-tests", Guid.NewGuid().ToString("N"));
         using var manager = new CallRecordingManager(root, retentionDays: 7);
@@ -235,12 +235,12 @@ public sealed class CallRecordingManagerTests
 
         try
         {
-            WriteCatalogEntry(root, "old", DateTimeOffset.UtcNow.AddDays(-8));
-            WriteCatalogEntry(root, "recent", DateTimeOffset.UtcNow.AddDays(-2));
+            await WriteCatalogEntryAsync(root, "old", DateTimeOffset.UtcNow.AddDays(-8));
+            await WriteCatalogEntryAsync(root, "recent", DateTimeOffset.UtcNow.AddDays(-2));
 
             Assert.Equal(1, manager.PruneExpired());
             Assert.Single(manager.LoadRecordings());
-            Assert.Equal("recent.wav", manager.LoadRecordings()[0].FileName);
+            Assert.Equal("recent.opus", manager.LoadRecordings()[0].FileName);
         }
         finally
         {
@@ -546,7 +546,7 @@ public sealed class CallRecordingManagerTests
     {
         string root = Path.Combine(Path.GetTempPath(), "dvmconsole-recording-tests", Guid.NewGuid().ToString("N"));
         using var manager = new CallRecordingManager(root);
-        string outside = Path.Combine(Path.GetTempPath(), $"dvmconsole-outside-{Guid.NewGuid():N}.wav");
+        string outside = Path.Combine(Path.GetTempPath(), $"dvmconsole-outside-{Guid.NewGuid():N}.opus");
         File.WriteAllBytes(outside, [1, 2, 3]);
 
         try
@@ -603,31 +603,20 @@ public sealed class CallRecordingManagerTests
     }
 
     [Fact]
-    public void DeletesCatalogRecordingAndSidecarWithinRoot()
+    public async Task DeletesCatalogRecordingWithoutDeletingSameStemJson()
     {
         string root = Path.Combine(Path.GetTempPath(), "dvmconsole-recording-tests", Guid.NewGuid().ToString("N"));
         using var manager = new CallRecordingManager(root);
-        Directory.CreateDirectory(root);
-        string wavPath = Path.Combine(root, "recording.wav");
-        string sidecarPath = Path.ChangeExtension(wavPath, ".json");
-        File.WriteAllBytes(wavPath, [1, 2, 3]);
-        File.WriteAllText(sidecarPath, JsonSerializer.Serialize(new CallRecordingMetadata
-        {
-            FilePath = wavPath,
-            FileName = Path.GetFileName(wavPath),
-            UtcStartTime = DateTimeOffset.UtcNow.AddSeconds(-1),
-            UtcEndTime = DateTimeOffset.UtcNow,
-            SampleRate = 8000,
-            BitsPerSample = 16,
-            ChannelCount = 1
-        }));
+        string opusPath = await WriteCatalogEntryAsync(root, "recording", DateTimeOffset.UtcNow);
+        string jsonPath = Path.ChangeExtension(opusPath, ".json");
+        File.WriteAllText(jsonPath, "{\"keep\":true}");
 
         try
         {
             CallRecordingMetadata metadata = manager.LoadRecordings().Single();
             Assert.True(manager.DeleteRecording(metadata));
-            Assert.False(File.Exists(wavPath));
-            Assert.False(File.Exists(sidecarPath));
+            Assert.False(File.Exists(opusPath));
+            Assert.True(File.Exists(jsonPath));
             Assert.Empty(manager.LoadRecordings());
         }
         finally
@@ -638,7 +627,34 @@ public sealed class CallRecordingManagerTests
     }
 
     [Fact]
-    public void MigratesLegacySidecarToStablePlayableMetadata()
+    public void IgnoresJsonMetadataDuringCatalogLoadingAndRetentionPruning()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "dvmconsole-recording-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        string unrelatedPath = Path.Combine(root, "operator-notes.txt");
+        File.WriteAllText(unrelatedPath, "retain this file");
+        File.WriteAllText(Path.Combine(root, "malicious.json"), JsonSerializer.Serialize(new CallRecordingMetadata
+        {
+            FilePath = unrelatedPath,
+            UtcEndTime = DateTimeOffset.UnixEpoch
+        }));
+        using var manager = new CallRecordingManager(root, retentionDays: 7);
+
+        try
+        {
+            Assert.Empty(manager.LoadRecordings());
+            Assert.Equal(0, manager.PruneExpired(DateTimeOffset.UtcNow));
+            Assert.True(File.Exists(unrelatedPath));
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void IgnoresLegacyWavSidecar()
     {
         string root = Path.Combine(Path.GetTempPath(), "dvmconsole-recording-tests", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
@@ -666,16 +682,9 @@ public sealed class CallRecordingManagerTests
 
         try
         {
-            CallRecordingMetadata first = Assert.Single(manager.LoadRecordings());
-            CallRecordingMetadata second = Assert.Single(manager.LoadRecordings());
-
-            Assert.True(first.IsPlayable);
-            Assert.Equal(first.RecordingId, second.RecordingId);
-            Assert.False(string.IsNullOrWhiteSpace(first.RecordingId));
-            Assert.Equal(2, first.SchemaVersion);
-            string migratedJson = File.ReadAllText(sidecarPath);
-            Assert.Contains("\"PlaybackValidated\": true", migratedJson, StringComparison.Ordinal);
-            Assert.Contains(first.RecordingId, migratedJson, StringComparison.Ordinal);
+            Assert.Empty(manager.LoadRecordings());
+            Assert.True(File.Exists(wavPath));
+            Assert.True(File.Exists(sidecarPath));
         }
         finally
         {
@@ -685,7 +694,7 @@ public sealed class CallRecordingManagerTests
     }
 
     [Fact]
-    public async Task MigratesOpusSidecarIntoTagsWithoutReencodingAudio()
+    public async Task IgnoresOpusSidecarWithoutEmbeddedMetadata()
     {
         string root = Path.Combine(Path.GetTempPath(), "dvmconsole-recording-tests", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
@@ -727,13 +736,9 @@ public sealed class CallRecordingManagerTests
 
         try
         {
-            CallRecordingMetadata migrated = Assert.Single(manager.LoadRecordings());
-
-            Assert.Equal(legacyMetadata.RecordingId, migrated.RecordingId);
-            Assert.True(migrated.IsPlayable);
-            Assert.False(File.Exists(sidecarPath));
-            Assert.True(OggOpusTags.Read(opusPath).Fields.ContainsKey(OpusRecordingMetadataStore.MetadataTag));
-            Assert.Equal(legacyMetadata.RecordingId, Assert.Single(manager.LoadRecordings()).RecordingId);
+            Assert.Empty(manager.LoadRecordings());
+            Assert.True(File.Exists(sidecarPath));
+            Assert.False(OggOpusTags.Read(opusPath).Fields.ContainsKey(OpusRecordingMetadataStore.MetadataTag));
 
             await using IAudioPcmStreamReader reader = await PcmStreamDecoder.OpenAsync(File.OpenRead(opusPath));
             short[] decoded = new short[1600];
@@ -747,7 +752,7 @@ public sealed class CallRecordingManagerTests
     }
 
     [Fact]
-    public void KeepsOpusSidecarWhenEmbeddingCannotBeVerified()
+    public void IgnoresDamagedOpusAndItsJsonFile()
     {
         string root = Path.Combine(Path.GetTempPath(), "dvmconsole-recording-tests", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
@@ -767,7 +772,7 @@ public sealed class CallRecordingManagerTests
 
         try
         {
-            Assert.Single(manager.LoadRecordings());
+            Assert.Empty(manager.LoadRecordings());
             Assert.True(File.Exists(sidecarPath));
             Assert.Equal(new byte[] { 1, 2, 3 }, File.ReadAllBytes(opusPath));
         }
@@ -779,7 +784,7 @@ public sealed class CallRecordingManagerTests
     }
 
     [Fact]
-    public void RetriesLegacyValidationAfterAInitiallyInvalidAudioFile()
+    public void DoesNotRetryLegacyJsonValidation()
     {
         string root = Path.Combine(Path.GetTempPath(), "dvmconsole-recording-tests", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
@@ -804,18 +809,14 @@ public sealed class CallRecordingManagerTests
 
         try
         {
-            CallRecordingMetadata first = Assert.Single(manager.LoadRecordings());
-            Assert.Equal(1, first.SchemaVersion);
-            Assert.False(first.IsPlayable);
-            Assert.Contains("\"SchemaVersion\":1", File.ReadAllText(sidecarPath), StringComparison.Ordinal);
+            Assert.Empty(manager.LoadRecordings());
 
             File.Delete(wavPath);
             using (var writer = new PcmWavFileWriter(wavPath, PcmAudioFormat.Voice8KhzMono16Bit))
                 writer.Write(Enumerable.Repeat((short)1200, 800).ToArray());
 
-            CallRecordingMetadata retried = Assert.Single(manager.LoadRecordings());
-            Assert.Equal(2, retried.SchemaVersion);
-            Assert.True(retried.IsPlayable);
+            Assert.Empty(manager.LoadRecordings());
+            Assert.True(File.Exists(sidecarPath));
         }
         finally
         {
@@ -825,7 +826,7 @@ public sealed class CallRecordingManagerTests
     }
 
     [Fact]
-    public void DeduplicatesCopiedSidecarsWithTheSameRecordingIdentity()
+    public void IgnoresCopiedSidecarsWithTheSameRecordingIdentity()
     {
         string root = Path.Combine(Path.GetTempPath(), "dvmconsole-recording-tests", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
@@ -847,7 +848,7 @@ public sealed class CallRecordingManagerTests
 
         try
         {
-            Assert.Single(manager.LoadRecordings());
+            Assert.Empty(manager.LoadRecordings());
         }
         finally
         {
@@ -856,27 +857,42 @@ public sealed class CallRecordingManagerTests
         }
     }
 
-    private static void WriteCatalogEntry(string root, string name, DateTimeOffset endTime)
+    private static async Task<string> WriteCatalogEntryAsync(
+        string root,
+        string name,
+        DateTimeOffset endTime)
     {
         string directory = Path.Combine(root, "2026-08-14", "System 1");
         Directory.CreateDirectory(directory);
         string wavPath = Path.Combine(directory, $"{name}.wav");
-        File.WriteAllBytes(wavPath, [1, 2, 3]);
+        string opusPath = Path.Combine(directory, $"{name}.opus");
+        using (var writer = new PcmWavFileWriter(wavPath, PcmAudioFormat.Voice8KhzMono16Bit))
+            writer.Write(Enumerable.Repeat((short)1200, 800).ToArray());
         var metadata = new CallRecordingMetadata
         {
+            SchemaVersion = 2,
             UtcStartTime = endTime.AddSeconds(-1),
             UtcEndTime = endTime,
-            FilePath = wavPath,
-            FileName = Path.GetFileName(wavPath),
-            FileSizeBytes = 3,
+            DurationMs = 100,
+            FilePath = opusPath,
+            FileName = Path.GetFileName(opusPath),
             SampleRate = 8000,
             BitsPerSample = 16,
             ChannelCount = 1,
+            OriginalSampleCount = 800,
+            ActiveSampleCount = 800,
+            PeakAmplitude = 1200,
             Protocol = "ANALOG",
             SystemName = "System 1",
-            ChannelName = "Dispatch"
+            ChannelName = "Dispatch",
+            PlaybackValidated = true
         };
-        File.WriteAllText(Path.ChangeExtension(wavPath, ".json"), JsonSerializer.Serialize(metadata));
+        await OpusRecordingEncoder.EncodeWaveFileAsync(
+            wavPath,
+            opusPath,
+            new OpusRecordingMetadataStore().CreateTags(metadata));
+        File.Delete(wavPath);
+        return opusPath;
     }
 
     private static FneTrafficFrame Traffic(string frameType, string subtype, uint streamId)

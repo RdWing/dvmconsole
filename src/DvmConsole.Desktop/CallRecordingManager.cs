@@ -2,8 +2,6 @@ using DvmConsole.Audio;
 using DvmConsole.FneClient;
 using DvmConsole.Media;
 using System.Globalization;
-using System.Security.Cryptography;
-using System.Text;
 using System.Text.Json;
 
 namespace DvmConsole.Desktop;
@@ -15,10 +13,6 @@ public sealed class CallRecordingManager : IDisposable, IAsyncDisposable
 {
     public const int DefaultRetentionDays = 7;
 
-    private static readonly JsonSerializerOptions MetadataJsonOptions = new()
-    {
-        WriteIndented = true
-    };
     private readonly object sync = new();
     private readonly OpusRecordingMetadataStore opusMetadataStore = new();
     private string rootPath;
@@ -128,11 +122,9 @@ public sealed class CallRecordingManager : IDisposable, IAsyncDisposable
 
         List<CallRecordingMetadata> recordings = [];
         string[] opusPaths;
-        string[] sidecarPaths;
         try
         {
             opusPaths = Directory.EnumerateFiles(rootPath, "*.opus", SearchOption.AllDirectories).ToArray();
-            sidecarPaths = Directory.EnumerateFiles(rootPath, "*.json", SearchOption.AllDirectories).ToArray();
         }
         catch (IOException)
         {
@@ -154,39 +146,7 @@ public sealed class CallRecordingManager : IDisposable, IAsyncDisposable
             catch (Exception exception) when (exception is InvalidDataException or JsonException or FormatException or IOException or UnauthorizedAccessException)
             {
                 // A damaged or unrelated Opus file must not hide the rest of
-                // the recording catalog. A matching legacy sidecar may still
-                // recover it in the pass below.
-            }
-        }
-
-        foreach (string sidecarPath in sidecarPaths)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            try
-            {
-                CallRecordingMetadata? metadata = JsonSerializer.Deserialize<CallRecordingMetadata>(
-                    File.ReadAllText(sidecarPath),
-                    MetadataJsonOptions);
-                if (metadata is null || !TryNormalizeRecordingPath(sidecarPath, metadata))
-                    continue;
-                if (metadata.SchemaVersion < 2)
-                    UpgradeLegacyMetadata(sidecarPath, metadata, cancellationToken);
-                opusMetadataStore.TryMigrateSidecar(sidecarPath, metadata, rootPath);
-
-                recordings.Add(metadata);
-            }
-            catch (JsonException)
-            {
-                // A partially written or unrelated JSON file must not hide the
-                // rest of the recording catalog.
-            }
-            catch (IOException)
-            {
-                // Files can disappear while an operator is browsing recordings.
-            }
-            catch (UnauthorizedAccessException)
-            {
-                // The catalog remains usable when one folder is inaccessible.
+                // the recording catalog.
             }
         }
 
@@ -208,100 +168,10 @@ public sealed class CallRecordingManager : IDisposable, IAsyncDisposable
             },
             cancellationToken);
 
-    private void UpgradeLegacyMetadata(
-        string sidecarPath,
-        CallRecordingMetadata metadata,
-        CancellationToken cancellationToken)
-    {
-        string relativePath = Path.GetRelativePath(rootPath, metadata.FilePath)
-            .Replace('\\', '/')
-            .ToUpperInvariant();
-        metadata.RecordingId = Convert.ToHexString(
-            SHA256.HashData(Encoding.UTF8.GetBytes(relativePath)))[..32];
-        metadata.FileName = string.IsNullOrWhiteSpace(metadata.FileName)
-            ? Path.GetFileName(metadata.FilePath)
-            : metadata.FileName;
-
-        try
-        {
-            LegacyAudioAnalysis analysis = AnalyzeLegacyAudioAsync(metadata.FilePath, cancellationToken).GetAwaiter().GetResult();
-            metadata.FileSizeBytes = new FileInfo(metadata.FilePath).Length;
-            metadata.SampleRate = analysis.SampleRate;
-            metadata.BitsPerSample = 16;
-            metadata.ChannelCount = 1;
-            metadata.OriginalSampleCount = analysis.SampleCount;
-            metadata.ActiveSampleCount = analysis.ActiveSampleCount;
-            metadata.PeakAmplitude = analysis.PeakAmplitude;
-            metadata.DurationMs = analysis.SampleRate > 0
-                ? (long)Math.Round(analysis.SampleCount * 1000d / analysis.SampleRate, MidpointRounding.AwayFromZero)
-                : metadata.DurationMs;
-            metadata.PlaybackValidated = analysis.ActiveSampleCount > 0 && analysis.PeakAmplitude > 0;
-            metadata.SchemaVersion = 2;
-        }
-        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or InvalidDataException or NotSupportedException)
-        {
-            // Keep the legacy schema retryable. A removable drive, partially
-            // copied file, or transient decoder failure must not permanently
-            // mark an otherwise valid recording as migrated and unplayable.
-            metadata.PlaybackValidated = false;
-            return;
-        }
-
-        string temporaryPath = $"{sidecarPath}.{Environment.ProcessId}.{Guid.NewGuid():N}.tmp";
-        try
-        {
-            File.WriteAllText(temporaryPath, JsonSerializer.Serialize(metadata, MetadataJsonOptions));
-            File.Move(temporaryPath, sidecarPath, overwrite: true);
-        }
-        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
-        {
-            // The in-memory migration remains stable even on read-only media.
-        }
-        finally
-        {
-            TryDelete(temporaryPath);
-        }
-    }
-
-    private static async Task<LegacyAudioAnalysis> AnalyzeLegacyAudioAsync(
-        string path,
-        CancellationToken cancellationToken)
-    {
-        await using FileStream source = new(path, FileMode.Open, FileAccess.Read, FileShare.Read);
-        await using IAudioPcmStreamReader reader = await PcmStreamDecoder.OpenAsync(source).ConfigureAwait(false);
-        short[] buffer = new short[4096];
-        long sampleCount = 0;
-        long activeSampleCount = 0;
-        int peakAmplitude = 0;
-        while (true)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            int count = await reader.ReadSamplesAsync(buffer, cancellationToken).ConfigureAwait(false);
-            if (count == 0)
-                break;
-            sampleCount += count;
-            foreach (short sample in buffer.AsSpan(0, count))
-            {
-                int amplitude = sample == short.MinValue ? short.MaxValue : Math.Abs(sample);
-                if (amplitude == 0)
-                    continue;
-                activeSampleCount++;
-                peakAmplitude = Math.Max(peakAmplitude, amplitude);
-            }
-        }
-        return new LegacyAudioAnalysis(reader.SampleRate, sampleCount, activeSampleCount, peakAmplitude);
-    }
-
     private static string RecordingCatalogKey(CallRecordingMetadata metadata)
         => !string.IsNullOrWhiteSpace(metadata.RecordingId)
             ? metadata.RecordingId
             : metadata.FilePath;
-
-    private readonly record struct LegacyAudioAnalysis(
-        int SampleRate,
-        long SampleCount,
-        long ActiveSampleCount,
-        int PeakAmplitude);
 
     public int PruneExpired(DateTimeOffset? now = null)
     {
@@ -326,20 +196,12 @@ public sealed class CallRecordingManager : IDisposable, IAsyncDisposable
         if (!TryGetRecordingPath(metadata, out string recordingPath))
             return false;
 
-        string sidecarPath = Path.ChangeExtension(recordingPath, ".json");
-
         bool deleted = false;
         try
         {
             if (File.Exists(recordingPath))
             {
                 File.Delete(recordingPath);
-                deleted = true;
-            }
-
-            if (File.Exists(sidecarPath))
-            {
-                File.Delete(sidecarPath);
                 deleted = true;
             }
         }
@@ -359,14 +221,29 @@ public sealed class CallRecordingManager : IDisposable, IAsyncDisposable
     {
         ArgumentNullException.ThrowIfNull(metadata);
         recordingPath = string.Empty;
-        if (string.IsNullOrWhiteSpace(metadata.FilePath) ||
-            !TryNormalizeRecordingPath(metadata.SidecarPath, metadata) ||
-            !IsUnderRoot(metadata.FilePath))
+        if (string.IsNullOrWhiteSpace(metadata.FilePath))
         {
             return false;
         }
 
-        recordingPath = metadata.FilePath;
+        string normalizedPath;
+        try
+        {
+            normalizedPath = Path.GetFullPath(metadata.FilePath);
+        }
+        catch (Exception exception) when (exception is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            return false;
+        }
+
+        if (!normalizedPath.EndsWith(".opus", StringComparison.OrdinalIgnoreCase) ||
+            !IsUnderRoot(normalizedPath) ||
+            !File.Exists(normalizedPath))
+        {
+            return false;
+        }
+
+        recordingPath = normalizedPath;
         return true;
     }
 
@@ -837,26 +714,6 @@ public sealed class CallRecordingManager : IDisposable, IAsyncDisposable
         catch (UnauthorizedAccessException)
         {
         }
-    }
-
-    private bool TryNormalizeRecordingPath(string sidecarPath, CallRecordingMetadata metadata)
-    {
-        if (string.IsNullOrWhiteSpace(metadata.FilePath))
-        {
-            string opusPath = Path.ChangeExtension(sidecarPath, ".opus");
-            metadata.FilePath = File.Exists(opusPath)
-                ? opusPath
-                : Path.ChangeExtension(sidecarPath, ".wav");
-        }
-        else if (!Path.IsPathRooted(metadata.FilePath))
-            metadata.FilePath = Path.GetFullPath(Path.Combine(Path.GetDirectoryName(sidecarPath) ?? rootPath, metadata.FilePath));
-        else
-            metadata.FilePath = Path.GetFullPath(metadata.FilePath);
-
-        if (string.IsNullOrWhiteSpace(metadata.FileName))
-            metadata.FileName = Path.GetFileName(metadata.FilePath);
-
-        return IsUnderRoot(metadata.FilePath) && File.Exists(metadata.FilePath);
     }
 
     private bool IsUnderRoot(string path)

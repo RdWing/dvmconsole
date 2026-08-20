@@ -99,7 +99,7 @@ or a specific output device override.
 
 Use default for most resources. Use overrides when a specific talkgroup must always play through a different speaker or audio interface.
 
-Web stream output overrides are keyed by stream name. Keep stream names stable if you want saved routing, volume, active startup state, and position to continue applying to the same stream.
+Web stream output overrides, volume, and position are keyed by stream name. Automatic startup is more restrictive: it is bound to the codeplug path, canonical URL, and configured credentials that the operator previously started. Keep the name and stream definition stable if you want all saved behavior to continue applying.
 
 ---
 

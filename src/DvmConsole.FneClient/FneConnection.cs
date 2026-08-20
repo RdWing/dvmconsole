@@ -121,22 +121,32 @@ public sealed record FneKeyResponse(
 // Owns one cross-platform FNE peer lifecycle. It does not start until StartAsync is called.
 public sealed class FneConnection : IAsyncDisposable
 {
+    internal static TimeSpan P25KeyResponseWindow { get; } = TimeSpan.FromMinutes(1);
+
     internal static string SoftwareIdentifier => FormatSoftwareIdentifier(
         typeof(FneConnection).Assembly
             .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?
             .InformationalVersion);
 
     private readonly FneConnectionOptions options;
+    private readonly TimeProvider timeProvider;
     private readonly object sync = new();
     private readonly SemaphoreSlim lifecycle = new(1, 1);
+    private readonly Dictionary<(byte AlgorithmId, ushort KeyId), DateTimeOffset> pendingP25KeyRequests = [];
     private FnePeer? peer;
     private FneConnectionStatus status;
     private CancellationTokenSource? stateMonitorCancellation;
     private Task? stateMonitorTask;
 
     public FneConnection(FneConnectionOptions options)
+        : this(options, TimeProvider.System)
+    {
+    }
+
+    internal FneConnection(FneConnectionOptions options, TimeProvider timeProvider)
     {
         this.options = options ?? throw new ArgumentNullException(nameof(options));
+        this.timeProvider = timeProvider ?? throw new ArgumentNullException(nameof(timeProvider));
         status = new FneConnectionStatus(options.Name, FneConnectionState.Disconnected, "Not started", DateTimeOffset.UtcNow);
     }
 
@@ -219,6 +229,7 @@ public sealed class FneConnection : IAsyncDisposable
             throw new ArgumentOutOfRangeException(nameof(keyId), "P25 key ID must be non-zero.");
 
         FnePeer current;
+        DateTimeOffset expiresAt;
         lock (sync)
         {
             current = peer ?? throw new InvalidOperationException("The FNE connection is not started.");
@@ -227,7 +238,20 @@ public sealed class FneConnection : IAsyncDisposable
             if (options.SourceId is not uint sourceId)
                 throw new InvalidOperationException("A source ID is required for P25 key management.");
 
-            current.SendMasterKeyRequest(algorithmId, keyId, sourceId);
+            expiresAt = RegisterPendingP25KeyRequestCore(algorithmId, keyId);
+            try
+            {
+                current.SendMasterKeyRequest(algorithmId, keyId, sourceId);
+            }
+            catch
+            {
+                if (pendingP25KeyRequests.TryGetValue((algorithmId, keyId), out DateTimeOffset pendingExpiry) &&
+                    pendingExpiry == expiresAt)
+                {
+                    pendingP25KeyRequests.Remove((algorithmId, keyId));
+                }
+                throw;
+            }
         }
     }
 
@@ -391,6 +415,7 @@ public sealed class FneConnection : IAsyncDisposable
         {
             current = peer;
             peer = null;
+            pendingP25KeyRequests.Clear();
             monitorCancellation = stateMonitorCancellation;
             monitorTask = stateMonitorTask;
             stateMonitorCancellation = null;
@@ -477,7 +502,7 @@ public sealed class FneConnection : IAsyncDisposable
             created.SetKMFPresharedKey(options.KmfPresharedKey);
         created.PeerConnected += HandlePeerConnected;
         created.KeyResponse += HandleKeyResponse;
-        created.PeerDisconnected = _ => Publish(FneConnectionState.WaitingForLogin, "FNE peer disconnected; waiting to reconnect");
+        created.PeerDisconnected = HandlePeerDisconnected;
         created.DMRDataReceived += HandleDmrDataReceived;
         created.P25DataReceived += HandleP25DataReceived;
         created.NXDNDataReceived += HandleNxdnDataReceived;
@@ -497,6 +522,13 @@ public sealed class FneConnection : IAsyncDisposable
     private void HandlePeerConnected(object? sender, PeerConnectedEvent args)
     {
         Publish(FneConnectionState.Connected, "FNE peer connected");
+    }
+
+    private void HandlePeerDisconnected(uint _)
+    {
+        lock (sync)
+            pendingP25KeyRequests.Clear();
+        Publish(FneConnectionState.WaitingForLogin, "FNE peer disconnected; waiting to reconnect");
     }
 
     private void HandleKeyResponse(object? sender, KeyResponseEvent args)
@@ -528,12 +560,45 @@ public sealed class FneConnection : IAsyncDisposable
             if (material.Length == 0)
                 continue;
 
-            Raise(KeyResponseReceived, new FneKeyResponse(
-                options.Name,
-                algorithmId,
-                key.KeyId,
-                material));
+            TryPublishRequestedP25KeyResponse(algorithmId, key.KeyId, material);
         }
+    }
+
+    internal void RegisterPendingP25KeyRequest(byte algorithmId, ushort keyId)
+    {
+        lock (sync)
+            RegisterPendingP25KeyRequestCore(algorithmId, keyId);
+    }
+
+    private DateTimeOffset RegisterPendingP25KeyRequestCore(byte algorithmId, ushort keyId)
+    {
+        DateTimeOffset expiresAt = timeProvider.GetUtcNow().Add(P25KeyResponseWindow);
+        pendingP25KeyRequests[(algorithmId, keyId)] = expiresAt;
+        return expiresAt;
+    }
+
+    internal bool TryPublishRequestedP25KeyResponse(
+        byte algorithmId,
+        ushort keyId,
+        ReadOnlyMemory<byte> material)
+    {
+        if (!IsSupportedP25Algorithm(algorithmId) ||
+            keyId == 0 ||
+            !HasSupportedP25KeyLength(algorithmId, material.Length))
+            return false;
+
+        DateTimeOffset now = timeProvider.GetUtcNow();
+        lock (sync)
+        {
+            if (!pendingP25KeyRequests.Remove((algorithmId, keyId), out DateTimeOffset expiresAt) ||
+                expiresAt < now)
+            {
+                return false;
+            }
+        }
+
+        Raise(KeyResponseReceived, new FneKeyResponse(options.Name, algorithmId, keyId, material));
+        return true;
     }
 
     private void HandleDmrDataReceived(object? sender, DMRDataReceivedEvent args)
@@ -622,6 +687,15 @@ public sealed class FneConnection : IAsyncDisposable
             P25Defines.P25_ALGO_DES or
             P25Defines.P25_ALGO_ARC4;
     }
+
+    private static bool HasSupportedP25KeyLength(byte algorithmId, int length)
+        => algorithmId switch
+        {
+            P25Defines.P25_ALGO_AES => length is >= 1 and <= 32,
+            P25Defines.P25_ALGO_DES => length == 8,
+            P25Defines.P25_ALGO_ARC4 => length == 5,
+            _ => false
+        };
 
     private void HandlePeerLog(LogLevel level, string message)
     {

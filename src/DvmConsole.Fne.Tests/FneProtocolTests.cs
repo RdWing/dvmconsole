@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Sockets;
 using System.Security.Cryptography;
 using fnecore;
+using fnecore.EDAC;
 using Xunit;
 
 namespace DvmConsole.Fne.Tests;
@@ -186,11 +187,142 @@ public sealed class FneProtocolTests
         Assert.Equal((byte)0x34, opcode.Item2);
     }
 
+    [Fact]
+    public void RejectsFramesThatCanReachUnsafeUpstreamParsers()
+    {
+        Assert.False(FneInboundFramePolicy.ShouldDeliverTraffic(new byte[31]));
+
+        byte[] validAck = CreateFrame(Constants.NET_FUNC_ACK, Constants.NET_SUBFUNC_NOP, new byte[10]);
+        Assert.True(FneInboundFramePolicy.ShouldDeliverTraffic(validAck));
+
+        byte[] oversized = validAck.ToArray();
+        FneUtils.WriteBytes(uint.MaxValue, ref oversized, 28);
+        Assert.False(FneInboundFramePolicy.ShouldDeliverTraffic(oversized));
+
+        Assert.False(FneInboundFramePolicy.ShouldDeliverTraffic(CreateFrame(
+            Constants.NET_FUNC_PROTOCOL,
+            Constants.NET_PROTOCOL_SUBFUNC_P25,
+            new byte[22])));
+        Assert.False(FneInboundFramePolicy.ShouldDeliverTraffic(CreateFrame(
+            Constants.NET_FUNC_INCALL_CTRL,
+            Constants.NET_PROTOCOL_SUBFUNC_DMR,
+            new byte[14])));
+
+        byte[] oversizedHaTable = new byte[10];
+        FneUtils.WriteBytes(uint.MaxValue, ref oversizedHaTable, 6);
+        Assert.False(FneInboundFramePolicy.ShouldDeliverTraffic(CreateFrame(
+            Constants.NET_FUNC_MASTER,
+            Constants.NET_MASTER_SUBFUNC_HA_PARAMS,
+            oversizedHaTable)));
+
+        byte[] malformedKmm = new byte[29];
+        malformedKmm[11] = (byte)fnecore.P25.KMM.KmmMessageType.MODIFY_KEY_CMD;
+        malformedKmm[25] = 0;
+        malformedKmm[26] = fnecore.P25.P25Defines.P25_ALGO_AES;
+        malformedKmm[27] = 32;
+        malformedKmm[28] = 1;
+        Assert.False(FneInboundFramePolicy.ShouldDeliverTraffic(CreateFrame(
+            Constants.NET_FUNC_KEY_RSP,
+            Constants.NET_SUBFUNC_NOP,
+            malformedKmm)));
+    }
+
+    [Fact]
+    public void DisablesUnusedMetadataAndAnnouncementInputs()
+    {
+        Assert.False(FneInboundFramePolicy.AcceptsInbound(FneUdpChannelKind.Metadata));
+        Assert.True(FneInboundFramePolicy.AcceptsInbound(FneUdpChannelKind.Traffic));
+
+        using (FneTransportEncryptionContext.Use(FneTransportEncryptionMode.Auto))
+        {
+            Assert.Equal(FneUdpChannelKind.Traffic, FneTransportEncryptionContext.Capture().ChannelKind);
+            Assert.Equal(FneUdpChannelKind.Metadata, FneTransportEncryptionContext.Capture().ChannelKind);
+        }
+
+        byte[] announcement = new byte[11];
+        FneUtils.WriteBytes(0U, ref announcement, 6);
+        Assert.False(FneInboundFramePolicy.ShouldDeliverTraffic(CreateFrame(
+            Constants.NET_FUNC_MASTER,
+            Constants.NET_MASTER_SUBFUNC_ACTIVE_TGS,
+            announcement)));
+        Assert.False(FneInboundFramePolicy.ShouldDeliverTraffic(CreateFrame(
+            Constants.NET_FUNC_MASTER,
+            Constants.NET_MASTER_SUBFUNC_DEACTIVE_TGS,
+            announcement)));
+    }
+
+    [Fact]
+    public async Task EncryptedReceiverDropsExactWireReplayAndContinues()
+    {
+        const string keyHex =
+            "000102030405060708090A0B0C0D0E0F000102030405060708090A0B0C0D0E0F";
+        byte[] firstFrame = CreateFrame(Constants.NET_FUNC_ACK, Constants.NET_SUBFUNC_NOP, new byte[10]);
+        byte[] secondPayload = new byte[10];
+        secondPayload[^1] = 1;
+        byte[] secondFrame = CreateFrame(Constants.NET_FUNC_ACK, Constants.NET_SUBFUNC_NOP, secondPayload);
+
+        using IDisposable encryptionScope = FneTransportEncryptionContext.Use(FneTransportEncryptionMode.Cbc);
+        using var server = new UdpClient(new IPEndPoint(IPAddress.Loopback, 0));
+        var destination = Assert.IsType<IPEndPoint>(server.Client.LocalEndPoint);
+        var receiver = new UdpReceiver();
+        receiver.SetPresharedKey(Convert.FromHexString(keyHex));
+        receiver.Connect(destination);
+        receiver.Send(new UdpFrame { Endpoint = destination, Message = firstFrame });
+        UdpReceiveResult probe = await server.ReceiveAsync().WaitAsync(TimeSpan.FromSeconds(2));
+        IPEndPoint receiverEndpoint = probe.RemoteEndPoint;
+
+        byte[] firstWire = EncryptCbc(PadToBlock(firstFrame), keyHex);
+        await server.SendAsync(firstWire, receiverEndpoint);
+        UdpFrame first = await receiver.Receive().WaitAsync(TimeSpan.FromSeconds(2));
+        Assert.Equal(firstFrame, first.Message[..firstFrame.Length]);
+
+        Task<UdpFrame> nextReceive = receiver.Receive();
+        await server.SendAsync(firstWire, receiverEndpoint);
+        await server.SendAsync(EncryptCbc(PadToBlock(secondFrame), keyHex), receiverEndpoint);
+        UdpFrame second = await nextReceive.WaitAsync(TimeSpan.FromSeconds(2));
+
+        Assert.Equal(secondFrame, second.Message[..secondFrame.Length]);
+    }
+
     private static byte[] CreateLoginFrame()
         => Convert.FromHexString(
             "905600001376E9000000037900FE0004" +
             "C9F060FFE3CBE0C60000037900000008" +
             "5250544C000003790000000000000000");
+
+    private static byte[] CreateFrame(byte function, byte subFunction, byte[] payload)
+    {
+        byte[] frame = new byte[32 + payload.Length];
+        var rtp = new RtpHeader
+        {
+            Extension = true,
+            PayloadType = Constants.DVMRtpPayloadType,
+            Sequence = 1,
+            SSRC = 1
+        };
+        rtp.Encode(ref frame);
+
+        var fne = new RtpFNEHeader
+        {
+            CRC = CRC.CreateCRC16(payload, (uint)(payload.Length * 8)),
+            Function = function,
+            SubFunction = subFunction,
+            StreamID = 1,
+            PeerID = 1,
+            MessageLength = (uint)payload.Length
+        };
+        fne.Encode(ref frame);
+        payload.CopyTo(frame, 32);
+        return frame;
+    }
+
+    private static byte[] PadToBlock(byte[] plaintext)
+    {
+        int paddedLength = ((plaintext.Length + 15) / 16) * 16;
+        return paddedLength == plaintext.Length
+            ? plaintext
+            : plaintext.Concat(new byte[paddedLength - plaintext.Length]).ToArray();
+    }
 
     private static byte[] DecryptEcb(byte[] wire, string keyHex)
         => Transform(wire[2..], Convert.FromHexString(keyHex), CipherMode.ECB, encrypt: false, null);

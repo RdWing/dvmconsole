@@ -74,6 +74,8 @@ Fields:
 - `presharedKey`: key used when `encrypted` is enabled.
 - `aliasPath`: optional RID alias YAML file.
 
+The current FNE plaintext and legacy encrypted transports are compatibility protocols, not mutually authenticated sessions. DVM Console rejects malformed frames and exact encrypted packet replays within a bounded receive window, but the transport cannot prove the master's identity or detect every forged packet. Use FNE only across a trusted network or an authenticated VPN.
+
 ---
 
 # Zones
@@ -172,7 +174,7 @@ Fields:
 
 Web stream chips start disabled after console load. Click the chip to start or stop local playback.
 
-If **Restore Selected Channels On Startup** is enabled, active web streams are saved on shutdown and restarted on the next console launch.
+If **Restore Selected Channels On Startup** is enabled, an active web stream is restarted only when the codeplug path, canonical URL, and configured credentials match the exact stream the operator previously started. Changing any of those values requires one manual start to authorize the new definition. Legacy name-only saved selections remain off until manually selected again.
 
 Basic Auth credentials are stored in the codeplug file. Protect the file if protected stream credentials are configured.
 

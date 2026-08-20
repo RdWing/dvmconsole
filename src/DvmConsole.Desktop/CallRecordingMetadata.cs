@@ -3,8 +3,7 @@ using System.Text.Json.Serialization;
 
 namespace DvmConsole.Desktop;
 
-// Portable catalog metadata embedded in new Opus recordings. JSON sidecars are
-// still supported for legacy recordings and are migrated when it is safe.
+// Portable catalog metadata embedded directly in Opus recordings.
 // Encryption identifiers are descriptive only; key material is never stored.
 public sealed class CallRecordingMetadata
 {
@@ -47,11 +46,6 @@ public sealed class CallRecordingMetadata
         ActiveSampleCount > 0 &&
         PeakAmplitude > 0 &&
         !string.IsNullOrWhiteSpace(FilePath);
-
-    [JsonIgnore]
-    public string SidecarPath => string.IsNullOrWhiteSpace(FilePath)
-        ? string.Empty
-        : Path.ChangeExtension(FilePath, ".json");
 
     [JsonIgnore]
     public string TimestampText => UtcStartTime.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss");

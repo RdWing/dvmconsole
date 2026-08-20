@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+
+- Load and prune TAR catalog entries only from metadata embedded in Opus recordings, without scanning or deleting legacy JSON sidecars.
+- Accept FNE/KMM P25 key material only once for the matching algorithm and key ID requested during the current bounded response window, without requiring codeplug changes.
+- Reject truncated, length-inconsistent, and parser-unsafe FNE datagrams before they reach the pinned upstream decoder, and discard exact encrypted wire replays within a bounded receive window.
+- Disable unused inbound FNE metadata inventory and master talkgroup-announcement inputs so they cannot accumulate unbounded upstream state.
+- Restore a selected web stream automatically only when its codeplug path, canonical URL, and credentials match the stream the operator previously started; legacy name-only selections remain off until manually selected again.
+
 ## [0.3.2] - 2026-08-19
 
 ### Changed
