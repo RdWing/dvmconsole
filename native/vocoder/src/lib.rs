@@ -9,7 +9,7 @@ use std::cell::RefCell;
 use std::ffi::c_char;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
-use blip25_vocoder::enhancement::{ClassicalConfig, EnhancementMode};
+use blip25_vocoder::enhancement::{Biquad, ClassicalConfig, Compressor, EnhancementMode};
 use blip25_vocoder::fullrate::frame::{decode_frame as decode_full_rate_frame, INFO_WIDTHS};
 use blip25_vocoder::halfrate::dequantize::{
     encode_tone_frame_info, TONE_AMPLITUDE_EXPONENT_STEP, TONE_AMPLITUDE_PEAK,
@@ -21,7 +21,7 @@ use blip25_vocoder::halfrate::{pack_natural, unpack_natural};
 use blip25_vocoder::rate_conversion::HalfToFullConverter;
 use blip25_vocoder::vocoder::{FrameStatus, Rate, Vocoder};
 
-const ABI_VERSION: u32 = 6;
+const ABI_VERSION: u32 = 7;
 const MODE_DMR: u32 = 0;
 const MODE_P25: u32 = 1;
 const MODE_NXDN: u32 = 2;
@@ -36,8 +36,11 @@ const HALF_RATE_PARAMETER_BYTES: usize = 7;
 const P25_CODEWORD_BYTES: usize = 11;
 
 // Half-rate modes need presentation gain beyond the crate's classical
-// defaults. P25 Phase 1 uses ClassicalConfig::default without overrides.
-const RX_OUTPUT_GAIN_DB: f32 = 6.0;
+// defaults. P25 Phase 1 remains at unity gain.
+const RX_OUTPUT_GAIN_DB: f32 = 9.0;
+const RX_BOUNDARY_FADE_SAMPLES: usize = 40;
+const RX_COMPRESSOR_ATTACK_MS: f32 = 10.0;
+const RX_COMPRESSOR_RELEASE_MS: f32 = 250.0;
 
 const OK: i32 = 0;
 const ERR_INVALID: i32 = -1;
@@ -80,13 +83,59 @@ impl Session {
             pending_tone: None,
             flushed: false,
         };
-        session.set_receive_audio_processing(true);
+        session.set_receive_audio_processing(ReceiveAudioProcessingOptions::default());
         Some(session)
     }
 
-    fn set_receive_audio_processing(&mut self, enabled: bool) {
+    fn set_receive_audio_processing(&mut self, options: ReceiveAudioProcessingOptions) {
         self.vocoder
-            .set_enhancement(receive_enhancement(self.mode, enabled));
+            .set_enhancement(receive_enhancement(self.mode, options));
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct ReceiveAudioProcessingOptions {
+    high_pass_enabled: bool,
+    high_pass_frequency_hz: f32,
+    peaking_enabled: bool,
+    peaking_frequency_hz: f32,
+    peaking_gain_db: f32,
+    compressor_enabled: bool,
+    compressor_ratio: f32,
+    compressor_threshold_dbfs: f32,
+    compressor_makeup_gain_db: f32,
+}
+
+impl Default for ReceiveAudioProcessingOptions {
+    fn default() -> Self {
+        Self {
+            high_pass_enabled: true,
+            high_pass_frequency_hz: 250.0,
+            peaking_enabled: true,
+            peaking_frequency_hz: 2_500.0,
+            peaking_gain_db: 3.0,
+            compressor_enabled: false,
+            compressor_ratio: 3.0,
+            compressor_threshold_dbfs: -18.0,
+            compressor_makeup_gain_db: 3.0,
+        }
+    }
+}
+
+impl ReceiveAudioProcessingOptions {
+    fn is_valid(self) -> bool {
+        self.high_pass_frequency_hz.is_finite()
+            && (0.0..=500.0).contains(&self.high_pass_frequency_hz)
+            && self.peaking_frequency_hz.is_finite()
+            && (250.0..=3_000.0).contains(&self.peaking_frequency_hz)
+            && self.peaking_gain_db.is_finite()
+            && (-10.0..=10.0).contains(&self.peaking_gain_db)
+            && self.compressor_ratio.is_finite()
+            && (1.0..=10.0).contains(&self.compressor_ratio)
+            && self.compressor_threshold_dbfs.is_finite()
+            && (-40.0..=0.0).contains(&self.compressor_threshold_dbfs)
+            && self.compressor_makeup_gain_db.is_finite()
+            && (0.0..=10.0).contains(&self.compressor_makeup_gain_db)
     }
 }
 
@@ -138,12 +187,30 @@ fn rate(mode: u32) -> Option<Rate> {
     }
 }
 
-fn receive_enhancement(mode: u32, enabled: bool) -> EnhancementMode {
-    if !enabled {
-        return EnhancementMode::None;
-    }
-
+fn receive_enhancement(mode: u32, options: ReceiveAudioProcessingOptions) -> EnhancementMode {
     let mut config = ClassicalConfig::default();
+    config.biquads = [
+        (options.high_pass_enabled && options.high_pass_frequency_hz > 0.0)
+            .then(|| Biquad::high_pass(8_000.0, options.high_pass_frequency_hz, 0.707)),
+        options.peaking_enabled.then(|| {
+            Biquad::peaking(
+                8_000.0,
+                options.peaking_frequency_hz,
+                1.0,
+                options.peaking_gain_db,
+            )
+        }),
+    ];
+    config.compressor = options.compressor_enabled.then_some(Compressor {
+        threshold_db: options.compressor_threshold_dbfs,
+        ratio: options.compressor_ratio,
+        attack_ms: RX_COMPRESSOR_ATTACK_MS,
+        release_ms: RX_COMPRESSOR_RELEASE_MS,
+        makeup_db: options.compressor_makeup_gain_db,
+    });
+    // Boundary smoothing is a receive invariant, independent of the optional
+    // filters and compressor.
+    config.boundary_fade_samples = RX_BOUNDARY_FADE_SAMPLES;
     if matches!(mode, MODE_DMR | MODE_NXDN | MODE_P25_PHASE2) {
         config.output_gain_db = RX_OUTPUT_GAIN_DB;
     }
@@ -513,13 +580,22 @@ pub extern "C" fn dvmconsole_vocoder_session_create(mode: u32) -> *mut Session {
 }
 
 #[no_mangle]
-/// Enables the classical post-decoder stage or restores spec-faithful output.
+/// Configures the optional post-decoder filters and compressor. Presentation
+/// gain and boundary smoothing remain enabled independently of these options.
 ///
 /// # Safety
 /// `session` must point to a live session for the duration of the call.
-pub unsafe extern "C" fn dvmconsole_vocoder_set_rx_audio_processing(
+pub unsafe extern "C" fn dvmconsole_vocoder_configure_rx_audio_processing(
     session: *mut Session,
-    enabled: bool,
+    high_pass_enabled: bool,
+    high_pass_frequency_hz: f32,
+    peaking_enabled: bool,
+    peaking_frequency_hz: f32,
+    peaking_gain_db: f32,
+    compressor_enabled: bool,
+    compressor_ratio: f32,
+    compressor_threshold_dbfs: f32,
+    compressor_makeup_gain_db: f32,
 ) -> i32 {
     checked(
         || {
@@ -527,7 +603,22 @@ pub unsafe extern "C" fn dvmconsole_vocoder_set_rx_audio_processing(
                 set_error("null receive-processing session");
                 return ERR_STATE;
             };
-            session.set_receive_audio_processing(enabled);
+            let options = ReceiveAudioProcessingOptions {
+                high_pass_enabled,
+                high_pass_frequency_hz,
+                peaking_enabled,
+                peaking_frequency_hz,
+                peaking_gain_db,
+                compressor_enabled,
+                compressor_ratio,
+                compressor_threshold_dbfs,
+                compressor_makeup_gain_db,
+            };
+            if !options.is_valid() {
+                set_error("receive-processing options are outside their supported ranges");
+                return ERR_INVALID;
+            }
+            session.set_receive_audio_processing(options);
             set_error("ok");
             OK
         },
@@ -997,7 +1088,7 @@ mod tests {
 
     #[test]
     fn abi_reports_all_required_modes() {
-        assert_eq!(dvmconsole_vocoder_abi_version(), 6);
+        assert_eq!(dvmconsole_vocoder_abi_version(), 7);
         assert_eq!(dvmconsole_vocoder_capabilities(), 15);
     }
 
@@ -1076,7 +1167,7 @@ mod tests {
     }
 
     #[test]
-    fn receive_vocoder_uses_protocol_specific_classical_defaults() {
+    fn receive_vocoder_uses_protocol_specific_fixed_output_settings() {
         for (mode, expected_gain_db) in [
             (MODE_DMR, RX_OUTPUT_GAIN_DB),
             (MODE_NXDN, RX_OUTPUT_GAIN_DB),
@@ -1087,34 +1178,81 @@ mod tests {
             let EnhancementMode::Classical(config) = session.vocoder.enhancement() else {
                 panic!("receive enhancement must be enabled for mode {mode}");
             };
-            let defaults = ClassicalConfig::default();
             assert_eq!(
                 config
                     .biquads
                     .iter()
                     .map(Option::is_some)
                     .collect::<Vec<_>>(),
-                defaults
+                ClassicalConfig::default()
                     .biquads
                     .iter()
                     .map(Option::is_some)
                     .collect::<Vec<_>>()
             );
             assert!(config.compressor.is_none());
-            assert_eq!(config.boundary_fade_samples, defaults.boundary_fade_samples);
+            assert_eq!(config.boundary_fade_samples, RX_BOUNDARY_FADE_SAMPLES);
             assert_eq!(config.output_gain_db, expected_gain_db);
         }
     }
 
     #[test]
-    fn receive_processing_can_restore_spec_faithful_output() {
+    fn receive_processing_stages_are_independently_configurable() {
         let mut session = test_session(MODE_DMR);
-        session.set_receive_audio_processing(false);
+        session.set_receive_audio_processing(ReceiveAudioProcessingOptions {
+            high_pass_enabled: false,
+            peaking_frequency_hz: 1_750.0,
+            peaking_gain_db: -4.5,
+            compressor_enabled: true,
+            compressor_ratio: 4.0,
+            compressor_threshold_dbfs: -22.0,
+            compressor_makeup_gain_db: 5.0,
+            ..ReceiveAudioProcessingOptions::default()
+        });
 
-        assert!(matches!(
-            session.vocoder.enhancement(),
-            EnhancementMode::None
-        ));
+        let EnhancementMode::Classical(config) = session.vocoder.enhancement() else {
+            panic!("receive enhancement must remain active");
+        };
+        assert!(config.biquads[0].is_none());
+        let peaking = config.biquads[1].expect("peaking filter");
+        let expected_peaking = Biquad::peaking(8_000.0, 1_750.0, 1.0, -4.5);
+        assert!((peaking.b0 - expected_peaking.b0).abs() < f32::EPSILON);
+        let compressor = config.compressor.expect("compressor");
+        assert_eq!(compressor.ratio, 4.0);
+        assert_eq!(compressor.threshold_db, -22.0);
+        assert_eq!(compressor.makeup_db, 5.0);
+        assert_eq!(compressor.attack_ms, RX_COMPRESSOR_ATTACK_MS);
+        assert_eq!(compressor.release_ms, RX_COMPRESSOR_RELEASE_MS);
+        assert_eq!(config.boundary_fade_samples, RX_BOUNDARY_FADE_SAMPLES);
+        assert_eq!(config.output_gain_db, RX_OUTPUT_GAIN_DB);
+    }
+
+    #[test]
+    fn receive_processing_rejects_out_of_range_options() {
+        let mut options = ReceiveAudioProcessingOptions::default();
+        assert!(options.is_valid());
+
+        options.high_pass_frequency_hz = 525.0;
+        assert!(!options.is_valid());
+        options = ReceiveAudioProcessingOptions::default();
+        options.compressor_threshold_dbfs = f32::NAN;
+        assert!(!options.is_valid());
+    }
+
+    #[test]
+    fn zero_hz_high_pass_cutoff_is_a_stable_bypass() {
+        let mut session = test_session(MODE_NXDN);
+        session.set_receive_audio_processing(ReceiveAudioProcessingOptions {
+            high_pass_frequency_hz: 0.0,
+            ..ReceiveAudioProcessingOptions::default()
+        });
+
+        let EnhancementMode::Classical(config) = session.vocoder.enhancement() else {
+            panic!("receive enhancement must remain active");
+        };
+        assert!(config.biquads[0].is_none());
+        assert_eq!(config.boundary_fade_samples, RX_BOUNDARY_FADE_SAMPLES);
+        assert_eq!(config.output_gain_db, RX_OUTPUT_GAIN_DB);
     }
 
     #[test]

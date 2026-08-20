@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-08-19
+
+### Changed
+
+- Replace the single RX audio-processing toggle with per-mode high-pass, peaking-EQ, and soft-knee compressor controls. Keep decoder boundary smoothing fixed on, and raise the fixed DMR, NXDN, and P25 Phase 2 presentation gain from 6 dB to 9 dB while leaving P25 Phase 1 at unity gain.
+
 ### Fixed
 
 - Preserve simultaneous calls that share one talkgroup with independent receive lifecycles, decoder state, mixer lanes, and TAR writers, while refilling ready live-audio frames when the output buffer falls behind.
@@ -219,7 +225,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Add patches, multi-select groups, call history, recordings, web streams, clocks, layouts, themes, startup behavior, and in-application operator documentation.
 - Add support for local and KMM-provided P25 encryption keys while preserving compatibility with existing variable-length AES key material.
 
-[Unreleased]: https://github.com/RdWing/dvmconsole/compare/v0.3.1...HEAD
+[Unreleased]: https://github.com/RdWing/dvmconsole/compare/v0.3.2...HEAD
+[0.3.2]: https://github.com/RdWing/dvmconsole/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/RdWing/dvmconsole/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/RdWing/dvmconsole/compare/v0.2.4...v0.3.0
 [0.2.4]: https://github.com/RdWing/dvmconsole/compare/v0.2.3...v0.2.4

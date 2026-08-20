@@ -20,11 +20,38 @@ public sealed class WidgetPositionSetting
     public double Y { get; set; }
 }
 
+public sealed class RxAudioProcessingModeSetting
+{
+    public const string DmrMode = "Dmr";
+    public const string P25Phase1Mode = "P25Phase1";
+    public const string NxdnMode = "Nxdn";
+    public const string P25Phase2Mode = "P25Phase2";
+
+    public static IReadOnlyList<string> ModeKeys { get; } =
+        [DmrMode, P25Phase1Mode, NxdnMode, P25Phase2Mode];
+
+    public bool HighPassFilterEnabled { get; set; } = true;
+    public double HighPassFrequencyHz { get; set; } = 250;
+    public bool PeakingFilterEnabled { get; set; } = true;
+    public double PeakingFrequencyHz { get; set; } = 2_500;
+    public double PeakingGainDb { get; set; } = 3;
+    public bool CompressorEnabled { get; set; }
+    public double CompressorRatio { get; set; } = 3;
+    public double CompressorThresholdDbfs { get; set; } = -18;
+    public double CompressorMakeupGainDb { get; set; } = 3;
+
+    public static Dictionary<string, RxAudioProcessingModeSetting> CreateDefaults()
+        => ModeKeys.ToDictionary(
+            key => key,
+            _ => new RxAudioProcessingModeSetting(),
+            StringComparer.OrdinalIgnoreCase);
+}
+
 // Small, portable subset of operator state that is safe to persist outside a
 // codeplug. Protocol credentials and encryption keys remain codeplug-owned.
 public sealed class UserSettings
 {
-    public const int CurrentSchemaVersion = 2;
+    public const int CurrentSchemaVersion = 3;
     public const string DvmConsoleAudioProcessingMode = "DvmConsole";
     public const string AppleVoiceProcessingMode = "AppleVoiceProcessing";
     public const int MaximumToolbarClocks = 8;
@@ -36,7 +63,10 @@ public sealed class UserSettings
     public string? LastSelectedChannelKey { get; set; }
     public string AudioInputDeviceId { get; set; } = "default";
     public string AudioOutputDeviceId { get; set; } = "default";
-    public bool RxAudioProcessingEnabled { get; set; } = true;
+    public Dictionary<string, RxAudioProcessingModeSetting> RxAudioProcessingOptions { get; set; }
+        = RxAudioProcessingModeSetting.CreateDefaults();
+    [JsonPropertyName("RxAudioProcessingEnabled")]
+    public bool? LegacyRxAudioProcessingEnabled { get; set; }
     public string AudioProcessingMode { get; set; } = DvmConsoleAudioProcessingMode;
     public bool HighQualityBluetoothAudioEnabled { get; set; }
     public bool AudioInputAgcEnabled { get; set; }
@@ -151,11 +181,11 @@ public sealed class UserSettingsStore
         {
             UserSettings settings = JsonSerializer.Deserialize<UserSettings>(File.ReadAllText(Path), SerializerOptions)
                 ?? new UserSettings();
-            if (settings.SchemaVersion < 2)
-            {
+            int storedSchemaVersion = settings.SchemaVersion;
+            if (storedSchemaVersion < 2)
                 settings.HighQualityBluetoothAudioEnabled = false;
-                settings.SchemaVersion = UserSettings.CurrentSchemaVersion;
-            }
+            NormalizeRxAudioProcessingOptions(settings, storedSchemaVersion < 3);
+            settings.SchemaVersion = UserSettings.CurrentSchemaVersion;
             settings.TransmitEncryptionStates ??= new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
             settings.CallHistoryWindowPlacement = NormalizeWindowPlacement(settings.CallHistoryWindowPlacement);
             settings.GlobalPttKey = NormalizeGlobalPttKey(settings.GlobalPttKey);
@@ -402,6 +432,7 @@ public sealed class UserSettingsStore
         // migration; schema 2 true values are always an explicit selection.
         if (settings.SchemaVersion < 2)
             settings.HighQualityBluetoothAudioEnabled = false;
+        NormalizeRxAudioProcessingOptions(settings, settings.SchemaVersion < 3);
         settings.SchemaVersion = UserSettings.CurrentSchemaVersion;
         settings.DtmfPresets = NormalizeDtmfPresets(settings.DtmfPresets);
         settings.TonePresets = NormalizeTonePresets(settings.TonePresets);
@@ -423,6 +454,72 @@ public sealed class UserSettingsStore
         NormalizeSerialPttSettings(settings);
         settings.TransmitSelectedChannelKeys = NormalizeNames(settings.TransmitSelectedChannelKeys);
         settings.ChannelWidgetPositions = NormalizeWidgetPositions(settings.ChannelWidgetPositions);
+    }
+
+    private static void NormalizeRxAudioProcessingOptions(UserSettings settings, bool migrateLegacyToggle)
+    {
+        Dictionary<string, RxAudioProcessingModeSetting> defaults =
+            RxAudioProcessingModeSetting.CreateDefaults();
+        Dictionary<string, RxAudioProcessingModeSetting> configured =
+            settings.RxAudioProcessingOptions ?? [];
+        var normalized = new Dictionary<string, RxAudioProcessingModeSetting>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (string modeKey in RxAudioProcessingModeSetting.ModeKeys)
+        {
+            RxAudioProcessingModeSetting source = configured
+                .FirstOrDefault(entry => entry.Key.Equals(modeKey, StringComparison.OrdinalIgnoreCase))
+                .Value ?? defaults[modeKey];
+            normalized[modeKey] = NormalizeRxAudioProcessingMode(source);
+        }
+
+        if (migrateLegacyToggle && settings.LegacyRxAudioProcessingEnabled == false)
+        {
+            foreach (RxAudioProcessingModeSetting mode in normalized.Values)
+            {
+                mode.HighPassFilterEnabled = false;
+                mode.PeakingFilterEnabled = false;
+                mode.CompressorEnabled = false;
+            }
+        }
+
+        settings.RxAudioProcessingOptions = normalized;
+        settings.LegacyRxAudioProcessingEnabled = null;
+    }
+
+    private static RxAudioProcessingModeSetting NormalizeRxAudioProcessingMode(
+        RxAudioProcessingModeSetting? setting)
+    {
+        setting ??= new RxAudioProcessingModeSetting();
+        return new RxAudioProcessingModeSetting
+        {
+            HighPassFilterEnabled = setting.HighPassFilterEnabled,
+            HighPassFrequencyHz = NormalizeIncrement(
+                setting.HighPassFrequencyHz, 250, 0, 500, 25),
+            PeakingFilterEnabled = setting.PeakingFilterEnabled,
+            PeakingFrequencyHz = NormalizeIncrement(
+                setting.PeakingFrequencyHz, 2_500, 250, 3_000, 25),
+            PeakingGainDb = NormalizeBounded(setting.PeakingGainDb, 3, -10, 10),
+            CompressorEnabled = setting.CompressorEnabled,
+            CompressorRatio = NormalizeBounded(setting.CompressorRatio, 3, 1, 10),
+            CompressorThresholdDbfs = NormalizeBounded(
+                setting.CompressorThresholdDbfs, -18, -40, 0),
+            CompressorMakeupGainDb = NormalizeBounded(
+                setting.CompressorMakeupGainDb, 3, 0, 10)
+        };
+    }
+
+    private static double NormalizeIncrement(
+        double value,
+        double fallback,
+        double minimum,
+        double maximum,
+        double increment)
+    {
+        double bounded = NormalizeBounded(value, fallback, minimum, maximum);
+        double snapped = minimum + Math.Round(
+            (bounded - minimum) / increment,
+            MidpointRounding.AwayFromZero) * increment;
+        return Math.Clamp(snapped, minimum, maximum);
     }
 
     public void Reset()
@@ -492,7 +589,7 @@ public sealed class UserSettingsStore
 
         if (!string.Equals(settings.AudioInputDeviceId, "default", StringComparison.OrdinalIgnoreCase) ||
             !string.Equals(settings.AudioOutputDeviceId, "default", StringComparison.OrdinalIgnoreCase) ||
-            !settings.RxAudioProcessingEnabled ||
+            HasCustomRxAudioProcessingOptions(settings.RxAudioProcessingOptions) ||
             !string.Equals(settings.AudioProcessingMode, UserSettings.DvmConsoleAudioProcessingMode, StringComparison.Ordinal) ||
             settings.HighQualityBluetoothAudioEnabled ||
             settings.AudioInputAgcEnabled || settings.AudioInputAgcTargetDbfs != -25.0 ||
@@ -575,7 +672,10 @@ public sealed class UserSettingsStore
         {
             target.AudioInputDeviceId = source.AudioInputDeviceId;
             target.AudioOutputDeviceId = source.AudioOutputDeviceId;
-            target.RxAudioProcessingEnabled = source.RxAudioProcessingEnabled;
+            target.RxAudioProcessingOptions = source.RxAudioProcessingOptions.ToDictionary(
+                entry => entry.Key,
+                entry => NormalizeRxAudioProcessingMode(entry.Value),
+                StringComparer.OrdinalIgnoreCase);
             target.AudioProcessingMode = source.AudioProcessingMode;
             target.HighQualityBluetoothAudioEnabled = source.HighQualityBluetoothAudioEnabled;
             target.AudioInputAgcEnabled = source.AudioInputAgcEnabled;
@@ -639,6 +739,38 @@ public sealed class UserSettingsStore
             target.TransmitEncryptionStates = new Dictionary<string, bool>(source.TransmitEncryptionStates, StringComparer.OrdinalIgnoreCase);
         }
     }
+
+    private static bool HasCustomRxAudioProcessingOptions(
+        IReadOnlyDictionary<string, RxAudioProcessingModeSetting>? configured)
+    {
+        Dictionary<string, RxAudioProcessingModeSetting> defaults =
+            RxAudioProcessingModeSetting.CreateDefaults();
+        if (configured is null)
+            return false;
+
+        foreach (string modeKey in RxAudioProcessingModeSetting.ModeKeys)
+        {
+            RxAudioProcessingModeSetting? value = configured
+                .FirstOrDefault(entry => entry.Key.Equals(modeKey, StringComparison.OrdinalIgnoreCase))
+                .Value;
+            if (value is null || !RxAudioProcessingModesEqual(value, defaults[modeKey]))
+                return true;
+        }
+        return false;
+    }
+
+    private static bool RxAudioProcessingModesEqual(
+        RxAudioProcessingModeSetting left,
+        RxAudioProcessingModeSetting right)
+        => left.HighPassFilterEnabled == right.HighPassFilterEnabled &&
+           left.HighPassFrequencyHz == right.HighPassFrequencyHz &&
+           left.PeakingFilterEnabled == right.PeakingFilterEnabled &&
+           left.PeakingFrequencyHz == right.PeakingFrequencyHz &&
+           left.PeakingGainDb == right.PeakingGainDb &&
+           left.CompressorEnabled == right.CompressorEnabled &&
+           left.CompressorRatio == right.CompressorRatio &&
+           left.CompressorThresholdDbfs == right.CompressorThresholdDbfs &&
+           left.CompressorMakeupGainDb == right.CompressorMakeupGainDb;
 
     private static Dictionary<string, WidgetPositionSetting> NormalizeWidgetPositions(
         Dictionary<string, WidgetPositionSetting>? positions)

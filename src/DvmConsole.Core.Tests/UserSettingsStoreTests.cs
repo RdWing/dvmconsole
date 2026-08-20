@@ -39,7 +39,19 @@ public sealed class UserSettingsStoreTests
             Assert.Null(settings.LastSelectedChannelKey);
             Assert.True(settings.ConnectionChimes);
             Assert.False(settings.HighQualityBluetoothAudioEnabled);
-            Assert.True(settings.RxAudioProcessingEnabled);
+            Assert.Equal(4, settings.RxAudioProcessingOptions.Count);
+            Assert.All(settings.RxAudioProcessingOptions.Values, option =>
+            {
+                Assert.True(option.HighPassFilterEnabled);
+                Assert.Equal(250, option.HighPassFrequencyHz);
+                Assert.True(option.PeakingFilterEnabled);
+                Assert.Equal(2_500, option.PeakingFrequencyHz);
+                Assert.Equal(3, option.PeakingGainDb);
+                Assert.False(option.CompressorEnabled);
+                Assert.Equal(3, option.CompressorRatio);
+                Assert.Equal(-18, option.CompressorThresholdDbfs);
+                Assert.Equal(3, option.CompressorMakeupGainDb);
+            });
             Assert.Equal(14, settings.UiFontSize);
             Assert.Equal(1.0, settings.UiScale);
         }
@@ -100,6 +112,76 @@ public sealed class UserSettingsStoreTests
 
             Assert.Equal(UserSettings.CurrentSchemaVersion, settings.SchemaVersion);
             Assert.False(settings.HighQualityBluetoothAudioEnabled);
+        }
+        finally
+        {
+            Cleanup(path);
+        }
+    }
+
+    [Fact]
+    public void LegacyDisabledRxProcessingMigratesToDisabledOptionalStages()
+    {
+        string path = CreatePath();
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            File.WriteAllText(path, """
+                {
+                  "SchemaVersion": 2,
+                  "RxAudioProcessingEnabled": false
+                }
+                """);
+
+            UserSettings settings = new UserSettingsStore(path).Load();
+
+            Assert.Equal(UserSettings.CurrentSchemaVersion, settings.SchemaVersion);
+            Assert.Null(settings.LegacyRxAudioProcessingEnabled);
+            Assert.All(settings.RxAudioProcessingOptions.Values, option =>
+            {
+                Assert.False(option.HighPassFilterEnabled);
+                Assert.False(option.PeakingFilterEnabled);
+                Assert.False(option.CompressorEnabled);
+            });
+        }
+        finally
+        {
+            Cleanup(path);
+        }
+    }
+
+    [Fact]
+    public void NormalizesRxProcessingRangesAndFrequencySteps()
+    {
+        string path = CreatePath();
+        try
+        {
+            var store = new UserSettingsStore(path);
+            store.Save(new UserSettings
+            {
+                RxAudioProcessingOptions = new Dictionary<string, RxAudioProcessingModeSetting>
+                {
+                    [RxAudioProcessingModeSetting.DmrMode] = new()
+                    {
+                        HighPassFrequencyHz = 288,
+                        PeakingFrequencyHz = 263,
+                        PeakingGainDb = 12,
+                        CompressorRatio = 0.5,
+                        CompressorThresholdDbfs = -50,
+                        CompressorMakeupGainDb = 12
+                    }
+                }
+            });
+
+            RxAudioProcessingModeSetting dmr = store.Load().RxAudioProcessingOptions[
+                RxAudioProcessingModeSetting.DmrMode];
+
+            Assert.Equal(300, dmr.HighPassFrequencyHz);
+            Assert.Equal(275, dmr.PeakingFrequencyHz);
+            Assert.Equal(10, dmr.PeakingGainDb);
+            Assert.Equal(1, dmr.CompressorRatio);
+            Assert.Equal(-40, dmr.CompressorThresholdDbfs);
+            Assert.Equal(10, dmr.CompressorMakeupGainDb);
         }
         finally
         {
@@ -181,7 +263,20 @@ public sealed class UserSettingsStoreTests
                 LastSelectedChannelKey = "System 1\u001FDispatch",
                 AudioInputDeviceId = " microphone-1 ",
                 AudioOutputDeviceId = " speaker-1 ",
-                RxAudioProcessingEnabled = false,
+                RxAudioProcessingOptions = new Dictionary<string, RxAudioProcessingModeSetting>
+                {
+                    [RxAudioProcessingModeSetting.DmrMode] = new()
+                    {
+                        HighPassFilterEnabled = false,
+                        HighPassFrequencyHz = 300,
+                        PeakingFrequencyHz = 2_000,
+                        PeakingGainDb = -2.5,
+                        CompressorEnabled = true,
+                        CompressorRatio = 4,
+                        CompressorThresholdDbfs = -24,
+                        CompressorMakeupGainDb = 4.5
+                    }
+                },
                 AudioProcessingMode = UserSettings.AppleVoiceProcessingMode,
                 HighQualityBluetoothAudioEnabled = false,
                 AudioInputAgcEnabled = true,
@@ -305,7 +400,17 @@ public sealed class UserSettingsStoreTests
             Assert.Equal("System 1\u001FDispatch", loaded.LastSelectedChannelKey);
             Assert.Equal("microphone-1", loaded.AudioInputDeviceId);
             Assert.Equal("speaker-1", loaded.AudioOutputDeviceId);
-            Assert.False(loaded.RxAudioProcessingEnabled);
+            RxAudioProcessingModeSetting dmrRx = loaded.RxAudioProcessingOptions[
+                RxAudioProcessingModeSetting.DmrMode];
+            Assert.False(dmrRx.HighPassFilterEnabled);
+            Assert.Equal(300, dmrRx.HighPassFrequencyHz);
+            Assert.True(dmrRx.PeakingFilterEnabled);
+            Assert.Equal(2_000, dmrRx.PeakingFrequencyHz);
+            Assert.Equal(-2.5, dmrRx.PeakingGainDb);
+            Assert.True(dmrRx.CompressorEnabled);
+            Assert.Equal(4, dmrRx.CompressorRatio);
+            Assert.Equal(-24, dmrRx.CompressorThresholdDbfs);
+            Assert.Equal(4.5, dmrRx.CompressorMakeupGainDb);
             Assert.Equal(UserSettings.AppleVoiceProcessingMode, loaded.AudioProcessingMode);
             Assert.False(loaded.HighQualityBluetoothAudioEnabled);
             Assert.True(loaded.AudioInputAgcEnabled);
