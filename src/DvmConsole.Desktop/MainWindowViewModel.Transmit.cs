@@ -43,8 +43,8 @@ public sealed partial class MainWindowViewModel
 
             // Bring capture, processing, and every selected call fully online.
             // When a permit tone is enabled, discard microphone frames until
-            // the first real callback proves the selected capture path is
-            // ready and the local readiness indication has completed.
+            // enough real callbacks prove the selected capture path is ready
+            // and the local readiness indication has completed.
             transmitCoordinator.SetMicrophoneAudioSuppressed(suppressMicrophoneForPermitTone);
             await Task.Run(() => transmitCoordinator.StartAsync(targets)).ConfigureAwait(false);
             if (suppressMicrophoneForPermitTone)
@@ -111,7 +111,9 @@ public sealed partial class MainWindowViewModel
             {
                 await PlayTalkPermitToneAsync(
                     reportSuccess: false,
-                    requiredForTransmit: true).ConfigureAwait(false);
+                    requiredForTransmit: true,
+                    microphoneStartedCold: transmitCoordinator.ActiveMicrophoneStartedCold,
+                    microphoneIsBluetooth: transmitCoordinator.ActiveMicrophoneIsBluetooth).ConfigureAwait(false);
                 transmitCoordinator.SetMicrophoneAudioSuppressed(false);
             }
         }
@@ -228,11 +230,17 @@ public sealed partial class MainWindowViewModel
 
     private async Task PlayTalkPermitToneAsync(
         bool reportSuccess,
-        bool requiredForTransmit = false)
+        bool requiredForTransmit = false,
+        bool microphoneStartedCold = false,
+        bool? microphoneIsBluetooth = false)
     {
         try
         {
-            LocalTonePlaybackResult result = await localTonePlayer.PlayAsync(LocalToneCues.TalkPermit).ConfigureAwait(false);
+            LocalTonePlaybackResult result = requiredForTransmit
+                ? await localTonePlayer.PlayTalkPermitAsync(
+                    microphoneStartedCold,
+                    microphoneIsBluetooth).ConfigureAwait(false)
+                : await localTonePlayer.PlayAsync(LocalToneCues.TalkPermit).ConfigureAwait(false);
             string drainText = result.QueuedSamples is int queued &&
                                result.ConsumedSamples is int consumed
                 ? $" queued {queued} / consumed {consumed} samples"

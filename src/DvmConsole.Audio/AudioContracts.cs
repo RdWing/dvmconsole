@@ -34,7 +34,8 @@ public sealed record AudioDeviceInfo(
     string Id,
     string Name,
     AudioDirection Direction,
-    bool IsDefault);
+    bool IsDefault,
+    bool? IsBluetooth = null);
 
 public sealed record PcmAudioFormat
 {

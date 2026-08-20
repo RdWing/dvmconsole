@@ -126,14 +126,127 @@ public sealed class LocalTonePlayerTests
     }
 
     [Fact]
+    public async Task ColdStartCueRetriesWhenOutputChangesDuringExtendedWarmup()
+    {
+        var first = new FakeAudioBackend();
+        var recovered = new FakeAudioBackend();
+        var backends = new Queue<FakeAudioBackend>([first, recovered]);
+        var routeResolver = new SequenceOutputRouteResolver(
+            Output("old", "Headset stereo"),
+            Output("duplex", "Headset duplex"),
+            Output("duplex", "Headset duplex"),
+            Output("duplex", "Headset duplex"));
+        var delays = new List<TimeSpan>();
+        await using var player = new LocalTonePlayer(
+            () => backends.Dequeue(),
+            () => "default",
+            routeResolver,
+            (delay, _) =>
+            {
+                delays.Add(delay);
+                return Task.CompletedTask;
+            });
+
+        LocalTonePlaybackResult result = await player.PlayAsync(LocalToneCues.ColdStartTalkPermit);
+
+        Assert.Equal(2, result.Attempts);
+        Assert.Equal("duplex", result.Output.Id);
+        Assert.Single(first.Playback.Frames);
+        Assert.Equal(2, recovered.Playback.Frames.Count);
+        Assert.Contains(LocalToneCues.ColdStartTalkPermit.OutputPostDrainDuration, delays);
+        Assert.True(first.Playback.IsDisposed);
+        Assert.True(recovered.Playback.IsDisposed);
+    }
+
+    [Fact]
+    public async Task KnownNonBluetoothColdRouteKeepsStandardPermitTiming()
+    {
+        var backend = new FakeAudioBackend { OutputIsBluetooth = false };
+        var delays = new List<TimeSpan>();
+        await using var player = new LocalTonePlayer(
+            () => backend,
+            () => "default",
+            new AudioOutputRouteResolver((_, _) => Task.CompletedTask),
+            (delay, _) =>
+            {
+                delays.Add(delay);
+                return Task.CompletedTask;
+            });
+
+        LocalTonePlaybackResult result = await player.PlayTalkPermitAsync(
+            microphoneStartedCold: true,
+            microphoneIsBluetooth: false);
+
+        Assert.Equal(3680, result.QueuedSamples);
+        Assert.Equal(2400, backend.Playback.Frames[0].Length);
+        Assert.Equal([LocalToneCues.TalkPermit.OutputPostDrainDuration], delays);
+    }
+
+    [Fact]
+    public async Task BluetoothOutputUsesExtendedPermitTimingForColdMicrophone()
+    {
+        var backend = new FakeAudioBackend { OutputIsBluetooth = true };
+        var delays = new List<TimeSpan>();
+        await using var player = new LocalTonePlayer(
+            () => backend,
+            () => "default",
+            new AudioOutputRouteResolver((_, _) => Task.CompletedTask),
+            (delay, _) =>
+            {
+                delays.Add(delay);
+                return Task.CompletedTask;
+            });
+
+        LocalTonePlaybackResult result = await player.PlayTalkPermitAsync(
+            microphoneStartedCold: true,
+            microphoneIsBluetooth: false);
+
+        Assert.Equal(10880, result.QueuedSamples);
+        Assert.Equal(8000, backend.Playback.Frames[0].Length);
+        Assert.Equal([LocalToneCues.ColdStartTalkPermit.OutputPostDrainDuration], delays);
+    }
+
+    [Theory]
+    [InlineData(false, null, null, false)]
+    [InlineData(true, false, false, false)]
+    [InlineData(true, true, false, true)]
+    [InlineData(true, false, true, true)]
+    [InlineData(true, null, false, true)]
+    [InlineData(true, false, null, true)]
+    public void SelectsExtendedPermitOnlyForColdBluetoothOrUnknownRoutes(
+        bool microphoneStartedCold,
+        bool? microphoneIsBluetooth,
+        bool? outputIsBluetooth,
+        bool expectedExtended)
+    {
+        LocalTonePlaybackRequest selected = LocalToneCues.SelectTalkPermit(
+            microphoneStartedCold,
+            microphoneIsBluetooth,
+            outputIsBluetooth);
+
+        Assert.Same(
+            expectedExtended ? LocalToneCues.ColdStartTalkPermit : LocalToneCues.TalkPermit,
+            selected);
+    }
+
+    [Fact]
     public void CueDefinitionsDeclareTheirOutputPreparationPolicy()
     {
         Assert.True(LocalToneCues.TalkPermit.OutputWarmupDuration > TimeSpan.Zero);
         Assert.True(LocalToneCues.TalkPermit.OutputPostDrainDuration > TimeSpan.Zero);
         Assert.True(LocalToneCues.TalkPermit.MaximumPlaybackAttempts > 1);
+        Assert.True(LocalToneCues.ColdStartTalkPermit.OutputWarmupDuration >
+            LocalToneCues.TalkPermit.OutputWarmupDuration);
+        Assert.True(LocalToneCues.ColdStartTalkPermit.ToneDuration >
+            LocalToneCues.TalkPermit.ToneDuration);
+        Assert.True(LocalToneCues.ColdStartTalkPermit.OutputPostDrainDuration >
+            LocalToneCues.TalkPermit.OutputPostDrainDuration);
         Assert.Equal(TimeSpan.Zero, LocalToneCues.ConnectionEstablished.OutputWarmupDuration);
         Assert.Equal(TimeSpan.Zero, LocalToneCues.ConnectionLost.OutputWarmupDuration);
     }
+
+    private static AudioDeviceInfo Output(string id, string name)
+        => new(id, name, AudioDirection.Output, true);
 
     private sealed class FakeAudioBackend : IAudioBackend
     {
@@ -141,6 +254,7 @@ public sealed class LocalTonePlayerTests
         public string? LastOutputDeviceId { get; private set; }
         public int OpenPlaybackCount { get; private set; }
         public int MissingAlternateEnumerations { get; init; }
+        public bool? OutputIsBluetooth { get; init; } = false;
         public bool FailOpenPlayback { get; init; }
         public int OutputEnumerationCount { get; private set; }
         public bool IsDisposed { get; private set; }
@@ -149,15 +263,15 @@ public sealed class LocalTonePlayerTests
         public IReadOnlyList<AudioDeviceInfo> EnumerateDevices(AudioDirection direction)
         {
             if (direction != AudioDirection.Output)
-                return [new AudioDeviceInfo("input", "Fake input", direction, true)];
+                return [new AudioDeviceInfo("input", "Fake input", direction, true, false)];
 
             OutputEnumerationCount++;
             if (OutputEnumerationCount <= MissingAlternateEnumerations)
-                return [new AudioDeviceInfo("output", "Fake output", direction, true)];
+                return [new AudioDeviceInfo("output", "Fake output", direction, true, OutputIsBluetooth)];
             return
             [
-                new AudioDeviceInfo("output", "Fake output", direction, true),
-                new AudioDeviceInfo("alternate", "Fake alternate output", direction, false)
+                new AudioDeviceInfo("output", "Fake output", direction, true, OutputIsBluetooth),
+                new AudioDeviceInfo("alternate", "Fake alternate output", direction, false, OutputIsBluetooth)
             ];
         }
 
@@ -200,6 +314,28 @@ public sealed class LocalTonePlayerTests
 
         public void Dispose()
         {
+        }
+    }
+
+    private sealed class SequenceOutputRouteResolver : IAudioOutputRouteResolver
+    {
+        private readonly Queue<AudioDeviceInfo> outputs;
+
+        public SequenceOutputRouteResolver(params AudioDeviceInfo[] outputs)
+        {
+            this.outputs = new Queue<AudioDeviceInfo>(outputs);
+        }
+
+        public Task<AudioDeviceInfo> ResolveAsync(
+            IAudioBackend backend,
+            string? requestedDeviceId,
+            AudioOutputRoutePolicy policy,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (outputs.Count == 0)
+                throw new InvalidOperationException("No test output remains.");
+            return Task.FromResult(outputs.Dequeue());
         }
     }
 

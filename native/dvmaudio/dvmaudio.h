@@ -39,6 +39,11 @@ int32_t dvm_audio_get_device(
     uint32_t name_capacity,
     int32_t *is_default);
 
+// Returns 1 for a Bluetooth or Bluetooth LE CoreAudio endpoint, 0 for a
+// known non-Bluetooth endpoint, and -1 when CoreAudio cannot currently
+// classify the device (for example while a route is changing).
+int32_t dvm_audio_device_is_bluetooth(uint64_t device_id);
+
 // Attempts the macOS 26 full-bandwidth Bluetooth recording mode for the
 // system-default Bluetooth input/output pair. A zero result means the route is
 // ineligible or unsupported and callers should continue with normal CoreAudio.

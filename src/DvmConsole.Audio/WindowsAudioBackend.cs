@@ -27,18 +27,19 @@ public sealed class WindowsAudioBackend : IAudioBackend, IDefaultAudioDeviceIden
                 DefaultDeviceId,
                 direction == AudioDirection.Input ? "Windows default input" : "Windows default output",
                 direction,
-                true)
+                true,
+                false)
         };
 
         if (direction == AudioDirection.Input)
         {
             for (int index = 0; index < WaveInEvent.DeviceCount; index++)
-                devices.Add(new AudioDeviceInfo(index.ToString(), WaveInEvent.GetCapabilities(index).ProductName, direction, false));
+                devices.Add(new AudioDeviceInfo(index.ToString(), WaveInEvent.GetCapabilities(index).ProductName, direction, false, false));
         }
         else
         {
             for (int index = 0; index < GetWaveOutDeviceCount(); index++)
-                devices.Add(new AudioDeviceInfo(index.ToString(), GetWaveOutDeviceName(index), direction, false));
+                devices.Add(new AudioDeviceInfo(index.ToString(), GetWaveOutDeviceName(index), direction, false, false));
         }
 
         return devices;

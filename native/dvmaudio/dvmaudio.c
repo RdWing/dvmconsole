@@ -207,6 +207,30 @@ int32_t dvm_audio_get_device(
     return -4;
 }
 
+int32_t dvm_audio_device_is_bluetooth(uint64_t device_id)
+{
+    if (device_id > UINT32_MAX)
+        return -1;
+
+    AudioObjectPropertyAddress address = {
+        kAudioDevicePropertyTransportType,
+        kAudioObjectPropertyScopeGlobal,
+        kAudioObjectPropertyElementMain};
+    UInt32 transport = 0;
+    UInt32 size = sizeof(transport);
+    OSStatus status = AudioObjectGetPropertyData(
+        (AudioDeviceID)device_id,
+        &address,
+        0,
+        NULL,
+        &size,
+        &transport);
+    if (status != noErr)
+        return -1;
+    return transport == kAudioDeviceTransportTypeBluetooth ||
+           transport == kAudioDeviceTransportTypeBluetoothLE;
+}
+
 static uint32_t ring_push(DvmAudioStream *stream, const int16_t *samples, uint32_t count)
 {
     uint32_t write = atomic_load_explicit(&stream->write_index, memory_order_relaxed);
