@@ -192,7 +192,9 @@ than for every packet.
 ### Per-connection RX network jitter buffer
 
 Each FNE connection has independent P25, DMR, and NXDN jitter settings. The
-buffer holds complete network packets before decoding. If a packet arrives out
+compact selectors appear beside that connection's Connect, Disconnect, and
+Restart controls. The buffer holds complete network packets before decoding.
+If a packet arrives out
 of order but before its playout deadline, the console restores it to the correct
 place in the stream. If the deadline expires first, playback continues and the
 decoder applies its normal loss concealment; one missing packet cannot stall the
@@ -211,8 +213,8 @@ device can add a small route-dependent amount that the application cannot
 measure exactly. Turning the jitter buffer off minimizes latency but removes
 the packet reordering opportunity.
 
-Choose **Apply to this connection** to save that FNE's settings and safely
-recreate active listening and patch-source decode sessions.
+Changing a selection saves that FNE's settings immediately and safely recreates
+active listening and patch-source decode sessions.
 
 Debug Logs report a packet successfully restored to playout order as a jitter
 buffer reorder event. A separate warning reports when an expected packet misses

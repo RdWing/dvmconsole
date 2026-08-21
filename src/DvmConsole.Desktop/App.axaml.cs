@@ -59,6 +59,8 @@ public sealed class App : Application
                 await Task.Delay(75);
                 if (section == OperatorToolSection.History && !window.IsHistoryViewportHookAttached)
                     throw new InvalidOperationException("The deferred History list did not initialize its viewport handling.");
+                if (section == OperatorToolSection.EncryptionKeys && window.IsPendingSectionNavigation)
+                    throw new InvalidOperationException("Encryption Key Status did not reveal the channel key-status section.");
                 window.Close();
             }
 

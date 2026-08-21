@@ -111,7 +111,7 @@ internal static class ReceiveDiagnosticsText
                $"{SamplesToMilliseconds(playback.GapFilledSamples):0} ms, " +
                $"late concealment skipped for live audio " +
                $"{SamplesToMilliseconds(playback.SuppressedLiveConcealmentSamples):0} ms, " +
-               $"cold-transition discarded " +
+               $"output-policy discarded " +
                $"{SamplesToMilliseconds(playback.TransitionDiscardedSamples):0} ms, " +
                $"low-buffer recoveries {playback.LowBufferRecoveries}, " +
                $"peak queued {FramesToMilliseconds(playback.PeakBufferedFrames)} ms, " +

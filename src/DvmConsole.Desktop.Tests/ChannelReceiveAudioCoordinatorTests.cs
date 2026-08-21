@@ -118,6 +118,39 @@ public sealed class ChannelReceiveAudioCoordinatorTests
     }
 
     [Fact]
+    public async Task OperatorMuteKeepsTarObservationActiveAndIsIndependentFromTransitionGating()
+    {
+        var backend = new FakeAudioBackend();
+        int observedSamples = 0;
+        await using var coordinator = new ChannelReceiveAudioCoordinator(
+            () => backend,
+            () => new FakeVocoderBackend(),
+            samplesObserver: (_, _, _, samples) => observedSamples += samples.Length);
+        var channel = new ChannelViewModel(new ChannelConfiguration
+        {
+            Name = "Dispatch",
+            System = "System 1",
+            Tgid = "100",
+            Mode = "analog"
+        });
+        await coordinator.StartAsync(channel);
+
+        coordinator.SetOutputMuted(muted: true);
+        await coordinator.ProcessAsync(channel, CreateAnalogTraffic(100));
+        coordinator.SetLivePlaybackDiscarded(discarded: true);
+        coordinator.SetOutputMuted(muted: false);
+        await coordinator.ProcessAsync(channel, CreateAnalogTraffic(100, packetSequence: 2));
+        await Task.Delay(40);
+
+        Assert.Equal(AnalogVoicePacketCodec.SamplesPerPacket * 2, observedSamples);
+        Assert.Empty(backend.Playback.Frames);
+
+        coordinator.SetLivePlaybackDiscarded(discarded: false);
+        await coordinator.ProcessAsync(channel, CreateAnalogTraffic(100, packetSequence: 3));
+        await WaitForAsync(() => backend.Playback.Frames.Count > 0);
+    }
+
+    [Fact]
     public async Task RecordingDecodeCanRemainObservableWithoutLivePlayback()
     {
         var backend = new FakeAudioBackend();

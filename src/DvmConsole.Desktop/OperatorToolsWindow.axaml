@@ -447,7 +447,7 @@
       </TabItem>
 
       <TabItem Header="Connections">
-        <ScrollViewer Margin="10">
+        <ScrollViewer x:Name="ConnectionsScrollViewer" Margin="10">
           <StackPanel Spacing="12" Margin="0,0,0,20">
             <TextBlock Classes="heading" Text="FNE Connections and Key Status" />
             <ItemsControl ItemsSource="{Binding Systems}">
@@ -455,14 +455,40 @@
                 <DataTemplate x:DataType="local:SystemViewModel">
                   <Border Classes="panel">
                     <StackPanel Spacing="6">
-                      <Grid ColumnDefinitions="*,Auto,Auto,Auto" ColumnSpacing="8">
+                      <Grid ColumnDefinitions="*,Auto,Auto,Auto,Auto" ColumnSpacing="8">
                         <StackPanel>
                           <TextBlock FontWeight="SemiBold" Text="{Binding Name}" />
                           <TextBlock Classes="caption" Text="{Binding Endpoint}" />
                         </StackPanel>
-                        <Button Grid.Column="1" Content="Connect" Tag="{Binding}" Click="HandleConnectSystemClick" />
-                        <Button Grid.Column="2" Content="Disconnect" Tag="{Binding}" Click="HandleDisconnectSystemClick" />
-                        <Button Grid.Column="3" Content="Restart" Tag="{Binding}" Click="HandleRestartSystemClick" />
+                        <StackPanel Grid.Column="1" Spacing="2">
+                          <TextBlock Classes="caption" FontWeight="SemiBold" Text="RX jitter" />
+                          <ItemsControl ItemsSource="{Binding RxJitterBufferModes}"
+                                        ToolTip.Tip="Packet-aligned receive delay. Changes save and apply immediately.">
+                            <ItemsControl.ItemsPanel>
+                              <ItemsPanelTemplate><StackPanel Orientation="Horizontal" Spacing="4" /></ItemsPanelTemplate>
+                            </ItemsControl.ItemsPanel>
+                            <ItemsControl.ItemTemplate>
+                              <DataTemplate x:DataType="local:RxJitterBufferModeViewModel">
+                                <StackPanel Width="124" Spacing="1">
+                                  <TextBlock Classes="caption" Text="{Binding ModeName}" />
+                                  <ComboBox MinHeight="0"
+                                            Padding="6,3"
+                                            ItemsSource="{Binding Options}"
+                                            SelectedItem="{Binding SelectedOption, Mode=TwoWay}">
+                                    <ComboBox.ItemTemplate>
+                                      <DataTemplate x:DataType="local:RxJitterBufferOption">
+                                        <TextBlock Text="{Binding Label}" />
+                                      </DataTemplate>
+                                    </ComboBox.ItemTemplate>
+                                  </ComboBox>
+                                </StackPanel>
+                              </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                          </ItemsControl>
+                        </StackPanel>
+                        <Button Grid.Column="2" Content="Connect" Tag="{Binding}" Click="HandleConnectSystemClick" />
+                        <Button Grid.Column="3" Content="Disconnect" Tag="{Binding}" Click="HandleDisconnectSystemClick" />
+                        <Button Grid.Column="4" Content="Restart" Tag="{Binding}" Click="HandleRestartSystemClick" />
                       </Grid>
 
                       <TextBlock Text="{Binding ConnectionStatus}" />
@@ -470,37 +496,6 @@
                       <TextBlock Classes="caption" Text="{Binding StreamTrafficText}" TextWrapping="Wrap" />
                       <TextBlock Classes="caption" Text="{Binding ConnectionHealthText}" TextWrapping="Wrap" />
 
-                      <Separator />
-                      <TextBlock FontWeight="SemiBold" Text="RX network jitter buffer" />
-                      <TextBlock Classes="caption"
-                                 Text="Per-connection delays are packet-aligned. They restore out-of-order packets before decoding when those packets arrive before playout."
-                                 TextWrapping="Wrap" />
-                      <ItemsControl ItemsSource="{Binding RxJitterBufferModes}">
-                        <ItemsControl.ItemsPanel>
-                          <ItemsPanelTemplate><WrapPanel Orientation="Horizontal" /></ItemsPanelTemplate>
-                        </ItemsControl.ItemsPanel>
-                        <ItemsControl.ItemTemplate>
-                          <DataTemplate x:DataType="local:RxJitterBufferModeViewModel">
-                            <StackPanel Width="190" Spacing="2" Margin="0,0,10,2">
-                              <TextBlock Text="{Binding ModeName}" FontWeight="SemiBold" />
-                              <ComboBox ItemsSource="{Binding Options}" SelectedItem="{Binding SelectedOption, Mode=TwoWay}">
-                                <ComboBox.ItemTemplate>
-                                  <DataTemplate x:DataType="local:RxJitterBufferOption">
-                                    <TextBlock Text="{Binding Label}" />
-                                  </DataTemplate>
-                                </ComboBox.ItemTemplate>
-                              </ComboBox>
-                            </StackPanel>
-                          </DataTemplate>
-                        </ItemsControl.ItemTemplate>
-                      </ItemsControl>
-                      <StackPanel Orientation="Horizontal" Spacing="8">
-                        <Button Content="Apply to this connection"
-                                Command="{Binding ApplyJitterBufferCommand}"
-                                MinHeight="0"
-                                Padding="8,4" />
-                        <TextBlock Classes="caption" Text="{Binding JitterBufferSummaryText}" VerticalAlignment="Center" />
-                      </StackPanel>
                     </StackPanel>
                   </Border>
                 </DataTemplate>

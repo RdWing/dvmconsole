@@ -69,7 +69,9 @@ its edge. Double-click the Activity heading to open Event History in Console
 Settings. Double-click a call with a TAR recording to show that file selected
 in Finder or File Explorer.
 
-The toolbar provides the three original alert patterns and a **TONES** button that opens Console Settings directly to the Tones page.
+The toolbar provides the three original alert patterns and a **TONES** button
+that opens Console Settings directly to the Tones page. The speaker button next
+to Warm mic mutes live RX output while leaving decoding and TAR recording active.
 
 When DVM Console closes normally, it remembers the main window's last normal
 size and position for the next launch. Closing while maximized or minimized

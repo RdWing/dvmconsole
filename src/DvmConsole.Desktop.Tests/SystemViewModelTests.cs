@@ -177,6 +177,33 @@ public sealed class SystemViewModelTests
                 section is not (OperatorToolSection.Clock or OperatorToolSection.EncryptionKeys)));
     }
 
+    [Fact]
+    public async Task ToolbarOutputMuteIsSessionScopedAndDescribesTarContinuation()
+    {
+        string codeplugPath = Path.Combine(AppContext.BaseDirectory, "TestData", "multiple-systems.yml");
+        string settingsPath = CreateSettingsPath();
+        try
+        {
+            await using MainWindowViewModel viewModel = MainWindowViewModel.Load(
+                codeplugPath,
+                new UserSettingsStore(settingsPath));
+
+            Assert.False(viewModel.OutputMuted);
+            Assert.Equal("🔊", viewModel.OutputMuteGlyph);
+
+            viewModel.OutputMuted = true;
+
+            Assert.True(viewModel.OutputMuted);
+            Assert.Equal("🔇", viewModel.OutputMuteGlyph);
+            Assert.Contains("TAR continues", viewModel.OutputMuteToolTip);
+            Assert.Contains("TAR recording continue", viewModel.AudioStatusText);
+        }
+        finally
+        {
+            CleanupSettingsPath(settingsPath);
+        }
+    }
+
     [Theory]
     [InlineData("duplex", true, "duplex", false, true)]
     [InlineData("input-default", true, "output-default", true, true)]
@@ -1403,7 +1430,7 @@ public sealed class SystemViewModelTests
     }
 
     [Fact]
-    public async Task RestoresAndPersistsRxJitterBufferIndependentlyPerConnection()
+    public async Task RestoresAndImmediatelyPersistsRxJitterBufferIndependentlyPerConnection()
     {
         string codeplugPath = Path.Combine(AppContext.BaseDirectory, "TestData", "multiple-systems.yml");
         string settingsPath = CreateSettingsPath();
@@ -1436,7 +1463,6 @@ public sealed class SystemViewModelTests
                 beta.RxJitterBufferModes,
                 mode => mode.Mode == RxJitterBufferMode.P25);
             betaP25.SelectedOption = Assert.Single(betaP25.Options, option => option.Milliseconds == 540);
-            await viewModel.ApplyRxJitterBufferAsync(beta);
 
             UserSettings persisted = store.Load();
             Assert.Equal(360, persisted.RxJitterBuffersBySystem["Alpha"].P25Milliseconds);

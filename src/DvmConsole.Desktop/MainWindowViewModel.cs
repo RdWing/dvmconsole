@@ -100,8 +100,10 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
     private readonly Dictionary<string, FneConnectionState> lastConnectionStates = new(StringComparer.OrdinalIgnoreCase);
     private readonly IReadOnlyDictionary<SystemViewModel, IReadOnlyDictionary<(FneTrafficProtocol Protocol, uint DestinationId), ChannelViewModel[]>> trafficRoutes;
     private readonly ConnectionChimeTracker connectionChimeTracker = new();
+    private readonly P25KeyRequestCoordinator p25KeyRequestCoordinator = new();
     private ChannelViewModel[] suspendedAudioChannels = [];
     private bool suspendedAudioKeptActive;
+    private bool outputMuted;
     private bool activityCurrentZoneOnly;
     private bool activityReceiveEnabledOnly = true;
     private PatchGroupEditorViewModel? activeMultiSelectGroup;
@@ -501,7 +503,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
 
         foreach (SystemViewModel system in Systems)
         {
-            system.ConfigureJitterBufferApply(ApplyRxJitterBufferAsync);
+            system.JitterBufferChanged += HandleSystemJitterBufferChanged;
             system.PropertyChanged += HandleSystemPropertyChanged;
             system.StatusChanged += (_, status) => HandleSystemStatus(system, status);
             system.LogReceived += HandleSystemLog;
@@ -1065,6 +1067,32 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
         => KeepTransmitMicrophoneWarm
             ? "Keep transmit microphone warm: On (click to turn off)"
             : "Keep transmit microphone warm: Off (click to turn on)";
+
+    public bool OutputMuted
+    {
+        get => outputMuted;
+        set
+        {
+            if (outputMuted == value)
+                return;
+
+            audioCoordinator.SetOutputMuted(value);
+            outputMuted = value;
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(OutputMuted)));
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(OutputMuteGlyph)));
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(OutputMuteToolTip)));
+            AudioStatusText = value
+                ? "Live RX output is muted; decoding, call state, and TAR recording continue."
+                : "Live RX output is restored.";
+        }
+    }
+
+    public string OutputMuteGlyph => OutputMuted ? "🔇" : "🔊";
+
+    public string OutputMuteToolTip
+        => OutputMuted
+            ? "Live RX output muted; TAR continues (click to restore output)"
+            : "Mute live RX output to the selected output device; TAR continues";
 
     public IReadOnlyList<string> AudioProcessingModeOptions
         => IsAppleVoiceProcessingPlatformAvailable && IsAppleVoiceProcessingRouteCompatible
@@ -2875,8 +2903,10 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
         warmMicrophoneReconciler.Reconciled -= HandleWarmMicrophoneReconciled;
         await warmMicrophoneReconciler.WhenIdleAsync().ConfigureAwait(false);
         await transmitCoordinator.DisposeAsync().ConfigureAwait(false);
+        await p25KeyRequestCoordinator.DisposeAsync().ConfigureAwait(false);
         foreach (SystemViewModel system in Systems)
         {
+            system.JitterBufferChanged -= HandleSystemJitterBufferChanged;
             system.PropertyChanged -= HandleSystemPropertyChanged;
             system.KeyResponseReceived -= HandleSystemKeyResponse;
             system.LogReceived -= HandleSystemLog;
@@ -2997,8 +3027,12 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
             NotifyConnectionPresentationChanged();
             if (status.State == FneConnectionState.Connected)
             {
-                RequestConfiguredP25Keys(system);
+                ScheduleConfiguredP25Keys(system);
                 _ = ReconcileReceiveSessionsAsync();
+            }
+            else
+            {
+                p25KeyRequestCoordinator.Cancel(system.Name);
             }
             bool stateChanged = !lastConnectionStates.TryGetValue(system.Name, out FneConnectionState previousState) ||
                 previousState != status.State;
@@ -3078,24 +3112,27 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
             Dispatcher.UIThread.Post(Apply);
     }
 
-    private void RequestConfiguredP25Keys(SystemViewModel system)
+    private void ScheduleConfiguredP25Keys(SystemViewModel system)
     {
         // Request every configured key even when a local fallback is available.
-        // Valid KMM material takes precedence for this system when it arrives.
+        // Match the legacy console's post-connect settling delay and per-request
+        // pacing so an FNE/KMM has time to service every configured key.
         if (p25KeyRing is null)
             return;
 
-        foreach ((byte algorithmId, ushort keyId) in ResolveConfiguredP25KeyRequests(system.Channels))
-        {
-            try
-            {
-                system.RequestP25Key(algorithmId, keyId);
-            }
-            catch (Exception exception)
-            {
-                StatusText = $"{system.Name}: P25 key request unavailable — {exception.Message}";
-            }
-        }
+        _ = p25KeyRequestCoordinator.Schedule(
+            system.Name,
+            ResolveConfiguredP25KeyRequests(system.Channels),
+            () => system.IsConnected,
+            system.RequestP25Key,
+            exception => Dispatcher.UIThread.Post(() =>
+                StatusText = $"{system.Name}: P25 key request unavailable — {exception.Message}"));
+    }
+
+    private void HandleSystemJitterBufferChanged(object? sender, EventArgs e)
+    {
+        if (sender is SystemViewModel system)
+            _ = ApplyRxJitterBufferAsync(system);
     }
 
     internal static IReadOnlyList<(byte AlgorithmId, ushort KeyId)> ResolveConfiguredP25KeyRequests(

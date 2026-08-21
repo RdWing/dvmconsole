@@ -34,9 +34,11 @@
     <Style Selector="Button.status-card:pointerover /template/ ContentPresenter#PART_ContentPresenter" x:DataType="local:SystemViewModel"><Setter Property="BorderBrush" Value="{Binding ConnectionBrush}" /><Setter Property="BorderThickness" Value="2" /></Style>
     <Style Selector="Button.status-card:pressed" x:DataType="local:SystemViewModel"><Setter Property="BorderBrush" Value="{Binding ConnectionBrush}" /></Style>
     <Style Selector="Button.status-card:pressed /template/ ContentPresenter#PART_ContentPresenter" x:DataType="local:SystemViewModel"><Setter Property="BorderBrush" Value="{Binding ConnectionBrush}" /><Setter Property="BorderThickness" Value="2" /></Style>
-    <Style Selector="ToggleButton.mic-warm"><Setter Property="Width" Value="30" /><Setter Property="Height" Value="26" /><Setter Property="Padding" Value="2,0" /><Setter Property="HorizontalContentAlignment" Value="Center" /><Setter Property="VerticalContentAlignment" Value="Center" /><Setter Property="Background" Value="{DynamicResource ButtonBackgroundBrush}" /><Setter Property="BorderBrush" Value="{DynamicResource ControlBorderBrush}" /><Setter Property="Opacity" Value="1" /></Style>
+    <Style Selector="ToggleButton.toolbar-audio"><Setter Property="Width" Value="30" /><Setter Property="Height" Value="26" /><Setter Property="Padding" Value="2,0" /><Setter Property="HorizontalContentAlignment" Value="Center" /><Setter Property="VerticalContentAlignment" Value="Center" /><Setter Property="Background" Value="{DynamicResource ButtonBackgroundBrush}" /><Setter Property="BorderBrush" Value="{DynamicResource ControlBorderBrush}" /><Setter Property="Opacity" Value="1" /></Style>
     <Style Selector="ToggleButton.mic-warm:checked"><Setter Property="Background" Value="#B45309" /><Setter Property="BorderBrush" Value="#F59E0B" /></Style>
     <Style Selector="ToggleButton.mic-warm:checked:pointerover"><Setter Property="Background" Value="#92400E" /><Setter Property="BorderBrush" Value="#F59E0B" /></Style>
+    <Style Selector="ToggleButton.output-mute:checked"><Setter Property="Background" Value="#991B1B" /><Setter Property="BorderBrush" Value="#EF4444" /></Style>
+    <Style Selector="ToggleButton.output-mute:checked:pointerover"><Setter Property="Background" Value="#7F1D1D" /><Setter Property="BorderBrush" Value="#EF4444" /></Style>
     <Style Selector="TabItem"><Setter Property="Foreground" Value="{DynamicResource TabTextBrush}" /><Setter Property="Padding" Value="6,8" /><Setter Property="FontSize" Value="{Binding $parent[Window].((local:MainWindowViewModel)DataContext).UiFontSize}" /></Style>
     <Style Selector="TabItem:selected"><Setter Property="Foreground" Value="{DynamicResource SelectedTabTextBrush}" /></Style>
     <Style Selector="ScrollViewer"><Setter Property="AllowAutoHide" Value="True" /></Style>
@@ -182,10 +184,15 @@
             <ItemsControl.ItemsPanel><ItemsPanelTemplate><StackPanel Orientation="Horizontal" Spacing="4" /></ItemsPanelTemplate></ItemsControl.ItemsPanel>
             <ItemsControl.ItemTemplate><DataTemplate x:DataType="local:ToolbarClockViewModel"><Border IsVisible="{Binding Enabled}" Background="{Binding BackgroundBrush}" BorderBrush="{DynamicResource ClockBorderBrush}" BorderThickness="1" CornerRadius="4" Padding="5,2"><StackPanel><TextBlock Foreground="{DynamicResource ClockTextBrush}" FontSize="{Binding $parent[Window].((local:MainWindowViewModel)DataContext).UiCompactFontSize}" Text="{Binding TimeZoneLabel}" HorizontalAlignment="Center" /><TextBlock Foreground="{DynamicResource ClockTextBrush}" FontSize="{Binding $parent[Window].((local:MainWindowViewModel)DataContext).UiSmallFontSize}" Text="{Binding TimeText}" HorizontalAlignment="Center" /></StackPanel></Border></DataTemplate></ItemsControl.ItemTemplate>
           </ItemsControl>
-          <ToggleButton Classes="mic-warm" Content="🎙️"
+          <ToggleButton Classes="toolbar-audio mic-warm" Content="🎙️"
                         IsChecked="{Binding KeepTransmitMicrophoneWarm, Mode=TwoWay}"
                         ToolTip.Tip="{Binding KeepTransmitMicrophoneWarmToolTip}"
                         AutomationProperties.Name="{Binding KeepTransmitMicrophoneWarmToolTip}" />
+          <ToggleButton Classes="toolbar-audio output-mute"
+                        Content="{Binding OutputMuteGlyph}"
+                        IsChecked="{Binding OutputMuted, Mode=TwoWay}"
+                        ToolTip.Tip="{Binding OutputMuteToolTip}"
+                        AutomationProperties.Name="{Binding OutputMuteToolTip}" />
           <StackPanel Orientation="Horizontal" Spacing="4" IsVisible="{Binding ShowAlertTones}">
             <ItemsControl ItemsSource="{Binding BuiltInAlertTones}">
               <ItemsControl.ItemsPanel><ItemsPanelTemplate><StackPanel Orientation="Horizontal" Spacing="4" /></ItemsPanelTemplate></ItemsControl.ItemsPanel>

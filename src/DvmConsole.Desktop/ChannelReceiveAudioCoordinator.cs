@@ -34,7 +34,8 @@ public sealed class ChannelReceiveAudioCoordinator : IAsyncDisposable
     private readonly Func<ChannelViewModel, string?>? getOutputDeviceId;
     private volatile ChannelViewModel[] activeChannels = [];
     private IVocoderBackend? vocoderBackend;
-    private bool livePlaybackDiscarded;
+    private bool transitionPlaybackDiscarded;
+    private bool operatorOutputMuted;
     private bool disposed;
 
     public ChannelReceiveAudioCoordinator()
@@ -145,23 +146,41 @@ public sealed class ChannelReceiveAudioCoordinator : IAsyncDisposable
         ObjectDisposedException.ThrowIf(disposed, this);
         lock (playbackPolicySync)
         {
-            livePlaybackDiscarded = discarded;
-            long totalDiscardedSamples = 0;
-            foreach (AudioRoute route in audioRoutes.Values)
-            {
-                try
-                {
-                    totalDiscardedSamples = checked(
-                        totalDiscardedSamples + route.Mixer.SetInputDiscarded(discarded));
-                }
-                catch (ObjectDisposedException)
-                {
-                    // A route replacement may finish concurrently. A newly
-                    // created route applies the policy before it is published.
-                }
-            }
-            return totalDiscardedSamples;
+            transitionPlaybackDiscarded = discarded;
+            return ApplyOutputDiscardPolicyLocked();
         }
+    }
+
+    // Operator mute affects only live speaker-bound receive PCM. Decode,
+    // lifecycle, patching, and TAR observation remain active upstream.
+    public long SetOutputMuted(bool muted)
+    {
+        ObjectDisposedException.ThrowIf(disposed, this);
+        lock (playbackPolicySync)
+        {
+            operatorOutputMuted = muted;
+            return ApplyOutputDiscardPolicyLocked();
+        }
+    }
+
+    private long ApplyOutputDiscardPolicyLocked()
+    {
+        bool discarded = transitionPlaybackDiscarded || operatorOutputMuted;
+        long totalDiscardedSamples = 0;
+        foreach (AudioRoute route in audioRoutes.Values)
+        {
+            try
+            {
+                totalDiscardedSamples = checked(
+                    totalDiscardedSamples + route.Mixer.SetInputDiscarded(discarded));
+            }
+            catch (ObjectDisposedException)
+            {
+                // A route replacement may finish concurrently. A newly
+                // created route applies the policy before it is published.
+            }
+        }
+        return totalDiscardedSamples;
     }
 
     // Recreates the selected channel's audio route and receive session after
@@ -880,7 +899,7 @@ public sealed class ChannelReceiveAudioCoordinator : IAsyncDisposable
         {
             if (!audioRoutes.TryAdd(route.DeviceId, route))
                 throw new InvalidOperationException("The receive output route was added concurrently.");
-            if (livePlaybackDiscarded)
+            if (transitionPlaybackDiscarded || operatorOutputMuted)
                 route.Mixer.SetInputDiscarded(discarded: true);
         }
         createdRoute = route;
