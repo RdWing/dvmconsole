@@ -22,7 +22,7 @@ internal sealed class ChannelAudioMeterPipeline
     private const double MinimumVisibleLevel = 0.25;
 
     private readonly object sync = new();
-    private readonly Dictionary<(ChannelViewModel Channel, ChannelAudioDirection Direction), MeterState> states = [];
+    private readonly Dictionary<MeterKey, MeterState> states = [];
 
     public void Observe(
         ChannelViewModel channel,
@@ -38,15 +38,11 @@ internal sealed class ChannelAudioMeterPipeline
         double level = ChannelAudioMeter.Calculate(samples, direction);
         lock (sync)
         {
-            var key = (channel, direction);
+            var key = new MeterKey(channel, direction, streamId);
             if (!states.TryGetValue(key, out MeterState? state))
             {
-                state = new MeterState(streamId);
+                state = new MeterState();
                 states.Add(key, state);
-            }
-            else if (state.StreamId != streamId)
-            {
-                state.Reset(streamId);
             }
 
             long delayTicks = presentationDelay <= TimeSpan.Zero
@@ -68,11 +64,11 @@ internal sealed class ChannelAudioMeterPipeline
                 return [];
 
             var updates = new List<ChannelAudioMeterUpdate>(states.Count);
-            List<(ChannelViewModel Channel, ChannelAudioDirection Direction)>? completed = null;
+            List<MeterKey>? completed = null;
             long now = Stopwatch.GetTimestamp();
-            foreach (KeyValuePair<(ChannelViewModel Channel, ChannelAudioDirection Direction), MeterState> pair in states)
+            foreach (KeyValuePair<MeterKey, MeterState> pair in states)
             {
-                (ChannelViewModel channel, ChannelAudioDirection direction) = pair.Key;
+                MeterKey key = pair.Key;
                 MeterState state = pair.Value;
                 double target = state.ReadAverage(SamplesPerRefresh, now, out bool hadSamples);
                 if (hadSamples)
@@ -89,9 +85,9 @@ internal sealed class ChannelAudioMeterPipeline
                 }
 
                 updates.Add(new ChannelAudioMeterUpdate(
-                    channel,
-                    state.StreamId,
-                    direction,
+                    key.Channel,
+                    key.StreamId,
+                    key.Direction,
                     state.DisplayLevel));
 
                 if (!hadSamples && state.DisplayLevel == 0 && state.BufferedSamples == 0)
@@ -100,29 +96,25 @@ internal sealed class ChannelAudioMeterPipeline
 
             if (completed is not null)
             {
-                foreach ((ChannelViewModel channel, ChannelAudioDirection direction) in completed)
-                    states.Remove((channel, direction));
+                foreach (MeterKey key in completed)
+                    states.Remove(key);
             }
 
             return updates;
         }
     }
 
-    private sealed class MeterState(uint streamId)
+    private readonly record struct MeterKey(
+        ChannelViewModel Channel,
+        ChannelAudioDirection Direction,
+        uint StreamId);
+
+    private sealed class MeterState
     {
         private readonly Queue<MeterSegment> segments = [];
 
-        public uint StreamId { get; private set; } = streamId;
         public int BufferedSamples { get; private set; }
         public double DisplayLevel { get; set; }
-
-        public void Reset(uint streamId)
-        {
-            segments.Clear();
-            BufferedSamples = 0;
-            DisplayLevel = 0;
-            StreamId = streamId;
-        }
 
         public void Enqueue(double level, int sampleCount, long availableAtTimestamp)
         {

@@ -154,6 +154,127 @@ public sealed class ChannelReceiveWorkQueueTests
             TimeSpan.FromMilliseconds(450));
     }
 
+    [Fact]
+    public async Task AttributesTransportAndFneBoundaryDelaySeparately()
+    {
+        var observed = new TaskCompletionSource<ReceiveWorkItemTiming>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var channel = CreateChannel("Dispatch", "100");
+        await using var queue = new ChannelReceiveWorkQueue(
+            (_, _) => Task.CompletedTask,
+            timingObserver: (_, timing) => observed.TrySetResult(timing));
+        long boundaryTimestamp = Stopwatch.GetTimestamp();
+        long transportTimestamp = boundaryTimestamp - (Stopwatch.Frequency / 20);
+        var traffic = new FneTrafficFrame(
+            FneTrafficProtocol.Dmr,
+            peerId: 1,
+            sourceId: 2,
+            destinationId: 100,
+            slot: 1,
+            callType: "GROUP",
+            frameType: "VOICE",
+            subtype: "VOICE",
+            packetSequence: 1,
+            streamId: 99,
+            payload: [],
+            fneBoundaryTimestamp: boundaryTimestamp,
+            transportIngressTimestamp: transportTimestamp);
+
+        Assert.True(queue.Enqueue(channel, traffic, boundaryTimestamp, out _));
+        ReceiveWorkItemTiming timing = await observed.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+        Assert.InRange(
+            timing.TransportToFneBoundaryDelay,
+            TimeSpan.FromMilliseconds(45),
+            TimeSpan.FromMilliseconds(55));
+        Assert.Equal(
+            timing.TransportToFneBoundaryDelay,
+            queue.GetDiagnostics(channel).MaximumTransportToFneBoundaryDelay);
+    }
+
+    [Fact]
+    public async Task ReordersPacketsThatArriveBeforeTheirPlayoutDeadline()
+    {
+        var processed = new List<ushort>();
+        var completed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var channel = CreateChannel("Dispatch", "100");
+        await using var queue = new ChannelReceiveWorkQueue(
+            (_, traffic) =>
+            {
+                lock (processed)
+                {
+                    processed.Add(traffic.PacketSequence);
+                    if (processed.Count == 3)
+                        completed.TrySetResult();
+                }
+                return Task.CompletedTask;
+            },
+            getJitterBufferProfile: (_, _) => new ReceiveJitterBufferProfile(
+                TimeSpan.FromMilliseconds(20),
+                TimeSpan.FromMilliseconds(60)));
+
+        queue.Enqueue(channel, CreateTraffic(10));
+        queue.Enqueue(channel, CreateTraffic(12));
+        queue.Enqueue(channel, CreateTraffic(11));
+
+        await completed.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        await queue.StopAsync(channel);
+        Assert.Equal([(ushort)10, (ushort)11, (ushort)12], processed);
+        Assert.Equal(1, queue.GetDiagnostics(channel).JitterBufferReorderedPackets);
+        Assert.Equal(1, queue.GetDiagnostics(channel, streamId: 99).JitterBufferReorderedPackets);
+    }
+
+    [Fact]
+    public async Task ReleasesFuturePacketWhenMissingPacketMissesDeadline()
+    {
+        var processed = new List<ushort>();
+        var completed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var channel = CreateChannel("Dispatch", "100");
+        await using var queue = new ChannelReceiveWorkQueue(
+            (_, traffic) =>
+            {
+                lock (processed)
+                {
+                    processed.Add(traffic.PacketSequence);
+                    if (processed.Count == 2)
+                        completed.TrySetResult();
+                }
+                return Task.CompletedTask;
+            },
+            getJitterBufferProfile: (_, _) => new ReceiveJitterBufferProfile(
+                TimeSpan.FromMilliseconds(20),
+                TimeSpan.FromMilliseconds(40)));
+
+        queue.Enqueue(channel, CreateTraffic(20));
+        queue.Enqueue(channel, CreateTraffic(22));
+
+        await completed.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        await queue.StopAsync(channel);
+        Assert.Equal([(ushort)20, (ushort)22], processed);
+        Assert.Equal(1, queue.GetDiagnostics(channel).JitterBufferDeadlineMissedPackets);
+    }
+
+    [Fact]
+    public async Task RemovesPerStreamTimingAfterItsTerminatorIsReported()
+    {
+        var terminatorReported = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var channel = CreateChannel("Dispatch", "100");
+        await using var queue = new ChannelReceiveWorkQueue(
+            (_, _) => Task.CompletedTask,
+            timingObserver: (_, timing) =>
+            {
+                if (ReceiveTrafficClassifier.IsTerminator(timing.Traffic))
+                    terminatorReported.TrySetResult();
+            });
+
+        queue.Enqueue(channel, CreateTraffic(1, streamId: 42));
+        queue.Enqueue(channel, CreateTraffic(2, terminator: true, streamId: 42));
+
+        await terminatorReported.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+        Assert.Equal(default, queue.GetDiagnostics(channel, streamId: 42));
+    }
+
     private static ChannelViewModel CreateChannel(string name, string tgid)
         => new(new ChannelConfiguration
         {

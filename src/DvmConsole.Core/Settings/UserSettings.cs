@@ -3,8 +3,8 @@ using System.Text.Json.Serialization;
 
 namespace DvmConsole.Core.Settings;
 
-// Portable placement for a modeless operator window. Coordinates are
-// optional because a display topology can change between launches.
+// Portable window placement. Coordinates are optional because a display
+// topology can change between launches.
 public sealed class WindowPlacementSetting
 {
     public double? Left { get; set; }
@@ -47,11 +47,52 @@ public sealed class RxAudioProcessingModeSetting
             StringComparer.OrdinalIgnoreCase);
 }
 
+public sealed class RxJitterBufferSetting
+{
+    public const int DefaultP25Milliseconds = 180;
+    public const int DefaultDmrMilliseconds = 120;
+    public const int DefaultNxdnMilliseconds = 160;
+
+    public static IReadOnlyList<int> P25OptionsMilliseconds { get; } = [0, 180, 360, 540];
+    public static IReadOnlyList<int> DmrOptionsMilliseconds { get; } = [0, 60, 120, 180];
+    public static IReadOnlyList<int> NxdnOptionsMilliseconds { get; } = [0, 80, 160, 240];
+
+    public int P25Milliseconds { get; set; } = DefaultP25Milliseconds;
+    public int DmrMilliseconds { get; set; } = DefaultDmrMilliseconds;
+    public int NxdnMilliseconds { get; set; } = DefaultNxdnMilliseconds;
+
+    public static RxJitterBufferSetting Normalize(RxJitterBufferSetting? setting)
+    {
+        setting ??= new RxJitterBufferSetting();
+        return new RxJitterBufferSetting
+        {
+            P25Milliseconds = NormalizeChoice(
+                setting.P25Milliseconds,
+                P25OptionsMilliseconds,
+                DefaultP25Milliseconds),
+            DmrMilliseconds = NormalizeChoice(
+                setting.DmrMilliseconds,
+                DmrOptionsMilliseconds,
+                DefaultDmrMilliseconds),
+            NxdnMilliseconds = NormalizeChoice(
+                setting.NxdnMilliseconds,
+                NxdnOptionsMilliseconds,
+                DefaultNxdnMilliseconds)
+        };
+    }
+
+    private static int NormalizeChoice(
+        int value,
+        IReadOnlyList<int> choices,
+        int fallback)
+        => choices.Contains(value) ? value : fallback;
+}
+
 // Small, portable subset of operator state that is safe to persist outside a
 // codeplug. Protocol credentials and encryption keys remain codeplug-owned.
 public sealed class UserSettings
 {
-    public const int CurrentSchemaVersion = 3;
+    public const int CurrentSchemaVersion = 5;
     public const string DvmConsoleAudioProcessingMode = "DvmConsole";
     public const string AppleVoiceProcessingMode = "AppleVoiceProcessing";
     public const int MaximumToolbarClocks = 8;
@@ -65,6 +106,11 @@ public sealed class UserSettings
     public string AudioOutputDeviceId { get; set; } = "default";
     public Dictionary<string, RxAudioProcessingModeSetting> RxAudioProcessingOptions { get; set; }
         = RxAudioProcessingModeSetting.CreateDefaults();
+    // Retained as the migration/default value for settings written before
+    // per-connection jitter configuration was introduced.
+    public RxJitterBufferSetting RxJitterBuffer { get; set; } = new();
+    public Dictionary<string, RxJitterBufferSetting> RxJitterBuffersBySystem { get; set; }
+        = new(StringComparer.OrdinalIgnoreCase);
     [JsonPropertyName("RxAudioProcessingEnabled")]
     public bool? LegacyRxAudioProcessingEnabled { get; set; }
     public string AudioProcessingMode { get; set; } = DvmConsoleAudioProcessingMode;
@@ -131,6 +177,11 @@ public sealed class UserSettings
     public Dictionary<string, bool> TransmitEncryptionStates { get; set; } = new(StringComparer.OrdinalIgnoreCase);
     public bool ShowCallHistoryPane { get; set; } = true;
     public bool SnapCallHistoryToWindow { get; set; }
+    public WindowPlacementSetting MainWindowPlacement { get; set; } = new()
+    {
+        Width = 1260,
+        Height = 760
+    };
     public WindowPlacementSetting CallHistoryWindowPlacement { get; set; } = new();
 }
 
@@ -188,8 +239,19 @@ public sealed class UserSettingsStore
             if (storedSchemaVersion < 2)
                 settings.HighQualityBluetoothAudioEnabled = false;
             NormalizeRxAudioProcessingOptions(settings, storedSchemaVersion < 3);
+            settings.RxJitterBuffer = RxJitterBufferSetting.Normalize(settings.RxJitterBuffer);
+            settings.RxJitterBuffersBySystem = NormalizeRxJitterBuffersBySystem(
+                settings.RxJitterBuffersBySystem);
             settings.SchemaVersion = UserSettings.CurrentSchemaVersion;
             settings.TransmitEncryptionStates ??= new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
+            settings.MainWindowPlacement = NormalizeWindowPlacement(
+                settings.MainWindowPlacement,
+                defaultWidth: 1260,
+                defaultHeight: 760,
+                minimumWidth: 880,
+                minimumHeight: 560,
+                maximumWidth: 3840,
+                maximumHeight: 2160);
             settings.CallHistoryWindowPlacement = NormalizeWindowPlacement(settings.CallHistoryWindowPlacement);
             settings.GlobalPttKey = NormalizeGlobalPttKey(settings.GlobalPttKey);
             settings.ActiveSystemPttKey = NormalizeGlobalPttKey(settings.ActiveSystemPttKey);
@@ -439,9 +501,20 @@ public sealed class UserSettingsStore
         if (settings.SchemaVersion < 2)
             settings.HighQualityBluetoothAudioEnabled = false;
         NormalizeRxAudioProcessingOptions(settings, settings.SchemaVersion < 3);
+        settings.RxJitterBuffer = RxJitterBufferSetting.Normalize(settings.RxJitterBuffer);
+        settings.RxJitterBuffersBySystem = NormalizeRxJitterBuffersBySystem(
+            settings.RxJitterBuffersBySystem);
         settings.SchemaVersion = UserSettings.CurrentSchemaVersion;
         settings.DtmfPresets = NormalizeDtmfPresets(settings.DtmfPresets);
         settings.TonePresets = NormalizeTonePresets(settings.TonePresets);
+        settings.MainWindowPlacement = NormalizeWindowPlacement(
+            settings.MainWindowPlacement,
+            defaultWidth: 1260,
+            defaultHeight: 760,
+            minimumWidth: 880,
+            minimumHeight: 560,
+            maximumWidth: 3840,
+            maximumHeight: 2160);
         settings.CallHistoryWindowPlacement = NormalizeWindowPlacement(settings.CallHistoryWindowPlacement);
         settings.ToolbarClocks = NormalizeToolbarClocks(settings.ToolbarClocks);
         NormalizeUiSettings(settings);
@@ -593,6 +666,12 @@ public sealed class UserSettingsStore
             !settings.ShowSystemStatus || !settings.ShowChannels || !settings.ShowAlertTones ||
             !settings.LockWidgets || settings.ChannelWidgetPositions.Count > 0 ||
             !settings.ShowCallHistoryPane || settings.SnapCallHistoryToWindow ||
+            !WindowPlacementsEqual(settings.MainWindowPlacement, new WindowPlacementSetting
+            {
+                Width = 1260,
+                Height = 760
+            }) ||
+            !WindowPlacementsEqual(settings.CallHistoryWindowPlacement, new WindowPlacementSetting()) ||
             settings.UserBackgroundImage is not null)
         {
             sections.Add("General");
@@ -610,6 +689,12 @@ public sealed class UserSettingsStore
             settings.WebStreamOutputDeviceIds.Count > 0 || settings.WebStreamVolumes.Count > 0)
         {
             sections.Add("Audio");
+        }
+
+        if (!RxJitterBufferSettingsEqual(settings.RxJitterBuffer, new RxJitterBufferSetting()) ||
+            settings.RxJitterBuffersBySystem.Count > 0)
+        {
+            sections.Add("Connections");
         }
 
         if (settings.DtmfPresets.Count > 0 || settings.TonePresets.Count > 0 || settings.AlertTones.Count > 0 ||
@@ -673,6 +758,7 @@ public sealed class UserSettingsStore
             target.UserBackgroundImage = source.UserBackgroundImage;
             target.ShowCallHistoryPane = source.ShowCallHistoryPane;
             target.SnapCallHistoryToWindow = source.SnapCallHistoryToWindow;
+            target.MainWindowPlacement = CopyWindowPlacement(source.MainWindowPlacement);
             target.CallHistoryWindowPlacement = new WindowPlacementSetting
             {
                 Left = source.CallHistoryWindowPlacement.Left,
@@ -707,6 +793,13 @@ public sealed class UserSettingsStore
             target.ChannelOutputDeviceIds = new Dictionary<string, string>(source.ChannelOutputDeviceIds, StringComparer.OrdinalIgnoreCase);
             target.WebStreamOutputDeviceIds = new Dictionary<string, string>(source.WebStreamOutputDeviceIds, StringComparer.OrdinalIgnoreCase);
             target.WebStreamVolumes = new Dictionary<string, double>(source.WebStreamVolumes, StringComparer.OrdinalIgnoreCase);
+        }
+
+        if ((scope & SettingsImportScope.Connections) != 0)
+        {
+            target.RxJitterBuffer = RxJitterBufferSetting.Normalize(source.RxJitterBuffer);
+            target.RxJitterBuffersBySystem = NormalizeRxJitterBuffersBySystem(
+                source.RxJitterBuffersBySystem);
         }
 
         if ((scope & SettingsImportScope.Presets) != 0)
@@ -786,6 +879,32 @@ public sealed class UserSettingsStore
            left.CompressorRatio == right.CompressorRatio &&
            left.CompressorThresholdDbfs == right.CompressorThresholdDbfs &&
            left.CompressorMakeupGainDb == right.CompressorMakeupGainDb;
+
+    private static bool RxJitterBufferSettingsEqual(
+        RxJitterBufferSetting left,
+        RxJitterBufferSetting right)
+        => left.P25Milliseconds == right.P25Milliseconds &&
+           left.DmrMilliseconds == right.DmrMilliseconds &&
+           left.NxdnMilliseconds == right.NxdnMilliseconds;
+
+    private static Dictionary<string, RxJitterBufferSetting> NormalizeRxJitterBuffersBySystem(
+        Dictionary<string, RxJitterBufferSetting>? settings)
+    {
+        const int maximumSystems = 128;
+        const int maximumSystemNameLength = 128;
+        var normalized = new Dictionary<string, RxJitterBufferSetting>(StringComparer.OrdinalIgnoreCase);
+        foreach (KeyValuePair<string, RxJitterBufferSetting> entry in settings ?? [])
+        {
+            string systemName = entry.Key?.Trim() ?? string.Empty;
+            if (systemName.Length == 0 || systemName.Length > maximumSystemNameLength || entry.Value is null)
+                continue;
+
+            normalized[systemName] = RxJitterBufferSetting.Normalize(entry.Value);
+            if (normalized.Count >= maximumSystems)
+                break;
+        }
+        return normalized;
+    }
 
     private static Dictionary<string, WidgetPositionSetting> NormalizeWidgetPositions(
         Dictionary<string, WidgetPositionSetting>? positions)
@@ -1036,17 +1155,45 @@ public sealed class UserSettingsStore
         return normalized;
     }
 
-    private static WindowPlacementSetting NormalizeWindowPlacement(WindowPlacementSetting? placement)
+    private static WindowPlacementSetting CopyWindowPlacement(WindowPlacementSetting source)
+        => new()
+        {
+            Left = source.Left,
+            Top = source.Top,
+            Width = source.Width,
+            Height = source.Height
+        };
+
+    private static WindowPlacementSetting NormalizeWindowPlacement(
+        WindowPlacementSetting? placement,
+        double defaultWidth = 560,
+        double defaultHeight = 500,
+        double minimumWidth = 400,
+        double minimumHeight = 300,
+        double maximumWidth = 1800,
+        double maximumHeight = 1400)
     {
-        placement ??= new WindowPlacementSetting();
+        placement ??= new WindowPlacementSetting
+        {
+            Width = defaultWidth,
+            Height = defaultHeight
+        };
         return new WindowPlacementSetting
         {
             Left = placement.Left is double left && double.IsFinite(left) ? left : null,
             Top = placement.Top is double top && double.IsFinite(top) ? top : null,
-            Width = NormalizeBounded(placement.Width, 560, 400, 1800),
-            Height = NormalizeBounded(placement.Height, 500, 300, 1400)
+            Width = NormalizeBounded(placement.Width, defaultWidth, minimumWidth, maximumWidth),
+            Height = NormalizeBounded(placement.Height, defaultHeight, minimumHeight, maximumHeight)
         };
     }
+
+    private static bool WindowPlacementsEqual(
+        WindowPlacementSetting left,
+        WindowPlacementSetting right)
+        => left.Left == right.Left &&
+            left.Top == right.Top &&
+            left.Width == right.Width &&
+            left.Height == right.Height;
 
     private static List<DtmfPresetSetting> NormalizeDtmfPresets(IEnumerable<DtmfPresetSetting>? presets)
     {

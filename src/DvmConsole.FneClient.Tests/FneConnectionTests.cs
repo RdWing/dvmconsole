@@ -8,6 +8,38 @@ namespace DvmConsole.FneClient.Tests;
 public sealed class FneConnectionTests
 {
     [Fact]
+    public async Task TrafficSubscribersRemainOrderedAndFailureIsolated()
+    {
+        await using var connection = new FneConnection(new FneConnectionOptions(
+            "Test", "Test", "127.0.0.1", 62031, 1, null, false, null));
+        var calls = new List<string>();
+        EventHandler<FneTrafficFrame> failing = (_, _) =>
+        {
+            calls.Add("first");
+            throw new InvalidOperationException("expected test failure");
+        };
+        EventHandler<FneTrafficFrame> succeeding = (_, _) => calls.Add("second");
+        connection.TrafficReceived += failing;
+        connection.TrafficReceived += succeeding;
+
+        connection.PublishTraffic(new FneTrafficFrame(
+            FneTrafficProtocol.P25,
+            1,
+            2,
+            3,
+            null,
+            "GROUP",
+            "VOICE",
+            "LDU1",
+            1,
+            77,
+            []));
+        connection.TrafficReceived -= succeeding;
+
+        Assert.Equal(["first", "second"], calls);
+    }
+
+    [Fact]
     public void MapsLegacySystemConfigurationToConnectionOptions()
     {
         var system = new SystemConfiguration

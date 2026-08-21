@@ -252,6 +252,27 @@ public sealed class ChannelViewModelTests
     }
 
     [Fact]
+    public void MeterUpdateForCollidingStreamDoesNotClearPresentationOwner()
+    {
+        var channel = new ChannelViewModel(new ChannelConfiguration
+        {
+            Name = "Dispatch",
+            System = "System 1",
+            Tgid = "99",
+            Mode = "p25"
+        });
+        channel.SetAudioEnabled(true);
+        Assert.True(channel.TryApplyTraffic(
+            "System 1",
+            CreateTraffic(FneTrafficProtocol.P25, 42, 99, null, "VOICE", "LDU1", 7)));
+        channel.SetAudioLevel(50, ChannelAudioDirection.Receive, streamId: 7);
+
+        channel.SetAudioLevel(80, ChannelAudioDirection.Receive, streamId: 8);
+
+        Assert.Equal(50, channel.AudioLevel);
+    }
+
+    [Fact]
     public void ContinuedVoiceTrafficDoesNotRaiseNonVisualActivityNotifications()
     {
         var channel = new ChannelViewModel(new ChannelConfiguration
@@ -359,15 +380,18 @@ public sealed class ChannelViewModelTests
                 now.AddSeconds(2)).Transition);
         Assert.Equal(ChannelRuntimeState.Receiving, channel.State);
         Assert.Equal(
+            ReceiveStreamTransition.None,
+            channel.AdvanceReceiveLifecycle(now.AddSeconds(3.9)).Transition);
+        Assert.Equal(
             ReceiveStreamTransition.TerminationExpired,
-            channel.AdvanceReceiveLifecycle(now.AddSeconds(6)).Transition);
+            channel.AdvanceReceiveLifecycle(now.AddSeconds(4)).Transition);
         Assert.Equal(ChannelRuntimeState.Idle, channel.State);
         Assert.Equal(
             ReceiveStreamTransition.IgnoredLate,
             channel.ApplyTraffic(
                 "System 1",
                 CreateTraffic(FneTrafficProtocol.Dmr, 42, 99, 1, "VOICE", "VOICE", 7),
-                now.AddSeconds(6.5)).Transition);
+                now.AddSeconds(4.5)).Transition);
     }
 
     [Fact]
@@ -446,17 +470,17 @@ public sealed class ChannelViewModelTests
 
         Assert.Equal(
             ReceiveStreamTransition.GraceStarted,
-            channel.AdvanceReceiveLifecycle(now.AddSeconds(2)).Transition);
+            channel.AdvanceReceiveLifecycle(now.AddSeconds(1)).Transition);
         Assert.Equal(ChannelRuntimeState.Receiving, channel.State);
         Assert.Equal(
             ReceiveStreamTransition.Resumed,
             channel.ApplyTraffic(
                 "System 1",
                 CreateTraffic(FneTrafficProtocol.P25, 42, 99, null, "VOICE", "LDU2", 7),
-                now.AddSeconds(3)).Transition);
+                now.AddSeconds(1.5)).Transition);
         Assert.Equal(
             ReceiveStreamTransition.GraceExpired,
-            channel.AdvanceReceiveLifecycle(now.AddSeconds(7)).Transition);
+            channel.AdvanceReceiveLifecycle(now.AddSeconds(3.5)).Transition);
         Assert.Equal(ChannelRuntimeState.Idle, channel.State);
     }
 

@@ -64,6 +64,44 @@ public sealed class ReceivePipelineTimingReporterTests
             DateTimeOffset.UtcNow));
     }
 
+    [Fact]
+    public void PublishesATransportInterArrivalGapEvenWhenLaterStagesAreFast()
+    {
+        var reporter = new ReceivePipelineTimingReporter(TimeSpan.FromSeconds(5));
+        var channel = new ChannelViewModel(new ChannelConfiguration
+        {
+            Name = "Dispatch",
+            System = "System 1",
+            Tgid = "100",
+            Mode = "p25"
+        });
+        ReceiveWorkItemTiming timing = Timing(TimeSpan.FromMilliseconds(5)) with
+        {
+            TransportInterArrivalDelay = TimeSpan.FromMilliseconds(750)
+        };
+
+        Assert.True(reporter.ShouldPublish(channel, timing, DateTimeOffset.UtcNow));
+    }
+
+    [Fact]
+    public void DoesNotWarnForTheConfiguredJitterBufferDelay()
+    {
+        var reporter = new ReceivePipelineTimingReporter(TimeSpan.FromSeconds(5));
+        var channel = new ChannelViewModel(new ChannelConfiguration
+        {
+            Name = "Dispatch",
+            System = "System 1",
+            Tgid = "100",
+            Mode = "p25"
+        });
+        ReceiveWorkItemTiming timing = Timing(TimeSpan.FromMilliseconds(190)) with
+        {
+            ConfiguredJitterBufferDelay = TimeSpan.FromMilliseconds(180)
+        };
+
+        Assert.False(reporter.ShouldPublish(channel, timing, DateTimeOffset.UtcNow));
+    }
+
     private static ReceiveWorkItemTiming Timing(
         TimeSpan total,
         TimeSpan? interArrival = null)

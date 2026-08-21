@@ -29,9 +29,9 @@ internal readonly record struct ReceiveStreamDecision(
 
 internal sealed class ReceiveStreamLifecycle
 {
-    private static readonly TimeSpan DefaultInactivityTimeout = TimeSpan.FromSeconds(2);
-    private static readonly TimeSpan DefaultGracePeriod = TimeSpan.FromSeconds(2);
-    private static readonly TimeSpan DefaultTerminatorHold = TimeSpan.FromSeconds(4);
+    private static readonly TimeSpan DefaultInactivityTimeout = TimeSpan.FromSeconds(1);
+    private static readonly TimeSpan DefaultGracePeriod = TimeSpan.FromSeconds(1);
+    private static readonly TimeSpan DefaultTerminatorHold = TimeSpan.FromSeconds(2);
     private static readonly TimeSpan DefaultTombstoneLifetime = TimeSpan.FromSeconds(5);
     private readonly TimeSpan inactivityTimeout;
     private readonly TimeSpan gracePeriod;

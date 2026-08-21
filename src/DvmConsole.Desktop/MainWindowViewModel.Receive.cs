@@ -88,22 +88,19 @@ public sealed partial class MainWindowViewModel
             }
 
             if (empty)
-            {
-                system.PublishTrafficDiagnostics();
                 return;
-            }
 
+            SystemTrafficWorkItem current = workItem!.Value;
             ProcessTraffic(
                 system,
-                workItem!.Traffic,
+                current.Traffic,
                 publishTrafficDiagnostics: false,
-                receivedAt: workItem.ReceivedAt,
-                preEnqueuedAudioChannels: workItem.PreEnqueuedAudioChannels,
-                ingressTimestamp: workItem.ReceivedTimestamp);
+                receivedAt: current.ReceivedAt,
+                preEnqueuedAudioChannels: current.PreEnqueuedAudioChannels,
+                ingressTimestamp: current.ReceivedTimestamp);
             processed++;
         }
 
-        system.PublishTrafficDiagnostics();
         Dispatcher.UIThread.Post(() => DrainSystemTraffic(system));
     }
 
@@ -136,7 +133,7 @@ public sealed partial class MainWindowViewModel
             if (applied.Transition == ReceiveStreamTransition.IgnoredLate)
             {
                 channel.RecordIgnoredLatePacket();
-                PublishReceiveDiagnostics(channel, now);
+                PublishReceiveDiagnostics(channel, traffic.StreamId, now);
                 continue;
             }
 
@@ -324,7 +321,8 @@ public sealed partial class MainWindowViewModel
             traffic.PacketSequence,
             traffic.StreamId,
             traffic.Payload,
-            traffic.FneBoundaryTimestamp);
+            traffic.FneBoundaryTimestamp,
+            traffic.TransportIngressTimestamp);
     }
 
     private static string DescribeFneSignalQuality(FneTrafficFrame traffic)
@@ -566,7 +564,7 @@ public sealed partial class MainWindowViewModel
         try
         {
             await audioCoordinator.ProcessAsync(channel, traffic).ConfigureAwait(false);
-            PublishReceiveDiagnostics(channel, DateTimeOffset.UtcNow);
+            PublishReceiveDiagnostics(channel, traffic.StreamId, DateTimeOffset.UtcNow);
         }
         catch (Exception exception)
         {
@@ -597,6 +595,7 @@ public sealed partial class MainWindowViewModel
                 // and TAR writer remain available during the bounded
                 // terminator hold. ExpireStaleReceiveStreams finalizes both
                 // after the stream has remained quiet.
+                channel.MarkReceiveAudioMeterEnded(traffic.StreamId);
                 Dispatcher.UIThread.Post(() =>
                     channel.MarkReceivePlaybackEnded(traffic.StreamId));
             }
@@ -607,10 +606,13 @@ public sealed partial class MainWindowViewModel
         }
     }
 
-    private void PublishReceiveDiagnostics(ChannelViewModel channel, DateTimeOffset now)
+    private void PublishReceiveDiagnostics(
+        ChannelViewModel channel,
+        uint streamId,
+        DateTimeOffset now)
     {
         ReceiveAudioDiagnostics audio = audioCoordinator.GetDiagnostics(channel);
-        ReceiveWorkQueueDiagnostics pipeline = receiveAudioWork.GetDiagnostics(channel);
+        ReceiveWorkQueueDiagnostics pipeline = receiveAudioWork.GetDiagnostics(channel, streamId);
         var warning = new ReceiveWarningDiagnostics(
             audio.LostPackets,
             audio.DuplicateOrLatePackets,
@@ -622,6 +624,7 @@ public sealed partial class MainWindowViewModel
         AudioMixerDiagnostics? playback = audioCoordinator.GetPlaybackDiagnostics(channel);
         string message = ReceiveDiagnosticsText.FormatWarning(
             channel.Name,
+            streamId,
             warning,
             audioCoordinator.IsLivePlaybackEnabled(channel),
             playback,
@@ -642,10 +645,23 @@ public sealed partial class MainWindowViewModel
         ReceiveWorkItemTiming timing)
     {
         DateTimeOffset now = DateTimeOffset.UtcNow;
+        if (timing.JitterBufferReorderedPacket || timing.JitterBufferDeadlineMissedPackets > 0)
+        {
+            AddDebugLog(
+                now,
+                "RX",
+                timing.JitterBufferDeadlineMissedPackets > 0
+                    ? DebugLogSeverity.Warning
+                    : DebugLogSeverity.Debug,
+                ReceiveDiagnosticsText.FormatJitterBufferEvent(channel.Name, timing));
+        }
+
         if (!receivePipelineTimingReporter.ShouldPublish(channel, timing, now))
             return;
 
-        ReceiveWorkQueueDiagnostics maximums = receiveAudioWork.GetDiagnostics(channel);
+        ReceiveWorkQueueDiagnostics maximums = receiveAudioWork.GetDiagnostics(
+            channel,
+            timing.Traffic.StreamId);
         AddDebugLog(
             now,
             "RX",
@@ -665,21 +681,34 @@ public sealed partial class MainWindowViewModel
             return [];
         }
 
-        IReadOnlyList<ChannelViewModel> targets = ReceiveAudioTrafficRouter.ResolveTargets(
+        ChannelViewModel[] targets = ReceiveAudioTrafficRouter.ResolveTargets(
             routes,
             audioCoordinator.ActiveChannels,
             traffic,
             audioCoordinator.IsTrackingStream);
-        if (targets.Count == 0)
+        if (targets.Length == 0)
             return [];
 
-        var accepted = new List<ChannelViewModel>(targets.Count);
+        int acceptedCount = 0;
         foreach (ChannelViewModel channel in targets)
         {
             if (TryEnqueueReceiveAudio(channel, traffic, ingressTimestamp))
-                accepted.Add(channel);
+            {
+                targets[acceptedCount++] = channel;
+                if (ReceiveTrafficClassifier.IsTerminator(traffic))
+                    channel.MarkReceiveAudioMeterEnded(traffic.StreamId);
+                else
+                    channel.MarkReceiveAudioMeterActive(traffic.StreamId);
+            }
         }
-        return accepted.ToArray();
+
+        if (acceptedCount == targets.Length)
+            return targets;
+        if (acceptedCount == 0)
+            return [];
+
+        Array.Resize(ref targets, acceptedCount);
+        return targets;
     }
 
     private void EnqueueReceiveAudio(
@@ -690,8 +719,15 @@ public sealed partial class MainWindowViewModel
         if (!TryEnqueueReceiveAudio(channel, traffic, ingressTimestamp))
             return;
 
-        if (!ReceiveTrafficClassifier.IsTerminator(traffic))
+        if (ReceiveTrafficClassifier.IsTerminator(traffic))
+        {
+            channel.MarkReceiveAudioMeterEnded(traffic.StreamId);
+        }
+        else
+        {
+            channel.MarkReceiveAudioMeterActive(traffic.StreamId);
             channel.MarkReceivePlaybackActive(traffic.SourceId, traffic.StreamId);
+        }
     }
 
     private bool TryEnqueueReceiveAudio(
@@ -711,22 +747,23 @@ public sealed partial class MainWindowViewModel
             channel.RecordDroppedReceiveFrame();
         if (!accepted)
         {
-            PublishReceiveDiagnostics(channel, DateTimeOffset.UtcNow);
+            PublishReceiveDiagnostics(channel, traffic.StreamId, DateTimeOffset.UtcNow);
             return false;
         }
 
         if (droppedFrame)
-            PublishReceiveDiagnostics(channel, DateTimeOffset.UtcNow);
+            PublishReceiveDiagnostics(channel, traffic.StreamId, DateTimeOffset.UtcNow);
         return true;
     }
 
     private async Task DrainPatchSourceWorkAsync()
     {
-        Task[] pending;
-        lock (patchSourceWorkSync)
-            pending = patchSourceWork.Values.ToArray();
-        if (pending.Length > 0)
-            await Task.WhenAll(pending).ConfigureAwait(false);
+        ChannelViewModel[] channels = Systems
+            .SelectMany(system => system.Channels)
+            .Distinct()
+            .ToArray();
+        foreach (ChannelViewModel channel in channels)
+            await patchSourceReceiveWork.StopAsync(channel).ConfigureAwait(false);
     }
 
     private static bool IsAudioDeviceFailure(Exception exception)

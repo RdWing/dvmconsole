@@ -173,7 +173,8 @@ public sealed class SystemViewModelTests
                 OperatorToolSection.Connections,
                 OperatorToolSection.Ptt
             ],
-            Enum.GetValues<OperatorToolSection>().Where(section => section != OperatorToolSection.Clock));
+            Enum.GetValues<OperatorToolSection>().Where(section =>
+                section is not (OperatorToolSection.Clock or OperatorToolSection.EncryptionKeys)));
     }
 
     [Theory]
@@ -519,6 +520,8 @@ public sealed class SystemViewModelTests
                 "2002",
                 out _));
 
+            viewModel.ToggleActivityReceiveFilter();
+
             Assert.Single(viewModel.ActivityCallHistory, entry => entry.SystemName == "Alpha");
             Assert.Single(viewModel.ActivitySubscriberCommandAudit, entry => entry.SystemName == "Alpha");
 
@@ -559,17 +562,55 @@ public sealed class SystemViewModelTests
                 "2001",
                 out _));
 
+            viewModel.ToggleActivityReceiveFilter();
+
             Assert.Equal(2, viewModel.ActivityCallHistory.Count);
             Assert.Single(viewModel.ActivitySubscriberCommandAudit);
-            Assert.Equal("All channels", viewModel.ActivityFilterButtonText);
+            Assert.Equal("System Wide", viewModel.ActivityZoneFilterButtonText);
 
             alpha.SelectedZone = alpha.Zones[1];
-            viewModel.ToggleActivityCurrentZoneFilter();
+            viewModel.ToggleActivityZoneFilter();
 
-            Assert.Equal("Current tab", viewModel.ActivityFilterButtonText);
+            Assert.Equal("Zone Wide", viewModel.ActivityZoneFilterButtonText);
             Assert.Single(viewModel.ActivityCallHistory);
             Assert.Equal("Alpha Emergency", viewModel.ActivityCallHistory[0].ChannelName);
             Assert.Single(viewModel.ActivitySubscriberCommandAudit);
+        }
+        finally
+        {
+            CleanupSettingsPath(settingsPath);
+        }
+    }
+
+    [Fact]
+    public async Task ActivitySidebarShowsRxEnabledChannelsByDefault()
+    {
+        string path = Path.Combine(AppContext.BaseDirectory, "TestData", "multiple-systems.yml");
+        string settingsPath = CreateSettingsPath();
+
+        try
+        {
+            await using MainWindowViewModel viewModel = MainWindowViewModel.Load(
+                path,
+                new UserSettingsStore(settingsPath));
+            SystemViewModel alpha = viewModel.Systems[0];
+            ChannelViewModel enabled = alpha.Channels.Single(channel => channel.Name == "Alpha Dispatch");
+            enabled.SetAudioEnabled(true);
+
+            viewModel.ProcessTraffic(alpha, new FneTrafficFrame(
+                FneTrafficProtocol.Dmr, 1, 42, 101, 0, "GROUP", "VOICE", "VOICE", 1, 701,
+                new byte[DmrVoicePacketCodec.PacketBytes]));
+            viewModel.ProcessTraffic(alpha, new FneTrafficFrame(
+                FneTrafficProtocol.Dmr, 1, 43, 103, 1, "GROUP", "VOICE", "VOICE", 2, 702,
+                new byte[DmrVoicePacketCodec.PacketBytes]));
+
+            Assert.Equal("Active", viewModel.ActivityReceiveFilterButtonText);
+            Assert.Equal("Alpha Dispatch", Assert.Single(viewModel.ActivityCallHistory).ChannelName);
+
+            viewModel.ToggleActivityReceiveFilter();
+
+            Assert.Equal("All", viewModel.ActivityReceiveFilterButtonText);
+            Assert.Equal(2, viewModel.ActivityCallHistory.Count);
         }
         finally
         {
@@ -732,7 +773,7 @@ public sealed class SystemViewModelTests
                 2,
                 77,
                 new byte[DvmConsole.Media.DmrVoicePacketCodec.PacketBytes]),
-                receivedAt: start.AddMilliseconds(20));
+                receivedAt: start.AddSeconds(1.5));
             viewModel.ProcessTraffic(system, new FneTrafficFrame(
                 FneTrafficProtocol.Dmr,
                 1,
@@ -745,7 +786,7 @@ public sealed class SystemViewModelTests
                 3,
                 78,
                 new byte[DvmConsole.Media.DmrVoicePacketCodec.PacketBytes]),
-                receivedAt: start.AddSeconds(1));
+                receivedAt: start.AddSeconds(1.6));
             viewModel.ProcessTraffic(system, new FneTrafficFrame(
                 FneTrafficProtocol.Dmr,
                 1,
@@ -784,12 +825,12 @@ public sealed class SystemViewModelTests
                 6,
                 77,
                 new byte[DvmConsole.Media.DmrVoicePacketCodec.PacketBytes]),
-                receivedAt: start.AddSeconds(3.9));
-            viewModel.ExpireStaleReceiveStates(start.AddSeconds(6));
+                receivedAt: start.AddSeconds(3.1));
+            viewModel.ExpireStaleReceiveStates(start.AddSeconds(4));
 
             CallHistoryEntry[] sessionHistory = viewModel.CallHistory.Where(entry => !entry.IsRecordingOnly).ToArray();
             Assert.Equal(2, sessionHistory.Length);
-            Assert.Contains("non-call DMR terminators 1", system.PacketDiagnosticsText);
+            Assert.Contains("non-call DMR terminators 1", system.ConnectionHealthText);
             Assert.Equal((uint)78, sessionHistory[0].StreamId);
             Assert.False(sessionHistory[0].IsActive);
             Assert.NotNull(sessionHistory[0].Duration);
@@ -836,7 +877,7 @@ public sealed class SystemViewModelTests
             ChannelViewModel channel = system.Channels.Single(candidate => candidate.Name == "Alpha Dispatch");
 
             viewModel.ProcessTraffic(system, CreateDmrTraffic(77, "VOICE", "VOICE"), receivedAt: now);
-            viewModel.ExpireStaleReceiveStates(now.AddSeconds(2.5));
+            viewModel.ExpireStaleReceiveStates(now.AddSeconds(1.5));
 
             Assert.Equal(ChannelRuntimeState.Receiving, channel.State);
             Assert.True(Assert.Single(viewModel.CallHistory).IsActive);
@@ -844,32 +885,32 @@ public sealed class SystemViewModelTests
             viewModel.ProcessTraffic(
                 system,
                 CreateDmrTraffic(77, "VOICE", "VOICE", packetSequence: 2),
-                receivedAt: now.AddSeconds(3));
+                receivedAt: now.AddSeconds(1.75));
 
             Assert.True(Assert.Single(viewModel.CallHistory).IsActive);
 
             viewModel.ProcessTraffic(
                 system,
                 CreateDmrTraffic(77, "TERMINATOR", "TERMINATOR_WITH_LC", packetSequence: 3),
-                receivedAt: now.AddSeconds(4));
+                receivedAt: now.AddSeconds(2.5));
             viewModel.ProcessTraffic(
                 system,
                 CreateDmrTraffic(77, "VOICE", "VOICE", packetSequence: 4),
-                receivedAt: now.AddSeconds(4.5));
+                receivedAt: now.AddSeconds(3));
 
             Assert.Single(viewModel.CallHistory);
             Assert.True(viewModel.CallHistory[0].IsActive);
             Assert.Equal(ChannelRuntimeState.Receiving, channel.State);
             Assert.Equal(0, channel.IgnoredLatePacketCount);
 
-            viewModel.ExpireStaleReceiveStates(now.AddSeconds(8.5));
+            viewModel.ExpireStaleReceiveStates(now.AddSeconds(5));
             Assert.False(viewModel.CallHistory[0].IsActive);
             Assert.Equal(ChannelRuntimeState.Idle, channel.State);
 
             viewModel.ProcessTraffic(
                 system,
                 CreateDmrTraffic(77, "VOICE", "VOICE", packetSequence: 5),
-                receivedAt: now.AddSeconds(9));
+                receivedAt: now.AddSeconds(5.5));
             Assert.Equal(1, channel.IgnoredLatePacketCount);
             Assert.Contains("post-call late 1", viewModel.AudioStatusText, StringComparison.OrdinalIgnoreCase);
         }
@@ -1097,6 +1138,7 @@ public sealed class SystemViewModelTests
                 viewModel.CallHistory,
                 entry => entry.StreamId == 78);
             Assert.Equal(P25Defines.WUID_FNE, placeholder.SourceId);
+            viewModel.ToggleActivityReceiveFilter();
             Assert.Contains(placeholder, viewModel.ActivityCallHistory);
         }
         finally
@@ -1307,12 +1349,12 @@ public sealed class SystemViewModelTests
         {
             system.RecordTraffic(traffic);
 
-            Assert.Equal("RX 1 packets / 3 bytes · TX 0 packets / 0 bytes", system.PacketDiagnosticsText);
+            Assert.Equal("Media this connection · RX 3 B · TX 0 B", system.TrafficTotalsText);
             Assert.Equal("Test ○", system.SystemTabText);
-            Assert.Contains("P25 GROUP/VOICE", system.LastPacketText);
-            Assert.Contains("seq 7", system.LastPacketText);
-            Assert.Contains("stream 42", system.LastPacketText);
-            Assert.Contains("1001→2002", system.LastPacketText);
+            Assert.Contains("P25 GROUP/VOICE", system.StreamTrafficText);
+            Assert.Contains("1 packets / 3 B", system.StreamTrafficText);
+            Assert.Contains("stream 42", system.StreamTrafficText);
+            Assert.Contains("1001→2002", system.StreamTrafficText);
 
             system.ApplyStatus(new FneConnectionStatus(
                 "Test",
@@ -1324,6 +1366,52 @@ public sealed class SystemViewModelTests
         finally
         {
             await system.DisposeAsync();
+        }
+    }
+
+    [Fact]
+    public async Task RestoresAndPersistsRxJitterBufferIndependentlyPerConnection()
+    {
+        string codeplugPath = Path.Combine(AppContext.BaseDirectory, "TestData", "multiple-systems.yml");
+        string settingsPath = CreateSettingsPath();
+        var store = new UserSettingsStore(settingsPath);
+        store.Save(new UserSettings
+        {
+            RxJitterBuffersBySystem = new Dictionary<string, RxJitterBufferSetting>
+            {
+                ["Alpha"] = new()
+                {
+                    P25Milliseconds = 360,
+                    DmrMilliseconds = 60,
+                    NxdnMilliseconds = 80
+                }
+            }
+        });
+
+        try
+        {
+            await using MainWindowViewModel viewModel = MainWindowViewModel.Load(codeplugPath, store);
+            SystemViewModel alpha = Assert.Single(viewModel.Systems, system => system.Name == "Alpha");
+            SystemViewModel beta = Assert.Single(viewModel.Systems, system => system.Name == "Beta");
+
+            Assert.Equal(360, alpha.GetConfiguredJitterBuffer().P25Milliseconds);
+            Assert.Equal(60, alpha.GetConfiguredJitterBuffer().DmrMilliseconds);
+            Assert.Equal(80, alpha.GetConfiguredJitterBuffer().NxdnMilliseconds);
+            Assert.Equal(RxJitterBufferSetting.DefaultP25Milliseconds, beta.GetConfiguredJitterBuffer().P25Milliseconds);
+
+            RxJitterBufferModeViewModel betaP25 = Assert.Single(
+                beta.RxJitterBufferModes,
+                mode => mode.Mode == RxJitterBufferMode.P25);
+            betaP25.SelectedOption = Assert.Single(betaP25.Options, option => option.Milliseconds == 540);
+            await viewModel.ApplyRxJitterBufferAsync(beta);
+
+            UserSettings persisted = store.Load();
+            Assert.Equal(360, persisted.RxJitterBuffersBySystem["Alpha"].P25Milliseconds);
+            Assert.Equal(540, persisted.RxJitterBuffersBySystem["Beta"].P25Milliseconds);
+        }
+        finally
+        {
+            CleanupSettingsPath(settingsPath);
         }
     }
 
@@ -1391,7 +1479,7 @@ public sealed class SystemViewModelTests
         int notifications = 0;
         system.PropertyChanged += (_, args) =>
         {
-            if (args.PropertyName is nameof(SystemViewModel.PacketDiagnosticsText) or nameof(SystemViewModel.LastPacketText))
+            if (args.PropertyName is nameof(SystemViewModel.TrafficTotalsText) or nameof(SystemViewModel.StreamTrafficText))
                 notifications++;
         };
 
@@ -1402,7 +1490,8 @@ public sealed class SystemViewModelTests
             system.PublishTrafficDiagnostics();
 
             Assert.Equal(2, notifications);
-            Assert.StartsWith("RX 20 packets / 60 bytes", system.PacketDiagnosticsText, StringComparison.Ordinal);
+            Assert.Equal("Media this connection · RX 60 B · TX 0 B", system.TrafficTotalsText);
+            Assert.Contains("20 packets / 60 B", system.StreamTrafficText);
         }
         finally
         {

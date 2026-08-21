@@ -97,6 +97,17 @@ public sealed class VoiceFrameDecoder : IDisposable
         return errors;
     }
 
+    public int Process(ReadOnlySpan<byte> codeword, Span<short> samples)
+    {
+        ObjectDisposedException.ThrowIf(disposed, this);
+        if (codeword.Length != VocoderFrameSizes.CodewordBytes(mode))
+            throw new ArgumentException("The codeword length does not match the decoder mode.", nameof(codeword));
+        if (samples.Length != VocoderFrameSizes.PcmSamplesPerFrame)
+            throw new ArgumentException("The PCM destination must contain exactly one vocoder frame.", nameof(samples));
+
+        return session.Decode(codeword, samples);
+    }
+
     public int ProcessLost(Action<ReadOnlyMemory<short>> emit)
     {
         ObjectDisposedException.ThrowIf(disposed, this);
@@ -105,6 +116,15 @@ public sealed class VoiceFrameDecoder : IDisposable
         int errors = session.DecodeLost(samples);
         emit(samples);
         return errors;
+    }
+
+    public int ProcessLost(Span<short> samples)
+    {
+        ObjectDisposedException.ThrowIf(disposed, this);
+        if (samples.Length != VocoderFrameSizes.PcmSamplesPerFrame)
+            throw new ArgumentException("The PCM destination must contain exactly one vocoder frame.", nameof(samples));
+
+        return session.DecodeLost(samples);
     }
 
     public void Reset()

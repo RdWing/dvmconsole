@@ -27,7 +27,8 @@ public sealed record FneTrafficFrame
         ushort packetSequence,
         uint streamId,
         ReadOnlySpan<byte> payload,
-        long fneBoundaryTimestamp = 0)
+        long fneBoundaryTimestamp = 0,
+        long transportIngressTimestamp = 0)
     {
         Protocol = protocol;
         PeerId = peerId;
@@ -43,6 +44,10 @@ public sealed record FneTrafficFrame
         FneBoundaryTimestamp = fneBoundaryTimestamp > 0
             ? fneBoundaryTimestamp
             : Stopwatch.GetTimestamp();
+        TransportIngressTimestamp = transportIngressTimestamp > 0 &&
+            transportIngressTimestamp <= FneBoundaryTimestamp
+                ? transportIngressTimestamp
+                : 0;
     }
 
     public FneTrafficProtocol Protocol { get; }
@@ -59,4 +64,7 @@ public sealed record FneTrafficFrame
     // Monotonic timestamp taken at the app-owned fnecore event boundary. It
     // bounds delay above fnecore without depending on wall-clock adjustments.
     public long FneBoundaryTimestamp { get; }
+    // Monotonic timestamp captured when the traffic UDP receiver completes its
+    // socket read. Zero means the transport adapter did not provide one.
+    public long TransportIngressTimestamp { get; }
 }

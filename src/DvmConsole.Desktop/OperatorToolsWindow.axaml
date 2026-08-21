@@ -447,7 +447,85 @@
       </TabItem>
 
       <TabItem Header="Connections">
-        <ScrollViewer Margin="10"><StackPanel Spacing="12"><TextBlock Classes="heading" Text="FNE Connections and Key Status" /><ItemsControl ItemsSource="{Binding Systems}"><ItemsControl.ItemTemplate><DataTemplate x:DataType="local:SystemViewModel"><Border Classes="panel"><Grid ColumnDefinitions="*,Auto,Auto,Auto" ColumnSpacing="8"><StackPanel><TextBlock FontWeight="SemiBold" Text="{Binding Name}" /><TextBlock Classes="caption" Text="{Binding Endpoint}" /><TextBlock Text="{Binding ConnectionStatus}" /><TextBlock Classes="caption" Text="{Binding PacketDiagnosticsText}" /><TextBlock Classes="caption" Text="{Binding LastPacketText}" TextTrimming="CharacterEllipsis" /></StackPanel><Button Grid.Column="1" Content="Connect" Tag="{Binding}" Click="HandleConnectSystemClick" /><Button Grid.Column="2" Content="Disconnect" Tag="{Binding}" Click="HandleDisconnectSystemClick" /><Button Grid.Column="3" Content="Restart" Tag="{Binding}" Click="HandleRestartSystemClick" /></Grid></Border></DataTemplate></ItemsControl.ItemTemplate></ItemsControl><TextBlock FontWeight="SemiBold" Text="Channel key status" /><ItemsControl ItemsSource="{Binding KeyStatusItems}"><ItemsControl.ItemTemplate><DataTemplate x:DataType="local:KeyStatusItemViewModel"><Border Classes="panel"><Grid ColumnDefinitions="*,*,90,90,140" ColumnSpacing="8"><StackPanel><TextBlock FontWeight="SemiBold" Text="{Binding ChannelName}" /><TextBlock Classes="caption" Text="{Binding SystemName}" /></StackPanel><TextBlock Grid.Column="1" Text="{Binding ModeText}" VerticalAlignment="Center" /><TextBlock Grid.Column="2" Text="{Binding AlgorithmIdText}" VerticalAlignment="Center" /><TextBlock Grid.Column="3" Text="{Binding KeyIdText}" VerticalAlignment="Center" /><TextBlock Grid.Column="4" Text="{Binding StatusText}" VerticalAlignment="Center" /></Grid></Border></DataTemplate></ItemsControl.ItemTemplate></ItemsControl><TextBlock Classes="caption" Text="Key material is never displayed or logged; only identifiers and availability are shown." IsVisible="{Binding HasNoKeyStatusItems}" /></StackPanel></ScrollViewer>
+        <ScrollViewer Margin="10">
+          <StackPanel Spacing="12" Margin="0,0,0,20">
+            <TextBlock Classes="heading" Text="FNE Connections and Key Status" />
+            <ItemsControl ItemsSource="{Binding Systems}">
+              <ItemsControl.ItemTemplate>
+                <DataTemplate x:DataType="local:SystemViewModel">
+                  <Border Classes="panel">
+                    <StackPanel Spacing="6">
+                      <Grid ColumnDefinitions="*,Auto,Auto,Auto" ColumnSpacing="8">
+                        <StackPanel>
+                          <TextBlock FontWeight="SemiBold" Text="{Binding Name}" />
+                          <TextBlock Classes="caption" Text="{Binding Endpoint}" />
+                        </StackPanel>
+                        <Button Grid.Column="1" Content="Connect" Tag="{Binding}" Click="HandleConnectSystemClick" />
+                        <Button Grid.Column="2" Content="Disconnect" Tag="{Binding}" Click="HandleDisconnectSystemClick" />
+                        <Button Grid.Column="3" Content="Restart" Tag="{Binding}" Click="HandleRestartSystemClick" />
+                      </Grid>
+
+                      <TextBlock Text="{Binding ConnectionStatus}" />
+                      <TextBlock Classes="caption" Text="{Binding TrafficTotalsText}" />
+                      <TextBlock Classes="caption" Text="{Binding StreamTrafficText}" TextWrapping="Wrap" />
+                      <TextBlock Classes="caption" Text="{Binding ConnectionHealthText}" TextWrapping="Wrap" />
+
+                      <Separator />
+                      <TextBlock FontWeight="SemiBold" Text="RX network jitter buffer" />
+                      <TextBlock Classes="caption"
+                                 Text="Per-connection delays are packet-aligned. They restore out-of-order packets before decoding when those packets arrive before playout."
+                                 TextWrapping="Wrap" />
+                      <ItemsControl ItemsSource="{Binding RxJitterBufferModes}">
+                        <ItemsControl.ItemsPanel>
+                          <ItemsPanelTemplate><WrapPanel Orientation="Horizontal" /></ItemsPanelTemplate>
+                        </ItemsControl.ItemsPanel>
+                        <ItemsControl.ItemTemplate>
+                          <DataTemplate x:DataType="local:RxJitterBufferModeViewModel">
+                            <StackPanel Width="190" Spacing="2" Margin="0,0,10,2">
+                              <TextBlock Text="{Binding ModeName}" FontWeight="SemiBold" />
+                              <ComboBox ItemsSource="{Binding Options}" SelectedItem="{Binding SelectedOption, Mode=TwoWay}">
+                                <ComboBox.ItemTemplate>
+                                  <DataTemplate x:DataType="local:RxJitterBufferOption">
+                                    <TextBlock Text="{Binding Label}" />
+                                  </DataTemplate>
+                                </ComboBox.ItemTemplate>
+                              </ComboBox>
+                            </StackPanel>
+                          </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                      </ItemsControl>
+                      <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Button Content="Apply to this connection"
+                                Command="{Binding ApplyJitterBufferCommand}"
+                                MinHeight="0"
+                                Padding="8,4" />
+                        <TextBlock Classes="caption" Text="{Binding JitterBufferSummaryText}" VerticalAlignment="Center" />
+                      </StackPanel>
+                    </StackPanel>
+                  </Border>
+                </DataTemplate>
+              </ItemsControl.ItemTemplate>
+            </ItemsControl>
+
+            <TextBlock x:Name="EncryptionKeyStatusSection" FontWeight="SemiBold" Text="Channel key status" />
+            <ItemsControl ItemsSource="{Binding KeyStatusItems}">
+              <ItemsControl.ItemTemplate>
+                <DataTemplate x:DataType="local:KeyStatusItemViewModel">
+                  <Border Classes="panel">
+                    <Grid ColumnDefinitions="*,*,90,90,140" ColumnSpacing="8">
+                      <StackPanel><TextBlock FontWeight="SemiBold" Text="{Binding ChannelName}" /><TextBlock Classes="caption" Text="{Binding SystemName}" /></StackPanel>
+                      <TextBlock Grid.Column="1" Text="{Binding ModeText}" VerticalAlignment="Center" />
+                      <TextBlock Grid.Column="2" Text="{Binding AlgorithmIdText}" VerticalAlignment="Center" />
+                      <TextBlock Grid.Column="3" Text="{Binding KeyIdText}" VerticalAlignment="Center" />
+                      <TextBlock Grid.Column="4" Text="{Binding StatusText}" VerticalAlignment="Center" />
+                    </Grid>
+                  </Border>
+                </DataTemplate>
+              </ItemsControl.ItemTemplate>
+            </ItemsControl>
+            <TextBlock Classes="caption" Text="Key material is never displayed or logged; only identifiers and availability are shown." IsVisible="{Binding HasNoKeyStatusItems}" />
+          </StackPanel>
+        </ScrollViewer>
       </TabItem>
 
       <TabItem Header="PTT">

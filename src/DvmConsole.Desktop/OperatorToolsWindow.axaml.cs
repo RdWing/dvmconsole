@@ -61,6 +61,15 @@ public sealed partial class OperatorToolsWindow : Window
             return;
         }
 
+        if (section == OperatorToolSection.EncryptionKeys)
+        {
+            ToolTabs.SelectedIndex = (int)OperatorToolSection.Connections;
+            Dispatcher.UIThread.Post(
+                () => this.FindControl<TextBlock>("EncryptionKeyStatusSection")?.BringIntoView(),
+                DispatcherPriority.Background);
+            return;
+        }
+
         ToolTabs.SelectedIndex = (int)section;
     }
 
@@ -482,5 +491,6 @@ public enum OperatorToolSection
     Groups,
     Connections,
     Ptt,
-    Clock
+    Clock,
+    EncryptionKeys
 }

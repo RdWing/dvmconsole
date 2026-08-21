@@ -39,6 +39,7 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
     private double stereoBalance;
     private long ignoredLatePacketCount;
     private long droppedReceiveFrameCount;
+    private long receiveAudioMeterStreamId;
     private uint? receivePlaybackSourceId;
     private uint? receivePlaybackStreamId;
     private string ignoredSubscriberIdsText = string.Empty;
@@ -480,6 +481,7 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
     {
         if (!audioEnabled || audioSuspended || streamId == 0)
             return;
+        MarkReceiveAudioMeterActive(streamId);
         if (receivePlaybackSourceId == sourceId && receivePlaybackStreamId == streamId)
             return;
         if (receivePlaybackStreamId is not null)
@@ -492,12 +494,31 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
 
     internal void MarkReceivePlaybackEnded(uint streamId)
     {
+        MarkReceiveAudioMeterEnded(streamId);
         if (receivePlaybackStreamId != streamId)
             return;
 
         receivePlaybackSourceId = null;
         receivePlaybackStreamId = null;
         NotifyReceivePresentationChanged();
+    }
+
+    // The decoder path can lead the UI-thread lifecycle pass during a traffic
+    // burst. Track its first audible stream without raising properties from a
+    // worker thread so early meter samples remain eligible for the next UI
+    // refresh instead of being discarded.
+    internal void MarkReceiveAudioMeterActive(uint streamId)
+    {
+        if (streamId == 0)
+            return;
+        Interlocked.CompareExchange(ref receiveAudioMeterStreamId, streamId, 0);
+    }
+
+    internal void MarkReceiveAudioMeterEnded(uint streamId)
+    {
+        if (streamId == 0)
+            return;
+        Interlocked.CompareExchange(ref receiveAudioMeterStreamId, 0, streamId);
     }
 
     internal void RefreshReceivePresentation()
@@ -516,6 +537,7 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
 
     private void ClearReceivePlayback()
     {
+        Interlocked.Exchange(ref receiveAudioMeterStreamId, 0);
         if (receivePlaybackStreamId is null)
             return;
         receivePlaybackSourceId = null;
@@ -559,10 +581,22 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
         uint? streamId = null)
     {
         double normalized = double.IsFinite(value) ? Math.Clamp(value, 0, 100) : 0;
+        long fastReceiveStreamId = Interlocked.Read(ref receiveAudioMeterStreamId);
+        if (streamId is uint expectedStreamId)
+        {
+            bool streamMatches = PresentationStreamId == expectedStreamId ||
+                (direction == ChannelAudioDirection.Receive &&
+                 fastReceiveStreamId == expectedStreamId);
+            if (!streamMatches)
+                return;
+        }
+        bool fastReceiveActive = direction == ChannelAudioDirection.Receive &&
+            streamId is uint receiveStreamId &&
+            fastReceiveStreamId == receiveStreamId;
         if ((direction == ChannelAudioDirection.Receive &&
-             (!audioEnabled || audioSuspended || !IsReceivePresentationActive)) ||
-            (direction == ChannelAudioDirection.Transmit && runtime.State != ChannelRuntimeState.Transmitting) ||
-            (streamId is uint expectedStreamId && PresentationStreamId != expectedStreamId))
+             (!audioEnabled || audioSuspended ||
+              (!IsReceivePresentationActive && !fastReceiveActive))) ||
+            (direction == ChannelAudioDirection.Transmit && runtime.State != ChannelRuntimeState.Transmitting))
         {
             normalized = 0;
         }

@@ -115,10 +115,11 @@ public sealed class SystemTrafficBufferTests
         Assert.True(buffer.TryDequeue(out SystemTrafficWorkItem? actual));
 
         Assert.NotNull(actual);
-        Assert.Same(traffic, actual.Traffic);
-        Assert.Equal(receivedAt, actual.ReceivedAt);
-        Assert.Equal(123, actual.ReceivedTimestamp);
-        Assert.Same(channel, Assert.Single(actual.PreEnqueuedAudioChannels));
+        SystemTrafficWorkItem dequeued = actual.Value;
+        Assert.Same(traffic, dequeued.Traffic);
+        Assert.Equal(receivedAt, dequeued.ReceivedAt);
+        Assert.Equal(123, dequeued.ReceivedTimestamp);
+        Assert.Same(channel, Assert.Single(dequeued.PreEnqueuedAudioChannels));
     }
 
     private static FneTrafficFrame Traffic(

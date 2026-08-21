@@ -52,7 +52,7 @@ public static class OpusRecordingEncoder
         await using var output = new FileStream(
             opusPath,
             FileMode.CreateNew,
-            FileAccess.Write,
+            FileAccess.ReadWrite,
             FileShare.None,
             bufferSize: 16_384,
             useAsync: false);
@@ -79,14 +79,18 @@ public static class OpusRecordingEncoder
             inputSampleRate: pcm.SampleRate,
             leaveOpen: true);
         short[] samples = new short[1600];
+        long sourceSampleCount = 0;
         while (true)
         {
             int count = await pcm.ReadSamplesAsync(samples, cancellationToken).ConfigureAwait(false);
             if (count == 0)
                 break;
             ogg.WriteSamples(samples, 0, count);
+            sourceSampleCount = checked(sourceSampleCount + count);
         }
         ogg.Finish();
         await output.FlushAsync(cancellationToken).ConfigureAwait(false);
+        OggOpusDurationFinalizer.SetExactPcmDuration(output, sourceSampleCount, pcm.SampleRate);
+        output.Flush(flushToDisk: true);
     }
 }

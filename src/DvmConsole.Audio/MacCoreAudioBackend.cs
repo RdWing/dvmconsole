@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Runtime.InteropServices;
 
 namespace DvmConsole.Audio;
@@ -285,7 +286,10 @@ public sealed class MacCoreAudioBackend :
         }
     }
 
-    private sealed class MacCoreAudioPlayback : IAudioPlayback, IAudioPlaybackContinuityDiagnostics
+    private sealed class MacCoreAudioPlayback :
+        IAudioPlayback,
+        IAudioPlaybackContinuityDiagnostics,
+        IAudioPlaybackCallbackDiagnostics
     {
         private readonly NativeCoreAudioApi api;
         private readonly IntPtr stream;
@@ -316,6 +320,10 @@ public sealed class MacCoreAudioBackend :
         public TimeSpan StarvedDuration => TimeSpan.FromSeconds(
             api.GetStarvedSamples(stream) /
             (double)checked(nativeSampleRate * Format.Channels));
+        public TimeSpan PendingStarvedDuration => TimeSpan.FromSeconds(
+            api.GetPendingStarvedSamples(stream) /
+            (double)checked(nativeSampleRate * Format.Channels));
+        public long OutputCallbackCount => checked((long)api.GetOutputCallbackCount(stream));
 
         public void EndExpectedPlayback()
         {
@@ -326,17 +334,90 @@ public sealed class MacCoreAudioBackend :
         public async ValueTask WriteAsync(ReadOnlyMemory<short> samples, CancellationToken cancellationToken = default)
         {
             ObjectDisposedException.ThrowIf(disposed, this);
-            short[] buffer = rateConverter?.Convert(samples.Span) ?? samples.ToArray();
+            if (rateConverter is null)
+            {
+                await WriteUnconvertedAsync(samples, cancellationToken).ConfigureAwait(false);
+                return;
+            }
+
+            int maximumOutputSamples = rateConverter.GetMaximumOutputSampleCount(samples.Length);
+            if (maximumOutputSamples == 0)
+            {
+                rateConverter.Convert(samples.Span, Span<short>.Empty);
+                return;
+            }
+
+            short[] buffer = ArrayPool<short>.Shared.Rent(maximumOutputSamples);
+            try
+            {
+                int convertedSamples = rateConverter.Convert(
+                    samples.Span,
+                    buffer.AsSpan(0, maximumOutputSamples));
+                await WriteConvertedAsync(
+                    buffer,
+                    convertedSamples,
+                    cancellationToken).ConfigureAwait(false);
+            }
+            finally
+            {
+                ArrayPool<short>.Shared.Return(buffer);
+            }
+        }
+
+        private async ValueTask WriteUnconvertedAsync(
+            ReadOnlyMemory<short> samples,
+            CancellationToken cancellationToken)
+        {
+            short[] buffer = GetZeroOffsetArrayOrCopy(samples);
             int offset = 0;
             while (offset < buffer.Length)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                int written = api.WriteStream(stream, buffer.AsSpan(offset).ToArray(), buffer.Length - offset);
+                short[] writeBuffer = offset == 0
+                    ? buffer
+                    : buffer.AsSpan(offset).ToArray();
+                int written = api.WriteStream(stream, writeBuffer, buffer.Length - offset);
                 EnsureSuccess(written < 0 ? written : 0, "write CoreAudio playback");
                 offset += written;
                 if (written == 0)
                     await Task.Delay(2, cancellationToken).ConfigureAwait(false);
             }
+        }
+
+        private async ValueTask WriteConvertedAsync(
+            short[] buffer,
+            int sampleCount,
+            CancellationToken cancellationToken)
+        {
+            int remaining = sampleCount;
+            while (remaining > 0)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                int written = api.WriteStream(stream, buffer, remaining);
+                EnsureSuccess(written < 0 ? written : 0, "write CoreAudio playback");
+                if (written > 0)
+                {
+                    remaining -= written;
+                    if (remaining > 0)
+                        Array.Copy(buffer, written, buffer, 0, remaining);
+                }
+                else
+                {
+                    await Task.Delay(2, cancellationToken).ConfigureAwait(false);
+                }
+            }
+        }
+
+        private static short[] GetZeroOffsetArrayOrCopy(ReadOnlyMemory<short> samples)
+        {
+            if (MemoryMarshal.TryGetArray(samples, out ArraySegment<short> segment) &&
+                segment.Array is short[] array &&
+                segment.Offset == 0 &&
+                segment.Count == array.Length)
+            {
+                return array;
+            }
+            return samples.ToArray();
         }
 
         public ValueTask FlushAsync(CancellationToken cancellationToken = default)
@@ -468,7 +549,10 @@ public sealed class MacCoreAudioBackend :
         }
     }
 
-    private sealed class MacVoiceProcessingPlayback : IAudioPlayback, IAudioPlaybackContinuityDiagnostics
+    private sealed class MacVoiceProcessingPlayback :
+        IAudioPlayback,
+        IAudioPlaybackContinuityDiagnostics,
+        IAudioPlaybackCallbackDiagnostics
     {
         private readonly VoiceProcessingSession session;
         private bool disposed;
@@ -491,6 +575,8 @@ public sealed class MacCoreAudioBackend :
         public PcmAudioFormat Format { get; }
         public int? QueuedSamples => session.QueuedSamples;
         public TimeSpan StarvedDuration => session.StarvedDuration;
+        public TimeSpan PendingStarvedDuration => session.PendingStarvedDuration;
+        public long OutputCallbackCount => session.OutputCallbackCount;
 
         public void EndExpectedPlayback()
         {
@@ -501,12 +587,24 @@ public sealed class MacCoreAudioBackend :
         public async ValueTask WriteAsync(ReadOnlyMemory<short> samples, CancellationToken cancellationToken = default)
         {
             ObjectDisposedException.ThrowIf(disposed, this);
-            short[] buffer = samples.ToArray();
+            short[] buffer;
+            if (MemoryMarshal.TryGetArray(samples, out ArraySegment<short> segment) &&
+                segment.Array is short[] array &&
+                segment.Offset == 0 &&
+                segment.Count == array.Length)
+            {
+                buffer = array;
+            }
+            else
+            {
+                buffer = samples.ToArray();
+            }
             int offset = 0;
             while (offset < buffer.Length)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                int written = session.Write(buffer.AsSpan(offset).ToArray());
+                int written = session.Write(
+                    offset == 0 ? buffer : buffer.AsSpan(offset).ToArray());
                 if (written < 0)
                     EnsureSuccess(written, "write Apple voice-processing playback");
                 offset += written;
@@ -660,6 +758,11 @@ public sealed class MacCoreAudioBackend :
         public TimeSpan StarvedDuration => TimeSpan.FromSeconds(
             api.GetVoiceProcessingStarvedSamples(stream) /
             (double)checked(format.SampleRate * format.Channels));
+        public TimeSpan PendingStarvedDuration => TimeSpan.FromSeconds(
+            api.GetVoiceProcessingPendingStarvedSamples(stream) /
+            (double)checked(format.SampleRate * format.Channels));
+        public long OutputCallbackCount => checked(
+            (long)api.GetVoiceProcessingOutputCallbackCount(stream));
 
         public void AddEndpoint(PcmAudioFormat requestedFormat, VoiceEndpoint endpoint)
         {
@@ -809,6 +912,8 @@ public sealed class MacCoreAudioBackend :
         private readonly StreamWriteDelegate writeStream;
         private readonly StreamQueuedSamplesDelegate queuedSamples;
         private readonly StreamStarvedSamplesDelegate starvedSamples;
+        private readonly StreamStarvedSamplesDelegate pendingStarvedSamples;
+        private readonly StreamStarvedSamplesDelegate outputCallbackCount;
         private readonly EndPlaybackContinuityDelegate endPlaybackContinuity;
         private readonly DestroyStreamDelegate destroyStream;
         private readonly CreateVoiceProcessingStreamDelegate createVoiceProcessingStream;
@@ -818,6 +923,8 @@ public sealed class MacCoreAudioBackend :
         private readonly StreamWriteDelegate writeVoiceProcessing;
         private readonly StreamQueuedSamplesDelegate voiceProcessingQueuedSamples;
         private readonly StreamStarvedSamplesDelegate voiceProcessingStarvedSamples;
+        private readonly StreamStarvedSamplesDelegate voiceProcessingPendingStarvedSamples;
+        private readonly StreamStarvedSamplesDelegate voiceProcessingOutputCallbackCount;
         private readonly EndPlaybackContinuityDelegate endVoiceProcessingPlaybackContinuity;
         private readonly DestroyStreamDelegate destroyVoiceProcessingStream;
         private readonly AcquireHighQualityBluetoothDelegate acquireHighQualityBluetooth;
@@ -839,6 +946,8 @@ public sealed class MacCoreAudioBackend :
             writeStream = Get<StreamWriteDelegate>("dvm_audio_stream_write");
             queuedSamples = Get<StreamQueuedSamplesDelegate>("dvm_audio_stream_queued_samples");
             starvedSamples = Get<StreamStarvedSamplesDelegate>("dvm_audio_stream_starved_samples");
+            pendingStarvedSamples = Get<StreamStarvedSamplesDelegate>("dvm_audio_stream_pending_starved_samples");
+            outputCallbackCount = Get<StreamStarvedSamplesDelegate>("dvm_audio_stream_output_callback_count");
             endPlaybackContinuity = Get<EndPlaybackContinuityDelegate>("dvm_audio_stream_end_playback_continuity");
             destroyStream = Get<DestroyStreamDelegate>("dvm_audio_stream_destroy");
             createVoiceProcessingStream = Get<CreateVoiceProcessingStreamDelegate>("dvm_audio_voice_processing_create");
@@ -848,6 +957,8 @@ public sealed class MacCoreAudioBackend :
             writeVoiceProcessing = Get<StreamWriteDelegate>("dvm_audio_voice_processing_write");
             voiceProcessingQueuedSamples = Get<StreamQueuedSamplesDelegate>("dvm_audio_voice_processing_queued_samples");
             voiceProcessingStarvedSamples = Get<StreamStarvedSamplesDelegate>("dvm_audio_voice_processing_starved_samples");
+            voiceProcessingPendingStarvedSamples = Get<StreamStarvedSamplesDelegate>("dvm_audio_voice_processing_pending_starved_samples");
+            voiceProcessingOutputCallbackCount = Get<StreamStarvedSamplesDelegate>("dvm_audio_voice_processing_output_callback_count");
             endVoiceProcessingPlaybackContinuity = Get<EndPlaybackContinuityDelegate>("dvm_audio_voice_processing_end_playback_continuity");
             destroyVoiceProcessingStream = Get<DestroyStreamDelegate>("dvm_audio_voice_processing_destroy");
             acquireHighQualityBluetooth = Get<AcquireHighQualityBluetoothDelegate>("dvm_audio_high_quality_bluetooth_acquire");
@@ -889,6 +1000,8 @@ public sealed class MacCoreAudioBackend :
         public int WriteStream(IntPtr stream, short[] samples, int count) => writeStream(stream, samples, count);
         public uint GetQueuedSamples(IntPtr stream) => queuedSamples(stream);
         public ulong GetStarvedSamples(IntPtr stream) => starvedSamples(stream);
+        public ulong GetPendingStarvedSamples(IntPtr stream) => pendingStarvedSamples(stream);
+        public ulong GetOutputCallbackCount(IntPtr stream) => outputCallbackCount(stream);
         public void EndPlaybackContinuity(IntPtr stream) => endPlaybackContinuity(stream);
         public void DestroyStream(IntPtr stream) => destroyStream(stream);
         public IntPtr CreateVoiceProcessingStream(ulong inputDeviceId, ulong outputDeviceId, int sampleRate, int channels, int bits) => createVoiceProcessingStream(inputDeviceId, outputDeviceId, sampleRate, channels, bits);
@@ -898,6 +1011,8 @@ public sealed class MacCoreAudioBackend :
         public int WriteVoiceProcessing(IntPtr stream, short[] samples, int count) => writeVoiceProcessing(stream, samples, count);
         public uint GetVoiceProcessingQueuedSamples(IntPtr stream) => voiceProcessingQueuedSamples(stream);
         public ulong GetVoiceProcessingStarvedSamples(IntPtr stream) => voiceProcessingStarvedSamples(stream);
+        public ulong GetVoiceProcessingPendingStarvedSamples(IntPtr stream) => voiceProcessingPendingStarvedSamples(stream);
+        public ulong GetVoiceProcessingOutputCallbackCount(IntPtr stream) => voiceProcessingOutputCallbackCount(stream);
         public void EndVoiceProcessingPlaybackContinuity(IntPtr stream) => endVoiceProcessingPlaybackContinuity(stream);
         public void DestroyVoiceProcessingStream(IntPtr stream) => destroyVoiceProcessingStream(stream);
         public int AcquireHighQualityBluetooth(ulong inputDeviceId, ulong outputDeviceId) => acquireHighQualityBluetooth(inputDeviceId, outputDeviceId);

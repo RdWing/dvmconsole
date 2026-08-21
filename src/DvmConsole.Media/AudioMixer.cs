@@ -1,4 +1,5 @@
 using DvmConsole.Audio;
+using System.Buffers;
 using System.Diagnostics;
 
 namespace DvmConsole.Media;
@@ -19,7 +20,20 @@ public sealed record AudioMixerDiagnostics(
     long GapFilledSamples,
     long SuppressedLiveConcealmentSamples,
     long TransitionDiscardedSamples,
-    TimeSpan? PhysicalOutputStarvation);
+    TimeSpan? PhysicalOutputStarvation,
+    TimeSpan? PendingPhysicalOutputStarvation = null,
+    long? PhysicalOutputCallbackCount = null,
+    TimeSpan? PhysicalOutputCallbackAge = null,
+    long AgedLiveSamples = 0,
+    IReadOnlyList<AudioMixerLaneDiagnostics>? LaneDiagnostics = null);
+
+public sealed record AudioMixerLaneDiagnostics(
+    string Label,
+    long DroppedSamples,
+    long OverflowResynchronizations,
+    long GapFilledSamples,
+    long AgedLiveSamples,
+    int PeakBufferedFrames);
 
 // Reports when a lane's PCM is handed to the physical output queue. The delay
 // is the queued-device duration ahead of those samples, allowing presentation
@@ -36,10 +50,15 @@ public interface IAudioPlaybackPresentationSource
 public sealed class AudioMixer : IAsyncDisposable
 {
     // Four 20 ms frames keep the hardware just far enough ahead for stable
-    // playout. A detected underrun temporarily adds two frames, while a lane
-    // that reaches 320 ms is collapsed back to the normal 80 ms depth.
+    // playout. A detected underrun temporarily adds two frames. Streaming
+    // writes recover an overflowing lane to 80 ms; complete network-packet
+    // writes retain the newest packet as one admission unit.
     private const int DefaultStartupBufferedFrames = 4;
-    private const int MaximumBufferedFrames = 16;
+    // P25 delivers nine 20 ms voice frames per LDU. Bound the lane at exactly
+    // three complete LDUs so two-LDU steady state retains one full LDU of
+    // jitter headroom without splitting the emergency limit across a packet.
+    // The physical output target remains 80 ms.
+    private const int MaximumBufferedFrames = 27;
     private const int OverflowRecoveryFrames = 4;
     private const int BoundarySmoothingSamples = 40;
     private const int NormalOutputBufferedFrames = 4;
@@ -47,10 +66,12 @@ public sealed class AudioMixer : IAsyncDisposable
     private const int LiveConcealmentBufferedFrames = 9;
     private static readonly TimeSpan PumpInterval = TimeSpan.FromMilliseconds(10);
     private static readonly TimeSpan RecoveryHoldDuration = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan OutputCallbackStallTimeout = TimeSpan.FromSeconds(1);
     private readonly IAudioPlayback output;
     private readonly PcmAudioFormat inputFormat;
     private readonly object sync = new();
     private readonly Dictionary<int, ChannelBuffer> channels = [];
+    private readonly Dictionary<string, LaneDiagnosticsAccumulator> laneDiagnostics = [];
     private readonly CancellationTokenSource cancellation = new();
     private readonly SemaphoreSlim dataAvailable = new(0, 1);
     private readonly TaskCompletionSource pumpCompletion =
@@ -66,6 +87,7 @@ public sealed class AudioMixer : IAsyncDisposable
     private readonly short[] outputFrame;
     private readonly short[] silentInputFrame;
     private readonly bool supportsBufferedPlayout;
+    private readonly IAudioPlaybackCallbackDiagnostics? callbackDiagnostics;
     private int nextChannelId;
     private int targetOutputBufferedFrames = NormalOutputBufferedFrames;
     private long recoveryHoldUntilTimestamp;
@@ -88,6 +110,9 @@ public sealed class AudioMixer : IAsyncDisposable
     private long gapFilledSamples;
     private long suppressedLiveConcealmentSamples;
     private long transitionDiscardedSamples;
+    private long agedLiveSamples;
+    private long lastOutputCallbackCount;
+    private long lastOutputCallbackTimestamp;
 
     public AudioMixer(IAudioPlayback output)
     {
@@ -98,6 +123,9 @@ public sealed class AudioMixer : IAsyncDisposable
         frameSamples = Math.Max(1, output.Format.SampleRate / 50);
         outputFrameSamples = checked(frameSamples * output.Format.Channels);
         supportsBufferedPlayout = output.QueuedSamples is not null;
+        callbackDiagnostics = output as IAudioPlaybackCallbackDiagnostics;
+        lastOutputCallbackCount = callbackDiagnostics?.OutputCallbackCount ?? 0;
+        lastOutputCallbackTimestamp = Stopwatch.GetTimestamp();
         startupBufferedFrames = !supportsBufferedPlayout
             ? 1
             : DefaultStartupBufferedFrames;
@@ -150,8 +178,14 @@ public sealed class AudioMixer : IAsyncDisposable
     {
         TimeSpan? physicalOutputStarvation =
             (output as IAudioPlaybackContinuityDiagnostics)?.StarvedDuration;
+        TimeSpan? pendingPhysicalOutputStarvation =
+            (output as IAudioPlaybackContinuityDiagnostics)?.PendingStarvedDuration;
+        long? outputCallbackCount = callbackDiagnostics?.OutputCallbackCount;
         lock (sync)
         {
+            TimeSpan? outputCallbackAge = callbackDiagnostics is null
+                ? null
+                : Stopwatch.GetElapsedTime(lastOutputCallbackTimestamp);
             return new AudioMixerDiagnostics(
                 droppedSamples,
                 overflowResynchronizations,
@@ -168,7 +202,16 @@ public sealed class AudioMixer : IAsyncDisposable
                 gapFilledSamples,
                 suppressedLiveConcealmentSamples,
                 transitionDiscardedSamples,
-                physicalOutputStarvation);
+                physicalOutputStarvation,
+                pendingPhysicalOutputStarvation,
+                outputCallbackCount,
+                outputCallbackAge,
+                agedLiveSamples,
+                laneDiagnostics.Values
+                    .Select(diagnostics => diagnostics.Snapshot())
+                    .OrderByDescending(diagnostics => diagnostics.DroppedSamples)
+                    .ThenByDescending(diagnostics => diagnostics.GapFilledSamples)
+                    .ToArray());
         }
     }
 
@@ -235,7 +278,12 @@ public sealed class AudioMixer : IAsyncDisposable
             string label = string.IsNullOrWhiteSpace(diagnosticLabel)
                 ? $"mixer lane {id}"
                 : diagnosticLabel.Trim();
-            var channel = new ChannelBuffer(id, frameSamples, label);
+            if (!laneDiagnostics.TryGetValue(label, out LaneDiagnosticsAccumulator? diagnostics))
+            {
+                diagnostics = new LaneDiagnosticsAccumulator(label);
+                laneDiagnostics.Add(label, diagnostics);
+            }
+            var channel = new ChannelBuffer(id, frameSamples, label, diagnostics);
             channels.Add(channel.Id, channel);
             return new ChannelPlayback(this, channel);
         }
@@ -340,12 +388,28 @@ public sealed class AudioMixer : IAsyncDisposable
                     TimeSpan presentationDelay = GetPhysicalQueueDuration();
                     if (!TryTakeFrame(
                             out ReadOnlyMemory<short> frame,
-                            out PresentationNotification[] notifications))
+                            out PresentationNotification[] notifications,
+                            out int notificationCount))
                         break;
-                    output.WriteAsync(frame, cancellationToken).GetAwaiter().GetResult();
-                    lock (sync)
-                        outputWasPrimed = true;
-                    NotifyPresentations(notifications, presentationDelay);
+                    try
+                    {
+                        output.WriteAsync(frame, cancellationToken).GetAwaiter().GetResult();
+                        lock (sync)
+                            outputWasPrimed = true;
+                        NotifyPresentations(
+                            notifications,
+                            notificationCount,
+                            presentationDelay);
+                    }
+                    finally
+                    {
+                        if (notificationCount > 0)
+                        {
+                            ArrayPool<PresentationNotification>.Shared.Return(
+                                notifications,
+                                clearArray: true);
+                        }
+                    }
                 }
             }
         }
@@ -382,10 +446,14 @@ public sealed class AudioMixer : IAsyncDisposable
         long now = Stopwatch.GetTimestamp();
         int targetFrames;
         bool endExpectedPlayback = false;
+        bool expectsPlayback;
         lock (sync)
         {
             bool hasReadyFrames = HasReadyFramesLocked();
             bool expectsMoreInput = ExpectsMoreLiveInputLocked();
+            expectsPlayback = hasReadyFrames ||
+                expectsMoreInput ||
+                (outputWasPrimed && queuedSamples > 0);
             if (!hasReadyFrames && queuedSamples == 0 && !expectsMoreInput)
             {
                 endExpectedPlayback = outputWasPrimed;
@@ -406,6 +474,7 @@ public sealed class AudioMixer : IAsyncDisposable
             }
             targetFrames = targetOutputBufferedFrames;
         }
+        ObserveOutputCallbackHealth(expectsPlayback);
         if (endExpectedPlayback && output is IAudioPlaybackContinuityDiagnostics continuity)
             continuity.EndExpectedPlayback();
 
@@ -429,11 +498,13 @@ public sealed class AudioMixer : IAsyncDisposable
     }
 
     private static void NotifyPresentations(
-        IReadOnlyList<PresentationNotification> notifications,
+        PresentationNotification[] notifications,
+        int count,
         TimeSpan presentationDelay)
     {
-        foreach (PresentationNotification notification in notifications)
+        for (int index = 0; index < count; index++)
         {
+            PresentationNotification notification = notifications[index];
             try
             {
                 notification.Observer(notification.Samples, presentationDelay);
@@ -448,7 +519,8 @@ public sealed class AudioMixer : IAsyncDisposable
 
     private bool TryTakeFrame(
         out ReadOnlyMemory<short> frame,
-        out PresentationNotification[] notifications)
+        out PresentationNotification[] notifications,
+        out int notificationCount)
     {
         lock (sync)
         {
@@ -456,6 +528,7 @@ public sealed class AudioMixer : IAsyncDisposable
             {
                 frame = default;
                 notifications = [];
+                notificationCount = 0;
                 return false;
             }
 
@@ -463,7 +536,8 @@ public sealed class AudioMixer : IAsyncDisposable
             if (rightMix is not null)
                 Array.Clear(rightMix);
             List<ChannelBuffer>? drainedChannels = null;
-            List<PresentationNotification>? presented = null;
+            PresentationNotification[]? presented = null;
+            int presentedCount = 0;
             foreach (ChannelBuffer channel in channels.Values)
             {
                 if (!channel.PlayoutStarted)
@@ -477,14 +551,17 @@ public sealed class AudioMixer : IAsyncDisposable
                     channel.PresentedGapSamples = checked(
                         channel.PresentedGapSamples + frameSamples);
                     gapFilledSamples = checked(gapFilledSamples + frameSamples);
+                    channel.Diagnostics.GapFilledSamples = checked(
+                        channel.Diagnostics.GapFilledSamples + frameSamples);
                     channel.LastOutputSample = 0;
                     channel.HasLastOutputSample = true;
                     channel.BoundarySmoothingPending = true;
                     if (channel.PresentationObserver is not null)
                     {
-                        (presented ??= []).Add(new PresentationNotification(
+                        presented ??= ArrayPool<PresentationNotification>.Shared.Rent(channels.Count);
+                        presented[presentedCount++] = new PresentationNotification(
                             channel.PresentationObserver,
-                            silentInputFrame));
+                            silentInputFrame);
                     }
                     continue;
                 }
@@ -493,9 +570,10 @@ public sealed class AudioMixer : IAsyncDisposable
 
                 if (channel.PresentationObserver is not null)
                 {
-                    (presented ??= []).Add(new PresentationNotification(
+                    presented ??= ArrayPool<PresentationNotification>.Shared.Rent(channels.Count);
+                    presented[presentedCount++] = new PresentationNotification(
                         channel.PresentationObserver,
-                        source));
+                        source);
                 }
 
                 int count = Math.Min(frameSamples, source.Length);
@@ -546,7 +624,8 @@ public sealed class AudioMixer : IAsyncDisposable
                     outputFrame[outputIndex + 1] = ToPcm(rightMix[index] * protection);
             }
             frame = outputFrame;
-            notifications = presented?.ToArray() ?? [];
+            notifications = presented ?? [];
+            notificationCount = presentedCount;
             return true;
         }
     }
@@ -575,6 +654,7 @@ public sealed class AudioMixer : IAsyncDisposable
         ChannelBuffer channel,
         ReadOnlyMemory<short> samples,
         bool concealment,
+        bool packetAdmission,
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
@@ -635,6 +715,9 @@ public sealed class AudioMixer : IAsyncDisposable
                 channel.BoundarySmoothingPending = channel.HasLastOutputSample;
             }
 
+            if (packetAdmission)
+                AgePacketBacklogLocked(channel, samples.Length);
+
             ReadOnlySpan<short> incoming = samples.Span;
             while (!incoming.IsEmpty)
             {
@@ -662,15 +745,13 @@ public sealed class AudioMixer : IAsyncDisposable
                    channel.Frames.TryDequeue(out short[]? discarded))
             {
                 overflowCorrected = true;
-                channel.DroppedSamples += discarded.Length;
-                droppedSamples += discarded.Length;
-                lastDroppedLane = channel.DiagnosticLabel;
-                lastDroppedLaneSamples = channel.DroppedSamples;
+                RecordDroppedFrameLocked(channel, discarded.Length, aged: false);
             }
         }
         if (overflowCorrected)
         {
             overflowResynchronizations++;
+            channel.Diagnostics.OverflowResynchronizations++;
             channel.BoundarySmoothingPending = channel.HasLastOutputSample;
         }
 
@@ -681,7 +762,91 @@ public sealed class AudioMixer : IAsyncDisposable
             channel.PlayoutStarted = true;
         }
         peakBufferedFrames = Math.Max(peakBufferedFrames, channel.Frames.Count);
+        channel.Diagnostics.PeakBufferedFrames = Math.Max(
+            channel.Diagnostics.PeakBufferedFrames,
+            channel.Frames.Count);
         SignalDataAvailable();
+    }
+
+    private void AgePacketBacklogLocked(ChannelBuffer channel, int incomingSamples)
+    {
+        int incomingFrames = checked(
+            (channel.PartialCount + incomingSamples) / frameSamples);
+        if (incomingFrames <= 0)
+            return;
+
+        int projectedFrames = checked(channel.Frames.Count + incomingFrames);
+        if (projectedFrames <= MaximumBufferedFrames)
+            return;
+
+        int droppedFrames = 0;
+        while (channel.Frames.TryDequeue(out short[]? discarded))
+        {
+            RecordDroppedFrameLocked(channel, discarded.Length, aged: true);
+            droppedFrames++;
+        }
+        int droppedPartialSamples = channel.PartialCount;
+        if (droppedPartialSamples > 0)
+        {
+            RecordDroppedFrameLocked(channel, droppedPartialSamples, aged: true);
+            channel.PartialCount = 0;
+        }
+        if (droppedFrames == 0 && droppedPartialSamples == 0)
+            return;
+
+        overflowResynchronizations++;
+        channel.Diagnostics.OverflowResynchronizations++;
+        channel.BoundarySmoothingPending = channel.HasLastOutputSample;
+    }
+
+    private void RecordDroppedFrameLocked(
+        ChannelBuffer channel,
+        int sampleCount,
+        bool aged)
+    {
+        channel.DroppedSamples = checked(channel.DroppedSamples + sampleCount);
+        droppedSamples = checked(droppedSamples + sampleCount);
+        channel.Diagnostics.DroppedSamples = checked(
+            channel.Diagnostics.DroppedSamples + sampleCount);
+        if (aged)
+        {
+            agedLiveSamples = checked(agedLiveSamples + sampleCount);
+            channel.Diagnostics.AgedLiveSamples = checked(
+                channel.Diagnostics.AgedLiveSamples + sampleCount);
+        }
+        lastDroppedLane = channel.DiagnosticLabel;
+        lastDroppedLaneSamples = channel.DroppedSamples;
+    }
+
+    private void ObserveOutputCallbackHealth(bool expectsPlayback)
+    {
+        if (callbackDiagnostics is null)
+            return;
+
+        long now = Stopwatch.GetTimestamp();
+        long callbackCount = callbackDiagnostics.OutputCallbackCount;
+        lock (sync)
+        {
+            if (callbackCount != lastOutputCallbackCount)
+            {
+                lastOutputCallbackCount = callbackCount;
+                lastOutputCallbackTimestamp = now;
+                return;
+            }
+
+            if (!outputWasPrimed || !expectsPlayback)
+            {
+                lastOutputCallbackTimestamp = now;
+                return;
+            }
+
+            if (Stopwatch.GetElapsedTime(lastOutputCallbackTimestamp, now) >=
+                OutputCallbackStallTimeout)
+            {
+                throw new IOException(
+                    "The physical audio output callback stopped advancing while live playback was active.");
+            }
+        }
     }
 
     private static void SmoothCorrectedBoundary(ChannelBuffer channel, short[] source)
@@ -812,10 +977,15 @@ public sealed class AudioMixer : IAsyncDisposable
         Action<ReadOnlyMemory<short>, TimeSpan> Observer,
         ReadOnlyMemory<short> Samples);
 
-    private sealed class ChannelBuffer(int id, int frameSamples, string diagnosticLabel)
+    private sealed class ChannelBuffer(
+        int id,
+        int frameSamples,
+        string diagnosticLabel,
+        LaneDiagnosticsAccumulator diagnostics)
     {
         public int Id { get; } = id;
         public string DiagnosticLabel { get; } = diagnosticLabel;
+        public LaneDiagnosticsAccumulator Diagnostics { get; } = diagnostics;
         public Queue<short[]> Frames { get; } = [];
         public short[] PartialFrame { get; set; } = new short[frameSamples];
         public int PartialCount { get; set; }
@@ -838,6 +1008,7 @@ public sealed class AudioMixer : IAsyncDisposable
     private sealed class ChannelPlayback(AudioMixer owner, ChannelBuffer channel) :
         IAudioPlayback,
         IConcealmentAudioPlayback,
+        ILivePacketAudioPlayback,
         ILiveAudioPlaybackControl,
         IAudioPlaybackPresentationSource,
         IAudioGainControl,
@@ -917,7 +1088,26 @@ public sealed class AudioMixer : IAsyncDisposable
         public ValueTask WriteAsync(ReadOnlyMemory<short> samples, CancellationToken cancellationToken = default)
         {
             ObjectDisposedException.ThrowIf(disposed, this);
-            owner.Enqueue(channel, samples, concealment: false, cancellationToken);
+            owner.Enqueue(
+                channel,
+                samples,
+                concealment: false,
+                packetAdmission: false,
+                cancellationToken);
+            return ValueTask.CompletedTask;
+        }
+
+        public ValueTask WriteLivePacketAsync(
+            ReadOnlyMemory<short> samples,
+            CancellationToken cancellationToken = default)
+        {
+            ObjectDisposedException.ThrowIf(disposed, this);
+            owner.Enqueue(
+                channel,
+                samples,
+                concealment: false,
+                packetAdmission: true,
+                cancellationToken);
             return ValueTask.CompletedTask;
         }
 
@@ -926,7 +1116,12 @@ public sealed class AudioMixer : IAsyncDisposable
             CancellationToken cancellationToken = default)
         {
             ObjectDisposedException.ThrowIf(disposed, this);
-            owner.Enqueue(channel, samples, concealment: true, cancellationToken);
+            owner.Enqueue(
+                channel,
+                samples,
+                concealment: true,
+                packetAdmission: false,
+                cancellationToken);
             return ValueTask.CompletedTask;
         }
 
@@ -948,5 +1143,24 @@ public sealed class AudioMixer : IAsyncDisposable
 
             return ValueTask.CompletedTask;
         }
+    }
+
+    private sealed class LaneDiagnosticsAccumulator(string label)
+    {
+        public string Label { get; } = label;
+        public long DroppedSamples { get; set; }
+        public long OverflowResynchronizations { get; set; }
+        public long GapFilledSamples { get; set; }
+        public long AgedLiveSamples { get; set; }
+        public int PeakBufferedFrames { get; set; }
+
+        public AudioMixerLaneDiagnostics Snapshot()
+            => new(
+                Label,
+                DroppedSamples,
+                OverflowResynchronizations,
+                GapFilledSamples,
+                AgedLiveSamples,
+                PeakBufferedFrames);
     }
 }

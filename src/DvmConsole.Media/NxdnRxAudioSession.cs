@@ -97,43 +97,47 @@ public sealed class NxdnRxAudioSession : IAsyncDisposable
         lastVoiceCodewordCount = codewordCount;
         int errors = 0;
         bool missingPrivacy = false;
+        short[] packetSamples = new short[
+            checked(codewordCount * VocoderFrameSizes.PcmSamplesPerFrame)];
+        bool[] concealed = new bool[codewordCount];
+        Span<byte> parameters = stackalloc byte[VocoderFrameSizes.HalfRateParameterBytes];
         for (int index = 0; index < codewordCount; index++)
         {
             ReadOnlySpan<byte> codeword = ambe.AsSpan(
                 index * NxdnVoicePacketCodec.CodewordBytes,
                 NxdnVoicePacketCodec.CodewordBytes);
+            Span<short> frameSamples = packetSamples.AsSpan(
+                index * VocoderFrameSizes.PcmSamplesPerFrame,
+                VocoderFrameSizes.PcmSamplesPerFrame);
             if (privacyAlgorithm != 0)
             {
                 if (privacyProcessor is null)
                 {
                     missingPrivacy = true;
-                    await ConcealFrameAsync(cancellationToken).ConfigureAwait(false);
+                    concealed[index] = true;
+                    decoder.ProcessLost(frameSamples);
+                    FramesDecoded++;
                     continue;
                 }
-                byte[] parameters = new byte[VocoderFrameSizes.HalfRateParameterBytes];
                 HalfRateFecStatus status = privacyProcessor.ExtractAndProcessParameters(
                     codeword,
                     parameters);
-                short[] decryptedSamples = new short[VocoderFrameSizes.PcmSamplesPerFrame];
                 halfRateVocoder!.DecodeParameters(
                     parameters,
-                    decryptedSamples,
+                    frameSamples,
                     status.DecoderErrorMetric,
                     status.Unrecoverable);
                 errors += checked((int)status.DecoderErrorMetric);
-                await playback.WriteAsync(decryptedSamples, cancellationToken).ConfigureAwait(false);
                 FramesDecoded++;
                 hasDecodedVoiceInActiveStream = true;
                 continue;
             }
-            short[]? samples = null;
-            errors += decoder.Process(
-                codeword,
-                decoded => samples = decoded.ToArray());
-            await playback.WriteAsync(samples!, cancellationToken).ConfigureAwait(false);
+            errors += decoder.Process(codeword, frameSamples);
             FramesDecoded++;
             hasDecodedVoiceInActiveStream = true;
         }
+        await WritePacketSegmentsAsync(packetSamples, concealed, cancellationToken)
+            .ConfigureAwait(false);
         if (missingPrivacy)
             MalformedPackets++;
         return errors;
@@ -149,10 +153,16 @@ public sealed class NxdnRxAudioSession : IAsyncDisposable
         const int maximumConcealedPackets = 10;
         int frameCount = checked((int)Math.Min(lostPackets, maximumConcealedPackets)) *
             lastVoiceCodewordCount;
-        var concealedFrames = new List<short[]>(frameCount);
+        var concealedSamples = new short[
+            checked(frameCount * VocoderFrameSizes.PcmSamplesPerFrame)];
         for (int index = 0; index < frameCount; index++)
-            concealedFrames.Add(DecodeLostFrame());
-        await ConcealmentAudioWriter.WriteAsync(playback, concealedFrames, cancellationToken)
+        {
+            decoder.ProcessLost(concealedSamples.AsSpan(
+                index * VocoderFrameSizes.PcmSamplesPerFrame,
+                VocoderFrameSizes.PcmSamplesPerFrame));
+            FramesDecoded++;
+        }
+        await ConcealmentAudioWriter.WriteAsync(playback, concealedSamples, cancellationToken)
             .ConfigureAwait(false);
         if (lostPackets > maximumConcealedPackets)
             decoder.Reset();
@@ -161,18 +171,34 @@ public sealed class NxdnRxAudioSession : IAsyncDisposable
     private ValueTask ConcealCurrentPacketAsync(CancellationToken cancellationToken)
         => ConcealLostPacketsAsync(1, cancellationToken);
 
-    private ValueTask ConcealFrameAsync(CancellationToken cancellationToken)
-        => ConcealmentAudioWriter.WriteAsync(
-            playback,
-            [DecodeLostFrame()],
-            cancellationToken);
-
-    private short[] DecodeLostFrame()
+    private async ValueTask WritePacketSegmentsAsync(
+        short[] packetSamples,
+        bool[] concealed,
+        CancellationToken cancellationToken)
     {
-        short[] samples = [];
-        decoder.ProcessLost(decoded => samples = decoded.ToArray());
-        FramesDecoded++;
-        return samples;
+        int segmentStart = 0;
+        while (segmentStart < concealed.Length)
+        {
+            bool isConcealed = concealed[segmentStart];
+            int segmentEnd = segmentStart + 1;
+            while (segmentEnd < concealed.Length && concealed[segmentEnd] == isConcealed)
+                segmentEnd++;
+
+            ReadOnlyMemory<short> segment = packetSamples.AsMemory(
+                segmentStart * VocoderFrameSizes.PcmSamplesPerFrame,
+                (segmentEnd - segmentStart) * VocoderFrameSizes.PcmSamplesPerFrame);
+            if (isConcealed)
+            {
+                await ConcealmentAudioWriter.WriteAsync(playback, segment, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            else
+            {
+                await LivePacketAudioWriter.WriteAsync(playback, segment, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            segmentStart = segmentEnd;
+        }
     }
 
     private void InvalidatePrivacyAfterLoss()

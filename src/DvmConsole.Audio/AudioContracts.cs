@@ -114,6 +114,17 @@ public interface IConcealmentAudioPlayback
         CancellationToken cancellationToken = default);
 }
 
+// Optional packet-aware live playback path. Digital receive sessions use this
+// to preserve one network packet as a single admission unit while the mixer
+// still presents fixed 20 ms PCM frames. Recorders remain upstream of this
+// live-only policy and therefore retain the complete decoded packet.
+public interface ILivePacketAudioPlayback
+{
+    ValueTask WriteLivePacketAsync(
+        ReadOnlyMemory<short> samples,
+        CancellationToken cancellationToken = default);
+}
+
 // Optional per-lane live-presentation control. Disabling presentation discards
 // queued and future speaker-bound PCM without closing the decoder-facing
 // playback object, allowing observers such as TAR writers to keep receiving the
@@ -129,7 +140,16 @@ public interface ILiveAudioPlaybackControl
 public interface IAudioPlaybackContinuityDiagnostics
 {
     TimeSpan StarvedDuration { get; }
+    TimeSpan PendingStarvedDuration => TimeSpan.Zero;
     void EndExpectedPlayback();
+}
+
+// Optional physical render heartbeat. The value advances from the native or
+// platform playback callback, independently of managed queue writes, so a
+// stalled device can be distinguished from an ordinary empty input lane.
+public interface IAudioPlaybackCallbackDiagnostics
+{
+    long OutputCallbackCount { get; }
 }
 
 public interface IAudioGainControl

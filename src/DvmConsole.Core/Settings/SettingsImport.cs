@@ -9,7 +9,8 @@ public enum SettingsImportScope
     Presets = 1 << 2,
     RecordingAndPatch = 1 << 3,
     Session = 1 << 4,
-    OperatorState = General | Audio | Presets | RecordingAndPatch,
+    Connections = 1 << 5,
+    OperatorState = General | Audio | Connections | Presets | RecordingAndPatch,
     All = OperatorState | Session
 }
 

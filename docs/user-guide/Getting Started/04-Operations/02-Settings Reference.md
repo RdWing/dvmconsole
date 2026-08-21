@@ -184,7 +184,52 @@ See **Configurations > Talkgroup Audio Recorder** for TAR recording, retention, 
 
 ## FNE Connection Manager
 
-Opens manual connection controls for configured FNE systems.
+Opens the **Connections** page for manual connection controls, the current or
+most recently completed RX stream, local receive-health counters, and key status
+for configured FNE systems. The view is refreshed at a stable cadence rather
+than for every packet.
+
+### Per-connection RX network jitter buffer
+
+Each FNE connection has independent P25, DMR, and NXDN jitter settings. The
+buffer holds complete network packets before decoding. If a packet arrives out
+of order but before its playout deadline, the console restores it to the correct
+place in the stream. If the deadline expires first, playback continues and the
+decoder applies its normal loss concealment; one missing packet cannot stall the
+call.
+
+Only protocol-aligned durations are offered:
+
+- P25: Off, 180, 360, or 540 ms. The 180 ms default is one complete LDU.
+- DMR: Off, 60, 120, or 180 ms. The 120 ms default is two network packets.
+- NXDN: Off, 80, 160, or 240 ms. The 160 ms default is two network packets.
+
+The configured duration is added to the existing decode and speaker-output
+path. In normal conditions, estimated packet-arrival-to-speaker latency is the
+selected jitter duration plus approximately 80–110 ms. The physical audio
+device can add a small route-dependent amount that the application cannot
+measure exactly. Turning the jitter buffer off minimizes latency but removes
+the packet reordering opportunity.
+
+Choose **Apply to this connection** to save that FNE's settings and safely
+recreate active listening and patch-source decode sessions.
+
+Debug Logs report a packet successfully restored to playout order as a jitter
+buffer reorder event. A separate warning reports when an expected packet misses
+its deadline and playback advances. The `jitter/decoder queue` value is one
+component of the enclosing `total FNE-to-mixer` time, so the two values can be
+nearly identical when decoding and mixer admission take only a few milliseconds.
+
+Live timing high-water marks and jitter counters reset for the next stream.
+Already-emitted reorder, deadline, and timing messages remain in the Debug Logs
+session within the displayed entry and memory limits. When a limit is reached,
+the window discards the oldest entries first and reports the discarded count.
+
+## Encryption Key Status
+
+Opens Console Settings directly at the channel key-status section of the
+**Connections** page. The view displays key identifiers and availability only;
+key material is never displayed or logged.
 
 ---
 

@@ -28,7 +28,7 @@ public sealed class ChannelAudioMeterPipelineTests
     }
 
     [Fact]
-    public void NewStreamDiscardsBufferedLevelsFromThePreviousCall()
+    public void NewStreamDoesNotDiscardAnIndependentMeterWindow()
     {
         ChannelViewModel channel = CreateReceivingChannel(FneTrafficProtocol.P25, streamId: 8);
         var pipeline = new ChannelAudioMeterPipeline();
@@ -44,10 +44,63 @@ public sealed class ChannelAudioMeterPipelineTests
             Enumerable.Repeat((short)1_000, 160).ToArray(),
             ChannelAudioDirection.Receive);
 
-        ChannelAudioMeterUpdate update = Assert.Single(pipeline.Advance());
+        ChannelAudioMeterUpdate[] updates = pipeline.Advance().ToArray();
+        ChannelAudioMeterUpdate update = Assert.Single(
+            updates,
+            candidate => candidate.StreamId == 8);
 
+        Assert.Equal(2, updates.Length);
         Assert.Equal((uint)8, update.StreamId);
         Assert.InRange(update.Level, 0.1, 20);
+    }
+
+    [Fact]
+    public void CollidingStreamsKeepIndependentMeterWindows()
+    {
+        ChannelViewModel channel = CreateReceivingChannel(FneTrafficProtocol.P25, streamId: 7);
+        var pipeline = new ChannelAudioMeterPipeline();
+
+        pipeline.Observe(
+            channel,
+            streamId: 7,
+            Enumerable.Repeat((short)12_000, 160).ToArray(),
+            ChannelAudioDirection.Receive);
+        pipeline.Observe(
+            channel,
+            streamId: 8,
+            Enumerable.Repeat((short)2_000, 160).ToArray(),
+            ChannelAudioDirection.Receive);
+
+        ChannelAudioMeterUpdate[] updates = pipeline.Advance().ToArray();
+
+        Assert.Equal(2, updates.Length);
+        Assert.Contains(updates, update => update.StreamId == 7 && update.Level > 0);
+        Assert.Contains(updates, update => update.StreamId == 8 && update.Level > 0);
+    }
+
+    [Fact]
+    public void FastReceiveStreamCanPresentBeforeUiLifecycleCatchesUp()
+    {
+        var channel = new ChannelViewModel(new ChannelConfiguration
+        {
+            Name = "Dispatch",
+            System = "System 1",
+            Tgid = "99",
+            Mode = "p25"
+        });
+        channel.SetAudioEnabled(true);
+        channel.MarkReceiveAudioMeterActive(7);
+        var pipeline = new ChannelAudioMeterPipeline();
+        pipeline.Observe(
+            channel,
+            streamId: 7,
+            Enumerable.Repeat((short)12_000, 160).ToArray(),
+            ChannelAudioDirection.Receive);
+
+        ChannelAudioMeterUpdate update = Assert.Single(pipeline.Advance());
+        channel.SetAudioLevel(update.Level, update.Direction, update.StreamId);
+
+        Assert.True(channel.AudioLevel > 0);
     }
 
     [Fact]

@@ -80,37 +80,39 @@ public sealed class DmrRxAudioSession : IAsyncDisposable
             return 0;
         }
         int errors = 0;
+        short[] packetSamples = new short[
+            DmrVoicePacketCodec.CodewordsPerPacket * VocoderFrameSizes.PcmSamplesPerFrame];
+        Span<byte> parameters = stackalloc byte[VocoderFrameSizes.HalfRateParameterBytes];
         for (int index = 0; index < DmrVoicePacketCodec.CodewordsPerPacket; index++)
         {
-            byte[] codeword = ambe.AsSpan(
+            ReadOnlySpan<byte> codeword = ambe.AsSpan(
                 index * DmrVoicePacketCodec.CodewordBytes,
-                DmrVoicePacketCodec.CodewordBytes).ToArray();
+                DmrVoicePacketCodec.CodewordBytes);
+            Span<short> frameSamples = packetSamples.AsSpan(
+                index * VocoderFrameSizes.PcmSamplesPerFrame,
+                VocoderFrameSizes.PcmSamplesPerFrame);
             if (privacyProcessor is not null)
             {
-                byte[] parameters = new byte[VocoderFrameSizes.HalfRateParameterBytes];
                 HalfRateFecStatus status = privacyProcessor.ExtractAndProcessParameters(
                     codeword,
                     parameters);
-                short[] decryptedSamples = new short[VocoderFrameSizes.PcmSamplesPerFrame];
                 ((IHalfRateVocoderSession)vocoder).DecodeParameters(
                     parameters,
-                    decryptedSamples,
+                    frameSamples,
                     status.DecoderErrorMetric,
                     status.Unrecoverable);
                 errors += checked((int)status.DecoderErrorMetric);
-                await playback.WriteAsync(decryptedSamples, cancellationToken).ConfigureAwait(false);
-                FramesDecoded++;
-                hasDecodedVoiceInActiveStream = true;
-                continue;
             }
-            short[] samples = [];
-            errors += decoder.Process(
-                codeword,
-                decoded => samples = decoded.ToArray());
-            await playback.WriteAsync(samples, cancellationToken).ConfigureAwait(false);
+            else
+            {
+                errors += decoder.Process(codeword, frameSamples);
+            }
             FramesDecoded++;
             hasDecodedVoiceInActiveStream = true;
         }
+
+        await LivePacketAudioWriter.WriteAsync(playback, packetSamples, cancellationToken)
+            .ConfigureAwait(false);
 
         return errors;
     }
@@ -125,15 +127,16 @@ public sealed class DmrRxAudioSession : IAsyncDisposable
         const int maximumConcealedPackets = 10;
         int frameCount = checked((int)Math.Min(lostPackets, maximumConcealedPackets)) *
             DmrVoicePacketCodec.CodewordsPerPacket;
-        var concealedFrames = new List<short[]>(frameCount);
+        var concealedSamples = new short[
+            checked(frameCount * VocoderFrameSizes.PcmSamplesPerFrame)];
         for (int index = 0; index < frameCount; index++)
         {
-            short[] samples = [];
-            decoder.ProcessLost(decoded => samples = decoded.ToArray());
-            concealedFrames.Add(samples);
+            decoder.ProcessLost(concealedSamples.AsSpan(
+                index * VocoderFrameSizes.PcmSamplesPerFrame,
+                VocoderFrameSizes.PcmSamplesPerFrame));
             FramesDecoded++;
         }
-        await ConcealmentAudioWriter.WriteAsync(playback, concealedFrames, cancellationToken)
+        await ConcealmentAudioWriter.WriteAsync(playback, concealedSamples, cancellationToken)
             .ConfigureAwait(false);
         if (lostPackets > maximumConcealedPackets)
             decoder.Reset();

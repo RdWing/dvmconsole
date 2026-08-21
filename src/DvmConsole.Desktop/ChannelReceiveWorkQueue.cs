@@ -9,7 +9,12 @@ internal readonly record struct ReceiveWorkQueueDiagnostics(
     TimeSpan MaximumIngressToQueueDelay,
     TimeSpan MaximumQueueDelay,
     TimeSpan MaximumProcessingDuration,
-    TimeSpan MaximumEndToEndDelay);
+    TimeSpan MaximumEndToEndDelay,
+    TimeSpan MaximumTransportInterArrivalDelay = default,
+    TimeSpan MaximumTransportToFneBoundaryDelay = default,
+    TimeSpan MaximumConfiguredJitterBufferDelay = default,
+    long JitterBufferReorderedPackets = 0,
+    long JitterBufferDeadlineMissedPackets = 0);
 
 internal readonly record struct ReceiveWorkItemTiming(
     FneTrafficFrame Traffic,
@@ -17,10 +22,15 @@ internal readonly record struct ReceiveWorkItemTiming(
     TimeSpan IngressToQueueDelay,
     TimeSpan QueueDelay,
     TimeSpan ProcessingDuration,
-    TimeSpan EndToEndDelay);
+    TimeSpan EndToEndDelay,
+    TimeSpan TransportInterArrivalDelay = default,
+    TimeSpan TransportToFneBoundaryDelay = default,
+    TimeSpan ConfiguredJitterBufferDelay = default,
+    bool JitterBufferReorderedPacket = false,
+    int JitterBufferDeadlineMissedPackets = 0);
 
 // Keeps receive work ordered for one channel without coupling it to any other
-// channel. The bounded pending list prevents a slow decoder or output device
+// channel. The bounded pending buffer prevents a slow decoder or output device
 // from growing an unbounded continuation chain during a busy period.
 internal sealed class ChannelReceiveWorkQueue : IAsyncDisposable
 {
@@ -30,19 +40,22 @@ internal sealed class ChannelReceiveWorkQueue : IAsyncDisposable
     private readonly HashSet<ChannelViewModel> stoppedChannels = [];
     private readonly Func<ChannelViewModel, FneTrafficFrame, Task> process;
     private readonly Action<ChannelViewModel, ReceiveWorkItemTiming>? timingObserver;
+    private readonly Func<ChannelViewModel, FneTrafficProtocol, ReceiveJitterBufferProfile> getJitterBufferProfile;
     private readonly int maxPendingFramesPerChannel;
     private bool disposed;
 
     public ChannelReceiveWorkQueue(
         Func<ChannelViewModel, FneTrafficFrame, Task> process,
         int maxPendingFramesPerChannel = 64,
-        Action<ChannelViewModel, ReceiveWorkItemTiming>? timingObserver = null)
+        Action<ChannelViewModel, ReceiveWorkItemTiming>? timingObserver = null,
+        Func<ChannelViewModel, FneTrafficProtocol, ReceiveJitterBufferProfile>? getJitterBufferProfile = null)
     {
         this.process = process ?? throw new ArgumentNullException(nameof(process));
         if (maxPendingFramesPerChannel < 1)
             throw new ArgumentOutOfRangeException(nameof(maxPendingFramesPerChannel));
         this.maxPendingFramesPerChannel = maxPendingFramesPerChannel;
         this.timingObserver = timingObserver;
+        this.getJitterBufferProfile = getJitterBufferProfile ?? ((_, _) => default);
     }
 
     public void Start(ChannelViewModel channel)
@@ -57,12 +70,14 @@ internal sealed class ChannelReceiveWorkQueue : IAsyncDisposable
         }
     }
 
-    public ReceiveWorkQueueDiagnostics GetDiagnostics(ChannelViewModel channel)
+    public ReceiveWorkQueueDiagnostics GetDiagnostics(
+        ChannelViewModel channel,
+        uint? streamId = null)
     {
         ArgumentNullException.ThrowIfNull(channel);
         lock (sync)
             return timing.TryGetValue(channel, out TimingAccumulator? current)
-                ? current.Snapshot()
+                ? current.Snapshot(streamId)
                 : default;
     }
 
@@ -104,7 +119,8 @@ internal sealed class ChannelReceiveWorkQueue : IAsyncDisposable
                     process,
                     accumulator,
                     maxPendingFramesPerChannel,
-                    timingObserver);
+                    timingObserver,
+                    getJitterBufferProfile);
                 workers.Add(channel, worker);
             }
 
@@ -126,6 +142,7 @@ internal sealed class ChannelReceiveWorkQueue : IAsyncDisposable
         {
             worker.Complete();
             await worker.Completion.ConfigureAwait(false);
+            worker.Dispose();
         }
     }
 
@@ -144,17 +161,21 @@ internal sealed class ChannelReceiveWorkQueue : IAsyncDisposable
         foreach (ChannelWorker worker in oldWorkers)
             worker.Complete();
         await Task.WhenAll(oldWorkers.Select(worker => worker.Completion)).ConfigureAwait(false);
+        foreach (ChannelWorker worker in oldWorkers)
+            worker.Dispose();
     }
 
     private sealed class ChannelWorker
     {
         private readonly object sync = new();
-        private readonly LinkedList<WorkItem> pending = [];
+        private readonly ReceivePacketJitterBuffer<WorkItem> pending;
+        private readonly SemaphoreSlim wakeSignal = new(0);
         private readonly ChannelViewModel channel;
         private readonly Func<ChannelViewModel, FneTrafficFrame, Task> process;
         private readonly TimingAccumulator timing;
         private readonly int maxPendingFrames;
         private readonly Action<ChannelViewModel, ReceiveWorkItemTiming>? timingObserver;
+        private readonly Func<ChannelViewModel, FneTrafficProtocol, ReceiveJitterBufferProfile> getJitterBufferProfile;
         private readonly TaskCompletionSource completion =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
         private bool accepting = true;
@@ -165,13 +186,20 @@ internal sealed class ChannelReceiveWorkQueue : IAsyncDisposable
             Func<ChannelViewModel, FneTrafficFrame, Task> process,
             TimingAccumulator timing,
             int maxPendingFrames,
-            Action<ChannelViewModel, ReceiveWorkItemTiming>? timingObserver)
+            Action<ChannelViewModel, ReceiveWorkItemTiming>? timingObserver,
+            Func<ChannelViewModel, FneTrafficProtocol, ReceiveJitterBufferProfile> getJitterBufferProfile)
         {
             this.channel = channel;
             this.process = process;
             this.timing = timing;
             this.maxPendingFrames = maxPendingFrames;
             this.timingObserver = timingObserver;
+            this.getJitterBufferProfile = getJitterBufferProfile;
+            pending = new ReceivePacketJitterBuffer<WorkItem>(
+                item => item.Traffic.StreamId,
+                item => item.Traffic.PacketSequence,
+                item => ReceiveTrafficClassifier.IsTerminator(item.Traffic),
+                item => item.JitterBufferProfile);
         }
 
         public Task Completion => completion.Task;
@@ -196,11 +224,20 @@ internal sealed class ChannelReceiveWorkQueue : IAsyncDisposable
                 long normalizedIngressTimestamp = ingressTimestamp > 0
                     ? ingressTimestamp
                     : Stopwatch.GetTimestamp();
-                pending.AddLast(new WorkItem(
+                ReceiveIngressTiming ingressTiming = timing.ObserveIngress(
+                    traffic.StreamId,
+                    traffic.TransportIngressTimestamp,
+                    normalizedIngressTimestamp);
+                long enqueuedTimestamp = Stopwatch.GetTimestamp();
+                pending.Enqueue(new WorkItem(
                     traffic,
-                    timing.ObserveIngress(traffic.StreamId, normalizedIngressTimestamp),
+                    ingressTiming.FneInterArrivalDelay,
+                    ingressTiming.TransportInterArrivalDelay,
+                    ingressTiming.TransportToFneBoundaryDelay,
                     normalizedIngressTimestamp,
-                    Stopwatch.GetTimestamp()));
+                    enqueuedTimestamp,
+                    getJitterBufferProfile(channel, traffic.Protocol)), enqueuedTimestamp);
+                wakeSignal.Release();
                 if (!running)
                 {
                     running = true;
@@ -215,62 +252,36 @@ internal sealed class ChannelReceiveWorkQueue : IAsyncDisposable
             lock (sync)
             {
                 accepting = false;
+                wakeSignal.Release();
                 if (!running)
                     completion.TrySetResult();
             }
         }
 
+        public void Dispose()
+            => wakeSignal.Dispose();
+
         private bool MakeRoomFor(FneTrafficFrame incoming)
         {
-            LinkedListNode<WorkItem>? candidate = pending.First;
-            while (candidate is not null)
-            {
-                if (!ReceiveTrafficClassifier.IsTerminator(candidate.Value.Traffic) &&
-                    HasLaterVoiceForSameStream(candidate))
-                {
-                    break;
-                }
-                candidate = candidate.Next;
-            }
+            if (pending.TryRemoveOldestSuperseded())
+                return true;
 
-            if (candidate is null && ReceiveTrafficClassifier.IsTerminator(incoming))
+            if (ReceiveTrafficClassifier.IsTerminator(incoming) &&
+                pending.TryRemoveOldest(item =>
+                    !ReceiveTrafficClassifier.IsTerminator(item.Traffic) &&
+                    item.Traffic.StreamId != incoming.StreamId))
             {
-                candidate = pending.First;
-                while (candidate is not null &&
-                       (ReceiveTrafficClassifier.IsTerminator(candidate.Value.Traffic) ||
-                        candidate.Value.Traffic.StreamId == incoming.StreamId))
-                {
-                    candidate = candidate.Next;
-                }
-            }
-
-            candidate ??= pending.First;
-            while (candidate is not null &&
-                   ReceiveTrafficClassifier.IsTerminator(candidate.Value.Traffic))
-                candidate = candidate.Next;
-
-            if (candidate is not null)
-            {
-                pending.Remove(candidate);
                 return true;
             }
+
+            if (pending.TryRemoveOldest(item =>
+                    !ReceiveTrafficClassifier.IsTerminator(item.Traffic)))
+                return true;
 
             if (!ReceiveTrafficClassifier.IsTerminator(incoming))
                 return false;
 
-            pending.RemoveFirst();
-            return true;
-        }
-
-        private static bool HasLaterVoiceForSameStream(LinkedListNode<WorkItem> candidate)
-        {
-            for (LinkedListNode<WorkItem>? later = candidate.Next; later is not null; later = later.Next)
-            {
-                if (!ReceiveTrafficClassifier.IsTerminator(later.Value.Traffic) &&
-                    later.Value.Traffic.StreamId == candidate.Value.Traffic.StreamId)
-                    return true;
-            }
-            return false;
+            return pending.TryRemoveOldest(_ => true);
         }
 
         private async Task ProcessLoopAsync()
@@ -278,18 +289,33 @@ internal sealed class ChannelReceiveWorkQueue : IAsyncDisposable
             while (true)
             {
                 WorkItem item;
+                TimeSpan waitTime;
+                ReceiveJitterBufferDequeueMetadata jitterMetadata;
+                bool hasItem;
                 lock (sync)
                 {
-                    if (pending.First is null)
+                    hasItem = pending.TryDequeue(
+                        Stopwatch.GetTimestamp(),
+                        drain: !accepting,
+                        out item,
+                        out waitTime,
+                        out jitterMetadata);
+                    if (!hasItem && pending.Count == 0)
                     {
                         running = false;
                         if (!accepting)
                             completion.TrySetResult();
                         return;
                     }
+                }
 
-                    item = pending.First.Value;
-                    pending.RemoveFirst();
+                if (!hasItem)
+                {
+                    if (waitTime == Timeout.InfiniteTimeSpan)
+                        await wakeSignal.WaitAsync().ConfigureAwait(false);
+                    else
+                        await wakeSignal.WaitAsync(waitTime).ConfigureAwait(false);
+                    continue;
                 }
 
                 long processingStarted = Stopwatch.GetTimestamp();
@@ -312,7 +338,12 @@ internal sealed class ChannelReceiveWorkQueue : IAsyncDisposable
                         Stopwatch.GetElapsedTime(item.IngressTimestamp, item.EnqueuedTimestamp),
                         Stopwatch.GetElapsedTime(item.EnqueuedTimestamp, processingStarted),
                         Stopwatch.GetElapsedTime(processingStarted, processingCompleted),
-                        Stopwatch.GetElapsedTime(item.IngressTimestamp, processingCompleted));
+                        Stopwatch.GetElapsedTime(item.IngressTimestamp, processingCompleted),
+                        item.TransportInterArrivalDelay,
+                        item.TransportToFneBoundaryDelay,
+                        item.JitterBufferProfile.TargetDelay,
+                        jitterMetadata.ReorderedBeforePlayout,
+                        jitterMetadata.MissingPacketsAtDeadline);
                     timing.Observe(observed);
                     try
                     {
@@ -323,6 +354,8 @@ internal sealed class ChannelReceiveWorkQueue : IAsyncDisposable
                         // Timing is diagnostic only and must never strand the
                         // ordered decoder worker or later lifecycle traffic.
                     }
+                    if (ReceiveTrafficClassifier.IsTerminator(item.Traffic))
+                        timing.EndStream(item.Traffic.StreamId);
                 }
             }
         }
@@ -330,72 +363,178 @@ internal sealed class ChannelReceiveWorkQueue : IAsyncDisposable
         private readonly record struct WorkItem(
             FneTrafficFrame Traffic,
             TimeSpan InterArrivalDelay,
+            TimeSpan TransportInterArrivalDelay,
+            TimeSpan TransportToFneBoundaryDelay,
             long IngressTimestamp,
-            long EnqueuedTimestamp);
+            long EnqueuedTimestamp,
+            ReceiveJitterBufferProfile JitterBufferProfile);
     }
+
+    private readonly record struct ReceiveIngressTiming(
+        TimeSpan FneInterArrivalDelay,
+        TimeSpan TransportInterArrivalDelay,
+        TimeSpan TransportToFneBoundaryDelay);
 
     private sealed class TimingAccumulator
     {
+        private const int MaximumTrackedStreams = 32;
         private readonly object sync = new();
-        private long processedFrames;
-        private readonly Dictionary<uint, long> lastIngressByStream = [];
-        private readonly Queue<uint> ingressStreamOrder = [];
-        private TimeSpan maximumInterArrivalDelay;
-        private TimeSpan maximumIngressToQueueDelay;
-        private TimeSpan maximumQueueDelay;
-        private TimeSpan maximumProcessingDuration;
-        private TimeSpan maximumEndToEndDelay;
+        private readonly Dictionary<uint, StreamTimingAccumulator> streams = [];
+        private readonly LinkedList<uint> streamOrder = [];
 
-        public TimeSpan ObserveIngress(uint streamId, long ingressTimestamp)
+        public ReceiveIngressTiming ObserveIngress(
+            uint streamId,
+            long transportIngressTimestamp,
+            long fneBoundaryTimestamp)
         {
             lock (sync)
-            {
-                TimeSpan delay = lastIngressByStream.TryGetValue(streamId, out long previous)
-                    ? Stopwatch.GetElapsedTime(previous, ingressTimestamp)
-                    : TimeSpan.Zero;
-                if (!lastIngressByStream.ContainsKey(streamId))
-                {
-                    ingressStreamOrder.Enqueue(streamId);
-                    while (ingressStreamOrder.Count > 32)
-                        lastIngressByStream.Remove(ingressStreamOrder.Dequeue());
-                }
-                lastIngressByStream[streamId] = ingressTimestamp;
-                maximumInterArrivalDelay = Max(maximumInterArrivalDelay, delay);
-                return delay;
-            }
+                return GetOrCreate(streamId).ObserveIngress(
+                    transportIngressTimestamp,
+                    fneBoundaryTimestamp);
         }
 
         public void Observe(ReceiveWorkItemTiming observed)
         {
             lock (sync)
-            {
-                processedFrames++;
-                maximumIngressToQueueDelay = Max(
-                    maximumIngressToQueueDelay,
-                    observed.IngressToQueueDelay);
-                maximumQueueDelay = Max(maximumQueueDelay, observed.QueueDelay);
-                maximumProcessingDuration = Max(
-                    maximumProcessingDuration,
-                    observed.ProcessingDuration);
-                maximumEndToEndDelay = Max(maximumEndToEndDelay, observed.EndToEndDelay);
-            }
+                GetOrCreate(observed.Traffic.StreamId).Observe(observed);
         }
 
-        public ReceiveWorkQueueDiagnostics Snapshot()
+        public ReceiveWorkQueueDiagnostics Snapshot(uint? streamId)
         {
             lock (sync)
             {
-                return new ReceiveWorkQueueDiagnostics(
+                if (streamId is uint selectedStreamId)
+                    return streams.TryGetValue(selectedStreamId, out StreamTimingAccumulator? selected)
+                        ? selected.Snapshot()
+                        : default;
+
+                ReceiveWorkQueueDiagnostics aggregate = default;
+                foreach (StreamTimingAccumulator stream in streams.Values)
+                    aggregate = Combine(aggregate, stream.Snapshot());
+                return aggregate;
+            }
+        }
+
+        public void EndStream(uint streamId)
+        {
+            lock (sync)
+            {
+                if (!streams.Remove(streamId, out StreamTimingAccumulator? stream))
+                    return;
+                streamOrder.Remove(stream.OrderNode);
+            }
+        }
+
+        private StreamTimingAccumulator GetOrCreate(uint streamId)
+        {
+            if (streams.TryGetValue(streamId, out StreamTimingAccumulator? existing))
+                return existing;
+
+            LinkedListNode<uint> orderNode = streamOrder.AddLast(streamId);
+            var created = new StreamTimingAccumulator(orderNode);
+            streams.Add(streamId, created);
+            while (streams.Count > MaximumTrackedStreams && streamOrder.First is not null)
+            {
+                uint oldestStreamId = streamOrder.First.Value;
+                streamOrder.RemoveFirst();
+                streams.Remove(oldestStreamId);
+            }
+            return created;
+        }
+
+        private static ReceiveWorkQueueDiagnostics Combine(
+            ReceiveWorkQueueDiagnostics left,
+            ReceiveWorkQueueDiagnostics right)
+            => new(
+                SaturatingAdd(left.ProcessedFrames, right.ProcessedFrames),
+                Max(left.MaximumInterArrivalDelay, right.MaximumInterArrivalDelay),
+                Max(left.MaximumIngressToQueueDelay, right.MaximumIngressToQueueDelay),
+                Max(left.MaximumQueueDelay, right.MaximumQueueDelay),
+                Max(left.MaximumProcessingDuration, right.MaximumProcessingDuration),
+                Max(left.MaximumEndToEndDelay, right.MaximumEndToEndDelay),
+                Max(left.MaximumTransportInterArrivalDelay, right.MaximumTransportInterArrivalDelay),
+                Max(left.MaximumTransportToFneBoundaryDelay, right.MaximumTransportToFneBoundaryDelay),
+                Max(left.MaximumConfiguredJitterBufferDelay, right.MaximumConfiguredJitterBufferDelay),
+                SaturatingAdd(left.JitterBufferReorderedPackets, right.JitterBufferReorderedPackets),
+                SaturatingAdd(left.JitterBufferDeadlineMissedPackets, right.JitterBufferDeadlineMissedPackets));
+
+        private static long SaturatingAdd(long left, long right)
+            => left > long.MaxValue - right ? long.MaxValue : left + right;
+
+        private static TimeSpan Max(TimeSpan left, TimeSpan right)
+            => left >= right ? left : right;
+
+        private sealed class StreamTimingAccumulator(LinkedListNode<uint> orderNode)
+        {
+            private long processedFrames;
+            private long lastIngressTimestamp;
+            private long lastTransportIngressTimestamp;
+            private TimeSpan maximumInterArrivalDelay;
+            private TimeSpan maximumTransportInterArrivalDelay;
+            private TimeSpan maximumTransportToFneBoundaryDelay;
+            private TimeSpan maximumIngressToQueueDelay;
+            private TimeSpan maximumQueueDelay;
+            private TimeSpan maximumProcessingDuration;
+            private TimeSpan maximumEndToEndDelay;
+            private TimeSpan maximumConfiguredJitterBufferDelay;
+            private long jitterBufferReorderedPackets;
+            private long jitterBufferDeadlineMissedPackets;
+
+            public LinkedListNode<uint> OrderNode { get; } = orderNode;
+
+            public ReceiveIngressTiming ObserveIngress(
+                long transportIngressTimestamp,
+                long fneBoundaryTimestamp)
+            {
+                TimeSpan fneDelay = lastIngressTimestamp > 0
+                    ? Stopwatch.GetElapsedTime(lastIngressTimestamp, fneBoundaryTimestamp)
+                    : TimeSpan.Zero;
+                TimeSpan transportDelay = transportIngressTimestamp > 0 && lastTransportIngressTimestamp > 0
+                    ? Stopwatch.GetElapsedTime(lastTransportIngressTimestamp, transportIngressTimestamp)
+                    : TimeSpan.Zero;
+                TimeSpan boundaryDelay = transportIngressTimestamp > 0 &&
+                    transportIngressTimestamp <= fneBoundaryTimestamp
+                        ? Stopwatch.GetElapsedTime(transportIngressTimestamp, fneBoundaryTimestamp)
+                        : TimeSpan.Zero;
+                lastIngressTimestamp = fneBoundaryTimestamp;
+                if (transportIngressTimestamp > 0)
+                    lastTransportIngressTimestamp = transportIngressTimestamp;
+                maximumInterArrivalDelay = Max(maximumInterArrivalDelay, fneDelay);
+                maximumTransportInterArrivalDelay = Max(maximumTransportInterArrivalDelay, transportDelay);
+                maximumTransportToFneBoundaryDelay = Max(maximumTransportToFneBoundaryDelay, boundaryDelay);
+                return new ReceiveIngressTiming(fneDelay, transportDelay, boundaryDelay);
+            }
+
+            public void Observe(ReceiveWorkItemTiming observed)
+            {
+                processedFrames = processedFrames == long.MaxValue ? long.MaxValue : processedFrames + 1;
+                maximumIngressToQueueDelay = Max(maximumIngressToQueueDelay, observed.IngressToQueueDelay);
+                maximumQueueDelay = Max(maximumQueueDelay, observed.QueueDelay);
+                maximumProcessingDuration = Max(maximumProcessingDuration, observed.ProcessingDuration);
+                maximumEndToEndDelay = Max(maximumEndToEndDelay, observed.EndToEndDelay);
+                maximumConfiguredJitterBufferDelay = Max(
+                    maximumConfiguredJitterBufferDelay,
+                    observed.ConfiguredJitterBufferDelay);
+                if (observed.JitterBufferReorderedPacket && jitterBufferReorderedPackets < long.MaxValue)
+                    jitterBufferReorderedPackets++;
+                jitterBufferDeadlineMissedPackets = SaturatingAdd(
+                    jitterBufferDeadlineMissedPackets,
+                    observed.JitterBufferDeadlineMissedPackets);
+            }
+
+            public ReceiveWorkQueueDiagnostics Snapshot()
+                => new(
                     processedFrames,
                     maximumInterArrivalDelay,
                     maximumIngressToQueueDelay,
                     maximumQueueDelay,
                     maximumProcessingDuration,
-                    maximumEndToEndDelay);
-            }
+                    maximumEndToEndDelay,
+                    maximumTransportInterArrivalDelay,
+                    maximumTransportToFneBoundaryDelay,
+                    maximumConfiguredJitterBufferDelay,
+                    jitterBufferReorderedPackets,
+                    jitterBufferDeadlineMissedPackets);
         }
-
-        private static TimeSpan Max(TimeSpan left, TimeSpan right)
-            => left >= right ? left : right;
     }
 }

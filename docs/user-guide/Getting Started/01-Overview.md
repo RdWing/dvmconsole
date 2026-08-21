@@ -61,9 +61,20 @@ The bottom row contains:
 
 Purple means a route or recorder is enabled. Gray means it is disabled.
 
-The Activity sidebar shows recent calls. Collapse it with the arrow at the edge of the sidebar. Double-click the Activity heading to open Event History in Console Settings. Double-click a call with a TAR recording to show that file selected in Finder or File Explorer.
+The Activity sidebar shows recent calls for RX-enabled channel cards by default.
+Use **Active** / **All** to include or exclude channels that are not enabled for
+RX. The separate **Zone Wide** / **System Wide** control limits the selected
+set to the current zone. Collapse the sidebar with the arrow at
+its edge. Double-click the Activity heading to open Event History in Console
+Settings. Double-click a call with a TAR recording to show that file selected
+in Finder or File Explorer.
 
 The toolbar provides the three original alert patterns and a **TONES** button that opens Console Settings directly to the Tones page.
+
+When DVM Console closes normally, it remembers the main window's last normal
+size and position for the next launch. Closing while maximized or minimized
+does not replace those normal bounds, and a saved position is ignored if a
+display-layout change would leave the title bar unreachable.
 
 ---
 

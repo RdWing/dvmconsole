@@ -7,7 +7,7 @@ namespace DvmConsole.Desktop;
 // still observe the same frame independently.
 internal static class ReceiveAudioTrafficRouter
 {
-    public static IReadOnlyList<ChannelViewModel> ResolveTargets(
+    public static ChannelViewModel[] ResolveTargets(
         IReadOnlyDictionary<(FneTrafficProtocol Protocol, uint DestinationId), ChannelViewModel[]> routes,
         IReadOnlyList<ChannelViewModel> activeChannels,
         FneTrafficFrame traffic,
@@ -18,17 +18,13 @@ internal static class ReceiveAudioTrafficRouter
         ArgumentNullException.ThrowIfNull(traffic);
         ArgumentNullException.ThrowIfNull(isTrackingStream);
 
-        HashSet<ChannelViewModel> systemChannels = routes.Values
-            .SelectMany(channels => channels)
-            .ToHashSet();
-
         if (ReceiveTrafficClassifier.IsTerminator(traffic))
         {
-            return activeChannels
-                .Where(systemChannels.Contains)
-                .Where(channel => MatchesProtocolAndSlot(channel, traffic))
-                .Where(channel => isTrackingStream(channel, traffic.StreamId))
-                .ToArray();
+            return ResolveTerminatorTargets(
+                routes,
+                activeChannels,
+                traffic,
+                isTrackingStream);
         }
 
         if (!ReceiveTrafficClassifier.CarriesVoicePayload(traffic) &&
@@ -45,17 +41,136 @@ internal static class ReceiveAudioTrafficRouter
             return [];
         }
 
-        HashSet<ChannelViewModel> active = activeChannels.ToHashSet();
-        return candidates
-            .Where(active.Contains)
-            .Where(channel => MatchesProtocolAndSlot(channel, traffic))
-            .GroupBy(channel => (
-                channel.Definition.Mode,
-                channel.Definition.DestinationId,
-                Slot: channel.Definition.Mode == "dmr" ? channel.Definition.Slot : (byte)0))
-            .Select(group => group.First())
-            .ToArray();
+        int targetCount = 0;
+        for (int candidateIndex = 0; candidateIndex < candidates.Length; candidateIndex++)
+        {
+            if (IsEligibleVoiceTarget(
+                    candidates,
+                    candidateIndex,
+                    activeChannels,
+                    traffic))
+            {
+                targetCount++;
+            }
+        }
+
+        if (targetCount == 0)
+            return [];
+
+        var targets = new ChannelViewModel[targetCount];
+        int targetIndex = 0;
+        for (int candidateIndex = 0; candidateIndex < candidates.Length; candidateIndex++)
+        {
+            if (IsEligibleVoiceTarget(
+                    candidates,
+                    candidateIndex,
+                    activeChannels,
+                    traffic))
+            {
+                targets[targetIndex++] = candidates[candidateIndex];
+            }
+        }
+        return targets;
     }
+
+    private static ChannelViewModel[] ResolveTerminatorTargets(
+        IReadOnlyDictionary<(FneTrafficProtocol Protocol, uint DestinationId), ChannelViewModel[]> routes,
+        IReadOnlyList<ChannelViewModel> activeChannels,
+        FneTrafficFrame traffic,
+        Func<ChannelViewModel, uint, bool> isTrackingStream)
+    {
+        int targetCount = 0;
+        for (int index = 0; index < activeChannels.Count; index++)
+        {
+            if (IsEligibleTerminatorTarget(
+                    routes,
+                    activeChannels[index],
+                    traffic,
+                    isTrackingStream))
+            {
+                targetCount++;
+            }
+        }
+
+        if (targetCount == 0)
+            return [];
+
+        var targets = new ChannelViewModel[targetCount];
+        int targetIndex = 0;
+        for (int index = 0; index < activeChannels.Count; index++)
+        {
+            ChannelViewModel channel = activeChannels[index];
+            if (IsEligibleTerminatorTarget(routes, channel, traffic, isTrackingStream))
+                targets[targetIndex++] = channel;
+        }
+        return targets;
+    }
+
+    private static bool IsEligibleVoiceTarget(
+        ChannelViewModel[] candidates,
+        int candidateIndex,
+        IReadOnlyList<ChannelViewModel> activeChannels,
+        FneTrafficFrame traffic)
+    {
+        ChannelViewModel candidate = candidates[candidateIndex];
+        if (!ContainsReference(activeChannels, candidate) ||
+            !MatchesProtocolAndSlot(candidate, traffic))
+        {
+            return false;
+        }
+
+        for (int priorIndex = 0; priorIndex < candidateIndex; priorIndex++)
+        {
+            ChannelViewModel prior = candidates[priorIndex];
+            if (ContainsReference(activeChannels, prior) &&
+                MatchesProtocolAndSlot(prior, traffic) &&
+                HasEquivalentReceiveIdentity(prior, candidate))
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static bool IsEligibleTerminatorTarget(
+        IReadOnlyDictionary<(FneTrafficProtocol Protocol, uint DestinationId), ChannelViewModel[]> routes,
+        ChannelViewModel channel,
+        FneTrafficFrame traffic,
+        Func<ChannelViewModel, uint, bool> isTrackingStream)
+        => ContainsRoutedChannel(routes, channel) &&
+           MatchesProtocolAndSlot(channel, traffic) &&
+           isTrackingStream(channel, traffic.StreamId);
+
+    private static bool ContainsRoutedChannel(
+        IReadOnlyDictionary<(FneTrafficProtocol Protocol, uint DestinationId), ChannelViewModel[]> routes,
+        ChannelViewModel channel)
+    {
+        foreach (ChannelViewModel[] routedChannels in routes.Values)
+        {
+            if (ContainsReference(routedChannels, channel))
+                return true;
+        }
+        return false;
+    }
+
+    private static bool ContainsReference(
+        IReadOnlyList<ChannelViewModel> channels,
+        ChannelViewModel target)
+    {
+        for (int index = 0; index < channels.Count; index++)
+        {
+            if (ReferenceEquals(channels[index], target))
+                return true;
+        }
+        return false;
+    }
+
+    private static bool HasEquivalentReceiveIdentity(
+        ChannelViewModel left,
+        ChannelViewModel right)
+        => left.Definition.Mode == right.Definition.Mode &&
+           left.Definition.DestinationId == right.Definition.DestinationId &&
+           (left.Definition.Mode != "dmr" || left.Definition.Slot == right.Definition.Slot);
 
     private static bool MatchesProtocolAndSlot(
         ChannelViewModel channel,

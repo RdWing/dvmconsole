@@ -1,5 +1,6 @@
 using DvmConsole.Audio;
 using DvmConsole.Core.Settings;
+using DvmConsole.FneClient;
 using DvmConsole.Vocoder;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
@@ -345,6 +346,62 @@ public sealed partial class MainWindowViewModel
             mode => mode.VocoderMode,
             mode => mode.ToVocoderOptions());
 
+    internal async Task ApplyRxJitterBufferAsync(SystemViewModel system)
+    {
+        ArgumentNullException.ThrowIfNull(system);
+        if (!Systems.Contains(system))
+            throw new ArgumentException("The FNE connection is not part of this console.", nameof(system));
+
+        RxJitterBufferSetting configured = system.GetConfiguredJitterBuffer();
+        userSettings.RxJitterBuffersBySystem[system.Name] = configured;
+        PersistUserSettings();
+        system.RestoreJitterBuffer(configured);
+        Volatile.Write(
+            ref receiveJitterBufferSettingsBySystem,
+            BuildReceiveJitterBufferSettingsBySystem());
+
+        try
+        {
+            await RestartReceiveVocoderSessionsAsync();
+            AudioStatusText = $"{system.Name} RX jitter buffer settings saved and applied.";
+        }
+        catch (Exception exception)
+        {
+            AudioStatusText = $"{system.Name} RX jitter buffer settings were saved, but active sessions could not restart: {exception.Message}";
+        }
+    }
+
+    private ReceiveJitterBufferProfile GetReceiveJitterBufferProfile(
+        ChannelViewModel channel,
+        FneTrafficProtocol protocol)
+    {
+        IReadOnlyDictionary<string, RxJitterBufferSetting> settings =
+            Volatile.Read(ref receiveJitterBufferSettingsBySystem);
+        RxJitterBufferSetting configured = settings.TryGetValue(
+            channel.Definition.SystemName,
+            out RxJitterBufferSetting? systemSettings)
+                ? systemSettings
+                : RxJitterBufferSetting.Normalize(userSettings.RxJitterBuffer);
+        return ReceiveJitterBufferPolicy.GetProfile(protocol, configured);
+    }
+
+    private IReadOnlyDictionary<string, RxJitterBufferSetting> BuildReceiveJitterBufferSettingsBySystem()
+    {
+        RxJitterBufferSetting fallback = RxJitterBufferSetting.Normalize(userSettings.RxJitterBuffer);
+        var configured = new Dictionary<string, RxJitterBufferSetting>(StringComparer.OrdinalIgnoreCase);
+        foreach (SystemViewModel system in Systems)
+        {
+            RxJitterBufferSetting systemSettings = userSettings.RxJitterBuffersBySystem.TryGetValue(
+                system.Name,
+                out RxJitterBufferSetting? stored)
+                    ? RxJitterBufferSetting.Normalize(stored)
+                    : RxJitterBufferSetting.Normalize(fallback);
+            system.RestoreJitterBuffer(systemSettings);
+            configured[system.Name] = systemSettings;
+        }
+        return configured;
+    }
+
     private async Task RestartReceiveVocoderSessionsAsync()
     {
         if (Volatile.Read(ref disposeStarted) != 0)
@@ -356,6 +413,8 @@ public sealed partial class MainWindowViewModel
             ChannelViewModel[] activeChannels = audioCoordinator.ActiveChannels.ToArray();
             if (activeChannels.Length > 0)
             {
+                foreach (ChannelViewModel channel in activeChannels)
+                    await receiveAudioWork.StopAsync(channel).ConfigureAwait(false);
                 await audioCoordinator.StopAsync().ConfigureAwait(false);
                 foreach (ChannelViewModel channel in activeChannels)
                 {
@@ -367,6 +426,7 @@ public sealed partial class MainWindowViewModel
             }
 
             ChannelViewModel[] patchChannels = GetActivePatchSourceChannels();
+            await DrainPatchSourceWorkAsync().ConfigureAwait(false);
             await patchSourceDecode.StopAllAsync().ConfigureAwait(false);
             await patchSourceDecode.ApplyChannelsAsync(patchChannels).ConfigureAwait(false);
         }
