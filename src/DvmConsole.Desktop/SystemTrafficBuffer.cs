@@ -3,7 +3,7 @@ using DvmConsole.Media;
 
 namespace DvmConsole.Desktop;
 
-internal sealed record SystemTrafficWorkItem(
+internal readonly record struct SystemTrafficWorkItem(
     FneTrafficFrame Traffic,
     DateTimeOffset ReceivedAt,
     long ReceivedTimestamp,
@@ -35,7 +35,6 @@ internal sealed class SystemTrafficBuffer
 
     public bool Enqueue(SystemTrafficWorkItem item)
     {
-        ArgumentNullException.ThrowIfNull(item);
         FneTrafficFrame traffic = item.Traffic;
         if (pending.Count >= maximumCount)
         {

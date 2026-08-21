@@ -26,6 +26,7 @@ public sealed partial class MainWindow : Window
     private readonly HashSet<ScrollViewer> configuredScrollViewers = [];
     private readonly INotifyCollectionChanged activityHistoryCollection;
     private readonly ScrollViewportAnchor<CallHistoryEntry> activityViewportAnchor;
+    private readonly MainWindowPlacementController mainWindowPlacement;
     private Control? draggedChannelCard;
     private ChannelViewModel? draggedChannel;
     private Point dragPointerOrigin;
@@ -51,6 +52,8 @@ public sealed partial class MainWindow : Window
         activityCallHistoryList ??= this.FindControl<ItemsControl>("activityCallHistoryList")
             ?? throw new InvalidOperationException("The Activity history list was not initialized.");
         viewModel = MainWindowViewModel.Load(configurationPath);
+        mainWindowPlacement = new MainWindowPlacementController(this, viewModel.MainWindowPlacement);
+        mainWindowPlacement.PrepareSize();
         cardPtt = new PressAndHoldPttController(
             channel => viewModel.StartChannelTransmitAsync(channel),
             channel => viewModel.StopChannelTransmitAsync(channel));
@@ -73,15 +76,20 @@ public sealed partial class MainWindow : Window
         RefreshNamedSettingsProfileMenus();
         Opened += async (_, _) =>
         {
+            mainWindowPlacement.RestorePosition();
+            mainWindowPlacement.StartTracking();
             ConfigureTransientChannelScrollBars();
             ConfigureTransientScrollBars(activityScrollViewer);
             await viewModel.StartKeyboardPttAsync().ConfigureAwait(false);
         };
         LayoutUpdated += (_, _) => ConfigureTransientChannelScrollBars();
+        Closing += (_, _) =>
+            viewModel.SaveMainWindowPlacement(mainWindowPlacement.GetPlacementForPersistence());
         Closed += async (_, _) =>
         {
             try
             {
+                mainWindowPlacement.Dispose();
                 operatorToolsWindow?.Close();
                 debugLogWindow?.Close();
                 documentationWindow?.Close();
@@ -640,6 +648,13 @@ public sealed partial class MainWindow : Window
 
     private void HandleActivityDoubleTapped(object? sender, TappedEventArgs e)
     {
+        if (e.Source is Control source &&
+            (source is Button || source.GetVisualAncestors().OfType<Button>().Any()))
+        {
+            e.Handled = true;
+            return;
+        }
+
         OpenOperatorTools(OperatorToolSection.History);
         e.Handled = true;
     }
@@ -672,9 +687,15 @@ public sealed partial class MainWindow : Window
         e.Handled = true;
     }
 
-    private void HandleToggleActivityCurrentZoneFilterClick(object? sender, RoutedEventArgs e)
+    private void HandleToggleActivityZoneFilterClick(object? sender, RoutedEventArgs e)
     {
-        viewModel.ToggleActivityCurrentZoneFilter();
+        viewModel.ToggleActivityZoneFilter();
+        e.Handled = true;
+    }
+
+    private void HandleToggleActivityReceiveFilterClick(object? sender, RoutedEventArgs e)
+    {
+        viewModel.ToggleActivityReceiveFilter();
         e.Handled = true;
     }
 

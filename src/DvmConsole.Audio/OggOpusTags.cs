@@ -12,7 +12,6 @@ public sealed record OggOpusTagSet(string Vendor, IReadOnlyDictionary<string, st
 public static class OggOpusTags
 {
     private const int FixedHeaderLength = 27;
-    private const uint OggCrcPolynomial = 0x04C11DB7;
     private static readonly byte[] OggCapturePattern = "OggS"u8.ToArray();
     private static readonly byte[] OpusTagsSignature = "OpusTags"u8.ToArray();
 
@@ -170,7 +169,7 @@ public static class OggOpusTags
         lacingValues.CopyTo(page, FixedHeaderLength);
         payload.CopyTo(page, FixedHeaderLength + lacingValues.Count);
         page.AsSpan(22, sizeof(uint)).Clear();
-        BinaryPrimitives.WriteUInt32LittleEndian(page.AsSpan(22), CalculateCrc(page));
+        BinaryPrimitives.WriteUInt32LittleEndian(page.AsSpan(22), OggPageChecksum.Calculate(page));
         output.Write(page);
     }
 
@@ -185,18 +184,6 @@ public static class OggOpusTags
         }
         values.Add((byte)remaining);
         return values;
-    }
-
-    private static uint CalculateCrc(ReadOnlySpan<byte> data)
-    {
-        uint crc = 0;
-        foreach (byte value in data)
-        {
-            crc ^= (uint)value << 24;
-            for (int bit = 0; bit < 8; bit++)
-                crc = (crc & 0x80000000) != 0 ? (crc << 1) ^ OggCrcPolynomial : crc << 1;
-        }
-        return crc;
     }
 
     private static string ReadString(ReadOnlySpan<byte> data, ref int cursor)

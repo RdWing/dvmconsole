@@ -72,7 +72,11 @@ public sealed class FneProtocolTests
             "000102030405060708090A0B0C0D0E0F000102030405060708090A0B0C0D0E0F";
         byte[] plaintext = CreateLoginFrame();
 
-        using IDisposable encryptionScope = FneTransportEncryptionContext.Use(FneTransportEncryptionMode.Auto);
+        var observedIngress = new TaskCompletionSource<long>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        using IDisposable encryptionScope = FneTransportEncryptionContext.Use(
+            FneTransportEncryptionMode.Auto,
+            timestamp => observedIngress.TrySetResult(timestamp));
         using var server = new UdpClient(new IPEndPoint(IPAddress.Loopback, 0));
         var destination = Assert.IsType<IPEndPoint>(server.Client.LocalEndPoint);
         var client = new UdpReceiver();
@@ -92,6 +96,8 @@ public sealed class FneProtocolTests
         UdpFrame response = await client.Receive().WaitAsync(TimeSpan.FromSeconds(2));
 
         Assert.Equal(plaintext, response.Message);
+        Assert.True(
+            await observedIngress.Task.WaitAsync(TimeSpan.FromSeconds(2)) > 0);
         Assert.Equal(FneTransportEncryptionMode.Cbc, client.NegotiatedEncryptionMode);
 
         client.Send(new UdpFrame { Endpoint = destination, Message = plaintext });

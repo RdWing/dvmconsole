@@ -126,31 +126,40 @@ public sealed class P25RxAudioSession : IAsyncDisposable
         }
 
         int errors = 0;
+        byte[] codeword = new byte[P25DfsiFrameCodec.CodewordBytes];
+        short[] packetSamples = new short[
+            P25DfsiFrameCodec.CodewordsPerLdu * VocoderFrameSizes.PcmSamplesPerFrame];
         for (int index = 0; index < P25DfsiFrameCodec.CodewordsPerLdu; index++)
         {
             P25DUID duid = ldu1 ? P25DUID.LDU1 : P25DUID.LDU2;
+            Span<short> frameSamples = packetSamples.AsSpan(
+                index * VocoderFrameSizes.PcmSamplesPerFrame,
+                VocoderFrameSizes.PcmSamplesPerFrame);
             if (!available[index])
             {
                 // Encryption is a continuous per-LDU keystream. Consume and
                 // discard the missing slot's keystream so later valid records
                 // stay aligned, then let the vocoder conceal exactly 20 ms.
                 if (cryptoState is not null)
-                    ProcessEncryption(new byte[P25DfsiFrameCodec.CodewordBytes], duid);
-                await ConcealFrameAsync(cancellationToken).ConfigureAwait(false);
+                {
+                    Array.Clear(codeword);
+                    ProcessEncryption(codeword, duid);
+                }
+                decoder.ProcessLost(frameSamples);
+                FramesDecoded++;
                 continue;
             }
 
-            byte[] codeword = imbe.AsSpan(
+            imbe.AsSpan(
                 index * P25DfsiFrameCodec.CodewordBytes,
-                P25DfsiFrameCodec.CodewordBytes).ToArray();
+                P25DfsiFrameCodec.CodewordBytes).CopyTo(codeword);
             ProcessEncryption(codeword, duid);
-            short[] samples = [];
-            errors += decoder.Process(
-                codeword,
-                decoded => samples = decoded.ToArray());
-            await playback.WriteAsync(samples, cancellationToken).ConfigureAwait(false);
+            errors += decoder.Process(codeword, frameSamples);
             FramesDecoded++;
         }
+
+        await WritePacketSegmentsAsync(packetSamples, available, cancellationToken)
+            .ConfigureAwait(false);
 
         if (!ldu1 && cryptoState is not null)
             AdvanceAfterLdu2(traffic, errors);
@@ -165,27 +174,49 @@ public sealed class P25RxAudioSession : IAsyncDisposable
         const int maximumConcealedPackets = 10;
         int frameCount = checked((int)Math.Min(lostPackets, maximumConcealedPackets)) *
             P25DfsiFrameCodec.CodewordsPerLdu;
-        var concealedFrames = new List<short[]>(frameCount);
+        var concealedSamples = new short[
+            checked(frameCount * VocoderFrameSizes.PcmSamplesPerFrame)];
         for (int index = 0; index < frameCount; index++)
-            concealedFrames.Add(DecodeLostFrame());
-        await ConcealmentAudioWriter.WriteAsync(playback, concealedFrames, cancellationToken)
+        {
+            decoder.ProcessLost(concealedSamples.AsSpan(
+                index * VocoderFrameSizes.PcmSamplesPerFrame,
+                VocoderFrameSizes.PcmSamplesPerFrame));
+            FramesDecoded++;
+        }
+        await ConcealmentAudioWriter.WriteAsync(playback, concealedSamples, cancellationToken)
             .ConfigureAwait(false);
         if (lostPackets > maximumConcealedPackets)
             decoder.Reset();
     }
 
-    private ValueTask ConcealFrameAsync(CancellationToken cancellationToken)
-        => ConcealmentAudioWriter.WriteAsync(
-            playback,
-            [DecodeLostFrame()],
-            cancellationToken);
-
-    private short[] DecodeLostFrame()
+    private async ValueTask WritePacketSegmentsAsync(
+        short[] packetSamples,
+        bool[] available,
+        CancellationToken cancellationToken)
     {
-        short[] samples = [];
-        decoder.ProcessLost(decoded => samples = decoded.ToArray());
-        FramesDecoded++;
-        return samples;
+        int segmentStart = 0;
+        while (segmentStart < available.Length)
+        {
+            bool concealment = !available[segmentStart];
+            int segmentEnd = segmentStart + 1;
+            while (segmentEnd < available.Length && (!available[segmentEnd]) == concealment)
+                segmentEnd++;
+
+            ReadOnlyMemory<short> segment = packetSamples.AsMemory(
+                segmentStart * VocoderFrameSizes.PcmSamplesPerFrame,
+                (segmentEnd - segmentStart) * VocoderFrameSizes.PcmSamplesPerFrame);
+            if (concealment)
+            {
+                await ConcealmentAudioWriter.WriteAsync(playback, segment, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            else
+            {
+                await LivePacketAudioWriter.WriteAsync(playback, segment, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            segmentStart = segmentEnd;
+        }
     }
 
     private ValueTask ConcealCurrentLduAsync(CancellationToken cancellationToken)

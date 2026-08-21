@@ -53,4 +53,33 @@ public sealed class PcmRateConverterTests
 
         Assert.Equal(new short[] { 0, 1_000, 50, 1_050 }, output);
     }
+
+    [Fact]
+    public void CallerOwnedBufferConversionMatchesAllocatingApiAcrossChunks()
+    {
+        var allocating = new PcmRateConverter(8_000, 48_000);
+        var buffered = new PcmRateConverter(8_000, 48_000);
+        short[][] chunks = [[0, 100], [200], [300, 400, 500]];
+
+        foreach (short[] chunk in chunks)
+        {
+            short[] expected = allocating.Convert(chunk);
+            int maximum = buffered.GetMaximumOutputSampleCount(chunk.Length);
+            var destination = new short[maximum];
+
+            int count = buffered.Convert(chunk, destination);
+
+            Assert.Equal(expected, destination.AsSpan(0, count).ToArray());
+        }
+    }
+
+    [Fact]
+    public void CallerOwnedBufferRequiresCompleteFramesAndEnoughCapacity()
+    {
+        var stereo = new PcmRateConverter(8_000, 48_000, channels: 2);
+
+        Assert.Throws<ArgumentException>(() => stereo.GetMaximumOutputSampleCount(1));
+        Assert.Throws<ArgumentException>(() => stereo.Convert([0, 1, 2], new short[32]));
+        Assert.Throws<ArgumentException>(() => stereo.Convert([0, 1, 2, 3], Span<short>.Empty));
+    }
 }

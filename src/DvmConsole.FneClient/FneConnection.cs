@@ -137,6 +137,8 @@ public sealed class FneConnection : IAsyncDisposable
     private FneConnectionStatus status;
     private CancellationTokenSource? stateMonitorCancellation;
     private Task? stateMonitorTask;
+    private long latestTrafficTransportTimestamp;
+    private EventHandler<FneTrafficFrame>[] trafficReceivedHandlers = [];
 
     public FneConnection(FneConnectionOptions options)
         : this(options, TimeProvider.System)
@@ -152,7 +154,19 @@ public sealed class FneConnection : IAsyncDisposable
 
     public event EventHandler<FneConnectionStatus>? StatusChanged;
     public event EventHandler<FneLogEntry>? LogReceived;
-    public event EventHandler<FneTrafficFrame>? TrafficReceived;
+    public event EventHandler<FneTrafficFrame>? TrafficReceived
+    {
+        add
+        {
+            if (value is not null)
+                AddTrafficHandler(value);
+        }
+        remove
+        {
+            if (value is not null)
+                RemoveTrafficHandler(value);
+        }
+    }
     public event EventHandler<FneKeyResponse>? KeyResponseReceived;
 
     public FneConnectionStatus Status
@@ -476,7 +490,8 @@ public sealed class FneConnection : IAsyncDisposable
                 FneTransportEncryptionPreference.Ecb => fnecore.FneTransportEncryptionMode.Ecb,
                 FneTransportEncryptionPreference.Cbc => fnecore.FneTransportEncryptionMode.Cbc,
                 _ => fnecore.FneTransportEncryptionMode.Auto
-            });
+            },
+            timestamp => Volatile.Write(ref latestTrafficTransportTimestamp, timestamp));
         var created = new FnePeer("DVMCONSOLE", options.PeerId, endpoint, options.PresharedKey);
         created.Passphrase = options.Password;
         created.PingTime = 5;
@@ -616,7 +631,8 @@ public sealed class FneConnection : IAsyncDisposable
             args.PacketSequence,
             args.StreamId,
             args.Data,
-            boundaryTimestamp));
+            boundaryTimestamp,
+            Interlocked.Exchange(ref latestTrafficTransportTimestamp, 0)));
     }
 
     private void HandleP25DataReceived(object? sender, P25DataReceivedEvent args)
@@ -634,7 +650,8 @@ public sealed class FneConnection : IAsyncDisposable
             args.PacketSequence,
             args.StreamId,
             args.Data,
-            boundaryTimestamp));
+            boundaryTimestamp,
+            Interlocked.Exchange(ref latestTrafficTransportTimestamp, 0)));
     }
 
     private void HandleNxdnDataReceived(object? sender, NXDNDataReceivedEvent args)
@@ -652,7 +669,8 @@ public sealed class FneConnection : IAsyncDisposable
             args.PacketSequence,
             args.StreamId,
             args.Data,
-            boundaryTimestamp));
+            boundaryTimestamp,
+            Interlocked.Exchange(ref latestTrafficTransportTimestamp, 0)));
     }
 
     private void HandleAnalogDataReceived(object? sender, AnalogDataReceivedEvent args)
@@ -670,12 +688,60 @@ public sealed class FneConnection : IAsyncDisposable
             args.PacketSequence,
             args.StreamId,
             args.Data,
-            boundaryTimestamp));
+            boundaryTimestamp,
+            Interlocked.Exchange(ref latestTrafficTransportTimestamp, 0)));
     }
 
-    private void PublishTraffic(FneTrafficFrame frame)
+    internal void PublishTraffic(FneTrafficFrame frame)
     {
-        Raise(TrafficReceived, frame);
+        Raise(Volatile.Read(ref trafficReceivedHandlers), frame);
+    }
+
+    private void AddTrafficHandler(EventHandler<FneTrafficFrame> handler)
+    {
+        while (true)
+        {
+            EventHandler<FneTrafficFrame>[] current = Volatile.Read(ref trafficReceivedHandlers);
+            var updated = new EventHandler<FneTrafficFrame>[current.Length + 1];
+            Array.Copy(current, updated, current.Length);
+            updated[^1] = handler;
+            if (ReferenceEquals(
+                    Interlocked.CompareExchange(ref trafficReceivedHandlers, updated, current),
+                    current))
+            {
+                return;
+            }
+        }
+    }
+
+    private void RemoveTrafficHandler(EventHandler<FneTrafficFrame> handler)
+    {
+        while (true)
+        {
+            EventHandler<FneTrafficFrame>[] current = Volatile.Read(ref trafficReceivedHandlers);
+            int removeIndex = Array.LastIndexOf(current, handler);
+            if (removeIndex < 0)
+                return;
+
+            var updated = new EventHandler<FneTrafficFrame>[current.Length - 1];
+            if (removeIndex > 0)
+                Array.Copy(current, 0, updated, 0, removeIndex);
+            if (removeIndex < current.Length - 1)
+            {
+                Array.Copy(
+                    current,
+                    removeIndex + 1,
+                    updated,
+                    removeIndex,
+                    current.Length - removeIndex - 1);
+            }
+            if (ReferenceEquals(
+                    Interlocked.CompareExchange(ref trafficReceivedHandlers, updated, current),
+                    current))
+            {
+                return;
+            }
+        }
     }
 
     private void DetachPeerHandlers(FnePeer current)
@@ -859,6 +925,21 @@ public sealed class FneConnection : IAsyncDisposable
             return;
 
         foreach (EventHandler<T> handler in handlers.GetInvocationList().Cast<EventHandler<T>>())
+        {
+            try
+            {
+                handler(this, args);
+            }
+            catch (Exception exception)
+            {
+                Debug.WriteLine($"FNE event handler failed: {exception.Message}");
+            }
+        }
+    }
+
+    private void Raise<T>(EventHandler<T>[] handlers, T args)
+    {
+        foreach (EventHandler<T> handler in handlers)
         {
             try
             {

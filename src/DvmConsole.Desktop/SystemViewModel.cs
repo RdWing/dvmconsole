@@ -1,9 +1,11 @@
 using Avalonia.Media;
 using DvmConsole.Core.Diagnostics;
 using DvmConsole.Core.Runtime;
+using DvmConsole.Core.Settings;
 using DvmConsole.FneClient;
 using DvmConsole.Media;
 using System.ComponentModel;
+using System.Windows.Input;
 
 namespace DvmConsole.Desktop;
 
@@ -14,13 +16,11 @@ public sealed class SystemViewModel : IFneTrafficEndpoint, INotifyPropertyChange
     private string connectionStatus = "Disconnected";
     private readonly object keyRequestSync = new();
     private readonly HashSet<(byte AlgorithmId, ushort KeyId)> requestedP25Keys = [];
-    private long receivedPacketCount;
-    private long receivedPacketBytes;
-    private long sentPacketCount;
-    private long sentPacketBytes;
+    private readonly FneTrafficStatistics trafficStatistics = new();
+    private readonly RxJitterBufferModeViewModel[] rxJitterBufferModes;
     private long nonCallDmrTerminatorCount;
     private long droppedSystemTrafficCount;
-    private string lastPacketText = "No media packets received.";
+    private int trafficDiagnosticsDirty;
     private bool isSelected;
     private ZoneViewModel? selectedZone;
 
@@ -38,6 +38,8 @@ public sealed class SystemViewModel : IFneTrafficEndpoint, INotifyPropertyChange
         Endpoint = endpoint;
         Channels = channels?.ToArray() ?? [];
         Zones = zones?.ToArray() ?? [];
+        rxJitterBufferModes = CreateJitterBufferModes(new RxJitterBufferSetting());
+        ApplyJitterBufferCommand = new AsyncRelayCommand(() => Task.CompletedTask, () => false);
         StatusAccentBrush = SystemAccentPalette.GetBrush(accentIndex);
         selectedZone = Zones.FirstOrDefault();
         foreach (ZoneViewModel zone in Zones)
@@ -100,15 +102,31 @@ public sealed class SystemViewModel : IFneTrafficEndpoint, INotifyPropertyChange
         _ => "#8794A1"
     }));
     public string SystemTabText => $"{Name} {(ConnectionStatus.StartsWith("Connected:", StringComparison.OrdinalIgnoreCase) ? "●" : "○")}";
-    public string PacketDiagnosticsText
-        => $"RX {receivedPacketCount:N0} packets / {receivedPacketBytes:N0} bytes · TX {sentPacketCount:N0} packets / {sentPacketBytes:N0} bytes" +
-            (nonCallDmrTerminatorCount > 0
-                ? $" · non-call DMR terminators {nonCallDmrTerminatorCount:N0}"
-                : string.Empty) +
-            (Interlocked.Read(ref droppedSystemTrafficCount) > 0
-                ? $" · UI backlog drops {Interlocked.Read(ref droppedSystemTrafficCount):N0}"
-                : string.Empty);
-    public string LastPacketText => lastPacketText;
+    public string TrafficTotalsText => trafficStatistics.TotalsText;
+    public string StreamTrafficText => trafficStatistics.StreamText;
+    public string ConnectionHealthText
+    {
+        get
+        {
+            long nonCallTerminators = Interlocked.Read(ref nonCallDmrTerminatorCount);
+            long backlogDrops = Interlocked.Read(ref droppedSystemTrafficCount);
+            if (nonCallTerminators == 0 && backlogDrops == 0)
+                return "Local receive health · no discarded control traffic or UI backlog drops";
+
+            var details = new List<string>(2);
+            if (nonCallTerminators > 0)
+                details.Add($"non-call DMR terminators {nonCallTerminators:N0}");
+            if (backlogDrops > 0)
+                details.Add($"UI backlog drops {backlogDrops:N0}");
+            return $"Local receive health · {string.Join(" · ", details)}";
+        }
+    }
+    public IReadOnlyList<RxJitterBufferModeViewModel> RxJitterBufferModes => rxJitterBufferModes;
+    public ICommand ApplyJitterBufferCommand { get; private set; }
+    public string JitterBufferSummaryText
+        => $"Applied: P25 {rxJitterBufferModes[0].Milliseconds} ms · " +
+           $"DMR {rxJitterBufferModes[1].Milliseconds} ms · " +
+           $"NXDN {rxJitterBufferModes[2].Milliseconds} ms";
     public string ConnectionStatus
     {
         get => connectionStatus;
@@ -136,6 +154,13 @@ public sealed class SystemViewModel : IFneTrafficEndpoint, INotifyPropertyChange
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsSelected)));
     }
 
+    internal void ConfigureJitterBufferApply(Func<SystemViewModel, Task> apply)
+    {
+        ArgumentNullException.ThrowIfNull(apply);
+        ApplyJitterBufferCommand = new AsyncRelayCommand(() => apply(this), () => true);
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ApplyJitterBufferCommand)));
+    }
+
     public async Task StartAsync(CancellationToken cancellationToken = default)
     {
         ResetPacketDiagnostics();
@@ -157,15 +182,14 @@ public sealed class SystemViewModel : IFneTrafficEndpoint, INotifyPropertyChange
     public void SendTraffic(FneTrafficProtocol protocol, ReadOnlySpan<byte> payload, ushort packetSequence, uint streamId)
     {
         connection.SendTraffic(protocol, payload, packetSequence, streamId);
-        sentPacketCount++;
-        sentPacketBytes += payload.Length;
+        trafficStatistics.ObserveSend(payload.Length);
+        Volatile.Write(ref trafficDiagnosticsDirty, 1);
         LogReceived?.Invoke(this, new FneLogEntry(
             Name,
             DebugLogSeverity.Debug,
             $"FNE TX {protocol.ToString().ToUpperInvariant()} vocoder packet; seq {packetSequence}, " +
             $"stream {streamId}, {payload.Length} bytes.",
             DateTimeOffset.Now));
-        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(PacketDiagnosticsText)));
     }
 
     public void RequestP25Key(byte algorithmId, ushort keyId)
@@ -199,29 +223,71 @@ public sealed class SystemViewModel : IFneTrafficEndpoint, INotifyPropertyChange
     internal void RecordTraffic(FneTrafficFrame traffic, bool publishDiagnostics = true)
     {
         ArgumentNullException.ThrowIfNull(traffic);
-        receivedPacketCount++;
-        receivedPacketBytes += traffic.Payload.Length;
-        lastPacketText = $"{traffic.Protocol.ToString().ToUpperInvariant()} {traffic.CallType}/{traffic.FrameType} · seq {traffic.PacketSequence} · stream {traffic.StreamId} · {traffic.SourceId}→{traffic.DestinationId}";
+        trafficStatistics.ObserveReceive(traffic);
+        Volatile.Write(ref trafficDiagnosticsDirty, 1);
         if (publishDiagnostics)
             PublishTrafficDiagnostics();
     }
 
     internal void PublishTrafficDiagnostics()
     {
-        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(PacketDiagnosticsText)));
-        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(LastPacketText)));
+        if (Interlocked.Exchange(ref trafficDiagnosticsDirty, 0) == 0)
+            return;
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(TrafficTotalsText)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(StreamTrafficText)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ConnectionHealthText)));
     }
 
     internal void RecordNonCallDmrTerminator()
     {
-        nonCallDmrTerminatorCount++;
-        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(PacketDiagnosticsText)));
+        SaturatingAdd(ref nonCallDmrTerminatorCount, 1);
+        Volatile.Write(ref trafficDiagnosticsDirty, 1);
     }
 
     internal void RecordDroppedSystemTraffic(long count)
     {
         if (count > 0)
-            Interlocked.Add(ref droppedSystemTrafficCount, count);
+        {
+            SaturatingAdd(ref droppedSystemTrafficCount, count);
+            Volatile.Write(ref trafficDiagnosticsDirty, 1);
+        }
+    }
+
+    internal RxJitterBufferSetting GetConfiguredJitterBuffer()
+    {
+        var configured = new RxJitterBufferSetting();
+        foreach (RxJitterBufferModeViewModel mode in rxJitterBufferModes)
+        {
+            switch (mode.Mode)
+            {
+                case RxJitterBufferMode.P25:
+                    configured.P25Milliseconds = mode.Milliseconds;
+                    break;
+                case RxJitterBufferMode.Dmr:
+                    configured.DmrMilliseconds = mode.Milliseconds;
+                    break;
+                case RxJitterBufferMode.Nxdn:
+                    configured.NxdnMilliseconds = mode.Milliseconds;
+                    break;
+            }
+        }
+        return RxJitterBufferSetting.Normalize(configured);
+    }
+
+    internal void RestoreJitterBuffer(RxJitterBufferSetting settings)
+    {
+        RxJitterBufferSetting normalized = RxJitterBufferSetting.Normalize(settings);
+        foreach (RxJitterBufferModeViewModel mode in rxJitterBufferModes)
+        {
+            mode.Restore(mode.Mode switch
+            {
+                RxJitterBufferMode.P25 => normalized.P25Milliseconds,
+                RxJitterBufferMode.Dmr => normalized.DmrMilliseconds,
+                RxJitterBufferMode.Nxdn => normalized.NxdnMilliseconds,
+                _ => throw new InvalidOperationException($"Unsupported RX jitter buffer mode {mode.Mode}.")
+            });
+        }
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(JitterBufferSummaryText)));
     }
 
     public async ValueTask DisposeAsync()
@@ -257,15 +323,50 @@ public sealed class SystemViewModel : IFneTrafficEndpoint, INotifyPropertyChange
 
     private void ResetPacketDiagnostics()
     {
-        receivedPacketCount = 0;
-        receivedPacketBytes = 0;
-        sentPacketCount = 0;
-        sentPacketBytes = 0;
-        nonCallDmrTerminatorCount = 0;
+        trafficStatistics.Reset();
+        Interlocked.Exchange(ref nonCallDmrTerminatorCount, 0);
         Interlocked.Exchange(ref droppedSystemTrafficCount, 0);
-        lastPacketText = "No media packets received.";
-        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(PacketDiagnosticsText)));
-        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(LastPacketText)));
+        Volatile.Write(ref trafficDiagnosticsDirty, 1);
+        PublishTrafficDiagnostics();
+    }
+
+    private static RxJitterBufferModeViewModel[] CreateJitterBufferModes(
+        RxJitterBufferSetting settings)
+        =>
+        [
+            new RxJitterBufferModeViewModel(
+                RxJitterBufferMode.P25,
+                "P25",
+                RxJitterBufferSetting.P25OptionsMilliseconds,
+                settings.P25Milliseconds,
+                packetMilliseconds: 180,
+                singularUnit: "LDU",
+                pluralUnit: "LDUs"),
+            new RxJitterBufferModeViewModel(
+                RxJitterBufferMode.Dmr,
+                "DMR",
+                RxJitterBufferSetting.DmrOptionsMilliseconds,
+                settings.DmrMilliseconds,
+                packetMilliseconds: 60),
+            new RxJitterBufferModeViewModel(
+                RxJitterBufferMode.Nxdn,
+                "NXDN",
+                RxJitterBufferSetting.NxdnOptionsMilliseconds,
+                settings.NxdnMilliseconds,
+                packetMilliseconds: 80)
+        ];
+
+    private static void SaturatingAdd(ref long target, long increment)
+    {
+        while (true)
+        {
+            long current = Interlocked.Read(ref target);
+            long next = current > long.MaxValue - increment
+                ? long.MaxValue
+                : current + increment;
+            if (Interlocked.CompareExchange(ref target, next, current) == current)
+                return;
+        }
     }
 
     private void HandleKeyResponse(object? sender, FneKeyResponse response)

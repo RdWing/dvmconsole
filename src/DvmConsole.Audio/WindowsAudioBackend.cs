@@ -1,5 +1,6 @@
 using NAudio.Wave;
 using NAudio.CoreAudioApi;
+using System.Buffers;
 using System.Runtime.InteropServices;
 
 namespace DvmConsole.Audio;
@@ -10,6 +11,8 @@ namespace DvmConsole.Audio;
 public sealed class WindowsAudioBackend : IAudioBackend, IDefaultAudioDeviceIdentityProvider
 {
     private const string DefaultDeviceId = "default";
+    private const int PlaybackLatencyMilliseconds = 80;
+    private const int PlaybackBufferCount = 4;
 
     public WindowsAudioBackend()
     {
@@ -204,10 +207,14 @@ public sealed class WindowsAudioBackend : IAudioBackend, IDefaultAudioDeviceIden
         }
     }
 
-    private sealed class WindowsAudioPlayback : IAudioPlayback
+    private sealed class WindowsAudioPlayback :
+        IAudioPlayback,
+        IAudioPlaybackContinuityDiagnostics,
+        IAudioPlaybackCallbackDiagnostics
     {
         private readonly WaveOutEvent output;
         private readonly BufferedWaveProvider buffer;
+        private readonly WindowsPlaybackObserver playbackObserver;
         private bool disposed;
         private Exception? playbackFailure;
 
@@ -216,16 +223,32 @@ public sealed class WindowsAudioBackend : IAudioBackend, IDefaultAudioDeviceIden
             Format = format;
             buffer = new BufferedWaveProvider(new WaveFormat(format.SampleRate, format.BitsPerSample, format.Channels))
             {
-                DiscardOnBufferOverflow = false
+                DiscardOnBufferOverflow = false,
+                ReadFully = true
             };
-            output = new WaveOutEvent { DeviceNumber = deviceNumber };
-            output.Init(buffer);
+            playbackObserver = new WindowsPlaybackObserver(buffer, format);
+            output = new WaveOutEvent
+            {
+                DeviceNumber = deviceNumber,
+                DesiredLatency = PlaybackLatencyMilliseconds,
+                NumberOfBuffers = PlaybackBufferCount
+            };
+            output.Init(playbackObserver);
             output.PlaybackStopped += HandlePlaybackStopped;
             output.Play();
         }
 
         public PcmAudioFormat Format { get; }
         public int? QueuedSamples => buffer.BufferedBytes / sizeof(short);
+        public TimeSpan StarvedDuration => playbackObserver.StarvedDuration;
+        public TimeSpan PendingStarvedDuration => playbackObserver.PendingStarvedDuration;
+        public long OutputCallbackCount => playbackObserver.OutputCallbackCount;
+
+        public void EndExpectedPlayback()
+        {
+            ObjectDisposedException.ThrowIf(disposed, this);
+            playbackObserver.EndExpectedPlayback();
+        }
 
         public ValueTask WriteAsync(ReadOnlyMemory<short> samples, CancellationToken cancellationToken = default)
         {
@@ -234,9 +257,18 @@ public sealed class WindowsAudioBackend : IAudioBackend, IDefaultAudioDeviceIden
             ThrowIfPlaybackFailed();
             if (!samples.IsEmpty)
             {
-                byte[] bytes = new byte[samples.Length * sizeof(short)];
-                Buffer.BlockCopy(samples.ToArray(), 0, bytes, 0, bytes.Length);
-                buffer.AddSamples(bytes, 0, bytes.Length);
+                int byteCount = checked(samples.Length * sizeof(short));
+                byte[] bytes = ArrayPool<byte>.Shared.Rent(byteCount);
+                try
+                {
+                    MemoryMarshal.AsBytes(samples.Span).CopyTo(bytes);
+                    buffer.AddSamples(bytes, 0, byteCount);
+                    playbackObserver.ResumePlaybackContinuity();
+                }
+                finally
+                {
+                    ArrayPool<byte>.Shared.Return(bytes);
+                }
             }
             return ValueTask.CompletedTask;
         }
@@ -297,5 +329,63 @@ public sealed class WindowsAudioBackend : IAudioBackend, IDefaultAudioDeviceIden
             if (failure is not null)
                 throw new IOException("Windows audio playback stopped unexpectedly.", failure);
         }
+    }
+}
+
+// Observes WaveOut's actual pulls from the managed provider. Keeping this
+// separate from device setup makes callback heartbeat and starvation policy
+// deterministic and testable without opening a Windows audio device.
+internal sealed class WindowsPlaybackObserver :
+    IWaveProvider,
+    IAudioPlaybackContinuityDiagnostics,
+    IAudioPlaybackCallbackDiagnostics
+{
+    private readonly BufferedWaveProvider inner;
+    private readonly int samplesPerSecond;
+    private int continuityExpected;
+    private long pendingStarvedSamples;
+    private long starvedSamples;
+    private long outputCallbackCount;
+
+    public WindowsPlaybackObserver(BufferedWaveProvider inner, PcmAudioFormat format)
+    {
+        this.inner = inner ?? throw new ArgumentNullException(nameof(inner));
+        ArgumentNullException.ThrowIfNull(format);
+        samplesPerSecond = checked(format.SampleRate * format.Channels);
+    }
+
+    public WaveFormat WaveFormat => inner.WaveFormat;
+    public TimeSpan StarvedDuration => TimeSpan.FromSeconds(
+        Interlocked.Read(ref starvedSamples) / (double)samplesPerSecond);
+    public TimeSpan PendingStarvedDuration => TimeSpan.FromSeconds(
+        Interlocked.Read(ref pendingStarvedSamples) / (double)samplesPerSecond);
+    public long OutputCallbackCount => Interlocked.Read(ref outputCallbackCount);
+
+    public int Read(byte[] buffer, int offset, int count)
+    {
+        int availableBytes = inner.BufferedBytes;
+        int read = inner.Read(buffer, offset, count);
+        Interlocked.Increment(ref outputCallbackCount);
+
+        if (Volatile.Read(ref continuityExpected) != 0 && availableBytes < read)
+        {
+            int missingSamples = (read - availableBytes) / sizeof(short);
+            Interlocked.Add(ref pendingStarvedSamples, missingSamples);
+        }
+        return read;
+    }
+
+    public void ResumePlaybackContinuity()
+    {
+        int wasExpected = Interlocked.Exchange(ref continuityExpected, 1);
+        long pending = Interlocked.Exchange(ref pendingStarvedSamples, 0);
+        if (wasExpected != 0 && pending > 0)
+            Interlocked.Add(ref starvedSamples, pending);
+    }
+
+    public void EndExpectedPlayback()
+    {
+        Volatile.Write(ref continuityExpected, 0);
+        Interlocked.Exchange(ref pendingStarvedSamples, 0);
     }
 }

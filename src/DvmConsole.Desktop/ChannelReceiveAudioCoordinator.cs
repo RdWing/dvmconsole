@@ -1353,6 +1353,7 @@ public sealed class ChannelReceiveAudioCoordinator : IAsyncDisposable
     private sealed class ObservedAudioPlayback :
         IAudioPlayback,
         IConcealmentAudioPlayback,
+        ILivePacketAudioPlayback,
         ILiveAudioPlaybackControl,
         IAudioGainControl,
         IAudioBalanceControl
@@ -1409,14 +1410,17 @@ public sealed class ChannelReceiveAudioCoordinator : IAsyncDisposable
 
         public async ValueTask WriteAsync(ReadOnlyMemory<short> samples, CancellationToken cancellationToken = default)
         {
-            await inner.WriteAsync(samples, cancellationToken).ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
             observer(samples);
+            await inner.WriteAsync(samples, cancellationToken).ConfigureAwait(false);
         }
 
         public async ValueTask WriteConcealmentAsync(
             ReadOnlyMemory<short> samples,
             CancellationToken cancellationToken = default)
         {
+            cancellationToken.ThrowIfCancellationRequested();
+            observer(samples);
             if (inner is IConcealmentAudioPlayback concealmentPlayback)
             {
                 await concealmentPlayback.WriteConcealmentAsync(samples, cancellationToken)
@@ -1426,7 +1430,23 @@ public sealed class ChannelReceiveAudioCoordinator : IAsyncDisposable
             {
                 await inner.WriteAsync(samples, cancellationToken).ConfigureAwait(false);
             }
+        }
+
+        public async ValueTask WriteLivePacketAsync(
+            ReadOnlyMemory<short> samples,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
             observer(samples);
+            if (inner is ILivePacketAudioPlayback packetPlayback)
+            {
+                await packetPlayback.WriteLivePacketAsync(samples, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            else
+            {
+                await inner.WriteAsync(samples, cancellationToken).ConfigureAwait(false);
+            }
         }
 
         public ValueTask FlushAsync(CancellationToken cancellationToken = default)

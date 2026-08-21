@@ -16,6 +16,7 @@
 using System.Net;
 using System.Net.Sockets;
 using System.Security.Cryptography;
+using System.Diagnostics;
 
 namespace fnecore;
 
@@ -39,28 +40,39 @@ public static class FneTransportEncryptionContext
 {
     private static readonly AsyncLocal<ContextState?> Current = new();
 
-    internal static (FneTransportEncryptionMode Mode, FneUdpChannelKind ChannelKind) Capture()
+    internal static (
+        FneTransportEncryptionMode Mode,
+        FneUdpChannelKind ChannelKind,
+        Action<long>? TrafficIngressObserver) Capture()
     {
         ContextState? state = Current.Value;
         if (state is null)
-            return (FneTransportEncryptionMode.Auto, FneUdpChannelKind.Traffic);
+            return (FneTransportEncryptionMode.Auto, FneUdpChannelKind.Traffic, null);
 
         FneUdpChannelKind channelKind = state.ReceiverCount++ == 1
             ? FneUdpChannelKind.Metadata
             : FneUdpChannelKind.Traffic;
-        return (state.Mode, channelKind);
+        return (state.Mode, channelKind, state.TrafficIngressObserver);
     }
 
     public static IDisposable Use(FneTransportEncryptionMode mode)
+        => Use(mode, trafficIngressObserver: null);
+
+    public static IDisposable Use(
+        FneTransportEncryptionMode mode,
+        Action<long>? trafficIngressObserver)
     {
         ContextState? previous = Current.Value;
-        Current.Value = new ContextState(mode);
+        Current.Value = new ContextState(mode, trafficIngressObserver);
         return new Scope(previous);
     }
 
-    private sealed class ContextState(FneTransportEncryptionMode mode)
+    private sealed class ContextState(
+        FneTransportEncryptionMode mode,
+        Action<long>? trafficIngressObserver)
     {
         public FneTransportEncryptionMode Mode { get; } = mode;
+        public Action<long>? TrafficIngressObserver { get; } = trafficIngressObserver;
         public int ReceiverCount { get; set; }
     }
 
@@ -95,6 +107,7 @@ public abstract class UdpBase
     private readonly object cryptoSync = new();
     private readonly FneTransportEncryptionMode configuredMode;
     private readonly FneUdpChannelKind channelKind;
+    private readonly Action<long>? trafficIngressObserver;
     private readonly InboundReplayCache replayCache = new();
     private FneTransportEncryptionMode sendMode;
     private FneTransportEncryptionMode lastSentMode;
@@ -105,7 +118,8 @@ public abstract class UdpBase
     protected UdpBase()
     {
         client = new UdpClient();
-        (configuredMode, channelKind) = FneTransportEncryptionContext.Capture();
+        (configuredMode, channelKind, trafficIngressObserver) =
+            FneTransportEncryptionContext.Capture();
         sendMode = InitialMode(configuredMode);
         lastSentMode = sendMode;
     }
@@ -141,6 +155,18 @@ public abstract class UdpBase
         while (true)
         {
             UdpReceiveResult result = await client.ReceiveAsync().ConfigureAwait(false);
+            if (channelKind == FneUdpChannelKind.Traffic && trafficIngressObserver is not null)
+            {
+                try
+                {
+                    trafficIngressObserver(Stopwatch.GetTimestamp());
+                }
+                catch
+                {
+                    // Timing observation is diagnostic only and must not stop
+                    // the protocol receiver.
+                }
+            }
             if (!FneInboundFramePolicy.AcceptsInbound(channelKind))
                 continue;
 

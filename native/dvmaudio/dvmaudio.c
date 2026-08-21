@@ -24,6 +24,7 @@ struct DvmAudioStream {
     _Atomic int32_t playback_continuity_expected;
     _Atomic uint64_t pending_starved_samples;
     _Atomic uint64_t starved_samples;
+    _Atomic uint64_t output_callback_count;
 };
 
 struct DvmVoiceProcessingStream {
@@ -43,6 +44,7 @@ struct DvmVoiceProcessingStream {
     _Atomic int32_t playback_continuity_expected;
     _Atomic uint64_t pending_starved_samples;
     _Atomic uint64_t starved_samples;
+    _Atomic uint64_t output_callback_count;
 };
 
 static void observe_playback_starvation(
@@ -370,6 +372,7 @@ static OSStatus output_callback(
     DvmAudioStream *stream = (DvmAudioStream *)ref_con;
     if (stream == NULL || data == NULL || data->mNumberBuffers == 0)
         return noErr;
+    atomic_fetch_add_explicit(&stream->output_callback_count, 1, memory_order_relaxed);
 
     for (UInt32 buffer_index = 0; buffer_index < data->mNumberBuffers; buffer_index++) {
         AudioBuffer *buffer = &data->mBuffers[buffer_index];
@@ -505,6 +508,7 @@ static OSStatus voice_output_callback(
     DvmVoiceProcessingStream *stream = (DvmVoiceProcessingStream *)ref_con;
     if (stream == NULL || data == NULL)
         return noErr;
+    atomic_fetch_add_explicit(&stream->output_callback_count, 1, memory_order_relaxed);
 
     for (UInt32 index = 0; index < data->mNumberBuffers; index++) {
         AudioBuffer *buffer = &data->mBuffers[index];
@@ -617,6 +621,7 @@ DvmVoiceProcessingStream *dvm_audio_voice_processing_create(
     atomic_init(&stream->playback_continuity_expected, 0);
     atomic_init(&stream->pending_starved_samples, 0);
     atomic_init(&stream->starved_samples, 0);
+    atomic_init(&stream->output_callback_count, 0);
     return stream;
 
 fail:
@@ -689,6 +694,20 @@ uint64_t dvm_audio_voice_processing_starved_samples(DvmVoiceProcessingStream *st
     return stream == NULL
         ? 0
         : atomic_load_explicit(&stream->starved_samples, memory_order_acquire);
+}
+
+uint64_t dvm_audio_voice_processing_pending_starved_samples(DvmVoiceProcessingStream *stream)
+{
+    return stream == NULL
+        ? 0
+        : atomic_load_explicit(&stream->pending_starved_samples, memory_order_acquire);
+}
+
+uint64_t dvm_audio_voice_processing_output_callback_count(DvmVoiceProcessingStream *stream)
+{
+    return stream == NULL
+        ? 0
+        : atomic_load_explicit(&stream->output_callback_count, memory_order_acquire);
 }
 
 void dvm_audio_voice_processing_end_playback_continuity(DvmVoiceProcessingStream *stream)
@@ -825,6 +844,7 @@ DvmAudioStream *dvm_audio_stream_create(
     atomic_init(&stream->playback_continuity_expected, 0);
     atomic_init(&stream->pending_starved_samples, 0);
     atomic_init(&stream->starved_samples, 0);
+    atomic_init(&stream->output_callback_count, 0);
     return stream;
 
 fail:
@@ -903,6 +923,20 @@ uint64_t dvm_audio_stream_starved_samples(DvmAudioStream *stream)
     return stream == NULL
         ? 0
         : atomic_load_explicit(&stream->starved_samples, memory_order_acquire);
+}
+
+uint64_t dvm_audio_stream_pending_starved_samples(DvmAudioStream *stream)
+{
+    return stream == NULL
+        ? 0
+        : atomic_load_explicit(&stream->pending_starved_samples, memory_order_acquire);
+}
+
+uint64_t dvm_audio_stream_output_callback_count(DvmAudioStream *stream)
+{
+    return stream == NULL
+        ? 0
+        : atomic_load_explicit(&stream->output_callback_count, memory_order_acquire);
 }
 
 void dvm_audio_stream_end_playback_continuity(DvmAudioStream *stream)

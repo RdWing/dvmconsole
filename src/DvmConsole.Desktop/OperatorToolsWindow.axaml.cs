@@ -45,6 +45,7 @@ public sealed partial class OperatorToolsWindow : Window
         historyCollection = viewModel.FilteredCallHistory;
         historyCollection.CollectionChanged += HandleHistoryCollectionChanged;
         Opened += HandleOpened;
+        LayoutUpdated += HandleWindowLayoutUpdated;
         ToolTabs.SelectionChanged += HandleToolTabsSelectionChanged;
         Closed += HandleClosed;
         ScheduleHistoryViewportHook();
@@ -57,6 +58,15 @@ public sealed partial class OperatorToolsWindow : Window
             ToolTabs.SelectedIndex = (int)OperatorToolSection.General;
             Dispatcher.UIThread.Post(
                 () => this.FindControl<TextBlock>("ClockSettingsSection")?.BringIntoView(),
+                DispatcherPriority.Background);
+            return;
+        }
+
+        if (section == OperatorToolSection.EncryptionKeys)
+        {
+            ToolTabs.SelectedIndex = (int)OperatorToolSection.Connections;
+            Dispatcher.UIThread.Post(
+                () => this.FindControl<TextBlock>("EncryptionKeyStatusSection")?.BringIntoView(),
                 DispatcherPriority.Background);
             return;
         }
@@ -96,6 +106,9 @@ public sealed partial class OperatorToolsWindow : Window
     private void HandleOpened(object? sender, EventArgs e)
         => ScheduleHistoryViewportHook();
 
+    private void HandleWindowLayoutUpdated(object? sender, EventArgs e)
+        => TryAttachHistoryViewportHook();
+
     private void HandleToolTabsSelectionChanged(object? sender, SelectionChangedEventArgs e)
         => ScheduleHistoryViewportHook();
 
@@ -116,6 +129,7 @@ public sealed partial class OperatorToolsWindow : Window
             return;
 
         historyList = list;
+        LayoutUpdated -= HandleWindowLayoutUpdated;
         historyViewportAnchor = new ScrollViewportAnchor<CallHistoryEntry>(
             GetHistoryScrollViewer,
             () => list.GetVisualDescendants().OfType<ListBoxItem>(),
@@ -138,6 +152,7 @@ public sealed partial class OperatorToolsWindow : Window
     {
         scrollBarHideTimer.Stop();
         Opened -= HandleOpened;
+        LayoutUpdated -= HandleWindowLayoutUpdated;
         ToolTabs.SelectionChanged -= HandleToolTabsSelectionChanged;
         if (historyList is not null)
             historyList.LayoutUpdated -= HandleHistoryListLayoutUpdated;
@@ -482,5 +497,6 @@ public enum OperatorToolSection
     Groups,
     Connections,
     Ptt,
-    Clock
+    Clock,
+    EncryptionKeys
 }

@@ -6,6 +6,31 @@ namespace DvmConsole.Audio.Tests;
 public sealed class OggOpusTagsTests
 {
     [Fact]
+    public async Task FinalGranuleMatchesSourceDurationForPartialOpusFrame()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "dvmconsole-opus-duration-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        string wavPath = Path.Combine(root, "source.wav");
+        string opusPath = Path.Combine(root, "recording.opus");
+        const int sourceSampleCount = 8_123;
+
+        try
+        {
+            WriteWaveFile(wavPath, Enumerable.Repeat((short)1200, sourceSampleCount).ToArray());
+            await OpusRecordingEncoder.EncodeWaveFileAsync(wavPath, opusPath);
+
+            (ushort preSkip, long finalGranule) = ReadOpusTiming(opusPath);
+
+            Assert.Equal(preSkip + sourceSampleCount * 6L, finalGranule);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task WritesAndAtomicallyUpdatesTagsWithoutBreakingAudio()
     {
         string root = Path.Combine(Path.GetTempPath(), "dvmconsole-ogg-tags-tests", Guid.NewGuid().ToString("N"));
@@ -82,5 +107,36 @@ public sealed class OggOpusTagsTests
         writer.Write("data"u8);
         writer.Write(data.Length);
         writer.Write(data);
+    }
+
+    private static (ushort PreSkip, long FinalGranule) ReadOpusTiming(string path)
+    {
+        byte[] file = File.ReadAllBytes(path);
+        ushort? preSkip = null;
+        long finalGranule = -1;
+        int offset = 0;
+        while (offset < file.Length)
+        {
+            ReadOnlySpan<byte> page = file.AsSpan(offset);
+            Assert.True(page.Length >= 27);
+            Assert.True(page[..4].SequenceEqual("OggS"u8));
+            int segmentCount = page[26];
+            Assert.True(page.Length >= 27 + segmentCount);
+            int bodyLength = 0;
+            for (int index = 0; index < segmentCount; index++)
+                bodyLength += page[27 + index];
+            int pageLength = 27 + segmentCount + bodyLength;
+            Assert.True(page.Length >= pageLength);
+
+            ReadOnlySpan<byte> body = page.Slice(27 + segmentCount, bodyLength);
+            if (preSkip is null && body.Length >= 12 && body[..8].SequenceEqual("OpusHead"u8))
+                preSkip = BinaryPrimitives.ReadUInt16LittleEndian(body[10..]);
+            finalGranule = BinaryPrimitives.ReadInt64LittleEndian(page[6..]);
+            offset += pageLength;
+        }
+
+        Assert.NotNull(preSkip);
+        Assert.True(finalGranule >= 0);
+        return (preSkip.Value, finalGranule);
     }
 }

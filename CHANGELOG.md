@@ -6,8 +6,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Changed
+
+- Decode complete RX network packets into caller-owned PCM batches before proceeding through the chain, reducing allocation and scheduler pressure without changing per-mode gain, smoothing, or optional processing.
+- Add configurable, packet-aligned RX jitter buffers per FNE connection for P25, DMR, and NXDN so packets that arrive out of order can be restored before their playout deadline in both live listening and patch-source decoding.
+- Shorten receive cleanup to one second of inactivity plus one second of grace, with a two-second post-terminator hold. Report packets restored to playout order separately from packets that miss the jitter deadline.
+- Show Activity Event History for RX-enabled channels by default, with independent `Active`/`All` and `Zone Wide`/`System Wide` filters that do not trigger the History window when double-clicked.
+- Restore the main console's last normal size and position at launch when that position remains reachable on a connected display.
+- Replace rapidly changing per-packet connection details with readable connection-session RX/TX totals, bounded current-stream summaries, and coalesced health updates. Keep the current Debug Log session within explicit entry and memory limits while discarding the oldest entries first.
+- Keep per-FNE jitter controls compact in Connections and open Encryption Key Status directly at the channel key-status section.
+
 ### Fixed
 
+- Age an overflowing live RX lane at whole-packet boundaries so newly arrived speech replaces stale speaker-bound audio while TAR keeps the complete decoded timeline. Detect a stalled physical output callback on macOS and Windows, expose pending physical starvation and per-lane high-water evidence, and separate UDP arrival, FNE handling, decoder queue, mixer, and device timing in diagnostics.
+- Keep three complete P25 LDUs of bounded live-lane headroom so ordinary packet bursts do not age current speech, and make RX meters follow the selected receive stream immediately while UI lifecycle work catches up.
+- Finalize TAR Ogg Opus recordings with an exact PCM-duration end timestamp so players do not advertise codec-frame padding after the recording's real audio ends.
 - Interpret unprefixed P25 key IDs as hexadecimal, matching legacy WPF codeplugs so FNE/KMM requests use the intended key ID.
 
 ## [0.3.2] - 2026-08-20

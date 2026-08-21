@@ -125,11 +125,23 @@ public sealed class DebugLogWindow : Window
                     Padding = new Thickness(10),
                     Child = logScroller
                 },
-                new TextBlock
+                new StackPanel
                 {
-                    Text = "Network payloads and credential-like values are redacted before display and export.",
-                    Classes = { "muted" },
-                    TextWrapping = TextWrapping.Wrap
+                    Spacing = 3,
+                    Children =
+                    {
+                        new TextBlock
+                        {
+                            Text = "Network payloads and credential-like values are redacted before display and export.",
+                            Classes = { "muted" },
+                            TextWrapping = TextWrapping.Wrap
+                        },
+                        new TextBlock
+                        {
+                            Classes = { "muted" },
+                            [!TextBlock.TextProperty] = new Binding(nameof(MainWindowViewModel.DebugLogRetentionText))
+                        }
+                    }
                 }
             }
         };

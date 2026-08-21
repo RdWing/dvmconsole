@@ -21,9 +21,17 @@ internal sealed class ReceivePipelineTimingReporter
         DateTimeOffset now)
     {
         ArgumentNullException.ThrowIfNull(channel);
-        if (latest.InterArrivalDelay < InterArrivalWarningThreshold &&
-            latest.EndToEndDelay < WarningThreshold &&
-            latest.QueueDelay < WarningThreshold &&
+        TimeSpan unexpectedQueueDelay = RemoveConfiguredJitterDelay(
+            latest.QueueDelay,
+            latest.ConfiguredJitterBufferDelay);
+        TimeSpan unexpectedEndToEndDelay = RemoveConfiguredJitterDelay(
+            latest.EndToEndDelay,
+            latest.ConfiguredJitterBufferDelay);
+        if (latest.TransportInterArrivalDelay < InterArrivalWarningThreshold &&
+            latest.TransportToFneBoundaryDelay < WarningThreshold &&
+            latest.InterArrivalDelay < InterArrivalWarningThreshold &&
+            unexpectedEndToEndDelay < WarningThreshold &&
+            unexpectedQueueDelay < WarningThreshold &&
             latest.ProcessingDuration < WarningThreshold)
         {
             return false;
@@ -41,6 +49,13 @@ internal sealed class ReceivePipelineTimingReporter
             return true;
         }
     }
+
+    private static TimeSpan RemoveConfiguredJitterDelay(
+        TimeSpan observed,
+        TimeSpan configuredJitterDelay)
+        => observed > configuredJitterDelay
+            ? observed - configuredJitterDelay
+            : TimeSpan.Zero;
 
     public void Reset(ChannelViewModel channel)
     {

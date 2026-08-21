@@ -96,12 +96,122 @@ public sealed class UserSettingsStoreTests
                 Assert.Equal(-18, option.CompressorThresholdDbfs);
                 Assert.Equal(3, option.CompressorMakeupGainDb);
             });
+            Assert.Equal(180, settings.RxJitterBuffer.P25Milliseconds);
+            Assert.Equal(120, settings.RxJitterBuffer.DmrMilliseconds);
+            Assert.Equal(160, settings.RxJitterBuffer.NxdnMilliseconds);
+            Assert.Empty(settings.RxJitterBuffersBySystem);
             Assert.Equal(14, settings.UiFontSize);
             Assert.Equal(1.0, settings.UiScale);
+            Assert.Null(settings.MainWindowPlacement.Left);
+            Assert.Null(settings.MainWindowPlacement.Top);
+            Assert.Equal(1260, settings.MainWindowPlacement.Width);
+            Assert.Equal(760, settings.MainWindowPlacement.Height);
         }
         finally
         {
             Cleanup(path);
+        }
+    }
+
+    [Fact]
+    public void RxJitterBufferAcceptsOnlyProtocolAlignedDurations()
+    {
+        string path = CreatePath();
+        try
+        {
+            var store = new UserSettingsStore(path);
+            store.Save(new UserSettings
+            {
+                RxJitterBuffer = new RxJitterBufferSetting
+                {
+                    P25Milliseconds = 360,
+                    DmrMilliseconds = 100,
+                    NxdnMilliseconds = 240
+                }
+            });
+
+            RxJitterBufferSetting loaded = store.Load().RxJitterBuffer;
+            Assert.Equal(360, loaded.P25Milliseconds);
+            Assert.Equal(RxJitterBufferSetting.DefaultDmrMilliseconds, loaded.DmrMilliseconds);
+            Assert.Equal(240, loaded.NxdnMilliseconds);
+        }
+        finally
+        {
+            Cleanup(path);
+        }
+    }
+
+    [Fact]
+    public void PerSystemRxJitterBuffersAreBoundedNormalizedAndCaseInsensitive()
+    {
+        string path = CreatePath();
+        try
+        {
+            var store = new UserSettingsStore(path);
+            store.Save(new UserSettings
+            {
+                RxJitterBuffersBySystem = new Dictionary<string, RxJitterBufferSetting>
+                {
+                    [" Alpha "] = new()
+                    {
+                        P25Milliseconds = 360,
+                        DmrMilliseconds = 999,
+                        NxdnMilliseconds = 80
+                    },
+                    [" "] = new()
+                }
+            });
+
+            Dictionary<string, RxJitterBufferSetting> loaded = store.Load().RxJitterBuffersBySystem;
+            RxJitterBufferSetting alpha = Assert.Single(loaded).Value;
+            Assert.True(loaded.ContainsKey("alpha"));
+            Assert.Equal(360, alpha.P25Milliseconds);
+            Assert.Equal(RxJitterBufferSetting.DefaultDmrMilliseconds, alpha.DmrMilliseconds);
+            Assert.Equal(80, alpha.NxdnMilliseconds);
+        }
+        finally
+        {
+            Cleanup(path);
+        }
+    }
+
+    [Fact]
+    public void ConnectionImportScopeKeepsJitterSettingsSeparateFromAudio()
+    {
+        string path = CreatePath();
+        string importPath = Path.Combine(Path.GetDirectoryName(path)!, "connection-import.json");
+        try
+        {
+            var store = new UserSettingsStore(path);
+            store.Save(new UserSettings
+            {
+                AudioOutputDeviceId = "current-output",
+                RxJitterBuffersBySystem = new Dictionary<string, RxJitterBufferSetting>
+                {
+                    ["Alpha"] = new() { P25Milliseconds = 180 }
+                }
+            });
+            new UserSettingsStore(importPath).Save(new UserSettings
+            {
+                AudioOutputDeviceId = "imported-output",
+                RxJitterBuffersBySystem = new Dictionary<string, RxJitterBufferSetting>
+                {
+                    ["Alpha"] = new() { P25Milliseconds = 540 }
+                }
+            });
+
+            store.Import(importPath, SettingsImportScope.Audio);
+            UserSettings audioOnly = store.Load();
+            Assert.Equal("imported-output", audioOnly.AudioOutputDeviceId);
+            Assert.Equal(180, audioOnly.RxJitterBuffersBySystem["Alpha"].P25Milliseconds);
+
+            store.Import(importPath, SettingsImportScope.Connections);
+            Assert.Equal(540, store.Load().RxJitterBuffersBySystem["Alpha"].P25Milliseconds);
+        }
+        finally
+        {
+            Cleanup(path);
+            Cleanup(importPath);
         }
     }
 
@@ -255,7 +365,7 @@ public sealed class UserSettingsStoreTests
     }
 
     [Fact]
-    public void NormalizesCallHistoryPaneAndWindowPlacement()
+    public void NormalizesOperatorWindowPlacements()
     {
         string path = CreatePath();
         try
@@ -265,6 +375,13 @@ public sealed class UserSettingsStoreTests
             {
                 ShowCallHistoryPane = false,
                 SnapCallHistoryToWindow = true,
+                MainWindowPlacement = new WindowPlacementSetting
+                {
+                    Left = -1200,
+                    Top = double.PositiveInfinity,
+                    Width = 500,
+                    Height = 5000
+                },
                 CallHistoryWindowPlacement = new WindowPlacementSetting
                 {
                     Left = double.NaN,
@@ -278,6 +395,10 @@ public sealed class UserSettingsStoreTests
 
             Assert.False(loaded.ShowCallHistoryPane);
             Assert.True(loaded.SnapCallHistoryToWindow);
+            Assert.Equal(-1200, loaded.MainWindowPlacement.Left);
+            Assert.Null(loaded.MainWindowPlacement.Top);
+            Assert.Equal(880, loaded.MainWindowPlacement.Width);
+            Assert.Equal(2160, loaded.MainWindowPlacement.Height);
             Assert.Null(loaded.CallHistoryWindowPlacement.Left);
             Assert.Equal(42, loaded.CallHistoryWindowPlacement.Top);
             Assert.Equal(400, loaded.CallHistoryWindowPlacement.Width);

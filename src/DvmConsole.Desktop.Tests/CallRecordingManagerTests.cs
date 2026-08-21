@@ -13,6 +13,41 @@ namespace DvmConsole.Desktop.Tests;
 public sealed class CallRecordingManagerTests
 {
     [Fact]
+    public async Task DisposalClosesActiveWaveAndDrainsOpusFinalization()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "dvmconsole-recording-tests", Guid.NewGuid().ToString("N"));
+        var channel = new ChannelViewModel(new ChannelConfiguration
+        {
+            Name = "Dispatch",
+            System = "System 1",
+            Tgid = "99",
+            Mode = "analog"
+        });
+        var manager = new CallRecordingManager(root);
+        channel.SetRecordingEnabled(true);
+
+        try
+        {
+            manager.WriteSamples(channel, streamId: 42, sourceId: 7, ActiveSamples());
+            Task<RecordingFinalizationResult> finalized = NextFinalizationAsync(manager);
+
+            await manager.DisposeAsync();
+
+            RecordingFinalizationResult result = await finalized;
+            Assert.True(result.IsPlayable);
+            Assert.Empty(manager.ActivePaths);
+            Assert.Empty(Directory.GetFiles(root, "*.wav", SearchOption.AllDirectories));
+            Assert.Single(Directory.GetFiles(root, "*.opus", SearchOption.AllDirectories));
+        }
+        finally
+        {
+            await manager.DisposeAsync();
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task SilentOnlyRecordingFinalizesWithoutAPlayAction()
     {
         string root = Path.Combine(Path.GetTempPath(), "dvmconsole-recording-tests", Guid.NewGuid().ToString("N"));

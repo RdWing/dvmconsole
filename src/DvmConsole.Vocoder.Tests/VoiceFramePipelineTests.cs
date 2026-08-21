@@ -38,6 +38,22 @@ public sealed class VoiceFramePipelineTests
     }
 
     [Fact]
+    public void DecoderFillsCallerOwnedPcmWithoutAllocatingAFrameCallback()
+    {
+        var session = new FakeVocoderSession();
+        using var decoder = new VoiceFrameDecoder(session, VocoderMode.P25Imbe);
+        var samples = new short[VocoderFrameSizes.PcmSamplesPerFrame];
+
+        int errors = decoder.Process(
+            new byte[] { 9, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
+            samples);
+
+        Assert.Equal(0, errors);
+        Assert.All(samples, sample => Assert.Equal((short)9, sample));
+        Assert.Equal(1, session.DecodeCalls);
+    }
+
+    [Fact]
     public void EncoderFlushEmitsDelayedFrameOnce()
     {
         var session = new FakeVocoderSession { FlushValue = 0x5A };

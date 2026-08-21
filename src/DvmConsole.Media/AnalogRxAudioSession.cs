@@ -33,7 +33,8 @@ public sealed class AnalogRxAudioSession : IAsyncDisposable
             return 0;
         }
 
-        await playback.WriteAsync(samples, cancellationToken).ConfigureAwait(false);
+        await LivePacketAudioWriter.WriteAsync(playback, samples, cancellationToken)
+            .ConfigureAwait(false);
         FramesDecoded++;
         return 0;
     }
