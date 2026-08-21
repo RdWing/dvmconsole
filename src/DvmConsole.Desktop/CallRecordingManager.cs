@@ -8,7 +8,8 @@ namespace DvmConsole.Desktop;
 
 // Owns per-channel receive and console-transmit recordings fed by PCM. A
 // recording starts on the first frame for an active stream and is finalized
-// on its terminator, call stop, channel stop, or application shutdown.
+// after its confirmed terminator, call stop, channel stop, or application
+// shutdown.
 public sealed class CallRecordingManager : IDisposable, IAsyncDisposable
 {
     public const int DefaultRetentionDays = 7;
@@ -346,7 +347,7 @@ public sealed class CallRecordingManager : IDisposable, IAsyncDisposable
                     current.SetEncryption(resolved);
             }
 
-            if (!IsTerminatingTraffic(traffic))
+            if (!ReceiveTrafficClassifier.IsTerminator(traffic))
                 return false;
 
             bool closed = active.ContainsKey((channel, traffic.StreamId));
@@ -730,14 +731,6 @@ public sealed class CallRecordingManager : IDisposable, IAsyncDisposable
         sanitized = string.IsNullOrWhiteSpace(sanitized) ? "unknown" : sanitized.Trim();
         return sanitized.Length <= 64 ? sanitized : sanitized[..64];
     }
-
-    private static bool IsTerminatingTraffic(FneTrafficFrame traffic)
-        => traffic.FrameType.Equals("TERMINATOR", StringComparison.OrdinalIgnoreCase) ||
-           (traffic.Protocol == FneTrafficProtocol.Dmr &&
-            traffic.Subtype.Equals("TERMINATOR_WITH_LC", StringComparison.OrdinalIgnoreCase)) ||
-           (traffic.Protocol == FneTrafficProtocol.P25 &&
-            (traffic.Subtype.Equals("TDU", StringComparison.OrdinalIgnoreCase) ||
-             traffic.Subtype.Equals("TDULC", StringComparison.OrdinalIgnoreCase)));
 
     private sealed class ActiveRecording(
         uint streamId,

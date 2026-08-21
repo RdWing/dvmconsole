@@ -1,6 +1,23 @@
 using DvmConsole.FneClient;
+using System.Diagnostics;
 
 namespace DvmConsole.Desktop;
+
+internal readonly record struct ReceiveWorkQueueDiagnostics(
+    long ProcessedFrames,
+    TimeSpan MaximumInterArrivalDelay,
+    TimeSpan MaximumIngressToQueueDelay,
+    TimeSpan MaximumQueueDelay,
+    TimeSpan MaximumProcessingDuration,
+    TimeSpan MaximumEndToEndDelay);
+
+internal readonly record struct ReceiveWorkItemTiming(
+    FneTrafficFrame Traffic,
+    TimeSpan InterArrivalDelay,
+    TimeSpan IngressToQueueDelay,
+    TimeSpan QueueDelay,
+    TimeSpan ProcessingDuration,
+    TimeSpan EndToEndDelay);
 
 // Keeps receive work ordered for one channel without coupling it to any other
 // channel. The bounded pending list prevents a slow decoder or output device
@@ -9,19 +26,23 @@ internal sealed class ChannelReceiveWorkQueue : IAsyncDisposable
 {
     private readonly object sync = new();
     private readonly Dictionary<ChannelViewModel, ChannelWorker> workers = [];
+    private readonly Dictionary<ChannelViewModel, TimingAccumulator> timing = [];
     private readonly HashSet<ChannelViewModel> stoppedChannels = [];
     private readonly Func<ChannelViewModel, FneTrafficFrame, Task> process;
+    private readonly Action<ChannelViewModel, ReceiveWorkItemTiming>? timingObserver;
     private readonly int maxPendingFramesPerChannel;
     private bool disposed;
 
     public ChannelReceiveWorkQueue(
         Func<ChannelViewModel, FneTrafficFrame, Task> process,
-        int maxPendingFramesPerChannel = 64)
+        int maxPendingFramesPerChannel = 64,
+        Action<ChannelViewModel, ReceiveWorkItemTiming>? timingObserver = null)
     {
         this.process = process ?? throw new ArgumentNullException(nameof(process));
         if (maxPendingFramesPerChannel < 1)
             throw new ArgumentOutOfRangeException(nameof(maxPendingFramesPerChannel));
         this.maxPendingFramesPerChannel = maxPendingFramesPerChannel;
+        this.timingObserver = timingObserver;
     }
 
     public void Start(ChannelViewModel channel)
@@ -31,15 +52,33 @@ internal sealed class ChannelReceiveWorkQueue : IAsyncDisposable
         {
             ObjectDisposedException.ThrowIf(disposed, this);
             stoppedChannels.Remove(channel);
+            if (!workers.ContainsKey(channel))
+                timing[channel] = new TimingAccumulator();
         }
     }
 
+    public ReceiveWorkQueueDiagnostics GetDiagnostics(ChannelViewModel channel)
+    {
+        ArgumentNullException.ThrowIfNull(channel);
+        lock (sync)
+            return timing.TryGetValue(channel, out TimingAccumulator? current)
+                ? current.Snapshot()
+                : default;
+    }
+
     public bool Enqueue(ChannelViewModel channel, FneTrafficFrame traffic)
-        => Enqueue(channel, traffic, out _);
+        => Enqueue(channel, traffic, Stopwatch.GetTimestamp(), out _);
 
     public bool Enqueue(
         ChannelViewModel channel,
         FneTrafficFrame traffic,
+        out bool droppedFrame)
+        => Enqueue(channel, traffic, Stopwatch.GetTimestamp(), out droppedFrame);
+
+    public bool Enqueue(
+        ChannelViewModel channel,
+        FneTrafficFrame traffic,
+        long ingressTimestamp,
         out bool droppedFrame)
     {
         ArgumentNullException.ThrowIfNull(channel);
@@ -55,11 +94,21 @@ internal sealed class ChannelReceiveWorkQueue : IAsyncDisposable
 
             if (!workers.TryGetValue(channel, out ChannelWorker? worker))
             {
-                worker = new ChannelWorker(channel, process, maxPendingFramesPerChannel);
+                if (!timing.TryGetValue(channel, out TimingAccumulator? accumulator))
+                {
+                    accumulator = new TimingAccumulator();
+                    timing.Add(channel, accumulator);
+                }
+                worker = new ChannelWorker(
+                    channel,
+                    process,
+                    accumulator,
+                    maxPendingFramesPerChannel,
+                    timingObserver);
                 workers.Add(channel, worker);
             }
 
-            return worker.Enqueue(traffic, out droppedFrame);
+            return worker.Enqueue(traffic, ingressTimestamp, out droppedFrame);
         }
     }
 
@@ -100,10 +149,12 @@ internal sealed class ChannelReceiveWorkQueue : IAsyncDisposable
     private sealed class ChannelWorker
     {
         private readonly object sync = new();
-        private readonly LinkedList<FneTrafficFrame> pending = [];
+        private readonly LinkedList<WorkItem> pending = [];
         private readonly ChannelViewModel channel;
         private readonly Func<ChannelViewModel, FneTrafficFrame, Task> process;
+        private readonly TimingAccumulator timing;
         private readonly int maxPendingFrames;
+        private readonly Action<ChannelViewModel, ReceiveWorkItemTiming>? timingObserver;
         private readonly TaskCompletionSource completion =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
         private bool accepting = true;
@@ -112,16 +163,23 @@ internal sealed class ChannelReceiveWorkQueue : IAsyncDisposable
         public ChannelWorker(
             ChannelViewModel channel,
             Func<ChannelViewModel, FneTrafficFrame, Task> process,
-            int maxPendingFrames)
+            TimingAccumulator timing,
+            int maxPendingFrames,
+            Action<ChannelViewModel, ReceiveWorkItemTiming>? timingObserver)
         {
             this.channel = channel;
             this.process = process;
+            this.timing = timing;
             this.maxPendingFrames = maxPendingFrames;
+            this.timingObserver = timingObserver;
         }
 
         public Task Completion => completion.Task;
 
-        public bool Enqueue(FneTrafficFrame traffic, out bool droppedFrame)
+        public bool Enqueue(
+            FneTrafficFrame traffic,
+            long ingressTimestamp,
+            out bool droppedFrame)
         {
             lock (sync)
             {
@@ -135,7 +193,14 @@ internal sealed class ChannelReceiveWorkQueue : IAsyncDisposable
                 if (droppedFrame && !MakeRoomFor(traffic))
                     return false;
 
-                pending.AddLast(traffic);
+                long normalizedIngressTimestamp = ingressTimestamp > 0
+                    ? ingressTimestamp
+                    : Stopwatch.GetTimestamp();
+                pending.AddLast(new WorkItem(
+                    traffic,
+                    timing.ObserveIngress(traffic.StreamId, normalizedIngressTimestamp),
+                    normalizedIngressTimestamp,
+                    Stopwatch.GetTimestamp()));
                 if (!running)
                 {
                     running = true;
@@ -157,28 +222,31 @@ internal sealed class ChannelReceiveWorkQueue : IAsyncDisposable
 
         private bool MakeRoomFor(FneTrafficFrame incoming)
         {
-            LinkedListNode<FneTrafficFrame>? candidate = pending.First;
+            LinkedListNode<WorkItem>? candidate = pending.First;
             while (candidate is not null)
             {
-                if (!IsTerminator(candidate.Value) && HasLaterVoiceForSameStream(candidate))
+                if (!ReceiveTrafficClassifier.IsTerminator(candidate.Value.Traffic) &&
+                    HasLaterVoiceForSameStream(candidate))
                 {
                     break;
                 }
                 candidate = candidate.Next;
             }
 
-            if (candidate is null && IsTerminator(incoming))
+            if (candidate is null && ReceiveTrafficClassifier.IsTerminator(incoming))
             {
                 candidate = pending.First;
                 while (candidate is not null &&
-                       (IsTerminator(candidate.Value) || candidate.Value.StreamId == incoming.StreamId))
+                       (ReceiveTrafficClassifier.IsTerminator(candidate.Value.Traffic) ||
+                        candidate.Value.Traffic.StreamId == incoming.StreamId))
                 {
                     candidate = candidate.Next;
                 }
             }
 
             candidate ??= pending.First;
-            while (candidate is not null && IsTerminator(candidate.Value))
+            while (candidate is not null &&
+                   ReceiveTrafficClassifier.IsTerminator(candidate.Value.Traffic))
                 candidate = candidate.Next;
 
             if (candidate is not null)
@@ -187,18 +255,19 @@ internal sealed class ChannelReceiveWorkQueue : IAsyncDisposable
                 return true;
             }
 
-            if (!IsTerminator(incoming))
+            if (!ReceiveTrafficClassifier.IsTerminator(incoming))
                 return false;
 
             pending.RemoveFirst();
             return true;
         }
 
-        private static bool HasLaterVoiceForSameStream(LinkedListNode<FneTrafficFrame> candidate)
+        private static bool HasLaterVoiceForSameStream(LinkedListNode<WorkItem> candidate)
         {
-            for (LinkedListNode<FneTrafficFrame>? later = candidate.Next; later is not null; later = later.Next)
+            for (LinkedListNode<WorkItem>? later = candidate.Next; later is not null; later = later.Next)
             {
-                if (!IsTerminator(later.Value) && later.Value.StreamId == candidate.Value.StreamId)
+                if (!ReceiveTrafficClassifier.IsTerminator(later.Value.Traffic) &&
+                    later.Value.Traffic.StreamId == candidate.Value.Traffic.StreamId)
                     return true;
             }
             return false;
@@ -208,7 +277,7 @@ internal sealed class ChannelReceiveWorkQueue : IAsyncDisposable
         {
             while (true)
             {
-                FneTrafficFrame? traffic;
+                WorkItem item;
                 lock (sync)
                 {
                     if (pending.First is null)
@@ -219,13 +288,14 @@ internal sealed class ChannelReceiveWorkQueue : IAsyncDisposable
                         return;
                     }
 
-                    traffic = pending.First.Value;
+                    item = pending.First.Value;
                     pending.RemoveFirst();
                 }
 
+                long processingStarted = Stopwatch.GetTimestamp();
                 try
                 {
-                    await process(channel, traffic).ConfigureAwait(false);
+                    await process(channel, item.Traffic).ConfigureAwait(false);
                 }
                 catch
                 {
@@ -233,24 +303,99 @@ internal sealed class ChannelReceiveWorkQueue : IAsyncDisposable
                     // failures. Keep this worker alive so a fault cannot strand
                     // later lifecycle or terminator frames.
                 }
+                finally
+                {
+                    long processingCompleted = Stopwatch.GetTimestamp();
+                    var observed = new ReceiveWorkItemTiming(
+                        item.Traffic,
+                        item.InterArrivalDelay,
+                        Stopwatch.GetElapsedTime(item.IngressTimestamp, item.EnqueuedTimestamp),
+                        Stopwatch.GetElapsedTime(item.EnqueuedTimestamp, processingStarted),
+                        Stopwatch.GetElapsedTime(processingStarted, processingCompleted),
+                        Stopwatch.GetElapsedTime(item.IngressTimestamp, processingCompleted));
+                    timing.Observe(observed);
+                    try
+                    {
+                        timingObserver?.Invoke(channel, observed);
+                    }
+                    catch
+                    {
+                        // Timing is diagnostic only and must never strand the
+                        // ordered decoder worker or later lifecycle traffic.
+                    }
+                }
             }
         }
 
-        private static bool IsTerminator(FneTrafficFrame traffic)
-        {
-            if (traffic.FrameType.Equals("TERMINATOR", StringComparison.OrdinalIgnoreCase))
-                return true;
+        private readonly record struct WorkItem(
+            FneTrafficFrame Traffic,
+            TimeSpan InterArrivalDelay,
+            long IngressTimestamp,
+            long EnqueuedTimestamp);
+    }
 
-            return traffic.Protocol switch
+    private sealed class TimingAccumulator
+    {
+        private readonly object sync = new();
+        private long processedFrames;
+        private readonly Dictionary<uint, long> lastIngressByStream = [];
+        private readonly Queue<uint> ingressStreamOrder = [];
+        private TimeSpan maximumInterArrivalDelay;
+        private TimeSpan maximumIngressToQueueDelay;
+        private TimeSpan maximumQueueDelay;
+        private TimeSpan maximumProcessingDuration;
+        private TimeSpan maximumEndToEndDelay;
+
+        public TimeSpan ObserveIngress(uint streamId, long ingressTimestamp)
+        {
+            lock (sync)
             {
-                FneTrafficProtocol.Dmr => traffic.Subtype.Equals(
-                    "TERMINATOR_WITH_LC",
-                    StringComparison.OrdinalIgnoreCase),
-                FneTrafficProtocol.P25 => traffic.Subtype.Equals("TDU", StringComparison.OrdinalIgnoreCase) ||
-                                           traffic.Subtype.Equals("TDULC", StringComparison.OrdinalIgnoreCase),
-                FneTrafficProtocol.Analog => traffic.Subtype.Equals("TERMINATOR", StringComparison.OrdinalIgnoreCase),
-                _ => false
-            };
+                TimeSpan delay = lastIngressByStream.TryGetValue(streamId, out long previous)
+                    ? Stopwatch.GetElapsedTime(previous, ingressTimestamp)
+                    : TimeSpan.Zero;
+                if (!lastIngressByStream.ContainsKey(streamId))
+                {
+                    ingressStreamOrder.Enqueue(streamId);
+                    while (ingressStreamOrder.Count > 32)
+                        lastIngressByStream.Remove(ingressStreamOrder.Dequeue());
+                }
+                lastIngressByStream[streamId] = ingressTimestamp;
+                maximumInterArrivalDelay = Max(maximumInterArrivalDelay, delay);
+                return delay;
+            }
         }
+
+        public void Observe(ReceiveWorkItemTiming observed)
+        {
+            lock (sync)
+            {
+                processedFrames++;
+                maximumIngressToQueueDelay = Max(
+                    maximumIngressToQueueDelay,
+                    observed.IngressToQueueDelay);
+                maximumQueueDelay = Max(maximumQueueDelay, observed.QueueDelay);
+                maximumProcessingDuration = Max(
+                    maximumProcessingDuration,
+                    observed.ProcessingDuration);
+                maximumEndToEndDelay = Max(maximumEndToEndDelay, observed.EndToEndDelay);
+            }
+        }
+
+        public ReceiveWorkQueueDiagnostics Snapshot()
+        {
+            lock (sync)
+            {
+                return new ReceiveWorkQueueDiagnostics(
+                    processedFrames,
+                    maximumInterArrivalDelay,
+                    maximumIngressToQueueDelay,
+                    maximumQueueDelay,
+                    maximumProcessingDuration,
+                    maximumEndToEndDelay);
+            }
+        }
+
+        private static TimeSpan Max(TimeSpan left, TimeSpan right)
+            => left >= right ? left : right;
     }
 }

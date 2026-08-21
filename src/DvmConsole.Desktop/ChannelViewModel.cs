@@ -17,10 +17,7 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
     private readonly IDmrKeyResolver? dmrKeyResolver;
     private readonly INxdnKeyResolver? nxdnKeyResolver;
     private readonly IReadOnlyList<RadioAlias> aliases;
-    private readonly ReceiveStreamLifecycle receiveLifecycle = new(
-        TimeSpan.FromSeconds(2),
-        TimeSpan.FromSeconds(2),
-        TimeSpan.FromSeconds(5));
+    private readonly ReceiveStreamLifecycle receiveLifecycle = ReceiveStreamLifecycle.CreateDefault();
     private Func<ChannelViewModel, Task>? startAudio;
     private Func<ChannelViewModel, Task>? stopAudio;
     private Func<ChannelViewModel, Task>? startTransmit;
@@ -563,9 +560,9 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
     {
         double normalized = double.IsFinite(value) ? Math.Clamp(value, 0, 100) : 0;
         if ((direction == ChannelAudioDirection.Receive &&
-             (!audioEnabled || audioSuspended || runtime.State != ChannelRuntimeState.Receiving)) ||
+             (!audioEnabled || audioSuspended || !IsReceivePresentationActive)) ||
             (direction == ChannelAudioDirection.Transmit && runtime.State != ChannelRuntimeState.Transmitting) ||
-            (streamId is uint expectedStreamId && runtime.StreamId != expectedStreamId))
+            (streamId is uint expectedStreamId && PresentationStreamId != expectedStreamId))
         {
             normalized = 0;
         }
@@ -699,10 +696,10 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
         if (runtime.State == ChannelRuntimeState.Transmitting)
             return ChannelTrafficApplyResult.NoMatch;
 
-        if (IsTerminator(traffic))
+        if (ReceiveTrafficClassifier.IsTerminator(traffic))
         {
             ReceiveStreamDecision decision = receiveLifecycle.ObserveTerminator(traffic.StreamId, now);
-            if (decision.Transition != ReceiveStreamTransition.Ended)
+            if (decision.Transition != ReceiveStreamTransition.TerminationPending)
                 return decision.Transition == ReceiveStreamTransition.IgnoredLate
                     ? ToApplyResult(decision)
                     : ChannelTrafficApplyResult.NoMatch;
@@ -712,7 +709,7 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
             return ToApplyResult(decision);
         }
 
-        if (IsDmrPrivacyHeader(traffic))
+        if (ReceiveTrafficClassifier.IsDmrPrivacyHeader(traffic))
         {
             if (!receiveLifecycle.IsActive(traffic.StreamId) ||
                 runtime.Definition.DestinationId != traffic.DestinationId ||
@@ -733,7 +730,7 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
         if (traffic.DestinationId != runtime.Definition.DestinationId)
             return ChannelTrafficApplyResult.NoMatch;
 
-        bool isDmrVoiceLcHeader = IsDmrVoiceLcHeader(traffic);
+        bool isDmrVoiceLcHeader = ReceiveTrafficClassifier.IsDefinitiveStart(traffic);
         if ((!MatchesVoiceTraffic(traffic) && !isDmrVoiceLcHeader) || traffic.SourceId == 0)
             return ChannelTrafficApplyResult.NoMatch;
 
@@ -753,13 +750,17 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
     {
         if (timeout <= TimeSpan.Zero)
             throw new ArgumentOutOfRangeException(nameof(timeout));
-        return AdvanceReceiveLifecycle(now).Transition == ReceiveStreamTransition.GraceExpired;
+        return AdvanceReceiveLifecycle(now).Transition is
+            ReceiveStreamTransition.GraceExpired or
+            ReceiveStreamTransition.TerminationExpired;
     }
 
     internal ChannelTrafficApplyResult AdvanceReceiveLifecycle(DateTimeOffset now)
     {
         ReceiveStreamDecision decision = receiveLifecycle.Advance(now);
-        if (decision.Transition == ReceiveStreamTransition.GraceExpired)
+        if (decision.Transition is
+            ReceiveStreamTransition.GraceExpired or
+            ReceiveStreamTransition.TerminationExpired)
         {
             if (decision.EndedStreamId is uint endedStreamId)
             {
@@ -776,21 +777,13 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
             Matched: decision.Transition is not ReceiveStreamTransition.None,
             decision.Transition,
             decision.ActiveStreamId,
-            decision.EndedStreamId);
+            decision.EndedStreamId,
+            decision.EndedAt);
 
     private bool MatchesVoiceTraffic(FneTrafficFrame traffic)
     {
-        return runtime.Definition.Mode switch
-        {
-            "dmr" => traffic.Slot == runtime.Definition.Slot &&
-                     IsVoiceFrame(traffic.FrameType),
-            "p25" => IsVoiceFrame(traffic.FrameType) &&
-                     (traffic.Subtype.Equals("LDU1", StringComparison.OrdinalIgnoreCase) ||
-                      traffic.Subtype.Equals("LDU2", StringComparison.OrdinalIgnoreCase)),
-            "nxdn" => IsVoiceFrame(traffic.FrameType),
-            "analog" => IsVoiceFrame(traffic.FrameType),
-            _ => false
-        };
+        return ReceiveTrafficClassifier.CarriesVoicePayload(traffic) &&
+               (runtime.Definition.Mode != "dmr" || traffic.Slot == runtime.Definition.Slot);
     }
 
     private bool MatchesProtocol(FneTrafficProtocol protocol)
@@ -803,43 +796,6 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
             "analog" => protocol == FneTrafficProtocol.Analog,
             _ => false
         };
-    }
-
-    private static bool IsTerminator(FneTrafficFrame traffic)
-    {
-        if (traffic.FrameType.Equals("TERMINATOR", StringComparison.OrdinalIgnoreCase))
-            return true;
-
-        return traffic.Protocol switch
-        {
-            FneTrafficProtocol.Dmr => traffic.Subtype.Equals(
-                "TERMINATOR_WITH_LC",
-                StringComparison.OrdinalIgnoreCase),
-            FneTrafficProtocol.P25 => traffic.Subtype.Equals("TDU", StringComparison.OrdinalIgnoreCase) ||
-                                       traffic.Subtype.Equals("TDULC", StringComparison.OrdinalIgnoreCase),
-            FneTrafficProtocol.Analog => traffic.Subtype.Equals("TERMINATOR", StringComparison.OrdinalIgnoreCase),
-            _ => false
-        };
-    }
-
-    private static bool IsDmrPrivacyHeader(FneTrafficFrame traffic)
-    {
-        return traffic.Protocol == FneTrafficProtocol.Dmr &&
-            traffic.FrameType.Equals("DATA_SYNC", StringComparison.OrdinalIgnoreCase) &&
-            traffic.Subtype.Equals("VOICE_PI_HEADER", StringComparison.OrdinalIgnoreCase);
-    }
-
-    private static bool IsDmrVoiceLcHeader(FneTrafficFrame traffic)
-    {
-        return traffic.Protocol == FneTrafficProtocol.Dmr &&
-            traffic.FrameType.Equals("DATA_SYNC", StringComparison.OrdinalIgnoreCase) &&
-            traffic.Subtype.Equals("VOICE_LC_HEADER", StringComparison.OrdinalIgnoreCase);
-    }
-
-    private static bool IsVoiceFrame(string frameType)
-    {
-        return frameType.Equals("VOICE", StringComparison.OrdinalIgnoreCase) ||
-            frameType.Equals("VOICE_SYNC", StringComparison.OrdinalIgnoreCase);
     }
 
     private async Task ToggleAudioAsync()

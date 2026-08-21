@@ -125,13 +125,16 @@ public sealed class DmrRxAudioSession : IAsyncDisposable
         const int maximumConcealedPackets = 10;
         int frameCount = checked((int)Math.Min(lostPackets, maximumConcealedPackets)) *
             DmrVoicePacketCodec.CodewordsPerPacket;
+        var concealedFrames = new List<short[]>(frameCount);
         for (int index = 0; index < frameCount; index++)
         {
             short[] samples = [];
             decoder.ProcessLost(decoded => samples = decoded.ToArray());
-            await playback.WriteAsync(samples, cancellationToken).ConfigureAwait(false);
+            concealedFrames.Add(samples);
             FramesDecoded++;
         }
+        await ConcealmentAudioWriter.WriteAsync(playback, concealedFrames, cancellationToken)
+            .ConfigureAwait(false);
         if (lostPackets > maximumConcealedPackets)
             decoder.Reset();
     }

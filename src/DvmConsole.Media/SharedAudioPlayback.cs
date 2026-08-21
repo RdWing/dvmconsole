@@ -5,7 +5,7 @@ namespace DvmConsole.Media;
 // Forwards PCM to a shared output without taking ownership of that output.
 // Receive sessions can therefore be added or removed independently while the
 // coordinator owns the single native playback device.
-public sealed class SharedAudioPlayback : IAudioPlayback
+public sealed class SharedAudioPlayback : IAudioPlayback, IAudioPlaybackContinuityDiagnostics
 {
     private readonly IAudioPlayback inner;
 
@@ -16,6 +16,14 @@ public sealed class SharedAudioPlayback : IAudioPlayback
 
     public PcmAudioFormat Format => inner.Format;
     public int? QueuedSamples => inner.QueuedSamples;
+    public TimeSpan StarvedDuration =>
+        (inner as IAudioPlaybackContinuityDiagnostics)?.StarvedDuration ?? TimeSpan.Zero;
+
+    public void EndExpectedPlayback()
+    {
+        if (inner is IAudioPlaybackContinuityDiagnostics diagnostics)
+            diagnostics.EndExpectedPlayback();
+    }
 
     public ValueTask WriteAsync(ReadOnlyMemory<short> samples, CancellationToken cancellationToken = default)
         => inner.WriteAsync(samples, cancellationToken);

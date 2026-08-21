@@ -61,6 +61,25 @@ public sealed class TransmitCoordinatorTests
     }
 
     [Theory]
+    [InlineData(true, true)]
+    [InlineData(false, false)]
+    [InlineData(null, true)]
+    public async Task PreflightIdentifiesColdBluetoothOrUnknownTransitions(
+        bool? inputIsBluetooth,
+        bool expectedGate)
+    {
+        var audio = new FakeAudioBackend(inputIsBluetooth: inputIsBluetooth);
+        await using var coordinator = new ChannelTransmitCoordinator(createAudioBackend: () => audio);
+
+        MicrophoneStartExpectation expectation =
+            await coordinator.InspectNextMicrophoneStartAsync();
+
+        Assert.True(expectation.StartsCold);
+        Assert.Equal(inputIsBluetooth, expectation.IsBluetooth);
+        Assert.Equal(expectedGate, expectation.RequiresReceiveTransitionGate);
+    }
+
+    [Theory]
     [InlineData(true)]
     [InlineData(null)]
     public async Task ColdBluetoothOrUnknownMicrophoneReadinessWaitsForSustainedSelectedCaptureSamples(

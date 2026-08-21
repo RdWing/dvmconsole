@@ -1,6 +1,38 @@
-using DvmConsole.Media;
-
 namespace DvmConsole.Desktop;
+
+internal readonly record struct ReceiveWarningDiagnostics(
+    long RtpLostPackets,
+    long RtpLateOrDuplicatePackets,
+    long ReceiveQueueDroppedFrames,
+    long PostCallLateFrames,
+    long MalformedPackets)
+{
+    public bool HasIssues =>
+        RtpLostPackets > 0 ||
+        RtpLateOrDuplicatePackets > 0 ||
+        ReceiveQueueDroppedFrames > 0 ||
+        PostCallLateFrames > 0 ||
+        MalformedPackets > 0;
+
+    public string SummaryText
+    {
+        get
+        {
+            var details = new List<string>(5);
+            if (RtpLostPackets > 0)
+                details.Add($"RTP lost {RtpLostPackets:N0}");
+            if (RtpLateOrDuplicatePackets > 0)
+                details.Add($"RTP late/duplicate {RtpLateOrDuplicatePackets:N0}");
+            if (ReceiveQueueDroppedFrames > 0)
+                details.Add($"receive queue dropped {ReceiveQueueDroppedFrames:N0}");
+            if (PostCallLateFrames > 0)
+                details.Add($"post-call late {PostCallLateFrames:N0}");
+            if (MalformedPackets > 0)
+                details.Add($"malformed {MalformedPackets:N0}");
+            return details.Count == 0 ? "no packet issues" : string.Join(", ", details);
+        }
+    }
+}
 
 internal sealed class ReceiveDiagnosticsReporter
 {
@@ -17,13 +49,12 @@ internal sealed class ReceiveDiagnosticsReporter
 
     public bool ShouldPublish(
         ChannelViewModel channel,
-        ReceiveAudioDiagnostics diagnostics,
+        ReceiveWarningDiagnostics diagnostics,
         DateTimeOffset now)
     {
         ArgumentNullException.ThrowIfNull(channel);
-        ArgumentNullException.ThrowIfNull(diagnostics);
 
-        IssueSnapshot current = IssueSnapshot.From(diagnostics);
+        ReceiveWarningDiagnostics current = diagnostics;
         lock (sync)
         {
             if (!states.TryGetValue(channel, out ChannelState? state))
@@ -32,7 +63,7 @@ internal sealed class ReceiveDiagnosticsReporter
                 states.Add(channel, state);
             }
 
-            if (!diagnostics.HasIssues)
+            if (!current.HasIssues)
             {
                 state.LastPublished = current;
                 state.Pending = null;
@@ -55,29 +86,20 @@ internal sealed class ReceiveDiagnosticsReporter
         }
     }
 
-    private static void Publish(ChannelState state, IssueSnapshot snapshot, DateTimeOffset now)
+    private static void Publish(
+        ChannelState state,
+        ReceiveWarningDiagnostics snapshot,
+        DateTimeOffset now)
     {
         state.LastPublished = snapshot;
         state.Pending = null;
         state.LastPublishedAt = now;
     }
 
-    private readonly record struct IssueSnapshot(
-        long LostPackets,
-        long DuplicateOrLatePackets,
-        long MalformedPackets)
-    {
-        public static IssueSnapshot From(ReceiveAudioDiagnostics diagnostics)
-            => new(
-                diagnostics.LostPackets,
-                diagnostics.DuplicateOrLatePackets,
-                diagnostics.MalformedPackets);
-    }
-
     private sealed class ChannelState
     {
-        public IssueSnapshot LastPublished { get; set; }
-        public IssueSnapshot? Pending { get; set; }
+        public ReceiveWarningDiagnostics LastPublished { get; set; }
+        public ReceiveWarningDiagnostics? Pending { get; set; }
         public DateTimeOffset? LastPublishedAt { get; set; }
     }
 }

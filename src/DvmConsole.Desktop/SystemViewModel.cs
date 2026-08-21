@@ -41,11 +41,8 @@ public sealed class SystemViewModel : IFneTrafficEndpoint, INotifyPropertyChange
         StatusAccentBrush = SystemAccentPalette.GetBrush(accentIndex);
         selectedZone = Zones.FirstOrDefault();
         foreach (ZoneViewModel zone in Zones)
-        {
-            zone.SetReceiveActivityResolver(() => Channels.Any(active =>
-                active.State == ChannelRuntimeState.Receiving &&
-                zone.Channels.Any(member => SameResource(active, member))));
-        }
+            zone.SetReceiveActivityResolver(() =>
+                zone.Channels.Any(channel => channel.IsReceivePresentationActive));
         foreach (ChannelViewModel channel in Channels)
         {
             channel.SetReceivePresentationOwnerResolver(() => Channels.FirstOrDefault(candidate =>
@@ -83,7 +80,7 @@ public sealed class SystemViewModel : IFneTrafficEndpoint, INotifyPropertyChange
     public bool IsConnected => connection.Status.State == FneConnectionState.Connected;
     public bool IsConnectionActive => connection.Status.State is not (FneConnectionState.Disconnected or FneConnectionState.Faulted);
     public bool IsSelected => isSelected;
-    public bool IsReceiving => Channels.Any(channel => channel.State == ChannelRuntimeState.Receiving);
+    public bool IsReceiving => Channels.Any(channel => channel.IsReceivePresentationActive);
     public double ActivityBarOpacity => IsReceiving ? 1.0 : 0.12;
     public string RecordingConfigurationHeader
         => $"{Name} · {Channels.Count(channel => channel.IsRecordingEnabled)} of {Channels.Count} TAR enabled";
@@ -278,13 +275,8 @@ public sealed class SystemViewModel : IFneTrafficEndpoint, INotifyPropertyChange
 
     private void HandleChannelPropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
-        if (e.PropertyName == nameof(ChannelViewModel.State))
-        {
-            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsReceiving)));
-            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ActivityBarOpacity)));
-            foreach (ZoneViewModel zone in Zones)
-                zone.RefreshReceiveActivity();
-        }
+        if (e.PropertyName == nameof(ChannelViewModel.IsReceivePresentationActive))
+            RefreshReceiveActivity();
 
         if (sender is ChannelViewModel changed &&
             e.PropertyName is nameof(ChannelViewModel.State) or
@@ -298,6 +290,14 @@ public sealed class SystemViewModel : IFneTrafficEndpoint, INotifyPropertyChange
         {
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(RecordingConfigurationHeader)));
         }
+    }
+
+    private void RefreshReceiveActivity()
+    {
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsReceiving)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ActivityBarOpacity)));
+        foreach (ZoneViewModel zone in Zones)
+            zone.RefreshReceiveActivity();
     }
 
     private static bool SameResource(ChannelViewModel left, ChannelViewModel right)

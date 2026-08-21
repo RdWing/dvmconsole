@@ -7,7 +7,7 @@ namespace DvmConsole.Desktop.Tests;
 public sealed class ZoneViewModelTests
 {
     [Fact]
-    public void ReceiveActivityTracksChannelRuntimeState()
+    public void ReceiveActivityRequiresEnabledReceivePresentation()
     {
         var channel = new ChannelViewModel(new ChannelConfiguration
         {
@@ -20,6 +20,10 @@ public sealed class ZoneViewModelTests
 
         Assert.False(zone.IsReceiving);
         Assert.True(channel.TryApplyTraffic("System 1", Traffic("VOICE", "LDU1")));
+        Assert.False(zone.IsReceiving);
+
+        channel.SetAudioEnabled(true);
+
         Assert.True(zone.IsReceiving);
         Assert.Equal(1.0, zone.ActivityBarOpacity);
 

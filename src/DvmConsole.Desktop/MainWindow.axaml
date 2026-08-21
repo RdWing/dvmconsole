@@ -276,10 +276,10 @@
             <StackPanel Spacing="14">
               <StackPanel Spacing="6">
                 <TextBlock Classes="eyebrow" Text="Event History" />
-                <ItemsControl ItemsSource="{Binding ActivityCallHistory}">
+                <ItemsControl x:Name="activityCallHistoryList" ItemsSource="{Binding ActivityCallHistory}">
                   <ItemsControl.ItemTemplate>
                     <DataTemplate x:DataType="local:CallHistoryEntry">
-                      <Border Background="{DynamicResource ActivityBackgroundBrush}" BorderBrush="{DynamicResource ControlBorderBrush}" BorderThickness="1" CornerRadius="6" Padding="7" Margin="0,0,0,6">
+                      <Border Classes="activity-call-card" Background="{DynamicResource ActivityBackgroundBrush}" BorderBrush="{DynamicResource ControlBorderBrush}" BorderThickness="1" CornerRadius="6" Padding="7" Margin="0,0,0,6">
                         <Grid RowDefinitions="Auto,Auto,Auto" ColumnDefinitions="*,Auto,Auto" ColumnSpacing="4"><TextBlock FontSize="{Binding $parent[Window].((local:MainWindowViewModel)DataContext).UiSmallFontSize}" FontWeight="SemiBold" Text="{Binding DisplayChannelText}" /><Button Grid.Column="1" Grid.RowSpan="3" Tag="{Binding}" IsVisible="{Binding HasPlayableRecording}" ToolTip.Tip="Play validated TAR recording" Padding="5,2" VerticalAlignment="Center" Click="HandlePlayCallHistoryRecordingClick"><PathIcon Width="11" Height="11" Data="M 2,1 L 11,6 L 2,11 Z" /></Button><TextBlock Grid.Column="2" Classes="eyebrow" Text="{Binding TimestampText}" /><TextBlock Grid.Row="1" Classes="eyebrow" Text="{Binding RouteText}" TextTrimming="CharacterEllipsis" /><TextBlock Grid.Row="1" Grid.Column="2" Classes="eyebrow" Text="{Binding ProtocolText}" /><TextBlock Grid.Row="2" Classes="eyebrow" Text="{Binding EncryptionText}" /><TextBlock Grid.Row="2" Grid.Column="2" Classes="eyebrow" Text="{Binding DurationText}" /></Grid>
                       </Border>
                     </DataTemplate>

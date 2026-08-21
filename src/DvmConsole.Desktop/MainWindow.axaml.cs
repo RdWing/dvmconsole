@@ -9,6 +9,7 @@ using Avalonia.VisualTree;
 using DvmConsole.Audio;
 using DvmConsole.Core.Settings;
 using DvmConsole.FneClient;
+using System.Collections.Specialized;
 using System.Reflection;
 
 namespace DvmConsole.Desktop;
@@ -23,6 +24,8 @@ public sealed partial class MainWindow : Window
     private AboutWindow? aboutWindow;
     private readonly List<DispatcherTimer> scrollBarTimers = [];
     private readonly HashSet<ScrollViewer> configuredScrollViewers = [];
+    private readonly INotifyCollectionChanged activityHistoryCollection;
+    private readonly ScrollViewportAnchor<CallHistoryEntry> activityViewportAnchor;
     private Control? draggedChannelCard;
     private ChannelViewModel? draggedChannel;
     private Point dragPointerOrigin;
@@ -45,11 +48,22 @@ public sealed partial class MainWindow : Window
         recentCodeplugsMenu ??= this.FindControl<MenuItem>("recentCodeplugsMenu");
         namedSettingsProfileLoadMenu ??= this.FindControl<MenuItem>("namedSettingsProfileLoadMenu");
         namedSettingsProfileDeleteMenu ??= this.FindControl<MenuItem>("namedSettingsProfileDeleteMenu");
+        activityCallHistoryList ??= this.FindControl<ItemsControl>("activityCallHistoryList")
+            ?? throw new InvalidOperationException("The Activity history list was not initialized.");
         viewModel = MainWindowViewModel.Load(configurationPath);
         cardPtt = new PressAndHoldPttController(
             channel => viewModel.StartChannelTransmitAsync(channel),
             channel => viewModel.StopChannelTransmitAsync(channel));
         DataContext = viewModel;
+        activityHistoryCollection = (INotifyCollectionChanged)viewModel.ActivityCallHistory;
+        activityViewportAnchor = new ScrollViewportAnchor<CallHistoryEntry>(
+            () => activityScrollViewer,
+            () => activityCallHistoryList.GetVisualDescendants()
+                .OfType<Border>()
+                .Where(border => border.Classes.Contains("activity-call-card")),
+            control => control.DataContext as CallHistoryEntry);
+        activityHistoryCollection.CollectionChanged += HandleActivityHistoryCollectionChanged;
+        activityCallHistoryList.LayoutUpdated += HandleActivityHistoryLayoutUpdated;
         AddHandler(InputElement.KeyDownEvent, HandleKeyDown, RoutingStrategies.Tunnel);
         AddHandler(InputElement.KeyUpEvent, HandleKeyUp, RoutingStrategies.Tunnel);
         AddHandler(InputElement.PointerPressedEvent, HandlePttPointerPressed, RoutingStrategies.Tunnel, true);
@@ -74,6 +88,9 @@ public sealed partial class MainWindow : Window
                 aboutWindow?.Close();
                 foreach (DispatcherTimer timer in scrollBarTimers)
                     timer.Stop();
+                activityCallHistoryList.LayoutUpdated -= HandleActivityHistoryLayoutUpdated;
+                activityHistoryCollection.CollectionChanged -= HandleActivityHistoryCollectionChanged;
+                activityViewportAnchor.Reset();
                 await viewModel.DisposeAsync().ConfigureAwait(false);
             }
             catch (Exception exception)
@@ -82,6 +99,19 @@ public sealed partial class MainWindow : Window
             }
         };
     }
+
+    private void HandleActivityHistoryCollectionChanged(
+        object? sender,
+        NotifyCollectionChangedEventArgs e)
+    {
+        if (e.Action == NotifyCollectionChangedAction.Reset)
+            activityViewportAnchor.Reset();
+        if (e.Action == NotifyCollectionChangedAction.Add && e.NewStartingIndex == 0)
+            activityViewportAnchor.Capture();
+    }
+
+    private void HandleActivityHistoryLayoutUpdated(object? sender, EventArgs e)
+        => activityViewportAnchor.Restore();
 
     private async void HandleChannelPointerPressed(object? sender, PointerPressedEventArgs e)
     {

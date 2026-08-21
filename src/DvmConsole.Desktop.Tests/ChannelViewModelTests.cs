@@ -162,19 +162,13 @@ public sealed class ChannelViewModelTests
                 CreateTraffic(FneTrafficProtocol.Dmr, 42, 99, 0, "DATA_SYNC", "VOICE_LC_HEADER", 7),
                 now).Transition);
         Assert.Equal(
-            ReceiveStreamTransition.Ended,
+            ReceiveStreamTransition.TerminationPending,
             channel.ApplyTraffic(
                 "System 1",
                 CreateTraffic(FneTrafficProtocol.Dmr, 42, 99, 0, "DATA_SYNC", "TERMINATOR_WITH_LC", 7),
                 now.AddSeconds(1)).Transition);
         Assert.Equal(
-            ReceiveStreamTransition.IgnoredLate,
-            channel.ApplyTraffic(
-                "System 1",
-                CreateTraffic(FneTrafficProtocol.Dmr, 42, 99, 0, "VOICE", "VOICE", 7),
-                now.AddSeconds(2)).Transition);
-        Assert.Equal(
-            ReceiveStreamTransition.Started,
+            ReceiveStreamTransition.Restarted,
             channel.ApplyTraffic(
                 "System 1",
                 CreateTraffic(FneTrafficProtocol.Dmr, 43, 99, 0, "DATA_SYNC", "VOICE_LC_HEADER", 7),
@@ -333,7 +327,7 @@ public sealed class ChannelViewModelTests
     }
 
     [Fact]
-    public void LateVoiceAfterTerminatorDoesNotReopenChannel()
+    public void DelayedVoiceAfterTerminatorResumesChannelDuringHold()
     {
         var channel = new ChannelViewModel(new ChannelConfiguration
         {
@@ -352,18 +346,28 @@ public sealed class ChannelViewModelTests
                 CreateTraffic(FneTrafficProtocol.Dmr, 42, 99, 1, "VOICE", "VOICE", 7),
                 now).Transition);
         Assert.Equal(
-            ReceiveStreamTransition.Ended,
+            ReceiveStreamTransition.TerminationPending,
             channel.ApplyTraffic(
                 "System 1",
                 CreateTraffic(FneTrafficProtocol.Dmr, 42, 99, 1, "TERMINATOR", "TERMINATOR", 7),
                 now.AddSeconds(1)).Transition);
         Assert.Equal(
-            ReceiveStreamTransition.IgnoredLate,
+            ReceiveStreamTransition.Resumed,
             channel.ApplyTraffic(
                 "System 1",
                 CreateTraffic(FneTrafficProtocol.Dmr, 42, 99, 1, "VOICE", "VOICE", 7),
                 now.AddSeconds(2)).Transition);
+        Assert.Equal(ChannelRuntimeState.Receiving, channel.State);
+        Assert.Equal(
+            ReceiveStreamTransition.TerminationExpired,
+            channel.AdvanceReceiveLifecycle(now.AddSeconds(6)).Transition);
         Assert.Equal(ChannelRuntimeState.Idle, channel.State);
+        Assert.Equal(
+            ReceiveStreamTransition.IgnoredLate,
+            channel.ApplyTraffic(
+                "System 1",
+                CreateTraffic(FneTrafficProtocol.Dmr, 42, 99, 1, "VOICE", "VOICE", 7),
+                now.AddSeconds(6.5)).Transition);
     }
 
     [Fact]

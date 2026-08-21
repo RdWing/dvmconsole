@@ -85,6 +85,99 @@ public sealed class ChannelReceiveAudioCoordinatorTests
     }
 
     [Fact]
+    public async Task ColdTransitionDiscardsOnlyLivePlaybackWhileSamplesRemainObservable()
+    {
+        var backend = new FakeAudioBackend();
+        int observedSamples = 0;
+        await using var coordinator = new ChannelReceiveAudioCoordinator(
+            () => backend,
+            () => new FakeVocoderBackend(),
+            samplesObserver: (_, _, _, samples) => observedSamples += samples.Length);
+        var channel = new ChannelViewModel(new ChannelConfiguration
+        {
+            Name = "Dispatch",
+            System = "System 1",
+            Tgid = "100",
+            Mode = "analog"
+        });
+        await coordinator.StartAsync(channel);
+
+        long discardedBefore = coordinator.SetLivePlaybackDiscarded(discarded: true);
+        await coordinator.ProcessAsync(channel, CreateAnalogTraffic(100));
+        await Task.Delay(40);
+
+        Assert.Equal(AnalogVoicePacketCodec.SamplesPerPacket, observedSamples);
+        Assert.Empty(backend.Playback.Frames);
+        Assert.True(
+            coordinator.GetPlaybackDiagnostics(channel)!.TransitionDiscardedSamples >
+            discardedBefore);
+
+        coordinator.SetLivePlaybackDiscarded(discarded: false);
+        await coordinator.ProcessAsync(channel, CreateAnalogTraffic(100, packetSequence: 2));
+        await WaitForAsync(() => backend.Playback.Frames.Count > 0);
+    }
+
+    [Fact]
+    public async Task RecordingDecodeCanRemainObservableWithoutLivePlayback()
+    {
+        var backend = new FakeAudioBackend();
+        int observedSamples = 0;
+        await using var coordinator = new ChannelReceiveAudioCoordinator(
+            () => backend,
+            () => new FakeVocoderBackend(),
+            samplesObserver: (_, _, _, samples) => observedSamples += samples.Length);
+        var channel = new ChannelViewModel(new ChannelConfiguration
+        {
+            Name = "TAR only",
+            System = "System 1",
+            Tgid = "100",
+            Mode = "analog"
+        });
+
+        await coordinator.EnsureDecodeAsync(channel);
+        await coordinator.ProcessAsync(channel, CreateAnalogTraffic(100));
+        await Task.Delay(40);
+
+        Assert.Equal(AnalogVoicePacketCodec.SamplesPerPacket, observedSamples);
+        Assert.Empty(backend.Playback.Frames);
+        Assert.Empty(coordinator.LivePlaybackChannels);
+
+        await coordinator.StartAsync(channel);
+        await coordinator.ProcessAsync(channel, CreateAnalogTraffic(100, packetSequence: 2));
+        await WaitForAsync(() => backend.Playback.Frames.Count > 0);
+
+        Assert.Same(channel, Assert.Single(coordinator.LivePlaybackChannels));
+    }
+
+    [Fact]
+    public async Task KeepsCompleteLossConcealmentObservableWhileBoundingLivePlayback()
+    {
+        var backend = new FakeAudioBackend();
+        int observedSamples = 0;
+        await using var coordinator = new ChannelReceiveAudioCoordinator(
+            () => backend,
+            () => new FakeVocoderBackend(),
+            samplesObserver: (_, _, _, samples) => observedSamples += samples.Length);
+        var channel = new ChannelViewModel(new ChannelConfiguration
+        {
+            Name = "PHS Scan",
+            System = "System 1",
+            Tgid = "100",
+            Mode = "p25"
+        });
+        await coordinator.StartAsync(channel);
+
+        await coordinator.ProcessAsync(channel, CreateP25Traffic(100, packetSequence: 1));
+        await coordinator.ProcessAsync(channel, CreateP25Traffic(100, packetSequence: 12));
+
+        AudioMixerDiagnostics diagnostics = coordinator.GetPlaybackDiagnostics(channel)!;
+        Assert.Equal(108 * VocoderFrameSizes.PcmSamplesPerFrame, observedSamples);
+        Assert.True(
+            diagnostics.SuppressedLiveConcealmentSamples >=
+            81 * VocoderFrameSizes.PcmSamplesPerFrame);
+    }
+
+    [Fact]
     public async Task ConcurrentStreamsOnOneTalkgroupUseIndependentVocoderAndMixerLanes()
     {
         var backend = new FakeAudioBackend();
@@ -110,11 +203,131 @@ public sealed class ChannelReceiveAudioCoordinatorTests
 
         await coordinator.ProcessAsync(channel, CreateTraffic(100, 0, streamId: 41));
         await coordinator.ProcessAsync(channel, CreateTraffic(100, 0, streamId: 42));
-        await WaitForAsync(() => backend.Playback.Frames.Count > 0);
+        await WaitForAsync(() =>
+        {
+            int count = backend.Playback.Frames.Count;
+            for (int index = 0; index < count; index++)
+            {
+                if (backend.Playback.Frames[index][0] >= 2_000)
+                    return true;
+            }
+            return false;
+        });
 
         Assert.Equal(2, vocoder.CreateSessionCalls);
         Assert.Equal(new uint[] { 41, 42 }, observedStreams.Order().ToArray());
-        Assert.Equal((short)3_000, backend.Playback.Frames[0][0]);
+        int outputCount = backend.Playback.Frames.Count;
+        var outputStarts = new short[outputCount];
+        for (int index = 0; index < outputCount; index++)
+            outputStarts[index] = backend.Playback.Frames[index][0];
+        Assert.True(
+            outputStarts.Contains((short)3_000) ||
+            (outputStarts.Contains((short)1_000) && outputStarts.Contains((short)2_000)),
+            "Each stream must reach playback either in one mixed frame or in adjacent frames.");
+    }
+
+    [Fact]
+    public async Task ConfirmedTerminatorReleasesAShortStreamBeforeTheStartupCushionIsFull()
+    {
+        var backend = new QueueReportingAudioBackend();
+        await using var coordinator = new ChannelReceiveAudioCoordinator(
+            () => backend,
+            () => new FakeVocoderBackend());
+        var channel = new ChannelViewModel(new ChannelConfiguration
+        {
+            Name = "Dispatch",
+            System = "System 1",
+            Tgid = "100",
+            Mode = "dmr",
+            Slot = 1
+        });
+        await coordinator.StartAsync(channel);
+
+        await coordinator.ProcessAsync(channel, CreateTraffic(100, 0));
+        await Task.Delay(40);
+        Assert.Empty(backend.Playback.Frames);
+
+        await coordinator.ProcessAsync(channel, CreateDmrTerminator(100, 0));
+        await coordinator.CompleteStreamAsync(
+            channel,
+            streamId: 99,
+            endedAt: DateTimeOffset.UtcNow);
+        await WaitForAsync(() => backend.Playback.Frames.Count == 3);
+
+        Assert.Equal(0, coordinator.GetPlaybackDiagnostics(channel)!.DroppedSamples);
+    }
+
+    [Fact]
+    public async Task ReceivePolicyChangesIgnoreCompletedStreamTombstones()
+    {
+        var backend = new FakeAudioBackend();
+        await using var coordinator = new ChannelReceiveAudioCoordinator(
+            () => backend,
+            () => new FakeVocoderBackend());
+        var channel = new ChannelViewModel(new ChannelConfiguration
+        {
+            Name = "Dispatch",
+            System = "System 1",
+            Tgid = "100",
+            Mode = "dmr",
+            Slot = 1
+        });
+        await coordinator.StartAsync(channel);
+
+        await coordinator.ProcessAsync(channel, CreateTraffic(100, 0, streamId: 41));
+        await coordinator.CompleteStreamAsync(
+            channel,
+            streamId: 41,
+            endedAt: DateTimeOffset.UtcNow);
+        await WaitForAsync(() => backend.Playback.Frames.Count > 0);
+
+        await coordinator.SetLivePlaybackEnabledAsync(channel, enabled: false);
+        await coordinator.SetGainAsync(channel, 0.75);
+        await coordinator.SetBalanceAsync(channel, -0.25);
+
+        Assert.Empty(coordinator.LivePlaybackChannels);
+    }
+
+    [Fact]
+    public async Task TimedOutStreamRejectsLateVoiceUntilADefinitiveRestart()
+    {
+        var backend = new FakeAudioBackend();
+        int observedSamples = 0;
+        await using var coordinator = new ChannelReceiveAudioCoordinator(
+            () => backend,
+            () => new FakeVocoderBackend(),
+            samplesObserver: (_, _, _, samples) => observedSamples += samples.Length);
+        var channel = new ChannelViewModel(new ChannelConfiguration
+        {
+            Name = "Dispatch",
+            System = "System 1",
+            Tgid = "100",
+            Mode = "dmr",
+            Slot = 1
+        });
+        await coordinator.StartAsync(channel);
+
+        await coordinator.ProcessAsync(channel, CreateTraffic(100, 0, streamId: 41));
+        int samplesBeforeTimeout = observedSamples;
+
+        await coordinator.CompleteStreamAsync(
+            channel,
+            streamId: 41,
+            endedAt: DateTimeOffset.UtcNow);
+        await coordinator.ProcessAsync(
+            channel,
+            CreateTraffic(100, 0, packetSequence: 2, streamId: 41));
+
+        Assert.Equal(samplesBeforeTimeout, observedSamples);
+        Assert.False(coordinator.IsTrackingStream(channel, 41));
+
+        await coordinator.ProcessAsync(channel, CreateDmrVoiceLcHeader(100, 0, streamId: 41));
+        await coordinator.ProcessAsync(
+            channel,
+            CreateTraffic(100, 0, packetSequence: 3, streamId: 41));
+
+        Assert.True(observedSamples > samplesBeforeTimeout);
+        Assert.True(coordinator.IsTrackingStream(channel, 41));
     }
 
     [Fact]
@@ -653,7 +866,45 @@ public sealed class ChannelReceiveAudioCoordinatorTests
             payload: new byte[DmrVoicePacketCodec.PacketBytes]);
     }
 
-    private static FneTrafficFrame CreateAnalogTraffic(uint destinationId)
+    private static FneTrafficFrame CreateDmrTerminator(
+        uint destinationId,
+        byte slot,
+        ushort packetSequence = 2,
+        uint streamId = 99)
+        => new(
+            FneTrafficProtocol.Dmr,
+            peerId: 1,
+            sourceId: 2,
+            destinationId,
+            slot,
+            callType: "GROUP",
+            frameType: "TERMINATOR",
+            subtype: "TERMINATOR_WITH_LC",
+            packetSequence,
+            streamId,
+            payload: []);
+
+    private static FneTrafficFrame CreateDmrVoiceLcHeader(
+        uint destinationId,
+        byte slot,
+        ushort packetSequence = 1,
+        uint streamId = 99)
+        => new(
+            FneTrafficProtocol.Dmr,
+            peerId: 1,
+            sourceId: 2,
+            destinationId,
+            slot,
+            callType: "GROUP",
+            frameType: "DATA_SYNC",
+            subtype: "VOICE_LC_HEADER",
+            packetSequence,
+            streamId,
+            payload: []);
+
+    private static FneTrafficFrame CreateAnalogTraffic(
+        uint destinationId,
+        ushort packetSequence = 1)
     {
         var samples = new short[AnalogVoicePacketCodec.SamplesPerPacket];
         return new FneTrafficFrame(
@@ -665,9 +916,45 @@ public sealed class ChannelReceiveAudioCoordinatorTests
             callType: "GROUP",
             frameType: "VOICE",
             subtype: "VOICE",
-            packetSequence: 1,
+            packetSequence,
             streamId: 99,
-            payload: AnalogVoicePacketCodec.CreatePacket(AnalogAudioFrameType.Voice, 1, destinationId, samples));
+            payload: AnalogVoicePacketCodec.CreatePacket(
+                AnalogAudioFrameType.Voice,
+                (byte)packetSequence,
+                destinationId,
+                samples));
+    }
+
+    private static FneTrafficFrame CreateP25Traffic(
+        uint destinationId,
+        ushort packetSequence)
+    {
+        int[] lengths = [22, 14, 17, 17, 17, 17, 17, 17, 16];
+        int[] offsets = [10, 1, 5, 5, 5, 5, 5, 5, 4];
+        byte[] payload = new byte[P25DfsiFrameCodec.HeaderBytes + P25DfsiFrameCodec.RecordBytes];
+        payload[P25DfsiFrameCodec.RecordLengthOffset] = (byte)payload.Length;
+
+        int offset = P25DfsiFrameCodec.HeaderBytes;
+        for (int index = 0; index < lengths.Length; index++)
+        {
+            payload[offset] = (byte)(0x62 + index);
+            for (int codewordByte = 0; codewordByte < P25DfsiFrameCodec.CodewordBytes; codewordByte++)
+                payload[offset + offsets[index] + codewordByte] = (byte)(index + 1);
+            offset += lengths[index];
+        }
+
+        return new FneTrafficFrame(
+            FneTrafficProtocol.P25,
+            peerId: 1,
+            sourceId: 2,
+            destinationId,
+            slot: null,
+            callType: "GROUP",
+            frameType: "VOICE",
+            subtype: "LDU1",
+            packetSequence,
+            streamId: 99,
+            payload);
     }
 
     private static FneTrafficFrame CreateNxdnTraffic(uint destinationId)
@@ -721,6 +1008,27 @@ public sealed class ChannelReceiveAudioCoordinatorTests
             => device.Id == "alternate" ? AlternatePlayback : Playback;
 
         public void Dispose() => IsDisposed = true;
+    }
+
+    private sealed class QueueReportingAudioBackend : IAudioBackend
+    {
+        public QueueReportingPlayback Playback { get; } = new();
+        public string Name => "queue-reporting-fake";
+
+        public IReadOnlyList<AudioDeviceInfo> EnumerateDevices(AudioDirection direction)
+            => direction == AudioDirection.Output
+                ? [new AudioDeviceInfo("output", "Queue-reporting output", direction, true)]
+                : [new AudioDeviceInfo("input", "Fake input", direction, true)];
+
+        public IAudioCapture OpenCapture(AudioDeviceInfo device, PcmAudioFormat format)
+            => throw new NotSupportedException();
+
+        public IAudioPlayback OpenPlayback(AudioDeviceInfo device, PcmAudioFormat format)
+            => Playback;
+
+        public void Dispose()
+        {
+        }
     }
 
     private sealed class RecoveringAudioBackend(bool failWrites) : IAudioBackend
@@ -823,6 +1131,28 @@ public sealed class ChannelReceiveAudioCoordinatorTests
             IsDisposed = true;
             return ValueTask.CompletedTask;
         }
+    }
+
+    private sealed class QueueReportingPlayback : IAudioPlayback
+    {
+        public List<short[]> Frames { get; } = [];
+        public PcmAudioFormat Format { get; } = PcmAudioFormat.Voice8KhzMono16Bit;
+        public int? QueuedSamples { get; private set; } = 0;
+
+        public ValueTask WriteAsync(
+            ReadOnlyMemory<short> samples,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            Frames.Add(samples.ToArray());
+            QueuedSamples += samples.Length;
+            return ValueTask.CompletedTask;
+        }
+
+        public ValueTask FlushAsync(CancellationToken cancellationToken = default)
+            => ValueTask.CompletedTask;
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 
     private sealed class RecoveringPlayback(bool failWrites) : IAudioPlayback

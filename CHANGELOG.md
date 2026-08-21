@@ -6,7 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
-## [0.3.2] - 2026-08-19
+## [0.3.2] - 2026-08-20
 
 ### Changed
 
@@ -25,6 +25,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Reject truncated, length-inconsistent, and parser-unsafe FNE datagrams before they reach the pinned upstream decoder, and discard exact encrypted wire replays within a bounded receive window.
 - Disable unused inbound FNE metadata inventory and master talkgroup-announcement inputs so they cannot accumulate unbounded upstream state.
 - Restore a selected web stream automatically only when its codeplug path, canonical URL, and credentials match the stream the operator previously started; legacy name-only selections remain off until manually selected again.
+- Keep the audible Bluetooth talk-permit tone the same length for cold and warm PTT, reopen a cold AirPods output after microphone readiness so the cue uses the duplex profile, protect the cold cue's audible edge with a short silent lead-in, reduce the post-transition safety margins, and report phase-by-phase timing diagnostics as elapsed time without releasing microphone audio before the cue completes.
+- Keep the live RX output clock continuous across delayed FNE packets, reconcile later concealment against audio time already presented as silence, and reduce the startup and normal speaker cushions to 80 ms with a bounded 120 ms recovery target. Normalize macOS CoreAudio queue depth into the requested 8 kHz format so those targets represent real device time instead of native-rate sample counts.
+- Retain complete packet-loss concealment in TAR while bounding stale live concealment and live lanes to 320 ms; resynchronize an overflowing lane once toward the current 80 ms window instead of remaining delayed. Report live gap fill, skipped concealment, actual CoreAudio starvation, and the most recent overflowing lane.
+- During a cold Bluetooth PTT profile transition, discard only live speaker-bound RX PCM instead of replaying a delayed backlog while preserving call state and TAR observation; report that intentional discard separately, and distinguish RTP sequencing issues, receive-queue drops, and post-call late traffic.
+- Timestamp traffic at the app-owned FNE event boundary and route selected receive traffic directly into its ordered per-channel decoder worker so unrelated UI presentation traffic cannot delay live audio while TAR continues to receive the same decoded samples. Report boundary-to-audio queue, worker, and processing high-water timing, and keep physical-output continuity diagnostics active across unexpected mid-call source gaps.
+- Drive channel-card receive meters from speaker-bound PCM with the measured physical queue delay so their movement follows audible playback rather than earlier decoder bursts.
+- Keep completed receive-stream tombstones out of live playback, gain, and balance changes; serialize card, zone, bulk, transmit-mute, and alert-tone RX transitions; and reconcile selected cards that have lost their live session. This prevents disposed-playback crashes, enabled-but-silent cards, inconsistent persisted RX state, and intermittent tone sends while receive audio is muted or restored.
+- Tie system and zone activity lamps to enabled live-RX presentation so raw startup traffic cannot light disabled tabs. Tombstone timed-out decoder and mixer streams before the priority ingress path can accept delayed packets for an ended call.
+- Persist the RX/Listen selection of every channel card independently from TAR arming and restore those cards across all tabs when startup selection restoration is enabled. Keep TAR-only decoders active without feeding or lighting the live speaker lane.
+- Default the warm transmit microphone to off while continuing to persist the operator's last selection, let History searches combine multiple terms across any displayed or recording field, retain more Debug Log entries, and coalesce repeated RX diagnostic snapshots.
+- Hold an explicitly terminated receive stream off-screen for a bounded quiet interval so voice packets that arrive behind their terminator can continue through the same decoder, TAR writer, and live lane without adding playout latency.
+- Keep the visible Activity call anchored when newer calls are inserted above it, while continuing to follow new activity when already at the top, and wrap long Debug Log entries to the window width.
 
 ## [0.3.1] - 2026-08-19
 

@@ -39,6 +39,7 @@ public sealed class UserSettingsStoreTests
             Assert.Null(settings.LastSelectedChannelKey);
             Assert.True(settings.ConnectionChimes);
             Assert.False(settings.HighQualityBluetoothAudioEnabled);
+            Assert.False(settings.KeepTransmitMicrophoneWarm);
             Assert.Equal(4, settings.RxAudioProcessingOptions.Count);
             Assert.All(settings.RxAudioProcessingOptions.Values, option =>
             {
@@ -54,6 +55,27 @@ public sealed class UserSettingsStoreTests
             });
             Assert.Equal(14, settings.UiFontSize);
             Assert.Equal(1.0, settings.UiScale);
+        }
+        finally
+        {
+            Cleanup(path);
+        }
+    }
+
+    [Fact]
+    public void WarmMicrophonePersistsTheLastDisabledState()
+    {
+        string path = CreatePath();
+        try
+        {
+            var store = new UserSettingsStore(path);
+            var settings = new UserSettings { KeepTransmitMicrophoneWarm = true };
+            store.Save(settings);
+
+            settings.KeepTransmitMicrophoneWarm = false;
+            store.Save(settings);
+
+            Assert.False(store.Load().KeepTransmitMicrophoneWarm);
         }
         finally
         {
@@ -330,6 +352,7 @@ public sealed class UserSettingsStoreTests
                 SerialPttEnabled = true,
                 SerialPttPortName = " /dev/cu.ptt ",
                 SerialPttBaudRate = 19_200,
+                ReceiveEnabledChannelKeys = [" System 1\u001FDispatch ", "system 1\u001Fdispatch"],
                 TransmitSelectedChannelKeys = [" System 1\u001FDispatch ", "system 1\u001Fdispatch"],
                 LastDtmfDigits = " 12a# ",
                 ToneFrequencyHz = 1200,
@@ -452,6 +475,7 @@ public sealed class UserSettingsStoreTests
             Assert.True(loaded.SerialPttEnabled);
             Assert.Equal("/dev/cu.ptt", loaded.SerialPttPortName);
             Assert.Equal(19_200, loaded.SerialPttBaudRate);
+            Assert.Equal(["System 1\u001FDispatch"], loaded.ReceiveEnabledChannelKeys);
             Assert.Equal(["System 1\u001FDispatch"], loaded.TransmitSelectedChannelKeys);
             Assert.Equal("12A#", loaded.LastDtmfDigits);
             Assert.Equal(1200, loaded.ToneFrequencyHz);

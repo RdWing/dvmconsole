@@ -1,5 +1,6 @@
 using DvmConsole.Audio;
 using DvmConsole.Media;
+using System.Collections.Concurrent;
 using Xunit;
 
 namespace DvmConsole.Media.Tests;
@@ -74,7 +75,154 @@ public sealed class AudioMixerTests
 
         Assert.True(mixer.DroppedSamples > 0);
         Assert.True(mixer.DroppedSamples <= samples.Length);
-        Assert.Equal((short)160, output.Frames[0][0]);
+        Assert.Equal(12 * 160, mixer.DroppedSamples);
+        Assert.Equal((short)(12 * 160), output.Frames[0][0]);
+    }
+
+    [Fact]
+    public async Task BoundsLiveConcealmentAndRetainsItsNewestFrames()
+    {
+        var output = new FakePlayback();
+        await using var mixer = new AudioMixer(output);
+        await using IAudioPlayback channel = mixer.OpenChannel();
+        var concealmentPlayback = Assert.IsAssignableFrom<IConcealmentAudioPlayback>(channel);
+        short[] concealedSamples = Enumerable.Range(1, 90)
+            .SelectMany(frame => Enumerable.Repeat((short)frame, 160))
+            .ToArray();
+
+        await concealmentPlayback.WriteConcealmentAsync(concealedSamples);
+        await WaitForAsync(() => output.Frames.Count > 0);
+
+        AudioMixerDiagnostics diagnostics = mixer.GetDiagnostics();
+        Assert.Equal(81 * 160, diagnostics.SuppressedLiveConcealmentSamples);
+        Assert.Equal(0, diagnostics.DroppedSamples);
+        Assert.Equal(0, diagnostics.OverflowResynchronizations);
+        Assert.Equal((short)82, output.Frames[0][0]);
+    }
+
+    [Fact]
+    public async Task ReportsTheLaneResponsibleForTheLatestOverflow()
+    {
+        var output = new FakePlayback();
+        await using var mixer = new AudioMixer(output);
+        await using IAudioPlayback channel = mixer.OpenChannel("East Bay/Oakland Fire DSP");
+        short[] samples = Enumerable.Repeat(
+            (short)500,
+            mixer.MaximumBufferedSamples + 160).ToArray();
+
+        await channel.WriteAsync(samples);
+        await WaitForAsync(() => mixer.GetDiagnostics().LastDroppedLane is not null);
+
+        AudioMixerDiagnostics diagnostics = mixer.GetDiagnostics();
+        Assert.Equal("East Bay/Oakland Fire DSP", diagnostics.LastDroppedLane);
+        Assert.Equal(12 * 160, diagnostics.LastDroppedLaneSamples);
+        Assert.Equal(12 * 160, diagnostics.DroppedSamples);
+        Assert.Equal(1, diagnostics.OverflowResynchronizations);
+    }
+
+    [Fact]
+    public async Task StartsADeviceBackedLaneAfterTheDefaultPlayoutCushion()
+    {
+        var output = new BufferedFakePlayback();
+        await using var mixer = new AudioMixer(output);
+        await using IAudioPlayback channel = mixer.OpenChannel();
+
+        await channel.WriteAsync(Enumerable.Repeat((short)500, 3 * 160).ToArray());
+        await Task.Delay(40);
+        Assert.Empty(output.Frames);
+
+        await channel.WriteAsync(CreateSamples(500));
+        await WaitForAsync(() => output.Frames.Count >= 4);
+
+        AudioMixerDiagnostics diagnostics = mixer.GetDiagnostics();
+        Assert.Equal(4, diagnostics.StartupBufferedFrames);
+        Assert.Equal(16, diagnostics.MaximumBufferedFrames);
+    }
+
+    [Fact]
+    public async Task ReleasesAShortCallWhenItsInputCompletes()
+    {
+        var output = new BufferedFakePlayback();
+        await using var mixer = new AudioMixer(output);
+        await using IAudioPlayback channel = mixer.OpenChannel();
+
+        await channel.WriteAsync(Enumerable.Repeat((short)500, 3 * 160).ToArray());
+        await Task.Delay(40);
+        Assert.Empty(output.Frames);
+
+        await channel.FlushAsync();
+        await WaitForAsync(() => output.Frames.Count == 3);
+
+        Assert.Equal(0, mixer.DroppedSamples);
+    }
+
+    [Fact]
+    public async Task DisposingALaneDiscardsItsPendingAudioImmediately()
+    {
+        var output = new BufferedFakePlayback();
+        await using var mixer = new AudioMixer(output);
+        IAudioPlayback channel = mixer.OpenChannel();
+
+        await channel.WriteAsync(Enumerable.Repeat((short)500, 3 * 160).ToArray());
+        await channel.DisposeAsync();
+        await Task.Delay(40);
+
+        Assert.Empty(output.Frames);
+    }
+
+    [Fact]
+    public async Task DisabledLiveLaneDiscardsPcmWithoutClosingTheLane()
+    {
+        var output = new FakePlayback();
+        await using var mixer = new AudioMixer(output);
+        await using IAudioPlayback channel = mixer.OpenChannel();
+        var livePlayback = Assert.IsAssignableFrom<ILiveAudioPlaybackControl>(channel);
+
+        livePlayback.LivePlaybackEnabled = false;
+        await channel.WriteAsync(CreateSamples(100));
+        await Task.Delay(40);
+        Assert.Empty(output.Frames);
+
+        livePlayback.LivePlaybackEnabled = true;
+        await channel.WriteAsync(CreateSamples(200));
+        await WaitForAsync(() => output.Frames.Count > 0);
+
+        Assert.Equal((short)200, output.Frames[0][0]);
+    }
+
+    [Fact]
+    public async Task WritesOutputOnTheDedicatedMixerThread()
+    {
+        var output = new FakePlayback();
+        await using var mixer = new AudioMixer(output);
+        await using IAudioPlayback channel = mixer.OpenChannel();
+
+        await channel.WriteAsync(CreateSamples(500));
+        await WaitForAsync(() => output.Frames.Count > 0);
+
+        Assert.Equal("DVM Console RX mixer", output.LastWriterThreadName);
+    }
+
+    [Fact]
+    public async Task DiscardsLiveInputWithoutReplayingItAfterTheTransition()
+    {
+        var output = new FakePlayback();
+        await using var mixer = new AudioMixer(output);
+        await using IAudioPlayback channel = mixer.OpenChannel();
+
+        mixer.SetInputDiscarded(true);
+        await channel.WriteAsync(Enumerable.Repeat((short)100, 320).ToArray());
+        await Task.Delay(40);
+
+        Assert.Empty(output.Frames);
+        Assert.Equal(320, mixer.GetDiagnostics().TransitionDiscardedSamples);
+
+        mixer.SetInputDiscarded(false);
+        await channel.WriteAsync(CreateSamples(200));
+        await WaitForAsync(() => output.Frames.Count > 0);
+
+        Assert.Single(output.Frames);
+        Assert.Equal((short)200, output.Frames[0][0]);
     }
 
     [Fact]
@@ -83,13 +231,89 @@ public sealed class AudioMixerTests
         var output = new BufferedFakePlayback();
         await using var mixer = new AudioMixer(output);
         await using IAudioPlayback channel = mixer.OpenChannel();
-        short[] samples = Enumerable.Repeat((short)500, 8 * 160).ToArray();
+        var presentationDelays = new ConcurrentQueue<TimeSpan>();
+        Assert.IsAssignableFrom<IAudioPlaybackPresentationSource>(channel)
+            .SetPresentationObserver((_, delay) => presentationDelays.Enqueue(delay));
+        short[] samples = Enumerable.Repeat((short)500, 4 * 160).ToArray();
 
         await channel.WriteAsync(samples);
         await WaitForAsync(() => output.Frames.Count >= 4);
+        await WaitForAsync(() => presentationDelays.Count >= 4);
 
         Assert.Equal(4, output.Frames.Count);
         Assert.Equal(4 * 160, output.QueuedSamples);
+        Assert.Equal(
+            [0, 20, 40, 60],
+            presentationDelays.Select(delay => (int)delay.TotalMilliseconds).ToArray());
+    }
+
+    [Fact]
+    public async Task RaisesOutputTargetAfterAPrimedBufferRunsLowWithFramesReady()
+    {
+        var output = new BufferedFakePlayback();
+        await using var mixer = new AudioMixer(output);
+        await using IAudioPlayback channel = mixer.OpenChannel();
+
+        await channel.WriteAsync(Enumerable.Repeat((short)500, 12 * 160).ToArray());
+        await WaitForAsync(() => output.Frames.Count >= 4);
+
+        output.ConsumeAll();
+        await WaitForAsync(() => mixer.GetDiagnostics().LowBufferRecoveries > 0);
+
+        AudioMixerDiagnostics diagnostics = mixer.GetDiagnostics();
+        Assert.Equal(6, diagnostics.TargetOutputBufferedFrames);
+        Assert.True(output.Frames.Count >= 10);
+        Assert.True(diagnostics.PeakBufferedFrames >= 12);
+    }
+
+    [Fact]
+    public async Task ReportsPhysicalStarvationAndEndsContinuityAfterAudioDrains()
+    {
+        var output = new BufferedFakePlayback
+        {
+            StarvedDuration = TimeSpan.FromMilliseconds(40)
+        };
+        await using var mixer = new AudioMixer(output);
+        await using IAudioPlayback channel = mixer.OpenChannel();
+
+        await channel.WriteAsync(Enumerable.Repeat((short)500, 8 * 160).ToArray());
+        await WaitForAsync(() => output.Frames.Count >= 4);
+        output.ConsumeAll();
+        await WaitForAsync(() => output.Frames.Count >= 10);
+        output.ConsumeAll();
+        await channel.FlushAsync();
+        await WaitForAsync(() => output.EndExpectedPlaybackCalls > 0);
+
+        Assert.Equal(
+            TimeSpan.FromMilliseconds(40),
+            mixer.GetDiagnostics().PhysicalOutputStarvation);
+    }
+
+    [Fact]
+    public async Task KeepsContinuityExpectedAcrossAnActiveInputGap()
+    {
+        var output = new BufferedFakePlayback();
+        await using var mixer = new AudioMixer(output);
+        await using IAudioPlayback channel = mixer.OpenChannel();
+
+        await channel.WriteAsync(Enumerable.Repeat((short)500, 4 * 160).ToArray());
+        await WaitForAsync(() => output.Frames.Count >= 4);
+        output.ConsumeAll();
+        await WaitForAsync(() => output.Frames.Count >= 8);
+        output.ConsumeAll();
+        await Task.Delay(40);
+
+        Assert.Equal(0, output.EndExpectedPlaybackCalls);
+        Assert.True(mixer.GetDiagnostics().GapFilledSamples >= 4 * 160);
+
+        var concealment = Assert.IsAssignableFrom<IConcealmentAudioPlayback>(channel);
+        await concealment.WriteConcealmentAsync(
+            Enumerable.Repeat((short)250, 4 * 160).ToArray());
+        Assert.Equal(4 * 160, mixer.GetDiagnostics().SuppressedLiveConcealmentSamples);
+
+        await channel.FlushAsync();
+        output.ConsumeAll();
+        await WaitForAsync(() => output.EndExpectedPlaybackCalls > 0);
     }
 
     [Fact]
@@ -172,10 +396,12 @@ public sealed class AudioMixerTests
 
         public List<short[]> Frames { get; } = [];
         public PcmAudioFormat Format { get; }
+        public string? LastWriterThreadName { get; private set; }
 
         public ValueTask WriteAsync(ReadOnlyMemory<short> samples, CancellationToken cancellationToken = default)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            LastWriterThreadName = Thread.CurrentThread.Name;
             Frames.Add(samples.ToArray());
             return ValueTask.CompletedTask;
         }
@@ -186,11 +412,16 @@ public sealed class AudioMixerTests
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 
-    private sealed class BufferedFakePlayback : IAudioPlayback
+    private sealed class BufferedFakePlayback : IAudioPlayback, IAudioPlaybackContinuityDiagnostics
     {
         public List<short[]> Frames { get; } = [];
         public PcmAudioFormat Format { get; } = PcmAudioFormat.Voice8KhzMono16Bit;
         public int? QueuedSamples { get; private set; } = 0;
+        public TimeSpan StarvedDuration { get; init; }
+        public int EndExpectedPlaybackCalls { get; private set; }
+
+        public void ConsumeAll() => QueuedSamples = 0;
+        public void EndExpectedPlayback() => EndExpectedPlaybackCalls++;
 
         public ValueTask WriteAsync(ReadOnlyMemory<short> samples, CancellationToken cancellationToken = default)
         {

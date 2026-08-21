@@ -23,6 +23,7 @@ namespace DvmConsole.Desktop;
 
 public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposable
 {
+    private const int MaximumDebugLogEntries = 1000;
     internal const double ChannelWidgetSpacing = 8;
     internal const double DefaultWidgetCanvasWidth = 900;
     private const int MaximumSubscriberCommandAuditEntries = 50;
@@ -92,7 +93,8 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
     private readonly object audioLevelLogSync = new();
     private readonly Dictionary<(ChannelViewModel Channel, ChannelAudioDirection Direction), PcmLevelLogState> audioLevelLogs = [];
     private readonly ChannelAudioMeterPipeline audioMeterPipeline = new();
-    private readonly ReceiveDiagnosticsReporter receiveDiagnosticsReporter = new(TimeSpan.FromMilliseconds(500));
+    private readonly ReceiveDiagnosticsReporter receiveDiagnosticsReporter = new(TimeSpan.FromSeconds(5));
+    private readonly ReceivePipelineTimingReporter receivePipelineTimingReporter = new(TimeSpan.FromSeconds(5));
     private readonly SemaphoreSlim audioReconfigurationLock = new(1, 1);
     private readonly Dictionary<ChannelViewModel, DateTimeOffset> receiveRetryAfter = [];
     private readonly Dictionary<string, FneConnectionState> lastConnectionStates = new(StringComparer.OrdinalIgnoreCase);
@@ -322,8 +324,11 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
             GetChannelOutputDeviceId,
             dmrKeyResolver: dmrKeyResolver,
             nxdnKeyResolver: nxdnKeyResolver,
-            getChannelBalance: GetChannelStereoBalance);
-        receiveAudioWork = new ChannelReceiveWorkQueue(ProcessAudioAsync);
+            getChannelBalance: GetChannelStereoBalance,
+            presentationSamplesObserver: HandlePresentedReceiveSamples);
+        receiveAudioWork = new ChannelReceiveWorkQueue(
+            ProcessAudioAsync,
+            timingObserver: HandleReceiveWorkItemTiming);
         transmitCoordinator = new ChannelTransmitCoordinator(
             p25KeyResolver,
             new AudioInputProcessingOptions
@@ -456,8 +461,17 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
                     out List<uint>? ignoredSubscriberIds)
                     ? ignoredSubscriberIds
                     : []);
-            channel.ConfigureAudio(StartAudioAsync, StopAudioAsync);
+            channel.ConfigureAudio(
+                candidate => ChangeChannelReceiveSelectionAsync(candidate, enabled: true),
+                candidate => ChangeChannelReceiveSelectionAsync(candidate, enabled: false));
             channel.ConfigureTransmit(StartTransmitAsync, StopTransmitAsync);
+            if (userSettings.RestoreSelectedChannelsOnStartup &&
+                userSettings.ReceiveEnabledChannelKeys.Contains(
+                    channel.SettingsKey,
+                    StringComparer.OrdinalIgnoreCase))
+            {
+                channel.SetAudioEnabled(true);
+            }
             channel.RestoreTransmitSelection(userSettings.TransmitSelectedChannelKeys.Contains(
                 channel.SettingsKey,
                 StringComparer.OrdinalIgnoreCase));
@@ -2392,10 +2406,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
     {
         ArgumentNullException.ThrowIfNull(channel);
         SelectChannel(channel);
-        if (channel.IsAudioEnabled)
-            await StopAudioAsync(channel).ConfigureAwait(false);
-        else
-            await StartAudioAsync(channel).ConfigureAwait(false);
+        await ChangeChannelReceiveSelectionAsync(channel, enabled: null).ConfigureAwait(false);
     }
 
     public async Task DisableAllReceiveAsync()
@@ -2425,13 +2436,80 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
 
     private async Task SetReceiveAsync(ReceiveSelectionScope scope, bool enabled)
     {
-        foreach (ChannelViewModel channel in GetReceiveScopeChannels(scope))
+        await audioReconfigurationLock.WaitAsync().ConfigureAwait(false);
+        try
         {
-            if (enabled && !channel.IsAudioEnabled)
-                await StartAudioAsync(channel).ConfigureAwait(false);
-            else if (!enabled && channel.IsAudioEnabled)
-                await StopAudioAsync(channel).ConfigureAwait(false);
+            foreach (ChannelViewModel channel in GetReceiveScopeChannels(scope))
+            {
+                try
+                {
+                    await ApplyChannelReceiveSelectionAsync(channel, enabled).ConfigureAwait(false);
+                }
+                catch (Exception exception)
+                {
+                    await ReportReceiveSelectionFailureAsync(channel, exception).ConfigureAwait(false);
+                }
+            }
         }
+        finally
+        {
+            audioReconfigurationLock.Release();
+        }
+    }
+
+    private async Task ChangeChannelReceiveSelectionAsync(
+        ChannelViewModel channel,
+        bool? enabled)
+    {
+        await audioReconfigurationLock.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            bool targetEnabled = enabled ?? !channel.IsAudioEnabled;
+            await ApplyChannelReceiveSelectionAsync(channel, targetEnabled).ConfigureAwait(false);
+        }
+        catch (Exception exception)
+        {
+            await ReportReceiveSelectionFailureAsync(channel, exception).ConfigureAwait(false);
+        }
+        finally
+        {
+            audioReconfigurationLock.Release();
+        }
+    }
+
+    private async Task ApplyChannelReceiveSelectionAsync(
+        ChannelViewModel channel,
+        bool enabled)
+    {
+        if (enabled)
+        {
+            bool liveSessionMissing = !audioCoordinator.LivePlaybackChannels.Contains(channel);
+            if (!channel.IsAudioEnabled ||
+                !audioCoordinator.IsActive(channel) ||
+                (!channel.IsAudioSuspended && liveSessionMissing))
+            {
+                await StartAudioAsync(channel, persistSelection: true).ConfigureAwait(false);
+            }
+            return;
+        }
+
+        if (channel.IsAudioEnabled)
+            await StopAudioAsync(channel, persistSelection: true).ConfigureAwait(false);
+    }
+
+    private async Task ReportReceiveSelectionFailureAsync(
+        ChannelViewModel channel,
+        Exception exception)
+    {
+        await RunOnUiThreadAsync(() =>
+        {
+            AudioStatusText = $"Unable to change RX selection for {channel.Name}: {exception.Message}";
+            AddDebugLog(
+                DateTimeOffset.Now,
+                "RX",
+                DebugLogSeverity.Warning,
+                $"RX selection change failed on {channel.Name}: {exception}");
+        }).ConfigureAwait(false);
     }
 
     public async Task StartChannelTransmitAsync(ChannelViewModel channel)
@@ -2861,7 +2939,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
     {
         void Apply()
         {
-            if (debugLogEntries.Count >= 500)
+            if (debugLogEntries.Count >= MaximumDebugLogEntries)
                 debugLogEntries.RemoveAt(debugLogEntries.Count - 1);
 
             debugLogEntries.Insert(0, new DebugLogEntry(
@@ -2985,6 +3063,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
         if (!enabled)
         {
             callRecordings.StopChannel(channel);
+            _ = StopRecordingDecodeIfUnusedAsync(channel);
             return;
         }
 
@@ -3260,8 +3339,47 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
 
     private async Task EnsureRecordingAudioAsync(ChannelViewModel channel)
     {
-        if (!audioCoordinator.IsActive(channel))
-            await StartAudioAsync(channel);
+        if (audioCoordinator.IsActive(channel))
+            return;
+
+        try
+        {
+            await audioCoordinator.EnsureDecodeAsync(
+                channel,
+                livePlaybackEnabledWhenCreated: channel.IsAudioEnabled).ConfigureAwait(false);
+            receiveAudioWork.Start(channel);
+            receivePipelineTimingReporter.Reset(channel);
+        }
+        catch (Exception exception)
+        {
+            await RunOnUiThreadAsync(() =>
+                AudioStatusText = $"TAR decode unavailable for {channel.Name}: {exception.Message}")
+                .ConfigureAwait(false);
+        }
+    }
+
+    private async Task StopRecordingDecodeIfUnusedAsync(ChannelViewModel channel)
+    {
+        if (channel.IsAudioEnabled || !audioCoordinator.IsActive(channel))
+            return;
+
+        try
+        {
+            await receiveAudioWork.StopAsync(channel).ConfigureAwait(false);
+            await audioCoordinator.StopAsync(channel).ConfigureAwait(false);
+        }
+        catch (ObjectDisposedException) when (Volatile.Read(ref disposeStarted) != 0)
+        {
+            // Application shutdown already owns receive-session cleanup.
+        }
+        catch (Exception exception)
+        {
+            AddDebugLog(
+                DateTimeOffset.UtcNow,
+                "RX",
+                DebugLogSeverity.Warning,
+                $"TAR decoder cleanup failed for {channel.Name}: {exception.Message}");
+        }
     }
 
     private void HandleDecodedSamples(
@@ -3272,8 +3390,21 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
     {
         patchForwarding.ObserveDecodedSamples(channel, streamId, sourceId, samples);
         callRecordings.WriteSamples(channel, streamId, sourceId, samples);
-        audioMeterPipeline.Observe(channel, streamId, samples.Span, ChannelAudioDirection.Receive);
         LogVocoderAudioLevel(channel, samples, ChannelAudioDirection.Receive, streamId);
+    }
+
+    private void HandlePresentedReceiveSamples(
+        ChannelViewModel channel,
+        uint streamId,
+        ReadOnlyMemory<short> samples,
+        TimeSpan presentationDelay)
+    {
+        audioMeterPipeline.Observe(
+            channel,
+            streamId,
+            samples.Span,
+            ChannelAudioDirection.Receive,
+            presentationDelay);
     }
 
     private void HandleTransmitSamples(

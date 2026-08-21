@@ -603,6 +603,7 @@ public sealed class FneConnection : IAsyncDisposable
 
     private void HandleDmrDataReceived(object? sender, DMRDataReceivedEvent args)
     {
+        long boundaryTimestamp = Stopwatch.GetTimestamp();
         PublishTraffic(new FneTrafficFrame(
             FneTrafficProtocol.Dmr,
             args.PeerId,
@@ -614,11 +615,13 @@ public sealed class FneConnection : IAsyncDisposable
             args.DataType.ToString(),
             args.PacketSequence,
             args.StreamId,
-            args.Data));
+            args.Data,
+            boundaryTimestamp));
     }
 
     private void HandleP25DataReceived(object? sender, P25DataReceivedEvent args)
     {
+        long boundaryTimestamp = Stopwatch.GetTimestamp();
         PublishTraffic(new FneTrafficFrame(
             FneTrafficProtocol.P25,
             args.PeerId,
@@ -630,11 +633,13 @@ public sealed class FneConnection : IAsyncDisposable
             args.DUID.ToString(),
             args.PacketSequence,
             args.StreamId,
-            args.Data));
+            args.Data,
+            boundaryTimestamp));
     }
 
     private void HandleNxdnDataReceived(object? sender, NXDNDataReceivedEvent args)
     {
+        long boundaryTimestamp = Stopwatch.GetTimestamp();
         PublishTraffic(new FneTrafficFrame(
             FneTrafficProtocol.Nxdn,
             args.PeerId,
@@ -646,11 +651,13 @@ public sealed class FneConnection : IAsyncDisposable
             args.MessageType.ToString(),
             args.PacketSequence,
             args.StreamId,
-            args.Data));
+            args.Data,
+            boundaryTimestamp));
     }
 
     private void HandleAnalogDataReceived(object? sender, AnalogDataReceivedEvent args)
     {
+        long boundaryTimestamp = Stopwatch.GetTimestamp();
         PublishTraffic(new FneTrafficFrame(
             FneTrafficProtocol.Analog,
             args.PeerId,
@@ -662,7 +669,8 @@ public sealed class FneConnection : IAsyncDisposable
             args.AudioFrameType.ToString(),
             args.PacketSequence,
             args.StreamId,
-            args.Data));
+            args.Data,
+            boundaryTimestamp));
     }
 
     private void PublishTraffic(FneTrafficFrame frame)

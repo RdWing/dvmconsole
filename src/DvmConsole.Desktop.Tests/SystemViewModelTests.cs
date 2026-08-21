@@ -732,6 +732,20 @@ public sealed class SystemViewModelTests
                 999,
                 new byte[DvmConsole.Media.DmrVoicePacketCodec.PacketBytes]),
                 receivedAt: start.AddSeconds(3));
+            viewModel.ProcessTraffic(system, new FneTrafficFrame(
+                FneTrafficProtocol.Dmr,
+                1,
+                42,
+                101,
+                0,
+                "GROUP",
+                "VOICE",
+                "VOICE",
+                6,
+                77,
+                new byte[DvmConsole.Media.DmrVoicePacketCodec.PacketBytes]),
+                receivedAt: start.AddSeconds(3.9));
+            viewModel.ExpireStaleReceiveStates(start.AddSeconds(6));
 
             CallHistoryEntry[] sessionHistory = viewModel.CallHistory.Where(entry => !entry.IsRecordingOnly).ToArray();
             Assert.Equal(2, sessionHistory.Length);
@@ -767,7 +781,7 @@ public sealed class SystemViewModelTests
     }
 
     [Fact]
-    public async Task TimeoutGraceResumesOneHistoryCallAndExplicitEndRejectsLateVoice()
+    public async Task TimeoutGraceAndTerminatorHoldResumeOneHistoryCall()
     {
         string path = Path.Combine(AppContext.BaseDirectory, "TestData", "multiple-systems.yml");
         string settingsPath = CreateSettingsPath();
@@ -804,10 +818,20 @@ public sealed class SystemViewModelTests
                 receivedAt: now.AddSeconds(4.5));
 
             Assert.Single(viewModel.CallHistory);
+            Assert.True(viewModel.CallHistory[0].IsActive);
+            Assert.Equal(ChannelRuntimeState.Receiving, channel.State);
+            Assert.Equal(0, channel.IgnoredLatePacketCount);
+
+            viewModel.ExpireStaleReceiveStates(now.AddSeconds(8.5));
             Assert.False(viewModel.CallHistory[0].IsActive);
             Assert.Equal(ChannelRuntimeState.Idle, channel.State);
+
+            viewModel.ProcessTraffic(
+                system,
+                CreateDmrTraffic(77, "VOICE", "VOICE", packetSequence: 5),
+                receivedAt: now.AddSeconds(9));
             Assert.Equal(1, channel.IgnoredLatePacketCount);
-            Assert.Contains("late/duplicate 1", viewModel.AudioStatusText, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("post-call late 1", viewModel.AudioStatusText, StringComparison.OrdinalIgnoreCase);
         }
         finally
         {
@@ -879,13 +903,16 @@ public sealed class SystemViewModelTests
             viewModel.ProcessTraffic(system, CreateP25Traffic(200, 0, "TERMINATOR", "TDU", 2, destinationId: 0), receivedAt: now.AddSeconds(1));
 
             Assert.True(viewModel.CallHistory.Single(entry => entry.StreamId == 100).IsActive);
-            Assert.False(viewModel.CallHistory.Single(entry => entry.StreamId == 200).IsActive);
+            Assert.True(viewModel.CallHistory.Single(entry => entry.StreamId == 200).IsActive);
             Assert.Equal(ChannelRuntimeState.Receiving, channel.State);
 
             viewModel.ProcessTraffic(system, CreateP25Traffic(100, 0, "TERMINATOR", "TDU", 3, destinationId: 0), receivedAt: now.AddSeconds(1.1));
 
-            Assert.All(viewModel.CallHistory, entry => Assert.False(entry.IsActive));
+            Assert.All(viewModel.CallHistory, entry => Assert.True(entry.IsActive));
             Assert.Equal(ChannelRuntimeState.Idle, channel.State);
+
+            viewModel.ExpireStaleReceiveStates(now.AddSeconds(5.2));
+            Assert.All(viewModel.CallHistory, entry => Assert.False(entry.IsActive));
         }
         finally
         {
@@ -962,6 +989,8 @@ public sealed class SystemViewModelTests
             system.Channels[1].SetAudioEnabled(false);
 
             Assert.False(system.Channels[1].IsReceivePresentationActive);
+            Assert.True(system.Zones[0].IsReceiving);
+            Assert.False(system.Zones[1].IsReceiving);
             Assert.NotEqual(
                 Color.Parse("#008A3A"),
                 Assert.IsType<SolidColorBrush>(system.Channels[1].CardBackgroundBrush).Color);
@@ -1259,7 +1288,7 @@ public sealed class SystemViewModelTests
     }
 
     [Fact]
-    public async Task SystemReceiveActivityTracksChannelsIndependentlyOfSelection()
+    public async Task SystemReceiveActivityRequiresEnabledReceivePresentation()
     {
         var channel = new ChannelViewModel(new ChannelConfiguration
         {
@@ -1293,6 +1322,10 @@ public sealed class SystemViewModelTests
             Assert.Equal("○", system.StatusGlyph);
             Assert.False(system.IsReceiving);
             Assert.True(channel.TryApplyTraffic("Test", traffic));
+            Assert.False(system.IsReceiving);
+
+            channel.SetAudioEnabled(true);
+
             Assert.True(system.IsReceiving);
             Assert.Equal(1.0, system.ActivityBarOpacity);
             Assert.Equal(
@@ -1681,6 +1714,7 @@ public sealed class SystemViewModelTests
                 channel.SetRecordingEnabled(true);
 
                 Assert.True(channel.IsRecordingEnabled);
+                Assert.False(channel.IsAudioEnabled);
                 Assert.Contains(channelKey, store.Load().RecordingEnabledChannelKeys, StringComparer.OrdinalIgnoreCase);
             }
 
@@ -1688,6 +1722,7 @@ public sealed class SystemViewModelTests
             ChannelViewModel restoredChannel = restored.Systems[0].Channels[0];
 
             Assert.True(restoredChannel.IsRecordingEnabled);
+            Assert.False(restoredChannel.IsAudioEnabled);
             Assert.Equal("Disable TAR", restoredChannel.RecordingConfigurationButtonText);
 
             restoredChannel.SetRecordingEnabled(false);
@@ -1695,6 +1730,57 @@ public sealed class SystemViewModelTests
                 channelKey,
                 store.Load().RecordingEnabledChannelKeys,
                 StringComparer.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            CleanupSettingsPath(settingsPath);
+        }
+    }
+
+    [Fact]
+    public async Task PersistsAndRestoresReceiveEnabledCardsIndependentlyOfTar()
+    {
+        string codeplugPath = Path.Combine(AppContext.BaseDirectory, "TestData", "multiple-systems.yml");
+        string settingsPath = CreateSettingsPath();
+        var store = new UserSettingsStore(settingsPath);
+        string[] restoredKeys =
+        [
+            "Alpha\u001FAlpha Operations",
+            "Beta\u001FBeta Operations"
+        ];
+
+        try
+        {
+            store.Save(new UserSettings
+            {
+                RestoreSelectedChannelsOnStartup = true,
+                ReceiveEnabledChannelKeys = restoredKeys.ToList()
+            });
+
+            await using MainWindowViewModel viewModel = MainWindowViewModel.Load(codeplugPath, store);
+            ChannelViewModel[] restored = viewModel.Systems
+                .SelectMany(system => system.Channels)
+                .Where(channel => restoredKeys.Contains(channel.SettingsKey, StringComparer.Ordinal))
+                .ToArray();
+            ChannelViewModel additional = viewModel.Systems
+                .SelectMany(system => system.Channels)
+                .First(channel => !restored.Contains(channel));
+
+            Assert.Equal(2, restored.Length);
+            Assert.All(restored, channel => Assert.True(channel.IsAudioEnabled));
+            Assert.All(restored, channel => Assert.False(channel.IsRecordingEnabled));
+            Assert.All(
+                viewModel.Systems.SelectMany(system => system.Channels).Where(channel => !restored.Contains(channel)),
+                channel => Assert.False(channel.IsAudioEnabled));
+
+            viewModel.SetReceiveSelectionPreference(additional, enabled: true);
+            viewModel.SetReceiveSelectionPreference(restored[0], enabled: false);
+
+            UserSettings saved = store.Load();
+            Assert.Equal(
+                new[] { additional.SettingsKey, restored[1].SettingsKey }
+                    .OrderBy(key => key, StringComparer.OrdinalIgnoreCase),
+                saved.ReceiveEnabledChannelKeys);
         }
         finally
         {

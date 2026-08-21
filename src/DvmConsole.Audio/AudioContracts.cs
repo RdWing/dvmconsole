@@ -94,11 +94,42 @@ public interface IAudioCapture : IAsyncDisposable
 public interface IAudioPlayback : IAsyncDisposable
 {
     PcmAudioFormat Format { get; }
+    // Interleaved samples currently waiting for presentation, expressed in
+    // this playback object's Format even when the native device runs at a
+    // different sample rate.
     int? QueuedSamples => null;
     ValueTask WriteAsync(ReadOnlyMemory<short> samples, CancellationToken cancellationToken = default);
     ValueTask FlushAsync(CancellationToken cancellationToken = default);
     ValueTask<int?> DrainAsync(CancellationToken cancellationToken = default)
         => ValueTask.FromResult<int?>(null);
+}
+
+// Optional playback path for decoder-generated replacement audio. Consumers
+// that present live audio may bound how much late concealment they admit while
+// observers such as recorders can still retain the complete decoded timeline.
+public interface IConcealmentAudioPlayback
+{
+    ValueTask WriteConcealmentAsync(
+        ReadOnlyMemory<short> samples,
+        CancellationToken cancellationToken = default);
+}
+
+// Optional per-lane live-presentation control. Disabling presentation discards
+// queued and future speaker-bound PCM without closing the decoder-facing
+// playback object, allowing observers such as TAR writers to keep receiving the
+// complete decoded stream.
+public interface ILiveAudioPlaybackControl
+{
+    bool LivePlaybackEnabled { get; set; }
+}
+
+// Optional physical-output diagnostics. A backend begins continuity tracking
+// when audio is written and commits a starvation gap only if playback later
+// resumes. EndExpectedPlayback discards the normal empty tail after a call.
+public interface IAudioPlaybackContinuityDiagnostics
+{
+    TimeSpan StarvedDuration { get; }
+    void EndExpectedPlayback();
 }
 
 public interface IAudioGainControl
