@@ -131,7 +131,9 @@ Fields:
 - `system`: system name from the `systems` section.
 - `tgid`: target talkgroup ID.
 - `mode`: `p25`, `dmr`, `nxdn`, or `analog`. If omitted, P25 is used. NXDN is the 4800-baud voice mode; NXDN 9600/EFR is not implemented in dvmhost.
-- `keyId`: optional encryption key ID.
+- `keyId`: optional encryption key ID. P25 values are hexadecimal; use an
+  `0x` prefix for clarity. Unprefixed P25 values remain hexadecimal for
+  compatibility with WPF-era codeplugs.
 - `algo`: optional encryption algorithm, such as `aes`, `des`, `arc4`, or `none`.
 - `selectable_encryption`: optional flag for P25, DMR, or NXDN secure-capable resources. When `true`, the card shows a **SELECT** toggle so operators can choose encrypted or clear transmit. This requires a valid `keyId` and `algo`.
 - `resourceColor`: optional resource card color in hex.

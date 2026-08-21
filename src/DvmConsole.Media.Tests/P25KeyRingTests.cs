@@ -29,13 +29,13 @@ public sealed class P25KeyRingTests
                 },
                 new KeyEntry
                 {
-                    KeyId = 81,
+                    KeyId = 0x81,
                     AlgId = P25Defines.P25_ALGO_DES,
                     Key = "0011223344556677"
                 },
                 new KeyEntry
                 {
-                    KeyId = 170,
+                    KeyId = 0x170,
                     AlgId = P25Defines.P25_ALGO_ARC4,
                     Key = "0011223344"
                 }
@@ -48,6 +48,17 @@ public sealed class P25KeyRingTests
         Assert.True(P25KeyRing.TryParseKeyId(keyId, out ushort parsedKeyId));
         Assert.True(ring.TryResolve(SystemName, parsedAlgorithm, parsedKeyId, out ReadOnlyMemory<byte> key));
         Assert.NotEmpty(key.ToArray());
+    }
+
+    [Theory]
+    [InlineData("1", 0x0001)]
+    [InlineData("20", 0x0020)]
+    [InlineData("069D", 0x069D)]
+    [InlineData("0x1a2b", 0x1A2B)]
+    public void ParsesLegacyWpfKeyIdsAsHexadecimal(string configuredKeyId, ushort expected)
+    {
+        Assert.True(P25KeyRing.TryParseKeyId(configuredKeyId, out ushort parsed));
+        Assert.Equal(expected, parsed);
     }
 
     [Fact]

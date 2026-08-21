@@ -224,14 +224,21 @@ public sealed class P25KeyRing : IP25KeyResolver, IDisposable
             return false;
 
         string normalized = value.Trim();
-        NumberStyles style = normalized.StartsWith("0x", StringComparison.OrdinalIgnoreCase)
-            ? NumberStyles.AllowHexSpecifier
-            : NumberStyles.Integer;
-        if (style == NumberStyles.AllowHexSpecifier)
+        if (normalized.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
             normalized = normalized[2..];
 
-        if (!ushort.TryParse(normalized, style, CultureInfo.InvariantCulture, out keyId) || keyId == 0)
+        // The WPF console treated every configured P25 KID as hexadecimal,
+        // including values without a 0x prefix. Preserve that codeplug
+        // contract so the requested KID and the over-the-air KID agree.
+        if (!ushort.TryParse(
+                normalized,
+                NumberStyles.AllowHexSpecifier,
+                CultureInfo.InvariantCulture,
+                out keyId) ||
+            keyId == 0)
+        {
             return false;
+        }
 
         return true;
     }

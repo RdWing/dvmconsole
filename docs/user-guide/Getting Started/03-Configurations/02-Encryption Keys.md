@@ -85,6 +85,10 @@ Supported `algo` values include:
 
 For NXDN, use `ehr`, `des`, or `aes`. NXDN 9600/EFR is not implemented in dvmhost.
 
+P25 channel key IDs are hexadecimal. The `0x` prefix is recommended for
+clarity; unprefixed P25 values retain the legacy WPF hexadecimal
+interpretation.
+
 If `keyId` is blank or zero, the channel is treated as clear for normal operation.
 
 ---
