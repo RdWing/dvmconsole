@@ -117,7 +117,11 @@ View > Debug Logs
 
 The viewer captures FNE messages, supports an all-terms search across each log
 entry, and can export a redacted log for troubleshooting. **Clear Text** clears
-the entered search without deleting the captured entries.
+the entered search without deleting the captured entries. Entries exist only
+for the current application session and share a 100 MB in-memory limit. The
+oldest entries are discarded first when that limit is reached. New traffic does
+not move the line currently being read when the viewer is scrolled away from
+the newest entry.
 
 If the application closes without an error dialog, inspect `LastCrash.log` before restarting:
 

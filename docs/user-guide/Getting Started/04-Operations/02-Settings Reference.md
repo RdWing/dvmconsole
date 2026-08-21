@@ -92,6 +92,20 @@ Opens Console Settings on the Audio page.
 
 See **Audio Settings** for details.
 
+The main toolbar has three independent live-output mute controls:
+
+- `S` mutes or restores the currently selected FNE system.
+- `Z` mutes or restores the currently selected zone.
+- the unprefixed speaker button mutes or restores all live RX output.
+
+These controls affect speaker playback only. Receive decoding, call lifecycle,
+patching, and TAR recording continue. System and zone scopes compose: restoring
+one scope does not override another scope that is still muted.
+
+Microphone gain, EQ, AGC, warm-microphone, and Apply controls wrap onto
+additional rows when Console Settings is narrowed so every control remains
+reachable.
+
 ## Import / Export Settings
 
 Opens the Settings Transfer window.
@@ -191,47 +205,78 @@ than for every packet.
 
 ### Per-connection RX network jitter buffer
 
-Each FNE connection has independent P25, DMR, and NXDN jitter settings. The
-compact selectors appear beside that connection's Connect, Disconnect, and
-Restart controls. The buffer holds complete network packets before decoding.
-If a packet arrives out
-of order but before its playout deadline, the console restores it to the correct
-place in the stream. If the deadline expires first, playback continues and the
-decoder applies its normal loss concealment; one missing packet cannot stall the
-call.
+Each FNE connection has independent P25, DMR, and NXDN jitter settings. Choose
+**Off**, a fixed packet-aligned delay, or **Adaptive** from the compact selectors
+beside that connection's state-aware Connect/Disconnect and Restart controls. The buffer
+holds complete network packets before decoding. If a packet arrives out of order
+but before its playout deadline, the console restores it to the correct place in
+the stream. If the deadline expires first, playback continues and the decoder
+applies its normal loss concealment; one missing packet cannot stall the call.
+
+Adaptive mode measures transport arrival variation once per FNE connection and
+protocol. Each new receive stream snapshots the current target for its complete
+call, so simultaneous streams keep independent sequencing and one call never
+changes another call's playout clock. The target rises immediately in whole
+packet steps when late arrival evidence requires more headroom. It falls one
+packet only after three clean completed calls. Missing packets that never arrive
+do not by themselves increase the target. Adaptive is the default for new or
+previously unsaved settings. It starts at zero added frames on a clean
+connection and can learn up to nine frames.
 
 Only protocol-aligned durations are offered:
 
-- P25: Off, 180, 360, or 540 ms. The 180 ms default is one complete LDU.
-- DMR: Off, 60, 120, or 180 ms. The 120 ms default is two network packets.
-- NXDN: Off, 80, 160, or 240 ms. The 160 ms default is two network packets.
+- P25: zero through nine 180 ms LDUs; adaptive range 0–1620 ms.
+- DMR: zero through nine 60 ms packets; adaptive range 0–540 ms.
+- NXDN: zero through nine 80 ms packets; adaptive range 0–720 ms.
 
-The configured duration is added to the existing decode and speaker-output
-path. In normal conditions, estimated packet-arrival-to-speaker latency is the
-selected jitter duration plus approximately 80–110 ms. The physical audio
-device can add a small route-dependent amount that the application cannot
-measure exactly. Turning the jitter buffer off minimizes latency but removes
-the packet reordering opportunity.
+The fixed or currently learned duration is added to the existing decode and
+speaker-output path. In normal conditions, estimated packet-arrival-to-speaker
+latency is the stream's jitter target plus approximately 80–110 ms. The physical
+audio device can add a small route-dependent amount that the application cannot
+measure exactly. Turning the jitter buffer off minimizes latency but removes the
+packet reordering opportunity.
 
 Changing a selection saves that FNE's settings immediately and safely recreates
 active listening and patch-source decode sessions.
 
+Below the selectors, **Adaptive learned** shows the current target for every
+protocol using adaptive mode. **Jitter effectiveness** shows how many delayed
+packets were restored before playout and how many expected packets missed their
+deadline. These values refresh at the same stable cadence as the connection
+diagnostics rather than on every packet.
+
+The FNE identity, jitter selectors, and connection actions wrap onto additional
+rows when the window is narrow. One state-aware button alternates between
+**Connect** and **Disconnect**; **Restart** remains separate.
+
 Debug Logs report a packet successfully restored to playout order as a jitter
 buffer reorder event. A separate warning reports when an expected packet misses
-its deadline and playback advances. The `jitter/decoder queue` value is one
-component of the enclosing `total FNE-to-mixer` time, so the two values can be
-nearly identical when decoding and mixer admission take only a few milliseconds.
+its deadline and playback advances. Pipeline timing identifies whether the
+stream used a fixed delay or an adaptive target. The `jitter/decoder queue`
+value is one component of the enclosing `total FNE-to-mixer` time, so the two
+values can be nearly identical when decoding and mixer admission take only a few
+milliseconds.
 
-Live timing high-water marks and jitter counters reset for the next stream.
-Already-emitted reorder, deadline, and timing messages remain in the Debug Logs
-session within the displayed entry and memory limits. When a limit is reached,
-the window discards the oldest entries first and reports the discarded count.
+Stream-scoped timing high-water marks reset for the next stream. The
+per-connection effectiveness totals retain completed-call evidence until the
+FNE disconnects or its jitter setting changes. Already-emitted reorder,
+deadline, and timing messages remain in the Debug Logs session within the
+displayed 100 MB in-memory limit. Entries are retained only for the current
+application session. When the limit is reached, the window discards the oldest
+entries first and reports the discarded count.
 
 ## Encryption Key Status
 
 Opens Console Settings directly at the channel key-status section of the
 **Connections** page. The view displays key identifiers and availability only;
 key material is never displayed or logged.
+
+Selectable-encryption state is restored independently of key arrival. When a
+restored channel is secure and its configured key is available only from KMM,
+the channel remains unavailable during the post-connect request interval. As
+soon as the matching key arrives, its encryption capability refreshes and the
+channel presents the restored **SECURE** control. The key itself is not persisted
+or displayed.
 
 ---
 

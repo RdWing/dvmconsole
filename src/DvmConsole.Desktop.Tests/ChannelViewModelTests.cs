@@ -801,6 +801,42 @@ public sealed class ChannelViewModelTests
     }
 
     [Fact]
+    public void RestoredSelectableSecureStateIsPresentedWhenKmmKeyArrives()
+    {
+        var keyRing = new P25KeyRing();
+        var channel = new ChannelViewModel(new ChannelConfiguration
+        {
+            Name = "Selectable KMM P25",
+            System = "System 1",
+            Tgid = "101",
+            Mode = "p25",
+            Algo = "aes",
+            KeyId = "0x50",
+            SelectableEncryption = true
+        }, keyRing);
+        channel.RestoreTransmitEncryption(true);
+        var changedProperties = new List<string?>();
+        channel.PropertyChanged += (_, args) => changedProperties.Add(args.PropertyName);
+
+        Assert.False(channel.CanToggleEncryption);
+        Assert.True(channel.IsTransmitEncrypted);
+
+        keyRing.AddOrReplaceFromFne(
+            "System 1",
+            P25Defines.P25_ALGO_AES,
+            0x50,
+            Convert.FromHexString("00112233445566778899AABBCCDDEEFF"));
+        channel.RefreshEncryptionState();
+
+        Assert.True(channel.CanToggleEncryption);
+        Assert.True(channel.IsTransmitEncrypted);
+        Assert.Equal("SECURE", channel.EncryptionButtonText);
+        Assert.Contains(nameof(ChannelViewModel.CanToggleEncryption), changedProperties);
+        Assert.Contains(nameof(ChannelViewModel.EncryptionButtonText), changedProperties);
+        Assert.Contains(nameof(ChannelViewModel.EncryptionSelectionBrush), changedProperties);
+    }
+
+    [Fact]
     public void SelectableClearP25UsesClearDefinitionForGeneratedTransmit()
     {
         var keyRing = new P25KeyRing("System 1", new KeyContainer

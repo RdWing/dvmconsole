@@ -99,6 +99,9 @@ public sealed class UserSettingsStoreTests
             Assert.Equal(180, settings.RxJitterBuffer.P25Milliseconds);
             Assert.Equal(120, settings.RxJitterBuffer.DmrMilliseconds);
             Assert.Equal(160, settings.RxJitterBuffer.NxdnMilliseconds);
+            Assert.True(settings.RxJitterBuffer.P25Adaptive);
+            Assert.True(settings.RxJitterBuffer.DmrAdaptive);
+            Assert.True(settings.RxJitterBuffer.NxdnAdaptive);
             Assert.Empty(settings.RxJitterBuffersBySystem);
             Assert.Equal(14, settings.UiFontSize);
             Assert.Equal(1.0, settings.UiScale);
@@ -126,14 +129,56 @@ public sealed class UserSettingsStoreTests
                 {
                     P25Milliseconds = 360,
                     DmrMilliseconds = 100,
-                    NxdnMilliseconds = 240
+                    NxdnMilliseconds = 320,
+                    P25Adaptive = true
                 }
             });
 
             RxJitterBufferSetting loaded = store.Load().RxJitterBuffer;
             Assert.Equal(360, loaded.P25Milliseconds);
             Assert.Equal(RxJitterBufferSetting.DefaultDmrMilliseconds, loaded.DmrMilliseconds);
-            Assert.Equal(240, loaded.NxdnMilliseconds);
+            Assert.Equal(320, loaded.NxdnMilliseconds);
+            Assert.True(loaded.P25Adaptive);
+        }
+        finally
+        {
+            Cleanup(path);
+        }
+    }
+
+    [Fact]
+    public void MissingAdaptiveFieldsMigrateToTheAdaptiveDefault()
+    {
+        string path = CreatePath();
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            File.WriteAllText(path, """
+                {
+                  "SchemaVersion": 6,
+                  "RxJitterBuffer": {
+                    "P25Milliseconds": 360,
+                    "DmrMilliseconds": 120,
+                    "NxdnMilliseconds": 160
+                  },
+                  "RxJitterBuffersBySystem": {
+                    "Alpha": {
+                      "P25Milliseconds": 180,
+                      "DmrMilliseconds": 60,
+                      "NxdnMilliseconds": 80
+                    }
+                  }
+                }
+                """);
+
+            UserSettings loaded = new UserSettingsStore(path).Load();
+
+            Assert.True(loaded.RxJitterBuffer.P25Adaptive);
+            Assert.True(loaded.RxJitterBuffer.DmrAdaptive);
+            Assert.True(loaded.RxJitterBuffer.NxdnAdaptive);
+            Assert.True(loaded.RxJitterBuffersBySystem["Alpha"].P25Adaptive);
+            Assert.True(loaded.RxJitterBuffersBySystem["Alpha"].DmrAdaptive);
+            Assert.True(loaded.RxJitterBuffersBySystem["Alpha"].NxdnAdaptive);
         }
         finally
         {
@@ -156,7 +201,8 @@ public sealed class UserSettingsStoreTests
                     {
                         P25Milliseconds = 360,
                         DmrMilliseconds = 999,
-                        NxdnMilliseconds = 80
+                        NxdnMilliseconds = 80,
+                        DmrAdaptive = true
                     },
                     [" "] = new()
                 }
@@ -168,6 +214,7 @@ public sealed class UserSettingsStoreTests
             Assert.Equal(360, alpha.P25Milliseconds);
             Assert.Equal(RxJitterBufferSetting.DefaultDmrMilliseconds, alpha.DmrMilliseconds);
             Assert.Equal(80, alpha.NxdnMilliseconds);
+            Assert.True(alpha.DmrAdaptive);
         }
         finally
         {
@@ -918,12 +965,14 @@ public sealed class UserSettingsStoreTests
             Assert.Equal(
                 [AudioPresetStepKinds.Digit, AudioPresetStepKinds.Hold, AudioPresetStepKinds.Digit],
                 loaded.DtmfPresets[0].Steps.Select(step => step.Kind));
+            Assert.Equal(0.1, loaded.DtmfPresets[0].Steps[0].DurationSeconds);
             Assert.Equal(10.0, loaded.DtmfPresets[0].Steps[1].DurationSeconds);
             Assert.Equal(
                 [AudioPresetStepKinds.Tone, AudioPresetStepKinds.Hold],
                 loaded.TonePresets[0].Steps.Select(step => step.Kind));
             Assert.Equal(1200, loaded.TonePresets[0].FrequencyHz);
-            Assert.Equal(0.25, loaded.TonePresets[0].Steps[0].DurationSeconds);
+            Assert.Equal(0.1, loaded.TonePresets[0].DurationSeconds);
+            Assert.Equal(0.1, loaded.TonePresets[0].Steps[0].DurationSeconds);
         }
         finally
         {

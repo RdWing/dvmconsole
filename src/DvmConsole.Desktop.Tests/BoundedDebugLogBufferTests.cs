@@ -6,6 +6,19 @@ namespace DvmConsole.Desktop.Tests;
 public sealed class BoundedDebugLogBufferTests
 {
     [Fact]
+    public void DefaultSessionLimitIsOneHundredMegabytesWithoutAnEntryCountCeiling()
+    {
+        var buffer = new BoundedDebugLogBuffer();
+
+        for (int index = 0; index < 5_001; index++)
+            buffer.Add(Entry($"entry {index}"));
+
+        Assert.Equal(5_001, buffer.Entries.Count);
+        Assert.Contains("limit 100.0 MB", buffer.RetentionText);
+        Assert.DoesNotContain("entries /", buffer.RetentionText);
+    }
+
+    [Fact]
     public void RetainsNewestSessionEntriesWithinCountLimit()
     {
         var buffer = new BoundedDebugLogBuffer(maximumEntries: 2, maximumBytes: 4_096);

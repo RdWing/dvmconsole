@@ -12,7 +12,7 @@ internal readonly record struct ReceiveWorkQueueDiagnostics(
     TimeSpan MaximumEndToEndDelay,
     TimeSpan MaximumTransportInterArrivalDelay = default,
     TimeSpan MaximumTransportToFneBoundaryDelay = default,
-    TimeSpan MaximumConfiguredJitterBufferDelay = default,
+    TimeSpan MaximumJitterBufferTargetDelay = default,
     long JitterBufferReorderedPackets = 0,
     long JitterBufferDeadlineMissedPackets = 0);
 
@@ -25,7 +25,8 @@ internal readonly record struct ReceiveWorkItemTiming(
     TimeSpan EndToEndDelay,
     TimeSpan TransportInterArrivalDelay = default,
     TimeSpan TransportToFneBoundaryDelay = default,
-    TimeSpan ConfiguredJitterBufferDelay = default,
+    TimeSpan JitterBufferTargetDelay = default,
+    bool AdaptiveJitterBuffer = false,
     bool JitterBufferReorderedPacket = false,
     int JitterBufferDeadlineMissedPackets = 0);
 
@@ -341,7 +342,8 @@ internal sealed class ChannelReceiveWorkQueue : IAsyncDisposable
                         Stopwatch.GetElapsedTime(item.IngressTimestamp, processingCompleted),
                         item.TransportInterArrivalDelay,
                         item.TransportToFneBoundaryDelay,
-                        item.JitterBufferProfile.TargetDelay,
+                        jitterMetadata.TargetDelay,
+                        jitterMetadata.IsAdaptive,
                         jitterMetadata.ReorderedBeforePlayout,
                         jitterMetadata.MissingPacketsAtDeadline);
                     timing.Observe(observed);
@@ -454,7 +456,7 @@ internal sealed class ChannelReceiveWorkQueue : IAsyncDisposable
                 Max(left.MaximumEndToEndDelay, right.MaximumEndToEndDelay),
                 Max(left.MaximumTransportInterArrivalDelay, right.MaximumTransportInterArrivalDelay),
                 Max(left.MaximumTransportToFneBoundaryDelay, right.MaximumTransportToFneBoundaryDelay),
-                Max(left.MaximumConfiguredJitterBufferDelay, right.MaximumConfiguredJitterBufferDelay),
+                Max(left.MaximumJitterBufferTargetDelay, right.MaximumJitterBufferTargetDelay),
                 SaturatingAdd(left.JitterBufferReorderedPackets, right.JitterBufferReorderedPackets),
                 SaturatingAdd(left.JitterBufferDeadlineMissedPackets, right.JitterBufferDeadlineMissedPackets));
 
@@ -476,7 +478,7 @@ internal sealed class ChannelReceiveWorkQueue : IAsyncDisposable
             private TimeSpan maximumQueueDelay;
             private TimeSpan maximumProcessingDuration;
             private TimeSpan maximumEndToEndDelay;
-            private TimeSpan maximumConfiguredJitterBufferDelay;
+            private TimeSpan maximumJitterBufferTargetDelay;
             private long jitterBufferReorderedPackets;
             private long jitterBufferDeadlineMissedPackets;
 
@@ -512,9 +514,9 @@ internal sealed class ChannelReceiveWorkQueue : IAsyncDisposable
                 maximumQueueDelay = Max(maximumQueueDelay, observed.QueueDelay);
                 maximumProcessingDuration = Max(maximumProcessingDuration, observed.ProcessingDuration);
                 maximumEndToEndDelay = Max(maximumEndToEndDelay, observed.EndToEndDelay);
-                maximumConfiguredJitterBufferDelay = Max(
-                    maximumConfiguredJitterBufferDelay,
-                    observed.ConfiguredJitterBufferDelay);
+                maximumJitterBufferTargetDelay = Max(
+                    maximumJitterBufferTargetDelay,
+                    observed.JitterBufferTargetDelay);
                 if (observed.JitterBufferReorderedPacket && jitterBufferReorderedPackets < long.MaxValue)
                     jitterBufferReorderedPackets++;
                 jitterBufferDeadlineMissedPackets = SaturatingAdd(
@@ -532,7 +534,7 @@ internal sealed class ChannelReceiveWorkQueue : IAsyncDisposable
                     maximumEndToEndDelay,
                     maximumTransportInterArrivalDelay,
                     maximumTransportToFneBoundaryDelay,
-                    maximumConfiguredJitterBufferDelay,
+                    maximumJitterBufferTargetDelay,
                     jitterBufferReorderedPackets,
                     jitterBufferDeadlineMissedPackets);
         }

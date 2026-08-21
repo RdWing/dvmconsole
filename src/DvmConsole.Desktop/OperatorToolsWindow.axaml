@@ -157,23 +157,18 @@
                 </Grid>
                 <TextBlock Classes="caption" Text="{Binding AudioProcessingDescription}" TextWrapping="Wrap" />
                 <TextBlock Classes="caption" Text="{Binding AppleVoiceProcessingRouteDescription}" TextWrapping="Wrap" IsVisible="{Binding IsAppleVoiceProcessingPlatformAvailable}" />
-                <Grid ColumnDefinitions="Auto,116,Auto,116,Auto,116,Auto,116" ColumnSpacing="8" IsEnabled="{Binding IsDvmConsoleProcessingSelected}">
-                  <TextBlock Text="Gain" VerticalAlignment="Center" />
-                  <NumericUpDown Grid.Column="1" Minimum="0.25" Maximum="3.0" Increment="0.1" FormatString="0.0" ClipValueToMinMax="True" Text="{Binding AudioInputGainText, Mode=TwoWay}" />
-                  <TextBlock Grid.Column="2" Text="Low dB" VerticalAlignment="Center" />
-                  <NumericUpDown Grid.Column="3" Minimum="-12" Maximum="12" Increment="0.1" FormatString="0.0" ClipValueToMinMax="True" Text="{Binding AudioInputLowGainText, Mode=TwoWay}" />
-                  <TextBlock Grid.Column="4" Text="Mid dB" VerticalAlignment="Center" />
-                  <NumericUpDown Grid.Column="5" Minimum="-12" Maximum="12" Increment="0.1" FormatString="0.0" ClipValueToMinMax="True" Text="{Binding AudioInputMidGainText, Mode=TwoWay}" />
-                  <TextBlock Grid.Column="6" Text="High dB" VerticalAlignment="Center" />
-                  <NumericUpDown Grid.Column="7" Minimum="-12" Maximum="12" Increment="0.1" FormatString="0.0" ClipValueToMinMax="True" Text="{Binding AudioInputHighGainText, Mode=TwoWay}" />
-                </Grid>
-                <StackPanel Orientation="Horizontal" Spacing="10">
+                <WrapPanel ItemSpacing="16" LineSpacing="8" IsEnabled="{Binding IsDvmConsoleProcessingSelected}">
+                  <StackPanel Orientation="Horizontal" Spacing="8"><TextBlock Text="Gain" VerticalAlignment="Center" /><NumericUpDown Width="116" Minimum="0.25" Maximum="3.0" Increment="0.1" FormatString="0.0" ClipValueToMinMax="True" Text="{Binding AudioInputGainText, Mode=TwoWay}" /></StackPanel>
+                  <StackPanel Orientation="Horizontal" Spacing="8"><TextBlock Text="Low dB" VerticalAlignment="Center" /><NumericUpDown Width="116" Minimum="-12" Maximum="12" Increment="0.1" FormatString="0.0" ClipValueToMinMax="True" Text="{Binding AudioInputLowGainText, Mode=TwoWay}" /></StackPanel>
+                  <StackPanel Orientation="Horizontal" Spacing="8"><TextBlock Text="Mid dB" VerticalAlignment="Center" /><NumericUpDown Width="116" Minimum="-12" Maximum="12" Increment="0.1" FormatString="0.0" ClipValueToMinMax="True" Text="{Binding AudioInputMidGainText, Mode=TwoWay}" /></StackPanel>
+                  <StackPanel Orientation="Horizontal" Spacing="8"><TextBlock Text="High dB" VerticalAlignment="Center" /><NumericUpDown Width="116" Minimum="-12" Maximum="12" Increment="0.1" FormatString="0.0" ClipValueToMinMax="True" Text="{Binding AudioInputHighGainText, Mode=TwoWay}" /></StackPanel>
+                </WrapPanel>
+                <WrapPanel ItemSpacing="10" LineSpacing="8">
                   <CheckBox Content="Automatic gain control" IsChecked="{Binding AudioInputAgcEnabled, Mode=TwoWay}" IsEnabled="{Binding IsDvmConsoleProcessingSelected}" />
-                  <TextBlock Text="AGC target (dBFS)" VerticalAlignment="Center" IsEnabled="{Binding IsAgcTargetEnabled}" />
-                  <NumericUpDown Width="136" Minimum="-40" Maximum="-12" Increment="0.1" FormatString="0.0" ClipValueToMinMax="True" Text="{Binding AudioInputAgcTargetDbfsText, Mode=TwoWay}" IsEnabled="{Binding IsAgcTargetEnabled}" />
+                  <StackPanel Orientation="Horizontal" Spacing="8" IsEnabled="{Binding IsAgcTargetEnabled}"><TextBlock Text="AGC target (dBFS)" VerticalAlignment="Center" /><NumericUpDown Width="136" Minimum="-40" Maximum="-12" Increment="0.1" FormatString="0.0" ClipValueToMinMax="True" Text="{Binding AudioInputAgcTargetDbfsText, Mode=TwoWay}" /></StackPanel>
                   <CheckBox Content="Keep transmit microphone warm" IsChecked="{Binding KeepTransmitMicrophoneWarm, Mode=TwoWay}" />
                   <Button Content="Apply" Command="{Binding ApplyAudioInputSettingsCommand}" />
-                </StackPanel>
+                </WrapPanel>
                 <TextBlock Classes="caption" Text="The default AGC target is -25 dBFS. Use a more-negative value for a quieter target; accepted range is -40 to -12 dBFS." TextWrapping="Wrap" />
                 <TextBlock Classes="caption" Text="Keeping the microphone warm is generally advised only for Bluetooth headsets to reduce PTT startup latency; without high-quality AirPods support it may lower output audio quality while enabled." TextWrapping="Wrap" />
                 <CheckBox Content="Use high-quality AirPods audio when supported"
@@ -455,21 +450,21 @@
                 <DataTemplate x:DataType="local:SystemViewModel">
                   <Border Classes="panel">
                     <StackPanel Spacing="6">
-                      <Grid ColumnDefinitions="*,Auto,Auto,Auto,Auto" ColumnSpacing="8">
-                        <StackPanel>
+                      <WrapPanel ItemSpacing="16" LineSpacing="8">
+                        <StackPanel MinWidth="220">
                           <TextBlock FontWeight="SemiBold" Text="{Binding Name}" />
                           <TextBlock Classes="caption" Text="{Binding Endpoint}" />
                         </StackPanel>
-                        <StackPanel Grid.Column="1" Spacing="2">
+                        <StackPanel Spacing="2">
                           <TextBlock Classes="caption" FontWeight="SemiBold" Text="RX jitter" />
                           <ItemsControl ItemsSource="{Binding RxJitterBufferModes}"
-                                        ToolTip.Tip="Packet-aligned receive delay. Changes save and apply immediately.">
+                                        ToolTip.Tip="Fixed or adaptive packet-aligned receive delay. Adaptive learns per connection and protocol; changes save and apply immediately.">
                             <ItemsControl.ItemsPanel>
                               <ItemsPanelTemplate><StackPanel Orientation="Horizontal" Spacing="4" /></ItemsPanelTemplate>
                             </ItemsControl.ItemsPanel>
                             <ItemsControl.ItemTemplate>
                               <DataTemplate x:DataType="local:RxJitterBufferModeViewModel">
-                                <StackPanel Width="124" Spacing="1">
+                                <StackPanel Width="136" Spacing="1">
                                   <TextBlock Classes="caption" Text="{Binding ModeName}" />
                                   <ComboBox MinHeight="0"
                                             Padding="6,3"
@@ -486,11 +481,14 @@
                             </ItemsControl.ItemTemplate>
                           </ItemsControl>
                         </StackPanel>
-                        <Button Grid.Column="2" Content="Connect" Tag="{Binding}" Click="HandleConnectSystemClick" />
-                        <Button Grid.Column="3" Content="Disconnect" Tag="{Binding}" Click="HandleDisconnectSystemClick" />
-                        <Button Grid.Column="4" Content="Restart" Tag="{Binding}" Click="HandleRestartSystemClick" />
-                      </Grid>
+                        <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Bottom">
+                          <Button Content="{Binding ConnectionButtonText}" Tag="{Binding}" Click="HandleToggleSystemConnectionClick" />
+                          <Button Content="Restart" Tag="{Binding}" Click="HandleRestartSystemClick" />
+                        </StackPanel>
+                      </WrapPanel>
 
+                      <TextBlock Classes="caption" Text="{Binding AdaptiveJitterLearnedText}" TextWrapping="Wrap" />
+                      <TextBlock Classes="caption" Text="{Binding JitterBufferEffectivenessText}" TextWrapping="Wrap" />
                       <TextBlock Text="{Binding ConnectionStatus}" />
                       <TextBlock Classes="caption" Text="{Binding TrafficTotalsText}" />
                       <TextBlock Classes="caption" Text="{Binding StreamTrafficText}" TextWrapping="Wrap" />

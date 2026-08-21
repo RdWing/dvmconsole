@@ -84,7 +84,7 @@ public sealed class ReceivePipelineTimingReporterTests
     }
 
     [Fact]
-    public void DoesNotWarnForTheConfiguredJitterBufferDelay()
+    public void DoesNotWarnForTheJitterBufferTargetDelay()
     {
         var reporter = new ReceivePipelineTimingReporter(TimeSpan.FromSeconds(5));
         var channel = new ChannelViewModel(new ChannelConfiguration
@@ -96,7 +96,7 @@ public sealed class ReceivePipelineTimingReporterTests
         });
         ReceiveWorkItemTiming timing = Timing(TimeSpan.FromMilliseconds(190)) with
         {
-            ConfiguredJitterBufferDelay = TimeSpan.FromMilliseconds(180)
+            JitterBufferTargetDelay = TimeSpan.FromMilliseconds(180)
         };
 
         Assert.False(reporter.ShouldPublish(channel, timing, DateTimeOffset.UtcNow));

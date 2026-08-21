@@ -299,7 +299,7 @@ public sealed class SystemViewModelTests
 
     [Fact]
     public void ReportsUnreleasedSemanticVersion()
-        => Assert.StartsWith("0.3.2", MainWindow.ApplicationVersion, StringComparison.Ordinal);
+        => Assert.StartsWith("0.3.3", MainWindow.ApplicationVersion, StringComparison.Ordinal);
 
     [Theory]
     [InlineData("0.1.0-alpha.1+abcdef123456", "0.1.0-alpha.1 (abcdef1)")]
@@ -1437,13 +1437,16 @@ public sealed class SystemViewModelTests
         var store = new UserSettingsStore(settingsPath);
         store.Save(new UserSettings
         {
+            RxJitterBuffer = new RxJitterBufferSetting { P25Adaptive = false },
             RxJitterBuffersBySystem = new Dictionary<string, RxJitterBufferSetting>
             {
                 ["Alpha"] = new()
                 {
                     P25Milliseconds = 360,
                     DmrMilliseconds = 60,
-                    NxdnMilliseconds = 80
+                    NxdnMilliseconds = 80,
+                    P25Adaptive = false,
+                    DmrAdaptive = true
                 }
             }
         });
@@ -1457,16 +1460,25 @@ public sealed class SystemViewModelTests
             Assert.Equal(360, alpha.GetConfiguredJitterBuffer().P25Milliseconds);
             Assert.Equal(60, alpha.GetConfiguredJitterBuffer().DmrMilliseconds);
             Assert.Equal(80, alpha.GetConfiguredJitterBuffer().NxdnMilliseconds);
+            Assert.True(alpha.GetConfiguredJitterBuffer().DmrAdaptive);
             Assert.Equal(RxJitterBufferSetting.DefaultP25Milliseconds, beta.GetConfiguredJitterBuffer().P25Milliseconds);
 
             RxJitterBufferModeViewModel betaP25 = Assert.Single(
                 beta.RxJitterBufferModes,
-                mode => mode.Mode == RxJitterBufferMode.P25);
-            betaP25.SelectedOption = Assert.Single(betaP25.Options, option => option.Milliseconds == 540);
+                mode => mode.Protocol == RxJitterBufferProtocol.P25);
+            Assert.Contains(
+                betaP25.Options,
+                option => !option.IsAdaptive && option.Milliseconds == 720);
+            Assert.Contains(
+                betaP25.Options,
+                option => option.IsAdaptive && option.Label == "Adaptive ≤ 1620 ms");
+            betaP25.SelectedOption = Assert.Single(betaP25.Options, option => option.IsAdaptive);
 
             UserSettings persisted = store.Load();
             Assert.Equal(360, persisted.RxJitterBuffersBySystem["Alpha"].P25Milliseconds);
-            Assert.Equal(540, persisted.RxJitterBuffersBySystem["Beta"].P25Milliseconds);
+            Assert.False(persisted.RxJitterBuffersBySystem["Alpha"].P25Adaptive);
+            Assert.Equal(RxJitterBufferSetting.DefaultP25Milliseconds, persisted.RxJitterBuffersBySystem["Beta"].P25Milliseconds);
+            Assert.True(persisted.RxJitterBuffersBySystem["Beta"].P25Adaptive);
         }
         finally
         {

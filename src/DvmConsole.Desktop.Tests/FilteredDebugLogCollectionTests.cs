@@ -1,0 +1,98 @@
+using DvmConsole.Core.Diagnostics;
+using System.Collections.ObjectModel;
+using System.Collections.Specialized;
+using Xunit;
+
+namespace DvmConsole.Desktop.Tests;
+
+public sealed class FilteredDebugLogCollectionTests
+{
+    [Fact]
+    public void NewMatchingTrafficUpdatesIncrementallyWithoutResettingTheView()
+    {
+        var source = new ObservableCollection<DebugLogEntry>();
+        using var filtered = new FilteredDebugLogCollection(source);
+        var changes = new List<NotifyCollectionChangedAction>();
+        ((INotifyCollectionChanged)filtered.Entries).CollectionChanged +=
+            (_, args) => changes.Add(args.Action);
+
+        source.Insert(0, Entry(DebugLogSeverity.Debug, "packet one"));
+        source.Insert(0, Entry(DebugLogSeverity.Info, "call started"));
+
+        DebugLogEntry visible = Assert.Single(filtered.Entries);
+        Assert.Equal("call started", visible.Message);
+        Assert.Equal([NotifyCollectionChangedAction.Add], changes);
+    }
+
+    [Fact]
+    public void MatchingInsertionIsAnnouncedBeforeTheVisibleCollectionChanges()
+    {
+        DebugLogEntry existing = Entry(DebugLogSeverity.Info, "existing");
+        DebugLogEntry incoming = Entry(DebugLogSeverity.Info, "incoming");
+        var source = new ObservableCollection<DebugLogEntry> { existing };
+        using var filtered = new FilteredDebugLogCollection(source);
+        var notifications = new List<string>();
+        filtered.CollectionChanging += (_, args) =>
+        {
+            notifications.Add("changing");
+            Assert.Equal(NotifyCollectionChangedAction.Add, args.Action);
+            Assert.Equal(0, args.NewStartingIndex);
+            Assert.Same(existing, Assert.Single(filtered.Entries));
+        };
+        ((INotifyCollectionChanged)filtered.Entries).CollectionChanged +=
+            (_, _) => notifications.Add("changed");
+
+        source.Insert(0, incoming);
+
+        Assert.Equal(["changing", "changed"], notifications);
+        Assert.Equal([incoming, existing], filtered.Entries);
+    }
+
+    [Fact]
+    public void FilterChangesPublishOneResetAndPreserveNewestFirstOrder()
+    {
+        var source = new ObservableCollection<DebugLogEntry>
+        {
+            Entry(DebugLogSeverity.Info, "newest alpha"),
+            Entry(DebugLogSeverity.Warning, "middle beta"),
+            Entry(DebugLogSeverity.Info, "oldest alpha")
+        };
+        using var filtered = new FilteredDebugLogCollection(source);
+        var changes = new List<NotifyCollectionChangedAction>();
+        ((INotifyCollectionChanged)filtered.Entries).CollectionChanged +=
+            (_, args) => changes.Add(args.Action);
+
+        filtered.SetFilter("All", "alpha");
+
+        Assert.Equal(
+            ["newest alpha", "oldest alpha"],
+            filtered.Entries.Select(entry => entry.Message));
+        Assert.Equal([NotifyCollectionChangedAction.Reset], changes);
+    }
+
+    [Fact]
+    public void RetentionTurnoverRemovesAndAddsOnlyAffectedRows()
+    {
+        var buffer = new BoundedDebugLogBuffer(maximumEntries: 2, maximumBytes: 4_096);
+        using var filtered = new FilteredDebugLogCollection(buffer.Entries);
+        var changes = new List<NotifyCollectionChangedAction>();
+        ((INotifyCollectionChanged)filtered.Entries).CollectionChanged +=
+            (_, args) => changes.Add(args.Action);
+
+        buffer.Add(Entry(DebugLogSeverity.Info, "oldest"));
+        buffer.Add(Entry(DebugLogSeverity.Info, "middle"));
+        changes.Clear();
+
+        buffer.Add(Entry(DebugLogSeverity.Info, "newest"));
+
+        Assert.Equal(
+            ["newest", "middle"],
+            filtered.Entries.Select(entry => entry.Message));
+        Assert.Equal(
+            [NotifyCollectionChangedAction.Remove, NotifyCollectionChangedAction.Add],
+            changes);
+    }
+
+    private static DebugLogEntry Entry(DebugLogSeverity severity, string message)
+        => new(DateTimeOffset.UnixEpoch, "Test", severity, message);
+}

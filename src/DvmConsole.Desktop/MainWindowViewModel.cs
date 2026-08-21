@@ -11,6 +11,7 @@ using DvmConsole.Core.Settings;
 using DvmConsole.FneClient;
 using DvmConsole.Media;
 using DvmConsole.Vocoder;
+using System.Collections.Specialized;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Diagnostics;
@@ -82,6 +83,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
     private readonly ObservableCollection<AudioDeviceOptionViewModel> audioOutputDevices = [];
     private readonly ObservableCollection<SubscriberCommandAuditEntry> subscriberCommandAudit = [];
     private readonly BoundedDebugLogBuffer debugLogBuffer = new();
+    private readonly FilteredDebugLogCollection filteredDebugLogs;
     private readonly ObservableCollection<string> recentCodeplugPaths = [];
     private readonly ObservableCollection<WebStreamViewModel> webStreams = [];
     private readonly WebStreamPlaybackCoordinator webStreamPlayback;
@@ -93,6 +95,9 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
     private readonly ChannelAudioMeterPipeline audioMeterPipeline = new();
     private readonly ReceiveDiagnosticsReporter receiveDiagnosticsReporter = new(TimeSpan.FromSeconds(5));
     private readonly ReceivePipelineTimingReporter receivePipelineTimingReporter = new(TimeSpan.FromSeconds(5));
+    private readonly AdaptiveReceiveJitterBufferController adaptiveReceiveJitter = new();
+    private readonly ReceiveJitterBufferEffectivenessTracker receiveJitterEffectiveness = new();
+    private readonly ReceiveOutputMutePolicy receiveOutputMutePolicy = new();
     private readonly SemaphoreSlim audioReconfigurationLock = new(1, 1);
     private readonly Dictionary<ChannelViewModel, DateTimeOffset> receiveRetryAfter = [];
     private IReadOnlyDictionary<string, RxJitterBufferSetting> receiveJitterBufferSettingsBySystem =
@@ -201,6 +206,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
         codeplugDiagnosticsText = statusText;
         this.userSettingsStore = userSettingsStore ?? new UserSettingsStore(UserSettingsStore.DefaultPath);
         userSettings = this.userSettingsStore.Load();
+        filteredDebugLogs = new FilteredDebugLogCollection(debugLogBuffer.Entries);
         Systems = systems.ToArray();
         Zones = zones.ToArray();
         loadedCodeplugPath = string.IsNullOrWhiteSpace(codeplugPath)
@@ -352,6 +358,8 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
         patchSourceReceiveWork = new ChannelReceiveWorkQueue(
             ProcessPatchSourceAsync,
             getJitterBufferProfile: GetReceiveJitterBufferProfile);
+        foreach (SystemViewModel system in Systems)
+            RefreshJitterBufferTelemetry(system);
         transmitCoordinator = new ChannelTransmitCoordinator(
             p25KeyResolver,
             new AudioInputProcessingOptions
@@ -531,6 +539,12 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
 
         ConnectCommand = new AsyncRelayCommand(ConnectAsync, () => !busy && Systems.Count > 0);
         DisconnectCommand = new AsyncRelayCommand(DisconnectAsync, () => !busy && Systems.Count > 0);
+        ToggleSelectedSystemOutputMuteCommand = new AsyncRelayCommand(
+            ToggleSelectedSystemOutputMuteAsync,
+            () => SelectedSystem is not null);
+        ToggleSelectedZoneOutputMuteCommand = new AsyncRelayCommand(
+            ToggleSelectedZoneOutputMuteAsync,
+            () => SelectedSystem?.SelectedZone is not null);
         SendDtmfCommand = new AsyncRelayCommand(SendDtmfAsync, CanSendGeneratedAudio);
         SendToneCommand = new AsyncRelayCommand(SendToneAsync, CanSendGeneratedAudio);
         SaveDtmfPresetCommand = new RelayCommand(SaveDtmfPreset);
@@ -1094,6 +1108,25 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
             ? "Live RX output muted; TAR continues (click to restore output)"
             : "Mute live RX output to the selected output device; TAR continues";
 
+    public bool SelectedSystemOutputMuted
+        => SelectedSystem is not null && receiveOutputMutePolicy.IsMuted(SelectedSystem);
+
+    public bool SelectedZoneOutputMuted
+        => SelectedSystem?.SelectedZone is ZoneViewModel zone && receiveOutputMutePolicy.IsMuted(zone);
+
+    public string SelectedSystemOutputMuteGlyph => SelectedSystemOutputMuted ? "S🔇" : "S🔊";
+    public string SelectedZoneOutputMuteGlyph => SelectedZoneOutputMuted ? "Z🔇" : "Z🔊";
+
+    public string SelectedSystemOutputMuteToolTip
+        => SelectedSystemOutputMuted
+            ? $"Restore live RX output for {SelectedSystem?.Name}; TAR continues"
+            : $"Mute live RX output for {SelectedSystem?.Name ?? "the selected system"}; TAR continues";
+
+    public string SelectedZoneOutputMuteToolTip
+        => SelectedZoneOutputMuted
+            ? $"Restore live RX output for zone {SelectedSystem?.SelectedZone?.Name}; TAR continues"
+            : $"Mute live RX output for zone {SelectedSystem?.SelectedZone?.Name ?? "the selected zone"}; TAR continues";
+
     public IReadOnlyList<string> AudioProcessingModeOptions
         => IsAppleVoiceProcessingPlatformAvailable && IsAppleVoiceProcessingRouteCompatible
             ? AppleAudioProcessingModeOptions
@@ -1632,6 +1665,8 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
     public ReadOnlyObservableCollection<CallRecordingMetadata> Recordings { get; }
     public ICommand ConnectCommand { get; }
     public ICommand DisconnectCommand { get; }
+    public ICommand ToggleSelectedSystemOutputMuteCommand { get; }
+    public ICommand ToggleSelectedZoneOutputMuteCommand { get; }
     public ICommand SendDtmfCommand { get; }
     public ICommand SendToneCommand { get; }
     public ICommand SaveDtmfPresetCommand { get; }
@@ -1647,12 +1682,12 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
     public string SystemStatusText => SelectedSystem?.ConnectionStatus ?? "No configured system";
     public IReadOnlyList<string> DebugLogSeverityFilters { get; } = ["All", "Debug", "Info", "Warning", "Error", "Fatal"];
     public string DebugLogRetentionText => debugLogBuffer.RetentionText;
-    public IReadOnlyList<DebugLogEntry> FilteredDebugLogs
-        => DebugLogEntries
-            .Where(entry =>
-                (DebugLogSeverityFilter == "All" || entry.Severity.ToString().Equals(DebugLogSeverityFilter, StringComparison.OrdinalIgnoreCase)) &&
-                DebugLogSearch.Matches(entry, DebugLogFilterText))
-            .ToArray();
+    public IReadOnlyList<DebugLogEntry> FilteredDebugLogs => filteredDebugLogs.Entries;
+    internal event NotifyCollectionChangedEventHandler? DebugLogCollectionChanging
+    {
+        add => filteredDebugLogs.CollectionChanging += value;
+        remove => filteredDebugLogs.CollectionChanging -= value;
+    }
 
     public string DebugLogFilterText
     {
@@ -1663,8 +1698,8 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
             if (debugLogFilterText == normalized)
                 return;
             debugLogFilterText = normalized;
+            filteredDebugLogs.SetFilter(DebugLogSeverityFilter, normalized);
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(DebugLogFilterText)));
-            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(FilteredDebugLogs)));
         }
     }
 
@@ -1677,8 +1712,8 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
             if (debugLogSeverityFilter == normalized)
                 return;
             debugLogSeverityFilter = normalized;
+            filteredDebugLogs.SetFilter(normalized, DebugLogFilterText);
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(DebugLogSeverityFilter)));
-            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(FilteredDebugLogs)));
         }
     }
 
@@ -2259,6 +2294,9 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
             RefreshActivityCallHistory();
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ActivitySubscriberCommandAudit)));
             NotifyConnectionPresentationChanged();
+            NotifySelectedOutputMutePresentationChanged();
+            (ToggleSelectedSystemOutputMuteCommand as AsyncRelayCommand)?.RaiseCanExecuteChanged();
+            (ToggleSelectedZoneOutputMuteCommand as AsyncRelayCommand)?.RaiseCanExecuteChanged();
             RaiseGeneratedAudioCanExecuteChanged();
         }
     }
@@ -2298,6 +2336,8 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
         {
             RefreshActivityCallHistory();
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(HasSelectedZone)));
+            NotifySelectedOutputMutePresentationChanged();
+            (ToggleSelectedZoneOutputMuteCommand as AsyncRelayCommand)?.RaiseCanExecuteChanged();
         }
     }
 
@@ -2613,7 +2653,8 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
     {
         if (enabled)
         {
-            bool liveSessionMissing = !audioCoordinator.LivePlaybackChannels.Contains(channel);
+            bool liveSessionMissing = !receiveOutputMutePolicy.IsMuted(channel) &&
+                !audioCoordinator.LivePlaybackChannels.Contains(channel);
             if (!channel.IsAudioEnabled ||
                 !audioCoordinator.IsActive(channel) ||
                 (!channel.IsAudioSuspended && liveSessionMissing))
@@ -2869,6 +2910,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
         audioMeterTimer.Tick -= HandleAudioMeterTick;
         connectionDiagnosticsTimer.Stop();
         connectionDiagnosticsTimer.Tick -= HandleConnectionDiagnosticsTick;
+        filteredDebugLogs.Dispose();
         await defaultAudioDeviceMonitor.DisposeAsync().ConfigureAwait(false);
         Task recordingScan;
         CancellationTokenSource? recordingScanCancellation;
@@ -3039,6 +3081,13 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
             lastConnectionStates[system.Name] = status.State;
             if (stateChanged &&
                 previousState == FneConnectionState.Connected &&
+                status.State != FneConnectionState.Connected)
+            {
+                adaptiveReceiveJitter.Reset(system.Name);
+                receiveJitterEffectiveness.Reset(system.Name);
+            }
+            if (stateChanged &&
+                previousState == FneConnectionState.Connected &&
                 status.State != FneConnectionState.Connected &&
                 p25KeyRing is not null)
             {
@@ -3102,7 +3151,6 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
                 source,
                 severity,
                 DebugLogRedactor.Redact(message)));
-            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(FilteredDebugLogs)));
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(DebugLogRetentionText)));
         }
 
@@ -4251,7 +4299,10 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
     private void HandleConnectionDiagnosticsTick(object? sender, EventArgs e)
     {
         foreach (SystemViewModel system in Systems)
+        {
             system.PublishTrafficDiagnostics();
+            RefreshJitterBufferTelemetry(system);
+        }
     }
 
     internal void ExpireStaleReceiveStates(DateTimeOffset now)

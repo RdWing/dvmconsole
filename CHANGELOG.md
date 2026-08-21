@@ -6,16 +6,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.3.3] - 2026-08-21
+
+### Added
+
+- Add per-FNE, packet-aligned RX jitter buffers with fixed or default-on adaptive modes for P25, DMR, and NXDN so packets that arrive out of order can be restored before their playout deadline in both live listening and patch-source decoding. Adaptive targets learn transport variation from zero through nine protocol frames per connection and protocol while every receive stream retains an independent, call-stable playout clock.
+- Add toolbar output-mute controls for all RX, the selected system, and the selected zone beside Warm mic. Each suppresses only its live speaker scope without interrupting decode, call state, patching, or TAR recording.
+
 ### Changed
 
 - Decode complete RX network packets into caller-owned PCM batches before proceeding through the chain, reducing allocation and scheduler pressure without changing per-mode gain, smoothing, or optional processing.
-- Add configurable, packet-aligned RX jitter buffers per FNE connection for P25, DMR, and NXDN so packets that arrive out of order can be restored before their playout deadline in both live listening and patch-source decoding.
 - Shorten receive cleanup to one second of inactivity plus one second of grace, with a two-second post-terminator hold. Report packets restored to playout order separately from packets that miss the jitter deadline.
 - Show Activity Event History for RX-enabled channels by default, with independent `Active`/`All` and `Zone Wide`/`System Wide` filters that do not trigger the History window when double-clicked.
 - Restore the main console's last normal size and position at launch when that position remains reachable on a connected display.
-- Replace rapidly changing per-packet connection details with readable connection-session RX/TX totals, bounded current-stream summaries, and coalesced health updates. Keep the current Debug Log session within explicit entry and memory limits while discarding the oldest entries first.
-- Keep per-FNE jitter controls beside each connection's controls, apply selection changes immediately, and open Encryption Key Status directly at the channel key-status section.
-- Add a toolbar output-mute control beside Warm mic that suppresses live RX speaker playback without interrupting decode, call state, or TAR recording.
+- Replace rapidly changing per-packet connection details with readable connection-session RX/TX totals, bounded current-stream summaries, and coalesced health updates. Keep the current Debug Log session within a 100 MB memory limit while discarding the oldest entries first.
+- Keep responsive per-FNE jitter controls beside a state-aware Connect/Disconnect action, apply selection changes immediately, and show the learned adaptive target and reorder/deadline effectiveness counters for each connection. Open Encryption Key Status directly at the channel key-status section.
 
 ### Fixed
 
@@ -24,6 +29,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Finalize TAR Ogg Opus recordings with an exact PCM-duration end timestamp so players do not advertise codec-frame padding after the recording's real audio ends.
 - Interpret unprefixed P25 key IDs as hexadecimal, matching legacy WPF codeplugs so FNE/KMM requests use the intended key ID.
 - Match the legacy console's post-connect settling delay and per-key request pacing so FNE/KMM servers can service every configured P25 key request.
+- Refresh selectable-encryption controls when a delayed FNE/KMM key arrives so a restored secure channel presents its `SECURE` state as soon as the key becomes available.
+- Reflow FNE identity, jitter controls, connection actions, microphone processing values, and AGC controls instead of clipping them when Console Settings is narrowed.
+- Keep Debug Logs responsive during busy traffic with an incrementally maintained virtualized view, compact rows, stable reading position as new entries arrive, safe row recycling, and a current-session-only 100 MB memory limit that discards the oldest entries first.
+- Preserve saved Alert/QCII tone-pattern steps shorter than 0.25 seconds instead of raising them to the former preset floor.
 
 ## [0.3.2] - 2026-08-20
 
@@ -271,7 +280,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Add patches, multi-select groups, call history, recordings, web streams, clocks, layouts, themes, startup behavior, and in-application operator documentation.
 - Add support for local and KMM-provided P25 encryption keys while preserving compatibility with existing variable-length AES key material.
 
-[Unreleased]: https://github.com/RdWing/dvmconsole/compare/v0.3.2...HEAD
+[Unreleased]: https://github.com/RdWing/dvmconsole/compare/v0.3.3...HEAD
+[0.3.3]: https://github.com/RdWing/dvmconsole/compare/v0.3.2...v0.3.3
 [0.3.2]: https://github.com/RdWing/dvmconsole/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/RdWing/dvmconsole/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/RdWing/dvmconsole/compare/v0.2.4...v0.3.0

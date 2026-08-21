@@ -103,7 +103,7 @@ public sealed class ReceiveDiagnosticsTextTests
             EndToEndDelay: TimeSpan.FromMilliseconds(6),
             TransportInterArrivalDelay: TimeSpan.FromMilliseconds(440),
             TransportToFneBoundaryDelay: TimeSpan.FromMilliseconds(1),
-            ConfiguredJitterBufferDelay: TimeSpan.FromMilliseconds(180));
+            JitterBufferTargetDelay: TimeSpan.FromMilliseconds(180));
         var maximums = new ReceiveWorkQueueDiagnostics(
             ProcessedFrames: 5,
             MaximumInterArrivalDelay: TimeSpan.FromMilliseconds(500),
@@ -111,7 +111,7 @@ public sealed class ReceiveDiagnosticsTextTests
             MaximumQueueDelay: TimeSpan.FromMilliseconds(3),
             MaximumProcessingDuration: TimeSpan.FromMilliseconds(4),
             MaximumEndToEndDelay: TimeSpan.FromMilliseconds(20),
-            MaximumConfiguredJitterBufferDelay: TimeSpan.FromMilliseconds(180));
+            MaximumJitterBufferTargetDelay: TimeSpan.FromMilliseconds(180));
 
         string message = ReceiveDiagnosticsText.FormatPipelineDelay(
             "Dispatch",
@@ -122,10 +122,16 @@ public sealed class ReceiveDiagnosticsTextTests
         Assert.Contains("UDP inter-arrival 440 ms", message);
         Assert.Contains("socket-to-FNE 1 ms", message);
         Assert.Contains("FNE boundary-to-queue 1 ms", message);
-        Assert.Contains("configured jitter 180 ms", message);
+        Assert.Contains("fixed jitter 180 ms", message);
         Assert.Contains("total FNE-to-mixer 6 ms", message);
         Assert.Contains("stream maximum total FNE-to-mixer 20 ms", message);
         Assert.EndsWith("stream 34, sequence 12.", message);
+
+        string adaptiveMessage = ReceiveDiagnosticsText.FormatPipelineDelay(
+            "Dispatch",
+            latest with { AdaptiveJitterBuffer = true },
+            maximums);
+        Assert.Contains("adaptive jitter target 180 ms", adaptiveMessage);
     }
 
     [Fact]

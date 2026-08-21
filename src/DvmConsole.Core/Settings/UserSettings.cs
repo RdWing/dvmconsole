@@ -52,14 +52,23 @@ public sealed class RxJitterBufferSetting
     public const int DefaultP25Milliseconds = 180;
     public const int DefaultDmrMilliseconds = 120;
     public const int DefaultNxdnMilliseconds = 160;
+    public const int MaximumP25Milliseconds = 1_620;
+    public const int MaximumDmrMilliseconds = 540;
+    public const int MaximumNxdnMilliseconds = 720;
 
-    public static IReadOnlyList<int> P25OptionsMilliseconds { get; } = [0, 180, 360, 540];
-    public static IReadOnlyList<int> DmrOptionsMilliseconds { get; } = [0, 60, 120, 180];
-    public static IReadOnlyList<int> NxdnOptionsMilliseconds { get; } = [0, 80, 160, 240];
+    public static IReadOnlyList<int> P25OptionsMilliseconds { get; } =
+        [0, 180, 360, 540, 720, 900, 1_080, 1_260, 1_440, MaximumP25Milliseconds];
+    public static IReadOnlyList<int> DmrOptionsMilliseconds { get; } =
+        [0, 60, 120, 180, 240, 300, 360, 420, 480, MaximumDmrMilliseconds];
+    public static IReadOnlyList<int> NxdnOptionsMilliseconds { get; } =
+        [0, 80, 160, 240, 320, 400, 480, 560, 640, MaximumNxdnMilliseconds];
 
     public int P25Milliseconds { get; set; } = DefaultP25Milliseconds;
     public int DmrMilliseconds { get; set; } = DefaultDmrMilliseconds;
     public int NxdnMilliseconds { get; set; } = DefaultNxdnMilliseconds;
+    public bool P25Adaptive { get; set; } = true;
+    public bool DmrAdaptive { get; set; } = true;
+    public bool NxdnAdaptive { get; set; } = true;
 
     public static RxJitterBufferSetting Normalize(RxJitterBufferSetting? setting)
     {
@@ -77,7 +86,10 @@ public sealed class RxJitterBufferSetting
             NxdnMilliseconds = NormalizeChoice(
                 setting.NxdnMilliseconds,
                 NxdnOptionsMilliseconds,
-                DefaultNxdnMilliseconds)
+                DefaultNxdnMilliseconds),
+            P25Adaptive = setting.P25Adaptive,
+            DmrAdaptive = setting.DmrAdaptive,
+            NxdnAdaptive = setting.NxdnAdaptive
         };
     }
 
@@ -92,7 +104,7 @@ public sealed class RxJitterBufferSetting
 // codeplug. Protocol credentials and encryption keys remain codeplug-owned.
 public sealed class UserSettings
 {
-    public const int CurrentSchemaVersion = 5;
+    public const int CurrentSchemaVersion = 6;
     public const string DvmConsoleAudioProcessingMode = "DvmConsole";
     public const string AppleVoiceProcessingMode = "AppleVoiceProcessing";
     public const int MaximumToolbarClocks = 8;
@@ -190,7 +202,6 @@ public sealed class UserSettings
 // platform-specific profile location.
 public sealed class UserSettingsStore
 {
-    private const double PresetMinDurationSeconds = 0.25;
     private const double PresetMaxDurationSeconds = 10.0;
 
     private static readonly JsonSerializerOptions SerializerOptions = new()
@@ -885,7 +896,10 @@ public sealed class UserSettingsStore
         RxJitterBufferSetting right)
         => left.P25Milliseconds == right.P25Milliseconds &&
            left.DmrMilliseconds == right.DmrMilliseconds &&
-           left.NxdnMilliseconds == right.NxdnMilliseconds;
+           left.NxdnMilliseconds == right.NxdnMilliseconds &&
+           left.P25Adaptive == right.P25Adaptive &&
+           left.DmrAdaptive == right.DmrAdaptive &&
+           left.NxdnAdaptive == right.NxdnAdaptive;
 
     private static Dictionary<string, RxJitterBufferSetting> NormalizeRxJitterBuffersBySystem(
         Dictionary<string, RxJitterBufferSetting>? settings)
@@ -1316,7 +1330,7 @@ public sealed class UserSettingsStore
     }
 
     private static double NormalizePresetDuration(double duration, double fallback)
-        => double.IsFinite(duration)
-            ? Math.Clamp(duration, PresetMinDurationSeconds, PresetMaxDurationSeconds)
+        => double.IsFinite(duration) && duration > 0
+            ? Math.Min(duration, PresetMaxDurationSeconds)
             : fallback;
 }
