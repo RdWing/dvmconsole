@@ -238,6 +238,39 @@ public sealed class SystemViewModelTests
     }
 
     [Fact]
+    public void PlansFneKeyRequestsWithLegacyUnprefixedHexadecimalKeyIds()
+    {
+        var local20 = new ChannelViewModel(new DvmConsole.Core.Configuration.ChannelConfiguration
+        {
+            Name = "Legacy KID 20",
+            System = "Alpha",
+            Tgid = "101",
+            Mode = "p25",
+            Algo = "aes",
+            KeyId = "20"
+        });
+        var alphanumeric = new ChannelViewModel(new DvmConsole.Core.Configuration.ChannelConfiguration
+        {
+            Name = "Legacy KID 069D",
+            System = "Alpha",
+            Tgid = "102",
+            Mode = "p25",
+            Algo = "aes",
+            KeyId = "069D"
+        });
+
+        IReadOnlyList<(byte AlgorithmId, ushort KeyId)> requests =
+            MainWindowViewModel.ResolveConfiguredP25KeyRequests([local20, alphanumeric]);
+
+        Assert.Equal(
+            [
+                (fnecore.P25.P25Defines.P25_ALGO_AES, (ushort)0x0020),
+                (fnecore.P25.P25Defines.P25_ALGO_AES, (ushort)0x069D)
+            ],
+            requests);
+    }
+
+    [Fact]
     public void ReportsUnreleasedSemanticVersion()
         => Assert.StartsWith("0.3.2", MainWindow.ApplicationVersion, StringComparison.Ordinal);
 

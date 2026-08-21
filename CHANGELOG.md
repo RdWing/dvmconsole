@@ -21,6 +21,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Age an overflowing live RX lane at whole-packet boundaries so newly arrived speech replaces stale speaker-bound audio while TAR keeps the complete decoded timeline. Detect a stalled physical output callback on macOS and Windows, expose pending physical starvation and per-lane high-water evidence, and separate UDP arrival, FNE handling, decoder queue, mixer, and device timing in diagnostics.
 - Keep three complete P25 LDUs of bounded live-lane headroom so ordinary packet bursts do not age current speech, and make RX meters follow the selected receive stream immediately while UI lifecycle work catches up.
 - Finalize TAR Ogg Opus recordings with an exact PCM-duration end timestamp so players do not advertise codec-frame padding after the recording's real audio ends.
+- Interpret unprefixed P25 key IDs as hexadecimal, matching legacy WPF codeplugs so FNE/KMM requests use the intended key ID.
 
 ## [0.3.2] - 2026-08-20
 
