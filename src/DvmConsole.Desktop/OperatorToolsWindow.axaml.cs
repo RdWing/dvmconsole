@@ -45,6 +45,7 @@ public sealed partial class OperatorToolsWindow : Window
         historyCollection = viewModel.FilteredCallHistory;
         historyCollection.CollectionChanged += HandleHistoryCollectionChanged;
         Opened += HandleOpened;
+        LayoutUpdated += HandleWindowLayoutUpdated;
         ToolTabs.SelectionChanged += HandleToolTabsSelectionChanged;
         Closed += HandleClosed;
         ScheduleHistoryViewportHook();
@@ -105,6 +106,9 @@ public sealed partial class OperatorToolsWindow : Window
     private void HandleOpened(object? sender, EventArgs e)
         => ScheduleHistoryViewportHook();
 
+    private void HandleWindowLayoutUpdated(object? sender, EventArgs e)
+        => TryAttachHistoryViewportHook();
+
     private void HandleToolTabsSelectionChanged(object? sender, SelectionChangedEventArgs e)
         => ScheduleHistoryViewportHook();
 
@@ -125,6 +129,7 @@ public sealed partial class OperatorToolsWindow : Window
             return;
 
         historyList = list;
+        LayoutUpdated -= HandleWindowLayoutUpdated;
         historyViewportAnchor = new ScrollViewportAnchor<CallHistoryEntry>(
             GetHistoryScrollViewer,
             () => list.GetVisualDescendants().OfType<ListBoxItem>(),
@@ -147,6 +152,7 @@ public sealed partial class OperatorToolsWindow : Window
     {
         scrollBarHideTimer.Stop();
         Opened -= HandleOpened;
+        LayoutUpdated -= HandleWindowLayoutUpdated;
         ToolTabs.SelectionChanged -= HandleToolTabsSelectionChanged;
         if (historyList is not null)
             historyList.LayoutUpdated -= HandleHistoryListLayoutUpdated;
