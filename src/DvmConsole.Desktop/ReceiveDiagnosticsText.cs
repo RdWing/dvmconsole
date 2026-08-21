@@ -32,13 +32,16 @@ internal static class ReceiveDiagnosticsText
         ReceiveWorkQueueDiagnostics maximums)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(channelName);
+        string jitterTarget = latest.AdaptiveJitterBuffer
+            ? $"adaptive jitter target {latest.JitterBufferTargetDelay.TotalMilliseconds:0} ms"
+            : $"fixed jitter {latest.JitterBufferTargetDelay.TotalMilliseconds:0} ms";
         return $"RX pipeline delay on {channelName}: " +
                $"UDP inter-arrival {latest.TransportInterArrivalDelay.TotalMilliseconds:0} ms, " +
                $"socket-to-FNE {latest.TransportToFneBoundaryDelay.TotalMilliseconds:0} ms, " +
                $"FNE inter-arrival {latest.InterArrivalDelay.TotalMilliseconds:0} ms, " +
                $"FNE boundary-to-queue {latest.IngressToQueueDelay.TotalMilliseconds:0} ms, " +
                $"jitter/decoder queue {latest.QueueDelay.TotalMilliseconds:0} ms " +
-               $"(configured jitter {latest.ConfiguredJitterBufferDelay.TotalMilliseconds:0} ms), " +
+               $"({jitterTarget}), " +
                $"decode/mixer {latest.ProcessingDuration.TotalMilliseconds:0} ms, " +
                $"total FNE-to-mixer {latest.EndToEndDelay.TotalMilliseconds:0} ms; " +
                $"stream maximum total FNE-to-mixer {maximums.MaximumEndToEndDelay.TotalMilliseconds:0} ms; " +
@@ -134,7 +137,7 @@ internal static class ReceiveDiagnosticsText
               $"{pipeline.MaximumInterArrivalDelay.TotalMilliseconds:0} ms, " +
               $"FNE boundary-to-queue {pipeline.MaximumIngressToQueueDelay.TotalMilliseconds:0} ms, " +
               $"jitter/decoder queue {pipeline.MaximumQueueDelay.TotalMilliseconds:0} ms " +
-              $"(configured jitter up to {pipeline.MaximumConfiguredJitterBufferDelay.TotalMilliseconds:0} ms), " +
+              $"(jitter target up to {pipeline.MaximumJitterBufferTargetDelay.TotalMilliseconds:0} ms), " +
               $"decode/mixer {pipeline.MaximumProcessingDuration.TotalMilliseconds:0} ms, " +
               $"total FNE-to-mixer {pipeline.MaximumEndToEndDelay.TotalMilliseconds:0} ms, " +
               $"jitter reordered this stream {pipeline.JitterBufferReorderedPackets:N0}, " +

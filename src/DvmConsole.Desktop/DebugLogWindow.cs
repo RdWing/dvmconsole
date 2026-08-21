@@ -1,10 +1,12 @@
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Controls.Primitives;
 using Avalonia.Controls.Templates;
 using Avalonia.Data;
 using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Platform.Storage;
+using Avalonia.Styling;
 using Avalonia.VisualTree;
 using DvmConsole.Core.Diagnostics;
 using System.Collections.Specialized;
@@ -14,15 +16,12 @@ namespace DvmConsole.Desktop;
 public sealed class DebugLogWindow : Window
 {
     private readonly MainWindowViewModel viewModel;
-    private readonly INotifyCollectionChanged debugLogCollection;
-    private readonly ItemsControl logs;
-    private readonly ScrollViewer logScroller;
+    private readonly ListBox logs;
     private readonly ScrollViewportAnchor<DebugLogEntry> logViewportAnchor;
 
     public DebugLogWindow(MainWindowViewModel viewModel)
     {
         this.viewModel = viewModel ?? throw new ArgumentNullException(nameof(viewModel));
-        debugLogCollection = (INotifyCollectionChanged)viewModel.DebugLogEntries;
         Title = "Debug Logs";
         Width = 920;
         Height = 580;
@@ -54,27 +53,23 @@ public sealed class DebugLogWindow : Window
             Mode = BindingMode.TwoWay
         });
 
-        logs = new ItemsControl
+        logs = new ListBox
         {
+            SelectionMode = SelectionMode.Single,
             ItemTemplate = new FuncDataTemplate<DebugLogEntry>(
-                (entry, _) => new TextBlock
-                {
-                    Text = entry.Summary,
-                    TextWrapping = TextWrapping.Wrap,
-                    FontFamily = new FontFamily("monospace"),
-                    Margin = new Thickness(0, 0, 0, 5)
-                })
+                (entry, _) => CreateLogRow(entry))
         };
+        ScrollViewer.SetHorizontalScrollBarVisibility(
+            logs,
+            Avalonia.Controls.Primitives.ScrollBarVisibility.Disabled);
+        logs.Styles.Add(CreateCompactLogItemStyle());
         logs.Bind(ItemsControl.ItemsSourceProperty, new Binding(nameof(MainWindowViewModel.FilteredDebugLogs)));
-        logScroller = new ScrollViewer
-        {
-            Content = logs,
-            HorizontalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Disabled
-        };
         logViewportAnchor = new ScrollViewportAnchor<DebugLogEntry>(
-            () => logScroller,
-            () => logs.GetVisualDescendants().OfType<TextBlock>(),
-            control => control.DataContext as DebugLogEntry);
+            () => logs.GetVisualDescendants().OfType<ScrollViewer>().FirstOrDefault(),
+            () => logs.GetVisualDescendants().OfType<ListBoxItem>(),
+            control => control is ListBoxItem item
+                ? item.DataContext as DebugLogEntry ?? item.Content as DebugLogEntry
+                : null);
 
         var closeButton = new Button { Content = "Close", MinWidth = 88 };
         var clearTextButton = new Button { Content = "Clear Text", MinWidth = 100 };
@@ -123,7 +118,7 @@ public sealed class DebugLogWindow : Window
                     BorderBrush = new SolidColorBrush(Color.Parse("#293847")),
                     BorderThickness = new Thickness(1),
                     Padding = new Thickness(10),
-                    Child = logScroller
+                    Child = logs
                 },
                 new StackPanel
                 {
@@ -157,12 +152,34 @@ public sealed class DebugLogWindow : Window
             filterInput.Focus();
         };
         exportButton.Click += HandleExportClick;
-        debugLogCollection.CollectionChanged += HandleDebugLogCollectionChanged;
+        viewModel.DebugLogCollectionChanging += HandleDebugLogCollectionChanging;
         logs.LayoutUpdated += HandleLogsLayoutUpdated;
         Closed += HandleClosed;
     }
 
-    private void HandleDebugLogCollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
+    internal static TextBlock CreateLogRow(DebugLogEntry? entry)
+        => new()
+        {
+            // Virtualized item containers are briefly cleared with null content
+            // while Avalonia recycles them.
+            Text = entry?.Summary ?? string.Empty,
+            TextWrapping = TextWrapping.Wrap,
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+            FontFamily = new FontFamily("monospace"),
+            Margin = new Thickness(0)
+        };
+
+    internal static Style CreateCompactLogItemStyle()
+    {
+        var style = new Style(selector => selector.OfType<ListBoxItem>());
+        style.Setters.Add(new Setter(TemplatedControl.PaddingProperty, new Thickness(0)));
+        style.Setters.Add(new Setter(Layoutable.MarginProperty, new Thickness(0)));
+        style.Setters.Add(new Setter(Layoutable.MinHeightProperty, 0d));
+        style.Setters.Add(new Setter(ContentControl.HorizontalContentAlignmentProperty, HorizontalAlignment.Stretch));
+        return style;
+    }
+
+    private void HandleDebugLogCollectionChanging(object? sender, NotifyCollectionChangedEventArgs e)
     {
         if (e.Action == NotifyCollectionChangedAction.Reset)
             logViewportAnchor.Reset();
@@ -177,7 +194,7 @@ public sealed class DebugLogWindow : Window
     {
         Closed -= HandleClosed;
         logs.LayoutUpdated -= HandleLogsLayoutUpdated;
-        debugLogCollection.CollectionChanged -= HandleDebugLogCollectionChanged;
+        viewModel.DebugLogCollectionChanging -= HandleDebugLogCollectionChanging;
         logViewportAnchor.Reset();
     }
 

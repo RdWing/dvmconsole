@@ -3,6 +3,7 @@ using DvmConsole.Core.Diagnostics;
 using DvmConsole.Core.Runtime;
 using DvmConsole.FneClient;
 using DvmConsole.Media;
+using System.ComponentModel;
 using System.Diagnostics;
 
 namespace DvmConsole.Desktop;
@@ -19,6 +20,7 @@ public sealed partial class MainWindowViewModel
             ? traffic.FneBoundaryTimestamp
             : Stopwatch.GetTimestamp();
         traffic = NormalizeP25CallIdentity(traffic);
+        ObserveAdaptiveReceiveJitter(system, traffic);
         ChannelViewModel[] preEnqueuedAudioChannels = EnqueuePriorityReceiveAudio(
             system,
             traffic,
@@ -403,6 +405,12 @@ public sealed partial class MainWindowViewModel
         try
         {
             await Task.Run(() => audioCoordinator.StartAsync(channel)).ConfigureAwait(false);
+            if (receiveOutputMutePolicy.IsMuted(channel))
+            {
+                await audioCoordinator
+                    .SetLivePlaybackEnabledAsync(channel, enabled: false)
+                    .ConfigureAwait(false);
+            }
             receiveAudioWork.Start(channel);
             receivePipelineTimingReporter.Reset(channel);
             await RunOnUiThreadAsync(() =>
@@ -437,6 +445,12 @@ public sealed partial class MainWindowViewModel
             DateTimeOffset retryAt = DateTimeOffset.UtcNow.AddSeconds(5);
             foreach (ChannelViewModel channel in result.Restarted)
             {
+                if (receiveOutputMutePolicy.IsMuted(channel))
+                {
+                    await audioCoordinator
+                        .SetLivePlaybackEnabledAsync(channel, enabled: false)
+                        .ConfigureAwait(false);
+                }
                 receiveRetryAfter.Remove(channel);
                 receiveAudioWork.Start(channel);
                 receivePipelineTimingReporter.Reset(channel);
@@ -469,6 +483,7 @@ public sealed partial class MainWindowViewModel
                     (!audioCoordinator.IsActive(channel) ||
                      (channel.IsAudioEnabled &&
                       !channel.IsAudioSuspended &&
+                      !receiveOutputMutePolicy.IsMuted(channel) &&
                       !livePlaybackChannels.Contains(channel))) &&
                     (!receiveRetryAfter.TryGetValue(channel, out DateTimeOffset retryAt) || retryAt <= now))
                 .Distinct()
@@ -482,7 +497,15 @@ public sealed partial class MainWindowViewModel
                 try
                 {
                     if (channel.IsAudioEnabled)
+                    {
                         await audioCoordinator.StartAsync(channel).ConfigureAwait(false);
+                        if (receiveOutputMutePolicy.IsMuted(channel))
+                        {
+                            await audioCoordinator
+                                .SetLivePlaybackEnabledAsync(channel, enabled: false)
+                                .ConfigureAwait(false);
+                        }
+                    }
                     else
                         await audioCoordinator.EnsureDecodeAsync(channel).ConfigureAwait(false);
                     receiveAudioWork.Start(channel);
@@ -557,6 +580,76 @@ public sealed partial class MainWindowViewModel
             .OrderBy(key => key, StringComparer.OrdinalIgnoreCase)
             .ToList();
         PersistUserSettings();
+    }
+
+    private async Task ToggleSelectedSystemOutputMuteAsync()
+    {
+        SystemViewModel? system = SelectedSystem;
+        if (system is null)
+            return;
+
+        bool muted = receiveOutputMutePolicy.Toggle(system);
+        await ApplyReceiveOutputMutePolicyAsync(system.Channels).ConfigureAwait(false);
+        await RunOnUiThreadAsync(() =>
+        {
+            NotifySelectedOutputMutePresentationChanged();
+            AudioStatusText = muted
+                ? $"Live RX output for {system.Name} is muted; decoding and TAR continue."
+                : $"Live RX output for {system.Name} is restored except for any muted zones.";
+        }).ConfigureAwait(false);
+    }
+
+    private async Task ToggleSelectedZoneOutputMuteAsync()
+    {
+        ZoneViewModel? zone = SelectedSystem?.SelectedZone;
+        if (zone is null)
+            return;
+
+        bool muted = receiveOutputMutePolicy.Toggle(zone);
+        await ApplyReceiveOutputMutePolicyAsync(zone.Channels).ConfigureAwait(false);
+        await RunOnUiThreadAsync(() =>
+        {
+            NotifySelectedOutputMutePresentationChanged();
+            AudioStatusText = muted
+                ? $"Live RX output for zone {zone.Name} is muted; decoding and TAR continue."
+                : $"Live RX output for zone {zone.Name} is restored except for any muted system scope.";
+        }).ConfigureAwait(false);
+    }
+
+    private async Task ApplyReceiveOutputMutePolicyAsync(IEnumerable<ChannelViewModel> channels)
+    {
+        await audioReconfigurationLock.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            foreach (ChannelViewModel channel in channels.Distinct())
+            {
+                if (!audioCoordinator.IsActive(channel))
+                    continue;
+
+                bool livePlaybackEnabled = channel.IsAudioEnabled &&
+                    !channel.IsAudioSuspended &&
+                    !receiveOutputMutePolicy.IsMuted(channel);
+                await audioCoordinator
+                    .SetLivePlaybackEnabledAsync(channel, livePlaybackEnabled)
+                    .ConfigureAwait(false);
+            }
+        }
+        finally
+        {
+            audioReconfigurationLock.Release();
+        }
+
+        await ReconcileReceiveSessionsAsync().ConfigureAwait(false);
+    }
+
+    private void NotifySelectedOutputMutePresentationChanged()
+    {
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SelectedSystemOutputMuted)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SelectedZoneOutputMuted)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SelectedSystemOutputMuteGlyph)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SelectedZoneOutputMuteGlyph)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SelectedSystemOutputMuteToolTip)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SelectedZoneOutputMuteToolTip)));
     }
 
     private async Task ProcessAudioAsync(ChannelViewModel channel, FneTrafficFrame traffic)
@@ -644,6 +737,7 @@ public sealed partial class MainWindowViewModel
         ChannelViewModel channel,
         ReceiveWorkItemTiming timing)
     {
+        receiveJitterEffectiveness.Observe(channel.Definition.SystemName, timing);
         DateTimeOffset now = DateTimeOffset.UtcNow;
         if (timing.JitterBufferReorderedPacket || timing.JitterBufferDeadlineMissedPackets > 0)
         {

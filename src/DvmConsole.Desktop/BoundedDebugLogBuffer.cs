@@ -7,21 +7,20 @@ namespace DvmConsole.Desktop;
 // The UI and export paths observe the same bounded collection.
 internal sealed class BoundedDebugLogBuffer
 {
-    internal const int DefaultMaximumEntries = 5_000;
-    internal const long DefaultMaximumBytes = 4L * 1024 * 1024;
+    internal const long DefaultMaximumBytes = 100L * 1024 * 1024;
     internal const int MaximumMessageCharacters = 16_384;
     private const int EstimatedEntryOverheadBytes = 128;
 
-    private readonly int maximumEntries;
+    private readonly int? maximumEntries;
     private readonly long maximumBytes;
     private long retainedBytes;
     private long discardedEntries;
 
     public BoundedDebugLogBuffer(
-        int maximumEntries = DefaultMaximumEntries,
+        int? maximumEntries = null,
         long maximumBytes = DefaultMaximumBytes)
     {
-        if (maximumEntries < 1)
+        if (maximumEntries is < 1)
             throw new ArgumentOutOfRangeException(nameof(maximumEntries));
         if (maximumBytes < EstimatedEntryOverheadBytes)
             throw new ArgumentOutOfRangeException(nameof(maximumBytes));
@@ -38,8 +37,11 @@ internal sealed class BoundedDebugLogBuffer
             string discarded = discardedEntries > 0
                 ? $" · oldest discarded {discardedEntries:N0}"
                 : string.Empty;
+            string limit = maximumEntries is int entryLimit
+                ? $"{entryLimit:N0} entries / {FormatBytes(maximumBytes)}"
+                : FormatBytes(maximumBytes);
             return $"Session log · {Entries.Count:N0} entries · {FormatBytes(retainedBytes)} in memory" +
-                $" · limit {maximumEntries:N0} entries / {FormatBytes(maximumBytes)}{discarded}";
+                $" · limit {limit}{discarded}";
         }
     }
 
@@ -56,7 +58,8 @@ internal sealed class BoundedDebugLogBuffer
         long entryBytes = EstimateBytes(retained);
 
         while (Entries.Count > 0 &&
-               (Entries.Count >= maximumEntries || retainedBytes > maximumBytes - entryBytes))
+               ((maximumEntries is int entryLimit && Entries.Count >= entryLimit) ||
+                retainedBytes > maximumBytes - entryBytes))
         {
             RemoveOldest();
         }

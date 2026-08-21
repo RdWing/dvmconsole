@@ -1,39 +1,51 @@
 using DvmConsole.Core.Settings;
 using System.ComponentModel;
-using System.Runtime.CompilerServices;
 
 namespace DvmConsole.Desktop;
 
-internal enum RxJitterBufferMode
+internal enum RxJitterBufferProtocol
 {
     P25,
     Dmr,
     Nxdn
 }
 
-public sealed record RxJitterBufferOption(int Milliseconds, string Label);
+public sealed record RxJitterBufferOption(
+    int Milliseconds,
+    bool IsAdaptive,
+    string Label);
 
 public sealed class RxJitterBufferModeViewModel : INotifyPropertyChanged
 {
     private RxJitterBufferOption selectedOption;
+    private int lastFixedMilliseconds;
 
     internal RxJitterBufferModeViewModel(
-        RxJitterBufferMode mode,
+        RxJitterBufferProtocol protocol,
         string modeName,
         IReadOnlyList<int> allowedMilliseconds,
         int selectedMilliseconds,
+        bool adaptive,
         int packetMilliseconds,
         string singularUnit = "packet",
         string pluralUnit = "packets")
     {
-        Mode = mode;
+        Protocol = protocol;
         ModeName = modeName;
         Options = allowedMilliseconds
             .Select(value => new RxJitterBufferOption(
                 value,
+                IsAdaptive: false,
                 CreateLabel(value, packetMilliseconds, singularUnit, pluralUnit)))
+            .Append(new RxJitterBufferOption(
+                allowedMilliseconds[^1],
+                IsAdaptive: true,
+                CreateAdaptiveLabel(allowedMilliseconds[^1])))
             .ToArray();
-        selectedOption = Options.First(option => option.Milliseconds == selectedMilliseconds);
+        lastFixedMilliseconds = selectedMilliseconds;
+        selectedOption = adaptive
+            ? Options.Single(option => option.IsAdaptive)
+            : Options.First(option => !option.IsAdaptive && option.Milliseconds == selectedMilliseconds);
     }
 
     public event PropertyChangedEventHandler? PropertyChanged;
@@ -50,15 +62,26 @@ public sealed class RxJitterBufferModeViewModel : INotifyPropertyChanged
             if (selectedOption == value)
                 return;
             selectedOption = value;
+            if (!value.IsAdaptive)
+                lastFixedMilliseconds = value.Milliseconds;
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SelectedOption)));
         }
     }
 
-    internal int Milliseconds => SelectedOption.Milliseconds;
-    internal RxJitterBufferMode Mode { get; }
+    internal int FixedMilliseconds => lastFixedMilliseconds;
+    internal bool IsAdaptive => SelectedOption.IsAdaptive;
+    internal RxJitterBufferProtocol Protocol { get; }
+    internal string SummaryText => IsAdaptive
+        ? $"adaptive ≤ {SelectedOption.Milliseconds} ms"
+        : $"{SelectedOption.Milliseconds} ms";
 
-    internal void Restore(int milliseconds)
-        => SelectedOption = Options.First(option => option.Milliseconds == milliseconds);
+    internal void Restore(int milliseconds, bool adaptive)
+    {
+        lastFixedMilliseconds = milliseconds;
+        SelectedOption = adaptive
+            ? Options.Single(option => option.IsAdaptive)
+            : Options.First(option => !option.IsAdaptive && option.Milliseconds == milliseconds);
+    }
 
     private static string CreateLabel(
         int milliseconds,
@@ -73,4 +96,7 @@ public sealed class RxJitterBufferModeViewModel : INotifyPropertyChanged
         string unit = packetCount == 1 ? singularUnit : pluralUnit;
         return $"{milliseconds} ms ({packetCount} {unit})";
     }
+
+    private static string CreateAdaptiveLabel(int maximumMilliseconds)
+        => $"Adaptive ≤ {maximumMilliseconds} ms";
 }

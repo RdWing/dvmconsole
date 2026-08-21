@@ -17,6 +17,7 @@ public sealed class SystemViewModel : IFneTrafficEndpoint, INotifyPropertyChange
     private readonly HashSet<(byte AlgorithmId, ushort KeyId)> requestedP25Keys = [];
     private readonly FneTrafficStatistics trafficStatistics = new();
     private readonly RxJitterBufferModeViewModel[] rxJitterBufferModes;
+    private ReceiveJitterBufferTelemetry jitterBufferTelemetry;
     private bool restoringJitterBuffer;
     private long nonCallDmrTerminatorCount;
     private long droppedSystemTrafficCount;
@@ -92,6 +93,7 @@ public sealed class SystemViewModel : IFneTrafficEndpoint, INotifyPropertyChange
     public string StatusGlyph => IsConnected ? "●" : "○";
     public string ConnectionPillText => connection.Status.State.ToString().ToUpperInvariant();
     public string ConnectionActionText => IsConnectionActive ? $"Disconnect {Name}" : $"Start {Name}";
+    public string ConnectionButtonText => IsConnectionActive ? "Disconnect" : "Connect";
     public IBrush ConnectionBrush => new SolidColorBrush(Color.Parse(connection.Status.State switch
     {
         FneConnectionState.Connected => "#00BE5A",
@@ -125,9 +127,11 @@ public sealed class SystemViewModel : IFneTrafficEndpoint, INotifyPropertyChange
     }
     public IReadOnlyList<RxJitterBufferModeViewModel> RxJitterBufferModes => rxJitterBufferModes;
     public string JitterBufferSummaryText
-        => $"Applied: P25 {rxJitterBufferModes[0].Milliseconds} ms · " +
-           $"DMR {rxJitterBufferModes[1].Milliseconds} ms · " +
-           $"NXDN {rxJitterBufferModes[2].Milliseconds} ms";
+        => $"Applied: P25 {rxJitterBufferModes[0].SummaryText} · " +
+           $"DMR {rxJitterBufferModes[1].SummaryText} · " +
+           $"NXDN {rxJitterBufferModes[2].SummaryText}";
+    public string AdaptiveJitterLearnedText => jitterBufferTelemetry.LearnedText;
+    public string JitterBufferEffectivenessText => jitterBufferTelemetry.EffectivenessText;
     public string ConnectionStatus
     {
         get => connectionStatus;
@@ -141,6 +145,7 @@ public sealed class SystemViewModel : IFneTrafficEndpoint, INotifyPropertyChange
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsConnectionActive)));
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ConnectionPillText)));
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ConnectionActionText)));
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ConnectionButtonText)));
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ConnectionBrush)));
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SystemTabText)));
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(StatusGlyph)));
@@ -252,16 +257,19 @@ public sealed class SystemViewModel : IFneTrafficEndpoint, INotifyPropertyChange
         var configured = new RxJitterBufferSetting();
         foreach (RxJitterBufferModeViewModel mode in rxJitterBufferModes)
         {
-            switch (mode.Mode)
+            switch (mode.Protocol)
             {
-                case RxJitterBufferMode.P25:
-                    configured.P25Milliseconds = mode.Milliseconds;
+                case RxJitterBufferProtocol.P25:
+                    configured.P25Milliseconds = mode.FixedMilliseconds;
+                    configured.P25Adaptive = mode.IsAdaptive;
                     break;
-                case RxJitterBufferMode.Dmr:
-                    configured.DmrMilliseconds = mode.Milliseconds;
+                case RxJitterBufferProtocol.Dmr:
+                    configured.DmrMilliseconds = mode.FixedMilliseconds;
+                    configured.DmrAdaptive = mode.IsAdaptive;
                     break;
-                case RxJitterBufferMode.Nxdn:
-                    configured.NxdnMilliseconds = mode.Milliseconds;
+                case RxJitterBufferProtocol.Nxdn:
+                    configured.NxdnMilliseconds = mode.FixedMilliseconds;
+                    configured.NxdnAdaptive = mode.IsAdaptive;
                     break;
             }
         }
@@ -276,13 +284,14 @@ public sealed class SystemViewModel : IFneTrafficEndpoint, INotifyPropertyChange
         {
             foreach (RxJitterBufferModeViewModel mode in rxJitterBufferModes)
             {
-                mode.Restore(mode.Mode switch
+                (int milliseconds, bool adaptive) = mode.Protocol switch
                 {
-                    RxJitterBufferMode.P25 => normalized.P25Milliseconds,
-                    RxJitterBufferMode.Dmr => normalized.DmrMilliseconds,
-                    RxJitterBufferMode.Nxdn => normalized.NxdnMilliseconds,
-                    _ => throw new InvalidOperationException($"Unsupported RX jitter buffer mode {mode.Mode}.")
-                });
+                    RxJitterBufferProtocol.P25 => (normalized.P25Milliseconds, normalized.P25Adaptive),
+                    RxJitterBufferProtocol.Dmr => (normalized.DmrMilliseconds, normalized.DmrAdaptive),
+                    RxJitterBufferProtocol.Nxdn => (normalized.NxdnMilliseconds, normalized.NxdnAdaptive),
+                    _ => throw new InvalidOperationException($"Unsupported RX jitter buffer protocol {mode.Protocol}.")
+                };
+                mode.Restore(milliseconds, adaptive);
             }
         }
         finally
@@ -290,6 +299,16 @@ public sealed class SystemViewModel : IFneTrafficEndpoint, INotifyPropertyChange
             restoringJitterBuffer = false;
         }
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(JitterBufferSummaryText)));
+    }
+
+    internal void UpdateJitterBufferTelemetry(ReceiveJitterBufferTelemetry telemetry)
+    {
+        if (jitterBufferTelemetry == telemetry)
+            return;
+
+        jitterBufferTelemetry = telemetry;
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(AdaptiveJitterLearnedText)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(JitterBufferEffectivenessText)));
     }
 
     public async ValueTask DisposeAsync()
@@ -339,24 +358,27 @@ public sealed class SystemViewModel : IFneTrafficEndpoint, INotifyPropertyChange
         =>
         [
             new RxJitterBufferModeViewModel(
-                RxJitterBufferMode.P25,
+                RxJitterBufferProtocol.P25,
                 "P25",
                 RxJitterBufferSetting.P25OptionsMilliseconds,
                 settings.P25Milliseconds,
+                settings.P25Adaptive,
                 packetMilliseconds: 180,
                 singularUnit: "LDU",
                 pluralUnit: "LDUs"),
             new RxJitterBufferModeViewModel(
-                RxJitterBufferMode.Dmr,
+                RxJitterBufferProtocol.Dmr,
                 "DMR",
                 RxJitterBufferSetting.DmrOptionsMilliseconds,
                 settings.DmrMilliseconds,
+                settings.DmrAdaptive,
                 packetMilliseconds: 60),
             new RxJitterBufferModeViewModel(
-                RxJitterBufferMode.Nxdn,
+                RxJitterBufferProtocol.Nxdn,
                 "NXDN",
                 RxJitterBufferSetting.NxdnOptionsMilliseconds,
                 settings.NxdnMilliseconds,
+                settings.NxdnAdaptive,
                 packetMilliseconds: 80)
         ];
 

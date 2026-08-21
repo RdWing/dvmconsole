@@ -189,6 +189,20 @@
                         ToolTip.Tip="{Binding KeepTransmitMicrophoneWarmToolTip}"
                         AutomationProperties.Name="{Binding KeepTransmitMicrophoneWarmToolTip}" />
           <ToggleButton Classes="toolbar-audio output-mute"
+                        Width="42"
+                        Content="{Binding SelectedSystemOutputMuteGlyph}"
+                        IsChecked="{Binding SelectedSystemOutputMuted, Mode=OneWay}"
+                        Command="{Binding ToggleSelectedSystemOutputMuteCommand}"
+                        ToolTip.Tip="{Binding SelectedSystemOutputMuteToolTip}"
+                        AutomationProperties.Name="{Binding SelectedSystemOutputMuteToolTip}" />
+          <ToggleButton Classes="toolbar-audio output-mute"
+                        Width="42"
+                        Content="{Binding SelectedZoneOutputMuteGlyph}"
+                        IsChecked="{Binding SelectedZoneOutputMuted, Mode=OneWay}"
+                        Command="{Binding ToggleSelectedZoneOutputMuteCommand}"
+                        ToolTip.Tip="{Binding SelectedZoneOutputMuteToolTip}"
+                        AutomationProperties.Name="{Binding SelectedZoneOutputMuteToolTip}" />
+          <ToggleButton Classes="toolbar-audio output-mute"
                         Content="{Binding OutputMuteGlyph}"
                         IsChecked="{Binding OutputMuted, Mode=TwoWay}"
                         ToolTip.Tip="{Binding OutputMuteToolTip}"

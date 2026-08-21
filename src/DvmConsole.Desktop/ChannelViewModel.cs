@@ -368,6 +368,9 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CanListen)));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CanTransmit)));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CanToggleEncryption)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(EncryptionStatusText)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(EncryptionButtonText)));
+        NotifyEncryptionAppearanceChanged();
         (AudioCommand as AsyncRelayCommand)?.RaiseCanExecuteChanged();
         (PttCommand as AsyncRelayCommand)?.RaiseCanExecuteChanged();
         (EncryptionCommand as AsyncRelayCommand)?.RaiseCanExecuteChanged();

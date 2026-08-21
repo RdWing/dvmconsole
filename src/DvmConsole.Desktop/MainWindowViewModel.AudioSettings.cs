@@ -359,6 +359,9 @@ public sealed partial class MainWindowViewModel
         Volatile.Write(
             ref receiveJitterBufferSettingsBySystem,
             BuildReceiveJitterBufferSettingsBySystem());
+        adaptiveReceiveJitter.Reset(system.Name);
+        receiveJitterEffectiveness.Reset(system.Name);
+        RefreshJitterBufferTelemetry(system);
 
         try
         {
@@ -375,14 +378,30 @@ public sealed partial class MainWindowViewModel
         ChannelViewModel channel,
         FneTrafficProtocol protocol)
     {
+        string systemName = channel.Definition.SystemName;
+        RxJitterBufferSetting configured = GetReceiveJitterBufferSetting(systemName);
+        ReceiveJitterBufferConfiguration configuration =
+            ReceiveJitterBufferPolicy.GetConfiguration(protocol, configured);
+        return adaptiveReceiveJitter.GetProfile(systemName, protocol, configuration);
+    }
+
+    private void ObserveAdaptiveReceiveJitter(
+        SystemViewModel system,
+        FneTrafficFrame traffic)
+    {
+        RxJitterBufferSetting configured = GetReceiveJitterBufferSetting(system.Name);
+        ReceiveJitterBufferConfiguration configuration =
+            ReceiveJitterBufferPolicy.GetConfiguration(traffic.Protocol, configured);
+        adaptiveReceiveJitter.Observe(system.Name, traffic, configuration);
+    }
+
+    private RxJitterBufferSetting GetReceiveJitterBufferSetting(string systemName)
+    {
         IReadOnlyDictionary<string, RxJitterBufferSetting> settings =
             Volatile.Read(ref receiveJitterBufferSettingsBySystem);
-        RxJitterBufferSetting configured = settings.TryGetValue(
-            channel.Definition.SystemName,
-            out RxJitterBufferSetting? systemSettings)
-                ? systemSettings
-                : RxJitterBufferSetting.Normalize(userSettings.RxJitterBuffer);
-        return ReceiveJitterBufferPolicy.GetProfile(protocol, configured);
+        return settings.TryGetValue(systemName, out RxJitterBufferSetting? systemSettings)
+            ? systemSettings
+            : RxJitterBufferSetting.Normalize(userSettings.RxJitterBuffer);
     }
 
     private IReadOnlyDictionary<string, RxJitterBufferSetting> BuildReceiveJitterBufferSettingsBySystem()
@@ -400,6 +419,33 @@ public sealed partial class MainWindowViewModel
             configured[system.Name] = systemSettings;
         }
         return configured;
+    }
+
+    private void RefreshJitterBufferTelemetry(SystemViewModel system)
+    {
+        RxJitterBufferSetting settings = GetReceiveJitterBufferSetting(system.Name);
+        ReceiveJitterBufferEffectiveness effectiveness =
+            receiveJitterEffectiveness.GetSnapshot(system.Name);
+
+        system.UpdateJitterBufferTelemetry(new ReceiveJitterBufferTelemetry(
+            GetLearnedDelay(system.Name, FneTrafficProtocol.P25, settings),
+            GetLearnedDelay(system.Name, FneTrafficProtocol.Dmr, settings),
+            GetLearnedDelay(system.Name, FneTrafficProtocol.Nxdn, settings),
+            settings.P25Adaptive,
+            settings.DmrAdaptive,
+            settings.NxdnAdaptive,
+            effectiveness.RestoredDelayedPackets,
+            effectiveness.DeadlineMissedPackets));
+    }
+
+    private TimeSpan GetLearnedDelay(
+        string systemName,
+        FneTrafficProtocol protocol,
+        RxJitterBufferSetting settings)
+    {
+        ReceiveJitterBufferConfiguration configuration =
+            ReceiveJitterBufferPolicy.GetConfiguration(protocol, settings);
+        return adaptiveReceiveJitter.GetProfile(systemName, protocol, configuration).TargetDelay;
     }
 
     private async Task RestartReceiveVocoderSessionsAsync()

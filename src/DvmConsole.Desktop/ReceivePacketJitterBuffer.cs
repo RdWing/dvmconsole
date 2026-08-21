@@ -4,7 +4,9 @@ namespace DvmConsole.Desktop;
 
 internal readonly record struct ReceiveJitterBufferDequeueMetadata(
     bool ReorderedBeforePlayout,
-    int MissingPacketsAtDeadline);
+    int MissingPacketsAtDeadline,
+    TimeSpan TargetDelay,
+    bool IsAdaptive);
 
 // Reorders packets for independent receive streams and releases them against a
 // monotonic playout deadline. Codec-specific loss concealment remains the
@@ -103,7 +105,11 @@ internal sealed class ReceivePacketJitterBuffer<T>
         AdvanceStream(selected.Item, timestamp);
         item = selected.Item;
         waitTime = TimeSpan.Zero;
-        metadata = new ReceiveJitterBufferDequeueMetadata(reordered, missingPackets);
+        metadata = new ReceiveJitterBufferDequeueMetadata(
+            reordered,
+            missingPackets,
+            selectedState.Profile.TargetDelay,
+            selectedState.Profile.IsAdaptive);
         return true;
     }
 

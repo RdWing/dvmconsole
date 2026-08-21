@@ -506,16 +506,10 @@ public sealed partial class OperatorToolsWindow : Window
     private void HandleClearCallHistoryClick(object? sender, RoutedEventArgs e)
         => viewModel.ClearCallHistory();
 
-    private async void HandleConnectSystemClick(object? sender, RoutedEventArgs e)
+    private async void HandleToggleSystemConnectionClick(object? sender, RoutedEventArgs e)
     {
         if (sender is Button { Tag: SystemViewModel system })
-            await system.StartAsync();
-    }
-
-    private async void HandleDisconnectSystemClick(object? sender, RoutedEventArgs e)
-    {
-        if (sender is Button { Tag: SystemViewModel system })
-            await system.StopAsync();
+            await viewModel.ToggleSystemConnectionAsync(system);
     }
 
     private async void HandleRestartSystemClick(object? sender, RoutedEventArgs e)

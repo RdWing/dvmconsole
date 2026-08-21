@@ -21,12 +21,12 @@ internal sealed class ReceivePipelineTimingReporter
         DateTimeOffset now)
     {
         ArgumentNullException.ThrowIfNull(channel);
-        TimeSpan unexpectedQueueDelay = RemoveConfiguredJitterDelay(
+        TimeSpan unexpectedQueueDelay = RemoveJitterTargetDelay(
             latest.QueueDelay,
-            latest.ConfiguredJitterBufferDelay);
-        TimeSpan unexpectedEndToEndDelay = RemoveConfiguredJitterDelay(
+            latest.JitterBufferTargetDelay);
+        TimeSpan unexpectedEndToEndDelay = RemoveJitterTargetDelay(
             latest.EndToEndDelay,
-            latest.ConfiguredJitterBufferDelay);
+            latest.JitterBufferTargetDelay);
         if (latest.TransportInterArrivalDelay < InterArrivalWarningThreshold &&
             latest.TransportToFneBoundaryDelay < WarningThreshold &&
             latest.InterArrivalDelay < InterArrivalWarningThreshold &&
@@ -50,11 +50,11 @@ internal sealed class ReceivePipelineTimingReporter
         }
     }
 
-    private static TimeSpan RemoveConfiguredJitterDelay(
+    private static TimeSpan RemoveJitterTargetDelay(
         TimeSpan observed,
-        TimeSpan configuredJitterDelay)
-        => observed > configuredJitterDelay
-            ? observed - configuredJitterDelay
+        TimeSpan jitterTargetDelay)
+        => observed > jitterTargetDelay
+            ? observed - jitterTargetDelay
             : TimeSpan.Zero;
 
     public void Reset(ChannelViewModel channel)
