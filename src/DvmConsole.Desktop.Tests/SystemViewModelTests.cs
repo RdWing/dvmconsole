@@ -606,6 +606,46 @@ public sealed class SystemViewModelTests
     }
 
     [Fact]
+    public async Task ActiveSystemPttTargetsOnlySelectedResourcesInTheActiveSystem()
+    {
+        string path = Path.Combine(AppContext.BaseDirectory, "TestData", "multiple-systems.yml");
+        string settingsPath = CreateSettingsPath();
+
+        try
+        {
+            await using MainWindowViewModel viewModel = MainWindowViewModel.Load(
+                path,
+                new UserSettingsStore(settingsPath));
+            SystemViewModel alpha = viewModel.Systems[0];
+            SystemViewModel beta = viewModel.Systems[1];
+
+            viewModel.SelectedSystem = alpha;
+            viewModel.ToggleAllTransmitSelection();
+            viewModel.SelectedSystem = beta;
+            viewModel.ToggleAllTransmitSelection();
+
+            ChannelViewModel[] alphaTargets = alpha.Channels.Where(channel => channel.CanTransmit).ToArray();
+            ChannelViewModel[] betaTargets = beta.Channels.Where(channel => channel.CanTransmit).ToArray();
+            Assert.Equal(
+                alphaTargets.Length + betaTargets.Length,
+                viewModel.GetSelectedTransmitTargets(PttTargetScope.AllSelectedResources).Count);
+            Assert.Equal(
+                betaTargets,
+                viewModel.GetSelectedTransmitTargets(PttTargetScope.ActiveSystem));
+
+            viewModel.SelectedSystem = alpha;
+
+            Assert.Equal(
+                alphaTargets,
+                viewModel.GetSelectedTransmitTargets(PttTargetScope.ActiveSystem));
+        }
+        finally
+        {
+            CleanupSettingsPath(settingsPath);
+        }
+    }
+
+    [Fact]
     public async Task SubscriberCommandValidationAuditsAndBoundsFailures()
     {
         string path = Path.Combine(AppContext.BaseDirectory, "TestData", "multiple-systems.yml");
@@ -1524,6 +1564,8 @@ public sealed class SystemViewModelTests
             Assert.Contains(KeyboardPttKey.None, viewModel.GlobalPttKeyOptions);
             viewModel.SelectedGlobalPttKey = KeyboardPttKey.F3;
             await viewModel.ApplyGlobalPttKeySelectionAsync();
+            viewModel.SelectedActiveSystemPttKey = KeyboardPttKey.F4;
+            await viewModel.ApplyActiveSystemPttKeySelectionAsync();
 
             UserSettings saved = store.Load();
             Assert.False(saved.ClockUse24HourTime);
@@ -1531,12 +1573,24 @@ public sealed class SystemViewModelTests
             Assert.True(saved.KeepWindowOnTop);
             Assert.True(saved.TogglePttMode);
             Assert.Equal("F3", saved.GlobalPttKey);
+            Assert.Equal("F4", saved.ActiveSystemPttKey);
             Assert.True(viewModel.IsConfiguredPttKey(KeyboardPttKey.F3));
+            Assert.True(viewModel.IsConfiguredPttKey(KeyboardPttKey.F4));
+
+            viewModel.SelectedGlobalPttKey = KeyboardPttKey.F4;
+            await viewModel.ApplyGlobalPttKeySelectionAsync();
+            Assert.Equal("F3", store.Load().GlobalPttKey);
+            Assert.Contains("already assigned", viewModel.TransmitStatusText);
 
             viewModel.SelectedGlobalPttKey = KeyboardPttKey.None;
             await viewModel.ApplyGlobalPttKeySelectionAsync();
             Assert.Equal("None", store.Load().GlobalPttKey);
             Assert.Equal("Keyboard PTT disabled", viewModel.GlobalPttKeyText);
+
+            viewModel.SelectedActiveSystemPttKey = KeyboardPttKey.None;
+            await viewModel.ApplyActiveSystemPttKeySelectionAsync();
+            Assert.Equal("None", store.Load().ActiveSystemPttKey);
+            Assert.Equal("Keyboard PTT disabled", viewModel.ActiveSystemPttKeyText);
             Assert.NotEmpty(viewModel.ClockText);
         }
         finally
@@ -1908,6 +1962,7 @@ public sealed class SystemViewModelTests
             Assert.Equal("/dev/cu.aaa", viewModel.SerialPttPortName);
 
             viewModel.SerialPttEnabled = true;
+            viewModel.SerialPttActiveSystemOnly = true;
             viewModel.SerialPttPortName = "/dev/cu.zzz";
             viewModel.SerialPttBaudRate = 19_200;
 
@@ -1916,8 +1971,18 @@ public sealed class SystemViewModelTests
             Assert.Equal(0, Assert.Single(createdSources).StartCount);
             UserSettings saved = store.Load();
             Assert.True(saved.SerialPttEnabled);
+            Assert.True(saved.SerialPttActiveSystemOnly);
             Assert.Equal("/dev/cu.zzz", saved.SerialPttPortName);
             Assert.Equal(19_200, saved.SerialPttBaudRate);
+
+            SystemViewModel activeSystem = viewModel.Systems[0];
+            viewModel.SelectedSystem = activeSystem;
+            viewModel.ToggleAllTransmitSelection();
+            viewModel.SelectedSystem = viewModel.Systems[1];
+            viewModel.ToggleAllTransmitSelection();
+            Assert.Equal(
+                viewModel.Systems[1].Channels.Where(channel => channel.CanTransmit),
+                viewModel.GetSerialPttTargets());
 
             viewModel.SerialPttEnabled = false;
 

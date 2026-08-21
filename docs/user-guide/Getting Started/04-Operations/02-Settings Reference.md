@@ -125,9 +125,11 @@ Use with care. This can remove saved window layout, widget positions, audio rout
 
 The General page can show or hide system status cards, channel widgets, and toolbar alert buttons. **Lock channel widget positions** prevents card dragging; clear it to arrange cards on the active tab.
 
-## Global PTT Key
+## Keyboard PTT Keys
 
-Choose Space or F1 through F12 from **Channels > Global PTT key**.
+Choose Space or F1 through F19 for global PTT and active-system PTT under **Channels** or **Console Settings > PTT**. Global PTT keys every `TX`-selected resource; active-system PTT limits those resources to the active system tab. The keys must be unique and share the same press-and-hold or toggle setting.
+
+The serial hardware PTT can independently operate all `TX`-selected resources or only those in the active system. Apply the serial settings after changing its scope.
 
 ---
 

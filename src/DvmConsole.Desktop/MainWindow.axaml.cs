@@ -644,6 +644,28 @@ public sealed partial class MainWindow : Window
         e.Handled = true;
     }
 
+    private void HandleCallHistoryDoubleTapped(object? sender, TappedEventArgs e)
+    {
+        if (e.Source is Control source &&
+            (source is Button || source.GetVisualAncestors().OfType<Button>().Any()))
+        {
+            return;
+        }
+
+        if (sender is Border
+            {
+                DataContext: CallHistoryEntry
+                {
+                    HasPlayableRecording: true,
+                    Recording: { } recording
+                }
+            })
+        {
+            viewModel.OpenRecording(recording);
+            e.Handled = true;
+        }
+    }
+
     private void HandleToggleActivitySidebarClick(object? sender, RoutedEventArgs e)
     {
         viewModel.ShowCallHistoryPane = !viewModel.ShowCallHistoryPane;
@@ -791,6 +813,14 @@ public sealed partial class MainWindow : Window
             !Enum.TryParse(value, ignoreCase: true, out KeyboardPttKey key))
             return;
         await viewModel.SetGlobalPttKeyAsync(key);
+    }
+
+    private async void HandleActiveSystemPttKeyClick(object? sender, RoutedEventArgs e)
+    {
+        if (sender is not MenuItem { Tag: string value } ||
+            !Enum.TryParse(value, ignoreCase: true, out KeyboardPttKey key))
+            return;
+        await viewModel.SetActiveSystemPttKeyAsync(key);
     }
 
     private void HandleExitClick(object? sender, RoutedEventArgs e) => Close();

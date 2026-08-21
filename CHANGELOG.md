@@ -8,13 +8,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [0.3.2] - 2026-08-20
 
+### Added
+
+- Add a second OS-global keyboard PTT binding that keys only the TX-selected resources in the active system, using the same press-and-hold or toggle setting as global PTT, plus an independent active-system scope option for serial hardware PTT.
+
 ### Changed
 
+- Show Event History call durations consistently with tenths of a second, adding minute and hour units for longer calls.
 - Replace the single RX audio-processing toggle with per-mode high-pass, peaking-EQ, and soft-knee compressor controls. Keep decoder boundary smoothing fixed on, and raise the fixed DMR, NXDN, and P25 Phase 2 presentation gain from 6 dB to 9 dB while leaving P25 Phase 1 at unity gain.
 - Document that the current FNE plaintext and legacy encrypted transports should be used only across a trusted network or an authenticated VPN because they do not mutually authenticate the master.
 
 ### Fixed
 
+- Reveal a call's TAR recording directly in Finder or File Explorer when its Activity sidebar row is double-clicked.
 - Let Debug Logs search for multiple space-separated terms anywhere in an entry, make Clear Text reset only the entered search, and describe vocoder level windows by elapsed time instead of sample count.
 - Close timed-out receive streams before applying later traffic so channel cards, History, and TAR state cannot remain pinned to an ended call when a UI cleanup tick is delayed.
 - Keep every RX audio-processing spinner value visible and list the mode rows as P25 Phase 1, P25 Phase 2, DMR, and NXDN.

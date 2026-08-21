@@ -51,8 +51,8 @@ public sealed class CallRecordingMetadata
     public string TimestampText => UtcStartTime.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss");
 
     [JsonIgnore]
-    public string DurationText => TimeSpan.FromMilliseconds(Math.Max(0, DurationMs)).ToString(
-        DurationMs >= 3_600_000 ? "hh\\:mm\\:ss" : "mm\\:ss");
+    public string DurationText => CallDurationTextFormatter.Format(
+        TimeSpan.FromMilliseconds(Math.Max(0, DurationMs)));
 
     [JsonIgnore]
     public string SummaryText => $"{SystemName} · {Protocol} · {TimestampText}";

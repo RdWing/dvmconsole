@@ -87,13 +87,13 @@ public sealed class CallHistoryEntry : INotifyPropertyChanged
     public bool IsActive => !IsEvent && endTimestamp is null;
     public TimeSpan? Duration => IsEvent
         ? null
-        : endTimestamp - Timestamp ?? (recording is null
-            ? null
-            : TimeSpan.FromMilliseconds(Math.Max(0, recording.DurationMs)));
-    public string DurationText => IsRecordingOnly && recording is not null
-        ? recording.DurationText
-        : Duration is TimeSpan duration
-        ? $"{duration.TotalSeconds:0.0}s"
+        : IsRecordingOnly && recording is not null
+            ? TimeSpan.FromMilliseconds(Math.Max(0, recording.DurationMs))
+            : endTimestamp - Timestamp ?? (recording is null
+                ? null
+                : TimeSpan.FromMilliseconds(Math.Max(0, recording.DurationMs)));
+    public string DurationText => Duration is TimeSpan duration
+        ? CallDurationTextFormatter.Format(duration)
         : IsEvent ? "—" : "Active";
     public byte? EncryptionAlgorithmId => encryptionAlgorithmId;
     public ushort? EncryptionKeyId => encryptionKeyId;

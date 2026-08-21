@@ -74,20 +74,22 @@ If the resource does not show **SELECT**, encryption behavior is fixed by the co
 
 # Global PTT
 
-Global PTT keys every channel with `TX` armed. At least one transmit-capable channel must be armed before global PTT can begin.
+Global PTT keys every channel with `TX` armed. Active-system PTT keys only the `TX`-armed channels in the system tab that is active when PTT starts. At least one transmit-capable channel must be armed in the applicable scope before PTT can begin.
 
-Choose the key under **Channels > Global PTT key**. Space and F1 through F12 are supported. On macOS, OS-global capture may require Accessibility or Input Monitoring permission. When global capture is unavailable, the key still works while the application has keyboard focus.
+Choose separate keys under **Channels > Global PTT key** and **Channels > Active-system PTT key**, or configure both under **Console Settings > PTT**. Space and F1 through F19 are supported, and each enabled binding must use a unique key. Both bindings use the same saved press-and-hold or toggle PTT setting. On macOS, OS-global capture may require Accessibility or Input Monitoring permission. When global capture is unavailable, the keys still work while the application has keyboard focus.
+
+Under **Console Settings > PTT > Serial hardware PTT**, select **Limit serial PTT to TX-selected resources in the active system** to give the serial device the same active-system scope. Leave it clear for the serial device to key every `TX`-selected resource across systems.
 
 On macOS, **Console Settings > PTT > Keyboard PTT > Request macOS keyboard
 access** asks the system for Input Monitoring access again. If macOS has already
 recorded a denial, enable DVM Console manually under **System Settings > Privacy
 & Security > Input Monitoring**.
 
-The global PTT key remains active while the modeless **Console Settings** window
+The keyboard PTT keys remain active while the modeless **Console Settings** window
 has focus. Console Settings can stay open while the operator selects resources or
 uses other controls in the main window.
 
-The talk permit tone uses the selected output device for both card and global PTT. Use **Audio > Test talk permit tone** when checking the route.
+The talk permit tone uses the selected output device for card, global, and active-system PTT. Use **Audio > Test talk permit tone** when checking the route.
 
 ---
 

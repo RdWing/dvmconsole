@@ -98,7 +98,9 @@ public sealed class UserSettings
     // Portable name of the key that activates global PTT.  The desktop host
     // maps this to its platform key enum so Core remains UI-independent.
     public string GlobalPttKey { get; set; } = "Space";
+    public string ActiveSystemPttKey { get; set; } = "None";
     public bool SerialPttEnabled { get; set; }
+    public bool SerialPttActiveSystemOnly { get; set; }
     public string SerialPttPortName { get; set; } = string.Empty;
     public int SerialPttBaudRate { get; set; } = 9_600;
     public List<string> ReceiveEnabledChannelKeys { get; set; } = [];
@@ -190,6 +192,8 @@ public sealed class UserSettingsStore
             settings.TransmitEncryptionStates ??= new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
             settings.CallHistoryWindowPlacement = NormalizeWindowPlacement(settings.CallHistoryWindowPlacement);
             settings.GlobalPttKey = NormalizeGlobalPttKey(settings.GlobalPttKey);
+            settings.ActiveSystemPttKey = NormalizeGlobalPttKey(settings.ActiveSystemPttKey);
+            ResolveDuplicateKeyboardPttKeys(settings);
             NormalizeSerialPttSettings(settings);
             settings.UserBackgroundImage = string.IsNullOrWhiteSpace(settings.UserBackgroundImage)
                 ? null
@@ -453,6 +457,8 @@ public sealed class UserSettingsStore
         settings.RecordingEnabledChannelKeys = NormalizeNames(settings.RecordingEnabledChannelKeys);
         settings.SelectedWebStreams = NormalizeNames(settings.SelectedWebStreams);
         settings.GlobalPttKey = NormalizeGlobalPttKey(settings.GlobalPttKey);
+        settings.ActiveSystemPttKey = NormalizeGlobalPttKey(settings.ActiveSystemPttKey);
+        ResolveDuplicateKeyboardPttKeys(settings);
         NormalizeSerialPttSettings(settings);
         settings.ReceiveEnabledChannelKeys = NormalizeNames(settings.ReceiveEnabledChannelKeys);
         settings.TransmitSelectedChannelKeys = NormalizeNames(settings.TransmitSelectedChannelKeys);
@@ -580,7 +586,9 @@ public sealed class UserSettingsStore
         if (settings.TalkPermitTone || !settings.ConnectionChimes || settings.DarkMode ||
             settings.UiFontSize != 14 || settings.UiScale != 1.0 ||
             settings.TogglePttMode || !string.Equals(settings.GlobalPttKey, "Space", StringComparison.OrdinalIgnoreCase) ||
-            settings.SerialPttEnabled || !string.IsNullOrWhiteSpace(settings.SerialPttPortName) ||
+            !string.Equals(settings.ActiveSystemPttKey, "None", StringComparison.OrdinalIgnoreCase) ||
+            settings.SerialPttEnabled || settings.SerialPttActiveSystemOnly ||
+            !string.IsNullOrWhiteSpace(settings.SerialPttPortName) ||
             settings.SerialPttBaudRate != 9_600 ||
             !settings.ShowSystemStatus || !settings.ShowChannels || !settings.ShowAlertTones ||
             !settings.LockWidgets || settings.ChannelWidgetPositions.Count > 0 ||
@@ -640,7 +648,9 @@ public sealed class UserSettingsStore
         {
             target.TogglePttMode = source.TogglePttMode;
             target.GlobalPttKey = source.GlobalPttKey;
+            target.ActiveSystemPttKey = source.ActiveSystemPttKey;
             target.SerialPttEnabled = source.SerialPttEnabled;
+            target.SerialPttActiveSystemOnly = source.SerialPttActiveSystemOnly;
             target.SerialPttPortName = source.SerialPttPortName;
             target.SerialPttBaudRate = source.SerialPttBaudRate;
             target.TalkPermitTone = source.TalkPermitTone;
@@ -865,6 +875,15 @@ public sealed class UserSettingsStore
                 var value => value
             }
             : "None";
+    }
+
+    private static void ResolveDuplicateKeyboardPttKeys(UserSettings settings)
+    {
+        if (!settings.ActiveSystemPttKey.Equals("None", StringComparison.OrdinalIgnoreCase) &&
+            settings.ActiveSystemPttKey.Equals(settings.GlobalPttKey, StringComparison.OrdinalIgnoreCase))
+        {
+            settings.ActiveSystemPttKey = "None";
+        }
     }
 
     private static void NormalizeSerialPttSettings(UserSettings settings)
