@@ -76,6 +76,7 @@
             <CheckBox Content="Use 24-hour time" IsChecked="{Binding ClockUse24HourTime, Mode=TwoWay}" />
             <CheckBox Content="Show seconds" IsChecked="{Binding ClockShowSeconds, Mode=TwoWay}" />
             <StackPanel Orientation="Horizontal" Spacing="4"><TextBlock Classes="caption" Text="Global PTT key:" /><TextBlock Classes="caption" Text="{Binding GlobalPttKeyText}" /></StackPanel>
+            <StackPanel Orientation="Horizontal" Spacing="4"><TextBlock Classes="caption" Text="Active-system PTT key:" /><TextBlock Classes="caption" Text="{Binding ActiveSystemPttKeyText}" /></StackPanel>
           </StackPanel>
         </ScrollViewer>
       </TabItem>
@@ -453,7 +454,7 @@
         <ScrollViewer Margin="10">
           <StackPanel Spacing="12">
             <TextBlock Classes="heading" Text="Global PTT Settings" />
-            <TextBlock Classes="caption" Text="The configured keyboard key and optional serial hardware source both operate the channels selected with TX." TextWrapping="Wrap" />
+            <TextBlock Classes="caption" Text="Global PTT and optional serial hardware operate every channel selected with TX. Active-system PTT limits the selected channels to the system tab that is active when PTT starts." TextWrapping="Wrap" />
             <Border Classes="panel">
               <StackPanel Spacing="8">
                 <TextBlock FontWeight="SemiBold" Text="Keyboard PTT" />
@@ -462,15 +463,21 @@
                   <ComboBox Grid.Column="1" ItemsSource="{Binding GlobalPttKeyOptions}" SelectedItem="{Binding SelectedGlobalPttKey, Mode=TwoWay}" />
                   <Button Grid.Column="2" Content="Apply" Click="HandleApplyGlobalPttKeyClick" />
                 </Grid>
-                <CheckBox Content="Toggle global PTT instead of hold-to-talk" IsChecked="{Binding TogglePttMode, Mode=TwoWay}" />
+                <Grid ColumnDefinitions="Auto,180,Auto" ColumnSpacing="8">
+                  <TextBlock Text="Active-system PTT key" VerticalAlignment="Center" />
+                  <ComboBox Grid.Column="1" ItemsSource="{Binding GlobalPttKeyOptions}" SelectedItem="{Binding SelectedActiveSystemPttKey, Mode=TwoWay}" />
+                  <Button Grid.Column="2" Content="Apply" Click="HandleApplyActiveSystemPttKeyClick" />
+                </Grid>
+                <CheckBox Content="Toggle keyboard PTT instead of hold-to-talk" IsChecked="{Binding TogglePttMode, Mode=TwoWay}" />
                 <Button Content="Request macOS keyboard access" HorizontalAlignment="Left" Click="HandleRequestMacOsKeyboardPermissionClick" IsVisible="{Binding IsMacOsPermissionRequestAvailable}" />
-                <TextBlock Classes="caption" Text="This is the same global key available from Settings → Global PTT key in the main window." TextWrapping="Wrap" />
+                <TextBlock Classes="caption" Text="Each keyboard key must be unique. Both bindings use the same hold-to-talk or toggle mode." TextWrapping="Wrap" />
               </StackPanel>
             </Border>
             <Border Classes="panel">
               <StackPanel Spacing="10">
                 <TextBlock FontWeight="SemiBold" Text="Serial hardware PTT" />
-                <CheckBox Content="Enable serial device as a global PTT source" IsChecked="{Binding SerialPttEnabled, Mode=TwoWay}" />
+                <CheckBox Content="Enable serial hardware PTT" IsChecked="{Binding SerialPttEnabled, Mode=TwoWay}" />
+                <CheckBox Content="Limit serial PTT to TX-selected resources in the active system" IsChecked="{Binding SerialPttActiveSystemOnly, Mode=TwoWay}" IsEnabled="{Binding SerialPttEnabled}" />
                 <Grid ColumnDefinitions="Auto,*,Auto,160" ColumnSpacing="8">
                   <TextBlock Text="Device" VerticalAlignment="Center" />
                   <ComboBox Grid.Column="1" ItemsSource="{Binding SerialPttPortOptions}" SelectedItem="{Binding SerialPttPortName, Mode=TwoWay}" IsEnabled="{Binding SerialPttEnabled}" />

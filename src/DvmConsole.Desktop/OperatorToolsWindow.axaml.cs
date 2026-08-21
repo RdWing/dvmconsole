@@ -266,6 +266,9 @@ public sealed partial class OperatorToolsWindow : Window
     private async void HandleApplyGlobalPttKeyClick(object? sender, RoutedEventArgs e)
         => await viewModel.ApplyGlobalPttKeySelectionAsync();
 
+    private async void HandleApplyActiveSystemPttKeyClick(object? sender, RoutedEventArgs e)
+        => await viewModel.ApplyActiveSystemPttKeySelectionAsync();
+
     private async void HandleImportAlertToneClick(object? sender, RoutedEventArgs e)
     {
         if (!StorageProvider.CanOpen)

@@ -177,6 +177,26 @@ public sealed class CallHistoryStoreTests
         Assert.Equal("1.5s", entry.DurationText);
     }
 
+    [Theory]
+    [InlineData(5_400, "5.4s")]
+    [InlineData(65_400, "1m 05.4s")]
+    [InlineData(3_723_400, "1h 02m 03.4s")]
+    public void FormatsLiveAndRecordedCallDurationsConsistently(
+        int durationMilliseconds,
+        string expected)
+    {
+        var liveEntry = CreateEntry(42);
+        liveEntry.Complete(DateTimeOffset.UnixEpoch.AddMilliseconds(durationMilliseconds));
+
+        CallRecordingMetadata recording = CreatePlayableRecording(99);
+        recording.DurationMs = durationMilliseconds;
+        CallHistoryEntry recordedEntry = CallHistoryEntry.CreateRecordingOnly(recording);
+
+        Assert.Equal(expected, liveEntry.DurationText);
+        Assert.Equal(expected, recording.DurationText);
+        Assert.Equal(expected, recordedEntry.DurationText);
+    }
+
     [Fact]
     public void CompletesOnlyTheMatchingConcurrentConsoleTransmission()
     {

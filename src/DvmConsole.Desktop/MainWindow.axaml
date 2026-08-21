@@ -95,6 +95,29 @@
               <MenuItem Header="F18" Tag="F18" Click="HandleGlobalPttKeyClick" />
               <MenuItem Header="F19" Tag="F19" Click="HandleGlobalPttKeyClick" />
             </MenuItem>
+            <MenuItem Header="Active-system PTT key">
+              <MenuItem Header="None (active-system PTT disabled)" Tag="None" Click="HandleActiveSystemPttKeyClick" />
+              <MenuItem Header="Space" Tag="Space" Click="HandleActiveSystemPttKeyClick" />
+              <MenuItem Header="F1" Tag="F1" Click="HandleActiveSystemPttKeyClick" />
+              <MenuItem Header="F2" Tag="F2" Click="HandleActiveSystemPttKeyClick" />
+              <MenuItem Header="F3" Tag="F3" Click="HandleActiveSystemPttKeyClick" />
+              <MenuItem Header="F4" Tag="F4" Click="HandleActiveSystemPttKeyClick" />
+              <MenuItem Header="F5" Tag="F5" Click="HandleActiveSystemPttKeyClick" />
+              <MenuItem Header="F6" Tag="F6" Click="HandleActiveSystemPttKeyClick" />
+              <MenuItem Header="F7" Tag="F7" Click="HandleActiveSystemPttKeyClick" />
+              <MenuItem Header="F8" Tag="F8" Click="HandleActiveSystemPttKeyClick" />
+              <MenuItem Header="F9" Tag="F9" Click="HandleActiveSystemPttKeyClick" />
+              <MenuItem Header="F10" Tag="F10" Click="HandleActiveSystemPttKeyClick" />
+              <MenuItem Header="F11" Tag="F11" Click="HandleActiveSystemPttKeyClick" />
+              <MenuItem Header="F12" Tag="F12" Click="HandleActiveSystemPttKeyClick" />
+              <MenuItem Header="F13" Tag="F13" Click="HandleActiveSystemPttKeyClick" />
+              <MenuItem Header="F14" Tag="F14" Click="HandleActiveSystemPttKeyClick" />
+              <MenuItem Header="F15" Tag="F15" Click="HandleActiveSystemPttKeyClick" />
+              <MenuItem Header="F16" Tag="F16" Click="HandleActiveSystemPttKeyClick" />
+              <MenuItem Header="F17" Tag="F17" Click="HandleActiveSystemPttKeyClick" />
+              <MenuItem Header="F18" Tag="F18" Click="HandleActiveSystemPttKeyClick" />
+              <MenuItem Header="F19" Tag="F19" Click="HandleActiveSystemPttKeyClick" />
+            </MenuItem>
             <Separator />
             <MenuItem Header="Select/unselect all TX channels" Click="HandleToggleAllTransmitSelectionClick" />
           </MenuItem>
@@ -279,7 +302,7 @@
                 <ItemsControl x:Name="activityCallHistoryList" ItemsSource="{Binding ActivityCallHistory}">
                   <ItemsControl.ItemTemplate>
                     <DataTemplate x:DataType="local:CallHistoryEntry">
-                      <Border Classes="activity-call-card" Background="{DynamicResource ActivityBackgroundBrush}" BorderBrush="{DynamicResource ControlBorderBrush}" BorderThickness="1" CornerRadius="6" Padding="7" Margin="0,0,0,6">
+                      <Border Classes="activity-call-card" Background="{DynamicResource ActivityBackgroundBrush}" BorderBrush="{DynamicResource ControlBorderBrush}" BorderThickness="1" CornerRadius="6" Padding="7" Margin="0,0,0,6" DoubleTapped="HandleCallHistoryDoubleTapped" ToolTip.Tip="Double-click to show the TAR recording in Finder or Explorer">
                         <Grid RowDefinitions="Auto,Auto,Auto" ColumnDefinitions="*,Auto,Auto" ColumnSpacing="4"><TextBlock FontSize="{Binding $parent[Window].((local:MainWindowViewModel)DataContext).UiSmallFontSize}" FontWeight="SemiBold" Text="{Binding DisplayChannelText}" /><Button Grid.Column="1" Grid.RowSpan="3" Tag="{Binding}" IsVisible="{Binding HasPlayableRecording}" ToolTip.Tip="Play validated TAR recording" Padding="5,2" VerticalAlignment="Center" Click="HandlePlayCallHistoryRecordingClick"><PathIcon Width="11" Height="11" Data="M 2,1 L 11,6 L 2,11 Z" /></Button><TextBlock Grid.Column="2" Classes="eyebrow" Text="{Binding TimestampText}" /><TextBlock Grid.Row="1" Classes="eyebrow" Text="{Binding RouteText}" TextTrimming="CharacterEllipsis" /><TextBlock Grid.Row="1" Grid.Column="2" Classes="eyebrow" Text="{Binding ProtocolText}" /><TextBlock Grid.Row="2" Classes="eyebrow" Text="{Binding EncryptionText}" /><TextBlock Grid.Row="2" Grid.Column="2" Classes="eyebrow" Text="{Binding DurationText}" /></Grid>
                       </Border>
                     </DataTemplate>

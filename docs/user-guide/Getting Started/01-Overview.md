@@ -61,7 +61,7 @@ The bottom row contains:
 
 Purple means a route or recorder is enabled. Gray means it is disabled.
 
-The Activity sidebar shows recent calls. Collapse it with the arrow at the edge of the sidebar. Double-click the Activity list to open the full Event History window.
+The Activity sidebar shows recent calls. Collapse it with the arrow at the edge of the sidebar. Double-click the Activity heading to open Event History in Console Settings. Double-click a call with a TAR recording to show that file selected in Finder or File Explorer.
 
 The toolbar provides the three original alert patterns and a **TONES** button that opens Console Settings directly to the Tones page.
 

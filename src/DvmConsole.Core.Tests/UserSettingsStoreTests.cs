@@ -25,6 +25,49 @@ public sealed class UserSettingsStoreTests
         }
     }
 
+    [Theory]
+    [InlineData("F19", "F19")]
+    [InlineData("None", "None")]
+    [InlineData("unsupported", "None")]
+    public void NormalizesOptionalActiveSystemPttKeys(string configured, string expected)
+    {
+        string path = CreatePath();
+        try
+        {
+            var store = new UserSettingsStore(path);
+            store.Save(new UserSettings { ActiveSystemPttKey = configured });
+
+            Assert.Equal(expected, store.Load().ActiveSystemPttKey);
+        }
+        finally
+        {
+            Cleanup(path);
+        }
+    }
+
+    [Fact]
+    public void DisablesAnActiveSystemPttKeyThatDuplicatesGlobalPtt()
+    {
+        string path = CreatePath();
+        try
+        {
+            var store = new UserSettingsStore(path);
+            store.Save(new UserSettings
+            {
+                GlobalPttKey = "F12",
+                ActiveSystemPttKey = "f12"
+            });
+
+            UserSettings loaded = store.Load();
+            Assert.Equal("F12", loaded.GlobalPttKey);
+            Assert.Equal("None", loaded.ActiveSystemPttKey);
+        }
+        finally
+        {
+            Cleanup(path);
+        }
+    }
+
     [Fact]
     public void MissingSettingsReturnDefaults()
     {
@@ -349,7 +392,9 @@ public sealed class UserSettingsStoreTests
                 UserBackgroundImage = " /tmp/background.png ",
                 TogglePttMode = true,
                 GlobalPttKey = " f12 ",
+                ActiveSystemPttKey = " f11 ",
                 SerialPttEnabled = true,
+                SerialPttActiveSystemOnly = true,
                 SerialPttPortName = " /dev/cu.ptt ",
                 SerialPttBaudRate = 19_200,
                 ReceiveEnabledChannelKeys = [" System 1\u001FDispatch ", "system 1\u001Fdispatch"],
@@ -472,7 +517,9 @@ public sealed class UserSettingsStoreTests
             Assert.Equal("/tmp/background.png", loaded.UserBackgroundImage);
             Assert.True(loaded.TogglePttMode);
             Assert.Equal("F12", loaded.GlobalPttKey);
+            Assert.Equal("F11", loaded.ActiveSystemPttKey);
             Assert.True(loaded.SerialPttEnabled);
+            Assert.True(loaded.SerialPttActiveSystemOnly);
             Assert.Equal("/dev/cu.ptt", loaded.SerialPttPortName);
             Assert.Equal(19_200, loaded.SerialPttBaudRate);
             Assert.Equal(["System 1\u001FDispatch"], loaded.ReceiveEnabledChannelKeys);
@@ -575,7 +622,9 @@ public sealed class UserSettingsStoreTests
                 LastCodeplugPath = "/tmp/original.yml",
                 TalkPermitTone = true,
                 GlobalPttKey = "F4",
+                ActiveSystemPttKey = "F5",
                 SerialPttEnabled = true,
+                SerialPttActiveSystemOnly = true,
                 SerialPttPortName = "/dev/cu.original",
                 SerialPttBaudRate = 9_600
             }, exportPath);
@@ -588,7 +637,9 @@ public sealed class UserSettingsStoreTests
                   "lastCodeplugPath": "/tmp/imported.yml",
                   "talkPermitTone": false,
                   "globalPttKey": "f9",
+                  "activeSystemPttKey": "f10",
                   "serialPttEnabled": true,
+                  "serialPttActiveSystemOnly": true,
                   "serialPttPortName": " /dev/cu.imported ",
                   "serialPttBaudRate": 38400
                 }
@@ -598,7 +649,9 @@ public sealed class UserSettingsStoreTests
             Assert.Equal("/tmp/imported.yml", imported.LastCodeplugPath);
             Assert.False(imported.TalkPermitTone);
             Assert.Equal("F9", imported.GlobalPttKey);
+            Assert.Equal("F10", imported.ActiveSystemPttKey);
             Assert.True(imported.SerialPttEnabled);
+            Assert.True(imported.SerialPttActiveSystemOnly);
             Assert.Equal("/dev/cu.imported", imported.SerialPttPortName);
             Assert.Equal(38_400, imported.SerialPttBaudRate);
 
