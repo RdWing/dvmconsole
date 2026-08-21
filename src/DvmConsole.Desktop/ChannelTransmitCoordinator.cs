@@ -7,6 +7,11 @@ namespace DvmConsole.Desktop;
 
 public sealed record TransmitTarget(ChannelViewModel Channel, IFneTrafficEndpoint System);
 
+public sealed record MicrophoneStartExpectation(bool StartsCold, bool? IsBluetooth)
+{
+    public bool RequiresReceiveTransitionGate => StartsCold && IsBluetooth != false;
+}
+
 public enum DefaultInputRefreshResult
 {
     NotRequired,
@@ -19,7 +24,7 @@ public enum DefaultInputRefreshResult
 public sealed class ChannelTransmitCoordinator : IAsyncDisposable
 {
     internal static TimeSpan ColdMicrophoneSettlingDuration { get; } =
-        TimeSpan.FromMilliseconds(750);
+        TimeSpan.FromMilliseconds(650);
     private static TimeSpan MicrophoneReadyTimeout { get; } =
         TimeSpan.FromSeconds(8);
     private readonly IP25KeyResolver? p25KeyResolver;
@@ -48,6 +53,38 @@ public sealed class ChannelTransmitCoordinator : IAsyncDisposable
     public uint ActiveStreamId => active.FirstOrDefault()?.StreamId ?? 0;
     public bool ActiveMicrophoneStartedCold { get; private set; }
     public bool? ActiveMicrophoneIsBluetooth { get; private set; }
+
+    public async Task<MicrophoneStartExpectation> InspectNextMicrophoneStartAsync(
+        CancellationToken cancellationToken = default)
+    {
+        ObjectDisposedException.ThrowIf(disposed, this);
+        await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            if (sharedCapture is not null)
+            {
+                return new MicrophoneStartExpectation(
+                    StartsCold: !sharedCapture.IsReady,
+                    sharedCaptureIsBluetooth);
+            }
+
+            return await Task.Run(() =>
+            {
+                using IAudioBackend backend = createAudioBackend();
+                AudioDeviceSelection selection = AudioDeviceSelector.Select(
+                    backend.EnumerateDevices(AudioDirection.Input),
+                    AudioDirection.Input,
+                    audioInputOptions.DeviceId);
+                return new MicrophoneStartExpectation(
+                    StartsCold: true,
+                    selection.Device.IsBluetooth);
+            }, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            gate.Release();
+        }
+    }
 
     public ChannelTransmitCoordinator(
         IP25KeyResolver? p25KeyResolver = null,
@@ -156,7 +193,7 @@ public sealed class ChannelTransmitCoordinator : IAsyncDisposable
         return active.FirstOrDefault(entry => ReferenceEquals(entry.Channel, channel))?.StreamId ?? 0;
     }
 
-    public async Task WaitForMicrophoneReadyAsync(
+    public async Task<MicrophoneReadinessTiming> WaitForMicrophoneReadyAsync(
         TimeSpan? timeout = null,
         CancellationToken cancellationToken = default)
     {
@@ -166,7 +203,7 @@ public sealed class ChannelTransmitCoordinator : IAsyncDisposable
         if (active.Count == 0)
             throw new InvalidOperationException("No transmit call is waiting for microphone audio.");
 
-        await capture.WaitForSamplesAsync(
+        return await capture.WaitForSamplesAsync(
             timeout ?? MicrophoneReadyTimeout,
             cancellationToken).ConfigureAwait(false);
     }

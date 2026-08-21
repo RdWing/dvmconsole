@@ -60,13 +60,17 @@ public sealed class DebugLogWindow : Window
                 (entry, _) => new TextBlock
                 {
                     Text = entry.Summary,
-                    TextWrapping = TextWrapping.NoWrap,
+                    TextWrapping = TextWrapping.Wrap,
                     FontFamily = new FontFamily("monospace"),
                     Margin = new Thickness(0, 0, 0, 5)
                 })
         };
         logs.Bind(ItemsControl.ItemsSourceProperty, new Binding(nameof(MainWindowViewModel.FilteredDebugLogs)));
-        logScroller = new ScrollViewer { Content = logs };
+        logScroller = new ScrollViewer
+        {
+            Content = logs,
+            HorizontalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Disabled
+        };
         logViewportAnchor = new ScrollViewportAnchor<DebugLogEntry>(
             () => logScroller,
             () => logs.GetVisualDescendants().OfType<TextBlock>(),

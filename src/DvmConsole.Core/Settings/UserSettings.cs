@@ -71,7 +71,7 @@ public sealed class UserSettings
     public bool HighQualityBluetoothAudioEnabled { get; set; }
     public bool AudioInputAgcEnabled { get; set; }
     public double AudioInputAgcTargetDbfs { get; set; } = -25.0;
-    public bool KeepTransmitMicrophoneWarm { get; set; }
+    public bool KeepTransmitMicrophoneWarm { get; set; } = false;
     public double AudioInputGain { get; set; } = 1.0;
     public double AudioInputEqLowGainDb { get; set; }
     public double AudioInputEqMidGainDb { get; set; }
@@ -101,6 +101,7 @@ public sealed class UserSettings
     public bool SerialPttEnabled { get; set; }
     public string SerialPttPortName { get; set; } = string.Empty;
     public int SerialPttBaudRate { get; set; } = 9_600;
+    public List<string> ReceiveEnabledChannelKeys { get; set; } = [];
     public List<string> TransmitSelectedChannelKeys { get; set; } = [];
     public string LastDtmfDigits { get; set; } = "123";
     public double ToneFrequencyHz { get; set; } = 1000;
@@ -196,6 +197,7 @@ public sealed class UserSettingsStore
             settings.RecentCodeplugPaths = NormalizeRecentCodeplugPaths(settings.RecentCodeplugPaths);
             settings.ToolbarClocks = NormalizeToolbarClocks(settings.ToolbarClocks);
             NormalizeUiSettings(settings);
+            settings.ReceiveEnabledChannelKeys = NormalizeNames(settings.ReceiveEnabledChannelKeys);
             settings.TransmitSelectedChannelKeys = NormalizeNames(settings.TransmitSelectedChannelKeys);
             settings.ChannelWidgetPositions = NormalizeWidgetPositions(settings.ChannelWidgetPositions);
             NormalizeAudioInputSettings(settings);
@@ -452,6 +454,7 @@ public sealed class UserSettingsStore
         settings.SelectedWebStreams = NormalizeNames(settings.SelectedWebStreams);
         settings.GlobalPttKey = NormalizeGlobalPttKey(settings.GlobalPttKey);
         NormalizeSerialPttSettings(settings);
+        settings.ReceiveEnabledChannelKeys = NormalizeNames(settings.ReceiveEnabledChannelKeys);
         settings.TransmitSelectedChannelKeys = NormalizeNames(settings.TransmitSelectedChannelKeys);
         settings.ChannelWidgetPositions = NormalizeWidgetPositions(settings.ChannelWidgetPositions);
     }
@@ -619,6 +622,7 @@ public sealed class UserSettingsStore
         if (!string.IsNullOrWhiteSpace(settings.LastCodeplugPath) || settings.RecentCodeplugPaths.Count > 0 ||
             !string.IsNullOrWhiteSpace(settings.LastSelectedSystemName) ||
             !string.IsNullOrWhiteSpace(settings.LastSelectedChannelKey) ||
+            settings.ReceiveEnabledChannelKeys.Count > 0 ||
             settings.TransmitSelectedChannelKeys.Count > 0 || settings.SelectedWebStreams.Count > 0 ||
             settings.TransmitEncryptionStates.Count > 0)
         {
@@ -734,6 +738,7 @@ public sealed class UserSettingsStore
             target.RecentCodeplugPaths = source.RecentCodeplugPaths.ToList();
             target.LastSelectedSystemName = source.LastSelectedSystemName;
             target.LastSelectedChannelKey = source.LastSelectedChannelKey;
+            target.ReceiveEnabledChannelKeys = source.ReceiveEnabledChannelKeys.ToList();
             target.TransmitSelectedChannelKeys = source.TransmitSelectedChannelKeys.ToList();
             target.SelectedWebStreams = source.SelectedWebStreams.ToList();
             target.TransmitEncryptionStates = new Dictionary<string, bool>(source.TransmitEncryptionStates, StringComparer.OrdinalIgnoreCase);

@@ -149,8 +149,11 @@ public sealed class NxdnRxAudioSession : IAsyncDisposable
         const int maximumConcealedPackets = 10;
         int frameCount = checked((int)Math.Min(lostPackets, maximumConcealedPackets)) *
             lastVoiceCodewordCount;
+        var concealedFrames = new List<short[]>(frameCount);
         for (int index = 0; index < frameCount; index++)
-            await ConcealFrameAsync(cancellationToken).ConfigureAwait(false);
+            concealedFrames.Add(DecodeLostFrame());
+        await ConcealmentAudioWriter.WriteAsync(playback, concealedFrames, cancellationToken)
+            .ConfigureAwait(false);
         if (lostPackets > maximumConcealedPackets)
             decoder.Reset();
     }
@@ -158,12 +161,18 @@ public sealed class NxdnRxAudioSession : IAsyncDisposable
     private ValueTask ConcealCurrentPacketAsync(CancellationToken cancellationToken)
         => ConcealLostPacketsAsync(1, cancellationToken);
 
-    private async ValueTask ConcealFrameAsync(CancellationToken cancellationToken)
+    private ValueTask ConcealFrameAsync(CancellationToken cancellationToken)
+        => ConcealmentAudioWriter.WriteAsync(
+            playback,
+            [DecodeLostFrame()],
+            cancellationToken);
+
+    private short[] DecodeLostFrame()
     {
         short[] samples = [];
         decoder.ProcessLost(decoded => samples = decoded.ToArray());
-        await playback.WriteAsync(samples, cancellationToken).ConfigureAwait(false);
         FramesDecoded++;
+        return samples;
     }
 
     private void InvalidatePrivacyAfterLoss()

@@ -5,26 +5,37 @@ internal enum ReceiveStreamTransition
     None,
     IgnoredLate,
     Started,
+    Restarted,
     Continued,
     Resumed,
-    Ended,
     Colliding,
     GraceStarted,
-    GraceExpired
+    GraceExpired,
+    TerminationPending,
+    TerminationExpired
 }
 
 internal readonly record struct ReceiveStreamDecision(
     ReceiveStreamTransition Transition,
     uint? ActiveStreamId = null,
-    uint? EndedStreamId = null)
+    uint? EndedStreamId = null,
+    DateTimeOffset? EndedAt = null)
 {
-    public bool AcceptTraffic => Transition is not (ReceiveStreamTransition.None or ReceiveStreamTransition.IgnoredLate);
+    public bool AcceptTraffic => Transition is not (
+        ReceiveStreamTransition.None or
+        ReceiveStreamTransition.IgnoredLate or
+        ReceiveStreamTransition.TerminationPending);
 }
 
 internal sealed class ReceiveStreamLifecycle
 {
+    private static readonly TimeSpan DefaultInactivityTimeout = TimeSpan.FromSeconds(2);
+    private static readonly TimeSpan DefaultGracePeriod = TimeSpan.FromSeconds(2);
+    private static readonly TimeSpan DefaultTerminatorHold = TimeSpan.FromSeconds(4);
+    private static readonly TimeSpan DefaultTombstoneLifetime = TimeSpan.FromSeconds(5);
     private readonly TimeSpan inactivityTimeout;
     private readonly TimeSpan gracePeriod;
+    private readonly TimeSpan terminatorHold;
     private readonly TimeSpan tombstoneLifetime;
     private readonly Dictionary<uint, DateTimeOffset> tombstones = [];
     // A busy talkgroup can legitimately carry two FNE stream IDs at once.
@@ -36,19 +47,30 @@ internal sealed class ReceiveStreamLifecycle
     public ReceiveStreamLifecycle(
         TimeSpan inactivityTimeout,
         TimeSpan gracePeriod,
+        TimeSpan terminatorHold,
         TimeSpan tombstoneLifetime)
     {
         if (inactivityTimeout <= TimeSpan.Zero)
             throw new ArgumentOutOfRangeException(nameof(inactivityTimeout));
         if (gracePeriod <= TimeSpan.Zero)
             throw new ArgumentOutOfRangeException(nameof(gracePeriod));
+        if (terminatorHold <= TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(nameof(terminatorHold));
         if (tombstoneLifetime <= TimeSpan.Zero)
             throw new ArgumentOutOfRangeException(nameof(tombstoneLifetime));
 
         this.inactivityTimeout = inactivityTimeout;
         this.gracePeriod = gracePeriod;
+        this.terminatorHold = terminatorHold;
         this.tombstoneLifetime = tombstoneLifetime;
     }
+
+    public static ReceiveStreamLifecycle CreateDefault()
+        => new(
+            DefaultInactivityTimeout,
+            DefaultGracePeriod,
+            DefaultTerminatorHold,
+            DefaultTombstoneLifetime);
 
     public uint? ActiveStreamId => primaryStreamId;
 
@@ -65,9 +87,20 @@ internal sealed class ReceiveStreamLifecycle
 
         if (activeStreams.TryGetValue(streamId, out StreamActivity? activity))
         {
-            bool resumed = activity.GraceDeadline is not null;
+            bool resumed = activity.GraceDeadline is not null ||
+                           activity.TerminationDeadline is not null;
             activity.LastActivity = now;
             activity.GraceDeadline = null;
+            if (activity.TerminationDeadline is not null)
+            {
+                // The terminator arrived ahead of voice that was already in
+                // flight. Retain the terminator intent, but wait for a quiet
+                // interval after the newest delayed voice before finalizing.
+                activity.TerminationDeadline = now + terminatorHold;
+                activity.PendingEndAt = now;
+            }
+            if (primaryStreamId is null)
+                primaryStreamId = streamId;
             return new ReceiveStreamDecision(
                 streamId == primaryStreamId
                     ? resumed ? ReceiveStreamTransition.Resumed : ReceiveStreamTransition.Continued
@@ -101,9 +134,28 @@ internal sealed class ReceiveStreamLifecycle
 
         if (activeStreams.TryGetValue(streamId, out StreamActivity? activity))
         {
+            if (activity.TerminationDeadline is not null)
+            {
+                DateTimeOffset endedAt = activity.PendingEndAt ?? activity.LastActivity;
+                activeStreams.Remove(streamId);
+                if (primaryStreamId == streamId)
+                    primaryStreamId = MostRecentlyPresentableStreamId();
+                if (primaryStreamId is null)
+                    Start(streamId, now);
+                else
+                    activeStreams.Add(streamId, new StreamActivity(now));
+                return new ReceiveStreamDecision(
+                    ReceiveStreamTransition.Restarted,
+                    primaryStreamId,
+                    streamId,
+                    endedAt);
+            }
+
             bool resumed = activity.GraceDeadline is not null;
             activity.LastActivity = now;
             activity.GraceDeadline = null;
+            if (primaryStreamId is null)
+                primaryStreamId = streamId;
             return new ReceiveStreamDecision(
                 streamId == primaryStreamId
                     ? resumed ? ReceiveStreamTransition.Resumed : ReceiveStreamTransition.Continued
@@ -131,16 +183,37 @@ internal sealed class ReceiveStreamLifecycle
         PurgeTombstones(now);
         if (tombstones.ContainsKey(streamId))
             return new ReceiveStreamDecision(ReceiveStreamTransition.IgnoredLate, ActiveStreamId);
-        if (!activeStreams.Remove(streamId))
+        if (!activeStreams.TryGetValue(streamId, out StreamActivity? activity))
             return new ReceiveStreamDecision(ReceiveStreamTransition.None, ActiveStreamId);
 
-        Tombstone(streamId, now);
+        activity.TerminationDeadline ??= now + terminatorHold;
+        activity.PendingEndAt ??= now;
         if (primaryStreamId == streamId)
-            primaryStreamId = MostRecentlyActiveStreamId();
+            primaryStreamId = MostRecentlyPresentableStreamId();
         return new ReceiveStreamDecision(
-            ReceiveStreamTransition.Ended,
+            ReceiveStreamTransition.TerminationPending,
+            primaryStreamId);
+    }
+
+    // Used after the presentation lifecycle has observed the bounded hold.
+    // This keeps independently-owned decoder state aligned without starting a
+    // second hold interval.
+    public ReceiveStreamDecision Complete(uint streamId, DateTimeOffset now)
+    {
+        if (streamId == 0)
+            throw new ArgumentOutOfRangeException(nameof(streamId));
+
+        PurgeTombstones(now);
+        if (!activeStreams.TryGetValue(streamId, out StreamActivity? activity))
+            return new ReceiveStreamDecision(ReceiveStreamTransition.None, ActiveStreamId);
+
+        DateTimeOffset endedAt = activity.PendingEndAt ?? activity.LastActivity;
+        End(streamId, now);
+        return new ReceiveStreamDecision(
+            ReceiveStreamTransition.TerminationExpired,
             primaryStreamId,
-            streamId);
+            streamId,
+            endedAt);
     }
 
     public ReceiveStreamDecision Advance(DateTimeOffset now)
@@ -153,6 +226,20 @@ internal sealed class ReceiveStreamLifecycle
                      .OrderBy(pair => pair.Value.LastActivity)
                      .ToArray())
         {
+            if (activity.TerminationDeadline is DateTimeOffset terminationDeadline)
+            {
+                if (now < terminationDeadline)
+                    continue;
+
+                DateTimeOffset endedAt = activity.PendingEndAt ?? activity.LastActivity;
+                End(streamId, now);
+                return new ReceiveStreamDecision(
+                    ReceiveStreamTransition.TerminationExpired,
+                    primaryStreamId,
+                    streamId,
+                    endedAt);
+            }
+
             DateTimeOffset inactivityDeadline = activity.LastActivity + inactivityTimeout;
             if (activity.GraceDeadline is null)
             {
@@ -198,13 +285,15 @@ internal sealed class ReceiveStreamLifecycle
             return;
         Tombstone(streamId, now);
         if (primaryStreamId == streamId)
-            primaryStreamId = MostRecentlyActiveStreamId();
+            primaryStreamId = MostRecentlyPresentableStreamId();
     }
 
-    private uint? MostRecentlyActiveStreamId()
-        => activeStreams.Count == 0
-            ? null
-            : activeStreams.MaxBy(pair => pair.Value.LastActivity).Key;
+    private uint? MostRecentlyPresentableStreamId()
+        => activeStreams
+            .Where(pair => pair.Value.TerminationDeadline is null)
+            .OrderByDescending(pair => pair.Value.LastActivity)
+            .Select(pair => (uint?)pair.Key)
+            .FirstOrDefault();
 
     private void Tombstone(uint streamId, DateTimeOffset now)
         => tombstones[streamId] = now + tombstoneLifetime;
@@ -224,5 +313,7 @@ internal sealed class ReceiveStreamLifecycle
     {
         public DateTimeOffset LastActivity { get; set; } = lastActivity;
         public DateTimeOffset? GraceDeadline { get; set; }
+        public DateTimeOffset? TerminationDeadline { get; set; }
+        public DateTimeOffset? PendingEndAt { get; set; }
     }
 }

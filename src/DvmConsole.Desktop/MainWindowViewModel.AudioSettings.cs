@@ -299,12 +299,17 @@ public sealed partial class MainWindowViewModel
 
             await audioCoordinator.StopAsync();
             foreach (ChannelViewModel channel in activeChannels)
-                await StartAudioAsync(channel);
+            {
+                if (channel.IsAudioEnabled)
+                    await StartAudioAsync(channel);
+                else if (channel.IsRecordingEnabled)
+                    await EnsureRecordingAudioAsync(channel);
+            }
 
             int restarted = activeChannels.Count(audioCoordinator.IsActive);
             AudioStatusText = restarted == activeChannels.Length
-                ? $"Audio settings changed; restarted {restarted} active listening channel(s)."
-                : $"Audio settings changed; restarted {restarted} of {activeChannels.Length} listening channel(s).";
+                ? $"Audio settings changed; restarted {restarted} receive session(s)."
+                : $"Audio settings changed; restarted {restarted} of {activeChannels.Length} receive session(s).";
         }
         finally
         {
@@ -353,7 +358,12 @@ public sealed partial class MainWindowViewModel
             {
                 await audioCoordinator.StopAsync().ConfigureAwait(false);
                 foreach (ChannelViewModel channel in activeChannels)
-                    await StartAudioAsync(channel).ConfigureAwait(false);
+                {
+                    if (channel.IsAudioEnabled)
+                        await StartAudioAsync(channel).ConfigureAwait(false);
+                    else if (channel.IsRecordingEnabled)
+                        await EnsureRecordingAudioAsync(channel).ConfigureAwait(false);
+                }
             }
 
             ChannelViewModel[] patchChannels = GetActivePatchSourceChannels();

@@ -114,6 +114,26 @@ public sealed class ChannelReceiveAudioSession : IAsyncDisposable
         return analogSession!.ProcessAsync(traffic, cancellationToken);
     }
 
+    // Marks decoder input complete without closing the shared output route.
+    // Mixer-backed playback uses this to release short calls that end before
+    // reaching the normal startup cushion and to drain their queued frames.
+    public ValueTask CompletePlaybackAsync(CancellationToken cancellationToken = default)
+    {
+        ObjectDisposedException.ThrowIf(disposed, this);
+        return playback.FlushAsync(cancellationToken);
+    }
+
+    public void SetLivePlaybackEnabled(bool enabled)
+    {
+        ObjectDisposedException.ThrowIf(disposed, this);
+        if (playback is not ILiveAudioPlaybackControl playbackControl)
+        {
+            throw new NotSupportedException(
+                "This receive playback path does not support independent live presentation.");
+        }
+        playbackControl.LivePlaybackEnabled = enabled;
+    }
+
     public async ValueTask DisposeAsync()
     {
         if (disposed)

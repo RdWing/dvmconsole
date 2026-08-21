@@ -1,5 +1,4 @@
 using Avalonia.Media;
-using DvmConsole.Core.Runtime;
 using System.ComponentModel;
 
 namespace DvmConsole.Desktop;
@@ -38,7 +37,7 @@ public sealed class ZoneViewModel : INotifyPropertyChanged
     public IBrush TabTextBrush => CreateBrush(TabTextColor, darkMode ? "#DCE3EB" : "#18212B");
     public IBrush ActivityBrush => activityBrush;
     public bool IsReceiving => receiveActivityResolver?.Invoke() ??
-        Channels.Any(channel => channel.State == ChannelRuntimeState.Receiving);
+        Channels.Any(channel => channel.IsReceivePresentationActive);
     public double ActivityBarOpacity => IsReceiving ? 1.0 : 0.12;
     private double widgetCardHeight = 122;
     public double WidgetCanvasWidth => Math.Max(1, Channels.Count == 0 ? 0 : Channels.Max(channel => channel.WidgetX + channel.CardWidth + 12));
@@ -86,11 +85,8 @@ public sealed class ZoneViewModel : INotifyPropertyChanged
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(WidgetCanvasWidth)));
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(WidgetCanvasHeight)));
         }
-        else if (e.PropertyName == nameof(ChannelViewModel.State))
-        {
-            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsReceiving)));
-            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ActivityBarOpacity)));
-        }
+        else if (e.PropertyName == nameof(ChannelViewModel.IsReceivePresentationActive))
+            RefreshReceiveActivity();
     }
 
     private static IBrush CreateBrush(string? color, string fallback)

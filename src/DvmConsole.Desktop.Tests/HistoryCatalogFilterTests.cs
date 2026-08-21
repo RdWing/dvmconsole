@@ -35,6 +35,8 @@ public sealed class HistoryCatalogFilterTests
         Assert.True(new HistoryCatalogFilter(SearchText: "alpha-dispatch.wav").Matches(entry));
         Assert.True(new HistoryCatalogFilter(SearchText: "Medic 42").Matches(entry));
         Assert.True(new HistoryCatalogFilter(SearchText: "peak 9000").Matches(entry));
+        Assert.True(new HistoryCatalogFilter(SearchText: "Alpha Medic 101 peak").Matches(entry));
+        Assert.False(new HistoryCatalogFilter(SearchText: "Alpha Oakland").Matches(entry));
         Assert.False(new HistoryCatalogFilter(SearchText: "missing").Matches(entry));
     }
 

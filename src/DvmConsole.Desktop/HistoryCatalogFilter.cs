@@ -43,7 +43,7 @@ public sealed record HistoryCatalogFilter(
         if (EndDate is DateTimeOffset endDate && localDate > endDate.Date)
             return false;
 
-        return MatchesText(
+        return SearchTextMatcher.MatchesAllTerms(
             SearchText,
             entry.SystemName,
             entry.DisplayChannelText,

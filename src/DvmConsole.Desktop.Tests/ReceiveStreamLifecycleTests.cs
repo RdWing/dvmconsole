@@ -6,17 +6,26 @@ public sealed class ReceiveStreamLifecycleTests
 {
     private static readonly TimeSpan InactivityTimeout = TimeSpan.FromSeconds(2);
     private static readonly TimeSpan GracePeriod = TimeSpan.FromSeconds(2);
+    private static readonly TimeSpan TerminatorHold = TimeSpan.FromSeconds(2);
     private static readonly TimeSpan TombstoneLifetime = TimeSpan.FromSeconds(5);
 
     [Fact]
-    public void ExplicitTerminationTombstonesLateVoice()
+    public void TerminatorWaitsForQuietAndAcceptsDelayedVoice()
     {
         var lifecycle = CreateLifecycle();
         DateTimeOffset now = DateTimeOffset.UnixEpoch;
 
         Assert.Equal(ReceiveStreamTransition.Started, lifecycle.ObserveVoice(7, now).Transition);
-        Assert.Equal(ReceiveStreamTransition.Ended, lifecycle.ObserveTerminator(7, now.AddSeconds(1)).Transition);
-        Assert.Equal(ReceiveStreamTransition.IgnoredLate, lifecycle.ObserveVoice(7, now.AddSeconds(2)).Transition);
+        Assert.Equal(
+            ReceiveStreamTransition.TerminationPending,
+            lifecycle.ObserveTerminator(7, now.AddSeconds(1)).Transition);
+        Assert.Equal(ReceiveStreamTransition.Resumed, lifecycle.ObserveVoice(7, now.AddSeconds(2)).Transition);
+        Assert.Equal(ReceiveStreamTransition.None, lifecycle.Advance(now.AddSeconds(3.9)).Transition);
+
+        ReceiveStreamDecision expired = lifecycle.Advance(now.AddSeconds(4));
+        Assert.Equal(ReceiveStreamTransition.TerminationExpired, expired.Transition);
+        Assert.Equal(now.AddSeconds(2), expired.EndedAt);
+        Assert.Equal(ReceiveStreamTransition.IgnoredLate, lifecycle.ObserveVoice(7, now.AddSeconds(4.5)).Transition);
         Assert.Null(lifecycle.ActiveStreamId);
     }
 
@@ -30,10 +39,7 @@ public sealed class ReceiveStreamLifecycleTests
         lifecycle.ObserveTerminator(7, now.AddSeconds(1));
 
         Assert.Equal(
-            ReceiveStreamTransition.IgnoredLate,
-            lifecycle.ObserveVoice(7, now.AddSeconds(2)).Transition);
-        Assert.Equal(
-            ReceiveStreamTransition.Started,
+            ReceiveStreamTransition.Restarted,
             lifecycle.ObserveDefinitiveStart(7, now.AddSeconds(2.1)).Transition);
         Assert.Equal((uint)7, lifecycle.ActiveStreamId);
     }
@@ -78,8 +84,30 @@ public sealed class ReceiveStreamLifecycleTests
         Assert.Null(decision.EndedStreamId);
         Assert.Equal((uint)10, decision.ActiveStreamId);
         Assert.Equal(ReceiveStreamTransition.Continued, lifecycle.ObserveVoice(10, now.AddSeconds(1)).Transition);
-        Assert.Equal(ReceiveStreamTransition.Ended, lifecycle.ObserveTerminator(11, now.AddSeconds(1.1)).Transition);
+        Assert.Equal(
+            ReceiveStreamTransition.TerminationPending,
+            lifecycle.ObserveTerminator(11, now.AddSeconds(1.1)).Transition);
+        Assert.Equal(
+            ReceiveStreamTransition.TerminationExpired,
+            lifecycle.Advance(now.AddSeconds(3.1)).Transition);
         Assert.Equal((uint)10, lifecycle.ActiveStreamId);
+    }
+
+    [Fact]
+    public void NewStreamStartsWhilePreviousStreamAwaitsTermination()
+    {
+        var lifecycle = CreateLifecycle();
+        DateTimeOffset now = DateTimeOffset.UnixEpoch;
+
+        lifecycle.ObserveVoice(10, now);
+        lifecycle.ObserveTerminator(10, now.AddSeconds(1));
+
+        ReceiveStreamDecision next = lifecycle.ObserveVoice(11, now.AddSeconds(1.1));
+
+        Assert.Equal(ReceiveStreamTransition.Started, next.Transition);
+        Assert.Equal((uint)11, lifecycle.ActiveStreamId);
+        Assert.True(lifecycle.IsActive(10));
+        Assert.True(lifecycle.IsActive(11));
     }
 
     [Fact]
@@ -89,7 +117,7 @@ public sealed class ReceiveStreamLifecycleTests
         DateTimeOffset now = DateTimeOffset.UnixEpoch;
 
         lifecycle.ObserveVoice(12, now);
-        lifecycle.ObserveTerminator(12, now.AddSeconds(1));
+        lifecycle.Complete(12, now.AddSeconds(1));
 
         Assert.Equal(ReceiveStreamTransition.Started, lifecycle.ObserveVoice(12, now.AddSeconds(6)).Transition);
     }
@@ -126,5 +154,5 @@ public sealed class ReceiveStreamLifecycleTests
     }
 
     private static ReceiveStreamLifecycle CreateLifecycle()
-        => new(InactivityTimeout, GracePeriod, TombstoneLifetime);
+        => new(InactivityTimeout, GracePeriod, TerminatorHold, TombstoneLifetime);
 }

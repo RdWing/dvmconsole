@@ -1,6 +1,13 @@
 using DvmConsole.Audio;
+using System.Diagnostics;
 
 namespace DvmConsole.Desktop;
+
+public sealed record MicrophoneReadinessTiming(
+    TimeSpan CaptureStartReturned,
+    TimeSpan FirstSamplesReceived,
+    TimeSpan SustainedReadinessReached,
+    long RequiredSamples);
 
 // Fans one microphone capture stream out to independently-owned transmit
 // calls. Each lease has the normal <see cref="IAudioCapture"/> lifecycle,
@@ -15,6 +22,10 @@ internal sealed class SharedAudioCapture : IAsyncDisposable
     private readonly long requiredReadinessSamples;
     private TaskCompletionSource<bool> samplesReady = CreateReadinessSource();
     private long observedReadinessSamples;
+    private long readinessStartedTimestamp;
+    private long captureStartCompletedTimestamp;
+    private long firstSamplesTimestamp;
+    private long readinessCompletedTimestamp;
     private bool samplesSuppressed;
     private bool disposed;
 
@@ -67,7 +78,7 @@ internal sealed class SharedAudioCapture : IAsyncDisposable
         }
     }
 
-    public async Task WaitForSamplesAsync(
+    public async Task<MicrophoneReadinessTiming> WaitForSamplesAsync(
         TimeSpan timeout,
         CancellationToken cancellationToken = default)
     {
@@ -82,6 +93,20 @@ internal sealed class SharedAudioCapture : IAsyncDisposable
         }
 
         await ready.WaitAsync(timeout, cancellationToken).ConfigureAwait(false);
+        lock (sync)
+        {
+            long started = readinessStartedTimestamp;
+            if (started == 0 || firstSamplesTimestamp == 0 || readinessCompletedTimestamp == 0)
+                throw new InvalidOperationException("Microphone readiness completed without timing checkpoints.");
+            long captureStarted = captureStartCompletedTimestamp == 0
+                ? firstSamplesTimestamp
+                : captureStartCompletedTimestamp;
+            return new MicrophoneReadinessTiming(
+                Stopwatch.GetElapsedTime(started, captureStarted),
+                Stopwatch.GetElapsedTime(started, firstSamplesTimestamp),
+                Stopwatch.GetElapsedTime(started, readinessCompletedTimestamp),
+                requiredReadinessSamples);
+        }
     }
 
     public async ValueTask DisposeAsync()
@@ -116,6 +141,10 @@ internal sealed class SharedAudioCapture : IAsyncDisposable
             {
                 samplesReady = CreateReadinessSource();
                 observedReadinessSamples = 0;
+                readinessStartedTimestamp = Stopwatch.GetTimestamp();
+                captureStartCompletedTimestamp = 0;
+                firstSamplesTimestamp = 0;
+                readinessCompletedTimestamp = 0;
             }
             lease.SetRunning(true);
         }
@@ -126,6 +155,8 @@ internal sealed class SharedAudioCapture : IAsyncDisposable
         try
         {
             await source.StartAsync(cancellationToken).ConfigureAwait(false);
+            lock (sync)
+                captureStartCompletedTimestamp = Stopwatch.GetTimestamp();
         }
         catch (Exception exception)
         {
@@ -175,11 +206,17 @@ internal sealed class SharedAudioCapture : IAsyncDisposable
             // profile is still changing, so transmit readiness can require a
             // sustained interval rather than treating that callback as proof
             // that the route has settled.
+            if (firstSamplesTimestamp == 0)
+                firstSamplesTimestamp = Stopwatch.GetTimestamp();
             observedReadinessSamples = Math.Min(
                 requiredReadinessSamples,
                 observedReadinessSamples + args.Samples.Length);
             if (observedReadinessSamples >= requiredReadinessSamples)
+            {
+                if (readinessCompletedTimestamp == 0)
+                    readinessCompletedTimestamp = Stopwatch.GetTimestamp();
                 samplesReady.TrySetResult(true);
+            }
             if (samplesSuppressed)
                 return;
 

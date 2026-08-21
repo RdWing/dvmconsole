@@ -1,6 +1,7 @@
 using DvmConsole.Core.Configuration;
 using DvmConsole.Desktop;
 using DvmConsole.FneClient;
+using System.Diagnostics;
 using Xunit;
 
 namespace DvmConsole.Desktop.Tests;
@@ -101,6 +102,56 @@ public sealed class ChannelReceiveWorkQueueTests
         Assert.Contains(processed, item => item.Sequence == 2 && item.StreamId == 100);
         Assert.Contains(processed, item => item.Sequence == 4 && item.StreamId == 100);
         Assert.DoesNotContain(processed, item => item.Sequence == 3 && item.StreamId == 200);
+    }
+
+    [Fact]
+    public async Task MeasuresIngressQueueAndProcessingLatency()
+    {
+        var processed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var observed = new TaskCompletionSource<ReceiveWorkItemTiming>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var channel = CreateChannel("Dispatch", "100");
+        await using var queue = new ChannelReceiveWorkQueue(
+            async (_, _) =>
+            {
+                await Task.Delay(15);
+                processed.TrySetResult();
+            },
+            timingObserver: (_, timing) => observed.TrySetResult(timing));
+        long ingressTimestamp = Stopwatch.GetTimestamp() - (Stopwatch.Frequency / 20);
+
+        Assert.True(queue.Enqueue(
+            channel,
+            CreateTraffic(1),
+            ingressTimestamp,
+            out bool dropped));
+        Assert.False(dropped);
+        await processed.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        ReceiveWorkItemTiming timing = await observed.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        ReceiveWorkQueueDiagnostics diagnostics = queue.GetDiagnostics(channel);
+
+        Assert.True(timing.IngressToQueueDelay >= TimeSpan.FromMilliseconds(40));
+        Assert.True(timing.ProcessingDuration >= TimeSpan.FromMilliseconds(10));
+        Assert.True(timing.EndToEndDelay >= timing.IngressToQueueDelay);
+        Assert.Equal(1, diagnostics.ProcessedFrames);
+        Assert.Equal(timing.EndToEndDelay, diagnostics.MaximumEndToEndDelay);
+    }
+
+    [Fact]
+    public async Task MeasuresFneInterArrivalDelayPerStream()
+    {
+        var channel = CreateChannel("Dispatch", "100");
+        await using var queue = new ChannelReceiveWorkQueue((_, _) => Task.CompletedTask);
+        long secondIngress = Stopwatch.GetTimestamp();
+        long firstIngress = secondIngress - (Stopwatch.Frequency / 2);
+
+        queue.Enqueue(channel, CreateTraffic(1), firstIngress, out _);
+        queue.Enqueue(channel, CreateTraffic(2), secondIngress, out _);
+        await queue.StopAsync(channel);
+
+        Assert.True(
+            queue.GetDiagnostics(channel).MaximumInterArrivalDelay >=
+            TimeSpan.FromMilliseconds(450));
     }
 
     private static ChannelViewModel CreateChannel(string name, string tgid)

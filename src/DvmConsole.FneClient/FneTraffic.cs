@@ -1,3 +1,5 @@
+using System.Diagnostics;
+
 namespace DvmConsole.FneClient;
 
 public enum FneTrafficProtocol
@@ -24,7 +26,8 @@ public sealed record FneTrafficFrame
         string subtype,
         ushort packetSequence,
         uint streamId,
-        ReadOnlySpan<byte> payload)
+        ReadOnlySpan<byte> payload,
+        long fneBoundaryTimestamp = 0)
     {
         Protocol = protocol;
         PeerId = peerId;
@@ -37,6 +40,9 @@ public sealed record FneTrafficFrame
         PacketSequence = packetSequence;
         StreamId = streamId;
         Payload = payload.ToArray();
+        FneBoundaryTimestamp = fneBoundaryTimestamp > 0
+            ? fneBoundaryTimestamp
+            : Stopwatch.GetTimestamp();
     }
 
     public FneTrafficProtocol Protocol { get; }
@@ -50,4 +56,7 @@ public sealed record FneTrafficFrame
     public ushort PacketSequence { get; }
     public uint StreamId { get; }
     public byte[] Payload { get; }
+    // Monotonic timestamp taken at the app-owned fnecore event boundary. It
+    // bounds delay above fnecore without depending on wall-clock adjustments.
+    public long FneBoundaryTimestamp { get; }
 }

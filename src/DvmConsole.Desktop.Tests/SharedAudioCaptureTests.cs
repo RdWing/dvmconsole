@@ -46,15 +46,18 @@ public sealed class SharedAudioCaptureTests
 
         shared.SetSamplesSuppressed(true);
         await lease.StartAsync();
-        Task ready = shared.WaitForSamplesAsync(TimeSpan.FromSeconds(1));
+        Task<MicrophoneReadinessTiming> ready = shared.WaitForSamplesAsync(TimeSpan.FromSeconds(1));
         Assert.False(ready.IsCompleted);
 
         source.Emit([]);
         Assert.False(ready.IsCompleted);
         source.Emit([1, 2, 3]);
 
-        await ready;
+        MicrophoneReadinessTiming timing = await ready;
         Assert.Empty(published);
+        Assert.Equal(1, timing.RequiredSamples);
+        Assert.True(timing.CaptureStartReturned >= TimeSpan.Zero);
+        Assert.True(timing.FirstSamplesReceived <= timing.SustainedReadinessReached);
     }
 
     [Fact]
@@ -70,15 +73,18 @@ public sealed class SharedAudioCaptureTests
 
         shared.SetSamplesSuppressed(true);
         await lease.StartAsync();
-        Task ready = shared.WaitForSamplesAsync(TimeSpan.FromSeconds(1));
+        Task<MicrophoneReadinessTiming> ready = shared.WaitForSamplesAsync(TimeSpan.FromSeconds(1));
 
         source.Emit(new short[160]);
         source.Emit(new short[160]);
         Assert.False(ready.IsCompleted);
         source.Emit(new short[80]);
 
-        await ready;
+        MicrophoneReadinessTiming timing = await ready;
         Assert.Empty(published);
+        Assert.Equal(400, timing.RequiredSamples);
+        Assert.True(timing.CaptureStartReturned >= TimeSpan.Zero);
+        Assert.True(timing.FirstSamplesReceived <= timing.SustainedReadinessReached);
     }
 
     private sealed class FakeCapture : IAudioCapture

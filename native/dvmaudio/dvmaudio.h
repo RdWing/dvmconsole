@@ -66,6 +66,8 @@ int32_t dvm_audio_stream_get_sample_rate(DvmAudioStream *stream);
 int32_t dvm_audio_stream_read(DvmAudioStream *stream, int16_t *samples, uint32_t capacity);
 int32_t dvm_audio_stream_write(DvmAudioStream *stream, const int16_t *samples, uint32_t count);
 uint32_t dvm_audio_stream_queued_samples(DvmAudioStream *stream);
+uint64_t dvm_audio_stream_starved_samples(DvmAudioStream *stream);
+void dvm_audio_stream_end_playback_continuity(DvmAudioStream *stream);
 void dvm_audio_stream_destroy(DvmAudioStream *stream);
 
 // One full-duplex Voice Processing I/O unit. Playback written here is the
@@ -87,6 +89,8 @@ int32_t dvm_audio_voice_processing_write(
     const int16_t *samples,
     uint32_t count);
 uint32_t dvm_audio_voice_processing_queued_samples(DvmVoiceProcessingStream *stream);
+uint64_t dvm_audio_voice_processing_starved_samples(DvmVoiceProcessingStream *stream);
+void dvm_audio_voice_processing_end_playback_continuity(DvmVoiceProcessingStream *stream);
 void dvm_audio_voice_processing_destroy(DvmVoiceProcessingStream *stream);
 
 #ifdef __cplusplus

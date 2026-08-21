@@ -187,6 +187,9 @@ fn rate(mode: u32) -> Option<Rate> {
     }
 }
 
+// ClassicalConfig is non-exhaustive, so external consumers must begin with its
+// default value before applying the complete operator-selected table.
+#[allow(clippy::field_reassign_with_default)]
 fn receive_enhancement(mode: u32, options: ReceiveAudioProcessingOptions) -> EnhancementMode {
     let mut config = ClassicalConfig::default();
     config.biquads = [

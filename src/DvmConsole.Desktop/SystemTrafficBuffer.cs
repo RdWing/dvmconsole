@@ -3,11 +3,17 @@ using DvmConsole.Media;
 
 namespace DvmConsole.Desktop;
 
+internal sealed record SystemTrafficWorkItem(
+    FneTrafficFrame Traffic,
+    DateTimeOffset ReceivedAt,
+    long ReceivedTimestamp,
+    IReadOnlyList<ChannelViewModel> PreEnqueuedAudioChannels);
+
 // Bounds media waiting for the UI-thread routing pass. Lifecycle frames are
 // retained preferentially so dropping stale voice cannot strand a call active.
 internal sealed class SystemTrafficBuffer
 {
-    private readonly LinkedList<FneTrafficFrame> pending = [];
+    private readonly LinkedList<SystemTrafficWorkItem> pending = [];
     private readonly int maximumCount;
 
     public SystemTrafficBuffer(int maximumCount = 256)
@@ -21,53 +27,70 @@ internal sealed class SystemTrafficBuffer
     public long DroppedCount { get; private set; }
 
     public bool Enqueue(FneTrafficFrame traffic)
+        => Enqueue(new SystemTrafficWorkItem(
+            traffic,
+            DateTimeOffset.UtcNow,
+            0,
+            []));
+
+    public bool Enqueue(SystemTrafficWorkItem item)
     {
-        ArgumentNullException.ThrowIfNull(traffic);
+        ArgumentNullException.ThrowIfNull(item);
+        FneTrafficFrame traffic = item.Traffic;
         if (pending.Count >= maximumCount)
         {
             DroppedCount++;
             if (!MakeRoomFor(traffic))
                 return false;
         }
-        pending.AddLast(traffic);
+        pending.AddLast(item);
         return true;
     }
 
     public bool TryDequeue(out FneTrafficFrame? traffic)
     {
+        bool found = TryDequeue(out SystemTrafficWorkItem? item);
+        traffic = item?.Traffic;
+        return found;
+    }
+
+    public bool TryDequeue(out SystemTrafficWorkItem? item)
+    {
         if (pending.First is null)
         {
-            traffic = null;
+            item = null;
             return false;
         }
 
-        traffic = pending.First.Value;
+        item = pending.First.Value;
         pending.RemoveFirst();
         return true;
     }
 
     private bool MakeRoomFor(FneTrafficFrame incoming)
     {
-        LinkedListNode<FneTrafficFrame>? candidate = pending.First;
+        LinkedListNode<SystemTrafficWorkItem>? candidate = pending.First;
         while (candidate is not null)
         {
-            if (!IsLifecycleTraffic(candidate.Value) && HasLaterVoiceForSameStream(candidate))
+            if (!IsLifecycleTraffic(candidate.Value.Traffic) &&
+                HasLaterVoiceForSameStream(candidate))
                 break;
             candidate = candidate.Next;
         }
 
-        if (candidate is null && IsTerminator(incoming))
+        if (candidate is null && ReceiveTrafficClassifier.IsTerminator(incoming))
         {
             candidate = pending.First;
             while (candidate is not null &&
-                   (IsLifecycleTraffic(candidate.Value) || candidate.Value.StreamId == incoming.StreamId))
+                   (IsLifecycleTraffic(candidate.Value.Traffic) ||
+                    candidate.Value.Traffic.StreamId == incoming.StreamId))
             {
                 candidate = candidate.Next;
             }
         }
 
         candidate ??= pending.First;
-        while (candidate is not null && IsLifecycleTraffic(candidate.Value))
+        while (candidate is not null && IsLifecycleTraffic(candidate.Value.Traffic))
             candidate = candidate.Next;
 
         if (candidate is not null)
@@ -83,26 +106,19 @@ internal sealed class SystemTrafficBuffer
         return true;
     }
 
-    private static bool HasLaterVoiceForSameStream(LinkedListNode<FneTrafficFrame> candidate)
+    private static bool HasLaterVoiceForSameStream(
+        LinkedListNode<SystemTrafficWorkItem> candidate)
     {
-        for (LinkedListNode<FneTrafficFrame>? later = candidate.Next; later is not null; later = later.Next)
+        for (LinkedListNode<SystemTrafficWorkItem>? later = candidate.Next;
+             later is not null;
+             later = later.Next)
         {
-            if (!IsLifecycleTraffic(later.Value) && later.Value.StreamId == candidate.Value.StreamId)
+            if (!IsLifecycleTraffic(later.Value.Traffic) &&
+                later.Value.Traffic.StreamId == candidate.Value.Traffic.StreamId)
                 return true;
         }
         return false;
     }
-
-    private static bool IsTerminator(FneTrafficFrame traffic)
-        => traffic.FrameType.Equals("TERMINATOR", StringComparison.OrdinalIgnoreCase) ||
-           (traffic.Protocol switch
-            {
-                FneTrafficProtocol.Dmr => traffic.Subtype.Equals("TERMINATOR_WITH_LC", StringComparison.OrdinalIgnoreCase),
-                FneTrafficProtocol.P25 => traffic.Subtype.Equals("TDU", StringComparison.OrdinalIgnoreCase) ||
-                                           traffic.Subtype.Equals("TDULC", StringComparison.OrdinalIgnoreCase),
-                FneTrafficProtocol.Analog => traffic.Subtype.Equals("TERMINATOR", StringComparison.OrdinalIgnoreCase),
-                _ => false
-            });
 
     private static bool IsLifecycleTraffic(FneTrafficFrame traffic)
     {
@@ -120,23 +136,8 @@ internal sealed class SystemTrafficBuffer
             return true;
         }
 
-        if (traffic.FrameType.Equals("TERMINATOR", StringComparison.OrdinalIgnoreCase))
-            return true;
-        if (traffic.Protocol == FneTrafficProtocol.Dmr &&
-            traffic.FrameType.Equals("DATA_SYNC", StringComparison.OrdinalIgnoreCase) &&
-            (traffic.Subtype.Equals("VOICE_PI_HEADER", StringComparison.OrdinalIgnoreCase) ||
-             traffic.Subtype.Equals("VOICE_LC_HEADER", StringComparison.OrdinalIgnoreCase)))
-        {
-            return true;
-        }
-
-        return traffic.Protocol switch
-        {
-            FneTrafficProtocol.Dmr => traffic.Subtype.Equals("TERMINATOR_WITH_LC", StringComparison.OrdinalIgnoreCase),
-            FneTrafficProtocol.P25 => traffic.Subtype.Equals("TDU", StringComparison.OrdinalIgnoreCase) ||
-                                       traffic.Subtype.Equals("TDULC", StringComparison.OrdinalIgnoreCase),
-            FneTrafficProtocol.Analog => traffic.Subtype.Equals("TERMINATOR", StringComparison.OrdinalIgnoreCase),
-            _ => false
-        };
+        return ReceiveTrafficClassifier.IsTerminator(traffic) ||
+               ReceiveTrafficClassifier.IsDefinitiveStart(traffic) ||
+               ReceiveTrafficClassifier.IsDmrPrivacyHeader(traffic);
     }
 }

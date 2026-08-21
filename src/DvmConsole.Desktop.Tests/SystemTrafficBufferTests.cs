@@ -91,6 +91,36 @@ public sealed class SystemTrafficBufferTests
         Assert.Equal("TERMINATOR", second.FrameType);
     }
 
+    [Fact]
+    public void PreservesPriorityAudioDispatchMetadataForUiProcessing()
+    {
+        var buffer = new SystemTrafficBuffer();
+        FneTrafficFrame traffic = Traffic(1);
+        var channel = new ChannelViewModel(new DvmConsole.Core.Configuration.ChannelConfiguration
+        {
+            Name = "Dispatch",
+            System = "System 1",
+            Tgid = "100",
+            Mode = "dmr",
+            Slot = 1
+        });
+        DateTimeOffset receivedAt = DateTimeOffset.UtcNow;
+        var expected = new SystemTrafficWorkItem(
+            traffic,
+            receivedAt,
+            123,
+            [channel]);
+
+        Assert.True(buffer.Enqueue(expected));
+        Assert.True(buffer.TryDequeue(out SystemTrafficWorkItem? actual));
+
+        Assert.NotNull(actual);
+        Assert.Same(traffic, actual.Traffic);
+        Assert.Equal(receivedAt, actual.ReceivedAt);
+        Assert.Equal(123, actual.ReceivedTimestamp);
+        Assert.Same(channel, Assert.Single(actual.PreEnqueuedAudioChannels));
+    }
+
     private static FneTrafficFrame Traffic(
         ushort sequence,
         bool terminator = false,

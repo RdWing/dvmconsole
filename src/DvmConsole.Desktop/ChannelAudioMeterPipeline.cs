@@ -1,3 +1,5 @@
+using System.Diagnostics;
+
 namespace DvmConsole.Desktop;
 
 internal readonly record struct ChannelAudioMeterUpdate(
@@ -6,9 +8,9 @@ internal readonly record struct ChannelAudioMeterUpdate(
     ChannelAudioDirection Direction,
     double Level);
 
-// Buffers decoded PCM meter readings by audio duration rather than network
-// packet cadence. DMR and P25 deliver different numbers of 20 ms codewords per
-// packet, but this pipeline presents both at the same fixed UI cadence.
+// Buffers PCM meter readings by audio duration rather than network packet
+// cadence. Receive observations arrive when frames enter the physical output
+// queue and remain held until their estimated presentation time.
 internal sealed class ChannelAudioMeterPipeline
 {
     internal const int RefreshIntervalMilliseconds = 50;
@@ -26,7 +28,8 @@ internal sealed class ChannelAudioMeterPipeline
         ChannelViewModel channel,
         uint streamId,
         ReadOnlySpan<short> samples,
-        ChannelAudioDirection direction)
+        ChannelAudioDirection direction,
+        TimeSpan presentationDelay = default)
     {
         ArgumentNullException.ThrowIfNull(channel);
         if (streamId == 0 || samples.IsEmpty)
@@ -46,7 +49,13 @@ internal sealed class ChannelAudioMeterPipeline
                 state.Reset(streamId);
             }
 
-            state.Enqueue(level, samples.Length);
+            long delayTicks = presentationDelay <= TimeSpan.Zero
+                ? 0
+                : (long)(presentationDelay.TotalSeconds * Stopwatch.Frequency);
+            state.Enqueue(
+                level,
+                samples.Length,
+                checked(Stopwatch.GetTimestamp() + delayTicks));
             state.TrimToMaximum(MaximumBufferedSamples);
         }
     }
@@ -60,11 +69,12 @@ internal sealed class ChannelAudioMeterPipeline
 
             var updates = new List<ChannelAudioMeterUpdate>(states.Count);
             List<(ChannelViewModel Channel, ChannelAudioDirection Direction)>? completed = null;
+            long now = Stopwatch.GetTimestamp();
             foreach (KeyValuePair<(ChannelViewModel Channel, ChannelAudioDirection Direction), MeterState> pair in states)
             {
                 (ChannelViewModel channel, ChannelAudioDirection direction) = pair.Key;
                 MeterState state = pair.Value;
-                double target = state.ReadAverage(SamplesPerRefresh, out bool hadSamples);
+                double target = state.ReadAverage(SamplesPerRefresh, now, out bool hadSamples);
                 if (hadSamples)
                 {
                     state.DisplayLevel = target >= state.DisplayLevel
@@ -114,9 +124,9 @@ internal sealed class ChannelAudioMeterPipeline
             StreamId = streamId;
         }
 
-        public void Enqueue(double level, int sampleCount)
+        public void Enqueue(double level, int sampleCount, long availableAtTimestamp)
         {
-            segments.Enqueue(new MeterSegment(level, sampleCount));
+            segments.Enqueue(new MeterSegment(level, sampleCount, availableAtTimestamp));
             BufferedSamples = checked(BufferedSamples + sampleCount);
         }
 
@@ -132,13 +142,19 @@ internal sealed class ChannelAudioMeterPipeline
             }
         }
 
-        public double ReadAverage(int requestedSamples, out bool hadSamples)
+        public double ReadAverage(
+            int requestedSamples,
+            long now,
+            out bool hadSamples)
         {
             int remainingBudget = requestedSamples;
             int consumedSamples = 0;
             double weightedLevel = 0;
             while (remainingBudget > 0 && segments.TryPeek(out MeterSegment? segment))
             {
+                if (segment.AvailableAtTimestamp > now)
+                    break;
+
                 int count = Math.Min(remainingBudget, segment.RemainingSamples);
                 weightedLevel += segment.Level * count;
                 consumedSamples += count;
@@ -154,9 +170,13 @@ internal sealed class ChannelAudioMeterPipeline
         }
     }
 
-    private sealed class MeterSegment(double level, int sampleCount)
+    private sealed class MeterSegment(
+        double level,
+        int sampleCount,
+        long availableAtTimestamp)
     {
         public double Level { get; } = level;
         public int RemainingSamples { get; set; } = sampleCount;
+        public long AvailableAtTimestamp { get; } = availableAtTimestamp;
     }
 }

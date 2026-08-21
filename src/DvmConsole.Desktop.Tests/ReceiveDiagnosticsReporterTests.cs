@@ -1,5 +1,4 @@
 using DvmConsole.Core.Configuration;
-using DvmConsole.Media;
 using Xunit;
 
 namespace DvmConsole.Desktop.Tests;
@@ -12,13 +11,13 @@ public sealed class ReceiveDiagnosticsReporterTests
         var reporter = new ReceiveDiagnosticsReporter(TimeSpan.FromMilliseconds(500));
         ChannelViewModel channel = CreateChannel();
         DateTimeOffset now = DateTimeOffset.UnixEpoch;
-        var first = new ReceiveAudioDiagnostics(10, 1, 2, 0);
+        var first = new ReceiveWarningDiagnostics(1, 2, 0, 0, 0);
 
         Assert.True(reporter.ShouldPublish(channel, first, now));
         Assert.False(reporter.ShouldPublish(channel, first, now.AddSeconds(1)));
         Assert.True(reporter.ShouldPublish(
             channel,
-            first with { DuplicateOrLatePackets = 3 },
+            first with { RtpLateOrDuplicatePackets = 3 },
             now.AddSeconds(2)));
     }
 
@@ -31,19 +30,19 @@ public sealed class ReceiveDiagnosticsReporterTests
 
         Assert.True(reporter.ShouldPublish(
             channel,
-            new ReceiveAudioDiagnostics(10, 1, 0, 0),
+            new ReceiveWarningDiagnostics(1, 0, 0, 0, 0),
             now));
         Assert.False(reporter.ShouldPublish(
             channel,
-            new ReceiveAudioDiagnostics(11, 2, 0, 0),
+            new ReceiveWarningDiagnostics(2, 0, 0, 0, 0),
             now.AddMilliseconds(100)));
         Assert.True(reporter.ShouldPublish(
             channel,
-            new ReceiveAudioDiagnostics(20, 2, 0, 0),
+            new ReceiveWarningDiagnostics(2, 0, 0, 0, 0),
             now.AddMilliseconds(500)));
         Assert.False(reporter.ShouldPublish(
             channel,
-            new ReceiveAudioDiagnostics(21, 2, 0, 0),
+            new ReceiveWarningDiagnostics(2, 0, 0, 0, 0),
             now.AddSeconds(1)));
     }
 
@@ -53,10 +52,20 @@ public sealed class ReceiveDiagnosticsReporterTests
         var reporter = new ReceiveDiagnosticsReporter(TimeSpan.FromMilliseconds(500));
         ChannelViewModel first = CreateChannel("First");
         ChannelViewModel second = CreateChannel("Second");
-        var diagnostics = new ReceiveAudioDiagnostics(10, 0, 1, 0);
+        var diagnostics = new ReceiveWarningDiagnostics(0, 1, 0, 0, 0);
 
         Assert.True(reporter.ShouldPublish(first, diagnostics, DateTimeOffset.UnixEpoch));
         Assert.True(reporter.ShouldPublish(second, diagnostics, DateTimeOffset.UnixEpoch));
+    }
+
+    [Fact]
+    public void SeparatesRtpSequenceAndPostCallLateTraffic()
+    {
+        var diagnostics = new ReceiveWarningDiagnostics(1, 2, 3, 4, 5);
+
+        Assert.Equal(
+            "RTP lost 1, RTP late/duplicate 2, receive queue dropped 3, post-call late 4, malformed 5",
+            diagnostics.SummaryText);
     }
 
     private static ChannelViewModel CreateChannel(string name = "Dispatch")
