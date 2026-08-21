@@ -53,6 +53,10 @@ Options include:
 
 If System Default Output is selected, the console follows the current macOS or Windows default playback device.
 
+The speaker button beside Warm mic in the main toolbar mutes live RX presentation
+to configured output devices. Muting does not stop receive decoding, call state,
+patching, or TAR recording, and the mute state resets when the console restarts.
+
 ---
 
 # RX Audio Processing

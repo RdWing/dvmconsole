@@ -5,7 +5,6 @@ using DvmConsole.Core.Settings;
 using DvmConsole.FneClient;
 using DvmConsole.Media;
 using System.ComponentModel;
-using System.Windows.Input;
 
 namespace DvmConsole.Desktop;
 
@@ -18,6 +17,7 @@ public sealed class SystemViewModel : IFneTrafficEndpoint, INotifyPropertyChange
     private readonly HashSet<(byte AlgorithmId, ushort KeyId)> requestedP25Keys = [];
     private readonly FneTrafficStatistics trafficStatistics = new();
     private readonly RxJitterBufferModeViewModel[] rxJitterBufferModes;
+    private bool restoringJitterBuffer;
     private long nonCallDmrTerminatorCount;
     private long droppedSystemTrafficCount;
     private int trafficDiagnosticsDirty;
@@ -39,7 +39,8 @@ public sealed class SystemViewModel : IFneTrafficEndpoint, INotifyPropertyChange
         Channels = channels?.ToArray() ?? [];
         Zones = zones?.ToArray() ?? [];
         rxJitterBufferModes = CreateJitterBufferModes(new RxJitterBufferSetting());
-        ApplyJitterBufferCommand = new AsyncRelayCommand(() => Task.CompletedTask, () => false);
+        foreach (RxJitterBufferModeViewModel mode in rxJitterBufferModes)
+            mode.PropertyChanged += HandleJitterBufferModePropertyChanged;
         StatusAccentBrush = SystemAccentPalette.GetBrush(accentIndex);
         selectedZone = Zones.FirstOrDefault();
         foreach (ZoneViewModel zone in Zones)
@@ -62,6 +63,7 @@ public sealed class SystemViewModel : IFneTrafficEndpoint, INotifyPropertyChange
     public event EventHandler<FneLogEntry>? LogReceived;
     public event EventHandler<FneTrafficFrame>? TrafficReceived;
     public event EventHandler<FneKeyResponse>? KeyResponseReceived;
+    internal event EventHandler? JitterBufferChanged;
     public string Name { get; }
     public string Endpoint { get; }
     public IReadOnlyList<ChannelViewModel> Channels { get; }
@@ -122,7 +124,6 @@ public sealed class SystemViewModel : IFneTrafficEndpoint, INotifyPropertyChange
         }
     }
     public IReadOnlyList<RxJitterBufferModeViewModel> RxJitterBufferModes => rxJitterBufferModes;
-    public ICommand ApplyJitterBufferCommand { get; private set; }
     public string JitterBufferSummaryText
         => $"Applied: P25 {rxJitterBufferModes[0].Milliseconds} ms · " +
            $"DMR {rxJitterBufferModes[1].Milliseconds} ms · " +
@@ -152,13 +153,6 @@ public sealed class SystemViewModel : IFneTrafficEndpoint, INotifyPropertyChange
             return;
         isSelected = selected;
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsSelected)));
-    }
-
-    internal void ConfigureJitterBufferApply(Func<SystemViewModel, Task> apply)
-    {
-        ArgumentNullException.ThrowIfNull(apply);
-        ApplyJitterBufferCommand = new AsyncRelayCommand(() => apply(this), () => true);
-        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ApplyJitterBufferCommand)));
     }
 
     public async Task StartAsync(CancellationToken cancellationToken = default)
@@ -277,21 +271,31 @@ public sealed class SystemViewModel : IFneTrafficEndpoint, INotifyPropertyChange
     internal void RestoreJitterBuffer(RxJitterBufferSetting settings)
     {
         RxJitterBufferSetting normalized = RxJitterBufferSetting.Normalize(settings);
-        foreach (RxJitterBufferModeViewModel mode in rxJitterBufferModes)
+        restoringJitterBuffer = true;
+        try
         {
-            mode.Restore(mode.Mode switch
+            foreach (RxJitterBufferModeViewModel mode in rxJitterBufferModes)
             {
-                RxJitterBufferMode.P25 => normalized.P25Milliseconds,
-                RxJitterBufferMode.Dmr => normalized.DmrMilliseconds,
-                RxJitterBufferMode.Nxdn => normalized.NxdnMilliseconds,
-                _ => throw new InvalidOperationException($"Unsupported RX jitter buffer mode {mode.Mode}.")
-            });
+                mode.Restore(mode.Mode switch
+                {
+                    RxJitterBufferMode.P25 => normalized.P25Milliseconds,
+                    RxJitterBufferMode.Dmr => normalized.DmrMilliseconds,
+                    RxJitterBufferMode.Nxdn => normalized.NxdnMilliseconds,
+                    _ => throw new InvalidOperationException($"Unsupported RX jitter buffer mode {mode.Mode}.")
+                });
+            }
+        }
+        finally
+        {
+            restoringJitterBuffer = false;
         }
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(JitterBufferSummaryText)));
     }
 
     public async ValueTask DisposeAsync()
     {
+        foreach (RxJitterBufferModeViewModel mode in rxJitterBufferModes)
+            mode.PropertyChanged -= HandleJitterBufferModePropertyChanged;
         foreach (ChannelViewModel channel in Channels)
             channel.PropertyChanged -= HandleChannelPropertyChanged;
         connection.StatusChanged -= HandleConnectionStatus;
@@ -372,6 +376,15 @@ public sealed class SystemViewModel : IFneTrafficEndpoint, INotifyPropertyChange
     private void HandleKeyResponse(object? sender, FneKeyResponse response)
     {
         KeyResponseReceived?.Invoke(this, response);
+    }
+
+    private void HandleJitterBufferModePropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (restoringJitterBuffer || e.PropertyName != nameof(RxJitterBufferModeViewModel.SelectedOption))
+            return;
+
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(JitterBufferSummaryText)));
+        JitterBufferChanged?.Invoke(this, EventArgs.Empty);
     }
 
     private void HandleChannelPropertyChanged(object? sender, PropertyChangedEventArgs e)

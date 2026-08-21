@@ -215,9 +215,9 @@ public sealed class AudioMixer : IAsyncDisposable
         }
     }
 
-    // Used only while a cold Bluetooth microphone changes the shared hardware
-    // profile. Decoder/TAR observation continues, but live PCM is intentionally
-    // not accumulated for delayed playback after the transition.
+    // Used while live output is intentionally suppressed, including cold
+    // Bluetooth profile transitions and operator mute. Decoder/TAR observation
+    // continues, and live PCM is not accumulated for delayed playback.
     public long SetInputDiscarded(bool discarded)
     {
         bool endExpectedPlayback = false;
@@ -261,7 +261,7 @@ public sealed class AudioMixer : IAsyncDisposable
             discardedSamples = transitionDiscardedSamples;
         }
 
-        // An intentional cold-Bluetooth transition is not a playback fault.
+        // Intentional output suppression is not a playback fault.
         // Close the current continuity window so native starvation diagnostics
         // do not count the deliberately discarded interval as an underrun.
         if (endExpectedPlayback && output is IAudioPlaybackContinuityDiagnostics continuity)

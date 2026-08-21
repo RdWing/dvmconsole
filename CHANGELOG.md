@@ -14,7 +14,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Show Activity Event History for RX-enabled channels by default, with independent `Active`/`All` and `Zone Wide`/`System Wide` filters that do not trigger the History window when double-clicked.
 - Restore the main console's last normal size and position at launch when that position remains reachable on a connected display.
 - Replace rapidly changing per-packet connection details with readable connection-session RX/TX totals, bounded current-stream summaries, and coalesced health updates. Keep the current Debug Log session within explicit entry and memory limits while discarding the oldest entries first.
-- Keep per-FNE jitter controls compact in Connections and open Encryption Key Status directly at the channel key-status section.
+- Keep per-FNE jitter controls beside each connection's controls, apply selection changes immediately, and open Encryption Key Status directly at the channel key-status section.
+- Add a toolbar output-mute control beside Warm mic that suppresses live RX speaker playback without interrupting decode, call state, or TAR recording.
 
 ### Fixed
 
@@ -22,6 +23,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Keep three complete P25 LDUs of bounded live-lane headroom so ordinary packet bursts do not age current speech, and make RX meters follow the selected receive stream immediately while UI lifecycle work catches up.
 - Finalize TAR Ogg Opus recordings with an exact PCM-duration end timestamp so players do not advertise codec-frame padding after the recording's real audio ends.
 - Interpret unprefixed P25 key IDs as hexadecimal, matching legacy WPF codeplugs so FNE/KMM requests use the intended key ID.
+- Match the legacy console's post-connect settling delay and per-key request pacing so FNE/KMM servers can service every configured P25 key request.
 
 ## [0.3.2] - 2026-08-20
 

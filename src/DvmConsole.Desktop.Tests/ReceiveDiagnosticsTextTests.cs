@@ -69,7 +69,7 @@ public sealed class ReceiveDiagnosticsTextTests
         Assert.Contains("pending physical starvation 20 ms", message);
         Assert.Contains("output callbacks 123 (age 5 ms)", message);
         Assert.Contains("live gap fill 30 ms", message);
-        Assert.Contains("cold-transition discarded 60 ms", message);
+        Assert.Contains("output-policy discarded 60 ms", message);
         Assert.Contains("last overflow East Bay/Dispatch (20 ms cumulative)", message);
         Assert.Contains("stream pipeline maximum UDP inter-arrival 480 ms", message);
         Assert.Contains("socket-to-FNE 8 ms", message);

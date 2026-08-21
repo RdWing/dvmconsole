@@ -19,8 +19,10 @@ public sealed partial class OperatorToolsWindow : Window
     private ListBox? historyList;
     private INotifyCollectionChanged? historyCollection;
     private ScrollViewportAnchor<CallHistoryEntry>? historyViewportAnchor;
+    private string? pendingSectionAnchorName;
 
     internal bool IsHistoryViewportHookAttached => historyList is not null;
+    internal bool IsPendingSectionNavigation => pendingSectionAnchorName is not null;
 
     public OperatorToolsWindow()
     {
@@ -53,6 +55,7 @@ public sealed partial class OperatorToolsWindow : Window
 
     public void SelectSection(OperatorToolSection section)
     {
+        pendingSectionAnchorName = null;
         if (section == OperatorToolSection.Clock)
         {
             ToolTabs.SelectedIndex = (int)OperatorToolSection.General;
@@ -65,9 +68,8 @@ public sealed partial class OperatorToolsWindow : Window
         if (section == OperatorToolSection.EncryptionKeys)
         {
             ToolTabs.SelectedIndex = (int)OperatorToolSection.Connections;
-            Dispatcher.UIThread.Post(
-                () => this.FindControl<TextBlock>("EncryptionKeyStatusSection")?.BringIntoView(),
-                DispatcherPriority.Background);
+            pendingSectionAnchorName = "EncryptionKeyStatusSection";
+            SchedulePendingSectionReveal();
             return;
         }
 
@@ -104,7 +106,46 @@ public sealed partial class OperatorToolsWindow : Window
     }
 
     private void HandleOpened(object? sender, EventArgs e)
-        => ScheduleHistoryViewportHook();
+    {
+        ScheduleHistoryViewportHook();
+        SchedulePendingSectionReveal();
+    }
+
+    private void SchedulePendingSectionReveal()
+    {
+        if (pendingSectionAnchorName is null)
+            return;
+
+        Dispatcher.UIThread.Post(() =>
+        {
+            if (!TryRevealPendingSection())
+                Dispatcher.UIThread.Post(() => TryRevealPendingSection(), DispatcherPriority.Background);
+        }, DispatcherPriority.Loaded);
+    }
+
+    private bool TryRevealPendingSection()
+    {
+        if (pendingSectionAnchorName is null)
+            return true;
+
+        Control? anchor = this.FindControl<Control>(pendingSectionAnchorName);
+        ScrollViewer? scrollViewer = this.FindControl<ScrollViewer>("ConnectionsScrollViewer");
+        if (anchor is null || scrollViewer is null || anchor.Bounds.Height <= 0)
+            return false;
+
+        Point? position = anchor.TranslatePoint(default, scrollViewer);
+        if (position is null)
+            return false;
+
+        double maximumOffset = Math.Max(0, scrollViewer.Extent.Height - scrollViewer.Viewport.Height);
+        double desiredOffset = Math.Clamp(
+            scrollViewer.Offset.Y + position.Value.Y - 8,
+            0,
+            maximumOffset);
+        scrollViewer.Offset = new Vector(scrollViewer.Offset.X, desiredOffset);
+        pendingSectionAnchorName = null;
+        return true;
+    }
 
     private void HandleWindowLayoutUpdated(object? sender, EventArgs e)
         => TryAttachHistoryViewportHook();
