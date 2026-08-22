@@ -88,6 +88,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
     private readonly ObservableCollection<string> recentCodeplugPaths = [];
     private readonly ObservableCollection<WebStreamViewModel> webStreams = [];
     private readonly WebStreamPlaybackCoordinator webStreamPlayback;
+    private readonly IUiDispatcher uiDispatcher;
     private readonly object systemTrafficWorkSync = new();
     private readonly Dictionary<SystemViewModel, SystemTrafficBuffer> pendingSystemTraffic = [];
     private readonly HashSet<SystemViewModel> scheduledSystemTraffic = [];
@@ -202,7 +203,8 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
         Func<string, int, IPttSource>? serialPttFactory = null,
         IDmrKeyResolver? dmrKeyResolver = null,
         INxdnKeyResolver? nxdnKeyResolver = null,
-        string? codeplugPath = null)
+        string? codeplugPath = null,
+        IUiDispatcher? uiDispatcher = null)
     {
         this.statusText = statusText;
         codeplugDiagnosticsText = statusText;
@@ -216,6 +218,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
             : Path.GetFullPath(codeplugPath);
         this.serialPortProvider = serialPortProvider ?? SerialPttSource.GetAvailablePortNames;
         this.serialPttFactory = serialPttFactory ?? ((portName, baudRate) => new SerialPttSource(portName, baudRate));
+        this.uiDispatcher = uiDispatcher ?? AvaloniaUiDispatcher.Instance;
         uiScaleTransform = new ScaleTransform
         {
             ScaleX = userSettings.UiScale,
@@ -309,7 +312,10 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
         webStreamPlayback = new WebStreamPlaybackCoordinator(
             () => AudioBackendFactory.CreateDefault(Environment.GetEnvironmentVariable("DVM_AUDIO_LIBRARY")),
             () => userSettings.AudioOutputDeviceId,
-            getStreamOutputDeviceId: GetWebStreamOutputDeviceId);
+            openStream: null,
+            createDecoder: null,
+            getStreamOutputDeviceId: GetWebStreamOutputDeviceId,
+            uiDispatcher: this.uiDispatcher);
         foreach (DtmfPresetSetting preset in userSettings.DtmfPresets)
             dtmfPresets.Add(new DtmfPresetViewModel(preset));
         foreach (TonePresetSetting preset in userSettings.TonePresets)
@@ -2747,7 +2753,8 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
         string? configurationPath,
         UserSettingsStore userSettingsStore,
         Func<IReadOnlyList<string>>? serialPortProvider = null,
-        Func<string, int, IPttSource>? serialPttFactory = null)
+        Func<string, int, IPttSource>? serialPttFactory = null,
+        IUiDispatcher? uiDispatcher = null)
     {
         ArgumentNullException.ThrowIfNull(userSettingsStore);
         if (string.IsNullOrWhiteSpace(configurationPath))
@@ -2762,7 +2769,8 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
                 userSettingsStore: userSettingsStore,
                 groupDefinitions: [],
                 serialPortProvider: serialPortProvider,
-                serialPttFactory: serialPttFactory);
+                serialPttFactory: serialPttFactory,
+                uiDispatcher: uiDispatcher);
         }
 
         try
@@ -2806,7 +2814,8 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
                 serialPttFactory,
                 dmrKeyRing,
                 nxdnKeyRing,
-                loadedCodeplugPath);
+                loadedCodeplugPath,
+                uiDispatcher);
             if (errors.Count == 0)
                 viewModel.RecordLoadedCodeplug(loadedCodeplugPath);
             return viewModel;
@@ -2820,7 +2829,8 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
                 userSettingsStore: userSettingsStore,
                 groupDefinitions: [],
                 serialPortProvider: serialPortProvider,
-                serialPttFactory: serialPttFactory);
+                serialPttFactory: serialPttFactory,
+                uiDispatcher: uiDispatcher);
         }
     }
 
@@ -3386,18 +3396,21 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
         {
             await webStreamPlayback.StartAsync(stream).ConfigureAwait(false);
             PersistSelectedWebStreamState(stream);
-            AudioStatusText = stream.IsFailed
-                ? $"Web stream {stream.Name}: {stream.StatusText}"
-                : $"Web stream {stream.Name}: {stream.StatusText}";
+            await uiDispatcher.InvokeAsync(() =>
+                AudioStatusText = $"Web stream {stream.Name}: {stream.StatusText}");
         }
         catch (OperationCanceledException)
         {
-            stream.SetPlaybackState(false, false, false, false, "Off");
+            await uiDispatcher.InvokeAsync(() =>
+                stream.SetPlaybackState(false, false, false, false, "Off"));
         }
         catch (Exception exception)
         {
-            stream.SetPlaybackState(false, false, false, true, $"Failed: {exception.Message}");
-            AudioStatusText = $"Web stream {stream.Name}: {stream.StatusText}";
+            await uiDispatcher.InvokeAsync(() =>
+            {
+                stream.SetPlaybackState(false, false, false, true, $"Failed: {exception.Message}");
+                AudioStatusText = $"Web stream {stream.Name}: {stream.StatusText}";
+            });
         }
     }
 
@@ -3407,16 +3420,21 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
         {
             await webStreamPlayback.StopAsync(stream).ConfigureAwait(false);
             PersistSelectedWebStreamState(stream);
-            AudioStatusText = $"Web stream {stream.Name}: Off";
+            await uiDispatcher.InvokeAsync(() =>
+                AudioStatusText = $"Web stream {stream.Name}: Off");
         }
         catch (OperationCanceledException)
         {
-            stream.SetPlaybackState(false, false, false, false, "Off");
+            await uiDispatcher.InvokeAsync(() =>
+                stream.SetPlaybackState(false, false, false, false, "Off"));
         }
         catch (Exception exception)
         {
-            stream.SetPlaybackState(false, false, false, true, $"Failed to stop: {exception.Message}");
-            AudioStatusText = $"Web stream {stream.Name}: {stream.StatusText}";
+            await uiDispatcher.InvokeAsync(() =>
+            {
+                stream.SetPlaybackState(false, false, false, true, $"Failed to stop: {exception.Message}");
+                AudioStatusText = $"Web stream {stream.Name}: {stream.StatusText}";
+            });
         }
     }
 
