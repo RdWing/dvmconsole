@@ -15,7 +15,7 @@ public sealed class CallRecordingManager : IDisposable, IAsyncDisposable
     public const int DefaultRetentionDays = 7;
 
     private readonly object sync = new();
-    private readonly OpusRecordingMetadataStore opusMetadataStore = new();
+    private readonly RecordingCatalogStore catalogStore = new();
     private string rootPath;
     private readonly Action<ChannelViewModel, Exception>? faultHandler;
     private readonly Func<ChannelViewModel, uint, bool> shouldRecordSource;
@@ -116,48 +116,7 @@ public sealed class CallRecordingManager : IDisposable, IAsyncDisposable
         => LoadRecordings(CancellationToken.None);
 
     private IReadOnlyList<CallRecordingMetadata> LoadRecordings(CancellationToken cancellationToken)
-    {
-        cancellationToken.ThrowIfCancellationRequested();
-        if (!Directory.Exists(rootPath))
-            return [];
-
-        List<CallRecordingMetadata> recordings = [];
-        string[] opusPaths;
-        try
-        {
-            opusPaths = Directory.EnumerateFiles(rootPath, "*.opus", SearchOption.AllDirectories).ToArray();
-        }
-        catch (IOException)
-        {
-            return [];
-        }
-        catch (UnauthorizedAccessException)
-        {
-            return [];
-        }
-
-        foreach (string opusPath in opusPaths)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            try
-            {
-                if (opusMetadataStore.TryRead(opusPath, rootPath, out CallRecordingMetadata metadata))
-                    recordings.Add(metadata);
-            }
-            catch (Exception exception) when (exception is InvalidDataException or JsonException or FormatException or IOException or UnauthorizedAccessException)
-            {
-                // A damaged or unrelated Opus file must not hide the rest of
-                // the recording catalog.
-            }
-        }
-
-        return recordings
-            .OrderByDescending(recording => recording.UtcStartTime)
-            .ThenBy(recording => recording.FileName, StringComparer.OrdinalIgnoreCase)
-            .GroupBy(RecordingCatalogKey, StringComparer.OrdinalIgnoreCase)
-            .Select(group => group.First())
-            .ToArray();
-    }
+        => catalogStore.Load(rootPath, cancellationToken);
 
     public Task<IReadOnlyList<CallRecordingMetadata>> LoadRecordingsAsync(
         CancellationToken cancellationToken = default)
@@ -168,11 +127,6 @@ public sealed class CallRecordingManager : IDisposable, IAsyncDisposable
                 return LoadRecordings(cancellationToken);
             },
             cancellationToken);
-
-    private static string RecordingCatalogKey(CallRecordingMetadata metadata)
-        => !string.IsNullOrWhiteSpace(metadata.RecordingId)
-            ? metadata.RecordingId
-            : metadata.FilePath;
 
     public int PruneExpired(DateTimeOffset? now = null)
     {
@@ -192,61 +146,10 @@ public sealed class CallRecordingManager : IDisposable, IAsyncDisposable
     }
 
     public bool DeleteRecording(CallRecordingMetadata metadata)
-    {
-        ArgumentNullException.ThrowIfNull(metadata);
-        if (!TryGetRecordingPath(metadata, out string recordingPath))
-            return false;
-
-        bool deleted = false;
-        try
-        {
-            if (File.Exists(recordingPath))
-            {
-                File.Delete(recordingPath);
-                deleted = true;
-            }
-        }
-        catch (IOException)
-        {
-            return false;
-        }
-        catch (UnauthorizedAccessException)
-        {
-            return false;
-        }
-
-        return deleted;
-    }
+        => catalogStore.Delete(rootPath, metadata);
 
     public bool TryGetRecordingPath(CallRecordingMetadata metadata, out string recordingPath)
-    {
-        ArgumentNullException.ThrowIfNull(metadata);
-        recordingPath = string.Empty;
-        if (string.IsNullOrWhiteSpace(metadata.FilePath))
-        {
-            return false;
-        }
-
-        string normalizedPath;
-        try
-        {
-            normalizedPath = Path.GetFullPath(metadata.FilePath);
-        }
-        catch (Exception exception) when (exception is ArgumentException or NotSupportedException or PathTooLongException)
-        {
-            return false;
-        }
-
-        if (!normalizedPath.EndsWith(".opus", StringComparison.OrdinalIgnoreCase) ||
-            !IsUnderRoot(normalizedPath) ||
-            !File.Exists(normalizedPath))
-        {
-            return false;
-        }
-
-        recordingPath = normalizedPath;
-        return true;
-    }
+        => catalogStore.TryGetExistingPath(rootPath, metadata, out recordingPath);
 
     public void WriteSamples(ChannelViewModel channel, ReadOnlyMemory<short> samples)
         => WriteSamples(channel, channel.StreamId ?? 0, channel.SourceId ?? 0, samples);
@@ -591,7 +494,7 @@ public sealed class CallRecordingManager : IDisposable, IAsyncDisposable
             await OpusRecordingEncoder.EncodeWaveFileAsync(
                 snapshot.WavePath,
                 temporaryOpusPath,
-                opusMetadataStore.CreateTags(metadata),
+                catalogStore.CreateTags(metadata),
                 cancellationToken: cancellationToken).ConfigureAwait(false);
             if (!await ContainsDecodableAudioAsync(temporaryOpusPath, cancellationToken).ConfigureAwait(false))
             {
@@ -605,9 +508,9 @@ public sealed class CallRecordingManager : IDisposable, IAsyncDisposable
 
             File.Move(temporaryOpusPath, finalPath);
             temporaryOpusPath = null;
-            if (!opusMetadataStore.TryRead(finalPath, snapshot.RootPath, out CallRecordingMetadata persistedMetadata) ||
-                !RecordingCatalogKey(persistedMetadata).Equals(
-                    RecordingCatalogKey(metadata),
+            if (!catalogStore.TryRead(finalPath, snapshot.RootPath, out CallRecordingMetadata persistedMetadata) ||
+                !RecordingCatalogStore.GetCatalogKey(persistedMetadata).Equals(
+                    RecordingCatalogStore.GetCatalogKey(metadata),
                     StringComparison.OrdinalIgnoreCase))
             {
                 throw new InvalidDataException("The embedded TAR metadata could not be verified.");
@@ -710,13 +613,6 @@ public sealed class CallRecordingManager : IDisposable, IAsyncDisposable
         catch (UnauthorizedAccessException)
         {
         }
-    }
-
-    private bool IsUnderRoot(string path)
-    {
-        string normalizedPath = Path.GetFullPath(path);
-        string normalizedRoot = rootPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
-        return normalizedPath.StartsWith(normalizedRoot, StringComparison.OrdinalIgnoreCase);
     }
 
     private static string SanitizeSegment(string value)
