@@ -130,6 +130,7 @@ public sealed class FneConnection : IAsyncDisposable
 
     private readonly FneConnectionOptions options;
     private readonly IFneEndpointResolver endpointResolver;
+    private readonly IFnePeerSessionFactory peerSessionFactory;
     private readonly PendingP25KeyRequestTracker pendingP25KeyRequests;
     private readonly FnePeerStateMonitor stateMonitor = new();
     private readonly object sync = new();
@@ -153,10 +154,20 @@ public sealed class FneConnection : IAsyncDisposable
         FneConnectionOptions options,
         TimeProvider timeProvider,
         IFneEndpointResolver endpointResolver)
+        : this(options, timeProvider, endpointResolver, new FnePeerSessionFactory())
+    {
+    }
+
+    internal FneConnection(
+        FneConnectionOptions options,
+        TimeProvider timeProvider,
+        IFneEndpointResolver endpointResolver,
+        IFnePeerSessionFactory peerSessionFactory)
     {
         this.options = options ?? throw new ArgumentNullException(nameof(options));
         pendingP25KeyRequests = new PendingP25KeyRequestTracker(timeProvider);
         this.endpointResolver = endpointResolver ?? throw new ArgumentNullException(nameof(endpointResolver));
+        this.peerSessionFactory = peerSessionFactory ?? throw new ArgumentNullException(nameof(peerSessionFactory));
         status = new FneConnectionStatus(options.Name, FneConnectionState.Disconnected, "Not started", DateTimeOffset.UtcNow);
     }
 
@@ -445,45 +456,20 @@ public sealed class FneConnection : IAsyncDisposable
 
     internal FnePeer CreatePeer(IPEndPoint endpoint)
     {
-        using IDisposable encryptionScope = FneTransportEncryptionContext.Use(
-            options.TransportEncryptionMode switch
-            {
-                FneTransportEncryptionPreference.Ecb => fnecore.FneTransportEncryptionMode.Ecb,
-                FneTransportEncryptionPreference.Cbc => fnecore.FneTransportEncryptionMode.Cbc,
-                _ => fnecore.FneTransportEncryptionMode.Auto
-            },
-            timestamp => Volatile.Write(ref latestTrafficTransportTimestamp, timestamp));
-        var created = new FnePeer("DVMCONSOLE", options.PeerId, endpoint, options.PresharedKey);
-        created.Passphrase = options.Password;
-        created.PingTime = 5;
-        // The operator debug viewer is the console's complete FNE log sink.
-        // Raw packet tracing remains separately opt-in so payload dumps are
-        // not exposed by enabling the ordinary protocol log stream.
-        created.LogLevel = LogLevel.DEBUG;
-        created.RawPacketTrace = options.EnableDiagnostics;
-        // Preserve the constructor-owned PeerInformation instance. Newer
-        // fnecore revisions retain connection state on this object while the
-        // RPTC payload reads the configured identity from its Details member.
-        created.Information.PeerID = options.PeerId;
-        created.Information.State = ConnectionState.WAITING_LOGIN;
-        created.Information.Details = new PeerDetails
-        {
-            ConventionalPeer = true,
-            PeerClass = PeerConnectionClass.PEER_CONN_CLASS_CONSOLE,
-            Software = SoftwareIdentifier,
-            Identity = options.Identity
-        };
-        created.Logger = HandlePeerLog;
-        if (!string.IsNullOrWhiteSpace(options.KmfPresharedKey))
-            created.SetKMFPresharedKey(options.KmfPresharedKey);
-        created.PeerConnected += HandlePeerConnected;
-        created.KeyResponse += HandleKeyResponse;
-        created.PeerDisconnected = HandlePeerDisconnected;
-        created.DMRDataReceived += HandleDmrDataReceived;
-        created.P25DataReceived += HandleP25DataReceived;
-        created.NXDNDataReceived += HandleNxdnDataReceived;
-        created.AnalogDataReceived += HandleAnalogDataReceived;
-        return created;
+        return peerSessionFactory.Create(
+            options,
+            endpoint,
+            SoftwareIdentifier,
+            new FnePeerSessionCallbacks(
+                HandlePeerLog,
+                HandlePeerConnected,
+                HandleKeyResponse,
+                HandlePeerDisconnected,
+                HandleDmrDataReceived,
+                HandleP25DataReceived,
+                HandleNxdnDataReceived,
+                HandleAnalogDataReceived,
+                timestamp => Volatile.Write(ref latestTrafficTransportTimestamp, timestamp)));
     }
 
     internal static string FormatSoftwareIdentifier(string? informationalVersion)
