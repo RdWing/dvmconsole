@@ -16,15 +16,15 @@ namespace DvmConsole.Desktop;
 
 public sealed partial class MainWindow : Window
 {
-    private MainWindowViewModel viewModel;
-    private PressAndHoldPttController cardPtt;
+    private readonly MainWindowSessionHost sessionHost;
+    private MainWindowViewModel viewModel => sessionHost.ViewModel;
+    private PressAndHoldPttController cardPtt => sessionHost.CardPtt;
     private OperatorToolsWindow? operatorToolsWindow;
     private DebugLogWindow? debugLogWindow;
     private DocumentationWindow? documentationWindow;
     private AboutWindow? aboutWindow;
     private readonly List<DispatcherTimer> scrollBarTimers = [];
     private readonly HashSet<ScrollViewer> configuredScrollViewers = [];
-    private readonly CollectionChangedSubscription activityHistorySubscription;
     private readonly ScrollViewportAnchor<CallHistoryEntry> activityViewportAnchor;
     private readonly MainWindowPlacementController mainWindowPlacement;
     private Control? draggedChannelCard;
@@ -53,20 +53,21 @@ public sealed partial class MainWindow : Window
         namedSettingsProfileDeleteMenu ??= this.FindControl<MenuItem>("namedSettingsProfileDeleteMenu");
         activityCallHistoryList ??= this.FindControl<ItemsControl>("activityCallHistoryList")
             ?? throw new InvalidOperationException("The Activity history list was not initialized.");
-        viewModel = MainWindowViewModel.Load(configurationPath);
-        mainWindowPlacement = new MainWindowPlacementController(this, viewModel.MainWindowPlacement);
+        MainWindowViewModel initialViewModel = MainWindowViewModel.Load(configurationPath);
+        mainWindowPlacement = new MainWindowPlacementController(this, initialViewModel.MainWindowPlacement);
         mainWindowPlacement.PrepareSize();
-        cardPtt = CreateCardPtt(viewModel);
-        DataContext = viewModel;
         activityViewportAnchor = new ScrollViewportAnchor<CallHistoryEntry>(
             () => activityScrollViewer,
             () => activityCallHistoryList.GetVisualDescendants()
                 .OfType<Border>()
                 .Where(border => border.Classes.Contains("activity-call-card")),
             control => control.DataContext as CallHistoryEntry);
-        activityHistorySubscription = new CollectionChangedSubscription(
-            (INotifyCollectionChanged)viewModel.ActivityCallHistory,
-            HandleActivityHistoryCollectionChanged);
+        sessionHost = new MainWindowSessionHost(
+            initialViewModel,
+            HandleActivityHistoryCollectionChanged,
+            replacement => DataContext = replacement,
+            CloseModelessViewModelWindows,
+            CloseAllModelessWindows);
         activityCallHistoryList.LayoutUpdated += HandleActivityHistoryLayoutUpdated;
         AddHandler(InputElement.KeyDownEvent, HandleKeyDown, RoutingStrategies.Tunnel);
         AddHandler(InputElement.KeyUpEvent, HandleKeyUp, RoutingStrategies.Tunnel);
@@ -81,7 +82,7 @@ public sealed partial class MainWindow : Window
             mainWindowPlacement.StartTracking();
             ConfigureTransientChannelScrollBars();
             ConfigureTransientScrollBars(activityScrollViewer);
-            await viewModel.StartKeyboardPttAsync().ConfigureAwait(false);
+            await sessionHost.StartAsync().ConfigureAwait(false);
         };
         LayoutUpdated += (_, _) => ConfigureTransientChannelScrollBars();
         Closing += HandleClosing;
@@ -120,10 +121,6 @@ public sealed partial class MainWindow : Window
         cleanup.Run(() =>
             viewModel.SaveMainWindowPlacement(mainWindowPlacement.GetPlacementForPersistence()));
         cleanup.Run(mainWindowPlacement.Dispose);
-        cleanup.Run(() => operatorToolsWindow?.Close());
-        cleanup.Run(() => debugLogWindow?.Close());
-        cleanup.Run(() => documentationWindow?.Close());
-        cleanup.Run(() => aboutWindow?.Close());
         cleanup.Run(() =>
         {
             foreach (DispatcherTimer timer in scrollBarTimers)
@@ -131,10 +128,8 @@ public sealed partial class MainWindow : Window
         });
         cleanup.Run(() =>
             activityCallHistoryList.LayoutUpdated -= HandleActivityHistoryLayoutUpdated);
-        cleanup.Run(activityHistorySubscription.Dispose);
         cleanup.Run(activityViewportAnchor.Reset);
-        await cleanup.RunTaskAsync(() => cardPtt.DisposeAsync().AsTask());
-        await cleanup.RunTaskAsync(() => viewModel.DisposeAsync().AsTask());
+        await cleanup.RunTaskAsync(() => sessionHost.DisposeAsync().AsTask());
         cleanup.ThrowIfFailed();
     }
 
@@ -570,29 +565,10 @@ public sealed partial class MainWindow : Window
 
     private async Task ReplaceViewModelAsync(MainWindowViewModel replacement)
     {
-        ArgumentNullException.ThrowIfNull(replacement);
-        MainWindowViewModel previous = viewModel;
-
-        // These modeless windows hold direct references to the view model. Close
-        // them before disposing the old model rather than leaving a visible
-        // window bound to stale settings, history, or PTT state.
-        CloseModelessViewModelWindows();
-        await cardPtt.DisposeAsync();
-        activityHistorySubscription.Rebind(
-            (INotifyCollectionChanged)replacement.ActivityCallHistory);
-        viewModel = replacement;
-        cardPtt = CreateCardPtt(replacement);
-        DataContext = replacement;
+        await sessionHost.ReplaceAsync(replacement);
         RefreshRecentCodeplugMenu();
         RefreshNamedSettingsProfileMenus();
-        await previous.DisposeAsync();
-        await replacement.StartKeyboardPttAsync();
     }
-
-    private static PressAndHoldPttController CreateCardPtt(MainWindowViewModel owner)
-        => new(
-            channel => owner.StartChannelTransmitAsync(channel),
-            channel => owner.StopChannelTransmitAsync(channel));
 
     private void CloseModelessViewModelWindows()
     {
@@ -603,6 +579,19 @@ public sealed partial class MainWindow : Window
         DebugLogWindow? logs = debugLogWindow;
         debugLogWindow = null;
         logs?.Close();
+    }
+
+    private void CloseAllModelessWindows()
+    {
+        CloseModelessViewModelWindows();
+
+        DocumentationWindow? documentation = documentationWindow;
+        documentationWindow = null;
+        documentation?.Close();
+
+        AboutWindow? about = aboutWindow;
+        aboutWindow = null;
+        about?.Close();
     }
 
     private async Task<bool> ConfirmAsync(string title, string message, string confirmLabel = "Reset")
