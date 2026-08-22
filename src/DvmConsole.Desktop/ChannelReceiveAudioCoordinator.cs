@@ -954,10 +954,8 @@ public sealed class ChannelReceiveAudioCoordinator : IAsyncDisposable
     {
         private const int MaximumStreamSessions = 8;
         private static readonly TimeSpan CompletedStreamRetention = TimeSpan.FromSeconds(1);
-        private readonly object sync = new();
+        private readonly AsyncOperationLifetime operationLifetime = new();
         private readonly object streamSync = new();
-        private readonly TaskCompletionSource idle =
-            new(TaskCreationOptions.RunContinuationsAsynchronously);
         private readonly Dictionary<uint, StreamSessionState> streams = [];
         private readonly ReceiveStreamLifecycle receiveLifecycle =
             ReceiveStreamLifecycle.CreateDefault();
@@ -967,8 +965,6 @@ public sealed class ChannelReceiveAudioCoordinator : IAsyncDisposable
         private double gain;
         private double balance;
         private bool livePlaybackEnabled;
-        private int operations;
-        private bool stopping;
 
         public SessionState(
             StreamSessionState initialStream,
@@ -1160,38 +1156,15 @@ public sealed class ChannelReceiveAudioCoordinator : IAsyncDisposable
                 .ToArray();
 
         public bool TryAcquire()
-        {
-            lock (sync)
-            {
-                if (stopping)
-                    return false;
-
-                operations++;
-                return true;
-            }
-        }
+            => operationLifetime.TryAcquire();
 
         public void Release()
-        {
-            lock (sync)
-            {
-                operations--;
-                if (stopping && operations == 0)
-                    idle.TrySetResult();
-            }
-        }
+            => operationLifetime.Release();
 
         public void BeginStop()
-        {
-            lock (sync)
-            {
-                stopping = true;
-                if (operations == 0)
-                    idle.TrySetResult();
-            }
-        }
+            => operationLifetime.BeginStop();
 
-        public Task WaitForIdleAsync() => idle.Task;
+        public Task WaitForIdleAsync() => operationLifetime.WaitForIdleAsync();
 
         public async ValueTask DisposeAsync()
         {
