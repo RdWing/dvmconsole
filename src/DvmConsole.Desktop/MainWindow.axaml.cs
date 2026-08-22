@@ -24,7 +24,7 @@ public sealed partial class MainWindow : Window
     private AboutWindow? aboutWindow;
     private readonly List<DispatcherTimer> scrollBarTimers = [];
     private readonly HashSet<ScrollViewer> configuredScrollViewers = [];
-    private readonly INotifyCollectionChanged activityHistoryCollection;
+    private readonly CollectionChangedSubscription activityHistorySubscription;
     private readonly ScrollViewportAnchor<CallHistoryEntry> activityViewportAnchor;
     private readonly MainWindowPlacementController mainWindowPlacement;
     private Control? draggedChannelCard;
@@ -56,14 +56,15 @@ public sealed partial class MainWindow : Window
         mainWindowPlacement.PrepareSize();
         cardPtt = CreateCardPtt(viewModel);
         DataContext = viewModel;
-        activityHistoryCollection = (INotifyCollectionChanged)viewModel.ActivityCallHistory;
         activityViewportAnchor = new ScrollViewportAnchor<CallHistoryEntry>(
             () => activityScrollViewer,
             () => activityCallHistoryList.GetVisualDescendants()
                 .OfType<Border>()
                 .Where(border => border.Classes.Contains("activity-call-card")),
             control => control.DataContext as CallHistoryEntry);
-        activityHistoryCollection.CollectionChanged += HandleActivityHistoryCollectionChanged;
+        activityHistorySubscription = new CollectionChangedSubscription(
+            (INotifyCollectionChanged)viewModel.ActivityCallHistory,
+            HandleActivityHistoryCollectionChanged);
         activityCallHistoryList.LayoutUpdated += HandleActivityHistoryLayoutUpdated;
         AddHandler(InputElement.KeyDownEvent, HandleKeyDown, RoutingStrategies.Tunnel);
         AddHandler(InputElement.KeyUpEvent, HandleKeyUp, RoutingStrategies.Tunnel);
@@ -95,7 +96,7 @@ public sealed partial class MainWindow : Window
                 foreach (DispatcherTimer timer in scrollBarTimers)
                     timer.Stop();
                 activityCallHistoryList.LayoutUpdated -= HandleActivityHistoryLayoutUpdated;
-                activityHistoryCollection.CollectionChanged -= HandleActivityHistoryCollectionChanged;
+                activityHistorySubscription.Dispose();
                 activityViewportAnchor.Reset();
                 await cardPtt.DisposeAsync().ConfigureAwait(false);
                 await viewModel.DisposeAsync().ConfigureAwait(false);
@@ -547,6 +548,8 @@ public sealed partial class MainWindow : Window
         // window bound to stale settings, history, or PTT state.
         CloseModelessViewModelWindows();
         await cardPtt.DisposeAsync();
+        activityHistorySubscription.Rebind(
+            (INotifyCollectionChanged)replacement.ActivityCallHistory);
         viewModel = replacement;
         cardPtt = CreateCardPtt(replacement);
         DataContext = replacement;
