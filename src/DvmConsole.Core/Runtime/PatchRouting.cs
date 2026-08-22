@@ -29,10 +29,8 @@ public sealed class PatchRoutingTable
     private static readonly TimeSpan LatePacketSuppressWindow = TimeSpan.FromSeconds(2);
 
     private readonly object sync = new();
-    private readonly Func<PatchMemberAddress, uint, uint> beginCall;
-    private readonly Action<PatchMemberAddress, uint, uint> endCall;
-    private readonly Action<PatchMemberAddress, uint, ReadOnlyMemory<short>, uint> sendAudio;
-    private readonly Func<PatchMemberAddress, uint> fallbackSourceId;
+    private readonly IPatchForwardingSink sink;
+    private readonly TimeProvider timeProvider;
     private readonly Dictionary<string, GroupState> groups = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> outboundStreams = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, DateTimeOffset> recentlyEndedOutboundStreams = new(StringComparer.OrdinalIgnoreCase);
@@ -45,11 +43,16 @@ public sealed class PatchRoutingTable
         Action<PatchMemberAddress, uint, uint> endCall,
         Action<PatchMemberAddress, uint, ReadOnlyMemory<short>, uint> sendAudio,
         Func<PatchMemberAddress, uint> fallbackSourceId)
+        : this(new DelegatePatchForwardingSink(beginCall, endCall, sendAudio, fallbackSourceId))
     {
-        this.beginCall = beginCall ?? throw new ArgumentNullException(nameof(beginCall));
-        this.endCall = endCall ?? throw new ArgumentNullException(nameof(endCall));
-        this.sendAudio = sendAudio ?? throw new ArgumentNullException(nameof(sendAudio));
-        this.fallbackSourceId = fallbackSourceId ?? throw new ArgumentNullException(nameof(fallbackSourceId));
+    }
+
+    public PatchRoutingTable(
+        IPatchForwardingSink sink,
+        TimeProvider? timeProvider = null)
+    {
+        this.sink = sink ?? throw new ArgumentNullException(nameof(sink));
+        this.timeProvider = timeProvider ?? TimeProvider.System;
     }
 
     public bool SourceIdPassthrough
@@ -79,7 +82,9 @@ public sealed class PatchRoutingTable
         IReadOnlyDictionary<string, IReadOnlyList<PatchMemberAddress>> memberships,
         IReadOnlyDictionary<string, bool>? oneWayModes = null)
     {
-        Dictionary<string, GroupState> incoming = NormalizeMemberships(memberships, oneWayModes);
+        Dictionary<string, PatchGroupMembership> incoming = PatchMembershipPolicy.Normalize(
+            memberships,
+            oneWayModes);
         List<ForwardTarget> stops;
 
         lock (sync)
@@ -91,7 +96,7 @@ public sealed class PatchRoutingTable
             stops = [];
             foreach (string groupName in groups.Keys
                 .Where(name => !incoming.ContainsKey(name) ||
-                              !MembersEqual(groups[name].Members, incoming[name].Members) ||
+                              !PatchMembershipPolicy.MembersEqual(groups[name].Members, incoming[name].Members) ||
                               groups[name].OneWay != incoming[name].OneWay)
                 .ToArray())
             {
@@ -99,10 +104,10 @@ public sealed class PatchRoutingTable
                 groups.Remove(groupName);
             }
 
-            foreach ((string groupName, GroupState state) in incoming)
+            foreach ((string groupName, PatchGroupMembership membership) in incoming)
             {
                 if (!groups.ContainsKey(groupName))
-                    groups[groupName] = state;
+                    groups[groupName] = new GroupState(membership);
             }
         }
 
@@ -119,7 +124,7 @@ public sealed class PatchRoutingTable
         List<ForwardTarget> stops = [];
         lock (sync)
         {
-            DateTimeOffset now = DateTimeOffset.UtcNow;
+            DateTimeOffset now = timeProvider.GetUtcNow();
             foreach (GroupState group in groups.Values.Where(group => IsEligibleSource(group, source)))
             {
                 if (group.Source is not null)
@@ -160,7 +165,7 @@ public sealed class PatchRoutingTable
         List<ForwardTarget> stops = [];
         lock (sync)
         {
-            DateTimeOffset now = DateTimeOffset.UtcNow;
+            DateTimeOffset now = timeProvider.GetUtcNow();
             foreach (GroupState group in groups.Values.Where(group => IsEligibleSource(group, source)))
             {
                 if (group.Source is null ||
@@ -206,7 +211,7 @@ public sealed class PatchRoutingTable
         }
 
         foreach (ForwardTarget target in audioTargets)
-            sendAudio(target.Member, target.StreamId, samples, target.OutboundSourceId);
+            sink.SendAudio(target.Member, target.StreamId, samples, target.OutboundSourceId);
     }
 
     public void HandleCallEnd(PatchMemberAddress source, uint streamId)
@@ -258,7 +263,7 @@ public sealed class PatchRoutingTable
         int cleaned = 0;
         lock (sync)
         {
-            DateTimeOffset now = DateTimeOffset.UtcNow;
+            DateTimeOffset now = timeProvider.GetUtcNow();
             foreach (GroupState group in groups.Values.Where(group =>
                          group.Source is not null && IsSourceStale(group.Source, now)))
             {
@@ -278,11 +283,11 @@ public sealed class PatchRoutingTable
         {
             uint outboundSourceId = SourceIdPassthrough && start.SourceId != 0
                 ? start.SourceId
-                : fallbackSourceId(start.Member);
+                : sink.GetFallbackSourceId(start.Member);
             if (outboundSourceId == 0)
                 continue;
 
-            uint streamId = beginCall(start.Member, outboundSourceId);
+            uint streamId = sink.BeginCall(start.Member, outboundSourceId);
             if (streamId == 0)
                 continue;
 
@@ -308,14 +313,14 @@ public sealed class PatchRoutingTable
             }
 
             if (!accepted)
-                endCall(start.Member, streamId, outboundSourceId);
+                sink.EndCall(start.Member, streamId, outboundSourceId);
         }
     }
 
     private void EndTargets(List<ForwardTarget> stops)
     {
         foreach (ForwardTarget target in stops)
-            endCall(target.Member, target.StreamId, target.OutboundSourceId);
+            sink.EndCall(target.Member, target.StreamId, target.OutboundSourceId);
     }
 
     private void AddStartRequests(GroupState group, List<StartRequest> starts)
@@ -345,23 +350,23 @@ public sealed class PatchRoutingTable
             stops.Add(target);
             string streamKey = BuildStreamKey(target.Member, target.StreamId);
             outboundStreams.Remove(streamKey);
-            recentlyEndedOutboundStreams[streamKey] = DateTimeOffset.UtcNow + LatePacketSuppressWindow;
+            recentlyEndedOutboundStreams[streamKey] = timeProvider.GetUtcNow() + LatePacketSuppressWindow;
             activeTargetKeys.Remove(target.Member.Key);
         }
 
         group.ActiveTargets.Clear();
     }
 
-    private bool MembershipsEqual(Dictionary<string, GroupState> incoming)
+    private bool MembershipsEqual(Dictionary<string, PatchGroupMembership> incoming)
     {
         if (groups.Count != incoming.Count)
             return false;
 
-        foreach ((string name, GroupState state) in incoming)
+        foreach ((string name, PatchGroupMembership membership) in incoming)
         {
             if (!groups.TryGetValue(name, out GroupState? existing) ||
-                existing.OneWay != state.OneWay ||
-                !MembersEqual(existing.Members, state.Members))
+                existing.OneWay != membership.OneWay ||
+                !PatchMembershipPolicy.MembersEqual(existing.Members, membership.Members))
             {
                 return false;
             }
@@ -370,49 +375,15 @@ public sealed class PatchRoutingTable
         return true;
     }
 
-    private static Dictionary<string, GroupState> NormalizeMemberships(
-        IReadOnlyDictionary<string, IReadOnlyList<PatchMemberAddress>> memberships,
-        IReadOnlyDictionary<string, bool>? oneWayModes)
-    {
-        var normalized = new Dictionary<string, GroupState>(StringComparer.OrdinalIgnoreCase);
-        foreach ((string name, IReadOnlyList<PatchMemberAddress> configuredMembers) in memberships ??
-                 new Dictionary<string, IReadOnlyList<PatchMemberAddress>>())
-        {
-            string groupName = name?.Trim() ?? string.Empty;
-            if (string.IsNullOrWhiteSpace(groupName))
-                continue;
-
-            List<PatchMemberAddress> members = (configuredMembers ?? [])
-                .Where(member => member is not null)
-                .GroupBy(member => member.Key, StringComparer.OrdinalIgnoreCase)
-                .Select(group => group.First())
-                .ToList();
-            if (members.Count == 0)
-                continue;
-
-            bool oneWay = oneWayModes is not null &&
-                oneWayModes.TryGetValue(groupName, out bool configuredOneWay) &&
-                configuredOneWay;
-            normalized[groupName] = new GroupState(groupName, members, oneWay);
-        }
-
-        return normalized;
-    }
-
-    private static bool MembersEqual(IReadOnlyList<PatchMemberAddress> left, IReadOnlyList<PatchMemberAddress> right)
-        => new HashSet<string>(left.Select(member => member.Key), StringComparer.OrdinalIgnoreCase)
-            .SetEquals(right.Select(member => member.Key));
-
     private static bool IsEligibleSource(GroupState group, PatchMemberAddress source)
-        => group.Members.Any(member => member.Key == source.Key) &&
-           (!group.OneWay || group.Members[0].Key == source.Key);
+        => PatchMembershipPolicy.IsEligibleSource(group.Members, group.OneWay, source);
 
     private static bool IsSourceStale(ActiveSource source, DateTimeOffset now)
         => now - source.LastActivityUtc > LatePacketSuppressWindow;
 
     private void CleanupExpiredSuppression()
     {
-        DateTimeOffset now = DateTimeOffset.UtcNow;
+        DateTimeOffset now = timeProvider.GetUtcNow();
         foreach (string key in recentlyEndedOutboundStreams
             .Where(entry => entry.Value <= now)
             .Select(entry => entry.Key)
@@ -427,15 +398,15 @@ public sealed class PatchRoutingTable
 
     private sealed class GroupState
     {
-        public GroupState(string groupName, List<PatchMemberAddress> members, bool oneWay)
+        public GroupState(PatchGroupMembership membership)
         {
-            GroupName = groupName;
-            Members = members;
-            OneWay = oneWay;
+            GroupName = membership.GroupName;
+            Members = membership.Members;
+            OneWay = membership.OneWay;
         }
 
         public string GroupName { get; }
-        public List<PatchMemberAddress> Members { get; }
+        public IReadOnlyList<PatchMemberAddress> Members { get; }
         public bool OneWay { get; }
         public ActiveSource? Source { get; set; }
         public Dictionary<string, ForwardTarget> ActiveTargets { get; } = new(StringComparer.OrdinalIgnoreCase);

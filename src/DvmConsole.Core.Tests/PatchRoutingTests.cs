@@ -134,4 +134,44 @@ public sealed class PatchRoutingTests
         Assert.Equal((uint)55, sourceIds[0]);
         Assert.Equal((uint)55, sourceIds[1]);
     }
+
+    [Fact]
+    public void SuppressesLateOutboundPacketsForExactlyTheConfiguredTimeWindow()
+    {
+        PatchMemberAddress source = new("Alpha", 100);
+        PatchMemberAddress target = new("Beta", 200);
+        var clock = new ManualTimeProvider(DateTimeOffset.UnixEpoch);
+        var sink = new RecordingPatchSink();
+        var router = new PatchRoutingTable(sink, clock);
+        router.ApplyMemberships(new Dictionary<string, IReadOnlyList<PatchMemberAddress>>
+        {
+            ["Dispatch"] = [source, target]
+        });
+
+        router.HandleCallStart(source, 77, 42);
+        router.HandleCallEnd(source, 77);
+
+        Assert.True(router.IsPatchedTransmitStream(target, sink.StreamId));
+        clock.Advance(TimeSpan.FromSeconds(2));
+        Assert.False(router.IsPatchedTransmitStream(target, sink.StreamId));
+    }
+
+    private sealed class RecordingPatchSink : IPatchForwardingSink
+    {
+        public uint StreamId { get; } = 500;
+
+        public uint BeginCall(PatchMemberAddress member, uint sourceId) => StreamId;
+        public void EndCall(PatchMemberAddress member, uint streamId, uint sourceId) { }
+        public void SendAudio(PatchMemberAddress member, uint streamId, ReadOnlyMemory<short> samples, uint sourceId) { }
+        public uint GetFallbackSourceId(PatchMemberAddress member) => 999;
+    }
+
+    private sealed class ManualTimeProvider(DateTimeOffset utcNow) : TimeProvider
+    {
+        private DateTimeOffset utcNow = utcNow;
+
+        public override DateTimeOffset GetUtcNow() => utcNow;
+
+        public void Advance(TimeSpan elapsed) => utcNow += elapsed;
+    }
 }
