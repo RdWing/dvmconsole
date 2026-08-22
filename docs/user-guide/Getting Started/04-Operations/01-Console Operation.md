@@ -24,8 +24,10 @@ selector does not change its state. Click the selector to arm or disarm only
 that routing path.
 
 The `TAR` button occupies the same control row. It enables or disables local
-Talkgroup Audio Recorder capture for that resource. Receive monitoring itself
-is controlled by clicking the card, so there is no separate listen button.
+Talkgroup Audio Recorder capture for that resource. TAR can record inbound
+calls while the card is not selected for live RX. Speaker monitoring remains
+controlled independently by clicking the card, so there is no separate listen
+button.
 
 The talkgroup and protocol are shown together as `TG 9990 - DMR` or
 `TG 9990 - P25`.
@@ -89,7 +91,10 @@ The keyboard PTT keys remain active while the modeless **Console Settings** wind
 has focus. Console Settings can stay open while the operator selects resources or
 uses other controls in the main window.
 
-The talk permit tone uses the selected output device for card, global, and active-system PTT. Use **Audio > Test talk permit tone** when checking the route.
+The talk permit tone uses the selected output device for card, global, and
+active-system PTT. Global and active-system keybinds complete this cue in both
+press-and-hold and toggle mode before microphone audio is released. Use
+**Audio > Test talk permit tone** when checking the route.
 
 ---
 

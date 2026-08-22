@@ -61,6 +61,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
     private readonly Func<string, int, IPttSource> serialPttFactory;
     private readonly Func<IReadOnlyList<string>> serialPortProvider;
     private readonly SemaphoreSlim serialPttChangeLock = new(1, 1);
+    private readonly SemaphoreSlim pttStateChangeLock = new(1, 1);
     private readonly ObservableCollection<string> serialPttPortOptions = [];
     private readonly CallHistoryStore callHistory = new();
     private readonly ObservableCollection<CallHistoryEntry> filteredCallHistoryEntries = [];
@@ -2940,11 +2941,21 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
         {
             serialPttChangeLock.Release();
         }
-        await toneTransmitCoordinator.DisposeAsync().ConfigureAwait(false);
-        await localTonePlayer.DisposeAsync().ConfigureAwait(false);
-        warmMicrophoneReconciler.Reconciled -= HandleWarmMicrophoneReconciled;
-        await warmMicrophoneReconciler.WhenIdleAsync().ConfigureAwait(false);
-        await transmitCoordinator.DisposeAsync().ConfigureAwait(false);
+        await pttStateChangeLock.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            // A PTT startup may still be completing microphone readiness and
+            // its permit cue. Do not dispose those services out from under it.
+            await toneTransmitCoordinator.DisposeAsync().ConfigureAwait(false);
+            await localTonePlayer.DisposeAsync().ConfigureAwait(false);
+            warmMicrophoneReconciler.Reconciled -= HandleWarmMicrophoneReconciled;
+            await warmMicrophoneReconciler.WhenIdleAsync().ConfigureAwait(false);
+            await transmitCoordinator.DisposeAsync().ConfigureAwait(false);
+        }
+        finally
+        {
+            pttStateChangeLock.Release();
+        }
         await p25KeyRequestCoordinator.DisposeAsync().ConfigureAwait(false);
         foreach (SystemViewModel system in Systems)
         {
@@ -3274,6 +3285,9 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
             return;
         }
 
+        // Accept and retain inbound frames immediately. The ordered worker
+        // will wait for EnsureRecordingAudioAsync before decoding them.
+        receiveAudioWork.Start(channel);
         _ = EnsureRecordingAudioAsync(channel);
     }
 
@@ -3596,8 +3610,27 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
         ReadOnlyMemory<short> samples)
     {
         patchForwarding.ObserveDecodedSamples(channel, streamId, sourceId, samples);
-        callRecordings.WriteSamples(channel, streamId, sourceId, samples);
+        ChannelViewModel? recordingTarget = ResolveReceiveRecordingTarget(channel);
+        if (recordingTarget is not null)
+            callRecordings.WriteSamples(recordingTarget, streamId, sourceId, samples);
         LogVocoderAudioLevel(channel, samples, ChannelAudioDirection.Receive, streamId);
+    }
+
+    private ChannelViewModel? ResolveReceiveRecordingTarget(ChannelViewModel decodedChannel)
+    {
+        SystemViewModel? system = Systems.FirstOrDefault(candidate => candidate.Name.Equals(
+            decodedChannel.Definition.SystemName,
+            StringComparison.OrdinalIgnoreCase));
+        return system is null
+            ? decodedChannel.IsRecordingEnabled ? decodedChannel : null
+            : ReceiveRecordingTargetResolver.Resolve(decodedChannel, system.Channels);
+    }
+
+    private void StopReceiveRecording(ChannelViewModel decodedChannel, uint streamId)
+    {
+        ChannelViewModel? recordingTarget = ResolveReceiveRecordingTarget(decodedChannel);
+        if (recordingTarget is not null)
+            callRecordings.StopStream(recordingTarget, streamId);
     }
 
     private void HandlePresentedReceiveSamples(
@@ -4038,26 +4071,57 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
         bool pressed,
         PttTargetScope scope)
     {
-        if (pressed)
+        if (Volatile.Read(ref disposeStarted) != 0)
+            return;
+
+        // Starting TX includes microphone readiness and the required permit
+        // cue. Keep later toggle/release edges from stopping the shared TX
+        // path until that startup sequence (including cue drainage) finishes.
+        await pttStateChangeLock.WaitAsync();
+        try
         {
-            IReadOnlyList<ChannelViewModel> targets =
-                GetSelectedTransmitTargets(scope);
-            if (targets.Count == 0)
-            {
-                TransmitStatusText = scope == PttTargetScope.ActiveSystem
-                    ? $"Choose TX on one or more cards in {SelectedSystemName} before using {ActiveSystemPttKeyText}."
-                    : $"Choose TX on one or more cards before using {GlobalPttKeyText}.";
-                return;
-            }
-            if (transmitCoordinator.ActiveChannel is not null)
+            if (Volatile.Read(ref disposeStarted) != 0)
                 return;
 
-            await StartTransmitAsync(targets);
-            if (!AnyPttSourcePressed && transmitCoordinator.ActiveChannel is not null)
-                await StopTransmitAsync(transmitCoordinator.ActiveChannels);
+            if (pressed)
+            {
+                await StartScopedPttAsync(scope);
+            }
+            else
+            {
+                await StopScopedPttAsync();
+            }
+        }
+        finally
+        {
+            pttStateChangeLock.Release();
+        }
+    }
+
+    private async Task StartScopedPttAsync(PttTargetScope scope)
+    {
+        IReadOnlyList<ChannelViewModel> targets = GetSelectedTransmitTargets(scope);
+        if (targets.Count == 0)
+        {
+            TransmitStatusText = scope == PttTargetScope.ActiveSystem
+                ? $"Choose TX on one or more cards in {SelectedSystemName} before using {ActiveSystemPttKeyText}."
+                : $"Choose TX on one or more cards before using {GlobalPttKeyText}.";
             return;
         }
+        if (transmitCoordinator.ActiveChannel is not null)
+            return;
 
+        await StartTransmitAsync(targets);
+
+        // A press-and-hold source can be released while microphone readiness
+        // and the permit cue are still completing. Finish that indication,
+        // then stop the call instead of racing the queued release edge.
+        if (!AnyPttSourcePressed && transmitCoordinator.ActiveChannel is not null)
+            await StopTransmitAsync(transmitCoordinator.ActiveChannels);
+    }
+
+    private async Task StopScopedPttAsync()
+    {
         if (AnyPttSourcePressed)
             return;
 

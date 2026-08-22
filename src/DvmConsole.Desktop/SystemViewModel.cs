@@ -437,8 +437,5 @@ public sealed class SystemViewModel : IFneTrafficEndpoint, INotifyPropertyChange
     }
 
     private static bool SameResource(ChannelViewModel left, ChannelViewModel right)
-        => left.Definition.SystemName.Equals(right.Definition.SystemName, StringComparison.OrdinalIgnoreCase) &&
-           left.Definition.Mode.Equals(right.Definition.Mode, StringComparison.OrdinalIgnoreCase) &&
-           left.Definition.DestinationId == right.Definition.DestinationId &&
-           (left.Definition.Mode != "dmr" || left.Definition.Slot == right.Definition.Slot);
+        => ChannelReceiveIdentity.AreEquivalent(left, right);
 }

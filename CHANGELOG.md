@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.3.4] - 2026-08-21
+
+### Fixed
+
+- Record inbound calls whenever TAR is armed for a resource, even when its live RX card is not selected. Keep recording ownership, encryption metadata, and call finalization aligned when another zone copy owns the shared receive decoder.
+- Complete the local talk-permit tone before processing a later stop edge from global, active-system, or serial PTT so toggle-mode keybinds retain the same audible transmit-ready indication as press-and-hold operation.
+
 ## [0.3.3] - 2026-08-21
 
 ### Added
@@ -280,7 +287,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Add patches, multi-select groups, call history, recordings, web streams, clocks, layouts, themes, startup behavior, and in-application operator documentation.
 - Add support for local and KMM-provided P25 encryption keys while preserving compatibility with existing variable-length AES key material.
 
-[Unreleased]: https://github.com/RdWing/dvmconsole/compare/v0.3.3...HEAD
+[Unreleased]: https://github.com/RdWing/dvmconsole/compare/v0.3.4...HEAD
+[0.3.4]: https://github.com/RdWing/dvmconsole/compare/v0.3.3...v0.3.4
 [0.3.3]: https://github.com/RdWing/dvmconsole/compare/v0.3.2...v0.3.3
 [0.3.2]: https://github.com/RdWing/dvmconsole/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/RdWing/dvmconsole/compare/v0.3.0...v0.3.1
