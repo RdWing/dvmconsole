@@ -8,6 +8,11 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <Compile Include="../Shared/TaskObservation.cs" Link="Threading/TaskObservation.cs" />
+    <Using Include="DvmConsole.Threading" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="../DvmConsole.Audio/DvmConsole.Audio.csproj" />
     <ProjectReference Include="../DvmConsole.Core/DvmConsole.Core.csproj" />
     <ProjectReference Include="../DvmConsole.Fne/DvmConsole.Fne.csproj" />

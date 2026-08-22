@@ -62,7 +62,7 @@ public sealed partial class MainWindowViewModel
         AudioInputLowGainText = preset.LowGainDb.ToString("0.###", CultureInfo.InvariantCulture);
         AudioInputMidGainText = preset.MidGainDb.ToString("0.###", CultureInfo.InvariantCulture);
         AudioInputHighGainText = preset.HighGainDb.ToString("0.###", CultureInfo.InvariantCulture);
-        _ = ApplyAudioInputSettingsAsync(restartActiveAudio: false);
+        TaskObservation.Observe(ApplyAudioInputSettingsAsync(restartActiveAudio: false));
         AudioStatusText = $"Microphone preset '{preset.Name}' loaded.";
     }
 

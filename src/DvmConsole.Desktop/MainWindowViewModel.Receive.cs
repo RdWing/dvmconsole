@@ -210,7 +210,7 @@ public sealed partial class MainWindowViewModel
                 endedAt,
                 channel.Name,
                 channel.Definition.DestinationId) || callHistoryChanged;
-            _ = CompleteTimedOutReceiveAudioStreamAsync(channel, streamId, now);
+            TaskObservation.Observe(CompleteTimedOutReceiveAudioStreamAsync(channel, streamId, now));
             StopReceiveRecording(channel, streamId);
         }
     }

@@ -260,7 +260,7 @@ public sealed class AudioMixer : IAsyncDisposable
         }
 
         if (startDisposal)
-            _ = DisposeAndCompleteAsync(completion);
+            TaskObservation.Observe(DisposeAndCompleteAsync(completion));
         return new ValueTask(completion.Task);
     }
 

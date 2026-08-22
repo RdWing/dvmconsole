@@ -348,7 +348,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
             stream.Configure(StartWebStreamAsync, StopWebStreamAsync);
             webStreams.Add(stream);
         }
-        _ = RestoreSelectedWebStreamsAsync();
+        TaskObservation.Observe(RestoreSelectedWebStreamsAsync());
         RefreshRecordings(pruneExpired: true);
         foreach (ChannelViewModel channel in Systems.SelectMany(system => system.Channels))
         {
@@ -400,7 +400,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
                 channel.SettingsKey,
                 StringComparer.OrdinalIgnoreCase));
             if (channel.IsRecordingEnabled)
-                _ = EnsureRecordingAudioAsync(channel);
+                TaskObservation.Observe(EnsureRecordingAudioAsync(channel));
         }
 
         foreach (SystemViewModel system in Systems)
@@ -2570,7 +2570,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
             if (status.State == FneConnectionState.Connected)
             {
                 ScheduleConfiguredP25Keys(system);
-                _ = ReconcileReceiveSessionsAsync();
+                TaskObservation.Observe(ReconcileReceiveSessionsAsync());
             }
             else
             {
@@ -2593,7 +2593,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
             {
                 p25KeyRing.ClearFneKeys(system.Name);
                 RefreshP25KeyState();
-                _ = SyncPatchSourceDecodeAsync();
+                TaskObservation.Observe(SyncPatchSourceDecodeAsync());
             }
             if (stateChanged && status.State is FneConnectionState.Connected or FneConnectionState.Disconnected or FneConnectionState.Faulted)
             {
@@ -2606,7 +2606,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
             }
             bool shouldPlayChime = connectionChimeTracker.ShouldPlay(system.Name, status.State);
             if (stateChanged && shouldPlayChime)
-                _ = PlayConnectionChimeAsync(system.Name, status.State);
+                TaskObservation.Observe(PlayConnectionChimeAsync(system.Name, status.State));
             RaiseGeneratedAudioCanExecuteChanged();
         }
 
@@ -2680,7 +2680,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
     private void HandleSystemJitterBufferChanged(object? sender, EventArgs e)
     {
         if (sender is SystemViewModel system)
-            _ = ApplyRxJitterBufferAsync(system);
+            TaskObservation.Observe(ApplyRxJitterBufferAsync(system));
     }
 
     internal static IReadOnlyList<(byte AlgorithmId, ushort KeyId)> ResolveConfiguredP25KeyRequests(
@@ -2725,7 +2725,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
                     response.KeyMaterial.Span);
                 RefreshP25KeyState();
                 StatusText = $"{system.Name}: P25 key 0x{response.KeyId:X4} received through FNE/KMM.";
-                _ = SyncPatchSourceDecodeAsync();
+                TaskObservation.Observe(SyncPatchSourceDecodeAsync());
             }
             catch (ArgumentException exception)
             {
@@ -2770,14 +2770,14 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
         if (!enabled)
         {
             callRecordings.StopChannel(channel);
-            _ = StopRecordingDecodeIfUnusedAsync(channel);
+            TaskObservation.Observe(StopRecordingDecodeIfUnusedAsync(channel));
             return;
         }
 
         // Accept and retain inbound frames immediately. The ordered worker
         // will wait for EnsureRecordingAudioAsync before decoding them.
         receiveAudioWork.Start(channel);
-        _ = EnsureRecordingAudioAsync(channel);
+        TaskObservation.Observe(EnsureRecordingAudioAsync(channel));
     }
 
     private void HandleChannelVolumeChanged(object? sender, double volume)
@@ -2787,7 +2787,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
 
         userSettings.ChannelVolumes[channel.SettingsKey] = volume;
         PersistUserSettings();
-        _ = audioCoordinator.SetGainAsync(channel, volume);
+        TaskObservation.Observe(audioCoordinator.SetGainAsync(channel, volume));
     }
 
     private void HandleChannelStereoBalanceChanged(object? sender, double balance)
@@ -2797,7 +2797,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
 
         userSettings.ChannelStereoBalances[channel.SettingsKey] = balance;
         PersistUserSettings();
-        _ = audioCoordinator.SetBalanceAsync(channel, balance);
+        TaskObservation.Observe(audioCoordinator.SetBalanceAsync(channel, balance));
     }
 
     private async Task StartWebStreamAsync(WebStreamViewModel stream)
@@ -3520,10 +3520,10 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
     private void DispatchKeyboardPttStateChanged(bool pressed, PttTargetScope scope)
     {
         if (Dispatcher.UIThread.CheckAccess())
-            _ = HandleKeyboardPttStateChangedAsync(pressed, scope);
+            TaskObservation.Observe(HandleKeyboardPttStateChangedAsync(pressed, scope));
         else
             Dispatcher.UIThread.Post(
-                () => _ = HandleKeyboardPttStateChangedAsync(pressed, scope));
+                () => TaskObservation.Observe(HandleKeyboardPttStateChangedAsync(pressed, scope)));
     }
 
     private async Task HandleKeyboardPttStateChangedAsync(
@@ -3657,7 +3657,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
             activeMultiSelectGroup = null;
             TransmitStatusText = $"Transmission stopped: {exception.Message}";
         });
-        _ = Task.Run(async () =>
+        TaskObservation.Observe(Task.Run(async () =>
         {
             try
             {
@@ -3694,7 +3694,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
                 Dispatcher.UIThread.Post(() =>
                     TransmitStatusText = $"Transmission stopped; audio recovery failed: {cleanupException.Message}");
             }
-        });
+        }));
     }
 
     private void SetBusy(bool value)
@@ -3814,7 +3814,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
     {
         RefreshClock();
         ExpireStaleReceiveStates(DateTimeOffset.UtcNow);
-        _ = ReconcileReceiveSessionsAsync();
+        TaskObservation.Observe(ReconcileReceiveSessionsAsync());
     }
 
     private void HandleConnectionDiagnosticsTick(object? sender, EventArgs e)
@@ -3993,7 +3993,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
         ReapplyPatchState();
         PersistUserSettings();
         RefreshPatchMembershipConflicts();
-        _ = SyncPatchSourceDecodeAsync();
+        TaskObservation.Observe(SyncPatchSourceDecodeAsync());
     }
 
     public void ApplyPatchGroup(PatchGroupEditorViewModel group)

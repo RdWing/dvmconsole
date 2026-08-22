@@ -25,7 +25,7 @@ internal sealed class AsyncDisposal
         }
 
         if (start)
-            _ = ExecuteAsync(dispose, current);
+            TaskObservation.Observe(ExecuteAsync(dispose, current));
         return new ValueTask(current.Task);
     }
 

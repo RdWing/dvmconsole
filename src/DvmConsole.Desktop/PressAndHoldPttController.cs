@@ -90,7 +90,7 @@ public sealed class PressAndHoldPttController : IAsyncDisposable
         }
 
         if (startDisposal)
-            _ = DisposeAndCompleteAsync(completion);
+            TaskObservation.Observe(DisposeAndCompleteAsync(completion));
         return new ValueTask(completion.Task);
     }
 

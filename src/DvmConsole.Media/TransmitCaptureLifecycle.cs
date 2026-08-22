@@ -184,7 +184,7 @@ internal sealed class TransmitCaptureLifecycle : IAsyncDisposable
                 faulted = true;
                 publishFault(exception);
                 if (Interlocked.Exchange(ref faultStopStarted, 1) == 0)
-                    _ = StopAfterFaultAsync();
+                    TaskObservation.Observe(StopAfterFaultAsync());
             }
         }
     }

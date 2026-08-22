@@ -29,7 +29,7 @@ internal sealed class LatestBooleanStateReconciler
                 running = true;
                 idle = new TaskCompletionSource<LatestBooleanStateResult>(
                     TaskCreationOptions.RunContinuationsAsynchronously);
-                _ = Task.Run(RunAsync);
+                TaskObservation.Observe(Task.Run(RunAsync));
             }
             return idle.Task;
         }
