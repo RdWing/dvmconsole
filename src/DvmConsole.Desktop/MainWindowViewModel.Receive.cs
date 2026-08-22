@@ -30,81 +30,20 @@ public sealed partial class MainWindowViewModel
             receivedAt,
             receivedTimestamp,
             preEnqueuedAudioChannels);
-
-        if (Dispatcher.UIThread.CheckAccess())
-        {
-            ProcessTraffic(
-                system,
-                traffic,
-                receivedAt: receivedAt,
-                preEnqueuedAudioChannels: preEnqueuedAudioChannels,
-                ingressTimestamp: receivedTimestamp);
-            return;
-        }
-
-        bool schedule;
-        lock (systemTrafficWorkSync)
-        {
-            if (!pendingSystemTraffic.TryGetValue(system, out SystemTrafficBuffer? pending))
-            {
-                pending = new SystemTrafficBuffer();
-                pendingSystemTraffic.Add(system, pending);
-            }
-            long droppedBefore = pending.DroppedCount;
-            pending.Enqueue(workItem);
-            system.RecordDroppedSystemTraffic(pending.DroppedCount - droppedBefore);
-            schedule = scheduledSystemTraffic.Add(system);
-        }
-
-        if (schedule)
-            Dispatcher.UIThread.Post(() => DrainSystemTraffic(system));
+        receivePresentation.Present(system, workItem);
     }
 
-    private void DrainSystemTraffic(SystemViewModel system)
-    {
-        const int MaximumBatchSize = 64;
-        if (Volatile.Read(ref disposeStarted) != 0)
-        {
-            lock (systemTrafficWorkSync)
-            {
-                pendingSystemTraffic.Remove(system);
-                scheduledSystemTraffic.Remove(system);
-            }
-            return;
-        }
-
-        int processed = 0;
-        while (processed < MaximumBatchSize)
-        {
-            SystemTrafficWorkItem? workItem = null;
-            bool empty;
-            lock (systemTrafficWorkSync)
-            {
-                empty = !pendingSystemTraffic.TryGetValue(system, out SystemTrafficBuffer? pending) ||
-                    !pending.TryDequeue(out workItem);
-                if (empty)
-                {
-                    pendingSystemTraffic.Remove(system);
-                    scheduledSystemTraffic.Remove(system);
-                }
-            }
-
-            if (empty)
-                return;
-
-            SystemTrafficWorkItem current = workItem!.Value;
-            ProcessTraffic(
-                system,
-                current.Traffic,
-                publishTrafficDiagnostics: false,
-                receivedAt: current.ReceivedAt,
-                preEnqueuedAudioChannels: current.PreEnqueuedAudioChannels,
-                ingressTimestamp: current.ReceivedTimestamp);
-            processed++;
-        }
-
-        Dispatcher.UIThread.Post(() => DrainSystemTraffic(system));
-    }
+    private void PresentSystemTraffic(
+        SystemViewModel system,
+        SystemTrafficWorkItem workItem,
+        bool publishTrafficDiagnostics)
+        => ProcessTraffic(
+            system,
+            workItem.Traffic,
+            publishTrafficDiagnostics,
+            workItem.ReceivedAt,
+            workItem.PreEnqueuedAudioChannels,
+            workItem.ReceivedTimestamp);
 
     internal void ProcessTraffic(
         SystemViewModel system,

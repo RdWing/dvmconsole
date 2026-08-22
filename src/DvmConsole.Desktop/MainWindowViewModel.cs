@@ -86,9 +86,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
     private readonly ObservableCollection<WebStreamViewModel> webStreams = [];
     private readonly WebStreamPlaybackCoordinator webStreamPlayback;
     private readonly IUiDispatcher uiDispatcher;
-    private readonly object systemTrafficWorkSync = new();
-    private readonly Dictionary<SystemViewModel, SystemTrafficBuffer> pendingSystemTraffic = [];
-    private readonly HashSet<SystemViewModel> scheduledSystemTraffic = [];
+    private readonly ReceivePresentationController receivePresentation;
     private readonly object audioLevelLogSync = new();
     private readonly Dictionary<(ChannelViewModel Channel, ChannelAudioDirection Direction), PcmLevelLogState> audioLevelLogs = [];
     private readonly ChannelAudioMeterPipeline audioMeterPipeline = new();
@@ -262,6 +260,11 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
         patchSourceReceiveWork = new ChannelReceiveWorkQueue(
             ProcessPatchSourceAsync,
             getJitterBufferProfile: GetReceiveJitterBufferProfile);
+        receivePresentation = new ReceivePresentationController(
+            () => Volatile.Read(ref disposeStarted) != 0,
+            Dispatcher.UIThread.CheckAccess,
+            action => Dispatcher.UIThread.Post(action),
+            PresentSystemTraffic);
         foreach (SystemViewModel system in Systems)
             RefreshJitterBufferTelemetry(system);
         transmitCoordinator = new ChannelTransmitCoordinator(
