@@ -60,7 +60,9 @@ public sealed class P25TxAudioSession : IDisposable
     private readonly P25TxEncryptionOptions? encryption;
     private readonly P25Crypto? crypto;
     private readonly byte[] messageIndicator;
-    private readonly List<byte> pendingImbe = [];
+    private readonly byte[] pendingImbe = new byte[P25DfsiFrameCodec.ImbeBytes];
+    private readonly byte[] wireCodeword = new byte[P25DfsiFrameCodec.CodewordBytes];
+    private int pendingImbeBytes;
     private int pendingPcmSamples;
     private ushort packetSequence;
     private bool sendLdu1 = true;
@@ -143,7 +145,7 @@ public sealed class P25TxAudioSession : IDisposable
 
         encoder.Flush(EmitCodeword);
 
-        while (pendingImbe.Count > 0)
+        while (pendingImbeBytes > 0)
             Process(new short[VocoderFrameSizes.PcmSamplesPerFrame]);
 
         return LdusSent - packetsBefore;
@@ -154,7 +156,9 @@ public sealed class P25TxAudioSession : IDisposable
         if (disposed)
             return;
         encoder.Dispose();
-        pendingImbe.Clear();
+        Array.Clear(pendingImbe);
+        Array.Clear(wireCodeword);
+        pendingImbeBytes = 0;
         pendingPcmSamples = 0;
         disposed = true;
     }
@@ -167,24 +171,25 @@ public sealed class P25TxAudioSession : IDisposable
 
     private void EmitCodeword(ReadOnlyMemory<byte> codeword)
     {
-        byte[] wireCodeword = codeword.ToArray();
+        codeword.Span.CopyTo(wireCodeword);
         if (crypto is not null &&
             !crypto.Process(wireCodeword, sendLdu1 ? P25DUID.LDU1 : P25DUID.LDU2))
         {
             throw new InvalidOperationException("P25 encryption could not process the transmit codeword.");
         }
 
-        pendingImbe.AddRange(wireCodeword);
+        wireCodeword.CopyTo(pendingImbe, pendingImbeBytes);
+        pendingImbeBytes += wireCodeword.Length;
         CodewordsEncoded++;
-        if (pendingImbe.Count < P25DfsiFrameCodec.ImbeBytes)
+        if (pendingImbeBytes < pendingImbe.Length)
             return;
 
         byte[] payload;
         if (encryption is null)
         {
             payload = sendLdu1
-                ? P25DfsiFrameCodec.CreateLdu1Payload(sourceId, destinationId, pendingImbe.ToArray())
-                : P25DfsiFrameCodec.CreateLdu2Payload(sourceId, destinationId, pendingImbe.ToArray());
+                ? P25DfsiFrameCodec.CreateLdu1Payload(sourceId, destinationId, pendingImbe)
+                : P25DfsiFrameCodec.CreateLdu2Payload(sourceId, destinationId, pendingImbe);
         }
         else
         {
@@ -206,17 +211,17 @@ public sealed class P25TxAudioSession : IDisposable
                 ? P25DfsiFrameCodec.CreateEncryptedLdu1Payload(
                     sourceId,
                     destinationId,
-                    pendingImbe.ToArray(),
+                    pendingImbe,
                     metadata)
                 : P25DfsiFrameCodec.CreateEncryptedLdu2Payload(
                     sourceId,
                     destinationId,
-                    pendingImbe.ToArray(),
+                    pendingImbe,
                     metadata);
         }
 
         send(payload, packetSequence, streamId);
-        pendingImbe.Clear();
+        pendingImbeBytes = 0;
         LdusSent++;
         packetSequence = packetSequence >= P25DfsiFrameCodec.RtpCallEndSequence - 1
             ? (ushort)0
