@@ -56,15 +56,10 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
     private readonly SemaphoreSlim pttStateChangeLock = new(1, 1);
     private readonly PttSettingsViewModel pttSettings;
     private readonly PttSessionController pttSession;
-    private readonly CallHistoryStore callHistory = new();
-    private readonly ObservableCollection<CallHistoryEntry> filteredCallHistoryEntries = [];
-    private readonly ObservableCollection<CallHistoryEntry> activityCallHistoryEntries = [];
-    private readonly ObservableCollection<CallRecordingMetadata> recordingEntries = [];
-    private readonly object recordingCatalogScanSync = new();
-    private CancellationTokenSource? recordingCatalogScanCancellation;
-    private int recordingCatalogScanGeneration;
-    private long recordingCatalogMutationRevision;
-    private Task recordingCatalogScanTask = Task.CompletedTask;
+    private readonly HistoryRecordingWorkspace historyRecording;
+    private CallHistoryStore callHistory => historyRecording.History;
+    private ObservableCollection<CallRecordingMetadata> recordingEntries
+        => historyRecording.RecordingEntries;
     private readonly ObservableCollection<DtmfPresetViewModel> dtmfPresets = [];
     private readonly ObservableCollection<TonePresetViewModel> tonePresets = [];
     private readonly ObservableCollection<ToneSequenceStepViewModel> toneSequenceSteps = [];
@@ -137,34 +132,9 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
     private string dtmfPresetName = string.Empty;
     private string tonePresetName = string.Empty;
     private string alertToneNameText = string.Empty;
-    private string recordingRetentionDaysText = string.Empty;
-    private string recordingRootPathText = string.Empty;
-    private string recordingDirectionFilter = "All";
-    private string recordingProtocolFilter = "All";
-    private string recordingEncryptionFilter = "All";
-    private string recordingSystemFilterText = string.Empty;
-    private string recordingChannelFilterText = string.Empty;
-    private string recordingTalkgroupFilterText = string.Empty;
-    private string recordingSubscriberFilterText = string.Empty;
-    private string recordingAliasFilterText = string.Empty;
-    private DateTimeOffset? recordingStartDateFilter;
-    private DateTimeOffset? recordingEndDateFilter;
-    private bool recordingTimeColumnVisible = true;
-    private bool recordingDurationColumnVisible = true;
-    private bool recordingChannelColumnVisible = true;
-    private bool recordingTalkgroupColumnVisible = true;
-    private bool recordingSourceIdColumnVisible = true;
-    private bool recordingAliasColumnVisible = true;
-    private bool recordingDirectionColumnVisible;
-    private bool recordingProtocolColumnVisible;
-    private bool recordingSystemColumnVisible;
-    private bool recordingEncryptionColumnVisible;
-    private bool recordingDiagnosticsColumnVisible = true;
     private string clockText = string.Empty;
     private string debugLogFilterText = string.Empty;
     private string debugLogSeverityFilter = "Info";
-    private string callHistoryFilterText = string.Empty;
-    private string recordingFilterText = string.Empty;
     private bool busy;
     private bool codeplugDiagnosticsDismissed;
     private ChannelViewModel? selectedChannel;
@@ -201,6 +171,10 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
             : Path.GetFullPath(codeplugPath);
         this.serialPortProvider = serialPortProvider ?? SerialPttSource.GetAvailablePortNames;
         this.uiDispatcher = uiDispatcher ?? AvaloniaUiDispatcher.Instance;
+        historyRecording = new HistoryRecordingWorkspace(
+            userSettings.RecordingRetentionDays.ToString(CultureInfo.InvariantCulture),
+            GetDefaultRecordingRoot(userSettings.RecordingRootPath));
+        historyRecording.PropertyChanged += HandleHistoryRecordingPropertyChanged;
         uiScaleTransform = new ScaleTransform
         {
             ScaleX = userSettings.UiScale,
@@ -280,8 +254,6 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
         receiveAudioProcessingOptions = BuildReceiveAudioProcessingOptions();
         selectedAudioProcessingMode = ToAudioProcessingModeDisplay(userSettings.AudioProcessingMode);
         audioInputPresetNameText = userSettings.AudioInputPresetName;
-        recordingRetentionDaysText = userSettings.RecordingRetentionDays.ToString(CultureInfo.InvariantCulture);
-        recordingRootPathText = GetDefaultRecordingRoot(userSettings.RecordingRootPath);
         webStreamPlayback = new WebStreamPlaybackCoordinator(
             () => AudioBackendFactory.CreateDefault(Environment.GetEnvironmentVariable("DVM_AUDIO_LIBRARY")),
             () => userSettings.AudioOutputDeviceId,
@@ -312,7 +284,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
         dmrKeyRing = dmrKeyResolver as DmrKeyRing;
         nxdnKeyRing = nxdnKeyResolver as NxdnKeyRing;
         callRecordings = new CallRecordingManager(
-            recordingRootPathText,
+            RecordingRootPathText,
             HandleRecordingFaulted,
             userSettings.RecordingRetentionDays,
             ShouldRecordSource);
@@ -401,10 +373,6 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
         RestorePatchState(configuredGroups);
         PatchGroups = BuildPatchGroups(configuredGroups);
         RefreshPatchMembershipConflicts();
-        CallHistory = new System.Collections.ObjectModel.ReadOnlyObservableCollection<CallHistoryEntry>(callHistory.Entries);
-        FilteredCallHistory = new ReadOnlyObservableCollection<CallHistoryEntry>(filteredCallHistoryEntries);
-        ActivityCallHistory = new ReadOnlyObservableCollection<CallHistoryEntry>(activityCallHistoryEntries);
-        Recordings = new ReadOnlyObservableCollection<CallRecordingMetadata>(recordingEntries);
         DtmfPresets = new ReadOnlyObservableCollection<DtmfPresetViewModel>(dtmfPresets);
         TonePresets = new ReadOnlyObservableCollection<TonePresetViewModel>(tonePresets);
         ToneSequenceSteps = new ReadOnlyObservableCollection<ToneSequenceStepViewModel>(toneSequenceSteps);
@@ -1536,14 +1504,14 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
 
     public string RecordingRetentionDaysText
     {
-        get => recordingRetentionDaysText;
-        set => SetField(ref recordingRetentionDaysText, value ?? string.Empty);
+        get => historyRecording.RecordingRetentionDaysText;
+        set => historyRecording.RecordingRetentionDaysText = value;
     }
 
     public string RecordingRootPathText
     {
-        get => recordingRootPathText;
-        set => SetField(ref recordingRootPathText, value ?? string.Empty);
+        get => historyRecording.RecordingRootPathText;
+        set => historyRecording.RecordingRootPathText = value;
     }
 
     public string SelectionStatusText => selectedChannel is null
@@ -1574,8 +1542,10 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
     public ReadOnlyObservableCollection<SubscriberCommandAuditEntry> SubscriberCommandAudit { get; }
     public ReadOnlyObservableCollection<DebugLogEntry> DebugLogEntries { get; }
     public ReadOnlyObservableCollection<WebStreamViewModel> WebStreams { get; }
-    public System.Collections.ObjectModel.ReadOnlyObservableCollection<CallHistoryEntry> CallHistory { get; }
-    public ReadOnlyObservableCollection<CallHistoryEntry> ActivityCallHistory { get; }
+    public System.Collections.ObjectModel.ReadOnlyObservableCollection<CallHistoryEntry> CallHistory
+        => historyRecording.CallHistory;
+    public ReadOnlyObservableCollection<CallHistoryEntry> ActivityCallHistory
+        => historyRecording.ActivityCallHistory;
     public string ActivityZoneFilterButtonText => activityCurrentZoneOnly ? "Zone Wide" : "System Wide";
     public string ActivityReceiveFilterButtonText => activityReceiveEnabledOnly ? "Active" : "All";
     public IReadOnlyList<SubscriberCommandAuditEntry> ActivitySubscriberCommandAudit
@@ -1584,37 +1554,12 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
             : SubscriberCommandAudit
                 .Where(entry => entry.SystemName.Equals(SelectedSystem.Name, StringComparison.OrdinalIgnoreCase))
                 .ToArray();
-    public ReadOnlyObservableCollection<CallHistoryEntry> FilteredCallHistory { get; }
-    public bool HasAdvancedHistoryFilters =>
-        RecordingDirectionFilter != "All" ||
-        RecordingProtocolFilter != "All" ||
-        RecordingEncryptionFilter != "All" ||
-        !string.IsNullOrWhiteSpace(RecordingSystemFilterText) ||
-        !string.IsNullOrWhiteSpace(RecordingChannelFilterText) ||
-        !string.IsNullOrWhiteSpace(RecordingTalkgroupFilterText) ||
-        !string.IsNullOrWhiteSpace(RecordingSubscriberFilterText) ||
-        !string.IsNullOrWhiteSpace(RecordingAliasFilterText) ||
-        RecordingStartDateFilter is not null ||
-        RecordingEndDateFilter is not null;
-    public string HistoryFilterSummary
-    {
-        get
-        {
-            var filters = new List<string>();
-            if (RecordingDirectionFilter != "All") filters.Add(RecordingDirectionFilter);
-            if (RecordingProtocolFilter != "All") filters.Add(RecordingProtocolFilter);
-            if (RecordingEncryptionFilter != "All") filters.Add(RecordingEncryptionFilter);
-            if (!string.IsNullOrWhiteSpace(RecordingSystemFilterText)) filters.Add($"system {RecordingSystemFilterText}");
-            if (!string.IsNullOrWhiteSpace(RecordingChannelFilterText)) filters.Add($"channel {RecordingChannelFilterText}");
-            if (!string.IsNullOrWhiteSpace(RecordingTalkgroupFilterText)) filters.Add($"TG {RecordingTalkgroupFilterText}");
-            if (!string.IsNullOrWhiteSpace(RecordingSubscriberFilterText)) filters.Add($"RID {RecordingSubscriberFilterText}");
-            if (!string.IsNullOrWhiteSpace(RecordingAliasFilterText)) filters.Add($"alias {RecordingAliasFilterText}");
-            if (RecordingStartDateFilter is DateTimeOffset start) filters.Add($"from {start:yyyy-MM-dd}");
-            if (RecordingEndDateFilter is DateTimeOffset end) filters.Add($"to {end:yyyy-MM-dd}");
-            return string.Join(" · ", filters);
-        }
-    }
-    public ReadOnlyObservableCollection<CallRecordingMetadata> Recordings { get; }
+    public ReadOnlyObservableCollection<CallHistoryEntry> FilteredCallHistory
+        => historyRecording.FilteredCallHistory;
+    public bool HasAdvancedHistoryFilters => historyRecording.HasAdvancedHistoryFilters;
+    public string HistoryFilterSummary => historyRecording.HistoryFilterSummary;
+    public ReadOnlyObservableCollection<CallRecordingMetadata> Recordings
+        => historyRecording.Recordings;
     public ICommand ConnectCommand { get; }
     public ICommand DisconnectCommand { get; }
     public ICommand ToggleSelectedSystemOutputMuteCommand { get; }
@@ -1671,197 +1616,154 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
 
     public string CallHistoryFilterText
     {
-        get => callHistoryFilterText;
-        set
-        {
-            string normalized = value ?? string.Empty;
-            if (callHistoryFilterText == normalized)
-                return;
-            callHistoryFilterText = normalized;
-            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CallHistoryFilterText)));
-            RefreshFilteredCallHistory();
-        }
+        get => historyRecording.CallHistoryFilterText;
+        set => historyRecording.CallHistoryFilterText = value;
     }
 
     public string RecordingFilterText
     {
-        get => recordingFilterText;
-        set
-        {
-            string normalized = value ?? string.Empty;
-            if (recordingFilterText == normalized)
-                return;
-            recordingFilterText = normalized;
-            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(RecordingFilterText)));
-            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(FilteredRecordings)));
-        }
+        get => historyRecording.RecordingFilterText;
+        set => historyRecording.RecordingFilterText = value;
     }
 
-    public IReadOnlyList<string> RecordingDirectionFilters { get; } = ["All", "RX", "TX"];
-    public IReadOnlyList<string> RecordingProtocolFilters { get; } = ["All", "DMR", "P25", "ANALOG", "NXDN"];
-    public IReadOnlyList<string> RecordingEncryptionFilters { get; } = ["All", "Clear", "Encrypted"];
+    public IReadOnlyList<string> RecordingDirectionFilters => historyRecording.RecordingDirectionFilters;
+    public IReadOnlyList<string> RecordingProtocolFilters => historyRecording.RecordingProtocolFilters;
+    public IReadOnlyList<string> RecordingEncryptionFilters => historyRecording.RecordingEncryptionFilters;
 
     public string RecordingDirectionFilter
     {
-        get => recordingDirectionFilter;
-        set => SetRecordingFilter(ref recordingDirectionFilter, value, nameof(RecordingDirectionFilter));
+        get => historyRecording.RecordingDirectionFilter;
+        set => historyRecording.RecordingDirectionFilter = value;
     }
 
     public string RecordingProtocolFilter
     {
-        get => recordingProtocolFilter;
-        set => SetRecordingFilter(ref recordingProtocolFilter, value, nameof(RecordingProtocolFilter));
+        get => historyRecording.RecordingProtocolFilter;
+        set => historyRecording.RecordingProtocolFilter = value;
     }
 
     public string RecordingEncryptionFilter
     {
-        get => recordingEncryptionFilter;
-        set => SetRecordingFilter(ref recordingEncryptionFilter, value, nameof(RecordingEncryptionFilter));
+        get => historyRecording.RecordingEncryptionFilter;
+        set => historyRecording.RecordingEncryptionFilter = value;
     }
 
     public string RecordingSystemFilterText
     {
-        get => recordingSystemFilterText;
-        set => SetRecordingFilter(ref recordingSystemFilterText, value, nameof(RecordingSystemFilterText), allowEmpty: true);
+        get => historyRecording.RecordingSystemFilterText;
+        set => historyRecording.RecordingSystemFilterText = value;
     }
 
     public string RecordingChannelFilterText
     {
-        get => recordingChannelFilterText;
-        set => SetRecordingFilter(ref recordingChannelFilterText, value, nameof(RecordingChannelFilterText), allowEmpty: true);
+        get => historyRecording.RecordingChannelFilterText;
+        set => historyRecording.RecordingChannelFilterText = value;
     }
 
     public string RecordingTalkgroupFilterText
     {
-        get => recordingTalkgroupFilterText;
-        set => SetRecordingFilter(ref recordingTalkgroupFilterText, value, nameof(RecordingTalkgroupFilterText), allowEmpty: true);
+        get => historyRecording.RecordingTalkgroupFilterText;
+        set => historyRecording.RecordingTalkgroupFilterText = value;
     }
 
     public string RecordingSubscriberFilterText
     {
-        get => recordingSubscriberFilterText;
-        set => SetRecordingFilter(ref recordingSubscriberFilterText, value, nameof(RecordingSubscriberFilterText), allowEmpty: true);
+        get => historyRecording.RecordingSubscriberFilterText;
+        set => historyRecording.RecordingSubscriberFilterText = value;
     }
 
     public string RecordingAliasFilterText
     {
-        get => recordingAliasFilterText;
-        set => SetRecordingFilter(ref recordingAliasFilterText, value, nameof(RecordingAliasFilterText), allowEmpty: true);
+        get => historyRecording.RecordingAliasFilterText;
+        set => historyRecording.RecordingAliasFilterText = value;
     }
 
     public DateTimeOffset? RecordingStartDateFilter
     {
-        get => recordingStartDateFilter;
-        set => SetRecordingDateFilter(ref recordingStartDateFilter, value, nameof(RecordingStartDateFilter));
+        get => historyRecording.RecordingStartDateFilter;
+        set => historyRecording.RecordingStartDateFilter = value;
     }
 
     public DateTimeOffset? RecordingEndDateFilter
     {
-        get => recordingEndDateFilter;
-        set => SetRecordingDateFilter(ref recordingEndDateFilter, value, nameof(RecordingEndDateFilter));
+        get => historyRecording.RecordingEndDateFilter;
+        set => historyRecording.RecordingEndDateFilter = value;
     }
 
     public bool ShowRecordingTimeColumn
     {
-        get => recordingTimeColumnVisible;
-        set => SetRecordingColumnVisibility(ref recordingTimeColumnVisible, value, nameof(ShowRecordingTimeColumn));
+        get => historyRecording.ShowRecordingTimeColumn;
+        set => historyRecording.ShowRecordingTimeColumn = value;
     }
 
     public bool ShowRecordingDurationColumn
     {
-        get => recordingDurationColumnVisible;
-        set => SetRecordingColumnVisibility(ref recordingDurationColumnVisible, value, nameof(ShowRecordingDurationColumn));
+        get => historyRecording.ShowRecordingDurationColumn;
+        set => historyRecording.ShowRecordingDurationColumn = value;
     }
 
     public bool ShowRecordingChannelColumn
     {
-        get => recordingChannelColumnVisible;
-        set => SetRecordingColumnVisibility(ref recordingChannelColumnVisible, value, nameof(ShowRecordingChannelColumn));
+        get => historyRecording.ShowRecordingChannelColumn;
+        set => historyRecording.ShowRecordingChannelColumn = value;
     }
 
     public bool ShowRecordingTalkgroupColumn
     {
-        get => recordingTalkgroupColumnVisible;
-        set => SetRecordingColumnVisibility(ref recordingTalkgroupColumnVisible, value, nameof(ShowRecordingTalkgroupColumn));
+        get => historyRecording.ShowRecordingTalkgroupColumn;
+        set => historyRecording.ShowRecordingTalkgroupColumn = value;
     }
 
     public bool ShowRecordingSourceIdColumn
     {
-        get => recordingSourceIdColumnVisible;
-        set => SetRecordingColumnVisibility(ref recordingSourceIdColumnVisible, value, nameof(ShowRecordingSourceIdColumn));
+        get => historyRecording.ShowRecordingSourceIdColumn;
+        set => historyRecording.ShowRecordingSourceIdColumn = value;
     }
 
     public bool ShowRecordingAliasColumn
     {
-        get => recordingAliasColumnVisible;
-        set => SetRecordingColumnVisibility(ref recordingAliasColumnVisible, value, nameof(ShowRecordingAliasColumn));
+        get => historyRecording.ShowRecordingAliasColumn;
+        set => historyRecording.ShowRecordingAliasColumn = value;
     }
 
     public bool ShowRecordingDirectionColumn
     {
-        get => recordingDirectionColumnVisible;
-        set => SetRecordingColumnVisibility(ref recordingDirectionColumnVisible, value, nameof(ShowRecordingDirectionColumn));
+        get => historyRecording.ShowRecordingDirectionColumn;
+        set => historyRecording.ShowRecordingDirectionColumn = value;
     }
 
     public bool ShowRecordingProtocolColumn
     {
-        get => recordingProtocolColumnVisible;
-        set => SetRecordingColumnVisibility(ref recordingProtocolColumnVisible, value, nameof(ShowRecordingProtocolColumn));
+        get => historyRecording.ShowRecordingProtocolColumn;
+        set => historyRecording.ShowRecordingProtocolColumn = value;
     }
 
     public bool ShowRecordingSystemColumn
     {
-        get => recordingSystemColumnVisible;
-        set => SetRecordingColumnVisibility(ref recordingSystemColumnVisible, value, nameof(ShowRecordingSystemColumn));
+        get => historyRecording.ShowRecordingSystemColumn;
+        set => historyRecording.ShowRecordingSystemColumn = value;
     }
 
     public bool ShowRecordingEncryptionColumn
     {
-        get => recordingEncryptionColumnVisible;
-        set => SetRecordingColumnVisibility(ref recordingEncryptionColumnVisible, value, nameof(ShowRecordingEncryptionColumn));
+        get => historyRecording.ShowRecordingEncryptionColumn;
+        set => historyRecording.ShowRecordingEncryptionColumn = value;
     }
 
     public bool ShowRecordingDiagnosticsColumn
     {
-        get => recordingDiagnosticsColumnVisible;
-        set => SetRecordingColumnVisibility(ref recordingDiagnosticsColumnVisible, value, nameof(ShowRecordingDiagnosticsColumn));
+        get => historyRecording.ShowRecordingDiagnosticsColumn;
+        set => historyRecording.ShowRecordingDiagnosticsColumn = value;
     }
 
     public void ResetRecordingColumns()
-    {
-        ShowRecordingTimeColumn = true;
-        ShowRecordingDurationColumn = true;
-        ShowRecordingChannelColumn = true;
-        ShowRecordingTalkgroupColumn = true;
-        ShowRecordingSourceIdColumn = true;
-        ShowRecordingAliasColumn = true;
-        ShowRecordingDirectionColumn = false;
-        ShowRecordingProtocolColumn = false;
-        ShowRecordingSystemColumn = false;
-        ShowRecordingEncryptionColumn = false;
-        ShowRecordingDiagnosticsColumn = true;
-    }
+        => historyRecording.ResetRecordingColumns();
 
     public void ClearRecordingFilters()
-    {
-        RecordingFilterText = string.Empty;
-        RecordingDirectionFilter = "All";
-        RecordingProtocolFilter = "All";
-        RecordingEncryptionFilter = "All";
-        RecordingSystemFilterText = string.Empty;
-        RecordingChannelFilterText = string.Empty;
-        RecordingTalkgroupFilterText = string.Empty;
-        RecordingSubscriberFilterText = string.Empty;
-        RecordingAliasFilterText = string.Empty;
-        RecordingStartDateFilter = null;
-        RecordingEndDateFilter = null;
-    }
+        => historyRecording.ClearRecordingFilters();
 
     public void ClearHistoryFilters()
-    {
-        CallHistoryFilterText = string.Empty;
-        ClearRecordingFilters();
-    }
+        => historyRecording.ClearHistoryFilters();
 
     public bool ApplyRecordingRoot()
     {
@@ -1881,82 +1783,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
     }
 
     public IReadOnlyList<CallRecordingMetadata> FilteredRecordings
-        => Recordings
-            .Where(metadata => new RecordingCatalogFilter(
-                RecordingFilterText,
-                RecordingDirectionFilter,
-                RecordingProtocolFilter,
-                RecordingEncryptionFilter,
-                RecordingSystemFilterText,
-                RecordingChannelFilterText,
-                RecordingTalkgroupFilterText,
-                RecordingSubscriberFilterText,
-                RecordingAliasFilterText,
-                RecordingStartDateFilter,
-                RecordingEndDateFilter).Matches(metadata))
-            .ToArray();
-
-    private void SetRecordingDateFilter(
-        ref DateTimeOffset? field,
-        DateTimeOffset? value,
-        string propertyName)
-    {
-        DateTimeOffset? normalized = value is DateTimeOffset date
-            ? new DateTimeOffset(date.Date, date.Offset)
-            : null;
-        if (field == normalized)
-            return;
-        field = normalized;
-        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
-        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(FilteredRecordings)));
-        NotifyHistoryFilterChanged();
-    }
-
-    private void SetRecordingColumnVisibility(ref bool field, bool value, string propertyName)
-    {
-        if (field == value)
-            return;
-        field = value;
-        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
-    }
-
-    private void SetRecordingFilter(
-        ref string field,
-        string? value,
-        string propertyName,
-        bool allowEmpty = false)
-    {
-        string normalized = string.IsNullOrWhiteSpace(value)
-            ? (allowEmpty ? string.Empty : "All")
-            : value.Trim();
-        if (field.Equals(normalized, StringComparison.Ordinal))
-            return;
-        field = normalized;
-        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
-        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(FilteredRecordings)));
-        NotifyHistoryFilterChanged();
-    }
-
-    private HistoryCatalogFilter CreateHistoryFilter()
-        => new(
-            CallHistoryFilterText,
-            RecordingDirectionFilter,
-            RecordingProtocolFilter,
-            RecordingEncryptionFilter,
-            RecordingSystemFilterText,
-            RecordingChannelFilterText,
-            RecordingTalkgroupFilterText,
-            RecordingSubscriberFilterText,
-            RecordingAliasFilterText,
-            RecordingStartDateFilter,
-            RecordingEndDateFilter);
-
-    private void NotifyHistoryFilterChanged()
-    {
-        RefreshFilteredCallHistory();
-        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(HasAdvancedHistoryFilters)));
-        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(HistoryFilterSummary)));
-    }
+        => historyRecording.FilteredRecordings;
 
     public void ExportDebugLogs(string path)
     {
@@ -2182,7 +2009,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
             RecordRecordingCatalogMutation();
             recordingEntries.Remove(metadata);
             callHistory.RemoveRecording(metadata);
-            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(FilteredRecordings)));
+            historyRecording.NotifyRecordingsChanged();
             NotifyCallHistoryChanged();
         }).ConfigureAwait(false);
     }
@@ -2672,23 +2499,16 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
         cleanup.Run(filteredDebugLogs.Dispose);
         await cleanup.RunTaskAsync(
             () => defaultAudioDeviceMonitor.DisposeAsync().AsTask()).ConfigureAwait(false);
-        Task recordingScan;
-        CancellationTokenSource? recordingScanCancellation;
-        lock (recordingCatalogScanSync)
-        {
-            recordingScanCancellation = recordingCatalogScanCancellation;
-            recordingScanCancellation?.Cancel();
-            recordingCatalogScanCancellation = null;
-            recordingScan = recordingCatalogScanTask;
-        }
-        await cleanup.RunTaskAsync(() => recordingScan).ConfigureAwait(false);
-        cleanup.Run(() => recordingScanCancellation?.Dispose());
+        RecordingCatalogScanShutdown recordingScan = historyRecording.CancelRecordingCatalogScan();
+        await cleanup.RunTaskAsync(() => recordingScan.Scan).ConfigureAwait(false);
+        cleanup.Run(() => recordingScan.Cancellation?.Dispose());
         cleanup.Run(() =>
         {
             transmitCoordinator.Faulted -= HandleTransmitFaulted;
             transmitCoordinator.HighQualityBluetoothStatusChanged -= HandleHighQualityBluetoothStatusChanged;
             pttSession.StateChanged -= HandlePttSourceStateChanged;
             pttSettings.PropertyChanged -= HandlePttSettingsPropertyChanged;
+            historyRecording.PropertyChanged -= HandleHistoryRecordingPropertyChanged;
         });
         await cleanup.RunTaskAsync(() => pttSession.DisposeAsync().AsTask()).ConfigureAwait(false);
 
@@ -3596,7 +3416,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
                 recordingEntries.Insert(0, metadata);
                 callHistory.AddOrAttachRecording(metadata);
 
-                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(FilteredRecordings)));
+                historyRecording.NotifyRecordingsChanged();
                 NotifyCallHistoryChanged();
             }
             else if (result.Error is null && !string.IsNullOrWhiteSpace(result.Diagnostic))
@@ -3614,31 +3434,16 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
 
     private void RefreshRecordings(bool pruneExpired = false)
     {
-        CancellationTokenSource cancellation = new();
-        int generation;
-        long mutationRevision;
-        lock (recordingCatalogScanSync)
-        {
-            recordingCatalogScanCancellation?.Cancel();
-            recordingCatalogScanCancellation?.Dispose();
-            recordingCatalogScanCancellation = cancellation;
-            generation = ++recordingCatalogScanGeneration;
-            mutationRevision = recordingCatalogMutationRevision;
-        }
-        Task scan = RefreshRecordingsAsync(generation, mutationRevision, pruneExpired, cancellation.Token);
-        lock (recordingCatalogScanSync)
-        {
-            if (generation == recordingCatalogScanGeneration)
-                recordingCatalogScanTask = scan;
-        }
+        RecordingCatalogScanSnapshot snapshot = historyRecording.BeginRecordingCatalogScan();
+        Task scan = RefreshRecordingsAsync(snapshot, pruneExpired);
+        historyRecording.PublishRecordingCatalogScan(snapshot, scan);
     }
 
     private async Task RefreshRecordingsAsync(
-        int generation,
-        long mutationRevision,
-        bool pruneExpired,
-        CancellationToken cancellationToken)
+        RecordingCatalogScanSnapshot snapshot,
+        bool pruneExpired)
     {
+        CancellationToken cancellationToken = snapshot.CancellationToken;
         try
         {
             if (pruneExpired)
@@ -3649,18 +3454,10 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
             cancellationToken.ThrowIfCancellationRequested();
             bool applied = await ApplyRecordingCatalogAsync(
                 loaded,
-                generation,
-                mutationRevision,
-                cancellationToken).ConfigureAwait(false);
+                snapshot).ConfigureAwait(false);
             if (!applied && !cancellationToken.IsCancellationRequested)
             {
-                bool restart;
-                lock (recordingCatalogScanSync)
-                {
-                    restart = generation == recordingCatalogScanGeneration &&
-                        mutationRevision != recordingCatalogMutationRevision;
-                }
-                if (restart)
+                if (historyRecording.ShouldRestartRecordingCatalogScan(snapshot))
                     RefreshRecordings();
             }
         }
@@ -3676,16 +3473,13 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
 
     private async Task<bool> ApplyRecordingCatalogAsync(
         IReadOnlyList<CallRecordingMetadata> loaded,
-        int generation,
-        long mutationRevision,
-        CancellationToken cancellationToken)
+        RecordingCatalogScanSnapshot snapshot)
     {
+        CancellationToken cancellationToken = snapshot.CancellationToken;
         var desiredIds = new HashSet<string>(loaded.Select(RecordingCatalogKey), StringComparer.OrdinalIgnoreCase);
         CallRecordingMetadata[] existing = [];
         if (!await ApplyRecordingCatalogUiBatchAsync(
-                generation,
-                mutationRevision,
-                cancellationToken,
+                snapshot,
                 () => existing = recordingEntries.ToArray()).ConfigureAwait(false))
         {
             return false;
@@ -3697,7 +3491,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
             .ToArray();
         foreach (string[] batch in removedKeys.Chunk(RecordingCatalogUiBatchSize))
         {
-            if (!await ApplyRecordingCatalogUiBatchAsync(generation, mutationRevision, cancellationToken, () =>
+            if (!await ApplyRecordingCatalogUiBatchAsync(snapshot, () =>
                 {
                     var keys = new HashSet<string>(batch, StringComparer.OrdinalIgnoreCase);
                     for (int index = recordingEntries.Count - 1; index >= 0; index--)
@@ -3719,7 +3513,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
                 .Skip(batchStart)
                 .Take(RecordingCatalogUiBatchSize)
                 .ToArray();
-            if (!await ApplyRecordingCatalogUiBatchAsync(generation, mutationRevision, cancellationToken, () =>
+            if (!await ApplyRecordingCatalogUiBatchAsync(snapshot, () =>
             {
                 for (int offset = 0; offset < batch.Length; offset++)
                 {
@@ -3762,43 +3556,27 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
             }
         }
 
-        return await ApplyRecordingCatalogUiBatchAsync(generation, mutationRevision, cancellationToken, () =>
+        return await ApplyRecordingCatalogUiBatchAsync(snapshot, () =>
         {
-            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(FilteredRecordings)));
+            historyRecording.NotifyRecordingsChanged();
             NotifyCallHistoryChanged();
         }).ConfigureAwait(false);
     }
 
     private async Task<bool> ApplyRecordingCatalogUiBatchAsync(
-        int generation,
-        long mutationRevision,
-        CancellationToken cancellationToken,
+        RecordingCatalogScanSnapshot snapshot,
         Action action)
     {
         bool applied = false;
         await RunOnUiThreadAsync(() =>
         {
-            lock (recordingCatalogScanSync)
-            {
-                if (!IsRecordingCatalogSnapshotCurrent(
-                        generation,
-                        recordingCatalogScanGeneration,
-                        mutationRevision,
-                        recordingCatalogMutationRevision,
-                        cancellationToken.IsCancellationRequested))
-                    return;
-                action();
-                applied = true;
-            }
+            applied = historyRecording.TryApplyRecordingCatalogSnapshot(snapshot, action);
         }).ConfigureAwait(false);
         return applied;
     }
 
     private void RecordRecordingCatalogMutation()
-    {
-        lock (recordingCatalogScanSync)
-            recordingCatalogMutationRevision++;
-    }
+        => historyRecording.RecordRecordingCatalogMutation();
 
     internal static bool IsRecordingCatalogSnapshotCurrent(
         int snapshotGeneration,
@@ -3839,6 +3617,9 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
 
 
     private void HandlePttSettingsPropertyChanged(object? sender, PropertyChangedEventArgs args)
+        => PropertyChanged?.Invoke(this, args);
+
+    private void HandleHistoryRecordingPropertyChanged(object? sender, PropertyChangedEventArgs args)
         => PropertyChanged?.Invoke(this, args);
 
     private void HandlePttSourceStateChanged(object? sender, PttSourceStateChange change)
@@ -4164,12 +3945,9 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
 
     private void NotifyCallHistoryChanged()
     {
-        RefreshFilteredCallHistory();
+        historyRecording.RefreshFilteredCallHistory();
         RefreshActivityCallHistory();
     }
-
-    private void RefreshFilteredCallHistory()
-        => SynchronizeHistoryView(filteredCallHistoryEntries, CallHistory.Where(CreateHistoryFilter().Matches));
 
     private void RefreshActivityCallHistory()
     {
@@ -4184,7 +3962,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
                     .Where(channel => channel.IsAudioEnabled)
                     .Select(channel => channel.Name)
                 : null);
-        SynchronizeHistoryView(activityCallHistoryEntries, desired);
+        historyRecording.RefreshActivityCallHistory(desired);
     }
 
     internal static CallHistoryEntry[] SelectActivityHistory(
@@ -4213,29 +3991,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
     internal static void SynchronizeHistoryView(
         ObservableCollection<CallHistoryEntry> target,
         IEnumerable<CallHistoryEntry> desiredEntries)
-    {
-        CallHistoryEntry[] desired = desiredEntries.ToArray();
-        var desiredSet = new HashSet<CallHistoryEntry>(desired, ReferenceEqualityComparer.Instance);
-        lock (target)
-        {
-            for (int index = target.Count - 1; index >= 0; index--)
-            {
-                if (!desiredSet.Contains(target[index]))
-                    target.RemoveAt(index);
-            }
-
-            for (int index = 0; index < desired.Length; index++)
-            {
-                if (index < target.Count && ReferenceEquals(target[index], desired[index]))
-                    continue;
-                int existingIndex = target.IndexOf(desired[index]);
-                if (existingIndex >= 0)
-                    target.Move(existingIndex, index);
-                else
-                    target.Insert(index, desired[index]);
-            }
-        }
-    }
+        => HistoryViewSynchronizer.Synchronize(target, desiredEntries);
 
     private void RefreshClock()
     {
