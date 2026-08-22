@@ -52,14 +52,10 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
     private readonly P25KeyRing? p25KeyRing;
     private readonly DmrKeyRing? dmrKeyRing;
     private readonly NxdnKeyRing? nxdnKeyRing;
-    private KeyboardPttBinding keyboardPtt;
-    private KeyboardPttBinding activeSystemKeyboardPtt;
-    private IPttSource? serialPtt;
-    private readonly Func<string, int, IPttSource> serialPttFactory;
     private readonly Func<IReadOnlyList<string>> serialPortProvider;
-    private readonly SemaphoreSlim serialPttChangeLock = new(1, 1);
     private readonly SemaphoreSlim pttStateChangeLock = new(1, 1);
     private readonly PttSettingsViewModel pttSettings;
+    private readonly PttSessionController pttSession;
     private readonly CallHistoryStore callHistory = new();
     private readonly ObservableCollection<CallHistoryEntry> filteredCallHistoryEntries = [];
     private readonly ObservableCollection<CallHistoryEntry> activityCallHistoryEntries = [];
@@ -171,7 +167,6 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
     private string recordingFilterText = string.Empty;
     private bool busy;
     private bool codeplugDiagnosticsDismissed;
-    private bool pttStarted;
     private ChannelViewModel? selectedChannel;
     private SystemViewModel? selectedSystem;
     private AudioDeviceOptionViewModel? selectedAudioInputDevice;
@@ -205,7 +200,6 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
             ? string.Empty
             : Path.GetFullPath(codeplugPath);
         this.serialPortProvider = serialPortProvider ?? SerialPttSource.GetAvailablePortNames;
-        this.serialPttFactory = serialPttFactory ?? ((portName, baudRate) => new SerialPttSource(portName, baudRate));
         this.uiDispatcher = uiDispatcher ?? AvaloniaUiDispatcher.Instance;
         uiScaleTransform = new ScaleTransform
         {
@@ -216,12 +210,6 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
             recentCodeplugPaths.Add(path);
         LoadUserBackground(userSettings.UserBackgroundImage);
         ApplyTheme(userSettings.DarkMode);
-        keyboardPtt = new KeyboardPttBinding(
-            ParseGlobalPttKey(userSettings.GlobalPttKey),
-            userSettings.TogglePttMode);
-        activeSystemKeyboardPtt = new KeyboardPttBinding(
-            ParseGlobalPttKey(userSettings.ActiveSystemPttKey),
-            userSettings.TogglePttMode);
         bool initialSerialPttEnabled = userSettings.SerialPttEnabled;
         string initialSerialPttPortName = userSettings.SerialPttPortName;
         int initialSerialPttBaudRate = userSettings.SerialPttBaudRate;
@@ -233,18 +221,22 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
             initialSerialPttBaudRate = ReadSerialPttBaudRate();
         }
         pttSettings = new PttSettingsViewModel(
-            keyboardPtt.ActivationKey,
-            activeSystemKeyboardPtt.ActivationKey,
+            ParseGlobalPttKey(userSettings.GlobalPttKey),
+            ParseGlobalPttKey(userSettings.ActiveSystemPttKey),
             userSettings.TogglePttMode,
             initialSerialPttEnabled,
             userSettings.SerialPttActiveSystemOnly,
             initialSerialPttPortName,
             initialSerialPttBaudRate);
         pttSettings.PropertyChanged += HandlePttSettingsPropertyChanged;
+        pttSession = new PttSessionController(
+            pttSettings,
+            serialPttFactory ?? ((portName, baudRate) => new SerialPttSource(portName, baudRate)),
+            GetSerialPttTargetScope);
         RefreshSerialPttDevices();
         if (SerialPttEnabled && SerialPttPortName.Length > 0)
         {
-            serialPtt = this.serialPttFactory(SerialPttPortName, SerialPttBaudRate);
+            pttSession.CreateInitialSerialSource();
             SerialPttStatusText = $"Configured for {SerialPttPortName} at {SerialPttBaudRate:N0} baud.";
         }
         clockText = FormatClock(DateTime.Now, userSettings.ClockUse24HourTime, userSettings.ClockShowSeconds);
@@ -552,10 +544,8 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
         RefreshAudioDevices();
         defaultAudioDeviceMonitor.Start();
         transmitCoordinator.Faulted += HandleTransmitFaulted;
-        keyboardPtt.StateChanged += HandleKeyboardPttStateChanged;
-        activeSystemKeyboardPtt.StateChanged += HandleActiveSystemKeyboardPttStateChanged;
-        if (serialPtt is not null)
-            serialPtt.StateChanged += HandleSerialPttStateChanged;
+        pttSession.StateChanged += HandlePttSourceStateChanged;
+        pttSession.AttachEvents();
     }
 
     public event PropertyChangedEventHandler? PropertyChanged;
@@ -1346,16 +1336,15 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
             if (pttSettings.TogglePttMode == value)
                 return;
             userSettings.TogglePttMode = value;
-            keyboardPtt.ToggleMode = value;
-            activeSystemKeyboardPtt.ToggleMode = value;
+            pttSession.SetToggleMode(value);
             PersistUserSettings();
             pttSettings.TogglePttMode = value;
         }
     }
 
-    public string GlobalPttKeyText => keyboardPtt.ActivationKey == KeyboardPttKey.None
+    public string GlobalPttKeyText => pttSession.GlobalKey == KeyboardPttKey.None
         ? "Keyboard PTT disabled"
-        : keyboardPtt.ActivationKey.ToString();
+        : pttSession.GlobalKey.ToString();
 
     public IReadOnlyList<KeyboardPttKey> GlobalPttKeyOptions => pttSettings.GlobalPttKeyOptions;
 
@@ -1369,9 +1358,9 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
         => SetGlobalPttKeyAsync(SelectedGlobalPttKey);
 
     public string ActiveSystemPttKeyText =>
-        activeSystemKeyboardPtt.ActivationKey == KeyboardPttKey.None
+        pttSession.ActiveSystemKey == KeyboardPttKey.None
             ? "Keyboard PTT disabled"
-            : activeSystemKeyboardPtt.ActivationKey.ToString();
+            : pttSession.ActiveSystemKey.ToString();
 
     public KeyboardPttKey SelectedActiveSystemPttKey
     {
@@ -1433,7 +1422,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
             if (SerialPttPortName.Length == 0 && devices.Length > 0)
                 SerialPttPortName = devices[0];
             pttSettings.NotifySerialPttPortOptionsChanged();
-            SerialPttStatusText = serialPtt is not null && SerialPttEnabled
+            SerialPttStatusText = pttSession.HasSerialSource && SerialPttEnabled
                 ? $"Serial PTT configured for {SerialPttPortName} at {SerialPttBaudRate:N0} baud."
                 : devices.Length == 0
                     ? "Serial PTT is disabled; no serial devices were detected."
@@ -1463,19 +1452,20 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
             return false;
         }
 
-        await serialPttChangeLock.WaitAsync();
         try
         {
-            IPttSource? previous = serialPtt;
-            serialPtt = null;
-            if (previous is not null)
-                await StopAndDisposeSerialPttAsync(previous);
-
-            userSettings.SerialPttEnabled = SerialPttEnabled;
-            userSettings.SerialPttActiveSystemOnly = SerialPttActiveSystemOnly;
-            userSettings.SerialPttPortName = portName;
-            userSettings.SerialPttBaudRate = baudRate;
-            PersistUserSettings();
+            await pttSession.ReplaceSerialSourceAsync(
+                SerialPttEnabled,
+                portName,
+                baudRate,
+                () =>
+                {
+                    userSettings.SerialPttEnabled = SerialPttEnabled;
+                    userSettings.SerialPttActiveSystemOnly = SerialPttActiveSystemOnly;
+                    userSettings.SerialPttPortName = portName;
+                    userSettings.SerialPttBaudRate = baudRate;
+                    PersistUserSettings();
+                }).ConfigureAwait(false);
             if (!SerialPttEnabled)
             {
                 SerialPttStatusText = "Serial PTT is disabled.";
@@ -1483,37 +1473,19 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
                 return true;
             }
 
-            IPttSource? candidate = null;
-            try
-            {
-                candidate = serialPttFactory(portName, baudRate);
-                candidate.StateChanged += HandleSerialPttStateChanged;
-                if (pttStarted)
-                    await candidate.StartAsync();
-                serialPtt = candidate;
-                SerialPttStatusText = pttStarted
-                    ? $"Serial PTT ready on {portName} at {baudRate:N0} baud."
-                    : $"Serial PTT configured for {portName} at {baudRate:N0} baud.";
-                TransmitStatusText = pttStarted
-                    ? $"PTT idle; serial source {portName} ready for {SerialPttScopeText}."
-                    : $"PTT idle; serial source {portName} will start for {SerialPttScopeText}.";
-                return true;
-            }
-            catch (Exception exception) when (exception is IOException or InvalidOperationException or UnauthorizedAccessException or ArgumentException or PlatformNotSupportedException or System.ComponentModel.Win32Exception)
-            {
-                if (candidate is not null)
-                {
-                    candidate.StateChanged -= HandleSerialPttStateChanged;
-                    await candidate.DisposeAsync();
-                }
-                SerialPttStatusText = $"Serial PTT unavailable on {portName}: {exception.Message}";
-                TransmitStatusText = $"PTT idle; serial source unavailable: {exception.Message}";
-                return false;
-            }
+            SerialPttStatusText = pttSession.IsStarted
+                ? $"Serial PTT ready on {portName} at {baudRate:N0} baud."
+                : $"Serial PTT configured for {portName} at {baudRate:N0} baud.";
+            TransmitStatusText = pttSession.IsStarted
+                ? $"PTT idle; serial source {portName} ready for {SerialPttScopeText}."
+                : $"PTT idle; serial source {portName} will start for {SerialPttScopeText}.";
+            return true;
         }
-        finally
+        catch (Exception exception) when (exception is IOException or InvalidOperationException or UnauthorizedAccessException or ArgumentException or PlatformNotSupportedException or System.ComponentModel.Win32Exception)
         {
-            serialPttChangeLock.Release();
+            SerialPttStatusText = $"Serial PTT unavailable on {portName}: {exception.Message}";
+            TransmitStatusText = $"PTT idle; serial source unavailable: {exception.Message}";
+            return false;
         }
     }
 
@@ -2323,51 +2295,25 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
 
     public async ValueTask StartKeyboardPttAsync(CancellationToken cancellationToken = default)
     {
-        if (!pttStarted)
+        bool firstStart = !pttSession.IsStarted;
+        PttSessionStartResult result =
+            await pttSession.StartAsync(cancellationToken).ConfigureAwait(false);
+        if (firstStart)
         {
-            KeyboardPttStartResult globalResult =
-                await keyboardPtt.StartAsync(cancellationToken).ConfigureAwait(false);
-            KeyboardPttStartResult activeSystemResult =
-                await activeSystemKeyboardPtt.StartAsync(cancellationToken).ConfigureAwait(false);
-            pttStarted = true;
-            TransmitStatusText = DescribeKeyboardPttReadiness(globalResult, activeSystemResult);
+            TransmitStatusText = DescribeKeyboardPttReadiness(
+                result.GlobalKeyboard,
+                result.ActiveSystemKeyboard);
         }
-
-        await serialPttChangeLock.WaitAsync(cancellationToken).ConfigureAwait(false);
-        try
+        if (!pttSession.HasSerialSource)
+            return;
+        if (result.SerialError is not null)
         {
-            if (serialPtt is null)
-                return;
-
-            try
-            {
-                await serialPtt.StartAsync(cancellationToken).ConfigureAwait(false);
-                SerialPttStatusText = $"Serial PTT ready on {SerialPttPortName} at {SerialPttBaudRate:N0} baud.";
-                TransmitStatusText = $"PTT idle; serial source {SerialPttPortName} ready for {SerialPttScopeText}.";
-            }
-            catch (Exception exception) when (exception is IOException or InvalidOperationException or UnauthorizedAccessException or ArgumentException or PlatformNotSupportedException or System.ComponentModel.Win32Exception)
-            {
-                SerialPttStatusText = $"Serial PTT unavailable on {SerialPttPortName}: {exception.Message}";
-                TransmitStatusText = $"PTT idle; serial source unavailable: {exception.Message}";
-            }
+            SerialPttStatusText = $"Serial PTT unavailable on {SerialPttPortName}: {result.SerialError.Message}";
+            TransmitStatusText = $"PTT idle; serial source unavailable: {result.SerialError.Message}";
+            return;
         }
-        finally
-        {
-            serialPttChangeLock.Release();
-        }
-    }
-
-    private async Task StopAndDisposeSerialPttAsync(IPttSource source)
-    {
-        try
-        {
-            await source.StopAsync().ConfigureAwait(false);
-        }
-        finally
-        {
-            source.StateChanged -= HandleSerialPttStateChanged;
-            await source.DisposeAsync().ConfigureAwait(false);
-        }
+        SerialPttStatusText = $"Serial PTT ready on {SerialPttPortName} at {SerialPttBaudRate:N0} baud.";
+        TransmitStatusText = $"PTT idle; serial source {SerialPttPortName} ready for {SerialPttScopeText}.";
     }
 
     public void SelectChannel(ChannelViewModel channel)
@@ -2470,13 +2416,13 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
     public async Task SetGlobalPttKeyAsync(KeyboardPttKey key)
     {
         SelectedGlobalPttKey = key;
-        if (key != KeyboardPttKey.None && key == activeSystemKeyboardPtt.ActivationKey)
+        if (key != KeyboardPttKey.None && key == pttSession.ActiveSystemKey)
         {
-            SelectedGlobalPttKey = keyboardPtt.ActivationKey;
+            SelectedGlobalPttKey = pttSession.GlobalKey;
             TransmitStatusText = $"{key} is already assigned to active-system PTT.";
             return;
         }
-        if (keyboardPtt.ActivationKey == key)
+        if (pttSession.GlobalKey == key)
             return;
 
         await ReplaceKeyboardPttBindingAsync(
@@ -2494,13 +2440,13 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
     public async Task SetActiveSystemPttKeyAsync(KeyboardPttKey key)
     {
         SelectedActiveSystemPttKey = key;
-        if (key != KeyboardPttKey.None && key == keyboardPtt.ActivationKey)
+        if (key != KeyboardPttKey.None && key == pttSession.GlobalKey)
         {
-            SelectedActiveSystemPttKey = activeSystemKeyboardPtt.ActivationKey;
+            SelectedActiveSystemPttKey = pttSession.ActiveSystemKey;
             TransmitStatusText = $"{key} is already assigned to global PTT.";
             return;
         }
-        if (activeSystemKeyboardPtt.ActivationKey == key)
+        if (pttSession.ActiveSystemKey == key)
             return;
 
         await ReplaceKeyboardPttBindingAsync(
@@ -2519,37 +2465,17 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
         PttTargetScope scope,
         KeyboardPttKey key)
     {
-        bool activeSystemOnly = scope == PttTargetScope.ActiveSystem;
-        KeyboardPttBinding previous = activeSystemOnly
-            ? activeSystemKeyboardPtt
-            : keyboardPtt;
-        bool anotherSourcePressed = activeSystemOnly
-            ? keyboardPtt.IsPressed || serialPtt?.IsPressed == true
-            : activeSystemKeyboardPtt.IsPressed || serialPtt?.IsPressed == true;
-        if (previous.IsPressed && !anotherSourcePressed)
-        {
-            // Detaching a pressed binding suppresses its release event. Stop
-            // active TX first so rebinding can never leave PTT latched.
-            ChannelViewModel[] active = transmitCoordinator.ActiveChannels.ToArray();
-            if (active.Length > 0)
-                await StopTransmitAsync(active).ConfigureAwait(false);
-        }
-
-        EventHandler<bool> handler = activeSystemOnly
-            ? HandleActiveSystemKeyboardPttStateChanged
-            : HandleKeyboardPttStateChanged;
-        previous.StateChanged -= handler;
-        await previous.DisposeAsync().ConfigureAwait(false);
-
-        var replacement = new KeyboardPttBinding(key, userSettings.TogglePttMode);
-        replacement.StateChanged += handler;
-        if (activeSystemOnly)
-            activeSystemKeyboardPtt = replacement;
-        else
-            keyboardPtt = replacement;
-
-        if (pttStarted)
-            await replacement.StartAsync(CancellationToken.None).ConfigureAwait(false);
+        await pttSession.ReplaceKeyboardBindingAsync(
+            scope,
+            key,
+            async () =>
+            {
+                // Detaching a pressed binding suppresses its release event.
+                // Stop active TX first so rebinding cannot leave PTT latched.
+                ChannelViewModel[] active = transmitCoordinator.ActiveChannels.ToArray();
+                if (active.Length > 0)
+                    await StopTransmitAsync(active).ConfigureAwait(false);
+            }).ConfigureAwait(false);
     }
 
     public async Task ToggleChannelReceiveAsync(ChannelViewModel channel)
@@ -2686,21 +2612,13 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
     }
 
     public bool HandleKeyboardPttDown(KeyboardPttKey key)
-    {
-        bool globalHandled = keyboardPtt.HandleKeyDown(key);
-        bool activeSystemHandled = activeSystemKeyboardPtt.HandleKeyDown(key);
-        return globalHandled || activeSystemHandled;
-    }
+        => pttSession.HandleKeyDown(key);
 
     public bool HandleKeyboardPttUp(KeyboardPttKey key)
-    {
-        bool globalHandled = keyboardPtt.HandleKeyUp(key);
-        bool activeSystemHandled = activeSystemKeyboardPtt.HandleKeyUp(key);
-        return globalHandled || activeSystemHandled;
-    }
+        => pttSession.HandleKeyUp(key);
 
     public bool IsConfiguredPttKey(KeyboardPttKey key)
-        => keyboardPtt.ActivationKey == key || activeSystemKeyboardPtt.ActivationKey == key;
+        => pttSession.IsConfiguredKey(key);
 
     internal IReadOnlyList<ChannelViewModel> GetSelectedTransmitTargets(PttTargetScope scope)
     {
@@ -2769,40 +2687,10 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
         {
             transmitCoordinator.Faulted -= HandleTransmitFaulted;
             transmitCoordinator.HighQualityBluetoothStatusChanged -= HandleHighQualityBluetoothStatusChanged;
-            keyboardPtt.StateChanged -= HandleKeyboardPttStateChanged;
-            activeSystemKeyboardPtt.StateChanged -= HandleActiveSystemKeyboardPttStateChanged;
+            pttSession.StateChanged -= HandlePttSourceStateChanged;
             pttSettings.PropertyChanged -= HandlePttSettingsPropertyChanged;
         });
-        await cleanup.RunTaskAsync(() => keyboardPtt.DisposeAsync().AsTask()).ConfigureAwait(false);
-        await cleanup.RunTaskAsync(() => activeSystemKeyboardPtt.DisposeAsync().AsTask()).ConfigureAwait(false);
-
-        bool serialGateEntered = false;
-        try
-        {
-            await serialPttChangeLock.WaitAsync().ConfigureAwait(false);
-            serialGateEntered = true;
-        }
-        catch (Exception exception)
-        {
-            cleanup.Capture(exception);
-        }
-        if (serialGateEntered)
-        {
-            try
-            {
-                IPttSource? currentSerialPtt = serialPtt;
-                serialPtt = null;
-                if (currentSerialPtt is not null)
-                {
-                    await cleanup.RunTaskAsync(
-                        () => StopAndDisposeSerialPttAsync(currentSerialPtt)).ConfigureAwait(false);
-                }
-            }
-            finally
-            {
-                serialPttChangeLock.Release();
-            }
-        }
+        await cleanup.RunTaskAsync(() => pttSession.DisposeAsync().AsTask()).ConfigureAwait(false);
 
         bool pttGateEntered = false;
         try
@@ -2886,7 +2774,6 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
                 stream.PropertyChanged -= HandleWebStreamPropertyChanged;
             });
         }
-        cleanup.Run(serialPttChangeLock.Dispose);
         cleanup.Run(pttStateChangeLock.Dispose);
         cleanup.ThrowIfFailed();
     }
@@ -3954,16 +3841,8 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
     private void HandlePttSettingsPropertyChanged(object? sender, PropertyChangedEventArgs args)
         => PropertyChanged?.Invoke(this, args);
 
-    private void HandleKeyboardPttStateChanged(object? sender, bool pressed)
-        => DispatchKeyboardPttStateChanged(
-            pressed,
-            PttTargetScope.AllSelectedResources);
-
-    private void HandleActiveSystemKeyboardPttStateChanged(object? sender, bool pressed)
-        => DispatchKeyboardPttStateChanged(pressed, PttTargetScope.ActiveSystem);
-
-    private void HandleSerialPttStateChanged(object? sender, bool pressed)
-        => DispatchKeyboardPttStateChanged(pressed, GetSerialPttTargetScope());
+    private void HandlePttSourceStateChanged(object? sender, PttSourceStateChange change)
+        => DispatchKeyboardPttStateChanged(change.Pressed, change.Scope);
 
     private void DispatchKeyboardPttStateChanged(bool pressed, PttTargetScope scope)
     {
@@ -4038,9 +3917,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
     }
 
     private bool AnyPttSourcePressed
-        => keyboardPtt.IsPressed ||
-           activeSystemKeyboardPtt.IsPressed ||
-           serialPtt?.IsPressed == true;
+        => pttSession.IsAnySourcePressed;
 
     private string SerialPttScopeText => userSettings.SerialPttActiveSystemOnly
         ? "TX-selected resources in the active system"
