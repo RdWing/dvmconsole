@@ -17,6 +17,7 @@ namespace DvmConsole.Desktop;
 public sealed partial class MainWindow : Window
 {
     private readonly MainWindowSessionHost sessionHost;
+    private readonly WindowPttKeyRouter pttKeyRouter;
     private MainWindowViewModel viewModel => sessionHost.ViewModel;
     private PressAndHoldPttController cardPtt => sessionHost.CardPtt;
     private OperatorToolsWindow? operatorToolsWindow;
@@ -68,6 +69,7 @@ public sealed partial class MainWindow : Window
             replacement => DataContext = replacement,
             CloseModelessViewModelWindows,
             CloseAllModelessWindows);
+        pttKeyRouter = new WindowPttKeyRouter(() => viewModel);
         activityCallHistoryList.LayoutUpdated += HandleActivityHistoryLayoutUpdated;
         AddHandler(InputElement.KeyDownEvent, HandleKeyDown, RoutingStrategies.Tunnel);
         AddHandler(InputElement.KeyUpEvent, HandleKeyUp, RoutingStrategies.Tunnel);
@@ -742,7 +744,7 @@ public sealed partial class MainWindow : Window
     {
         if (operatorToolsWindow is null)
         {
-            operatorToolsWindow = new OperatorToolsWindow(viewModel, section);
+            operatorToolsWindow = new OperatorToolsWindow(viewModel, section, pttKeyRouter);
             operatorToolsWindow.Closed += (_, _) => operatorToolsWindow = null;
             operatorToolsWindow.Show();
             return;
@@ -876,52 +878,18 @@ public sealed partial class MainWindow : Window
 
     private void HandleKeyDown(object? sender, KeyEventArgs e)
     {
-        if (DataContext is MainWindowViewModel viewModel &&
-            TryMapPttKey(e.Key, out KeyboardPttKey key))
-        {
-            bool handled = viewModel.HandleKeyboardPttDown(key);
-            e.Handled = handled || viewModel.IsConfiguredPttKey(key);
-        }
+        if (pttKeyRouter.TryHandleKeyDown(e.Key, out bool handled))
+            e.Handled = handled;
     }
 
     private void HandleKeyUp(object? sender, KeyEventArgs e)
     {
-        if (DataContext is MainWindowViewModel viewModel &&
-            TryMapPttKey(e.Key, out KeyboardPttKey key))
-        {
-            bool handled = viewModel.HandleKeyboardPttUp(key);
-            e.Handled = handled || viewModel.IsConfiguredPttKey(key);
-        }
+        if (pttKeyRouter.TryHandleKeyUp(e.Key, out bool handled))
+            e.Handled = handled;
     }
 
     internal static bool TryMapPttKey(Key key, out KeyboardPttKey pttKey)
-    {
-        pttKey = key switch
-        {
-            Key.Space => KeyboardPttKey.Space,
-            Key.F1 => KeyboardPttKey.F1,
-            Key.F2 => KeyboardPttKey.F2,
-            Key.F3 => KeyboardPttKey.F3,
-            Key.F4 => KeyboardPttKey.F4,
-            Key.F5 => KeyboardPttKey.F5,
-            Key.F6 => KeyboardPttKey.F6,
-            Key.F7 => KeyboardPttKey.F7,
-            Key.F8 => KeyboardPttKey.F8,
-            Key.F9 => KeyboardPttKey.F9,
-            Key.F10 => KeyboardPttKey.F10,
-            Key.F11 => KeyboardPttKey.F11,
-            Key.F12 => KeyboardPttKey.F12,
-            Key.F13 => KeyboardPttKey.F13,
-            Key.F14 => KeyboardPttKey.F14,
-            Key.F15 => KeyboardPttKey.F15,
-            Key.F16 => KeyboardPttKey.F16,
-            Key.F17 => KeyboardPttKey.F17,
-            Key.F18 => KeyboardPttKey.F18,
-            Key.F19 => KeyboardPttKey.F19,
-            _ => default
-        };
-        return key is Key.Space or (>= Key.F1 and <= Key.F19);
-    }
+        => WindowPttKeyRouter.TryMap(key, out pttKey);
 
     private void ConfigureTransientScrollBars(ScrollViewer? viewer)
     {
