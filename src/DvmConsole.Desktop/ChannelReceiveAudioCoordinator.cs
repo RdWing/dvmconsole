@@ -16,7 +16,7 @@ public sealed class ChannelReceiveAudioCoordinator : IAsyncDisposable
     private readonly SemaphoreSlim gate = new(1, 1);
     private readonly SemaphoreSlim recoveryGate = new(1, 1);
     private readonly object playbackPolicySync = new();
-    private readonly ConcurrentDictionary<ChannelViewModel, SessionState> sessions = [];
+    private readonly ConcurrentDictionary<ChannelViewModel, ReceiveStreamSessionRegistry> sessions = [];
     private readonly ReceiveAudioRouteRegistry routeRegistry = new();
     private readonly Func<IAudioBackend> createAudioBackend;
     private readonly Func<IVocoderBackend> createVocoderBackend;
@@ -106,7 +106,7 @@ public sealed class ChannelReceiveAudioCoordinator : IAsyncDisposable
     public bool IsLivePlaybackEnabled(ChannelViewModel channel)
     {
         ArgumentNullException.ThrowIfNull(channel);
-        return sessions.TryGetValue(channel, out SessionState? state) &&
+        return sessions.TryGetValue(channel, out ReceiveStreamSessionRegistry? state) &&
                state.LivePlaybackEnabled;
     }
 
@@ -114,14 +114,14 @@ public sealed class ChannelReceiveAudioCoordinator : IAsyncDisposable
     {
         ArgumentNullException.ThrowIfNull(channel);
         return streamId != 0 &&
-               sessions.TryGetValue(channel, out SessionState? state) &&
+               sessions.TryGetValue(channel, out ReceiveStreamSessionRegistry? state) &&
                state.IsTrackingStream(streamId);
     }
 
     public ReceiveAudioDiagnostics GetDiagnostics(ChannelViewModel channel)
     {
         ArgumentNullException.ThrowIfNull(channel);
-        return sessions.TryGetValue(channel, out SessionState? state)
+        return sessions.TryGetValue(channel, out ReceiveStreamSessionRegistry? state)
             ? state.GetDiagnostics()
             : new ReceiveAudioDiagnostics(0, 0, 0, 0);
     }
@@ -240,7 +240,7 @@ public sealed class ChannelReceiveAudioCoordinator : IAsyncDisposable
 
             Dictionary<ChannelViewModel, bool> livePlaybackStates = desired.ToDictionary(
                 channel => channel,
-                channel => sessions.TryGetValue(channel, out SessionState? state) &&
+                channel => sessions.TryGetValue(channel, out ReceiveStreamSessionRegistry? state) &&
                            state.LivePlaybackEnabled);
 
             Exception? stopFailure = null;
@@ -328,7 +328,7 @@ public sealed class ChannelReceiveAudioCoordinator : IAsyncDisposable
         await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            if (sessions.TryGetValue(channel, out SessionState? state))
+            if (sessions.TryGetValue(channel, out ReceiveStreamSessionRegistry? state))
             {
                 await state
                     .SetLivePlaybackEnabledAsync(enabled, cancellationToken)
@@ -353,7 +353,7 @@ public sealed class ChannelReceiveAudioCoordinator : IAsyncDisposable
         await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            if (sessions.TryGetValue(channel, out SessionState? existingSession))
+            if (sessions.TryGetValue(channel, out ReceiveStreamSessionRegistry? existingSession))
             {
                 if (updateExistingSession)
                 {
@@ -374,7 +374,7 @@ public sealed class ChannelReceiveAudioCoordinator : IAsyncDisposable
             IVocoderBackend? createdVocoder = null;
             ReceiveAudioRoute? createdRoute = null;
             StreamSessionState? createdStreamSession = null;
-            SessionState? nextState = null;
+            ReceiveStreamSessionRegistry? nextState = null;
             bool sessionRegistered = false;
             bool routeRegistered = false;
             bool routePolicyRegistered = false;
@@ -413,7 +413,7 @@ public sealed class ChannelReceiveAudioCoordinator : IAsyncDisposable
                     activeVocoder,
                     gain,
                     balance).ConfigureAwait(false);
-                nextState = new SessionState(
+                nextState = new ReceiveStreamSessionRegistry(
                     createdStreamSession,
                     () => CreateStreamSessionAsync(channel, activeRoute, activeVocoder, gain, balance),
                     gain,
@@ -493,7 +493,7 @@ public sealed class ChannelReceiveAudioCoordinator : IAsyncDisposable
         ArgumentNullException.ThrowIfNull(traffic);
         ObjectDisposedException.ThrowIf(disposed, this);
 
-        if (!sessions.TryGetValue(channel, out SessionState? state) || !state.TryAcquire())
+        if (!sessions.TryGetValue(channel, out ReceiveStreamSessionRegistry? state) || !state.TryAcquire())
             return 0;
 
         bool entered = false;
@@ -522,7 +522,7 @@ public sealed class ChannelReceiveAudioCoordinator : IAsyncDisposable
             throw new ArgumentOutOfRangeException(nameof(streamId));
         ObjectDisposedException.ThrowIf(disposed, this);
 
-        if (!sessions.TryGetValue(channel, out SessionState? state) || !state.TryAcquire())
+        if (!sessions.TryGetValue(channel, out ReceiveStreamSessionRegistry? state) || !state.TryAcquire())
             return;
 
         bool entered = false;
@@ -550,7 +550,7 @@ public sealed class ChannelReceiveAudioCoordinator : IAsyncDisposable
         try
         {
             Exception? failure = null;
-            if (sessions.TryRemove(channel, out SessionState? state))
+            if (sessions.TryRemove(channel, out ReceiveStreamSessionRegistry? state))
             {
                 state.BeginStop();
                 routeRegistry.TryRemoveSessionRoute(channel, out string? routeId);
@@ -609,7 +609,7 @@ public sealed class ChannelReceiveAudioCoordinator : IAsyncDisposable
         await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            if (sessions.TryGetValue(channel, out SessionState? state))
+            if (sessions.TryGetValue(channel, out ReceiveStreamSessionRegistry? state))
                 await state.SetGainAsync(gain, cancellationToken).ConfigureAwait(false);
         }
         finally
@@ -626,7 +626,7 @@ public sealed class ChannelReceiveAudioCoordinator : IAsyncDisposable
         await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            if (sessions.TryGetValue(channel, out SessionState? state))
+            if (sessions.TryGetValue(channel, out ReceiveStreamSessionRegistry? state))
                 await state.SetBalanceAsync(balance, cancellationToken).ConfigureAwait(false);
         }
         finally
@@ -712,16 +712,16 @@ public sealed class ChannelReceiveAudioCoordinator : IAsyncDisposable
 
     private async Task StopCoreAsync()
     {
-        SessionState[] oldSessions = sessions.Values.ToArray();
+        ReceiveStreamSessionRegistry[] oldSessions = sessions.Values.ToArray();
         sessions.Clear();
         routeRegistry.ClearSessions();
         activeChannels = [];
 
-        foreach (SessionState state in oldSessions)
+        foreach (ReceiveStreamSessionRegistry state in oldSessions)
             state.BeginStop();
 
         Exception? failure = null;
-        foreach (SessionState state in oldSessions)
+        foreach (ReceiveStreamSessionRegistry state in oldSessions)
         {
             try
             {
@@ -837,7 +837,7 @@ public sealed class ChannelReceiveAudioCoordinator : IAsyncDisposable
         return route;
     }
 
-    private sealed class SessionState : IAsyncDisposable
+    private sealed class ReceiveStreamSessionRegistry : IAsyncDisposable
     {
         private const int MaximumStreamSessions = 8;
         private static readonly TimeSpan CompletedStreamRetention = TimeSpan.FromSeconds(1);
@@ -853,7 +853,7 @@ public sealed class ChannelReceiveAudioCoordinator : IAsyncDisposable
         private double balance;
         private bool livePlaybackEnabled;
 
-        public SessionState(
+        public ReceiveStreamSessionRegistry(
             StreamSessionState initialStream,
             Func<ValueTask<StreamSessionState>> createStreamSession,
             double gain,
