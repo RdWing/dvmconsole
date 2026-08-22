@@ -6,7 +6,8 @@ public sealed class VoiceFrameEncoder : IDisposable
 {
     private readonly IVocoderSession session;
     private readonly VocoderMode mode;
-    private readonly List<short> pending = [];
+    private readonly short[] pending = new short[VocoderFrameSizes.PcmSamplesPerFrame];
+    private int pendingCount;
     private bool hasUnflushedFrame;
     private bool disposed;
 
@@ -21,15 +22,20 @@ public sealed class VoiceFrameEncoder : IDisposable
         ObjectDisposedException.ThrowIf(disposed, this);
         ArgumentNullException.ThrowIfNull(emit);
 
-        pending.AddRange(samples.ToArray());
         int emitted = 0;
-        while (pending.Count >= VocoderFrameSizes.PcmSamplesPerFrame)
+        while (!samples.IsEmpty)
         {
-            short[] frame = pending.GetRange(0, VocoderFrameSizes.PcmSamplesPerFrame).ToArray();
-            pending.RemoveRange(0, VocoderFrameSizes.PcmSamplesPerFrame);
+            int copied = Math.Min(pending.Length - pendingCount, samples.Length);
+            samples[..copied].CopyTo(pending.AsSpan(pendingCount));
+            pendingCount += copied;
+            samples = samples[copied..];
+            if (pendingCount != pending.Length)
+                continue;
+
             byte[] codeword = new byte[VocoderFrameSizes.CodewordBytes(mode)];
-            session.Encode(frame, codeword);
+            session.Encode(pending, codeword);
             emit(codeword);
+            pendingCount = 0;
             hasUnflushedFrame = true;
             emitted++;
         }
@@ -44,7 +50,7 @@ public sealed class VoiceFrameEncoder : IDisposable
     {
         ObjectDisposedException.ThrowIf(disposed, this);
         ArgumentNullException.ThrowIfNull(emit);
-        if (pending.Count != 0)
+        if (pendingCount != 0)
             throw new InvalidOperationException("Pad the incomplete PCM frame before flushing the vocoder.");
         if (!hasUnflushedFrame)
             return 0;

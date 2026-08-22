@@ -6,6 +6,22 @@ namespace DvmConsole.Vocoder.Tests;
 public sealed class VoiceFramePipelineTests
 {
     [Fact]
+    public void EncoderRetainsOnlyOneFixedPcmFrameAcrossArbitraryChunks()
+    {
+        var session = new RecordingSession();
+        using var encoder = new VoiceFrameEncoder(session, VocoderMode.DmrAmbe);
+        short[] samples = Enumerable.Range(0, 480).Select(static value => (short)value).ToArray();
+
+        Assert.Equal(0, encoder.Process(samples.AsSpan(0, 17), static _ => { }));
+        Assert.Equal(2, encoder.Process(samples.AsSpan(17, 303), static _ => { }));
+        Assert.Equal(1, encoder.Process(samples.AsSpan(320), static _ => { }));
+
+        Assert.Equal(samples.AsSpan(0, 160).ToArray(), session.EncodedFrames[0]);
+        Assert.Equal(samples.AsSpan(160, 160).ToArray(), session.EncodedFrames[1]);
+        Assert.Equal(samples.AsSpan(320, 160).ToArray(), session.EncodedFrames[2]);
+    }
+
+    [Fact]
     public void EncoderTurnsArbitraryPcmChunksIntoFixedCodewords()
     {
         var session = new FakeVocoderSession();
@@ -112,6 +128,27 @@ public sealed class VoiceFramePipelineTests
             codeword.Fill(value);
             return codeword.Length;
         }
+
+        public void Dispose()
+        {
+        }
+    }
+
+    private sealed class RecordingSession : IVocoderSession
+    {
+        public List<short[]> EncodedFrames { get; } = [];
+
+        public int Encode(ReadOnlySpan<short> samples, Span<byte> codeword)
+        {
+            EncodedFrames.Add(samples.ToArray());
+            codeword.Clear();
+            return codeword.Length;
+        }
+
+        public int Decode(ReadOnlySpan<byte> codeword, Span<short> samples)
+            => throw new NotSupportedException();
+
+        public int FlushEncode(Span<byte> codeword) => 0;
 
         public void Dispose()
         {
