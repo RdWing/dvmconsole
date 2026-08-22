@@ -17,7 +17,7 @@ namespace DvmConsole.Desktop;
 public sealed partial class MainWindow : Window
 {
     private MainWindowViewModel viewModel;
-    private readonly PressAndHoldPttController cardPtt;
+    private PressAndHoldPttController cardPtt;
     private OperatorToolsWindow? operatorToolsWindow;
     private DebugLogWindow? debugLogWindow;
     private DocumentationWindow? documentationWindow;
@@ -54,9 +54,7 @@ public sealed partial class MainWindow : Window
         viewModel = MainWindowViewModel.Load(configurationPath);
         mainWindowPlacement = new MainWindowPlacementController(this, viewModel.MainWindowPlacement);
         mainWindowPlacement.PrepareSize();
-        cardPtt = new PressAndHoldPttController(
-            channel => viewModel.StartChannelTransmitAsync(channel),
-            channel => viewModel.StopChannelTransmitAsync(channel));
+        cardPtt = CreateCardPtt(viewModel);
         DataContext = viewModel;
         activityHistoryCollection = (INotifyCollectionChanged)viewModel.ActivityCallHistory;
         activityViewportAnchor = new ScrollViewportAnchor<CallHistoryEntry>(
@@ -99,6 +97,7 @@ public sealed partial class MainWindow : Window
                 activityCallHistoryList.LayoutUpdated -= HandleActivityHistoryLayoutUpdated;
                 activityHistoryCollection.CollectionChanged -= HandleActivityHistoryCollectionChanged;
                 activityViewportAnchor.Reset();
+                await cardPtt.DisposeAsync().ConfigureAwait(false);
                 await viewModel.DisposeAsync().ConfigureAwait(false);
             }
             catch (Exception exception)
@@ -547,13 +546,20 @@ public sealed partial class MainWindow : Window
         // them before disposing the old model rather than leaving a visible
         // window bound to stale settings, history, or PTT state.
         CloseModelessViewModelWindows();
+        await cardPtt.DisposeAsync();
         viewModel = replacement;
+        cardPtt = CreateCardPtt(replacement);
         DataContext = replacement;
         RefreshRecentCodeplugMenu();
         RefreshNamedSettingsProfileMenus();
         await previous.DisposeAsync();
         await replacement.StartKeyboardPttAsync();
     }
+
+    private static PressAndHoldPttController CreateCardPtt(MainWindowViewModel owner)
+        => new(
+            channel => owner.StartChannelTransmitAsync(channel),
+            channel => owner.StopChannelTransmitAsync(channel));
 
     private void CloseModelessViewModelWindows()
     {
