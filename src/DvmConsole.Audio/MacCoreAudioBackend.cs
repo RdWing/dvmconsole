@@ -171,7 +171,7 @@ public sealed class MacCoreAudioBackend :
     private static string NormalizeConfiguredDeviceId(string? deviceId)
         => string.IsNullOrWhiteSpace(deviceId) ? "default" : deviceId.Trim();
 
-    private static void EnsureSuccess(int result, string operation)
+    internal static void EnsureSuccess(int result, string operation)
     {
         if (result != 0)
             throw new InvalidOperationException($"Unable to {operation}; CoreAudio status {result}.");
@@ -180,7 +180,7 @@ public sealed class MacCoreAudioBackend :
     private sealed class MacCoreAudioCapture : IAudioCapture
     {
         private readonly NativeCoreAudioApi api;
-        private readonly IntPtr stream;
+        private readonly SafeCoreAudioStreamHandle stream;
         private readonly PcmRateConverter? rateConverter;
         private readonly bool highQualitySessionAcquired;
         private CancellationTokenSource? pumpCancellation;
@@ -200,7 +200,7 @@ public sealed class MacCoreAudioBackend :
             highQualitySessionAcquired = highQualityBluetoothAudio &&
                 api.AcquireHighQualityBluetooth(deviceId, outputDeviceId) != 0;
             stream = api.CreateStream(deviceId, input: 1, format.SampleRate, format.Channels, format.BitsPerSample);
-            if (stream == IntPtr.Zero)
+            if (stream.IsInvalid)
             {
                 if (highQualitySessionAcquired)
                     api.ReleaseHighQualityBluetooth();
@@ -248,7 +248,7 @@ public sealed class MacCoreAudioBackend :
             await StopAsync().ConfigureAwait(false);
             try
             {
-                api.DestroyStream(stream);
+                stream.Dispose();
             }
             finally
             {
@@ -292,7 +292,7 @@ public sealed class MacCoreAudioBackend :
         IAudioPlaybackCallbackDiagnostics
     {
         private readonly NativeCoreAudioApi api;
-        private readonly IntPtr stream;
+        private readonly SafeCoreAudioStreamHandle stream;
         private readonly PcmRateConverter? rateConverter;
         private readonly int nativeSampleRate;
         private bool disposed;
@@ -303,7 +303,7 @@ public sealed class MacCoreAudioBackend :
             this.api = api;
             Format = format;
             stream = api.CreateStream(deviceId, input: 0, format.SampleRate, format.Channels, format.BitsPerSample);
-            if (stream == IntPtr.Zero)
+            if (stream.IsInvalid)
                 throw new InvalidOperationException("CoreAudio could not create the playback stream.");
             nativeSampleRate = api.GetSampleRate(stream);
             rateConverter = nativeSampleRate == format.SampleRate
@@ -451,17 +451,11 @@ public sealed class MacCoreAudioBackend :
             if (!disposed)
             {
                 api.StopStream(stream);
-                api.DestroyStream(stream);
+                stream.Dispose();
                 disposed = true;
             }
             return ValueTask.CompletedTask;
         }
-    }
-
-    private enum VoiceEndpoint
-    {
-        Capture,
-        Playback
     }
 
     private sealed class MacVoiceProcessingCapture : IAudioCapture
@@ -655,205 +649,7 @@ public sealed class MacCoreAudioBackend :
         }
     }
 
-    private static class VoiceProcessingSessionRegistry
-    {
-        private static readonly object Sync = new();
-        private static readonly Dictionary<VoiceSessionKey, VoiceProcessingSession> Sessions = [];
-
-        public static VoiceProcessingSession Acquire(
-            string libraryPath,
-            ulong inputDeviceId,
-            ulong outputDeviceId,
-            bool highQualityBluetoothAudio,
-            PcmAudioFormat format,
-            VoiceEndpoint endpoint)
-        {
-            ValidateVoiceFormat(format);
-            lock (Sync)
-            {
-                var key = new VoiceSessionKey(
-                    libraryPath,
-                    inputDeviceId,
-                    outputDeviceId,
-                    highQualityBluetoothAudio);
-                if (!Sessions.TryGetValue(key, out VoiceProcessingSession? session))
-                {
-                    session = new VoiceProcessingSession(key, format);
-                    Sessions.Add(key, session);
-                }
-                try
-                {
-                    session.AddEndpoint(format, endpoint);
-                    return session;
-                }
-                catch
-                {
-                    if (session.HasNoEndpoints)
-                    {
-                        Sessions.Remove(key);
-                        session.Dispose();
-                    }
-                    throw;
-                }
-            }
-        }
-
-        public static void Release(VoiceProcessingSession session, VoiceEndpoint endpoint)
-        {
-            lock (Sync)
-            {
-                if (!session.RemoveEndpoint(endpoint))
-                    return;
-                Sessions.Remove(session.Key);
-                session.Dispose();
-            }
-        }
-
-        public readonly record struct VoiceSessionKey(
-            string LibraryPath,
-            ulong InputDeviceId,
-            ulong OutputDeviceId,
-            bool HighQualityBluetoothAudio);
-    }
-
-    private sealed class VoiceProcessingSession : IDisposable
-    {
-        private readonly object sync = new();
-        private readonly NativeCoreAudioApi api;
-        private readonly IntPtr stream;
-        private readonly PcmAudioFormat format;
-        private readonly bool highQualitySessionAcquired;
-        private int captureEndpoints;
-        private int playbackEndpoints;
-        private int runningEndpoints;
-        private bool disposed;
-
-        public VoiceProcessingSession(VoiceProcessingSessionRegistry.VoiceSessionKey key, PcmAudioFormat format)
-        {
-            Key = key;
-            this.format = format;
-            api = NativeCoreAudioApi.Load(key.LibraryPath);
-            highQualitySessionAcquired = key.HighQualityBluetoothAudio &&
-                api.AcquireHighQualityBluetooth(key.InputDeviceId, key.OutputDeviceId) != 0;
-            stream = api.CreateVoiceProcessingStream(
-                key.InputDeviceId,
-                key.OutputDeviceId,
-                format.SampleRate,
-                format.Channels,
-                format.BitsPerSample);
-            if (stream == IntPtr.Zero)
-            {
-                if (highQualitySessionAcquired)
-                    api.ReleaseHighQualityBluetooth();
-                api.Dispose();
-                throw new InvalidOperationException(
-                    "CoreAudio could not create the Apple Voice Processing I/O stream. " +
-                    "Confirm that the selected input/output pair supports full-duplex voice audio.");
-            }
-        }
-
-        public VoiceProcessingSessionRegistry.VoiceSessionKey Key { get; }
-        public bool HasNoEndpoints => captureEndpoints == 0 && playbackEndpoints == 0;
-        public int QueuedSamples => checked((int)api.GetVoiceProcessingQueuedSamples(stream));
-        public TimeSpan StarvedDuration => TimeSpan.FromSeconds(
-            api.GetVoiceProcessingStarvedSamples(stream) /
-            (double)checked(format.SampleRate * format.Channels));
-        public TimeSpan PendingStarvedDuration => TimeSpan.FromSeconds(
-            api.GetVoiceProcessingPendingStarvedSamples(stream) /
-            (double)checked(format.SampleRate * format.Channels));
-        public long OutputCallbackCount => checked(
-            (long)api.GetVoiceProcessingOutputCallbackCount(stream));
-
-        public void AddEndpoint(PcmAudioFormat requestedFormat, VoiceEndpoint endpoint)
-        {
-            if (requestedFormat != format)
-                throw new InvalidOperationException("Apple voice-processing capture and playback must use the same PCM format.");
-            if (endpoint == VoiceEndpoint.Capture)
-            {
-                if (captureEndpoints != 0)
-                    throw new InvalidOperationException("Only one Apple voice-processing microphone endpoint can be open.");
-                captureEndpoints++;
-            }
-            else
-            {
-                if (playbackEndpoints != 0)
-                    throw new InvalidOperationException(
-                        "Only the final mixed radio output can use Apple voice processing. " +
-                        "Additional physical output routes use the normal CoreAudio path.");
-                playbackEndpoints++;
-            }
-        }
-
-        public bool RemoveEndpoint(VoiceEndpoint endpoint)
-        {
-            if (endpoint == VoiceEndpoint.Capture)
-                captureEndpoints--;
-            else
-                playbackEndpoints--;
-            return captureEndpoints == 0 && playbackEndpoints == 0;
-        }
-
-        public void StartCapture() => StartEndpoint();
-        public void StopCapture() => StopEndpoint();
-        public void StartPlayback() => StartEndpoint();
-        public void StopPlayback() => StopEndpoint();
-        public int Read(short[] samples) => api.ReadVoiceProcessing(stream, samples, samples.Length);
-        public int Write(short[] samples) => api.WriteVoiceProcessing(stream, samples, samples.Length);
-        public void EndExpectedPlayback() => api.EndVoiceProcessingPlaybackContinuity(stream);
-
-        public void Dispose()
-        {
-            lock (sync)
-            {
-                if (disposed)
-                    return;
-                if (runningEndpoints > 0)
-                    api.StopVoiceProcessing(stream);
-                try
-                {
-                    api.DestroyVoiceProcessingStream(stream);
-                }
-                finally
-                {
-                    if (highQualitySessionAcquired)
-                        api.ReleaseHighQualityBluetooth();
-                    api.Dispose();
-                }
-                runningEndpoints = 0;
-                disposed = true;
-            }
-        }
-
-        private void StartEndpoint()
-        {
-            lock (sync)
-            {
-                ObjectDisposedException.ThrowIf(disposed, this);
-                if (runningEndpoints++ == 0)
-                {
-                    int result = api.StartVoiceProcessing(stream);
-                    if (result != 0)
-                    {
-                        runningEndpoints--;
-                        EnsureSuccess(result, "start Apple voice processing");
-                    }
-                }
-            }
-        }
-
-        private void StopEndpoint()
-        {
-            lock (sync)
-            {
-                if (runningEndpoints <= 0)
-                    return;
-                if (--runningEndpoints == 0)
-                    EnsureSuccess(api.StopVoiceProcessing(stream), "stop Apple voice processing");
-            }
-        }
-    }
-
-    private static void ValidateVoiceFormat(PcmAudioFormat format)
+    internal static void ValidateVoiceFormat(PcmAudioFormat format)
     {
         ArgumentNullException.ThrowIfNull(format);
         if (format.Channels != 1 || format.BitsPerSample != 16)
@@ -881,155 +677,4 @@ public sealed class MacCoreAudioBackend :
         return checked((int)((scaled + nativeSampleRate - 1) / nativeSampleRate));
     }
 
-    private sealed class NativeCoreAudioApi : IDisposable
-    {
-        [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate int GetDeviceCountDelegate(int input, out int count);
-        [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate int GetDeviceDelegate(int input, int index, out ulong deviceId, byte[] name, int nameCapacity, out int isDefault);
-        [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate int IsBluetoothDeviceDelegate(ulong deviceId);
-        [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate IntPtr CreateStreamDelegate(ulong deviceId, int input, int sampleRate, int channels, int bitsPerSample);
-        [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate int StreamStatusDelegate(IntPtr stream);
-        [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate int GetSampleRateDelegate(IntPtr stream);
-        [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate int StreamReadDelegate(IntPtr stream, [Out] short[] samples, int capacity);
-        [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate int StreamWriteDelegate(IntPtr stream, short[] samples, int count);
-        [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate uint StreamQueuedSamplesDelegate(IntPtr stream);
-        [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate ulong StreamStarvedSamplesDelegate(IntPtr stream);
-        [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate void EndPlaybackContinuityDelegate(IntPtr stream);
-        [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate void DestroyStreamDelegate(IntPtr stream);
-        [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate IntPtr CreateVoiceProcessingStreamDelegate(ulong inputDeviceId, ulong outputDeviceId, int sampleRate, int channels, int bitsPerSample);
-        [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate int AcquireHighQualityBluetoothDelegate(ulong inputDeviceId, ulong outputDeviceId);
-        [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate void ReleaseHighQualityBluetoothDelegate();
-        [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate int GetHighQualityBluetoothStatusDelegate();
-
-        private readonly IntPtr handle;
-        private readonly GetDeviceCountDelegate getDeviceCount;
-        private readonly GetDeviceDelegate getDevice;
-        private readonly IsBluetoothDeviceDelegate? isBluetoothDevice;
-        private readonly CreateStreamDelegate createStream;
-        private readonly StreamStatusDelegate startStream;
-        private readonly StreamStatusDelegate stopStream;
-        private readonly GetSampleRateDelegate getSampleRate;
-        private readonly StreamReadDelegate readStream;
-        private readonly StreamWriteDelegate writeStream;
-        private readonly StreamQueuedSamplesDelegate queuedSamples;
-        private readonly StreamStarvedSamplesDelegate starvedSamples;
-        private readonly StreamStarvedSamplesDelegate pendingStarvedSamples;
-        private readonly StreamStarvedSamplesDelegate outputCallbackCount;
-        private readonly EndPlaybackContinuityDelegate endPlaybackContinuity;
-        private readonly DestroyStreamDelegate destroyStream;
-        private readonly CreateVoiceProcessingStreamDelegate createVoiceProcessingStream;
-        private readonly StreamStatusDelegate startVoiceProcessing;
-        private readonly StreamStatusDelegate stopVoiceProcessing;
-        private readonly StreamReadDelegate readVoiceProcessing;
-        private readonly StreamWriteDelegate writeVoiceProcessing;
-        private readonly StreamQueuedSamplesDelegate voiceProcessingQueuedSamples;
-        private readonly StreamStarvedSamplesDelegate voiceProcessingStarvedSamples;
-        private readonly StreamStarvedSamplesDelegate voiceProcessingPendingStarvedSamples;
-        private readonly StreamStarvedSamplesDelegate voiceProcessingOutputCallbackCount;
-        private readonly EndPlaybackContinuityDelegate endVoiceProcessingPlaybackContinuity;
-        private readonly DestroyStreamDelegate destroyVoiceProcessingStream;
-        private readonly AcquireHighQualityBluetoothDelegate acquireHighQualityBluetooth;
-        private readonly ReleaseHighQualityBluetoothDelegate releaseHighQualityBluetooth;
-        private readonly GetHighQualityBluetoothStatusDelegate getHighQualityBluetoothStatus;
-
-        private NativeCoreAudioApi(IntPtr handle, string libraryPath)
-        {
-            this.handle = handle;
-            LibraryPath = libraryPath;
-            getDeviceCount = Get<GetDeviceCountDelegate>("dvm_audio_get_device_count");
-            getDevice = Get<GetDeviceDelegate>("dvm_audio_get_device");
-            isBluetoothDevice = TryGet<IsBluetoothDeviceDelegate>("dvm_audio_device_is_bluetooth");
-            createStream = Get<CreateStreamDelegate>("dvm_audio_stream_create");
-            startStream = Get<StreamStatusDelegate>("dvm_audio_stream_start");
-            stopStream = Get<StreamStatusDelegate>("dvm_audio_stream_stop");
-            getSampleRate = Get<GetSampleRateDelegate>("dvm_audio_stream_get_sample_rate");
-            readStream = Get<StreamReadDelegate>("dvm_audio_stream_read");
-            writeStream = Get<StreamWriteDelegate>("dvm_audio_stream_write");
-            queuedSamples = Get<StreamQueuedSamplesDelegate>("dvm_audio_stream_queued_samples");
-            starvedSamples = Get<StreamStarvedSamplesDelegate>("dvm_audio_stream_starved_samples");
-            pendingStarvedSamples = Get<StreamStarvedSamplesDelegate>("dvm_audio_stream_pending_starved_samples");
-            outputCallbackCount = Get<StreamStarvedSamplesDelegate>("dvm_audio_stream_output_callback_count");
-            endPlaybackContinuity = Get<EndPlaybackContinuityDelegate>("dvm_audio_stream_end_playback_continuity");
-            destroyStream = Get<DestroyStreamDelegate>("dvm_audio_stream_destroy");
-            createVoiceProcessingStream = Get<CreateVoiceProcessingStreamDelegate>("dvm_audio_voice_processing_create");
-            startVoiceProcessing = Get<StreamStatusDelegate>("dvm_audio_voice_processing_start");
-            stopVoiceProcessing = Get<StreamStatusDelegate>("dvm_audio_voice_processing_stop");
-            readVoiceProcessing = Get<StreamReadDelegate>("dvm_audio_voice_processing_read");
-            writeVoiceProcessing = Get<StreamWriteDelegate>("dvm_audio_voice_processing_write");
-            voiceProcessingQueuedSamples = Get<StreamQueuedSamplesDelegate>("dvm_audio_voice_processing_queued_samples");
-            voiceProcessingStarvedSamples = Get<StreamStarvedSamplesDelegate>("dvm_audio_voice_processing_starved_samples");
-            voiceProcessingPendingStarvedSamples = Get<StreamStarvedSamplesDelegate>("dvm_audio_voice_processing_pending_starved_samples");
-            voiceProcessingOutputCallbackCount = Get<StreamStarvedSamplesDelegate>("dvm_audio_voice_processing_output_callback_count");
-            endVoiceProcessingPlaybackContinuity = Get<EndPlaybackContinuityDelegate>("dvm_audio_voice_processing_end_playback_continuity");
-            destroyVoiceProcessingStream = Get<DestroyStreamDelegate>("dvm_audio_voice_processing_destroy");
-            acquireHighQualityBluetooth = Get<AcquireHighQualityBluetoothDelegate>("dvm_audio_high_quality_bluetooth_acquire");
-            releaseHighQualityBluetooth = Get<ReleaseHighQualityBluetoothDelegate>("dvm_audio_high_quality_bluetooth_release");
-            getHighQualityBluetoothStatus = Get<GetHighQualityBluetoothStatusDelegate>("dvm_audio_high_quality_bluetooth_status");
-        }
-
-        public string LibraryPath { get; }
-
-        public static NativeCoreAudioApi Load(string? configuredPath)
-        {
-            string? path = configuredPath;
-            if (string.IsNullOrWhiteSpace(path))
-                path = Environment.GetEnvironmentVariable("DVM_AUDIO_LIBRARY");
-            if (string.IsNullOrWhiteSpace(path))
-                path = Path.Combine(AppContext.BaseDirectory, "libdvmaudio.dylib");
-
-            string fullPath = Path.GetFullPath(path);
-            IntPtr handle = NativeLibrary.Load(fullPath);
-            try
-            {
-                return new NativeCoreAudioApi(handle, fullPath);
-            }
-            catch
-            {
-                NativeLibrary.Free(handle);
-                throw;
-            }
-        }
-
-        public int GetDeviceCount(int input, out int count) => getDeviceCount(input, out count);
-        public int GetDevice(int input, int index, out ulong deviceId, byte[] name, int capacity, out int isDefault) => getDevice(input, index, out deviceId, name, capacity, out isDefault);
-        public int IsBluetoothDevice(ulong deviceId) => isBluetoothDevice?.Invoke(deviceId) ?? -1;
-        public IntPtr CreateStream(ulong id, int input, int sampleRate, int channels, int bits) => createStream(id, input, sampleRate, channels, bits);
-        public int StartStream(IntPtr stream) => startStream(stream);
-        public int StopStream(IntPtr stream) => stopStream(stream);
-        public int GetSampleRate(IntPtr stream) => getSampleRate(stream);
-        public int ReadStream(IntPtr stream, short[] samples, int capacity) => readStream(stream, samples, capacity);
-        public int WriteStream(IntPtr stream, short[] samples, int count) => writeStream(stream, samples, count);
-        public uint GetQueuedSamples(IntPtr stream) => queuedSamples(stream);
-        public ulong GetStarvedSamples(IntPtr stream) => starvedSamples(stream);
-        public ulong GetPendingStarvedSamples(IntPtr stream) => pendingStarvedSamples(stream);
-        public ulong GetOutputCallbackCount(IntPtr stream) => outputCallbackCount(stream);
-        public void EndPlaybackContinuity(IntPtr stream) => endPlaybackContinuity(stream);
-        public void DestroyStream(IntPtr stream) => destroyStream(stream);
-        public IntPtr CreateVoiceProcessingStream(ulong inputDeviceId, ulong outputDeviceId, int sampleRate, int channels, int bits) => createVoiceProcessingStream(inputDeviceId, outputDeviceId, sampleRate, channels, bits);
-        public int StartVoiceProcessing(IntPtr stream) => startVoiceProcessing(stream);
-        public int StopVoiceProcessing(IntPtr stream) => stopVoiceProcessing(stream);
-        public int ReadVoiceProcessing(IntPtr stream, short[] samples, int capacity) => readVoiceProcessing(stream, samples, capacity);
-        public int WriteVoiceProcessing(IntPtr stream, short[] samples, int count) => writeVoiceProcessing(stream, samples, count);
-        public uint GetVoiceProcessingQueuedSamples(IntPtr stream) => voiceProcessingQueuedSamples(stream);
-        public ulong GetVoiceProcessingStarvedSamples(IntPtr stream) => voiceProcessingStarvedSamples(stream);
-        public ulong GetVoiceProcessingPendingStarvedSamples(IntPtr stream) => voiceProcessingPendingStarvedSamples(stream);
-        public ulong GetVoiceProcessingOutputCallbackCount(IntPtr stream) => voiceProcessingOutputCallbackCount(stream);
-        public void EndVoiceProcessingPlaybackContinuity(IntPtr stream) => endVoiceProcessingPlaybackContinuity(stream);
-        public void DestroyVoiceProcessingStream(IntPtr stream) => destroyVoiceProcessingStream(stream);
-        public int AcquireHighQualityBluetooth(ulong inputDeviceId, ulong outputDeviceId) => acquireHighQualityBluetooth(inputDeviceId, outputDeviceId);
-        public void ReleaseHighQualityBluetooth() => releaseHighQualityBluetooth();
-        public int GetHighQualityBluetoothStatus() => getHighQualityBluetoothStatus();
-        public void Dispose() => NativeLibrary.Free(handle);
-
-        private T Get<T>(string symbol) where T : Delegate
-        {
-            return Marshal.GetDelegateForFunctionPointer<T>(NativeLibrary.GetExport(handle, symbol));
-        }
-
-        private T? TryGet<T>(string symbol) where T : Delegate
-        {
-            return NativeLibrary.TryGetExport(handle, symbol, out IntPtr address)
-                ? Marshal.GetDelegateForFunctionPointer<T>(address)
-                : null;
-        }
-    }
 }
