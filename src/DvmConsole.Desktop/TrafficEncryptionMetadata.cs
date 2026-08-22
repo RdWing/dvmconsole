@@ -1,7 +1,5 @@
 using DvmConsole.FneClient;
 using DvmConsole.Media;
-using fnecore.DMR;
-using fnecore.P25;
 
 namespace DvmConsole.Desktop;
 
@@ -21,7 +19,7 @@ internal static class TrafficEncryptionMetadataResolver
                 out P25DfsiFrameCodec.P25EncryptionMetadata p25Metadata))
         {
             return new TrafficEncryptionMetadata(
-                p25Metadata.AlgorithmId != P25Defines.P25_ALGO_UNENCRYPT,
+                p25Metadata.AlgorithmId != P25EncryptionAlgorithms.Unencrypted,
                 p25Metadata.AlgorithmId,
                 p25Metadata.KeyId);
         }

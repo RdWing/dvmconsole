@@ -1,7 +1,6 @@
 using DvmConsole.FneClient;
 using DvmConsole.Core.Runtime;
 using DvmConsole.Media;
-using fnecore.P25;
 
 namespace DvmConsole.Desktop;
 
@@ -25,9 +24,9 @@ internal static class EncryptionPresentation
         {
             FneTrafficProtocol.P25 => value switch
             {
-                P25Defines.P25_ALGO_AES => "AES",
-                P25Defines.P25_ALGO_DES => "DES",
-                P25Defines.P25_ALGO_ARC4 => "RC4",
+                P25EncryptionAlgorithms.Aes => "AES",
+                P25EncryptionAlgorithms.Des => "DES",
+                P25EncryptionAlgorithms.Arc4 => "RC4",
                 _ => string.Empty
             },
             FneTrafficProtocol.Dmr => value switch
