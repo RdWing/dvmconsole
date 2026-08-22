@@ -230,16 +230,11 @@ public sealed class FneConnection : IAsyncDisposable
                 throw new InvalidOperationException($"The FNE connection is not ready for traffic ({status.State}).");
         }
 
-        var opcode = protocol switch
-        {
-            FneTrafficProtocol.Dmr => new Tuple<byte, byte>(Constants.NET_FUNC_PROTOCOL, Constants.NET_PROTOCOL_SUBFUNC_DMR),
-            FneTrafficProtocol.P25 => new Tuple<byte, byte>(Constants.NET_FUNC_PROTOCOL, Constants.NET_PROTOCOL_SUBFUNC_P25),
-            FneTrafficProtocol.Nxdn => new Tuple<byte, byte>(Constants.NET_FUNC_PROTOCOL, Constants.NET_PROTOCOL_SUBFUNC_NXDN),
-            FneTrafficProtocol.Analog => new Tuple<byte, byte>(Constants.NET_FUNC_PROTOCOL, Constants.NET_PROTOCOL_SUBFUNC_ANALOG),
-            _ => throw new ArgumentOutOfRangeException(nameof(protocol))
-        };
-
-        current.SendMasterTraffic(opcode, payload.ToArray(), packetSequence, streamId);
+        current.SendMasterTraffic(
+            FneTrafficMapper.ToOpcode(protocol),
+            payload.ToArray(),
+            packetSequence,
+            streamId);
     }
 
     // Requests one P25 key from the connected FNE. The response is accepted
@@ -589,18 +584,8 @@ public sealed class FneConnection : IAsyncDisposable
     private void HandleDmrDataReceived(object? sender, DMRDataReceivedEvent args)
     {
         long boundaryTimestamp = Stopwatch.GetTimestamp();
-        PublishTraffic(new FneTrafficFrame(
-            FneTrafficProtocol.Dmr,
-            args.PeerId,
-            args.SrcId,
-            args.DstId,
-            args.Slot,
-            args.CallType.ToString(),
-            args.FrameType.ToString(),
-            args.DataType.ToString(),
-            args.PacketSequence,
-            args.StreamId,
-            args.Data,
+        PublishTraffic(FneTrafficMapper.FromDmr(
+            args,
             boundaryTimestamp,
             Interlocked.Exchange(ref latestTrafficTransportTimestamp, 0)));
     }
@@ -608,18 +593,8 @@ public sealed class FneConnection : IAsyncDisposable
     private void HandleP25DataReceived(object? sender, P25DataReceivedEvent args)
     {
         long boundaryTimestamp = Stopwatch.GetTimestamp();
-        PublishTraffic(new FneTrafficFrame(
-            FneTrafficProtocol.P25,
-            args.PeerId,
-            args.SrcId,
-            args.DstId,
-            null,
-            args.CallType.ToString(),
-            args.FrameType.ToString(),
-            args.DUID.ToString(),
-            args.PacketSequence,
-            args.StreamId,
-            args.Data,
+        PublishTraffic(FneTrafficMapper.FromP25(
+            args,
             boundaryTimestamp,
             Interlocked.Exchange(ref latestTrafficTransportTimestamp, 0)));
     }
@@ -627,18 +602,8 @@ public sealed class FneConnection : IAsyncDisposable
     private void HandleNxdnDataReceived(object? sender, NXDNDataReceivedEvent args)
     {
         long boundaryTimestamp = Stopwatch.GetTimestamp();
-        PublishTraffic(new FneTrafficFrame(
-            FneTrafficProtocol.Nxdn,
-            args.PeerId,
-            args.SrcId,
-            args.DstId,
-            null,
-            args.CallType.ToString(),
-            args.FrameType.ToString(),
-            args.MessageType.ToString(),
-            args.PacketSequence,
-            args.StreamId,
-            args.Data,
+        PublishTraffic(FneTrafficMapper.FromNxdn(
+            args,
             boundaryTimestamp,
             Interlocked.Exchange(ref latestTrafficTransportTimestamp, 0)));
     }
@@ -646,18 +611,8 @@ public sealed class FneConnection : IAsyncDisposable
     private void HandleAnalogDataReceived(object? sender, AnalogDataReceivedEvent args)
     {
         long boundaryTimestamp = Stopwatch.GetTimestamp();
-        PublishTraffic(new FneTrafficFrame(
-            FneTrafficProtocol.Analog,
-            args.PeerId,
-            args.SrcId,
-            args.DstId,
-            null,
-            args.CallType.ToString(),
-            args.FrameType.ToString(),
-            args.AudioFrameType.ToString(),
-            args.PacketSequence,
-            args.StreamId,
-            args.Data,
+        PublishTraffic(FneTrafficMapper.FromAnalog(
+            args,
             boundaryTimestamp,
             Interlocked.Exchange(ref latestTrafficTransportTimestamp, 0)));
     }
