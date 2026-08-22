@@ -60,11 +60,15 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
     private CallHistoryStore callHistory => historyRecording.History;
     private ObservableCollection<CallRecordingMetadata> recordingEntries
         => historyRecording.RecordingEntries;
-    private readonly ObservableCollection<DtmfPresetViewModel> dtmfPresets = [];
-    private readonly ObservableCollection<TonePresetViewModel> tonePresets = [];
-    private readonly ObservableCollection<ToneSequenceStepViewModel> toneSequenceSteps = [];
-    private readonly ObservableCollection<AlertToneViewModel> alertTones = [];
-    private readonly ObservableCollection<BuiltInAlertToneViewModel> builtInAlertTones = [];
+    private readonly ToneWorkspaceViewModel toneWorkspace;
+    private ObservableCollection<DtmfPresetViewModel> dtmfPresets
+        => toneWorkspace.MutableDtmfPresets;
+    private ObservableCollection<TonePresetViewModel> tonePresets
+        => toneWorkspace.MutableTonePresets;
+    private ObservableCollection<ToneSequenceStepViewModel> toneSequenceSteps
+        => toneWorkspace.MutableToneSequenceSteps;
+    private ObservableCollection<AlertToneViewModel> alertTones
+        => toneWorkspace.MutableAlertTones;
     private readonly ObservableCollection<ToolbarClockViewModel> toolbarClocks = [];
     private readonly AudioSettingsViewModel audioSettings;
     private ObservableCollection<AudioInputPresetViewModel> audioInputPresets
@@ -116,16 +120,8 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
     private string statusText;
     private string audioStatusText = "RX audio disabled.";
     private string transmitStatusText = "PTT idle.";
-    private string dtmfDigits = "123";
-    private string toneFrequencyText = "1000";
-    private string toneDurationText = "1.0";
-    private string quickCallToneAText = "600";
-    private string quickCallToneBText = "1200";
     private IReadOnlyDictionary<VocoderMode, ReceiveAudioProcessingOptions> receiveAudioProcessingOptions =
         new Dictionary<VocoderMode, ReceiveAudioProcessingOptions>();
-    private string dtmfPresetName = string.Empty;
-    private string tonePresetName = string.Empty;
-    private string alertToneNameText = string.Empty;
     private string clockText = string.Empty;
     private string debugLogFilterText = string.Empty;
     private string debugLogSeverityFilter = "Info";
@@ -171,6 +167,8 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
             userSettings,
             ToAudioProcessingModeDisplay(userSettings.AudioProcessingMode));
         audioSettings.PropertyChanged += HandleAudioSettingsPropertyChanged;
+        toneWorkspace = new ToneWorkspaceViewModel(userSettings);
+        toneWorkspace.PropertyChanged += HandleToneWorkspacePropertyChanged;
         uiScaleTransform = new ScaleTransform
         {
             ScaleX = userSettings.UiScale,
@@ -215,14 +213,6 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
             TimeSpan.FromMilliseconds(ChannelAudioMeterPipeline.RefreshIntervalMilliseconds),
             HandleAudioMeterTick);
         sessionRuntime.StartTimer(TimeSpan.FromSeconds(1), HandleConnectionDiagnosticsTick);
-        dtmfDigits = userSettings.LastDtmfDigits;
-        toneFrequencyText = userSettings.ToneFrequencyHz.ToString("0.###", CultureInfo.InvariantCulture);
-        toneDurationText = userSettings.ToneDurationSeconds.ToString("0.###", CultureInfo.InvariantCulture);
-        toneSequenceSteps.Add(new ToneSequenceStepViewModel(
-            userSettings.ToneFrequencyHz,
-            userSettings.ToneDurationSeconds));
-        quickCallToneAText = userSettings.QuickCallToneAFrequencyHz.ToString("0.###", CultureInfo.InvariantCulture);
-        quickCallToneBText = userSettings.QuickCallToneBFrequencyHz.ToString("0.###", CultureInfo.InvariantCulture);
         receiveJitterBufferSettingsBySystem = BuildReceiveJitterBufferSettingsBySystem();
         receiveAudioProcessingOptions = BuildReceiveAudioProcessingOptions();
         webStreamPlayback = new WebStreamPlaybackCoordinator(
@@ -232,15 +222,6 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
             createDecoder: null,
             getStreamOutputDeviceId: GetWebStreamOutputDeviceId,
             uiDispatcher: this.uiDispatcher);
-        foreach (DtmfPresetSetting preset in userSettings.DtmfPresets)
-            dtmfPresets.Add(new DtmfPresetViewModel(preset));
-        foreach (TonePresetSetting preset in userSettings.TonePresets)
-            tonePresets.Add(new TonePresetViewModel(preset));
-        foreach (AlertToneSetting tone in userSettings.AlertTones)
-            alertTones.Add(new AlertToneViewModel(tone));
-        builtInAlertTones.Add(new BuiltInAlertToneViewModel(LegacyAlertTone.Alert1));
-        builtInAlertTones.Add(new BuiltInAlertToneViewModel(LegacyAlertTone.Alert2));
-        builtInAlertTones.Add(new BuiltInAlertToneViewModel(LegacyAlertTone.Alert3));
         List<ToolbarClockSetting> configuredClocks = (userSettings.ToolbarClocks ?? [])
             .Take(UserSettings.MaximumToolbarClocks)
             .ToList();
@@ -342,11 +323,6 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
         RestorePatchState(configuredGroups);
         PatchGroups = BuildPatchGroups(configuredGroups);
         RefreshPatchMembershipConflicts();
-        DtmfPresets = new ReadOnlyObservableCollection<DtmfPresetViewModel>(dtmfPresets);
-        TonePresets = new ReadOnlyObservableCollection<TonePresetViewModel>(tonePresets);
-        ToneSequenceSteps = new ReadOnlyObservableCollection<ToneSequenceStepViewModel>(toneSequenceSteps);
-        AlertTones = new ReadOnlyObservableCollection<AlertToneViewModel>(alertTones);
-        BuiltInAlertTones = new ReadOnlyObservableCollection<BuiltInAlertToneViewModel>(builtInAlertTones);
         ToolbarClocks = new ReadOnlyObservableCollection<ToolbarClockViewModel>(toolbarClocks);
         SubscriberCommandAudit = new ReadOnlyObservableCollection<SubscriberCommandAuditEntry>(subscriberCommandAudit);
         DebugLogEntries = new ReadOnlyObservableCollection<DebugLogEntry>(debugLogBuffer.Entries);
@@ -865,20 +841,20 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
 
     public string DtmfDigits
     {
-        get => dtmfDigits;
-        set => SetField(ref dtmfDigits, value ?? string.Empty);
+        get => toneWorkspace.DtmfDigits;
+        set => toneWorkspace.DtmfDigits = value;
     }
 
     public string ToneFrequencyText
     {
-        get => toneFrequencyText;
-        set => SetField(ref toneFrequencyText, value ?? string.Empty);
+        get => toneWorkspace.ToneFrequencyText;
+        set => toneWorkspace.ToneFrequencyText = value;
     }
 
     public string ToneDurationText
     {
-        get => toneDurationText;
-        set => SetField(ref toneDurationText, value ?? string.Empty);
+        get => toneWorkspace.ToneDurationText;
+        set => toneWorkspace.ToneDurationText = value;
     }
 
     public string AudioInputDeviceIdText
@@ -1433,32 +1409,32 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
 
     public string DtmfPresetName
     {
-        get => dtmfPresetName;
-        set => SetField(ref dtmfPresetName, value ?? string.Empty);
+        get => toneWorkspace.DtmfPresetName;
+        set => toneWorkspace.DtmfPresetName = value;
     }
 
     public string TonePresetName
     {
-        get => tonePresetName;
-        set => SetField(ref tonePresetName, value ?? string.Empty);
+        get => toneWorkspace.TonePresetName;
+        set => toneWorkspace.TonePresetName = value;
     }
 
     public string QuickCallToneAText
     {
-        get => quickCallToneAText;
-        set => SetField(ref quickCallToneAText, value ?? string.Empty);
+        get => toneWorkspace.QuickCallToneAText;
+        set => toneWorkspace.QuickCallToneAText = value;
     }
 
     public string QuickCallToneBText
     {
-        get => quickCallToneBText;
-        set => SetField(ref quickCallToneBText, value ?? string.Empty);
+        get => toneWorkspace.QuickCallToneBText;
+        set => toneWorkspace.QuickCallToneBText = value;
     }
 
     public string AlertToneNameText
     {
-        get => alertToneNameText;
-        set => SetField(ref alertToneNameText, value ?? string.Empty);
+        get => toneWorkspace.AlertToneNameText;
+        set => toneWorkspace.AlertToneNameText = value;
     }
 
     public string RecordingRetentionDaysText
@@ -1488,11 +1464,16 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
     public IReadOnlyList<ZoneViewModel> Zones { get; }
     public IReadOnlyList<string> PatchGroupNames => patchForwarding.GroupNames;
     public IReadOnlyList<PatchGroupEditorViewModel> PatchGroups { get; }
-    public ReadOnlyObservableCollection<DtmfPresetViewModel> DtmfPresets { get; }
-    public ReadOnlyObservableCollection<TonePresetViewModel> TonePresets { get; }
-    public ReadOnlyObservableCollection<ToneSequenceStepViewModel> ToneSequenceSteps { get; }
-    public ReadOnlyObservableCollection<AlertToneViewModel> AlertTones { get; }
-    public ReadOnlyObservableCollection<BuiltInAlertToneViewModel> BuiltInAlertTones { get; }
+    public ReadOnlyObservableCollection<DtmfPresetViewModel> DtmfPresets
+        => toneWorkspace.DtmfPresets;
+    public ReadOnlyObservableCollection<TonePresetViewModel> TonePresets
+        => toneWorkspace.TonePresets;
+    public ReadOnlyObservableCollection<ToneSequenceStepViewModel> ToneSequenceSteps
+        => toneWorkspace.ToneSequenceSteps;
+    public ReadOnlyObservableCollection<AlertToneViewModel> AlertTones
+        => toneWorkspace.AlertTones;
+    public ReadOnlyObservableCollection<BuiltInAlertToneViewModel> BuiltInAlertTones
+        => toneWorkspace.BuiltInAlertTones;
     public ReadOnlyObservableCollection<ToolbarClockViewModel> ToolbarClocks { get; }
     public ReadOnlyObservableCollection<AudioInputPresetViewModel> AudioInputPresets
         => audioSettings.AudioInputPresets;
@@ -2473,6 +2454,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
             pttSettings.PropertyChanged -= HandlePttSettingsPropertyChanged;
             historyRecording.PropertyChanged -= HandleHistoryRecordingPropertyChanged;
             audioSettings.PropertyChanged -= HandleAudioSettingsPropertyChanged;
+            toneWorkspace.PropertyChanged -= HandleToneWorkspacePropertyChanged;
         });
         await cleanup.RunTaskAsync(() => pttSession.DisposeAsync().AsTask()).ConfigureAwait(false);
 
@@ -3587,6 +3569,9 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
         => PropertyChanged?.Invoke(this, args);
 
     private void HandleAudioSettingsPropertyChanged(object? sender, PropertyChangedEventArgs args)
+        => PropertyChanged?.Invoke(this, args);
+
+    private void HandleToneWorkspacePropertyChanged(object? sender, PropertyChangedEventArgs args)
         => PropertyChanged?.Invoke(this, args);
 
     private void HandlePttSourceStateChanged(object? sender, PttSourceStateChange change)
