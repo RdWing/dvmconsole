@@ -563,9 +563,7 @@ public sealed class AudioMixer : IAsyncDisposable
                 return false;
             }
 
-            Array.Clear(leftMix);
-            if (rightMix is not null)
-                Array.Clear(rightMix);
+            PcmMixKernel.Clear(leftMix, rightMix);
             List<ChannelBuffer>? drainedChannels = null;
             PresentationNotification[]? presented = null;
             int presentedCount = 0;
@@ -607,16 +605,12 @@ public sealed class AudioMixer : IAsyncDisposable
                         source);
                 }
 
-                int count = Math.Min(frameSamples, source.Length);
-                double leftBalance = rightMix is null || channel.Balance <= 0 ? 1.0 : 1.0 - channel.Balance;
-                double rightBalance = channel.Balance >= 0 ? 1.0 : 1.0 + channel.Balance;
-                for (int index = 0; index < count; index++)
-                {
-                    double gained = source[index] * channel.Gain;
-                    leftMix[index] += gained * leftBalance;
-                    if (rightMix is not null)
-                        rightMix[index] += gained * rightBalance;
-                }
+                int count = PcmMixKernel.Accumulate(
+                    source,
+                    channel.Gain,
+                    channel.Balance,
+                    leftMix,
+                    rightMix);
 
                 if (count > 0)
                 {
@@ -636,23 +630,13 @@ public sealed class AudioMixer : IAsyncDisposable
                     RemoveDrainedChannelLocked(channel);
             }
 
-            double peak = 0;
-            for (int index = 0; index < frameSamples; index++)
+            if (PcmMixKernel.Render(
+                    leftMix,
+                    rightMix,
+                    output.Format.Channels,
+                    outputFrame))
             {
-                peak = Math.Max(peak, Math.Abs(leftMix[index]));
-                if (rightMix is not null)
-                    peak = Math.Max(peak, Math.Abs(rightMix[index]));
-            }
-            double protection = peak > short.MaxValue ? short.MaxValue / peak : 1.0;
-            if (protection < 1.0)
                 protectedFrames++;
-
-            for (int index = 0; index < frameSamples; index++)
-            {
-                int outputIndex = index * output.Format.Channels;
-                outputFrame[outputIndex] = ToPcm(leftMix[index] * protection);
-                if (rightMix is not null)
-                    outputFrame[outputIndex + 1] = ToPcm(rightMix[index] * protection);
             }
             frame = outputFrame;
             notifications = presented ?? [];
@@ -890,7 +874,7 @@ public sealed class AudioMixer : IAsyncDisposable
         for (int index = 0; index < count; index++)
         {
             double progress = (index + 1.0) / count;
-            source[index] = ToPcm(start + ((source[index] - start) * progress));
+            source[index] = PcmMixKernel.ToPcm(start + ((source[index] - start) * progress));
         }
         channel.BoundarySmoothingPending = false;
     }
@@ -997,12 +981,6 @@ public sealed class AudioMixer : IAsyncDisposable
         if (failure is not null)
             throw new IOException("The shared audio mixer stopped.", failure);
     }
-
-    private static short ToPcm(double sample)
-        => (short)Math.Clamp(
-            Math.Round(sample, MidpointRounding.AwayFromZero),
-            short.MinValue,
-            short.MaxValue);
 
     private readonly record struct PresentationNotification(
         Action<ReadOnlyMemory<short>, TimeSpan> Observer,
