@@ -34,6 +34,8 @@ public sealed partial class MainWindow : Window
     private double dragWidgetYOrigin;
     private bool draggedChannelMoved;
     private bool toggleReceiveAfterChannelClick;
+    private int shutdownStarted;
+    private bool shutdownComplete;
 
     public MainWindow() : this(null)
     {
@@ -82,30 +84,58 @@ public sealed partial class MainWindow : Window
             await viewModel.StartKeyboardPttAsync().ConfigureAwait(false);
         };
         LayoutUpdated += (_, _) => ConfigureTransientChannelScrollBars();
-        Closing += (_, _) =>
-            viewModel.SaveMainWindowPlacement(mainWindowPlacement.GetPlacementForPersistence());
-        Closed += async (_, _) =>
+        Closing += HandleClosing;
+    }
+
+    private async void HandleClosing(object? sender, WindowClosingEventArgs e)
+    {
+        if (shutdownComplete)
+            return;
+
+        // Keep the native window and application lifetime alive until every
+        // session-owned asynchronous resource has completed cleanup. A second
+        // close request remains cancelled while the same operation is running.
+        e.Cancel = true;
+        if (Interlocked.Exchange(ref shutdownStarted, 1) != 0)
+            return;
+
+        try
         {
-            try
-            {
-                mainWindowPlacement.Dispose();
-                operatorToolsWindow?.Close();
-                debugLogWindow?.Close();
-                documentationWindow?.Close();
-                aboutWindow?.Close();
-                foreach (DispatcherTimer timer in scrollBarTimers)
-                    timer.Stop();
-                activityCallHistoryList.LayoutUpdated -= HandleActivityHistoryLayoutUpdated;
-                activityHistorySubscription.Dispose();
-                activityViewportAnchor.Reset();
-                await cardPtt.DisposeAsync().ConfigureAwait(false);
-                await viewModel.DisposeAsync().ConfigureAwait(false);
-            }
-            catch (Exception exception)
-            {
-                DesktopCrashLog.Write("Main window shutdown", exception);
-            }
-        };
+            await ShutdownAsync();
+        }
+        catch (Exception exception)
+        {
+            DesktopCrashLog.Write("Main window shutdown", exception);
+        }
+        finally
+        {
+            shutdownComplete = true;
+            Dispatcher.UIThread.Post(Close);
+        }
+    }
+
+    private async Task ShutdownAsync()
+    {
+        var cleanup = new AsyncCleanup();
+        cleanup.Run(() =>
+            viewModel.SaveMainWindowPlacement(mainWindowPlacement.GetPlacementForPersistence()));
+        cleanup.Run(mainWindowPlacement.Dispose);
+        cleanup.Run(() => operatorToolsWindow?.Close());
+        cleanup.Run(() => debugLogWindow?.Close());
+        cleanup.Run(() => documentationWindow?.Close());
+        cleanup.Run(() => aboutWindow?.Close());
+        cleanup.Run(() =>
+        {
+            foreach (DispatcherTimer timer in scrollBarTimers)
+                timer.Stop();
+        });
+        cleanup.Run(() =>
+            activityCallHistoryList.LayoutUpdated -= HandleActivityHistoryLayoutUpdated);
+        cleanup.Run(activityHistorySubscription.Dispose);
+        cleanup.Run(activityViewportAnchor.Reset);
+        await cleanup.RunTaskAsync(() => cardPtt.DisposeAsync().AsTask());
+        await cleanup.RunTaskAsync(() => viewModel.DisposeAsync().AsTask());
+        cleanup.ThrowIfFailed();
     }
 
     private void HandleActivityHistoryCollectionChanged(

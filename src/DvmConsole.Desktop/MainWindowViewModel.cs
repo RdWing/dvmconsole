@@ -119,6 +119,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
     private readonly DispatcherTimer audioMeterTimer;
     private readonly DispatcherTimer connectionDiagnosticsTimer;
     private Bitmap? userBackgroundBitmap;
+    private readonly AsyncDisposal disposal = new();
     private int disposeStarted;
     private IBrush mainBackgroundBrush = new SolidColorBrush(Color.Parse("#0D1116"));
     private string statusText;
@@ -2900,19 +2901,33 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
         }).ToArray();
     }
 
-    public async ValueTask DisposeAsync()
+    public ValueTask DisposeAsync()
     {
-        if (Interlocked.Exchange(ref disposeStarted, 1) != 0)
-            return;
+        Interlocked.Exchange(ref disposeStarted, 1);
+        return disposal.RunAsync(DisposeCoreAsync);
+    }
 
-        clockTimer.Stop();
-        clockTimer.Tick -= HandleClockTick;
-        audioMeterTimer.Stop();
-        audioMeterTimer.Tick -= HandleAudioMeterTick;
-        connectionDiagnosticsTimer.Stop();
-        connectionDiagnosticsTimer.Tick -= HandleConnectionDiagnosticsTick;
-        filteredDebugLogs.Dispose();
-        await defaultAudioDeviceMonitor.DisposeAsync().ConfigureAwait(false);
+    private async Task DisposeCoreAsync()
+    {
+        var cleanup = new AsyncCleanup();
+        cleanup.Run(() =>
+        {
+            clockTimer.Stop();
+            clockTimer.Tick -= HandleClockTick;
+        });
+        cleanup.Run(() =>
+        {
+            audioMeterTimer.Stop();
+            audioMeterTimer.Tick -= HandleAudioMeterTick;
+        });
+        cleanup.Run(() =>
+        {
+            connectionDiagnosticsTimer.Stop();
+            connectionDiagnosticsTimer.Tick -= HandleConnectionDiagnosticsTick;
+        });
+        cleanup.Run(filteredDebugLogs.Dispose);
+        await cleanup.RunTaskAsync(
+            () => defaultAudioDeviceMonitor.DisposeAsync().AsTask()).ConfigureAwait(false);
         Task recordingScan;
         CancellationTokenSource? recordingScanCancellation;
         lock (recordingCatalogScanSync)
@@ -2922,77 +2937,131 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
             recordingCatalogScanCancellation = null;
             recordingScan = recordingCatalogScanTask;
         }
-        await recordingScan.ConfigureAwait(false);
-        recordingScanCancellation?.Dispose();
-        transmitCoordinator.Faulted -= HandleTransmitFaulted;
-        keyboardPtt.StateChanged -= HandleKeyboardPttStateChanged;
-        activeSystemKeyboardPtt.StateChanged -= HandleActiveSystemKeyboardPttStateChanged;
-        await keyboardPtt.DisposeAsync().ConfigureAwait(false);
-        await activeSystemKeyboardPtt.DisposeAsync().ConfigureAwait(false);
-        await serialPttChangeLock.WaitAsync().ConfigureAwait(false);
+        await cleanup.RunTaskAsync(() => recordingScan).ConfigureAwait(false);
+        cleanup.Run(() => recordingScanCancellation?.Dispose());
+        cleanup.Run(() =>
+        {
+            transmitCoordinator.Faulted -= HandleTransmitFaulted;
+            transmitCoordinator.HighQualityBluetoothStatusChanged -= HandleHighQualityBluetoothStatusChanged;
+            keyboardPtt.StateChanged -= HandleKeyboardPttStateChanged;
+            activeSystemKeyboardPtt.StateChanged -= HandleActiveSystemKeyboardPttStateChanged;
+        });
+        await cleanup.RunTaskAsync(() => keyboardPtt.DisposeAsync().AsTask()).ConfigureAwait(false);
+        await cleanup.RunTaskAsync(() => activeSystemKeyboardPtt.DisposeAsync().AsTask()).ConfigureAwait(false);
+
+        bool serialGateEntered = false;
         try
         {
-            IPttSource? currentSerialPtt = serialPtt;
-            serialPtt = null;
-            if (currentSerialPtt is not null)
-                await StopAndDisposeSerialPttAsync(currentSerialPtt).ConfigureAwait(false);
+            await serialPttChangeLock.WaitAsync().ConfigureAwait(false);
+            serialGateEntered = true;
         }
-        finally
+        catch (Exception exception)
         {
-            serialPttChangeLock.Release();
+            cleanup.Capture(exception);
         }
-        await pttStateChangeLock.WaitAsync().ConfigureAwait(false);
+        if (serialGateEntered)
+        {
+            try
+            {
+                IPttSource? currentSerialPtt = serialPtt;
+                serialPtt = null;
+                if (currentSerialPtt is not null)
+                {
+                    await cleanup.RunTaskAsync(
+                        () => StopAndDisposeSerialPttAsync(currentSerialPtt)).ConfigureAwait(false);
+                }
+            }
+            finally
+            {
+                serialPttChangeLock.Release();
+            }
+        }
+
+        bool pttGateEntered = false;
         try
         {
-            // A PTT startup may still be completing microphone readiness and
-            // its permit cue. Do not dispose those services out from under it.
-            await toneTransmitCoordinator.DisposeAsync().ConfigureAwait(false);
-            await localTonePlayer.DisposeAsync().ConfigureAwait(false);
-            warmMicrophoneReconciler.Reconciled -= HandleWarmMicrophoneReconciled;
-            await warmMicrophoneReconciler.WhenIdleAsync().ConfigureAwait(false);
-            await transmitCoordinator.DisposeAsync().ConfigureAwait(false);
+            await pttStateChangeLock.WaitAsync().ConfigureAwait(false);
+            pttGateEntered = true;
         }
-        finally
+        catch (Exception exception)
         {
-            pttStateChangeLock.Release();
+            cleanup.Capture(exception);
         }
-        await p25KeyRequestCoordinator.DisposeAsync().ConfigureAwait(false);
+        if (pttGateEntered)
+        {
+            try
+            {
+                // A PTT startup may still be completing microphone readiness
+                // and its permit cue. Preserve that ownership order.
+                await cleanup.RunTaskAsync(
+                    () => toneTransmitCoordinator.DisposeAsync().AsTask()).ConfigureAwait(false);
+                await cleanup.RunTaskAsync(
+                    () => localTonePlayer.DisposeAsync().AsTask()).ConfigureAwait(false);
+                cleanup.Run(() => warmMicrophoneReconciler.Reconciled -= HandleWarmMicrophoneReconciled);
+                await cleanup.RunTaskAsync(
+                    warmMicrophoneReconciler.WhenIdleAsync).ConfigureAwait(false);
+                await cleanup.RunTaskAsync(
+                    () => transmitCoordinator.DisposeAsync().AsTask()).ConfigureAwait(false);
+            }
+            finally
+            {
+                pttStateChangeLock.Release();
+            }
+        }
+
+        await cleanup.RunTaskAsync(
+            () => p25KeyRequestCoordinator.DisposeAsync().AsTask()).ConfigureAwait(false);
         foreach (SystemViewModel system in Systems)
         {
-            system.JitterBufferChanged -= HandleSystemJitterBufferChanged;
-            system.PropertyChanged -= HandleSystemPropertyChanged;
-            system.KeyResponseReceived -= HandleSystemKeyResponse;
-            system.LogReceived -= HandleSystemLog;
-            await system.DisposeAsync().ConfigureAwait(false);
+            cleanup.Run(() =>
+            {
+                system.JitterBufferChanged -= HandleSystemJitterBufferChanged;
+                system.PropertyChanged -= HandleSystemPropertyChanged;
+                system.KeyResponseReceived -= HandleSystemKeyResponse;
+                system.LogReceived -= HandleSystemLog;
+            });
+            await cleanup.RunTaskAsync(() => system.DisposeAsync().AsTask()).ConfigureAwait(false);
         }
-        await receiveAudioWork.DisposeAsync().ConfigureAwait(false);
-        await patchSourceReceiveWork.DisposeAsync().ConfigureAwait(false);
-        await patchSourceDecode.DisposeAsync().ConfigureAwait(false);
-        patchForwarding.Dispose();
-        await audioCoordinator.DisposeAsync().ConfigureAwait(false);
-        await webStreamPlayback.DisposeAsync().ConfigureAwait(false);
-        await recordingPlayback.DisposeAsync().ConfigureAwait(false);
-        audioReconfigurationLock.Dispose();
-        callRecordings.RecordingFinalized -= HandleRecordingFinalized;
-        await callRecordings.DisposeAsync().ConfigureAwait(false);
-        p25KeyRing?.Dispose();
-        dmrKeyRing?.Dispose();
-        nxdnKeyRing?.Dispose();
-        userBackgroundBitmap?.Dispose();
-        userBackgroundBitmap = null;
+        await cleanup.RunTaskAsync(() => receiveAudioWork.DisposeAsync().AsTask()).ConfigureAwait(false);
+        await cleanup.RunTaskAsync(() => patchSourceReceiveWork.DisposeAsync().AsTask()).ConfigureAwait(false);
+        await cleanup.RunTaskAsync(() => patchSourceDecode.DisposeAsync().AsTask()).ConfigureAwait(false);
+        cleanup.Run(patchForwarding.Dispose);
+        await cleanup.RunTaskAsync(() => audioCoordinator.DisposeAsync().AsTask()).ConfigureAwait(false);
+        await cleanup.RunTaskAsync(() => webStreamPlayback.DisposeAsync().AsTask()).ConfigureAwait(false);
+        await cleanup.RunTaskAsync(() => recordingPlayback.DisposeAsync().AsTask()).ConfigureAwait(false);
+        cleanup.Run(audioReconfigurationLock.Dispose);
+        cleanup.Run(() => callRecordings.RecordingFinalized -= HandleRecordingFinalized);
+        await cleanup.RunTaskAsync(() => callRecordings.DisposeAsync().AsTask()).ConfigureAwait(false);
+        cleanup.Run(() => p25KeyRing?.Dispose());
+        cleanup.Run(() => dmrKeyRing?.Dispose());
+        cleanup.Run(() => nxdnKeyRing?.Dispose());
+        cleanup.Run(() =>
+        {
+            userBackgroundBitmap?.Dispose();
+            userBackgroundBitmap = null;
+        });
         foreach (ChannelViewModel channel in Systems.SelectMany(system => system.Channels))
         {
-            channel.TransmitEncryptionChanged -= HandleChannelEncryptionChanged;
-            channel.RecordingStateChanged -= HandleChannelRecordingChanged;
-            channel.VolumeChanged -= HandleChannelVolumeChanged;
-            channel.StereoBalanceChanged -= HandleChannelStereoBalanceChanged;
-            channel.PropertyChanged -= HandleActivityChannelPropertyChanged;
+            cleanup.Run(() =>
+            {
+                channel.TransmitEncryptionChanged -= HandleChannelEncryptionChanged;
+                channel.RecordingStateChanged -= HandleChannelRecordingChanged;
+                channel.VolumeChanged -= HandleChannelVolumeChanged;
+                channel.StereoBalanceChanged -= HandleChannelStereoBalanceChanged;
+                channel.PropertyChanged -= HandleActivityChannelPropertyChanged;
+            });
         }
         foreach (WebStreamViewModel stream in WebStreams)
         {
-            stream.VolumeChanged -= HandleWebStreamVolumeChanged;
-            stream.PropertyChanged -= HandleWebStreamPropertyChanged;
+            cleanup.Run(() =>
+            {
+                stream.VolumeChanged -= HandleWebStreamVolumeChanged;
+                stream.PropertyChanged -= HandleWebStreamPropertyChanged;
+            });
         }
+        cleanup.Run(serialPttChangeLock.Dispose);
+        cleanup.Run(pttStateChangeLock.Dispose);
+        cleanup.ThrowIfFailed();
     }
 
     private async Task ConnectAsync()
