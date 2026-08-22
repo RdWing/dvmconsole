@@ -35,8 +35,6 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
         [DvmConsoleProcessingDisplay, AppleVoiceProcessingDisplay];
     private static readonly string[] DvmConsoleAudioProcessingModeOptions =
         [DvmConsoleProcessingDisplay];
-    private static readonly KeyboardPttKey[] GlobalPttKeyOptionValues = Enum.GetValues<KeyboardPttKey>();
-    private static readonly int[] SerialPttBaudRateOptions = [1_200, 2_400, 4_800, 9_600, 19_200, 38_400, 57_600, 115_200];
     private readonly ChannelReceiveAudioCoordinator audioCoordinator;
     private readonly ChannelReceiveWorkQueue receiveAudioWork;
     private readonly ChannelReceiveWorkQueue patchSourceReceiveWork;
@@ -61,7 +59,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
     private readonly Func<IReadOnlyList<string>> serialPortProvider;
     private readonly SemaphoreSlim serialPttChangeLock = new(1, 1);
     private readonly SemaphoreSlim pttStateChangeLock = new(1, 1);
-    private readonly ObservableCollection<string> serialPttPortOptions = [];
+    private readonly PttSettingsViewModel pttSettings;
     private readonly CallHistoryStore callHistory = new();
     private readonly ObservableCollection<CallHistoryEntry> filteredCallHistoryEntries = [];
     private readonly ObservableCollection<CallHistoryEntry> activityCallHistoryEntries = [];
@@ -139,8 +137,6 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
     private IReadOnlyDictionary<VocoderMode, ReceiveAudioProcessingOptions> receiveAudioProcessingOptions =
         new Dictionary<VocoderMode, ReceiveAudioProcessingOptions>();
     private string selectedAudioProcessingMode = "DVM Console processing";
-    private KeyboardPttKey selectedGlobalPttKey;
-    private KeyboardPttKey selectedActiveSystemPttKey;
     private string audioInputPresetNameText = string.Empty;
     private string dtmfPresetName = string.Empty;
     private string tonePresetName = string.Empty;
@@ -176,11 +172,6 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
     private bool busy;
     private bool codeplugDiagnosticsDismissed;
     private bool pttStarted;
-    private bool serialPttEnabled;
-    private bool serialPttActiveSystemOnly;
-    private string serialPttPortName = string.Empty;
-    private int serialPttBaudRate = 9_600;
-    private string serialPttStatusText = "Serial PTT is disabled.";
     private ChannelViewModel? selectedChannel;
     private SystemViewModel? selectedSystem;
     private AudioDeviceOptionViewModel? selectedAudioInputDevice;
@@ -231,24 +222,30 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
         activeSystemKeyboardPtt = new KeyboardPttBinding(
             ParseGlobalPttKey(userSettings.ActiveSystemPttKey),
             userSettings.TogglePttMode);
-        selectedGlobalPttKey = keyboardPtt.ActivationKey;
-        selectedActiveSystemPttKey = activeSystemKeyboardPtt.ActivationKey;
-        serialPttEnabled = userSettings.SerialPttEnabled;
-        serialPttActiveSystemOnly = userSettings.SerialPttActiveSystemOnly;
-        serialPttPortName = userSettings.SerialPttPortName;
-        serialPttBaudRate = userSettings.SerialPttBaudRate;
+        bool initialSerialPttEnabled = userSettings.SerialPttEnabled;
+        string initialSerialPttPortName = userSettings.SerialPttPortName;
+        int initialSerialPttBaudRate = userSettings.SerialPttBaudRate;
         string? environmentSerialPort = Environment.GetEnvironmentVariable("DVM_PTT_SERIAL_PORT");
-        if (serialPttPortName.Length == 0 && !string.IsNullOrWhiteSpace(environmentSerialPort))
+        if (initialSerialPttPortName.Length == 0 && !string.IsNullOrWhiteSpace(environmentSerialPort))
         {
-            serialPttEnabled = true;
-            serialPttPortName = environmentSerialPort.Trim();
-            serialPttBaudRate = ReadSerialPttBaudRate();
+            initialSerialPttEnabled = true;
+            initialSerialPttPortName = environmentSerialPort.Trim();
+            initialSerialPttBaudRate = ReadSerialPttBaudRate();
         }
+        pttSettings = new PttSettingsViewModel(
+            keyboardPtt.ActivationKey,
+            activeSystemKeyboardPtt.ActivationKey,
+            userSettings.TogglePttMode,
+            initialSerialPttEnabled,
+            userSettings.SerialPttActiveSystemOnly,
+            initialSerialPttPortName,
+            initialSerialPttBaudRate);
+        pttSettings.PropertyChanged += HandlePttSettingsPropertyChanged;
         RefreshSerialPttDevices();
-        if (serialPttEnabled && serialPttPortName.Length > 0)
+        if (SerialPttEnabled && SerialPttPortName.Length > 0)
         {
-            serialPtt = this.serialPttFactory(serialPttPortName, serialPttBaudRate);
-            serialPttStatusText = $"Configured for {serialPttPortName} at {serialPttBaudRate:N0} baud.";
+            serialPtt = this.serialPttFactory(SerialPttPortName, SerialPttBaudRate);
+            SerialPttStatusText = $"Configured for {SerialPttPortName} at {SerialPttBaudRate:N0} baud.";
         }
         clockText = FormatClock(DateTime.Now, userSettings.ClockUse24HourTime, userSettings.ClockShowSeconds);
         sessionRuntime.StartTimer(TimeSpan.FromSeconds(1), HandleClockTick);
@@ -1343,16 +1340,16 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
 
     public bool TogglePttMode
     {
-        get => userSettings.TogglePttMode;
+        get => pttSettings.TogglePttMode;
         set
         {
-            if (userSettings.TogglePttMode == value)
+            if (pttSettings.TogglePttMode == value)
                 return;
             userSettings.TogglePttMode = value;
             keyboardPtt.ToggleMode = value;
             activeSystemKeyboardPtt.ToggleMode = value;
             PersistUserSettings();
-            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(TogglePttMode)));
+            pttSettings.TogglePttMode = value;
         }
     }
 
@@ -1360,12 +1357,12 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
         ? "Keyboard PTT disabled"
         : keyboardPtt.ActivationKey.ToString();
 
-    public IReadOnlyList<KeyboardPttKey> GlobalPttKeyOptions => GlobalPttKeyOptionValues;
+    public IReadOnlyList<KeyboardPttKey> GlobalPttKeyOptions => pttSettings.GlobalPttKeyOptions;
 
     public KeyboardPttKey SelectedGlobalPttKey
     {
-        get => selectedGlobalPttKey;
-        set => SetField(ref selectedGlobalPttKey, value);
+        get => pttSettings.SelectedGlobalPttKey;
+        set => pttSettings.SelectedGlobalPttKey = value;
     }
 
     public Task ApplyGlobalPttKeySelectionAsync()
@@ -1378,8 +1375,8 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
 
     public KeyboardPttKey SelectedActiveSystemPttKey
     {
-        get => selectedActiveSystemPttKey;
-        set => SetField(ref selectedActiveSystemPttKey, value);
+        get => pttSettings.SelectedActiveSystemPttKey;
+        set => pttSettings.SelectedActiveSystemPttKey = value;
     }
 
     public Task ApplyActiveSystemPttKeySelectionAsync()
@@ -1387,42 +1384,37 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
 
     public bool SerialPttEnabled
     {
-        get => serialPttEnabled;
-        set => SetField(ref serialPttEnabled, value);
+        get => pttSettings.SerialPttEnabled;
+        set => pttSettings.SerialPttEnabled = value;
     }
 
     public bool SerialPttActiveSystemOnly
     {
-        get => serialPttActiveSystemOnly;
-        set => SetField(ref serialPttActiveSystemOnly, value);
+        get => pttSettings.SerialPttActiveSystemOnly;
+        set => pttSettings.SerialPttActiveSystemOnly = value;
     }
 
     public string SerialPttPortName
     {
-        get => serialPttPortName;
-        set => SetField(ref serialPttPortName, value?.Trim() ?? string.Empty);
+        get => pttSettings.SerialPttPortName;
+        set => pttSettings.SerialPttPortName = value;
     }
 
     public int SerialPttBaudRate
     {
-        get => serialPttBaudRate;
-        set => SetField(ref serialPttBaudRate, value);
+        get => pttSettings.SerialPttBaudRate;
+        set => pttSettings.SerialPttBaudRate = value;
     }
 
-    public IReadOnlyList<string> SerialPttPortOptions => serialPttPortOptions;
+    public IReadOnlyList<string> SerialPttPortOptions => pttSettings.SerialPttPortOptions;
 
     public IReadOnlyList<int> SerialPttBaudRates
-        => SerialPttBaudRateOptions
-            .Append(SerialPttBaudRate)
-            .Where(baudRate => baudRate > 0)
-            .Distinct()
-            .Order()
-            .ToArray();
+        => pttSettings.SerialPttBaudRates;
 
     public string SerialPttStatusText
     {
-        get => serialPttStatusText;
-        private set => SetField(ref serialPttStatusText, value);
+        get => pttSettings.SerialPttStatusText;
+        private set => pttSettings.SerialPttStatusText = value;
     }
 
     public void RefreshSerialPttDevices()
@@ -1437,13 +1429,10 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .OrderBy(portName => portName, StringComparer.OrdinalIgnoreCase)
                 .ToArray();
-            serialPttPortOptions.Clear();
-            foreach (string device in devices)
-                serialPttPortOptions.Add(device);
-
+            pttSettings.ReplaceSerialPttPortOptions(devices);
             if (SerialPttPortName.Length == 0 && devices.Length > 0)
                 SerialPttPortName = devices[0];
-            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SerialPttPortOptions)));
+            pttSettings.NotifySerialPttPortOptionsChanged();
             SerialPttStatusText = serialPtt is not null && SerialPttEnabled
                 ? $"Serial PTT configured for {SerialPttPortName} at {SerialPttBaudRate:N0} baud."
                 : devices.Length == 0
@@ -1452,10 +1441,9 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or InvalidOperationException or PlatformNotSupportedException or System.ComponentModel.Win32Exception)
         {
-            serialPttPortOptions.Clear();
-            if (SerialPttPortName.Length > 0)
-                serialPttPortOptions.Add(SerialPttPortName);
-            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SerialPttPortOptions)));
+            pttSettings.ReplaceSerialPttPortOptions(
+                SerialPttPortName.Length > 0 ? [SerialPttPortName] : []);
+            pttSettings.NotifySerialPttPortOptionsChanged();
             SerialPttStatusText = $"Serial device discovery unavailable: {exception.Message}";
         }
     }
@@ -2783,6 +2771,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
             transmitCoordinator.HighQualityBluetoothStatusChanged -= HandleHighQualityBluetoothStatusChanged;
             keyboardPtt.StateChanged -= HandleKeyboardPttStateChanged;
             activeSystemKeyboardPtt.StateChanged -= HandleActiveSystemKeyboardPttStateChanged;
+            pttSettings.PropertyChanged -= HandlePttSettingsPropertyChanged;
         });
         await cleanup.RunTaskAsync(() => keyboardPtt.DisposeAsync().AsTask()).ConfigureAwait(false);
         await cleanup.RunTaskAsync(() => activeSystemKeyboardPtt.DisposeAsync().AsTask()).ConfigureAwait(false);
@@ -3961,6 +3950,9 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
             : $"TAR retention set to {days} day(s).";
     }
 
+
+    private void HandlePttSettingsPropertyChanged(object? sender, PropertyChangedEventArgs args)
+        => PropertyChanged?.Invoke(this, args);
 
     private void HandleKeyboardPttStateChanged(object? sender, bool pressed)
         => DispatchKeyboardPttStateChanged(
