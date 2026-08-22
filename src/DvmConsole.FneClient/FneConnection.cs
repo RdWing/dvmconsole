@@ -121,7 +121,7 @@ public sealed record FneKeyResponse(
 // Owns one cross-platform FNE peer lifecycle. It does not start until StartAsync is called.
 public sealed class FneConnection : IAsyncDisposable
 {
-    internal static TimeSpan P25KeyResponseWindow { get; } = TimeSpan.FromMinutes(1);
+    internal static TimeSpan P25KeyResponseWindow => PendingP25KeyRequestTracker.ResponseWindow;
 
     internal static string SoftwareIdentifier => FormatSoftwareIdentifier(
         typeof(FneConnection).Assembly
@@ -129,11 +129,10 @@ public sealed class FneConnection : IAsyncDisposable
             .InformationalVersion);
 
     private readonly FneConnectionOptions options;
-    private readonly TimeProvider timeProvider;
     private readonly IFneEndpointResolver endpointResolver;
+    private readonly PendingP25KeyRequestTracker pendingP25KeyRequests;
     private readonly object sync = new();
     private readonly SemaphoreSlim lifecycle = new(1, 1);
-    private readonly Dictionary<(byte AlgorithmId, ushort KeyId), DateTimeOffset> pendingP25KeyRequests = [];
     private FnePeer? peer;
     private FneConnectionStatus status;
     private CancellationTokenSource? stateMonitorCancellation;
@@ -157,7 +156,7 @@ public sealed class FneConnection : IAsyncDisposable
         IFneEndpointResolver endpointResolver)
     {
         this.options = options ?? throw new ArgumentNullException(nameof(options));
-        this.timeProvider = timeProvider ?? throw new ArgumentNullException(nameof(timeProvider));
+        pendingP25KeyRequests = new PendingP25KeyRequestTracker(timeProvider);
         this.endpointResolver = endpointResolver ?? throw new ArgumentNullException(nameof(endpointResolver));
         status = new FneConnectionStatus(options.Name, FneConnectionState.Disconnected, "Not started", DateTimeOffset.UtcNow);
     }
@@ -269,11 +268,7 @@ public sealed class FneConnection : IAsyncDisposable
             }
             catch
             {
-                if (pendingP25KeyRequests.TryGetValue((algorithmId, keyId), out DateTimeOffset pendingExpiry) &&
-                    pendingExpiry == expiresAt)
-                {
-                    pendingP25KeyRequests.Remove((algorithmId, keyId));
-                }
+                pendingP25KeyRequests.TryCancel(algorithmId, keyId, expiresAt);
                 throw;
             }
         }
@@ -531,8 +526,7 @@ public sealed class FneConnection : IAsyncDisposable
 
     private void HandlePeerDisconnected(uint _)
     {
-        lock (sync)
-            pendingP25KeyRequests.Clear();
+        pendingP25KeyRequests.Clear();
         Publish(FneConnectionState.WaitingForLogin, "FNE peer disconnected; waiting to reconnect");
     }
 
@@ -570,17 +564,10 @@ public sealed class FneConnection : IAsyncDisposable
     }
 
     internal void RegisterPendingP25KeyRequest(byte algorithmId, ushort keyId)
-    {
-        lock (sync)
-            RegisterPendingP25KeyRequestCore(algorithmId, keyId);
-    }
+        => RegisterPendingP25KeyRequestCore(algorithmId, keyId);
 
     private DateTimeOffset RegisterPendingP25KeyRequestCore(byte algorithmId, ushort keyId)
-    {
-        DateTimeOffset expiresAt = timeProvider.GetUtcNow().Add(P25KeyResponseWindow);
-        pendingP25KeyRequests[(algorithmId, keyId)] = expiresAt;
-        return expiresAt;
-    }
+        => pendingP25KeyRequests.Register(algorithmId, keyId);
 
     internal bool TryPublishRequestedP25KeyResponse(
         byte algorithmId,
@@ -592,15 +579,8 @@ public sealed class FneConnection : IAsyncDisposable
             !HasSupportedP25KeyLength(algorithmId, material.Length))
             return false;
 
-        DateTimeOffset now = timeProvider.GetUtcNow();
-        lock (sync)
-        {
-            if (!pendingP25KeyRequests.Remove((algorithmId, keyId), out DateTimeOffset expiresAt) ||
-                expiresAt < now)
-            {
-                return false;
-            }
-        }
+        if (!pendingP25KeyRequests.TryConsume(algorithmId, keyId))
+            return false;
 
         Raise(KeyResponseReceived, new FneKeyResponse(options.Name, algorithmId, keyId, material));
         return true;
