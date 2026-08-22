@@ -96,6 +96,7 @@ public sealed class AudioMixer : IAsyncDisposable
     private bool stopping;
     private bool draining;
     private bool disposed;
+    private TaskCompletionSource? disposeCompletion;
     private Exception? failure;
     private long droppedSamples;
     private long overflowResynchronizations;
@@ -289,14 +290,44 @@ public sealed class AudioMixer : IAsyncDisposable
         }
     }
 
-    public async ValueTask DisposeAsync()
+    public ValueTask DisposeAsync()
+    {
+        TaskCompletionSource completion;
+        bool startDisposal = false;
+        lock (sync)
+        {
+            if (disposeCompletion is null)
+            {
+                disposeCompletion = new TaskCompletionSource(
+                    TaskCreationOptions.RunContinuationsAsynchronously);
+                startDisposal = true;
+            }
+            completion = disposeCompletion;
+        }
+
+        if (startDisposal)
+            _ = DisposeAndCompleteAsync(completion);
+        return new ValueTask(completion.Task);
+    }
+
+    private async Task DisposeAndCompleteAsync(TaskCompletionSource completion)
+    {
+        try
+        {
+            await DisposeCoreAsync().ConfigureAwait(false);
+            completion.TrySetResult();
+        }
+        catch (Exception exception)
+        {
+            completion.TrySetException(exception);
+        }
+    }
+
+    private async Task DisposeCoreAsync()
     {
         Task[] channelDrains;
         lock (sync)
         {
-            if (disposed || stopping)
-                return;
-
             stopping = true;
             draining = true;
             ChannelBuffer[] activeChannels = channels.Values.ToArray();
