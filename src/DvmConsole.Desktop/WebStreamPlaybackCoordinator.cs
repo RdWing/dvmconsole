@@ -253,36 +253,22 @@ public sealed class WebStreamPlaybackCoordinator : IAsyncDisposable
     private async Task RunAsync(WebStreamViewModel stream, PlaybackSession session)
     {
         Exception? failure = null;
-        bool received = false;
         bool canceled = false;
-        short[] input = new short[1600];
         try
         {
-            while (true)
-            {
-                int sampleCount = await session.Reader.ReadSamplesAsync(
-                    input,
-                    session.Cancellation.Token).ConfigureAwait(false);
-                if (sampleCount == 0)
-                    break;
-
-                short[] output = session.RateConverter?.Convert(input.AsSpan(0, sampleCount))
-                    ?? input.AsSpan(0, sampleCount).ToArray();
-                if (output.Length == 0)
-                    continue;
-                await session.Playback.WriteAsync(output, session.Cancellation.Token).ConfigureAwait(false);
-                if (!received)
-                {
-                    received = true;
-                    await SetPlaybackStateAsync(
+            await PcmPlaybackPump.RunAsync(
+                session.Reader,
+                session.Playback,
+                session.RateConverter,
+                session.Cancellation.Token,
+                () => SetPlaybackStateAsync(
                         stream,
                         true,
                         false,
                         true,
                         false,
-                        "Receiving").ConfigureAwait(false);
-                }
-            }
+                        "Receiving"))
+                .ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (session.Cancellation.IsCancellationRequested)
         {
