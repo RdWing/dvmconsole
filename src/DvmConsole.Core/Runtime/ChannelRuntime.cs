@@ -12,6 +12,14 @@ public enum ChannelRuntimeState
     Faulted
 }
 
+public enum ChannelProtocol
+{
+    Analog,
+    Dmr,
+    P25,
+    Nxdn
+}
+
 // Immutable channel identity used by services and views without depending on
 // a WPF/Avalonia control instance.
 public sealed record ChannelRuntimeDefinition
@@ -30,13 +38,19 @@ public sealed record ChannelRuntimeDefinition
         Name = string.IsNullOrWhiteSpace(name) ? throw new ArgumentException("A channel name is required.", nameof(name)) : name.Trim();
         SystemName = string.IsNullOrWhiteSpace(systemName) ? throw new ArgumentException("A channel system is required.", nameof(systemName)) : systemName.Trim();
         Mode = mode.Trim().ToLowerInvariant();
-        if (Mode is not ("dmr" or "p25" or "nxdn" or "analog"))
-            throw new ArgumentException($"Unsupported channel mode '{mode}'.", nameof(mode));
+        Protocol = Mode switch
+        {
+            "analog" => ChannelProtocol.Analog,
+            "dmr" => ChannelProtocol.Dmr,
+            "p25" => ChannelProtocol.P25,
+            "nxdn" => ChannelProtocol.Nxdn,
+            _ => throw new ArgumentException($"Unsupported channel mode '{mode}'.", nameof(mode))
+        };
         if (destinationId == 0)
             throw new ArgumentOutOfRangeException(nameof(destinationId), "A channel destination ID must be non-zero.");
-        if (Mode == "nxdn" && destinationId > ushort.MaxValue)
+        if (Protocol == ChannelProtocol.Nxdn && destinationId > ushort.MaxValue)
             throw new ArgumentOutOfRangeException(nameof(destinationId), "An NXDN destination ID must fit in 16 bits.");
-        if (Mode == "dmr" && slot > 1)
+        if (Protocol == ChannelProtocol.Dmr && slot > 1)
             throw new ArgumentOutOfRangeException(nameof(slot), "A DMR runtime slot must be zero or one.");
 
         DestinationId = destinationId;
@@ -52,6 +66,7 @@ public sealed record ChannelRuntimeDefinition
     public string Name { get; }
     public string SystemName { get; }
     public string Mode { get; }
+    public ChannelProtocol Protocol { get; }
     public uint DestinationId { get; }
     public byte Slot { get; }
     public bool RxOnly { get; }

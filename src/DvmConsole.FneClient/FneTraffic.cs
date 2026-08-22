@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using DvmConsole.Core.Runtime;
 
 namespace DvmConsole.FneClient;
 
@@ -8,6 +9,19 @@ public enum FneTrafficProtocol
     P25,
     Nxdn,
     Analog
+}
+
+public static class FneTrafficProtocolMapper
+{
+    public static FneTrafficProtocol FromChannelProtocol(ChannelProtocol protocol)
+        => protocol switch
+        {
+            ChannelProtocol.Analog => FneTrafficProtocol.Analog,
+            ChannelProtocol.Dmr => FneTrafficProtocol.Dmr,
+            ChannelProtocol.P25 => FneTrafficProtocol.P25,
+            ChannelProtocol.Nxdn => FneTrafficProtocol.Nxdn,
+            _ => throw new ArgumentOutOfRangeException(nameof(protocol))
+        };
 }
 
 // Platform-neutral representation of an inbound FNE media frame. Enum values

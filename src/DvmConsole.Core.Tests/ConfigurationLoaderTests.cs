@@ -244,9 +244,25 @@ public sealed class ConfigurationLoaderTests
         ChannelRuntimeDefinition definition = ChannelRuntimeDefinition.FromConfiguration(channel);
 
         Assert.Equal("dmr", definition.Mode);
+        Assert.Equal(ChannelProtocol.Dmr, definition.Protocol);
         Assert.Equal((byte)1, definition.Slot);
         Assert.Equal((uint)99, definition.DestinationId);
         Assert.True(definition.RxOnly);
+    }
+
+    [Theory]
+    [InlineData("analog", ChannelProtocol.Analog)]
+    [InlineData("DMR", ChannelProtocol.Dmr)]
+    [InlineData(" p25 ", ChannelProtocol.P25)]
+    [InlineData("NxDn", ChannelProtocol.Nxdn)]
+    public void ParsesChannelProtocolOnceWithoutChangingNormalizedMode(
+        string mode,
+        ChannelProtocol expected)
+    {
+        var definition = new ChannelRuntimeDefinition("Dispatch", "System 1", mode, 99, 0);
+
+        Assert.Equal(expected, definition.Protocol);
+        Assert.Equal(mode.Trim().ToLowerInvariant(), definition.Mode);
     }
 
     [Fact]

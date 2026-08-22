@@ -539,13 +539,8 @@ public sealed class CallRecordingManager : IDisposable, IAsyncDisposable
 
     private RecordingSnapshot CreateSnapshot(ChannelViewModel channel, ActiveRecording recording)
     {
-        FneTrafficProtocol protocol = channel.Definition.Mode switch
-        {
-            "p25" => FneTrafficProtocol.P25,
-            "nxdn" => FneTrafficProtocol.Nxdn,
-            "analog" => FneTrafficProtocol.Analog,
-            _ => FneTrafficProtocol.Dmr
-        };
+        FneTrafficProtocol protocol = FneTrafficProtocolMapper.FromChannelProtocol(
+            channel.Definition.Protocol);
         return new RecordingSnapshot(
             rootPath,
             recording.Writer.Path,

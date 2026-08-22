@@ -824,16 +824,7 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
     }
 
     private bool MatchesProtocol(FneTrafficProtocol protocol)
-    {
-        return runtime.Definition.Mode switch
-        {
-            "dmr" => protocol == FneTrafficProtocol.Dmr,
-            "p25" => protocol == FneTrafficProtocol.P25,
-            "nxdn" => protocol == FneTrafficProtocol.Nxdn,
-            "analog" => protocol == FneTrafficProtocol.Analog,
-            _ => false
-        };
-    }
+        => protocol == FneTrafficProtocolMapper.FromChannelProtocol(runtime.Definition.Protocol);
 
     private async Task ToggleAudioAsync()
     {
