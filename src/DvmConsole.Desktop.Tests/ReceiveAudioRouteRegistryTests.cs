@@ -23,6 +23,32 @@ public sealed class ReceiveAudioRouteRegistryTests
     }
 
     [Fact]
+    public void SingleSessionRecoveryExpansionAllocatesOnlyItsResultArray()
+    {
+        var registry = new ReceiveAudioRouteRegistry();
+        ChannelViewModel[] channels = Enumerable.Range(0, 16)
+            .Select(index => CreateChannel($"Channel-{index}"))
+            .ToArray();
+        foreach (ChannelViewModel channel in channels)
+            Assert.True(registry.TryAddSessionRoute(channel, "shared-output"));
+
+        for (int index = 0; index < 100; index++)
+            _ = registry.ExpandSharedRouteSessions([channels[index & 15]]);
+
+        const int iterations = 1_000;
+        int checksum = 0;
+        long before = GC.GetAllocatedBytesForCurrentThread();
+        for (int index = 0; index < iterations; index++)
+            checksum += registry.ExpandSharedRouteSessions([channels[index & 15]]).Length;
+        long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+
+        Assert.Equal(iterations * channels.Length, checksum);
+        Assert.True(
+            allocated <= iterations * 256,
+            $"Expected no per-call query allocations; observed {allocated / (double)iterations:F1} bytes per expansion.");
+    }
+
+    [Fact]
     public void DefaultRefreshSelectsOnlyActiveFollowingSessions()
     {
         var registry = new ReceiveAudioRouteRegistry();

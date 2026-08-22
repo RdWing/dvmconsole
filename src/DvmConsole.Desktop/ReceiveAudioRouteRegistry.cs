@@ -12,7 +12,10 @@ internal sealed record ReceiveAudioRoute(
 
 internal sealed class ReceiveAudioRouteRegistry
 {
+    private readonly object sessionRouteSync = new();
     private readonly ConcurrentDictionary<ChannelViewModel, string> sessionRoutes = [];
+    private readonly Dictionary<string, ChannelViewModel[]> sessionRouteSnapshots =
+        new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<ChannelViewModel, bool> sessionFollowsSystemDefault = [];
     private readonly ConcurrentDictionary<string, ReceiveAudioRoute> routes =
         new(StringComparer.OrdinalIgnoreCase);
@@ -42,10 +45,46 @@ internal sealed class ReceiveAudioRouteRegistry
         => routes.TryRemove(deviceId, out route);
 
     public bool TryAddSessionRoute(ChannelViewModel channel, string deviceId)
-        => sessionRoutes.TryAdd(channel, deviceId);
+    {
+        lock (sessionRouteSync)
+        {
+            if (!sessionRoutes.TryAdd(channel, deviceId))
+                return false;
+
+            sessionRouteSnapshots.TryGetValue(deviceId, out ChannelViewModel[]? current);
+            var updated = new ChannelViewModel[(current?.Length ?? 0) + 1];
+            current?.CopyTo(updated, 0);
+            updated[^1] = channel;
+            sessionRouteSnapshots[deviceId] = updated;
+            return true;
+        }
+    }
 
     public bool TryRemoveSessionRoute(ChannelViewModel channel, out string? deviceId)
-        => sessionRoutes.TryRemove(channel, out deviceId);
+    {
+        lock (sessionRouteSync)
+        {
+            if (!sessionRoutes.TryRemove(channel, out deviceId))
+                return false;
+
+            ChannelViewModel[] current = sessionRouteSnapshots[deviceId];
+            if (current.Length == 1)
+            {
+                sessionRouteSnapshots.Remove(deviceId);
+                return true;
+            }
+
+            var updated = new ChannelViewModel[current.Length - 1];
+            int index = 0;
+            foreach (ChannelViewModel candidate in current)
+            {
+                if (!ReferenceEquals(candidate, channel))
+                    updated[index++] = candidate;
+            }
+            sessionRouteSnapshots[deviceId] = updated;
+            return true;
+        }
+    }
 
     public void AddSessionPolicy(ChannelViewModel channel, bool followsSystemDefault)
         => sessionFollowsSystemDefault.Add(channel, followsSystemDefault);
@@ -54,7 +93,10 @@ internal sealed class ReceiveAudioRouteRegistry
         => sessionFollowsSystemDefault.Remove(channel);
 
     public bool HasSessionsForRoute(string deviceId)
-        => sessionRoutes.Values.Contains(deviceId, StringComparer.OrdinalIgnoreCase);
+    {
+        lock (sessionRouteSync)
+            return sessionRouteSnapshots.ContainsKey(deviceId);
+    }
 
     // Called while the coordinator gate is held.
     public ChannelViewModel[] SelectSystemDefaultSessions(
@@ -67,6 +109,18 @@ internal sealed class ReceiveAudioRouteRegistry
     // Called while the coordinator gate is held.
     public ChannelViewModel[] ExpandSharedRouteSessions(ChannelViewModel[] requested)
     {
+        if (requested.Length == 1)
+        {
+            lock (sessionRouteSync)
+            {
+                if (sessionRoutes.TryGetValue(requested[0], out string? requestedRouteId) &&
+                    sessionRouteSnapshots.TryGetValue(requestedRouteId, out ChannelViewModel[]? snapshot))
+                {
+                    return snapshot.ToArray();
+                }
+            }
+        }
+
         var routeIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (ChannelViewModel channel in requested)
         {
@@ -86,7 +140,11 @@ internal sealed class ReceiveAudioRouteRegistry
 
     public void ClearSessions()
     {
-        sessionRoutes.Clear();
+        lock (sessionRouteSync)
+        {
+            sessionRoutes.Clear();
+            sessionRouteSnapshots.Clear();
+        }
         sessionFollowsSystemDefault.Clear();
     }
 
