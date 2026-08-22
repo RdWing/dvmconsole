@@ -207,6 +207,7 @@ public sealed class UserSettingsStore
     private readonly UserSettingsSerializer serializer;
     private readonly AtomicSettingsFileStore fileStore;
     private readonly SettingsProfileRepository profiles;
+    private readonly UserSettingsNormalizationPipeline normalization;
 
     public UserSettingsStore(string path)
     {
@@ -215,6 +216,7 @@ public sealed class UserSettingsStore
         serializer = new UserSettingsSerializer();
         fileStore = new AtomicSettingsFileStore(Path);
         profiles = new SettingsProfileRepository(ProfilesDirectoryPath);
+        normalization = new UserSettingsNormalizationPipeline();
     }
 
     public string Path { get; }
@@ -246,117 +248,7 @@ public sealed class UserSettingsStore
         {
             UserSettings settings = serializer.Deserialize(fileStore.ReadAllText())
                 ?? new UserSettings();
-            int storedSchemaVersion = settings.SchemaVersion;
-            if (storedSchemaVersion < 2)
-                settings.HighQualityBluetoothAudioEnabled = false;
-            NormalizeRxAudioProcessingOptions(settings, storedSchemaVersion < 3);
-            settings.RxJitterBuffer = RxJitterBufferSetting.Normalize(settings.RxJitterBuffer);
-            settings.RxJitterBuffersBySystem = NormalizeRxJitterBuffersBySystem(
-                settings.RxJitterBuffersBySystem);
-            settings.SchemaVersion = UserSettings.CurrentSchemaVersion;
-            settings.TransmitEncryptionStates ??= new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
-            settings.MainWindowPlacement = NormalizeWindowPlacement(
-                settings.MainWindowPlacement,
-                defaultWidth: 1260,
-                defaultHeight: 760,
-                minimumWidth: 880,
-                minimumHeight: 560,
-                maximumWidth: 3840,
-                maximumHeight: 2160);
-            settings.CallHistoryWindowPlacement = NormalizeWindowPlacement(settings.CallHistoryWindowPlacement);
-            settings.GlobalPttKey = NormalizeGlobalPttKey(settings.GlobalPttKey);
-            settings.ActiveSystemPttKey = NormalizeGlobalPttKey(settings.ActiveSystemPttKey);
-            ResolveDuplicateKeyboardPttKeys(settings);
-            NormalizeSerialPttSettings(settings);
-            settings.UserBackgroundImage = string.IsNullOrWhiteSpace(settings.UserBackgroundImage)
-                ? null
-                : settings.UserBackgroundImage.Trim();
-            settings.RecentCodeplugPaths = NormalizeRecentCodeplugPaths(settings.RecentCodeplugPaths);
-            settings.ToolbarClocks = NormalizeToolbarClocks(settings.ToolbarClocks);
-            NormalizeUiSettings(settings);
-            settings.ReceiveEnabledChannelKeys = NormalizeNames(settings.ReceiveEnabledChannelKeys);
-            settings.TransmitSelectedChannelKeys = NormalizeNames(settings.TransmitSelectedChannelKeys);
-            settings.ChannelWidgetPositions = NormalizeWidgetPositions(settings.ChannelWidgetPositions);
-            NormalizeAudioInputSettings(settings);
-            settings.AudioInputPresetName = settings.AudioInputPresetName?.Trim() ?? string.Empty;
-            settings.AudioInputPresets = NormalizeAudioInputPresets(settings.AudioInputPresets);
-            settings.LastDtmfDigits = NormalizeDtmfDigits(settings.LastDtmfDigits);
-            settings.ToneFrequencyHz = NormalizeToneFrequency(settings.ToneFrequencyHz);
-            settings.ToneDurationSeconds = NormalizeToneDuration(settings.ToneDurationSeconds);
-            settings.QuickCallToneAFrequencyHz = NormalizeToneFrequency(settings.QuickCallToneAFrequencyHz, 600);
-            settings.QuickCallToneBFrequencyHz = NormalizeToneFrequency(settings.QuickCallToneBFrequencyHz, 1200);
-            settings.DtmfPresets = NormalizeDtmfPresets(settings.DtmfPresets);
-            settings.TonePresets = NormalizeTonePresets(settings.TonePresets);
-            settings.AlertTones = NormalizeAlertTones(settings.AlertTones);
-            settings.RecordingRetentionDays = Math.Max(0, settings.RecordingRetentionDays);
-            settings.RecordingRootPath = NormalizeRecordingRootPath(settings.RecordingRootPath);
-            var channelVolumes = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
-            foreach (KeyValuePair<string, double> entry in settings.ChannelVolumes ?? [])
-            {
-                string channelKey = entry.Key?.Trim() ?? string.Empty;
-                if (channelKey.Length > 0)
-                    channelVolumes[channelKey] = NormalizeChannelVolume(entry.Value);
-            }
-            settings.ChannelVolumes = channelVolumes;
-            settings.ChannelStereoBalances = NormalizeChannelStereoBalances(settings.ChannelStereoBalances);
-            var channelOutputDevices = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-            foreach (KeyValuePair<string, string> entry in settings.ChannelOutputDeviceIds ?? [])
-            {
-                string channelKey = entry.Key?.Trim() ?? string.Empty;
-                string deviceId = entry.Value?.Trim() ?? string.Empty;
-                if (channelKey.Length > 0 && deviceId.Length > 0)
-                    channelOutputDevices[channelKey] = deviceId;
-            }
-            settings.ChannelOutputDeviceIds = channelOutputDevices;
-            settings.WebStreamOutputDeviceIds = NormalizeChannelOutputDevices(settings.WebStreamOutputDeviceIds);
-            var webStreamVolumes = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
-            foreach (KeyValuePair<string, double> entry in settings.WebStreamVolumes ?? [])
-            {
-                string streamName = entry.Key?.Trim() ?? string.Empty;
-                if (streamName.Length > 0)
-                    webStreamVolumes[streamName] = NormalizeChannelVolume(entry.Value);
-            }
-            settings.WebStreamVolumes = webStreamVolumes;
-            settings.RecordingEnabledChannelKeys = NormalizeNames(settings.RecordingEnabledChannelKeys);
-            var ignoredSubscribers = new Dictionary<string, List<uint>>(StringComparer.OrdinalIgnoreCase);
-            foreach (KeyValuePair<string, List<uint>> entry in settings.RecordingIgnoredSubscriberIds ?? [])
-            {
-                string channelKey = entry.Key?.Trim() ?? string.Empty;
-                if (channelKey.Length == 0)
-                    continue;
-
-                ignoredSubscribers[channelKey] = (entry.Value ?? [])
-                    .Where(subscriberId => subscriberId != 0)
-                    .Distinct()
-                    .ToList();
-            }
-            settings.RecordingIgnoredSubscriberIds = ignoredSubscribers;
-
-            var memberships = new Dictionary<string, List<PatchMemberSetting>>(StringComparer.OrdinalIgnoreCase);
-            foreach (KeyValuePair<string, List<PatchMemberSetting>> entry in settings.PatchGroupMemberships ?? [])
-            {
-                string groupName = entry.Key?.Trim() ?? string.Empty;
-                if (string.IsNullOrWhiteSpace(groupName))
-                    continue;
-
-                memberships[groupName] = (entry.Value ?? [])
-                    .Where(member => member is not null &&
-                                     !string.IsNullOrWhiteSpace(member.SystemName) &&
-                                     member.DestinationId != 0)
-                    .Select(member => new PatchMemberSetting
-                    {
-                        SystemName = member.SystemName.Trim(),
-                        DestinationId = member.DestinationId
-                    })
-                    .GroupBy(member => $"{member.SystemName.ToLowerInvariant()}|{member.DestinationId}")
-                    .Select(group => group.First())
-                    .ToList();
-            }
-            settings.PatchGroupMemberships = memberships;
-            settings.PatchGroupModes = NormalizeGroupStates(settings.PatchGroupModes);
-            settings.PatchGroupEnabledStates = NormalizeGroupStates(settings.PatchGroupEnabledStates);
-            settings.SelectedWebStreams = NormalizeNames(settings.SelectedWebStreams);
-            return settings;
+            return normalization.NormalizeAfterLoad(settings);
         }
         catch (JsonException)
         {
@@ -372,7 +264,7 @@ public sealed class UserSettingsStore
     {
         ArgumentNullException.ThrowIfNull(settings);
 
-        NormalizeSettingsForWrite(settings);
+        normalization.NormalizeBeforeWrite(settings);
 
         fileStore.WriteAllText(serializer.Serialize(settings));
     }
@@ -397,7 +289,7 @@ public sealed class UserSettingsStore
     {
         string source = ResolveSettingsFilePath(sourcePath);
         UserSettings settings = ReadSettingsFile(source);
-        return CreatePreview(source, settings);
+        return SettingsImportPolicy.CreatePreview(source, settings);
     }
 
     public SettingsImportPreview PreviewNamedProfile(string profileName)
@@ -442,7 +334,7 @@ public sealed class UserSettingsStore
         }
 
         UserSettings current = Load();
-        MergeSettings(current, imported, scope);
+        SettingsImportPolicy.Merge(current, imported, scope);
         Save(current);
         return Load();
     }
@@ -470,56 +362,12 @@ public sealed class UserSettingsStore
             throw new InvalidDataException("The settings file is not valid DVM Console JSON.", exception);
         }
 
-        NormalizeSettingsForWrite(imported);
+        normalization.NormalizeBeforeWrite(imported);
         return imported;
     }
 
-    private static void NormalizeSettingsForWrite(UserSettings settings)
-    {
-        // Schema 1 defaulted this option on, so a stored true value does not
-        // prove that the operator selected it. Require a fresh opt-in after
-        // migration; schema 2 true values are always an explicit selection.
-        if (settings.SchemaVersion < 2)
-            settings.HighQualityBluetoothAudioEnabled = false;
-        NormalizeRxAudioProcessingOptions(settings, settings.SchemaVersion < 3);
-        settings.RxJitterBuffer = RxJitterBufferSetting.Normalize(settings.RxJitterBuffer);
-        settings.RxJitterBuffersBySystem = NormalizeRxJitterBuffersBySystem(
-            settings.RxJitterBuffersBySystem);
-        settings.SchemaVersion = UserSettings.CurrentSchemaVersion;
-        settings.DtmfPresets = NormalizeDtmfPresets(settings.DtmfPresets);
-        settings.TonePresets = NormalizeTonePresets(settings.TonePresets);
-        settings.MainWindowPlacement = NormalizeWindowPlacement(
-            settings.MainWindowPlacement,
-            defaultWidth: 1260,
-            defaultHeight: 760,
-            minimumWidth: 880,
-            minimumHeight: 560,
-            maximumWidth: 3840,
-            maximumHeight: 2160);
-        settings.CallHistoryWindowPlacement = NormalizeWindowPlacement(settings.CallHistoryWindowPlacement);
-        settings.ToolbarClocks = NormalizeToolbarClocks(settings.ToolbarClocks);
-        NormalizeUiSettings(settings);
-        NormalizeAudioInputSettings(settings);
-        settings.RecentCodeplugPaths = NormalizeRecentCodeplugPaths(settings.RecentCodeplugPaths);
-        settings.AudioInputPresetName = settings.AudioInputPresetName?.Trim() ?? string.Empty;
-        settings.AudioInputPresets = NormalizeAudioInputPresets(settings.AudioInputPresets);
-        settings.ChannelOutputDeviceIds = NormalizeChannelOutputDevices(settings.ChannelOutputDeviceIds);
-        settings.ChannelStereoBalances = NormalizeChannelStereoBalances(settings.ChannelStereoBalances);
-        settings.WebStreamOutputDeviceIds = NormalizeChannelOutputDevices(settings.WebStreamOutputDeviceIds);
-        settings.WebStreamVolumes = NormalizeWebStreamVolumes(settings.WebStreamVolumes);
-        settings.RecordingRootPath = NormalizeRecordingRootPath(settings.RecordingRootPath);
-        settings.RecordingEnabledChannelKeys = NormalizeNames(settings.RecordingEnabledChannelKeys);
-        settings.SelectedWebStreams = NormalizeNames(settings.SelectedWebStreams);
-        settings.GlobalPttKey = NormalizeGlobalPttKey(settings.GlobalPttKey);
-        settings.ActiveSystemPttKey = NormalizeGlobalPttKey(settings.ActiveSystemPttKey);
-        ResolveDuplicateKeyboardPttKeys(settings);
-        NormalizeSerialPttSettings(settings);
-        settings.ReceiveEnabledChannelKeys = NormalizeNames(settings.ReceiveEnabledChannelKeys);
-        settings.TransmitSelectedChannelKeys = NormalizeNames(settings.TransmitSelectedChannelKeys);
-        settings.ChannelWidgetPositions = NormalizeWidgetPositions(settings.ChannelWidgetPositions);
-    }
 
-    private static void NormalizeRxAudioProcessingOptions(UserSettings settings, bool migrateLegacyToggle)
+    internal static void NormalizeRxAudioProcessingOptions(UserSettings settings, bool migrateLegacyToggle)
     {
         Dictionary<string, RxAudioProcessingModeSetting> defaults =
             RxAudioProcessingModeSetting.CreateDefaults();
@@ -549,7 +397,7 @@ public sealed class UserSettingsStore
         settings.LegacyRxAudioProcessingEnabled = null;
     }
 
-    private static RxAudioProcessingModeSetting NormalizeRxAudioProcessingMode(
+    internal static RxAudioProcessingModeSetting NormalizeRxAudioProcessingMode(
         RxAudioProcessingModeSetting? setting)
     {
         setting ??= new RxAudioProcessingModeSetting();
@@ -591,202 +439,7 @@ public sealed class UserSettingsStore
     private string GetNamedProfilePath(string profileName)
         => profiles.GetPath(profileName);
 
-    private static SettingsImportPreview CreatePreview(string source, UserSettings settings)
-    {
-        var sections = new List<string>();
-        if (settings.TalkPermitTone || !settings.ConnectionChimes || settings.DarkMode ||
-            settings.UiFontSize != 14 || settings.UiScale != 1.0 ||
-            settings.TogglePttMode || !string.Equals(settings.GlobalPttKey, "Space", StringComparison.OrdinalIgnoreCase) ||
-            !string.Equals(settings.ActiveSystemPttKey, "None", StringComparison.OrdinalIgnoreCase) ||
-            settings.SerialPttEnabled || settings.SerialPttActiveSystemOnly ||
-            !string.IsNullOrWhiteSpace(settings.SerialPttPortName) ||
-            settings.SerialPttBaudRate != 9_600 ||
-            !settings.ShowSystemStatus || !settings.ShowChannels || !settings.ShowAlertTones ||
-            !settings.LockWidgets || settings.ChannelWidgetPositions.Count > 0 ||
-            !settings.ShowCallHistoryPane || settings.SnapCallHistoryToWindow ||
-            !WindowPlacementsEqual(settings.MainWindowPlacement, new WindowPlacementSetting
-            {
-                Width = 1260,
-                Height = 760
-            }) ||
-            !WindowPlacementsEqual(settings.CallHistoryWindowPlacement, new WindowPlacementSetting()) ||
-            settings.UserBackgroundImage is not null)
-        {
-            sections.Add("General");
-        }
-
-        if (!string.Equals(settings.AudioInputDeviceId, "default", StringComparison.OrdinalIgnoreCase) ||
-            !string.Equals(settings.AudioOutputDeviceId, "default", StringComparison.OrdinalIgnoreCase) ||
-            HasCustomRxAudioProcessingOptions(settings.RxAudioProcessingOptions) ||
-            !string.Equals(settings.AudioProcessingMode, UserSettings.DvmConsoleAudioProcessingMode, StringComparison.Ordinal) ||
-            settings.HighQualityBluetoothAudioEnabled ||
-            settings.AudioInputAgcEnabled || settings.AudioInputAgcTargetDbfs != -25.0 ||
-            settings.AudioInputPresets.Count > 0 ||
-            settings.ChannelVolumes.Count > 0 || settings.ChannelStereoBalances.Count > 0 ||
-            settings.ChannelOutputDeviceIds.Count > 0 ||
-            settings.WebStreamOutputDeviceIds.Count > 0 || settings.WebStreamVolumes.Count > 0)
-        {
-            sections.Add("Audio");
-        }
-
-        if (!RxJitterBufferSettingsEqual(settings.RxJitterBuffer, new RxJitterBufferSetting()) ||
-            settings.RxJitterBuffersBySystem.Count > 0)
-        {
-            sections.Add("Connections");
-        }
-
-        if (settings.DtmfPresets.Count > 0 || settings.TonePresets.Count > 0 || settings.AlertTones.Count > 0 ||
-            !string.Equals(settings.LastDtmfDigits, "123", StringComparison.Ordinal) ||
-            settings.ToneFrequencyHz != 1000 || settings.ToneDurationSeconds != 1.0)
-        {
-            sections.Add("Presets");
-        }
-
-        if (settings.RecordingRetentionDays != 7 || !string.IsNullOrWhiteSpace(settings.RecordingRootPath) ||
-            settings.RecordingEnabledChannelKeys.Count > 0 || settings.RecordingIgnoredSubscriberIds.Count > 0 ||
-            settings.PatchGroupMemberships.Count > 0 || settings.PatchGroupModes.Count > 0 ||
-            settings.PatchGroupEnabledStates.Count > 0 || settings.RetainPatchStateOnStartup)
-        {
-            sections.Add("Recording/patch");
-        }
-
-        if (!string.IsNullOrWhiteSpace(settings.LastCodeplugPath) || settings.RecentCodeplugPaths.Count > 0 ||
-            !string.IsNullOrWhiteSpace(settings.LastSelectedSystemName) ||
-            !string.IsNullOrWhiteSpace(settings.LastSelectedChannelKey) ||
-            settings.ReceiveEnabledChannelKeys.Count > 0 ||
-            settings.TransmitSelectedChannelKeys.Count > 0 || settings.SelectedWebStreams.Count > 0 ||
-            settings.TransmitEncryptionStates.Count > 0)
-        {
-            sections.Add("Session");
-        }
-
-        return new SettingsImportPreview(source, settings.SchemaVersion, settings.LastCodeplugPath, sections);
-    }
-
-    private static void MergeSettings(UserSettings target, UserSettings source, SettingsImportScope scope)
-    {
-        target.SchemaVersion = Math.Max(target.SchemaVersion, source.SchemaVersion);
-
-        if ((scope & SettingsImportScope.General) != 0)
-        {
-            target.TogglePttMode = source.TogglePttMode;
-            target.GlobalPttKey = source.GlobalPttKey;
-            target.ActiveSystemPttKey = source.ActiveSystemPttKey;
-            target.SerialPttEnabled = source.SerialPttEnabled;
-            target.SerialPttActiveSystemOnly = source.SerialPttActiveSystemOnly;
-            target.SerialPttPortName = source.SerialPttPortName;
-            target.SerialPttBaudRate = source.SerialPttBaudRate;
-            target.TalkPermitTone = source.TalkPermitTone;
-            target.ConnectionChimes = source.ConnectionChimes;
-            target.DarkMode = source.DarkMode;
-            target.UiFontSize = source.UiFontSize;
-            target.UiScale = source.UiScale;
-            target.ClockUse24HourTime = source.ClockUse24HourTime;
-            target.ClockShowSeconds = source.ClockShowSeconds;
-            target.ToolbarClocks = source.ToolbarClocks.ToList();
-            target.KeepWindowOnTop = source.KeepWindowOnTop;
-            target.ShowSystemStatus = source.ShowSystemStatus;
-            target.ShowChannels = source.ShowChannels;
-            target.ShowAlertTones = source.ShowAlertTones;
-            target.LockWidgets = source.LockWidgets;
-            target.ChannelWidgetPositions = source.ChannelWidgetPositions.ToDictionary(
-                entry => entry.Key,
-                entry => new WidgetPositionSetting { X = entry.Value.X, Y = entry.Value.Y },
-                StringComparer.OrdinalIgnoreCase);
-            target.UserBackgroundImage = source.UserBackgroundImage;
-            target.ShowCallHistoryPane = source.ShowCallHistoryPane;
-            target.SnapCallHistoryToWindow = source.SnapCallHistoryToWindow;
-            target.MainWindowPlacement = CopyWindowPlacement(source.MainWindowPlacement);
-            target.CallHistoryWindowPlacement = new WindowPlacementSetting
-            {
-                Left = source.CallHistoryWindowPlacement.Left,
-                Top = source.CallHistoryWindowPlacement.Top,
-                Width = source.CallHistoryWindowPlacement.Width,
-                Height = source.CallHistoryWindowPlacement.Height
-            };
-        }
-
-        if ((scope & SettingsImportScope.Audio) != 0)
-        {
-            target.AudioInputDeviceId = source.AudioInputDeviceId;
-            target.AudioOutputDeviceId = source.AudioOutputDeviceId;
-            target.RxAudioProcessingOptions = source.RxAudioProcessingOptions.ToDictionary(
-                entry => entry.Key,
-                entry => NormalizeRxAudioProcessingMode(entry.Value),
-                StringComparer.OrdinalIgnoreCase);
-            target.AudioProcessingMode = source.AudioProcessingMode;
-            target.HighQualityBluetoothAudioEnabled = source.HighQualityBluetoothAudioEnabled;
-            target.AudioInputAgcEnabled = source.AudioInputAgcEnabled;
-            target.AudioInputAgcTargetDbfs = source.AudioInputAgcTargetDbfs;
-            target.KeepTransmitMicrophoneWarm = source.KeepTransmitMicrophoneWarm;
-            target.AudioInputGain = source.AudioInputGain;
-            target.AudioInputEqLowGainDb = source.AudioInputEqLowGainDb;
-            target.AudioInputEqMidGainDb = source.AudioInputEqMidGainDb;
-            target.AudioInputEqHighGainDb = source.AudioInputEqHighGainDb;
-            target.AudioInputPresetName = source.AudioInputPresetName;
-            target.AudioInputPresets = source.AudioInputPresets.ToList();
-            target.MuteRxAudioWhileTransmitting = source.MuteRxAudioWhileTransmitting;
-            target.ChannelVolumes = new Dictionary<string, double>(source.ChannelVolumes, StringComparer.OrdinalIgnoreCase);
-            target.ChannelStereoBalances = new Dictionary<string, double>(source.ChannelStereoBalances, StringComparer.OrdinalIgnoreCase);
-            target.ChannelOutputDeviceIds = new Dictionary<string, string>(source.ChannelOutputDeviceIds, StringComparer.OrdinalIgnoreCase);
-            target.WebStreamOutputDeviceIds = new Dictionary<string, string>(source.WebStreamOutputDeviceIds, StringComparer.OrdinalIgnoreCase);
-            target.WebStreamVolumes = new Dictionary<string, double>(source.WebStreamVolumes, StringComparer.OrdinalIgnoreCase);
-        }
-
-        if ((scope & SettingsImportScope.Connections) != 0)
-        {
-            target.RxJitterBuffer = RxJitterBufferSetting.Normalize(source.RxJitterBuffer);
-            target.RxJitterBuffersBySystem = NormalizeRxJitterBuffersBySystem(
-                source.RxJitterBuffersBySystem);
-        }
-
-        if ((scope & SettingsImportScope.Presets) != 0)
-        {
-            target.LastDtmfDigits = source.LastDtmfDigits;
-            target.ToneFrequencyHz = source.ToneFrequencyHz;
-            target.ToneDurationSeconds = source.ToneDurationSeconds;
-            target.QuickCallToneAFrequencyHz = source.QuickCallToneAFrequencyHz;
-            target.QuickCallToneBFrequencyHz = source.QuickCallToneBFrequencyHz;
-            target.DtmfPresets = source.DtmfPresets.ToList();
-            target.TonePresets = source.TonePresets.ToList();
-            target.AlertTones = source.AlertTones.ToList();
-        }
-
-        if ((scope & SettingsImportScope.RecordingAndPatch) != 0)
-        {
-            target.RecordingRetentionDays = source.RecordingRetentionDays;
-            target.RecordingRootPath = source.RecordingRootPath;
-            target.RecordingEnabledChannelKeys = source.RecordingEnabledChannelKeys.ToList();
-            target.RecordingIgnoredSubscriberIds = source.RecordingIgnoredSubscriberIds
-                .ToDictionary(entry => entry.Key, entry => entry.Value.ToList(), StringComparer.OrdinalIgnoreCase);
-            target.PatchGroupMemberships = source.PatchGroupMemberships
-                .ToDictionary(
-                    entry => entry.Key,
-                    entry => entry.Value.Select(member => new PatchMemberSetting
-                    {
-                        SystemName = member.SystemName,
-                        DestinationId = member.DestinationId
-                    }).ToList(),
-                    StringComparer.OrdinalIgnoreCase);
-            target.PatchGroupModes = new Dictionary<string, bool>(source.PatchGroupModes, StringComparer.OrdinalIgnoreCase);
-            target.PatchGroupEnabledStates = new Dictionary<string, bool>(source.PatchGroupEnabledStates, StringComparer.OrdinalIgnoreCase);
-            target.RetainPatchStateOnStartup = source.RetainPatchStateOnStartup;
-        }
-
-        if ((scope & SettingsImportScope.Session) != 0)
-        {
-            target.LastCodeplugPath = source.LastCodeplugPath;
-            target.RecentCodeplugPaths = source.RecentCodeplugPaths.ToList();
-            target.LastSelectedSystemName = source.LastSelectedSystemName;
-            target.LastSelectedChannelKey = source.LastSelectedChannelKey;
-            target.ReceiveEnabledChannelKeys = source.ReceiveEnabledChannelKeys.ToList();
-            target.TransmitSelectedChannelKeys = source.TransmitSelectedChannelKeys.ToList();
-            target.SelectedWebStreams = source.SelectedWebStreams.ToList();
-            target.TransmitEncryptionStates = new Dictionary<string, bool>(source.TransmitEncryptionStates, StringComparer.OrdinalIgnoreCase);
-        }
-    }
-
-    private static bool HasCustomRxAudioProcessingOptions(
+    internal static bool HasCustomRxAudioProcessingOptions(
         IReadOnlyDictionary<string, RxAudioProcessingModeSetting>? configured)
     {
         Dictionary<string, RxAudioProcessingModeSetting> defaults =
@@ -818,7 +471,7 @@ public sealed class UserSettingsStore
            left.CompressorThresholdDbfs == right.CompressorThresholdDbfs &&
            left.CompressorMakeupGainDb == right.CompressorMakeupGainDb;
 
-    private static bool RxJitterBufferSettingsEqual(
+    internal static bool RxJitterBufferSettingsEqual(
         RxJitterBufferSetting left,
         RxJitterBufferSetting right)
         => left.P25Milliseconds == right.P25Milliseconds &&
@@ -828,7 +481,7 @@ public sealed class UserSettingsStore
            left.DmrAdaptive == right.DmrAdaptive &&
            left.NxdnAdaptive == right.NxdnAdaptive;
 
-    private static Dictionary<string, RxJitterBufferSetting> NormalizeRxJitterBuffersBySystem(
+    internal static Dictionary<string, RxJitterBufferSetting> NormalizeRxJitterBuffersBySystem(
         Dictionary<string, RxJitterBufferSetting>? settings)
     {
         const int maximumSystems = 128;
@@ -847,7 +500,7 @@ public sealed class UserSettingsStore
         return normalized;
     }
 
-    private static Dictionary<string, WidgetPositionSetting> NormalizeWidgetPositions(
+    internal static Dictionary<string, WidgetPositionSetting> NormalizeWidgetPositions(
         Dictionary<string, WidgetPositionSetting>? positions)
     {
         var normalized = new Dictionary<string, WidgetPositionSetting>(StringComparer.OrdinalIgnoreCase);
@@ -871,7 +524,7 @@ public sealed class UserSettingsStore
         return normalized;
     }
 
-    private static Dictionary<string, bool> NormalizeGroupStates(Dictionary<string, bool>? states)
+    internal static Dictionary<string, bool> NormalizeGroupStates(Dictionary<string, bool>? states)
     {
         var normalized = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
         foreach (KeyValuePair<string, bool> entry in states ?? [])
@@ -884,7 +537,7 @@ public sealed class UserSettingsStore
         return normalized;
     }
 
-    private static List<string> NormalizeNames(IEnumerable<string>? names)
+    internal static List<string> NormalizeNames(IEnumerable<string>? names)
     {
         return (names ?? [])
             .Select(name => name?.Trim() ?? string.Empty)
@@ -894,7 +547,7 @@ public sealed class UserSettingsStore
             .ToList();
     }
 
-    private static List<string> NormalizeRecentCodeplugPaths(IEnumerable<string>? paths)
+    internal static List<string> NormalizeRecentCodeplugPaths(IEnumerable<string>? paths)
     {
         var normalized = new List<string>();
         foreach (string? value in paths ?? [])
@@ -921,7 +574,7 @@ public sealed class UserSettingsStore
         return normalized;
     }
 
-    private static string NormalizeGlobalPttKey(string? key)
+    internal static string NormalizeGlobalPttKey(string? key)
     {
         string candidate = key?.Trim() ?? string.Empty;
         return candidate.Equals("None", StringComparison.OrdinalIgnoreCase) ||
@@ -937,7 +590,7 @@ public sealed class UserSettingsStore
             : "None";
     }
 
-    private static void ResolveDuplicateKeyboardPttKeys(UserSettings settings)
+    internal static void ResolveDuplicateKeyboardPttKeys(UserSettings settings)
     {
         if (!settings.ActiveSystemPttKey.Equals("None", StringComparison.OrdinalIgnoreCase) &&
             settings.ActiveSystemPttKey.Equals(settings.GlobalPttKey, StringComparison.OrdinalIgnoreCase))
@@ -946,7 +599,7 @@ public sealed class UserSettingsStore
         }
     }
 
-    private static void NormalizeSerialPttSettings(UserSettings settings)
+    internal static void NormalizeSerialPttSettings(UserSettings settings)
     {
         settings.SerialPttPortName = settings.SerialPttPortName?.Trim() ?? string.Empty;
         settings.SerialPttBaudRate = settings.SerialPttBaudRate is >= 300 and <= 4_000_000
@@ -956,7 +609,7 @@ public sealed class UserSettingsStore
             settings.SerialPttEnabled = false;
     }
 
-    private static void NormalizeAudioInputSettings(UserSettings settings)
+    internal static void NormalizeAudioInputSettings(UserSettings settings)
     {
         settings.AudioInputDeviceId = string.IsNullOrWhiteSpace(settings.AudioInputDeviceId)
             ? "default"
@@ -976,13 +629,13 @@ public sealed class UserSettingsStore
         settings.AudioInputEqHighGainDb = NormalizeBounded(settings.AudioInputEqHighGainDb, 0, -12, 12);
     }
 
-    private static void NormalizeUiSettings(UserSettings settings)
+    internal static void NormalizeUiSettings(UserSettings settings)
     {
         settings.UiFontSize = NormalizeBounded(settings.UiFontSize, 14, 11, 20);
         settings.UiScale = NormalizeBounded(settings.UiScale, 1.0, 0.75, 1.5);
     }
 
-    private static List<AudioInputPresetSetting> NormalizeAudioInputPresets(
+    internal static List<AudioInputPresetSetting> NormalizeAudioInputPresets(
         IEnumerable<AudioInputPresetSetting>? presets)
     {
         return (presets ?? [])
@@ -1004,7 +657,7 @@ public sealed class UserSettingsStore
     private static double NormalizeBounded(double value, double fallback, double minimum, double maximum)
         => double.IsFinite(value) ? Math.Clamp(value, minimum, maximum) : fallback;
 
-    private static Dictionary<string, string> NormalizeChannelOutputDevices(Dictionary<string, string>? devices)
+    internal static Dictionary<string, string> NormalizeChannelOutputDevices(Dictionary<string, string>? devices)
     {
         var normalized = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         foreach (KeyValuePair<string, string> entry in devices ?? [])
@@ -1018,7 +671,7 @@ public sealed class UserSettingsStore
         return normalized;
     }
 
-    private static Dictionary<string, double> NormalizeWebStreamVolumes(Dictionary<string, double>? volumes)
+    internal static Dictionary<string, double> NormalizeWebStreamVolumes(Dictionary<string, double>? volumes)
     {
         var normalized = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
         foreach (KeyValuePair<string, double> entry in volumes ?? [])
@@ -1031,7 +684,7 @@ public sealed class UserSettingsStore
         return normalized;
     }
 
-    private static Dictionary<string, double> NormalizeChannelStereoBalances(
+    internal static Dictionary<string, double> NormalizeChannelStereoBalances(
         Dictionary<string, double>? balances)
     {
         var normalized = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
@@ -1045,7 +698,7 @@ public sealed class UserSettingsStore
         return normalized;
     }
 
-    private static string NormalizeDtmfDigits(string? digits)
+    internal static string NormalizeDtmfDigits(string? digits)
     {
         string normalized = new string((digits ?? string.Empty)
             .Where(character => !char.IsWhiteSpace(character))
@@ -1056,16 +709,16 @@ public sealed class UserSettingsStore
             : "123";
     }
 
-    private static double NormalizeToneFrequency(double frequency, double fallback = 1000)
+    internal static double NormalizeToneFrequency(double frequency, double fallback = 1000)
         => double.IsFinite(frequency) && frequency is >= 300 and <= 2500 ? frequency : fallback;
 
-    private static double NormalizeToneDuration(double duration)
+    internal static double NormalizeToneDuration(double duration)
         => double.IsFinite(duration) && duration is > 0 and <= 10 ? duration : 1.0;
 
-    private static double NormalizeChannelVolume(double volume)
+    internal static double NormalizeChannelVolume(double volume)
         => double.IsFinite(volume) ? Math.Clamp(volume, 0, 4) : 1.0;
 
-    private static string NormalizeRecordingRootPath(string? rootPath)
+    internal static string NormalizeRecordingRootPath(string? rootPath)
     {
         if (string.IsNullOrWhiteSpace(rootPath))
             return string.Empty;
@@ -1080,7 +733,7 @@ public sealed class UserSettingsStore
         }
     }
 
-    private static List<ToolbarClockSetting> NormalizeToolbarClocks(IEnumerable<ToolbarClockSetting>? clocks)
+    internal static List<ToolbarClockSetting> NormalizeToolbarClocks(IEnumerable<ToolbarClockSetting>? clocks)
     {
         List<ToolbarClockSetting> normalized = (clocks ?? [])
             .Take(UserSettings.MaximumToolbarClocks)
@@ -1096,7 +749,7 @@ public sealed class UserSettingsStore
         return normalized;
     }
 
-    private static WindowPlacementSetting CopyWindowPlacement(WindowPlacementSetting source)
+    internal static WindowPlacementSetting CopyWindowPlacement(WindowPlacementSetting source)
         => new()
         {
             Left = source.Left,
@@ -1105,7 +758,7 @@ public sealed class UserSettingsStore
             Height = source.Height
         };
 
-    private static WindowPlacementSetting NormalizeWindowPlacement(
+    internal static WindowPlacementSetting NormalizeWindowPlacement(
         WindowPlacementSetting? placement,
         double defaultWidth = 560,
         double defaultHeight = 500,
@@ -1128,7 +781,7 @@ public sealed class UserSettingsStore
         };
     }
 
-    private static bool WindowPlacementsEqual(
+    internal static bool WindowPlacementsEqual(
         WindowPlacementSetting left,
         WindowPlacementSetting right)
         => left.Left == right.Left &&
@@ -1136,7 +789,7 @@ public sealed class UserSettingsStore
             left.Width == right.Width &&
             left.Height == right.Height;
 
-    private static List<DtmfPresetSetting> NormalizeDtmfPresets(IEnumerable<DtmfPresetSetting>? presets)
+    internal static List<DtmfPresetSetting> NormalizeDtmfPresets(IEnumerable<DtmfPresetSetting>? presets)
     {
         return (presets ?? [])
             .Where(preset => preset is not null)
@@ -1184,7 +837,7 @@ public sealed class UserSettingsStore
         };
     }
 
-    private static List<TonePresetSetting> NormalizeTonePresets(IEnumerable<TonePresetSetting>? presets)
+    internal static List<TonePresetSetting> NormalizeTonePresets(IEnumerable<TonePresetSetting>? presets)
     {
         return (presets ?? [])
             .Where(preset => preset is not null)
@@ -1192,7 +845,7 @@ public sealed class UserSettingsStore
             .ToList();
     }
 
-    private static List<AlertToneSetting> NormalizeAlertTones(IEnumerable<AlertToneSetting>? tones)
+    internal static List<AlertToneSetting> NormalizeAlertTones(IEnumerable<AlertToneSetting>? tones)
         => (tones ?? [])
             .Where(tone => tone is not null && !string.IsNullOrWhiteSpace(tone.FilePath))
             .Select(tone => new AlertToneSetting
