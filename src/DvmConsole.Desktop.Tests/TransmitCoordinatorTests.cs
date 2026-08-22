@@ -34,6 +34,41 @@ public sealed class TransmitCoordinatorTests
     }
 
     [Fact]
+    public async Task SampleObservationUsesAStableSnapshotWhileTransmitStops()
+    {
+        var first = Channel("A", 100);
+        var second = Channel("B", 101);
+        var endpoint = new FakeEndpoint("Test", [first, second]);
+        var audio = new FakeAudioBackend();
+        var firstObservationEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var allowObservationToContinue = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var observed = new List<ChannelViewModel>();
+        await using var coordinator = new ChannelTransmitCoordinator(
+            samplesObserver: (channel, _, _, _) =>
+            {
+                observed.Add(channel);
+                if (ReferenceEquals(channel, first))
+                {
+                    firstObservationEntered.TrySetResult();
+                    allowObservationToContinue.Task.GetAwaiter().GetResult();
+                }
+            },
+            createAudioBackend: () => audio);
+        await coordinator.StartAsync([
+            new TransmitTarget(first, endpoint),
+            new TransmitTarget(second, endpoint)]);
+
+        Task publish = Task.Run(() => audio.Capture.Emit(new short[160]));
+        await firstObservationEntered.Task.WaitAsync(TimeSpan.FromSeconds(1));
+        await coordinator.StopAsync().WaitAsync(TimeSpan.FromSeconds(1));
+        allowObservationToContinue.TrySetResult();
+        await publish.WaitAsync(TimeSpan.FromSeconds(1));
+
+        Assert.Equal([first, second], observed);
+        Assert.Empty(coordinator.ActiveChannels);
+    }
+
+    [Fact]
     public async Task SuppressedMicrophoneFramesAreDroppedUntilOperatorAudioMayTransmit()
     {
         var channel = Channel("A", 100);
