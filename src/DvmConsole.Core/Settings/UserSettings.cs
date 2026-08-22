@@ -204,17 +204,17 @@ public sealed class UserSettingsStore
 {
     private const double PresetMaxDurationSeconds = 10.0;
 
-    private static readonly JsonSerializerOptions SerializerOptions = new()
-    {
-        WriteIndented = true,
-        PropertyNameCaseInsensitive = true,
-        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
-    };
+    private readonly UserSettingsSerializer serializer;
+    private readonly AtomicSettingsFileStore fileStore;
+    private readonly SettingsProfileRepository profiles;
 
     public UserSettingsStore(string path)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
         Path = System.IO.Path.GetFullPath(path);
+        serializer = new UserSettingsSerializer();
+        fileStore = new AtomicSettingsFileStore(Path);
+        profiles = new SettingsProfileRepository(ProfilesDirectoryPath);
     }
 
     public string Path { get; }
@@ -239,12 +239,12 @@ public sealed class UserSettingsStore
 
     public UserSettings Load()
     {
-        if (!File.Exists(Path))
+        if (!fileStore.Exists)
             return new UserSettings();
 
         try
         {
-            UserSettings settings = JsonSerializer.Deserialize<UserSettings>(File.ReadAllText(Path), SerializerOptions)
+            UserSettings settings = serializer.Deserialize(fileStore.ReadAllText())
                 ?? new UserSettings();
             int storedSchemaVersion = settings.SchemaVersion;
             if (storedSchemaVersion < 2)
@@ -374,21 +374,7 @@ public sealed class UserSettingsStore
 
         NormalizeSettingsForWrite(settings);
 
-        string? directory = System.IO.Path.GetDirectoryName(Path);
-        if (!string.IsNullOrWhiteSpace(directory))
-            Directory.CreateDirectory(directory);
-
-        string temporaryPath = $"{Path}.{Environment.ProcessId}.{Guid.NewGuid():N}.tmp";
-        try
-        {
-            File.WriteAllText(temporaryPath, JsonSerializer.Serialize(settings, SerializerOptions));
-            File.Move(temporaryPath, Path, overwrite: true);
-        }
-        finally
-        {
-            if (File.Exists(temporaryPath))
-                File.Delete(temporaryPath);
-        }
+        fileStore.WriteAllText(serializer.Serialize(settings));
     }
 
     public void Export(UserSettings settings, string destinationPath)
@@ -404,10 +390,7 @@ public sealed class UserSettingsStore
         }
 
         Save(settings);
-        string? directory = System.IO.Path.GetDirectoryName(destination);
-        if (!string.IsNullOrWhiteSpace(directory))
-            Directory.CreateDirectory(directory);
-        File.Copy(Path, destination, overwrite: true);
+        fileStore.CopyTo(destination);
     }
 
     public SettingsImportPreview PreviewImport(string sourcePath)
@@ -421,16 +404,7 @@ public sealed class UserSettingsStore
         => PreviewImport(GetNamedProfilePath(profileName));
 
     public IReadOnlyList<string> ListNamedProfiles()
-    {
-        if (!Directory.Exists(ProfilesDirectoryPath))
-            return [];
-
-        return Directory.EnumerateFiles(ProfilesDirectoryPath, "*.json", SearchOption.TopDirectoryOnly)
-            .Select(file => System.IO.Path.GetFileNameWithoutExtension(file))
-            .Where(name => !string.IsNullOrWhiteSpace(name))
-            .OrderBy(name => name, StringComparer.OrdinalIgnoreCase)
-            .ToArray();
-    }
+        => profiles.ListNames();
 
     public void SaveNamedProfile(string profileName, UserSettings settings)
     {
@@ -453,11 +427,7 @@ public sealed class UserSettingsStore
         => Import(GetNamedProfilePath(profileName), scope);
 
     public void DeleteNamedProfile(string profileName)
-    {
-        string profilePath = GetNamedProfilePath(profileName);
-        if (File.Exists(profilePath))
-            File.Delete(profilePath);
-    }
+        => profiles.Delete(profileName);
 
     public UserSettings Import(
         string sourcePath,
@@ -486,13 +456,13 @@ public sealed class UserSettingsStore
         return source;
     }
 
-    private static UserSettings ReadSettingsFile(string source)
+    private UserSettings ReadSettingsFile(string source)
     {
         UserSettings imported;
 
         try
         {
-            imported = JsonSerializer.Deserialize<UserSettings>(File.ReadAllText(source), SerializerOptions)
+            imported = serializer.Deserialize(File.ReadAllText(source))
                 ?? throw new InvalidDataException("The settings file did not contain a settings object.");
         }
         catch (JsonException exception)
@@ -616,53 +586,10 @@ public sealed class UserSettingsStore
     }
 
     public void Reset()
-    {
-        if (File.Exists(Path))
-            File.Delete(Path);
-    }
+        => fileStore.Delete();
 
     private string GetNamedProfilePath(string profileName)
-    {
-        string normalized = NormalizeProfileName(profileName);
-        Directory.CreateDirectory(ProfilesDirectoryPath);
-        return System.IO.Path.Combine(ProfilesDirectoryPath, $"{normalized}.json");
-    }
-
-    private static string NormalizeProfileName(string profileName)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(profileName);
-        string normalized = profileName.Trim();
-        if (normalized is "." or ".." ||
-            normalized.Length > 64 ||
-            normalized.Any(char.IsControl) ||
-            normalized.IndexOfAny(System.IO.Path.GetInvalidFileNameChars()) >= 0 ||
-            normalized.Contains(':') ||
-            normalized.Contains(System.IO.Path.DirectorySeparatorChar) ||
-            normalized.Contains(System.IO.Path.AltDirectorySeparatorChar) ||
-            normalized.EndsWith('.') ||
-            normalized.EndsWith(' ') ||
-            IsReservedWindowsProfileName(normalized))
-        {
-            throw new ArgumentException(
-                "Profile names must be 1-64 characters and cannot contain path separators or control characters.",
-                nameof(profileName));
-        }
-
-        return normalized;
-    }
-
-    private static bool IsReservedWindowsProfileName(string profileName)
-    {
-        string stem = profileName.Split('.')[0];
-        return stem.Equals("CON", StringComparison.OrdinalIgnoreCase) ||
-            stem.Equals("PRN", StringComparison.OrdinalIgnoreCase) ||
-            stem.Equals("AUX", StringComparison.OrdinalIgnoreCase) ||
-            stem.Equals("NUL", StringComparison.OrdinalIgnoreCase) ||
-            (stem.Length == 4 &&
-             (stem.StartsWith("COM", StringComparison.OrdinalIgnoreCase) ||
-              stem.StartsWith("LPT", StringComparison.OrdinalIgnoreCase)) &&
-             stem[3] is >= '1' and <= '9');
-    }
+        => profiles.GetPath(profileName);
 
     private static SettingsImportPreview CreatePreview(string source, UserSettings settings)
     {
