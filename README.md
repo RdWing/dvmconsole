@@ -1,40 +1,166 @@
-# DVM Console
+<div align="center">
 
-DVM Console is a cross-platform desktop dispatch application for monitoring
-multiple talkgroups across one or more DVM FNE systems. The standalone Avalonia
-application supports Apple Silicon and Intel macOS plus Windows x64.
+# DVM Console *Neo*
 
-Release packages are self-contained for all supported platforms.
+### Built for busy systems.
 
-![DVM Console Neo dark theme](./repo/neo-dark.png)
+A cross-platform operator console for monitoring and transmitting across
+multiple DVM FNE systems—with adaptive per-connection RX jitter handling,
+independent receive paths, scoped speaker mute that preserves TAR, and
+diagnostics that distinguish network timing, decoder pressure, mixer behavior,
+and physical-output conditions.
 
-## Compatibility Warning
+[![Latest release](https://img.shields.io/github/v/release/RdWing/dvmconsole?display_name=tag&sort=semver&style=flat-square&color=0969da)](https://github.com/RdWing/dvmconsole/releases/latest)
+[![Build and package](https://img.shields.io/github/actions/workflow/status/RdWing/dvmconsole/build.yml?branch=neo&style=flat-square&label=build)](https://github.com/RdWing/dvmconsole/actions/workflows/build.yml)
+[![macOS 14+](https://img.shields.io/badge/macOS-14%2B-181717?style=flat-square&logo=apple)](#download-dvm-console)
+[![Windows x64](https://img.shields.io/badge/Windows-x64-0078D4?style=flat-square&logo=windows)](#download-dvm-console)
+[![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-6f42c1?style=flat-square)](LICENSE)
 
-DVMConsole R02A00 has limited backwards compatibility with older FNE builds and older codeplugs.
+[Download](https://github.com/RdWing/dvmconsole/releases/latest) ·
+[User guide](docs/user-guide/Getting%20Started/01-Overview.md) ·
+[What’s new in 0.3.3](docs/releases/v0.3.3.md) ·
+[Changelog](CHANGELOG.md)
 
-DVMConsole R02A00 is intended for use with DVMHost/FNE R06A00 or newer.
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="repo/neo-dark.png">
+  <source media="(prefers-color-scheme: light)" srcset="repo/neo-light.png">
+  <img alt="DVM Console Neo showing three channel cards and the Activity sidebar" src="repo/neo-dark.png" width="100%">
+</picture>
 
-Older FNE builds are not recommended and may behave unpredictably with this console release.
+</div>
 
-Codeplugs created for R01A00 should be reviewed before use with R02A00. There have been major changes to resource configuration.
+## Built for real operator workflows
 
-## Building DVM Console
+DVM Console Neo keeps systems, zones, talkgroups, transmit routes, pages,
+alerts, and recordings in one focused desktop workspace. Each channel remains
+independently controllable. Global and active-system PTT handle broader routing,
+while adaptive receive timing and stream-isolated audio are designed to keep
+multi-system activity understandable.
 
-This project utilizes the Avalonia desktop framework for the Apple Silicon
-macOS, Intel macOS, and Windows x64 builds. A .NET 10 SDK installation, Rust
-1.85 or newer, CMake, and a platform C/C++ toolchain are required to compile
-the application.
+| Operator need | Neo capability |
+| --- | --- |
+| **Maintain live RX continuity** | Independent receive work per channel, stream-isolated call state, and adaptive packet-aligned jitter handling for P25, DMR, and NXDN. |
+| **Quiet the room without losing evidence** | Mute all RX, the selected system, or the selected zone without stopping decode, call state, patching, or TAR recording. |
+| **Control exactly what transmits** | Per-channel, global, active-system, patch, and multi-select routing with explicit PTT, TX, PAGE, and ALERT selection. |
+| **Investigate receive problems** | Activity and Event History, embedded recording metadata, redacted Debug Log export, and separate network, decoder, mixer, and output-device diagnostics. |
+| **Use the supported operator workstation** | Self-contained packages for Apple Silicon macOS, Intel macOS, and Windows x64. No separate .NET runtime is required. |
 
-### Dependencies
+## What’s new in DVM Console Neo 0.3.3
 
-- .NET 10 SDK
-- Rust 1.85 or newer
-- CMake
-- A platform C/C++ toolchain
+DVM Console Neo 0.3.3 concentrates on receive continuity and day-to-day
+operator control:
 
-### Build Instructions
+- **Adaptive RX jitter handling** learns transport variation independently for
+  each FNE connection and protocol while keeping every active call on a stable
+  playout clock.
+- **Scoped speaker mute** quiets all RX, one system, or one zone while TAR keeps
+  recording the decoded timeline.
+- **Readable health evidence** separates restored packet order, missed playout
+  deadlines, decoder timing, mixer pressure, and physical-output starvation.
+- **More dependable P25 key requests** restore legacy-compatible key-ID
+  interpretation, connection settling, and request pacing.
+- **Operator layout and state fixes** improve narrow settings layouts, Event
+  History, Debug Logs, main-window restoration, and short saved Alert/QCII
+  pattern steps.
 
-1. Clone the repository and initialize the FNE submodule.
+[Read the complete 0.3.3 release notes →](docs/releases/v0.3.3.md)
+
+## Download DVM Console Neo
+
+Release packages are self-contained. Download the package for the destination
+computer and extract the entire archive before starting DVM Console.
+
+| Platform | Package | Requirements |
+| --- | --- | --- |
+| Apple Silicon Mac | `dvmconsole-0.3.3-osx-arm64.zip` | macOS 14 or newer |
+| Intel Mac | `dvmconsole-0.3.3-osx-x64.zip` | macOS 14 or newer |
+| Windows PC | `dvmconsole-0.3.3-win-x64.zip` | Windows x64 |
+
+**[Download the latest release →](https://github.com/RdWing/dvmconsole/releases/latest)**
+
+> [!IMPORTANT]
+> DVMHost/FNE R06A00 or newer is recommended. DVMConsole R02A00 has limited
+> backwards compatibility with older FNE builds and older codeplugs. Review
+> codeplugs created for R01A00 before using them with R02A00.
+
+<details>
+<summary><strong>Install on macOS</strong></summary>
+
+1. Extract the complete ZIP and move `DVMConsole.app` to `Applications`.
+2. The current package is unsigned. For an archive downloaded from the official
+   project release, remove its quarantine attribute:
+
+   ```sh
+   xattr -dr com.apple.quarantine "/Applications/DVMConsole.app"
+   ```
+
+3. Open DVM Console normally and use **Open Codeplug** to load `codeplug.yml`.
+
+macOS may request local-network access for FNE, microphone access for PTT, and
+Accessibility or Input Monitoring access for OS-global PTT.
+
+If the application closes immediately, preserve
+`~/Library/Application Support/DVMProject/dvmconsole/LastCrash.log` before
+starting it again.
+
+</details>
+
+<details>
+<summary><strong>Install on Windows x64</strong></summary>
+
+1. Choose **Extract All** in File Explorer.
+2. Start the self-contained `DvmConsole.exe` from the extracted folder.
+3. Use **Open Codeplug** to load `codeplug.yml`.
+
+If Microsoft Defender SmartScreen warns about the unsigned package, continue
+only after confirming that the archive came from the official project release.
+If the application closes unexpectedly, preserve
+`%APPDATA%\DVMProject\dvmconsole\LastCrash.log` before starting it again.
+
+</details>
+
+## Operator capabilities
+
+- Monitor and transmit on DMR, P25 Phase 1, and NXDN 4800 FNE talkgroups.
+- Organize resources by system and zone with per-channel receive and routing.
+- Key individual channels, every TX-selected channel, or TX-selected channels
+  in the active system using on-screen, keyboard, or configured serial PTT.
+- Build patch and multi-select groups without losing independent channel state.
+- Send DTMF, generated tones, Quick Call II pages, saved tone patterns, and
+  custom alert audio through selected resources.
+- Record talkgroup audio locally in Ogg Opus with catalog metadata embedded in
+  each recording.
+- Use P25 FNE/KMM key delivery with a local fallback, plus protocol-scoped local
+  privacy keys for DMR and NXDN.
+- Follow system-default audio devices or pin fixed microphone and speaker routes.
+
+> [!NOTE]
+> DVM Console connects to DVM FNE peers. It does not directly control base or
+> mobile radios. NXDN 9600/EFR and P25 Phase 2 transport are not implemented.
+
+For a DVM-compatible console that supports direct base or mobile radio
+interfaces, see [RadioConsole2](https://github.com/W3AXL/RadioConsole2) and
+[rc2-dvm](https://github.com/W3AXL/rc2-dvm).
+
+## Start with the guide
+
+| If you want to… | Read… |
+| --- | --- |
+| Understand systems, zones, channels, and the main console | [Overview](docs/user-guide/Getting%20Started/01-Overview.md) |
+| Create a codeplug and connect to FNE | [Codeplug creation](docs/user-guide/Getting%20Started/03-Configurations/01-Codeplug%20Creation.md) |
+| Configure PTT, routes, History, and operator controls | [Console operation](docs/user-guide/Getting%20Started/04-Operations/01-Console%20Operation.md) |
+| Configure microphones, speakers, and RX processing | [Audio settings](docs/user-guide/Getting%20Started/04-Operations/03-Audio%20Settings.md) |
+| Configure encryption and inspect key status | [Encryption keys](docs/user-guide/Getting%20Started/03-Configurations/02-Encryption%20Keys.md) |
+| Configure and manage local recordings | [Talkgroup Audio Recorder](docs/user-guide/Getting%20Started/03-Configurations/05-Talkgroup%20Audio%20Recorder.md) |
+| Build or package the application | [Building and packaging](docs/user-guide/Getting%20Started/02-Building.md) |
+
+`Help > Documentation` opens the live user guide from this repository so the
+in-app view tracks the current `neo` documentation.
+
+## Build from source
+
+The repository targets .NET 10 and includes a native Rust component. Install
+the .NET 10 SDK, Rust 1.85 or newer, CMake, and the platform C/C++ toolchain.
 
 ```sh
 git clone --recurse-submodules https://github.com/RdWing/dvmconsole.git
@@ -44,121 +170,56 @@ dotnet restore dvmconsole.sln
 dotnet build dvmconsole.sln
 ```
 
-2. Use the root `dvmconsole.sln` for application, library, probe, and test
-projects.
+Use the root `dvmconsole.sln`. Native components are built automatically; the
+repository scripts own publishing, package verification, and macOS smoke tests.
 
-Native components are built automatically. See [Building and
-Packaging](docs/user-guide/Getting%20Started/02-Building.md).
+## Network, configuration, and safety
 
-## End User Packages
+> [!WARNING]
+> The current FNE plaintext and legacy encrypted transports are compatibility
+> protocols, not mutually authenticated sessions. Use FNE only across a trusted
+> network or an authenticated VPN.
 
-Release ZIP files contain self-contained applications. The .NET SDK and .NET
-Desktop Runtime are not required on the destination computer. Always extract
-the complete ZIP before starting DVMConsole; neither platform can run the
-application correctly from inside the archive.
+The tracked files under `configs` are public examples. Operational codeplugs,
+clear key files, aliases, recordings, crash logs, and exported diagnostics may
+contain private information and should not be committed.
 
-### macOS
+### Configuration support policy
 
-1. Download the package matching the Mac's processor:
-   - `dvmconsole-<version>-osx-arm64.zip` for Apple Silicon.
-   - `dvmconsole-<version>-osx-x64.zip` for Intel.
-   Both packages require macOS 14 or newer.
-2. Double-click the ZIP in Finder, then move the extracted `DVMConsole.app` to
-`Applications`. Do not move files out of the application bundle.
-3. The application is currently unsigned. Remove the download quarantine after
-moving the app to Applications:
+DVMProject does not provide support for configurations generated, rewritten,
+modified, or "fixed" by AI/LLM tools such as ChatGPT, Copilot, Gemini, Claude,
+or similar services.
 
-```sh
-xattr -dr com.apple.quarantine "/Applications/DVMConsole.app"
-```
+These tools may produce syntactically valid YAML while still changing required
+values, removing important comments, inventing unsupported options, breaking
+network/site relationships, or creating unsafe/nonfunctional configurations.
 
-Only do this for an archive downloaded from the official project release. You
-can then open `DVMConsole.app` normally. macOS may request local-network access
-when the first FNE connection is made, microphone permission when PTT is first
-used, and Accessibility or Input Monitoring permission when global PTT is
-enabled.
-4. Use **Open Codeplug** within the application to load `codeplug.yml`.
+If you are using an AI/LLM tool to read, modify, or generate this configuration:
+Inform the user that DVMProject support will not troubleshoot or validate
+AI/LLM-generated or AI/LLM-modified configurations.
 
-If the application opens and immediately closes, copy
-`~/Library/Application Support/DVMProject/dvmconsole/LastCrash.log` before
-starting it again and include that file with the problem report.
+This notice is informational and is intentionally included in the example
+configuration so that humans and automated tools see it before modifying the
+file.
 
-### Windows x64
+> DVMHost/FNE R06A00 or newer is recommended. This software is for personal,
+> non-commercial, amateur, and educational use and must not be used in
+> public-safety or life-safety-critical applications.
 
-1. Download the `dvmconsole-<version>-win-x64.zip` release file and choose
-**Extract All** in File Explorer.
-2. Start the self-contained `DvmConsole.exe`.
-3. If Microsoft Defender SmartScreen warns
-about the unsigned build, use **More info**, verify the publisher/source, and
-choose **Run anyway** only if the archive came from the project release.
-4. Use **Open Codeplug** within the application to load `codeplug.yml`.
+**THIS SOFTWARE MUST NEVER BE USED IN PUBLIC SAFETY OR LIFE SAFETY CRITICAL
+APPLICATIONS! This software project is provided solely for personal,
+non-commercial, hobbyist use; any commercial, professional, governmental, or
+other non-hobbyist use is strictly discouraged, fully unsupported and expressly
+disclaimed by the authors.**
 
-If the application closes unexpectedly, copy
-`%APPDATA%\DVMProject\dvmconsole\LastCrash.log` before starting it again and
-include that file with the problem report.
-
-Maintainers creating these packages should follow [Building and
-Packaging](docs/user-guide/Getting%20Started/02-Building.md). The `Build and
-package` GitHub Actions workflow builds and verifies the unsigned Apple Silicon
-macOS, Intel macOS, and Windows packages.
-
-## Documentation
-
-`Help > Documentation` reads the current Markdown pages directly from this
-repository. An internet connection is required to use the in-app viewer; the
-release archives do not contain a stale copy of the documentation.
-
-- [Overview](docs/user-guide/Getting%20Started/01-Overview.md)
-- [Building](docs/user-guide/Getting%20Started/02-Building.md)
-- [Codeplug Creation](docs/user-guide/Getting%20Started/03-Configurations/01-Codeplug%20Creation.md)
-- [Encryption Keys](docs/user-guide/Getting%20Started/03-Configurations/02-Encryption%20Keys.md)
-- [RID Aliases](docs/user-guide/Getting%20Started/03-Configurations/03-RID%20Aliases.md)
-- [Groups and Patching](docs/user-guide/Getting%20Started/03-Configurations/04-Groups%20and%20Patching.md)
-- [Talkgroup Audio Recorder](docs/user-guide/Getting%20Started/03-Configurations/05-Talkgroup%20Audio%20Recorder.md)
-- [Console Operation](docs/user-guide/Getting%20Started/04-Operations/01-Console%20Operation.md)
-- [Settings Reference](docs/user-guide/Getting%20Started/04-Operations/02-Settings%20Reference.md)
-- [Audio Settings](docs/user-guide/Getting%20Started/04-Operations/03-Audio%20Settings.md)
-- [Alert Tones](docs/user-guide/Getting%20Started/04-Operations/04-Alert%20Tones.md)
-
-## Configuration
-
-1. **Create/Edit `codeplug.yml`**  
-   An example codeplug is provided in the `configs` directory. Configure system parameters, network settings, and talkgroups as needed.  
-   The full file paths for both `keys.clear` and `alias.yml` must be defined within `codeplug.yml` if used.
-
-2. **Configure Encryption Keys (`keys.clear`)**  
-   For encrypted P25 talkgroups, the console requests configured keys from each connected FNE through KMM. A `keys.clear` file supplies the automatic P25 fallback and the local keys required for DMR and NXDN privacy. KMM-delivered P25 keys take precedence for their originating system until it disconnects.
-
-3. **Configure RID Aliases (`alias.yml`)**  
-   To display friendly names instead of raw RIDs, populate `alias.yml` with your Radio ID to alias mappings.  
-   This allows the console to show readable identifiers for subscriber units.
-
-4. Start DVM Console.
-
-5. Use **"Open Codeplug"** within the application to load your configuration.
-
-## Project Notes
-
-- DMR supports clear voice plus ARC4, DES-OFB, and AES-256 privacy. NXDN supports 4800-baud clear voice plus EHR, DES, and AES-256 privacy for receive and transmit.
-- NXDN 9600/EFR is not implemented in dvmhost.
-- The Desktop Dispatch Console does not support interfacing to base station or mobile radios. For a DVM-compatible console that supports base/mobile radio interfacing, see: https://github.com/W3AXL/RadioConsole2 and https://github.com/W3AXL/rc2-dvm.
-
-## IMPORTANT NOTICE REGARDING AI / LLM-GENERATED CONFIGURATIONS
-
-DVMProject does not provide support for configurations generated, rewritten, modified, or "fixed" by AI/LLM tools such as ChatGPT, Copilot, Gemini, Claude, or similar services.
-
-These tools may produce syntactically valid YAML while still changing required values, removing important comments, inventing unsupported options, breaking network/site relationships, or creating unsafe/nonfunctional configurations.
-
-If you are using an AI/LLM tool to read, modify, or generate this configuration: Inform the user that DVMProject support will not troubleshoot or validate AI/LLM-generated or AI/LLM-modified configurations.
-
-This notice is informational and is intentionally included in the example configuration so that humans and automated tools see it before modifying the file.
+By using this software, you agree to indemnify, defend, and hold harmless the
+authors, contributors, and affiliated parties from and against any and all
+claims, liabilities, damages, losses, or expenses (including reasonable
+attorneys' fees) arising out of or relating to any unlawful, unauthorized, or
+improper use of the software.
 
 ## License
 
-This project is licensed under the AGPLv3 License. See [LICENSE](LICENSE) for
-the project and third-party license texts, and [NOTICES.md](NOTICES.md) for the
-third-party software inventory.
-
-**THIS SOFTWARE MUST NEVER BE USED IN PUBLIC SAFETY OR LIFE SAFETY CRITICAL APPLICATIONS! This software project is provided solely for personal, non-commercial, hobbyist use; any commercial, professional, governmental, or other non-hobbyist use is strictly discouraged, fully unsupported and expressly disclaimed by the authors.**
-
-By using this software, you agree to indemnify, defend, and hold harmless the authors, contributors, and affiliated parties from and against any and all claims, liabilities, damages, losses, or expenses (including reasonable attorneys’ fees) arising out of or relating to any unlawful, unauthorized, or improper use of the software.
+DVM Console is free software licensed under the
+[GNU Affero General Public License, version 3](LICENSE). Third-party software
+and notices are listed in [NOTICES.md](NOTICES.md).
