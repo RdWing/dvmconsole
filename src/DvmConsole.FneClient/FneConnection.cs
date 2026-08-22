@@ -130,6 +130,7 @@ public sealed class FneConnection : IAsyncDisposable
 
     private readonly FneConnectionOptions options;
     private readonly TimeProvider timeProvider;
+    private readonly IFneEndpointResolver endpointResolver;
     private readonly object sync = new();
     private readonly SemaphoreSlim lifecycle = new(1, 1);
     private readonly Dictionary<(byte AlgorithmId, ushort KeyId), DateTimeOffset> pendingP25KeyRequests = [];
@@ -146,9 +147,18 @@ public sealed class FneConnection : IAsyncDisposable
     }
 
     internal FneConnection(FneConnectionOptions options, TimeProvider timeProvider)
+        : this(options, timeProvider, new FneEndpointResolver())
+    {
+    }
+
+    internal FneConnection(
+        FneConnectionOptions options,
+        TimeProvider timeProvider,
+        IFneEndpointResolver endpointResolver)
     {
         this.options = options ?? throw new ArgumentNullException(nameof(options));
         this.timeProvider = timeProvider ?? throw new ArgumentNullException(nameof(timeProvider));
+        this.endpointResolver = endpointResolver ?? throw new ArgumentNullException(nameof(endpointResolver));
         status = new FneConnectionStatus(options.Name, FneConnectionState.Disconnected, "Not started", DateTimeOffset.UtcNow);
     }
 
@@ -345,7 +355,9 @@ public sealed class FneConnection : IAsyncDisposable
 
         try
         {
-            IPEndPoint endpoint = await ResolveEndpointAsync(cancellationToken).ConfigureAwait(false);
+            IPEndPoint endpoint = await endpointResolver
+                .ResolveAsync(options.Address, options.Port, cancellationToken)
+                .ConfigureAwait(false);
             cancellationToken.ThrowIfCancellationRequested();
 
             candidate = CreatePeer(endpoint);
@@ -875,19 +887,6 @@ public sealed class FneConnection : IAsyncDisposable
         FneConnectionState? lastState,
         FneConnectionState publishedState)
         => nextState != lastState || nextState != publishedState;
-
-    private async Task<IPEndPoint> ResolveEndpointAsync(CancellationToken cancellationToken)
-    {
-        if (IPAddress.TryParse(options.Address, out IPAddress? address))
-            return new IPEndPoint(address, options.Port);
-
-        IPAddress[] addresses = await Dns.GetHostAddressesAsync(options.Address, cancellationToken).ConfigureAwait(false);
-        IPAddress? resolved = addresses.FirstOrDefault(candidate => candidate.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork)
-            ?? addresses.FirstOrDefault();
-        return resolved is null
-            ? throw new InvalidOperationException($"Could not resolve FNE address '{options.Address}'.")
-            : new IPEndPoint(resolved, options.Port);
-    }
 
     private void Publish(FneConnectionState state, string message)
     {
