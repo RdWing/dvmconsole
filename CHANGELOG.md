@@ -6,6 +6,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.3.5] - 2026-08-22
+
+### Changed
+
+- Reduce managed allocation in receive routing, vocoder frame assembly, native vocoder calls, and DMR/P25/NXDN transmit packetization without changing output behavior.
+- Refactor settings, desktop sessions, FNE, audio, playback, and native-resource ownership into focused internal components while preserving existing public and compatibility contracts.
+- Strengthen automated compatibility, analyzer, native-audio, and packaged-application checks.
+
+### Fixed
+
+- Keep Activity, PTT, modeless tools, and other session-owned state attached to the replacement model after a codeplug reload.
+- Await and serialize PTT, background work, shared capture, mixer recovery, and desktop-session shutdown so retired resources cannot remain active or be revived.
+- Marshal bound web-stream state through Avalonia and observe intentional background-operation failures.
+
 ## [0.3.4] - 2026-08-21
 
 ### Fixed
@@ -287,7 +301,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Add patches, multi-select groups, call history, recordings, web streams, clocks, layouts, themes, startup behavior, and in-application operator documentation.
 - Add support for local and KMM-provided P25 encryption keys while preserving compatibility with existing variable-length AES key material.
 
-[Unreleased]: https://github.com/RdWing/dvmconsole/compare/v0.3.4...HEAD
+[Unreleased]: https://github.com/RdWing/dvmconsole/compare/v0.3.5...HEAD
+[0.3.5]: https://github.com/RdWing/dvmconsole/compare/v0.3.4...v0.3.5
 [0.3.4]: https://github.com/RdWing/dvmconsole/compare/v0.3.3...v0.3.4
 [0.3.3]: https://github.com/RdWing/dvmconsole/compare/v0.3.2...v0.3.3
 [0.3.2]: https://github.com/RdWing/dvmconsole/compare/v0.3.1...v0.3.2

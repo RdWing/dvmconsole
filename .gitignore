@@ -60,6 +60,10 @@ dlldata.c
 # Benchmark Results
 BenchmarkDotNet.Artifacts/
 
+# Local performance harness and captured machine-specific results. Release
+# source distributions intentionally exclude these development artifacts.
+benchmarks/
+
 # .NET Core
 project.lock.json
 project.fragment.lock.json

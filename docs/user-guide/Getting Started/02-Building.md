@@ -54,8 +54,8 @@ dotnet build dvmconsole.sln
 Run the complete solution tests before packaging:
 
 ```sh
-dotnet test dvmconsole.sln --no-restore \
-  /p:UseSharedCompilation=false
+dotnet test dvmconsole.sln --no-restore --disable-build-servers \
+  --configuration Release /m:1 /p:UseSharedCompilation=false
 ```
 
 ---
@@ -69,7 +69,10 @@ scripts/publish-desktop.sh osx-arm64 /tmp/dvmconsole-osx-arm64
 
 scripts/verify-publish.sh osx-arm64 /tmp/dvmconsole-osx-arm64
 scripts/package-desktop.sh osx-arm64 \
-  /tmp/dvmconsole-osx-arm64 /tmp/dvmconsole-osx-arm64.zip
+  /tmp/dvmconsole-osx-arm64 /tmp/dvmconsole-osx-arm64.zip \
+  /tmp/DVMConsole-osx-arm64.app
+scripts/smoke-desktop-macos.sh \
+  /tmp/DVMConsole-osx-arm64.app configs/codeplug.example.yml
 ```
 
 Use `osx-x64` instead of `osx-arm64` when packaging for an Intel Mac.
@@ -126,10 +129,7 @@ connection is required.
 
 # Tagged Releases
 
-Pushing a version tag such as `v0.3.4` starts the macOS and Windows test and
-packaging matrix. The workflow publishes a GitHub release only after all three
-target jobs pass, and attaches the three versioned ZIP files. Release notes can
-be supplied in `docs/releases/v<version>.md` before the tag is pushed.
+Pushing a version tag such as `v0.3.5` starts the macOS and Windows test and packaging matrix. Both native macOS rows smoke the packaged application bundle, and the Windows row runs the Avalonia headful smoke test. The workflow publishes a GitHub release only after all three target jobs pass and attaches the three versioned ZIP files. Release notes must be supplied in `docs/releases/v<version>.md` before the tag is pushed.
 
 ---
 
