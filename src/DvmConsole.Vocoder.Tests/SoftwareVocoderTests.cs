@@ -153,4 +153,25 @@ public sealed class SoftwareVocoderTests
         session.Dispose();
         Assert.Throws<ObjectDisposedException>(() => backend.CreateSession(VocoderMode.DmrAmbe));
     }
+
+    [Fact]
+    public void NativeEncodeUsesCallerBuffersWithoutPerFrameManagedAllocations()
+    {
+        using var backend = new SoftwareVocoderBackend();
+        using IVocoderSession session = backend.CreateSession(VocoderMode.DmrAmbe);
+        var samples = new short[VocoderFrameSizes.PcmSamplesPerFrame];
+        var codeword = new byte[VocoderFrameSizes.HalfRateCodewordBytes];
+        for (int index = 0; index < 100; index++)
+            session.Encode(samples, codeword);
+
+        const int iterations = 1_000;
+        long before = GC.GetAllocatedBytesForCurrentThread();
+        for (int index = 0; index < iterations; index++)
+            session.Encode(samples, codeword);
+        long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+
+        Assert.True(
+            allocated <= 1_024,
+            $"Expected caller-owned native buffers; observed {allocated / (double)iterations:F1} managed bytes per encode.");
+    }
 }
