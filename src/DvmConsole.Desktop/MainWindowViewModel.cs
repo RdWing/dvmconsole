@@ -66,10 +66,15 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
     private readonly ObservableCollection<AlertToneViewModel> alertTones = [];
     private readonly ObservableCollection<BuiltInAlertToneViewModel> builtInAlertTones = [];
     private readonly ObservableCollection<ToolbarClockViewModel> toolbarClocks = [];
-    private readonly ObservableCollection<AudioInputPresetViewModel> audioInputPresets = [];
-    private readonly ObservableCollection<RxAudioProcessingModeViewModel> rxAudioProcessingModes = [];
-    private readonly ObservableCollection<AudioDeviceOptionViewModel> audioInputDevices = [];
-    private readonly ObservableCollection<AudioDeviceOptionViewModel> audioOutputDevices = [];
+    private readonly AudioSettingsViewModel audioSettings;
+    private ObservableCollection<AudioInputPresetViewModel> audioInputPresets
+        => audioSettings.MutableAudioInputPresets;
+    private ObservableCollection<RxAudioProcessingModeViewModel> rxAudioProcessingModes
+        => audioSettings.MutableRxAudioProcessingModes;
+    private ObservableCollection<AudioDeviceOptionViewModel> audioInputDevices
+        => audioSettings.MutableAudioInputDevices;
+    private ObservableCollection<AudioDeviceOptionViewModel> audioOutputDevices
+        => audioSettings.MutableAudioOutputDevices;
     private readonly ObservableCollection<SubscriberCommandAuditEntry> subscriberCommandAudit = [];
     private readonly BoundedDebugLogBuffer debugLogBuffer = new();
     private readonly FilteredDebugLogCollection filteredDebugLogs;
@@ -116,19 +121,8 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
     private string toneDurationText = "1.0";
     private string quickCallToneAText = "600";
     private string quickCallToneBText = "1200";
-    private string audioInputDeviceIdText = "default";
-    private string audioOutputDeviceIdText = "default";
-    private string audioInputGainText = "1.0";
-    private string audioInputLowGainText = "0";
-    private string audioInputMidGainText = "0";
-    private string audioInputHighGainText = "0";
-    private string audioInputAgcTargetDbfsText = "-25";
-    private bool audioInputAgcEnabled;
-    private bool highQualityBluetoothAudioEnabled;
     private IReadOnlyDictionary<VocoderMode, ReceiveAudioProcessingOptions> receiveAudioProcessingOptions =
         new Dictionary<VocoderMode, ReceiveAudioProcessingOptions>();
-    private string selectedAudioProcessingMode = "DVM Console processing";
-    private string audioInputPresetNameText = string.Empty;
     private string dtmfPresetName = string.Empty;
     private string tonePresetName = string.Empty;
     private string alertToneNameText = string.Empty;
@@ -139,8 +133,6 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
     private bool codeplugDiagnosticsDismissed;
     private ChannelViewModel? selectedChannel;
     private SystemViewModel? selectedSystem;
-    private AudioDeviceOptionViewModel? selectedAudioInputDevice;
-    private AudioDeviceOptionViewModel? selectedAudioOutputDevice;
     private readonly ScaleTransform uiScaleTransform;
 
     internal MainWindowViewModel(
@@ -175,6 +167,10 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
             userSettings.RecordingRetentionDays.ToString(CultureInfo.InvariantCulture),
             GetDefaultRecordingRoot(userSettings.RecordingRootPath));
         historyRecording.PropertyChanged += HandleHistoryRecordingPropertyChanged;
+        audioSettings = new AudioSettingsViewModel(
+            userSettings,
+            ToAudioProcessingModeDisplay(userSettings.AudioProcessingMode));
+        audioSettings.PropertyChanged += HandleAudioSettingsPropertyChanged;
         uiScaleTransform = new ScaleTransform
         {
             ScaleX = userSettings.UiScale,
@@ -227,33 +223,8 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
             userSettings.ToneDurationSeconds));
         quickCallToneAText = userSettings.QuickCallToneAFrequencyHz.ToString("0.###", CultureInfo.InvariantCulture);
         quickCallToneBText = userSettings.QuickCallToneBFrequencyHz.ToString("0.###", CultureInfo.InvariantCulture);
-        audioInputDeviceIdText = userSettings.AudioInputDeviceId;
-        audioOutputDeviceIdText = userSettings.AudioOutputDeviceId;
-        audioInputGainText = userSettings.AudioInputGain.ToString("0.###", CultureInfo.InvariantCulture);
-        audioInputLowGainText = userSettings.AudioInputEqLowGainDb.ToString("0.###", CultureInfo.InvariantCulture);
-        audioInputMidGainText = userSettings.AudioInputEqMidGainDb.ToString("0.###", CultureInfo.InvariantCulture);
-        audioInputHighGainText = userSettings.AudioInputEqHighGainDb.ToString("0.###", CultureInfo.InvariantCulture);
-        audioInputAgcTargetDbfsText = userSettings.AudioInputAgcTargetDbfs.ToString("0.###", CultureInfo.InvariantCulture);
-        audioInputAgcEnabled = userSettings.AudioInputAgcEnabled;
-        highQualityBluetoothAudioEnabled = userSettings.HighQualityBluetoothAudioEnabled;
-        foreach ((string key, string label, VocoderMode mode) in new[]
-        {
-            (RxAudioProcessingModeSetting.P25Phase1Mode, "P25 Phase 1", VocoderMode.P25Imbe),
-            (RxAudioProcessingModeSetting.P25Phase2Mode, "P25 Phase 2", VocoderMode.P25Phase2Ambe),
-            (RxAudioProcessingModeSetting.DmrMode, "DMR", VocoderMode.DmrAmbe),
-            (RxAudioProcessingModeSetting.NxdnMode, "NXDN", VocoderMode.NxdnAmbe)
-        })
-        {
-            rxAudioProcessingModes.Add(new RxAudioProcessingModeViewModel(
-                key,
-                label,
-                mode,
-                userSettings.RxAudioProcessingOptions[key]));
-        }
         receiveJitterBufferSettingsBySystem = BuildReceiveJitterBufferSettingsBySystem();
         receiveAudioProcessingOptions = BuildReceiveAudioProcessingOptions();
-        selectedAudioProcessingMode = ToAudioProcessingModeDisplay(userSettings.AudioProcessingMode);
-        audioInputPresetNameText = userSettings.AudioInputPresetName;
         webStreamPlayback = new WebStreamPlaybackCoordinator(
             () => AudioBackendFactory.CreateDefault(Environment.GetEnvironmentVariable("DVM_AUDIO_LIBRARY")),
             () => userSettings.AudioOutputDeviceId,
@@ -278,8 +249,6 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
         for (int index = 0; index < configuredClocks.Count; index++)
             toolbarClocks.Add(new ToolbarClockViewModel(index + 1, configuredClocks[index]));
         RefreshClock();
-        foreach (AudioInputPresetSetting preset in userSettings.AudioInputPresets)
-            audioInputPresets.Add(new AudioInputPresetViewModel(preset));
         p25KeyRing = p25KeyResolver as P25KeyRing;
         dmrKeyRing = dmrKeyResolver as DmrKeyRing;
         nxdnKeyRing = nxdnKeyResolver as NxdnKeyRing;
@@ -379,10 +348,6 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
         AlertTones = new ReadOnlyObservableCollection<AlertToneViewModel>(alertTones);
         BuiltInAlertTones = new ReadOnlyObservableCollection<BuiltInAlertToneViewModel>(builtInAlertTones);
         ToolbarClocks = new ReadOnlyObservableCollection<ToolbarClockViewModel>(toolbarClocks);
-        AudioInputPresets = new ReadOnlyObservableCollection<AudioInputPresetViewModel>(audioInputPresets);
-        RxAudioProcessingModes = new ReadOnlyObservableCollection<RxAudioProcessingModeViewModel>(rxAudioProcessingModes);
-        AudioInputDevices = new ReadOnlyObservableCollection<AudioDeviceOptionViewModel>(audioInputDevices);
-        AudioOutputDevices = new ReadOnlyObservableCollection<AudioDeviceOptionViewModel>(audioOutputDevices);
         SubscriberCommandAudit = new ReadOnlyObservableCollection<SubscriberCommandAuditEntry>(subscriberCommandAudit);
         DebugLogEntries = new ReadOnlyObservableCollection<DebugLogEntry>(debugLogBuffer.Entries);
         RecentCodeplugPaths = new ReadOnlyObservableCollection<string>(recentCodeplugPaths);
@@ -918,92 +883,86 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
 
     public string AudioInputDeviceIdText
     {
-        get => audioInputDeviceIdText;
-        set => SetField(ref audioInputDeviceIdText, value ?? string.Empty);
+        get => audioSettings.AudioInputDeviceIdText;
+        set => audioSettings.AudioInputDeviceIdText = value;
     }
 
     public string AudioOutputDeviceIdText
     {
-        get => audioOutputDeviceIdText;
-        set => SetField(ref audioOutputDeviceIdText, value ?? string.Empty);
+        get => audioSettings.AudioOutputDeviceIdText;
+        set => audioSettings.AudioOutputDeviceIdText = value;
     }
 
     public AudioDeviceOptionViewModel? SelectedAudioInputDevice
     {
-        get => selectedAudioInputDevice;
+        get => audioSettings.SelectedAudioInputDevice;
         set
         {
-            if (ReferenceEquals(selectedAudioInputDevice, value))
+            if (ReferenceEquals(audioSettings.SelectedAudioInputDevice, value))
                 return;
-            selectedAudioInputDevice = value;
-            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SelectedAudioInputDevice)));
-            if (value is not null)
-                AudioInputDeviceIdText = value.Id;
+            audioSettings.SelectedAudioInputDevice = value;
             RefreshAppleVoiceProcessingRouteState();
         }
     }
 
     public AudioDeviceOptionViewModel? SelectedAudioOutputDevice
     {
-        get => selectedAudioOutputDevice;
+        get => audioSettings.SelectedAudioOutputDevice;
         set
         {
-            if (ReferenceEquals(selectedAudioOutputDevice, value))
+            if (ReferenceEquals(audioSettings.SelectedAudioOutputDevice, value))
                 return;
-            selectedAudioOutputDevice = value;
-            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SelectedAudioOutputDevice)));
-            if (value is not null)
-                AudioOutputDeviceIdText = value.Id;
+            audioSettings.SelectedAudioOutputDevice = value;
             RefreshAppleVoiceProcessingRouteState();
         }
     }
 
     public string AudioInputGainText
     {
-        get => audioInputGainText;
-        set => SetField(ref audioInputGainText, value ?? string.Empty);
+        get => audioSettings.AudioInputGainText;
+        set => audioSettings.AudioInputGainText = value;
     }
 
     public string AudioInputLowGainText
     {
-        get => audioInputLowGainText;
-        set => SetField(ref audioInputLowGainText, value ?? string.Empty);
+        get => audioSettings.AudioInputLowGainText;
+        set => audioSettings.AudioInputLowGainText = value;
     }
 
     public string AudioInputMidGainText
     {
-        get => audioInputMidGainText;
-        set => SetField(ref audioInputMidGainText, value ?? string.Empty);
+        get => audioSettings.AudioInputMidGainText;
+        set => audioSettings.AudioInputMidGainText = value;
     }
 
     public string AudioInputHighGainText
     {
-        get => audioInputHighGainText;
-        set => SetField(ref audioInputHighGainText, value ?? string.Empty);
+        get => audioSettings.AudioInputHighGainText;
+        set => audioSettings.AudioInputHighGainText = value;
     }
 
     public bool AudioInputAgcEnabled
     {
-        get => audioInputAgcEnabled;
+        get => audioSettings.AudioInputAgcEnabled;
         set
         {
-            if (audioInputAgcEnabled == value)
+            if (audioSettings.AudioInputAgcEnabled == value)
                 return;
-            SetField(ref audioInputAgcEnabled, value);
+            audioSettings.AudioInputAgcEnabled = value;
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsAgcTargetEnabled)));
         }
     }
 
     public string AudioInputAgcTargetDbfsText
     {
-        get => audioInputAgcTargetDbfsText;
-        set => SetField(ref audioInputAgcTargetDbfsText, value ?? string.Empty);
+        get => audioSettings.AudioInputAgcTargetDbfsText;
+        set => audioSettings.AudioInputAgcTargetDbfsText = value;
     }
 
     public bool HighQualityBluetoothAudioEnabled
     {
-        get => highQualityBluetoothAudioEnabled;
-        set => SetField(ref highQualityBluetoothAudioEnabled, value);
+        get => audioSettings.HighQualityBluetoothAudioEnabled;
+        set => audioSettings.HighQualityBluetoothAudioEnabled = value;
     }
 
     public bool IsHighQualityBluetoothAudioAvailable
@@ -1137,7 +1096,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
 
     public string SelectedAudioProcessingMode
     {
-        get => selectedAudioProcessingMode;
+        get => audioSettings.SelectedAudioProcessingMode;
         set
         {
             string normalized = IsAppleVoiceProcessingPlatformAvailable &&
@@ -1145,9 +1104,9 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
                 value == AppleVoiceProcessingDisplay
                 ? AppleVoiceProcessingDisplay
                 : DvmConsoleProcessingDisplay;
-            if (selectedAudioProcessingMode == normalized)
+            if (audioSettings.SelectedAudioProcessingMode == normalized)
                 return;
-            SetField(ref selectedAudioProcessingMode, normalized);
+            audioSettings.SelectedAudioProcessingMode = normalized;
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsDvmConsoleProcessingSelected)));
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsAgcTargetEnabled)));
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(AudioProcessingDescription)));
@@ -1167,8 +1126,8 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
 
     public string AudioInputPresetNameText
     {
-        get => audioInputPresetNameText;
-        set => SetField(ref audioInputPresetNameText, value ?? string.Empty);
+        get => audioSettings.AudioInputPresetNameText;
+        set => audioSettings.AudioInputPresetNameText = value;
     }
 
     public bool MuteRxAudioWhileTransmitting
@@ -1535,10 +1494,14 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
     public ReadOnlyObservableCollection<AlertToneViewModel> AlertTones { get; }
     public ReadOnlyObservableCollection<BuiltInAlertToneViewModel> BuiltInAlertTones { get; }
     public ReadOnlyObservableCollection<ToolbarClockViewModel> ToolbarClocks { get; }
-    public ReadOnlyObservableCollection<AudioInputPresetViewModel> AudioInputPresets { get; }
-    public ReadOnlyObservableCollection<RxAudioProcessingModeViewModel> RxAudioProcessingModes { get; }
-    public ReadOnlyObservableCollection<AudioDeviceOptionViewModel> AudioInputDevices { get; }
-    public ReadOnlyObservableCollection<AudioDeviceOptionViewModel> AudioOutputDevices { get; }
+    public ReadOnlyObservableCollection<AudioInputPresetViewModel> AudioInputPresets
+        => audioSettings.AudioInputPresets;
+    public ReadOnlyObservableCollection<RxAudioProcessingModeViewModel> RxAudioProcessingModes
+        => audioSettings.RxAudioProcessingModes;
+    public ReadOnlyObservableCollection<AudioDeviceOptionViewModel> AudioInputDevices
+        => audioSettings.AudioInputDevices;
+    public ReadOnlyObservableCollection<AudioDeviceOptionViewModel> AudioOutputDevices
+        => audioSettings.AudioOutputDevices;
     public ReadOnlyObservableCollection<SubscriberCommandAuditEntry> SubscriberCommandAudit { get; }
     public ReadOnlyObservableCollection<DebugLogEntry> DebugLogEntries { get; }
     public ReadOnlyObservableCollection<WebStreamViewModel> WebStreams { get; }
@@ -2509,6 +2472,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
             pttSession.StateChanged -= HandlePttSourceStateChanged;
             pttSettings.PropertyChanged -= HandlePttSettingsPropertyChanged;
             historyRecording.PropertyChanged -= HandleHistoryRecordingPropertyChanged;
+            audioSettings.PropertyChanged -= HandleAudioSettingsPropertyChanged;
         });
         await cleanup.RunTaskAsync(() => pttSession.DisposeAsync().AsTask()).ConfigureAwait(false);
 
@@ -3620,6 +3584,9 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
         => PropertyChanged?.Invoke(this, args);
 
     private void HandleHistoryRecordingPropertyChanged(object? sender, PropertyChangedEventArgs args)
+        => PropertyChanged?.Invoke(this, args);
+
+    private void HandleAudioSettingsPropertyChanged(object? sender, PropertyChangedEventArgs args)
         => PropertyChanged?.Invoke(this, args);
 
     private void HandlePttSourceStateChanged(object? sender, PttSourceStateChange change)

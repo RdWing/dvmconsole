@@ -168,10 +168,9 @@ public sealed partial class MainWindowViewModel
                 stream.RefreshOutputDeviceSelection();
             foreach (ChannelViewModel channel in Systems.SelectMany(system => system.Channels))
                 channel.RefreshOutputDeviceSelection();
-            selectedAudioInputDevice = ResolveAudioDeviceOption(audioInputDevices, AudioInputDeviceIdText);
-            selectedAudioOutputDevice = ResolveAudioDeviceOption(audioOutputDevices, AudioOutputDeviceIdText);
-            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SelectedAudioInputDevice)));
-            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SelectedAudioOutputDevice)));
+            audioSettings.SetResolvedDevices(
+                ResolveAudioDeviceOption(audioInputDevices, AudioInputDeviceIdText),
+                ResolveAudioDeviceOption(audioOutputDevices, AudioOutputDeviceIdText));
             RefreshAppleVoiceProcessingRouteState();
         }
         catch (Exception exception) when (exception is InvalidOperationException or IOException or DllNotFoundException or PlatformNotSupportedException)
@@ -182,10 +181,7 @@ public sealed partial class MainWindowViewModel
                 stream.RefreshOutputDeviceSelection();
             foreach (ChannelViewModel channel in Systems.SelectMany(system => system.Channels))
                 channel.RefreshOutputDeviceSelection();
-            selectedAudioInputDevice = null;
-            selectedAudioOutputDevice = null;
-            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SelectedAudioInputDevice)));
-            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SelectedAudioOutputDevice)));
+            audioSettings.SetResolvedDevices(input: null, output: null);
             RefreshAppleVoiceProcessingRouteState();
             AudioStatusText = $"Audio device list unavailable: {exception.Message}";
         }
@@ -283,7 +279,7 @@ public sealed partial class MainWindowViewModel
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsAppleVoiceProcessingRouteCompatible)));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(AppleVoiceProcessingRouteDescription)));
         if (!IsAppleVoiceProcessingRouteCompatible &&
-            selectedAudioProcessingMode == AppleVoiceProcessingDisplay)
+            SelectedAudioProcessingMode == AppleVoiceProcessingDisplay)
         {
             SelectedAudioProcessingMode = DvmConsoleProcessingDisplay;
         }
