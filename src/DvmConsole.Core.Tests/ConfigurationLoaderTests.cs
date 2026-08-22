@@ -21,6 +21,7 @@ public sealed class ConfigurationLoaderTests
         Assert.Equal("../keys.example.clear", configuration.KeyFile);
         SystemConfiguration system = Assert.Single(configuration.Systems);
         Assert.Equal("Radio 1", AliasFileLoader.FindAlias(system.RidAlias, 1));
+        Assert.Equal("Radio 1", system.AliasIndex.Find(1));
         GroupConfiguration group = Assert.Single(configuration.Groups);
         Assert.Equal("Legacy Patch", group.Name);
         Assert.Empty(configuration.LegacyPatchGroups);
@@ -32,6 +33,24 @@ public sealed class ConfigurationLoaderTests
         Assert.True(channel.SelectableEncryption);
         Assert.Equal("small", channel.CardSize);
         Assert.Empty(ConfigurationLoader.Validate(configuration));
+    }
+
+    [Fact]
+    public void RadioAliasIndexIsImmutableAndPreservesFirstMatchSemantics()
+    {
+        var aliases = new List<RadioAlias>
+        {
+            new() { Rid = 42, Alias = "First" },
+            new() { Rid = 42, Alias = "Second" }
+        };
+        var index = new RadioAliasIndex(aliases);
+
+        aliases[0].Alias = "Changed";
+        aliases.Add(new RadioAlias { Rid = 43, Alias = "Late" });
+
+        Assert.Equal("First", index.Find(42));
+        Assert.Equal(string.Empty, index.Find(43));
+        Assert.Equal(2, index.Count);
     }
 
     [Fact]

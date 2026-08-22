@@ -58,6 +58,8 @@ public sealed class ConsoleConfiguration
 
 public sealed class SystemConfiguration
 {
+    private List<RadioAlias> ridAlias = [];
+
     public string Name { get; set; } = string.Empty;
     public string Identity { get; set; } = string.Empty;
     public string Address { get; set; } = string.Empty;
@@ -76,7 +78,18 @@ public sealed class SystemConfiguration
     public string AliasPath { get; set; } = "./alias.yml";
 
     [YamlIgnore]
-    public List<RadioAlias> RidAlias { get; set; } = [];
+    public List<RadioAlias> RidAlias
+    {
+        get => ridAlias;
+        set
+        {
+            ridAlias = value ?? [];
+            AliasIndex = new RadioAliasIndex(ridAlias);
+        }
+    }
+
+    [YamlIgnore]
+    public RadioAliasIndex AliasIndex { get; internal set; } = RadioAliasIndex.Empty;
 }
 
 public sealed class ZoneConfiguration

@@ -23,6 +23,8 @@ public static class AliasFileLoader
 
     public static string FindAlias(IEnumerable<RadioAlias>? aliases, uint rid)
     {
-        return aliases?.FirstOrDefault(alias => alias.Rid == rid)?.Alias ?? string.Empty;
+        return aliases is RadioAliasIndex index
+            ? index.Find(rid)
+            : aliases?.FirstOrDefault(alias => alias.Rid == rid)?.Alias ?? string.Empty;
     }
 }

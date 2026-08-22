@@ -2787,7 +2787,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
                     p25KeyRing,
                     configuration.Systems
                         .FirstOrDefault(system => system.Name.Equals(channel.System, StringComparison.OrdinalIgnoreCase))
-                        ?.RidAlias,
+                        ?.AliasIndex,
                     dmrKeyRing,
                     nxdnKeyRing)).ToArray(),
                 zone.WebStreams.Select(stream => new WebStreamViewModel(stream)).ToArray(),

@@ -16,7 +16,7 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
     private readonly IP25KeyResolver? p25KeyResolver;
     private readonly IDmrKeyResolver? dmrKeyResolver;
     private readonly INxdnKeyResolver? nxdnKeyResolver;
-    private readonly IReadOnlyList<RadioAlias> aliases;
+    private readonly RadioAliasIndex aliases;
     private readonly ReceiveStreamLifecycle receiveLifecycle = ReceiveStreamLifecycle.CreateDefault();
     private Func<ChannelViewModel, Task>? startAudio;
     private Func<ChannelViewModel, Task>? stopAudio;
@@ -61,7 +61,7 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
         this.p25KeyResolver = p25KeyResolver;
         this.dmrKeyResolver = dmrKeyResolver;
         this.nxdnKeyResolver = nxdnKeyResolver;
-        this.aliases = aliases?.ToArray() ?? [];
+        this.aliases = aliases as RadioAliasIndex ?? new RadioAliasIndex(aliases);
         runtime = new ChannelRuntime(ChannelRuntimeDefinition.FromConfiguration(configuration));
         transmitEncrypted = runtime.Definition.IsEncrypted;
         runtime.PropertyChanged += HandleRuntimePropertyChanged;
