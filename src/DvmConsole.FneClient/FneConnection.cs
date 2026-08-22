@@ -700,62 +700,19 @@ public sealed class FneConnection : IAsyncDisposable
     {
         Raise(LogReceived, new FneLogEntry(
             options.Name,
-            MapLogSeverity(level),
+            FneLogInterpreter.MapSeverity(level),
             DebugLogRedactor.Redact(message),
             DateTimeOffset.UtcNow));
 
-        if (message.Contains("Sending login request", StringComparison.OrdinalIgnoreCase))
-        {
-            Publish(FneConnectionState.WaitingForLogin, "FNE login request sent");
-            return;
-        }
-
-        if (message.Contains("Network Sent", StringComparison.OrdinalIgnoreCase))
-        {
-            Publish(Status.State, "FNE traffic packet sent");
-            return;
-        }
-
-        if (message.Contains("Network Received", StringComparison.OrdinalIgnoreCase))
-        {
-            Publish(Status.State, "FNE traffic packet received");
-            return;
-        }
-
-        if (message.Contains("login ACK received", StringComparison.OrdinalIgnoreCase))
-        {
-            Publish(FneConnectionState.Authenticating, "FNE login acknowledgement received");
-            return;
-        }
-
-        if (message.Contains("master NAK", StringComparison.OrdinalIgnoreCase))
-        {
-            Publish(FneConnectionState.Faulted, "FNE master rejected the connection");
-            return;
-        }
-
-        if (message.Contains("SOCKET ERROR", StringComparison.OrdinalIgnoreCase) ||
-            message.Contains("Not connected or lost connection", StringComparison.OrdinalIgnoreCase))
-        {
-            Publish(FneConnectionState.Faulted, "FNE socket error or connection loss");
-            return;
-        }
+        FneLogStatusUpdate? statusUpdate = FneLogInterpreter.InterpretStatus(message, Status.State);
+        if (statusUpdate is not null)
+            Publish(statusUpdate.State, statusUpdate.Message);
 
         // Individual malformed packets and unknown opcodes are protocol
         // diagnostics, not proof that the transport disconnected. The peer
         // state monitor remains authoritative unless the log explicitly
         // identifies a connection failure above.
     }
-
-    private static DebugLogSeverity MapLogSeverity(LogLevel level)
-        => level switch
-        {
-            LogLevel.DEBUG => DebugLogSeverity.Debug,
-            LogLevel.WARNING => DebugLogSeverity.Warning,
-            LogLevel.ERROR => DebugLogSeverity.Error,
-            LogLevel.FATAL => DebugLogSeverity.Fatal,
-            _ => DebugLogSeverity.Info
-        };
 
     private void StartStateMonitor(FnePeer current)
     {
