@@ -131,12 +131,11 @@ public sealed class FneConnection : IAsyncDisposable
     private readonly FneConnectionOptions options;
     private readonly IFneEndpointResolver endpointResolver;
     private readonly PendingP25KeyRequestTracker pendingP25KeyRequests;
+    private readonly FnePeerStateMonitor stateMonitor = new();
     private readonly object sync = new();
     private readonly SemaphoreSlim lifecycle = new(1, 1);
     private FnePeer? peer;
     private FneConnectionStatus status;
-    private CancellationTokenSource? stateMonitorCancellation;
-    private Task? stateMonitorTask;
     private long latestTrafficTransportTimestamp;
     private EventHandler<FneTrafficFrame>[] trafficReceivedHandlers = [];
 
@@ -366,7 +365,7 @@ public sealed class FneConnection : IAsyncDisposable
                     peer = null;
             }
 
-            StopStateMonitor();
+            stateMonitor.Cancel();
 
             if (candidate is not null)
             {
@@ -403,17 +402,11 @@ public sealed class FneConnection : IAsyncDisposable
     private async Task StopCoreAsync(CancellationToken cancellationToken)
     {
         FnePeer? current;
-        CancellationTokenSource? monitorCancellation;
-        Task? monitorTask;
         lock (sync)
         {
             current = peer;
             peer = null;
             pendingP25KeyRequests.Clear();
-            monitorCancellation = stateMonitorCancellation;
-            monitorTask = stateMonitorTask;
-            stateMonitorCancellation = null;
-            stateMonitorTask = null;
         }
 
         if (current is null)
@@ -423,19 +416,7 @@ public sealed class FneConnection : IAsyncDisposable
         }
 
         Publish(FneConnectionState.Stopping, "Stopping FNE network services");
-        monitorCancellation?.Cancel();
-        if (monitorTask is not null)
-        {
-            try
-            {
-                await monitorTask.ConfigureAwait(false);
-            }
-            catch (OperationCanceledException)
-            {
-                // Expected during shutdown.
-            }
-        }
-        monitorCancellation?.Dispose();
+        await stateMonitor.StopAsync().ConfigureAwait(false);
         DetachPeerHandlers(current);
 
         try
@@ -715,70 +696,13 @@ public sealed class FneConnection : IAsyncDisposable
     }
 
     private void StartStateMonitor(FnePeer current)
-    {
-        var cancellation = new CancellationTokenSource();
-        lock (sync)
-        {
-            stateMonitorCancellation = cancellation;
-            stateMonitorTask = MonitorPeerStateAsync(current, cancellation.Token);
-        }
-    }
-
-    private void StopStateMonitor()
-    {
-        CancellationTokenSource? cancellation;
-        lock (sync)
-        {
-            cancellation = stateMonitorCancellation;
-            stateMonitorCancellation = null;
-            stateMonitorTask = null;
-        }
-
-        cancellation?.Cancel();
-        cancellation?.Dispose();
-    }
-
-    private async Task MonitorPeerStateAsync(FnePeer current, CancellationToken cancellationToken)
-    {
-        using var timer = new PeriodicTimer(TimeSpan.FromMilliseconds(250));
-        FneConnectionState? lastState = null;
-
-        try
-        {
-            while (await timer.WaitForNextTickAsync(cancellationToken).ConfigureAwait(false))
-            {
-                FneConnectionState nextState = current.Information?.State switch
-                {
-                    ConnectionState.WAITING_AUTHORISATION => FneConnectionState.Authenticating,
-                    ConnectionState.WAITING_CONFIG => FneConnectionState.Configuring,
-                    ConnectionState.RUNNING => FneConnectionState.Connected,
-                    _ => FneConnectionState.WaitingForLogin
-                };
-
-                if (!ShouldPublishMonitoredState(nextState, lastState, Status.State))
-                    continue;
-
-                lastState = nextState;
-                Publish(nextState, nextState switch
-                {
-                    FneConnectionState.Authenticating => "FNE login accepted; waiting for authorization",
-                    FneConnectionState.Configuring => "FNE authorization accepted; sending configuration",
-                    FneConnectionState.Connected => "FNE peer connected",
-                    _ => "Waiting for FNE login acknowledgement"
-                });
-            }
-        }
-        catch (OperationCanceledException)
-        {
-            // Expected during shutdown.
-        }
-    }
+        => stateMonitor.Start(current, () => Status.State, Publish);
 
     internal static bool ShouldPublishMonitoredState(
         FneConnectionState nextState,
         FneConnectionState? lastState,
         FneConnectionState publishedState)
-        => nextState != lastState || nextState != publishedState;
+        => FnePeerStateMonitor.ShouldPublish(nextState, lastState, publishedState);
 
     private void Publish(FneConnectionState state, string message)
     {
