@@ -44,14 +44,14 @@ public sealed class GlobalKeyboardPttSource : IPttSource
         set => stateSource.ToggleMode = value;
     }
 
-    public ValueTask StartAsync(CancellationToken cancellationToken = default)
+    public async ValueTask StartAsync(CancellationToken cancellationToken = default)
     {
         ObjectDisposedException.ThrowIf(disposed, this);
         cancellationToken.ThrowIfCancellationRequested();
         if (started)
-            return ValueTask.CompletedTask;
+            return;
 
-        stateSource.StartAsync(cancellationToken);
+        await stateSource.StartAsync(cancellationToken).ConfigureAwait(false);
         IGlobalKeyboardCapture? nextCapture = null;
         try
         {
@@ -69,18 +69,16 @@ public sealed class GlobalKeyboardPttSource : IPttSource
                 nextCapture.Dispose();
             }
 
-            stateSource.StopAsync(CancellationToken.None);
+            await stateSource.StopAsync(CancellationToken.None).ConfigureAwait(false);
             throw;
         }
-
-        return ValueTask.CompletedTask;
     }
 
-    public ValueTask StopAsync(CancellationToken cancellationToken = default)
+    public async ValueTask StopAsync(CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
         if (!started && capture is null)
-            return ValueTask.CompletedTask;
+            return;
 
         IGlobalKeyboardCapture? currentCapture = capture;
         capture = null;
@@ -103,29 +101,26 @@ public sealed class GlobalKeyboardPttSource : IPttSource
             }
         }
 
-        stateSource.StopAsync(CancellationToken.None);
+        await stateSource.StopAsync(CancellationToken.None).ConfigureAwait(false);
         if (stopException is not null)
             ExceptionDispatchInfo.Capture(stopException).Throw();
-        return ValueTask.CompletedTask;
     }
 
-    public ValueTask DisposeAsync()
+    public async ValueTask DisposeAsync()
     {
         if (!disposed)
         {
             try
             {
-                StopAsync(CancellationToken.None);
+                await StopAsync(CancellationToken.None).ConfigureAwait(false);
             }
             finally
             {
                 stateSource.StateChanged -= HandleStateChanged;
-                stateSource.DisposeAsync();
+                await stateSource.DisposeAsync().ConfigureAwait(false);
                 disposed = true;
             }
         }
-
-        return ValueTask.CompletedTask;
     }
 
     private static IGlobalKeyboardCapture CreateCapture()

@@ -143,7 +143,7 @@ internal sealed class AudioOutputPump : IDisposable
 
                     try
                     {
-                        output.WriteAsync(frame, cancellationToken).GetAwaiter().GetResult();
+                        output.WriteAsync(frame, cancellationToken).AsTask().GetAwaiter().GetResult();
                         markOutputPrimed();
                         NotifyPresentations(notifications, notificationCount, presentationDelay);
                     }

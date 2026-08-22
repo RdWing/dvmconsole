@@ -1,8 +1,8 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <TargetFramework>net10.0</TargetFramework>
     <Nullable>disable</Nullable>
-    <ImplicitUsings>enable</ImplicitUsings>
+    <!-- The pinned upstream sources still use these legacy framework APIs. -->
+    <NoWarn>$(NoWarn);CS0672;SYSLIB0003;SYSLIB0021;SYSLIB0023;SYSLIB0051</NoWarn>
     <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
     <Deterministic>false</Deterministic>
     <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
