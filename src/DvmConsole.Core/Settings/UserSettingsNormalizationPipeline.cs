@@ -7,13 +7,13 @@ internal sealed class UserSettingsNormalizationPipeline
         int storedSchemaVersion = settings.SchemaVersion;
         if (storedSchemaVersion < 2)
             settings.HighQualityBluetoothAudioEnabled = false;
-        UserSettingsStore.NormalizeRxAudioProcessingOptions(settings, storedSchemaVersion < 3);
+        UserSettingsNormalizationRules.NormalizeRxAudioProcessingOptions(settings, storedSchemaVersion < 3);
         settings.RxJitterBuffer = RxJitterBufferSetting.Normalize(settings.RxJitterBuffer);
-        settings.RxJitterBuffersBySystem = UserSettingsStore.NormalizeRxJitterBuffersBySystem(
+        settings.RxJitterBuffersBySystem = UserSettingsNormalizationRules.NormalizeRxJitterBuffersBySystem(
             settings.RxJitterBuffersBySystem);
         settings.SchemaVersion = UserSettings.CurrentSchemaVersion;
         settings.TransmitEncryptionStates ??= new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
-        settings.MainWindowPlacement = UserSettingsStore.NormalizeWindowPlacement(
+        settings.MainWindowPlacement = UserSettingsNormalizationRules.NormalizeWindowPlacement(
             settings.MainWindowPlacement,
             defaultWidth: 1260,
             defaultHeight: 760,
@@ -21,43 +21,43 @@ internal sealed class UserSettingsNormalizationPipeline
             minimumHeight: 560,
             maximumWidth: 3840,
             maximumHeight: 2160);
-        settings.CallHistoryWindowPlacement = UserSettingsStore.NormalizeWindowPlacement(settings.CallHistoryWindowPlacement);
-        settings.GlobalPttKey = UserSettingsStore.NormalizeGlobalPttKey(settings.GlobalPttKey);
-        settings.ActiveSystemPttKey = UserSettingsStore.NormalizeGlobalPttKey(settings.ActiveSystemPttKey);
-        UserSettingsStore.ResolveDuplicateKeyboardPttKeys(settings);
-        UserSettingsStore.NormalizeSerialPttSettings(settings);
+        settings.CallHistoryWindowPlacement = UserSettingsNormalizationRules.NormalizeWindowPlacement(settings.CallHistoryWindowPlacement);
+        settings.GlobalPttKey = UserSettingsNormalizationRules.NormalizeGlobalPttKey(settings.GlobalPttKey);
+        settings.ActiveSystemPttKey = UserSettingsNormalizationRules.NormalizeGlobalPttKey(settings.ActiveSystemPttKey);
+        UserSettingsNormalizationRules.ResolveDuplicateKeyboardPttKeys(settings);
+        UserSettingsNormalizationRules.NormalizeSerialPttSettings(settings);
         settings.UserBackgroundImage = string.IsNullOrWhiteSpace(settings.UserBackgroundImage)
             ? null
             : settings.UserBackgroundImage.Trim();
-        settings.RecentCodeplugPaths = UserSettingsStore.NormalizeRecentCodeplugPaths(settings.RecentCodeplugPaths);
-        settings.ToolbarClocks = UserSettingsStore.NormalizeToolbarClocks(settings.ToolbarClocks);
-        UserSettingsStore.NormalizeUiSettings(settings);
-        settings.ReceiveEnabledChannelKeys = UserSettingsStore.NormalizeNames(settings.ReceiveEnabledChannelKeys);
-        settings.TransmitSelectedChannelKeys = UserSettingsStore.NormalizeNames(settings.TransmitSelectedChannelKeys);
-        settings.ChannelWidgetPositions = UserSettingsStore.NormalizeWidgetPositions(settings.ChannelWidgetPositions);
-        UserSettingsStore.NormalizeAudioInputSettings(settings);
+        settings.RecentCodeplugPaths = UserSettingsNormalizationRules.NormalizeRecentCodeplugPaths(settings.RecentCodeplugPaths);
+        settings.ToolbarClocks = UserSettingsNormalizationRules.NormalizeToolbarClocks(settings.ToolbarClocks);
+        UserSettingsNormalizationRules.NormalizeUiSettings(settings);
+        settings.ReceiveEnabledChannelKeys = UserSettingsNormalizationRules.NormalizeNames(settings.ReceiveEnabledChannelKeys);
+        settings.TransmitSelectedChannelKeys = UserSettingsNormalizationRules.NormalizeNames(settings.TransmitSelectedChannelKeys);
+        settings.ChannelWidgetPositions = UserSettingsNormalizationRules.NormalizeWidgetPositions(settings.ChannelWidgetPositions);
+        UserSettingsNormalizationRules.NormalizeAudioInputSettings(settings);
         settings.AudioInputPresetName = settings.AudioInputPresetName?.Trim() ?? string.Empty;
-        settings.AudioInputPresets = UserSettingsStore.NormalizeAudioInputPresets(settings.AudioInputPresets);
-        settings.LastDtmfDigits = UserSettingsStore.NormalizeDtmfDigits(settings.LastDtmfDigits);
-        settings.ToneFrequencyHz = UserSettingsStore.NormalizeToneFrequency(settings.ToneFrequencyHz);
-        settings.ToneDurationSeconds = UserSettingsStore.NormalizeToneDuration(settings.ToneDurationSeconds);
-        settings.QuickCallToneAFrequencyHz = UserSettingsStore.NormalizeToneFrequency(settings.QuickCallToneAFrequencyHz, 600);
-        settings.QuickCallToneBFrequencyHz = UserSettingsStore.NormalizeToneFrequency(settings.QuickCallToneBFrequencyHz, 1200);
-        settings.DtmfPresets = UserSettingsStore.NormalizeDtmfPresets(settings.DtmfPresets);
-        settings.TonePresets = UserSettingsStore.NormalizeTonePresets(settings.TonePresets);
-        settings.AlertTones = UserSettingsStore.NormalizeAlertTones(settings.AlertTones);
+        settings.AudioInputPresets = UserSettingsNormalizationRules.NormalizeAudioInputPresets(settings.AudioInputPresets);
+        settings.LastDtmfDigits = UserSettingsNormalizationRules.NormalizeDtmfDigits(settings.LastDtmfDigits);
+        settings.ToneFrequencyHz = UserSettingsNormalizationRules.NormalizeToneFrequency(settings.ToneFrequencyHz);
+        settings.ToneDurationSeconds = UserSettingsNormalizationRules.NormalizeToneDuration(settings.ToneDurationSeconds);
+        settings.QuickCallToneAFrequencyHz = UserSettingsNormalizationRules.NormalizeToneFrequency(settings.QuickCallToneAFrequencyHz, 600);
+        settings.QuickCallToneBFrequencyHz = UserSettingsNormalizationRules.NormalizeToneFrequency(settings.QuickCallToneBFrequencyHz, 1200);
+        settings.DtmfPresets = UserSettingsNormalizationRules.NormalizeDtmfPresets(settings.DtmfPresets);
+        settings.TonePresets = UserSettingsNormalizationRules.NormalizeTonePresets(settings.TonePresets);
+        settings.AlertTones = UserSettingsNormalizationRules.NormalizeAlertTones(settings.AlertTones);
         settings.RecordingRetentionDays = Math.Max(0, settings.RecordingRetentionDays);
-        settings.RecordingRootPath = UserSettingsStore.NormalizeRecordingRootPath(settings.RecordingRootPath);
+        settings.RecordingRootPath = UserSettingsNormalizationRules.NormalizeRecordingRootPath(settings.RecordingRootPath);
 
         var channelVolumes = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
         foreach (KeyValuePair<string, double> entry in settings.ChannelVolumes ?? [])
         {
             string channelKey = entry.Key?.Trim() ?? string.Empty;
             if (channelKey.Length > 0)
-                channelVolumes[channelKey] = UserSettingsStore.NormalizeChannelVolume(entry.Value);
+                channelVolumes[channelKey] = UserSettingsNormalizationRules.NormalizeChannelVolume(entry.Value);
         }
         settings.ChannelVolumes = channelVolumes;
-        settings.ChannelStereoBalances = UserSettingsStore.NormalizeChannelStereoBalances(settings.ChannelStereoBalances);
+        settings.ChannelStereoBalances = UserSettingsNormalizationRules.NormalizeChannelStereoBalances(settings.ChannelStereoBalances);
 
         var channelOutputDevices = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         foreach (KeyValuePair<string, string> entry in settings.ChannelOutputDeviceIds ?? [])
@@ -68,17 +68,17 @@ internal sealed class UserSettingsNormalizationPipeline
                 channelOutputDevices[channelKey] = deviceId;
         }
         settings.ChannelOutputDeviceIds = channelOutputDevices;
-        settings.WebStreamOutputDeviceIds = UserSettingsStore.NormalizeChannelOutputDevices(settings.WebStreamOutputDeviceIds);
+        settings.WebStreamOutputDeviceIds = UserSettingsNormalizationRules.NormalizeChannelOutputDevices(settings.WebStreamOutputDeviceIds);
 
         var webStreamVolumes = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
         foreach (KeyValuePair<string, double> entry in settings.WebStreamVolumes ?? [])
         {
             string streamName = entry.Key?.Trim() ?? string.Empty;
             if (streamName.Length > 0)
-                webStreamVolumes[streamName] = UserSettingsStore.NormalizeChannelVolume(entry.Value);
+                webStreamVolumes[streamName] = UserSettingsNormalizationRules.NormalizeChannelVolume(entry.Value);
         }
         settings.WebStreamVolumes = webStreamVolumes;
-        settings.RecordingEnabledChannelKeys = UserSettingsStore.NormalizeNames(settings.RecordingEnabledChannelKeys);
+        settings.RecordingEnabledChannelKeys = UserSettingsNormalizationRules.NormalizeNames(settings.RecordingEnabledChannelKeys);
 
         var ignoredSubscribers = new Dictionary<string, List<uint>>(StringComparer.OrdinalIgnoreCase);
         foreach (KeyValuePair<string, List<uint>> entry in settings.RecordingIgnoredSubscriberIds ?? [])
@@ -115,9 +115,9 @@ internal sealed class UserSettingsNormalizationPipeline
                 .ToList();
         }
         settings.PatchGroupMemberships = memberships;
-        settings.PatchGroupModes = UserSettingsStore.NormalizeGroupStates(settings.PatchGroupModes);
-        settings.PatchGroupEnabledStates = UserSettingsStore.NormalizeGroupStates(settings.PatchGroupEnabledStates);
-        settings.SelectedWebStreams = UserSettingsStore.NormalizeNames(settings.SelectedWebStreams);
+        settings.PatchGroupModes = UserSettingsNormalizationRules.NormalizeGroupStates(settings.PatchGroupModes);
+        settings.PatchGroupEnabledStates = UserSettingsNormalizationRules.NormalizeGroupStates(settings.PatchGroupEnabledStates);
+        settings.SelectedWebStreams = UserSettingsNormalizationRules.NormalizeNames(settings.SelectedWebStreams);
         return settings;
     }
 
@@ -128,14 +128,14 @@ internal sealed class UserSettingsNormalizationPipeline
         // migration; schema 2 true values are always an explicit selection.
         if (settings.SchemaVersion < 2)
             settings.HighQualityBluetoothAudioEnabled = false;
-        UserSettingsStore.NormalizeRxAudioProcessingOptions(settings, settings.SchemaVersion < 3);
+        UserSettingsNormalizationRules.NormalizeRxAudioProcessingOptions(settings, settings.SchemaVersion < 3);
         settings.RxJitterBuffer = RxJitterBufferSetting.Normalize(settings.RxJitterBuffer);
-        settings.RxJitterBuffersBySystem = UserSettingsStore.NormalizeRxJitterBuffersBySystem(
+        settings.RxJitterBuffersBySystem = UserSettingsNormalizationRules.NormalizeRxJitterBuffersBySystem(
             settings.RxJitterBuffersBySystem);
         settings.SchemaVersion = UserSettings.CurrentSchemaVersion;
-        settings.DtmfPresets = UserSettingsStore.NormalizeDtmfPresets(settings.DtmfPresets);
-        settings.TonePresets = UserSettingsStore.NormalizeTonePresets(settings.TonePresets);
-        settings.MainWindowPlacement = UserSettingsStore.NormalizeWindowPlacement(
+        settings.DtmfPresets = UserSettingsNormalizationRules.NormalizeDtmfPresets(settings.DtmfPresets);
+        settings.TonePresets = UserSettingsNormalizationRules.NormalizeTonePresets(settings.TonePresets);
+        settings.MainWindowPlacement = UserSettingsNormalizationRules.NormalizeWindowPlacement(
             settings.MainWindowPlacement,
             defaultWidth: 1260,
             defaultHeight: 760,
@@ -143,26 +143,26 @@ internal sealed class UserSettingsNormalizationPipeline
             minimumHeight: 560,
             maximumWidth: 3840,
             maximumHeight: 2160);
-        settings.CallHistoryWindowPlacement = UserSettingsStore.NormalizeWindowPlacement(settings.CallHistoryWindowPlacement);
-        settings.ToolbarClocks = UserSettingsStore.NormalizeToolbarClocks(settings.ToolbarClocks);
-        UserSettingsStore.NormalizeUiSettings(settings);
-        UserSettingsStore.NormalizeAudioInputSettings(settings);
-        settings.RecentCodeplugPaths = UserSettingsStore.NormalizeRecentCodeplugPaths(settings.RecentCodeplugPaths);
+        settings.CallHistoryWindowPlacement = UserSettingsNormalizationRules.NormalizeWindowPlacement(settings.CallHistoryWindowPlacement);
+        settings.ToolbarClocks = UserSettingsNormalizationRules.NormalizeToolbarClocks(settings.ToolbarClocks);
+        UserSettingsNormalizationRules.NormalizeUiSettings(settings);
+        UserSettingsNormalizationRules.NormalizeAudioInputSettings(settings);
+        settings.RecentCodeplugPaths = UserSettingsNormalizationRules.NormalizeRecentCodeplugPaths(settings.RecentCodeplugPaths);
         settings.AudioInputPresetName = settings.AudioInputPresetName?.Trim() ?? string.Empty;
-        settings.AudioInputPresets = UserSettingsStore.NormalizeAudioInputPresets(settings.AudioInputPresets);
-        settings.ChannelOutputDeviceIds = UserSettingsStore.NormalizeChannelOutputDevices(settings.ChannelOutputDeviceIds);
-        settings.ChannelStereoBalances = UserSettingsStore.NormalizeChannelStereoBalances(settings.ChannelStereoBalances);
-        settings.WebStreamOutputDeviceIds = UserSettingsStore.NormalizeChannelOutputDevices(settings.WebStreamOutputDeviceIds);
-        settings.WebStreamVolumes = UserSettingsStore.NormalizeWebStreamVolumes(settings.WebStreamVolumes);
-        settings.RecordingRootPath = UserSettingsStore.NormalizeRecordingRootPath(settings.RecordingRootPath);
-        settings.RecordingEnabledChannelKeys = UserSettingsStore.NormalizeNames(settings.RecordingEnabledChannelKeys);
-        settings.SelectedWebStreams = UserSettingsStore.NormalizeNames(settings.SelectedWebStreams);
-        settings.GlobalPttKey = UserSettingsStore.NormalizeGlobalPttKey(settings.GlobalPttKey);
-        settings.ActiveSystemPttKey = UserSettingsStore.NormalizeGlobalPttKey(settings.ActiveSystemPttKey);
-        UserSettingsStore.ResolveDuplicateKeyboardPttKeys(settings);
-        UserSettingsStore.NormalizeSerialPttSettings(settings);
-        settings.ReceiveEnabledChannelKeys = UserSettingsStore.NormalizeNames(settings.ReceiveEnabledChannelKeys);
-        settings.TransmitSelectedChannelKeys = UserSettingsStore.NormalizeNames(settings.TransmitSelectedChannelKeys);
-        settings.ChannelWidgetPositions = UserSettingsStore.NormalizeWidgetPositions(settings.ChannelWidgetPositions);
+        settings.AudioInputPresets = UserSettingsNormalizationRules.NormalizeAudioInputPresets(settings.AudioInputPresets);
+        settings.ChannelOutputDeviceIds = UserSettingsNormalizationRules.NormalizeChannelOutputDevices(settings.ChannelOutputDeviceIds);
+        settings.ChannelStereoBalances = UserSettingsNormalizationRules.NormalizeChannelStereoBalances(settings.ChannelStereoBalances);
+        settings.WebStreamOutputDeviceIds = UserSettingsNormalizationRules.NormalizeChannelOutputDevices(settings.WebStreamOutputDeviceIds);
+        settings.WebStreamVolumes = UserSettingsNormalizationRules.NormalizeWebStreamVolumes(settings.WebStreamVolumes);
+        settings.RecordingRootPath = UserSettingsNormalizationRules.NormalizeRecordingRootPath(settings.RecordingRootPath);
+        settings.RecordingEnabledChannelKeys = UserSettingsNormalizationRules.NormalizeNames(settings.RecordingEnabledChannelKeys);
+        settings.SelectedWebStreams = UserSettingsNormalizationRules.NormalizeNames(settings.SelectedWebStreams);
+        settings.GlobalPttKey = UserSettingsNormalizationRules.NormalizeGlobalPttKey(settings.GlobalPttKey);
+        settings.ActiveSystemPttKey = UserSettingsNormalizationRules.NormalizeGlobalPttKey(settings.ActiveSystemPttKey);
+        UserSettingsNormalizationRules.ResolveDuplicateKeyboardPttKeys(settings);
+        UserSettingsNormalizationRules.NormalizeSerialPttSettings(settings);
+        settings.ReceiveEnabledChannelKeys = UserSettingsNormalizationRules.NormalizeNames(settings.ReceiveEnabledChannelKeys);
+        settings.TransmitSelectedChannelKeys = UserSettingsNormalizationRules.NormalizeNames(settings.TransmitSelectedChannelKeys);
+        settings.ChannelWidgetPositions = UserSettingsNormalizationRules.NormalizeWidgetPositions(settings.ChannelWidgetPositions);
     }
 }

@@ -15,12 +15,12 @@ internal static class SettingsImportPolicy
             !settings.ShowSystemStatus || !settings.ShowChannels || !settings.ShowAlertTones ||
             !settings.LockWidgets || settings.ChannelWidgetPositions.Count > 0 ||
             !settings.ShowCallHistoryPane || settings.SnapCallHistoryToWindow ||
-            !UserSettingsStore.WindowPlacementsEqual(settings.MainWindowPlacement, new WindowPlacementSetting
+            !UserSettingsNormalizationRules.WindowPlacementsEqual(settings.MainWindowPlacement, new WindowPlacementSetting
             {
                 Width = 1260,
                 Height = 760
             }) ||
-            !UserSettingsStore.WindowPlacementsEqual(settings.CallHistoryWindowPlacement, new WindowPlacementSetting()) ||
+            !UserSettingsNormalizationRules.WindowPlacementsEqual(settings.CallHistoryWindowPlacement, new WindowPlacementSetting()) ||
             settings.UserBackgroundImage is not null)
         {
             sections.Add("General");
@@ -28,7 +28,7 @@ internal static class SettingsImportPolicy
 
         if (!string.Equals(settings.AudioInputDeviceId, "default", StringComparison.OrdinalIgnoreCase) ||
             !string.Equals(settings.AudioOutputDeviceId, "default", StringComparison.OrdinalIgnoreCase) ||
-            UserSettingsStore.HasCustomRxAudioProcessingOptions(settings.RxAudioProcessingOptions) ||
+            UserSettingsNormalizationRules.HasCustomRxAudioProcessingOptions(settings.RxAudioProcessingOptions) ||
             !string.Equals(settings.AudioProcessingMode, UserSettings.DvmConsoleAudioProcessingMode, StringComparison.Ordinal) ||
             settings.HighQualityBluetoothAudioEnabled ||
             settings.AudioInputAgcEnabled || settings.AudioInputAgcTargetDbfs != -25.0 ||
@@ -40,7 +40,7 @@ internal static class SettingsImportPolicy
             sections.Add("Audio");
         }
 
-        if (!UserSettingsStore.RxJitterBufferSettingsEqual(settings.RxJitterBuffer, new RxJitterBufferSetting()) ||
+        if (!UserSettingsNormalizationRules.RxJitterBufferSettingsEqual(settings.RxJitterBuffer, new RxJitterBufferSetting()) ||
             settings.RxJitterBuffersBySystem.Count > 0)
         {
             sections.Add("Connections");
@@ -107,7 +107,7 @@ internal static class SettingsImportPolicy
             target.UserBackgroundImage = source.UserBackgroundImage;
             target.ShowCallHistoryPane = source.ShowCallHistoryPane;
             target.SnapCallHistoryToWindow = source.SnapCallHistoryToWindow;
-            target.MainWindowPlacement = UserSettingsStore.CopyWindowPlacement(source.MainWindowPlacement);
+            target.MainWindowPlacement = UserSettingsNormalizationRules.CopyWindowPlacement(source.MainWindowPlacement);
             target.CallHistoryWindowPlacement = new WindowPlacementSetting
             {
                 Left = source.CallHistoryWindowPlacement.Left,
@@ -123,7 +123,7 @@ internal static class SettingsImportPolicy
             target.AudioOutputDeviceId = source.AudioOutputDeviceId;
             target.RxAudioProcessingOptions = source.RxAudioProcessingOptions.ToDictionary(
                 entry => entry.Key,
-                entry => UserSettingsStore.NormalizeRxAudioProcessingMode(entry.Value),
+                entry => UserSettingsNormalizationRules.NormalizeRxAudioProcessingMode(entry.Value),
                 StringComparer.OrdinalIgnoreCase);
             target.AudioProcessingMode = source.AudioProcessingMode;
             target.HighQualityBluetoothAudioEnabled = source.HighQualityBluetoothAudioEnabled;
@@ -147,7 +147,7 @@ internal static class SettingsImportPolicy
         if ((scope & SettingsImportScope.Connections) != 0)
         {
             target.RxJitterBuffer = RxJitterBufferSetting.Normalize(source.RxJitterBuffer);
-            target.RxJitterBuffersBySystem = UserSettingsStore.NormalizeRxJitterBuffersBySystem(
+            target.RxJitterBuffersBySystem = UserSettingsNormalizationRules.NormalizeRxJitterBuffersBySystem(
                 source.RxJitterBuffersBySystem);
         }
 
