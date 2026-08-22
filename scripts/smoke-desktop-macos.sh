@@ -25,7 +25,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-open -W "$APP_PATH" --args --smoke-windows "--smoke-result=$RESULT_PATH" "$CODEPLUG_PATH"
+open -n -W "$APP_PATH" --args --smoke-windows "--smoke-result=$RESULT_PATH" "$CODEPLUG_PATH"
 
 if [[ ! -f "$RESULT_PATH" ]] || [[ "$(head -n 1 "$RESULT_PATH")" != "PASS" ]]; then
     printf 'Desktop window smoke did not report PASS.\n' >&2

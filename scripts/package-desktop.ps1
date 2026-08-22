@@ -12,30 +12,6 @@ param(
 $ErrorActionPreference = "Stop"
 $RootDirectory = Split-Path -Parent $PSScriptRoot
 
-function Assert-X64PeFile([string] $Path) {
-    $Stream = [IO.File]::OpenRead($Path)
-    try {
-        $Reader = [IO.BinaryReader]::new($Stream)
-        if ($Stream.Length -lt 64 -or $Reader.ReadUInt16() -ne 0x5A4D) {
-            throw "File is not a Windows PE executable: $Path"
-        }
-
-        $Stream.Position = 0x3C
-        $PeOffset = $Reader.ReadInt32()
-        if ($PeOffset -lt 0 -or $PeOffset + 6 -gt $Stream.Length) {
-            throw "File has an invalid Windows PE header: $Path"
-        }
-
-        $Stream.Position = $PeOffset
-        if ($Reader.ReadUInt32() -ne 0x00004550 -or $Reader.ReadUInt16() -ne 0x8664) {
-            throw "File is not a Windows x64 PE executable: $Path"
-        }
-    }
-    finally {
-        $Stream.Dispose()
-    }
-}
-
 if ([string]::IsNullOrWhiteSpace($OutputArchive)) {
     $OutputArchive = Join-Path $RootDirectory "artifacts/dvmconsole-$Runtime.zip"
 }
@@ -46,41 +22,9 @@ if (-not (Test-Path -LiteralPath $PublishDirectory -PathType Container)) {
     throw "Publish directory does not exist: $PublishDirectory"
 }
 
-foreach ($FileName in @(
-    "DvmConsole.exe",
-    "LICENSE",
-    "NOTICES.md"
-)) {
-    if (-not (Test-Path -LiteralPath (Join-Path $PublishDirectory $FileName) -PathType Leaf)) {
-        throw "Published output is missing required file: $FileName"
-    }
-}
-
-if (Test-Path -LiteralPath (Join-Path $PublishDirectory "Docs")) {
-    throw "Publish contains documentation that must be read live from GitHub."
-}
-
-foreach ($LegacyAlert in @("alert1.wav", "alert2.wav", "alert3.wav")) {
-    $LegacyAlertPath = Join-Path $PublishDirectory "Audio/$LegacyAlert"
-    if (Test-Path -LiteralPath $LegacyAlertPath) {
-        throw "Published output contains obsolete generated-alert asset: $LegacyAlertPath"
-    }
-}
-
-Assert-X64PeFile (Join-Path $PublishDirectory "DvmConsole.exe")
-
-foreach ($SidecarName in @("libvocoder.dll", "dvmconsole_vocoder.dll")) {
-    if (Test-Path -LiteralPath (Join-Path $PublishDirectory $SidecarName) -PathType Leaf) {
-        throw "The vocoder must be embedded in DvmConsole.exe, not shipped as $SidecarName."
-    }
-}
-
-$PrivateCodeplug = Get-ChildItem -LiteralPath $PublishDirectory -Recurse -File -ErrorAction SilentlyContinue |
-    Where-Object { $_.Name -in @("codeplug_testing.yml", "codeplug_testing.yaml") } |
-    Select-Object -First 1
-if ($null -ne $PrivateCodeplug) {
-    throw "Publish contains the testing codeplug: $($PrivateCodeplug.FullName)"
-}
+& (Join-Path $PSScriptRoot "verify-publish.ps1") `
+    -Runtime $Runtime `
+    -PublishDirectory $PublishDirectory
 
 $StagingDirectory = Join-Path ([IO.Path]::GetTempPath()) ("dvmconsole-package-" + [Guid]::NewGuid().ToString("N"))
 $PackageDirectory = Join-Path $StagingDirectory "DVMConsole-$Runtime"

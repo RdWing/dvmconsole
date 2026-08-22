@@ -126,6 +126,11 @@ jobs:
         shell: bash
         run: scripts/package-desktop.sh "${{ matrix.rid }}" "$RUNNER_TEMP/dvmconsole-publish/${{ matrix.rid }}" "$RUNNER_TEMP/dvmconsole-publish/dvmconsole-${DVM_PACKAGE_VERSION}-${{ matrix.rid }}.zip"
 
+      - name: Smoke packaged macOS app
+        if: startsWith(matrix.rid, 'osx-')
+        shell: bash
+        run: scripts/smoke-desktop-macos.sh "$RUNNER_TEMP/dvmconsole-publish/DVMConsole.app" configs/codeplug.example.yml
+
       - name: Package unsigned Windows handoff
         if: matrix.rid == 'win-x64'
         shell: pwsh
