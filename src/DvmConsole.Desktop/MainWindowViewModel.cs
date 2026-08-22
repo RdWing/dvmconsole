@@ -115,11 +115,8 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
     private PatchGroupEditorViewModel? activeMultiSelectGroup;
     private readonly CallRecordingManager callRecordings;
     private readonly RecordingPlaybackCoordinator recordingPlayback;
-    private readonly DispatcherTimer clockTimer;
-    private readonly DispatcherTimer audioMeterTimer;
-    private readonly DispatcherTimer connectionDiagnosticsTimer;
+    private readonly ConsoleSessionRuntime sessionRuntime;
     private Bitmap? userBackgroundBitmap;
-    private readonly AsyncDisposal disposal = new();
     private int disposeStarted;
     private IBrush mainBackgroundBrush = new SolidColorBrush(Color.Parse("#0D1116"));
     private string statusText;
@@ -205,6 +202,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
         string? codeplugPath = null,
         IUiDispatcher? uiDispatcher = null)
     {
+        sessionRuntime = new ConsoleSessionRuntime(DisposeCoreAsync);
         this.statusText = statusText;
         codeplugDiagnosticsText = statusText;
         this.userSettingsStore = userSettingsStore ?? new UserSettingsStore(UserSettingsStore.DefaultPath);
@@ -253,24 +251,11 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
             serialPttStatusText = $"Configured for {serialPttPortName} at {serialPttBaudRate:N0} baud.";
         }
         clockText = FormatClock(DateTime.Now, userSettings.ClockUse24HourTime, userSettings.ClockShowSeconds);
-        clockTimer = new DispatcherTimer
-        {
-            Interval = TimeSpan.FromSeconds(1)
-        };
-        clockTimer.Tick += HandleClockTick;
-        clockTimer.Start();
-        audioMeterTimer = new DispatcherTimer
-        {
-            Interval = TimeSpan.FromMilliseconds(ChannelAudioMeterPipeline.RefreshIntervalMilliseconds)
-        };
-        audioMeterTimer.Tick += HandleAudioMeterTick;
-        audioMeterTimer.Start();
-        connectionDiagnosticsTimer = new DispatcherTimer
-        {
-            Interval = TimeSpan.FromSeconds(1)
-        };
-        connectionDiagnosticsTimer.Tick += HandleConnectionDiagnosticsTick;
-        connectionDiagnosticsTimer.Start();
+        sessionRuntime.StartTimer(TimeSpan.FromSeconds(1), HandleClockTick);
+        sessionRuntime.StartTimer(
+            TimeSpan.FromMilliseconds(ChannelAudioMeterPipeline.RefreshIntervalMilliseconds),
+            HandleAudioMeterTick);
+        sessionRuntime.StartTimer(TimeSpan.FromSeconds(1), HandleConnectionDiagnosticsTick);
         dtmfDigits = userSettings.LastDtmfDigits;
         toneFrequencyText = userSettings.ToneFrequencyHz.ToString("0.###", CultureInfo.InvariantCulture);
         toneDurationText = userSettings.ToneDurationSeconds.ToString("0.###", CultureInfo.InvariantCulture);
@@ -2772,27 +2757,12 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
     public ValueTask DisposeAsync()
     {
         Interlocked.Exchange(ref disposeStarted, 1);
-        return disposal.RunAsync(DisposeCoreAsync);
+        return sessionRuntime.DisposeAsync();
     }
 
     private async Task DisposeCoreAsync()
     {
         var cleanup = new AsyncCleanup();
-        cleanup.Run(() =>
-        {
-            clockTimer.Stop();
-            clockTimer.Tick -= HandleClockTick;
-        });
-        cleanup.Run(() =>
-        {
-            audioMeterTimer.Stop();
-            audioMeterTimer.Tick -= HandleAudioMeterTick;
-        });
-        cleanup.Run(() =>
-        {
-            connectionDiagnosticsTimer.Stop();
-            connectionDiagnosticsTimer.Tick -= HandleConnectionDiagnosticsTick;
-        });
         cleanup.Run(filteredDebugLogs.Dispose);
         await cleanup.RunTaskAsync(
             () => defaultAudioDeviceMonitor.DisposeAsync().AsTask()).ConfigureAwait(false);
