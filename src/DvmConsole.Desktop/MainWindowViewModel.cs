@@ -190,7 +190,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
     private AudioDeviceOptionViewModel? selectedAudioOutputDevice;
     private readonly ScaleTransform uiScaleTransform;
 
-    private MainWindowViewModel(
+    internal MainWindowViewModel(
         string statusText,
         IEnumerable<SystemViewModel> systems,
         IEnumerable<ZoneViewModel> zones,
@@ -2746,7 +2746,11 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
         => GetSelectedTransmitTargets(GetSerialPttTargetScope());
 
     public static MainWindowViewModel Load(string? configurationPath)
-        => Load(configurationPath, new UserSettingsStore(UserSettingsStore.DefaultPath));
+    {
+        DesktopRuntimeDependencies dependencies = DesktopRuntimeDependencies.CreateDefault();
+        return new ConsoleSessionFactory(dependencies).Create(
+            new ConsoleSessionLoader(dependencies.UserSettingsStore).Load(configurationPath));
+    }
 
     internal static MainWindowViewModel Load(
         string? configurationPath,
@@ -2756,158 +2760,13 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
         IUiDispatcher? uiDispatcher = null)
     {
         ArgumentNullException.ThrowIfNull(userSettingsStore);
-        if (string.IsNullOrWhiteSpace(configurationPath))
-            configurationPath = userSettingsStore.Load().LastCodeplugPath;
-
-        if (string.IsNullOrWhiteSpace(configurationPath))
-        {
-            return new MainWindowViewModel(
-                "No codeplug selected. Launch with a path to a codeplug YAML file.",
-                [],
-                [],
-                userSettingsStore: userSettingsStore,
-                groupDefinitions: [],
-                serialPortProvider: serialPortProvider,
-                serialPttFactory: serialPttFactory,
-                uiDispatcher: uiDispatcher);
-        }
-
-        try
-        {
-            ConsoleConfiguration configuration = ConfigurationLoader.Load(configurationPath);
-            IReadOnlyList<string> errors = ConfigurationLoader.Validate(configuration);
-            (P25KeyRing p25KeyRing, DmrKeyRing dmrKeyRing, NxdnKeyRing nxdnKeyRing) = LoadKeyRings(
-                configuration,
-                out string? keyWarning);
-            IReadOnlyList<ZoneViewModel> zones = configuration.Zones.Select(zone => new ZoneViewModel(
-                zone.Name,
-                zone.Channels.Select(channel => new ChannelViewModel(
-                    channel,
-                    p25KeyRing,
-                    configuration.Systems
-                        .FirstOrDefault(system => system.Name.Equals(channel.System, StringComparison.OrdinalIgnoreCase))
-                        ?.AliasIndex,
-                    dmrKeyRing,
-                    nxdnKeyRing)).ToArray(),
-                zone.WebStreams.Select(stream => new WebStreamViewModel(stream)).ToArray(),
-                zone.TabColor,
-                zone.TabTextColor)).ToArray();
-            string status = errors.Count == 0
-                ? $"Loaded {configuration.Systems.Count} system(s) and {configuration.Zones.Count} zone(s). Connections are idle until Connect is pressed."
-                : $"Configuration has {errors.Count} validation error(s):\n• {string.Join("\n• ", errors)}";
-            if (!string.IsNullOrWhiteSpace(keyWarning))
-                status = $"{status}\n{keyWarning}";
-
-            string loadedCodeplugPath = configuration.SourcePath ?? Path.GetFullPath(configurationPath);
-            var viewModel = new MainWindowViewModel(
-                status,
-                errors.Count == 0
-                    ? CreateSystemViewModels(configuration, zones)
-                    : [],
-                zones,
-                p25KeyRing,
-                userSettingsStore,
-                configuration.EffectiveGroups(),
-                configuration.PatchSourceIdPassthrough,
-                serialPortProvider,
-                serialPttFactory,
-                dmrKeyRing,
-                nxdnKeyRing,
-                loadedCodeplugPath,
-                uiDispatcher);
-            if (errors.Count == 0)
-                viewModel.RecordLoadedCodeplug(loadedCodeplugPath);
-            return viewModel;
-        }
-        catch (Exception exception) when (exception is IOException or InvalidDataException or FormatException or YamlDotNet.Core.YamlException)
-        {
-            return new MainWindowViewModel(
-                $"Unable to load codeplug: {exception.Message}",
-                [],
-                [],
-                userSettingsStore: userSettingsStore,
-                groupDefinitions: [],
-                serialPortProvider: serialPortProvider,
-                serialPttFactory: serialPttFactory,
-                uiDispatcher: uiDispatcher);
-        }
-    }
-
-    private static (P25KeyRing P25, DmrKeyRing Dmr, NxdnKeyRing Nxdn) LoadKeyRings(
-        ConsoleConfiguration configuration,
-        out string? warning)
-    {
-        var p25Ring = new P25KeyRing();
-        var dmrRing = new DmrKeyRing();
-        var nxdnRing = new NxdnKeyRing();
-        warning = null;
-        if (string.IsNullOrWhiteSpace(configuration.KeyFile))
-            return (p25Ring, dmrRing, nxdnRing);
-
-        try
-        {
-            KeyContainer localKeys = KeyFileLoader.Load(
-                ConfigurationLoader.ResolvePath(configuration, configuration.KeyFile));
-            foreach (SystemConfiguration system in configuration.Systems)
-            {
-                p25Ring.AddLocalKeys(system.Name, localKeys);
-                dmrRing.AddLocalKeys(system.Name, localKeys);
-                nxdnRing.AddLocalKeys(system.Name, localKeys);
-            }
-        }
-        catch (Exception exception) when (exception is IOException or InvalidDataException or FormatException or YamlDotNet.Core.YamlException)
-        {
-            warning = $"Encryption keys unavailable: {exception.Message} Encrypted P25 channels are disabled until FNE/KMM supplies their keys. Encrypted DMR and NXDN channels require local keys.";
-            p25Ring.Dispose();
-            dmrRing.Dispose();
-            nxdnRing.Dispose();
-            return (new P25KeyRing(), new DmrKeyRing(), new NxdnKeyRing());
-        }
-        return (p25Ring, dmrRing, nxdnRing);
-    }
-
-    private static IReadOnlyList<SystemViewModel> CreateSystemViewModels(
-        ConsoleConfiguration configuration,
-        IReadOnlyList<ZoneViewModel> zones)
-    {
-        var channelsBySystem = new Dictionary<string, List<ChannelViewModel>>(StringComparer.OrdinalIgnoreCase);
-        foreach (ChannelViewModel channel in zones.SelectMany(zone => zone.Channels))
-        {
-            if (!channelsBySystem.TryGetValue(channel.Definition.SystemName, out List<ChannelViewModel>? channels))
-            {
-                channels = [];
-                channelsBySystem.Add(channel.Definition.SystemName, channels);
-            }
-
-            channels.Add(channel);
-        }
-
-        return configuration.Systems.Select((system, systemIndex) =>
-        {
-            IBrush systemAccent = SystemAccentPalette.GetBrush(systemIndex);
-            IReadOnlyList<ZoneViewModel> systemZones = zones
-                .Select(zone => new ZoneViewModel(
-                    zone.Name,
-                    zone.Channels.Where(channel => channel.Definition.SystemName.Equals(
-                        system.Name,
-                        StringComparison.OrdinalIgnoreCase)).ToArray(),
-                    zone.WebStreams,
-                    zone.TabColor,
-                    zone.TabTextColor,
-                    systemAccent))
-                .Where(zone => zone.Channels.Count > 0)
-                .ToArray();
-
-            return new SystemViewModel(
-                FneConnectionOptions.FromConfiguration(system),
-                system.Name,
-                $"{system.Address}:{system.Port}",
-                channelsBySystem.TryGetValue(system.Name, out List<ChannelViewModel>? channels)
-                    ? channels
-                    : [],
-                systemZones,
-                systemIndex);
-        }).ToArray();
+        var dependencies = new DesktopRuntimeDependencies(
+            userSettingsStore,
+            serialPortProvider ?? SerialPttSource.GetAvailablePortNames,
+            serialPttFactory ?? ((portName, baudRate) => new SerialPttSource(portName, baudRate)),
+            uiDispatcher ?? AvaloniaUiDispatcher.Instance);
+        return new ConsoleSessionFactory(dependencies).Create(
+            new ConsoleSessionLoader(userSettingsStore).Load(configurationPath));
     }
 
     public ValueTask DisposeAsync()
@@ -4856,7 +4715,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
         patchForwarding.ApplyMemberships(memberships, userSettings.PatchGroupModes);
     }
 
-    private void RecordLoadedCodeplug(string path)
+    internal void RecordLoadedCodeplug(string path)
     {
         string normalizedPath = Path.GetFullPath(path);
         userSettings.LastCodeplugPath = normalizedPath;
