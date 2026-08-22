@@ -104,6 +104,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
     private readonly Dictionary<string, FneConnectionState> lastConnectionStates = new(StringComparer.OrdinalIgnoreCase);
     private readonly IReadOnlyDictionary<SystemViewModel, IReadOnlyDictionary<(FneTrafficProtocol Protocol, uint DestinationId), ChannelViewModel[]>> trafficRoutes;
     private readonly ConnectionChimeTracker connectionChimeTracker = new();
+    private readonly ConnectionSessionController connectionSession;
     private readonly P25KeyRequestCoordinator p25KeyRequestCoordinator = new();
     private ChannelViewModel[] suspendedAudioChannels = [];
     private bool suspendedAudioKeptActive;
@@ -427,8 +428,17 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
             system.SetSelected(ReferenceEquals(system, selectedSystem));
         RefreshActivityCallHistory();
 
-        ConnectCommand = new AsyncRelayCommand(ConnectAsync, () => !busy && Systems.Count > 0);
-        DisconnectCommand = new AsyncRelayCommand(DisconnectAsync, () => !busy && Systems.Count > 0);
+        connectionSession = new ConnectionSessionController(
+            Systems,
+            SyncPatchSourceDecodeAsync,
+            () => patchSourceDecode.StopAllAsync(),
+            patchForwarding.StopAll,
+            SetBusy,
+            text => StatusText = text,
+            system => SelectedSystem = system,
+            HandleSystemStatus);
+        ConnectCommand = new AsyncRelayCommand(connectionSession.ConnectAsync, () => !busy && Systems.Count > 0);
+        DisconnectCommand = new AsyncRelayCommand(connectionSession.DisconnectAsync, () => !busy && Systems.Count > 0);
         ToggleSelectedSystemOutputMuteCommand = new AsyncRelayCommand(
             ToggleSelectedSystemOutputMuteAsync,
             () => SelectedSystem is not null);
@@ -2544,81 +2554,8 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
         cleanup.ThrowIfFailed();
     }
 
-    private async Task ConnectAsync()
-    {
-        SetBusy(true);
-        StatusText = "Starting FNE connection services...";
-        try
-        {
-            await Task.WhenAll(Systems.Select(system => StartSystemAsync(system)));
-            await SyncPatchSourceDecodeAsync().ConfigureAwait(false);
-            StatusText = "FNE connection services started; waiting for login acknowledgements.";
-        }
-        finally
-        {
-            SetBusy(false);
-        }
-    }
-
-    private async Task StartSystemAsync(SystemViewModel system)
-    {
-        try
-        {
-            await system.StartAsync().ConfigureAwait(false);
-        }
-        catch (Exception exception)
-        {
-            HandleSystemStatus(system, new FneConnectionStatus(
-                system.Name,
-                FneConnectionState.Faulted,
-                exception.Message,
-                DateTimeOffset.UtcNow));
-        }
-    }
-
-    public async Task ToggleSystemConnectionAsync(SystemViewModel system)
-    {
-        ArgumentNullException.ThrowIfNull(system);
-        if (!Systems.Contains(system))
-            throw new ArgumentException("The FNE is not part of this console.", nameof(system));
-
-        SelectedSystem = system;
-        if (system.IsConnectionActive)
-        {
-            StatusText = $"Stopping {system.Name}...";
-            try
-            {
-                await system.StopAsync();
-                StatusText = $"{system.Name}: disconnected.";
-            }
-            catch (Exception exception)
-            {
-                StatusText = $"{system.Name}: disconnect failed — {exception.Message}";
-            }
-            return;
-        }
-
-        StatusText = $"Starting {system.Name}...";
-        await StartSystemAsync(system);
-        await SyncPatchSourceDecodeAsync();
-    }
-
-    private async Task DisconnectAsync()
-    {
-        SetBusy(true);
-        StatusText = "Stopping FNE connection services...";
-        try
-        {
-            await patchSourceDecode.StopAllAsync().ConfigureAwait(false);
-            patchForwarding.StopAll();
-            await Task.WhenAll(Systems.Select(system => system.StopAsync()));
-            StatusText = "FNE connections stopped.";
-        }
-        finally
-        {
-            SetBusy(false);
-        }
-    }
+    public Task ToggleSystemConnectionAsync(SystemViewModel system)
+        => connectionSession.ToggleAsync(system);
 
     private void HandleSystemStatus(SystemViewModel system, FneConnectionStatus status)
     {
