@@ -121,7 +121,7 @@ public sealed record FneKeyResponse(
 // Owns one cross-platform FNE peer lifecycle. It does not start until StartAsync is called.
 public sealed class FneConnection : IAsyncDisposable
 {
-    internal static TimeSpan P25KeyResponseWindow { get; } = TimeSpan.FromMinutes(1);
+    internal static TimeSpan P25KeyResponseWindow => PendingP25KeyRequestTracker.ResponseWindow;
 
     internal static string SoftwareIdentifier => FormatSoftwareIdentifier(
         typeof(FneConnection).Assembly
@@ -129,14 +129,14 @@ public sealed class FneConnection : IAsyncDisposable
             .InformationalVersion);
 
     private readonly FneConnectionOptions options;
-    private readonly TimeProvider timeProvider;
+    private readonly IFneEndpointResolver endpointResolver;
+    private readonly IFnePeerSessionFactory peerSessionFactory;
+    private readonly PendingP25KeyRequestTracker pendingP25KeyRequests;
+    private readonly FnePeerStateMonitor stateMonitor = new();
     private readonly object sync = new();
     private readonly SemaphoreSlim lifecycle = new(1, 1);
-    private readonly Dictionary<(byte AlgorithmId, ushort KeyId), DateTimeOffset> pendingP25KeyRequests = [];
     private FnePeer? peer;
     private FneConnectionStatus status;
-    private CancellationTokenSource? stateMonitorCancellation;
-    private Task? stateMonitorTask;
     private long latestTrafficTransportTimestamp;
     private EventHandler<FneTrafficFrame>[] trafficReceivedHandlers = [];
 
@@ -146,9 +146,28 @@ public sealed class FneConnection : IAsyncDisposable
     }
 
     internal FneConnection(FneConnectionOptions options, TimeProvider timeProvider)
+        : this(options, timeProvider, new FneEndpointResolver())
+    {
+    }
+
+    internal FneConnection(
+        FneConnectionOptions options,
+        TimeProvider timeProvider,
+        IFneEndpointResolver endpointResolver)
+        : this(options, timeProvider, endpointResolver, new FnePeerSessionFactory())
+    {
+    }
+
+    internal FneConnection(
+        FneConnectionOptions options,
+        TimeProvider timeProvider,
+        IFneEndpointResolver endpointResolver,
+        IFnePeerSessionFactory peerSessionFactory)
     {
         this.options = options ?? throw new ArgumentNullException(nameof(options));
-        this.timeProvider = timeProvider ?? throw new ArgumentNullException(nameof(timeProvider));
+        pendingP25KeyRequests = new PendingP25KeyRequestTracker(timeProvider);
+        this.endpointResolver = endpointResolver ?? throw new ArgumentNullException(nameof(endpointResolver));
+        this.peerSessionFactory = peerSessionFactory ?? throw new ArgumentNullException(nameof(peerSessionFactory));
         status = new FneConnectionStatus(options.Name, FneConnectionState.Disconnected, "Not started", DateTimeOffset.UtcNow);
     }
 
@@ -221,16 +240,11 @@ public sealed class FneConnection : IAsyncDisposable
                 throw new InvalidOperationException($"The FNE connection is not ready for traffic ({status.State}).");
         }
 
-        var opcode = protocol switch
-        {
-            FneTrafficProtocol.Dmr => new Tuple<byte, byte>(Constants.NET_FUNC_PROTOCOL, Constants.NET_PROTOCOL_SUBFUNC_DMR),
-            FneTrafficProtocol.P25 => new Tuple<byte, byte>(Constants.NET_FUNC_PROTOCOL, Constants.NET_PROTOCOL_SUBFUNC_P25),
-            FneTrafficProtocol.Nxdn => new Tuple<byte, byte>(Constants.NET_FUNC_PROTOCOL, Constants.NET_PROTOCOL_SUBFUNC_NXDN),
-            FneTrafficProtocol.Analog => new Tuple<byte, byte>(Constants.NET_FUNC_PROTOCOL, Constants.NET_PROTOCOL_SUBFUNC_ANALOG),
-            _ => throw new ArgumentOutOfRangeException(nameof(protocol))
-        };
-
-        current.SendMasterTraffic(opcode, payload.ToArray(), packetSequence, streamId);
+        current.SendMasterTraffic(
+            FneTrafficMapper.ToOpcode(protocol),
+            payload.ToArray(),
+            packetSequence,
+            streamId);
     }
 
     // Requests one P25 key from the connected FNE. The response is accepted
@@ -259,11 +273,7 @@ public sealed class FneConnection : IAsyncDisposable
             }
             catch
             {
-                if (pendingP25KeyRequests.TryGetValue((algorithmId, keyId), out DateTimeOffset pendingExpiry) &&
-                    pendingExpiry == expiresAt)
-                {
-                    pendingP25KeyRequests.Remove((algorithmId, keyId));
-                }
+                pendingP25KeyRequests.TryCancel(algorithmId, keyId, expiresAt);
                 throw;
             }
         }
@@ -292,29 +302,7 @@ public sealed class FneConnection : IAsyncDisposable
         // FnePeer intentionally exposes only raw traffic. Build the TSDU
         // framing at this client boundary instead of adding a console-specific
         // API to fnecore.
-        byte[] payload = new byte[200];
-        FneUtils.StringToBytes(Constants.TAG_P25_DATA, payload, 0, Constants.TAG_P25_DATA.Length);
-        payload[4] = callData.LCO;
-        FneUtils.Write3Bytes(callData.SrcId, ref payload, 5);
-        FneUtils.Write3Bytes(callData.DstId, ref payload, 8);
-        payload[11] = 0;
-        payload[12] = 0;
-        payload[14] = 0;
-        payload[15] = callData.MFId;
-        payload[16] = 0;
-        payload[17] = 0;
-        payload[18] = 0;
-        payload[20] = callData.LSD1;
-        payload[21] = callData.LSD2;
-        payload[22] = (byte)P25DUID.TSDU;
-
-        var trellis = new Trellis();
-        byte[] tsbkTrellis = new byte[P25Defines.P25_TSBK_FEC_LENGTH_BYTES];
-        trellis.Encode12(message.Tsbk, ref tsbkTrellis);
-        byte[] raw = new byte[P25Defines.P25_TSDU_FRAME_LENGTH_BYTES];
-        P25Interleaver.Encode(tsbkTrellis, ref raw, 114, 318);
-        Buffer.BlockCopy(raw, 0, payload, 24, raw.Length);
-        payload[23] = (byte)(24 + raw.Length);
+        byte[] payload = P25SubscriberFrameEncoder.Encode(message, callData);
 
         current.SendMasterTraffic(
             FneBase.CreateOpcode(Constants.NET_FUNC_PROTOCOL, Constants.NET_PROTOCOL_SUBFUNC_P25),
@@ -367,7 +355,9 @@ public sealed class FneConnection : IAsyncDisposable
 
         try
         {
-            IPEndPoint endpoint = await ResolveEndpointAsync(cancellationToken).ConfigureAwait(false);
+            IPEndPoint endpoint = await endpointResolver
+                .ResolveAsync(options.Address, options.Port, cancellationToken)
+                .ConfigureAwait(false);
             cancellationToken.ThrowIfCancellationRequested();
 
             candidate = CreatePeer(endpoint);
@@ -386,7 +376,7 @@ public sealed class FneConnection : IAsyncDisposable
                     peer = null;
             }
 
-            StopStateMonitor();
+            stateMonitor.Cancel();
 
             if (candidate is not null)
             {
@@ -423,17 +413,11 @@ public sealed class FneConnection : IAsyncDisposable
     private async Task StopCoreAsync(CancellationToken cancellationToken)
     {
         FnePeer? current;
-        CancellationTokenSource? monitorCancellation;
-        Task? monitorTask;
         lock (sync)
         {
             current = peer;
             peer = null;
             pendingP25KeyRequests.Clear();
-            monitorCancellation = stateMonitorCancellation;
-            monitorTask = stateMonitorTask;
-            stateMonitorCancellation = null;
-            stateMonitorTask = null;
         }
 
         if (current is null)
@@ -443,19 +427,7 @@ public sealed class FneConnection : IAsyncDisposable
         }
 
         Publish(FneConnectionState.Stopping, "Stopping FNE network services");
-        monitorCancellation?.Cancel();
-        if (monitorTask is not null)
-        {
-            try
-            {
-                await monitorTask.ConfigureAwait(false);
-            }
-            catch (OperationCanceledException)
-            {
-                // Expected during shutdown.
-            }
-        }
-        monitorCancellation?.Dispose();
+        await stateMonitor.StopAsync().ConfigureAwait(false);
         DetachPeerHandlers(current);
 
         try
@@ -484,45 +456,20 @@ public sealed class FneConnection : IAsyncDisposable
 
     internal FnePeer CreatePeer(IPEndPoint endpoint)
     {
-        using IDisposable encryptionScope = FneTransportEncryptionContext.Use(
-            options.TransportEncryptionMode switch
-            {
-                FneTransportEncryptionPreference.Ecb => fnecore.FneTransportEncryptionMode.Ecb,
-                FneTransportEncryptionPreference.Cbc => fnecore.FneTransportEncryptionMode.Cbc,
-                _ => fnecore.FneTransportEncryptionMode.Auto
-            },
-            timestamp => Volatile.Write(ref latestTrafficTransportTimestamp, timestamp));
-        var created = new FnePeer("DVMCONSOLE", options.PeerId, endpoint, options.PresharedKey);
-        created.Passphrase = options.Password;
-        created.PingTime = 5;
-        // The operator debug viewer is the console's complete FNE log sink.
-        // Raw packet tracing remains separately opt-in so payload dumps are
-        // not exposed by enabling the ordinary protocol log stream.
-        created.LogLevel = LogLevel.DEBUG;
-        created.RawPacketTrace = options.EnableDiagnostics;
-        // Preserve the constructor-owned PeerInformation instance. Newer
-        // fnecore revisions retain connection state on this object while the
-        // RPTC payload reads the configured identity from its Details member.
-        created.Information.PeerID = options.PeerId;
-        created.Information.State = ConnectionState.WAITING_LOGIN;
-        created.Information.Details = new PeerDetails
-        {
-            ConventionalPeer = true,
-            PeerClass = PeerConnectionClass.PEER_CONN_CLASS_CONSOLE,
-            Software = SoftwareIdentifier,
-            Identity = options.Identity
-        };
-        created.Logger = HandlePeerLog;
-        if (!string.IsNullOrWhiteSpace(options.KmfPresharedKey))
-            created.SetKMFPresharedKey(options.KmfPresharedKey);
-        created.PeerConnected += HandlePeerConnected;
-        created.KeyResponse += HandleKeyResponse;
-        created.PeerDisconnected = HandlePeerDisconnected;
-        created.DMRDataReceived += HandleDmrDataReceived;
-        created.P25DataReceived += HandleP25DataReceived;
-        created.NXDNDataReceived += HandleNxdnDataReceived;
-        created.AnalogDataReceived += HandleAnalogDataReceived;
-        return created;
+        return peerSessionFactory.Create(
+            options,
+            endpoint,
+            SoftwareIdentifier,
+            new FnePeerSessionCallbacks(
+                HandlePeerLog,
+                HandlePeerConnected,
+                HandleKeyResponse,
+                HandlePeerDisconnected,
+                HandleDmrDataReceived,
+                HandleP25DataReceived,
+                HandleNxdnDataReceived,
+                HandleAnalogDataReceived,
+                timestamp => Volatile.Write(ref latestTrafficTransportTimestamp, timestamp)));
     }
 
     internal static string FormatSoftwareIdentifier(string? informationalVersion)
@@ -541,8 +488,7 @@ public sealed class FneConnection : IAsyncDisposable
 
     private void HandlePeerDisconnected(uint _)
     {
-        lock (sync)
-            pendingP25KeyRequests.Clear();
+        pendingP25KeyRequests.Clear();
         Publish(FneConnectionState.WaitingForLogin, "FNE peer disconnected; waiting to reconnect");
     }
 
@@ -580,17 +526,10 @@ public sealed class FneConnection : IAsyncDisposable
     }
 
     internal void RegisterPendingP25KeyRequest(byte algorithmId, ushort keyId)
-    {
-        lock (sync)
-            RegisterPendingP25KeyRequestCore(algorithmId, keyId);
-    }
+        => RegisterPendingP25KeyRequestCore(algorithmId, keyId);
 
     private DateTimeOffset RegisterPendingP25KeyRequestCore(byte algorithmId, ushort keyId)
-    {
-        DateTimeOffset expiresAt = timeProvider.GetUtcNow().Add(P25KeyResponseWindow);
-        pendingP25KeyRequests[(algorithmId, keyId)] = expiresAt;
-        return expiresAt;
-    }
+        => pendingP25KeyRequests.Register(algorithmId, keyId);
 
     internal bool TryPublishRequestedP25KeyResponse(
         byte algorithmId,
@@ -602,15 +541,8 @@ public sealed class FneConnection : IAsyncDisposable
             !HasSupportedP25KeyLength(algorithmId, material.Length))
             return false;
 
-        DateTimeOffset now = timeProvider.GetUtcNow();
-        lock (sync)
-        {
-            if (!pendingP25KeyRequests.Remove((algorithmId, keyId), out DateTimeOffset expiresAt) ||
-                expiresAt < now)
-            {
-                return false;
-            }
-        }
+        if (!pendingP25KeyRequests.TryConsume(algorithmId, keyId))
+            return false;
 
         Raise(KeyResponseReceived, new FneKeyResponse(options.Name, algorithmId, keyId, material));
         return true;
@@ -619,18 +551,8 @@ public sealed class FneConnection : IAsyncDisposable
     private void HandleDmrDataReceived(object? sender, DMRDataReceivedEvent args)
     {
         long boundaryTimestamp = Stopwatch.GetTimestamp();
-        PublishTraffic(new FneTrafficFrame(
-            FneTrafficProtocol.Dmr,
-            args.PeerId,
-            args.SrcId,
-            args.DstId,
-            args.Slot,
-            args.CallType.ToString(),
-            args.FrameType.ToString(),
-            args.DataType.ToString(),
-            args.PacketSequence,
-            args.StreamId,
-            args.Data,
+        PublishTraffic(FneTrafficMapper.FromDmr(
+            args,
             boundaryTimestamp,
             Interlocked.Exchange(ref latestTrafficTransportTimestamp, 0)));
     }
@@ -638,18 +560,8 @@ public sealed class FneConnection : IAsyncDisposable
     private void HandleP25DataReceived(object? sender, P25DataReceivedEvent args)
     {
         long boundaryTimestamp = Stopwatch.GetTimestamp();
-        PublishTraffic(new FneTrafficFrame(
-            FneTrafficProtocol.P25,
-            args.PeerId,
-            args.SrcId,
-            args.DstId,
-            null,
-            args.CallType.ToString(),
-            args.FrameType.ToString(),
-            args.DUID.ToString(),
-            args.PacketSequence,
-            args.StreamId,
-            args.Data,
+        PublishTraffic(FneTrafficMapper.FromP25(
+            args,
             boundaryTimestamp,
             Interlocked.Exchange(ref latestTrafficTransportTimestamp, 0)));
     }
@@ -657,18 +569,8 @@ public sealed class FneConnection : IAsyncDisposable
     private void HandleNxdnDataReceived(object? sender, NXDNDataReceivedEvent args)
     {
         long boundaryTimestamp = Stopwatch.GetTimestamp();
-        PublishTraffic(new FneTrafficFrame(
-            FneTrafficProtocol.Nxdn,
-            args.PeerId,
-            args.SrcId,
-            args.DstId,
-            null,
-            args.CallType.ToString(),
-            args.FrameType.ToString(),
-            args.MessageType.ToString(),
-            args.PacketSequence,
-            args.StreamId,
-            args.Data,
+        PublishTraffic(FneTrafficMapper.FromNxdn(
+            args,
             boundaryTimestamp,
             Interlocked.Exchange(ref latestTrafficTransportTimestamp, 0)));
     }
@@ -676,18 +578,8 @@ public sealed class FneConnection : IAsyncDisposable
     private void HandleAnalogDataReceived(object? sender, AnalogDataReceivedEvent args)
     {
         long boundaryTimestamp = Stopwatch.GetTimestamp();
-        PublishTraffic(new FneTrafficFrame(
-            FneTrafficProtocol.Analog,
-            args.PeerId,
-            args.SrcId,
-            args.DstId,
-            null,
-            args.CallType.ToString(),
-            args.FrameType.ToString(),
-            args.AudioFrameType.ToString(),
-            args.PacketSequence,
-            args.StreamId,
-            args.Data,
+        PublishTraffic(FneTrafficMapper.FromAnalog(
+            args,
             boundaryTimestamp,
             Interlocked.Exchange(ref latestTrafficTransportTimestamp, 0)));
     }
@@ -775,46 +667,13 @@ public sealed class FneConnection : IAsyncDisposable
     {
         Raise(LogReceived, new FneLogEntry(
             options.Name,
-            MapLogSeverity(level),
+            FneLogInterpreter.MapSeverity(level),
             DebugLogRedactor.Redact(message),
             DateTimeOffset.UtcNow));
 
-        if (message.Contains("Sending login request", StringComparison.OrdinalIgnoreCase))
-        {
-            Publish(FneConnectionState.WaitingForLogin, "FNE login request sent");
-            return;
-        }
-
-        if (message.Contains("Network Sent", StringComparison.OrdinalIgnoreCase))
-        {
-            Publish(Status.State, "FNE traffic packet sent");
-            return;
-        }
-
-        if (message.Contains("Network Received", StringComparison.OrdinalIgnoreCase))
-        {
-            Publish(Status.State, "FNE traffic packet received");
-            return;
-        }
-
-        if (message.Contains("login ACK received", StringComparison.OrdinalIgnoreCase))
-        {
-            Publish(FneConnectionState.Authenticating, "FNE login acknowledgement received");
-            return;
-        }
-
-        if (message.Contains("master NAK", StringComparison.OrdinalIgnoreCase))
-        {
-            Publish(FneConnectionState.Faulted, "FNE master rejected the connection");
-            return;
-        }
-
-        if (message.Contains("SOCKET ERROR", StringComparison.OrdinalIgnoreCase) ||
-            message.Contains("Not connected or lost connection", StringComparison.OrdinalIgnoreCase))
-        {
-            Publish(FneConnectionState.Faulted, "FNE socket error or connection loss");
-            return;
-        }
+        FneLogStatusUpdate? statusUpdate = FneLogInterpreter.InterpretStatus(message, Status.State);
+        if (statusUpdate is not null)
+            Publish(statusUpdate.State, statusUpdate.Message);
 
         // Individual malformed packets and unknown opcodes are protocol
         // diagnostics, not proof that the transport disconnected. The peer
@@ -822,94 +681,14 @@ public sealed class FneConnection : IAsyncDisposable
         // identifies a connection failure above.
     }
 
-    private static DebugLogSeverity MapLogSeverity(LogLevel level)
-        => level switch
-        {
-            LogLevel.DEBUG => DebugLogSeverity.Debug,
-            LogLevel.WARNING => DebugLogSeverity.Warning,
-            LogLevel.ERROR => DebugLogSeverity.Error,
-            LogLevel.FATAL => DebugLogSeverity.Fatal,
-            _ => DebugLogSeverity.Info
-        };
-
     private void StartStateMonitor(FnePeer current)
-    {
-        var cancellation = new CancellationTokenSource();
-        lock (sync)
-        {
-            stateMonitorCancellation = cancellation;
-            stateMonitorTask = MonitorPeerStateAsync(current, cancellation.Token);
-        }
-    }
-
-    private void StopStateMonitor()
-    {
-        CancellationTokenSource? cancellation;
-        lock (sync)
-        {
-            cancellation = stateMonitorCancellation;
-            stateMonitorCancellation = null;
-            stateMonitorTask = null;
-        }
-
-        cancellation?.Cancel();
-        cancellation?.Dispose();
-    }
-
-    private async Task MonitorPeerStateAsync(FnePeer current, CancellationToken cancellationToken)
-    {
-        using var timer = new PeriodicTimer(TimeSpan.FromMilliseconds(250));
-        FneConnectionState? lastState = null;
-
-        try
-        {
-            while (await timer.WaitForNextTickAsync(cancellationToken).ConfigureAwait(false))
-            {
-                FneConnectionState nextState = current.Information?.State switch
-                {
-                    ConnectionState.WAITING_AUTHORISATION => FneConnectionState.Authenticating,
-                    ConnectionState.WAITING_CONFIG => FneConnectionState.Configuring,
-                    ConnectionState.RUNNING => FneConnectionState.Connected,
-                    _ => FneConnectionState.WaitingForLogin
-                };
-
-                if (!ShouldPublishMonitoredState(nextState, lastState, Status.State))
-                    continue;
-
-                lastState = nextState;
-                Publish(nextState, nextState switch
-                {
-                    FneConnectionState.Authenticating => "FNE login accepted; waiting for authorization",
-                    FneConnectionState.Configuring => "FNE authorization accepted; sending configuration",
-                    FneConnectionState.Connected => "FNE peer connected",
-                    _ => "Waiting for FNE login acknowledgement"
-                });
-            }
-        }
-        catch (OperationCanceledException)
-        {
-            // Expected during shutdown.
-        }
-    }
+        => stateMonitor.Start(current, () => Status.State, Publish);
 
     internal static bool ShouldPublishMonitoredState(
         FneConnectionState nextState,
         FneConnectionState? lastState,
         FneConnectionState publishedState)
-        => nextState != lastState || nextState != publishedState;
-
-    private async Task<IPEndPoint> ResolveEndpointAsync(CancellationToken cancellationToken)
-    {
-        if (IPAddress.TryParse(options.Address, out IPAddress? address))
-            return new IPEndPoint(address, options.Port);
-
-        IPAddress[] addresses = await Dns.GetHostAddressesAsync(options.Address, cancellationToken).ConfigureAwait(false);
-        IPAddress? resolved = addresses.FirstOrDefault(candidate => candidate.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork)
-            ?? addresses.FirstOrDefault();
-        return resolved is null
-            ? throw new InvalidOperationException($"Could not resolve FNE address '{options.Address}'.")
-            : new IPEndPoint(resolved, options.Port);
-    }
+        => FnePeerStateMonitor.ShouldPublish(nextState, lastState, publishedState);
 
     private void Publish(FneConnectionState state, string message)
     {

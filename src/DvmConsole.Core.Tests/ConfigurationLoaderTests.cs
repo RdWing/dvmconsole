@@ -7,6 +7,53 @@ namespace DvmConsole.Core.Tests;
 public sealed class ConfigurationLoaderTests
 {
     [Fact]
+    public void LoadsImmutableLegacyAliasFixture()
+    {
+        string path = Path.Combine(
+            AppContext.BaseDirectory,
+            "TestData",
+            "Compatibility",
+            "legacy-codeplug-aliases.yml");
+
+        ConsoleConfiguration configuration = ConfigurationLoader.Load(path);
+
+        Assert.Equal(Path.GetFullPath(path), configuration.SourcePath);
+        Assert.Equal("../keys.example.clear", configuration.KeyFile);
+        SystemConfiguration system = Assert.Single(configuration.Systems);
+        Assert.Equal("Radio 1", AliasFileLoader.FindAlias(system.RidAlias, 1));
+        Assert.Equal("Radio 1", system.AliasIndex.Find(1));
+        GroupConfiguration group = Assert.Single(configuration.Groups);
+        Assert.Equal("Legacy Patch", group.Name);
+        Assert.Empty(configuration.LegacyPatchGroups);
+        ZoneConfiguration zone = Assert.Single(configuration.Zones);
+        WebStreamConfiguration stream = Assert.Single(zone.WebStreams);
+        Assert.Equal("Legacy Stream", stream.Name);
+        ChannelConfiguration channel = Assert.Single(zone.Channels);
+        Assert.True(channel.RxOnly);
+        Assert.True(channel.SelectableEncryption);
+        Assert.Equal("small", channel.CardSize);
+        Assert.Empty(ConfigurationLoader.Validate(configuration));
+    }
+
+    [Fact]
+    public void RadioAliasIndexIsImmutableAndPreservesFirstMatchSemantics()
+    {
+        var aliases = new List<RadioAlias>
+        {
+            new() { Rid = 42, Alias = "First" },
+            new() { Rid = 42, Alias = "Second" }
+        };
+        var index = new RadioAliasIndex(aliases);
+
+        aliases[0].Alias = "Changed";
+        aliases.Add(new RadioAlias { Rid = 43, Alias = "Late" });
+
+        Assert.Equal("First", index.Find(42));
+        Assert.Equal(string.Empty, index.Find(43));
+        Assert.Equal(2, index.Count);
+    }
+
+    [Fact]
     public void LoadsTheLegacyExampleCodeplug()
     {
         string path = Path.Combine(AppContext.BaseDirectory, "TestData", "codeplug.example.yml");
@@ -216,9 +263,25 @@ public sealed class ConfigurationLoaderTests
         ChannelRuntimeDefinition definition = ChannelRuntimeDefinition.FromConfiguration(channel);
 
         Assert.Equal("dmr", definition.Mode);
+        Assert.Equal(ChannelProtocol.Dmr, definition.Protocol);
         Assert.Equal((byte)1, definition.Slot);
         Assert.Equal((uint)99, definition.DestinationId);
         Assert.True(definition.RxOnly);
+    }
+
+    [Theory]
+    [InlineData("analog", ChannelProtocol.Analog)]
+    [InlineData("DMR", ChannelProtocol.Dmr)]
+    [InlineData(" p25 ", ChannelProtocol.P25)]
+    [InlineData("NxDn", ChannelProtocol.Nxdn)]
+    public void ParsesChannelProtocolOnceWithoutChangingNormalizedMode(
+        string mode,
+        ChannelProtocol expected)
+    {
+        var definition = new ChannelRuntimeDefinition("Dispatch", "System 1", mode, 99, 0);
+
+        Assert.Equal(expected, definition.Protocol);
+        Assert.Equal(mode.Trim().ToLowerInvariant(), definition.Mode);
     }
 
     [Fact]

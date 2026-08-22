@@ -1,8 +1,8 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <TargetFramework>net10.0</TargetFramework>
     <Nullable>disable</Nullable>
-    <ImplicitUsings>enable</ImplicitUsings>
+    <!-- The pinned upstream sources still use these legacy framework APIs. -->
+    <NoWarn>$(NoWarn);CS0672;SYSLIB0003;SYSLIB0021;SYSLIB0023;SYSLIB0051</NoWarn>
     <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
     <Deterministic>false</Deterministic>
     <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
@@ -13,6 +13,10 @@
   <ItemGroup>
     <Compile Include="../../fnecore/**/*.cs" Exclude="../../fnecore/obj/**/*.cs;../../fnecore/bin/**/*.cs;../../fnecore/Udp.cs" />
     <Compile Include="CompatibleUdp.cs" />
+    <Compile Include="FneInboundFramePolicy.cs" />
+    <Compile Include="FneTransportCryptoCodec.cs" />
+    <Compile Include="FneTransportNegotiationState.cs" />
+    <Compile Include="InboundReplayWindow.cs" />
     <Compile Include="Properties/AssemblyInfo.cs" />
     <PackageReference Include="SharpZipLib" Version="1.4.2" />
   </ItemGroup>

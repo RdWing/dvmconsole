@@ -14,7 +14,8 @@ public sealed class NxdnTxAudioSession : IDisposable
     private readonly VoiceFrameEncoder encoder;
     private readonly NxdnPrivacyProcessor? privacyProcessor;
     private readonly NxdnPrivacyOptions? privacy;
-    private readonly List<byte> pendingAmbe = [];
+    private readonly byte[] pendingAmbe = new byte[NxdnVoicePacketCodec.AmbeBytes];
+    private int pendingAmbeBytes;
     private int pendingPcmSamples;
     private ushort packetSequence;
     private byte frameSequence;
@@ -78,7 +79,7 @@ public sealed class NxdnTxAudioSession : IDisposable
         if (pendingPcmSamples > 0)
             Process(new short[VocoderFrameSizes.PcmSamplesPerFrame - pendingPcmSamples]);
         encoder.Flush(EmitCodeword);
-        while (pendingAmbe.Count > 0)
+        while (pendingAmbeBytes > 0)
             Process(new short[VocoderFrameSizes.PcmSamplesPerFrame]);
         return FramesSent - before;
     }
@@ -97,7 +98,8 @@ public sealed class NxdnTxAudioSession : IDisposable
             return;
         encoder.Dispose();
         privacyProcessor?.Dispose();
-        pendingAmbe.Clear();
+        Array.Clear(pendingAmbe);
+        pendingAmbeBytes = 0;
         disposed = true;
     }
 
@@ -105,28 +107,28 @@ public sealed class NxdnTxAudioSession : IDisposable
     {
         if (privacyIvPending)
             SendNextPrivacyIv();
-        byte[] wireCodeword = codeword.ToArray();
+        Span<byte> destination = pendingAmbe.AsSpan(
+            pendingAmbeBytes,
+            NxdnVoicePacketCodec.CodewordBytes);
         if (privacyProcessor is not null)
-        {
-            byte[] encrypted = new byte[NxdnVoicePacketCodec.CodewordBytes];
-            privacyProcessor.ProcessCodeword(wireCodeword, encrypted);
-            wireCodeword = encrypted;
-        }
-        pendingAmbe.AddRange(wireCodeword);
+            privacyProcessor.ProcessCodeword(codeword.Span, destination);
+        else
+            codeword.Span.CopyTo(destination);
+        pendingAmbeBytes += destination.Length;
         CodewordsEncoded++;
-        if (pendingAmbe.Count < NxdnVoicePacketCodec.AmbeBytes)
+        if (pendingAmbeBytes < pendingAmbe.Length)
             return;
         byte[] packet = NxdnVoicePacketCodec.CreateVoicePacket(
             sourceId,
             destinationId,
             group,
             frameSequence,
-            pendingAmbe.ToArray(),
+            pendingAmbe,
             superframePart: (byte)(FramesSent % 4),
             cipherType: privacy?.AlgorithmId ?? 0,
             keyId: privacy?.KeyId ?? 0);
         send(packet, packetSequence, streamId);
-        pendingAmbe.Clear();
+        pendingAmbeBytes = 0;
         FramesSent++;
         AdvanceSequence();
         if (privacy is not null &&

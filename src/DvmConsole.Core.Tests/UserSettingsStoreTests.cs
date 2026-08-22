@@ -6,6 +6,63 @@ namespace DvmConsole.Core.Tests;
 public sealed class UserSettingsStoreTests
 {
     [Theory]
+    [InlineData(1)]
+    [InlineData(2)]
+    [InlineData(3)]
+    [InlineData(4)]
+    [InlineData(5)]
+    [InlineData(6)]
+    public void LoadsEveryPersistedSchemaFixtureWithoutChangingItsMeaning(int schemaVersion)
+    {
+        string fixturePath = Path.Combine(
+            AppContext.BaseDirectory,
+            "TestData",
+            "Compatibility",
+            $"settings-schema-{schemaVersion}.json");
+        string path = CreatePath();
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            File.Copy(fixturePath, path);
+
+            UserSettings settings = new UserSettingsStore(path).Load();
+
+            Assert.Equal(UserSettings.CurrentSchemaVersion, settings.SchemaVersion);
+            Assert.Equal($"Schema {schemaVersion}", settings.LastSelectedSystemName);
+            if (schemaVersion == 1)
+                Assert.False(settings.HighQualityBluetoothAudioEnabled);
+            if (schemaVersion == 2)
+            {
+                Assert.True(settings.HighQualityBluetoothAudioEnabled);
+                Assert.All(settings.RxAudioProcessingOptions.Values, option =>
+                {
+                    Assert.False(option.HighPassFilterEnabled);
+                    Assert.False(option.PeakingFilterEnabled);
+                    Assert.False(option.CompressorEnabled);
+                });
+            }
+            if (schemaVersion == 3)
+                Assert.True(settings.TogglePttMode);
+            if (schemaVersion == 4)
+                Assert.Equal("schema-4-input", settings.AudioInputDeviceId);
+            if (schemaVersion == 5)
+                Assert.True(settings.KeepTransmitMicrophoneWarm);
+            if (schemaVersion == 6)
+            {
+                Assert.Equal(360, settings.RxJitterBuffer.P25Milliseconds);
+                Assert.Equal(320, settings.RxJitterBuffer.NxdnMilliseconds);
+                Assert.True(settings.RxJitterBuffer.P25Adaptive);
+                Assert.True(settings.RxJitterBuffer.DmrAdaptive);
+                Assert.True(settings.RxJitterBuffer.NxdnAdaptive);
+            }
+        }
+        finally
+        {
+            Cleanup(path);
+        }
+    }
+
+    [Theory]
     [InlineData("F19", "F19")]
     [InlineData("None", "None")]
     [InlineData("unsupported", "None")]

@@ -87,6 +87,42 @@ public sealed class SharedAudioCaptureTests
         Assert.True(timing.FirstSamplesReceived <= timing.SustainedReadinessReached);
     }
 
+    [Fact]
+    public async Task ConcurrentStartsDoNotLeaveALeaseRunningWhenPhysicalStartFails()
+    {
+        var source = new BlockingFailingCapture();
+        await using var shared = new SharedAudioCapture(source);
+        await using SharedAudioCapture.Lease first = shared.CreateLease();
+        await using SharedAudioCapture.Lease second = shared.CreateLease();
+
+        Task firstStart = first.StartAsync().AsTask();
+        await source.StartEntered.Task.WaitAsync(TimeSpan.FromSeconds(1));
+        Task secondStart = second.StartAsync().AsTask();
+
+        Assert.False(secondStart.IsCompleted);
+        source.FailStarts();
+        await Assert.ThrowsAsync<IOException>(() => firstStart);
+        await Assert.ThrowsAsync<IOException>(() => secondStart);
+
+        Assert.False(first.IsRunning);
+        Assert.False(second.IsRunning);
+    }
+
+    [Fact]
+    public async Task SubscriberCanStopItsLeaseWithoutDeadlockingPublication()
+    {
+        var source = new FakeCapture();
+        await using var shared = new SharedAudioCapture(source);
+        await using SharedAudioCapture.Lease lease = shared.CreateLease();
+        lease.SamplesAvailable += (_, _) => lease.StopAsync().AsTask().GetAwaiter().GetResult();
+        await lease.StartAsync();
+
+        await Task.Run(() => source.Emit([1, 2, 3])).WaitAsync(TimeSpan.FromSeconds(1));
+
+        Assert.False(lease.IsRunning);
+        Assert.Equal(1, source.StopCalls);
+    }
+
     private sealed class FakeCapture : IAudioCapture
     {
         public event EventHandler<PcmSamplesEventArgs>? SamplesAvailable;
@@ -120,5 +156,40 @@ public sealed class SharedAudioCaptureTests
             if (IsRunning)
                 SamplesAvailable?.Invoke(this, new PcmSamplesEventArgs(samples));
         }
+    }
+
+    private sealed class BlockingFailingCapture : IAudioCapture
+    {
+        private readonly TaskCompletionSource startFailure = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public event EventHandler<PcmSamplesEventArgs>? SamplesAvailable
+        {
+            add { }
+            remove { }
+        }
+        public PcmAudioFormat Format { get; } = PcmAudioFormat.Voice8KhzMono16Bit;
+        public bool IsRunning { get; private set; }
+        public TaskCompletionSource StartEntered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public async ValueTask StartAsync(CancellationToken cancellationToken = default)
+        {
+            StartEntered.TrySetResult();
+            await startFailure.Task.WaitAsync(cancellationToken);
+            throw new IOException("test capture start failure");
+        }
+
+        public ValueTask StopAsync(CancellationToken cancellationToken = default)
+        {
+            IsRunning = false;
+            return ValueTask.CompletedTask;
+        }
+
+        public ValueTask DisposeAsync()
+        {
+            IsRunning = false;
+            return ValueTask.CompletedTask;
+        }
+
+        public void FailStarts() => startFailure.TrySetResult();
     }
 }

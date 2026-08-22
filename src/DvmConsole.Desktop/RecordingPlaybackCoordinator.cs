@@ -179,22 +179,11 @@ public sealed class RecordingPlaybackCoordinator : IAsyncDisposable
         bool completedNaturally = false;
         try
         {
-            short[] input = new short[1600];
-            while (true)
-            {
-                int sampleCount = await session.Reader.ReadSamplesAsync(
-                    input,
-                    session.Cancellation.Token).ConfigureAwait(false);
-                if (sampleCount == 0)
-                    break;
-
-                short[] output = session.RateConverter?.Convert(input.AsSpan(0, sampleCount))
-                    ?? input.AsSpan(0, sampleCount).ToArray();
-                if (output.Length > 0)
-                {
-                    await session.Playback.WriteAsync(output, session.Cancellation.Token).ConfigureAwait(false);
-                }
-            }
+            await PcmPlaybackPump.RunAsync(
+                session.Reader,
+                session.Playback,
+                session.RateConverter,
+                session.Cancellation.Token).ConfigureAwait(false);
             completedNaturally = true;
         }
         catch (OperationCanceledException) when (session.Cancellation.IsCancellationRequested)

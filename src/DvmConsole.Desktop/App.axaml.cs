@@ -27,7 +27,8 @@ public sealed class App : Application
             var mainWindow = new MainWindow(ConfigurationPath);
             desktop.MainWindow = mainWindow;
             if (SmokeWindows)
-                Dispatcher.UIThread.Post(() => _ = SmokeWindowsAsync(desktop, mainWindow));
+                Dispatcher.UIThread.Post(() =>
+                    TaskObservation.Observe(SmokeWindowsAsync(desktop, mainWindow)));
         }
 
         base.OnFrameworkInitializationCompleted();

@@ -18,7 +18,10 @@ internal sealed class SharedAudioCapture : IAsyncDisposable
 {
     private readonly IAudioCapture source;
     private readonly object sync = new();
+    private readonly object publicationSync = new();
+    private readonly SemaphoreSlim lifecycleGate = new(1, 1);
     private readonly List<Lease> leases = [];
+    private Lease[] runningLeases = [];
     private readonly long requiredReadinessSamples;
     private TaskCompletionSource<bool> samplesReady = CreateReadinessSource();
     private long observedReadinessSamples;
@@ -71,9 +74,10 @@ internal sealed class SharedAudioCapture : IAsyncDisposable
 
     public void SetSamplesSuppressed(bool suppressed)
     {
-        lock (sync)
+        lock (publicationSync)
         {
-            ObjectDisposedException.ThrowIf(disposed, this);
+            lock (sync)
+                ObjectDisposedException.ThrowIf(disposed, this);
             samplesSuppressed = suppressed;
         }
     }
@@ -111,87 +115,144 @@ internal sealed class SharedAudioCapture : IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
-        Lease[] current;
-        lock (sync)
+        await lifecycleGate.WaitAsync().ConfigureAwait(false);
+        try
         {
-            if (disposed)
-                return;
-            disposed = true;
-            current = leases.ToArray();
-            leases.Clear();
-        }
+            Lease[] current;
+            lock (publicationSync)
+            {
+                lock (sync)
+                {
+                    if (disposed)
+                        return;
+                    disposed = true;
+                    current = leases.ToArray();
+                    leases.Clear();
+                    runningLeases = [];
+                }
+                source.SamplesAvailable -= HandleSamplesAvailable;
+            }
 
-        foreach (Lease lease in current)
-            lease.MarkDisposed();
-        samplesReady.TrySetCanceled();
-        source.SamplesAvailable -= HandleSamplesAvailable;
-        await source.DisposeAsync().ConfigureAwait(false);
+            foreach (Lease lease in current)
+                lease.MarkDisposed();
+            samplesReady.TrySetCanceled();
+            await source.DisposeAsync().ConfigureAwait(false);
+        }
+        finally
+        {
+            lifecycleGate.Release();
+        }
     }
 
     private async ValueTask StartAsync(Lease lease, CancellationToken cancellationToken)
     {
-        bool startSource;
-        lock (sync)
-        {
-            ThrowIfUnavailable(lease);
-            if (lease.IsRunning)
-                return;
-            startSource = !leases.Any(candidate => candidate.IsRunning);
-            if (startSource)
-            {
-                samplesReady = CreateReadinessSource();
-                observedReadinessSamples = 0;
-                readinessStartedTimestamp = Stopwatch.GetTimestamp();
-                captureStartCompletedTimestamp = 0;
-                firstSamplesTimestamp = 0;
-                readinessCompletedTimestamp = 0;
-            }
-            lease.SetRunning(true);
-        }
-
-        if (!startSource)
-            return;
-
+        await lifecycleGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            await source.StartAsync(cancellationToken).ConfigureAwait(false);
-            lock (sync)
-                captureStartCompletedTimestamp = Stopwatch.GetTimestamp();
-        }
-        catch (Exception exception)
-        {
-            lock (sync)
+            bool startSource;
+            lock (publicationSync)
             {
-                lease.SetRunning(false);
-                samplesReady.TrySetException(exception);
+                lock (sync)
+                {
+                    ThrowIfUnavailable(lease);
+                    if (lease.IsRunning)
+                        return;
+                    startSource = runningLeases.Length == 0;
+                    if (startSource)
+                    {
+                        samplesReady = CreateReadinessSource();
+                        observedReadinessSamples = 0;
+                        readinessStartedTimestamp = Stopwatch.GetTimestamp();
+                        captureStartCompletedTimestamp = 0;
+                        firstSamplesTimestamp = 0;
+                        readinessCompletedTimestamp = 0;
+                    }
+                    lease.SetRunning(true);
+                    PublishRunningLeasesLocked();
+                }
             }
-            throw;
+
+            if (!startSource)
+                return;
+
+            try
+            {
+                await source.StartAsync(cancellationToken).ConfigureAwait(false);
+                lock (sync)
+                    captureStartCompletedTimestamp = Stopwatch.GetTimestamp();
+            }
+            catch (Exception exception)
+            {
+                lock (publicationSync)
+                {
+                    lock (sync)
+                    {
+                        lease.SetRunning(false);
+                        PublishRunningLeasesLocked();
+                        samplesReady.TrySetException(exception);
+                    }
+                }
+                throw;
+            }
+        }
+        finally
+        {
+            lifecycleGate.Release();
         }
     }
 
     private async ValueTask StopAsync(Lease lease, CancellationToken cancellationToken)
     {
-        bool stopSource;
-        lock (sync)
+        await lifecycleGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
         {
-            if (!leases.Contains(lease) || !lease.IsRunning)
-                return;
-            lease.SetRunning(false);
-            stopSource = !leases.Any(candidate => candidate.IsRunning);
+            await StopCoreAsync(lease, cancellationToken).ConfigureAwait(false);
         }
-
-        if (stopSource)
-            await source.StopAsync(cancellationToken).ConfigureAwait(false);
+        finally
+        {
+            lifecycleGate.Release();
+        }
     }
 
     private async ValueTask DisposeLeaseAsync(Lease lease)
     {
-        await StopAsync(lease, CancellationToken.None).ConfigureAwait(false);
-        lock (sync)
+        await lifecycleGate.WaitAsync().ConfigureAwait(false);
+        try
         {
-            leases.Remove(lease);
-            lease.MarkDisposed();
+            await StopCoreAsync(lease, CancellationToken.None).ConfigureAwait(false);
+            lock (publicationSync)
+            {
+                lock (sync)
+                {
+                    leases.Remove(lease);
+                    lease.MarkDisposed();
+                    PublishRunningLeasesLocked();
+                }
+            }
         }
+        finally
+        {
+            lifecycleGate.Release();
+        }
+    }
+
+    private async ValueTask StopCoreAsync(Lease lease, CancellationToken cancellationToken)
+    {
+        bool stopSource;
+        lock (publicationSync)
+        {
+            lock (sync)
+            {
+                if (!leases.Contains(lease) || !lease.IsRunning)
+                    return;
+                lease.SetRunning(false);
+                PublishRunningLeasesLocked();
+                stopSource = runningLeases.Length == 0;
+            }
+        }
+
+        if (stopSource)
+            await source.StopAsync(cancellationToken).ConfigureAwait(false);
     }
 
     private void HandleSamplesAvailable(object? sender, PcmSamplesEventArgs args)
@@ -217,16 +278,24 @@ internal sealed class SharedAudioCapture : IAsyncDisposable
                     readinessCompletedTimestamp = Stopwatch.GetTimestamp();
                 samplesReady.TrySetResult(true);
             }
+        }
+
+        // Keep suppression and lifecycle changes serialized with publication.
+        // Subscriber code runs outside the state lock, so a reentrant stop
+        // cannot deadlock the capture callback.
+        lock (publicationSync)
+        {
             if (samplesSuppressed)
                 return;
-
-            // Keep suppression changes serialized with publication. Once
-            // SetSamplesSuppressed(true) returns, no callback that began just
-            // before it can publish a trailing microphone frame.
-            foreach (Lease lease in leases.Where(lease => lease.IsRunning).ToArray())
+            foreach (Lease lease in runningLeases)
                 lease.Publish(args);
         }
     }
+
+    // Called with publicationSync and sync held. Lease transitions are rare;
+    // callbacks reuse this immutable array without per-frame LINQ or copying.
+    private void PublishRunningLeasesLocked()
+        => runningLeases = leases.Where(candidate => candidate.IsRunning).ToArray();
 
     private void ThrowIfUnavailable(Lease lease)
     {

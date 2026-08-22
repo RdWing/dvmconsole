@@ -5,7 +5,6 @@ using Avalonia.Interactivity;
 using Avalonia.Platform.Storage;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
-using DvmConsole.Audio;
 using DvmConsole.Media;
 using System.Collections.Specialized;
 
@@ -14,6 +13,7 @@ namespace DvmConsole.Desktop;
 public sealed partial class OperatorToolsWindow : Window
 {
     private readonly MainWindowViewModel viewModel;
+    private readonly WindowPttKeyRouter pttKeyRouter;
     private readonly DispatcherTimer scrollBarHideTimer;
     private ScrollViewer? activeScrollViewer;
     private ListBox? historyList;
@@ -27,13 +27,23 @@ public sealed partial class OperatorToolsWindow : Window
     public OperatorToolsWindow()
     {
         viewModel = null!;
+        pttKeyRouter = null!;
         scrollBarHideTimer = CreateScrollBarHideTimer();
         InitializeComponent();
     }
 
     public OperatorToolsWindow(MainWindowViewModel viewModel, OperatorToolSection section)
+        : this(viewModel, section, new WindowPttKeyRouter(() => viewModel))
+    {
+    }
+
+    internal OperatorToolsWindow(
+        MainWindowViewModel viewModel,
+        OperatorToolSection section,
+        WindowPttKeyRouter pttKeyRouter)
     {
         this.viewModel = viewModel ?? throw new ArgumentNullException(nameof(viewModel));
+        this.pttKeyRouter = pttKeyRouter ?? throw new ArgumentNullException(nameof(pttKeyRouter));
         scrollBarHideTimer = CreateScrollBarHideTimer();
         InitializeComponent();
         TabControl tabs = ToolTabs ?? this.FindControl<TabControl>("ToolTabs")
@@ -207,20 +217,14 @@ public sealed partial class OperatorToolsWindow : Window
 
     private void HandleKeyDown(object? sender, KeyEventArgs e)
     {
-        if (MainWindow.TryMapPttKey(e.Key, out KeyboardPttKey key))
-        {
-            bool handled = viewModel.HandleKeyboardPttDown(key);
-            e.Handled = handled || viewModel.IsConfiguredPttKey(key);
-        }
+        if (pttKeyRouter.TryHandleKeyDown(e.Key, out bool handled))
+            e.Handled = handled;
     }
 
     private void HandleKeyUp(object? sender, KeyEventArgs e)
     {
-        if (MainWindow.TryMapPttKey(e.Key, out KeyboardPttKey key))
-        {
-            bool handled = viewModel.HandleKeyboardPttUp(key);
-            e.Handled = handled || viewModel.IsConfiguredPttKey(key);
-        }
+        if (pttKeyRouter.TryHandleKeyUp(e.Key, out bool handled))
+            e.Handled = handled;
     }
 
     private void InitializeComponent()

@@ -18,6 +18,7 @@ public sealed class WebStreamPlaybackCoordinator : IAsyncDisposable
     private readonly Func<WebStreamViewModel, string?>? getStreamOutputDeviceId;
     private readonly Func<WebStreamConfiguration, CancellationToken, Task<Stream>> openStream;
     private readonly Func<Stream, CancellationToken, Task<IAudioPcmStreamReader>> createDecoder;
+    private readonly IUiDispatcher uiDispatcher;
     private IAudioBackend? audioBackend;
     private bool disposed;
 
@@ -34,12 +35,30 @@ public sealed class WebStreamPlaybackCoordinator : IAsyncDisposable
         Func<WebStreamConfiguration, CancellationToken, Task<Stream>>? openStream = null,
         Func<Stream, CancellationToken, Task<IAudioPcmStreamReader>>? createDecoder = null,
         Func<WebStreamViewModel, string?>? getStreamOutputDeviceId = null)
+        : this(
+            createAudioBackend,
+            getOutputDeviceId,
+            openStream,
+            createDecoder,
+            getStreamOutputDeviceId,
+            AvaloniaUiDispatcher.Instance)
+    {
+    }
+
+    internal WebStreamPlaybackCoordinator(
+        Func<IAudioBackend> createAudioBackend,
+        Func<string?> getOutputDeviceId,
+        Func<WebStreamConfiguration, CancellationToken, Task<Stream>>? openStream,
+        Func<Stream, CancellationToken, Task<IAudioPcmStreamReader>>? createDecoder,
+        Func<WebStreamViewModel, string?>? getStreamOutputDeviceId,
+        IUiDispatcher uiDispatcher)
     {
         this.createAudioBackend = createAudioBackend ?? throw new ArgumentNullException(nameof(createAudioBackend));
         this.getOutputDeviceId = getOutputDeviceId ?? throw new ArgumentNullException(nameof(getOutputDeviceId));
         this.getStreamOutputDeviceId = getStreamOutputDeviceId;
         this.openStream = openStream ?? OpenHttpStreamAsync;
         this.createDecoder = createDecoder ?? PcmStreamDecoder.OpenAsync;
+        this.uiDispatcher = uiDispatcher ?? throw new ArgumentNullException(nameof(uiDispatcher));
     }
 
     public IReadOnlyList<WebStreamViewModel> ActiveStreams
@@ -69,7 +88,13 @@ public sealed class WebStreamPlaybackCoordinator : IAsyncDisposable
             if (sessions.ContainsKey(stream))
                 return;
 
-            stream.SetPlaybackState(true, true, false, false, "Connecting…");
+            await SetPlaybackStateAsync(
+                stream,
+                true,
+                true,
+                false,
+                false,
+                "Connecting…").ConfigureAwait(false);
             IAudioBackend? createdBackend = null;
             Stream? source = null;
             IAudioPcmStreamReader? reader = null;
@@ -97,7 +122,13 @@ public sealed class WebStreamPlaybackCoordinator : IAsyncDisposable
                 lock (sessions)
                     sessions.Add(stream, session);
                 session.RunTask = RunAsync(stream, session);
-                stream.SetPlaybackState(true, false, false, false, "Connected; waiting for audio");
+                await SetPlaybackStateAsync(
+                    stream,
+                    true,
+                    false,
+                    false,
+                    false,
+                    "Connected; waiting for audio").ConfigureAwait(false);
             }
             catch (Exception exception)
             {
@@ -111,7 +142,13 @@ public sealed class WebStreamPlaybackCoordinator : IAsyncDisposable
                     createdBackend.Dispose();
                 }
 
-                stream.SetPlaybackState(false, false, false, true, CreateFailureStatus(exception));
+                await SetPlaybackStateAsync(
+                    stream,
+                    false,
+                    false,
+                    false,
+                    true,
+                    CreateFailureStatus(exception)).ConfigureAwait(false);
             }
         }
         finally
@@ -124,13 +161,13 @@ public sealed class WebStreamPlaybackCoordinator : IAsyncDisposable
     {
         ArgumentNullException.ThrowIfNull(stream);
         PlaybackSession? session = null;
+        bool removed = false;
         await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
             lock (sessions)
             {
-                if (sessions.Remove(stream, out session))
-                    stream.SetPlaybackState(false, false, false, false, "Stopping…");
+                removed = sessions.Remove(stream, out session);
             }
         }
         finally
@@ -138,10 +175,28 @@ public sealed class WebStreamPlaybackCoordinator : IAsyncDisposable
             gate.Release();
         }
 
+        if (removed)
+        {
+            await SetPlaybackStateAsync(
+                stream,
+                false,
+                false,
+                false,
+                false,
+                "Stopping…").ConfigureAwait(false);
+        }
         if (session is not null)
             await session.StopAsync(cancellationToken).ConfigureAwait(false);
         if (session is not null)
-            stream.SetPlaybackState(false, false, false, false, "Off");
+        {
+            await SetPlaybackStateAsync(
+                stream,
+                false,
+                false,
+                false,
+                false,
+                "Off").ConfigureAwait(false);
+        }
     }
 
     public void SetVolume(WebStreamViewModel stream, double volume)
@@ -198,30 +253,22 @@ public sealed class WebStreamPlaybackCoordinator : IAsyncDisposable
     private async Task RunAsync(WebStreamViewModel stream, PlaybackSession session)
     {
         Exception? failure = null;
-        bool received = false;
         bool canceled = false;
-        short[] input = new short[1600];
         try
         {
-            while (true)
-            {
-                int sampleCount = await session.Reader.ReadSamplesAsync(
-                    input,
-                    session.Cancellation.Token).ConfigureAwait(false);
-                if (sampleCount == 0)
-                    break;
-
-                short[] output = session.RateConverter?.Convert(input.AsSpan(0, sampleCount))
-                    ?? input.AsSpan(0, sampleCount).ToArray();
-                if (output.Length == 0)
-                    continue;
-                await session.Playback.WriteAsync(output, session.Cancellation.Token).ConfigureAwait(false);
-                if (!received)
-                {
-                    received = true;
-                    stream.SetPlaybackState(true, false, true, false, "Receiving");
-                }
-            }
+            await PcmPlaybackPump.RunAsync(
+                session.Reader,
+                session.Playback,
+                session.RateConverter,
+                session.Cancellation.Token,
+                () => SetPlaybackStateAsync(
+                        stream,
+                        true,
+                        false,
+                        true,
+                        false,
+                        "Receiving"))
+                .ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (session.Cancellation.IsCancellationRequested)
         {
@@ -247,11 +294,41 @@ public sealed class WebStreamPlaybackCoordinator : IAsyncDisposable
             await RemoveCompletedAsync(stream, session).ConfigureAwait(false);
 
             if (failure is not null)
-                stream.SetPlaybackState(false, false, false, true, CreateFailureStatus(failure));
+            {
+                await SetPlaybackStateAsync(
+                    stream,
+                    false,
+                    false,
+                    false,
+                    true,
+                    CreateFailureStatus(failure)).ConfigureAwait(false);
+            }
             else if (!canceled)
-                stream.SetPlaybackState(false, false, false, false, "Ended");
+            {
+                await SetPlaybackStateAsync(
+                    stream,
+                    false,
+                    false,
+                    false,
+                    false,
+                    "Ended").ConfigureAwait(false);
+            }
         }
     }
+
+    private ValueTask SetPlaybackStateAsync(
+        WebStreamViewModel stream,
+        bool active,
+        bool connecting,
+        bool receiving,
+        bool failed,
+        string status)
+        => uiDispatcher.InvokeAsync(() => stream.SetPlaybackState(
+            active,
+            connecting,
+            receiving,
+            failed,
+            status));
 
     private async Task RemoveCompletedAsync(WebStreamViewModel stream, PlaybackSession session)
     {

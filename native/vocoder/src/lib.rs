@@ -4,22 +4,30 @@
 //! panics never cross the boundary.
 
 mod legacy_p25_tone_frames;
+mod packing;
+mod processing;
+mod session;
+mod tone;
 
 use std::cell::RefCell;
 use std::ffi::c_char;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
-use blip25_vocoder::enhancement::{Biquad, ClassicalConfig, Compressor, EnhancementMode};
-use blip25_vocoder::fullrate::frame::{decode_frame as decode_full_rate_frame, INFO_WIDTHS};
-use blip25_vocoder::halfrate::dequantize::{
-    encode_tone_frame_info, TONE_AMPLITUDE_EXPONENT_STEP, TONE_AMPLITUDE_PEAK,
-};
-use blip25_vocoder::halfrate::frame::{
-    decode_code_vectors, decode_frame, encode_code_vectors, encode_frame, ANNEX_T, DIBITS_PER_FRAME,
-};
+#[cfg(test)]
+use blip25_vocoder::enhancement::{Biquad, ClassicalConfig, EnhancementMode};
+#[cfg(test)]
+use blip25_vocoder::halfrate::frame::encode_code_vectors;
+#[cfg(test)]
+use blip25_vocoder::halfrate::frame::{encode_frame, ANNEX_T};
 use blip25_vocoder::halfrate::{pack_natural, unpack_natural};
 use blip25_vocoder::rate_conversion::HalfToFullConverter;
-use blip25_vocoder::vocoder::{FrameStatus, Rate, Vocoder};
+#[cfg(test)]
+use blip25_vocoder::vocoder::Vocoder;
+use blip25_vocoder::vocoder::{FrameStatus, Rate};
+use packing::*;
+use processing::*;
+pub use session::Session;
+use tone::*;
 
 const ABI_VERSION: u32 = 7;
 const MODE_DMR: u32 = 0;
@@ -35,114 +43,13 @@ const HALF_RATE_CODEWORD_BYTES: usize = 9;
 const HALF_RATE_PARAMETER_BYTES: usize = 7;
 const P25_CODEWORD_BYTES: usize = 11;
 
-// Half-rate modes need presentation gain beyond the crate's classical
-// defaults. P25 Phase 1 remains at unity gain.
-const RX_OUTPUT_GAIN_DB: f32 = 9.0;
-const RX_BOUNDARY_FADE_SAMPLES: usize = 40;
-const RX_COMPRESSOR_ATTACK_MS: f32 = 10.0;
-const RX_COMPRESSOR_RELEASE_MS: f32 = 250.0;
-
 const OK: i32 = 0;
 const ERR_INVALID: i32 = -1;
 const ERR_LENGTH: i32 = -2;
 const ERR_STATE: i32 = -3;
 
-// Positions of the four protocol-agnostic half-rate code vectors in a DMR
-// 72-bit codeword, in first-transmitted-bit order. NXDN carries the same code
-// vectors sequentially and therefore must not use this interleave.
-const A_POSITIONS: [usize; 24] = [
-    0, 4, 8, 12, 16, 20, 24, 28, 32, 36, 40, 44, 48, 52, 56, 60, 64, 68, 1, 5, 9, 13, 17, 21,
-];
-const B_POSITIONS: [usize; 23] = [
-    25, 29, 33, 37, 41, 45, 49, 53, 57, 61, 65, 69, 2, 6, 10, 14, 18, 22, 26, 30, 34, 38, 42,
-];
-const C_POSITIONS: [usize; 25] = [
-    46, 50, 54, 58, 62, 66, 70, 3, 7, 11, 15, 19, 23, 27, 31, 35, 39, 43, 47, 51, 55, 59, 63, 67,
-    71,
-];
-
 thread_local! {
     static LAST_ERROR: RefCell<Vec<u8>> = RefCell::new(b"ok\0".to_vec());
-}
-
-#[repr(C)]
-pub struct Session {
-    mode: u32,
-    vocoder: Vocoder,
-    tone_converter: HalfToFullConverter,
-    pending_tone: Option<DetectedTone>,
-    flushed: bool,
-}
-
-impl Session {
-    fn new(mode: u32) -> Option<Self> {
-        let mut session = Self {
-            mode,
-            vocoder: Vocoder::new(rate(mode)?),
-            tone_converter: HalfToFullConverter::new(),
-            pending_tone: None,
-            flushed: false,
-        };
-        session.set_receive_audio_processing(ReceiveAudioProcessingOptions::default());
-        Some(session)
-    }
-
-    fn set_receive_audio_processing(&mut self, options: ReceiveAudioProcessingOptions) {
-        self.vocoder
-            .set_enhancement(receive_enhancement(self.mode, options));
-    }
-}
-
-#[derive(Clone, Copy, Debug)]
-struct ReceiveAudioProcessingOptions {
-    high_pass_enabled: bool,
-    high_pass_frequency_hz: f32,
-    peaking_enabled: bool,
-    peaking_frequency_hz: f32,
-    peaking_gain_db: f32,
-    compressor_enabled: bool,
-    compressor_ratio: f32,
-    compressor_threshold_dbfs: f32,
-    compressor_makeup_gain_db: f32,
-}
-
-impl Default for ReceiveAudioProcessingOptions {
-    fn default() -> Self {
-        Self {
-            high_pass_enabled: true,
-            high_pass_frequency_hz: 250.0,
-            peaking_enabled: true,
-            peaking_frequency_hz: 2_500.0,
-            peaking_gain_db: 3.0,
-            compressor_enabled: false,
-            compressor_ratio: 3.0,
-            compressor_threshold_dbfs: -18.0,
-            compressor_makeup_gain_db: 3.0,
-        }
-    }
-}
-
-impl ReceiveAudioProcessingOptions {
-    fn is_valid(self) -> bool {
-        self.high_pass_frequency_hz.is_finite()
-            && (0.0..=500.0).contains(&self.high_pass_frequency_hz)
-            && self.peaking_frequency_hz.is_finite()
-            && (250.0..=3_000.0).contains(&self.peaking_frequency_hz)
-            && self.peaking_gain_db.is_finite()
-            && (-10.0..=10.0).contains(&self.peaking_gain_db)
-            && self.compressor_ratio.is_finite()
-            && (1.0..=10.0).contains(&self.compressor_ratio)
-            && self.compressor_threshold_dbfs.is_finite()
-            && (-40.0..=0.0).contains(&self.compressor_threshold_dbfs)
-            && self.compressor_makeup_gain_db.is_finite()
-            && (0.0..=10.0).contains(&self.compressor_makeup_gain_db)
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct DetectedTone {
-    id: u8,
-    amplitude: u8,
 }
 
 fn set_error(message: &str) {
@@ -184,276 +91,6 @@ fn rate(mode: u32) -> Option<Rate> {
         MODE_DMR | MODE_NXDN | MODE_P25_PHASE2 => Some(Rate::HalfRate3600x2450),
         MODE_P25 => Some(Rate::FullRate4400x4400),
         _ => None,
-    }
-}
-
-// ClassicalConfig is non-exhaustive, so external consumers must begin with its
-// default value before applying the complete operator-selected table.
-#[allow(clippy::field_reassign_with_default)]
-fn receive_enhancement(mode: u32, options: ReceiveAudioProcessingOptions) -> EnhancementMode {
-    let mut config = ClassicalConfig::default();
-    config.biquads = [
-        (options.high_pass_enabled && options.high_pass_frequency_hz > 0.0)
-            .then(|| Biquad::high_pass(8_000.0, options.high_pass_frequency_hz, 0.707)),
-        options.peaking_enabled.then(|| {
-            Biquad::peaking(
-                8_000.0,
-                options.peaking_frequency_hz,
-                1.0,
-                options.peaking_gain_db,
-            )
-        }),
-    ];
-    config.compressor = options.compressor_enabled.then_some(Compressor {
-        threshold_db: options.compressor_threshold_dbfs,
-        ratio: options.compressor_ratio,
-        attack_ms: RX_COMPRESSOR_ATTACK_MS,
-        release_ms: RX_COMPRESSOR_RELEASE_MS,
-        makeup_db: options.compressor_makeup_gain_db,
-    });
-    // Boundary smoothing is a receive invariant, independent of the optional
-    // filters and compressor.
-    config.boundary_fade_samples = RX_BOUNDARY_FADE_SAMPLES;
-    if matches!(mode, MODE_DMR | MODE_NXDN | MODE_P25_PHASE2) {
-        config.output_gain_db = RX_OUTPUT_GAIN_DB;
-    }
-    EnhancementMode::Classical(config)
-}
-
-fn read_bit(bytes: &[u8], bit: usize) -> u32 {
-    u32::from((bytes[bit / 8] >> (7 - bit % 8)) & 1)
-}
-
-fn write_bit(bytes: &mut [u8], bit: usize, value: u32) {
-    let mask = 1u8 << (7 - bit % 8);
-    if value & 1 != 0 {
-        bytes[bit / 8] |= mask;
-    } else {
-        bytes[bit / 8] &= !mask;
-    }
-}
-
-fn pack_full_rate_natural(info: &[u16; 8]) -> [u8; P25_CODEWORD_BYTES] {
-    let mut output = [0u8; P25_CODEWORD_BYTES];
-    let mut bit = 0usize;
-    for (vector, width) in INFO_WIDTHS.into_iter().enumerate() {
-        for shift in (0..usize::from(width)).rev() {
-            write_bit(&mut output, bit, u32::from(info[vector]) >> shift);
-            bit += 1;
-        }
-    }
-    output
-}
-
-fn tone_component(samples: &[f64; PCM_SAMPLES], frequency: f64) -> (f64, f64) {
-    let step = std::f64::consts::TAU * frequency / 8000.0;
-    let (step_sin, step_cos) = step.sin_cos();
-    let (mut sin, mut cos) = (0.0, 1.0);
-    let (mut sin_sum, mut cos_sum) = (0.0, 0.0);
-    for sample in samples {
-        cos_sum += sample * cos;
-        sin_sum += sample * sin;
-        (sin, cos) = (
-            sin * step_cos + cos * step_sin,
-            cos * step_cos - sin * step_sin,
-        );
-    }
-    let magnitude_squared = cos_sum * cos_sum + sin_sum * sin_sum;
-    let explained_energy = 2.0 * magnitude_squared / PCM_SAMPLES as f64;
-    let peak = 2.0 * magnitude_squared.sqrt() / PCM_SAMPLES as f64;
-    (explained_energy, peak)
-}
-
-/// Recognize only frames overwhelmingly explained by a representable single
-/// or dual tone. Normal speech continues through the ordinary speech encoder.
-fn detect_tone(samples: &[i16]) -> Option<DetectedTone> {
-    let mean = samples.iter().map(|&sample| f64::from(sample)).sum::<f64>() / PCM_SAMPLES as f64;
-    let centered: [f64; PCM_SAMPLES] =
-        std::array::from_fn(|index| f64::from(samples[index]) - mean);
-    let total_energy = centered.iter().map(|sample| sample * sample).sum::<f64>();
-    if total_energy < PCM_SAMPLES as f64 * 256.0f64.powi(2) {
-        return None;
-    }
-
-    let mut best: Option<(f64, u8, f64)> = None;
-    for (id, row) in ANNEX_T.iter().enumerate() {
-        let Some(tone) = row else {
-            continue;
-        };
-        let frequency1 = f64::from(tone.f0) * f64::from(tone.l1);
-        let frequency2 = f64::from(tone.f0) * f64::from(tone.l2);
-        let (energy1, peak1) = tone_component(&centered, frequency1);
-        let (explained, peak) = if tone.l1 == tone.l2 {
-            (energy1, peak1)
-        } else {
-            let (energy2, peak2) = tone_component(&centered, frequency2);
-            let balance = energy1.min(energy2) / energy1.max(energy2).max(1.0);
-            if balance < 0.15 {
-                continue;
-            }
-            (energy1 + energy2, peak1.max(peak2))
-        };
-        let score = explained / total_energy;
-        if best.is_none_or(|(best_score, _, _)| score > best_score) {
-            best = Some((score, id as u8, peak));
-        }
-    }
-
-    let (score, id, peak) = best?;
-    if score < 0.72 {
-        return None;
-    }
-    let amplitude = ((peak / TONE_AMPLITUDE_PEAK).log10() / TONE_AMPLITUDE_EXPONENT_STEP + 127.0)
-        .round()
-        .clamp(0.0, 127.0) as u8;
-    Some(DetectedTone { id, amplitude })
-}
-
-fn encode_detected_tone(session: &mut Session, tone: DetectedTone) -> Vec<u8> {
-    let info = encode_tone_frame_info(tone.id, tone.amplitude);
-    if is_half_rate(session.mode) {
-        return pack_natural(&info).to_vec();
-    }
-    if session.mode == MODE_P25 {
-        let row = ANNEX_T[tone.id as usize].expect("detected Annex T tone");
-        if row.l1 == row.l2 {
-            let frequency = f64::from(row.f0) * f64::from(row.l1);
-            return legacy_p25_tone_frames::nearest(frequency).to_vec();
-        }
-    }
-    let half_rate_dibits = encode_frame(&info);
-    let full_rate_dibits = session
-        .tone_converter
-        .convert(&half_rate_dibits)
-        .expect("valid Annex T tone conversion");
-    pack_full_rate_natural(&decode_full_rate_frame(&full_rate_dibits).info).to_vec()
-}
-
-fn dmr_codeword_to_vectors(codeword: &[u8]) -> [u32; 4] {
-    let mut vectors = [0u32; 4];
-    for &position in &A_POSITIONS {
-        vectors[0] = (vectors[0] << 1) | read_bit(codeword, position);
-    }
-    for &position in &B_POSITIONS {
-        vectors[1] = (vectors[1] << 1) | read_bit(codeword, position);
-    }
-    for (index, &position) in C_POSITIONS.iter().enumerate() {
-        let vector = if index < 11 { 2 } else { 3 };
-        vectors[vector] = (vectors[vector] << 1) | read_bit(codeword, position);
-    }
-    vectors
-}
-
-fn dmr_vectors_to_codeword(vectors: &[u32; 4]) -> [u8; HALF_RATE_CODEWORD_BYTES] {
-    let mut codeword = [0u8; HALF_RATE_CODEWORD_BYTES];
-    for (index, &position) in A_POSITIONS.iter().enumerate() {
-        write_bit(&mut codeword, position, vectors[0] >> (23 - index));
-    }
-    for (index, &position) in B_POSITIONS.iter().enumerate() {
-        write_bit(&mut codeword, position, vectors[1] >> (22 - index));
-    }
-    for (index, &position) in C_POSITIONS.iter().enumerate() {
-        let bit = if index < 11 {
-            vectors[2] >> (10 - index)
-        } else {
-            vectors[3] >> (13 - (index - 11))
-        };
-        write_bit(&mut codeword, position, bit);
-    }
-    codeword
-}
-
-fn sequential_codeword_to_vectors(codeword: &[u8]) -> [u32; 4] {
-    const WIDTHS: [usize; 4] = [24, 23, 11, 14];
-    let mut bit = 0usize;
-    std::array::from_fn(|vector| {
-        let mut word = 0u32;
-        for _ in 0..WIDTHS[vector] {
-            word = (word << 1) | read_bit(codeword, bit);
-            bit += 1;
-        }
-        word
-    })
-}
-
-fn sequential_vectors_to_codeword(vectors: &[u32; 4]) -> [u8; HALF_RATE_CODEWORD_BYTES] {
-    const WIDTHS: [usize; 4] = [24, 23, 11, 14];
-    let mut codeword = [0u8; HALF_RATE_CODEWORD_BYTES];
-    let mut bit = 0usize;
-    for (vector, width) in WIDTHS.into_iter().enumerate() {
-        for shift in (0..width).rev() {
-            write_bit(&mut codeword, bit, vectors[vector] >> shift);
-            bit += 1;
-        }
-    }
-    codeword
-}
-
-fn unpack_dibits(codeword: &[u8]) -> [u8; DIBITS_PER_FRAME] {
-    std::array::from_fn(|index| {
-        let bit = index * 2;
-        (codeword[bit / 8] >> (6 - bit % 8)) & 0x03
-    })
-}
-
-fn pack_dibits(dibits: &[u8; DIBITS_PER_FRAME]) -> [u8; HALF_RATE_CODEWORD_BYTES] {
-    let mut codeword = [0u8; HALF_RATE_CODEWORD_BYTES];
-    for (index, dibit) in dibits.iter().enumerate() {
-        let bit = index * 2;
-        codeword[bit / 8] |= (dibit & 0x03) << (6 - bit % 8);
-    }
-    codeword
-}
-
-fn codeword_to_vectors(mode: u32, codeword: &[u8]) -> [u32; 4] {
-    match mode {
-        MODE_DMR => dmr_codeword_to_vectors(codeword),
-        MODE_NXDN => sequential_codeword_to_vectors(codeword),
-        _ => unreachable!("validated half-rate mode"),
-    }
-}
-
-fn vectors_to_codeword(mode: u32, vectors: &[u32; 4]) -> [u8; HALF_RATE_CODEWORD_BYTES] {
-    match mode {
-        MODE_DMR => dmr_vectors_to_codeword(vectors),
-        MODE_NXDN => sequential_vectors_to_codeword(vectors),
-        _ => unreachable!("validated half-rate mode"),
-    }
-}
-
-fn natural_to_codeword(mode: u32, parameters: &[u8]) -> [u8; HALF_RATE_CODEWORD_BYTES] {
-    let info = unpack_natural(parameters);
-    if mode == MODE_P25_PHASE2 {
-        pack_dibits(&encode_frame(&info))
-    } else {
-        vectors_to_codeword(mode, &encode_code_vectors(&info))
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct HalfRateDecode {
-    parameters: [u8; HALF_RATE_PARAMETER_BYTES],
-    corrected_errors: u16,
-    unrecoverable: bool,
-}
-
-fn codeword_to_natural(mode: u32, codeword: &[u8]) -> HalfRateDecode {
-    let frame = if mode == MODE_P25_PHASE2 {
-        decode_frame(&unpack_dibits(codeword))
-    } else {
-        decode_code_vectors(codeword_to_vectors(mode, codeword))
-    };
-    let unrecoverable = frame.errors[0] == u8::MAX;
-    HalfRateDecode {
-        parameters: pack_natural(&frame.info),
-        // An uncorrectable c0 marker is not an error count. Keep the numeric
-        // metric in the decoder's live range and carry erasure separately.
-        corrected_errors: if unrecoverable {
-            15
-        } else {
-            frame.error_total()
-        },
-        unrecoverable,
     }
 }
 

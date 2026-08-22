@@ -209,6 +209,24 @@ public sealed class AudioMixerTests
     }
 
     [Fact]
+    public async Task ConcurrentDisposalWaitsForTheSharedCleanupOperation()
+    {
+        var output = new BlockingDrainPlayback();
+        var mixer = new AudioMixer(output);
+
+        Task first = mixer.DisposeAsync().AsTask();
+        await output.DrainEntered.Task.WaitAsync(TimeSpan.FromSeconds(1));
+        Task second = mixer.DisposeAsync().AsTask();
+
+        Assert.False(first.IsCompleted);
+        Assert.False(second.IsCompleted);
+        output.AllowDrain();
+        await Task.WhenAll(first, second).WaitAsync(TimeSpan.FromSeconds(1));
+
+        Assert.Equal(1, output.DisposeCalls);
+    }
+
+    [Fact]
     public async Task StartsADeviceBackedLaneAfterTheDefaultPlayoutCushion()
     {
         var output = new BufferedFakePlayback();
@@ -558,5 +576,39 @@ public sealed class AudioMixerTests
             => ValueTask.CompletedTask;
 
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
+    private sealed class BlockingDrainPlayback : IAudioPlayback
+    {
+        private readonly TaskCompletionSource drainCompletion = new(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public PcmAudioFormat Format { get; } = PcmAudioFormat.Voice8KhzMono16Bit;
+        public TaskCompletionSource DrainEntered { get; } = new(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        public int DisposeCalls { get; private set; }
+
+        public ValueTask WriteAsync(
+            ReadOnlyMemory<short> samples,
+            CancellationToken cancellationToken = default)
+            => ValueTask.CompletedTask;
+
+        public ValueTask FlushAsync(CancellationToken cancellationToken = default)
+            => ValueTask.CompletedTask;
+
+        public async ValueTask<int?> DrainAsync(CancellationToken cancellationToken = default)
+        {
+            DrainEntered.TrySetResult();
+            await drainCompletion.Task.WaitAsync(cancellationToken);
+            return 0;
+        }
+
+        public ValueTask DisposeAsync()
+        {
+            DisposeCalls++;
+            return ValueTask.CompletedTask;
+        }
+
+        public void AllowDrain() => drainCompletion.TrySetResult();
     }
 }

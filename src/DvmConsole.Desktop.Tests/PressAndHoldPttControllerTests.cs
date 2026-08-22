@@ -107,6 +107,63 @@ public sealed class PressAndHoldPttControllerTests
         Assert.True(uiContext.PostCount > 0);
     }
 
+    [Fact]
+    public async Task DisposalWaitsForStartupThenStopsThePressedChannel()
+    {
+        ChannelViewModel channel = CreateChannel();
+        var startupEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var allowStartup = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var stopped = new TaskCompletionSource<ChannelViewModel>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var controller = new PressAndHoldPttController(
+            async _ =>
+            {
+                startupEntered.TrySetResult();
+                await allowStartup.Task;
+            },
+            stoppedChannel =>
+            {
+                stopped.TrySetResult(stoppedChannel);
+                return Task.CompletedTask;
+            });
+
+        Task press = controller.PressAsync(channel);
+        await startupEntered.Task.WaitAsync(TimeSpan.FromSeconds(1));
+        Task dispose = controller.DisposeAsync().AsTask();
+
+        Assert.False(dispose.IsCompleted);
+        allowStartup.TrySetResult();
+        await Task.WhenAll(press, dispose).WaitAsync(TimeSpan.FromSeconds(1));
+
+        Assert.Same(channel, await stopped.Task.WaitAsync(TimeSpan.FromSeconds(1)));
+    }
+
+    [Fact]
+    public async Task DisposedControllerIgnoresLaterPointerTransitions()
+    {
+        ChannelViewModel channel = CreateChannel();
+        int starts = 0;
+        int stops = 0;
+        var controller = new PressAndHoldPttController(
+            _ =>
+            {
+                starts++;
+                return Task.CompletedTask;
+            },
+            _ =>
+            {
+                stops++;
+                return Task.CompletedTask;
+            });
+        await controller.DisposeAsync();
+
+        await controller.PressAsync(channel);
+        await controller.ReleaseAsync(channel);
+
+        Assert.Equal(0, starts);
+        Assert.Equal(0, stops);
+    }
+
     private static ChannelViewModel CreateChannel()
         => new(new ChannelConfiguration
         {

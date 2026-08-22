@@ -1,10 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <TargetFramework>net10.0</TargetFramework>
     <IsPackable>false</IsPackable>
     <IsTestProject>true</IsTestProject>
-    <Nullable>enable</Nullable>
-    <ImplicitUsings>enable</ImplicitUsings>
   </PropertyGroup>
 
   <ItemGroup>
@@ -18,5 +15,6 @@
     <None Include="../../configs/codeplug.example.yml" Link="TestData/codeplug.example.yml" CopyToOutputDirectory="PreserveNewest" />
     <None Include="../../configs/keys.example.clear" Link="TestData/keys.example.clear" CopyToOutputDirectory="PreserveNewest" />
     <None Include="../../configs/alias.example.yml" Link="TestData/alias.example.yml" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="TestData/Compatibility/**/*" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

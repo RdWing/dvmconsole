@@ -1,4 +1,5 @@
 using DvmConsole.FneClient;
+using fnecore;
 using fnecore.P25;
 using Xunit;
 
@@ -18,6 +19,31 @@ public sealed class P25SubscriberCommandCodecTests
         Assert.Equal(
             [0x00, 0x00, 0x00, 0x30, 0x39, 0x00, 0x03, 0x7A],
             message.Tsbk[2..10]);
+    }
+
+    [Fact]
+    public void EncodesCompleteCallAlertFrameByteForByte()
+    {
+        P25SubscriberCommandMessage message = P25SubscriberCommandCodec.Build(
+            P25SubscriberCommand.CallAlert,
+            890,
+            12345);
+        var callData = new RemoteCallData
+        {
+            SrcId = 890,
+            DstId = 12345,
+            LCO = message.LinkControlOpcode
+        };
+
+        byte[] frame = P25SubscriberFrameEncoder.Encode(message, callData);
+
+        byte[] expectedPrefix = Convert.FromHexString(
+            "503235441F00037A0030390000000000000000000000074500" +
+            "0000000000000000000000000009488888E2B729C2222FF22" +
+            "3D04C888958899DE08888272FAED0");
+        Assert.Equal(200, frame.Length);
+        Assert.Equal(expectedPrefix, frame[..expectedPrefix.Length]);
+        Assert.All(frame[expectedPrefix.Length..], value => Assert.Equal((byte)0, value));
     }
 
     [Theory]

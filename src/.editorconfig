@@ -1,0 +1,6 @@
+root = true
+
+[*.cs]
+# ValueTask instances may be backed by pooled sources and must be consumed.
+# Add further correctness rules here only after the existing tree is clean.
+dotnet_diagnostic.CA2012.severity = warning

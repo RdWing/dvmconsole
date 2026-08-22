@@ -47,38 +47,26 @@ multi-system activity understandable.
 
 ## What’s new in DVM Console Neo
 
-### 0.3.4 — Recording and PTT cue reliability
+### 0.3.5 — Optimization and reliability
 
-DVM Console Neo 0.3.4 is a focused recording and PTT-cue reliability patch:
+DVM Console Neo 0.3.5 improves performance and runtime reliability while preserving existing operator behavior:
 
-- **TAR without live RX** records an armed inbound resource without also
-  selecting its channel card for speaker playback.
-- **Consistent zone-copy ownership** keeps decoded audio, encryption metadata,
-  and call finalization attached to the TAR-armed copy of a shared resource.
-- **Reliable scoped PTT cues** complete the local talk-permit tone for global,
-  active-system, and serial PTT in toggle as well as press-and-hold operation.
+- **Optimized audio paths** reduce managed allocation in receive routing, vocoder processing, and transmit packetization without changing output behavior.
+- **More reliable reload and shutdown** keep Activity, PTT, audio services, tools, and background work attached to the correct session.
+- **Clearer internal ownership** makes the runtime easier to maintain while preserving settings, FNE, audio, and UI compatibility.
 
-[Read the complete 0.3.4 release notes →](docs/releases/v0.3.4.md)
+[Read the complete 0.3.5 release notes →](docs/releases/v0.3.5.md)
 
-### 0.3.3 — Built for busy systems
+### Prior recent improvements
 
-DVM Console Neo 0.3.3 was a substantial receive-continuity and day-to-day
-operator-control release, and remains recent:
+Recent 0.3.4 and 0.3.3 updates also introduced:
 
-- **Adaptive RX jitter handling** learns transport variation independently for
-  each FNE connection and protocol while keeping every active call on a stable
-  playout clock.
-- **Scoped speaker mute** quiets all RX, one system, or one zone while TAR keeps
-  recording the decoded timeline.
-- **Readable health evidence** separates restored packet order, missed playout
-  deadlines, decoder timing, mixer pressure, and physical-output starvation.
-- **More dependable P25 key requests** restore legacy-compatible key-ID
-  interpretation, connection settling, and request pacing.
-- **Operator layout and state fixes** improve narrow settings layouts, Event
-  History, Debug Logs, main-window restoration, and short saved Alert/QCII
-  pattern steps.
+- **Adaptive receive timing and clearer diagnostics** for P25, DMR, and NXDN, with independent stream handling and better visibility into network, decoder, mixer, and output-device conditions.
+- **Scoped speaker mute that preserves TAR**, allowing all RX, one system, or one zone to be quieted without stopping decode, call state, patching, or recording.
+- **TAR without live RX**, including consistent recording ownership when multiple zone copies share a resource.
+- **More reliable PTT cues and P25 key requests**, including scoped toggle/hold behavior and legacy-compatible KMM timing and key-ID handling.
 
-[Read the complete 0.3.3 release notes →](docs/releases/v0.3.3.md)
+[Read the 0.3.4 release notes →](docs/releases/v0.3.4.md) · [Read the 0.3.3 release notes →](docs/releases/v0.3.3.md)
 
 ## Download DVM Console Neo
 
@@ -87,9 +75,9 @@ computer and extract the entire archive before starting DVM Console.
 
 | Platform | Package | Requirements |
 | --- | --- | --- |
-| Apple Silicon Mac | `dvmconsole-0.3.4-osx-arm64.zip` | macOS 14 or newer |
-| Intel Mac | `dvmconsole-0.3.4-osx-x64.zip` | macOS 14 or newer |
-| Windows PC | `dvmconsole-0.3.4-win-x64.zip` | Windows x64 |
+| Apple Silicon Mac | `dvmconsole-0.3.5-osx-arm64.zip` | macOS 14 or newer |
+| Intel Mac | `dvmconsole-0.3.5-osx-x64.zip` | macOS 14 or newer |
+| Windows PC | `dvmconsole-0.3.5-win-x64.zip` | Windows x64 |
 
 **[Download the latest release →](https://github.com/RdWing/dvmconsole/releases/latest)**
 

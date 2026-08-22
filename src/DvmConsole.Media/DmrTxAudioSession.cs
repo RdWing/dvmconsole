@@ -19,7 +19,8 @@ public sealed class DmrTxAudioSession : IDisposable
     private readonly EmbeddedData? embeddedData;
     private readonly DmrPrivacyOptions? privacy;
     private readonly DmrPrivacyProcessor? privacyProcessor;
-    private readonly List<byte> pendingAmbe = [];
+    private readonly byte[] pendingAmbe = new byte[DmrVoicePacketCodec.AmbeBytes];
+    private int pendingAmbeBytes;
     private byte embeddedSequence;
     private int pendingPcmSamples;
     private bool privacyHeaderPending;
@@ -122,7 +123,7 @@ public sealed class DmrTxAudioSession : IDisposable
 
         encoder.Flush(EmitCodeword);
 
-        while (pendingAmbe.Count > 0)
+        while (pendingAmbeBytes > 0)
             Process(new short[VocoderFrameSizes.PcmSamplesPerFrame]);
 
         while (embeddedSequence != 0)
@@ -137,7 +138,8 @@ public sealed class DmrTxAudioSession : IDisposable
             return;
         privacyProcessor?.Dispose();
         encoder.Dispose();
-        pendingAmbe.Clear();
+        Array.Clear(pendingAmbe);
+        pendingAmbeBytes = 0;
         pendingPcmSamples = 0;
         disposed = true;
     }
@@ -147,16 +149,16 @@ public sealed class DmrTxAudioSession : IDisposable
         if (privacyHeaderPending)
             SendPrivacyHeader();
 
-        byte[] wireCodeword = codeword.ToArray();
+        Span<byte> destination = pendingAmbe.AsSpan(
+            pendingAmbeBytes,
+            VocoderFrameSizes.HalfRateCodewordBytes);
         if (privacyProcessor is not null)
-        {
-            byte[] encrypted = new byte[VocoderFrameSizes.HalfRateCodewordBytes];
-            privacyProcessor.ProcessCodeword(wireCodeword, encrypted);
-            wireCodeword = encrypted;
-        }
-        pendingAmbe.AddRange(wireCodeword);
+            privacyProcessor.ProcessCodeword(codeword.Span, destination);
+        else
+            codeword.Span.CopyTo(destination);
+        pendingAmbeBytes += destination.Length;
         CodewordsEncoded++;
-        if (pendingAmbe.Count < DmrVoicePacketCodec.AmbeBytes)
+        if (pendingAmbeBytes < pendingAmbe.Length)
             return;
 
         bool voiceSync = embeddedSequence == 0;
@@ -167,11 +169,11 @@ public sealed class DmrTxAudioSession : IDisposable
             voiceSync,
             embeddedSequence,
             sequence.FrameSequence,
-            pendingAmbe.ToArray(),
+            pendingAmbe,
             embeddedData);
         ushort packetSequence = sequence.PacketSequence;
         send(packet, packetSequence, streamId);
-        pendingAmbe.Clear();
+        pendingAmbeBytes = 0;
         PacketsSent++;
         sequence.Advance();
         if (embeddedSequence >= 5)

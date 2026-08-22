@@ -611,11 +611,5 @@ public sealed partial class MainWindowViewModel
     }
 
     private static FneTrafficProtocol ProtocolFor(ChannelViewModel channel)
-        => channel.Definition.Mode switch
-        {
-            "dmr" => FneTrafficProtocol.Dmr,
-            "p25" => FneTrafficProtocol.P25,
-            "nxdn" => FneTrafficProtocol.Nxdn,
-            _ => FneTrafficProtocol.Analog
-        };
+        => FneTrafficProtocolMapper.FromChannelProtocol(channel.Definition.Protocol);
 }

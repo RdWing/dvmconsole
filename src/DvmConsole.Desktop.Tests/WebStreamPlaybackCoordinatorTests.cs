@@ -66,6 +66,34 @@ public sealed class WebStreamPlaybackCoordinatorTests
         Assert.True(backend.IsDisposed);
     }
 
+    [Fact]
+    public async Task PlaybackStateChangesUseTheUiDispatcher()
+    {
+        var backend = new FakeAudioBackend();
+        var dispatcher = new RecordingUiDispatcher();
+        var stream = new WebStreamViewModel(new WebStreamConfiguration
+        {
+            Name = "Dispatch stream",
+            Url = "https://example.test/dispatch.wav"
+        });
+        bool observedOutsideDispatcher = false;
+        stream.PropertyChanged += (_, _) =>
+            observedOutsideDispatcher |= !dispatcher.IsDispatching;
+        await using var coordinator = new WebStreamPlaybackCoordinator(
+            () => backend,
+            () => "output",
+            (_, _) => Task.FromResult<Stream>(CreateWav(1600, 10_000)),
+            createDecoder: null,
+            getStreamOutputDeviceId: null,
+            uiDispatcher: dispatcher);
+
+        await Task.Run(() => coordinator.StartAsync(stream));
+        await WaitForAsync(() => stream.StatusText == "Ended");
+
+        Assert.False(observedOutsideDispatcher);
+        Assert.True(dispatcher.InvocationCount >= 3);
+    }
+
     private static MemoryStream CreateWav(int sampleCount, short sample, ushort formatTag = 1)
     {
         byte[] data = new byte[sampleCount * sizeof(short)];
@@ -144,6 +172,31 @@ public sealed class WebStreamPlaybackCoordinatorTests
         {
             IsDisposed = true;
             return ValueTask.CompletedTask;
+        }
+    }
+
+    private sealed class RecordingUiDispatcher : IUiDispatcher
+    {
+        private readonly AsyncLocal<bool> isDispatching = new();
+        private int invocationCount;
+
+        public bool IsDispatching => isDispatching.Value;
+        public int InvocationCount => Volatile.Read(ref invocationCount);
+
+        public ValueTask InvokeAsync(Action action)
+        {
+            Interlocked.Increment(ref invocationCount);
+            bool previous = isDispatching.Value;
+            isDispatching.Value = true;
+            try
+            {
+                action();
+                return ValueTask.CompletedTask;
+            }
+            finally
+            {
+                isDispatching.Value = previous;
+            }
         }
     }
 }

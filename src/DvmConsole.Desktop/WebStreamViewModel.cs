@@ -136,9 +136,9 @@ public sealed class WebStreamViewModel : INotifyPropertyChanged
         try
         {
             if (IsActive)
-                await stop(this).ConfigureAwait(false);
+                await stop(this);
             else
-                await start(this).ConfigureAwait(false);
+                await start(this);
         }
         finally
         {

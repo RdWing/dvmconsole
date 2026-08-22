@@ -1,0 +1,26 @@
+keyFile: "../keys.example.clear"
+systems:
+  - name: "Legacy System"
+    identity: "Legacy Console"
+    address: "127.0.0.1"
+    port: 62031
+    peerId: 1000001
+    rid: "1001"
+    aliasPath: "../alias.example.yml"
+patchGroups:
+  - name: "Legacy Patch"
+zones:
+  - name: "Legacy Zone"
+    web_streams:
+      - name: "Legacy Stream"
+        url: "https://example.test/live"
+    channels:
+      - name: "Legacy Channel"
+        system: "Legacy System"
+        tgid: "2001"
+        keyId: "0x50"
+        algo: "aes"
+        mode: "p25"
+        rx_only: true
+        selectable_encryption: true
+        card_size: small

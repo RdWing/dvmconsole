@@ -16,15 +16,16 @@ namespace DvmConsole.Desktop;
 
 public sealed partial class MainWindow : Window
 {
-    private MainWindowViewModel viewModel;
-    private readonly PressAndHoldPttController cardPtt;
+    private readonly MainWindowSessionHost sessionHost;
+    private readonly WindowPttKeyRouter pttKeyRouter;
+    private MainWindowViewModel viewModel => sessionHost.ViewModel;
+    private PressAndHoldPttController cardPtt => sessionHost.CardPtt;
     private OperatorToolsWindow? operatorToolsWindow;
     private DebugLogWindow? debugLogWindow;
     private DocumentationWindow? documentationWindow;
     private AboutWindow? aboutWindow;
     private readonly List<DispatcherTimer> scrollBarTimers = [];
     private readonly HashSet<ScrollViewer> configuredScrollViewers = [];
-    private readonly INotifyCollectionChanged activityHistoryCollection;
     private readonly ScrollViewportAnchor<CallHistoryEntry> activityViewportAnchor;
     private readonly MainWindowPlacementController mainWindowPlacement;
     private Control? draggedChannelCard;
@@ -34,6 +35,8 @@ public sealed partial class MainWindow : Window
     private double dragWidgetYOrigin;
     private bool draggedChannelMoved;
     private bool toggleReceiveAfterChannelClick;
+    private int shutdownStarted;
+    private bool shutdownComplete;
 
     public MainWindow() : this(null)
     {
@@ -51,21 +54,22 @@ public sealed partial class MainWindow : Window
         namedSettingsProfileDeleteMenu ??= this.FindControl<MenuItem>("namedSettingsProfileDeleteMenu");
         activityCallHistoryList ??= this.FindControl<ItemsControl>("activityCallHistoryList")
             ?? throw new InvalidOperationException("The Activity history list was not initialized.");
-        viewModel = MainWindowViewModel.Load(configurationPath);
-        mainWindowPlacement = new MainWindowPlacementController(this, viewModel.MainWindowPlacement);
+        MainWindowViewModel initialViewModel = MainWindowViewModel.Load(configurationPath);
+        mainWindowPlacement = new MainWindowPlacementController(this, initialViewModel.MainWindowPlacement);
         mainWindowPlacement.PrepareSize();
-        cardPtt = new PressAndHoldPttController(
-            channel => viewModel.StartChannelTransmitAsync(channel),
-            channel => viewModel.StopChannelTransmitAsync(channel));
-        DataContext = viewModel;
-        activityHistoryCollection = (INotifyCollectionChanged)viewModel.ActivityCallHistory;
         activityViewportAnchor = new ScrollViewportAnchor<CallHistoryEntry>(
             () => activityScrollViewer,
             () => activityCallHistoryList.GetVisualDescendants()
                 .OfType<Border>()
                 .Where(border => border.Classes.Contains("activity-call-card")),
             control => control.DataContext as CallHistoryEntry);
-        activityHistoryCollection.CollectionChanged += HandleActivityHistoryCollectionChanged;
+        sessionHost = new MainWindowSessionHost(
+            initialViewModel,
+            HandleActivityHistoryCollectionChanged,
+            replacement => DataContext = replacement,
+            CloseModelessViewModelWindows,
+            CloseAllModelessWindows);
+        pttKeyRouter = new WindowPttKeyRouter(() => viewModel);
         activityCallHistoryList.LayoutUpdated += HandleActivityHistoryLayoutUpdated;
         AddHandler(InputElement.KeyDownEvent, HandleKeyDown, RoutingStrategies.Tunnel);
         AddHandler(InputElement.KeyUpEvent, HandleKeyUp, RoutingStrategies.Tunnel);
@@ -80,32 +84,55 @@ public sealed partial class MainWindow : Window
             mainWindowPlacement.StartTracking();
             ConfigureTransientChannelScrollBars();
             ConfigureTransientScrollBars(activityScrollViewer);
-            await viewModel.StartKeyboardPttAsync().ConfigureAwait(false);
+            await sessionHost.StartAsync().ConfigureAwait(false);
         };
         LayoutUpdated += (_, _) => ConfigureTransientChannelScrollBars();
-        Closing += (_, _) =>
-            viewModel.SaveMainWindowPlacement(mainWindowPlacement.GetPlacementForPersistence());
-        Closed += async (_, _) =>
+        Closing += HandleClosing;
+    }
+
+    private async void HandleClosing(object? sender, WindowClosingEventArgs e)
+    {
+        if (shutdownComplete)
+            return;
+
+        // Keep the native window and application lifetime alive until every
+        // session-owned asynchronous resource has completed cleanup. A second
+        // close request remains cancelled while the same operation is running.
+        e.Cancel = true;
+        if (Interlocked.Exchange(ref shutdownStarted, 1) != 0)
+            return;
+
+        try
         {
-            try
-            {
-                mainWindowPlacement.Dispose();
-                operatorToolsWindow?.Close();
-                debugLogWindow?.Close();
-                documentationWindow?.Close();
-                aboutWindow?.Close();
-                foreach (DispatcherTimer timer in scrollBarTimers)
-                    timer.Stop();
-                activityCallHistoryList.LayoutUpdated -= HandleActivityHistoryLayoutUpdated;
-                activityHistoryCollection.CollectionChanged -= HandleActivityHistoryCollectionChanged;
-                activityViewportAnchor.Reset();
-                await viewModel.DisposeAsync().ConfigureAwait(false);
-            }
-            catch (Exception exception)
-            {
-                DesktopCrashLog.Write("Main window shutdown", exception);
-            }
-        };
+            await ShutdownAsync();
+        }
+        catch (Exception exception)
+        {
+            DesktopCrashLog.Write("Main window shutdown", exception);
+        }
+        finally
+        {
+            shutdownComplete = true;
+            Dispatcher.UIThread.Post(Close);
+        }
+    }
+
+    private async Task ShutdownAsync()
+    {
+        var cleanup = new AsyncCleanup();
+        cleanup.Run(() =>
+            viewModel.SaveMainWindowPlacement(mainWindowPlacement.GetPlacementForPersistence()));
+        cleanup.Run(mainWindowPlacement.Dispose);
+        cleanup.Run(() =>
+        {
+            foreach (DispatcherTimer timer in scrollBarTimers)
+                timer.Stop();
+        });
+        cleanup.Run(() =>
+            activityCallHistoryList.LayoutUpdated -= HandleActivityHistoryLayoutUpdated);
+        cleanup.Run(activityViewportAnchor.Reset);
+        await cleanup.RunTaskAsync(() => sessionHost.DisposeAsync().AsTask());
+        cleanup.ThrowIfFailed();
     }
 
     private void HandleActivityHistoryCollectionChanged(
@@ -540,19 +567,9 @@ public sealed partial class MainWindow : Window
 
     private async Task ReplaceViewModelAsync(MainWindowViewModel replacement)
     {
-        ArgumentNullException.ThrowIfNull(replacement);
-        MainWindowViewModel previous = viewModel;
-
-        // These modeless windows hold direct references to the view model. Close
-        // them before disposing the old model rather than leaving a visible
-        // window bound to stale settings, history, or PTT state.
-        CloseModelessViewModelWindows();
-        viewModel = replacement;
-        DataContext = replacement;
+        await sessionHost.ReplaceAsync(replacement);
         RefreshRecentCodeplugMenu();
         RefreshNamedSettingsProfileMenus();
-        await previous.DisposeAsync();
-        await replacement.StartKeyboardPttAsync();
     }
 
     private void CloseModelessViewModelWindows()
@@ -564,6 +581,19 @@ public sealed partial class MainWindow : Window
         DebugLogWindow? logs = debugLogWindow;
         debugLogWindow = null;
         logs?.Close();
+    }
+
+    private void CloseAllModelessWindows()
+    {
+        CloseModelessViewModelWindows();
+
+        DocumentationWindow? documentation = documentationWindow;
+        documentationWindow = null;
+        documentation?.Close();
+
+        AboutWindow? about = aboutWindow;
+        aboutWindow = null;
+        about?.Close();
     }
 
     private async Task<bool> ConfirmAsync(string title, string message, string confirmLabel = "Reset")
@@ -714,7 +744,7 @@ public sealed partial class MainWindow : Window
     {
         if (operatorToolsWindow is null)
         {
-            operatorToolsWindow = new OperatorToolsWindow(viewModel, section);
+            operatorToolsWindow = new OperatorToolsWindow(viewModel, section, pttKeyRouter);
             operatorToolsWindow.Closed += (_, _) => operatorToolsWindow = null;
             operatorToolsWindow.Show();
             return;
@@ -848,52 +878,18 @@ public sealed partial class MainWindow : Window
 
     private void HandleKeyDown(object? sender, KeyEventArgs e)
     {
-        if (DataContext is MainWindowViewModel viewModel &&
-            TryMapPttKey(e.Key, out KeyboardPttKey key))
-        {
-            bool handled = viewModel.HandleKeyboardPttDown(key);
-            e.Handled = handled || viewModel.IsConfiguredPttKey(key);
-        }
+        if (pttKeyRouter.TryHandleKeyDown(e.Key, out bool handled))
+            e.Handled = handled;
     }
 
     private void HandleKeyUp(object? sender, KeyEventArgs e)
     {
-        if (DataContext is MainWindowViewModel viewModel &&
-            TryMapPttKey(e.Key, out KeyboardPttKey key))
-        {
-            bool handled = viewModel.HandleKeyboardPttUp(key);
-            e.Handled = handled || viewModel.IsConfiguredPttKey(key);
-        }
+        if (pttKeyRouter.TryHandleKeyUp(e.Key, out bool handled))
+            e.Handled = handled;
     }
 
     internal static bool TryMapPttKey(Key key, out KeyboardPttKey pttKey)
-    {
-        pttKey = key switch
-        {
-            Key.Space => KeyboardPttKey.Space,
-            Key.F1 => KeyboardPttKey.F1,
-            Key.F2 => KeyboardPttKey.F2,
-            Key.F3 => KeyboardPttKey.F3,
-            Key.F4 => KeyboardPttKey.F4,
-            Key.F5 => KeyboardPttKey.F5,
-            Key.F6 => KeyboardPttKey.F6,
-            Key.F7 => KeyboardPttKey.F7,
-            Key.F8 => KeyboardPttKey.F8,
-            Key.F9 => KeyboardPttKey.F9,
-            Key.F10 => KeyboardPttKey.F10,
-            Key.F11 => KeyboardPttKey.F11,
-            Key.F12 => KeyboardPttKey.F12,
-            Key.F13 => KeyboardPttKey.F13,
-            Key.F14 => KeyboardPttKey.F14,
-            Key.F15 => KeyboardPttKey.F15,
-            Key.F16 => KeyboardPttKey.F16,
-            Key.F17 => KeyboardPttKey.F17,
-            Key.F18 => KeyboardPttKey.F18,
-            Key.F19 => KeyboardPttKey.F19,
-            _ => default
-        };
-        return key is Key.Space or (>= Key.F1 and <= Key.F19);
-    }
+        => WindowPttKeyRouter.TryMap(key, out pttKey);
 
     private void ConfigureTransientScrollBars(ScrollViewer? viewer)
     {

@@ -242,7 +242,7 @@ internal sealed class ChannelReceiveWorkQueue : IAsyncDisposable
                 if (!running)
                 {
                     running = true;
-                    _ = Task.Run(ProcessLoopAsync);
+                    TaskObservation.Observe(Task.Run(ProcessLoopAsync));
                 }
                 return true;
             }

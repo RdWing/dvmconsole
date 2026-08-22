@@ -18,7 +18,6 @@ using System.Diagnostics;
 using System.Globalization;
 using System.Runtime.CompilerServices;
 using System.Windows.Input;
-using fnecore.P25;
 
 namespace DvmConsole.Desktop;
 
@@ -36,8 +35,6 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
         [DvmConsoleProcessingDisplay, AppleVoiceProcessingDisplay];
     private static readonly string[] DvmConsoleAudioProcessingModeOptions =
         [DvmConsoleProcessingDisplay];
-    private static readonly KeyboardPttKey[] GlobalPttKeyOptionValues = Enum.GetValues<KeyboardPttKey>();
-    private static readonly int[] SerialPttBaudRateOptions = [1_200, 2_400, 4_800, 9_600, 19_200, 38_400, 57_600, 115_200];
     private readonly ChannelReceiveAudioCoordinator audioCoordinator;
     private readonly ChannelReceiveWorkQueue receiveAudioWork;
     private readonly ChannelReceiveWorkQueue patchSourceReceiveWork;
@@ -55,42 +52,41 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
     private readonly P25KeyRing? p25KeyRing;
     private readonly DmrKeyRing? dmrKeyRing;
     private readonly NxdnKeyRing? nxdnKeyRing;
-    private KeyboardPttBinding keyboardPtt;
-    private KeyboardPttBinding activeSystemKeyboardPtt;
-    private IPttSource? serialPtt;
-    private readonly Func<string, int, IPttSource> serialPttFactory;
     private readonly Func<IReadOnlyList<string>> serialPortProvider;
-    private readonly SemaphoreSlim serialPttChangeLock = new(1, 1);
     private readonly SemaphoreSlim pttStateChangeLock = new(1, 1);
-    private readonly ObservableCollection<string> serialPttPortOptions = [];
-    private readonly CallHistoryStore callHistory = new();
-    private readonly ObservableCollection<CallHistoryEntry> filteredCallHistoryEntries = [];
-    private readonly ObservableCollection<CallHistoryEntry> activityCallHistoryEntries = [];
-    private readonly ObservableCollection<CallRecordingMetadata> recordingEntries = [];
-    private readonly object recordingCatalogScanSync = new();
-    private CancellationTokenSource? recordingCatalogScanCancellation;
-    private int recordingCatalogScanGeneration;
-    private long recordingCatalogMutationRevision;
-    private Task recordingCatalogScanTask = Task.CompletedTask;
-    private readonly ObservableCollection<DtmfPresetViewModel> dtmfPresets = [];
-    private readonly ObservableCollection<TonePresetViewModel> tonePresets = [];
-    private readonly ObservableCollection<ToneSequenceStepViewModel> toneSequenceSteps = [];
-    private readonly ObservableCollection<AlertToneViewModel> alertTones = [];
-    private readonly ObservableCollection<BuiltInAlertToneViewModel> builtInAlertTones = [];
+    private readonly PttSettingsViewModel pttSettings;
+    private readonly PttSessionController pttSession;
+    private readonly HistoryRecordingWorkspace historyRecording;
+    private CallHistoryStore callHistory => historyRecording.History;
+    private ObservableCollection<CallRecordingMetadata> recordingEntries
+        => historyRecording.RecordingEntries;
+    private readonly ToneWorkspaceViewModel toneWorkspace;
+    private ObservableCollection<DtmfPresetViewModel> dtmfPresets
+        => toneWorkspace.MutableDtmfPresets;
+    private ObservableCollection<TonePresetViewModel> tonePresets
+        => toneWorkspace.MutableTonePresets;
+    private ObservableCollection<ToneSequenceStepViewModel> toneSequenceSteps
+        => toneWorkspace.MutableToneSequenceSteps;
+    private ObservableCollection<AlertToneViewModel> alertTones
+        => toneWorkspace.MutableAlertTones;
     private readonly ObservableCollection<ToolbarClockViewModel> toolbarClocks = [];
-    private readonly ObservableCollection<AudioInputPresetViewModel> audioInputPresets = [];
-    private readonly ObservableCollection<RxAudioProcessingModeViewModel> rxAudioProcessingModes = [];
-    private readonly ObservableCollection<AudioDeviceOptionViewModel> audioInputDevices = [];
-    private readonly ObservableCollection<AudioDeviceOptionViewModel> audioOutputDevices = [];
+    private readonly AudioSettingsViewModel audioSettings;
+    private ObservableCollection<AudioInputPresetViewModel> audioInputPresets
+        => audioSettings.MutableAudioInputPresets;
+    private ObservableCollection<RxAudioProcessingModeViewModel> rxAudioProcessingModes
+        => audioSettings.MutableRxAudioProcessingModes;
+    private ObservableCollection<AudioDeviceOptionViewModel> audioInputDevices
+        => audioSettings.MutableAudioInputDevices;
+    private ObservableCollection<AudioDeviceOptionViewModel> audioOutputDevices
+        => audioSettings.MutableAudioOutputDevices;
     private readonly ObservableCollection<SubscriberCommandAuditEntry> subscriberCommandAudit = [];
     private readonly BoundedDebugLogBuffer debugLogBuffer = new();
     private readonly FilteredDebugLogCollection filteredDebugLogs;
     private readonly ObservableCollection<string> recentCodeplugPaths = [];
     private readonly ObservableCollection<WebStreamViewModel> webStreams = [];
     private readonly WebStreamPlaybackCoordinator webStreamPlayback;
-    private readonly object systemTrafficWorkSync = new();
-    private readonly Dictionary<SystemViewModel, SystemTrafficBuffer> pendingSystemTraffic = [];
-    private readonly HashSet<SystemViewModel> scheduledSystemTraffic = [];
+    private readonly IUiDispatcher uiDispatcher;
+    private readonly ReceivePresentationController receivePresentation;
     private readonly object audioLevelLogSync = new();
     private readonly Dictionary<(ChannelViewModel Channel, ChannelAudioDirection Direction), PcmLevelLogState> audioLevelLogs = [];
     private readonly ChannelAudioMeterPipeline audioMeterPipeline = new();
@@ -106,6 +102,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
     private readonly Dictionary<string, FneConnectionState> lastConnectionStates = new(StringComparer.OrdinalIgnoreCase);
     private readonly IReadOnlyDictionary<SystemViewModel, IReadOnlyDictionary<(FneTrafficProtocol Protocol, uint DestinationId), ChannelViewModel[]>> trafficRoutes;
     private readonly ConnectionChimeTracker connectionChimeTracker = new();
+    private readonly ConnectionSessionController connectionSession;
     private readonly P25KeyRequestCoordinator p25KeyRequestCoordinator = new();
     private ChannelViewModel[] suspendedAudioChannels = [];
     private bool suspendedAudioKeptActive;
@@ -115,81 +112,25 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
     private PatchGroupEditorViewModel? activeMultiSelectGroup;
     private readonly CallRecordingManager callRecordings;
     private readonly RecordingPlaybackCoordinator recordingPlayback;
-    private readonly DispatcherTimer clockTimer;
-    private readonly DispatcherTimer audioMeterTimer;
-    private readonly DispatcherTimer connectionDiagnosticsTimer;
+    private readonly ConsoleSessionRuntime sessionRuntime;
     private Bitmap? userBackgroundBitmap;
     private int disposeStarted;
     private IBrush mainBackgroundBrush = new SolidColorBrush(Color.Parse("#0D1116"));
     private string statusText;
     private string audioStatusText = "RX audio disabled.";
     private string transmitStatusText = "PTT idle.";
-    private string dtmfDigits = "123";
-    private string toneFrequencyText = "1000";
-    private string toneDurationText = "1.0";
-    private string quickCallToneAText = "600";
-    private string quickCallToneBText = "1200";
-    private string audioInputDeviceIdText = "default";
-    private string audioOutputDeviceIdText = "default";
-    private string audioInputGainText = "1.0";
-    private string audioInputLowGainText = "0";
-    private string audioInputMidGainText = "0";
-    private string audioInputHighGainText = "0";
-    private string audioInputAgcTargetDbfsText = "-25";
-    private bool audioInputAgcEnabled;
-    private bool highQualityBluetoothAudioEnabled;
     private IReadOnlyDictionary<VocoderMode, ReceiveAudioProcessingOptions> receiveAudioProcessingOptions =
         new Dictionary<VocoderMode, ReceiveAudioProcessingOptions>();
-    private string selectedAudioProcessingMode = "DVM Console processing";
-    private KeyboardPttKey selectedGlobalPttKey;
-    private KeyboardPttKey selectedActiveSystemPttKey;
-    private string audioInputPresetNameText = string.Empty;
-    private string dtmfPresetName = string.Empty;
-    private string tonePresetName = string.Empty;
-    private string alertToneNameText = string.Empty;
-    private string recordingRetentionDaysText = string.Empty;
-    private string recordingRootPathText = string.Empty;
-    private string recordingDirectionFilter = "All";
-    private string recordingProtocolFilter = "All";
-    private string recordingEncryptionFilter = "All";
-    private string recordingSystemFilterText = string.Empty;
-    private string recordingChannelFilterText = string.Empty;
-    private string recordingTalkgroupFilterText = string.Empty;
-    private string recordingSubscriberFilterText = string.Empty;
-    private string recordingAliasFilterText = string.Empty;
-    private DateTimeOffset? recordingStartDateFilter;
-    private DateTimeOffset? recordingEndDateFilter;
-    private bool recordingTimeColumnVisible = true;
-    private bool recordingDurationColumnVisible = true;
-    private bool recordingChannelColumnVisible = true;
-    private bool recordingTalkgroupColumnVisible = true;
-    private bool recordingSourceIdColumnVisible = true;
-    private bool recordingAliasColumnVisible = true;
-    private bool recordingDirectionColumnVisible;
-    private bool recordingProtocolColumnVisible;
-    private bool recordingSystemColumnVisible;
-    private bool recordingEncryptionColumnVisible;
-    private bool recordingDiagnosticsColumnVisible = true;
     private string clockText = string.Empty;
     private string debugLogFilterText = string.Empty;
     private string debugLogSeverityFilter = "Info";
-    private string callHistoryFilterText = string.Empty;
-    private string recordingFilterText = string.Empty;
     private bool busy;
     private bool codeplugDiagnosticsDismissed;
-    private bool pttStarted;
-    private bool serialPttEnabled;
-    private bool serialPttActiveSystemOnly;
-    private string serialPttPortName = string.Empty;
-    private int serialPttBaudRate = 9_600;
-    private string serialPttStatusText = "Serial PTT is disabled.";
     private ChannelViewModel? selectedChannel;
     private SystemViewModel? selectedSystem;
-    private AudioDeviceOptionViewModel? selectedAudioInputDevice;
-    private AudioDeviceOptionViewModel? selectedAudioOutputDevice;
     private readonly ScaleTransform uiScaleTransform;
 
-    private MainWindowViewModel(
+    internal MainWindowViewModel(
         string statusText,
         IEnumerable<SystemViewModel> systems,
         IEnumerable<ZoneViewModel> zones,
@@ -201,8 +142,10 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
         Func<string, int, IPttSource>? serialPttFactory = null,
         IDmrKeyResolver? dmrKeyResolver = null,
         INxdnKeyResolver? nxdnKeyResolver = null,
-        string? codeplugPath = null)
+        string? codeplugPath = null,
+        IUiDispatcher? uiDispatcher = null)
     {
+        sessionRuntime = new ConsoleSessionRuntime(DisposeCoreAsync);
         this.statusText = statusText;
         codeplugDiagnosticsText = statusText;
         this.userSettingsStore = userSettingsStore ?? new UserSettingsStore(UserSettingsStore.DefaultPath);
@@ -214,7 +157,17 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
             ? string.Empty
             : Path.GetFullPath(codeplugPath);
         this.serialPortProvider = serialPortProvider ?? SerialPttSource.GetAvailablePortNames;
-        this.serialPttFactory = serialPttFactory ?? ((portName, baudRate) => new SerialPttSource(portName, baudRate));
+        this.uiDispatcher = uiDispatcher ?? AvaloniaUiDispatcher.Instance;
+        historyRecording = new HistoryRecordingWorkspace(
+            userSettings.RecordingRetentionDays.ToString(CultureInfo.InvariantCulture),
+            GetDefaultRecordingRoot(userSettings.RecordingRootPath));
+        historyRecording.PropertyChanged += HandleHistoryRecordingPropertyChanged;
+        audioSettings = new AudioSettingsViewModel(
+            userSettings,
+            ToAudioProcessingModeDisplay(userSettings.AudioProcessingMode));
+        audioSettings.PropertyChanged += HandleAudioSettingsPropertyChanged;
+        toneWorkspace = new ToneWorkspaceViewModel(userSettings);
+        toneWorkspace.PropertyChanged += HandleToneWorkspacePropertyChanged;
         uiScaleTransform = new ScaleTransform
         {
             ScaleX = userSettings.UiScale,
@@ -224,100 +177,50 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
             recentCodeplugPaths.Add(path);
         LoadUserBackground(userSettings.UserBackgroundImage);
         ApplyTheme(userSettings.DarkMode);
-        keyboardPtt = new KeyboardPttBinding(
-            ParseGlobalPttKey(userSettings.GlobalPttKey),
-            userSettings.TogglePttMode);
-        activeSystemKeyboardPtt = new KeyboardPttBinding(
-            ParseGlobalPttKey(userSettings.ActiveSystemPttKey),
-            userSettings.TogglePttMode);
-        selectedGlobalPttKey = keyboardPtt.ActivationKey;
-        selectedActiveSystemPttKey = activeSystemKeyboardPtt.ActivationKey;
-        serialPttEnabled = userSettings.SerialPttEnabled;
-        serialPttActiveSystemOnly = userSettings.SerialPttActiveSystemOnly;
-        serialPttPortName = userSettings.SerialPttPortName;
-        serialPttBaudRate = userSettings.SerialPttBaudRate;
+        bool initialSerialPttEnabled = userSettings.SerialPttEnabled;
+        string initialSerialPttPortName = userSettings.SerialPttPortName;
+        int initialSerialPttBaudRate = userSettings.SerialPttBaudRate;
         string? environmentSerialPort = Environment.GetEnvironmentVariable("DVM_PTT_SERIAL_PORT");
-        if (serialPttPortName.Length == 0 && !string.IsNullOrWhiteSpace(environmentSerialPort))
+        if (initialSerialPttPortName.Length == 0 && !string.IsNullOrWhiteSpace(environmentSerialPort))
         {
-            serialPttEnabled = true;
-            serialPttPortName = environmentSerialPort.Trim();
-            serialPttBaudRate = ReadSerialPttBaudRate();
+            initialSerialPttEnabled = true;
+            initialSerialPttPortName = environmentSerialPort.Trim();
+            initialSerialPttBaudRate = ReadSerialPttBaudRate();
         }
+        pttSettings = new PttSettingsViewModel(
+            ParseGlobalPttKey(userSettings.GlobalPttKey),
+            ParseGlobalPttKey(userSettings.ActiveSystemPttKey),
+            userSettings.TogglePttMode,
+            initialSerialPttEnabled,
+            userSettings.SerialPttActiveSystemOnly,
+            initialSerialPttPortName,
+            initialSerialPttBaudRate);
+        pttSettings.PropertyChanged += HandlePttSettingsPropertyChanged;
+        pttSession = new PttSessionController(
+            pttSettings,
+            serialPttFactory ?? ((portName, baudRate) => new SerialPttSource(portName, baudRate)),
+            GetSerialPttTargetScope);
         RefreshSerialPttDevices();
-        if (serialPttEnabled && serialPttPortName.Length > 0)
+        if (SerialPttEnabled && SerialPttPortName.Length > 0)
         {
-            serialPtt = this.serialPttFactory(serialPttPortName, serialPttBaudRate);
-            serialPttStatusText = $"Configured for {serialPttPortName} at {serialPttBaudRate:N0} baud.";
+            pttSession.CreateInitialSerialSource();
+            SerialPttStatusText = $"Configured for {SerialPttPortName} at {SerialPttBaudRate:N0} baud.";
         }
         clockText = FormatClock(DateTime.Now, userSettings.ClockUse24HourTime, userSettings.ClockShowSeconds);
-        clockTimer = new DispatcherTimer
-        {
-            Interval = TimeSpan.FromSeconds(1)
-        };
-        clockTimer.Tick += HandleClockTick;
-        clockTimer.Start();
-        audioMeterTimer = new DispatcherTimer
-        {
-            Interval = TimeSpan.FromMilliseconds(ChannelAudioMeterPipeline.RefreshIntervalMilliseconds)
-        };
-        audioMeterTimer.Tick += HandleAudioMeterTick;
-        audioMeterTimer.Start();
-        connectionDiagnosticsTimer = new DispatcherTimer
-        {
-            Interval = TimeSpan.FromSeconds(1)
-        };
-        connectionDiagnosticsTimer.Tick += HandleConnectionDiagnosticsTick;
-        connectionDiagnosticsTimer.Start();
-        dtmfDigits = userSettings.LastDtmfDigits;
-        toneFrequencyText = userSettings.ToneFrequencyHz.ToString("0.###", CultureInfo.InvariantCulture);
-        toneDurationText = userSettings.ToneDurationSeconds.ToString("0.###", CultureInfo.InvariantCulture);
-        toneSequenceSteps.Add(new ToneSequenceStepViewModel(
-            userSettings.ToneFrequencyHz,
-            userSettings.ToneDurationSeconds));
-        quickCallToneAText = userSettings.QuickCallToneAFrequencyHz.ToString("0.###", CultureInfo.InvariantCulture);
-        quickCallToneBText = userSettings.QuickCallToneBFrequencyHz.ToString("0.###", CultureInfo.InvariantCulture);
-        audioInputDeviceIdText = userSettings.AudioInputDeviceId;
-        audioOutputDeviceIdText = userSettings.AudioOutputDeviceId;
-        audioInputGainText = userSettings.AudioInputGain.ToString("0.###", CultureInfo.InvariantCulture);
-        audioInputLowGainText = userSettings.AudioInputEqLowGainDb.ToString("0.###", CultureInfo.InvariantCulture);
-        audioInputMidGainText = userSettings.AudioInputEqMidGainDb.ToString("0.###", CultureInfo.InvariantCulture);
-        audioInputHighGainText = userSettings.AudioInputEqHighGainDb.ToString("0.###", CultureInfo.InvariantCulture);
-        audioInputAgcTargetDbfsText = userSettings.AudioInputAgcTargetDbfs.ToString("0.###", CultureInfo.InvariantCulture);
-        audioInputAgcEnabled = userSettings.AudioInputAgcEnabled;
-        highQualityBluetoothAudioEnabled = userSettings.HighQualityBluetoothAudioEnabled;
-        foreach ((string key, string label, VocoderMode mode) in new[]
-        {
-            (RxAudioProcessingModeSetting.P25Phase1Mode, "P25 Phase 1", VocoderMode.P25Imbe),
-            (RxAudioProcessingModeSetting.P25Phase2Mode, "P25 Phase 2", VocoderMode.P25Phase2Ambe),
-            (RxAudioProcessingModeSetting.DmrMode, "DMR", VocoderMode.DmrAmbe),
-            (RxAudioProcessingModeSetting.NxdnMode, "NXDN", VocoderMode.NxdnAmbe)
-        })
-        {
-            rxAudioProcessingModes.Add(new RxAudioProcessingModeViewModel(
-                key,
-                label,
-                mode,
-                userSettings.RxAudioProcessingOptions[key]));
-        }
+        sessionRuntime.StartTimer(TimeSpan.FromSeconds(1), HandleClockTick);
+        sessionRuntime.StartTimer(
+            TimeSpan.FromMilliseconds(ChannelAudioMeterPipeline.RefreshIntervalMilliseconds),
+            HandleAudioMeterTick);
+        sessionRuntime.StartTimer(TimeSpan.FromSeconds(1), HandleConnectionDiagnosticsTick);
         receiveJitterBufferSettingsBySystem = BuildReceiveJitterBufferSettingsBySystem();
         receiveAudioProcessingOptions = BuildReceiveAudioProcessingOptions();
-        selectedAudioProcessingMode = ToAudioProcessingModeDisplay(userSettings.AudioProcessingMode);
-        audioInputPresetNameText = userSettings.AudioInputPresetName;
-        recordingRetentionDaysText = userSettings.RecordingRetentionDays.ToString(CultureInfo.InvariantCulture);
-        recordingRootPathText = GetDefaultRecordingRoot(userSettings.RecordingRootPath);
         webStreamPlayback = new WebStreamPlaybackCoordinator(
             () => AudioBackendFactory.CreateDefault(Environment.GetEnvironmentVariable("DVM_AUDIO_LIBRARY")),
             () => userSettings.AudioOutputDeviceId,
-            getStreamOutputDeviceId: GetWebStreamOutputDeviceId);
-        foreach (DtmfPresetSetting preset in userSettings.DtmfPresets)
-            dtmfPresets.Add(new DtmfPresetViewModel(preset));
-        foreach (TonePresetSetting preset in userSettings.TonePresets)
-            tonePresets.Add(new TonePresetViewModel(preset));
-        foreach (AlertToneSetting tone in userSettings.AlertTones)
-            alertTones.Add(new AlertToneViewModel(tone));
-        builtInAlertTones.Add(new BuiltInAlertToneViewModel(LegacyAlertTone.Alert1));
-        builtInAlertTones.Add(new BuiltInAlertToneViewModel(LegacyAlertTone.Alert2));
-        builtInAlertTones.Add(new BuiltInAlertToneViewModel(LegacyAlertTone.Alert3));
+            openStream: null,
+            createDecoder: null,
+            getStreamOutputDeviceId: GetWebStreamOutputDeviceId,
+            uiDispatcher: this.uiDispatcher);
         List<ToolbarClockSetting> configuredClocks = (userSettings.ToolbarClocks ?? [])
             .Take(UserSettings.MaximumToolbarClocks)
             .ToList();
@@ -326,13 +229,11 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
         for (int index = 0; index < configuredClocks.Count; index++)
             toolbarClocks.Add(new ToolbarClockViewModel(index + 1, configuredClocks[index]));
         RefreshClock();
-        foreach (AudioInputPresetSetting preset in userSettings.AudioInputPresets)
-            audioInputPresets.Add(new AudioInputPresetViewModel(preset));
         p25KeyRing = p25KeyResolver as P25KeyRing;
         dmrKeyRing = dmrKeyResolver as DmrKeyRing;
         nxdnKeyRing = nxdnKeyResolver as NxdnKeyRing;
         callRecordings = new CallRecordingManager(
-            recordingRootPathText,
+            RecordingRootPathText,
             HandleRecordingFaulted,
             userSettings.RecordingRetentionDays,
             ShouldRecordSource);
@@ -359,6 +260,11 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
         patchSourceReceiveWork = new ChannelReceiveWorkQueue(
             ProcessPatchSourceAsync,
             getJitterBufferProfile: GetReceiveJitterBufferProfile);
+        receivePresentation = new ReceivePresentationController(
+            () => Volatile.Read(ref disposeStarted) != 0,
+            Dispatcher.UIThread.CheckAccess,
+            action => Dispatcher.UIThread.Post(action),
+            PresentSystemTraffic);
         foreach (SystemViewModel system in Systems)
             RefreshJitterBufferTelemetry(system);
         transmitCoordinator = new ChannelTransmitCoordinator(
@@ -421,20 +327,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
         RestorePatchState(configuredGroups);
         PatchGroups = BuildPatchGroups(configuredGroups);
         RefreshPatchMembershipConflicts();
-        CallHistory = new System.Collections.ObjectModel.ReadOnlyObservableCollection<CallHistoryEntry>(callHistory.Entries);
-        FilteredCallHistory = new ReadOnlyObservableCollection<CallHistoryEntry>(filteredCallHistoryEntries);
-        ActivityCallHistory = new ReadOnlyObservableCollection<CallHistoryEntry>(activityCallHistoryEntries);
-        Recordings = new ReadOnlyObservableCollection<CallRecordingMetadata>(recordingEntries);
-        DtmfPresets = new ReadOnlyObservableCollection<DtmfPresetViewModel>(dtmfPresets);
-        TonePresets = new ReadOnlyObservableCollection<TonePresetViewModel>(tonePresets);
-        ToneSequenceSteps = new ReadOnlyObservableCollection<ToneSequenceStepViewModel>(toneSequenceSteps);
-        AlertTones = new ReadOnlyObservableCollection<AlertToneViewModel>(alertTones);
-        BuiltInAlertTones = new ReadOnlyObservableCollection<BuiltInAlertToneViewModel>(builtInAlertTones);
         ToolbarClocks = new ReadOnlyObservableCollection<ToolbarClockViewModel>(toolbarClocks);
-        AudioInputPresets = new ReadOnlyObservableCollection<AudioInputPresetViewModel>(audioInputPresets);
-        RxAudioProcessingModes = new ReadOnlyObservableCollection<RxAudioProcessingModeViewModel>(rxAudioProcessingModes);
-        AudioInputDevices = new ReadOnlyObservableCollection<AudioDeviceOptionViewModel>(audioInputDevices);
-        AudioOutputDevices = new ReadOnlyObservableCollection<AudioDeviceOptionViewModel>(audioOutputDevices);
         SubscriberCommandAudit = new ReadOnlyObservableCollection<SubscriberCommandAuditEntry>(subscriberCommandAudit);
         DebugLogEntries = new ReadOnlyObservableCollection<DebugLogEntry>(debugLogBuffer.Entries);
         RecentCodeplugPaths = new ReadOnlyObservableCollection<string>(recentCodeplugPaths);
@@ -455,7 +348,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
             stream.Configure(StartWebStreamAsync, StopWebStreamAsync);
             webStreams.Add(stream);
         }
-        _ = RestoreSelectedWebStreamsAsync();
+        TaskObservation.Observe(RestoreSelectedWebStreamsAsync());
         RefreshRecordings(pruneExpired: true);
         foreach (ChannelViewModel channel in Systems.SelectMany(system => system.Channels))
         {
@@ -507,7 +400,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
                 channel.SettingsKey,
                 StringComparer.OrdinalIgnoreCase));
             if (channel.IsRecordingEnabled)
-                _ = EnsureRecordingAudioAsync(channel);
+                TaskObservation.Observe(EnsureRecordingAudioAsync(channel));
         }
 
         foreach (SystemViewModel system in Systems)
@@ -538,8 +431,17 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
             system.SetSelected(ReferenceEquals(system, selectedSystem));
         RefreshActivityCallHistory();
 
-        ConnectCommand = new AsyncRelayCommand(ConnectAsync, () => !busy && Systems.Count > 0);
-        DisconnectCommand = new AsyncRelayCommand(DisconnectAsync, () => !busy && Systems.Count > 0);
+        connectionSession = new ConnectionSessionController(
+            Systems,
+            SyncPatchSourceDecodeAsync,
+            () => patchSourceDecode.StopAllAsync(),
+            patchForwarding.StopAll,
+            SetBusy,
+            text => StatusText = text,
+            system => SelectedSystem = system,
+            HandleSystemStatus);
+        ConnectCommand = new AsyncRelayCommand(connectionSession.ConnectAsync, () => !busy && Systems.Count > 0);
+        DisconnectCommand = new AsyncRelayCommand(connectionSession.DisconnectAsync, () => !busy && Systems.Count > 0);
         ToggleSelectedSystemOutputMuteCommand = new AsyncRelayCommand(
             ToggleSelectedSystemOutputMuteAsync,
             () => SelectedSystem is not null);
@@ -564,10 +466,8 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
         RefreshAudioDevices();
         defaultAudioDeviceMonitor.Start();
         transmitCoordinator.Faulted += HandleTransmitFaulted;
-        keyboardPtt.StateChanged += HandleKeyboardPttStateChanged;
-        activeSystemKeyboardPtt.StateChanged += HandleActiveSystemKeyboardPttStateChanged;
-        if (serialPtt is not null)
-            serialPtt.StateChanged += HandleSerialPttStateChanged;
+        pttSession.StateChanged += HandlePttSourceStateChanged;
+        pttSession.AttachEvents();
     }
 
     public event PropertyChangedEventHandler? PropertyChanged;
@@ -954,110 +854,104 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
 
     public string DtmfDigits
     {
-        get => dtmfDigits;
-        set => SetField(ref dtmfDigits, value ?? string.Empty);
+        get => toneWorkspace.DtmfDigits;
+        set => toneWorkspace.DtmfDigits = value;
     }
 
     public string ToneFrequencyText
     {
-        get => toneFrequencyText;
-        set => SetField(ref toneFrequencyText, value ?? string.Empty);
+        get => toneWorkspace.ToneFrequencyText;
+        set => toneWorkspace.ToneFrequencyText = value;
     }
 
     public string ToneDurationText
     {
-        get => toneDurationText;
-        set => SetField(ref toneDurationText, value ?? string.Empty);
+        get => toneWorkspace.ToneDurationText;
+        set => toneWorkspace.ToneDurationText = value;
     }
 
     public string AudioInputDeviceIdText
     {
-        get => audioInputDeviceIdText;
-        set => SetField(ref audioInputDeviceIdText, value ?? string.Empty);
+        get => audioSettings.AudioInputDeviceIdText;
+        set => audioSettings.AudioInputDeviceIdText = value;
     }
 
     public string AudioOutputDeviceIdText
     {
-        get => audioOutputDeviceIdText;
-        set => SetField(ref audioOutputDeviceIdText, value ?? string.Empty);
+        get => audioSettings.AudioOutputDeviceIdText;
+        set => audioSettings.AudioOutputDeviceIdText = value;
     }
 
     public AudioDeviceOptionViewModel? SelectedAudioInputDevice
     {
-        get => selectedAudioInputDevice;
+        get => audioSettings.SelectedAudioInputDevice;
         set
         {
-            if (ReferenceEquals(selectedAudioInputDevice, value))
+            if (ReferenceEquals(audioSettings.SelectedAudioInputDevice, value))
                 return;
-            selectedAudioInputDevice = value;
-            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SelectedAudioInputDevice)));
-            if (value is not null)
-                AudioInputDeviceIdText = value.Id;
+            audioSettings.SelectedAudioInputDevice = value;
             RefreshAppleVoiceProcessingRouteState();
         }
     }
 
     public AudioDeviceOptionViewModel? SelectedAudioOutputDevice
     {
-        get => selectedAudioOutputDevice;
+        get => audioSettings.SelectedAudioOutputDevice;
         set
         {
-            if (ReferenceEquals(selectedAudioOutputDevice, value))
+            if (ReferenceEquals(audioSettings.SelectedAudioOutputDevice, value))
                 return;
-            selectedAudioOutputDevice = value;
-            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SelectedAudioOutputDevice)));
-            if (value is not null)
-                AudioOutputDeviceIdText = value.Id;
+            audioSettings.SelectedAudioOutputDevice = value;
             RefreshAppleVoiceProcessingRouteState();
         }
     }
 
     public string AudioInputGainText
     {
-        get => audioInputGainText;
-        set => SetField(ref audioInputGainText, value ?? string.Empty);
+        get => audioSettings.AudioInputGainText;
+        set => audioSettings.AudioInputGainText = value;
     }
 
     public string AudioInputLowGainText
     {
-        get => audioInputLowGainText;
-        set => SetField(ref audioInputLowGainText, value ?? string.Empty);
+        get => audioSettings.AudioInputLowGainText;
+        set => audioSettings.AudioInputLowGainText = value;
     }
 
     public string AudioInputMidGainText
     {
-        get => audioInputMidGainText;
-        set => SetField(ref audioInputMidGainText, value ?? string.Empty);
+        get => audioSettings.AudioInputMidGainText;
+        set => audioSettings.AudioInputMidGainText = value;
     }
 
     public string AudioInputHighGainText
     {
-        get => audioInputHighGainText;
-        set => SetField(ref audioInputHighGainText, value ?? string.Empty);
+        get => audioSettings.AudioInputHighGainText;
+        set => audioSettings.AudioInputHighGainText = value;
     }
 
     public bool AudioInputAgcEnabled
     {
-        get => audioInputAgcEnabled;
+        get => audioSettings.AudioInputAgcEnabled;
         set
         {
-            if (audioInputAgcEnabled == value)
+            if (audioSettings.AudioInputAgcEnabled == value)
                 return;
-            SetField(ref audioInputAgcEnabled, value);
+            audioSettings.AudioInputAgcEnabled = value;
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsAgcTargetEnabled)));
         }
     }
 
     public string AudioInputAgcTargetDbfsText
     {
-        get => audioInputAgcTargetDbfsText;
-        set => SetField(ref audioInputAgcTargetDbfsText, value ?? string.Empty);
+        get => audioSettings.AudioInputAgcTargetDbfsText;
+        set => audioSettings.AudioInputAgcTargetDbfsText = value;
     }
 
     public bool HighQualityBluetoothAudioEnabled
     {
-        get => highQualityBluetoothAudioEnabled;
-        set => SetField(ref highQualityBluetoothAudioEnabled, value);
+        get => audioSettings.HighQualityBluetoothAudioEnabled;
+        set => audioSettings.HighQualityBluetoothAudioEnabled = value;
     }
 
     public bool IsHighQualityBluetoothAudioAvailable
@@ -1191,7 +1085,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
 
     public string SelectedAudioProcessingMode
     {
-        get => selectedAudioProcessingMode;
+        get => audioSettings.SelectedAudioProcessingMode;
         set
         {
             string normalized = IsAppleVoiceProcessingPlatformAvailable &&
@@ -1199,9 +1093,9 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
                 value == AppleVoiceProcessingDisplay
                 ? AppleVoiceProcessingDisplay
                 : DvmConsoleProcessingDisplay;
-            if (selectedAudioProcessingMode == normalized)
+            if (audioSettings.SelectedAudioProcessingMode == normalized)
                 return;
-            SetField(ref selectedAudioProcessingMode, normalized);
+            audioSettings.SelectedAudioProcessingMode = normalized;
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsDvmConsoleProcessingSelected)));
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsAgcTargetEnabled)));
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(AudioProcessingDescription)));
@@ -1221,8 +1115,8 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
 
     public string AudioInputPresetNameText
     {
-        get => audioInputPresetNameText;
-        set => SetField(ref audioInputPresetNameText, value ?? string.Empty);
+        get => audioSettings.AudioInputPresetNameText;
+        set => audioSettings.AudioInputPresetNameText = value;
     }
 
     public bool MuteRxAudioWhileTransmitting
@@ -1352,43 +1246,42 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
 
     public bool TogglePttMode
     {
-        get => userSettings.TogglePttMode;
+        get => pttSettings.TogglePttMode;
         set
         {
-            if (userSettings.TogglePttMode == value)
+            if (pttSettings.TogglePttMode == value)
                 return;
             userSettings.TogglePttMode = value;
-            keyboardPtt.ToggleMode = value;
-            activeSystemKeyboardPtt.ToggleMode = value;
+            pttSession.SetToggleMode(value);
             PersistUserSettings();
-            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(TogglePttMode)));
+            pttSettings.TogglePttMode = value;
         }
     }
 
-    public string GlobalPttKeyText => keyboardPtt.ActivationKey == KeyboardPttKey.None
+    public string GlobalPttKeyText => pttSession.GlobalKey == KeyboardPttKey.None
         ? "Keyboard PTT disabled"
-        : keyboardPtt.ActivationKey.ToString();
+        : pttSession.GlobalKey.ToString();
 
-    public IReadOnlyList<KeyboardPttKey> GlobalPttKeyOptions => GlobalPttKeyOptionValues;
+    public IReadOnlyList<KeyboardPttKey> GlobalPttKeyOptions => pttSettings.GlobalPttKeyOptions;
 
     public KeyboardPttKey SelectedGlobalPttKey
     {
-        get => selectedGlobalPttKey;
-        set => SetField(ref selectedGlobalPttKey, value);
+        get => pttSettings.SelectedGlobalPttKey;
+        set => pttSettings.SelectedGlobalPttKey = value;
     }
 
     public Task ApplyGlobalPttKeySelectionAsync()
         => SetGlobalPttKeyAsync(SelectedGlobalPttKey);
 
     public string ActiveSystemPttKeyText =>
-        activeSystemKeyboardPtt.ActivationKey == KeyboardPttKey.None
+        pttSession.ActiveSystemKey == KeyboardPttKey.None
             ? "Keyboard PTT disabled"
-            : activeSystemKeyboardPtt.ActivationKey.ToString();
+            : pttSession.ActiveSystemKey.ToString();
 
     public KeyboardPttKey SelectedActiveSystemPttKey
     {
-        get => selectedActiveSystemPttKey;
-        set => SetField(ref selectedActiveSystemPttKey, value);
+        get => pttSettings.SelectedActiveSystemPttKey;
+        set => pttSettings.SelectedActiveSystemPttKey = value;
     }
 
     public Task ApplyActiveSystemPttKeySelectionAsync()
@@ -1396,42 +1289,37 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
 
     public bool SerialPttEnabled
     {
-        get => serialPttEnabled;
-        set => SetField(ref serialPttEnabled, value);
+        get => pttSettings.SerialPttEnabled;
+        set => pttSettings.SerialPttEnabled = value;
     }
 
     public bool SerialPttActiveSystemOnly
     {
-        get => serialPttActiveSystemOnly;
-        set => SetField(ref serialPttActiveSystemOnly, value);
+        get => pttSettings.SerialPttActiveSystemOnly;
+        set => pttSettings.SerialPttActiveSystemOnly = value;
     }
 
     public string SerialPttPortName
     {
-        get => serialPttPortName;
-        set => SetField(ref serialPttPortName, value?.Trim() ?? string.Empty);
+        get => pttSettings.SerialPttPortName;
+        set => pttSettings.SerialPttPortName = value;
     }
 
     public int SerialPttBaudRate
     {
-        get => serialPttBaudRate;
-        set => SetField(ref serialPttBaudRate, value);
+        get => pttSettings.SerialPttBaudRate;
+        set => pttSettings.SerialPttBaudRate = value;
     }
 
-    public IReadOnlyList<string> SerialPttPortOptions => serialPttPortOptions;
+    public IReadOnlyList<string> SerialPttPortOptions => pttSettings.SerialPttPortOptions;
 
     public IReadOnlyList<int> SerialPttBaudRates
-        => SerialPttBaudRateOptions
-            .Append(SerialPttBaudRate)
-            .Where(baudRate => baudRate > 0)
-            .Distinct()
-            .Order()
-            .ToArray();
+        => pttSettings.SerialPttBaudRates;
 
     public string SerialPttStatusText
     {
-        get => serialPttStatusText;
-        private set => SetField(ref serialPttStatusText, value);
+        get => pttSettings.SerialPttStatusText;
+        private set => pttSettings.SerialPttStatusText = value;
     }
 
     public void RefreshSerialPttDevices()
@@ -1446,14 +1334,11 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .OrderBy(portName => portName, StringComparer.OrdinalIgnoreCase)
                 .ToArray();
-            serialPttPortOptions.Clear();
-            foreach (string device in devices)
-                serialPttPortOptions.Add(device);
-
+            pttSettings.ReplaceSerialPttPortOptions(devices);
             if (SerialPttPortName.Length == 0 && devices.Length > 0)
                 SerialPttPortName = devices[0];
-            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SerialPttPortOptions)));
-            SerialPttStatusText = serialPtt is not null && SerialPttEnabled
+            pttSettings.NotifySerialPttPortOptionsChanged();
+            SerialPttStatusText = pttSession.HasSerialSource && SerialPttEnabled
                 ? $"Serial PTT configured for {SerialPttPortName} at {SerialPttBaudRate:N0} baud."
                 : devices.Length == 0
                     ? "Serial PTT is disabled; no serial devices were detected."
@@ -1461,10 +1346,9 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or InvalidOperationException or PlatformNotSupportedException or System.ComponentModel.Win32Exception)
         {
-            serialPttPortOptions.Clear();
-            if (SerialPttPortName.Length > 0)
-                serialPttPortOptions.Add(SerialPttPortName);
-            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SerialPttPortOptions)));
+            pttSettings.ReplaceSerialPttPortOptions(
+                SerialPttPortName.Length > 0 ? [SerialPttPortName] : []);
+            pttSettings.NotifySerialPttPortOptionsChanged();
             SerialPttStatusText = $"Serial device discovery unavailable: {exception.Message}";
         }
     }
@@ -1484,19 +1368,20 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
             return false;
         }
 
-        await serialPttChangeLock.WaitAsync();
         try
         {
-            IPttSource? previous = serialPtt;
-            serialPtt = null;
-            if (previous is not null)
-                await StopAndDisposeSerialPttAsync(previous);
-
-            userSettings.SerialPttEnabled = SerialPttEnabled;
-            userSettings.SerialPttActiveSystemOnly = SerialPttActiveSystemOnly;
-            userSettings.SerialPttPortName = portName;
-            userSettings.SerialPttBaudRate = baudRate;
-            PersistUserSettings();
+            await pttSession.ReplaceSerialSourceAsync(
+                SerialPttEnabled,
+                portName,
+                baudRate,
+                () =>
+                {
+                    userSettings.SerialPttEnabled = SerialPttEnabled;
+                    userSettings.SerialPttActiveSystemOnly = SerialPttActiveSystemOnly;
+                    userSettings.SerialPttPortName = portName;
+                    userSettings.SerialPttBaudRate = baudRate;
+                    PersistUserSettings();
+                }).ConfigureAwait(false);
             if (!SerialPttEnabled)
             {
                 SerialPttStatusText = "Serial PTT is disabled.";
@@ -1504,37 +1389,19 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
                 return true;
             }
 
-            IPttSource? candidate = null;
-            try
-            {
-                candidate = serialPttFactory(portName, baudRate);
-                candidate.StateChanged += HandleSerialPttStateChanged;
-                if (pttStarted)
-                    await candidate.StartAsync();
-                serialPtt = candidate;
-                SerialPttStatusText = pttStarted
-                    ? $"Serial PTT ready on {portName} at {baudRate:N0} baud."
-                    : $"Serial PTT configured for {portName} at {baudRate:N0} baud.";
-                TransmitStatusText = pttStarted
-                    ? $"PTT idle; serial source {portName} ready for {SerialPttScopeText}."
-                    : $"PTT idle; serial source {portName} will start for {SerialPttScopeText}.";
-                return true;
-            }
-            catch (Exception exception) when (exception is IOException or InvalidOperationException or UnauthorizedAccessException or ArgumentException or PlatformNotSupportedException or System.ComponentModel.Win32Exception)
-            {
-                if (candidate is not null)
-                {
-                    candidate.StateChanged -= HandleSerialPttStateChanged;
-                    await candidate.DisposeAsync();
-                }
-                SerialPttStatusText = $"Serial PTT unavailable on {portName}: {exception.Message}";
-                TransmitStatusText = $"PTT idle; serial source unavailable: {exception.Message}";
-                return false;
-            }
+            SerialPttStatusText = pttSession.IsStarted
+                ? $"Serial PTT ready on {portName} at {baudRate:N0} baud."
+                : $"Serial PTT configured for {portName} at {baudRate:N0} baud.";
+            TransmitStatusText = pttSession.IsStarted
+                ? $"PTT idle; serial source {portName} ready for {SerialPttScopeText}."
+                : $"PTT idle; serial source {portName} will start for {SerialPttScopeText}.";
+            return true;
         }
-        finally
+        catch (Exception exception) when (exception is IOException or InvalidOperationException or UnauthorizedAccessException or ArgumentException or PlatformNotSupportedException or System.ComponentModel.Win32Exception)
         {
-            serialPttChangeLock.Release();
+            SerialPttStatusText = $"Serial PTT unavailable on {portName}: {exception.Message}";
+            TransmitStatusText = $"PTT idle; serial source unavailable: {exception.Message}";
+            return false;
         }
     }
 
@@ -1555,44 +1422,44 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
 
     public string DtmfPresetName
     {
-        get => dtmfPresetName;
-        set => SetField(ref dtmfPresetName, value ?? string.Empty);
+        get => toneWorkspace.DtmfPresetName;
+        set => toneWorkspace.DtmfPresetName = value;
     }
 
     public string TonePresetName
     {
-        get => tonePresetName;
-        set => SetField(ref tonePresetName, value ?? string.Empty);
+        get => toneWorkspace.TonePresetName;
+        set => toneWorkspace.TonePresetName = value;
     }
 
     public string QuickCallToneAText
     {
-        get => quickCallToneAText;
-        set => SetField(ref quickCallToneAText, value ?? string.Empty);
+        get => toneWorkspace.QuickCallToneAText;
+        set => toneWorkspace.QuickCallToneAText = value;
     }
 
     public string QuickCallToneBText
     {
-        get => quickCallToneBText;
-        set => SetField(ref quickCallToneBText, value ?? string.Empty);
+        get => toneWorkspace.QuickCallToneBText;
+        set => toneWorkspace.QuickCallToneBText = value;
     }
 
     public string AlertToneNameText
     {
-        get => alertToneNameText;
-        set => SetField(ref alertToneNameText, value ?? string.Empty);
+        get => toneWorkspace.AlertToneNameText;
+        set => toneWorkspace.AlertToneNameText = value;
     }
 
     public string RecordingRetentionDaysText
     {
-        get => recordingRetentionDaysText;
-        set => SetField(ref recordingRetentionDaysText, value ?? string.Empty);
+        get => historyRecording.RecordingRetentionDaysText;
+        set => historyRecording.RecordingRetentionDaysText = value;
     }
 
     public string RecordingRootPathText
     {
-        get => recordingRootPathText;
-        set => SetField(ref recordingRootPathText, value ?? string.Empty);
+        get => historyRecording.RecordingRootPathText;
+        set => historyRecording.RecordingRootPathText = value;
     }
 
     public string SelectionStatusText => selectedChannel is null
@@ -1610,21 +1477,32 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
     public IReadOnlyList<ZoneViewModel> Zones { get; }
     public IReadOnlyList<string> PatchGroupNames => patchForwarding.GroupNames;
     public IReadOnlyList<PatchGroupEditorViewModel> PatchGroups { get; }
-    public ReadOnlyObservableCollection<DtmfPresetViewModel> DtmfPresets { get; }
-    public ReadOnlyObservableCollection<TonePresetViewModel> TonePresets { get; }
-    public ReadOnlyObservableCollection<ToneSequenceStepViewModel> ToneSequenceSteps { get; }
-    public ReadOnlyObservableCollection<AlertToneViewModel> AlertTones { get; }
-    public ReadOnlyObservableCollection<BuiltInAlertToneViewModel> BuiltInAlertTones { get; }
+    public ReadOnlyObservableCollection<DtmfPresetViewModel> DtmfPresets
+        => toneWorkspace.DtmfPresets;
+    public ReadOnlyObservableCollection<TonePresetViewModel> TonePresets
+        => toneWorkspace.TonePresets;
+    public ReadOnlyObservableCollection<ToneSequenceStepViewModel> ToneSequenceSteps
+        => toneWorkspace.ToneSequenceSteps;
+    public ReadOnlyObservableCollection<AlertToneViewModel> AlertTones
+        => toneWorkspace.AlertTones;
+    public ReadOnlyObservableCollection<BuiltInAlertToneViewModel> BuiltInAlertTones
+        => toneWorkspace.BuiltInAlertTones;
     public ReadOnlyObservableCollection<ToolbarClockViewModel> ToolbarClocks { get; }
-    public ReadOnlyObservableCollection<AudioInputPresetViewModel> AudioInputPresets { get; }
-    public ReadOnlyObservableCollection<RxAudioProcessingModeViewModel> RxAudioProcessingModes { get; }
-    public ReadOnlyObservableCollection<AudioDeviceOptionViewModel> AudioInputDevices { get; }
-    public ReadOnlyObservableCollection<AudioDeviceOptionViewModel> AudioOutputDevices { get; }
+    public ReadOnlyObservableCollection<AudioInputPresetViewModel> AudioInputPresets
+        => audioSettings.AudioInputPresets;
+    public ReadOnlyObservableCollection<RxAudioProcessingModeViewModel> RxAudioProcessingModes
+        => audioSettings.RxAudioProcessingModes;
+    public ReadOnlyObservableCollection<AudioDeviceOptionViewModel> AudioInputDevices
+        => audioSettings.AudioInputDevices;
+    public ReadOnlyObservableCollection<AudioDeviceOptionViewModel> AudioOutputDevices
+        => audioSettings.AudioOutputDevices;
     public ReadOnlyObservableCollection<SubscriberCommandAuditEntry> SubscriberCommandAudit { get; }
     public ReadOnlyObservableCollection<DebugLogEntry> DebugLogEntries { get; }
     public ReadOnlyObservableCollection<WebStreamViewModel> WebStreams { get; }
-    public System.Collections.ObjectModel.ReadOnlyObservableCollection<CallHistoryEntry> CallHistory { get; }
-    public ReadOnlyObservableCollection<CallHistoryEntry> ActivityCallHistory { get; }
+    public System.Collections.ObjectModel.ReadOnlyObservableCollection<CallHistoryEntry> CallHistory
+        => historyRecording.CallHistory;
+    public ReadOnlyObservableCollection<CallHistoryEntry> ActivityCallHistory
+        => historyRecording.ActivityCallHistory;
     public string ActivityZoneFilterButtonText => activityCurrentZoneOnly ? "Zone Wide" : "System Wide";
     public string ActivityReceiveFilterButtonText => activityReceiveEnabledOnly ? "Active" : "All";
     public IReadOnlyList<SubscriberCommandAuditEntry> ActivitySubscriberCommandAudit
@@ -1633,37 +1511,12 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
             : SubscriberCommandAudit
                 .Where(entry => entry.SystemName.Equals(SelectedSystem.Name, StringComparison.OrdinalIgnoreCase))
                 .ToArray();
-    public ReadOnlyObservableCollection<CallHistoryEntry> FilteredCallHistory { get; }
-    public bool HasAdvancedHistoryFilters =>
-        RecordingDirectionFilter != "All" ||
-        RecordingProtocolFilter != "All" ||
-        RecordingEncryptionFilter != "All" ||
-        !string.IsNullOrWhiteSpace(RecordingSystemFilterText) ||
-        !string.IsNullOrWhiteSpace(RecordingChannelFilterText) ||
-        !string.IsNullOrWhiteSpace(RecordingTalkgroupFilterText) ||
-        !string.IsNullOrWhiteSpace(RecordingSubscriberFilterText) ||
-        !string.IsNullOrWhiteSpace(RecordingAliasFilterText) ||
-        RecordingStartDateFilter is not null ||
-        RecordingEndDateFilter is not null;
-    public string HistoryFilterSummary
-    {
-        get
-        {
-            var filters = new List<string>();
-            if (RecordingDirectionFilter != "All") filters.Add(RecordingDirectionFilter);
-            if (RecordingProtocolFilter != "All") filters.Add(RecordingProtocolFilter);
-            if (RecordingEncryptionFilter != "All") filters.Add(RecordingEncryptionFilter);
-            if (!string.IsNullOrWhiteSpace(RecordingSystemFilterText)) filters.Add($"system {RecordingSystemFilterText}");
-            if (!string.IsNullOrWhiteSpace(RecordingChannelFilterText)) filters.Add($"channel {RecordingChannelFilterText}");
-            if (!string.IsNullOrWhiteSpace(RecordingTalkgroupFilterText)) filters.Add($"TG {RecordingTalkgroupFilterText}");
-            if (!string.IsNullOrWhiteSpace(RecordingSubscriberFilterText)) filters.Add($"RID {RecordingSubscriberFilterText}");
-            if (!string.IsNullOrWhiteSpace(RecordingAliasFilterText)) filters.Add($"alias {RecordingAliasFilterText}");
-            if (RecordingStartDateFilter is DateTimeOffset start) filters.Add($"from {start:yyyy-MM-dd}");
-            if (RecordingEndDateFilter is DateTimeOffset end) filters.Add($"to {end:yyyy-MM-dd}");
-            return string.Join(" · ", filters);
-        }
-    }
-    public ReadOnlyObservableCollection<CallRecordingMetadata> Recordings { get; }
+    public ReadOnlyObservableCollection<CallHistoryEntry> FilteredCallHistory
+        => historyRecording.FilteredCallHistory;
+    public bool HasAdvancedHistoryFilters => historyRecording.HasAdvancedHistoryFilters;
+    public string HistoryFilterSummary => historyRecording.HistoryFilterSummary;
+    public ReadOnlyObservableCollection<CallRecordingMetadata> Recordings
+        => historyRecording.Recordings;
     public ICommand ConnectCommand { get; }
     public ICommand DisconnectCommand { get; }
     public ICommand ToggleSelectedSystemOutputMuteCommand { get; }
@@ -1720,197 +1573,154 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
 
     public string CallHistoryFilterText
     {
-        get => callHistoryFilterText;
-        set
-        {
-            string normalized = value ?? string.Empty;
-            if (callHistoryFilterText == normalized)
-                return;
-            callHistoryFilterText = normalized;
-            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CallHistoryFilterText)));
-            RefreshFilteredCallHistory();
-        }
+        get => historyRecording.CallHistoryFilterText;
+        set => historyRecording.CallHistoryFilterText = value;
     }
 
     public string RecordingFilterText
     {
-        get => recordingFilterText;
-        set
-        {
-            string normalized = value ?? string.Empty;
-            if (recordingFilterText == normalized)
-                return;
-            recordingFilterText = normalized;
-            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(RecordingFilterText)));
-            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(FilteredRecordings)));
-        }
+        get => historyRecording.RecordingFilterText;
+        set => historyRecording.RecordingFilterText = value;
     }
 
-    public IReadOnlyList<string> RecordingDirectionFilters { get; } = ["All", "RX", "TX"];
-    public IReadOnlyList<string> RecordingProtocolFilters { get; } = ["All", "DMR", "P25", "ANALOG", "NXDN"];
-    public IReadOnlyList<string> RecordingEncryptionFilters { get; } = ["All", "Clear", "Encrypted"];
+    public IReadOnlyList<string> RecordingDirectionFilters => historyRecording.RecordingDirectionFilters;
+    public IReadOnlyList<string> RecordingProtocolFilters => historyRecording.RecordingProtocolFilters;
+    public IReadOnlyList<string> RecordingEncryptionFilters => historyRecording.RecordingEncryptionFilters;
 
     public string RecordingDirectionFilter
     {
-        get => recordingDirectionFilter;
-        set => SetRecordingFilter(ref recordingDirectionFilter, value, nameof(RecordingDirectionFilter));
+        get => historyRecording.RecordingDirectionFilter;
+        set => historyRecording.RecordingDirectionFilter = value;
     }
 
     public string RecordingProtocolFilter
     {
-        get => recordingProtocolFilter;
-        set => SetRecordingFilter(ref recordingProtocolFilter, value, nameof(RecordingProtocolFilter));
+        get => historyRecording.RecordingProtocolFilter;
+        set => historyRecording.RecordingProtocolFilter = value;
     }
 
     public string RecordingEncryptionFilter
     {
-        get => recordingEncryptionFilter;
-        set => SetRecordingFilter(ref recordingEncryptionFilter, value, nameof(RecordingEncryptionFilter));
+        get => historyRecording.RecordingEncryptionFilter;
+        set => historyRecording.RecordingEncryptionFilter = value;
     }
 
     public string RecordingSystemFilterText
     {
-        get => recordingSystemFilterText;
-        set => SetRecordingFilter(ref recordingSystemFilterText, value, nameof(RecordingSystemFilterText), allowEmpty: true);
+        get => historyRecording.RecordingSystemFilterText;
+        set => historyRecording.RecordingSystemFilterText = value;
     }
 
     public string RecordingChannelFilterText
     {
-        get => recordingChannelFilterText;
-        set => SetRecordingFilter(ref recordingChannelFilterText, value, nameof(RecordingChannelFilterText), allowEmpty: true);
+        get => historyRecording.RecordingChannelFilterText;
+        set => historyRecording.RecordingChannelFilterText = value;
     }
 
     public string RecordingTalkgroupFilterText
     {
-        get => recordingTalkgroupFilterText;
-        set => SetRecordingFilter(ref recordingTalkgroupFilterText, value, nameof(RecordingTalkgroupFilterText), allowEmpty: true);
+        get => historyRecording.RecordingTalkgroupFilterText;
+        set => historyRecording.RecordingTalkgroupFilterText = value;
     }
 
     public string RecordingSubscriberFilterText
     {
-        get => recordingSubscriberFilterText;
-        set => SetRecordingFilter(ref recordingSubscriberFilterText, value, nameof(RecordingSubscriberFilterText), allowEmpty: true);
+        get => historyRecording.RecordingSubscriberFilterText;
+        set => historyRecording.RecordingSubscriberFilterText = value;
     }
 
     public string RecordingAliasFilterText
     {
-        get => recordingAliasFilterText;
-        set => SetRecordingFilter(ref recordingAliasFilterText, value, nameof(RecordingAliasFilterText), allowEmpty: true);
+        get => historyRecording.RecordingAliasFilterText;
+        set => historyRecording.RecordingAliasFilterText = value;
     }
 
     public DateTimeOffset? RecordingStartDateFilter
     {
-        get => recordingStartDateFilter;
-        set => SetRecordingDateFilter(ref recordingStartDateFilter, value, nameof(RecordingStartDateFilter));
+        get => historyRecording.RecordingStartDateFilter;
+        set => historyRecording.RecordingStartDateFilter = value;
     }
 
     public DateTimeOffset? RecordingEndDateFilter
     {
-        get => recordingEndDateFilter;
-        set => SetRecordingDateFilter(ref recordingEndDateFilter, value, nameof(RecordingEndDateFilter));
+        get => historyRecording.RecordingEndDateFilter;
+        set => historyRecording.RecordingEndDateFilter = value;
     }
 
     public bool ShowRecordingTimeColumn
     {
-        get => recordingTimeColumnVisible;
-        set => SetRecordingColumnVisibility(ref recordingTimeColumnVisible, value, nameof(ShowRecordingTimeColumn));
+        get => historyRecording.ShowRecordingTimeColumn;
+        set => historyRecording.ShowRecordingTimeColumn = value;
     }
 
     public bool ShowRecordingDurationColumn
     {
-        get => recordingDurationColumnVisible;
-        set => SetRecordingColumnVisibility(ref recordingDurationColumnVisible, value, nameof(ShowRecordingDurationColumn));
+        get => historyRecording.ShowRecordingDurationColumn;
+        set => historyRecording.ShowRecordingDurationColumn = value;
     }
 
     public bool ShowRecordingChannelColumn
     {
-        get => recordingChannelColumnVisible;
-        set => SetRecordingColumnVisibility(ref recordingChannelColumnVisible, value, nameof(ShowRecordingChannelColumn));
+        get => historyRecording.ShowRecordingChannelColumn;
+        set => historyRecording.ShowRecordingChannelColumn = value;
     }
 
     public bool ShowRecordingTalkgroupColumn
     {
-        get => recordingTalkgroupColumnVisible;
-        set => SetRecordingColumnVisibility(ref recordingTalkgroupColumnVisible, value, nameof(ShowRecordingTalkgroupColumn));
+        get => historyRecording.ShowRecordingTalkgroupColumn;
+        set => historyRecording.ShowRecordingTalkgroupColumn = value;
     }
 
     public bool ShowRecordingSourceIdColumn
     {
-        get => recordingSourceIdColumnVisible;
-        set => SetRecordingColumnVisibility(ref recordingSourceIdColumnVisible, value, nameof(ShowRecordingSourceIdColumn));
+        get => historyRecording.ShowRecordingSourceIdColumn;
+        set => historyRecording.ShowRecordingSourceIdColumn = value;
     }
 
     public bool ShowRecordingAliasColumn
     {
-        get => recordingAliasColumnVisible;
-        set => SetRecordingColumnVisibility(ref recordingAliasColumnVisible, value, nameof(ShowRecordingAliasColumn));
+        get => historyRecording.ShowRecordingAliasColumn;
+        set => historyRecording.ShowRecordingAliasColumn = value;
     }
 
     public bool ShowRecordingDirectionColumn
     {
-        get => recordingDirectionColumnVisible;
-        set => SetRecordingColumnVisibility(ref recordingDirectionColumnVisible, value, nameof(ShowRecordingDirectionColumn));
+        get => historyRecording.ShowRecordingDirectionColumn;
+        set => historyRecording.ShowRecordingDirectionColumn = value;
     }
 
     public bool ShowRecordingProtocolColumn
     {
-        get => recordingProtocolColumnVisible;
-        set => SetRecordingColumnVisibility(ref recordingProtocolColumnVisible, value, nameof(ShowRecordingProtocolColumn));
+        get => historyRecording.ShowRecordingProtocolColumn;
+        set => historyRecording.ShowRecordingProtocolColumn = value;
     }
 
     public bool ShowRecordingSystemColumn
     {
-        get => recordingSystemColumnVisible;
-        set => SetRecordingColumnVisibility(ref recordingSystemColumnVisible, value, nameof(ShowRecordingSystemColumn));
+        get => historyRecording.ShowRecordingSystemColumn;
+        set => historyRecording.ShowRecordingSystemColumn = value;
     }
 
     public bool ShowRecordingEncryptionColumn
     {
-        get => recordingEncryptionColumnVisible;
-        set => SetRecordingColumnVisibility(ref recordingEncryptionColumnVisible, value, nameof(ShowRecordingEncryptionColumn));
+        get => historyRecording.ShowRecordingEncryptionColumn;
+        set => historyRecording.ShowRecordingEncryptionColumn = value;
     }
 
     public bool ShowRecordingDiagnosticsColumn
     {
-        get => recordingDiagnosticsColumnVisible;
-        set => SetRecordingColumnVisibility(ref recordingDiagnosticsColumnVisible, value, nameof(ShowRecordingDiagnosticsColumn));
+        get => historyRecording.ShowRecordingDiagnosticsColumn;
+        set => historyRecording.ShowRecordingDiagnosticsColumn = value;
     }
 
     public void ResetRecordingColumns()
-    {
-        ShowRecordingTimeColumn = true;
-        ShowRecordingDurationColumn = true;
-        ShowRecordingChannelColumn = true;
-        ShowRecordingTalkgroupColumn = true;
-        ShowRecordingSourceIdColumn = true;
-        ShowRecordingAliasColumn = true;
-        ShowRecordingDirectionColumn = false;
-        ShowRecordingProtocolColumn = false;
-        ShowRecordingSystemColumn = false;
-        ShowRecordingEncryptionColumn = false;
-        ShowRecordingDiagnosticsColumn = true;
-    }
+        => historyRecording.ResetRecordingColumns();
 
     public void ClearRecordingFilters()
-    {
-        RecordingFilterText = string.Empty;
-        RecordingDirectionFilter = "All";
-        RecordingProtocolFilter = "All";
-        RecordingEncryptionFilter = "All";
-        RecordingSystemFilterText = string.Empty;
-        RecordingChannelFilterText = string.Empty;
-        RecordingTalkgroupFilterText = string.Empty;
-        RecordingSubscriberFilterText = string.Empty;
-        RecordingAliasFilterText = string.Empty;
-        RecordingStartDateFilter = null;
-        RecordingEndDateFilter = null;
-    }
+        => historyRecording.ClearRecordingFilters();
 
     public void ClearHistoryFilters()
-    {
-        CallHistoryFilterText = string.Empty;
-        ClearRecordingFilters();
-    }
+        => historyRecording.ClearHistoryFilters();
 
     public bool ApplyRecordingRoot()
     {
@@ -1930,82 +1740,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
     }
 
     public IReadOnlyList<CallRecordingMetadata> FilteredRecordings
-        => Recordings
-            .Where(metadata => new RecordingCatalogFilter(
-                RecordingFilterText,
-                RecordingDirectionFilter,
-                RecordingProtocolFilter,
-                RecordingEncryptionFilter,
-                RecordingSystemFilterText,
-                RecordingChannelFilterText,
-                RecordingTalkgroupFilterText,
-                RecordingSubscriberFilterText,
-                RecordingAliasFilterText,
-                RecordingStartDateFilter,
-                RecordingEndDateFilter).Matches(metadata))
-            .ToArray();
-
-    private void SetRecordingDateFilter(
-        ref DateTimeOffset? field,
-        DateTimeOffset? value,
-        string propertyName)
-    {
-        DateTimeOffset? normalized = value is DateTimeOffset date
-            ? new DateTimeOffset(date.Date, date.Offset)
-            : null;
-        if (field == normalized)
-            return;
-        field = normalized;
-        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
-        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(FilteredRecordings)));
-        NotifyHistoryFilterChanged();
-    }
-
-    private void SetRecordingColumnVisibility(ref bool field, bool value, string propertyName)
-    {
-        if (field == value)
-            return;
-        field = value;
-        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
-    }
-
-    private void SetRecordingFilter(
-        ref string field,
-        string? value,
-        string propertyName,
-        bool allowEmpty = false)
-    {
-        string normalized = string.IsNullOrWhiteSpace(value)
-            ? (allowEmpty ? string.Empty : "All")
-            : value.Trim();
-        if (field.Equals(normalized, StringComparison.Ordinal))
-            return;
-        field = normalized;
-        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
-        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(FilteredRecordings)));
-        NotifyHistoryFilterChanged();
-    }
-
-    private HistoryCatalogFilter CreateHistoryFilter()
-        => new(
-            CallHistoryFilterText,
-            RecordingDirectionFilter,
-            RecordingProtocolFilter,
-            RecordingEncryptionFilter,
-            RecordingSystemFilterText,
-            RecordingChannelFilterText,
-            RecordingTalkgroupFilterText,
-            RecordingSubscriberFilterText,
-            RecordingAliasFilterText,
-            RecordingStartDateFilter,
-            RecordingEndDateFilter);
-
-    private void NotifyHistoryFilterChanged()
-    {
-        RefreshFilteredCallHistory();
-        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(HasAdvancedHistoryFilters)));
-        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(HistoryFilterSummary)));
-    }
+        => historyRecording.FilteredRecordings;
 
     public void ExportDebugLogs(string path)
     {
@@ -2231,7 +1966,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
             RecordRecordingCatalogMutation();
             recordingEntries.Remove(metadata);
             callHistory.RemoveRecording(metadata);
-            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(FilteredRecordings)));
+            historyRecording.NotifyRecordingsChanged();
             NotifyCallHistoryChanged();
         }).ConfigureAwait(false);
     }
@@ -2344,51 +2079,25 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
 
     public async ValueTask StartKeyboardPttAsync(CancellationToken cancellationToken = default)
     {
-        if (!pttStarted)
+        bool firstStart = !pttSession.IsStarted;
+        PttSessionStartResult result =
+            await pttSession.StartAsync(cancellationToken).ConfigureAwait(false);
+        if (firstStart)
         {
-            KeyboardPttStartResult globalResult =
-                await keyboardPtt.StartAsync(cancellationToken).ConfigureAwait(false);
-            KeyboardPttStartResult activeSystemResult =
-                await activeSystemKeyboardPtt.StartAsync(cancellationToken).ConfigureAwait(false);
-            pttStarted = true;
-            TransmitStatusText = DescribeKeyboardPttReadiness(globalResult, activeSystemResult);
+            TransmitStatusText = DescribeKeyboardPttReadiness(
+                result.GlobalKeyboard,
+                result.ActiveSystemKeyboard);
         }
-
-        await serialPttChangeLock.WaitAsync(cancellationToken).ConfigureAwait(false);
-        try
+        if (!pttSession.HasSerialSource)
+            return;
+        if (result.SerialError is not null)
         {
-            if (serialPtt is null)
-                return;
-
-            try
-            {
-                await serialPtt.StartAsync(cancellationToken).ConfigureAwait(false);
-                SerialPttStatusText = $"Serial PTT ready on {SerialPttPortName} at {SerialPttBaudRate:N0} baud.";
-                TransmitStatusText = $"PTT idle; serial source {SerialPttPortName} ready for {SerialPttScopeText}.";
-            }
-            catch (Exception exception) when (exception is IOException or InvalidOperationException or UnauthorizedAccessException or ArgumentException or PlatformNotSupportedException or System.ComponentModel.Win32Exception)
-            {
-                SerialPttStatusText = $"Serial PTT unavailable on {SerialPttPortName}: {exception.Message}";
-                TransmitStatusText = $"PTT idle; serial source unavailable: {exception.Message}";
-            }
+            SerialPttStatusText = $"Serial PTT unavailable on {SerialPttPortName}: {result.SerialError.Message}";
+            TransmitStatusText = $"PTT idle; serial source unavailable: {result.SerialError.Message}";
+            return;
         }
-        finally
-        {
-            serialPttChangeLock.Release();
-        }
-    }
-
-    private async Task StopAndDisposeSerialPttAsync(IPttSource source)
-    {
-        try
-        {
-            await source.StopAsync().ConfigureAwait(false);
-        }
-        finally
-        {
-            source.StateChanged -= HandleSerialPttStateChanged;
-            await source.DisposeAsync().ConfigureAwait(false);
-        }
+        SerialPttStatusText = $"Serial PTT ready on {SerialPttPortName} at {SerialPttBaudRate:N0} baud.";
+        TransmitStatusText = $"PTT idle; serial source {SerialPttPortName} ready for {SerialPttScopeText}.";
     }
 
     public void SelectChannel(ChannelViewModel channel)
@@ -2491,13 +2200,13 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
     public async Task SetGlobalPttKeyAsync(KeyboardPttKey key)
     {
         SelectedGlobalPttKey = key;
-        if (key != KeyboardPttKey.None && key == activeSystemKeyboardPtt.ActivationKey)
+        if (key != KeyboardPttKey.None && key == pttSession.ActiveSystemKey)
         {
-            SelectedGlobalPttKey = keyboardPtt.ActivationKey;
+            SelectedGlobalPttKey = pttSession.GlobalKey;
             TransmitStatusText = $"{key} is already assigned to active-system PTT.";
             return;
         }
-        if (keyboardPtt.ActivationKey == key)
+        if (pttSession.GlobalKey == key)
             return;
 
         await ReplaceKeyboardPttBindingAsync(
@@ -2515,13 +2224,13 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
     public async Task SetActiveSystemPttKeyAsync(KeyboardPttKey key)
     {
         SelectedActiveSystemPttKey = key;
-        if (key != KeyboardPttKey.None && key == keyboardPtt.ActivationKey)
+        if (key != KeyboardPttKey.None && key == pttSession.GlobalKey)
         {
-            SelectedActiveSystemPttKey = activeSystemKeyboardPtt.ActivationKey;
+            SelectedActiveSystemPttKey = pttSession.ActiveSystemKey;
             TransmitStatusText = $"{key} is already assigned to global PTT.";
             return;
         }
-        if (activeSystemKeyboardPtt.ActivationKey == key)
+        if (pttSession.ActiveSystemKey == key)
             return;
 
         await ReplaceKeyboardPttBindingAsync(
@@ -2540,37 +2249,17 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
         PttTargetScope scope,
         KeyboardPttKey key)
     {
-        bool activeSystemOnly = scope == PttTargetScope.ActiveSystem;
-        KeyboardPttBinding previous = activeSystemOnly
-            ? activeSystemKeyboardPtt
-            : keyboardPtt;
-        bool anotherSourcePressed = activeSystemOnly
-            ? keyboardPtt.IsPressed || serialPtt?.IsPressed == true
-            : activeSystemKeyboardPtt.IsPressed || serialPtt?.IsPressed == true;
-        if (previous.IsPressed && !anotherSourcePressed)
-        {
-            // Detaching a pressed binding suppresses its release event. Stop
-            // active TX first so rebinding can never leave PTT latched.
-            ChannelViewModel[] active = transmitCoordinator.ActiveChannels.ToArray();
-            if (active.Length > 0)
-                await StopTransmitAsync(active).ConfigureAwait(false);
-        }
-
-        EventHandler<bool> handler = activeSystemOnly
-            ? HandleActiveSystemKeyboardPttStateChanged
-            : HandleKeyboardPttStateChanged;
-        previous.StateChanged -= handler;
-        await previous.DisposeAsync().ConfigureAwait(false);
-
-        var replacement = new KeyboardPttBinding(key, userSettings.TogglePttMode);
-        replacement.StateChanged += handler;
-        if (activeSystemOnly)
-            activeSystemKeyboardPtt = replacement;
-        else
-            keyboardPtt = replacement;
-
-        if (pttStarted)
-            await replacement.StartAsync(CancellationToken.None).ConfigureAwait(false);
+        await pttSession.ReplaceKeyboardBindingAsync(
+            scope,
+            key,
+            async () =>
+            {
+                // Detaching a pressed binding suppresses its release event.
+                // Stop active TX first so rebinding cannot leave PTT latched.
+                ChannelViewModel[] active = transmitCoordinator.ActiveChannels.ToArray();
+                if (active.Length > 0)
+                    await StopTransmitAsync(active).ConfigureAwait(false);
+            }).ConfigureAwait(false);
     }
 
     public async Task ToggleChannelReceiveAsync(ChannelViewModel channel)
@@ -2707,21 +2396,13 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
     }
 
     public bool HandleKeyboardPttDown(KeyboardPttKey key)
-    {
-        bool globalHandled = keyboardPtt.HandleKeyDown(key);
-        bool activeSystemHandled = activeSystemKeyboardPtt.HandleKeyDown(key);
-        return globalHandled || activeSystemHandled;
-    }
+        => pttSession.HandleKeyDown(key);
 
     public bool HandleKeyboardPttUp(KeyboardPttKey key)
-    {
-        bool globalHandled = keyboardPtt.HandleKeyUp(key);
-        bool activeSystemHandled = activeSystemKeyboardPtt.HandleKeyUp(key);
-        return globalHandled || activeSystemHandled;
-    }
+        => pttSession.HandleKeyUp(key);
 
     public bool IsConfiguredPttKey(KeyboardPttKey key)
-        => keyboardPtt.ActivationKey == key || activeSystemKeyboardPtt.ActivationKey == key;
+        => pttSession.IsConfiguredKey(key);
 
     internal IReadOnlyList<ChannelViewModel> GetSelectedTransmitTargets(PttTargetScope scope)
     {
@@ -2740,336 +2421,144 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
         => GetSelectedTransmitTargets(GetSerialPttTargetScope());
 
     public static MainWindowViewModel Load(string? configurationPath)
-        => Load(configurationPath, new UserSettingsStore(UserSettingsStore.DefaultPath));
+    {
+        DesktopRuntimeDependencies dependencies = DesktopRuntimeDependencies.CreateDefault();
+        return new ConsoleSessionFactory(dependencies).Create(
+            new ConsoleSessionLoader(dependencies.UserSettingsStore).Load(configurationPath));
+    }
 
     internal static MainWindowViewModel Load(
         string? configurationPath,
         UserSettingsStore userSettingsStore,
         Func<IReadOnlyList<string>>? serialPortProvider = null,
-        Func<string, int, IPttSource>? serialPttFactory = null)
+        Func<string, int, IPttSource>? serialPttFactory = null,
+        IUiDispatcher? uiDispatcher = null)
     {
         ArgumentNullException.ThrowIfNull(userSettingsStore);
-        if (string.IsNullOrWhiteSpace(configurationPath))
-            configurationPath = userSettingsStore.Load().LastCodeplugPath;
-
-        if (string.IsNullOrWhiteSpace(configurationPath))
-        {
-            return new MainWindowViewModel(
-                "No codeplug selected. Launch with a path to a codeplug YAML file.",
-                [],
-                [],
-                userSettingsStore: userSettingsStore,
-                groupDefinitions: [],
-                serialPortProvider: serialPortProvider,
-                serialPttFactory: serialPttFactory);
-        }
-
-        try
-        {
-            ConsoleConfiguration configuration = ConfigurationLoader.Load(configurationPath);
-            IReadOnlyList<string> errors = ConfigurationLoader.Validate(configuration);
-            (P25KeyRing p25KeyRing, DmrKeyRing dmrKeyRing, NxdnKeyRing nxdnKeyRing) = LoadKeyRings(
-                configuration,
-                out string? keyWarning);
-            IReadOnlyList<ZoneViewModel> zones = configuration.Zones.Select(zone => new ZoneViewModel(
-                zone.Name,
-                zone.Channels.Select(channel => new ChannelViewModel(
-                    channel,
-                    p25KeyRing,
-                    configuration.Systems
-                        .FirstOrDefault(system => system.Name.Equals(channel.System, StringComparison.OrdinalIgnoreCase))
-                        ?.RidAlias,
-                    dmrKeyRing,
-                    nxdnKeyRing)).ToArray(),
-                zone.WebStreams.Select(stream => new WebStreamViewModel(stream)).ToArray(),
-                zone.TabColor,
-                zone.TabTextColor)).ToArray();
-            string status = errors.Count == 0
-                ? $"Loaded {configuration.Systems.Count} system(s) and {configuration.Zones.Count} zone(s). Connections are idle until Connect is pressed."
-                : $"Configuration has {errors.Count} validation error(s):\n• {string.Join("\n• ", errors)}";
-            if (!string.IsNullOrWhiteSpace(keyWarning))
-                status = $"{status}\n{keyWarning}";
-
-            string loadedCodeplugPath = configuration.SourcePath ?? Path.GetFullPath(configurationPath);
-            var viewModel = new MainWindowViewModel(
-                status,
-                errors.Count == 0
-                    ? CreateSystemViewModels(configuration, zones)
-                    : [],
-                zones,
-                p25KeyRing,
-                userSettingsStore,
-                configuration.EffectiveGroups(),
-                configuration.PatchSourceIdPassthrough,
-                serialPortProvider,
-                serialPttFactory,
-                dmrKeyRing,
-                nxdnKeyRing,
-                loadedCodeplugPath);
-            if (errors.Count == 0)
-                viewModel.RecordLoadedCodeplug(loadedCodeplugPath);
-            return viewModel;
-        }
-        catch (Exception exception) when (exception is IOException or InvalidDataException or FormatException or YamlDotNet.Core.YamlException)
-        {
-            return new MainWindowViewModel(
-                $"Unable to load codeplug: {exception.Message}",
-                [],
-                [],
-                userSettingsStore: userSettingsStore,
-                groupDefinitions: [],
-                serialPortProvider: serialPortProvider,
-                serialPttFactory: serialPttFactory);
-        }
+        var dependencies = new DesktopRuntimeDependencies(
+            userSettingsStore,
+            serialPortProvider ?? SerialPttSource.GetAvailablePortNames,
+            serialPttFactory ?? ((portName, baudRate) => new SerialPttSource(portName, baudRate)),
+            uiDispatcher ?? AvaloniaUiDispatcher.Instance);
+        return new ConsoleSessionFactory(dependencies).Create(
+            new ConsoleSessionLoader(userSettingsStore).Load(configurationPath));
     }
 
-    private static (P25KeyRing P25, DmrKeyRing Dmr, NxdnKeyRing Nxdn) LoadKeyRings(
-        ConsoleConfiguration configuration,
-        out string? warning)
+    public ValueTask DisposeAsync()
     {
-        var p25Ring = new P25KeyRing();
-        var dmrRing = new DmrKeyRing();
-        var nxdnRing = new NxdnKeyRing();
-        warning = null;
-        if (string.IsNullOrWhiteSpace(configuration.KeyFile))
-            return (p25Ring, dmrRing, nxdnRing);
-
-        try
-        {
-            KeyContainer localKeys = KeyFileLoader.Load(
-                ConfigurationLoader.ResolvePath(configuration, configuration.KeyFile));
-            foreach (SystemConfiguration system in configuration.Systems)
-            {
-                p25Ring.AddLocalKeys(system.Name, localKeys);
-                dmrRing.AddLocalKeys(system.Name, localKeys);
-                nxdnRing.AddLocalKeys(system.Name, localKeys);
-            }
-        }
-        catch (Exception exception) when (exception is IOException or InvalidDataException or FormatException or YamlDotNet.Core.YamlException)
-        {
-            warning = $"Encryption keys unavailable: {exception.Message} Encrypted P25 channels are disabled until FNE/KMM supplies their keys. Encrypted DMR and NXDN channels require local keys.";
-            p25Ring.Dispose();
-            dmrRing.Dispose();
-            nxdnRing.Dispose();
-            return (new P25KeyRing(), new DmrKeyRing(), new NxdnKeyRing());
-        }
-        return (p25Ring, dmrRing, nxdnRing);
+        Interlocked.Exchange(ref disposeStarted, 1);
+        return sessionRuntime.DisposeAsync();
     }
 
-    private static IReadOnlyList<SystemViewModel> CreateSystemViewModels(
-        ConsoleConfiguration configuration,
-        IReadOnlyList<ZoneViewModel> zones)
+    private async Task DisposeCoreAsync()
     {
-        var channelsBySystem = new Dictionary<string, List<ChannelViewModel>>(StringComparer.OrdinalIgnoreCase);
-        foreach (ChannelViewModel channel in zones.SelectMany(zone => zone.Channels))
+        var cleanup = new AsyncCleanup();
+        cleanup.Run(filteredDebugLogs.Dispose);
+        await cleanup.RunTaskAsync(
+            () => defaultAudioDeviceMonitor.DisposeAsync().AsTask()).ConfigureAwait(false);
+        RecordingCatalogScanShutdown recordingScan = historyRecording.CancelRecordingCatalogScan();
+        await cleanup.RunTaskAsync(() => recordingScan.Scan).ConfigureAwait(false);
+        cleanup.Run(() => recordingScan.Cancellation?.Dispose());
+        cleanup.Run(() =>
         {
-            if (!channelsBySystem.TryGetValue(channel.Definition.SystemName, out List<ChannelViewModel>? channels))
-            {
-                channels = [];
-                channelsBySystem.Add(channel.Definition.SystemName, channels);
-            }
+            transmitCoordinator.Faulted -= HandleTransmitFaulted;
+            transmitCoordinator.HighQualityBluetoothStatusChanged -= HandleHighQualityBluetoothStatusChanged;
+            pttSession.StateChanged -= HandlePttSourceStateChanged;
+            pttSettings.PropertyChanged -= HandlePttSettingsPropertyChanged;
+            historyRecording.PropertyChanged -= HandleHistoryRecordingPropertyChanged;
+            audioSettings.PropertyChanged -= HandleAudioSettingsPropertyChanged;
+            toneWorkspace.PropertyChanged -= HandleToneWorkspacePropertyChanged;
+        });
+        await cleanup.RunTaskAsync(() => pttSession.DisposeAsync().AsTask()).ConfigureAwait(false);
 
-            channels.Add(channel);
-        }
-
-        return configuration.Systems.Select((system, systemIndex) =>
-        {
-            IBrush systemAccent = SystemAccentPalette.GetBrush(systemIndex);
-            IReadOnlyList<ZoneViewModel> systemZones = zones
-                .Select(zone => new ZoneViewModel(
-                    zone.Name,
-                    zone.Channels.Where(channel => channel.Definition.SystemName.Equals(
-                        system.Name,
-                        StringComparison.OrdinalIgnoreCase)).ToArray(),
-                    zone.WebStreams,
-                    zone.TabColor,
-                    zone.TabTextColor,
-                    systemAccent))
-                .Where(zone => zone.Channels.Count > 0)
-                .ToArray();
-
-            return new SystemViewModel(
-                FneConnectionOptions.FromConfiguration(system),
-                system.Name,
-                $"{system.Address}:{system.Port}",
-                channelsBySystem.TryGetValue(system.Name, out List<ChannelViewModel>? channels)
-                    ? channels
-                    : [],
-                systemZones,
-                systemIndex);
-        }).ToArray();
-    }
-
-    public async ValueTask DisposeAsync()
-    {
-        if (Interlocked.Exchange(ref disposeStarted, 1) != 0)
-            return;
-
-        clockTimer.Stop();
-        clockTimer.Tick -= HandleClockTick;
-        audioMeterTimer.Stop();
-        audioMeterTimer.Tick -= HandleAudioMeterTick;
-        connectionDiagnosticsTimer.Stop();
-        connectionDiagnosticsTimer.Tick -= HandleConnectionDiagnosticsTick;
-        filteredDebugLogs.Dispose();
-        await defaultAudioDeviceMonitor.DisposeAsync().ConfigureAwait(false);
-        Task recordingScan;
-        CancellationTokenSource? recordingScanCancellation;
-        lock (recordingCatalogScanSync)
-        {
-            recordingScanCancellation = recordingCatalogScanCancellation;
-            recordingScanCancellation?.Cancel();
-            recordingCatalogScanCancellation = null;
-            recordingScan = recordingCatalogScanTask;
-        }
-        await recordingScan.ConfigureAwait(false);
-        recordingScanCancellation?.Dispose();
-        transmitCoordinator.Faulted -= HandleTransmitFaulted;
-        keyboardPtt.StateChanged -= HandleKeyboardPttStateChanged;
-        activeSystemKeyboardPtt.StateChanged -= HandleActiveSystemKeyboardPttStateChanged;
-        await keyboardPtt.DisposeAsync().ConfigureAwait(false);
-        await activeSystemKeyboardPtt.DisposeAsync().ConfigureAwait(false);
-        await serialPttChangeLock.WaitAsync().ConfigureAwait(false);
+        bool pttGateEntered = false;
         try
         {
-            IPttSource? currentSerialPtt = serialPtt;
-            serialPtt = null;
-            if (currentSerialPtt is not null)
-                await StopAndDisposeSerialPttAsync(currentSerialPtt).ConfigureAwait(false);
-        }
-        finally
-        {
-            serialPttChangeLock.Release();
-        }
-        await pttStateChangeLock.WaitAsync().ConfigureAwait(false);
-        try
-        {
-            // A PTT startup may still be completing microphone readiness and
-            // its permit cue. Do not dispose those services out from under it.
-            await toneTransmitCoordinator.DisposeAsync().ConfigureAwait(false);
-            await localTonePlayer.DisposeAsync().ConfigureAwait(false);
-            warmMicrophoneReconciler.Reconciled -= HandleWarmMicrophoneReconciled;
-            await warmMicrophoneReconciler.WhenIdleAsync().ConfigureAwait(false);
-            await transmitCoordinator.DisposeAsync().ConfigureAwait(false);
-        }
-        finally
-        {
-            pttStateChangeLock.Release();
-        }
-        await p25KeyRequestCoordinator.DisposeAsync().ConfigureAwait(false);
-        foreach (SystemViewModel system in Systems)
-        {
-            system.JitterBufferChanged -= HandleSystemJitterBufferChanged;
-            system.PropertyChanged -= HandleSystemPropertyChanged;
-            system.KeyResponseReceived -= HandleSystemKeyResponse;
-            system.LogReceived -= HandleSystemLog;
-            await system.DisposeAsync().ConfigureAwait(false);
-        }
-        await receiveAudioWork.DisposeAsync().ConfigureAwait(false);
-        await patchSourceReceiveWork.DisposeAsync().ConfigureAwait(false);
-        await patchSourceDecode.DisposeAsync().ConfigureAwait(false);
-        patchForwarding.Dispose();
-        await audioCoordinator.DisposeAsync().ConfigureAwait(false);
-        await webStreamPlayback.DisposeAsync().ConfigureAwait(false);
-        await recordingPlayback.DisposeAsync().ConfigureAwait(false);
-        audioReconfigurationLock.Dispose();
-        callRecordings.RecordingFinalized -= HandleRecordingFinalized;
-        await callRecordings.DisposeAsync().ConfigureAwait(false);
-        p25KeyRing?.Dispose();
-        dmrKeyRing?.Dispose();
-        nxdnKeyRing?.Dispose();
-        userBackgroundBitmap?.Dispose();
-        userBackgroundBitmap = null;
-        foreach (ChannelViewModel channel in Systems.SelectMany(system => system.Channels))
-        {
-            channel.TransmitEncryptionChanged -= HandleChannelEncryptionChanged;
-            channel.RecordingStateChanged -= HandleChannelRecordingChanged;
-            channel.VolumeChanged -= HandleChannelVolumeChanged;
-            channel.StereoBalanceChanged -= HandleChannelStereoBalanceChanged;
-            channel.PropertyChanged -= HandleActivityChannelPropertyChanged;
-        }
-        foreach (WebStreamViewModel stream in WebStreams)
-        {
-            stream.VolumeChanged -= HandleWebStreamVolumeChanged;
-            stream.PropertyChanged -= HandleWebStreamPropertyChanged;
-        }
-    }
-
-    private async Task ConnectAsync()
-    {
-        SetBusy(true);
-        StatusText = "Starting FNE connection services...";
-        try
-        {
-            await Task.WhenAll(Systems.Select(system => StartSystemAsync(system)));
-            await SyncPatchSourceDecodeAsync().ConfigureAwait(false);
-            StatusText = "FNE connection services started; waiting for login acknowledgements.";
-        }
-        finally
-        {
-            SetBusy(false);
-        }
-    }
-
-    private async Task StartSystemAsync(SystemViewModel system)
-    {
-        try
-        {
-            await system.StartAsync().ConfigureAwait(false);
+            await pttStateChangeLock.WaitAsync().ConfigureAwait(false);
+            pttGateEntered = true;
         }
         catch (Exception exception)
         {
-            HandleSystemStatus(system, new FneConnectionStatus(
-                system.Name,
-                FneConnectionState.Faulted,
-                exception.Message,
-                DateTimeOffset.UtcNow));
+            cleanup.Capture(exception);
         }
-    }
-
-    public async Task ToggleSystemConnectionAsync(SystemViewModel system)
-    {
-        ArgumentNullException.ThrowIfNull(system);
-        if (!Systems.Contains(system))
-            throw new ArgumentException("The FNE is not part of this console.", nameof(system));
-
-        SelectedSystem = system;
-        if (system.IsConnectionActive)
+        if (pttGateEntered)
         {
-            StatusText = $"Stopping {system.Name}...";
             try
             {
-                await system.StopAsync();
-                StatusText = $"{system.Name}: disconnected.";
+                // A PTT startup may still be completing microphone readiness
+                // and its permit cue. Preserve that ownership order.
+                await cleanup.RunTaskAsync(
+                    () => toneTransmitCoordinator.DisposeAsync().AsTask()).ConfigureAwait(false);
+                await cleanup.RunTaskAsync(
+                    () => localTonePlayer.DisposeAsync().AsTask()).ConfigureAwait(false);
+                cleanup.Run(() => warmMicrophoneReconciler.Reconciled -= HandleWarmMicrophoneReconciled);
+                await cleanup.RunTaskAsync(
+                    warmMicrophoneReconciler.WhenIdleAsync).ConfigureAwait(false);
+                await cleanup.RunTaskAsync(
+                    () => transmitCoordinator.DisposeAsync().AsTask()).ConfigureAwait(false);
             }
-            catch (Exception exception)
+            finally
             {
-                StatusText = $"{system.Name}: disconnect failed — {exception.Message}";
+                pttStateChangeLock.Release();
             }
-            return;
         }
 
-        StatusText = $"Starting {system.Name}...";
-        await StartSystemAsync(system);
-        await SyncPatchSourceDecodeAsync();
+        await cleanup.RunTaskAsync(
+            () => p25KeyRequestCoordinator.DisposeAsync().AsTask()).ConfigureAwait(false);
+        foreach (SystemViewModel system in Systems)
+        {
+            cleanup.Run(() =>
+            {
+                system.JitterBufferChanged -= HandleSystemJitterBufferChanged;
+                system.PropertyChanged -= HandleSystemPropertyChanged;
+                system.KeyResponseReceived -= HandleSystemKeyResponse;
+                system.LogReceived -= HandleSystemLog;
+            });
+            await cleanup.RunTaskAsync(() => system.DisposeAsync().AsTask()).ConfigureAwait(false);
+        }
+        await cleanup.RunTaskAsync(() => receiveAudioWork.DisposeAsync().AsTask()).ConfigureAwait(false);
+        await cleanup.RunTaskAsync(() => patchSourceReceiveWork.DisposeAsync().AsTask()).ConfigureAwait(false);
+        await cleanup.RunTaskAsync(() => patchSourceDecode.DisposeAsync().AsTask()).ConfigureAwait(false);
+        cleanup.Run(patchForwarding.Dispose);
+        await cleanup.RunTaskAsync(() => audioCoordinator.DisposeAsync().AsTask()).ConfigureAwait(false);
+        await cleanup.RunTaskAsync(() => webStreamPlayback.DisposeAsync().AsTask()).ConfigureAwait(false);
+        await cleanup.RunTaskAsync(() => recordingPlayback.DisposeAsync().AsTask()).ConfigureAwait(false);
+        cleanup.Run(audioReconfigurationLock.Dispose);
+        cleanup.Run(() => callRecordings.RecordingFinalized -= HandleRecordingFinalized);
+        await cleanup.RunTaskAsync(() => callRecordings.DisposeAsync().AsTask()).ConfigureAwait(false);
+        cleanup.Run(() => p25KeyRing?.Dispose());
+        cleanup.Run(() => dmrKeyRing?.Dispose());
+        cleanup.Run(() => nxdnKeyRing?.Dispose());
+        cleanup.Run(() =>
+        {
+            userBackgroundBitmap?.Dispose();
+            userBackgroundBitmap = null;
+        });
+        foreach (ChannelViewModel channel in Systems.SelectMany(system => system.Channels))
+        {
+            cleanup.Run(() =>
+            {
+                channel.TransmitEncryptionChanged -= HandleChannelEncryptionChanged;
+                channel.RecordingStateChanged -= HandleChannelRecordingChanged;
+                channel.VolumeChanged -= HandleChannelVolumeChanged;
+                channel.StereoBalanceChanged -= HandleChannelStereoBalanceChanged;
+                channel.PropertyChanged -= HandleActivityChannelPropertyChanged;
+            });
+        }
+        foreach (WebStreamViewModel stream in WebStreams)
+        {
+            cleanup.Run(() =>
+            {
+                stream.VolumeChanged -= HandleWebStreamVolumeChanged;
+                stream.PropertyChanged -= HandleWebStreamPropertyChanged;
+            });
+        }
+        cleanup.Run(pttStateChangeLock.Dispose);
+        cleanup.ThrowIfFailed();
     }
 
-    private async Task DisconnectAsync()
-    {
-        SetBusy(true);
-        StatusText = "Stopping FNE connection services...";
-        try
-        {
-            await patchSourceDecode.StopAllAsync().ConfigureAwait(false);
-            patchForwarding.StopAll();
-            await Task.WhenAll(Systems.Select(system => system.StopAsync()));
-            StatusText = "FNE connections stopped.";
-        }
-        finally
-        {
-            SetBusy(false);
-        }
-    }
+    public Task ToggleSystemConnectionAsync(SystemViewModel system)
+        => connectionSession.ToggleAsync(system);
 
     private void HandleSystemStatus(SystemViewModel system, FneConnectionStatus status)
     {
@@ -3081,7 +2570,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
             if (status.State == FneConnectionState.Connected)
             {
                 ScheduleConfiguredP25Keys(system);
-                _ = ReconcileReceiveSessionsAsync();
+                TaskObservation.Observe(ReconcileReceiveSessionsAsync());
             }
             else
             {
@@ -3104,7 +2593,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
             {
                 p25KeyRing.ClearFneKeys(system.Name);
                 RefreshP25KeyState();
-                _ = SyncPatchSourceDecodeAsync();
+                TaskObservation.Observe(SyncPatchSourceDecodeAsync());
             }
             if (stateChanged && status.State is FneConnectionState.Connected or FneConnectionState.Disconnected or FneConnectionState.Faulted)
             {
@@ -3117,7 +2606,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
             }
             bool shouldPlayChime = connectionChimeTracker.ShouldPlay(system.Name, status.State);
             if (stateChanged && shouldPlayChime)
-                _ = PlayConnectionChimeAsync(system.Name, status.State);
+                TaskObservation.Observe(PlayConnectionChimeAsync(system.Name, status.State));
             RaiseGeneratedAudioCanExecuteChanged();
         }
 
@@ -3191,7 +2680,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
     private void HandleSystemJitterBufferChanged(object? sender, EventArgs e)
     {
         if (sender is SystemViewModel system)
-            _ = ApplyRxJitterBufferAsync(system);
+            TaskObservation.Observe(ApplyRxJitterBufferAsync(system));
     }
 
     internal static IReadOnlyList<(byte AlgorithmId, ushort KeyId)> ResolveConfiguredP25KeyRequests(
@@ -3236,7 +2725,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
                     response.KeyMaterial.Span);
                 RefreshP25KeyState();
                 StatusText = $"{system.Name}: P25 key 0x{response.KeyId:X4} received through FNE/KMM.";
-                _ = SyncPatchSourceDecodeAsync();
+                TaskObservation.Observe(SyncPatchSourceDecodeAsync());
             }
             catch (ArgumentException exception)
             {
@@ -3281,14 +2770,14 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
         if (!enabled)
         {
             callRecordings.StopChannel(channel);
-            _ = StopRecordingDecodeIfUnusedAsync(channel);
+            TaskObservation.Observe(StopRecordingDecodeIfUnusedAsync(channel));
             return;
         }
 
         // Accept and retain inbound frames immediately. The ordered worker
         // will wait for EnsureRecordingAudioAsync before decoding them.
         receiveAudioWork.Start(channel);
-        _ = EnsureRecordingAudioAsync(channel);
+        TaskObservation.Observe(EnsureRecordingAudioAsync(channel));
     }
 
     private void HandleChannelVolumeChanged(object? sender, double volume)
@@ -3298,7 +2787,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
 
         userSettings.ChannelVolumes[channel.SettingsKey] = volume;
         PersistUserSettings();
-        _ = audioCoordinator.SetGainAsync(channel, volume);
+        TaskObservation.Observe(audioCoordinator.SetGainAsync(channel, volume));
     }
 
     private void HandleChannelStereoBalanceChanged(object? sender, double balance)
@@ -3308,7 +2797,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
 
         userSettings.ChannelStereoBalances[channel.SettingsKey] = balance;
         PersistUserSettings();
-        _ = audioCoordinator.SetBalanceAsync(channel, balance);
+        TaskObservation.Observe(audioCoordinator.SetBalanceAsync(channel, balance));
     }
 
     private async Task StartWebStreamAsync(WebStreamViewModel stream)
@@ -3317,18 +2806,21 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
         {
             await webStreamPlayback.StartAsync(stream).ConfigureAwait(false);
             PersistSelectedWebStreamState(stream);
-            AudioStatusText = stream.IsFailed
-                ? $"Web stream {stream.Name}: {stream.StatusText}"
-                : $"Web stream {stream.Name}: {stream.StatusText}";
+            await uiDispatcher.InvokeAsync(() =>
+                AudioStatusText = $"Web stream {stream.Name}: {stream.StatusText}");
         }
         catch (OperationCanceledException)
         {
-            stream.SetPlaybackState(false, false, false, false, "Off");
+            await uiDispatcher.InvokeAsync(() =>
+                stream.SetPlaybackState(false, false, false, false, "Off"));
         }
         catch (Exception exception)
         {
-            stream.SetPlaybackState(false, false, false, true, $"Failed: {exception.Message}");
-            AudioStatusText = $"Web stream {stream.Name}: {stream.StatusText}";
+            await uiDispatcher.InvokeAsync(() =>
+            {
+                stream.SetPlaybackState(false, false, false, true, $"Failed: {exception.Message}");
+                AudioStatusText = $"Web stream {stream.Name}: {stream.StatusText}";
+            });
         }
     }
 
@@ -3338,16 +2830,21 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
         {
             await webStreamPlayback.StopAsync(stream).ConfigureAwait(false);
             PersistSelectedWebStreamState(stream);
-            AudioStatusText = $"Web stream {stream.Name}: Off";
+            await uiDispatcher.InvokeAsync(() =>
+                AudioStatusText = $"Web stream {stream.Name}: Off");
         }
         catch (OperationCanceledException)
         {
-            stream.SetPlaybackState(false, false, false, false, "Off");
+            await uiDispatcher.InvokeAsync(() =>
+                stream.SetPlaybackState(false, false, false, false, "Off"));
         }
         catch (Exception exception)
         {
-            stream.SetPlaybackState(false, false, false, true, $"Failed to stop: {exception.Message}");
-            AudioStatusText = $"Web stream {stream.Name}: {stream.StatusText}";
+            await uiDispatcher.InvokeAsync(() =>
+            {
+                stream.SetPlaybackState(false, false, false, true, $"Failed to stop: {exception.Message}");
+                AudioStatusText = $"Web stream {stream.Name}: {stream.StatusText}";
+            });
         }
     }
 
@@ -3805,7 +3302,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
                 recordingEntries.Insert(0, metadata);
                 callHistory.AddOrAttachRecording(metadata);
 
-                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(FilteredRecordings)));
+                historyRecording.NotifyRecordingsChanged();
                 NotifyCallHistoryChanged();
             }
             else if (result.Error is null && !string.IsNullOrWhiteSpace(result.Diagnostic))
@@ -3823,31 +3320,16 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
 
     private void RefreshRecordings(bool pruneExpired = false)
     {
-        CancellationTokenSource cancellation = new();
-        int generation;
-        long mutationRevision;
-        lock (recordingCatalogScanSync)
-        {
-            recordingCatalogScanCancellation?.Cancel();
-            recordingCatalogScanCancellation?.Dispose();
-            recordingCatalogScanCancellation = cancellation;
-            generation = ++recordingCatalogScanGeneration;
-            mutationRevision = recordingCatalogMutationRevision;
-        }
-        Task scan = RefreshRecordingsAsync(generation, mutationRevision, pruneExpired, cancellation.Token);
-        lock (recordingCatalogScanSync)
-        {
-            if (generation == recordingCatalogScanGeneration)
-                recordingCatalogScanTask = scan;
-        }
+        RecordingCatalogScanSnapshot snapshot = historyRecording.BeginRecordingCatalogScan();
+        Task scan = RefreshRecordingsAsync(snapshot, pruneExpired);
+        historyRecording.PublishRecordingCatalogScan(snapshot, scan);
     }
 
     private async Task RefreshRecordingsAsync(
-        int generation,
-        long mutationRevision,
-        bool pruneExpired,
-        CancellationToken cancellationToken)
+        RecordingCatalogScanSnapshot snapshot,
+        bool pruneExpired)
     {
+        CancellationToken cancellationToken = snapshot.CancellationToken;
         try
         {
             if (pruneExpired)
@@ -3858,18 +3340,10 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
             cancellationToken.ThrowIfCancellationRequested();
             bool applied = await ApplyRecordingCatalogAsync(
                 loaded,
-                generation,
-                mutationRevision,
-                cancellationToken).ConfigureAwait(false);
+                snapshot).ConfigureAwait(false);
             if (!applied && !cancellationToken.IsCancellationRequested)
             {
-                bool restart;
-                lock (recordingCatalogScanSync)
-                {
-                    restart = generation == recordingCatalogScanGeneration &&
-                        mutationRevision != recordingCatalogMutationRevision;
-                }
-                if (restart)
+                if (historyRecording.ShouldRestartRecordingCatalogScan(snapshot))
                     RefreshRecordings();
             }
         }
@@ -3885,16 +3359,13 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
 
     private async Task<bool> ApplyRecordingCatalogAsync(
         IReadOnlyList<CallRecordingMetadata> loaded,
-        int generation,
-        long mutationRevision,
-        CancellationToken cancellationToken)
+        RecordingCatalogScanSnapshot snapshot)
     {
+        CancellationToken cancellationToken = snapshot.CancellationToken;
         var desiredIds = new HashSet<string>(loaded.Select(RecordingCatalogKey), StringComparer.OrdinalIgnoreCase);
         CallRecordingMetadata[] existing = [];
         if (!await ApplyRecordingCatalogUiBatchAsync(
-                generation,
-                mutationRevision,
-                cancellationToken,
+                snapshot,
                 () => existing = recordingEntries.ToArray()).ConfigureAwait(false))
         {
             return false;
@@ -3906,7 +3377,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
             .ToArray();
         foreach (string[] batch in removedKeys.Chunk(RecordingCatalogUiBatchSize))
         {
-            if (!await ApplyRecordingCatalogUiBatchAsync(generation, mutationRevision, cancellationToken, () =>
+            if (!await ApplyRecordingCatalogUiBatchAsync(snapshot, () =>
                 {
                     var keys = new HashSet<string>(batch, StringComparer.OrdinalIgnoreCase);
                     for (int index = recordingEntries.Count - 1; index >= 0; index--)
@@ -3928,7 +3399,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
                 .Skip(batchStart)
                 .Take(RecordingCatalogUiBatchSize)
                 .ToArray();
-            if (!await ApplyRecordingCatalogUiBatchAsync(generation, mutationRevision, cancellationToken, () =>
+            if (!await ApplyRecordingCatalogUiBatchAsync(snapshot, () =>
             {
                 for (int offset = 0; offset < batch.Length; offset++)
                 {
@@ -3971,43 +3442,27 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
             }
         }
 
-        return await ApplyRecordingCatalogUiBatchAsync(generation, mutationRevision, cancellationToken, () =>
+        return await ApplyRecordingCatalogUiBatchAsync(snapshot, () =>
         {
-            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(FilteredRecordings)));
+            historyRecording.NotifyRecordingsChanged();
             NotifyCallHistoryChanged();
         }).ConfigureAwait(false);
     }
 
     private async Task<bool> ApplyRecordingCatalogUiBatchAsync(
-        int generation,
-        long mutationRevision,
-        CancellationToken cancellationToken,
+        RecordingCatalogScanSnapshot snapshot,
         Action action)
     {
         bool applied = false;
         await RunOnUiThreadAsync(() =>
         {
-            lock (recordingCatalogScanSync)
-            {
-                if (!IsRecordingCatalogSnapshotCurrent(
-                        generation,
-                        recordingCatalogScanGeneration,
-                        mutationRevision,
-                        recordingCatalogMutationRevision,
-                        cancellationToken.IsCancellationRequested))
-                    return;
-                action();
-                applied = true;
-            }
+            applied = historyRecording.TryApplyRecordingCatalogSnapshot(snapshot, action);
         }).ConfigureAwait(false);
         return applied;
     }
 
     private void RecordRecordingCatalogMutation()
-    {
-        lock (recordingCatalogScanSync)
-            recordingCatalogMutationRevision++;
-    }
+        => historyRecording.RecordRecordingCatalogMutation();
 
     internal static bool IsRecordingCatalogSnapshotCurrent(
         int snapshotGeneration,
@@ -4047,24 +3502,28 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
     }
 
 
-    private void HandleKeyboardPttStateChanged(object? sender, bool pressed)
-        => DispatchKeyboardPttStateChanged(
-            pressed,
-            PttTargetScope.AllSelectedResources);
+    private void HandlePttSettingsPropertyChanged(object? sender, PropertyChangedEventArgs args)
+        => PropertyChanged?.Invoke(this, args);
 
-    private void HandleActiveSystemKeyboardPttStateChanged(object? sender, bool pressed)
-        => DispatchKeyboardPttStateChanged(pressed, PttTargetScope.ActiveSystem);
+    private void HandleHistoryRecordingPropertyChanged(object? sender, PropertyChangedEventArgs args)
+        => PropertyChanged?.Invoke(this, args);
 
-    private void HandleSerialPttStateChanged(object? sender, bool pressed)
-        => DispatchKeyboardPttStateChanged(pressed, GetSerialPttTargetScope());
+    private void HandleAudioSettingsPropertyChanged(object? sender, PropertyChangedEventArgs args)
+        => PropertyChanged?.Invoke(this, args);
+
+    private void HandleToneWorkspacePropertyChanged(object? sender, PropertyChangedEventArgs args)
+        => PropertyChanged?.Invoke(this, args);
+
+    private void HandlePttSourceStateChanged(object? sender, PttSourceStateChange change)
+        => DispatchKeyboardPttStateChanged(change.Pressed, change.Scope);
 
     private void DispatchKeyboardPttStateChanged(bool pressed, PttTargetScope scope)
     {
         if (Dispatcher.UIThread.CheckAccess())
-            _ = HandleKeyboardPttStateChangedAsync(pressed, scope);
+            TaskObservation.Observe(HandleKeyboardPttStateChangedAsync(pressed, scope));
         else
             Dispatcher.UIThread.Post(
-                () => _ = HandleKeyboardPttStateChangedAsync(pressed, scope));
+                () => TaskObservation.Observe(HandleKeyboardPttStateChangedAsync(pressed, scope)));
     }
 
     private async Task HandleKeyboardPttStateChangedAsync(
@@ -4131,9 +3590,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
     }
 
     private bool AnyPttSourcePressed
-        => keyboardPtt.IsPressed ||
-           activeSystemKeyboardPtt.IsPressed ||
-           serialPtt?.IsPressed == true;
+        => pttSession.IsAnySourcePressed;
 
     private string SerialPttScopeText => userSettings.SerialPttActiveSystemOnly
         ? "TX-selected resources in the active system"
@@ -4200,7 +3657,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
             activeMultiSelectGroup = null;
             TransmitStatusText = $"Transmission stopped: {exception.Message}";
         });
-        _ = Task.Run(async () =>
+        TaskObservation.Observe(Task.Run(async () =>
         {
             try
             {
@@ -4237,7 +3694,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
                 Dispatcher.UIThread.Post(() =>
                     TransmitStatusText = $"Transmission stopped; audio recovery failed: {cleanupException.Message}");
             }
-        });
+        }));
     }
 
     private void SetBusy(bool value)
@@ -4357,7 +3814,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
     {
         RefreshClock();
         ExpireStaleReceiveStates(DateTimeOffset.UtcNow);
-        _ = ReconcileReceiveSessionsAsync();
+        TaskObservation.Observe(ReconcileReceiveSessionsAsync());
     }
 
     private void HandleConnectionDiagnosticsTick(object? sender, EventArgs e)
@@ -4380,12 +3837,9 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
 
     private void NotifyCallHistoryChanged()
     {
-        RefreshFilteredCallHistory();
+        historyRecording.RefreshFilteredCallHistory();
         RefreshActivityCallHistory();
     }
-
-    private void RefreshFilteredCallHistory()
-        => SynchronizeHistoryView(filteredCallHistoryEntries, CallHistory.Where(CreateHistoryFilter().Matches));
 
     private void RefreshActivityCallHistory()
     {
@@ -4400,7 +3854,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
                     .Where(channel => channel.IsAudioEnabled)
                     .Select(channel => channel.Name)
                 : null);
-        SynchronizeHistoryView(activityCallHistoryEntries, desired);
+        historyRecording.RefreshActivityCallHistory(desired);
     }
 
     internal static CallHistoryEntry[] SelectActivityHistory(
@@ -4429,29 +3883,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
     internal static void SynchronizeHistoryView(
         ObservableCollection<CallHistoryEntry> target,
         IEnumerable<CallHistoryEntry> desiredEntries)
-    {
-        CallHistoryEntry[] desired = desiredEntries.ToArray();
-        var desiredSet = new HashSet<CallHistoryEntry>(desired, ReferenceEqualityComparer.Instance);
-        lock (target)
-        {
-            for (int index = target.Count - 1; index >= 0; index--)
-            {
-                if (!desiredSet.Contains(target[index]))
-                    target.RemoveAt(index);
-            }
-
-            for (int index = 0; index < desired.Length; index++)
-            {
-                if (index < target.Count && ReferenceEquals(target[index], desired[index]))
-                    continue;
-                int existingIndex = target.IndexOf(desired[index]);
-                if (existingIndex >= 0)
-                    target.Move(existingIndex, index);
-                else
-                    target.Insert(index, desired[index]);
-            }
-        }
-    }
+        => HistoryViewSynchronizer.Synchronize(target, desiredEntries);
 
     private void RefreshClock()
     {
@@ -4561,7 +3993,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
         ReapplyPatchState();
         PersistUserSettings();
         RefreshPatchMembershipConflicts();
-        _ = SyncPatchSourceDecodeAsync();
+        TaskObservation.Observe(SyncPatchSourceDecodeAsync());
     }
 
     public void ApplyPatchGroup(PatchGroupEditorViewModel group)
@@ -4770,7 +4202,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
         patchForwarding.ApplyMemberships(memberships, userSettings.PatchGroupModes);
     }
 
-    private void RecordLoadedCodeplug(string path)
+    internal void RecordLoadedCodeplug(string path)
     {
         string normalizedPath = Path.GetFullPath(path);
         userSettings.LastCodeplugPath = normalizedPath;

@@ -42,15 +42,18 @@ public sealed class ChannelTransmitCoordinator : IAsyncDisposable
     private bool sharedCaptureFollowsSystemDefault;
     private bool refreshDefaultInputWhenIdle;
     private readonly List<ActiveTransmit> active = [];
+    private ActiveTransmit[] activeSnapshot = [];
     private bool disposed;
     private volatile bool microphoneAudioSuppressed;
     private AudioInputProcessingOptions audioInputOptions;
 
     public event EventHandler<Exception>? Faulted;
     public event EventHandler<HighQualityBluetoothAudioStatus>? HighQualityBluetoothStatusChanged;
-    public ChannelViewModel? ActiveChannel => active.FirstOrDefault()?.Channel;
-    public IReadOnlyList<ChannelViewModel> ActiveChannels => active.Select(entry => entry.Channel).ToArray();
-    public uint ActiveStreamId => active.FirstOrDefault()?.StreamId ?? 0;
+    public ChannelViewModel? ActiveChannel => Volatile.Read(ref activeSnapshot).FirstOrDefault()?.Channel;
+    public IReadOnlyList<ChannelViewModel> ActiveChannels => Volatile.Read(ref activeSnapshot)
+        .Select(entry => entry.Channel)
+        .ToArray();
+    public uint ActiveStreamId => Volatile.Read(ref activeSnapshot).FirstOrDefault()?.StreamId ?? 0;
     public bool ActiveMicrophoneStartedCold { get; private set; }
     public bool? ActiveMicrophoneIsBluetooth { get; private set; }
 
@@ -190,7 +193,8 @@ public sealed class ChannelTransmitCoordinator : IAsyncDisposable
     public uint GetActiveStreamId(ChannelViewModel channel)
     {
         ArgumentNullException.ThrowIfNull(channel);
-        return active.FirstOrDefault(entry => ReferenceEquals(entry.Channel, channel))?.StreamId ?? 0;
+        return Volatile.Read(ref activeSnapshot)
+            .FirstOrDefault(entry => ReferenceEquals(entry.Channel, channel))?.StreamId ?? 0;
     }
 
     public async Task<MicrophoneReadinessTiming> WaitForMicrophoneReadyAsync(
@@ -200,7 +204,7 @@ public sealed class ChannelTransmitCoordinator : IAsyncDisposable
         ObjectDisposedException.ThrowIf(disposed, this);
         SharedAudioCapture capture = sharedCapture ??
             throw new InvalidOperationException("The transmit microphone path has not been started.");
-        if (active.Count == 0)
+        if (Volatile.Read(ref activeSnapshot).Length == 0)
             throw new InvalidOperationException("No transmit call is waiting for microphone audio.");
 
         return await capture.WaitForSamplesAsync(
@@ -329,6 +333,7 @@ public sealed class ChannelTransmitCoordinator : IAsyncDisposable
                 vocoderBackend = createdVocoderBackend;
                 sharedCapture ??= createdSharedCapture;
                 active.AddRange(created);
+                PublishActiveSnapshot();
                 ActiveMicrophoneStartedCold = !reusedReadyCapture;
                 ActiveMicrophoneIsBluetooth = sharedCaptureIsBluetooth;
             }
@@ -418,6 +423,7 @@ public sealed class ChannelTransmitCoordinator : IAsyncDisposable
     {
         ActiveTransmit[] current = active.ToArray();
         active.Clear();
+        PublishActiveSnapshot();
         ActiveMicrophoneStartedCold = false;
         ActiveMicrophoneIsBluetooth = null;
         Exception? failure = null;
@@ -594,7 +600,7 @@ public sealed class ChannelTransmitCoordinator : IAsyncDisposable
             {
                 if (microphoneAudioSuppressed)
                     return;
-                foreach (ActiveTransmit entry in active)
+                foreach (ActiveTransmit entry in Volatile.Read(ref activeSnapshot))
                     samplesObserver(entry.Channel, entry.StreamId, entry.SourceId, args.Samples);
             };
         }
@@ -625,6 +631,12 @@ public sealed class ChannelTransmitCoordinator : IAsyncDisposable
             channel,
             ChannelTransmitDefinitionFactory.Create(channel),
             nxdnKeyResolver);
+
+    // The coordinator gate remains the sole writer. Readers include capture
+    // callbacks and UI properties, so publish an immutable point-in-time view
+    // instead of enumerating the mutable lifecycle list concurrently.
+    private void PublishActiveSnapshot()
+        => Volatile.Write(ref activeSnapshot, active.ToArray());
 
     private sealed record ActiveTransmit(
         ChannelViewModel Channel,

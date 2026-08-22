@@ -169,15 +169,8 @@ internal static class ReceiveAudioTrafficRouter
         ChannelViewModel channel,
         FneTrafficFrame traffic)
     {
-        FneTrafficProtocol protocol = channel.Definition.Mode switch
-        {
-            "dmr" => FneTrafficProtocol.Dmr,
-            "p25" => FneTrafficProtocol.P25,
-            "nxdn" => FneTrafficProtocol.Nxdn,
-            "analog" => FneTrafficProtocol.Analog,
-            _ => throw new InvalidOperationException(
-                $"Unsupported channel mode '{channel.Definition.Mode}'.")
-        };
+        FneTrafficProtocol protocol = FneTrafficProtocolMapper.FromChannelProtocol(
+            channel.Definition.Protocol);
         return protocol == traffic.Protocol &&
                (traffic.Protocol != FneTrafficProtocol.Dmr ||
                 traffic.Slot == channel.Definition.Slot);

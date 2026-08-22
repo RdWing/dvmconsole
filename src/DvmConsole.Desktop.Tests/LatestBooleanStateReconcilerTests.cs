@@ -21,9 +21,9 @@ public sealed class LatestBooleanStateReconcilerTests
             }
         });
 
-        reconciler.SetDesired(true);
+        _ = reconciler.SetDesired(true);
         await firstStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
-        reconciler.SetDesired(false);
+        _ = reconciler.SetDesired(false);
         releaseFirst.TrySetResult();
         LatestBooleanStateResult result = await reconciler.WhenIdleAsync().WaitAsync(TimeSpan.FromSeconds(2));
 
@@ -48,9 +48,9 @@ public sealed class LatestBooleanStateReconcilerTests
             }
         });
 
-        reconciler.SetDesired(true);
+        _ = reconciler.SetDesired(true);
         await firstStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
-        reconciler.SetDesired(false);
+        _ = reconciler.SetDesired(false);
         releaseFirst.TrySetResult();
         LatestBooleanStateResult result = await reconciler.WhenIdleAsync().WaitAsync(TimeSpan.FromSeconds(2));
 
