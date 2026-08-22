@@ -7,6 +7,34 @@ namespace DvmConsole.Core.Tests;
 public sealed class ConfigurationLoaderTests
 {
     [Fact]
+    public void LoadsImmutableLegacyAliasFixture()
+    {
+        string path = Path.Combine(
+            AppContext.BaseDirectory,
+            "TestData",
+            "Compatibility",
+            "legacy-codeplug-aliases.yml");
+
+        ConsoleConfiguration configuration = ConfigurationLoader.Load(path);
+
+        Assert.Equal(Path.GetFullPath(path), configuration.SourcePath);
+        Assert.Equal("../keys.example.clear", configuration.KeyFile);
+        SystemConfiguration system = Assert.Single(configuration.Systems);
+        Assert.Equal("Radio 1", AliasFileLoader.FindAlias(system.RidAlias, 1));
+        GroupConfiguration group = Assert.Single(configuration.Groups);
+        Assert.Equal("Legacy Patch", group.Name);
+        Assert.Empty(configuration.LegacyPatchGroups);
+        ZoneConfiguration zone = Assert.Single(configuration.Zones);
+        WebStreamConfiguration stream = Assert.Single(zone.WebStreams);
+        Assert.Equal("Legacy Stream", stream.Name);
+        ChannelConfiguration channel = Assert.Single(zone.Channels);
+        Assert.True(channel.RxOnly);
+        Assert.True(channel.SelectableEncryption);
+        Assert.Equal("small", channel.CardSize);
+        Assert.Empty(ConfigurationLoader.Validate(configuration));
+    }
+
+    [Fact]
     public void LoadsTheLegacyExampleCodeplug()
     {
         string path = Path.Combine(AppContext.BaseDirectory, "TestData", "codeplug.example.yml");

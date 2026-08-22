@@ -35,6 +35,10 @@ public sealed class FneProtocolTests
         UdpReceiveResult result = await listener.ReceiveAsync().WaitAsync(TimeSpan.FromSeconds(2));
         byte[] wire = result.Buffer;
 
+        Assert.Equal(
+            "C0FE223D74D91861E9477FA9490F9BC8A3904E3787EF858575F51B9D402BF69B40D1" +
+            "F2F59AF30EE285DE25B6EB86B9F800D3",
+            Convert.ToHexString(wire));
         Assert.Equal(new byte[] { 0xC0, 0xFE }, wire[..2]);
         Assert.Equal(0, (wire.Length - 2) % 16);
         byte[] decrypted = DecryptEcb(wire, keyHex);
@@ -63,6 +67,31 @@ public sealed class FneProtocolTests
         Assert.Equal(new byte[] { 0xC0, 0xFE }, result.Buffer[..2]);
         Assert.Equal(0, (result.Buffer.Length - 18) % 16);
         Assert.Equal(plaintext, DecryptCbc(result.Buffer, keyHex));
+    }
+
+    [Fact]
+    public async Task CbcGoldenDatagramUsesCiphertextThenTrailingIv()
+    {
+        const string keyHex =
+            "000102030405060708090A0B0C0D0E0F000102030405060708090A0B0C0D0E0F";
+        byte[] plaintext = CreateLoginFrame();
+        byte[] wire = Convert.FromHexString(
+            "C0FEC971C8B1C68B8794A74BCF9D132C7D941AA4ECED83A2791D671096D80E2CC736" +
+            "3EAF71338FA8E86487688C73ADF56E06000102030405060708090A0B0C0D0E0F");
+
+        using IDisposable encryptionScope = FneTransportEncryptionContext.Use(FneTransportEncryptionMode.Cbc);
+        using var server = new UdpClient(new IPEndPoint(IPAddress.Loopback, 0));
+        var destination = Assert.IsType<IPEndPoint>(server.Client.LocalEndPoint);
+        var receiver = new UdpReceiver();
+        receiver.SetPresharedKey(Convert.FromHexString(keyHex));
+        receiver.Connect(destination);
+        receiver.Send(new UdpFrame { Endpoint = destination, Message = plaintext });
+        UdpReceiveResult probe = await server.ReceiveAsync().WaitAsync(TimeSpan.FromSeconds(2));
+
+        Task<UdpFrame> receive = receiver.Receive();
+        await server.SendAsync(wire, probe.RemoteEndPoint);
+
+        Assert.Equal(plaintext, (await receive.WaitAsync(TimeSpan.FromSeconds(2))).Message);
     }
 
     [Fact]

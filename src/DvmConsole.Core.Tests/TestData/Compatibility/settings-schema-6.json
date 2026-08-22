@@ -1,0 +1,9 @@
+{
+  "SchemaVersion": 6,
+  "LastSelectedSystemName": "Schema 6",
+  "RxJitterBuffer": {
+    "P25Milliseconds": 360,
+    "DmrMilliseconds": 120,
+    "NxdnMilliseconds": 320
+  }
+}
