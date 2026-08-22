@@ -30,12 +30,13 @@ It can record:
 - received call audio on TAR-enabled talkgroups
 - console-originated transmit audio on TAR-enabled talkgroups
 
-TAR only records when both of these are true:
+For received calls, TAR recording is independent from live speaker selection.
+Arming TAR for a resource is enough to decode and record its inbound calls; the
+resource card does not also need to be selected for RX. Speaker playback remains
+off unless the operator separately selects that card.
 
-- TAR is enabled for the talkgroup in TAR Configuration
-- the resource is selected in the main console so the console is actively monitoring or using that path
-
-If a talkgroup is TAR-enabled but the resource is not selected, TAR does not capture live call audio for that resource.
+Console-originated transmit audio is recorded when a TAR-armed resource
+participates in the transmission.
 
 ---
 
@@ -64,7 +65,9 @@ In the TAR Configuration window:
 - click the `TAR` control to enable or disable recording
 - optionally enter ignored subscriber IDs in **Ignore RIDs**
 
-After TAR is enabled for a talkgroup, the operator must still select that resource on the main console for TAR to record live activity on it.
+After TAR is enabled for a talkgroup, inbound recording begins automatically
+when matching traffic arrives. Selecting the resource card remains a separate
+live-listening choice.
 
 Ignored subscriber IDs are useful for excluding known announcement or non-essential sources from TAR on a specific talkgroup.
 

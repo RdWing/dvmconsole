@@ -18,7 +18,7 @@ and physical-output conditions.
 
 [Download](https://github.com/RdWing/dvmconsole/releases/latest) ·
 [User guide](docs/user-guide/Getting%20Started/01-Overview.md) ·
-[What’s new in 0.3.3](docs/releases/v0.3.3.md) ·
+[What’s new](#whats-new-in-dvm-console-neo) ·
 [Changelog](CHANGELOG.md)
 
 <picture>
@@ -45,10 +45,25 @@ multi-system activity understandable.
 | **Investigate receive problems** | Activity and Event History, embedded recording metadata, redacted Debug Log export, and separate network, decoder, mixer, and output-device diagnostics. |
 | **Use the supported operator workstation** | Self-contained packages for Apple Silicon macOS, Intel macOS, and Windows x64. No separate .NET runtime is required. |
 
-## What’s new in DVM Console Neo 0.3.3
+## What’s new in DVM Console Neo
 
-DVM Console Neo 0.3.3 concentrates on receive continuity and day-to-day
-operator control:
+### 0.3.4 — Recording and PTT cue reliability
+
+DVM Console Neo 0.3.4 is a focused recording and PTT-cue reliability patch:
+
+- **TAR without live RX** records an armed inbound resource without also
+  selecting its channel card for speaker playback.
+- **Consistent zone-copy ownership** keeps decoded audio, encryption metadata,
+  and call finalization attached to the TAR-armed copy of a shared resource.
+- **Reliable scoped PTT cues** complete the local talk-permit tone for global,
+  active-system, and serial PTT in toggle as well as press-and-hold operation.
+
+[Read the complete 0.3.4 release notes →](docs/releases/v0.3.4.md)
+
+### 0.3.3 — Built for busy systems
+
+DVM Console Neo 0.3.3 was a substantial receive-continuity and day-to-day
+operator-control release, and remains recent:
 
 - **Adaptive RX jitter handling** learns transport variation independently for
   each FNE connection and protocol while keeping every active call on a stable
@@ -72,9 +87,9 @@ computer and extract the entire archive before starting DVM Console.
 
 | Platform | Package | Requirements |
 | --- | --- | --- |
-| Apple Silicon Mac | `dvmconsole-0.3.3-osx-arm64.zip` | macOS 14 or newer |
-| Intel Mac | `dvmconsole-0.3.3-osx-x64.zip` | macOS 14 or newer |
-| Windows PC | `dvmconsole-0.3.3-win-x64.zip` | Windows x64 |
+| Apple Silicon Mac | `dvmconsole-0.3.4-osx-arm64.zip` | macOS 14 or newer |
+| Intel Mac | `dvmconsole-0.3.4-osx-x64.zip` | macOS 14 or newer |
+| Windows PC | `dvmconsole-0.3.4-win-x64.zip` | Windows x64 |
 
 **[Download the latest release →](https://github.com/RdWing/dvmconsole/releases/latest)**
 

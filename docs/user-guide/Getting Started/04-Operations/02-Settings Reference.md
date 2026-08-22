@@ -24,7 +24,9 @@ This setting is saved.
 
 When enabled, the console plays a short local tone when transmit begins.
 
-This is local operator feedback only.
+This is local operator feedback only; it is not transmitted. Global,
+active-system, and serial PTT wait for the cue to complete before microphone
+audio is released, including when the shared PTT setting uses toggle mode.
 
 ## Connection Chimes
 

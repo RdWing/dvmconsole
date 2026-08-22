@@ -159,7 +159,7 @@ public sealed partial class MainWindowViewModel
                     endedAt,
                     channel.Name,
                     channel.Definition.DestinationId) || callHistoryChanged;
-                callRecordings.StopStream(channel, endedStreamId);
+                StopReceiveRecording(channel, endedStreamId);
             }
 
             bool canStartHistory = applied.Transition is
@@ -272,7 +272,7 @@ public sealed partial class MainWindowViewModel
                 channel.Name,
                 channel.Definition.DestinationId) || callHistoryChanged;
             _ = CompleteTimedOutReceiveAudioStreamAsync(channel, streamId, now);
-            callRecordings.StopStream(channel, streamId);
+            StopReceiveRecording(channel, streamId);
         }
     }
 
@@ -656,6 +656,14 @@ public sealed partial class MainWindowViewModel
     {
         try
         {
+            // TAR is independent from live RX. Frames can arrive while the
+            // TAR-only decoder is still opening, so retain them in this
+            // ordered worker until decoding is ready.
+            if (channel.IsRecordingEnabled && !audioCoordinator.IsActive(channel))
+                await EnsureRecordingAudioAsync(channel).ConfigureAwait(false);
+            if (!audioCoordinator.IsActive(channel))
+                return;
+
             await audioCoordinator.ProcessAsync(channel, traffic).ConfigureAwait(false);
             PublishReceiveDiagnostics(channel, traffic.StreamId, DateTimeOffset.UtcNow);
         }
@@ -694,7 +702,9 @@ public sealed partial class MainWindowViewModel
             }
             else
             {
-                callRecordings.ObserveTraffic(channel, traffic);
+                ChannelViewModel? recordingTarget = ResolveReceiveRecordingTarget(channel);
+                if (recordingTarget is not null)
+                    callRecordings.ObserveTraffic(recordingTarget, traffic);
             }
         }
     }
@@ -777,9 +787,11 @@ public sealed partial class MainWindowViewModel
 
         ChannelViewModel[] targets = ReceiveAudioTrafficRouter.ResolveTargets(
             routes,
-            audioCoordinator.ActiveChannels,
+            GetReceiveDecodeChannels(routes),
             traffic,
-            audioCoordinator.IsTrackingStream);
+            (channel, streamId) =>
+                audioCoordinator.IsTrackingStream(channel, streamId) ||
+                channel.IsTrackingReceiveStream(streamId));
         if (targets.Length == 0)
             return [];
 
@@ -804,6 +816,15 @@ public sealed partial class MainWindowViewModel
         Array.Resize(ref targets, acceptedCount);
         return targets;
     }
+
+    private IReadOnlyList<ChannelViewModel> GetReceiveDecodeChannels(
+        IReadOnlyDictionary<(FneTrafficProtocol Protocol, uint DestinationId), ChannelViewModel[]> routes)
+        => audioCoordinator.ActiveChannels
+            .Concat(routes.Values
+                .SelectMany(channels => channels)
+                .Where(channel => channel.IsRecordingEnabled))
+            .Distinct()
+            .ToArray();
 
     private void EnqueueReceiveAudio(
         ChannelViewModel channel,

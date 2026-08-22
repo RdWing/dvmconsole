@@ -8,6 +8,76 @@ namespace DvmConsole.Desktop.Tests;
 public sealed class ReceiveAudioTrafficRouterTests
 {
     [Fact]
+    public void RoutesTarArmedCardWithoutLiveRxAsDecodeTarget()
+    {
+        ChannelViewModel tarOnly = Channel("TAR only", "100", slot: 1);
+        tarOnly.SetRecordingEnabled(true);
+        var routes = new Dictionary<(FneTrafficProtocol, uint), ChannelViewModel[]>
+        {
+            [(FneTrafficProtocol.Dmr, 100)] = [tarOnly]
+        };
+
+        ChannelViewModel[] targets = ReceiveAudioTrafficRouter.ResolveTargets(
+            routes,
+            [tarOnly],
+            Traffic(slot: 0),
+            (_, _) => false);
+
+        Assert.Same(tarOnly, Assert.Single(targets));
+        Assert.False(tarOnly.IsAudioEnabled);
+    }
+
+    [Fact]
+    public void RoutesDecodedSamplesToTarArmedCopyWhenRxOwnerIsNotArmed()
+    {
+        ChannelViewModel rxOwner = Channel("Dispatch RX", "100", slot: 1);
+        ChannelViewModel tarCopy = Channel("Dispatch TAR", "100", slot: 1);
+        tarCopy.SetRecordingEnabled(true);
+
+        ChannelViewModel? target = ReceiveRecordingTargetResolver.Resolve(
+            rxOwner,
+            [rxOwner, tarCopy]);
+
+        Assert.Same(tarCopy, target);
+        Assert.False(rxOwner.IsRecordingEnabled);
+    }
+
+    [Fact]
+    public void KeepsDecodedTarOwnerWhenMultipleCopiesAreArmed()
+    {
+        ChannelViewModel decodedOwner = Channel("Dispatch A", "100", slot: 1);
+        ChannelViewModel otherCopy = Channel("Dispatch B", "100", slot: 1);
+        decodedOwner.SetRecordingEnabled(true);
+        otherCopy.SetRecordingEnabled(true);
+
+        ChannelViewModel? target = ReceiveRecordingTargetResolver.Resolve(
+            decodedOwner,
+            [otherCopy, decodedOwner]);
+
+        Assert.Same(decodedOwner, target);
+    }
+
+    [Fact]
+    public void DoesNotRedirectRecordingAcrossSystemsOrDmrSlots()
+    {
+        ChannelViewModel decodedOwner = Channel("Dispatch RX", "100", slot: 1);
+        ChannelViewModel otherSystem = Channel(
+            "Other system TAR",
+            "100",
+            slot: 1,
+            system: "System 2");
+        ChannelViewModel otherSlot = Channel("Slot 2 TAR", "100", slot: 2);
+        otherSystem.SetRecordingEnabled(true);
+        otherSlot.SetRecordingEnabled(true);
+
+        ChannelViewModel? target = ReceiveRecordingTargetResolver.Resolve(
+            decodedOwner,
+            [otherSystem, otherSlot]);
+
+        Assert.Null(target);
+    }
+
+    [Fact]
     public void RoutesOnlyTheActiveMatchingSlotAndDeduplicatesZoneCopies()
     {
         ChannelViewModel slotOne = Channel("Slot 1", "100", slot: 1);
@@ -67,11 +137,12 @@ public sealed class ReceiveAudioTrafficRouterTests
         string name,
         string tgid,
         byte slot,
-        string mode = "dmr")
+        string mode = "dmr",
+        string system = "System 1")
         => new(new ChannelConfiguration
         {
             Name = name,
-            System = "System 1",
+            System = system,
             Tgid = tgid,
             Mode = mode,
             Slot = slot

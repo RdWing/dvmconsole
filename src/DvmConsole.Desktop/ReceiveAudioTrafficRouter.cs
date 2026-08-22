@@ -2,19 +2,19 @@ using DvmConsole.FneClient;
 
 namespace DvmConsole.Desktop;
 
-// Selects only the already-open receive sessions that should get a network
-// frame on the latency-sensitive path. UI lifecycle and history processing
-// still observe the same frame independently.
+// Selects the receive decode sessions that should get a network frame on the
+// latency-sensitive path. Callers may include TAR-armed sessions that are
+// still opening so their ordered worker can retain the start of the call.
 internal static class ReceiveAudioTrafficRouter
 {
     public static ChannelViewModel[] ResolveTargets(
         IReadOnlyDictionary<(FneTrafficProtocol Protocol, uint DestinationId), ChannelViewModel[]> routes,
-        IReadOnlyList<ChannelViewModel> activeChannels,
+        IReadOnlyList<ChannelViewModel> decodeChannels,
         FneTrafficFrame traffic,
         Func<ChannelViewModel, uint, bool> isTrackingStream)
     {
         ArgumentNullException.ThrowIfNull(routes);
-        ArgumentNullException.ThrowIfNull(activeChannels);
+        ArgumentNullException.ThrowIfNull(decodeChannels);
         ArgumentNullException.ThrowIfNull(traffic);
         ArgumentNullException.ThrowIfNull(isTrackingStream);
 
@@ -22,7 +22,7 @@ internal static class ReceiveAudioTrafficRouter
         {
             return ResolveTerminatorTargets(
                 routes,
-                activeChannels,
+                decodeChannels,
                 traffic,
                 isTrackingStream);
         }
@@ -47,7 +47,7 @@ internal static class ReceiveAudioTrafficRouter
             if (IsEligibleVoiceTarget(
                     candidates,
                     candidateIndex,
-                    activeChannels,
+                    decodeChannels,
                     traffic))
             {
                 targetCount++;
@@ -64,7 +64,7 @@ internal static class ReceiveAudioTrafficRouter
             if (IsEligibleVoiceTarget(
                     candidates,
                     candidateIndex,
-                    activeChannels,
+                    decodeChannels,
                     traffic))
             {
                 targets[targetIndex++] = candidates[candidateIndex];
@@ -75,16 +75,16 @@ internal static class ReceiveAudioTrafficRouter
 
     private static ChannelViewModel[] ResolveTerminatorTargets(
         IReadOnlyDictionary<(FneTrafficProtocol Protocol, uint DestinationId), ChannelViewModel[]> routes,
-        IReadOnlyList<ChannelViewModel> activeChannels,
+        IReadOnlyList<ChannelViewModel> decodeChannels,
         FneTrafficFrame traffic,
         Func<ChannelViewModel, uint, bool> isTrackingStream)
     {
         int targetCount = 0;
-        for (int index = 0; index < activeChannels.Count; index++)
+        for (int index = 0; index < decodeChannels.Count; index++)
         {
             if (IsEligibleTerminatorTarget(
                     routes,
-                    activeChannels[index],
+                    decodeChannels[index],
                     traffic,
                     isTrackingStream))
             {
@@ -97,9 +97,9 @@ internal static class ReceiveAudioTrafficRouter
 
         var targets = new ChannelViewModel[targetCount];
         int targetIndex = 0;
-        for (int index = 0; index < activeChannels.Count; index++)
+        for (int index = 0; index < decodeChannels.Count; index++)
         {
-            ChannelViewModel channel = activeChannels[index];
+            ChannelViewModel channel = decodeChannels[index];
             if (IsEligibleTerminatorTarget(routes, channel, traffic, isTrackingStream))
                 targets[targetIndex++] = channel;
         }
@@ -109,11 +109,11 @@ internal static class ReceiveAudioTrafficRouter
     private static bool IsEligibleVoiceTarget(
         ChannelViewModel[] candidates,
         int candidateIndex,
-        IReadOnlyList<ChannelViewModel> activeChannels,
+        IReadOnlyList<ChannelViewModel> decodeChannels,
         FneTrafficFrame traffic)
     {
         ChannelViewModel candidate = candidates[candidateIndex];
-        if (!ContainsReference(activeChannels, candidate) ||
+        if (!ContainsReference(decodeChannels, candidate) ||
             !MatchesProtocolAndSlot(candidate, traffic))
         {
             return false;
@@ -122,9 +122,9 @@ internal static class ReceiveAudioTrafficRouter
         for (int priorIndex = 0; priorIndex < candidateIndex; priorIndex++)
         {
             ChannelViewModel prior = candidates[priorIndex];
-            if (ContainsReference(activeChannels, prior) &&
+            if (ContainsReference(decodeChannels, prior) &&
                 MatchesProtocolAndSlot(prior, traffic) &&
-                HasEquivalentReceiveIdentity(prior, candidate))
+                ChannelReceiveIdentity.AreEquivalent(prior, candidate))
             {
                 return false;
             }
@@ -164,13 +164,6 @@ internal static class ReceiveAudioTrafficRouter
         }
         return false;
     }
-
-    private static bool HasEquivalentReceiveIdentity(
-        ChannelViewModel left,
-        ChannelViewModel right)
-        => left.Definition.Mode == right.Definition.Mode &&
-           left.Definition.DestinationId == right.Definition.DestinationId &&
-           (left.Definition.Mode != "dmr" || left.Definition.Slot == right.Definition.Slot);
 
     private static bool MatchesProtocolAndSlot(
         ChannelViewModel channel,
