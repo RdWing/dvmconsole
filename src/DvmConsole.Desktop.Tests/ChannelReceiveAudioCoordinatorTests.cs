@@ -879,6 +879,35 @@ public sealed class ChannelReceiveAudioCoordinatorTests
         Assert.Equal("headset", headsetBackend.LastOutputDeviceId);
     }
 
+    [Fact]
+    public async Task ConcurrentDisposalWaitsForTheSharedReceiveCleanup()
+    {
+        var backend = new BlockingDrainAudioBackend();
+        var channel = new ChannelViewModel(new ChannelConfiguration
+        {
+            Name = "Dispatch",
+            System = "System 1",
+            Tgid = "100",
+            Mode = "analog"
+        });
+        var coordinator = new ChannelReceiveAudioCoordinator(
+            () => backend,
+            () => new FakeVocoderBackend());
+        await coordinator.StartAsync(channel);
+
+        Task first = coordinator.DisposeAsync().AsTask();
+        await backend.Playback.DrainEntered.Task.WaitAsync(TimeSpan.FromSeconds(1));
+        Task second = coordinator.DisposeAsync().AsTask();
+
+        Assert.False(first.IsCompleted);
+        Assert.False(second.IsCompleted);
+        backend.Playback.AllowDrain();
+        await Task.WhenAll(first, second).WaitAsync(TimeSpan.FromSeconds(1));
+
+        Assert.True(backend.IsDisposed);
+        Assert.Equal(1, backend.Playback.DisposeCalls);
+    }
+
     private static FneTrafficFrame CreateTraffic(
         uint destinationId,
         byte slot,
@@ -1116,6 +1145,60 @@ public sealed class ChannelReceiveAudioCoordinatorTests
         }
 
         public void Dispose() => IsDisposed = true;
+    }
+
+    private sealed class BlockingDrainAudioBackend : IAudioBackend
+    {
+        public BlockingDrainPlayback Playback { get; } = new();
+        public string Name => "blocking-drain-fake";
+        public bool IsDisposed { get; private set; }
+
+        public IReadOnlyList<AudioDeviceInfo> EnumerateDevices(AudioDirection direction)
+            => direction == AudioDirection.Output
+                ? [new AudioDeviceInfo("output", "Blocking output", direction, true)]
+                : [new AudioDeviceInfo("input", "Fake input", direction, true)];
+
+        public IAudioCapture OpenCapture(AudioDeviceInfo device, PcmAudioFormat format)
+            => throw new NotSupportedException();
+
+        public IAudioPlayback OpenPlayback(AudioDeviceInfo device, PcmAudioFormat format)
+            => Playback;
+
+        public void Dispose() => IsDisposed = true;
+    }
+
+    private sealed class BlockingDrainPlayback : IAudioPlayback
+    {
+        private readonly TaskCompletionSource drainCompletion = new(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public PcmAudioFormat Format { get; } = PcmAudioFormat.Voice8KhzStereo16Bit;
+        public TaskCompletionSource DrainEntered { get; } = new(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        public int DisposeCalls { get; private set; }
+
+        public ValueTask WriteAsync(
+            ReadOnlyMemory<short> samples,
+            CancellationToken cancellationToken = default)
+            => ValueTask.CompletedTask;
+
+        public ValueTask FlushAsync(CancellationToken cancellationToken = default)
+            => ValueTask.CompletedTask;
+
+        public async ValueTask<int?> DrainAsync(CancellationToken cancellationToken = default)
+        {
+            DrainEntered.TrySetResult();
+            await drainCompletion.Task.WaitAsync(cancellationToken);
+            return 0;
+        }
+
+        public ValueTask DisposeAsync()
+        {
+            DisposeCalls++;
+            return ValueTask.CompletedTask;
+        }
+
+        public void AllowDrain() => drainCompletion.TrySetResult();
     }
 
     private sealed class StereoAudioBackend : IAudioBackend

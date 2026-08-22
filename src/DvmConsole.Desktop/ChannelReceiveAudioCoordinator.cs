@@ -37,6 +37,7 @@ public sealed class ChannelReceiveAudioCoordinator : IAsyncDisposable
     private bool transitionPlaybackDiscarded;
     private bool operatorOutputMuted;
     private bool disposed;
+    private TaskCompletionSource? disposeCompletion;
 
     public ChannelReceiveAudioCoordinator()
         : this((IP25KeyResolver?)null)
@@ -226,9 +227,11 @@ public sealed class ChannelReceiveAudioCoordinator : IAsyncDisposable
         Func<ChannelViewModel[]> selectChannels,
         CancellationToken cancellationToken)
     {
+        ObjectDisposedException.ThrowIf(disposed, this);
         await recoveryGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
+            ObjectDisposedException.ThrowIf(disposed, this);
             ChannelViewModel[] desired;
             await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
             try
@@ -755,25 +758,64 @@ public sealed class ChannelReceiveAudioCoordinator : IAsyncDisposable
         }
     }
 
-    public async ValueTask DisposeAsync()
+    public ValueTask DisposeAsync()
     {
-        if (disposed)
-            return;
+        TaskCompletionSource completion;
+        bool startDisposal = false;
+        lock (playbackPolicySync)
+        {
+            if (disposeCompletion is null)
+            {
+                disposeCompletion = new TaskCompletionSource(
+                    TaskCreationOptions.RunContinuationsAsynchronously);
+                startDisposal = true;
+            }
+            completion = disposeCompletion;
+        }
 
-        await gate.WaitAsync().ConfigureAwait(false);
+        if (startDisposal)
+            _ = DisposeAndCompleteAsync(completion);
+        return new ValueTask(completion.Task);
+    }
+
+    private async Task DisposeAndCompleteAsync(TaskCompletionSource completion)
+    {
         try
         {
-            if (!disposed)
+            await DisposeCoreAsync().ConfigureAwait(false);
+            completion.TrySetResult();
+        }
+        catch (Exception exception)
+        {
+            completion.TrySetException(exception);
+        }
+    }
+
+    private async Task DisposeCoreAsync()
+    {
+        // Recovery owns a sequence of stop/start operations rather than one
+        // gate acquisition. Wait for that complete operation before tearing
+        // down its gates and routes.
+        await recoveryGate.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            await gate.WaitAsync().ConfigureAwait(false);
+            try
             {
-                await StopCoreAsync().ConfigureAwait(false);
-                disposed = true;
+                if (!disposed)
+                {
+                    await StopCoreAsync().ConfigureAwait(false);
+                    disposed = true;
+                }
+            }
+            finally
+            {
+                gate.Release();
             }
         }
         finally
         {
-            gate.Release();
-            gate.Dispose();
-            recoveryGate.Dispose();
+            recoveryGate.Release();
         }
     }
 
