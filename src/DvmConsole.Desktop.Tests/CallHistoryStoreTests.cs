@@ -299,6 +299,27 @@ public sealed class CallHistoryStoreTests
     }
 
     [Fact]
+    public void SessionLimitArchivesAttachedRecordingInsteadOfDiscardingIt()
+    {
+        var store = new CallHistoryStore(maxEntries: 2);
+        CallHistoryEntry recordedCall = CreateEntry(1);
+        store.Add(recordedCall);
+        CallRecordingMetadata recording = CreatePlayableRecording(streamId: 1);
+        store.AddOrAttachRecording(recording);
+
+        store.Add(CreateEntry(2));
+        store.Add(CreateEntry(3));
+
+        Assert.DoesNotContain(recordedCall, store.Entries);
+        CallHistoryEntry archived = Assert.Single(store.Entries, entry => entry.StreamId == 1);
+        Assert.True(archived.IsRecordingOnly);
+        Assert.Same(recording, archived.Recording);
+        Assert.True(archived.HasPlayableRecording);
+        Assert.Equal(3, store.Entries.Count);
+        Assert.Equal(2, store.Entries.Count(entry => !entry.IsRecordingOnly));
+    }
+
+    [Fact]
     public void SameStreamIdOnConcurrentChannelsDoesNotCompleteOrAttachWrongCall()
     {
         var store = new CallHistoryStore();

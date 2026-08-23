@@ -14,6 +14,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - Replace the legacy Windows WinMM audio backend with NAudio 3 shared, event-driven WASAPI capture and playback. Preserve stable fixed routes, Multimedia-role system-default following, 8 kHz application conversion, existing queue and starvation diagnostics, and deferred default-microphone migration during PTT.
 
+### Fixed
+
+- Keep completed TAR recordings playable and searchable in History when their live session rows age past the in-memory call limit, without requiring an application restart to reload them from disk.
+
 ## [0.3.5] - 2026-08-22
 
 ### Changed
