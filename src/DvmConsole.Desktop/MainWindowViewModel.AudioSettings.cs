@@ -101,9 +101,12 @@ public sealed partial class MainWindowViewModel
         string outputDeviceId = AudioOutputDeviceIdText.Trim();
         userSettings.AudioInputDeviceId = deviceId;
         userSettings.AudioOutputDeviceId = outputDeviceId;
-        userSettings.AudioProcessingMode = processingMode == AudioProcessingMode.AppleVoiceProcessing
-            ? UserSettings.AppleVoiceProcessingMode
-            : UserSettings.DvmConsoleAudioProcessingMode;
+        userSettings.AudioProcessingMode = processingMode switch
+        {
+            AudioProcessingMode.AppleVoiceProcessing => UserSettings.AppleVoiceProcessingMode,
+            AudioProcessingMode.WindowsCommunications => UserSettings.WindowsCommunicationsProcessingMode,
+            _ => UserSettings.DvmConsoleAudioProcessingMode
+        };
         if (OperatingSystem.IsMacOSVersionAtLeast(26))
             userSettings.HighQualityBluetoothAudioEnabled = HighQualityBluetoothAudioEnabled;
         userSettings.AudioInputAgcEnabled = AudioInputAgcEnabled;
@@ -140,9 +143,14 @@ public sealed partial class MainWindowViewModel
         string bluetoothStatus = userSettings.HighQualityBluetoothAudioEnabled
             ? " High-quality Bluetooth audio is enabled for compatible AirPods; unsupported routes fall back safely."
             : string.Empty;
-        AudioStatusText = (processingMode == AudioProcessingMode.AppleVoiceProcessing
-            ? "Apple voice processing saved for microphone transmit capture; RX vocoder processing remains independently controlled."
-            : "DVM Console audio processing saved; device routes apply to the next audio session and PTT call.") +
+        AudioStatusText = (processingMode switch
+        {
+            AudioProcessingMode.AppleVoiceProcessing =>
+                "Apple voice processing saved for microphone transmit capture; RX vocoder processing remains independently controlled.",
+            AudioProcessingMode.WindowsCommunications =>
+                "Windows communications processing saved for microphone transmit capture; available effects depend on Windows and the selected endpoint.",
+            _ => "DVM Console audio processing saved; device routes apply to the next audio session and PTT call."
+        }) +
             bluetoothStatus;
 
         bool audioRouteChanged = previousProcessingMode != processingMode ||

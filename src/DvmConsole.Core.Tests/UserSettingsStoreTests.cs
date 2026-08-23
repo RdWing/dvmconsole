@@ -981,6 +981,29 @@ public sealed class UserSettingsStoreTests
     }
 
     [Fact]
+    public void PreservesWindowsCommunicationsProcessingModeWithoutSchemaMigration()
+    {
+        string path = CreatePath();
+        try
+        {
+            var store = new UserSettingsStore(path);
+            store.Save(new UserSettings
+            {
+                AudioProcessingMode = UserSettings.WindowsCommunicationsProcessingMode
+            });
+
+            UserSettings loaded = store.Load();
+
+            Assert.Equal(UserSettings.CurrentSchemaVersion, loaded.SchemaVersion);
+            Assert.Equal(UserSettings.WindowsCommunicationsProcessingMode, loaded.AudioProcessingMode);
+        }
+        finally
+        {
+            Cleanup(path);
+        }
+    }
+
+    [Fact]
     public void NormalizesStepBasedPresetsAndPreservesHolds()
     {
         string path = CreatePath();

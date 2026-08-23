@@ -114,6 +114,28 @@ public sealed class PcmInputProcessorTests
         Assert.Equal(appleProcessed, received);
     }
 
+    [Fact]
+    public async Task WindowsCommunicationsModeDoesNotRunDvmConsoleGainOrAgcASecondTime()
+    {
+        var source = new TestCapture();
+        await using var capture = new ProcessedAudioCapture(source, new AudioInputProcessingOptions
+        {
+            ProcessingMode = AudioProcessingMode.WindowsCommunications,
+            AgcEnabled = true,
+            Gain = 3,
+            LowGainDb = 12,
+            MidGainDb = 12,
+            HighGainDb = 12
+        });
+        short[]? received = null;
+        capture.SamplesAvailable += (_, args) => received = args.Samples.ToArray();
+
+        short[] windowsProcessed = [100, -200, 300];
+        source.Emit(windowsProcessed);
+
+        Assert.Equal(windowsProcessed, received);
+    }
+
     private sealed class TestCapture : IAudioCapture
     {
         public event EventHandler<PcmSamplesEventArgs>? SamplesAvailable;

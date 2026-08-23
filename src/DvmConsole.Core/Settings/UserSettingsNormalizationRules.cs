@@ -251,6 +251,7 @@ internal static class UserSettingsNormalizationRules
         settings.AudioProcessingMode = settings.AudioProcessingMode?.Trim() switch
         {
             UserSettings.AppleVoiceProcessingMode => UserSettings.AppleVoiceProcessingMode,
+            UserSettings.WindowsCommunicationsProcessingMode => UserSettings.WindowsCommunicationsProcessingMode,
             _ => UserSettings.DvmConsoleAudioProcessingMode
         };
         settings.AudioInputAgcTargetDbfs = NormalizeBounded(settings.AudioInputAgcTargetDbfs, -25.0, -40.0, -12.0);

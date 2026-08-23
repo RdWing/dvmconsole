@@ -6,14 +6,13 @@ public enum AudioDirection
     Output
 }
 
-// Portable policy selected by the operator. Apple platforms implement the
-// second mode with their native full-duplex voice-processing stack; other
-// platforms can expose only the DVM Console mode until they provide an
-// equivalent backend.
+// Portable microphone-capture policy selected by the operator. Platform modes
+// are accepted only by their matching backend; receive playback is unaffected.
 public enum AudioProcessingMode
 {
     DvmConsole,
-    AppleVoiceProcessing
+    AppleVoiceProcessing,
+    WindowsCommunications
 }
 
 public enum HighQualityBluetoothAudioStatus

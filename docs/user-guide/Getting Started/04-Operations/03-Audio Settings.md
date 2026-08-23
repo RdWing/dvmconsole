@@ -104,8 +104,7 @@ Web stream output overrides, volume, and position are keyed by stream name. Auto
 
 # Microphone Processing
 
-DVM Console provides two mutually exclusive microphone processing modes on
-macOS:
+DVM Console provides mutually exclusive microphone processing modes:
 
 - **DVM Console processing** applies the console gain, equalizer, and optional
   automatic gain control after capture.
@@ -114,7 +113,17 @@ macOS:
   equalizer, and AGC are bypassed in this mode so the signal is not processed
   twice.
 
-Windows uses DVM Console processing.
+- **Windows communications processing** requests the communications effects
+  supplied by Windows, the selected audio driver, and the endpoint. Depending on
+  that combination, the effects can include acoustic echo cancellation, noise
+  suppression, and automatic gain control. DVM Console gain, equalizer, and AGC
+  are bypassed in this mode so the signal is not processed twice.
+
+Apple voice processing is available only on macOS. Windows communications
+processing is available only on Windows. DVM Console processing remains the
+default on both platforms. Windows communications effects are device-dependent;
+selecting the mode does not guarantee that every effect is provided by a given
+endpoint.
 
 Apple voice processing supports the system-default microphone/speaker pair or
 one Core Audio device that provides both input and output. macOS does not allow

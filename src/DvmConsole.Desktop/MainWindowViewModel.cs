@@ -31,8 +31,11 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
     private const int VocoderAudioLevelWindowSamples = VoiceSampleRate;
     private const string DvmConsoleProcessingDisplay = "DVM Console processing";
     private const string AppleVoiceProcessingDisplay = "Apple voice processing";
+    private const string WindowsCommunicationsProcessingDisplay = "Windows communications processing";
     private static readonly string[] AppleAudioProcessingModeOptions =
         [DvmConsoleProcessingDisplay, AppleVoiceProcessingDisplay];
+    private static readonly string[] WindowsAudioProcessingModeOptions =
+        [DvmConsoleProcessingDisplay, WindowsCommunicationsProcessingDisplay];
     private static readonly string[] DvmConsoleAudioProcessingModeOptions =
         [DvmConsoleProcessingDisplay];
     private readonly ChannelReceiveAudioCoordinator audioCoordinator;
@@ -1023,7 +1026,9 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
             : $"Mute live RX output for zone {SelectedSystem?.SelectedZone?.Name ?? "the selected zone"}; TAR continues";
 
     public IReadOnlyList<string> AudioProcessingModeOptions
-        => IsAppleVoiceProcessingPlatformAvailable && IsAppleVoiceProcessingRouteCompatible
+        => OperatingSystem.IsWindows()
+            ? WindowsAudioProcessingModeOptions
+            : IsAppleVoiceProcessingPlatformAvailable && IsAppleVoiceProcessingRouteCompatible
             ? AppleAudioProcessingModeOptions
             : DvmConsoleAudioProcessingModeOptions;
 
@@ -1088,11 +1093,14 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
         get => audioSettings.SelectedAudioProcessingMode;
         set
         {
-            string normalized = IsAppleVoiceProcessingPlatformAvailable &&
-                IsAppleVoiceProcessingRouteCompatible &&
-                value == AppleVoiceProcessingDisplay
-                ? AppleVoiceProcessingDisplay
-                : DvmConsoleProcessingDisplay;
+            string normalized = value switch
+            {
+                AppleVoiceProcessingDisplay when IsAppleVoiceProcessingPlatformAvailable &&
+                    IsAppleVoiceProcessingRouteCompatible => AppleVoiceProcessingDisplay,
+                WindowsCommunicationsProcessingDisplay when OperatingSystem.IsWindows() =>
+                    WindowsCommunicationsProcessingDisplay,
+                _ => DvmConsoleProcessingDisplay
+            };
             if (audioSettings.SelectedAudioProcessingMode == normalized)
                 return;
             audioSettings.SelectedAudioProcessingMode = normalized;
@@ -1109,9 +1117,14 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
         => IsDvmConsoleProcessingSelected && AudioInputAgcEnabled;
 
     public string AudioProcessingDescription
-        => IsDvmConsoleProcessingSelected
-            ? "DVM Console applies its gain, EQ, and optional AGC after microphone capture."
-            : "Apple Voice Processing applies acoustic echo cancellation and automatic gain control to the microphone capture used for transmit. RX vocoder processing is controlled separately.";
+        => SelectedAudioProcessingMode switch
+        {
+            AppleVoiceProcessingDisplay =>
+                "Apple Voice Processing applies acoustic echo cancellation and automatic gain control to the microphone capture used for transmit. RX vocoder processing is controlled separately.",
+            WindowsCommunicationsProcessingDisplay =>
+                "Windows requests the selected endpoint's communications processing for transmit capture. Actual AEC, noise suppression, and AGC depend on Windows, the audio driver, and the endpoint. DVM Console gain, EQ, and AGC are bypassed.",
+            _ => "DVM Console applies its gain, EQ, and optional AGC after microphone capture."
+        };
 
     public string AudioInputPresetNameText
     {
@@ -2961,9 +2974,9 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
             : 0.0;
     }
 
-    // Receive uses plain CoreAudio even when Apple voice processing is selected
-    // for the microphone. Vocoder receive processing remains a separate,
-    // protocol-aware stage rather than leaking microphone AEC/AGC into RX.
+    // Receive always uses the platform's ordinary playback path. Microphone
+    // processing modes remain scoped to transmit capture, while vocoder receive
+    // processing stays a separate, protocol-aware stage.
     private IAudioBackend CreateReceiveAudioBackend()
         => AudioBackendFactory.CreateDefault(
             Environment.GetEnvironmentVariable("DVM_AUDIO_LIBRARY"));
@@ -3026,20 +3039,32 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
     }
 
     private AudioProcessingMode GetConfiguredAudioProcessingMode()
-        => OperatingSystem.IsMacOS() &&
-           userSettings.AudioProcessingMode == UserSettings.AppleVoiceProcessingMode
-            ? AudioProcessingMode.AppleVoiceProcessing
-            : AudioProcessingMode.DvmConsole;
+        => userSettings.AudioProcessingMode switch
+        {
+            UserSettings.AppleVoiceProcessingMode when OperatingSystem.IsMacOS() =>
+                AudioProcessingMode.AppleVoiceProcessing,
+            UserSettings.WindowsCommunicationsProcessingMode when OperatingSystem.IsWindows() =>
+                AudioProcessingMode.WindowsCommunications,
+            _ => AudioProcessingMode.DvmConsole
+        };
 
     private AudioProcessingMode GetSelectedAudioProcessingMode()
-        => SelectedAudioProcessingMode == AppleVoiceProcessingDisplay
-            ? AudioProcessingMode.AppleVoiceProcessing
-            : AudioProcessingMode.DvmConsole;
+        => SelectedAudioProcessingMode switch
+        {
+            AppleVoiceProcessingDisplay => AudioProcessingMode.AppleVoiceProcessing,
+            WindowsCommunicationsProcessingDisplay => AudioProcessingMode.WindowsCommunications,
+            _ => AudioProcessingMode.DvmConsole
+        };
 
     private static string ToAudioProcessingModeDisplay(string? mode)
-        => OperatingSystem.IsMacOS() && mode == UserSettings.AppleVoiceProcessingMode
-            ? AppleVoiceProcessingDisplay
-            : DvmConsoleProcessingDisplay;
+        => mode switch
+        {
+            UserSettings.AppleVoiceProcessingMode when OperatingSystem.IsMacOS() =>
+                AppleVoiceProcessingDisplay,
+            UserSettings.WindowsCommunicationsProcessingMode when OperatingSystem.IsWindows() =>
+                WindowsCommunicationsProcessingDisplay,
+            _ => DvmConsoleProcessingDisplay
+        };
 
     private string? GetChannelOutputDeviceId(ChannelViewModel channel)
     {

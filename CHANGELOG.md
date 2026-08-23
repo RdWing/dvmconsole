@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- Add an opt-in Windows communications microphone mode that requests endpoint-provided echo cancellation, noise suppression, and automatic gain control while bypassing DVM Console microphone processing. Available effects remain dependent on Windows, the selected driver, and the endpoint.
+
+### Changed
+
+- Replace the legacy Windows WinMM audio backend with NAudio 3 shared, event-driven WASAPI capture and playback. Preserve stable fixed routes, Multimedia-role system-default following, 8 kHz application conversion, existing queue and starvation diagnostics, and deferred default-microphone migration during PTT.
+
 ## [0.3.5] - 2026-08-22
 
 ### Changed
