@@ -123,6 +123,8 @@ Viewer actions:
 - Open Folder
 - Delete
 
+Completed TAR recordings also remain available from the console History view when older live call rows age past the in-memory session limit. This affects only how recordings are represented in History; file deletion continues to follow the configured TAR retention policy.
+
 ---
 
 # Advanced Filters

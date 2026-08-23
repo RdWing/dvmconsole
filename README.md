@@ -47,26 +47,25 @@ multi-system activity understandable.
 
 ## What’s new in DVM Console Neo
 
-### 0.3.5 — Optimization and reliability
+### 0.3.6 — Windows audio and recording-history reliability
 
-DVM Console Neo 0.3.5 improves performance and runtime reliability while preserving existing operator behavior:
+DVM Console Neo 0.3.6 modernizes Windows audio and improves recording-history reliability:
 
-- **Optimized audio paths** reduce managed allocation in receive routing, vocoder processing, and transmit packetization without changing output behavior.
-- **More reliable reload and shutdown** keep Activity, PTT, audio services, tools, and background work attached to the correct session.
-- **Clearer internal ownership** makes the runtime easier to maintain while preserving settings, FNE, audio, and UI compatibility.
+- **Modern Windows audio** replaces the legacy WinMM backend with NAudio 3.0.1 shared, event-driven WASAPI capture and playback while preserving default and fixed-route behavior.
+- **Optional Windows communications processing** requests endpoint-provided echo cancellation, noise suppression, and automatic gain control without applying DVM Console processing twice.
+- **Persistent TAR history** keeps completed recordings playable and searchable when their live session rows age past the in-memory call limit.
 
-[Read the complete 0.3.5 release notes →](docs/releases/v0.3.5.md)
+[Read the complete 0.3.6 release notes →](docs/releases/v0.3.6.md)
 
 ### Prior recent improvements
 
-Recent 0.3.4 and 0.3.3 updates also introduced:
+Recent 0.3.5, 0.3.4, and 0.3.3 updates also introduced:
 
-- **Adaptive receive timing and clearer diagnostics** for P25, DMR, and NXDN, with independent stream handling and better visibility into network, decoder, mixer, and output-device conditions.
-- **Scoped speaker mute that preserves TAR**, allowing all RX, one system, or one zone to be quieted without stopping decode, call state, patching, or recording.
-- **TAR without live RX**, including consistent recording ownership when multiple zone copies share a resource.
-- **More reliable PTT cues and P25 key requests**, including scoped toggle/hold behavior and legacy-compatible KMM timing and key-ID handling.
+- **0.3.5 — Optimization and lifecycle reliability:** reduced managed allocation in receive, vocoder, and transmit paths; kept Activity, PTT, audio services, tools, and background work attached to the correct session through reload and shutdown; and clarified internal ownership without changing operator workflows.
+- **0.3.4 — TAR and PTT cue reliability:** allowed TAR-armed resources to record without live RX selection, preserved recording ownership across equivalent zone cards, and made scoped toggle and press-and-hold PTT complete the required talk-permit cue consistently.
+- **0.3.3 — Receive continuity and operator control:** added adaptive packet-aligned jitter handling, independent concurrent receive streams, scoped speaker mute that preserves TAR, clearer receive-path diagnostics, improved P25 key-request compatibility, and more responsive History and Debug Logs.
 
-[Read the 0.3.4 release notes →](docs/releases/v0.3.4.md) · [Read the 0.3.3 release notes →](docs/releases/v0.3.3.md)
+[Read the 0.3.5 release notes →](docs/releases/v0.3.5.md) · [Read the 0.3.4 release notes →](docs/releases/v0.3.4.md) · [Read the 0.3.3 release notes →](docs/releases/v0.3.3.md)
 
 ## Download DVM Console Neo
 
@@ -75,9 +74,9 @@ computer and extract the entire archive before starting DVM Console.
 
 | Platform | Package | Requirements |
 | --- | --- | --- |
-| Apple Silicon Mac | `dvmconsole-0.3.5-osx-arm64.zip` | macOS 14 or newer |
-| Intel Mac | `dvmconsole-0.3.5-osx-x64.zip` | macOS 14 or newer |
-| Windows PC | `dvmconsole-0.3.5-win-x64.zip` | Windows x64 |
+| Apple Silicon Mac | `dvmconsole-0.3.6-osx-arm64.zip` | macOS 14 or newer |
+| Intel Mac | `dvmconsole-0.3.6-osx-x64.zip` | macOS 14 or newer |
+| Windows PC | `dvmconsole-0.3.6-win-x64.zip` | Windows x64 |
 
 **[Download the latest release →](https://github.com/RdWing/dvmconsole/releases/latest)**
 
