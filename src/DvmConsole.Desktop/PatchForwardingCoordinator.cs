@@ -231,6 +231,7 @@ public sealed class PatchForwardingCoordinator : IDisposable
         catch
         {
             EndTarget(member, streamId, sourceId);
+            router.ReportTargetFailure(member, streamId);
         }
     }
 

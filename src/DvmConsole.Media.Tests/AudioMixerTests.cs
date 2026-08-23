@@ -191,12 +191,18 @@ public sealed class AudioMixerTests
         var output = new StalledCallbackPlayback();
         var mixer = new AudioMixer(output);
         IAudioPlayback channel = mixer.OpenChannel();
+        var faulted = new TaskCompletionSource<Exception>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        mixer.Faulted += exception => faulted.TrySetResult(exception);
         try
         {
             await channel.WriteAsync(
                 Enumerable.Repeat((short)500, 4 * 160).ToArray());
             await WaitForAsync(() => output.WriteCalls >= 4);
             await Task.Delay(1_200);
+
+            Exception observed = await faulted.Task.WaitAsync(TimeSpan.FromSeconds(1));
+            Assert.IsType<IOException>(observed);
 
             await Assert.ThrowsAsync<IOException>(async () =>
                 await channel.WriteAsync(CreateSamples(600)));
@@ -462,6 +468,25 @@ public sealed class AudioMixerTests
         Assert.Equal((short)100, output.Frames[0][79]);
         Assert.Equal((short)200, output.Frames[0][80]);
         Assert.Equal((short)200, output.Frames[0][159]);
+    }
+
+    [Fact]
+    public async Task DrainsAPartialLaneWithoutClosingIt()
+    {
+        var output = new FakePlayback();
+        await using var mixer = new AudioMixer(output);
+        await using IAudioPlayback channel = mixer.OpenChannel();
+
+        await channel.WriteAsync(Enumerable.Repeat((short)300, 200).ToArray());
+        int? firstDrain = await channel.DrainAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(1));
+        await channel.WriteAsync(CreateSamples(400));
+        int? secondDrain = await channel.DrainAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(1));
+
+        Assert.Equal(200, firstDrain);
+        Assert.Equal(160, secondDrain);
+        Assert.Equal(3, output.Frames.Count);
+        Assert.All(output.Frames[1].Skip(40), sample => Assert.Equal((short)0, sample));
+        Assert.Equal((short)400, output.Frames[2][0]);
     }
 
     [Fact]

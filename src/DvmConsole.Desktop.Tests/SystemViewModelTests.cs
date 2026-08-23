@@ -299,7 +299,7 @@ public sealed class SystemViewModelTests
 
     [Fact]
     public void ReportsUnreleasedSemanticVersion()
-        => Assert.StartsWith("0.3.6", MainWindow.ApplicationVersion, StringComparison.Ordinal);
+        => Assert.StartsWith("0.3.7", MainWindow.ApplicationVersion, StringComparison.Ordinal);
 
     [Theory]
     [InlineData("0.1.0-alpha.1+abcdef123456", "0.1.0-alpha.1 (abcdef1)")]
@@ -1831,6 +1831,51 @@ public sealed class SystemViewModelTests
             Assert.Equal(
                 ["Alpha Emergency", "Beta Operations"],
                 multiSelect.Members.Where(member => member.IsMember).Select(member => member.Channel.Name));
+        }
+        finally
+        {
+            CleanupSettingsPath(settingsPath);
+        }
+    }
+
+    [Fact]
+    public async Task OneWayPatchSourceCanBeSelectedAndPersistsFirst()
+    {
+        string codeplugPath = Path.Combine(AppContext.BaseDirectory, "TestData", "multiple-systems.yml");
+        string settingsPath = CreateSettingsPath();
+        var store = new UserSettingsStore(settingsPath);
+        store.Save(new UserSettings
+        {
+            PatchGroupMemberships = new Dictionary<string, List<PatchMemberSetting>>
+            {
+                ["Dispatch Patch"] =
+                [
+                    new PatchMemberSetting { SystemName = "Alpha", DestinationId = 101 },
+                    new PatchMemberSetting { SystemName = "Beta", DestinationId = 201 }
+                ]
+            },
+            PatchGroupModes = new Dictionary<string, bool> { ["Dispatch Patch"] = true }
+        });
+
+        try
+        {
+            await using MainWindowViewModel viewModel = MainWindowViewModel.Load(codeplugPath, store);
+            PatchGroupEditorViewModel group = Assert.Single(
+                viewModel.PatchGroups,
+                candidate => candidate.IsPatchGroup);
+            PatchMemberEditorViewModel beta = Assert.Single(
+                group.SourceOptions,
+                member => member.Channel.Definition.SystemName == "Beta");
+
+            Assert.Equal("Alpha", group.SelectedSource?.Channel.Definition.SystemName);
+            Assert.Equal("Edit members (2 selected)", group.MemberEditorHeader);
+
+            group.SelectedSource = beta;
+            viewModel.ApplyPatchGroup(group);
+
+            UserSettings saved = store.Load();
+            Assert.Equal("Beta", saved.PatchGroupMemberships["Dispatch Patch"][0].SystemName);
+            Assert.Contains("1 destination: Alpha Dispatch", group.OneWayDestinationSummary);
         }
         finally
         {

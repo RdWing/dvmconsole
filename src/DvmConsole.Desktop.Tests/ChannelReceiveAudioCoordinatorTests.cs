@@ -728,6 +728,33 @@ public sealed class ChannelReceiveAudioCoordinatorTests
     }
 
     [Fact]
+    public async Task ReportsOutputFailureWithoutWaitingForAnotherTrafficFrame()
+    {
+        var failedBackend = new RecoveringAudioBackend(failWrites: true);
+        await using var coordinator = new ChannelReceiveAudioCoordinator(
+            () => failedBackend,
+            () => new FakeVocoderBackend());
+        var channel = new ChannelViewModel(new ChannelConfiguration
+        {
+            Name = "Dispatch",
+            System = "System 1",
+            Tgid = "100",
+            Mode = "dmr",
+            Slot = 1
+        });
+        var failure = new TaskCompletionSource<ReceiveAudioOutputFailure>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        coordinator.OutputFailed += observed => failure.TrySetResult(observed);
+        await coordinator.StartAsync(channel);
+
+        await coordinator.ProcessAsync(channel, CreateTraffic(100, 0));
+
+        ReceiveAudioOutputFailure observed = await failure.Task.WaitAsync(TimeSpan.FromSeconds(1));
+        Assert.Contains(channel, observed.AffectedChannels);
+        Assert.IsType<IOException>(observed.Exception);
+    }
+
+    [Fact]
     public async Task RouteRecoveryDoesNotInterruptASeparateOutputDevice()
     {
         var failedBackend = new RecoveringAudioBackend(failWrites: true);

@@ -92,6 +92,7 @@ public sealed class ChannelReceiveAudioCoordinator : IAsyncDisposable
     }
 
     public ChannelViewModel? ActiveChannel => activeChannels.FirstOrDefault();
+    public event Action<ReceiveAudioOutputFailure>? OutputFailed;
     public IReadOnlyList<ChannelViewModel> ActiveChannels => activeChannels;
     public IReadOnlyList<ChannelViewModel> LivePlaybackChannels => activeChannels
         .Where(IsLivePlaybackEnabled)
@@ -825,7 +826,9 @@ public sealed class ChannelReceiveAudioCoordinator : IAsyncDisposable
         {
             playback = backend.OpenPlayback(output, PcmAudioFormat.Voice8KhzMono16Bit);
         }
-        var route = new ReceiveAudioRoute(output.Id, backend, new AudioMixer(playback));
+        var mixer = new AudioMixer(playback);
+        var route = new ReceiveAudioRoute(output.Id, backend, mixer);
+        mixer.Faulted += exception => NotifyOutputFailure(route.DeviceId, exception);
         lock (playbackPolicySync)
         {
             if (!routeRegistry.TryAddRoute(route))
@@ -835,6 +838,14 @@ public sealed class ChannelReceiveAudioCoordinator : IAsyncDisposable
         }
         createdRoute = route;
         return route;
+    }
+
+    private void NotifyOutputFailure(string deviceId, Exception exception)
+    {
+        ChannelViewModel[] affectedChannels = routeRegistry.GetSessionsForRoute(deviceId);
+        if (affectedChannels.Length == 0)
+            return;
+        OutputFailed?.Invoke(new ReceiveAudioOutputFailure(deviceId, affectedChannels, exception));
     }
 
     private sealed class ReceiveStreamSessionRegistry : IAsyncDisposable
@@ -1231,3 +1242,8 @@ public sealed record ReceiveRouteRecoveryResult(
     IReadOnlyList<ChannelViewModel> Restarted,
     IReadOnlyList<ChannelViewModel> Failed,
     string? Diagnostic);
+
+public sealed record ReceiveAudioOutputFailure(
+    string DeviceId,
+    IReadOnlyList<ChannelViewModel> AffectedChannels,
+    Exception Exception);

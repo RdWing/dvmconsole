@@ -23,8 +23,14 @@ internal sealed class MixerLaneBuffer(
     public short LastOutputSample { get; set; }
     public long PresentedGapSamples { get; set; }
     public Action<ReadOnlyMemory<short>, TimeSpan>? PresentationObserver { get; set; }
+    public Action<int, TimeSpan>? FrameHandedOff { get; set; }
+    public long AcceptedSamples { get; set; }
+    public long HandedOffSamples { get; set; }
+    public long DrainedSamples { get; set; }
+    public long PlaybackDrainTarget { get; set; }
     public TaskCompletionSource DrainCompletion { get; } =
         new(TaskCreationOptions.RunContinuationsAsynchronously);
+    public TaskCompletionSource<TimeSpan>? PlaybackDrainCompletion { get; set; }
     public bool Disposed { get; set; }
 }
 

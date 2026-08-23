@@ -25,11 +25,16 @@ public sealed partial class MainWindowViewModel
             system,
             traffic,
             receivedTimestamp);
+        ChannelViewModel[] preEnqueuedPatchChannels = EnqueuePriorityPatchAudio(
+            system,
+            traffic,
+            receivedTimestamp);
         var workItem = new SystemTrafficWorkItem(
             traffic,
             receivedAt,
             receivedTimestamp,
-            preEnqueuedAudioChannels);
+            preEnqueuedAudioChannels,
+            preEnqueuedPatchChannels);
         receivePresentation.Present(system, workItem);
     }
 
@@ -43,7 +48,8 @@ public sealed partial class MainWindowViewModel
             publishTrafficDiagnostics,
             workItem.ReceivedAt,
             workItem.PreEnqueuedAudioChannels,
-            workItem.ReceivedTimestamp);
+            workItem.ReceivedTimestamp,
+            workItem.PreEnqueuedPatchChannels);
 
     internal void ProcessTraffic(
         SystemViewModel system,
@@ -51,7 +57,8 @@ public sealed partial class MainWindowViewModel
         bool publishTrafficDiagnostics = true,
         DateTimeOffset? receivedAt = null,
         IReadOnlyList<ChannelViewModel>? preEnqueuedAudioChannels = null,
-        long ingressTimestamp = 0)
+        long ingressTimestamp = 0,
+        IReadOnlyList<ChannelViewModel>? preEnqueuedPatchChannels = null)
     {
         ArgumentNullException.ThrowIfNull(system);
         ArgumentNullException.ThrowIfNull(traffic);
@@ -78,8 +85,10 @@ public sealed partial class MainWindowViewModel
                 continue;
             }
 
-            patchForwarding.ObserveTraffic(channel, traffic);
-            if (patchSourceDecode.IsActive(channel))
+            bool patchAlreadyEnqueued = preEnqueuedPatchChannels?.Contains(channel) == true;
+            if (!patchAlreadyEnqueued)
+                patchForwarding.ObserveTraffic(channel, traffic);
+            if (!patchAlreadyEnqueued && patchSourceDecode.IsActive(channel))
                 activePatchSourceChannels.Add(channel);
 
             if (applied.EndedStreamId is uint endedStreamId)
@@ -404,6 +413,58 @@ public sealed partial class MainWindowViewModel
         }
     }
 
+    private void HandleReceiveAudioOutputFailed(ReceiveAudioOutputFailure failure)
+    {
+        if (Volatile.Read(ref disposeStarted) != 0)
+            return;
+        lock (receiveOutputRecoverySync)
+        {
+            foreach (ChannelViewModel channel in failure.AffectedChannels)
+                proactiveReceiveOutputRecoveries.Add(channel);
+        }
+        TaskObservation.Observe(RecoverFailedReceiveOutputAsync(failure));
+    }
+
+    private async Task RecoverFailedReceiveOutputAsync(ReceiveAudioOutputFailure failure)
+    {
+        try
+        {
+            ChannelViewModel? failedChannel = failure.AffectedChannels
+                .FirstOrDefault(audioCoordinator.IsActive);
+            if (failedChannel is null || Volatile.Read(ref disposeStarted) != 0)
+                return;
+
+            ReceiveRouteRecoveryResult recovery = await RecoverSelectedReceiveAudioAsync(failedChannel)
+                .ConfigureAwait(false);
+            await RunOnUiThreadAsync(() =>
+            {
+                AudioStatusText = recovery.Failed.Count == 0
+                    ? $"RX audio restarted for {recovery.Restarted.Count} selected channel(s) after the output callback stopped."
+                    : recovery.Diagnostic ?? "RX audio unavailable; retrying selected channels.";
+            }).ConfigureAwait(false);
+        }
+        catch (Exception exception) when (Volatile.Read(ref disposeStarted) == 0)
+        {
+            await RunOnUiThreadAsync(() =>
+                AudioStatusText = $"RX audio recovery failed: {exception.Message}")
+                .ConfigureAwait(false);
+        }
+        finally
+        {
+            lock (receiveOutputRecoverySync)
+            {
+                foreach (ChannelViewModel channel in failure.AffectedChannels)
+                    proactiveReceiveOutputRecoveries.Remove(channel);
+            }
+        }
+    }
+
+    private bool IsProactiveReceiveOutputRecoveryRunning(ChannelViewModel channel)
+    {
+        lock (receiveOutputRecoverySync)
+            return proactiveReceiveOutputRecoveries.Contains(channel);
+    }
+
     internal async Task ReconcileReceiveSessionsAsync()
     {
         if (Volatile.Read(ref disposeStarted) != 0)
@@ -610,6 +671,8 @@ public sealed partial class MainWindowViewModel
         {
             if (IsAudioDeviceFailure(exception))
             {
+                if (IsProactiveReceiveOutputRecoveryRunning(channel))
+                    return;
                 ReceiveRouteRecoveryResult recovery = await RecoverSelectedReceiveAudioAsync(channel).ConfigureAwait(false);
                 Dispatcher.UIThread.Post(() =>
                 {
@@ -744,6 +807,51 @@ public sealed partial class MainWindowViewModel
                     channel.MarkReceiveAudioMeterEnded(traffic.StreamId);
                 else
                     channel.MarkReceiveAudioMeterActive(traffic.StreamId);
+            }
+        }
+
+        if (acceptedCount == targets.Length)
+            return targets;
+        if (acceptedCount == 0)
+            return [];
+
+        Array.Resize(ref targets, acceptedCount);
+        return targets;
+    }
+
+    private ChannelViewModel[] EnqueuePriorityPatchAudio(
+        SystemViewModel system,
+        FneTrafficFrame traffic,
+        long ingressTimestamp)
+    {
+        if (!trafficRoutes.TryGetValue(
+                system,
+                out IReadOnlyDictionary<(FneTrafficProtocol Protocol, uint DestinationId), ChannelViewModel[]>? routes))
+        {
+            return [];
+        }
+
+        IReadOnlyList<ChannelViewModel> activeSources = patchSourceDecode.ActiveChannels;
+        ChannelViewModel[] targets = ReceiveAudioTrafficRouter.ResolveTargets(
+            routes,
+            activeSources,
+            traffic,
+            (_, _) => true);
+        if (targets.Length == 0)
+            return [];
+
+        int acceptedCount = 0;
+        foreach (ChannelViewModel channel in targets)
+        {
+            patchForwarding.ObserveTraffic(channel, traffic);
+            patchSourceReceiveWork.Start(channel);
+            if (patchSourceReceiveWork.Enqueue(
+                    channel,
+                    traffic,
+                    ingressTimestamp,
+                    out _))
+            {
+                targets[acceptedCount++] = channel;
             }
         }
 

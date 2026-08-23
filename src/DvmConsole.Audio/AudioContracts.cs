@@ -6,8 +6,10 @@ public enum AudioDirection
     Output
 }
 
-// Portable microphone-capture policy selected by the operator. Platform modes
-// are accepted only by their matching backend; receive playback is unaffected.
+// Portable application-audio policy selected by the operator. Platform modes
+// are accepted only by their matching backend. Apple Voice Processing uses a
+// coordinated full-duplex route; DVM Console and Windows processing retain
+// their platform-specific capture behavior.
 public enum AudioProcessingMode
 {
     DvmConsole,

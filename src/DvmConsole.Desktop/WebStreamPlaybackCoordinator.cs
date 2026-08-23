@@ -209,6 +209,30 @@ public sealed class WebStreamPlaybackCoordinator : IAsyncDisposable
         }
     }
 
+    // Releases the cached backend after all sessions have stopped so an audio
+    // processing-mode change cannot retain a facade for the previous route.
+    public async Task ResetAudioBackendAsync(CancellationToken cancellationToken = default)
+    {
+        IAudioBackend? oldBackend;
+        await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            ObjectDisposedException.ThrowIf(disposed, this);
+            lock (sessions)
+            {
+                if (sessions.Count != 0)
+                    throw new InvalidOperationException("Web-stream playback must stop before its audio route is reset.");
+            }
+            oldBackend = audioBackend;
+            audioBackend = null;
+        }
+        finally
+        {
+            gate.Release();
+        }
+        oldBackend?.Dispose();
+    }
+
     public async ValueTask DisposeAsync()
     {
         PlaybackSession[] oldSessions;

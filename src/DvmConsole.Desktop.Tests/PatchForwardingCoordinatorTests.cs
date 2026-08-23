@@ -113,6 +113,70 @@ public sealed class PatchForwardingCoordinatorTests
     }
 
     [Fact]
+    public void RestartsATargetAfterItsOutboundSessionFails()
+    {
+        (ChannelViewModel source, FakeEndpoint sourceSystem) = Create("Source", 100, 1001);
+        (ChannelViewModel target, FakeEndpoint targetSystem) = Create("Target", 200, 2002);
+        using var coordinator = new PatchForwardingCoordinator([sourceSystem, targetSystem]);
+        coordinator.ApplyMemberships(new Dictionary<string, IReadOnlyList<PatchMemberAddress>>
+        {
+            ["Patch"] = [new("Source", 100), new("Target", 200)]
+        });
+        ObserveVoice(coordinator, source, 77, 7001);
+
+        targetSystem.ThrowOnNextSend = true;
+        coordinator.ObserveDecodedSamples(source, ActiveSamples());
+        coordinator.ObserveDecodedSamples(source, ActiveSamples());
+
+        Assert.Equal(2, targetSystem.Sent.Count);
+        Assert.Equal(
+            (byte)AnalogAudioFrameType.Terminator,
+            targetSystem.Sent[0].Payload[AnalogVoicePacketCodec.FrameTypeOffset]);
+        Assert.Equal(
+            (byte)AnalogAudioFrameType.VoiceStart,
+            targetSystem.Sent[1].Payload[AnalogVoicePacketCodec.FrameTypeOffset]);
+    }
+
+    [Fact]
+    public void DisablingActivePatchEndsItsTargetAndDoesNotCascadeIntoAnotherPatch()
+    {
+        (ChannelViewModel firstSource, FakeEndpoint firstSystem) = Create("First", 100, 1001);
+        (ChannelViewModel sharedMember, FakeEndpoint sharedSystem) = Create("Shared", 200, 2002);
+        (_, FakeEndpoint secondTargetSystem) = Create("SecondTarget", 300, 3003);
+        using var coordinator = new PatchForwardingCoordinator(
+            [firstSystem, sharedSystem, secondTargetSystem]);
+        var oneWayModes = new Dictionary<string, bool>
+        {
+            ["First patch"] = true,
+            ["Second patch"] = true
+        };
+        coordinator.ApplyMemberships(
+            new Dictionary<string, IReadOnlyList<PatchMemberAddress>>
+            {
+                ["First patch"] = [new("First", 100), new("Shared", 200)],
+                ["Second patch"] = [new("Shared", 200), new("SecondTarget", 300)]
+            },
+            oneWayModes);
+        ObserveVoice(coordinator, firstSource, 77, 7001);
+        coordinator.ObserveDecodedSamples(firstSource, 77, 7001, ActiveSamples());
+
+        coordinator.ApplyMemberships(
+            new Dictionary<string, IReadOnlyList<PatchMemberAddress>>
+            {
+                ["Second patch"] = [new("Shared", 200), new("SecondTarget", 300)]
+            },
+            oneWayModes);
+        ObserveVoice(coordinator, sharedMember, 900, 7002);
+        coordinator.ObserveDecodedSamples(sharedMember, 900, 7002, ActiveSamples());
+
+        Assert.Equal(2, sharedSystem.Sent.Count);
+        Assert.Equal(
+            (byte)AnalogAudioFrameType.Terminator,
+            sharedSystem.Sent[1].Payload[AnalogVoicePacketCodec.FrameTypeOffset]);
+        Assert.Empty(secondTargetSystem.Sent);
+    }
+
+    [Fact]
     public void ForwardsDecodedAudioToNxdnTargetLifecycle()
     {
         (ChannelViewModel source, FakeEndpoint sourceSystem) = Create("Source", 100, 1001);
@@ -176,9 +240,18 @@ public sealed class PatchForwardingCoordinatorTests
         public bool IsConnected => connected;
         public uint? SourceId => sourceId;
         public List<(FneTrafficProtocol Protocol, byte[] Payload)> Sent { get; } = [];
+        public bool ThrowOnNextSend { get; set; }
         public uint CreateStreamId() => ++streamId;
         public void SendTraffic(FneTrafficProtocol protocol, ReadOnlySpan<byte> payload, ushort sequence, uint outboundStreamId)
-            => Sent.Add((protocol, payload.ToArray()));
+        {
+            if (ThrowOnNextSend)
+            {
+                ThrowOnNextSend = false;
+                throw new IOException("Simulated patch transport interruption.");
+            }
+
+            Sent.Add((protocol, payload.ToArray()));
+        }
     }
 
     private sealed class FakeVocoderBackend : IVocoderBackend

@@ -31,10 +31,8 @@ public sealed class PatchRoutingTable
     private readonly object sync = new();
     private readonly IPatchForwardingSink sink;
     private readonly TimeProvider timeProvider;
+    private readonly PatchLoopSuppression loopSuppression;
     private readonly Dictionary<string, GroupState> groups = new(StringComparer.OrdinalIgnoreCase);
-    private readonly HashSet<string> outboundStreams = new(StringComparer.OrdinalIgnoreCase);
-    private readonly Dictionary<string, DateTimeOffset> recentlyEndedOutboundStreams = new(StringComparer.OrdinalIgnoreCase);
-    private readonly HashSet<string> activeTargetKeys = new(StringComparer.OrdinalIgnoreCase);
     private bool sourceIdPassthrough;
     private int membershipGeneration;
 
@@ -42,8 +40,11 @@ public sealed class PatchRoutingTable
         Func<PatchMemberAddress, uint, uint> beginCall,
         Action<PatchMemberAddress, uint, uint> endCall,
         Action<PatchMemberAddress, uint, ReadOnlyMemory<short>, uint> sendAudio,
-        Func<PatchMemberAddress, uint> fallbackSourceId)
-        : this(new DelegatePatchForwardingSink(beginCall, endCall, sendAudio, fallbackSourceId))
+        Func<PatchMemberAddress, uint> fallbackSourceId,
+        TimeProvider? timeProvider = null)
+        : this(
+            new DelegatePatchForwardingSink(beginCall, endCall, sendAudio, fallbackSourceId),
+            timeProvider)
     {
     }
 
@@ -53,6 +54,7 @@ public sealed class PatchRoutingTable
     {
         this.sink = sink ?? throw new ArgumentNullException(nameof(sink));
         this.timeProvider = timeProvider ?? TimeProvider.System;
+        loopSuppression = new PatchLoopSuppression(this.timeProvider, LatePacketSuppressWindow);
     }
 
     public bool SourceIdPassthrough
@@ -86,6 +88,7 @@ public sealed class PatchRoutingTable
             memberships,
             oneWayModes);
         List<ForwardTarget> stops;
+        HashSet<string> explicitlyReconfiguredSourceKeys = new(StringComparer.OrdinalIgnoreCase);
 
         lock (sync)
         {
@@ -96,10 +99,22 @@ public sealed class PatchRoutingTable
             stops = [];
             foreach (string groupName in groups.Keys
                 .Where(name => !incoming.ContainsKey(name) ||
-                              !PatchMembershipPolicy.MembersEqual(groups[name].Members, incoming[name].Members) ||
-                              groups[name].OneWay != incoming[name].OneWay)
+                              !PatchMembershipPolicy.RoutingEqual(groups[name].Membership, incoming[name]))
                 .ToArray())
             {
+                if (incoming.TryGetValue(groupName, out PatchGroupMembership? replacement) &&
+                    replacement.OneWay &&
+                    replacement.Members.Count > 0 &&
+                    groups[groupName].OneWay &&
+                    groups[groupName].Members.Count > 0 &&
+                    !string.Equals(
+                        groups[groupName].Members[0].Key,
+                        replacement.Members[0].Key,
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    explicitlyReconfiguredSourceKeys.Add(replacement.Members[0].Key);
+                }
+
                 CollectAndClearStops(groups[groupName], stops);
                 groups.Remove(groupName);
             }
@@ -109,6 +124,9 @@ public sealed class PatchRoutingTable
                 if (!groups.ContainsKey(groupName))
                     groups[groupName] = new GroupState(membership);
             }
+
+            foreach (string sourceKey in explicitlyReconfiguredSourceKeys)
+                loopSuppression.AllowReconfiguredSource(sourceKey);
         }
 
         EndTargets(stops);
@@ -117,13 +135,16 @@ public sealed class PatchRoutingTable
     public void HandleCallStart(PatchMemberAddress source, uint streamId, uint sourceId)
     {
         ArgumentNullException.ThrowIfNull(source);
-        if (streamId == 0 || IsPatchedTransmitStream(source, streamId))
+        if (streamId == 0)
             return;
 
         List<StartRequest> starts = [];
         List<ForwardTarget> stops = [];
         lock (sync)
         {
+            if (loopSuppression.ShouldSuppressInbound(source, streamId))
+                return;
+
             DateTimeOffset now = timeProvider.GetUtcNow();
             foreach (GroupState group in groups.Values.Where(group => IsEligibleSource(group, source)))
             {
@@ -158,13 +179,16 @@ public sealed class PatchRoutingTable
         ReadOnlyMemory<short> samples)
     {
         ArgumentNullException.ThrowIfNull(source);
-        if (streamId == 0 || samples.IsEmpty || IsPatchedTransmitStream(source, streamId))
+        if (streamId == 0 || samples.IsEmpty)
             return;
 
         List<StartRequest> starts = [];
         List<ForwardTarget> stops = [];
         lock (sync)
         {
+            if (loopSuppression.ShouldSuppressInbound(source, streamId))
+                return;
+
             DateTimeOffset now = timeProvider.GetUtcNow();
             foreach (GroupState group in groups.Values.Where(group => IsEligibleSource(group, source)))
             {
@@ -176,7 +200,6 @@ public sealed class PatchRoutingTable
                         CollectAndClearStops(group, stops);
 
                     group.Source = new ActiveSource(source.Key, streamId, sourceId, sourceId != 0, now);
-                    AddStartRequests(group, starts);
                 }
 
                 if (group.Source.SourceKey != source.Key || group.Source.StreamId != streamId)
@@ -243,18 +266,47 @@ public sealed class PatchRoutingTable
             return false;
 
         lock (sync)
-        {
-            CleanupExpiredSuppression();
-            string key = BuildStreamKey(member, streamId);
-            return outboundStreams.Contains(key) || recentlyEndedOutboundStreams.ContainsKey(key);
-        }
+            return loopSuppression.ShouldSuppressInbound(member, streamId);
     }
 
     public bool IsForwardTargetActive(PatchMemberAddress member)
     {
         ArgumentNullException.ThrowIfNull(member);
         lock (sync)
-            return activeTargetKeys.Contains(member.Key);
+            return loopSuppression.IsTargetActive(member);
+    }
+
+    // Releases router state after the host loses an outbound encoder or
+    // transport session. The next source audio block can then establish a
+    // fresh target instead of remaining attached to a dead session.
+    public bool ReportTargetFailure(PatchMemberAddress member, uint streamId)
+    {
+        ArgumentNullException.ThrowIfNull(member);
+        if (streamId == 0)
+            return false;
+
+        int removedTargetCount = 0;
+        lock (sync)
+        {
+            foreach (GroupState group in groups.Values)
+            {
+                if (!group.ActiveTargets.TryGetValue(member.Key, out ForwardTarget? target) ||
+                    target.StreamId != streamId)
+                {
+                    continue;
+                }
+
+                group.ActiveTargets.Remove(member.Key);
+                removedTargetCount++;
+            }
+
+            if (removedTargetCount == 0)
+                return false;
+
+            loopSuppression.ReleaseTarget(member, streamId, removedTargetCount);
+        }
+
+        return true;
     }
 
     public int CleanupStaleSources()
@@ -305,9 +357,7 @@ public sealed class PatchRoutingTable
                         start.Member,
                         streamId,
                         outboundSourceId);
-                    outboundStreams.Add(BuildStreamKey(start.Member, streamId));
-                    recentlyEndedOutboundStreams.Remove(BuildStreamKey(start.Member, streamId));
-                    activeTargetKeys.Add(start.Member.Key);
+                    loopSuppression.ActivateTarget(start.Member, streamId);
                     accepted = true;
                 }
             }
@@ -348,10 +398,7 @@ public sealed class PatchRoutingTable
         foreach (ForwardTarget target in group.ActiveTargets.Values)
         {
             stops.Add(target);
-            string streamKey = BuildStreamKey(target.Member, target.StreamId);
-            outboundStreams.Remove(streamKey);
-            recentlyEndedOutboundStreams[streamKey] = timeProvider.GetUtcNow() + LatePacketSuppressWindow;
-            activeTargetKeys.Remove(target.Member.Key);
+            loopSuppression.ReleaseTarget(target.Member, target.StreamId);
         }
 
         group.ActiveTargets.Clear();
@@ -365,8 +412,7 @@ public sealed class PatchRoutingTable
         foreach ((string name, PatchGroupMembership membership) in incoming)
         {
             if (!groups.TryGetValue(name, out GroupState? existing) ||
-                existing.OneWay != membership.OneWay ||
-                !PatchMembershipPolicy.MembersEqual(existing.Members, membership.Members))
+                !PatchMembershipPolicy.RoutingEqual(existing.Membership, membership))
             {
                 return false;
             }
@@ -381,29 +427,17 @@ public sealed class PatchRoutingTable
     private static bool IsSourceStale(ActiveSource source, DateTimeOffset now)
         => now - source.LastActivityUtc > LatePacketSuppressWindow;
 
-    private void CleanupExpiredSuppression()
-    {
-        DateTimeOffset now = timeProvider.GetUtcNow();
-        foreach (string key in recentlyEndedOutboundStreams
-            .Where(entry => entry.Value <= now)
-            .Select(entry => entry.Key)
-            .ToArray())
-        {
-            recentlyEndedOutboundStreams.Remove(key);
-        }
-    }
-
-    private static string BuildStreamKey(PatchMemberAddress member, uint streamId)
-        => $"{member.Key}|{streamId}";
-
     private sealed class GroupState
     {
         public GroupState(PatchGroupMembership membership)
         {
+            Membership = membership;
             GroupName = membership.GroupName;
             Members = membership.Members;
             OneWay = membership.OneWay;
         }
+
+        public PatchGroupMembership Membership { get; }
 
         public string GroupName { get; }
         public IReadOnlyList<PatchMemberAddress> Members { get; }

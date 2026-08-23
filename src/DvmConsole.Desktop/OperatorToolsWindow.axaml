@@ -403,6 +403,11 @@
           <StackPanel Spacing="10">
             <TextBlock Classes="heading" Text="Patch and Multi-select Groups" />
             <ItemsControl ItemsSource="{Binding PatchGroups}">
+              <ItemsControl.ItemsPanel>
+                <ItemsPanelTemplate>
+                  <WrapPanel Orientation="Horizontal" ItemWidth="520" ItemSpacing="10" LineSpacing="10" />
+                </ItemsPanelTemplate>
+              </ItemsControl.ItemsPanel>
               <ItemsControl.ItemTemplate>
                 <DataTemplate x:DataType="local:PatchGroupEditorViewModel">
                   <Border Classes="panel">
@@ -414,23 +419,38 @@
                         </StackPanel>
                         <Button Grid.Column="1" IsVisible="{Binding IsMultiSelect}" Content="{Binding PttButtonText}" Tag="{Binding}" Click="HandleMultiSelectPttClick" />
                       </Grid>
-                      <Border IsVisible="{Binding HasConflicts}" Background="#4A2C16" BorderBrush="#B86B2B" BorderThickness="1" CornerRadius="4" Padding="8">
+                      <Border IsVisible="{Binding HasConflicts}" HorizontalAlignment="Left" Background="#4A2C16" BorderBrush="#B86B2B" BorderThickness="1" CornerRadius="4" Padding="8">
                         <TextBlock Text="{Binding ConflictSummary}" TextWrapping="Wrap" />
                       </Border>
                       <StackPanel Orientation="Horizontal" Spacing="12" IsVisible="{Binding IsPatchGroup}">
                         <CheckBox Content="Enabled" IsChecked="{Binding IsEnabled, Mode=TwoWay}" />
                         <CheckBox Content="One-way" IsChecked="{Binding IsOneWay, Mode=TwoWay}" />
                       </StackPanel>
-                      <ItemsControl ItemsSource="{Binding Members}">
-                        <ItemsControl.ItemTemplate>
-                          <DataTemplate x:DataType="local:PatchMemberEditorViewModel">
-                            <StackPanel Spacing="1">
-                              <CheckBox Content="{Binding DisplayName}" IsChecked="{Binding IsMember, Mode=TwoWay}" IsEnabled="{Binding CanTransmit}" />
-                              <TextBlock Classes="caption" IsVisible="{Binding HasConflict}" Text="{Binding ConflictText}" Margin="24,0,0,3" />
-                            </StackPanel>
-                          </DataTemplate>
-                        </ItemsControl.ItemTemplate>
-                      </ItemsControl>
+                      <StackPanel Spacing="4" IsVisible="{Binding IsOneWay}">
+                        <Grid ColumnDefinitions="Auto,*" ColumnSpacing="8">
+                          <TextBlock VerticalAlignment="Center" Text="Source" />
+                          <ComboBox Grid.Column="1" ItemsSource="{Binding SourceOptions}" SelectedItem="{Binding SelectedSource, Mode=TwoWay}">
+                            <ComboBox.ItemTemplate>
+                              <DataTemplate x:DataType="local:PatchMemberEditorViewModel">
+                                <TextBlock Text="{Binding DisplayName}" TextTrimming="CharacterEllipsis" />
+                              </DataTemplate>
+                            </ComboBox.ItemTemplate>
+                          </ComboBox>
+                        </Grid>
+                        <TextBlock Classes="caption" Text="{Binding OneWayDestinationSummary}" TextWrapping="Wrap" />
+                      </StackPanel>
+                      <Expander Header="{Binding MemberEditorHeader}">
+                        <ItemsControl ItemsSource="{Binding Members}" Margin="0,6,0,0">
+                          <ItemsControl.ItemTemplate>
+                            <DataTemplate x:DataType="local:PatchMemberEditorViewModel">
+                              <StackPanel Spacing="1">
+                                <CheckBox Content="{Binding DisplayName}" IsChecked="{Binding IsMember, Mode=TwoWay}" IsEnabled="{Binding IsSelectionEnabled}" />
+                                <TextBlock Classes="caption" IsVisible="{Binding HasConflict}" Text="{Binding ConflictText}" Margin="24,0,0,3" />
+                              </StackPanel>
+                            </DataTemplate>
+                          </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                      </Expander>
                       <Button HorizontalAlignment="Left" Content="Save group" Tag="{Binding}" Click="HandleApplyPatchGroupClick" />
                     </StackPanel>
                   </Border>

@@ -109,9 +109,11 @@ DVM Console provides mutually exclusive microphone processing modes:
 - **DVM Console processing** applies the console gain, equalizer, and optional
   automatic gain control after capture.
 - **Apple voice processing** uses Apple's full-duplex Voice Processing I/O for
-  acoustic echo cancellation and automatic gain control. DVM Console gain,
-  equalizer, and AGC are bypassed in this mode so the signal is not processed
-  twice.
+  acoustic echo cancellation and automatic gain control. Receive audio, local
+  cues, web streams, recording playback, and transmit capture share that one
+  physical route, giving Apple processing the application playback it needs as
+  its echo-cancellation reference. DVM Console gain, equalizer, and AGC are
+  bypassed in this mode so the microphone signal is not processed twice.
 
 - **Windows communications processing** requests the communications effects
   supplied by Windows, the selected audio driver, and the endpoint. Depending on
@@ -132,8 +134,10 @@ devices. Use DVM Console processing when the microphone and speaker are separate
 non-default devices.
 
 Applying a different main route or processing mode automatically restarts every
-active listening channel. The operator does not need to turn each card off and
-on manually.
+active listening channel and web stream around the route change. Active
+recording-file playback stops rather than carrying an obsolete backend into the
+new route. The operator does not need to turn each channel card off and on
+manually. Stop transmitting before applying a route or processing-mode change.
 
 The **Automatic gain control** checkbox controls the DVM Console microphone AGC
 path.

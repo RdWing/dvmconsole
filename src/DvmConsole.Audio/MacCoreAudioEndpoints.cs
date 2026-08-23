@@ -1,4 +1,5 @@
 using System.Buffers;
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 
 namespace DvmConsole.Audio;
@@ -374,12 +375,32 @@ internal sealed class MacVoiceProcessingPlayback :
     IAudioPlaybackContinuityDiagnostics,
     IAudioPlaybackCallbackDiagnostics
 {
-    private readonly VoiceProcessingSession session;
+    private static readonly TimeSpan DefaultWriteNoProgressTimeout = TimeSpan.FromSeconds(2);
+    private readonly IVoiceProcessingPlaybackSession session;
+    private readonly Action releaseSession;
+    private readonly TimeSpan writeNoProgressTimeout;
     private bool disposed;
 
     public MacVoiceProcessingPlayback(VoiceProcessingSession session, PcmAudioFormat format)
+        : this(
+            session,
+            format,
+            () => VoiceProcessingSessionRegistry.Release(session, VoiceEndpoint.Playback),
+            DefaultWriteNoProgressTimeout)
     {
-        this.session = session;
+    }
+
+    internal MacVoiceProcessingPlayback(
+        IVoiceProcessingPlaybackSession session,
+        PcmAudioFormat format,
+        Action? releaseSession = null,
+        TimeSpan? writeNoProgressTimeout = null)
+    {
+        this.session = session ?? throw new ArgumentNullException(nameof(session));
+        this.releaseSession = releaseSession ?? (() => { });
+        this.writeNoProgressTimeout = writeNoProgressTimeout ?? DefaultWriteNoProgressTimeout;
+        if (this.writeNoProgressTimeout <= TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(nameof(writeNoProgressTimeout));
         Format = format;
         try
         {
@@ -387,7 +408,7 @@ internal sealed class MacVoiceProcessingPlayback :
         }
         catch
         {
-            VoiceProcessingSessionRegistry.Release(session, VoiceEndpoint.Playback);
+            this.releaseSession();
             throw;
         }
     }
@@ -420,6 +441,7 @@ internal sealed class MacVoiceProcessingPlayback :
             buffer = samples.ToArray();
         }
         int offset = 0;
+        long lastProgress = Stopwatch.GetTimestamp();
         while (offset < buffer.Length)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -428,8 +450,19 @@ internal sealed class MacVoiceProcessingPlayback :
             if (written < 0)
                 MacCoreAudioBackend.EnsureSuccess(written, "write Apple voice-processing playback");
             offset += written;
-            if (written == 0)
+            if (written > 0)
+            {
+                lastProgress = Stopwatch.GetTimestamp();
+            }
+            else
+            {
+                if (Stopwatch.GetElapsedTime(lastProgress) >= writeNoProgressTimeout)
+                {
+                    throw new IOException(
+                        "Apple voice-processing output stopped consuming audio for two seconds.");
+                }
                 await Task.Delay(2, cancellationToken).ConfigureAwait(false);
+            }
         }
     }
 
@@ -467,7 +500,7 @@ internal sealed class MacVoiceProcessingPlayback :
             }
             finally
             {
-                VoiceProcessingSessionRegistry.Release(session, VoiceEndpoint.Playback);
+                releaseSession();
                 disposed = true;
             }
         }

@@ -98,6 +98,16 @@ internal sealed class ReceiveAudioRouteRegistry
             return sessionRouteSnapshots.ContainsKey(deviceId);
     }
 
+    public ChannelViewModel[] GetSessionsForRoute(string deviceId)
+    {
+        lock (sessionRouteSync)
+        {
+            return sessionRouteSnapshots.TryGetValue(deviceId, out ChannelViewModel[]? snapshot)
+                ? snapshot.ToArray()
+                : [];
+        }
+    }
+
     // Called while the coordinator gate is held.
     public ChannelViewModel[] SelectSystemDefaultSessions(
         Func<ChannelViewModel, bool> isActive)
