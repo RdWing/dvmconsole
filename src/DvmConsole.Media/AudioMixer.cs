@@ -83,6 +83,7 @@ public sealed class AudioMixer : IAsyncDisposable
     private readonly short[] silentInputFrame;
     private readonly bool supportsBufferedPlayout;
     private readonly IAudioPlaybackCallbackDiagnostics? callbackDiagnostics;
+    private readonly IPhysicalAudioOutputDiagnosticsSource? routedOutputDiagnostics;
     private int nextChannelId;
     private int targetOutputBufferedFrames = NormalOutputBufferedFrames;
     private long recoveryHoldUntilTimestamp;
@@ -106,7 +107,8 @@ public sealed class AudioMixer : IAsyncDisposable
         outputFrameSamples = checked(frameSamples * output.Format.Channels);
         supportsBufferedPlayout = output.QueuedSamples is not null;
         callbackDiagnostics = output as IAudioPlaybackCallbackDiagnostics;
-        lastOutputCallbackCount = callbackDiagnostics?.OutputCallbackCount ?? 0;
+        routedOutputDiagnostics = output as IPhysicalAudioOutputDiagnosticsSource;
+        lastOutputCallbackCount = ReadPhysicalOutputDiagnostics().OutputCallbackCount ?? 0;
         lastOutputCallbackTimestamp = Stopwatch.GetTimestamp();
         startupBufferedFrames = !supportsBufferedPlayout
             ? 1
@@ -155,23 +157,19 @@ public sealed class AudioMixer : IAsyncDisposable
 
     public AudioMixerDiagnostics GetDiagnostics()
     {
-        TimeSpan? physicalOutputStarvation =
-            (output as IAudioPlaybackContinuityDiagnostics)?.StarvedDuration;
-        TimeSpan? pendingPhysicalOutputStarvation =
-            (output as IAudioPlaybackContinuityDiagnostics)?.PendingStarvedDuration;
-        long? outputCallbackCount = callbackDiagnostics?.OutputCallbackCount;
+        PhysicalAudioOutputDiagnostics physical = ReadPhysicalOutputDiagnostics();
         lock (sync)
         {
-            TimeSpan? outputCallbackAge = callbackDiagnostics is null
+            TimeSpan? outputCallbackAge = physical.OutputCallbackCount is null
                 ? null
                 : Stopwatch.GetElapsedTime(lastOutputCallbackTimestamp);
             return diagnostics.Snapshot(
                 startupBufferedFrames,
                 MaximumBufferedFrames,
                 targetOutputBufferedFrames,
-                physicalOutputStarvation,
-                pendingPhysicalOutputStarvation,
-                outputCallbackCount,
+                physical.StarvedDuration,
+                physical.PendingStarvedDuration,
+                physical.OutputCallbackCount,
                 outputCallbackAge);
         }
     }
@@ -342,7 +340,17 @@ public sealed class AudioMixer : IAsyncDisposable
         }
 
         if (output.QueuedSamples is not int queuedSamples)
+        {
+            bool unbufferedPlaybackExpected;
+            lock (sync)
+            {
+                unbufferedPlaybackExpected = HasReadyFramesLocked() ||
+                    ExpectsMoreLiveInputLocked() ||
+                    outputWasPrimed;
+            }
+            ObserveOutputCallbackHealth(unbufferedPlaybackExpected);
             return 1;
+        }
 
         long now = Stopwatch.GetTimestamp();
         int targetFrames;
@@ -726,11 +734,12 @@ public sealed class AudioMixer : IAsyncDisposable
 
     private void ObserveOutputCallbackHealth(bool expectsPlayback)
     {
-        if (callbackDiagnostics is null)
+        long? observedCallbackCount = ReadPhysicalOutputDiagnostics().OutputCallbackCount;
+        if (observedCallbackCount is null)
             return;
 
         long now = Stopwatch.GetTimestamp();
-        long callbackCount = callbackDiagnostics.OutputCallbackCount;
+        long callbackCount = observedCallbackCount.Value;
         lock (sync)
         {
             if (callbackCount != lastOutputCallbackCount)
@@ -753,6 +762,19 @@ public sealed class AudioMixer : IAsyncDisposable
                     "The physical audio output callback stopped advancing while live playback was active.");
             }
         }
+    }
+
+    private PhysicalAudioOutputDiagnostics ReadPhysicalOutputDiagnostics()
+    {
+        if (routedOutputDiagnostics is not null)
+            return routedOutputDiagnostics.GetPhysicalOutputDiagnostics();
+
+        IAudioPlaybackContinuityDiagnostics? continuity =
+            output as IAudioPlaybackContinuityDiagnostics;
+        return new PhysicalAudioOutputDiagnostics(
+            continuity?.StarvedDuration,
+            continuity?.PendingStarvedDuration,
+            callbackDiagnostics?.OutputCallbackCount);
     }
 
     private static void SmoothCorrectedBoundary(MixerLaneBuffer channel, short[] source)
@@ -968,11 +990,21 @@ public sealed class AudioMixer : IAsyncDisposable
         ILiveAudioPlaybackControl,
         IAudioPlaybackPresentationSource,
         IAudioGainControl,
-        IAudioBalanceControl
+        IAudioBalanceControl,
+        IPhysicalAudioOutputDiagnosticsSource
     {
         private bool disposed;
 
         public PcmAudioFormat Format => owner.Format;
+
+        public PhysicalAudioOutputDiagnostics GetPhysicalOutputDiagnostics()
+        {
+            AudioMixerDiagnostics current = owner.GetDiagnostics();
+            return new PhysicalAudioOutputDiagnostics(
+                current.PhysicalOutputStarvation,
+                current.PendingPhysicalOutputStarvation,
+                current.PhysicalOutputCallbackCount);
+        }
 
         public bool LivePlaybackEnabled
         {

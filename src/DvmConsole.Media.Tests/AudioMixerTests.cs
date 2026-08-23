@@ -186,6 +186,57 @@ public sealed class AudioMixerTests
     }
 
     [Fact]
+    public async Task SharedLanePropagatesPhysicalHealthWithoutOwningTheDeviceQueue()
+    {
+        var physicalOutput = new ObservablePhysicalPlayback
+        {
+            StarvedDuration = TimeSpan.FromMilliseconds(40),
+            PendingStarvedDuration = TimeSpan.FromMilliseconds(20),
+            OutputCallbackCount = 17
+        };
+        await using var sharedMixer = new AudioMixer(physicalOutput);
+        await using IAudioPlayback sharedLane = sharedMixer.OpenChannel();
+        await using var clientMixer = new AudioMixer(sharedLane);
+
+        AudioMixerDiagnostics diagnostics = clientMixer.GetDiagnostics();
+
+        Assert.Equal(TimeSpan.FromMilliseconds(40), diagnostics.PhysicalOutputStarvation);
+        Assert.Equal(TimeSpan.FromMilliseconds(20), diagnostics.PendingPhysicalOutputStarvation);
+        Assert.Equal(17, diagnostics.PhysicalOutputCallbackCount);
+        Assert.Null(sharedLane.QueuedSamples);
+        Assert.False(sharedLane is IAudioPlaybackContinuityDiagnostics);
+    }
+
+    [Fact]
+    public async Task ClientMixerDetectsAStalledPhysicalCallbackAcrossASharedLane()
+    {
+        var physicalOutput = new StalledCallbackPlayback();
+        var sharedMixer = new AudioMixer(physicalOutput);
+        IAudioPlayback sharedLane = sharedMixer.OpenChannel();
+        var clientMixer = new AudioMixer(sharedLane);
+        IAudioPlayback clientLane = clientMixer.OpenChannel();
+        var faulted = new TaskCompletionSource<Exception>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        clientMixer.Faulted += exception => faulted.TrySetResult(exception);
+        try
+        {
+            await clientLane.WriteAsync(
+                Enumerable.Repeat((short)500, 4 * 160).ToArray());
+
+            Exception observed = await faulted.Task.WaitAsync(TimeSpan.FromSeconds(3));
+
+            Assert.IsType<IOException>(observed);
+        }
+        finally
+        {
+            await clientLane.DisposeAsync();
+            await clientMixer.DisposeAsync();
+            await sharedLane.DisposeAsync();
+            await sharedMixer.DisposeAsync();
+        }
+    }
+
+    [Fact]
     public async Task StopsTheMixerWhenThePhysicalOutputCallbackStalls()
     {
         var output = new StalledCallbackPlayback();
@@ -601,6 +652,36 @@ public sealed class AudioMixerTests
             => ValueTask.CompletedTask;
 
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
+    private sealed class ObservablePhysicalPlayback :
+        IAudioPlayback,
+        IAudioPlaybackContinuityDiagnostics,
+        IAudioPlaybackCallbackDiagnostics
+    {
+        public PcmAudioFormat Format => PcmAudioFormat.Voice8KhzMono16Bit;
+        public int? QueuedSamples => 0;
+        public TimeSpan StarvedDuration { get; init; }
+        public TimeSpan PendingStarvedDuration { get; init; }
+        public long OutputCallbackCount { get; init; }
+
+        public void EndExpectedPlayback()
+        {
+        }
+
+        public ValueTask WriteAsync(
+            ReadOnlyMemory<short> samples,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return ValueTask.CompletedTask;
+        }
+
+        public ValueTask FlushAsync(CancellationToken cancellationToken = default)
+            => ValueTask.CompletedTask;
+
+        public ValueTask DisposeAsync()
+            => ValueTask.CompletedTask;
     }
 
     private sealed class BlockingDrainPlayback : IAudioPlayback

@@ -153,6 +153,19 @@ public interface IAudioPlaybackCallbackDiagnostics
     long OutputCallbackCount { get; }
 }
 
+// Read-only physical-output health that can cross an intermediate shared
+// mixer. Individual mixer lanes may observe the device, but only the mixer
+// that owns the physical playback endpoint controls continuity or queue depth.
+public readonly record struct PhysicalAudioOutputDiagnostics(
+    TimeSpan? StarvedDuration,
+    TimeSpan? PendingStarvedDuration,
+    long? OutputCallbackCount);
+
+public interface IPhysicalAudioOutputDiagnosticsSource
+{
+    PhysicalAudioOutputDiagnostics GetPhysicalOutputDiagnostics();
+}
+
 public interface IAudioGainControl
 {
     double Gain { get; set; }

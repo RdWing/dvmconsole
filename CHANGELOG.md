@@ -24,7 +24,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Release failed outbound patch sessions from router state so the next source audio block can establish a fresh destination call instead of leaving the patch keyed but silent.
 - Rebuild an active one-way route when only its selected source changes, and avoid issuing duplicate destination-start requests when decoded audio arrives before an explicit call-start observation.
 - End active destination sessions when a patch is disabled and suppress rewritten or delayed FNE echoes through teardown so an overlapping member cannot cascade that audio into another patch. Preserve isolation reference counts when multiple active patches target the same member.
-- Prevent Apple Voice Processing and ordinary CoreAudio outputs from competing for the same device, including while the microphone is kept warm. Fail stalled voice-output writes promptly, restart failed receive routes without waiting for another traffic frame, and observe mixer failures without unobserved-task crash records.
+- Prevent Apple Voice Processing and ordinary CoreAudio outputs from competing for the same device, including while the microphone is kept warm. Fail stalled voice-output writes promptly, carry physical callback and starvation health through shared mixer lanes, restart failed receive routes without waiting for another traffic frame, and observe mixer failures without unobserved-task crash records.
 - Bound application shutdown so a CoreAudio teardown that does not return cannot leave DVM Console open indefinitely after Quit.
 
 ## [0.3.6] - 2026-08-22
