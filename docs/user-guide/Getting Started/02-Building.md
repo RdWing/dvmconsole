@@ -129,7 +129,7 @@ connection is required.
 
 # Tagged Releases
 
-Pushing a version tag such as `v0.3.5` starts the macOS and Windows test and packaging matrix. Both native macOS rows smoke the packaged application bundle, and the Windows row runs the Avalonia headful smoke test. The workflow publishes a GitHub release only after all three target jobs pass and attaches the three versioned ZIP files. Release notes must be supplied in `docs/releases/v<version>.md` before the tag is pushed.
+Pushing a version tag such as `v0.3.6` starts the macOS and Windows test and packaging matrix. Both native macOS rows smoke the packaged application bundle, and the Windows row runs the Avalonia headful smoke test. The workflow publishes a GitHub release only after all three target jobs pass and attaches the three versioned ZIP files. Release notes must be supplied in `docs/releases/v<version>.md` before the tag is pushed.
 
 ---
 
