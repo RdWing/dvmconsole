@@ -35,4 +35,16 @@ public sealed class AudioBackendFactoryTests
 
         Assert.Contains("Apple voice processing", exception.Message, StringComparison.OrdinalIgnoreCase);
     }
+
+    [Fact]
+    public void RejectsWindowsCommunicationsProcessingOutsideWindows()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        PlatformNotSupportedException exception = Assert.Throws<PlatformNotSupportedException>(() =>
+            AudioBackendFactory.CreateDefault(processingMode: AudioProcessingMode.WindowsCommunications));
+
+        Assert.Contains("Windows communications processing", exception.Message, StringComparison.OrdinalIgnoreCase);
+    }
 }

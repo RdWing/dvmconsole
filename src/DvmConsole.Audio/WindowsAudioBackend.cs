@@ -1,29 +1,134 @@
-using NAudio.Wave;
 using NAudio.CoreAudioApi;
-using System.Buffers;
-using System.Runtime.InteropServices;
+using System.Runtime.Versioning;
 
 namespace DvmConsole.Audio;
 
-// Windows audio backend using NAudio's WinMM wave input/output adapters.
-// The managed contract remains independent of NAudio and the implementation
-// is only constructible on Windows.
+// Windows platform adapter. Endpoint discovery and stream implementations are
+// kept separate so routing policy remains independent of the WASAPI mechanics.
+[SupportedOSPlatform("windows")]
 public sealed class WindowsAudioBackend : IAudioBackend, IDefaultAudioDeviceIdentityProvider
 {
-    private const string DefaultDeviceId = "default";
-    private const int PlaybackLatencyMilliseconds = 80;
-    private const int PlaybackBufferCount = 4;
+    private readonly WindowsWasapiDeviceCatalog devices = new();
+    private readonly AudioProcessingMode processingMode;
 
-    public WindowsAudioBackend()
+    public WindowsAudioBackend(AudioProcessingMode processingMode = AudioProcessingMode.DvmConsole)
     {
         if (!OperatingSystem.IsWindows())
             throw new PlatformNotSupportedException("WindowsAudioBackend requires Windows.");
+        if (processingMode == AudioProcessingMode.AppleVoiceProcessing)
+            throw new PlatformNotSupportedException("Apple voice processing requires an Apple audio backend.");
+        if (processingMode is not AudioProcessingMode.DvmConsole and not AudioProcessingMode.WindowsCommunications)
+            throw new ArgumentOutOfRangeException(nameof(processingMode));
+
+        this.processingMode = processingMode;
     }
 
-    public string Name => "Windows NAudio";
+    public string Name => "Windows WASAPI";
+
+    public IReadOnlyList<AudioDeviceInfo> EnumerateDevices(AudioDirection direction)
+        => devices.EnumerateDevices(direction);
+
+    public string? GetDefaultDeviceIdentity(AudioDirection direction)
+        => devices.GetDefaultDeviceIdentity(direction);
+
+    public IAudioCapture OpenCapture(AudioDeviceInfo device, PcmAudioFormat format)
+    {
+        ValidateFormat(format, allowStereo: false);
+        MMDevice endpoint = devices.OpenDevice(device, AudioDirection.Input);
+        try
+        {
+            return new WindowsWasapiCapture(
+                endpoint,
+                format,
+                useCommunicationsMode: processingMode == AudioProcessingMode.WindowsCommunications);
+        }
+        catch
+        {
+            endpoint.Dispose();
+            throw;
+        }
+    }
+
+    public IAudioPlayback OpenPlayback(AudioDeviceInfo device, PcmAudioFormat format)
+    {
+        ValidateFormat(format, allowStereo: true);
+        MMDevice endpoint = devices.OpenDevice(device, AudioDirection.Output);
+        try
+        {
+            return new WindowsWasapiPlayback(endpoint, format);
+        }
+        catch
+        {
+            endpoint.Dispose();
+            throw;
+        }
+    }
+
+    public void Dispose()
+    {
+    }
+
+    private static void ValidateFormat(PcmAudioFormat format, bool allowStereo)
+    {
+        ArgumentNullException.ThrowIfNull(format);
+        if (format.Channels < 1 || format.Channels > (allowStereo ? 2 : 1) || format.BitsPerSample != 16)
+            throw new NotSupportedException("The Windows audio backend supports mono capture and mono or stereo 16-bit playback.");
+    }
+}
+
+[SupportedOSPlatform("windows")]
+internal sealed class WindowsWasapiDeviceCatalog
+{
+    internal const string DefaultDeviceId = "default";
 
     public IReadOnlyList<AudioDeviceInfo> EnumerateDevices(AudioDirection direction)
     {
+        DataFlow dataFlow = ToDataFlow(direction);
+        using var enumerator = new MMDeviceEnumerator();
+        string? defaultIdentity = GetDefaultDeviceIdentity(enumerator, dataFlow);
+        var endpointDescriptors = new List<WindowsWasapiEndpointDescriptor>();
+        using MMDeviceCollection endpoints = enumerator.EnumerateAudioEndPoints(dataFlow, DeviceState.Active);
+        foreach (MMDevice endpoint in endpoints)
+        {
+            endpointDescriptors.Add(new WindowsWasapiEndpointDescriptor(endpoint.ID, endpoint.FriendlyName));
+        }
+
+        return BuildDeviceList(direction, endpointDescriptors, defaultIdentity);
+    }
+
+    public string? GetDefaultDeviceIdentity(AudioDirection direction)
+    {
+        using var enumerator = new MMDeviceEnumerator();
+        return GetDefaultDeviceIdentity(enumerator, ToDataFlow(direction));
+    }
+
+    public MMDevice OpenDevice(AudioDeviceInfo device, AudioDirection direction)
+    {
+        ArgumentNullException.ThrowIfNull(device);
+        if (device.Direction != direction)
+            throw new ArgumentException("The selected audio endpoint has the wrong direction.", nameof(device));
+
+        WindowsWasapiEndpointSelection selection = CreateSelection(device, direction);
+        using var enumerator = new MMDeviceEnumerator();
+        MMDevice endpoint = selection.UseDefault
+            ? enumerator.GetDefaultAudioEndpoint(selection.DataFlow, selection.Role)
+            : enumerator.GetDevice(selection.EndpointId);
+
+        if (endpoint.State != DeviceState.Active || endpoint.DataFlow != selection.DataFlow)
+        {
+            endpoint.Dispose();
+            throw new InvalidOperationException("The selected audio endpoint is not active or has the wrong direction.");
+        }
+
+        return endpoint;
+    }
+
+    internal static IReadOnlyList<AudioDeviceInfo> BuildDeviceList(
+        AudioDirection direction,
+        IEnumerable<WindowsWasapiEndpointDescriptor> endpoints,
+        string? defaultIdentity)
+    {
+        ArgumentNullException.ThrowIfNull(endpoints);
         var devices = new List<AudioDeviceInfo>
         {
             new(
@@ -33,359 +138,51 @@ public sealed class WindowsAudioBackend : IAudioBackend, IDefaultAudioDeviceIden
                 true,
                 false)
         };
-
-        if (direction == AudioDirection.Input)
-        {
-            for (int index = 0; index < WaveInEvent.DeviceCount; index++)
-                devices.Add(new AudioDeviceInfo(index.ToString(), WaveInEvent.GetCapabilities(index).ProductName, direction, false, false));
-        }
-        else
-        {
-            for (int index = 0; index < GetWaveOutDeviceCount(); index++)
-                devices.Add(new AudioDeviceInfo(index.ToString(), GetWaveOutDeviceName(index), direction, false, false));
-        }
-
+        devices.AddRange(endpoints.Select(endpoint => new AudioDeviceInfo(
+            endpoint.Id,
+            endpoint.FriendlyName,
+            direction,
+            string.Equals(endpoint.Id, defaultIdentity, StringComparison.Ordinal),
+            false)));
         return devices;
     }
 
-    public string? GetDefaultDeviceIdentity(AudioDirection direction)
+    internal static WindowsWasapiEndpointSelection CreateSelection(
+        AudioDeviceInfo device,
+        AudioDirection direction)
     {
-        using var enumerator = new MMDeviceEnumerator();
-        DataFlow dataFlow = direction == AudioDirection.Input
-            ? DataFlow.Capture
-            : DataFlow.Render;
+        ArgumentNullException.ThrowIfNull(device);
+        if (device.Direction != direction)
+            throw new ArgumentException("The selected audio endpoint has the wrong direction.", nameof(device));
+
+        return new WindowsWasapiEndpointSelection(
+            string.Equals(device.Id, DefaultDeviceId, StringComparison.OrdinalIgnoreCase),
+            device.Id,
+            ToDataFlow(direction),
+            Role.Multimedia);
+    }
+
+    private static string? GetDefaultDeviceIdentity(MMDeviceEnumerator enumerator, DataFlow dataFlow)
+    {
         if (!enumerator.HasDefaultAudioEndpoint(dataFlow, Role.Multimedia))
             return null;
 
-        using MMDevice device = enumerator.GetDefaultAudioEndpoint(dataFlow, Role.Multimedia);
-        return device.ID;
+        using MMDevice endpoint = enumerator.GetDefaultAudioEndpoint(dataFlow, Role.Multimedia);
+        return endpoint.ID;
     }
 
-    public IAudioCapture OpenCapture(AudioDeviceInfo device, PcmAudioFormat format)
+    private static DataFlow ToDataFlow(AudioDirection direction) => direction switch
     {
-        ValidateFormat(format, allowStereo: false);
-        return new WindowsAudioCapture(ParseDeviceNumber(device), format);
-    }
-
-    public IAudioPlayback OpenPlayback(AudioDeviceInfo device, PcmAudioFormat format)
-    {
-        ValidateFormat(format, allowStereo: true);
-        return new WindowsAudioPlayback(ParseDeviceNumber(device), format);
-    }
-
-    public void Dispose()
-    {
-    }
-
-    private static int ParseDeviceNumber(AudioDeviceInfo device)
-    {
-        ArgumentNullException.ThrowIfNull(device);
-        if (string.Equals(device.Id, DefaultDeviceId, StringComparison.OrdinalIgnoreCase))
-            return -1;
-        if (device.Id is null || !int.TryParse(device.Id, out int deviceNumber) || deviceNumber < 0)
-            throw new ArgumentException("The Windows audio device ID is invalid.", nameof(device));
-        return deviceNumber;
-    }
-
-    private static void ValidateFormat(PcmAudioFormat format, bool allowStereo)
-    {
-        ArgumentNullException.ThrowIfNull(format);
-        if (format.Channels < 1 || format.Channels > (allowStereo ? 2 : 1) || format.BitsPerSample != 16)
-            throw new NotSupportedException("The Windows audio backend supports mono capture and mono or stereo 16-bit playback.");
-    }
-
-    private static int GetWaveOutDeviceCount() => checked((int)waveOutGetNumDevs());
-
-    private static string GetWaveOutDeviceName(int deviceNumber)
-    {
-        int result = waveOutGetDevCaps(deviceNumber, out NativeWaveOutCapabilities capabilities, Marshal.SizeOf<NativeWaveOutCapabilities>());
-        return result == 0 && !string.IsNullOrWhiteSpace(capabilities.ProductName)
-            ? capabilities.ProductName.Trim()
-            : $"Windows output {deviceNumber}";
-    }
-
-    [DllImport("winmm.dll", EntryPoint = "waveOutGetNumDevs")]
-    private static extern uint waveOutGetNumDevs();
-
-    [DllImport("winmm.dll", EntryPoint = "waveOutGetDevCapsW", CharSet = CharSet.Unicode)]
-    private static extern int waveOutGetDevCaps(int deviceNumber, out NativeWaveOutCapabilities capabilities, int capabilitiesSize);
-
-    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
-    private struct NativeWaveOutCapabilities
-    {
-        public ushort ManufacturerId;
-        public ushort ProductId;
-        public uint DriverVersion;
-        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)]
-        public string ProductName;
-        public uint Formats;
-        public ushort Channels;
-        public ushort Reserved;
-    }
-
-    private sealed class WindowsAudioCapture : IAudioCapture
-    {
-        private readonly WaveInEvent input;
-        private bool running;
-        private bool disposed;
-        private Exception? captureFailure;
-
-        public WindowsAudioCapture(int deviceNumber, PcmAudioFormat format)
-        {
-            Format = format;
-            input = new WaveInEvent
-            {
-                DeviceNumber = deviceNumber,
-                WaveFormat = new WaveFormat(format.SampleRate, format.BitsPerSample, format.Channels),
-                BufferMilliseconds = 20
-            };
-            input.DataAvailable += HandleDataAvailable;
-            input.RecordingStopped += HandleRecordingStopped;
-        }
-
-        public event EventHandler<PcmSamplesEventArgs>? SamplesAvailable;
-        public PcmAudioFormat Format { get; }
-        public bool IsRunning => running;
-
-        public ValueTask StartAsync(CancellationToken cancellationToken = default)
-        {
-            ObjectDisposedException.ThrowIf(disposed, this);
-            cancellationToken.ThrowIfCancellationRequested();
-            ThrowIfCaptureFailed();
-            if (!running)
-            {
-                input.StartRecording();
-                running = true;
-            }
-            return ValueTask.CompletedTask;
-        }
-
-        public ValueTask StopAsync(CancellationToken cancellationToken = default)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            if (running)
-            {
-                input.StopRecording();
-                running = false;
-            }
-            return ValueTask.CompletedTask;
-        }
-
-        public async ValueTask DisposeAsync()
-        {
-            if (disposed)
-                return;
-            await StopAsync().ConfigureAwait(false);
-            input.DataAvailable -= HandleDataAvailable;
-            input.RecordingStopped -= HandleRecordingStopped;
-            input.Dispose();
-            disposed = true;
-        }
-
-        private void HandleDataAvailable(object? sender, WaveInEventArgs args)
-        {
-            int sampleCount = args.BytesRecorded / sizeof(short);
-            if (sampleCount == 0)
-                return;
-
-            short[] samples = new short[sampleCount];
-            Buffer.BlockCopy(args.Buffer, 0, samples, 0, sampleCount * sizeof(short));
-            SamplesAvailable?.Invoke(this, new PcmSamplesEventArgs(samples));
-        }
-
-        private void HandleRecordingStopped(object? sender, StoppedEventArgs args)
-        {
-            if (!disposed && args.Exception is not null)
-                Interlocked.CompareExchange(ref captureFailure, args.Exception, null);
-        }
-
-        private void ThrowIfCaptureFailed()
-        {
-            Exception? failure = Volatile.Read(ref captureFailure);
-            if (failure is not null)
-                throw new IOException("Windows audio capture stopped unexpectedly.", failure);
-        }
-    }
-
-    private sealed class WindowsAudioPlayback :
-        IAudioPlayback,
-        IAudioPlaybackContinuityDiagnostics,
-        IAudioPlaybackCallbackDiagnostics
-    {
-        private readonly WaveOutEvent output;
-        private readonly BufferedWaveProvider buffer;
-        private readonly WindowsPlaybackObserver playbackObserver;
-        private bool disposed;
-        private Exception? playbackFailure;
-
-        public WindowsAudioPlayback(int deviceNumber, PcmAudioFormat format)
-        {
-            Format = format;
-            buffer = new BufferedWaveProvider(new WaveFormat(format.SampleRate, format.BitsPerSample, format.Channels))
-            {
-                DiscardOnBufferOverflow = false,
-                ReadFully = true
-            };
-            playbackObserver = new WindowsPlaybackObserver(buffer, format);
-            output = new WaveOutEvent
-            {
-                DeviceNumber = deviceNumber,
-                DesiredLatency = PlaybackLatencyMilliseconds,
-                NumberOfBuffers = PlaybackBufferCount
-            };
-            output.Init(playbackObserver);
-            output.PlaybackStopped += HandlePlaybackStopped;
-            output.Play();
-        }
-
-        public PcmAudioFormat Format { get; }
-        public int? QueuedSamples => buffer.BufferedBytes / sizeof(short);
-        public TimeSpan StarvedDuration => playbackObserver.StarvedDuration;
-        public TimeSpan PendingStarvedDuration => playbackObserver.PendingStarvedDuration;
-        public long OutputCallbackCount => playbackObserver.OutputCallbackCount;
-
-        public void EndExpectedPlayback()
-        {
-            ObjectDisposedException.ThrowIf(disposed, this);
-            playbackObserver.EndExpectedPlayback();
-        }
-
-        public ValueTask WriteAsync(ReadOnlyMemory<short> samples, CancellationToken cancellationToken = default)
-        {
-            ObjectDisposedException.ThrowIf(disposed, this);
-            cancellationToken.ThrowIfCancellationRequested();
-            ThrowIfPlaybackFailed();
-            if (!samples.IsEmpty)
-            {
-                int byteCount = checked(samples.Length * sizeof(short));
-                byte[] bytes = ArrayPool<byte>.Shared.Rent(byteCount);
-                try
-                {
-                    MemoryMarshal.AsBytes(samples.Span).CopyTo(bytes);
-                    buffer.AddSamples(bytes, 0, byteCount);
-                    playbackObserver.ResumePlaybackContinuity();
-                }
-                finally
-                {
-                    ArrayPool<byte>.Shared.Return(bytes);
-                }
-            }
-            return ValueTask.CompletedTask;
-        }
-
-        public ValueTask FlushAsync(CancellationToken cancellationToken = default)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            ThrowIfPlaybackFailed();
-            buffer.ClearBuffer();
-            return ValueTask.CompletedTask;
-        }
-
-        public async ValueTask<int?> DrainAsync(CancellationToken cancellationToken = default)
-        {
-            ObjectDisposedException.ThrowIf(disposed, this);
-            cancellationToken.ThrowIfCancellationRequested();
-            int initialSamples = QueuedSamples ?? 0;
-            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            timeout.CancelAfter(TimeSpan.FromSeconds(5));
-            try
-            {
-                while (buffer.BufferedBytes > 0)
-                {
-                    ThrowIfPlaybackFailed();
-                    await Task.Delay(5, timeout.Token).ConfigureAwait(false);
-                }
-                ThrowIfPlaybackFailed();
-            }
-            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
-            {
-                throw new TimeoutException("Windows audio playback did not drain within five seconds.");
-            }
-
-            return initialSamples - (QueuedSamples ?? 0);
-        }
-
-        public ValueTask DisposeAsync()
-        {
-            if (!disposed)
-            {
-                output.PlaybackStopped -= HandlePlaybackStopped;
-                output.Stop();
-                output.Dispose();
-                disposed = true;
-            }
-            return ValueTask.CompletedTask;
-        }
-
-        private void HandlePlaybackStopped(object? sender, StoppedEventArgs args)
-        {
-            if (!disposed && args.Exception is not null)
-                Interlocked.CompareExchange(ref playbackFailure, args.Exception, null);
-        }
-
-        private void ThrowIfPlaybackFailed()
-        {
-            Exception? failure = Volatile.Read(ref playbackFailure);
-            if (failure is not null)
-                throw new IOException("Windows audio playback stopped unexpectedly.", failure);
-        }
-    }
+        AudioDirection.Input => DataFlow.Capture,
+        AudioDirection.Output => DataFlow.Render,
+        _ => throw new ArgumentOutOfRangeException(nameof(direction))
+    };
 }
 
-// Observes WaveOut's actual pulls from the managed provider. Keeping this
-// separate from device setup makes callback heartbeat and starvation policy
-// deterministic and testable without opening a Windows audio device.
-internal sealed class WindowsPlaybackObserver :
-    IWaveProvider,
-    IAudioPlaybackContinuityDiagnostics,
-    IAudioPlaybackCallbackDiagnostics
-{
-    private readonly BufferedWaveProvider inner;
-    private readonly int samplesPerSecond;
-    private int continuityExpected;
-    private long pendingStarvedSamples;
-    private long starvedSamples;
-    private long outputCallbackCount;
+internal sealed record WindowsWasapiEndpointDescriptor(string Id, string FriendlyName);
 
-    public WindowsPlaybackObserver(BufferedWaveProvider inner, PcmAudioFormat format)
-    {
-        this.inner = inner ?? throw new ArgumentNullException(nameof(inner));
-        ArgumentNullException.ThrowIfNull(format);
-        samplesPerSecond = checked(format.SampleRate * format.Channels);
-    }
-
-    public WaveFormat WaveFormat => inner.WaveFormat;
-    public TimeSpan StarvedDuration => TimeSpan.FromSeconds(
-        Interlocked.Read(ref starvedSamples) / (double)samplesPerSecond);
-    public TimeSpan PendingStarvedDuration => TimeSpan.FromSeconds(
-        Interlocked.Read(ref pendingStarvedSamples) / (double)samplesPerSecond);
-    public long OutputCallbackCount => Interlocked.Read(ref outputCallbackCount);
-
-    public int Read(byte[] buffer, int offset, int count)
-    {
-        int availableBytes = inner.BufferedBytes;
-        int read = inner.Read(buffer, offset, count);
-        Interlocked.Increment(ref outputCallbackCount);
-
-        if (Volatile.Read(ref continuityExpected) != 0 && availableBytes < read)
-        {
-            int missingSamples = (read - availableBytes) / sizeof(short);
-            Interlocked.Add(ref pendingStarvedSamples, missingSamples);
-        }
-        return read;
-    }
-
-    public void ResumePlaybackContinuity()
-    {
-        int wasExpected = Interlocked.Exchange(ref continuityExpected, 1);
-        long pending = Interlocked.Exchange(ref pendingStarvedSamples, 0);
-        if (wasExpected != 0 && pending > 0)
-            Interlocked.Add(ref starvedSamples, pending);
-    }
-
-    public void EndExpectedPlayback()
-    {
-        Volatile.Write(ref continuityExpected, 0);
-        Interlocked.Exchange(ref pendingStarvedSamples, 0);
-    }
-}
+internal sealed record WindowsWasapiEndpointSelection(
+    bool UseDefault,
+    string EndpointId,
+    DataFlow DataFlow,
+    Role Role);

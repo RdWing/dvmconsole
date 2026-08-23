@@ -1638,8 +1638,36 @@ public sealed class SystemViewModelTests
             viewModel.HighQualityBluetoothAudioEnabled = false;
             viewModel.AudioInputAgcEnabled = true;
             viewModel.AudioInputAgcTargetDbfsText = "-30";
-            viewModel.SelectedAudioProcessingMode = "Apple voice processing";
+            viewModel.SelectedAudioProcessingMode = OperatingSystem.IsWindows()
+                ? "Windows communications processing"
+                : "Apple voice processing";
             viewModel.ApplyAudioInputSettingsCommand.Execute(null);
+
+            if (OperatingSystem.IsWindows())
+            {
+                Assert.Equal(
+                    ["DVM Console processing", "Windows communications processing"],
+                    viewModel.AudioProcessingModeOptions);
+                Assert.DoesNotContain("Apple voice processing", viewModel.AudioProcessingModeOptions);
+                Assert.Equal("Windows communications processing", viewModel.SelectedAudioProcessingMode);
+                Assert.False(viewModel.IsDvmConsoleProcessingSelected);
+                Assert.False(viewModel.IsAgcTargetEnabled);
+                UserSettings windowsSettings = store.Load();
+                Assert.Equal(
+                    UserSettings.WindowsCommunicationsProcessingMode,
+                    windowsSettings.AudioProcessingMode);
+                Assert.Equal("input-device-42", windowsSettings.AudioInputDeviceId);
+                Assert.Equal("output-device-84", windowsSettings.AudioOutputDeviceId);
+                Assert.False(windowsSettings.HighQualityBluetoothAudioEnabled);
+                Assert.Contains("depend on Windows", viewModel.AudioProcessingDescription, StringComparison.OrdinalIgnoreCase);
+                Assert.Contains("bypassed", viewModel.AudioProcessingDescription, StringComparison.OrdinalIgnoreCase);
+
+                viewModel.SelectedAudioProcessingMode = "DVM Console processing";
+                viewModel.ApplyAudioInputSettingsCommand.Execute(null);
+                Assert.True(viewModel.IsDvmConsoleProcessingSelected);
+                Assert.Equal(UserSettings.DvmConsoleAudioProcessingMode, store.Load().AudioProcessingMode);
+                return;
+            }
 
             if (!OperatingSystem.IsMacOS())
             {

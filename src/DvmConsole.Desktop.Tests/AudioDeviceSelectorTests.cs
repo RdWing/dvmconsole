@@ -29,6 +29,7 @@ public sealed class AudioDeviceSelectorTests
     [InlineData("")]
     [InlineData("default")]
     [InlineData("missing-device")]
+    [InlineData("0")]
     public void DefaultAndFallbackSelectionsFollowTheSystemDefault(string? requestedDeviceId)
     {
         AudioDeviceSelection selection = AudioDeviceSelector.Select(

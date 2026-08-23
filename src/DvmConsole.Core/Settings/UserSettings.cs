@@ -106,6 +106,7 @@ public sealed class UserSettings
     public const int CurrentSchemaVersion = 6;
     public const string DvmConsoleAudioProcessingMode = "DvmConsole";
     public const string AppleVoiceProcessingMode = "AppleVoiceProcessing";
+    public const string WindowsCommunicationsProcessingMode = "WindowsCommunications";
     public const int MaximumToolbarClocks = 8;
     public const int MaximumRecentCodeplugs = 8;
     public int SchemaVersion { get; set; } = CurrentSchemaVersion;

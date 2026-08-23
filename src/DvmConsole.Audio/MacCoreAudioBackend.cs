@@ -22,6 +22,10 @@ public sealed class MacCoreAudioBackend :
     {
         if (!OperatingSystem.IsMacOS())
             throw new PlatformNotSupportedException("MacCoreAudioBackend requires macOS.");
+        if (processingMode == AudioProcessingMode.WindowsCommunications)
+            throw new PlatformNotSupportedException("Windows communications processing requires a Windows audio backend.");
+        if (processingMode is not AudioProcessingMode.DvmConsole and not AudioProcessingMode.AppleVoiceProcessing)
+            throw new ArgumentOutOfRangeException(nameof(processingMode));
 
         this.processingMode = processingMode;
         configuredInputDeviceId = NormalizeConfiguredDeviceId(inputDeviceId);

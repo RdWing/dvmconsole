@@ -15,12 +15,12 @@ public sealed class WindowsPlaybackObserverTests
         var observer = new WindowsPlaybackObserver(provider, format);
         byte[] output = new byte[320];
 
-        Assert.Equal(output.Length, observer.Read(output, 0, output.Length));
+        Assert.Equal(output.Length, observer.Read(output));
         Assert.Equal(1, observer.OutputCallbackCount);
         Assert.Equal(TimeSpan.Zero, observer.PendingStarvedDuration);
 
         observer.ResumePlaybackContinuity();
-        Assert.Equal(output.Length, observer.Read(output, 0, output.Length));
+        Assert.Equal(output.Length, observer.Read(output));
         Assert.Equal(TimeSpan.FromMilliseconds(20), observer.PendingStarvedDuration);
         Assert.Equal(TimeSpan.Zero, observer.StarvedDuration);
 
@@ -41,9 +41,9 @@ public sealed class WindowsPlaybackObserverTests
         byte[] output = new byte[320];
 
         observer.ResumePlaybackContinuity();
-        observer.Read(output, 0, output.Length);
+        observer.Read(output);
         observer.EndExpectedPlayback();
-        observer.Read(output, 0, output.Length);
+        observer.Read(output);
 
         Assert.Equal(TimeSpan.Zero, observer.PendingStarvedDuration);
         Assert.Equal(TimeSpan.Zero, observer.StarvedDuration);
