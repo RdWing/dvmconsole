@@ -431,6 +431,8 @@ public sealed class CallHistoryStore
             if (oldest is null)
                 break;
             Entries.Remove(oldest);
+            if (oldest.Recording is CallRecordingMetadata recording)
+                InsertNewestFirst(CallHistoryEntry.CreateRecordingOnly(recording));
         }
     }
 
