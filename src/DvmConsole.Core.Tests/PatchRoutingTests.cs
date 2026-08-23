@@ -79,6 +79,77 @@ public sealed class PatchRoutingTests
     }
 
     [Fact]
+    public void ChangingOneWaySourceRebuildsTheRoute()
+    {
+        PatchMemberAddress first = new("Alpha", 100);
+        PatchMemberAddress second = new("Beta", 200);
+        var starts = new List<PatchMemberAddress>();
+        var ends = new List<PatchMemberAddress>();
+        var router = new PatchRoutingTable(
+            (member, _) =>
+            {
+                starts.Add(member);
+                return (uint)(700 + starts.Count);
+            },
+            (member, _, _) => ends.Add(member),
+            (_, _, _, _) => { },
+            _ => 999);
+        var oneWay = new Dictionary<string, bool> { ["Dispatch"] = true };
+
+        router.ApplyMemberships(
+            new Dictionary<string, IReadOnlyList<PatchMemberAddress>>
+            {
+                ["Dispatch"] = [first, second]
+            },
+            oneWay);
+        router.HandleCallStart(first, 1, 42);
+
+        router.ApplyMemberships(
+            new Dictionary<string, IReadOnlyList<PatchMemberAddress>>
+            {
+                ["Dispatch"] = [second, first]
+            },
+            oneWay);
+        router.HandleCallStart(first, 2, 42);
+        router.HandleCallStart(second, 3, 42);
+
+        Assert.Equal([second, first], starts);
+        Assert.Equal([second], ends);
+    }
+
+    [Fact]
+    public void FailedTargetCanRestartOnTheNextAudioBlock()
+    {
+        PatchMemberAddress source = new("Alpha", 100);
+        PatchMemberAddress target = new("Beta", 200);
+        var streams = new Queue<uint>([701, 702]);
+        var starts = new List<uint>();
+        var audio = new List<uint>();
+        var router = new PatchRoutingTable(
+            (_, _) =>
+            {
+                uint stream = streams.Dequeue();
+                starts.Add(stream);
+                return stream;
+            },
+            (_, _, _) => { },
+            (_, stream, _, _) => audio.Add(stream),
+            _ => 999);
+        router.ApplyMemberships(new Dictionary<string, IReadOnlyList<PatchMemberAddress>>
+        {
+            ["Dispatch"] = [source, target]
+        });
+
+        router.HandleAudio(source, 1, 42, new short[] { 1 });
+        Assert.True(router.ReportTargetFailure(target, 701));
+        router.HandleAudio(source, 1, 42, new short[] { 2 });
+
+        Assert.Equal([701u, 702u], starts);
+        Assert.Equal([701u, 702u], audio);
+        Assert.True(router.IsForwardTargetActive(target));
+    }
+
+    [Fact]
     public void MembershipChangesStopOldTargetsBeforeReplacingGroup()
     {
         PatchMemberAddress source = new("Alpha", 100);
@@ -154,6 +225,109 @@ public sealed class PatchRoutingTests
         Assert.True(router.IsPatchedTransmitStream(target, sink.StreamId));
         clock.Advance(TimeSpan.FromSeconds(2));
         Assert.False(router.IsPatchedTransmitStream(target, sink.StreamId));
+    }
+
+    [Fact]
+    public void DisabledPatchCannotFeedARewrittenEchoIntoAnotherPatch()
+    {
+        PatchMemberAddress firstSource = new("Alpha", 100);
+        PatchMemberAddress sharedMember = new("Bravo", 200);
+        PatchMemberAddress secondTarget = new("Charlie", 300);
+        var clock = new ManualTimeProvider(DateTimeOffset.UnixEpoch);
+        var starts = new List<PatchMemberAddress>();
+        var ends = new List<PatchMemberAddress>();
+        uint nextStreamId = 500;
+        var router = new PatchRoutingTable(
+            (member, _) =>
+            {
+                starts.Add(member);
+                return nextStreamId++;
+            },
+            (member, _, _) => ends.Add(member),
+            (_, _, _, _) => { },
+            _ => 999,
+            clock);
+        var oneWayModes = new Dictionary<string, bool>
+        {
+            ["First patch"] = true,
+            ["Second patch"] = true
+        };
+        router.ApplyMemberships(
+            new Dictionary<string, IReadOnlyList<PatchMemberAddress>>
+            {
+                ["First patch"] = [firstSource, sharedMember],
+                ["Second patch"] = [sharedMember, secondTarget]
+            },
+            oneWayModes);
+        router.HandleCallStart(firstSource, 10, 42);
+
+        router.ApplyMemberships(
+            new Dictionary<string, IReadOnlyList<PatchMemberAddress>>
+            {
+                ["Second patch"] = [sharedMember, secondTarget]
+            },
+            oneWayModes);
+        router.HandleCallStart(sharedMember, 900, 42);
+        router.HandleAudio(sharedMember, 900, 42, new short[] { 1, 2, 3 });
+
+        Assert.Equal([sharedMember], starts);
+        Assert.Equal([sharedMember], ends);
+
+        clock.Advance(TimeSpan.FromSeconds(2));
+        router.HandleCallStart(sharedMember, 901, 42);
+
+        Assert.Equal([sharedMember, secondTarget], starts);
+    }
+
+    [Fact]
+    public void EndingOneSharedTargetRouteKeepsTheOtherRouteIsolated()
+    {
+        PatchMemberAddress firstSource = new("Alpha", 100);
+        PatchMemberAddress secondSource = new("Bravo", 200);
+        PatchMemberAddress sharedTarget = new("Charlie", 300);
+        PatchMemberAddress cascadeTarget = new("Delta", 400);
+        var clock = new ManualTimeProvider(DateTimeOffset.UnixEpoch);
+        var starts = new List<PatchMemberAddress>();
+        uint nextStreamId = 500;
+        var router = new PatchRoutingTable(
+            (member, _) =>
+            {
+                starts.Add(member);
+                return nextStreamId++;
+            },
+            (_, _, _) => { },
+            (_, _, _, _) => { },
+            _ => 999,
+            clock);
+        var oneWayModes = new Dictionary<string, bool>
+        {
+            ["First patch"] = true,
+            ["Second patch"] = true,
+            ["Cascade patch"] = true
+        };
+        router.ApplyMemberships(
+            new Dictionary<string, IReadOnlyList<PatchMemberAddress>>
+            {
+                ["First patch"] = [firstSource, sharedTarget],
+                ["Second patch"] = [secondSource, sharedTarget],
+                ["Cascade patch"] = [sharedTarget, cascadeTarget]
+            },
+            oneWayModes);
+        router.HandleCallStart(firstSource, 10, 42);
+        router.HandleCallStart(secondSource, 20, 42);
+
+        router.ApplyMemberships(
+            new Dictionary<string, IReadOnlyList<PatchMemberAddress>>
+            {
+                ["Second patch"] = [secondSource, sharedTarget],
+                ["Cascade patch"] = [sharedTarget, cascadeTarget]
+            },
+            oneWayModes);
+        clock.Advance(TimeSpan.FromSeconds(2));
+        router.HandleCallStart(sharedTarget, 900, 42);
+
+        Assert.Equal([sharedTarget, sharedTarget], starts);
+        Assert.True(router.IsForwardTargetActive(sharedTarget));
     }
 
     private sealed class RecordingPatchSink : IPatchForwardingSink

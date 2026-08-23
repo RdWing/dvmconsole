@@ -109,6 +109,7 @@ public sealed class SystemTrafficBufferTests
             traffic,
             receivedAt,
             123,
+            [channel],
             [channel]);
 
         Assert.True(buffer.Enqueue(expected));
@@ -120,6 +121,7 @@ public sealed class SystemTrafficBufferTests
         Assert.Equal(receivedAt, dequeued.ReceivedAt);
         Assert.Equal(123, dequeued.ReceivedTimestamp);
         Assert.Same(channel, Assert.Single(dequeued.PreEnqueuedAudioChannels));
+        Assert.Same(channel, Assert.Single(dequeued.PreEnqueuedPatchChannels));
     }
 
     private static FneTrafficFrame Traffic(

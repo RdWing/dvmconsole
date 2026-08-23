@@ -109,6 +109,26 @@ public sealed class RecordingPlaybackCoordinator : IAsyncDisposable
         }
     }
 
+    // Stops the current recording and drops the cached backend before an
+    // application-wide output route is replaced.
+    public async Task ResetAudioBackendAsync(CancellationToken cancellationToken = default)
+    {
+        IAudioBackend? oldBackend;
+        await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            ObjectDisposedException.ThrowIf(disposed, this);
+            await StopActiveCoreAsync(cancellationToken).ConfigureAwait(false);
+            oldBackend = audioBackend;
+            audioBackend = null;
+        }
+        finally
+        {
+            gate.Release();
+        }
+        oldBackend?.Dispose();
+    }
+
     public async Task<bool> StopIfPlayingAsync(
         string path,
         CancellationToken cancellationToken = default)

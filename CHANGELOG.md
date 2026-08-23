@@ -6,6 +6,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.3.7] - 2026-08-23
+
+### Changed
+
+- Make one-way patch direction explicit by selecting a source while treating every other member as a destination. Preserve existing settings by restoring the first saved member as the source.
+- Compact the Groups page with collapsed member editors, responsive two-column patch cards, concise destination summaries, and overlap warnings sized to their text.
+- Route patch-source traffic directly from FNE ingress through one adaptive jitter worker and one dedicated PCM decoder before re-encoding for each destination protocol. Keep patch forwarding independent from card Listen state, local playback volume, balance, output routing, and speaker mute.
+- Decode only eligible patch sources: the selected source for one-way patches and all members for two-way patches. Multi-select members and one-way destinations no longer open unnecessary patch decoders.
+- Allow an RX-only resource to source a one-way patch while requiring every destination, two-way member, and multi-select member to remain transmit-capable.
+- Coordinate Apple Voice Processing I/O as one application-wide full-duplex route so RX, local cues, web streams, recording playback, and transmit capture share the same physical output and acoustic echo-cancellation reference. Switching back to DVM Console processing restores the ordinary CoreAudio route.
+
+### Fixed
+
+- Prevent Listen or TAR decoding from feeding the same PCM to a patch alongside the dedicated patch decoder, eliminating doubled, short-repeat, and jittery forwarded audio.
+- Deliver patch traffic to its adaptive jitter queue before UI presentation so a busy settings or presentation thread cannot key a destination and then starve its audio.
+- Release failed outbound patch sessions from router state so the next source audio block can establish a fresh destination call instead of leaving the patch keyed but silent.
+- Rebuild an active one-way route when only its selected source changes, and avoid issuing duplicate destination-start requests when decoded audio arrives before an explicit call-start observation.
+- End active destination sessions when a patch is disabled and suppress rewritten or delayed FNE echoes through teardown so an overlapping member cannot cascade that audio into another patch. Preserve isolation reference counts when multiple active patches target the same member.
+- Prevent Apple Voice Processing and ordinary CoreAudio outputs from competing for the same device, including while the microphone is kept warm. Fail stalled voice-output writes promptly, carry physical callback and starvation health through shared mixer lanes, restart failed receive routes without waiting for another traffic frame, and observe mixer failures without unobserved-task crash records.
+- Bound application shutdown so a CoreAudio teardown that does not return cannot leave DVM Console open indefinitely after Quit.
+
 ## [0.3.6] - 2026-08-22
 
 ### Added
@@ -315,7 +336,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Add patches, multi-select groups, call history, recordings, web streams, clocks, layouts, themes, startup behavior, and in-application operator documentation.
 - Add support for local and KMM-provided P25 encryption keys while preserving compatibility with existing variable-length AES key material.
 
-[Unreleased]: https://github.com/RdWing/dvmconsole/compare/v0.3.6...HEAD
+[Unreleased]: https://github.com/RdWing/dvmconsole/compare/v0.3.7...HEAD
+[0.3.7]: https://github.com/RdWing/dvmconsole/compare/v0.3.6...v0.3.7
 [0.3.6]: https://github.com/RdWing/dvmconsole/compare/v0.3.5...v0.3.6
 [0.3.5]: https://github.com/RdWing/dvmconsole/compare/v0.3.4...v0.3.5
 [0.3.4]: https://github.com/RdWing/dvmconsole/compare/v0.3.3...v0.3.4

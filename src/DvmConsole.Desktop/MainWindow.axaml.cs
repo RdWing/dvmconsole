@@ -16,6 +16,7 @@ namespace DvmConsole.Desktop;
 
 public sealed partial class MainWindow : Window
 {
+    private static readonly TimeSpan ShutdownTimeout = TimeSpan.FromSeconds(10);
     private readonly MainWindowSessionHost sessionHost;
     private readonly WindowPttKeyRouter pttKeyRouter;
     private MainWindowViewModel viewModel => sessionHost.ViewModel;
@@ -131,7 +132,9 @@ public sealed partial class MainWindow : Window
         cleanup.Run(() =>
             activityCallHistoryList.LayoutUpdated -= HandleActivityHistoryLayoutUpdated);
         cleanup.Run(activityViewportAnchor.Reset);
-        await cleanup.RunTaskAsync(() => sessionHost.DisposeAsync().AsTask());
+        await cleanup.RunTaskAsync(() => BoundedShutdown.RunAsync(
+            () => sessionHost.DisposeAsync().AsTask(),
+            ShutdownTimeout));
         cleanup.ThrowIfFailed();
     }
 

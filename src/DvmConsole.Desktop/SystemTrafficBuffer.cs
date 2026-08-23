@@ -7,7 +7,8 @@ internal readonly record struct SystemTrafficWorkItem(
     FneTrafficFrame Traffic,
     DateTimeOffset ReceivedAt,
     long ReceivedTimestamp,
-    IReadOnlyList<ChannelViewModel> PreEnqueuedAudioChannels);
+    IReadOnlyList<ChannelViewModel> PreEnqueuedAudioChannels,
+    IReadOnlyList<ChannelViewModel> PreEnqueuedPatchChannels);
 
 // Bounds media waiting for the UI-thread routing pass. Lifecycle frames are
 // retained preferentially so dropping stale voice cannot strand a call active.
@@ -31,6 +32,7 @@ internal sealed class SystemTrafficBuffer
             traffic,
             DateTimeOffset.UtcNow,
             0,
+            [],
             []));
 
     public bool Enqueue(SystemTrafficWorkItem item)

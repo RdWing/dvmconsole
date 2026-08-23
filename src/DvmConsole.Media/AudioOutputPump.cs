@@ -5,7 +5,8 @@ using System.Diagnostics;
 namespace DvmConsole.Media;
 
 internal readonly record struct MixerPresentationNotification(
-    Action<ReadOnlyMemory<short>, TimeSpan> Observer,
+    MixerLaneBuffer? Channel,
+    Action<ReadOnlyMemory<short>, TimeSpan>? Observer,
     ReadOnlyMemory<short> Samples);
 
 internal delegate bool TryTakeMixedFrame(
@@ -183,7 +184,10 @@ internal sealed class AudioOutputPump : IDisposable
             MixerPresentationNotification notification = notifications[index];
             try
             {
-                notification.Observer(notification.Samples, presentationDelay);
+                notification.Channel?.FrameHandedOff?.Invoke(
+                    notification.Samples.Length,
+                    presentationDelay);
+                notification.Observer?.Invoke(notification.Samples, presentationDelay);
             }
             catch
             {

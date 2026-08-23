@@ -39,6 +39,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
     private static readonly string[] DvmConsoleAudioProcessingModeOptions =
         [DvmConsoleProcessingDisplay];
     private readonly ChannelReceiveAudioCoordinator audioCoordinator;
+    private readonly ApplicationAudioBackendProvider audioBackendProvider;
     private readonly ChannelReceiveWorkQueue receiveAudioWork;
     private readonly ChannelReceiveWorkQueue patchSourceReceiveWork;
     private readonly UserSettingsStore userSettingsStore;
@@ -99,6 +100,8 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
     private readonly ReceiveJitterBufferEffectivenessTracker receiveJitterEffectiveness = new();
     private readonly ReceiveOutputMutePolicy receiveOutputMutePolicy = new();
     private readonly SemaphoreSlim audioReconfigurationLock = new(1, 1);
+    private readonly object receiveOutputRecoverySync = new();
+    private readonly HashSet<ChannelViewModel> proactiveReceiveOutputRecoveries = [];
     private readonly Dictionary<ChannelViewModel, DateTimeOffset> receiveRetryAfter = [];
     private IReadOnlyDictionary<string, RxJitterBufferSetting> receiveJitterBufferSettingsBySystem =
         new Dictionary<string, RxJitterBufferSetting>(StringComparer.OrdinalIgnoreCase);
@@ -153,6 +156,9 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
         codeplugDiagnosticsText = statusText;
         this.userSettingsStore = userSettingsStore ?? new UserSettingsStore(UserSettingsStore.DefaultPath);
         userSettings = this.userSettingsStore.Load();
+        audioBackendProvider = new ApplicationAudioBackendProvider(
+            CreateApplicationAudioConfiguration(),
+            CreateNativeAudioBackend);
         filteredDebugLogs = new FilteredDebugLogCollection(debugLogBuffer.Entries);
         Systems = systems.ToArray();
         Zones = zones.ToArray();
@@ -218,7 +224,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
         receiveJitterBufferSettingsBySystem = BuildReceiveJitterBufferSettingsBySystem();
         receiveAudioProcessingOptions = BuildReceiveAudioProcessingOptions();
         webStreamPlayback = new WebStreamPlaybackCoordinator(
-            () => AudioBackendFactory.CreateDefault(Environment.GetEnvironmentVariable("DVM_AUDIO_LIBRARY")),
+            audioBackendProvider.CreateBackend,
             () => userSettings.AudioOutputDeviceId,
             openStream: null,
             createDecoder: null,
@@ -242,7 +248,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
             ShouldRecordSource);
         callRecordings.RecordingFinalized += HandleRecordingFinalized;
         recordingPlayback = new RecordingPlaybackCoordinator(
-            () => AudioBackendFactory.CreateDefault(Environment.GetEnvironmentVariable("DVM_AUDIO_LIBRARY")),
+            audioBackendProvider.CreateBackend,
             () => userSettings.AudioOutputDeviceId,
             HandleRecordingPlaybackFaulted);
         audioCoordinator = new ChannelReceiveAudioCoordinator(
@@ -256,6 +262,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
             nxdnKeyResolver: nxdnKeyResolver,
             getChannelBalance: GetChannelStereoBalance,
             presentationSamplesObserver: HandlePresentedReceiveSamples);
+        audioCoordinator.OutputFailed += HandleReceiveAudioOutputFailed;
         receiveAudioWork = new ChannelReceiveWorkQueue(
             ProcessAudioAsync,
             timingObserver: HandleReceiveWorkItemTiming,
@@ -1120,7 +1127,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
         => SelectedAudioProcessingMode switch
         {
             AppleVoiceProcessingDisplay =>
-                "Apple Voice Processing applies acoustic echo cancellation and automatic gain control to the microphone capture used for transmit. RX vocoder processing is controlled separately.",
+                "Apple Voice Processing uses one coordinated full-duplex route for application playback and transmit capture, providing the far-end reference needed for acoustic echo cancellation. RX vocoder processing is controlled separately.",
             WindowsCommunicationsProcessingDisplay =>
                 "Windows requests the selected endpoint's communications processing for transmit capture. Actual AEC, noise suppression, and AGC depend on Windows, the audio driver, and the endpoint. DVM Console gain, EQ, and AGC are bypassed.",
             _ => "DVM Console applies its gain, EQ, and optional AGC after microphone capture."
@@ -2533,9 +2540,11 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
         await cleanup.RunTaskAsync(() => patchSourceReceiveWork.DisposeAsync().AsTask()).ConfigureAwait(false);
         await cleanup.RunTaskAsync(() => patchSourceDecode.DisposeAsync().AsTask()).ConfigureAwait(false);
         cleanup.Run(patchForwarding.Dispose);
+        cleanup.Run(() => audioCoordinator.OutputFailed -= HandleReceiveAudioOutputFailed);
         await cleanup.RunTaskAsync(() => audioCoordinator.DisposeAsync().AsTask()).ConfigureAwait(false);
         await cleanup.RunTaskAsync(() => webStreamPlayback.DisposeAsync().AsTask()).ConfigureAwait(false);
         await cleanup.RunTaskAsync(() => recordingPlayback.DisposeAsync().AsTask()).ConfigureAwait(false);
+        await cleanup.RunTaskAsync(() => audioBackendProvider.DisposeAsync().AsTask()).ConfigureAwait(false);
         cleanup.Run(audioReconfigurationLock.Dispose);
         cleanup.Run(() => callRecordings.RecordingFinalized -= HandleRecordingFinalized);
         await cleanup.RunTaskAsync(() => callRecordings.DisposeAsync().AsTask()).ConfigureAwait(false);
@@ -2974,22 +2983,30 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
             : 0.0;
     }
 
-    // Receive always uses the platform's ordinary playback path. Microphone
-    // processing modes remain scoped to transmit capture, while vocoder receive
-    // processing stays a separate, protocol-aware stage.
+    // Apple Voice Processing I/O is a full-duplex route. The application-level
+    // provider mixes receive audio, local cues, web streams, and recordings into
+    // its one output stream while keeping vocoder processing independent.
     private IAudioBackend CreateReceiveAudioBackend()
-        => AudioBackendFactory.CreateDefault(
-            Environment.GetEnvironmentVariable("DVM_AUDIO_LIBRARY"));
+        => audioBackendProvider.CreateBackend();
 
     private IVocoderBackend CreateReceiveVocoderBackend()
         => new SoftwareVocoderBackend(Volatile.Read(ref receiveAudioProcessingOptions));
 
-    // The selected processing mode is intentionally scoped to microphone
-    // capture for transmit. ProcessedAudioCapture further confines the
-    // DVM Console gain/EQ/AGC path to this capture stream.
+    // ProcessedAudioCapture confines DVM Console gain/EQ/AGC to microphone
+    // samples. The provider coordinates the platform's physical I/O route.
     private IAudioBackend CreateTransmitAudioBackend()
+        => audioBackendProvider.CreateBackend();
+
+    private IAudioBackend CreateNativeAudioBackend(ApplicationAudioConfiguration configuration)
         => AudioBackendFactory.CreateDefault(
             Environment.GetEnvironmentVariable("DVM_AUDIO_LIBRARY"),
+            configuration.ProcessingMode,
+            configuration.InputDeviceId,
+            configuration.OutputDeviceId,
+            configuration.HighQualityBluetoothAudio);
+
+    private ApplicationAudioConfiguration CreateApplicationAudioConfiguration()
+        => new(
             GetConfiguredAudioProcessingMode(),
             userSettings.AudioInputDeviceId,
             userSettings.AudioOutputDeviceId,
@@ -3131,7 +3148,10 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
         uint sourceId,
         ReadOnlyMemory<short> samples)
     {
-        patchForwarding.ObserveDecodedSamples(channel, streamId, sourceId, samples);
+        // An enabled patch owns a dedicated jitter-buffered decoder for its
+        // source. Do not feed the same PCM a second time from Listen or TAR.
+        if (!patchSourceDecode.IsActive(channel))
+            patchForwarding.ObserveDecodedSamples(channel, streamId, sourceId, samples);
         ChannelViewModel? recordingTarget = ResolveReceiveRecordingTarget(channel);
         if (recordingTarget is not null)
             callRecordings.WriteSamples(recordingTarget, streamId, sourceId, samples);
@@ -3257,13 +3277,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
     }
 
     private ChannelViewModel[] GetActivePatchSourceChannels()
-        => PatchGroups
-            .Where(group => group.IsEnabled)
-            .SelectMany(group => group.Members
-                .Where(member => member.IsMember)
-                .Select(member => member.Channel))
-            .Distinct()
-            .ToArray();
+        => PatchSourceSelectionPolicy.SelectEnabledSources(PatchGroups);
 
     private sealed class PcmLevelLogState(uint streamId)
     {
@@ -4024,8 +4038,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
     public void ApplyPatchGroup(PatchGroupEditorViewModel group)
     {
         ArgumentNullException.ThrowIfNull(group);
-        List<PatchMemberAddress> members = group.Members
-            .Where(member => member.IsMember)
+        List<PatchMemberAddress> members = group.GetMembersInRoutingOrder()
             .Select(member => new PatchMemberAddress(
                 member.Channel.Definition.SystemName,
                 member.Channel.Definition.DestinationId))
@@ -4037,10 +4050,21 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
                 StatusText = $"Stop multi-select PTT for '{group.Name}' before changing its membership.";
                 return;
             }
+            if (group.GetMembershipValidationError() is { } validationError)
+            {
+                StatusText = $"Multi-select group '{group.Name}' was not saved. {validationError}";
+                return;
+            }
             PersistGroupDefinition(group.Name, members, enabled: true, oneWay: false);
             PersistUserSettings();
             RefreshPatchMembershipConflicts();
             StatusText = $"Multi-select group '{group.Name}' saved with {members.Count} member(s).";
+            return;
+        }
+
+        if (group.GetMembershipValidationError() is { } patchValidationError)
+        {
+            StatusText = $"Patch group '{group.Name}' was not saved. {patchValidationError}";
             return;
         }
 
@@ -4123,12 +4147,16 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
             if (groupName.Length == 0)
                 continue;
 
-            HashSet<string> configuredMembers = userSettings.PatchGroupMemberships
-                .TryGetValue(groupName, out List<PatchMemberSetting>? savedMembers)
-                ? (savedMembers ?? [])
-                    .Select(member => $"{member.SystemName.Trim().ToLowerInvariant()}|{member.DestinationId}")
-                    .ToHashSet(StringComparer.OrdinalIgnoreCase)
+            List<PatchMemberSetting> savedMembers = userSettings.PatchGroupMemberships
+                .TryGetValue(groupName, out List<PatchMemberSetting>? configuredSettings)
+                ? configuredSettings ?? []
                 : [];
+            HashSet<string> configuredMembers = savedMembers
+                    .Select(member => $"{member.SystemName.Trim().ToLowerInvariant()}|{member.DestinationId}")
+                    .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            string? configuredSourceKey = savedMembers.FirstOrDefault() is { } savedSource
+                ? $"{savedSource.SystemName.Trim()}|{savedSource.DestinationId}"
+                : null;
             bool isMultiSelect = definition.IsMultiselectGroup();
             bool enabled = isMultiSelect ||
                 (userSettings.PatchGroupEnabledStates.TryGetValue(groupName, out bool savedEnabled) && savedEnabled);
@@ -4140,7 +4168,8 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
                 channels.Select(channel => new PatchMemberEditorViewModel(
                     channel,
                     configuredMembers.Contains($"{channel.Definition.SystemName.ToLowerInvariant()}|{channel.Definition.DestinationId}"))),
-                isMultiSelect);
+                isMultiSelect,
+                configuredSourceKey);
             group.MembershipChanged += HandlePatchMembershipChanged;
             groups.Add(group);
         }

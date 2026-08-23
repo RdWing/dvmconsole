@@ -6,6 +6,18 @@ internal enum VoiceEndpoint
     Playback
 }
 
+internal interface IVoiceProcessingPlaybackSession
+{
+    int QueuedSamples { get; }
+    TimeSpan StarvedDuration { get; }
+    TimeSpan PendingStarvedDuration { get; }
+    long OutputCallbackCount { get; }
+    void StartPlayback();
+    void StopPlayback();
+    int Write(short[] samples);
+    void EndExpectedPlayback();
+}
+
 internal static class VoiceProcessingSessionRegistry
 {
     private static readonly object Sync = new();
@@ -56,8 +68,10 @@ internal static class VoiceProcessingSessionRegistry
             if (!session.RemoveEndpoint(endpoint))
                 return;
             Sessions.Remove(session.Key);
-            session.Dispose();
         }
+        // Native teardown can wait on CoreAudio. Never hold the registry-wide
+        // lock while one physical device is stopping.
+        session.Dispose();
     }
 
     internal readonly record struct VoiceSessionKey(
@@ -67,7 +81,7 @@ internal static class VoiceProcessingSessionRegistry
         bool HighQualityBluetoothAudio);
 }
 
-internal sealed class VoiceProcessingSession : IDisposable
+internal sealed class VoiceProcessingSession : IDisposable, IVoiceProcessingPlaybackSession
 {
     private readonly object sync = new();
     private readonly NativeCoreAudioApi api;

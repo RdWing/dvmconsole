@@ -55,8 +55,17 @@ public sealed class PatchSourceDecodeCoordinator : IAsyncDisposable
     public bool IsActive(ChannelViewModel channel)
     {
         ArgumentNullException.ThrowIfNull(channel);
-        lock (sessions)
+        lock (sync)
             return sessions.ContainsKey(channel);
+    }
+
+    public IReadOnlyList<ChannelViewModel> ActiveChannels
+    {
+        get
+        {
+            lock (sync)
+                return sessions.Keys.ToArray();
+        }
     }
 
     public async Task ApplyChannelsAsync(

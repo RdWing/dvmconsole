@@ -50,6 +50,16 @@ internal static class PatchMembershipPolicy
         => new HashSet<string>(left.Select(member => member.Key), StringComparer.OrdinalIgnoreCase)
             .SetEquals(right.Select(member => member.Key));
 
+    public static bool RoutingEqual(
+        PatchGroupMembership left,
+        PatchGroupMembership right)
+        => left.OneWay == right.OneWay &&
+           MembersEqual(left.Members, right.Members) &&
+           (!left.OneWay || string.Equals(
+               left.Members[0].Key,
+               right.Members[0].Key,
+               StringComparison.OrdinalIgnoreCase));
+
     public static bool IsEligibleSource(
         IReadOnlyList<PatchMemberAddress> members,
         bool oneWay,

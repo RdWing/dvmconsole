@@ -99,6 +99,19 @@ public sealed partial class MainWindowViewModel
         AudioProcessingMode processingMode = GetSelectedAudioProcessingMode();
         string deviceId = AudioInputDeviceIdText.Trim();
         string outputDeviceId = AudioOutputDeviceIdText.Trim();
+        bool highQualityBluetoothAudio = OperatingSystem.IsMacOSVersionAtLeast(26)
+            ? HighQualityBluetoothAudioEnabled
+            : userSettings.HighQualityBluetoothAudioEnabled;
+        bool audioRouteChanged = previousProcessingMode != processingMode ||
+            previousHighQualityBluetoothAudio != highQualityBluetoothAudio ||
+            !previousInputDeviceId.Equals(deviceId, StringComparison.OrdinalIgnoreCase) ||
+            !previousOutputDeviceId.Equals(outputDeviceId, StringComparison.OrdinalIgnoreCase);
+        if (restartActiveAudio && audioRouteChanged && transmitCoordinator.ActiveChannels.Count > 0)
+        {
+            AudioStatusText = "Stop transmitting before changing the audio processing mode or device route.";
+            return;
+        }
+
         userSettings.AudioInputDeviceId = deviceId;
         userSettings.AudioOutputDeviceId = outputDeviceId;
         userSettings.AudioProcessingMode = processingMode switch
@@ -107,8 +120,7 @@ public sealed partial class MainWindowViewModel
             AudioProcessingMode.WindowsCommunications => UserSettings.WindowsCommunicationsProcessingMode,
             _ => UserSettings.DvmConsoleAudioProcessingMode
         };
-        if (OperatingSystem.IsMacOSVersionAtLeast(26))
-            userSettings.HighQualityBluetoothAudioEnabled = HighQualityBluetoothAudioEnabled;
+        userSettings.HighQualityBluetoothAudioEnabled = highQualityBluetoothAudio;
         userSettings.AudioInputAgcEnabled = AudioInputAgcEnabled;
         userSettings.AudioInputAgcTargetDbfs = agcTargetDbfs;
         userSettings.AudioInputGain = gain;
@@ -127,7 +139,17 @@ public sealed partial class MainWindowViewModel
             MidGainDb = midGainDb,
             HighGainDb = highGainDb
         });
-        if (userSettings.KeepTransmitMicrophoneWarm)
+        bool restoreWarmMicrophone = userSettings.KeepTransmitMicrophoneWarm;
+        if (restartActiveAudio && audioRouteChanged)
+        {
+            if (restoreWarmMicrophone)
+                await transmitCoordinator.SetKeepMicrophoneWarmAsync(false).ConfigureAwait(false);
+            await ReconfigureApplicationAudioAsync(CreateApplicationAudioConfiguration())
+                .ConfigureAwait(false);
+            if (restoreWarmMicrophone)
+                await transmitCoordinator.SetKeepMicrophoneWarmAsync(true).ConfigureAwait(false);
+        }
+        else if (restoreWarmMicrophone)
         {
             await transmitCoordinator.SetKeepMicrophoneWarmAsync(false).ConfigureAwait(false);
             await transmitCoordinator.SetKeepMicrophoneWarmAsync(true).ConfigureAwait(false);
@@ -146,19 +168,13 @@ public sealed partial class MainWindowViewModel
         AudioStatusText = (processingMode switch
         {
             AudioProcessingMode.AppleVoiceProcessing =>
-                "Apple voice processing saved for microphone transmit capture; RX vocoder processing remains independently controlled.",
+                "Apple voice processing saved; application playback and transmit capture now share one full-duplex voice route. RX vocoder processing remains independently controlled.",
             AudioProcessingMode.WindowsCommunications =>
                 "Windows communications processing saved for microphone transmit capture; available effects depend on Windows and the selected endpoint.",
             _ => "DVM Console audio processing saved; device routes apply to the next audio session and PTT call."
         }) +
             bluetoothStatus;
 
-        bool audioRouteChanged = previousProcessingMode != processingMode ||
-            previousHighQualityBluetoothAudio != userSettings.HighQualityBluetoothAudioEnabled ||
-            !previousInputDeviceId.Equals(deviceId, StringComparison.OrdinalIgnoreCase) ||
-            !previousOutputDeviceId.Equals(outputDeviceId, StringComparison.OrdinalIgnoreCase);
-        if (restartActiveAudio && audioRouteChanged)
-            await RestartActiveListeningChannelsAsync();
     }
 
     public void RefreshAudioDevices()
@@ -293,28 +309,39 @@ public sealed partial class MainWindowViewModel
         }
     }
 
-    private async Task RestartActiveListeningChannelsAsync()
+    private async Task ReconfigureApplicationAudioAsync(
+        ApplicationAudioConfiguration configuration)
     {
         await audioReconfigurationLock.WaitAsync();
         try
         {
             ChannelViewModel[] activeChannels = audioCoordinator.ActiveChannels.ToArray();
-            if (activeChannels.Length == 0)
-                return;
+            WebStreamViewModel[] activeStreams = webStreamPlayback.ActiveStreams.ToArray();
 
-            await audioCoordinator.StopAsync();
+            foreach (ChannelViewModel channel in activeChannels)
+                await receiveAudioWork.StopAsync(channel).ConfigureAwait(false);
+            if (activeChannels.Length > 0)
+                await audioCoordinator.StopAsync().ConfigureAwait(false);
+            foreach (WebStreamViewModel stream in activeStreams)
+                await webStreamPlayback.StopAsync(stream).ConfigureAwait(false);
+            await webStreamPlayback.ResetAudioBackendAsync().ConfigureAwait(false);
+            await recordingPlayback.ResetAudioBackendAsync().ConfigureAwait(false);
+            await audioBackendProvider.ReconfigureAsync(configuration).ConfigureAwait(false);
+
             foreach (ChannelViewModel channel in activeChannels)
             {
                 if (channel.IsAudioEnabled)
-                    await StartAudioAsync(channel);
+                    await StartAudioAsync(channel).ConfigureAwait(false);
                 else if (channel.IsRecordingEnabled)
-                    await EnsureRecordingAudioAsync(channel);
+                    await EnsureRecordingAudioAsync(channel).ConfigureAwait(false);
             }
+            foreach (WebStreamViewModel stream in activeStreams)
+                await webStreamPlayback.StartAsync(stream).ConfigureAwait(false);
 
             int restarted = activeChannels.Count(audioCoordinator.IsActive);
-            AudioStatusText = restarted == activeChannels.Length
-                ? $"Audio settings changed; restarted {restarted} receive session(s)."
-                : $"Audio settings changed; restarted {restarted} of {activeChannels.Length} receive session(s).";
+            AudioStatusText =
+                $"Audio route changed; restarted {restarted} of {activeChannels.Length} receive session(s) " +
+                $"and {activeStreams.Count(webStreamPlayback.IsActive)} of {activeStreams.Length} web stream(s).";
         }
         finally
         {

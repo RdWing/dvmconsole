@@ -18,6 +18,8 @@ A patch group forwards audio between member resources.
 
 Use a patch group when traffic received on one member should be repeated to other members in the group.
 
+The console applies the source system's adaptive receive jitter buffer once, decodes the source to 8 kHz PCM, and re-encodes that PCM for each destination protocol. This supports cross-protocol patches. It does not pass source vocoder codewords directly to destinations.
+
 Patch groups have two separate pieces of state:
 
 - membership
@@ -35,6 +37,8 @@ When a patch is disabled:
 
 - members stay assigned
 - patch forwarding is inactive
+- any active destination transmission is ended
+- delayed or stream-ID-rewritten FNE echoes are briefly excluded from other patch routes during teardown
 - channel cards can still show that the resource belongs to a patch
 
 When a patch is enabled:
@@ -72,17 +76,18 @@ In this mode, any listed member can become the active patch source. Audio receiv
 When **Enable One-Way Patch** is on:
 
 - Patch Mode: One-Way
-- First listed member is the source.
-- All following members receive audio.
+- Choose the source explicitly from the selected members.
+- All other selected members are destinations and receive audio.
+- An RX-only channel can be the source, but every destination must be transmit-capable.
 
-Member order matters.
+The source is saved first internally for compatibility with existing configurations. When an older one-way patch is loaded, its first saved member is selected as the source.
 
 ```
 Member 1 = Source
 Members 2+ = Destinations
 ```
 
-If the wrong member is acting as the source, remove and re-add members in the desired order.
+Change the **Source** selector and save the group to route the patch in the other direction.
 
 ---
 
@@ -104,9 +109,10 @@ To edit a group:
 
 1. Open **View > Groups**.
 2. Find the required patch or multi-select group.
-3. Check each channel that should be a member.
+3. Expand **Edit members** and check each channel that should be a member.
 4. For a patch, select **Enabled** and **One-way** as required.
-5. Select **Save group**.
+5. For a one-way patch, choose the source. The other selected members are destinations.
+6. Select **Save group**.
 
 The console displays a conflict warning when a channel assignment cannot be used safely. Resolve the listed conflict before relying on that group.
 
@@ -143,5 +149,5 @@ If a resource belongs to both a patch and a multi-select group, the multi-select
 
 - Use patch groups for cross-resource receive forwarding.
 - Use multi-select groups for console-originated group transmit.
-- Keep one-way patch member order obvious.
+- Verify the source and destination summary before enabling a one-way patch.
 - Disable a patch instead of removing members when you want to keep the setup for later.
