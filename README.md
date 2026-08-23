@@ -136,6 +136,9 @@ If the application closes unexpectedly, preserve
 - Use P25 FNE/KMM key delivery with a local fallback, plus protocol-scoped local
   privacy keys for DMR and NXDN.
 - Follow system-default audio devices or pin fixed microphone and speaker routes.
+- Choose DVM Console microphone processing or the platform voice-processing
+  option: Apple Voice Processing on macOS or device-dependent Windows
+  communications processing on Windows.
 
 > [!NOTE]
 > DVM Console connects to DVM FNE peers. It does not directly control base or
@@ -152,7 +155,7 @@ interfaces, see [RadioConsole2](https://github.com/W3AXL/RadioConsole2) and
 | Understand systems, zones, channels, and the main console | [Overview](docs/user-guide/Getting%20Started/01-Overview.md) |
 | Create a codeplug and connect to FNE | [Codeplug creation](docs/user-guide/Getting%20Started/03-Configurations/01-Codeplug%20Creation.md) |
 | Configure PTT, routes, History, and operator controls | [Console operation](docs/user-guide/Getting%20Started/04-Operations/01-Console%20Operation.md) |
-| Configure microphones, speakers, and RX processing | [Audio settings](docs/user-guide/Getting%20Started/04-Operations/03-Audio%20Settings.md) |
+| Configure microphones, speakers, microphone processing, and RX processing | [Audio settings](docs/user-guide/Getting%20Started/04-Operations/03-Audio%20Settings.md) |
 | Configure encryption and inspect key status | [Encryption keys](docs/user-guide/Getting%20Started/03-Configurations/02-Encryption%20Keys.md) |
 | Configure and manage local recordings | [Talkgroup Audio Recorder](docs/user-guide/Getting%20Started/03-Configurations/05-Talkgroup%20Audio%20Recorder.md) |
 | Build or package the application | [Building and packaging](docs/user-guide/Getting%20Started/02-Building.md) |
