@@ -51,7 +51,8 @@ public sealed record HistoryCatalogFilter(
             entry.CallerText,
             entry.DisplaySourceText,
             entry.DisplayDestinationText,
-            entry.StreamId.ToString(CultureInfo.InvariantCulture),
+            string.Join(' ', entry.StreamIds.Select(streamId =>
+                streamId.ToString(CultureInfo.InvariantCulture))),
             entry.ProtocolText,
             entry.DirectionText,
             entry.EncryptionText,

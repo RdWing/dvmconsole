@@ -186,6 +186,33 @@ public sealed class AudioMixerTests
     }
 
     [Fact]
+    public async Task PausedInputExpectationDoesNotGapFillAFragmentHandoff()
+    {
+        var output = new BufferedFakePlayback();
+        await using var mixer = new AudioMixer(output);
+        await using IAudioPlayback channel = mixer.OpenChannel("logical episode");
+        var expectation = Assert.IsAssignableFrom<IAudioPlaybackInputExpectationControl>(channel);
+
+        await channel.WriteAsync(Enumerable.Repeat((short)500, 4 * 160).ToArray());
+        await WaitForAsync(() => output.Frames.Count > 0);
+        output.ConsumeAll();
+        await WaitForAsync(() => mixer.GetDiagnostics().GapFilledSamples > 0);
+
+        expectation.ExpectsMoreInput = false;
+        output.ConsumeAll();
+        await Task.Delay(60);
+        long pausedGapSamples = mixer.GetDiagnostics().GapFilledSamples;
+        await Task.Delay(60);
+
+        Assert.Equal(pausedGapSamples, mixer.GetDiagnostics().GapFilledSamples);
+
+        expectation.ExpectsMoreInput = true;
+        await channel.WriteAsync(CreateSamples(700));
+        output.ConsumeAll();
+        await WaitForAsync(() => output.Frames.Any(frame => frame[^1] == 700));
+    }
+
+    [Fact]
     public async Task SharedLanePropagatesPhysicalHealthWithoutOwningTheDeviceQueue()
     {
         var physicalOutput = new ObservablePhysicalPlayback

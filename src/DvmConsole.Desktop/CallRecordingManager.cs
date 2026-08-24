@@ -159,15 +159,23 @@ public sealed class CallRecordingManager : IDisposable, IAsyncDisposable
         uint streamId,
         uint sourceId,
         ReadOnlyMemory<short> samples)
+        => WriteEpisodeSamples(channel, streamId, streamId, sourceId, samples);
+
+    public void WriteEpisodeSamples(
+        ChannelViewModel channel,
+        uint episodeStreamId,
+        uint physicalStreamId,
+        uint sourceId,
+        ReadOnlyMemory<short> samples)
     {
         ArgumentNullException.ThrowIfNull(channel);
-        if (samples.IsEmpty || !channel.IsRecordingEnabled || streamId == 0)
+        if (samples.IsEmpty || !channel.IsRecordingEnabled || episodeStreamId == 0)
             return;
 
         if (sourceId != 0 && !shouldRecordSource(channel, sourceId))
         {
             lock (sync)
-                CloseCore(channel, streamId);
+                CloseCore(channel, episodeStreamId);
             return;
         }
 
@@ -176,23 +184,24 @@ public sealed class CallRecordingManager : IDisposable, IAsyncDisposable
             ObjectDisposedException.ThrowIf(disposed, this);
             try
             {
-                var key = (channel, streamId);
+                var key = (channel, episodeStreamId);
                 if (!active.TryGetValue(key, out ActiveRecording? recording))
                 {
                     recording = CreateActiveRecording(
                         channel,
-                        streamId,
+                        episodeStreamId,
                         sourceId == 0 ? null : sourceId,
                         "RX",
                         "InboundRadio");
                     active[key] = recording;
                 }
 
+                recording.ObservePhysicalStream(physicalStreamId);
                 recording.Writer.Write(samples.Span);
             }
             catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or InvalidOperationException)
             {
-                CloseCore(channel, streamId);
+                CloseCore(channel, episodeStreamId);
                 faultHandler?.Invoke(channel, exception);
             }
         }
@@ -257,6 +266,32 @@ public sealed class CallRecordingManager : IDisposable, IAsyncDisposable
             CloseCore(channel, traffic.StreamId);
             streamEncryption.Remove((channel, traffic.StreamId));
             return closed;
+        }
+    }
+
+    public void ObserveEpisodeTraffic(
+        ChannelViewModel channel,
+        uint episodeStreamId,
+        uint physicalStreamId,
+        FneTrafficFrame traffic)
+    {
+        ArgumentNullException.ThrowIfNull(channel);
+        ArgumentNullException.ThrowIfNull(traffic);
+        if (episodeStreamId == 0)
+            return;
+
+        lock (sync)
+        {
+            TrafficEncryptionMetadata? encryption = TrafficEncryptionMetadataResolver.TryResolve(traffic);
+            if (encryption is TrafficEncryptionMetadata resolved)
+            {
+                streamEncryption[(channel, episodeStreamId)] = resolved;
+                if (active.TryGetValue((channel, episodeStreamId), out ActiveRecording? current))
+                    current.SetEncryption(resolved);
+            }
+
+            if (active.TryGetValue((channel, episodeStreamId), out ActiveRecording? recording))
+                recording.ObservePhysicalStream(physicalStreamId);
         }
     }
 
@@ -460,6 +495,10 @@ public sealed class CallRecordingManager : IDisposable, IAsyncDisposable
             recording.SourceId,
             recording.SubscriberAlias,
             recording.StreamId,
+            recording.StreamIds
+                .OrderBy(streamId => streamId == recording.StreamId ? 0 : 1)
+                .ThenBy(streamId => streamId)
+                .ToArray(),
             recording.IsSecure,
             recording.EncryptionAlgorithmId,
             recording.EncryptionKeyId,
@@ -562,7 +601,7 @@ public sealed class CallRecordingManager : IDisposable, IAsyncDisposable
     {
         return new CallRecordingMetadata
         {
-            SchemaVersion = 2,
+            SchemaVersion = 3,
             Protocol = snapshot.ProtocolText,
             Direction = snapshot.Direction,
             RecordingSourceType = snapshot.RecordingSourceType,
@@ -588,6 +627,7 @@ public sealed class CallRecordingManager : IDisposable, IAsyncDisposable
             SubscriberId = snapshot.SourceId,
             SubscriberAlias = snapshot.SubscriberAlias,
             StreamId = snapshot.StreamId,
+            StreamIds = snapshot.StreamIds.ToList(),
             IsEncrypted = snapshot.IsSecure,
             EncryptionAlgorithm = EncryptionPresentation.AlgorithmAbbreviation(
                 snapshot.Protocol,
@@ -633,6 +673,7 @@ public sealed class CallRecordingManager : IDisposable, IAsyncDisposable
         PcmWavFileWriter writer)
     {
         public uint StreamId { get; } = streamId;
+        public HashSet<uint> StreamIds { get; } = [streamId];
         public DateTimeOffset UtcStartTime { get; } = utcStartTime;
         public uint? SourceId { get; } = sourceId;
         public string SubscriberAlias { get; } = subscriberAlias;
@@ -648,6 +689,12 @@ public sealed class CallRecordingManager : IDisposable, IAsyncDisposable
             IsSecure = encryption.Secure;
             EncryptionAlgorithmId = encryption.Secure ? encryption.AlgorithmId : null;
             EncryptionKeyId = encryption.Secure ? encryption.KeyId : null;
+        }
+
+        public void ObservePhysicalStream(uint streamId)
+        {
+            if (streamId != 0)
+                StreamIds.Add(streamId);
         }
     }
 
@@ -667,6 +714,7 @@ public sealed class CallRecordingManager : IDisposable, IAsyncDisposable
         uint? SourceId,
         string SubscriberAlias,
         uint StreamId,
+        IReadOnlyList<uint> StreamIds,
         bool IsSecure,
         byte? EncryptionAlgorithmId,
         ushort? EncryptionKeyId,

@@ -96,6 +96,23 @@ public sealed class CallHistoryStoreTests
     }
 
     [Fact]
+    public void TracksPhysicalStreamFragmentsOnOneLogicalHistoryEntry()
+    {
+        var store = new CallHistoryStore();
+        CallHistoryEntry entry = CreateEntry(42);
+        store.Add(entry);
+
+        Assert.True(store.ObserveReceiveStream(
+            "System 1", FneTrafficProtocol.Dmr, 42, 43, "Dispatch", 100));
+        Assert.False(store.ObserveReceiveStream(
+            "System 1", FneTrafficProtocol.Dmr, 42, 43, "Dispatch", 100));
+
+        Assert.Equal(new uint[] { 42, 43 }, entry.StreamIds);
+        Assert.Equal("DMR · 2 stream fragments", entry.StreamText);
+        Assert.True(new HistoryCatalogFilter(SearchText: "43").Matches(entry));
+    }
+
+    [Fact]
     public void UpdatesEncryptionWhenProtocolMetadataArrivesLater()
     {
         var store = new CallHistoryStore();

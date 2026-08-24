@@ -59,7 +59,10 @@ public sealed class ReceiveDiagnosticsTextTests
             warning,
             receiveSelected: true,
             playback,
-            pipeline);
+            pipeline,
+            new EpisodeLivePlayoutDiagnostics(
+                ProducerHandoffs: 2,
+                SuppressedRetiredSamples: 1_440));
 
         Assert.Contains("(RX selected)", message);
         Assert.Contains("stream 42", message);
@@ -77,6 +80,8 @@ public sealed class ReceiveDiagnosticsTextTests
         Assert.Contains("jitter reordered this stream 2", message);
         Assert.Contains("jitter deadline misses this stream 1", message);
         Assert.Contains("worst lane East Bay/Dispatch", message);
+        Assert.Contains("live episode handoffs 2", message);
+        Assert.Contains("retired-stream audio kept from live output 180 ms", message);
     }
 
     [Fact]
