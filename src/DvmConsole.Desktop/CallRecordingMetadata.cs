@@ -7,6 +7,7 @@ namespace DvmConsole.Desktop;
 // Encryption identifiers are descriptive only; key material is never stored.
 public sealed class CallRecordingMetadata
 {
+    private List<uint> streamIds = [];
     public int SchemaVersion { get; set; } = 1;
     public string RecordingId { get; set; } = Guid.NewGuid().ToString("N");
     public string Direction { get; set; } = "RX";
@@ -32,6 +33,16 @@ public sealed class CallRecordingMetadata
     public uint? SubscriberId { get; set; }
     public string SubscriberAlias { get; set; } = string.Empty;
     public uint? StreamId { get; set; }
+    public List<uint> StreamIds
+    {
+        get => streamIds;
+        set => streamIds = value ?? [];
+    }
+
+    [JsonIgnore]
+    public int StreamFragmentCount => StreamIds.Count > 0
+        ? StreamIds.Distinct().Count()
+        : StreamId is null ? 0 : 1;
     public bool IsEncrypted { get; set; }
     public string EncryptionAlgorithm { get; set; } = string.Empty;
     public string? EncryptionKeyId { get; set; }

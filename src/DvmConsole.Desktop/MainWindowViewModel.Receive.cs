@@ -20,6 +20,7 @@ public sealed partial class MainWindowViewModel
             ? traffic.FneBoundaryTimestamp
             : Stopwatch.GetTimestamp();
         traffic = NormalizeP25CallIdentity(traffic);
+        receiveCallEpisodes.Observe(system.Name, traffic, receivedAt);
         ObserveAdaptiveReceiveJitter(system, traffic);
         ChannelViewModel[] preEnqueuedAudioChannels = EnqueuePriorityReceiveAudio(
             system,
@@ -64,6 +65,16 @@ public sealed partial class MainWindowViewModel
         ArgumentNullException.ThrowIfNull(traffic);
         traffic = NormalizeP25CallIdentity(traffic);
         DateTimeOffset now = receivedAt ?? DateTimeOffset.Now;
+        ReceiveCallEpisodeObservation? episodeObservation = receiveCallEpisodes.Observe(
+            system.Name,
+            traffic,
+            now);
+        uint historyStreamId = episodeObservation?.PrimaryStreamId ?? traffic.StreamId;
+        receiveCallEpisodes.TryGet(
+            system.Name,
+            traffic.Protocol,
+            traffic.StreamId,
+            out ReceiveCallEpisodeSnapshot? episode);
         system.RecordTraffic(traffic, publishTrafficDiagnostics);
         List<ChannelViewModel> activeAudioChannels = [];
         List<ChannelViewModel> activePatchSourceChannels = [];
@@ -74,6 +85,7 @@ public sealed partial class MainWindowViewModel
         foreach (ChannelViewModel channel in ResolveTrafficCandidates(system, traffic))
         {
             callHistoryChanged = ExpireStaleReceiveStreams(channel, now) || callHistoryChanged;
+            callHistoryChanged = ExpireReceiveCallEpisodes(now) || callHistoryChanged;
             ChannelTrafficApplyResult applied = channel.ApplyTraffic(system.Name, traffic, now);
             if (!applied.Matched)
                 continue;
@@ -100,13 +112,11 @@ public sealed partial class MainWindowViewModel
                     DebugLogSeverity.Info,
                     $"RX call ended on {channel.Name}: {traffic.Protocol.ToString().ToUpperInvariant()} " +
                     $"{traffic.SourceId}→{traffic.DestinationId}, stream {endedStreamId}.");
-                callHistoryChanged = callHistory.Complete(
+                receiveCallEpisodes.ObservePhysicalEnd(
                     system.Name,
                     traffic.Protocol,
                     endedStreamId,
-                    endedAt,
-                    channel.Name,
-                    channel.Definition.DestinationId) || callHistoryChanged;
+                    endedAt);
                 TaskObservation.Observe(FinalizeEndedReceiveStreamAsync(
                     channel,
                     endedStreamId,
@@ -124,29 +134,46 @@ public sealed partial class MainWindowViewModel
                 !callHistory.HasActiveReceiveCall(
                     system.Name,
                     traffic.Protocol,
-                    traffic.StreamId,
+                    historyStreamId,
                     channel.Name,
-                    traffic.DestinationId))
+                    traffic.DestinationId,
+                    episode?.EpisodeId))
             {
                 AddDebugLog(
                     now,
                     system.Name,
                     DebugLogSeverity.Info,
                     $"RX call started on {channel.Name}: {traffic.Protocol.ToString().ToUpperInvariant()} " +
-                    $"{traffic.CallType}, {traffic.SourceId}→{traffic.DestinationId}, stream {traffic.StreamId}" +
+                    $"{traffic.CallType}, {traffic.SourceId}→{traffic.DestinationId}, stream {historyStreamId}" +
                     (protocolEncrypted ?? channel.Definition.IsEncrypted ? ", encrypted" : ", clear") +
                     $"{DescribeFneSignalQuality(traffic)}.");
                 callHistory.Add(new CallHistoryEntry(
-                    now,
+                    episode?.StartedAt ?? now,
                     system.Name,
                     channel.Name,
                     traffic.SourceId,
                     traffic.DestinationId,
                     traffic.Protocol,
-                    traffic.StreamId,
+                    historyStreamId,
                     channel.LastCallerText,
-                    protocolEncrypted ?? channel.Definition.IsEncrypted));
+                    protocolEncrypted ?? channel.Definition.IsEncrypted,
+                    receiveEpisodeId: episode?.EpisodeId));
                 callHistoryChanged = true;
+            }
+
+            if (episode is not null)
+            {
+                foreach (uint physicalStreamId in episode.StreamIds)
+                {
+                    callHistoryChanged = callHistory.ObserveReceiveStream(
+                        system.Name,
+                        traffic.Protocol,
+                        historyStreamId,
+                        physicalStreamId,
+                        channel.Name,
+                        traffic.DestinationId,
+                        episode.EpisodeId) || callHistoryChanged;
+                }
             }
 
             if (protocolEncrypted is bool encrypted)
@@ -154,12 +181,13 @@ public sealed partial class MainWindowViewModel
                 callHistoryChanged = callHistory.UpdateEncryption(
                     system.Name,
                     traffic.Protocol,
-                    traffic.StreamId,
+                    historyStreamId,
                     encrypted,
                     protocolEncryption?.AlgorithmId,
                     protocolEncryption?.KeyId,
                     channel.Name,
-                    traffic.DestinationId) || callHistoryChanged;
+                    traffic.DestinationId,
+                    episode?.EpisodeId) || callHistoryChanged;
             }
 
             if (audioCoordinator.IsActive(channel))
@@ -215,13 +243,11 @@ public sealed partial class MainWindowViewModel
                 applied.Transition == ReceiveStreamTransition.TerminationExpired
                     ? $"RX call ended on {channel.Name}: stream {streamId}."
                     : $"RX call timed out on {channel.Name}: stream {streamId}.");
-            callHistoryChanged = callHistory.Complete(
+            receiveCallEpisodes.ObservePhysicalEnd(
                 channel.Definition.SystemName,
                 ProtocolFor(channel),
                 streamId,
-                endedAt,
-                channel.Name,
-                channel.Definition.DestinationId) || callHistoryChanged;
+                endedAt);
             TaskObservation.Observe(FinalizeEndedReceiveStreamAsync(channel, streamId, endedAt));
         }
     }
@@ -238,15 +264,8 @@ public sealed partial class MainWindowViewModel
                 streamId,
                 async () =>
                 {
-                    try
-                    {
-                        await audioCoordinator.CompleteStreamAsync(channel, streamId, endedAt)
-                            .ConfigureAwait(false);
-                    }
-                    finally
-                    {
-                        StopReceiveRecording(channel, streamId);
-                    }
+                    await audioCoordinator.CompleteStreamAsync(channel, streamId, endedAt)
+                        .ConfigureAwait(false);
                 })
                 .ConfigureAwait(false);
         }
@@ -710,10 +729,9 @@ public sealed partial class MainWindowViewModel
         {
             if (ReceiveTrafficClassifier.IsTerminator(traffic))
             {
-                // The presentation can go idle immediately, but the decoder
-                // and TAR writer remain available during the bounded
-                // terminator hold. ExpireStaleReceiveStreams finalizes both
-                // after the stream has remained quiet.
+                // The physical decoder can go idle immediately. TAR remains
+                // open until the logical receive episode's continuation
+                // window expires, allowing a replacement stream to append.
                 channel.MarkReceiveAudioMeterEnded(traffic.StreamId);
                 Dispatcher.UIThread.Post(() =>
                     channel.MarkReceivePlaybackEnded(traffic.StreamId));
@@ -722,7 +740,14 @@ public sealed partial class MainWindowViewModel
             {
                 ChannelViewModel? recordingTarget = ResolveReceiveRecordingTarget(channel);
                 if (recordingTarget is not null)
-                    callRecordings.ObserveTraffic(recordingTarget, traffic);
+                {
+                    uint recordingStreamId = ResolveReceiveEpisodeStreamId(channel, traffic.StreamId);
+                    callRecordings.ObserveEpisodeTraffic(
+                        recordingTarget,
+                        recordingStreamId,
+                        traffic.StreamId,
+                        traffic);
+                }
             }
         }
     }

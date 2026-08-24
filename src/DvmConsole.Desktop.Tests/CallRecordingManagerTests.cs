@@ -13,6 +13,41 @@ namespace DvmConsole.Desktop.Tests;
 public sealed class CallRecordingManagerTests
 {
     [Fact]
+    public async Task EpisodeFragmentsProduceOneTarWithEveryPhysicalStreamId()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "dvmconsole-recording-tests", Guid.NewGuid().ToString("N"));
+        var channel = new ChannelViewModel(new ChannelConfiguration
+        {
+            Name = "Dispatch",
+            System = "System 1",
+            Tgid = "99",
+            Mode = "p25"
+        });
+        using var manager = new CallRecordingManager(root);
+        channel.SetRecordingEnabled(true);
+
+        try
+        {
+            manager.WriteEpisodeSamples(channel, 41, 41, 7, ActiveSamples());
+            manager.WriteEpisodeSamples(channel, 41, 42, 7, ActiveSamples());
+            Task<RecordingFinalizationResult> finalized = NextFinalizationAsync(manager);
+            manager.StopStream(channel, 41);
+
+            Assert.True((await finalized).IsPlayable);
+            CallRecordingMetadata metadata = Assert.Single(manager.LoadRecordings());
+            Assert.Equal((uint)41, metadata.StreamId);
+            Assert.Equal(new uint[] { 41, 42 }, metadata.StreamIds);
+            Assert.Equal(2, metadata.StreamFragmentCount);
+            Assert.Equal(3, metadata.SchemaVersion);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task DisposalClosesActiveWaveAndDrainsOpusFinalization()
     {
         string root = Path.Combine(Path.GetTempPath(), "dvmconsole-recording-tests", Guid.NewGuid().ToString("N"));

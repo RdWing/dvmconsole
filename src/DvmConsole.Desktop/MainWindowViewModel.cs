@@ -96,6 +96,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
     private readonly ReceivePipelineTimingReporter receivePipelineTimingReporter = new(TimeSpan.FromSeconds(5));
     private readonly AdaptiveReceiveJitterBufferController adaptiveReceiveJitter = new();
     private readonly ReceiveJitterBufferEffectivenessTracker receiveJitterEffectiveness = new();
+    private readonly ReceiveCallEpisodeTracker receiveCallEpisodes = new();
     private readonly ReceiveOutputMutePolicy receiveOutputMutePolicy = new();
     private readonly SemaphoreSlim audioReconfigurationLock = new(1, 1);
     private readonly object receiveOutputRecoverySync = new();
@@ -262,6 +263,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
             nxdnKeyResolver: nxdnKeyResolver,
             getChannelBalance: GetChannelStereoBalance,
             presentationSamplesObserver: HandlePresentedReceiveSamples);
+        audioCoordinator.SetReceivePlaybackEpisodeResolver(ResolveReceivePlaybackEpisode);
         audioCoordinator.OutputFailed += HandleReceiveAudioOutputFailed;
         receiveAudioWork = new ChannelReceiveWorkQueue(
             ProcessAudioAsync,
@@ -3135,7 +3137,14 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
             patchForwarding.ObserveDecodedSamples(channel, streamId, sourceId, samples);
         ChannelViewModel? recordingTarget = ResolveReceiveRecordingTarget(channel);
         if (recordingTarget is not null)
-            callRecordings.WriteSamples(recordingTarget, streamId, sourceId, samples);
+        {
+            callRecordings.WriteEpisodeSamples(
+                recordingTarget,
+                ResolveReceiveEpisodeStreamId(channel, streamId),
+                streamId,
+                sourceId,
+                samples);
+        }
         LogVocoderAudioLevel(channel, samples, ChannelAudioDirection.Receive, streamId);
     }
 
@@ -3149,12 +3158,31 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
             : ReceiveRecordingTargetResolver.Resolve(decodedChannel, system.Channels);
     }
 
-    private void StopReceiveRecording(ChannelViewModel decodedChannel, uint streamId)
-    {
-        ChannelViewModel? recordingTarget = ResolveReceiveRecordingTarget(decodedChannel);
-        if (recordingTarget is not null)
-            callRecordings.StopStream(recordingTarget, streamId);
-    }
+    private uint ResolveReceiveEpisodeStreamId(ChannelViewModel channel, uint physicalStreamId)
+        => receiveCallEpisodes.TryGet(
+            channel.Definition.SystemName,
+            ProtocolFor(channel),
+            physicalStreamId,
+            out ReceiveCallEpisodeSnapshot? episode)
+            ? episode.PrimaryStreamId
+            : physicalStreamId;
+
+    private ReceivePlaybackEpisode ResolveReceivePlaybackEpisode(
+        ChannelViewModel channel,
+        FneTrafficFrame traffic)
+        => receiveCallEpisodes.TryGet(
+            channel.Definition.SystemName,
+            traffic.Protocol,
+            traffic.StreamId,
+            out ReceiveCallEpisodeSnapshot? episode)
+            ? new ReceivePlaybackEpisode(
+                episode.EpisodeId,
+                episode.PrimaryStreamId,
+                RetainUntilEpisodeCompletion: true)
+            : new ReceivePlaybackEpisode(
+                -checked((long)traffic.StreamId),
+                traffic.StreamId,
+                RetainUntilEpisodeCompletion: false);
 
     private void HandlePresentedReceiveSamples(
         ChannelViewModel channel,
@@ -3854,8 +3882,68 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
         bool callHistoryChanged = false;
         foreach (ChannelViewModel channel in Systems.SelectMany(system => system.Channels))
             callHistoryChanged = ExpireStaleReceiveStreams(channel, now) || callHistoryChanged;
+        callHistoryChanged = ExpireReceiveCallEpisodes(now) || callHistoryChanged;
         if (callHistoryChanged)
             NotifyCallHistoryChanged();
+    }
+
+    private bool ExpireReceiveCallEpisodes(DateTimeOffset now)
+    {
+        bool callHistoryChanged = false;
+        foreach (ReceiveCallEpisodeSnapshot episode in receiveCallEpisodes.Advance(
+                     now,
+                     episode => !IsReceiveEpisodePhysicallyActive(episode)))
+        {
+            callHistoryChanged = callHistory.Complete(
+                episode.SystemName,
+                episode.Protocol,
+                episode.PrimaryStreamId,
+                episode.PresentationEndAt,
+                receiveEpisodeId: episode.EpisodeId) || callHistoryChanged;
+            StopReceiveEpisodeRecording(episode);
+        }
+        return callHistoryChanged;
+    }
+
+    private bool IsReceiveEpisodePhysicallyActive(ReceiveCallEpisodeSnapshot episode)
+    {
+        SystemViewModel? system = Systems.FirstOrDefault(candidate => candidate.Name.Equals(
+            episode.SystemName,
+            StringComparison.OrdinalIgnoreCase));
+        return system is not null && system.Channels.Any(channel =>
+            episode.StreamIds.Any(channel.IsTrackingReceiveStream));
+    }
+
+    private void StopReceiveEpisodeRecording(ReceiveCallEpisodeSnapshot episode)
+    {
+        SystemViewModel? system = Systems.FirstOrDefault(candidate => candidate.Name.Equals(
+            episode.SystemName,
+            StringComparison.OrdinalIgnoreCase));
+        if (system is null)
+            return;
+
+        ChannelViewModel[] episodeChannels = system.Channels
+            .Where(channel =>
+                ProtocolFor(channel) == episode.Protocol &&
+                channel.Definition.DestinationId == episode.DestinationId &&
+                (episode.Protocol != FneTrafficProtocol.Dmr ||
+                 channel.Definition.Slot == episode.Slot))
+            .Distinct()
+            .ToArray();
+        foreach (ChannelViewModel channel in episodeChannels)
+        {
+            TaskObservation.Observe(audioCoordinator.CompleteEpisodeAsync(
+                channel,
+                episode.EpisodeId));
+        }
+
+        foreach (ChannelViewModel target in episodeChannels
+                     .Select(ResolveReceiveRecordingTarget)
+                     .OfType<ChannelViewModel>()
+                     .Distinct())
+        {
+            callRecordings.StopStream(target, episode.PrimaryStreamId);
+        }
     }
 
     private void NotifyCallHistoryChanged()

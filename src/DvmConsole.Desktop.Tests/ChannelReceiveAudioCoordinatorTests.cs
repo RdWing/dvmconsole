@@ -260,6 +260,40 @@ public sealed class ChannelReceiveAudioCoordinatorTests
     }
 
     [Fact]
+    public async Task EpisodeFragmentsKeepIndependentDecodersButReuseOneMixerLane()
+    {
+        var backend = new FakeAudioBackend();
+        var vocoder = new DistinctVocoderBackend();
+        await using var coordinator = new ChannelReceiveAudioCoordinator(
+            () => backend,
+            () => vocoder);
+        coordinator.SetReceivePlaybackEpisodeResolver((_, traffic) =>
+            new ReceivePlaybackEpisode(900, 41, RetainUntilEpisodeCompletion: true));
+        var channel = new ChannelViewModel(new ChannelConfiguration
+        {
+            Name = "TAC",
+            System = "System 1",
+            Tgid = "100",
+            Mode = "dmr",
+            Slot = 1
+        });
+        await coordinator.StartAsync(channel);
+
+        await coordinator.ProcessAsync(channel, CreateTraffic(100, 0, streamId: 41));
+        await coordinator.ProcessAsync(channel, CreateDmrTerminator(100, 0, streamId: 41));
+        await coordinator.CompleteStreamAsync(channel, 41, DateTimeOffset.UtcNow);
+        await coordinator.ProcessAsync(channel, CreateTraffic(100, 0, streamId: 42));
+
+        Assert.Equal(2, vocoder.CreateSessionCalls);
+        AudioMixerLaneDiagnostics lane = Assert.Single(
+            coordinator.GetPlaybackDiagnostics(channel)!.LaneDiagnostics!);
+        Assert.Contains("episode 900", lane.Label, StringComparison.Ordinal);
+
+        await coordinator.CompleteStreamAsync(channel, 42, DateTimeOffset.UtcNow);
+        await coordinator.CompleteEpisodeAsync(channel, 900);
+    }
+
+    [Fact]
     public async Task ConfirmedTerminatorReleasesAShortStreamBeforeTheStartupCushionIsFull()
     {
         var backend = new QueueReportingAudioBackend();

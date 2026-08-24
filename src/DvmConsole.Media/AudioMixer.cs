@@ -44,6 +44,14 @@ public interface IAudioPlaybackPresentationSource
         Action<ReadOnlyMemory<short>, TimeSpan>? observer);
 }
 
+// Lets a long-lived mixer lane pause its live clock between related network
+// stream fragments without discarding buffered audio or resetting its playout
+// history. This is intentionally separate from operator mute.
+public interface IAudioPlaybackInputExpectationControl
+{
+    bool ExpectsMoreInput { get; set; }
+}
+
 // Mixes PCM from independently selected receive channels into one playback
 // stream. The mixer emits one 20 ms frame at a time and treats channels with
 // no frame ready as silence, so a quiet channel cannot block an active one.
@@ -569,6 +577,7 @@ public sealed class AudioMixer : IAsyncDisposable
     private bool ExpectsMoreLiveInputLocked()
         => channels.Values.Any(channel =>
             channel.LivePlaybackEnabled &&
+            channel.ExpectsMoreInput &&
             channel.PlayoutStarted &&
             !channel.Completing);
 
@@ -808,6 +817,25 @@ public sealed class AudioMixer : IAsyncDisposable
             return channel.LivePlaybackEnabled;
     }
 
+    private bool GetExpectsMoreInput(MixerLaneBuffer channel)
+    {
+        lock (sync)
+            return channel.ExpectsMoreInput;
+    }
+
+    private void SetExpectsMoreInput(MixerLaneBuffer channel, bool expected)
+    {
+        lock (sync)
+        {
+            ThrowIfUnavailable();
+            if (channel.Disposed || !channels.ContainsKey(channel.Id))
+                throw new ObjectDisposedException(nameof(IAudioPlayback));
+            channel.ExpectsMoreInput = expected;
+            if (expected)
+                SignalDataAvailable();
+        }
+    }
+
     private void SetLivePlaybackEnabled(MixerLaneBuffer channel, bool enabled)
     {
         lock (sync)
@@ -991,6 +1019,7 @@ public sealed class AudioMixer : IAsyncDisposable
         IAudioPlaybackPresentationSource,
         IAudioGainControl,
         IAudioBalanceControl,
+        IAudioPlaybackInputExpectationControl,
         IPhysicalAudioOutputDiagnosticsSource
     {
         private bool disposed;
@@ -1013,6 +1042,16 @@ public sealed class AudioMixer : IAsyncDisposable
             {
                 ObjectDisposedException.ThrowIf(disposed, this);
                 owner.SetLivePlaybackEnabled(channel, value);
+            }
+        }
+
+        public bool ExpectsMoreInput
+        {
+            get => owner.GetExpectsMoreInput(channel);
+            set
+            {
+                ObjectDisposedException.ThrowIf(disposed, this);
+                owner.SetExpectsMoreInput(channel, value);
             }
         }
 

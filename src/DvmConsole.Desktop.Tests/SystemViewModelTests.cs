@@ -791,7 +791,7 @@ public sealed class SystemViewModelTests
     }
 
     [Fact]
-    public async Task RecordsOneHistoryEntryPerNewVoiceStream()
+    public async Task CoalescesRapidReplacementStreamsIntoOneHistoryEpisode()
     {
         string path = Path.Combine(AppContext.BaseDirectory, "TestData", "multiple-systems.yml");
         string settingsPath = CreateSettingsPath();
@@ -889,14 +889,14 @@ public sealed class SystemViewModelTests
             viewModel.ExpireStaleReceiveStates(start.AddSeconds(4));
 
             CallHistoryEntry[] sessionHistory = viewModel.CallHistory.Where(entry => !entry.IsRecordingOnly).ToArray();
-            Assert.Equal(2, sessionHistory.Length);
+            CallHistoryEntry episode = Assert.Single(sessionHistory);
             Assert.Contains("non-call DMR terminators 1", system.ConnectionHealthText);
-            Assert.Equal((uint)78, sessionHistory[0].StreamId);
-            Assert.False(sessionHistory[0].IsActive);
-            Assert.NotNull(sessionHistory[0].Duration);
-            Assert.Equal((uint)77, sessionHistory[1].StreamId);
-            Assert.Equal("Alpha Dispatch", sessionHistory[1].ChannelName);
-            Assert.True(sessionHistory[1].IsActive);
+            Assert.Equal((uint)77, episode.StreamId);
+            Assert.Equal(new uint[] { 77, 78 }, episode.StreamIds);
+            Assert.Equal(2, episode.StreamFragmentCount);
+            Assert.Equal("DMR · 2 stream fragments", episode.StreamText);
+            Assert.Equal("Alpha Dispatch", episode.ChannelName);
+            Assert.True(episode.IsActive);
             Assert.Equal("Info", viewModel.DebugLogSeverityFilter);
             Assert.All(viewModel.FilteredDebugLogs, entry => Assert.Equal(DvmConsole.Core.Diagnostics.DebugLogSeverity.Info, entry.Severity));
             Assert.Contains(viewModel.FilteredDebugLogs, entry => entry.Message.Contains("RX call started", StringComparison.Ordinal));
@@ -908,7 +908,7 @@ public sealed class SystemViewModelTests
             Assert.DoesNotContain(viewModel.DebugLogEntries, entry => entry.Message.Contains("FNE RX DMR", StringComparison.Ordinal));
 
             viewModel.CallHistoryFilterText = "Alpha Dispatch";
-            Assert.Equal(2, viewModel.FilteredCallHistory.Count(entry => !entry.IsRecordingOnly));
+            Assert.Single(viewModel.FilteredCallHistory, entry => !entry.IsRecordingOnly);
             viewModel.CallHistoryFilterText = "78";
             Assert.Single(viewModel.FilteredCallHistory, entry => !entry.IsRecordingOnly);
             viewModel.CallHistoryFilterText = "not present";

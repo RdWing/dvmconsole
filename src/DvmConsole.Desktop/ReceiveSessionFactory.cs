@@ -11,22 +11,17 @@ internal sealed class ReceiveSessionFactory
     private readonly IDmrKeyResolver? dmrKeyResolver;
     private readonly INxdnKeyResolver? nxdnKeyResolver;
     private readonly Action<ChannelViewModel, uint, uint, ReadOnlyMemory<short>>? samplesObserver;
-    private readonly Action<ChannelViewModel, uint, ReadOnlyMemory<short>, TimeSpan>?
-        presentationSamplesObserver;
 
     public ReceiveSessionFactory(
         IP25KeyResolver? p25KeyResolver,
         IDmrKeyResolver? dmrKeyResolver,
         INxdnKeyResolver? nxdnKeyResolver,
-        Action<ChannelViewModel, uint, uint, ReadOnlyMemory<short>>? samplesObserver,
-        Action<ChannelViewModel, uint, ReadOnlyMemory<short>, TimeSpan>?
-            presentationSamplesObserver)
+        Action<ChannelViewModel, uint, uint, ReadOnlyMemory<short>>? samplesObserver)
     {
         this.p25KeyResolver = p25KeyResolver;
         this.dmrKeyResolver = dmrKeyResolver;
         this.nxdnKeyResolver = nxdnKeyResolver;
         this.samplesObserver = samplesObserver;
-        this.presentationSamplesObserver = presentationSamplesObserver;
     }
 
     public bool CanResolveEncryption(ChannelRuntimeDefinition definition)
@@ -49,7 +44,7 @@ internal sealed class ReceiveSessionFactory
 
     public async ValueTask<StreamSessionState> CreateAsync(
         ChannelViewModel channel,
-        ReceiveAudioRoute route,
+        ReceiveEpisodePlaybackPool playbackPool,
         IVocoderBackend? activeVocoder,
         double gain,
         double balance)
@@ -57,33 +52,20 @@ internal sealed class ReceiveSessionFactory
         IAudioPlayback? playback = null;
         IVocoderSession? vocoderSession = null;
         ChannelReceiveAudioSession? session = null;
+        ReceiveEpisodePlaybackPool.DeferredEpisodePlayback? episodePlayback = null;
         var sampleContext = new ReceiveSampleContext();
         try
         {
-            IAudioPlayback mixerPlayback = route.Mixer.OpenChannel(
-                $"{channel.Definition.SystemName}/{channel.Name}");
-            playback = samplesObserver is null && presentationSamplesObserver is null
-                ? mixerPlayback
+            episodePlayback = playbackPool.CreatePlayback();
+            playback = samplesObserver is null
+                ? episodePlayback
                 : new ObservedAudioPlayback(
-                    mixerPlayback,
+                    episodePlayback,
                     samples =>
                     {
                         if (sampleContext.TryGet(out uint streamId, out uint sourceId))
                             samplesObserver?.Invoke(channel, streamId, sourceId, samples);
-                    },
-                    presentationSamplesObserver is null
-                        ? null
-                        : (samples, delay) =>
-                        {
-                            if (sampleContext.TryGetLatestStream(out uint streamId))
-                            {
-                                presentationSamplesObserver(
-                                    channel,
-                                    streamId,
-                                    samples,
-                                    delay);
-                            }
-                        });
+                    });
 
             if (activeVocoder is not null)
             {
@@ -106,7 +88,7 @@ internal sealed class ReceiveSessionFactory
             session.SetBalance(balance);
             vocoderSession = null;
             playback = null;
-            return new StreamSessionState(session, sampleContext);
+            return new StreamSessionState(session, sampleContext, episodePlayback);
         }
         catch
         {
@@ -125,10 +107,12 @@ internal sealed class ReceiveSessionFactory
 
 internal sealed class StreamSessionState(
     ChannelReceiveAudioSession session,
-    ReceiveSampleContext sampleContext) : IAsyncDisposable
+    ReceiveSampleContext sampleContext,
+    ReceiveEpisodePlaybackPool.DeferredEpisodePlayback episodePlayback) : IAsyncDisposable
 {
     public ChannelReceiveAudioSession Session { get; } = session;
     public ReceiveSampleContext SampleContext { get; } = sampleContext;
+    public ReceiveEpisodePlaybackPool.DeferredEpisodePlayback EpisodePlayback { get; } = episodePlayback;
     public uint StreamId { get; set; }
     public DateTimeOffset LastActivity { get; set; } = DateTimeOffset.UtcNow;
     public DateTimeOffset? CompletedAt { get; set; }
@@ -140,13 +124,11 @@ internal sealed class ReceiveSampleContext
 {
     private uint streamId;
     private uint sourceId;
-    private uint latestStreamId;
 
     public void Set(uint nextStreamId, uint nextSourceId)
     {
         streamId = nextStreamId;
         sourceId = nextSourceId;
-        latestStreamId = nextStreamId;
     }
 
     public void Clear()
@@ -162,11 +144,6 @@ internal sealed class ReceiveSampleContext
         return currentStreamId != 0 && currentSourceId != 0;
     }
 
-    public bool TryGetLatestStream(out uint currentStreamId)
-    {
-        currentStreamId = latestStreamId;
-        return currentStreamId != 0;
-    }
 }
 
 internal sealed class ObservedAudioPlayback :
@@ -183,8 +160,7 @@ internal sealed class ObservedAudioPlayback :
 
     public ObservedAudioPlayback(
         IAudioPlayback inner,
-        Action<ReadOnlyMemory<short>> observer,
-        Action<ReadOnlyMemory<short>, TimeSpan>? presentationObserver)
+        Action<ReadOnlyMemory<short>> observer)
     {
         this.inner = inner ?? throw new ArgumentNullException(nameof(inner));
         livePlaybackControl = inner as ILiveAudioPlaybackControl ??
@@ -192,11 +168,6 @@ internal sealed class ObservedAudioPlayback :
                 "Observed receive playback requires independent live-presentation control.",
                 nameof(inner));
         this.observer = observer ?? throw new ArgumentNullException(nameof(observer));
-        if (presentationObserver is not null &&
-            inner is IAudioPlaybackPresentationSource presentationSource)
-        {
-            presentationSource.SetPresentationObserver(presentationObserver);
-        }
     }
 
     public PcmAudioFormat Format => inner.Format;

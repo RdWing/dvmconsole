@@ -16,6 +16,7 @@ internal sealed class MixerLaneBuffer(
     public double Balance { get; set; }
     public int DroppedSamples { get; set; }
     public bool LivePlaybackEnabled { get; set; } = true;
+    public bool ExpectsMoreInput { get; set; } = true;
     public bool PlayoutStarted { get; set; }
     public bool Completing { get; set; }
     public bool BoundarySmoothingPending { get; set; }

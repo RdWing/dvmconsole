@@ -8,6 +8,7 @@ namespace DvmConsole.Desktop;
 // One inbound voice stream recorded by the dispatch shell.
 public sealed class CallHistoryEntry : INotifyPropertyChanged
 {
+    private readonly List<uint> streamIds;
     private DateTimeOffset? endTimestamp;
     private bool encrypted;
     private byte? encryptionAlgorithmId;
@@ -37,7 +38,8 @@ public sealed class CallHistoryEntry : INotifyPropertyChanged
         string? eventSource = null,
         string? eventMessage = null,
         string? eventRidText = null,
-        string? eventTgidText = null)
+        string? eventTgidText = null,
+        long? receiveEpisodeId = null)
     {
         Timestamp = timestamp;
         SystemName = systemName;
@@ -55,6 +57,8 @@ public sealed class CallHistoryEntry : INotifyPropertyChanged
         this.eventMessage = eventMessage?.Trim() ?? string.Empty;
         this.eventRidText = eventRidText?.Trim() ?? string.Empty;
         this.eventTgidText = eventTgidText?.Trim() ?? string.Empty;
+        ReceiveEpisodeId = receiveEpisodeId;
+        streamIds = streamId == 0 ? [] : [streamId];
     }
 
     public event PropertyChangedEventHandler? PropertyChanged;
@@ -66,6 +70,9 @@ public sealed class CallHistoryEntry : INotifyPropertyChanged
     public uint DestinationId { get; }
     public FneTrafficProtocol Protocol { get; }
     public uint StreamId { get; }
+    internal long? ReceiveEpisodeId { get; }
+    public IReadOnlyList<uint> StreamIds => streamIds;
+    public int StreamFragmentCount => streamIds.Count;
     public string CallerText { get; }
     public bool IsEvent => isEvent;
     public bool IsConsoleTransmission => isConsoleTransmission;
@@ -83,7 +90,11 @@ public sealed class CallHistoryEntry : INotifyPropertyChanged
     public string DisplaySourceText => IsEvent ? EventRidText : SourceId.ToString();
     public string DisplayDestinationText => IsEvent ? EventTgidText : DestinationId.ToString();
     public string RouteText => IsEvent ? EventMessage : $"{CallerText} → TG {DestinationId}";
-    public string StreamText => IsEvent ? "Event" : $"{ProtocolText} · stream {StreamId}";
+    public string StreamText => IsEvent
+        ? "Event"
+        : StreamFragmentCount > 1
+            ? $"{ProtocolText} · {StreamFragmentCount} stream fragments"
+            : $"{ProtocolText} · stream {StreamId}";
     public bool IsActive => !IsEvent && endTimestamp is null;
     public TimeSpan? Duration => IsEvent
         ? null
@@ -123,6 +134,18 @@ public sealed class CallHistoryEntry : INotifyPropertyChanged
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(DurationText)));
     }
 
+    public bool ObserveStream(uint streamId)
+    {
+        if (streamId == 0 || streamIds.Contains(streamId))
+            return false;
+
+        streamIds.Add(streamId);
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(StreamIds)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(StreamFragmentCount)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(StreamText)));
+        return true;
+    }
+
     public static CallHistoryEntry CreateRecordingOnly(CallRecordingMetadata metadata)
     {
         ArgumentNullException.ThrowIfNull(metadata);
@@ -152,6 +175,8 @@ public sealed class CallHistoryEntry : INotifyPropertyChanged
         entry.endTimestamp = metadata.UtcEndTime >= metadata.UtcStartTime
             ? metadata.UtcEndTime
             : metadata.UtcStartTime.AddMilliseconds(Math.Max(0, metadata.DurationMs));
+        foreach (uint streamId in metadata.StreamIds ?? [])
+            entry.ObserveStream(streamId);
         entry.SetRecording(metadata);
         return entry;
     }
@@ -266,15 +291,36 @@ public sealed class CallHistoryStore
         FneTrafficProtocol protocol,
         uint streamId,
         string channelName,
-        uint destinationId)
+        uint destinationId,
+        long? receiveEpisodeId = null)
         => Entries.Any(candidate =>
             candidate.IsActive &&
             !candidate.IsConsoleTransmission &&
             candidate.StreamId == streamId &&
+            (receiveEpisodeId is null || candidate.ReceiveEpisodeId == receiveEpisodeId) &&
             candidate.Protocol == protocol &&
             candidate.DestinationId == destinationId &&
             candidate.ChannelName.Equals(channelName, StringComparison.OrdinalIgnoreCase) &&
             candidate.SystemName.Equals(systemName, StringComparison.OrdinalIgnoreCase));
+
+    public bool ObserveReceiveStream(
+        string systemName,
+        FneTrafficProtocol protocol,
+        uint primaryStreamId,
+        uint physicalStreamId,
+        string channelName,
+        uint destinationId,
+        long? receiveEpisodeId = null)
+    {
+        CallHistoryEntry? entry = FindActiveReceiveCall(
+            systemName,
+            protocol,
+            primaryStreamId,
+            channelName,
+            destinationId,
+            receiveEpisodeId);
+        return entry?.ObserveStream(physicalStreamId) == true;
+    }
 
     public void Add(CallHistoryEntry entry)
     {
@@ -487,16 +533,16 @@ public sealed class CallHistoryStore
         uint streamId,
         DateTimeOffset timestamp,
         string? channelName = null,
-        uint? destinationId = null)
+        uint? destinationId = null,
+        long? receiveEpisodeId = null)
     {
-        CallHistoryEntry? entry = Entries.FirstOrDefault(candidate =>
-            candidate.IsActive &&
-            !candidate.IsConsoleTransmission &&
-            candidate.StreamId == streamId &&
-            candidate.Protocol == protocol &&
-            (channelName is null || candidate.ChannelName.Equals(channelName, StringComparison.OrdinalIgnoreCase)) &&
-            (destinationId is null || candidate.DestinationId == destinationId) &&
-            candidate.SystemName.Equals(systemName, StringComparison.OrdinalIgnoreCase));
+        CallHistoryEntry? entry = FindActiveReceiveCall(
+            systemName,
+            protocol,
+            streamId,
+            channelName,
+            destinationId,
+            receiveEpisodeId);
         if (entry is null)
             return false;
         entry.Complete(timestamp);
@@ -524,18 +570,35 @@ public sealed class CallHistoryStore
         byte? algorithmId,
         ushort? keyId,
         string? channelName = null,
-        uint? destinationId = null)
+        uint? destinationId = null,
+        long? receiveEpisodeId = null)
     {
-        CallHistoryEntry? entry = Entries.FirstOrDefault(candidate =>
+        CallHistoryEntry? entry = FindActiveReceiveCall(
+            systemName,
+            protocol,
+            streamId,
+            channelName,
+            destinationId,
+            receiveEpisodeId);
+        return entry?.UpdateEncryption(encrypted, algorithmId, keyId) == true;
+    }
+
+    private CallHistoryEntry? FindActiveReceiveCall(
+        string systemName,
+        FneTrafficProtocol protocol,
+        uint streamId,
+        string? channelName,
+        uint? destinationId,
+        long? receiveEpisodeId = null)
+        => Entries.FirstOrDefault(candidate =>
             candidate.IsActive &&
             !candidate.IsConsoleTransmission &&
             candidate.StreamId == streamId &&
+            (receiveEpisodeId is null || candidate.ReceiveEpisodeId == receiveEpisodeId) &&
             candidate.Protocol == protocol &&
             (channelName is null || candidate.ChannelName.Equals(channelName, StringComparison.OrdinalIgnoreCase)) &&
             (destinationId is null || candidate.DestinationId == destinationId) &&
             candidate.SystemName.Equals(systemName, StringComparison.OrdinalIgnoreCase));
-        return entry?.UpdateEncryption(encrypted, algorithmId, keyId) == true;
-    }
 
     public void AddEvent(
         DateTimeOffset timestamp,
