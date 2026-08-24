@@ -55,6 +55,32 @@ public sealed class PcmPlaybackPumpTests
         Assert.Equal(0, firstOutputSignals);
     }
 
+    [Fact]
+    public async Task WaitsForPlaybackPacingBeforeWritingTheNextChunk()
+    {
+        var reader = new FakeReader(
+            new short[] { 1, 2, 3 },
+            new short[] { 4, 5 });
+        var playback = new FakePlayback();
+        var pacer = new BlockingSecondWritePacer();
+
+        Task<bool> pump = PcmPlaybackPump.RunAsync(
+            reader,
+            playback,
+            rateConverter: null,
+            CancellationToken.None,
+            pacer: pacer);
+
+        await pacer.SecondWaitStarted.Task.WaitAsync(TimeSpan.FromSeconds(1));
+        Assert.Single(playback.Writes);
+        Assert.Equal([3], pacer.ObservedSampleCounts);
+
+        pacer.AllowSecondWrite.TrySetResult();
+        Assert.True(await pump.WaitAsync(TimeSpan.FromSeconds(1)));
+        Assert.Equal(2, playback.Writes.Count);
+        Assert.Equal([3, 2], pacer.ObservedSampleCounts);
+    }
+
     private sealed class FakeReader(params short[][] chunks) : IAudioPcmStreamReader
     {
         private readonly Queue<short[]> remaining = new(chunks);
@@ -93,5 +119,28 @@ public sealed class PcmPlaybackPumpTests
             => ValueTask.CompletedTask;
 
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
+    private sealed class BlockingSecondWritePacer : IPcmPlaybackPacer
+    {
+        private int waitCount;
+
+        public TaskCompletionSource SecondWaitStarted { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource AllowSecondWrite { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public List<int> ObservedSampleCounts { get; } = [];
+
+        public async ValueTask WaitBeforeWriteAsync(CancellationToken cancellationToken)
+        {
+            if (Interlocked.Increment(ref waitCount) != 2)
+                return;
+
+            SecondWaitStarted.TrySetResult();
+            await AllowSecondWrite.Task.WaitAsync(cancellationToken);
+        }
+
+        public void ObserveWrittenSamples(int sampleCount)
+            => ObservedSampleCounts.Add(sampleCount);
     }
 }

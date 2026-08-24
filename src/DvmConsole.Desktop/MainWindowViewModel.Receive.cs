@@ -107,7 +107,10 @@ public sealed partial class MainWindowViewModel
                     endedAt,
                     channel.Name,
                     channel.Definition.DestinationId) || callHistoryChanged;
-                StopReceiveRecording(channel, endedStreamId);
+                TaskObservation.Observe(FinalizeEndedReceiveStreamAsync(
+                    channel,
+                    endedStreamId,
+                    endedAt));
             }
 
             bool canStartHistory = applied.Transition is
@@ -219,19 +222,32 @@ public sealed partial class MainWindowViewModel
                 endedAt,
                 channel.Name,
                 channel.Definition.DestinationId) || callHistoryChanged;
-            TaskObservation.Observe(CompleteTimedOutReceiveAudioStreamAsync(channel, streamId, now));
-            StopReceiveRecording(channel, streamId);
+            TaskObservation.Observe(FinalizeEndedReceiveStreamAsync(channel, streamId, endedAt));
         }
     }
 
-    private async Task CompleteTimedOutReceiveAudioStreamAsync(
+    private async Task FinalizeEndedReceiveStreamAsync(
         ChannelViewModel channel,
         uint streamId,
         DateTimeOffset endedAt)
     {
         try
         {
-            await audioCoordinator.CompleteStreamAsync(channel, streamId, endedAt)
+            await receiveAudioWork.RunAfterStreamAsync(
+                channel,
+                streamId,
+                async () =>
+                {
+                    try
+                    {
+                        await audioCoordinator.CompleteStreamAsync(channel, streamId, endedAt)
+                            .ConfigureAwait(false);
+                    }
+                    finally
+                    {
+                        StopReceiveRecording(channel, streamId);
+                    }
+                })
                 .ConfigureAwait(false);
         }
         catch (ObjectDisposedException) when (Volatile.Read(ref disposeStarted) != 0)

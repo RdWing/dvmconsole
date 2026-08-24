@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using DvmConsole.Audio;
 
 namespace DvmConsole.Desktop;
@@ -11,10 +12,12 @@ internal static class PcmPlaybackPump
         IAudioPlayback playback,
         PcmRateConverter? rateConverter,
         CancellationToken cancellationToken,
-        Func<ValueTask>? firstOutputWritten = null)
+        Func<ValueTask>? firstOutputWritten = null,
+        IPcmPlaybackPacer? pacer = null)
     {
         ArgumentNullException.ThrowIfNull(reader);
         ArgumentNullException.ThrowIfNull(playback);
+        pacer ??= new RealtimePcmPlaybackPacer(playback.Format);
 
         bool wroteOutput = false;
         short[] input = new short[InputBufferSamples];
@@ -30,7 +33,9 @@ internal static class PcmPlaybackPump
             if (output.Length == 0)
                 continue;
 
+            await pacer.WaitBeforeWriteAsync(cancellationToken).ConfigureAwait(false);
             await playback.WriteAsync(output, cancellationToken).ConfigureAwait(false);
+            pacer.ObserveWrittenSamples(output.Length);
             if (!wroteOutput)
             {
                 wroteOutput = true;
@@ -38,5 +43,43 @@ internal static class PcmPlaybackPump
                     await firstOutputWritten().ConfigureAwait(false);
             }
         }
+    }
+}
+
+internal interface IPcmPlaybackPacer
+{
+    ValueTask WaitBeforeWriteAsync(CancellationToken cancellationToken);
+    void ObserveWrittenSamples(int sampleCount);
+}
+
+// File and network decoders can produce PCM faster than real time. Pace their
+// writes against a monotonic media clock so immediately accepting mixer lanes
+// cannot be flooded and discard most of a recording before it is heard.
+internal sealed class RealtimePcmPlaybackPacer : IPcmPlaybackPacer
+{
+    private readonly long startedAt = Stopwatch.GetTimestamp();
+    private readonly int samplesPerSecond;
+    private long writtenSamples;
+
+    public RealtimePcmPlaybackPacer(PcmAudioFormat format)
+    {
+        ArgumentNullException.ThrowIfNull(format);
+        samplesPerSecond = checked(format.SampleRate * format.Channels);
+    }
+
+    public async ValueTask WaitBeforeWriteAsync(CancellationToken cancellationToken)
+    {
+        TimeSpan mediaElapsed = TimeSpan.FromSeconds(writtenSamples / (double)samplesPerSecond);
+        TimeSpan actualElapsed = Stopwatch.GetElapsedTime(startedAt);
+        TimeSpan remaining = mediaElapsed - actualElapsed;
+        if (remaining > TimeSpan.Zero)
+            await Task.Delay(remaining, cancellationToken).ConfigureAwait(false);
+    }
+
+    public void ObserveWrittenSamples(int sampleCount)
+    {
+        if (sampleCount < 0)
+            throw new ArgumentOutOfRangeException(nameof(sampleCount));
+        writtenSamples = checked(writtenSamples + sampleCount);
     }
 }

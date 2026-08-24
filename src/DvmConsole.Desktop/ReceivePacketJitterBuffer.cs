@@ -37,6 +37,9 @@ internal sealed class ReceivePacketJitterBuffer<T>
 
     public int Count => packets.Count;
 
+    public bool ContainsStream(uint streamId)
+        => packets.Any(packet => getStreamId(packet.Item) == streamId);
+
     public void Enqueue(T item, long timestamp)
     {
         uint streamId = getStreamId(item);

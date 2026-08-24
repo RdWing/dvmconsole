@@ -32,8 +32,6 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
     private const string DvmConsoleProcessingDisplay = "DVM Console processing";
     private const string AppleVoiceProcessingDisplay = "Apple voice processing";
     private const string WindowsCommunicationsProcessingDisplay = "Windows communications processing";
-    private static readonly string[] AppleAudioProcessingModeOptions =
-        [DvmConsoleProcessingDisplay, AppleVoiceProcessingDisplay];
     private static readonly string[] WindowsAudioProcessingModeOptions =
         [DvmConsoleProcessingDisplay, WindowsCommunicationsProcessingDisplay];
     private static readonly string[] DvmConsoleAudioProcessingModeOptions =
@@ -156,6 +154,8 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
         codeplugDiagnosticsText = statusText;
         this.userSettingsStore = userSettingsStore ?? new UserSettingsStore(UserSettingsStore.DefaultPath);
         userSettings = this.userSettingsStore.Load();
+        if (NormalizeHiddenAudioProcessingMode(userSettings))
+            PersistUserSettings();
         audioBackendProvider = new ApplicationAudioBackendProvider(
             CreateApplicationAudioConfiguration(),
             CreateNativeAudioBackend);
@@ -297,7 +297,6 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
         warmMicrophoneReconciler = new LatestBooleanStateReconciler(
             transmitCoordinator.SetKeepMicrophoneWarmAsync);
         warmMicrophoneReconciler.Reconciled += HandleWarmMicrophoneReconciled;
-        transmitCoordinator.HighQualityBluetoothStatusChanged += HandleHighQualityBluetoothStatusChanged;
         if (userSettings.KeepTransmitMicrophoneWarm)
             _ = warmMicrophoneReconciler.SetDesired(true);
         toneTransmitCoordinator = new ToneTransmitCoordinator(
@@ -1035,8 +1034,6 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
     public IReadOnlyList<string> AudioProcessingModeOptions
         => OperatingSystem.IsWindows()
             ? WindowsAudioProcessingModeOptions
-            : IsAppleVoiceProcessingPlatformAvailable && IsAppleVoiceProcessingRouteCompatible
-            ? AppleAudioProcessingModeOptions
             : DvmConsoleAudioProcessingModeOptions;
 
     public bool IsAppleVoiceProcessingPlatformAvailable
@@ -1102,8 +1099,6 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
         {
             string normalized = value switch
             {
-                AppleVoiceProcessingDisplay when IsAppleVoiceProcessingPlatformAvailable &&
-                    IsAppleVoiceProcessingRouteCompatible => AppleVoiceProcessingDisplay,
                 WindowsCommunicationsProcessingDisplay when OperatingSystem.IsWindows() =>
                     WindowsCommunicationsProcessingDisplay,
                 _ => DvmConsoleProcessingDisplay
@@ -2482,7 +2477,6 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
         cleanup.Run(() =>
         {
             transmitCoordinator.Faulted -= HandleTransmitFaulted;
-            transmitCoordinator.HighQualityBluetoothStatusChanged -= HandleHighQualityBluetoothStatusChanged;
             pttSession.StateChanged -= HandlePttSourceStateChanged;
             pttSettings.PropertyChanged -= HandlePttSettingsPropertyChanged;
             historyRecording.PropertyChanged -= HandleHistoryRecordingPropertyChanged;
@@ -3012,28 +3006,6 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
             userSettings.AudioOutputDeviceId,
             userSettings.HighQualityBluetoothAudioEnabled);
 
-    private void HandleHighQualityBluetoothStatusChanged(
-        object? sender,
-        HighQualityBluetoothAudioStatus status)
-    {
-        if (!IsHighQualityBluetoothAudioAvailable || !userSettings.HighQualityBluetoothAudioEnabled)
-            return;
-        string? message = status switch
-        {
-            HighQualityBluetoothAudioStatus.Active =>
-                "High-quality AirPods input and output are active at full bandwidth.",
-            HighQualityBluetoothAudioStatus.Requested =>
-                "High-quality AirPods audio was requested; macOS is still confirming the route.",
-            HighQualityBluetoothAudioStatus.Unsupported =>
-                "The selected Bluetooth route does not support high-quality recording; normal Bluetooth audio is active.",
-            HighQualityBluetoothAudioStatus.Unavailable when userSettings.HighQualityBluetoothAudioEnabled =>
-                "High-quality AirPods audio is unavailable for the current route; normal CoreAudio is active.",
-            _ => null
-        };
-        if (message is not null)
-            Dispatcher.UIThread.Post(() => AudioStatusText = message);
-    }
-
     private void HandleWarmMicrophoneReconciled(object? sender, LatestBooleanStateResult result)
     {
         Dispatcher.UIThread.Post(() =>
@@ -3058,8 +3030,6 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
     private AudioProcessingMode GetConfiguredAudioProcessingMode()
         => userSettings.AudioProcessingMode switch
         {
-            UserSettings.AppleVoiceProcessingMode when OperatingSystem.IsMacOS() =>
-                AudioProcessingMode.AppleVoiceProcessing,
             UserSettings.WindowsCommunicationsProcessingMode when OperatingSystem.IsWindows() =>
                 AudioProcessingMode.WindowsCommunications,
             _ => AudioProcessingMode.DvmConsole
@@ -3068,7 +3038,6 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
     private AudioProcessingMode GetSelectedAudioProcessingMode()
         => SelectedAudioProcessingMode switch
         {
-            AppleVoiceProcessingDisplay => AudioProcessingMode.AppleVoiceProcessing,
             WindowsCommunicationsProcessingDisplay => AudioProcessingMode.WindowsCommunications,
             _ => AudioProcessingMode.DvmConsole
         };
@@ -3076,12 +3045,24 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
     private static string ToAudioProcessingModeDisplay(string? mode)
         => mode switch
         {
-            UserSettings.AppleVoiceProcessingMode when OperatingSystem.IsMacOS() =>
-                AppleVoiceProcessingDisplay,
             UserSettings.WindowsCommunicationsProcessingMode when OperatingSystem.IsWindows() =>
                 WindowsCommunicationsProcessingDisplay,
             _ => DvmConsoleProcessingDisplay
         };
+
+    private static bool NormalizeHiddenAudioProcessingMode(UserSettings settings)
+    {
+        if (!string.Equals(
+                settings.AudioProcessingMode,
+                UserSettings.AppleVoiceProcessingMode,
+                StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        settings.AudioProcessingMode = UserSettings.DvmConsoleAudioProcessingMode;
+        return true;
+    }
 
     private string? GetChannelOutputDeviceId(ChannelViewModel channel)
     {
@@ -3209,7 +3190,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
         if (samples.IsEmpty)
             return;
 
-        PcmLevelMeasurement measurement;
+        IReadOnlyList<PcmLevelMeasurement> measurements;
         lock (audioLevelLogSync)
         {
             var key = (channel, direction);
@@ -3223,22 +3204,24 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
                 state.Reset(streamId);
             }
 
-            state.Levels.Add(samples.Span);
-            if (state.Levels.SampleCount < VocoderAudioLevelWindowSamples ||
-                !state.Levels.TryMeasureAndReset(out measurement))
+            measurements = state.Levels.Observe(samples.Span);
+            if (measurements.Count == 0)
                 return;
         }
 
         DateTimeOffset now = DateTimeOffset.Now;
         string streamText = streamId == 0 ? string.Empty : $", stream {streamId}";
-        AddDebugLog(
-            now,
-            channel.Definition.SystemName,
-            DebugLogSeverity.Debug,
-            $"Vocoder {direction.ToString().ToUpperInvariant()} {ProtocolFor(channel).ToString().ToUpperInvariant()} " +
-            $"on {channel.Name}: PCM RMS {measurement.RmsDbfs:0.0} dBFS, " +
-            $"peak {measurement.PeakDbfs:0.0} dBFS over " +
-            $"{FormatAudioLevelDuration(measurement.SampleCount)}{streamText}.");
+        foreach (PcmLevelMeasurement measurement in measurements)
+        {
+            AddDebugLog(
+                now,
+                channel.Definition.SystemName,
+                DebugLogSeverity.Debug,
+                $"Vocoder {direction.ToString().ToUpperInvariant()} {ProtocolFor(channel).ToString().ToUpperInvariant()} " +
+                $"on {channel.Name}: PCM RMS {measurement.RmsDbfs:0.0} dBFS, " +
+                $"peak {measurement.PeakDbfs:0.0} dBFS over " +
+                $"{FormatAudioLevelDuration(measurement.SampleCount)}{streamText}.");
+        }
     }
 
     internal static string FormatAudioLevelDuration(long sampleCount)
@@ -3282,7 +3265,8 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
     private sealed class PcmLevelLogState(uint streamId)
     {
         public uint StreamId { get; private set; } = streamId;
-        public PcmLevelAccumulator Levels { get; } = new();
+        public PcmLevelWindowAccumulator Levels { get; } =
+            new(VocoderAudioLevelWindowSamples);
 
         public void Reset(uint nextStreamId)
         {

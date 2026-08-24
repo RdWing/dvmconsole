@@ -4,7 +4,7 @@ using Xunit;
 
 namespace DvmConsole.Desktop.Tests;
 
-public sealed class PressAndHoldPttControllerTests
+public sealed class CardPttControllerTests
 {
     [Fact]
     public async Task ReleaseWaitsForStartupThenStopsTheSameCall()
@@ -13,7 +13,7 @@ public sealed class PressAndHoldPttControllerTests
         var startupEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var allowStartup = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var events = new List<string>();
-        var controller = new PressAndHoldPttController(
+        var controller = new CardPttController(
             async _ =>
             {
                 events.Add("start");
@@ -43,7 +43,7 @@ public sealed class PressAndHoldPttControllerTests
         ChannelViewModel channel = CreateChannel();
         int starts = 0;
         int stops = 0;
-        var controller = new PressAndHoldPttController(
+        var controller = new CardPttController(
             _ =>
             {
                 starts++;
@@ -65,6 +65,55 @@ public sealed class PressAndHoldPttControllerTests
     }
 
     [Fact]
+    public async Task ToggleRemainsLatchedAcrossPointerReleaseUntilNextPress()
+    {
+        ChannelViewModel channel = CreateChannel();
+        int starts = 0;
+        int stops = 0;
+        var controller = new CardPttController(
+            _ =>
+            {
+                starts++;
+                return Task.CompletedTask;
+            },
+            _ =>
+            {
+                stops++;
+                return Task.CompletedTask;
+            });
+
+        await controller.ToggleAsync(channel);
+        await controller.ReleaseAsync(channel);
+
+        Assert.Equal(1, starts);
+        Assert.Equal(0, stops);
+
+        await controller.ToggleAsync(channel);
+
+        Assert.Equal(1, starts);
+        Assert.Equal(1, stops);
+    }
+
+    [Fact]
+    public async Task DisposalStopsALatchedCall()
+    {
+        ChannelViewModel channel = CreateChannel();
+        int stops = 0;
+        var controller = new CardPttController(
+            _ => Task.CompletedTask,
+            _ =>
+            {
+                stops++;
+                return Task.CompletedTask;
+            });
+
+        await controller.ToggleAsync(channel);
+        await controller.DisposeAsync();
+
+        Assert.Equal(1, stops);
+    }
+
+    [Fact]
     public async Task EarlyReleasePreservesUiContextAfterWaitingForStartup()
     {
         ChannelViewModel channel = CreateChannel();
@@ -72,7 +121,7 @@ public sealed class PressAndHoldPttControllerTests
         var allowStartup = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var uiContext = new InlineSynchronizationContext();
         bool stopRanOnUiContext = false;
-        var controller = new PressAndHoldPttController(
+        var controller = new CardPttController(
             async _ =>
             {
                 startupEntered.SetResult();
@@ -115,7 +164,7 @@ public sealed class PressAndHoldPttControllerTests
         var allowStartup = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var stopped = new TaskCompletionSource<ChannelViewModel>(
             TaskCreationOptions.RunContinuationsAsynchronously);
-        var controller = new PressAndHoldPttController(
+        var controller = new CardPttController(
             async _ =>
             {
                 startupEntered.TrySetResult();
@@ -144,7 +193,7 @@ public sealed class PressAndHoldPttControllerTests
         ChannelViewModel channel = CreateChannel();
         int starts = 0;
         int stops = 0;
-        var controller = new PressAndHoldPttController(
+        var controller = new CardPttController(
             _ =>
             {
                 starts++;

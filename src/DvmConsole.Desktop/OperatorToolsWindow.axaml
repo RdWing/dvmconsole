@@ -151,12 +151,17 @@
             <Border Classes="panel">
               <StackPanel Spacing="8">
                 <TextBlock FontWeight="SemiBold" Text="Microphone processing" />
-                <Grid ColumnDefinitions="Auto,260,*" ColumnSpacing="8">
+                <TextBlock Classes="caption"
+                           Text="DVM Console processing is the standard macOS microphone path. It avoids the additional Apple full-duplex processing latency while retaining console gain, EQ, and optional AGC."
+                           TextWrapping="Wrap"
+                           IsVisible="{Binding IsAppleVoiceProcessingPlatformAvailable}" />
+                <Grid ColumnDefinitions="Auto,260,*" ColumnSpacing="8"
+                      IsVisible="{Binding !IsAppleVoiceProcessingPlatformAvailable}">
                   <TextBlock Text="Mode" VerticalAlignment="Center" />
                   <ComboBox Grid.Column="1" ItemsSource="{Binding AudioProcessingModeOptions}" SelectedItem="{Binding SelectedAudioProcessingMode, Mode=TwoWay}" />
                 </Grid>
-                <TextBlock Classes="caption" Text="{Binding AudioProcessingDescription}" TextWrapping="Wrap" />
-                <TextBlock Classes="caption" Text="{Binding AppleVoiceProcessingRouteDescription}" TextWrapping="Wrap" IsVisible="{Binding IsAppleVoiceProcessingPlatformAvailable}" />
+                <TextBlock Classes="caption" Text="{Binding AudioProcessingDescription}" TextWrapping="Wrap"
+                           IsVisible="{Binding !IsAppleVoiceProcessingPlatformAvailable}" />
                 <WrapPanel ItemSpacing="16" LineSpacing="8" IsEnabled="{Binding IsDvmConsoleProcessingSelected}">
                   <StackPanel Orientation="Horizontal" Spacing="8"><TextBlock Text="Gain" VerticalAlignment="Center" /><NumericUpDown Width="116" Minimum="0.25" Maximum="3.0" Increment="0.1" FormatString="0.0" ClipValueToMinMax="True" Text="{Binding AudioInputGainText, Mode=TwoWay}" /></StackPanel>
                   <StackPanel Orientation="Horizontal" Spacing="8"><TextBlock Text="Low dB" VerticalAlignment="Center" /><NumericUpDown Width="116" Minimum="-12" Maximum="12" Increment="0.1" FormatString="0.0" ClipValueToMinMax="True" Text="{Binding AudioInputLowGainText, Mode=TwoWay}" /></StackPanel>
@@ -170,13 +175,7 @@
                   <Button Content="Apply" Command="{Binding ApplyAudioInputSettingsCommand}" />
                 </WrapPanel>
                 <TextBlock Classes="caption" Text="The default AGC target is -25 dBFS. Use a more-negative value for a quieter target; accepted range is -40 to -12 dBFS." TextWrapping="Wrap" />
-                <TextBlock Classes="caption" Text="Keeping the microphone warm is generally advised only for Bluetooth headsets to reduce PTT startup latency; without high-quality AirPods support it may lower output audio quality while enabled." TextWrapping="Wrap" />
-                <CheckBox Content="Use high-quality AirPods audio when supported"
-                          IsChecked="{Binding HighQualityBluetoothAudioEnabled, Mode=TwoWay}"
-                          IsVisible="{Binding IsHighQualityBluetoothAudioAvailable}" />
-                <TextBlock Classes="caption" IsVisible="{Binding IsHighQualityBluetoothAudioAvailable}"
-                           Text="On macOS 26+, compatible AirPods are detected at runtime and requested at full bandwidth. Unsupported models, regions, and routes use the normal Bluetooth fallback. This mode can add microphone latency."
-                           TextWrapping="Wrap" />
+                <TextBlock Classes="caption" Text="Bluetooth PTT uses the optimized DVM Console audio path. Most headsets should not need Keep Mic Warm; enable it only if a particular headset still has unacceptable cold-start delay, because it may lower output audio quality while enabled." TextWrapping="Wrap" />
               </StackPanel>
             </Border>
 
