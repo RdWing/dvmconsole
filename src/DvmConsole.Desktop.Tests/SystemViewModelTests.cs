@@ -299,7 +299,7 @@ public sealed class SystemViewModelTests
 
     [Fact]
     public void ReportsUnreleasedSemanticVersion()
-        => Assert.StartsWith("0.3.7", MainWindow.ApplicationVersion, StringComparison.Ordinal);
+        => Assert.StartsWith("0.3.8", MainWindow.ApplicationVersion, StringComparison.Ordinal);
 
     [Theory]
     [InlineData("0.1.0-alpha.1+abcdef123456", "0.1.0-alpha.1 (abcdef1)")]
@@ -1640,7 +1640,7 @@ public sealed class SystemViewModelTests
             viewModel.AudioInputAgcTargetDbfsText = "-30";
             viewModel.SelectedAudioProcessingMode = OperatingSystem.IsWindows()
                 ? "Windows communications processing"
-                : "Apple voice processing";
+                : "DVM Console processing";
             viewModel.ApplyAudioInputSettingsCommand.Execute(null);
 
             if (OperatingSystem.IsWindows())
@@ -1669,49 +1669,47 @@ public sealed class SystemViewModelTests
                 return;
             }
 
-            if (!OperatingSystem.IsMacOS())
-            {
-                Assert.Single(viewModel.AudioProcessingModeOptions);
-                Assert.Equal("DVM Console processing", viewModel.AudioProcessingModeOptions[0]);
-                Assert.DoesNotContain("Apple voice processing", viewModel.AudioProcessingModeOptions);
-                Assert.Equal("DVM Console processing", viewModel.SelectedAudioProcessingMode);
-                Assert.True(viewModel.IsDvmConsoleProcessingSelected);
-                UserSettings unsupportedPlatformSettings = store.Load();
-                Assert.Equal(UserSettings.DvmConsoleAudioProcessingMode, unsupportedPlatformSettings.AudioProcessingMode);
-                Assert.Equal("input-device-42", unsupportedPlatformSettings.AudioInputDeviceId);
-                Assert.Equal("output-device-84", unsupportedPlatformSettings.AudioOutputDeviceId);
-                Assert.False(unsupportedPlatformSettings.HighQualityBluetoothAudioEnabled);
-                Assert.True(unsupportedPlatformSettings.AudioInputAgcEnabled);
-                Assert.Equal(-30, unsupportedPlatformSettings.AudioInputAgcTargetDbfs);
-                Assert.DoesNotContain("echo cancellation", viewModel.AudioProcessingDescription, StringComparison.OrdinalIgnoreCase);
-                return;
-            }
-
-            if (!viewModel.IsAppleVoiceProcessingRouteCompatible)
-            {
-                Assert.True(viewModel.IsDvmConsoleProcessingSelected);
-                Assert.DoesNotContain("Apple voice processing", viewModel.AudioProcessingModeOptions);
-                Assert.Contains("unavailable", viewModel.AppleVoiceProcessingRouteDescription, StringComparison.OrdinalIgnoreCase);
-                Assert.Equal(UserSettings.DvmConsoleAudioProcessingMode, store.Load().AudioProcessingMode);
-                return;
-            }
-
-            Assert.False(viewModel.IsDvmConsoleProcessingSelected);
-            UserSettings appleSettings = store.Load();
-            Assert.Equal(UserSettings.AppleVoiceProcessingMode, appleSettings.AudioProcessingMode);
-            Assert.Equal("input-device-42", appleSettings.AudioInputDeviceId);
-            Assert.Equal("output-device-84", appleSettings.AudioOutputDeviceId);
-            Assert.True(appleSettings.AudioInputAgcEnabled);
-            Assert.Equal(-30, appleSettings.AudioInputAgcTargetDbfs);
-            Assert.False(appleSettings.HighQualityBluetoothAudioEnabled);
-            Assert.Contains("echo cancellation", viewModel.AudioProcessingDescription, StringComparison.OrdinalIgnoreCase);
-            Assert.Contains("RX vocoder processing is controlled separately", viewModel.AudioProcessingDescription, StringComparison.OrdinalIgnoreCase);
-
-            viewModel.SelectedAudioProcessingMode = "DVM Console processing";
-            viewModel.ApplyAudioInputSettingsCommand.Execute(null);
-
+            Assert.Single(viewModel.AudioProcessingModeOptions);
+            Assert.Equal("DVM Console processing", viewModel.AudioProcessingModeOptions[0]);
+            Assert.DoesNotContain("Apple voice processing", viewModel.AudioProcessingModeOptions);
+            Assert.Equal("DVM Console processing", viewModel.SelectedAudioProcessingMode);
             Assert.True(viewModel.IsDvmConsoleProcessingSelected);
-            Assert.Equal(UserSettings.DvmConsoleAudioProcessingMode, store.Load().AudioProcessingMode);
+            UserSettings portableSettings = store.Load();
+            Assert.Equal(UserSettings.DvmConsoleAudioProcessingMode, portableSettings.AudioProcessingMode);
+            Assert.Equal("input-device-42", portableSettings.AudioInputDeviceId);
+            Assert.Equal("output-device-84", portableSettings.AudioOutputDeviceId);
+            Assert.False(portableSettings.HighQualityBluetoothAudioEnabled);
+            Assert.True(portableSettings.AudioInputAgcEnabled);
+            Assert.Equal(-30, portableSettings.AudioInputAgcTargetDbfs);
+            Assert.DoesNotContain("echo cancellation", viewModel.AudioProcessingDescription, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            CleanupSettingsPath(settingsPath);
+        }
+    }
+
+    [Fact]
+    public async Task NormalizesSavedAppleVoiceProcessingToDvmConsoleAtStartup()
+    {
+        string codeplugPath = Path.Combine(AppContext.BaseDirectory, "TestData", "multiple-systems.yml");
+        string settingsPath = CreateSettingsPath();
+        var store = new UserSettingsStore(settingsPath);
+        store.Save(new UserSettings
+        {
+            AudioProcessingMode = UserSettings.AppleVoiceProcessingMode
+        });
+
+        try
+        {
+            await using MainWindowViewModel viewModel = MainWindowViewModel.Load(codeplugPath, store);
+
+            Assert.Equal("DVM Console processing", viewModel.SelectedAudioProcessingMode);
+            Assert.True(viewModel.IsDvmConsoleProcessingSelected);
+            Assert.DoesNotContain("Apple voice processing", viewModel.AudioProcessingModeOptions);
+            Assert.Equal(
+                UserSettings.DvmConsoleAudioProcessingMode,
+                store.Load().AudioProcessingMode);
         }
         finally
         {

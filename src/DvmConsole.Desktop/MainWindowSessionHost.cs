@@ -11,7 +11,7 @@ internal sealed class MainWindowSessionHost : IAsyncDisposable
     private readonly Action closeAllWindows;
     private readonly AsyncDisposal disposal = new();
     private MainWindowViewModel viewModel;
-    private PressAndHoldPttController cardPtt;
+    private CardPttController cardPtt;
 
     public MainWindowSessionHost(
         MainWindowViewModel initialViewModel,
@@ -33,7 +33,7 @@ internal sealed class MainWindowSessionHost : IAsyncDisposable
     }
 
     public MainWindowViewModel ViewModel => viewModel;
-    public PressAndHoldPttController CardPtt => cardPtt;
+    public CardPttController CardPtt => cardPtt;
 
     public ValueTask StartAsync()
         => viewModel.StartKeyboardPttAsync();
@@ -82,7 +82,7 @@ internal sealed class MainWindowSessionHost : IAsyncDisposable
         }
     }
 
-    private static PressAndHoldPttController CreateCardPtt(MainWindowViewModel owner)
+    private static CardPttController CreateCardPtt(MainWindowViewModel owner)
         => new(
             channel => owner.StartChannelTransmitAsync(channel),
             channel => owner.StopChannelTransmitAsync(channel));

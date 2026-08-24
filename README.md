@@ -47,29 +47,31 @@ multi-system activity understandable.
 
 ## What’s new in DVM Console Neo
 
-### 0.3.7 — Patch routing and Apple audio reliability
+### 0.3.8 — Audio path optimization and receive continuity
 
-DVM Console Neo 0.3.7 makes patches easier to configure, keeps forwarded audio on one direct decode path, and stabilizes Apple Voice Processing during receive, Keep Mic Warm, mode changes, and shutdown:
+DVM Console Neo 0.3.8 is a pure optimization release: no new
+workflow, codeplug format, or wire behavior—just a faster, steadier version of
+the console already in use.
 
-- **Explicit one-way patch direction** lets operators choose the source while showing every other selected resource as a destination, including support for an RX-only source.
-- **Reliable patch audio ownership** prevents Listen or TAR from feeding duplicate PCM into the patch encoder and sends source traffic directly through one adaptive jitter worker.
-- **Compact group editing** places group cards in responsive columns, collapses full talkgroup lists until needed, and keeps overlap warnings concise.
-- **Recoverable, isolated forwarding** releases failed destination sessions and prevents delayed or stream-ID-rewritten teardown echoes from cascading through overlapping patch groups.
-- **One coordinated Apple voice route** shares the Voice Processing I/O output across RX, cues, web streams, recordings, and transmit capture, then restores ordinary CoreAudio when DVM Console processing is selected.
-- **Bounded audio recovery and Quit** detects stalled Apple output promptly, restarts failed receive routes, and prevents a CoreAudio teardown from keeping the application open indefinitely.
+- **A simpler macOS microphone path** makes DVM Console processing the standard. Apple Voice Processing and the high-quality AirPods option are no longer available in Console Settings, and saved Apple processing selections migrate automatically.
+- **Lower Bluetooth PTT startup overhead** avoids the additional Apple full-duplex route coordination. Live Bluetooth-headset testing found less delay before transmit readiness in DVM Console processing mode, and most headsets should not require Keep Mic Warm; exact timing remains headset- and route-dependent.
+- **Tail-safe receive cleanup** lets each stream finish its adaptive-jitter queue before its audio and TAR state close, preserving buffered ends of transmissions.
+- **Steady TAR and web playback** paces decoded PCM in real time so fast readers cannot flood a shared mixer lane and discard most of the audio.
+- **More consistent diagnostics** report RX and TX level windows over the same exact one-second duration.
+- **Reliable mouse toggle PTT** gives channel-card clicks the same latched behavior as the keyboard shortcut while retaining safe serialized startup and shutdown.
 
-[Read the complete 0.3.7 release notes →](docs/releases/v0.3.7.md)
+[Read the complete 0.3.8 release notes →](docs/releases/v0.3.8.md)
 
 ### Prior recent improvements
 
-Recent 0.3.6, 0.3.5, 0.3.4, and 0.3.3 updates also introduced:
+Recent 0.3.7, 0.3.6, 0.3.5, and 0.3.4 updates also introduced:
 
+- **0.3.7 — Patch routing and Apple audio reliability:** made one-way patch direction explicit, prevented duplicate patch PCM, compacted group editing, isolated patch teardown, and bounded audio recovery and Quit.
 - **0.3.6 — Windows audio and recording-history reliability:** replaced the legacy Windows WinMM backend with shared, event-driven WASAPI; added optional endpoint-provided communications processing; and kept completed TAR recordings available after their live History rows expire.
 - **0.3.5 — Optimization and lifecycle reliability:** reduced managed allocation in receive, vocoder, and transmit paths; kept Activity, PTT, audio services, tools, and background work attached to the correct session through reload and shutdown; and clarified internal ownership without changing operator workflows.
 - **0.3.4 — TAR and PTT cue reliability:** allowed TAR-armed resources to record without live RX selection, preserved recording ownership across equivalent zone cards, and made scoped toggle and press-and-hold PTT complete the required talk-permit cue consistently.
-- **0.3.3 — Receive continuity and operator control:** added adaptive packet-aligned jitter handling, independent concurrent receive streams, scoped speaker mute that preserves TAR, clearer receive-path diagnostics, improved P25 key-request compatibility, and more responsive History and Debug Logs.
 
-[Read the 0.3.6 release notes →](docs/releases/v0.3.6.md) · [Read the 0.3.5 release notes →](docs/releases/v0.3.5.md) · [Read the 0.3.4 release notes →](docs/releases/v0.3.4.md) · [Read the 0.3.3 release notes →](docs/releases/v0.3.3.md)
+[Read the 0.3.7 release notes →](docs/releases/v0.3.7.md) · [Read the 0.3.6 release notes →](docs/releases/v0.3.6.md) · [Read the 0.3.5 release notes →](docs/releases/v0.3.5.md) · [Read the 0.3.4 release notes →](docs/releases/v0.3.4.md)
 
 ## Download DVM Console Neo
 
@@ -78,9 +80,9 @@ computer and extract the entire archive before starting DVM Console.
 
 | Platform | Package | Requirements |
 | --- | --- | --- |
-| Apple Silicon Mac | `dvmconsole-0.3.7-osx-arm64.zip` | macOS 14 or newer |
-| Intel Mac | `dvmconsole-0.3.7-osx-x64.zip` | macOS 14 or newer |
-| Windows PC | `dvmconsole-0.3.7-win-x64.zip` | Windows x64 |
+| Apple Silicon Mac | `dvmconsole-0.3.8-osx-arm64.zip` | macOS 14 or newer |
+| Intel Mac | `dvmconsole-0.3.8-osx-x64.zip` | macOS 14 or newer |
+| Windows PC | `dvmconsole-0.3.8-win-x64.zip` | Windows x64 |
 
 **[Download the latest release →](https://github.com/RdWing/dvmconsole/releases/latest)**
 
@@ -139,9 +141,8 @@ If the application closes unexpectedly, preserve
 - Use P25 FNE/KMM key delivery with a local fallback, plus protocol-scoped local
   privacy keys for DMR and NXDN.
 - Follow system-default audio devices or pin fixed microphone and speaker routes.
-- Choose DVM Console microphone processing or the platform voice-processing
-  option: Apple Voice Processing on macOS or device-dependent Windows
-  communications processing on Windows.
+- Use DVM Console microphone processing on macOS and Windows, with optional
+  device-dependent Windows communications processing on supported endpoints.
 
 > [!NOTE]
 > DVM Console connects to DVM FNE peers. It does not directly control base or

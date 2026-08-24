@@ -1,18 +1,21 @@
 namespace DvmConsole.Desktop;
 
-// Serializes a card's press-and-hold PTT lifecycle so release cannot race
-// ahead of slower audio/vocoder startup and leave a call keyed.
-public sealed class PressAndHoldPttController : IAsyncDisposable
+// Owns mouse PTT intent independently from the window. A single reconciler
+// serializes slow audio/vocoder transitions while held and latched input modes
+// update only their own state.
+public sealed class CardPttController : IAsyncDisposable
 {
     private readonly Func<ChannelViewModel, Task> start;
     private readonly Func<ChannelViewModel, Task> stop;
     private readonly SemaphoreSlim gate = new(1, 1);
     private readonly object sync = new();
-    private readonly HashSet<ChannelViewModel> pressed = [];
+    private readonly HashSet<ChannelViewModel> held = [];
+    private readonly HashSet<ChannelViewModel> latched = [];
+    private readonly HashSet<ChannelViewModel> active = [];
     private TaskCompletionSource? disposeCompletion;
     private bool disposed;
 
-    public PressAndHoldPttController(
+    public CardPttController(
         Func<ChannelViewModel, Task> start,
         Func<ChannelViewModel, Task> stop)
     {
@@ -27,29 +30,10 @@ public sealed class PressAndHoldPttController : IAsyncDisposable
         {
             if (disposed)
                 return;
-            if (!pressed.Add(channel))
+            if (!held.Add(channel))
                 return;
         }
-
-        // PTT delegates update Avalonia-bound channel state. Preserve the
-        // caller's UI synchronization context when startup is slow (for
-        // example while macOS changes an AirPods Bluetooth audio profile).
-        // Otherwise an early release can resume on a pool thread and crash
-        // when the stop delegate raises CanExecuteChanged.
-        await gate.WaitAsync();
-        try
-        {
-            lock (sync)
-            {
-                if (disposed || !pressed.Contains(channel))
-                    return;
-            }
-            await start(channel);
-        }
-        finally
-        {
-            gate.Release();
-        }
+        await ReconcileAsync(channel);
     }
 
     public async Task ReleaseAsync(ChannelViewModel channel)
@@ -59,14 +43,60 @@ public sealed class PressAndHoldPttController : IAsyncDisposable
         {
             if (disposed)
                 return;
-            if (!pressed.Remove(channel))
+            if (!held.Remove(channel))
                 return;
         }
 
+        await ReconcileAsync(channel);
+    }
+
+    public async Task ToggleAsync(ChannelViewModel channel)
+    {
+        ArgumentNullException.ThrowIfNull(channel);
+        lock (sync)
+        {
+            if (disposed)
+                return;
+            if (!latched.Add(channel))
+                latched.Remove(channel);
+        }
+
+        await ReconcileAsync(channel);
+    }
+
+    private async Task ReconcileAsync(ChannelViewModel channel)
+    {
+        // PTT delegates update Avalonia-bound channel state. Preserve the
+        // caller's UI synchronization context while serialized startup waits,
+        // so CanExecuteChanged remains on the UI thread.
         await gate.WaitAsync();
         try
         {
-            await stop(channel);
+            bool shouldBeActive;
+            bool isActive;
+            lock (sync)
+            {
+                if (disposed)
+                    return;
+                shouldBeActive = held.Contains(channel) || latched.Contains(channel);
+                isActive = active.Contains(channel);
+            }
+
+            if (shouldBeActive == isActive)
+                return;
+
+            if (shouldBeActive)
+            {
+                await start(channel);
+                lock (sync)
+                    active.Add(channel);
+            }
+            else
+            {
+                await stop(channel);
+                lock (sync)
+                    active.Remove(channel);
+            }
         }
         finally
         {
@@ -109,19 +139,25 @@ public sealed class PressAndHoldPttController : IAsyncDisposable
 
     private async Task DisposeCoreAsync()
     {
-        ChannelViewModel[] pressedChannels;
         lock (sync)
         {
             disposed = true;
-            pressedChannels = pressed.ToArray();
-            pressed.Clear();
+            held.Clear();
+            latched.Clear();
         }
 
         await gate.WaitAsync();
         try
         {
+            ChannelViewModel[] activeChannels;
+            lock (sync)
+            {
+                activeChannels = active.ToArray();
+                active.Clear();
+            }
+
             Exception? failure = null;
-            foreach (ChannelViewModel channel in pressedChannels)
+            foreach (ChannelViewModel channel in activeChannels)
             {
                 try
                 {

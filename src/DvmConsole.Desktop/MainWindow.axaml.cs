@@ -20,7 +20,7 @@ public sealed partial class MainWindow : Window
     private readonly MainWindowSessionHost sessionHost;
     private readonly WindowPttKeyRouter pttKeyRouter;
     private MainWindowViewModel viewModel => sessionHost.ViewModel;
-    private PressAndHoldPttController cardPtt => sessionHost.CardPtt;
+    private CardPttController cardPtt => sessionHost.CardPtt;
     private OperatorToolsWindow? operatorToolsWindow;
     private DebugLogWindow? debugLogWindow;
     private DocumentationWindow? documentationWindow;
@@ -251,8 +251,15 @@ public sealed partial class MainWindow : Window
         }
 
         e.Handled = true;
-        e.Pointer.Capture(button);
-        await cardPtt.PressAsync(channel);
+        if (viewModel.TogglePttMode)
+        {
+            await cardPtt.ToggleAsync(channel);
+        }
+        else
+        {
+            e.Pointer.Capture(button);
+            await cardPtt.PressAsync(channel);
+        }
     }
 
     private async void HandlePttPointerReleased(object? sender, PointerReleasedEventArgs e)

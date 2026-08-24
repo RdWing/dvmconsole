@@ -131,11 +131,7 @@ internal sealed class SharedAudioOutputRouter : IAsyncDisposable
 
         var cleanup = new AsyncCleanup();
         foreach (SharedAudioOutputRoute route in oldRoutes)
-        {
-            await cleanup.RunTaskAsync(() => route.Mixer.DisposeAsync().AsTask())
-                .ConfigureAwait(false);
-            cleanup.Run(route.Backend.Dispose);
-        }
+            await cleanup.RunTaskAsync(() => DisposeRouteAsync(route)).ConfigureAwait(false);
         cleanup.ThrowIfFailed();
     }
 
@@ -148,6 +144,7 @@ internal sealed class SharedAudioOutputRouter : IAsyncDisposable
             backend = createBackend();
             playback = backend.OpenPlayback(device, PcmAudioFormat.Voice8KhzMono16Bit);
             var route = new SharedAudioOutputRoute(backend, new AudioMixer(playback));
+            route.Mixer.Faulted += _ => RetireFailedRoute(device.Id, route);
             backend = null;
             playback = null;
             return route;
@@ -157,6 +154,36 @@ internal sealed class SharedAudioOutputRouter : IAsyncDisposable
             if (playback is not null)
                 TaskObservation.Observe(playback.DisposeAsync().AsTask());
             backend?.Dispose();
+        }
+    }
+
+    private void RetireFailedRoute(string deviceId, SharedAudioOutputRoute failedRoute)
+    {
+        lock (sync)
+        {
+            if (!routes.TryGetValue(deviceId, out SharedAudioOutputRoute? current) ||
+                !ReferenceEquals(current, failedRoute))
+            {
+                return;
+            }
+            routes.Remove(deviceId);
+        }
+
+        // Existing lanes already carry the mixer failure. Retire their native
+        // route in the background so the next playback open can create a clean
+        // physical mixer immediately.
+        TaskObservation.Observe(DisposeRouteAsync(failedRoute));
+    }
+
+    private static async Task DisposeRouteAsync(SharedAudioOutputRoute route)
+    {
+        try
+        {
+            await route.Mixer.DisposeAsync().ConfigureAwait(false);
+        }
+        finally
+        {
+            route.Backend.Dispose();
         }
     }
 

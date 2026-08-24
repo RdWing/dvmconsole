@@ -104,40 +104,27 @@ Web stream output overrides, volume, and position are keyed by stream name. Auto
 
 # Microphone Processing
 
-DVM Console provides mutually exclusive microphone processing modes:
+DVM Console processing is the standard microphone path on macOS. It applies
+the console gain, equalizer, and optional automatic gain control after capture.
+Apple Voice Processing is no longer available: the optimized normal
+Core Audio path does not require the additional full-duplex Apple processing
+route. A saved Apple processing selection from an earlier release is changed to
+DVM Console processing the next time the application starts.
 
-- **DVM Console processing** applies the console gain, equalizer, and optional
-  automatic gain control after capture.
-- **Apple voice processing** uses Apple's full-duplex Voice Processing I/O for
-  acoustic echo cancellation and automatic gain control. Receive audio, local
-  cues, web streams, recording playback, and transmit capture share that one
-  physical route, giving Apple processing the application playback it needs as
-  its echo-cancellation reference. DVM Console gain, equalizer, and AGC are
-  bypassed in this mode so the microphone signal is not processed twice.
+On Windows, the mode selector also offers **Windows communications processing**.
+That mode requests the communications effects supplied by Windows, the selected
+audio driver, and the endpoint. Depending on that combination, the effects can
+include acoustic echo cancellation, noise suppression, and automatic gain
+control. DVM Console gain, equalizer, and AGC are bypassed so the signal is not
+processed twice. These endpoint-provided
+effects remain device-dependent and are not guaranteed by selecting the mode.
 
-- **Windows communications processing** requests the communications effects
-  supplied by Windows, the selected audio driver, and the endpoint. Depending on
-  that combination, the effects can include acoustic echo cancellation, noise
-  suppression, and automatic gain control. DVM Console gain, equalizer, and AGC
-  are bypassed in this mode so the signal is not processed twice.
-
-Apple voice processing is available only on macOS. Windows communications
-processing is available only on Windows. DVM Console processing remains the
-default on both platforms. Windows communications effects are device-dependent;
-selecting the mode does not guarantee that every effect is provided by a given
-endpoint.
-
-Apple voice processing supports the system-default microphone/speaker pair or
-one Core Audio device that provides both input and output. macOS does not allow
-the Voice Processing I/O unit to use a private aggregate of unrelated selected
-devices. Use DVM Console processing when the microphone and speaker are separate
-non-default devices.
-
-Applying a different main route or processing mode automatically restarts every
-active listening channel and web stream around the route change. Active
-recording-file playback stops rather than carrying an obsolete backend into the
-new route. The operator does not need to turn each channel card off and on
-manually. Stop transmitting before applying a route or processing-mode change.
+Applying a different main input or output route—and, on Windows, a different
+processing mode—automatically restarts every active listening channel and web
+stream around the route change. Active recording-file playback stops rather
+than carrying an obsolete backend into the new route. The operator does not
+need to turn each channel card off and on manually. Stop transmitting before
+applying a route or processing-mode change.
 
 The **Automatic gain control** checkbox controls the DVM Console microphone AGC
 path.
@@ -147,6 +134,25 @@ When enabled, the console applies its microphone AGC path before transmit.
 When disabled, the console uses the raw microphone behavior.
 
 This setting is saved.
+
+## Bluetooth PTT timing
+
+Bluetooth headsets still need time to change into their microphone-capable
+duplex profile when a cold PTT begins. DVM Console waits for selected microphone
+samples and completes the talk-permit cue before releasing microphone audio, so
+the operator is not invited to speak into a route that is still changing.
+
+The standard DVM Console processing path avoids the additional shared
+full-duplex coordination formerly required by Apple Voice Processing. In live
+testing this reduced Bluetooth PTT startup delay. Exact
+timing remains dependent on the headset, macOS, the current profile, and whether
+the microphone was already warm. Improvements throughout the audio chain mean
+most headsets should not require **Keep transmit microphone warm**.
+
+Leave **Keep transmit microphone warm** off for most headsets. Enable it only
+when a particular device still has unacceptable repeated cold-start delay and
+that benefit matters more than retaining the headset's higher-quality
+playback-only profile while idle.
 
 ---
 
@@ -158,7 +164,7 @@ This setting is in the Settings menu, not the Audio Settings window:
 Settings > Mute RX Audio While Transmitting
 ```
 
-When enabled, local RX speaker playback is suppressed while the console is transmitting. In Apple voice-processing mode the mixer is silenced in place so the full-duplex unit and macOS microphone-mode state remain active.
+When enabled, local RX speaker playback is suppressed while the console is transmitting.
 
 This does not affect:
 
@@ -186,5 +192,5 @@ This helps keep the AppData settings JSON from accumulating stale audio routing,
 - Use the master output for the normal speaker path.
 - Use per-resource overrides sparingly so future troubleshooting is easier.
 - If audio is playing from the wrong device, check both the master output and the resource override.
-- If Apple voice processing reports an incompatible split-device route, choose
-  the system-default pair, a single duplex device, or DVM Console processing.
+- For lower Bluetooth cold-start delay, use the standard DVM Console processing
+  path and consider keeping the transmit microphone warm.

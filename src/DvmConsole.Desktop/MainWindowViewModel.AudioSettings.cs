@@ -162,9 +162,6 @@ public sealed partial class MainWindowViewModel
         AudioInputLowGainText = lowGainDb.ToString("0.###", CultureInfo.InvariantCulture);
         AudioInputMidGainText = midGainDb.ToString("0.###", CultureInfo.InvariantCulture);
         AudioInputHighGainText = highGainDb.ToString("0.###", CultureInfo.InvariantCulture);
-        string bluetoothStatus = userSettings.HighQualityBluetoothAudioEnabled
-            ? " High-quality Bluetooth audio is enabled for compatible AirPods; unsupported routes fall back safely."
-            : string.Empty;
         AudioStatusText = (processingMode switch
         {
             AudioProcessingMode.AppleVoiceProcessing =>
@@ -172,8 +169,7 @@ public sealed partial class MainWindowViewModel
             AudioProcessingMode.WindowsCommunications =>
                 "Windows communications processing saved for microphone transmit capture; available effects depend on Windows and the selected endpoint.",
             _ => "DVM Console audio processing saved; device routes apply to the next audio session and PTT call."
-        }) +
-            bluetoothStatus;
+        });
 
     }
 

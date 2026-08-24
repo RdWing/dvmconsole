@@ -6,6 +6,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.3.8] - 2026-08-23
+
+### Changed
+
+- Standardize macOS microphone capture on DVM Console processing and remove the Apple Voice Processing and high-quality AirPods controls. Normalize a saved Apple processing selection before audio startup.
+- Avoid the additional Apple full-duplex route coordination during normal macOS PTT. Live Bluetooth-headset testing found lower transmit-start latency in DVM Console processing mode. Improvements throughout the audio chain mean most headsets should not require Keep Mic Warm, although exact timing remains device- and route-dependent.
+
+### Fixed
+
+- Drain each ended receive stream through its adaptive jitter worker before closing its audio and TAR recording state, preserving buffered transmission tails without coupling unrelated stream lifetimes.
+- Pace TAR and web-stream PCM against a monotonic media clock so immediately accepting mixer lanes cannot be flooded by faster-than-real-time decoding and discard most of the audio.
+- Retire a failed shared output mixer instead of allowing another client to reopen a lane on a permanently stopped physical output.
+- Report receive and transmit vocoder levels over exact one-second PCM windows.
+- Make channel-card mouse PTT honor toggle mode, with serialized held and latched call state that remains safe during slow audio startup and application shutdown.
+
 ## [0.3.7] - 2026-08-23
 
 ### Changed
@@ -336,7 +351,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Add patches, multi-select groups, call history, recordings, web streams, clocks, layouts, themes, startup behavior, and in-application operator documentation.
 - Add support for local and KMM-provided P25 encryption keys while preserving compatibility with existing variable-length AES key material.
 
-[Unreleased]: https://github.com/RdWing/dvmconsole/compare/v0.3.7...HEAD
+[Unreleased]: https://github.com/RdWing/dvmconsole/compare/v0.3.8...HEAD
+[0.3.8]: https://github.com/RdWing/dvmconsole/compare/v0.3.7...v0.3.8
 [0.3.7]: https://github.com/RdWing/dvmconsole/compare/v0.3.6...v0.3.7
 [0.3.6]: https://github.com/RdWing/dvmconsole/compare/v0.3.5...v0.3.6
 [0.3.5]: https://github.com/RdWing/dvmconsole/compare/v0.3.4...v0.3.5

@@ -93,6 +93,31 @@ public sealed class ApplicationAudioBackendProviderTests
         Assert.True(state.PhysicalWriteCalls > 0);
     }
 
+    [Fact]
+    public async Task FailedSharedMixerIsReplacedForTheNextPlaybackClient()
+    {
+        var state = new FakeAudioState { FailNextPhysicalWrite = 1 };
+        await using var provider = new ApplicationAudioBackendProvider(
+            CreateConfiguration(AudioProcessingMode.AppleVoiceProcessing),
+            _ => new FakeAudioBackend(state));
+        using IAudioBackend firstBackend = provider.CreateBackend();
+        IAudioPlayback failedPlayback = firstBackend.OpenPlayback(
+            Output,
+            PcmAudioFormat.Voice8KhzMono16Bit);
+
+        await failedPlayback.WriteAsync(new short[160]);
+        await WaitForAsync(() => state.DisposedPlaybackCalls > 0);
+
+        using IAudioBackend recoveredBackend = provider.CreateBackend();
+        await using IAudioPlayback recoveredPlayback = recoveredBackend.OpenPlayback(
+            Output,
+            PcmAudioFormat.Voice8KhzMono16Bit);
+        await recoveredPlayback.WriteAsync(new short[160]);
+        await WaitForAsync(() => state.SuccessfulPhysicalWriteCalls > 0);
+
+        Assert.Equal(2, state.OpenPlaybackCalls);
+    }
+
     private static ApplicationAudioConfiguration CreateConfiguration(AudioProcessingMode mode)
         => new(mode, "default", "default", false);
 
@@ -107,7 +132,9 @@ public sealed class ApplicationAudioBackendProviderTests
     {
         public int OpenPlaybackCalls;
         public int PhysicalWriteCalls;
+        public int SuccessfulPhysicalWriteCalls;
         public int DisposedPlaybackCalls;
+        public int FailNextPhysicalWrite;
     }
 
     private sealed class FakeAudioBackend(FakeAudioState state) : IAudioBackend
@@ -143,6 +170,9 @@ public sealed class ApplicationAudioBackendProviderTests
         {
             cancellationToken.ThrowIfCancellationRequested();
             Interlocked.Increment(ref state.PhysicalWriteCalls);
+            if (Interlocked.Exchange(ref state.FailNextPhysicalWrite, 0) != 0)
+                throw new IOException("Simulated physical output failure.");
+            Interlocked.Increment(ref state.SuccessfulPhysicalWriteCalls);
             return ValueTask.CompletedTask;
         }
 

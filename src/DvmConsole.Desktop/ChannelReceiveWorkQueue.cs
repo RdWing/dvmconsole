@@ -147,6 +147,32 @@ internal sealed class ChannelReceiveWorkQueue : IAsyncDisposable
         }
     }
 
+    // Runs lifecycle cleanup on the channel worker after every packet already
+    // buffered for this stream has passed through the ordered processor. The
+    // queue owns ordering only; audio and recording cleanup remain callers'
+    // responsibilities.
+    public Task RunAfterStreamAsync(
+        ChannelViewModel channel,
+        uint streamId,
+        Func<Task> continuation)
+    {
+        ArgumentNullException.ThrowIfNull(channel);
+        if (streamId == 0)
+            throw new ArgumentOutOfRangeException(nameof(streamId));
+        ArgumentNullException.ThrowIfNull(continuation);
+
+        ChannelWorker? worker;
+        lock (sync)
+        {
+            ObjectDisposedException.ThrowIf(disposed, this);
+            workers.TryGetValue(channel, out worker);
+        }
+
+        return worker is null
+            ? continuation()
+            : worker.RunAfterStreamAsync(streamId, continuation);
+    }
+
     public async ValueTask DisposeAsync()
     {
         ChannelWorker[] oldWorkers;
@@ -179,6 +205,8 @@ internal sealed class ChannelReceiveWorkQueue : IAsyncDisposable
         private readonly Func<ChannelViewModel, FneTrafficProtocol, ReceiveJitterBufferProfile> getJitterBufferProfile;
         private readonly TaskCompletionSource completion =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly List<StreamContinuation> streamContinuations = [];
+        private uint? processingStreamId;
         private bool accepting = true;
         private bool running;
 
@@ -259,6 +287,22 @@ internal sealed class ChannelReceiveWorkQueue : IAsyncDisposable
             }
         }
 
+        public Task RunAfterStreamAsync(uint streamId, Func<Task> continuation)
+        {
+            var request = new StreamContinuation(streamId, continuation);
+            lock (sync)
+            {
+                streamContinuations.Add(request);
+                wakeSignal.Release();
+                if (!running)
+                {
+                    running = true;
+                    TaskObservation.Observe(Task.Run(ProcessLoopAsync));
+                }
+            }
+            return request.Completion.Task;
+        }
+
         public void Dispose()
             => wakeSignal.Dispose();
 
@@ -289,25 +333,52 @@ internal sealed class ChannelReceiveWorkQueue : IAsyncDisposable
         {
             while (true)
             {
-                WorkItem item;
+                WorkItem item = default;
+                StreamContinuation? streamContinuation = null;
                 TimeSpan waitTime;
                 ReceiveJitterBufferDequeueMetadata jitterMetadata;
                 bool hasItem;
                 lock (sync)
                 {
-                    hasItem = pending.TryDequeue(
-                        Stopwatch.GetTimestamp(),
-                        drain: !accepting,
-                        out item,
-                        out waitTime,
-                        out jitterMetadata);
-                    if (!hasItem && pending.Count == 0)
+                    if (TryTakeReadyStreamContinuation(out streamContinuation))
+                    {
+                        hasItem = false;
+                        waitTime = TimeSpan.Zero;
+                        jitterMetadata = default;
+                    }
+                    else
+                    {
+                        hasItem = pending.TryDequeue(
+                            Stopwatch.GetTimestamp(),
+                            drain: !accepting,
+                            out item,
+                            out waitTime,
+                            out jitterMetadata);
+                        if (hasItem)
+                            processingStreamId = item.Traffic.StreamId;
+                    }
+                    if (streamContinuation is null && !hasItem &&
+                        pending.Count == 0 && streamContinuations.Count == 0)
                     {
                         running = false;
                         if (!accepting)
                             completion.TrySetResult();
                         return;
                     }
+                }
+
+                if (streamContinuation is not null)
+                {
+                    try
+                    {
+                        await streamContinuation.Continuation().ConfigureAwait(false);
+                        streamContinuation.Completion.TrySetResult();
+                    }
+                    catch (Exception exception)
+                    {
+                        streamContinuation.Completion.TrySetException(exception);
+                    }
+                    continue;
                 }
 
                 if (!hasItem)
@@ -358,8 +429,31 @@ internal sealed class ChannelReceiveWorkQueue : IAsyncDisposable
                     }
                     if (ReceiveTrafficClassifier.IsTerminator(item.Traffic))
                         timing.EndStream(item.Traffic.StreamId);
+                    lock (sync)
+                        processingStreamId = null;
                 }
             }
+        }
+
+        private bool TryTakeReadyStreamContinuation(
+            out StreamContinuation? continuation)
+        {
+            for (int index = 0; index < streamContinuations.Count; index++)
+            {
+                StreamContinuation candidate = streamContinuations[index];
+                if (processingStreamId == candidate.StreamId ||
+                    pending.ContainsStream(candidate.StreamId))
+                {
+                    continue;
+                }
+
+                streamContinuations.RemoveAt(index);
+                continuation = candidate;
+                return true;
+            }
+
+            continuation = null;
+            return false;
         }
 
         private readonly record struct WorkItem(
@@ -370,6 +464,16 @@ internal sealed class ChannelReceiveWorkQueue : IAsyncDisposable
             long IngressTimestamp,
             long EnqueuedTimestamp,
             ReceiveJitterBufferProfile JitterBufferProfile);
+
+        private sealed class StreamContinuation(
+            uint streamId,
+            Func<Task> continuation)
+        {
+            public uint StreamId { get; } = streamId;
+            public Func<Task> Continuation { get; } = continuation;
+            public TaskCompletionSource Completion { get; } =
+                new(TaskCreationOptions.RunContinuationsAsynchronously);
+        }
     }
 
     private readonly record struct ReceiveIngressTiming(

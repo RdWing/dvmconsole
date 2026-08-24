@@ -105,6 +105,72 @@ public sealed class ChannelReceiveWorkQueueTests
     }
 
     [Fact]
+    public async Task StreamContinuationRunsAfterBufferedJitterPackets()
+    {
+        var releaseFirst = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var firstStarted = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var events = new List<string>();
+        var channel = CreateChannel("Dispatch", "100");
+        await using var queue = new ChannelReceiveWorkQueue(async (_, traffic) =>
+        {
+            lock (events)
+                events.Add($"packet {traffic.PacketSequence}");
+            if (traffic.PacketSequence == 1)
+            {
+                firstStarted.TrySetResult();
+                await releaseFirst.Task;
+            }
+        });
+
+        queue.Enqueue(channel, CreateTraffic(1));
+        await firstStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        queue.Enqueue(channel, CreateTraffic(2));
+        Task completion = queue.RunAfterStreamAsync(channel, 99, () =>
+        {
+            lock (events)
+                events.Add("complete");
+            return Task.CompletedTask;
+        });
+
+        Assert.False(completion.IsCompleted);
+        releaseFirst.TrySetResult();
+        await completion.WaitAsync(TimeSpan.FromSeconds(2));
+
+        Assert.Equal(["packet 1", "packet 2", "complete"], events);
+    }
+
+    [Fact]
+    public async Task StreamContinuationDoesNotWaitForAnotherStreamsJitterDeadline()
+    {
+        var events = new List<string>();
+        var channel = CreateChannel("Dispatch", "100");
+        await using var queue = new ChannelReceiveWorkQueue(
+            (_, traffic) =>
+            {
+                lock (events)
+                    events.Add($"packet {traffic.StreamId}");
+                return Task.CompletedTask;
+            },
+            getJitterBufferProfile: (_, _) => new ReceiveJitterBufferProfile(
+                TimeSpan.FromSeconds(1),
+                TimeSpan.FromSeconds(1)));
+
+        queue.Enqueue(channel, CreateTraffic(1, streamId: 200));
+        Task completion = queue.RunAfterStreamAsync(channel, 100, () =>
+        {
+            lock (events)
+                events.Add("complete 100");
+            return Task.CompletedTask;
+        });
+
+        await completion.WaitAsync(TimeSpan.FromMilliseconds(500));
+
+        Assert.Equal(["complete 100"], events);
+    }
+
+    [Fact]
     public async Task MeasuresIngressQueueAndProcessingLatency()
     {
         var processed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
