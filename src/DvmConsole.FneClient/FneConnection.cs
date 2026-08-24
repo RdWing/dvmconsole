@@ -135,7 +135,7 @@ public sealed class FneConnection : IAsyncDisposable
     private readonly FnePeerStateMonitor stateMonitor = new();
     private readonly object sync = new();
     private readonly SemaphoreSlim lifecycle = new(1, 1);
-    private FnePeer? peer;
+    private IFnePeerSession? peerSession;
     private FneConnectionStatus status;
     private long latestTrafficTransportTimestamp;
     private EventHandler<FneTrafficFrame>[] trafficReceivedHandlers = [];
@@ -202,7 +202,7 @@ public sealed class FneConnection : IAsyncDisposable
         get
         {
             lock (sync)
-                return peer;
+                return peerSession?.Peer;
         }
     }
 
@@ -235,7 +235,7 @@ public sealed class FneConnection : IAsyncDisposable
         FnePeer current;
         lock (sync)
         {
-            current = peer ?? throw new InvalidOperationException("The FNE connection is not started.");
+            current = peerSession?.Peer ?? throw new InvalidOperationException("The FNE connection is not started.");
             if (status.State != FneConnectionState.Connected)
                 throw new InvalidOperationException($"The FNE connection is not ready for traffic ({status.State}).");
         }
@@ -260,7 +260,7 @@ public sealed class FneConnection : IAsyncDisposable
         DateTimeOffset expiresAt;
         lock (sync)
         {
-            current = peer ?? throw new InvalidOperationException("The FNE connection is not started.");
+            current = peerSession?.Peer ?? throw new InvalidOperationException("The FNE connection is not started.");
             if (status.State != FneConnectionState.Connected)
                 throw new InvalidOperationException($"The FNE connection is not ready for key management ({status.State}).");
             if (options.SourceId is not uint sourceId)
@@ -285,7 +285,7 @@ public sealed class FneConnection : IAsyncDisposable
         uint sourceId;
         lock (sync)
         {
-            current = peer ?? throw new InvalidOperationException("The FNE connection is not started.");
+            current = peerSession?.Peer ?? throw new InvalidOperationException("The FNE connection is not started.");
             if (status.State != FneConnectionState.Connected)
                 throw new InvalidOperationException($"The FNE connection is not ready for subscriber commands ({status.State}).");
             sourceId = options.SourceId ?? throw new InvalidOperationException("A source ID is required for P25 subscriber commands.");
@@ -346,12 +346,12 @@ public sealed class FneConnection : IAsyncDisposable
     {
         lock (sync)
         {
-            if (peer is not null)
+            if (peerSession is not null)
                 throw new InvalidOperationException("The FNE connection is already started.");
         }
 
         Publish(FneConnectionState.Starting, $"Resolving {options.Address}:{options.Port}");
-        FnePeer? candidate = null;
+        IFnePeerSession? candidate = null;
 
         try
         {
@@ -360,27 +360,27 @@ public sealed class FneConnection : IAsyncDisposable
                 .ConfigureAwait(false);
             cancellationToken.ThrowIfCancellationRequested();
 
-            candidate = CreatePeer(endpoint);
+            candidate = CreatePeerSession(endpoint);
             lock (sync)
-                peer = candidate;
+                peerSession = candidate;
 
             candidate.Start();
-            StartStateMonitor(candidate);
+            StartStateMonitor(candidate.Peer);
             Publish(FneConnectionState.WaitingForLogin, "FNE network services started; waiting for login");
         }
         catch (Exception exception)
         {
             lock (sync)
             {
-                if (ReferenceEquals(peer, candidate))
-                    peer = null;
+                if (ReferenceEquals(peerSession, candidate))
+                    peerSession = null;
             }
 
             stateMonitor.Cancel();
 
             if (candidate is not null)
             {
-                DetachPeerHandlers(candidate);
+                DetachPeerHandlers(candidate.Peer);
                 try
                 {
                     await Task.Run(candidate.Stop, CancellationToken.None).ConfigureAwait(false);
@@ -412,11 +412,11 @@ public sealed class FneConnection : IAsyncDisposable
 
     private async Task StopCoreAsync(CancellationToken cancellationToken)
     {
-        FnePeer? current;
+        IFnePeerSession? current;
         lock (sync)
         {
-            current = peer;
-            peer = null;
+            current = peerSession;
+            peerSession = null;
             pendingP25KeyRequests.Clear();
         }
 
@@ -428,11 +428,13 @@ public sealed class FneConnection : IAsyncDisposable
 
         Publish(FneConnectionState.Stopping, "Stopping FNE network services");
         await stateMonitor.StopAsync().ConfigureAwait(false);
-        DetachPeerHandlers(current);
+        DetachPeerHandlers(current.Peer);
 
         try
         {
-            await Task.Run(current.Stop, cancellationToken).ConfigureAwait(false);
+            // Once ownership has been removed from the connection, teardown
+            // must finish even if the caller cancels its original operation.
+            await Task.Run(current.Stop, CancellationToken.None).ConfigureAwait(false);
             Publish(FneConnectionState.Disconnected, "Stopped");
         }
         catch (ObjectDisposedException)
@@ -454,7 +456,7 @@ public sealed class FneConnection : IAsyncDisposable
         await StopAsync().ConfigureAwait(false);
     }
 
-    internal FnePeer CreatePeer(IPEndPoint endpoint)
+    internal IFnePeerSession CreatePeerSession(IPEndPoint endpoint)
     {
         return peerSessionFactory.Create(
             options,

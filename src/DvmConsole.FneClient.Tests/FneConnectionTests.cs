@@ -84,7 +84,8 @@ public sealed class FneConnectionTests
             null);
         await using var connection = new FneConnection(options);
 
-        fnecore.FnePeer peer = connection.CreatePeer(new IPEndPoint(IPAddress.Loopback, 62031));
+        using IFnePeerSession session = connection.CreatePeerSession(new IPEndPoint(IPAddress.Loopback, 62031));
+        fnecore.FnePeer peer = session.Peer;
 
         Assert.Equal("TYF_OP1", peer.Information.Details.Identity);
         Assert.Equal(FneConnection.SoftwareIdentifier, peer.Information.Details.Software);
@@ -118,7 +119,8 @@ public sealed class FneConnectionTests
             EnableDiagnostics = true
         };
         await using var connection = new FneConnection(options);
-        fnecore.FnePeer peer = connection.CreatePeer(new IPEndPoint(IPAddress.Loopback, 62031));
+        using IFnePeerSession session = connection.CreatePeerSession(new IPEndPoint(IPAddress.Loopback, 62031));
+        fnecore.FnePeer peer = session.Peer;
         FneLogEntry? received = null;
         connection.LogReceived += (_, entry) => received = entry;
 
@@ -137,7 +139,8 @@ public sealed class FneConnectionTests
         var options = new FneConnectionOptions(
             "Test FNE", "TYF_OP1", "127.0.0.1", 62031, 1000001, null, false, null);
         await using var connection = new FneConnection(options);
-        fnecore.FnePeer peer = connection.CreatePeer(new IPEndPoint(IPAddress.Loopback, 62031));
+        using IFnePeerSession session = connection.CreatePeerSession(new IPEndPoint(IPAddress.Loopback, 62031));
+        fnecore.FnePeer peer = session.Peer;
 
         peer.Logger(fnecore.LogLevel.ERROR, "Unknown master opcode 7F / 00");
 
@@ -150,7 +153,8 @@ public sealed class FneConnectionTests
         var options = new FneConnectionOptions(
             "Test FNE", "TYF_OP1", "127.0.0.1", 62031, 1000001, null, false, null);
         await using var connection = new FneConnection(options);
-        fnecore.FnePeer peer = connection.CreatePeer(new IPEndPoint(IPAddress.Loopback, 62031));
+        using IFnePeerSession session = connection.CreatePeerSession(new IPEndPoint(IPAddress.Loopback, 62031));
+        fnecore.FnePeer peer = session.Peer;
 
         peer.Logger(fnecore.LogLevel.ERROR, "SOCKET ERROR: connection reset");
 

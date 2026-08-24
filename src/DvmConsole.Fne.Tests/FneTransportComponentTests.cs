@@ -1,4 +1,5 @@
 using fnecore;
+using System.Net;
 using Xunit;
 
 namespace DvmConsole.Fne.Tests;
@@ -63,5 +64,57 @@ public sealed class FneTransportComponentTests
             out byte[] secondPlaintext));
         Assert.Equal(message, firstPlaintext);
         Assert.Equal(message, secondPlaintext);
+    }
+
+    [Fact]
+    public async Task RepeatedSessionLifetimesStopEveryCapturedUdpReceiver()
+    {
+        for (int attempt = 0; attempt < 32; attempt++)
+        {
+            var lifetime = new FneTransportLifetime();
+            UdpReceiver traffic;
+            UdpReceiver metadata;
+            using (FneTransportEncryptionContext.Use(
+                       FneTransportEncryptionMode.Auto,
+                       trafficIngressObserver: null,
+                       lifetime))
+            {
+                traffic = new UdpReceiver();
+                metadata = new UdpReceiver();
+            }
+
+            traffic.Connect(new IPEndPoint(IPAddress.Loopback, 62031));
+            metadata.Connect(new IPEndPoint(IPAddress.Loopback, 62032));
+            Task<UdpFrame> trafficReceive = traffic.Receive();
+            Task<UdpFrame> metadataReceive = metadata.Receive();
+
+            lifetime.Dispose();
+
+            UdpFrame[] stoppedFrames = await Task.WhenAll(trafficReceive, metadataReceive)
+                .WaitAsync(TimeSpan.FromSeconds(2));
+            Assert.True(lifetime.IsStopped);
+            Assert.All(stoppedFrames, frame => Assert.Empty(frame.Message));
+        }
+    }
+
+    [Fact]
+    public void SessionLifetimeStopsReceiversCreatedAfterShutdown()
+    {
+        var lifetime = new FneTransportLifetime();
+        lifetime.Dispose();
+
+        using (FneTransportEncryptionContext.Use(
+                   FneTransportEncryptionMode.Auto,
+                   trafficIngressObserver: null,
+                   lifetime))
+        {
+            var receiver = new UdpReceiver();
+            receiver.Connect(new IPEndPoint(IPAddress.Loopback, 62031));
+            receiver.Send(new UdpFrame
+            {
+                Endpoint = new IPEndPoint(IPAddress.Loopback, 62031),
+                Message = [1]
+            });
+        }
     }
 }
