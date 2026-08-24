@@ -30,6 +30,7 @@ public sealed class ChannelReceiveAudioCoordinator : IAsyncDisposable
         static (_, traffic) => new ReceivePlaybackEpisode(
             traffic.StreamId,
             traffic.StreamId,
+            traffic.StreamId,
             RetainUntilEpisodeCompletion: false);
     private volatile ChannelViewModel[] activeChannels = [];
     private IVocoderBackend? vocoderBackend;
@@ -144,6 +145,15 @@ public sealed class ChannelReceiveAudioCoordinator : IAsyncDisposable
         return routeRegistry.TryGetRoute(channel, out ReceiveAudioRoute? route)
             ? route.Mixer.GetDiagnostics()
             : null;
+    }
+
+    internal EpisodeLivePlayoutDiagnostics GetPlaybackArbitrationDiagnostics(
+        ChannelViewModel channel)
+    {
+        ArgumentNullException.ThrowIfNull(channel);
+        return sessions.TryGetValue(channel, out ReceiveStreamSessionRegistry? state)
+            ? state.GetPlaybackArbitrationDiagnostics()
+            : default;
     }
 
     public long SetLivePlaybackDiscarded(bool discarded)
@@ -1022,6 +1032,9 @@ public sealed class ChannelReceiveAudioCoordinator : IAsyncDisposable
 
         public ValueTask CompleteEpisodeAsync(long episodeId)
             => playbackPool.CompleteEpisodeAsync(episodeId);
+
+        public EpisodeLivePlayoutDiagnostics GetPlaybackArbitrationDiagnostics()
+            => playbackPool.GetDiagnostics();
 
         public ReceiveAudioDiagnostics GetDiagnostics()
         {

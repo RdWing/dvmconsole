@@ -52,6 +52,14 @@ public interface IAudioPlaybackInputExpectationControl
     bool ExpectsMoreInput { get; set; }
 }
 
+// Marks a producer handoff inside one long-lived logical mixer lane. The next
+// frame receives the same short click-suppression ramp used after a corrected
+// live gap, without flushing queued audio or restarting the lane cushion.
+public interface IAudioPlaybackBoundaryControl
+{
+    void MarkInputBoundary();
+}
+
 // Mixes PCM from independently selected receive channels into one playback
 // stream. The mixer emits one 20 ms frame at a time and treats channels with
 // no frame ready as silence, so a quiet channel cannot block an active one.
@@ -836,6 +844,17 @@ public sealed class AudioMixer : IAsyncDisposable
         }
     }
 
+    private void MarkInputBoundary(MixerLaneBuffer channel)
+    {
+        lock (sync)
+        {
+            ThrowIfUnavailable();
+            if (channel.Disposed || !channels.ContainsKey(channel.Id))
+                throw new ObjectDisposedException(nameof(IAudioPlayback));
+            channel.BoundarySmoothingPending = channel.HasLastOutputSample;
+        }
+    }
+
     private void SetLivePlaybackEnabled(MixerLaneBuffer channel, bool enabled)
     {
         lock (sync)
@@ -1020,6 +1039,7 @@ public sealed class AudioMixer : IAsyncDisposable
         IAudioGainControl,
         IAudioBalanceControl,
         IAudioPlaybackInputExpectationControl,
+        IAudioPlaybackBoundaryControl,
         IPhysicalAudioOutputDiagnosticsSource
     {
         private bool disposed;
@@ -1053,6 +1073,12 @@ public sealed class AudioMixer : IAsyncDisposable
                 ObjectDisposedException.ThrowIf(disposed, this);
                 owner.SetExpectsMoreInput(channel, value);
             }
+        }
+
+        public void MarkInputBoundary()
+        {
+            ObjectDisposedException.ThrowIf(disposed, this);
+            owner.MarkInputBoundary(channel);
         }
 
         public double Gain

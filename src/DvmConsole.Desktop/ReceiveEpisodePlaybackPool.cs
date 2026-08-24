@@ -6,6 +6,7 @@ namespace DvmConsole.Desktop;
 internal readonly record struct ReceivePlaybackEpisode(
     long EpisodeId,
     uint PrimaryStreamId,
+    uint PhysicalStreamId,
     bool RetainUntilEpisodeCompletion);
 
 // Owns one mixer lane per logical receive episode while every physical FNE
@@ -20,6 +21,7 @@ internal sealed class ReceiveEpisodePlaybackPool : IAsyncDisposable
     private readonly Action<ChannelViewModel, uint, ReadOnlyMemory<short>, TimeSpan>?
         presentationObserver;
     private readonly Dictionary<long, EpisodeLane> lanes = [];
+    private EpisodeLivePlayoutDiagnostics completedDiagnostics;
     private bool disposed;
 
     public ReceiveEpisodePlaybackPool(
@@ -45,6 +47,8 @@ internal sealed class ReceiveEpisodePlaybackPool : IAsyncDisposable
             if (!lanes.Remove(episodeId, out lane))
                 return;
             lane.Completed = true;
+            lane.Arbiter.Complete();
+            completedDiagnostics += lane.Arbiter.GetDiagnostics();
         }
 
         await CompleteLaneAsync(lane).ConfigureAwait(false);
@@ -61,14 +65,29 @@ internal sealed class ReceiveEpisodePlaybackPool : IAsyncDisposable
             snapshot = lanes.Values.ToArray();
             lanes.Clear();
             foreach (EpisodeLane lane in snapshot)
+            {
                 lane.Completed = true;
+                lane.Arbiter.Complete();
+                completedDiagnostics += lane.Arbiter.GetDiagnostics();
+            }
         }
 
         foreach (EpisodeLane lane in snapshot)
             await CompleteLaneAsync(lane).ConfigureAwait(false);
     }
 
-    private EpisodeLane Acquire(
+    public EpisodeLivePlayoutDiagnostics GetDiagnostics()
+    {
+        lock (sync)
+        {
+            EpisodeLivePlayoutDiagnostics diagnostics = completedDiagnostics;
+            foreach (EpisodeLane lane in lanes.Values)
+                diagnostics += lane.Arbiter.GetDiagnostics();
+            return diagnostics;
+        }
+    }
+
+    private (EpisodeLane Lane, EpisodeLivePlayoutArbiter.Producer Producer) Acquire(
         ReceivePlaybackEpisode episode,
         double gain,
         double balance,
@@ -101,15 +120,18 @@ internal sealed class ReceiveEpisodePlaybackPool : IAsyncDisposable
             ApplyControls(lane.Playback, gain, balance, livePlaybackEnabled);
             if (lane.Playback is IAudioPlaybackInputExpectationControl expectation)
                 expectation.ExpectsMoreInput = livePlaybackEnabled;
-            return lane;
+            return (lane, lane.Arbiter.Register(episode.PhysicalStreamId));
         }
     }
 
-    private async ValueTask ReleaseAsync(EpisodeLane lane)
+    private async ValueTask ReleaseAsync(
+        EpisodeLane lane,
+        EpisodeLivePlayoutArbiter.Producer producer)
     {
         bool complete;
         lock (sync)
         {
+            producer.Release();
             if (lane.ActiveLeases > 0)
                 lane.ActiveLeases--;
             if (lane.ActiveLeases > 0 || lane.Completed)
@@ -122,6 +144,8 @@ internal sealed class ReceiveEpisodePlaybackPool : IAsyncDisposable
             {
                 lane.Completed = true;
                 lanes.Remove(lane.EpisodeId);
+                lane.Arbiter.Complete();
+                completedDiagnostics += lane.Arbiter.GetDiagnostics();
             }
         }
 
@@ -174,6 +198,7 @@ internal sealed class ReceiveEpisodePlaybackPool : IAsyncDisposable
         public long EpisodeId { get; } = episodeId;
         public bool RetainUntilEpisodeCompletion { get; } = retainUntilEpisodeCompletion;
         public IAudioPlayback Playback { get; } = playback;
+        public EpisodeLivePlayoutArbiter Arbiter { get; } = new(playback);
         public int ActiveLeases { get; set; }
         public bool Completed { get; set; }
     }
@@ -189,6 +214,7 @@ internal sealed class ReceiveEpisodePlaybackPool : IAsyncDisposable
         private readonly ReceiveEpisodePlaybackPool owner;
         private ReceivePlaybackEpisode? episode;
         private EpisodeLane? lane;
+        private EpisodeLivePlayoutArbiter.Producer? producer;
         private double gain = 1.0;
         private double balance;
         private bool livePlaybackEnabled = true;
@@ -241,27 +267,26 @@ internal sealed class ReceiveEpisodePlaybackPool : IAsyncDisposable
             ObjectDisposedException.ThrowIf(disposed, this);
             if (episode is ReceivePlaybackEpisode current && current != value)
                 throw new InvalidOperationException("A physical receive decoder changed logical episodes.");
+            if (episode is not null)
+                return;
             episode = value;
+            (lane, producer) = owner.Acquire(value, gain, balance, livePlaybackEnabled);
         }
 
         public ValueTask WriteAsync(
             ReadOnlyMemory<short> samples,
             CancellationToken cancellationToken = default)
-            => GetLane().Playback.WriteAsync(samples, cancellationToken);
+            => GetProducer().WriteAsync(samples, cancellationToken);
 
         public ValueTask WriteConcealmentAsync(
             ReadOnlyMemory<short> samples,
             CancellationToken cancellationToken = default)
-            => GetLane().Playback is IConcealmentAudioPlayback concealment
-                ? concealment.WriteConcealmentAsync(samples, cancellationToken)
-                : GetLane().Playback.WriteAsync(samples, cancellationToken);
+            => GetProducer().WriteConcealmentAsync(samples, cancellationToken);
 
         public ValueTask WriteLivePacketAsync(
             ReadOnlyMemory<short> samples,
             CancellationToken cancellationToken = default)
-            => GetLane().Playback is ILivePacketAudioPlayback packet
-                ? packet.WriteLivePacketAsync(samples, cancellationToken)
-                : GetLane().Playback.WriteAsync(samples, cancellationToken);
+            => GetProducer().WritePacketAsync(samples, cancellationToken);
 
         public ValueTask<int?> DrainAsync(CancellationToken cancellationToken = default)
             => lane?.Playback.DrainAsync(cancellationToken) ?? ValueTask.FromResult<int?>(0);
@@ -280,17 +305,16 @@ internal sealed class ReceiveEpisodePlaybackPool : IAsyncDisposable
             await ReleaseOnceAsync().ConfigureAwait(false);
         }
 
-        private EpisodeLane GetLane()
+        private EpisodeLivePlayoutArbiter.Producer GetProducer()
         {
             ObjectDisposedException.ThrowIf(disposed, this);
             if (released)
                 throw new InvalidOperationException("The physical receive playback lease is complete.");
-            if (lane is not null)
-                return lane;
-            if (episode is not ReceivePlaybackEpisode bound)
+            if (producer is not null)
+                return producer;
+            if (episode is null)
                 throw new InvalidOperationException("Receive playback was used before an episode was bound.");
-            lane = owner.Acquire(bound, gain, balance, livePlaybackEnabled);
-            return lane;
+            throw new InvalidOperationException("Receive playback producer registration failed.");
         }
 
         private async ValueTask ReleaseOnceAsync()
@@ -298,8 +322,8 @@ internal sealed class ReceiveEpisodePlaybackPool : IAsyncDisposable
             if (released)
                 return;
             released = true;
-            if (lane is not null)
-                await owner.ReleaseAsync(lane).ConfigureAwait(false);
+            if (lane is not null && producer is not null)
+                await owner.ReleaseAsync(lane, producer).ConfigureAwait(false);
         }
     }
 }

@@ -774,7 +774,8 @@ public sealed partial class MainWindowViewModel
             warning,
             audioCoordinator.IsLivePlaybackEnabled(channel),
             playback,
-            pipeline);
+            pipeline,
+            audioCoordinator.GetPlaybackArbitrationDiagnostics(channel));
         void Publish()
         {
             AudioStatusText = message;

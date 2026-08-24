@@ -268,7 +268,11 @@ public sealed class ChannelReceiveAudioCoordinatorTests
             () => backend,
             () => vocoder);
         coordinator.SetReceivePlaybackEpisodeResolver((_, traffic) =>
-            new ReceivePlaybackEpisode(900, 41, RetainUntilEpisodeCompletion: true));
+            new ReceivePlaybackEpisode(
+                900,
+                41,
+                traffic.StreamId,
+                RetainUntilEpisodeCompletion: true));
         var channel = new ChannelViewModel(new ChannelConfiguration
         {
             Name = "TAC",
@@ -289,6 +293,50 @@ public sealed class ChannelReceiveAudioCoordinatorTests
             coordinator.GetPlaybackDiagnostics(channel)!.LaneDiagnostics!);
         Assert.Contains("episode 900", lane.Label, StringComparison.Ordinal);
 
+        await coordinator.CompleteStreamAsync(channel, 42, DateTimeOffset.UtcNow);
+        await coordinator.CompleteEpisodeAsync(channel, 900);
+    }
+
+    [Fact]
+    public async Task EpisodeHandoffSuppressesRetiredLivePcmButKeepsDecodedSamplesObservable()
+    {
+        var backend = new FakeAudioBackend();
+        var vocoder = new DistinctVocoderBackend();
+        var observedStreams = new List<uint>();
+        await using var coordinator = new ChannelReceiveAudioCoordinator(
+            () => backend,
+            () => vocoder,
+            samplesObserver: (_, streamId, _, _) => observedStreams.Add(streamId));
+        coordinator.SetReceivePlaybackEpisodeResolver((_, traffic) =>
+            new ReceivePlaybackEpisode(
+                900,
+                41,
+                traffic.StreamId,
+                RetainUntilEpisodeCompletion: true));
+        var channel = new ChannelViewModel(new ChannelConfiguration
+        {
+            Name = "TAC",
+            System = "System 1",
+            Tgid = "100",
+            Mode = "dmr",
+            Slot = 1
+        });
+        await coordinator.StartAsync(channel);
+
+        await coordinator.ProcessAsync(channel, CreateTraffic(100, 0, streamId: 41));
+        await coordinator.ProcessAsync(channel, CreateTraffic(100, 0, streamId: 42));
+        await coordinator.ProcessAsync(
+            channel,
+            CreateTraffic(100, 0, packetSequence: 2, streamId: 41));
+
+        Assert.Equal(new uint[] { 41, 42, 41 }, observedStreams);
+        Assert.Equal(
+            new EpisodeLivePlayoutDiagnostics(
+                ProducerHandoffs: 1,
+                SuppressedRetiredSamples: 3 * VocoderFrameSizes.PcmSamplesPerFrame),
+            coordinator.GetPlaybackArbitrationDiagnostics(channel));
+
+        await coordinator.CompleteStreamAsync(channel, 41, DateTimeOffset.UtcNow);
         await coordinator.CompleteStreamAsync(channel, 42, DateTimeOffset.UtcNow);
         await coordinator.CompleteEpisodeAsync(channel, 900);
     }

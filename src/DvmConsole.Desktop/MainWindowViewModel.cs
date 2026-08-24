@@ -3178,9 +3178,11 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
             ? new ReceivePlaybackEpisode(
                 episode.EpisodeId,
                 episode.PrimaryStreamId,
+                traffic.StreamId,
                 RetainUntilEpisodeCompletion: true)
             : new ReceivePlaybackEpisode(
                 -checked((long)traffic.StreamId),
+                traffic.StreamId,
                 traffic.StreamId,
                 RetainUntilEpisodeCompletion: false);
 

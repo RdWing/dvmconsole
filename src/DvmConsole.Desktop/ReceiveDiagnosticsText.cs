@@ -17,12 +17,14 @@ internal static class ReceiveDiagnosticsText
         ReceiveWarningDiagnostics warning,
         bool receiveSelected,
         AudioMixerDiagnostics? playback,
-        ReceiveWorkQueueDiagnostics pipeline)
+        ReceiveWorkQueueDiagnostics pipeline,
+        EpisodeLivePlayoutDiagnostics arbitration = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(channelName);
         string selectionState = receiveSelected ? "RX selected" : "RX not selected";
         return $"RX {channelName}, stream {streamId}: {warning.SummaryText} ({selectionState})" +
                FormatPlayback(playback) +
+               FormatArbitration(arbitration) +
                FormatPipelineMaximums(pipeline);
     }
 
@@ -142,6 +144,13 @@ internal static class ReceiveDiagnosticsText
               $"total FNE-to-mixer {pipeline.MaximumEndToEndDelay.TotalMilliseconds:0} ms, " +
               $"jitter reordered this stream {pipeline.JitterBufferReorderedPackets:N0}, " +
               $"jitter deadline misses this stream {pipeline.JitterBufferDeadlineMissedPackets:N0}";
+
+    private static string FormatArbitration(EpisodeLivePlayoutDiagnostics diagnostics)
+        => diagnostics.ProducerHandoffs == 0 && diagnostics.SuppressedRetiredSamples == 0
+            ? string.Empty
+            : $"; live episode handoffs {diagnostics.ProducerHandoffs:N0}, " +
+              $"retired-stream audio kept from live output " +
+              $"{SamplesToMilliseconds(diagnostics.SuppressedRetiredSamples):0} ms";
 
     private static double SamplesToMilliseconds(long samples)
         => samples * MillisecondsPerSecond /
