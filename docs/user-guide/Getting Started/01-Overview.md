@@ -86,11 +86,21 @@ RX. The separate **Zone Wide** / **System Wide** control limits the selected
 set to the current zone. Collapse the sidebar with the arrow at
 its edge. Double-click the Activity heading to open Event History in Console
 Settings. Double-click a call with a TAR recording to show that file selected
-in Finder or File Explorer.
+in Finder or File Explorer. When the sidebar is scrolled away from the top, new
+calls are inserted without moving the call currently being read. The sidebar
+continues following new calls while already at the top.
 
-The toolbar provides the three original alert patterns and a **TONES** button
-that opens Console Settings directly to the Tones page. The speaker button next
-to Warm mic mutes live RX output while leaving decoding and TAR recording active.
+The toolbar places enabled clocks immediately to the left of **Keep Mic Warm**
+and the three output-mute controls. The flexible space after **Help** collapses
+first when the window narrows. Alert shortcuts then move into **MORE**, followed
+by **TONES** and finally the clocks, so controls do not clip beyond the window
+edge. Overflow thresholds account for the configured interface scale and number
+of enabled clocks.
+
+The three original alert patterns remain available from the toolbar or **MORE**,
+and **TONES** opens Console Settings directly to the Tones page. The unprefixed
+speaker button mutes all live RX output while leaving decoding and TAR recording
+active.
 
 When DVM Console closes normally, it remembers the main window's last normal
 size and position for the next launch. Closing while maximized or minimized

@@ -2,6 +2,7 @@
   <PropertyGroup>
     <OutputType>Exe</OutputType>
     <RootNamespace>DvmConsole.MediaProbe</RootNamespace>
+    <AnalysisMode>None</AnalysisMode>
   </PropertyGroup>
 
   <ItemGroup>

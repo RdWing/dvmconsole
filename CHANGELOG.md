@@ -6,6 +6,56 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-08-25
+
+### Added
+
+- Add a documented `DvmConsole.CodeplugValidator` developer tool for validating
+  codeplugs without starting the desktop application.
+- Add regression coverage for audio-route rollback, asynchronous command faults,
+  multi-stream receive completion, session-construction cleanup, and responsive
+  toolbar breakpoints.
+
+### Changed
+
+- Collapse the flexible header spacer before toolbar contents, keep clocks
+  immediately left of the operational controls, and move alert shortcuts into
+  **MORE** before **TONES** and clocks. Account for interface scale and multiple
+  enabled clocks when selecting an overflow tier.
+- Wait for every physical stream in a logical receive episode before completing
+  live playback and stopping its distinct TAR recording targets.
+- Isolate runtime audio-setting changes, receive-episode completion, and
+  construction rollback behind focused coordinators.
+- Enforce explicit exception rethrowing and focused lifetime analyzers for the
+  long-lived desktop service graph.
+- Document the FNE, audio, and media probes as developer-only live validation
+  harnesses rather than packaged applications.
+
+### Fixed
+
+- Apply microphone processing and device-route changes transactionally. Restore
+  the previous route, input options, and Keep Mic Warm state when runtime
+  reconfiguration fails instead of persisting a partial configuration.
+- Contain and report asynchronous toolbar and settings command failures while
+  reliably restoring command availability and treating cancellation as expected.
+- Prevent receive playback and TAR teardown from overtaking buffered packets
+  from another physical stream in the same logical receive episode.
+- Restore viewport anchoring in the Activity sidebar and Console Settings Event
+  History so incoming rows do not push the current reading position down when
+  the operator has scrolled away from the top. Continue following new calls
+  while already at the top.
+- Release partially built sessions after main-window construction failures and
+  start recording-finalization workers only after spool recovery completes.
+- Close Opus, PCM prefix-stream, and serial PTT resources consistently when
+  construction, decoding, or ownership transfer fails.
+
+### Removed
+
+- Remove unreachable standalone recording-catalog filtering, column-visibility,
+  and code-behind handlers without changing Event History or recording behavior.
+- Replace the ambiguous developer project name `DvmConsole.App` with the
+  purpose-specific `DvmConsole.CodeplugValidator`.
+
 ## [0.4.0] - 2026-08-25
 
 ### Added
@@ -418,7 +468,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Add patches, multi-select groups, call history, recordings, web streams, clocks, layouts, themes, startup behavior, and in-application operator documentation.
 - Add support for local and KMM-provided P25 encryption keys while preserving compatibility with existing variable-length AES key material.
 
-[Unreleased]: https://github.com/RdWing/dvmconsole/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/RdWing/dvmconsole/compare/v0.4.1...HEAD
+[0.4.1]: https://github.com/RdWing/dvmconsole/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/RdWing/dvmconsole/compare/v0.3.8...v0.4.0
 [0.3.8]: https://github.com/RdWing/dvmconsole/compare/v0.3.7...v0.3.8
 [0.3.7]: https://github.com/RdWing/dvmconsole/compare/v0.3.6...v0.3.7

@@ -80,7 +80,7 @@ internal static class FneInboundFramePolicy
 
         uint announcedBytes = ReadUInt32(payload.Slice(6, 4));
         uint entryBytes = Constants.HAParamsEntryLen;
-        uint entries = entryBytes == 0 ? 0 : announcedBytes / entryBytes;
+        uint entries = announcedBytes / entryBytes;
         ulong requiredLength = 10UL + (ulong)entries * entryBytes;
         return requiredLength <= (ulong)payload.Length;
     }

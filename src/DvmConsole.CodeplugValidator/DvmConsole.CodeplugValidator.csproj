@@ -1,11 +1,12 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <OutputType>Exe</OutputType>
-    <RootNamespace>DvmConsole.App</RootNamespace>
+    <RootNamespace>DvmConsole.CodeplugValidator</RootNamespace>
+    <IsPackable>false</IsPackable>
+    <AnalysisMode>None</AnalysisMode>
   </PropertyGroup>
 
   <ItemGroup>
     <ProjectReference Include="../DvmConsole.Core/DvmConsole.Core.csproj" />
   </ItemGroup>
-
 </Project>

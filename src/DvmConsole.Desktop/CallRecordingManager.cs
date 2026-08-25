@@ -41,11 +41,31 @@ public sealed class CallRecordingManager : IDisposable, IAsyncDisposable
         this.faultHandler = faultHandler;
         this.retentionDays = retentionDays;
         this.shouldRecordSource = shouldRecordSource ?? ((_, _) => true);
-        finalizationQueue = new RecordingFinalizationQueue();
         finalizationSpool = new RecordingFinalizationSpool(this.rootPath);
-        finalizationQueue.Finalized += HandleRecordingFinalized;
         finalizationSpool.RecoverOrphanedWaveFiles();
-        ResumePendingFinalizations();
+        finalizationQueue = new RecordingFinalizationQueue();
+        finalizationQueue.Finalized += HandleRecordingFinalized;
+        try
+        {
+            ResumePendingFinalizations();
+        }
+        catch (Exception constructionException)
+        {
+            finalizationQueue.Finalized -= HandleRecordingFinalized;
+            try
+            {
+                finalizationQueue.DisposeAsync().AsTask().GetAwaiter().GetResult();
+            }
+            catch (Exception cleanupException)
+            {
+                throw new AggregateException(
+                    "Recording recovery and finalization-queue rollback both failed.",
+                    constructionException,
+                    cleanupException);
+            }
+
+            throw;
+        }
     }
 
     public event EventHandler<RecordingFinalizationResult>? RecordingFinalized;

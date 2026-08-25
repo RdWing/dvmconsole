@@ -57,8 +57,8 @@
       <RowDefinition Height="Auto" />
     </Grid.RowDefinitions>
     <Border Grid.Row="0" Grid.Column="0" Grid.ColumnSpan="2" Background="{DynamicResource ShellHeaderBrush}" Padding="6,0">
-      <DockPanel LastChildFill="False">
-        <Menu Background="Transparent" Foreground="{DynamicResource PrimaryTextBrush}">
+      <Grid ColumnDefinitions="Auto,*,Auto,Auto">
+        <Menu Grid.Column="0" Background="Transparent" Foreground="{DynamicResource PrimaryTextBrush}">
           <MenuItem Header="File">
             <MenuItem Header="Open Codeplug…" Click="HandleOpenCodeplugClick" />
             <MenuItem Header="Open Recent" x:Name="recentCodeplugsMenu" />
@@ -192,7 +192,17 @@
             <MenuItem Header="About" Tag="help.about" Click="HandleOperatorCommandClick" />
           </MenuItem>
         </Menu>
-        <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" Spacing="10" VerticalAlignment="Center">
+        <ItemsControl Grid.Column="2"
+                      x:Name="toolbarClocks"
+                      ItemsSource="{Binding ToolbarClocks}"
+                      Margin="8,0,10,0"
+                      HorizontalAlignment="Left"
+                      VerticalAlignment="Center"
+                      AutomationProperties.Name="Configured toolbar clocks">
+          <ItemsControl.ItemsPanel><ItemsPanelTemplate><StackPanel Orientation="Horizontal" Spacing="4" /></ItemsPanelTemplate></ItemsControl.ItemsPanel>
+          <ItemsControl.ItemTemplate><DataTemplate x:DataType="local:ToolbarClockViewModel"><Border IsVisible="{Binding Enabled}" Background="{Binding BackgroundBrush}" BorderBrush="{DynamicResource ClockBorderBrush}" BorderThickness="1" CornerRadius="4" Padding="5,2"><StackPanel><TextBlock Foreground="{DynamicResource ClockTextBrush}" FontSize="{Binding $parent[Window].((local:MainWindowViewModel)DataContext).UiCompactFontSize}" Text="{Binding TimeZoneLabel}" HorizontalAlignment="Center" /><TextBlock Foreground="{DynamicResource ClockTextBrush}" FontSize="{Binding $parent[Window].((local:MainWindowViewModel)DataContext).UiSmallFontSize}" Text="{Binding TimeText}" HorizontalAlignment="Center" /></StackPanel></Border></DataTemplate></ItemsControl.ItemTemplate>
+        </ItemsControl>
+        <StackPanel Grid.Column="3" Orientation="Horizontal" Spacing="10" VerticalAlignment="Center">
           <ToggleButton Classes="toolbar-audio mic-warm" Content="🎙️"
                         IsChecked="{Binding KeepTransmitMicrophoneWarm, Mode=TwoWay}"
                         ToolTip.Tip="{Binding KeepTransmitMicrophoneWarmToolTip}"
@@ -216,12 +226,6 @@
                         IsChecked="{Binding OutputMuted, Mode=TwoWay}"
                         ToolTip.Tip="{Binding OutputMuteToolTip}"
                         AutomationProperties.Name="{Binding OutputMuteToolTip}" />
-          <ItemsControl x:Name="toolbarClocks"
-                        ItemsSource="{Binding ToolbarClocks}"
-                        AutomationProperties.Name="Configured toolbar clocks">
-            <ItemsControl.ItemsPanel><ItemsPanelTemplate><StackPanel Orientation="Horizontal" Spacing="4" /></ItemsPanelTemplate></ItemsControl.ItemsPanel>
-            <ItemsControl.ItemTemplate><DataTemplate x:DataType="local:ToolbarClockViewModel"><Border IsVisible="{Binding Enabled}" Background="{Binding BackgroundBrush}" BorderBrush="{DynamicResource ClockBorderBrush}" BorderThickness="1" CornerRadius="4" Padding="5,2"><StackPanel><TextBlock Foreground="{DynamicResource ClockTextBrush}" FontSize="{Binding $parent[Window].((local:MainWindowViewModel)DataContext).UiCompactFontSize}" Text="{Binding TimeZoneLabel}" HorizontalAlignment="Center" /><TextBlock Foreground="{DynamicResource ClockTextBrush}" FontSize="{Binding $parent[Window].((local:MainWindowViewModel)DataContext).UiSmallFontSize}" Text="{Binding TimeText}" HorizontalAlignment="Center" /></StackPanel></Border></DataTemplate></ItemsControl.ItemTemplate>
-          </ItemsControl>
           <StackPanel Orientation="Horizontal" Spacing="4" IsVisible="{Binding ShowAlertTones}">
             <ItemsControl x:Name="toolbarAlertToneShortcuts"
                           ItemsSource="{Binding BuiltInAlertTones}"
@@ -244,7 +248,7 @@
             </MenuItem>
           </Menu>
         </StackPanel>
-      </DockPanel>
+      </Grid>
     </Border>
 
       <Border Grid.Row="1" Grid.Column="0" Background="{Binding MainBackgroundBrush}" Padding="3,5,4,4">

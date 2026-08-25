@@ -8,7 +8,13 @@ public sealed class OperatorInterfaceGateTests
 {
     [Theory]
     [InlineData(880, false, false, false, true)]
-    [InlineData(1260, false, false, true, true)]
+    [InlineData(919, false, false, false, true)]
+    [InlineData(920, true, false, false, true)]
+    [InlineData(999, true, false, false, true)]
+    [InlineData(1000, true, false, true, true)]
+    [InlineData(1119, true, false, true, true)]
+    [InlineData(1120, true, true, true, false)]
+    [InlineData(1260, true, true, true, false)]
     [InlineData(1920, true, true, true, false)]
     public void ResponsiveToolbarShedsConvenienceContentBeforeOperationalControls(
         double width,
@@ -29,10 +35,50 @@ public sealed class OperatorInterfaceGateTests
         Assert.Contains("x:Name=\"toolbarAlertToneShortcuts\"", shell, StringComparison.Ordinal);
         Assert.Contains("x:Name=\"toolbarTonesLauncher\"", shell, StringComparison.Ordinal);
         Assert.Contains("x:Name=\"toolbarOverflowMenu\"", shell, StringComparison.Ordinal);
-        Assert.True(
-            shell.IndexOf("KeepTransmitMicrophoneWarm", StringComparison.Ordinal) <
-            shell.IndexOf("x:Name=\"toolbarClocks\"", StringComparison.Ordinal),
-            "Operational controls must be measured before convenience content in the toolbar.");
+
+        XDocument document = XDocument.Parse(shell);
+        XElement clocks = document.Descendants()
+            .Single(element => Attribute(element, "Name") == "toolbarClocks");
+        XElement microphoneControl = document.Descendants()
+            .Single(element => Attribute(element, "Classes")?.Split(' ').Contains("mic-warm") == true);
+        XElement alertControls = document.Descendants()
+            .Single(element => Attribute(element, "Name") == "toolbarAlertToneShortcuts");
+        XElement actionGroup = microphoneControl.Ancestors()
+            .First(element => Attribute(element, "Grid.Column") == "3");
+
+        Assert.Equal("Grid", clocks.Parent?.Name.LocalName);
+        Assert.Equal("Auto,*,Auto,Auto", Attribute(clocks.Parent!, "ColumnDefinitions"));
+        Assert.Equal("2", Attribute(clocks, "Grid.Column"));
+        Assert.Equal("Left", Attribute(clocks, "HorizontalAlignment"));
+        Assert.Equal("StackPanel", actionGroup.Name.LocalName);
+        Assert.Contains(alertControls, actionGroup.Descendants());
+    }
+
+    [Theory]
+    [InlineData(1260, 1.25, 1, true, false, true, true)]
+    [InlineData(1399, 1.25, 1, true, false, true, true)]
+    [InlineData(1400, 1.25, 1, true, true, true, false)]
+    [InlineData(1260, 1.50, 1, false, false, false, true)]
+    [InlineData(1120, 1.00, 2, true, false, true, true)]
+    [InlineData(1200, 1.00, 2, true, true, true, false)]
+    public void ResponsiveToolbarAccountsForScaleAndAdditionalClocks(
+        double width,
+        double uiScale,
+        int enabledClockCount,
+        bool expectedClocks,
+        bool expectedAlertShortcuts,
+        bool expectedTonesLauncher,
+        bool expectedOverflow)
+    {
+        ResponsiveToolbarVisibility visibility = MainWindowResponsiveToolbarPolicy.Evaluate(
+            width,
+            uiScale,
+            enabledClockCount);
+
+        Assert.Equal(expectedClocks, visibility.ShowClocks);
+        Assert.Equal(expectedAlertShortcuts, visibility.ShowAlertToneShortcuts);
+        Assert.Equal(expectedTonesLauncher, visibility.ShowTonesLauncher);
+        Assert.Equal(expectedOverflow, visibility.ShowOverflow);
     }
 
     [Fact]

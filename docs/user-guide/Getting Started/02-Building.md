@@ -58,6 +58,16 @@ dotnet test dvmconsole.sln --no-restore --disable-build-servers \
   --configuration Release /m:1 /p:UseSharedCompilation=false
 ```
 
+Validate a codeplug without opening the desktop application:
+
+```sh
+dotnet run --project src/DvmConsole.CodeplugValidator -- path/to/codeplug.yml
+```
+
+`DvmConsole.FneProbe`, `DvmConsole.AudioProbe`, and `DvmConsole.MediaProbe` are
+developer-only live validation harnesses for network, hardware-audio, and media
+checks. They are not included as operator applications in release packages.
+
 ---
 
 # Package macOS
@@ -126,7 +136,7 @@ docs/user-guide
 
 # Tagged Releases
 
-Pushing a version tag such as `v0.4.0` starts the macOS and Windows test and
+Pushing a version tag such as `v0.4.1` starts the macOS and Windows test and
 packaging matrix. Both native macOS rows smoke the packaged application bundle,
 and the Windows row runs the Avalonia headful smoke test. Version-matched release
 notes must be present before the tag is pushed.

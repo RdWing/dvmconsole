@@ -181,6 +181,29 @@ public sealed class ConsoleSessionRuntimeTests
         }
     }
 
+    [Fact]
+    public void MainWindowConstructionFailureRollsBackSessionOwnership()
+    {
+        var services = new ConsoleSessionServices();
+        bool markerDisposed = false;
+        services.Presentation.Register(
+            "construction-test-marker",
+            () =>
+            {
+                markerDisposed = true;
+                return ValueTask.CompletedTask;
+            });
+
+        Assert.Throws<FormatException>(() => ConsoleSessionConstruction.Create<object>(
+            services,
+            () => throw new FormatException("synthetic construction failure")));
+
+        Assert.True(markerDisposed);
+        Assert.Equal(0, services.Count);
+        Assert.Throws<ObjectDisposedException>(() =>
+            services.Presentation.Register("late-registration", () => ValueTask.CompletedTask));
+    }
+
     private static ValueTask NoOp()
         => ValueTask.CompletedTask;
 

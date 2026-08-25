@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Collections.Specialized;
 using System.ComponentModel;
 using System.Runtime.CompilerServices;
 
@@ -13,7 +14,6 @@ internal sealed class HistoryRecordingWorkspace : INotifyPropertyChanged
     private string recordingRetentionDaysText;
     private string recordingRootPathText;
     private string callHistoryFilterText = string.Empty;
-    private string recordingFilterText = string.Empty;
     private string recordingDirectionFilter = "All";
     private string recordingProtocolFilter = "All";
     private string recordingEncryptionFilter = "All";
@@ -24,17 +24,6 @@ internal sealed class HistoryRecordingWorkspace : INotifyPropertyChanged
     private string recordingAliasFilterText = string.Empty;
     private DateTimeOffset? recordingStartDateFilter;
     private DateTimeOffset? recordingEndDateFilter;
-    private bool recordingTimeColumnVisible = true;
-    private bool recordingDurationColumnVisible = true;
-    private bool recordingChannelColumnVisible = true;
-    private bool recordingTalkgroupColumnVisible = true;
-    private bool recordingSourceIdColumnVisible = true;
-    private bool recordingAliasColumnVisible = true;
-    private bool recordingDirectionColumnVisible;
-    private bool recordingProtocolColumnVisible;
-    private bool recordingSystemColumnVisible;
-    private bool recordingEncryptionColumnVisible;
-    private bool recordingDiagnosticsColumnVisible = true;
     private CancellationTokenSource? recordingCatalogScanCancellation;
     private int recordingCatalogScanGeneration;
     private long recordingCatalogMutationRevision;
@@ -53,6 +42,8 @@ internal sealed class HistoryRecordingWorkspace : INotifyPropertyChanged
     }
 
     public event PropertyChangedEventHandler? PropertyChanged;
+    internal event NotifyCollectionChangedEventHandler? FilteredCallHistoryChanging;
+    internal event NotifyCollectionChangedEventHandler? ActivityCallHistoryChanging;
 
     internal CallHistoryStore History { get; } = new();
     internal ObservableCollection<CallRecordingMetadata> RecordingEntries => recordingEntries;
@@ -88,20 +79,6 @@ internal sealed class HistoryRecordingWorkspace : INotifyPropertyChanged
             callHistoryFilterText = normalized;
             NotifyPropertyChanged();
             RefreshFilteredCallHistory();
-        }
-    }
-
-    public string RecordingFilterText
-    {
-        get => recordingFilterText;
-        set
-        {
-            string normalized = value ?? string.Empty;
-            if (recordingFilterText == normalized)
-                return;
-            recordingFilterText = normalized;
-            NotifyPropertyChanged();
-            NotifyPropertyChanged(nameof(FilteredRecordings));
         }
     }
 
@@ -169,72 +146,6 @@ internal sealed class HistoryRecordingWorkspace : INotifyPropertyChanged
         set => SetRecordingDateFilter(ref recordingEndDateFilter, value);
     }
 
-    public bool ShowRecordingTimeColumn
-    {
-        get => recordingTimeColumnVisible;
-        set => SetField(ref recordingTimeColumnVisible, value);
-    }
-
-    public bool ShowRecordingDurationColumn
-    {
-        get => recordingDurationColumnVisible;
-        set => SetField(ref recordingDurationColumnVisible, value);
-    }
-
-    public bool ShowRecordingChannelColumn
-    {
-        get => recordingChannelColumnVisible;
-        set => SetField(ref recordingChannelColumnVisible, value);
-    }
-
-    public bool ShowRecordingTalkgroupColumn
-    {
-        get => recordingTalkgroupColumnVisible;
-        set => SetField(ref recordingTalkgroupColumnVisible, value);
-    }
-
-    public bool ShowRecordingSourceIdColumn
-    {
-        get => recordingSourceIdColumnVisible;
-        set => SetField(ref recordingSourceIdColumnVisible, value);
-    }
-
-    public bool ShowRecordingAliasColumn
-    {
-        get => recordingAliasColumnVisible;
-        set => SetField(ref recordingAliasColumnVisible, value);
-    }
-
-    public bool ShowRecordingDirectionColumn
-    {
-        get => recordingDirectionColumnVisible;
-        set => SetField(ref recordingDirectionColumnVisible, value);
-    }
-
-    public bool ShowRecordingProtocolColumn
-    {
-        get => recordingProtocolColumnVisible;
-        set => SetField(ref recordingProtocolColumnVisible, value);
-    }
-
-    public bool ShowRecordingSystemColumn
-    {
-        get => recordingSystemColumnVisible;
-        set => SetField(ref recordingSystemColumnVisible, value);
-    }
-
-    public bool ShowRecordingEncryptionColumn
-    {
-        get => recordingEncryptionColumnVisible;
-        set => SetField(ref recordingEncryptionColumnVisible, value);
-    }
-
-    public bool ShowRecordingDiagnosticsColumn
-    {
-        get => recordingDiagnosticsColumnVisible;
-        set => SetField(ref recordingDiagnosticsColumnVisible, value);
-    }
-
     public bool HasAdvancedHistoryFilters =>
         RecordingDirectionFilter != "All" ||
         RecordingProtocolFilter != "All" ||
@@ -266,40 +177,8 @@ internal sealed class HistoryRecordingWorkspace : INotifyPropertyChanged
         }
     }
 
-    public IReadOnlyList<CallRecordingMetadata> FilteredRecordings
-        => Recordings
-            .Where(metadata => new RecordingCatalogFilter(
-                RecordingFilterText,
-                RecordingDirectionFilter,
-                RecordingProtocolFilter,
-                RecordingEncryptionFilter,
-                RecordingSystemFilterText,
-                RecordingChannelFilterText,
-                RecordingTalkgroupFilterText,
-                RecordingSubscriberFilterText,
-                RecordingAliasFilterText,
-                RecordingStartDateFilter,
-                RecordingEndDateFilter).Matches(metadata))
-            .ToArray();
-
-    public void ResetRecordingColumns()
+    private void ClearAdvancedHistoryFilters()
     {
-        ShowRecordingTimeColumn = true;
-        ShowRecordingDurationColumn = true;
-        ShowRecordingChannelColumn = true;
-        ShowRecordingTalkgroupColumn = true;
-        ShowRecordingSourceIdColumn = true;
-        ShowRecordingAliasColumn = true;
-        ShowRecordingDirectionColumn = false;
-        ShowRecordingProtocolColumn = false;
-        ShowRecordingSystemColumn = false;
-        ShowRecordingEncryptionColumn = false;
-        ShowRecordingDiagnosticsColumn = true;
-    }
-
-    public void ClearRecordingFilters()
-    {
-        RecordingFilterText = string.Empty;
         RecordingDirectionFilter = "All";
         RecordingProtocolFilter = "All";
         RecordingEncryptionFilter = "All";
@@ -315,19 +194,20 @@ internal sealed class HistoryRecordingWorkspace : INotifyPropertyChanged
     public void ClearHistoryFilters()
     {
         CallHistoryFilterText = string.Empty;
-        ClearRecordingFilters();
+        ClearAdvancedHistoryFilters();
     }
 
     public void RefreshFilteredCallHistory()
         => HistoryViewSynchronizer.Synchronize(
             filteredCallHistoryEntries,
-            CallHistory.Where(CreateHistoryFilter().Matches));
+            CallHistory.Where(CreateHistoryFilter().Matches),
+            args => FilteredCallHistoryChanging?.Invoke(this, args));
 
     public void RefreshActivityCallHistory(IEnumerable<CallHistoryEntry> entries)
-        => HistoryViewSynchronizer.Synchronize(activityCallHistoryEntries, entries);
-
-    public void NotifyRecordingsChanged()
-        => NotifyPropertyChanged(nameof(FilteredRecordings));
+        => HistoryViewSynchronizer.Synchronize(
+            activityCallHistoryEntries,
+            entries,
+            args => ActivityCallHistoryChanging?.Invoke(this, args));
 
     public RecordingCatalogScanSnapshot BeginRecordingCatalogScan()
     {
@@ -413,7 +293,6 @@ internal sealed class HistoryRecordingWorkspace : INotifyPropertyChanged
             return;
         field = normalized;
         NotifyPropertyChanged(propertyName);
-        NotifyPropertyChanged(nameof(FilteredRecordings));
         NotifyHistoryFilterChanged();
     }
 
@@ -430,7 +309,6 @@ internal sealed class HistoryRecordingWorkspace : INotifyPropertyChanged
             return;
         field = normalized;
         NotifyPropertyChanged(propertyName);
-        NotifyPropertyChanged(nameof(FilteredRecordings));
         NotifyHistoryFilterChanged();
     }
 
@@ -483,7 +361,8 @@ internal static class HistoryViewSynchronizer
 {
     public static void Synchronize(
         ObservableCollection<CallHistoryEntry> target,
-        IEnumerable<CallHistoryEntry> desiredEntries)
+        IEnumerable<CallHistoryEntry> desiredEntries,
+        Action<NotifyCollectionChangedEventArgs>? collectionChanging = null)
     {
         CallHistoryEntry[] desired = desiredEntries.ToArray();
         var desiredSet = new HashSet<CallHistoryEntry>(desired, ReferenceEqualityComparer.Instance);
@@ -492,7 +371,13 @@ internal static class HistoryViewSynchronizer
             for (int index = target.Count - 1; index >= 0; index--)
             {
                 if (!desiredSet.Contains(target[index]))
+                {
+                    collectionChanging?.Invoke(new NotifyCollectionChangedEventArgs(
+                        NotifyCollectionChangedAction.Remove,
+                        target[index],
+                        index));
                     target.RemoveAt(index);
+                }
             }
 
             for (int index = 0; index < desired.Length; index++)
@@ -501,9 +386,22 @@ internal static class HistoryViewSynchronizer
                     continue;
                 int existingIndex = target.IndexOf(desired[index]);
                 if (existingIndex >= 0)
+                {
+                    collectionChanging?.Invoke(new NotifyCollectionChangedEventArgs(
+                        NotifyCollectionChangedAction.Move,
+                        desired[index],
+                        index,
+                        existingIndex));
                     target.Move(existingIndex, index);
+                }
                 else
+                {
+                    collectionChanging?.Invoke(new NotifyCollectionChangedEventArgs(
+                        NotifyCollectionChangedAction.Add,
+                        desired[index],
+                        index));
                     target.Insert(index, desired[index]);
+                }
             }
         }
     }

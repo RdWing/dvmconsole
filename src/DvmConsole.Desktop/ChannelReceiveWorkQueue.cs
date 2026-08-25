@@ -267,10 +267,21 @@ internal sealed class ChannelReceiveWorkQueue : IAsyncDisposable
         ChannelViewModel channel,
         uint streamId,
         Func<Task> continuation)
+        => RunAfterStreamsAsync(channel, [streamId], continuation);
+
+    // Runs one episode-level continuation after every buffered packet for any
+    // physical stream in the episode has passed through the channel worker.
+    // Unrelated streams retain their own jitter deadlines and do not delay it.
+    public Task RunAfterStreamsAsync(
+        ChannelViewModel channel,
+        IReadOnlyCollection<uint> streamIds,
+        Func<Task> continuation)
     {
         ArgumentNullException.ThrowIfNull(channel);
-        if (streamId == 0)
-            throw new ArgumentOutOfRangeException(nameof(streamId));
+        ArgumentNullException.ThrowIfNull(streamIds);
+        uint[] normalizedStreamIds = streamIds.Distinct().ToArray();
+        if (normalizedStreamIds.Length == 0 || normalizedStreamIds.Any(streamId => streamId == 0))
+            throw new ArgumentException("At least one non-zero stream ID is required.", nameof(streamIds));
         ArgumentNullException.ThrowIfNull(continuation);
 
         ChannelWorker? worker;
@@ -282,7 +293,7 @@ internal sealed class ChannelReceiveWorkQueue : IAsyncDisposable
 
         return worker is null
             ? continuation()
-            : worker.RunAfterStreamAsync(streamId, continuation);
+            : worker.RunAfterStreamsAsync(normalizedStreamIds, continuation);
     }
 
     public async ValueTask DisposeAsync()
@@ -416,9 +427,11 @@ internal sealed class ChannelReceiveWorkQueue : IAsyncDisposable
             }
         }
 
-        public Task RunAfterStreamAsync(uint streamId, Func<Task> continuation)
+        public Task RunAfterStreamsAsync(
+            IReadOnlyCollection<uint> streamIds,
+            Func<Task> continuation)
         {
-            var request = new StreamContinuation(streamId, continuation);
+            var request = new StreamContinuation(streamIds, continuation);
             lock (sync)
             {
                 streamContinuations.Add(request);
@@ -586,8 +599,8 @@ internal sealed class ChannelReceiveWorkQueue : IAsyncDisposable
             for (int index = 0; index < streamContinuations.Count; index++)
             {
                 StreamContinuation candidate = streamContinuations[index];
-                if (processingStreamId == candidate.StreamId ||
-                    pending.ContainsStream(candidate.StreamId))
+                if ((processingStreamId is uint processing && candidate.StreamIds.Contains(processing)) ||
+                    candidate.StreamIds.Any(pending.ContainsStream))
                 {
                     continue;
                 }
@@ -611,10 +624,10 @@ internal sealed class ChannelReceiveWorkQueue : IAsyncDisposable
             ReceiveJitterBufferProfile JitterBufferProfile);
 
         private sealed class StreamContinuation(
-            uint streamId,
+            IReadOnlyCollection<uint> streamIds,
             Func<Task> continuation)
         {
-            public uint StreamId { get; } = streamId;
+            public HashSet<uint> StreamIds { get; } = streamIds.ToHashSet();
             public Func<Task> Continuation { get; } = continuation;
             public TaskCompletionSource Completion { get; } =
                 new(TaskCreationOptions.RunContinuationsAsynchronously);

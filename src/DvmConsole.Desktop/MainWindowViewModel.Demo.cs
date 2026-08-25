@@ -158,7 +158,6 @@ public sealed partial class MainWindowViewModel
             DebugLogSeverity.Info,
             "Synthetic TAR retry retained its fictional source recording.");
 
-        historyRecording.NotifyRecordingsChanged();
         NotifyCallHistoryChanged();
         (ConnectCommand as AsyncRelayCommand)?.RaiseCanExecuteChanged();
         NotifyConnectionPresentationChanged();

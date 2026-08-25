@@ -171,6 +171,106 @@ public sealed class ChannelReceiveWorkQueueTests
     }
 
     [Fact]
+    public async Task MultiStreamContinuationWaitsForEveryEpisodeStream()
+    {
+        var releaseFirst = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var firstStarted = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var events = new List<string>();
+        var channel = CreateChannel("Dispatch", "100");
+        await using var queue = new ChannelReceiveWorkQueue(async (_, traffic) =>
+        {
+            lock (events)
+                events.Add($"packet {traffic.StreamId}");
+            if (traffic.StreamId == 100)
+            {
+                firstStarted.TrySetResult();
+                await releaseFirst.Task;
+            }
+        });
+
+        queue.Enqueue(channel, CreateTraffic(1, streamId: 100));
+        await firstStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        queue.Enqueue(channel, CreateTraffic(2, streamId: 200));
+        Task completion = queue.RunAfterStreamsAsync(channel, [100, 200], () =>
+        {
+            lock (events)
+                events.Add("complete");
+            return Task.CompletedTask;
+        });
+
+        Assert.False(completion.IsCompleted);
+        releaseFirst.TrySetResult();
+        await completion.WaitAsync(TimeSpan.FromSeconds(2));
+
+        Assert.Equal(["packet 100", "packet 200", "complete"], events);
+    }
+
+    [Fact]
+    public async Task EpisodeCompletionKeepsPlaybackAndRecordingBehindQueuedStreams()
+    {
+        var releaseFirst = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var firstStarted = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var events = new List<string>();
+        var channel = CreateChannel("Dispatch", "100");
+        await using var queue = new ChannelReceiveWorkQueue(async (_, traffic) =>
+        {
+            lock (events)
+                events.Add($"packet {traffic.StreamId}");
+            if (traffic.StreamId == 100)
+            {
+                firstStarted.TrySetResult();
+                await releaseFirst.Task;
+            }
+        });
+        var coordinator = new ReceiveEpisodeCompletionCoordinator(
+            queue,
+            (_, episodeId) =>
+            {
+                lock (events)
+                    events.Add($"playback {episodeId}");
+                return Task.CompletedTask;
+            },
+            (_, streamId) =>
+            {
+                lock (events)
+                    events.Add($"recording {streamId}");
+            },
+            candidate => candidate);
+        DateTimeOffset now = DateTimeOffset.UnixEpoch;
+        var episode = new ReceiveCallEpisodeSnapshot(
+            900,
+            "Test",
+            FneTrafficProtocol.P25,
+            42,
+            100,
+            null,
+            "Group",
+            100,
+            [100, 200],
+            now,
+            now,
+            now,
+            null);
+
+        queue.Enqueue(channel, CreateTraffic(1, streamId: 100));
+        await firstStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        queue.Enqueue(channel, CreateTraffic(2, streamId: 200));
+        Task completion = coordinator.CompleteAsync(episode, [channel]);
+
+        Assert.False(completion.IsCompleted);
+        releaseFirst.TrySetResult();
+        await completion.WaitAsync(TimeSpan.FromSeconds(2));
+
+        Assert.Equal(
+            ["packet 100", "packet 200", "playback 900", "recording 100"],
+            events);
+    }
+
+    [Fact]
     public async Task MeasuresIngressQueueAndProcessingLatency()
     {
         var processed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);

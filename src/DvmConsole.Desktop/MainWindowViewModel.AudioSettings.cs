@@ -1,4 +1,5 @@
 using DvmConsole.Audio;
+using DvmConsole.Core.Diagnostics;
 using DvmConsole.Core.Settings;
 using DvmConsole.FneClient;
 using DvmConsole.Vocoder;
@@ -62,7 +63,9 @@ public sealed partial class MainWindowViewModel
         AudioInputLowGainText = preset.LowGainDb.ToString("0.###", CultureInfo.InvariantCulture);
         AudioInputMidGainText = preset.MidGainDb.ToString("0.###", CultureInfo.InvariantCulture);
         AudioInputHighGainText = preset.HighGainDb.ToString("0.###", CultureInfo.InvariantCulture);
-        TaskObservation.Observe(ApplyAudioInputSettingsAsync(restartActiveAudio: false));
+        TaskObservation.Observe(
+            ApplyAudioInputSettingsAsync(restartActiveAudio: false),
+            HandleAudioCommandFault);
         AudioStatusText = $"Microphone preset '{preset.Name}' loaded.";
     }
 
@@ -92,24 +95,65 @@ public sealed partial class MainWindowViewModel
             return;
         }
 
-        string previousInputDeviceId = userSettings.AudioInputDeviceId;
-        string previousOutputDeviceId = userSettings.AudioOutputDeviceId;
-        AudioProcessingMode previousProcessingMode = GetConfiguredAudioProcessingMode();
-        bool previousHighQualityBluetoothAudio = userSettings.HighQualityBluetoothAudioEnabled;
+        ApplicationAudioConfiguration previousConfiguration = CreateApplicationAudioConfiguration();
+        AudioInputProcessingOptions previousInputOptions = CreateAudioInputProcessingOptions(
+            previousConfiguration.InputDeviceId,
+            previousConfiguration.ProcessingMode,
+            userSettings.AudioInputAgcEnabled,
+            userSettings.AudioInputAgcTargetDbfs,
+            userSettings.AudioInputGain,
+            userSettings.AudioInputEqLowGainDb,
+            userSettings.AudioInputEqMidGainDb,
+            userSettings.AudioInputEqHighGainDb);
         AudioProcessingMode processingMode = GetSelectedAudioProcessingMode();
         string deviceId = AudioInputDeviceIdText.Trim();
         string outputDeviceId = AudioOutputDeviceIdText.Trim();
         bool highQualityBluetoothAudio = OperatingSystem.IsMacOSVersionAtLeast(26)
             ? HighQualityBluetoothAudioEnabled
             : userSettings.HighQualityBluetoothAudioEnabled;
-        bool audioRouteChanged = previousProcessingMode != processingMode ||
-            previousHighQualityBluetoothAudio != highQualityBluetoothAudio ||
-            !previousInputDeviceId.Equals(deviceId, StringComparison.OrdinalIgnoreCase) ||
-            !previousOutputDeviceId.Equals(outputDeviceId, StringComparison.OrdinalIgnoreCase);
+        var proposedConfiguration = new ApplicationAudioConfiguration(
+            processingMode,
+            deviceId,
+            outputDeviceId,
+            highQualityBluetoothAudio);
+        bool audioRouteChanged =
+            previousConfiguration.ProcessingMode != proposedConfiguration.ProcessingMode ||
+            previousConfiguration.HighQualityBluetoothAudio != proposedConfiguration.HighQualityBluetoothAudio ||
+            !previousConfiguration.InputDeviceId.Equals(
+                proposedConfiguration.InputDeviceId,
+                StringComparison.OrdinalIgnoreCase) ||
+            !previousConfiguration.OutputDeviceId.Equals(
+                proposedConfiguration.OutputDeviceId,
+                StringComparison.OrdinalIgnoreCase);
         if (restartActiveAudio && audioRouteChanged && transmitCoordinator.ActiveChannels.Count > 0)
         {
             AudioStatusText = "Stop transmitting before changing the audio processing mode or device route.";
             return;
+        }
+
+        AudioInputProcessingOptions proposedInputOptions = CreateAudioInputProcessingOptions(
+            deviceId,
+            processingMode,
+            AudioInputAgcEnabled,
+            agcTargetDbfs,
+            gain,
+            lowGainDb,
+            midGainDb,
+            highGainDb);
+        bool restoreWarmMicrophone = userSettings.KeepTransmitMicrophoneWarm;
+        transmitCoordinator.UpdateAudioInputOptions(proposedInputOptions);
+        try
+        {
+            await audioRuntimeSettings.ApplyAsync(
+                restartActiveAudio && audioRouteChanged,
+                previousConfiguration,
+                proposedConfiguration,
+                restoreWarmMicrophone).ConfigureAwait(false);
+        }
+        catch
+        {
+            transmitCoordinator.UpdateAudioInputOptions(previousInputOptions);
+            throw;
         }
 
         userSettings.AudioInputDeviceId = deviceId;
@@ -128,32 +172,6 @@ public sealed partial class MainWindowViewModel
         userSettings.AudioInputEqMidGainDb = midGainDb;
         userSettings.AudioInputEqHighGainDb = highGainDb;
         PersistAudioInputPresetState();
-        transmitCoordinator.UpdateAudioInputOptions(new AudioInputProcessingOptions
-        {
-            DeviceId = deviceId,
-            ProcessingMode = processingMode,
-            AgcEnabled = AudioInputAgcEnabled,
-            AgcTargetDbfs = agcTargetDbfs,
-            Gain = gain,
-            LowGainDb = lowGainDb,
-            MidGainDb = midGainDb,
-            HighGainDb = highGainDb
-        });
-        bool restoreWarmMicrophone = userSettings.KeepTransmitMicrophoneWarm;
-        if (restartActiveAudio && audioRouteChanged)
-        {
-            if (restoreWarmMicrophone)
-                await transmitCoordinator.SetKeepMicrophoneWarmAsync(false).ConfigureAwait(false);
-            await ReconfigureApplicationAudioAsync(CreateApplicationAudioConfiguration())
-                .ConfigureAwait(false);
-            if (restoreWarmMicrophone)
-                await transmitCoordinator.SetKeepMicrophoneWarmAsync(true).ConfigureAwait(false);
-        }
-        else if (restoreWarmMicrophone)
-        {
-            await transmitCoordinator.SetKeepMicrophoneWarmAsync(false).ConfigureAwait(false);
-            await transmitCoordinator.SetKeepMicrophoneWarmAsync(true).ConfigureAwait(false);
-        }
         PersistUserSettings();
         AudioInputDeviceIdText = deviceId;
         AudioOutputDeviceIdText = outputDeviceId;
@@ -171,6 +189,45 @@ public sealed partial class MainWindowViewModel
             _ => "DVM Console audio processing saved; device routes apply to the next audio session and PTT call."
         });
 
+    }
+
+    private static AudioInputProcessingOptions CreateAudioInputProcessingOptions(
+        string deviceId,
+        AudioProcessingMode processingMode,
+        bool agcEnabled,
+        double agcTargetDbfs,
+        double gain,
+        double lowGainDb,
+        double midGainDb,
+        double highGainDb)
+        => new()
+        {
+            DeviceId = deviceId,
+            ProcessingMode = processingMode,
+            AgcEnabled = agcEnabled,
+            AgcTargetDbfs = agcTargetDbfs,
+            Gain = gain,
+            LowGainDb = lowGainDb,
+            MidGainDb = midGainDb,
+            HighGainDb = highGainDb
+        };
+
+    private void HandleAudioCommandFault(Exception exception)
+    {
+        DesktopCrashLog.Write("Audio settings command", exception);
+        TaskObservation.Observe(
+            uiDispatcher.InvokeAsync(() =>
+            {
+                AudioStatusText = $"Unable to apply audio settings: {exception.Message}";
+                AddDebugLog(
+                    DateTimeOffset.Now,
+                    "AUDIO",
+                    DebugLogSeverity.Warning,
+                    $"Audio settings command failed: {exception}");
+            }).AsTask(),
+            reportingException => DesktopCrashLog.Write(
+                "Audio settings command UI reporting",
+                reportingException));
     }
 
     public void RefreshAudioDevices()

@@ -12,6 +12,10 @@ Alert tones are used for operator alerting workflows such as page/alert tones an
 The toolbar buttons **ALERT 1**, **ALERT 2**, and **ALERT 3** use the built-in
 console tone generator. They do not depend on external audio files.
 
+When the main window narrows, the alert shortcuts move into **MORE** before
+**TONES** or configured clocks. The **MORE** menu provides the same three alert
+actions; selecting one uses the normal armed-resource and validation rules.
+
 - **ALERT 1:** continuous 1000 Hz for 3 seconds.
 - **ALERT 2:** alternating 1500 Hz and 800 Hz every 250 milliseconds for seven cycles.
 - **ALERT 3:** eight 250-millisecond bursts of 1000 Hz, separated by 250 milliseconds of silence.

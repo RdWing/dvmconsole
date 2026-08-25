@@ -56,7 +56,7 @@ public static class OpusRecordingEncoder
             FileShare.None,
             bufferSize: 16_384,
             useAsync: false);
-        IOpusEncoder encoder = OpusCodecFactory.CreateEncoder(
+        using IOpusEncoder encoder = OpusCodecFactory.CreateEncoder(
             pcm.SampleRate,
             1,
             OpusApplication.OPUS_APPLICATION_VOIP);

@@ -25,30 +25,42 @@ public static class PcmStreamDecoder
 
         byte[] prefix = new byte[4];
         await ReadExactlyAsync(source, prefix, cancellationToken).ConfigureAwait(false);
-        var replay = new PrefixStream(prefix, source);
+        PrefixStream? replay = new(prefix, source);
         try
         {
+            IAudioPcmStreamReader opened;
             if (prefix.AsSpan().SequenceEqual("RIFF"u8))
-                return await WavPcmStreamReader.OpenAsync(replay, cancellationToken).ConfigureAwait(false);
-            if (prefix.AsSpan().SequenceEqual("OggS"u8))
-                return await OpusOggPcmStreamReader.OpenAsync(replay, cancellationToken).ConfigureAwait(false);
-            if (LooksLikeMpeg(prefix))
-                return await MpegPcmStreamReader.OpenAsync(replay, cancellationToken).ConfigureAwait(false);
-            if (!string.IsNullOrWhiteSpace(ffmpegExecutable))
             {
-                return await FfmpegPcmStreamReader.OpenAsync(
+                opened = await WavPcmStreamReader.OpenAsync(replay, cancellationToken).ConfigureAwait(false);
+            }
+            else if (prefix.AsSpan().SequenceEqual("OggS"u8))
+            {
+                opened = await OpusOggPcmStreamReader.OpenAsync(replay, cancellationToken).ConfigureAwait(false);
+            }
+            else if (LooksLikeMpeg(prefix))
+            {
+                opened = await MpegPcmStreamReader.OpenAsync(replay, cancellationToken).ConfigureAwait(false);
+            }
+            else if (!string.IsNullOrWhiteSpace(ffmpegExecutable))
+            {
+                opened = await FfmpegPcmStreamReader.OpenAsync(
                     replay,
                     ffmpegExecutable,
                     cancellationToken).ConfigureAwait(false);
             }
+            else
+            {
+                throw new NotSupportedException(
+                    "Only PCM WAV, MPEG, and Ogg Opus audio streams are supported unless DVM_FFMPEG is configured.");
+            }
 
-            throw new NotSupportedException(
-                "Only PCM WAV, MPEG, and Ogg Opus audio streams are supported unless DVM_FFMPEG is configured.");
+            replay = null;
+            return opened;
         }
-        catch
+        finally
         {
-            await replay.DisposeAsync().ConfigureAwait(false);
-            throw;
+            if (replay is not null)
+                await replay.DisposeAsync().ConfigureAwait(false);
         }
     }
 
@@ -152,6 +164,7 @@ public static class PcmStreamDecoder
                 await inner.DisposeAsync().ConfigureAwait(false);
             }
 
+            await base.DisposeAsync().ConfigureAwait(false);
             GC.SuppressFinalize(this);
         }
 

@@ -38,6 +38,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
     private readonly ChannelReceiveAudioCoordinator audioCoordinator;
     private readonly ApplicationAudioBackendProvider audioBackendProvider;
     private readonly ChannelReceiveWorkQueue receiveAudioWork;
+    private readonly ReceiveEpisodeCompletionCoordinator receiveEpisodeCompletion;
     private readonly ChannelReceiveWorkQueue patchSourceReceiveWork;
     private readonly UserSettingsStore userSettingsStore;
     private readonly UserSettings userSettings;
@@ -118,6 +119,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
     private readonly CallRecordingManager callRecordings;
     private readonly RecordingPlaybackCoordinator recordingPlayback;
     private readonly ConsoleSessionRuntime sessionRuntime;
+    private readonly AudioRuntimeSettingsTransaction audioRuntimeSettings;
     private Bitmap? userBackgroundBitmap;
     private int disposeStarted;
     private IBrush mainBackgroundBrush = new SolidColorBrush(Color.Parse("#0D1116"));
@@ -150,7 +152,8 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
         string? codeplugPath = null,
         IUiDispatcher? uiDispatcher = null,
         ConsoleSessionServices? sessionServices = null,
-        bool networkDisabledDemo = false)
+        bool networkDisabledDemo = false,
+        Func<ApplicationAudioConfiguration, Task>? reconfigureApplicationAudio = null)
     {
         ConsoleSessionServices services = sessionServices ?? new ConsoleSessionServices();
         sessionRuntime = new ConsoleSessionRuntime(services);
@@ -167,6 +170,8 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
         audioBackendProvider = new ApplicationAudioBackendProvider(
             CreateApplicationAudioConfiguration(),
             CreateNativeAudioBackend);
+        Func<ApplicationAudioConfiguration, Task> reconfigureAudio =
+            reconfigureApplicationAudio ?? ReconfigureApplicationAudioAsync;
         filteredDebugLogs = new FilteredDebugLogCollection(debugLogBuffer.Entries);
         Systems = systems.ToArray();
         Zones = zones.ToArray();
@@ -281,6 +286,11 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
                 HandleReceiveWorkItemTiming(channel, timing);
             },
             getJitterBufferProfile: GetReceiveJitterBufferProfile);
+        receiveEpisodeCompletion = new ReceiveEpisodeCompletionCoordinator(
+            receiveAudioWork,
+            (channel, episodeId) => audioCoordinator.CompleteEpisodeAsync(channel, episodeId),
+            callRecordings.StopStream,
+            ResolveReceiveRecordingTarget);
         patchSourceReceiveWork = new ChannelReceiveWorkQueue(
             ProcessPatchSourceAsync,
             getJitterBufferProfile: GetReceiveJitterBufferProfile);
@@ -293,21 +303,22 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
             RefreshJitterBufferTelemetry(system);
         transmitCoordinator = new ChannelTransmitCoordinator(
             p25KeyResolver,
-            new AudioInputProcessingOptions
-            {
-                DeviceId = userSettings.AudioInputDeviceId,
-                ProcessingMode = GetConfiguredAudioProcessingMode(),
-                AgcEnabled = userSettings.AudioInputAgcEnabled,
-                AgcTargetDbfs = userSettings.AudioInputAgcTargetDbfs,
-                Gain = userSettings.AudioInputGain,
-                LowGainDb = userSettings.AudioInputEqLowGainDb,
-                MidGainDb = userSettings.AudioInputEqMidGainDb,
-                HighGainDb = userSettings.AudioInputEqHighGainDb
-            },
+            CreateAudioInputProcessingOptions(
+                userSettings.AudioInputDeviceId,
+                GetConfiguredAudioProcessingMode(),
+                userSettings.AudioInputAgcEnabled,
+                userSettings.AudioInputAgcTargetDbfs,
+                userSettings.AudioInputGain,
+                userSettings.AudioInputEqLowGainDb,
+                userSettings.AudioInputEqMidGainDb,
+                userSettings.AudioInputEqHighGainDb),
             HandleTransmitSamples,
             CreateTransmitAudioBackend,
             dmrKeyResolver: dmrKeyResolver,
             nxdnKeyResolver: nxdnKeyResolver);
+        audioRuntimeSettings = new AudioRuntimeSettingsTransaction(
+            transmitCoordinator.SetKeepMicrophoneWarmAsync,
+            reconfigureAudio);
         warmMicrophoneReconciler = new LatestBooleanStateReconciler(
             transmitCoordinator.SetKeepMicrophoneWarmAsync);
         warmMicrophoneReconciler.Reconciled += HandleWarmMicrophoneReconciled;
@@ -480,10 +491,12 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
         SaveTonePresetCommand = new RelayCommand(SaveTonePreset);
         ApplyAudioInputSettingsCommand = new AsyncRelayCommand(
             () => ApplyAudioInputSettingsAsync(restartActiveAudio: true),
-            () => !busy && transmitCoordinator.ActiveChannel is null);
+            () => !busy && transmitCoordinator.ActiveChannel is null,
+            HandleAudioCommandFault);
         ApplyRxAudioProcessingOptionsCommand = new AsyncRelayCommand(
             ApplyRxAudioProcessingOptionsAsync,
-            () => !busy);
+            () => !busy,
+            HandleAudioCommandFault);
         ApplyRecordingRetentionCommand = new RelayCommand(ApplyRecordingRetention);
         RefreshAudioDevicesCommand = new RelayCommand(RefreshAudioDevices);
         defaultAudioDeviceMonitor = new DefaultAudioDeviceMonitor(
@@ -1545,6 +1558,11 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
         => historyRecording.CallHistory;
     public ReadOnlyObservableCollection<CallHistoryEntry> ActivityCallHistory
         => historyRecording.ActivityCallHistory;
+    internal event NotifyCollectionChangedEventHandler? ActivityCallHistoryChanging
+    {
+        add => historyRecording.ActivityCallHistoryChanging += value;
+        remove => historyRecording.ActivityCallHistoryChanging -= value;
+    }
     public string ActivityZoneFilterButtonText => activityCurrentZoneOnly ? "Zone Wide" : "System Wide";
     public string ActivityReceiveFilterButtonText => activityReceiveEnabledOnly ? "Active" : "All";
     public IReadOnlyList<SubscriberCommandAuditEntry> ActivitySubscriberCommandAudit
@@ -1555,6 +1573,11 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
                 .ToArray();
     public ReadOnlyObservableCollection<CallHistoryEntry> FilteredCallHistory
         => historyRecording.FilteredCallHistory;
+    internal event NotifyCollectionChangedEventHandler? FilteredCallHistoryChanging
+    {
+        add => historyRecording.FilteredCallHistoryChanging += value;
+        remove => historyRecording.FilteredCallHistoryChanging -= value;
+    }
     public bool HasAdvancedHistoryFilters => historyRecording.HasAdvancedHistoryFilters;
     public string HistoryFilterSummary => historyRecording.HistoryFilterSummary;
     public ReadOnlyObservableCollection<CallRecordingMetadata> Recordings
@@ -1623,12 +1646,6 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
         set => historyRecording.CallHistoryFilterText = value;
     }
 
-    public string RecordingFilterText
-    {
-        get => historyRecording.RecordingFilterText;
-        set => historyRecording.RecordingFilterText = value;
-    }
-
     public IReadOnlyList<string> RecordingDirectionFilters => historyRecording.RecordingDirectionFilters;
     public IReadOnlyList<string> RecordingProtocolFilters => historyRecording.RecordingProtocolFilters;
     public IReadOnlyList<string> RecordingEncryptionFilters => historyRecording.RecordingEncryptionFilters;
@@ -1693,78 +1710,6 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
         set => historyRecording.RecordingEndDateFilter = value;
     }
 
-    public bool ShowRecordingTimeColumn
-    {
-        get => historyRecording.ShowRecordingTimeColumn;
-        set => historyRecording.ShowRecordingTimeColumn = value;
-    }
-
-    public bool ShowRecordingDurationColumn
-    {
-        get => historyRecording.ShowRecordingDurationColumn;
-        set => historyRecording.ShowRecordingDurationColumn = value;
-    }
-
-    public bool ShowRecordingChannelColumn
-    {
-        get => historyRecording.ShowRecordingChannelColumn;
-        set => historyRecording.ShowRecordingChannelColumn = value;
-    }
-
-    public bool ShowRecordingTalkgroupColumn
-    {
-        get => historyRecording.ShowRecordingTalkgroupColumn;
-        set => historyRecording.ShowRecordingTalkgroupColumn = value;
-    }
-
-    public bool ShowRecordingSourceIdColumn
-    {
-        get => historyRecording.ShowRecordingSourceIdColumn;
-        set => historyRecording.ShowRecordingSourceIdColumn = value;
-    }
-
-    public bool ShowRecordingAliasColumn
-    {
-        get => historyRecording.ShowRecordingAliasColumn;
-        set => historyRecording.ShowRecordingAliasColumn = value;
-    }
-
-    public bool ShowRecordingDirectionColumn
-    {
-        get => historyRecording.ShowRecordingDirectionColumn;
-        set => historyRecording.ShowRecordingDirectionColumn = value;
-    }
-
-    public bool ShowRecordingProtocolColumn
-    {
-        get => historyRecording.ShowRecordingProtocolColumn;
-        set => historyRecording.ShowRecordingProtocolColumn = value;
-    }
-
-    public bool ShowRecordingSystemColumn
-    {
-        get => historyRecording.ShowRecordingSystemColumn;
-        set => historyRecording.ShowRecordingSystemColumn = value;
-    }
-
-    public bool ShowRecordingEncryptionColumn
-    {
-        get => historyRecording.ShowRecordingEncryptionColumn;
-        set => historyRecording.ShowRecordingEncryptionColumn = value;
-    }
-
-    public bool ShowRecordingDiagnosticsColumn
-    {
-        get => historyRecording.ShowRecordingDiagnosticsColumn;
-        set => historyRecording.ShowRecordingDiagnosticsColumn = value;
-    }
-
-    public void ResetRecordingColumns()
-        => historyRecording.ResetRecordingColumns();
-
-    public void ClearRecordingFilters()
-        => historyRecording.ClearRecordingFilters();
-
     public void ClearHistoryFilters()
         => historyRecording.ClearHistoryFilters();
 
@@ -1784,9 +1729,6 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
         AudioStatusText = $"TAR recordings now use {callRecordings.RootPath}.";
         return true;
     }
-
-    public IReadOnlyList<CallRecordingMetadata> FilteredRecordings
-        => historyRecording.FilteredRecordings;
 
     public void ExportDebugLogs(string path)
     {
@@ -2012,7 +1954,6 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
             RecordRecordingCatalogMutation();
             recordingEntries.Remove(metadata);
             callHistory.RemoveRecording(metadata);
-            historyRecording.NotifyRecordingsChanged();
             NotifyCallHistoryChanged();
         }).ConfigureAwait(false);
     }
@@ -3536,7 +3477,6 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
                 recordingEntries.Insert(0, metadata);
                 callHistory.AddOrAttachRecording(metadata);
 
-                historyRecording.NotifyRecordingsChanged();
                 NotifyCallHistoryChanged();
             }
             else if (result.Error is null && !string.IsNullOrWhiteSpace(result.Diagnostic))
@@ -3600,7 +3540,6 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
         {
             historyRecording.ReplaceRecordingEntries(loaded);
             callHistory.ReplaceRecordingCatalog(loaded);
-            historyRecording.NotifyRecordingsChanged();
             NotifyCallHistoryChanged();
         }).ConfigureAwait(false);
     }
@@ -4039,20 +3978,32 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
                  channel.Definition.Slot == episode.Slot))
             .Distinct()
             .ToArray();
-        foreach (ChannelViewModel channel in episodeChannels)
-        {
-            TaskObservation.Observe(audioCoordinator.CompleteEpisodeAsync(
-                channel,
-                episode.EpisodeId));
-        }
+        if (episodeChannels.Length == 0)
+            return;
 
-        foreach (ChannelViewModel target in episodeChannels
-                     .Select(ResolveReceiveRecordingTarget)
-                     .OfType<ChannelViewModel>()
-                     .Distinct())
-        {
-            callRecordings.StopStream(target, episode.PrimaryStreamId);
-        }
+        TaskObservation.Observe(
+            receiveEpisodeCompletion.CompleteAsync(episode, episodeChannels),
+            exception => ReportReceiveEpisodeCompletionFailure(episode, exception));
+    }
+
+    private void ReportReceiveEpisodeCompletionFailure(
+        ReceiveCallEpisodeSnapshot episode,
+        Exception exception)
+    {
+        if (exception is ObjectDisposedException && Volatile.Read(ref disposeStarted) != 0)
+            return;
+
+        DesktopCrashLog.Write("Receive episode completion", exception);
+        TaskObservation.Observe(
+            uiDispatcher.InvokeAsync(() => AddDebugLog(
+                DateTimeOffset.Now,
+                "RX",
+                DebugLogSeverity.Warning,
+                $"Unable to complete receive episode {episode.EpisodeId}: {exception}"))
+                .AsTask(),
+            reportingException => DesktopCrashLog.Write(
+                "Receive episode completion UI reporting",
+                reportingException));
     }
 
     private void NotifyCallHistoryChanged()
