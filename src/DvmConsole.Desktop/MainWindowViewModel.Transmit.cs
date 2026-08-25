@@ -13,6 +13,14 @@ public sealed partial class MainWindowViewModel
 
     private async Task StartTransmitAsync(IReadOnlyCollection<ChannelViewModel> channels)
     {
+        if (networkDisabledDemo)
+        {
+            await RunOnUiThreadAsync(() =>
+                TransmitStatusText = "Demo safety boundary: PTT input observed; network output remains disabled.")
+                .ConfigureAwait(false);
+            return;
+        }
+
         if (channels.Count == 0 || transmitCoordinator.ActiveChannel is not null)
             return;
 
@@ -31,9 +39,10 @@ public sealed partial class MainWindowViewModel
             return;
         }
 
-        bool suppressMicrophoneForPermitTone = TalkPermitTone;
+        bool playPermitTone = TalkPermitTone;
         var startupTimer = Stopwatch.StartNew();
         TaskCompletionSource<bool>? cueRelease = null;
+        TaskCompletionSource<bool>? transmitActivated = null;
         Task<LocalTonePlaybackResult>? preparedPermitTone = null;
         bool receiveTransitionGateActive = false;
         long receiveTransitionDiscardedAtStart = 0;
@@ -56,11 +65,11 @@ public sealed partial class MainWindowViewModel
                 receiveTransitionGateActive = true;
             }
 
-            // Bring capture, processing, and every selected call fully online.
-            // When a permit tone is enabled, discard microphone frames until
-            // enough real callbacks prove the selected capture path is ready
-            // and the local readiness indication has completed.
-            transmitCoordinator.SetMicrophoneAudioSuppressed(suppressMicrophoneForPermitTone);
+            // Never publish operator audio or an ON AIR presentation until
+            // fresh physical callbacks prove the selected capture path is
+            // ready. This gate applies with or without a permit tone and also
+            // re-arms when a warm capture has become stale.
+            transmitCoordinator.SetMicrophoneAudioSuppressed(true);
             await Task.Run(() => transmitCoordinator.StartAsync(targets)).ConfigureAwait(false);
             TimeSpan transmitSessionsReadyAt = startupTimer.Elapsed;
             bool microphoneStartedCold = transmitCoordinator.ActiveMicrophoneStartedCold;
@@ -81,43 +90,70 @@ public sealed partial class MainWindowViewModel
                     receiveTransitionDiscardedAtStart).ConfigureAwait(false);
                 receiveTransitionGateActive = false;
             }
-            MicrophoneReadinessTiming? microphoneReadiness = null;
-            if (suppressMicrophoneForPermitTone)
+            MicrophoneReadinessTiming microphoneReadiness;
+            TimeSpan cueBarrierReleasedAt;
+            if (playPermitTone)
             {
                 cueRelease = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+                transmitActivated = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
                 Task<MicrophoneReadinessTiming> microphoneReady = transmitCoordinator.WaitForMicrophoneReadyAsync();
                 preparedPermitTone = localTonePlayer.PlayTalkPermitAsync(
                     microphoneStartedCold,
                     microphoneIsBluetooth,
-                    cueRelease.Task);
+                    cueRelease.Task,
+                    beforeCueAsync: async cancellationToken =>
+                    {
+                        try
+                        {
+                            await transmitCoordinator.ActivateAsync(cancellationToken).ConfigureAwait(false);
+                            transmitActivated.TrySetResult(true);
+                        }
+                        catch (Exception exception)
+                        {
+                            transmitActivated.TrySetException(exception);
+                            throw;
+                        }
+                    });
                 microphoneReadiness = await microphoneReady.ConfigureAwait(false);
+                cueBarrierReleasedAt = startupTimer.Elapsed;
+                cueRelease.TrySetResult(true);
             }
-            else if (receiveTransitionGateActive)
+            else
             {
                 microphoneReadiness = await transmitCoordinator
                     .WaitForMicrophoneReadyAsync()
                     .ConfigureAwait(false);
+                await transmitCoordinator.ActivateAsync().ConfigureAwait(false);
+                cueBarrierReleasedAt = startupTimer.Elapsed;
             }
             TimeSpan microphoneReadyAt = startupTimer.Elapsed;
             ChannelViewModel[] activeChannels = transmitCoordinator.ActiveChannels.ToArray();
             var startupDiagnostics = new TransmitStartupDiagnostics(
                 transmitSessionsReadyAt,
+                cueBarrierReleasedAt,
                 microphoneReadyAt,
                 microphoneStartedCold,
                 microphoneIsBluetooth,
                 microphoneReadiness);
+            if (playPermitTone)
+            {
+                Task completed = await Task.WhenAny(
+                    transmitActivated!.Task,
+                    preparedPermitTone!).ConfigureAwait(false);
+                if (completed == preparedPermitTone)
+                    await preparedPermitTone.ConfigureAwait(false);
+                await transmitActivated.Task.ConfigureAwait(false);
+            }
             await PresentTransmitStartupAsync(
                 targets,
                 activeChannels,
                 startupDiagnostics,
                 startupTimer).ConfigureAwait(false);
-            cueRelease?.TrySetResult(true);
             // A permit tone is an operational readiness indication. Play it
-            // only after every selected call and the shared microphone path
-            // have started successfully. In Apple processing mode this also
-            // lets Voice Processing I/O claim and initialize the duplex route
-            // before the local permit-tone playback path is opened.
-            if (suppressMicrophoneForPermitTone)
+            // only after the final output route is rendering, every selected
+            // protocol call is active, and the shared microphone path is
+            // ready. Operator audio remains suppressed until it completes.
+            if (playPermitTone)
             {
                 await PlayTalkPermitToneAsync(
                     reportSuccess: false,
@@ -127,8 +163,25 @@ public sealed partial class MainWindowViewModel
                     preparedPlayback: preparedPermitTone,
                     pttTimer: startupTimer,
                     transmitSessionsReadyAt: transmitSessionsReadyAt,
+                    cueBarrierReleasedAt: cueBarrierReleasedAt,
                     microphoneReadyAt: microphoneReadyAt).ConfigureAwait(false);
-                transmitCoordinator.SetMicrophoneAudioSuppressed(false);
+            }
+            bool requirePostTransitionMicrophoneRecovery =
+                microphoneStartedCold && microphoneIsBluetooth != false;
+            TimeSpan postCueMicrophoneRecovery = await transmitCoordinator
+                .ReleaseMicrophoneAudioAsync(requirePostTransitionMicrophoneRecovery)
+                .ConfigureAwait(false);
+            if (requirePostTransitionMicrophoneRecovery)
+            {
+                string recoveryContext = playPermitTone
+                    ? "after permit-tone output closed"
+                    : "after cold Bluetooth startup";
+                AddDebugLog(
+                    DateTimeOffset.Now,
+                    "TX",
+                    DebugLogSeverity.Debug,
+                    $"Cold Bluetooth microphone resumed {postCueMicrophoneRecovery.TotalMilliseconds:0} ms " +
+                    $"{recoveryContext}; operator audio released and watchdog armed.");
             }
             if (receiveTransitionGateActive)
             {
@@ -140,6 +193,7 @@ public sealed partial class MainWindowViewModel
         catch (Exception exception)
         {
             cueRelease?.TrySetCanceled();
+            transmitActivated?.TrySetCanceled();
             await ObservePreparedPermitToneFailureAsync(preparedPermitTone).ConfigureAwait(false);
             Exception startupFailure = exception;
             try
@@ -248,8 +302,8 @@ public sealed partial class MainWindowViewModel
 
             NotifyCallHistoryChanged();
             TransmitStatusText = activeChannels.Count == 1
-                ? $"Transmitting on {activeChannels[0].Name}."
-                : $"Transmitting on {activeChannels.Count} selected channels.";
+                ? $"Transmitting on {activeChannels[0].Name} · PTT: {PttInputSourceText}."
+                : $"Transmitting on {activeChannels.Count} selected channels · PTT: {PttInputSourceText}.";
         }).ConfigureAwait(false);
     }
 
@@ -264,14 +318,12 @@ public sealed partial class MainWindowViewModel
             : $"capture start returned " +
               $"{diagnostics.MicrophoneReadiness.CaptureStartReturned.TotalMilliseconds:0} ms, " +
               $"first samples " +
-              $"{diagnostics.MicrophoneReadiness.FirstSamplesReceived.TotalMilliseconds:0} ms, " +
-              $"sustained ready " +
-              $"{diagnostics.MicrophoneReadiness.SustainedReadinessReached.TotalMilliseconds:0} ms " +
-              $"({diagnostics.MicrophoneReadiness.RequiredSamples:N0} samples)";
+              $"{diagnostics.MicrophoneReadiness.FirstSamplesReceived.TotalMilliseconds:0} ms";
         return $"Vocoder TX initialized for {channel.Name}: mode {channel.Definition.Mode}, " +
                $"stream {streamId}, audio processing {userSettings.AudioProcessingMode}, " +
                $"warm microphone {(userSettings.KeepTransmitMicrophoneWarm ? "enabled" : "disabled")}, " +
                $"TX sessions {diagnostics.TransmitSessionsReadyAt.TotalMilliseconds:0} ms, " +
+               $"cue barrier {diagnostics.CueBarrierReleasedAt.TotalMilliseconds:0} ms, " +
                $"selected microphone {diagnostics.MicrophoneReadyAt.TotalMilliseconds:0} ms " +
                $"({(diagnostics.MicrophoneStartedCold ? "cold" : "warm")}, " +
                $"Bluetooth {DescribeBluetoothState(diagnostics.MicrophoneIsBluetooth)}), " +
@@ -399,6 +451,7 @@ public sealed partial class MainWindowViewModel
         Task<LocalTonePlaybackResult>? preparedPlayback = null,
         Stopwatch? pttTimer = null,
         TimeSpan? transmitSessionsReadyAt = null,
+        TimeSpan? cueBarrierReleasedAt = null,
         TimeSpan? microphoneReadyAt = null)
     {
         try
@@ -414,9 +467,21 @@ public sealed partial class MainWindowViewModel
                                result.ConsumedSamples is int consumed
                 ? $" queued {FormatAudioLevelDuration(queued)} / consumed {FormatAudioLevelDuration(consumed)}"
                 : string.Empty;
+            LocalTonePresentationEvidence presentation = result.PresentationEvidence;
+            string presentationText = presentation.CallbackConsumptionConfirmed
+                ? presentation.WarmupCallbacksBefore is long
+                    ? $" Output callback consumption confirmed (warm-up {presentation.WarmupCallbacksBefore}->{presentation.WarmupCallbacksAfter}, " +
+                      $"cue {presentation.CueCallbacksBefore}->{presentation.CueCallbacksAfter})."
+                    : $" Output callback consumption confirmed (cue {presentation.CueCallbacksBefore}->{presentation.CueCallbacksAfter}; no warm-up)."
+                : " Output callback confirmation was not requested for this cue.";
+            string presentationLatencyText = result.MeasuredOutputPresentationLatency is TimeSpan outputLatency
+                ? $" CoreAudio presentation latency {outputLatency.TotalMilliseconds:0} ms; " +
+                  $"post-drain wait {result.PostDrainWaitDuration.TotalMilliseconds:0} ms."
+                : $" Fixed post-drain wait {result.PostDrainWaitDuration.TotalMilliseconds:0} ms.";
             string pttText = pttTimer is null
                 ? string.Empty
                 : $" PTT sessions {transmitSessionsReadyAt?.TotalMilliseconds:0} ms, " +
+                  $"cue barrier {cueBarrierReleasedAt?.TotalMilliseconds:0} ms, " +
                   $"microphone ready {microphoneReadyAt?.TotalMilliseconds:0} ms, " +
                   $"permit complete {pttTimer.Elapsed.TotalMilliseconds:0} ms.";
             LocalTonePlaybackTiming timing = result.Timing;
@@ -425,7 +490,8 @@ public sealed partial class MainWindowViewModel
                 "TX",
                 DebugLogSeverity.Debug,
                 $"Talk permit tone completed on {result.Output.Name} ({result.Output.Id}) " +
-                $"after {result.Attempts} playback attempt(s).{drainText}{pttText} " +
+                $"after {result.Attempts} playback attempt(s).{drainText}{pttText}{presentationText}" +
+                $"{presentationLatencyText} " +
                 $"Output preparation: gate {timing.GateAcquired.TotalMilliseconds:0} ms, " +
                 $"initial route {timing.InitialRouteResolved.TotalMilliseconds:0} ms, " +
                 $"initial open {timing.InitialPlaybackOpened.TotalMilliseconds:0} ms, " +
@@ -472,6 +538,7 @@ public sealed partial class MainWindowViewModel
 
     private sealed record TransmitStartupDiagnostics(
         TimeSpan TransmitSessionsReadyAt,
+        TimeSpan CueBarrierReleasedAt,
         TimeSpan MicrophoneReadyAt,
         bool MicrophoneStartedCold,
         bool? MicrophoneIsBluetooth,

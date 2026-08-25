@@ -666,8 +666,9 @@ public sealed class UserSettingsStoreTests
                 {
                     [" Dispatch "] =
                     [
-                        new PatchMemberSetting { SystemName = "Alpha", DestinationId = 100 },
-                        new PatchMemberSetting { SystemName = "alpha", DestinationId = 100 },
+                        new PatchMemberSetting { SystemName = "Alpha", DestinationId = 100, ChannelName = " P25 Dispatch " },
+                        new PatchMemberSetting { SystemName = "alpha", DestinationId = 100, ChannelName = "p25 dispatch" },
+                        new PatchMemberSetting { SystemName = "Alpha", DestinationId = 100, ChannelName = "DMR Dispatch" },
                         new PatchMemberSetting { SystemName = "Beta", DestinationId = 200 }
                     ]
                 },
@@ -770,7 +771,10 @@ public sealed class UserSettingsStoreTests
             Assert.Equal(Path.GetFullPath("/tmp/recordings"), loaded.RecordingRootPath);
             Assert.Equal(["System 1\u001FDispatch"], loaded.RecordingEnabledChannelKeys);
             Assert.Equal([42u], loaded.RecordingIgnoredSubscriberIds["System 1\u001FDispatch"]);
-            Assert.Equal(2, loaded.PatchGroupMemberships["Dispatch"].Count);
+            Assert.Equal(3, loaded.PatchGroupMemberships["Dispatch"].Count);
+            Assert.Equal(
+                ["P25 Dispatch", "DMR Dispatch", null],
+                loaded.PatchGroupMemberships["Dispatch"].Select(member => member.ChannelName));
             Assert.True(loaded.PatchGroupModes["Dispatch"]);
             Assert.True(loaded.PatchGroupEnabledStates["Dispatch"]);
             Assert.True(loaded.RetainPatchStateOnStartup);

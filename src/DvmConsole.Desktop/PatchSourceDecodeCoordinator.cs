@@ -59,6 +59,18 @@ public sealed class PatchSourceDecodeCoordinator : IAsyncDisposable
             return sessions.ContainsKey(channel);
     }
 
+    public bool IsTrackingStream(ChannelViewModel channel, uint streamId)
+    {
+        ArgumentNullException.ThrowIfNull(channel);
+        if (streamId == 0)
+            return false;
+        lock (sync)
+        {
+            return sessions.TryGetValue(channel, out SessionState? state) &&
+                state.ActiveStreamId == streamId;
+        }
+    }
+
     public IReadOnlyList<ChannelViewModel> ActiveChannels
     {
         get
@@ -187,6 +199,14 @@ public sealed class PatchSourceDecodeCoordinator : IAsyncDisposable
             if (state is null)
                 return 0;
 
+            bool terminator = ReceiveTrafficClassifier.IsTerminator(traffic);
+            if (!terminator &&
+                (ReceiveTrafficClassifier.CarriesVoicePayload(traffic) ||
+                 ReceiveTrafficClassifier.IsDefinitiveStart(traffic)))
+            {
+                lock (sync)
+                    state.ActiveStreamId = traffic.StreamId;
+            }
             state.SampleContext.Set(traffic.StreamId, traffic.SourceId);
             try
             {
@@ -195,6 +215,14 @@ public sealed class PatchSourceDecodeCoordinator : IAsyncDisposable
             finally
             {
                 state.SampleContext.Clear();
+                if (terminator)
+                {
+                    lock (sync)
+                    {
+                        if (state.ActiveStreamId == traffic.StreamId)
+                            state.ActiveStreamId = 0;
+                    }
+                }
             }
         }
         finally
@@ -297,9 +325,14 @@ public sealed class PatchSourceDecodeCoordinator : IAsyncDisposable
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 
-    private sealed record SessionState(
-        ChannelReceiveAudioSession Session,
-        ReceiveSampleContext SampleContext);
+    private sealed class SessionState(
+        ChannelReceiveAudioSession session,
+        ReceiveSampleContext sampleContext)
+    {
+        public ChannelReceiveAudioSession Session { get; } = session;
+        public ReceiveSampleContext SampleContext { get; } = sampleContext;
+        public uint ActiveStreamId { get; set; }
+    }
 
     private sealed class ReceiveSampleContext
     {

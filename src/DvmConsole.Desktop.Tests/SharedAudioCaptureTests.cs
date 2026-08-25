@@ -1,4 +1,5 @@
 using DvmConsole.Audio;
+using DvmConsole.Operations;
 using Xunit;
 
 namespace DvmConsole.Desktop.Tests;
@@ -55,36 +56,8 @@ public sealed class SharedAudioCaptureTests
 
         MicrophoneReadinessTiming timing = await ready;
         Assert.Empty(published);
-        Assert.Equal(1, timing.RequiredSamples);
         Assert.True(timing.CaptureStartReturned >= TimeSpan.Zero);
-        Assert.True(timing.FirstSamplesReceived <= timing.SustainedReadinessReached);
-    }
-
-    [Fact]
-    public async Task CanRequireSustainedPhysicalSamplesBeforeReportingReady()
-    {
-        var source = new FakeCapture();
-        await using var shared = new SharedAudioCapture(
-            source,
-            TimeSpan.FromMilliseconds(50));
-        await using SharedAudioCapture.Lease lease = shared.CreateLease();
-        var published = new List<short[]>();
-        lease.SamplesAvailable += (_, args) => published.Add(args.Samples.ToArray());
-
-        shared.SetSamplesSuppressed(true);
-        await lease.StartAsync();
-        Task<MicrophoneReadinessTiming> ready = shared.WaitForSamplesAsync(TimeSpan.FromSeconds(1));
-
-        source.Emit(new short[160]);
-        source.Emit(new short[160]);
-        Assert.False(ready.IsCompleted);
-        source.Emit(new short[80]);
-
-        MicrophoneReadinessTiming timing = await ready;
-        Assert.Empty(published);
-        Assert.Equal(400, timing.RequiredSamples);
-        Assert.True(timing.CaptureStartReturned >= TimeSpan.Zero);
-        Assert.True(timing.FirstSamplesReceived <= timing.SustainedReadinessReached);
+        Assert.True(timing.FirstSamplesReceived >= timing.CaptureStartReturned);
     }
 
     [Fact]
@@ -121,6 +94,78 @@ public sealed class SharedAudioCaptureTests
 
         Assert.False(lease.IsRunning);
         Assert.Equal(1, source.StopCalls);
+    }
+
+    [Fact]
+    public async Task ReadyCaptureBecomesStaleAndRequiresFreshSamples()
+    {
+        var source = new FakeCapture();
+        await using var shared = new SharedAudioCapture(
+            source,
+            staleAfter: TimeSpan.FromMilliseconds(20));
+        await using SharedAudioCapture.Lease lease = shared.CreateLease();
+        await lease.StartAsync();
+        source.Emit([1, 2, 3]);
+        await shared.WaitForSamplesAsync(TimeSpan.FromSeconds(1));
+
+        Assert.True(shared.IsReady);
+        long generation = shared.Health.CaptureGeneration;
+        await Task.Delay(35);
+        Assert.False(shared.IsReady);
+        Assert.Equal(MicrophoneHealthState.Stale, shared.Health.State);
+
+        Task<MicrophoneReadinessTiming> refreshed = shared.WaitForSamplesAsync(TimeSpan.FromSeconds(1));
+        Assert.False(refreshed.IsCompleted);
+        source.Emit([4, 5, 6]);
+        await refreshed;
+
+        Assert.True(shared.IsReady);
+        Assert.Equal(generation, shared.Health.CaptureGeneration);
+    }
+
+    [Fact]
+    public async Task PostTransitionGateRequiresANewPhysicalCallback()
+    {
+        var source = new FakeCapture();
+        await using var shared = new SharedAudioCapture(source);
+        await using SharedAudioCapture.Lease lease = shared.CreateLease();
+        shared.SetSamplesSuppressed(true);
+        await lease.StartAsync();
+        source.Emit([1, 2, 3]);
+        await shared.WaitForSamplesAsync(TimeSpan.FromSeconds(1));
+
+        Task<TimeSpan> resumed = shared.WaitForNextPhysicalSamplesAsync(TimeSpan.FromSeconds(1));
+        Assert.False(resumed.IsCompleted);
+
+        source.Emit([]);
+        Assert.False(resumed.IsCompleted);
+        source.Emit([4, 5, 6]);
+
+        Assert.True(await resumed >= TimeSpan.Zero);
+    }
+
+    [Fact]
+    public async Task HealthAllowsObservedCallbackCadenceBeforeDeclaringCaptureStale()
+    {
+        var source = new FakeCapture();
+        var time = new ManualTimeProvider();
+        await using var shared = new SharedAudioCapture(
+            source,
+            staleAfter: TimeSpan.FromMilliseconds(50),
+            timeProvider: time);
+        await using SharedAudioCapture.Lease lease = shared.CreateLease();
+        await lease.StartAsync();
+        source.Emit([1]);
+        await shared.WaitForSamplesAsync(TimeSpan.FromSeconds(1));
+        time.Advance(TimeSpan.FromMilliseconds(100));
+        source.Emit([2]);
+
+        time.Advance(TimeSpan.FromMilliseconds(300));
+        Assert.Equal(MicrophoneHealthState.Ready, shared.Health.State);
+        Assert.Equal(TimeSpan.FromMilliseconds(100), shared.Health.CallbackCadence);
+
+        time.Advance(TimeSpan.FromMilliseconds(151));
+        Assert.Equal(MicrophoneHealthState.Stale, shared.Health.State);
     }
 
     private sealed class FakeCapture : IAudioCapture
@@ -191,5 +236,16 @@ public sealed class SharedAudioCaptureTests
         }
 
         public void FailStarts() => startFailure.TrySetResult();
+    }
+
+    private sealed class ManualTimeProvider : TimeProvider
+    {
+        private long timestamp = 1;
+
+        public override long TimestampFrequency => TimeSpan.TicksPerSecond;
+        public override long GetTimestamp() => timestamp;
+        public override DateTimeOffset GetUtcNow() => DateTimeOffset.UnixEpoch.AddTicks(timestamp);
+
+        public void Advance(TimeSpan duration) => timestamp = checked(timestamp + duration.Ticks);
     }
 }

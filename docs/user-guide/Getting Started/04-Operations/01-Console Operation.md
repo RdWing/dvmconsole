@@ -4,6 +4,23 @@ This page covers common operator workflows on the main console.
 
 ---
 
+# Operator Workspace
+
+DVM Console NEO uses a freeform channel-card console as its single operator
+surface. Systems and zones organize the cards; card positions, sizes, and
+controls retain their existing behavior.
+
+The Activity sidebar continues to show recent calls and subscriber-command
+audit entries. Collapse or expand it with the arrow in its header.
+
+Choose **View > Engineering Health** when runtime telemetry is useful. The
+default-hidden horizontal rail is resizable and reports receive pressure and
+latency, microphone freshness/generation/cadence/faults, transmit backlog, TAR
+finalization/catalog work, route recovery, and connection health. It is
+telemetry-only and does not duplicate PTT, mute, routing, or recording controls.
+
+---
+
 # Selecting Resources
 
 Click a resource card to select or deselect it.
@@ -79,6 +96,12 @@ If the resource does not show **SELECT**, encryption behavior is fixed by the co
 Global PTT keys every channel with `TX` armed. Active-system PTT keys only the `TX`-armed channels in the system tab that is active when PTT starts. At least one transmit-capable channel must be armed in the applicable scope before PTT can begin.
 
 Choose separate keys under **Channels > Global PTT key** and **Channels > Active-system PTT key**, or configure both under **Console Settings > PTT**. Space and F1 through F19 are supported, and each enabled binding must use a unique key. Both bindings use the same saved press-and-hold or toggle PTT setting. On macOS, OS-global capture may require Accessibility or Input Monitoring permission. When global capture is unavailable, the keys still work while the application has keyboard focus.
+
+The focused-window Space router does not consume Space while an editable field or
+ordinary interactive control has focus. OS-global capture remains available
+where supported. While transmitting, the bottom transmit-status field identifies
+whether window-local keyboard, OS-global keyboard, serial hardware, or a local
+channel control initiated PTT.
 
 Under **Console Settings > PTT > Serial hardware PTT**, select **Limit serial PTT to TX-selected resources in the active system** to give the serial device the same active-system scope. Leave it clear for the serial device to key every `TX`-selected resource across systems.
 

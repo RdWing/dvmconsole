@@ -27,6 +27,27 @@ public sealed class WindowsWasapiDeviceCatalogTests
         Assert.False(devices[1].IsDefault);
         Assert.Equal("endpoint-headset", devices[2].Id);
         Assert.True(devices[2].IsDefault);
+        Assert.All(devices, device => Assert.False(device.IsBluetooth));
+    }
+
+    [Theory]
+    [InlineData(AudioDirection.Input)]
+    [InlineData(AudioDirection.Output)]
+    public void WindowsEndpointsDoNotUseMacBluetoothProfileTransitionPolicy(
+        AudioDirection direction)
+    {
+        WindowsWasapiEndpointDescriptor[] endpoints =
+        [
+            new("endpoint-wired", "USB wired headset"),
+            new("endpoint-bluetooth", "Bluetooth hands-free headset")
+        ];
+
+        IReadOnlyList<AudioDeviceInfo> devices = WindowsWasapiDeviceCatalog.BuildDeviceList(
+            direction,
+            endpoints,
+            defaultIdentity: "endpoint-bluetooth");
+
+        Assert.All(devices, device => Assert.False(device.IsBluetooth));
     }
 
     [Fact]

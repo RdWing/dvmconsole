@@ -1,5 +1,4 @@
 using Avalonia.Controls;
-using Avalonia.Interactivity;
 using Avalonia.Markup.Xaml;
 
 namespace DvmConsole.Desktop;
@@ -18,7 +17,7 @@ public sealed partial class DocumentationWindow : Window
     {
         this.catalog = catalog ?? throw new ArgumentNullException(nameof(catalog));
         InitializeComponent();
-        markdownViewer.Markdown = "# Loading documentation\n\nFetching the current pages from GitHub…";
+        markdownViewer.Markdown = "# Loading documentation\n\nOpening the DVM Console NEO guide…";
         Opened += HandleOpened;
         Closed += HandleClosed;
     }
@@ -64,7 +63,7 @@ public sealed partial class DocumentationWindow : Window
         if (documentTree.SelectedItem is not TreeViewItem { Tag: DocumentationPage page })
             return;
 
-        markdownViewer.Markdown = $"# {page.Title}\n\nLoading the current page from GitHub…";
+        markdownViewer.Markdown = $"# {page.Title}\n\nLoading…";
         try
         {
             string markdown = await catalog.ReadAsync(page, reloadCancellation.Token);
@@ -74,7 +73,7 @@ public sealed partial class DocumentationWindow : Window
         catch (OperationCanceledException)
         {
         }
-        catch (Exception exception) when (exception is HttpRequestException or IOException or InvalidOperationException)
+        catch (Exception exception) when (exception is IOException or InvalidOperationException)
         {
             markdownViewer.Markdown = FormatUnavailable(exception);
         }
@@ -93,7 +92,7 @@ public sealed partial class DocumentationWindow : Window
         {
             return;
         }
-        catch (Exception exception) when (exception is HttpRequestException or IOException or InvalidOperationException)
+        catch (Exception exception) when (exception is IOException or InvalidOperationException)
         {
             documentTree.ItemsSource = Array.Empty<object?>();
             markdownViewer.Markdown = FormatUnavailable(exception);
@@ -136,7 +135,7 @@ public sealed partial class DocumentationWindow : Window
         {
             markdownViewer.Markdown = string.IsNullOrWhiteSpace(searchText)
                 ? "# Documentation unavailable\n\nNo documentation pages are configured."
-                : "# No results\n\nNo current GitHub documentation pages match the search.";
+                : "# No results\n\nNo documentation pages match the search.";
             return;
         }
 
@@ -145,7 +144,7 @@ public sealed partial class DocumentationWindow : Window
 
     private static string FormatUnavailable(Exception exception)
         => "# Documentation unavailable\n\n" +
-           "DVM Console reads these pages live from GitHub. Check the network connection and try again.\n\n" +
+           "DVM Console could not read the documentation.\n\n" +
            $"`{exception.Message}`";
 
     private static TreeViewItem? FindFirstPage(IEnumerable<object?> items)

@@ -32,8 +32,10 @@ internal sealed class TransmitCaptureLifecycle : IAsyncDisposable
     private readonly ITransmitCall call;
     private readonly string faultedMessage;
     private readonly Action<Exception> publishFault;
+    private readonly TransmitFramePacer framePacer;
     private readonly object sync = new();
     private bool running;
+    private bool activated;
     private bool faulted;
     private bool disposed;
     private int faultStopStarted;
@@ -42,15 +44,18 @@ internal sealed class TransmitCaptureLifecycle : IAsyncDisposable
         IAudioCapture capture,
         ITransmitCall call,
         string faultedMessage,
-        Action<Exception> publishFault)
+        Action<Exception> publishFault,
+        Func<CancellationToken, ValueTask>? waitForNextFrame = null)
     {
         this.capture = capture ?? throw new ArgumentNullException(nameof(capture));
         this.call = call ?? throw new ArgumentNullException(nameof(call));
         this.faultedMessage = faultedMessage ?? throw new ArgumentNullException(nameof(faultedMessage));
         this.publishFault = publishFault ?? throw new ArgumentNullException(nameof(publishFault));
+        framePacer = new TransmitFramePacer(call.Process, HandleFramePacerFault, waitForNextFrame);
     }
 
     public bool IsRunning => running;
+    public bool IsActivated => activated;
 
     public async ValueTask StartAsync(CancellationToken cancellationToken = default)
     {
@@ -65,7 +70,6 @@ internal sealed class TransmitCaptureLifecycle : IAsyncDisposable
         }
 
         cancellationToken.ThrowIfCancellationRequested();
-        call.Start();
         lock (sync)
             running = true;
 
@@ -79,15 +83,24 @@ internal sealed class TransmitCaptureLifecycle : IAsyncDisposable
             capture.SamplesAvailable -= HandleSamplesAvailable;
             lock (sync)
                 running = false;
-            try
-            {
-                call.End();
-            }
-            catch
-            {
-                // Preserve the capture-start failure for the caller.
-            }
             throw;
+        }
+    }
+
+    public void Activate()
+    {
+        ObjectDisposedException.ThrowIf(disposed, this);
+        lock (sync)
+        {
+            if (!running)
+                throw new InvalidOperationException("The transmit capture path must be running before activation.");
+            if (faulted)
+                throw new InvalidOperationException(faultedMessage);
+            if (activated)
+                return;
+
+            call.Start();
+            activated = true;
         }
     }
 
@@ -111,6 +124,8 @@ internal sealed class TransmitCaptureLifecycle : IAsyncDisposable
         finally
         {
             capture.SamplesAvailable -= HandleSamplesAvailable;
+            framePacer.Complete();
+            await framePacer.Completion.ConfigureAwait(false);
             try
             {
                 await capture.DisposeAsync().ConfigureAwait(false);
@@ -132,10 +147,13 @@ internal sealed class TransmitCaptureLifecycle : IAsyncDisposable
     {
         ObjectDisposedException.ThrowIf(disposed, this);
         bool wasRunning;
+        bool wasActivated;
         lock (sync)
         {
             wasRunning = running;
+            wasActivated = activated;
             running = false;
+            activated = false;
         }
 
         if (!wasRunning)
@@ -152,7 +170,10 @@ internal sealed class TransmitCaptureLifecycle : IAsyncDisposable
             stopFailure = exception;
         }
 
-        if (sendTerminator)
+        framePacer.Complete();
+        await framePacer.Completion.ConfigureAwait(false);
+
+        if (sendTerminator && wasActivated && framePacer.Failure is null)
         {
             try
             {
@@ -172,20 +193,26 @@ internal sealed class TransmitCaptureLifecycle : IAsyncDisposable
     {
         lock (sync)
         {
-            if (!running)
+            if (!running || !activated)
                 return;
 
-            try
-            {
-                call.Process(args.Samples.Span);
-            }
-            catch (Exception exception)
-            {
-                faulted = true;
-                publishFault(exception);
-                if (Interlocked.Exchange(ref faultStopStarted, 1) == 0)
-                    TaskObservation.Observe(StopAfterFaultAsync());
-            }
+            if (!framePacer.Enqueue(args.Samples.Span))
+                return;
+        }
+    }
+
+    private void HandleFramePacerFault(Exception exception)
+    {
+        lock (sync)
+            faulted = true;
+        try
+        {
+            publishFault(exception);
+        }
+        finally
+        {
+            if (Interlocked.Exchange(ref faultStopStarted, 1) == 0)
+                TaskObservation.Observe(StopAfterFaultAsync());
         }
     }
 

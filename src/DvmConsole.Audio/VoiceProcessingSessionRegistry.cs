@@ -12,9 +12,10 @@ internal interface IVoiceProcessingPlaybackSession
     TimeSpan StarvedDuration { get; }
     TimeSpan PendingStarvedDuration { get; }
     long OutputCallbackCount { get; }
+    TimeSpan OutputPresentationLatency { get; }
     void StartPlayback();
     void StopPlayback();
-    int Write(short[] samples);
+    int Write(short[] samples, int count);
     void EndExpectedPlayback();
 }
 
@@ -130,6 +131,8 @@ internal sealed class VoiceProcessingSession : IDisposable, IVoiceProcessingPlay
         (double)checked(format.SampleRate * format.Channels));
     public long OutputCallbackCount => checked(
         (long)api.GetVoiceProcessingOutputCallbackCount(stream));
+    public TimeSpan OutputPresentationLatency =>
+        api.GetVoiceProcessingOutputPresentationLatency(stream);
 
     public void AddEndpoint(PcmAudioFormat requestedFormat, VoiceEndpoint endpoint)
     {
@@ -165,7 +168,8 @@ internal sealed class VoiceProcessingSession : IDisposable, IVoiceProcessingPlay
     public void StartPlayback() => StartEndpoint();
     public void StopPlayback() => StopEndpoint();
     public int Read(short[] samples) => api.ReadVoiceProcessing(stream, samples, samples.Length);
-    public int Write(short[] samples) => api.WriteVoiceProcessing(stream, samples, samples.Length);
+    public int Write(short[] samples, int count)
+        => api.WriteVoiceProcessing(stream, samples, count);
     public void EndExpectedPlayback() => api.EndVoiceProcessingPlaybackContinuity(stream);
 
     public void Dispose()

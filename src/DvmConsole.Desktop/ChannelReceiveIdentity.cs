@@ -10,14 +10,6 @@ internal static class ChannelReceiveIdentity
         ArgumentNullException.ThrowIfNull(left);
         ArgumentNullException.ThrowIfNull(right);
 
-        return left.Definition.SystemName.Equals(
-                   right.Definition.SystemName,
-                   StringComparison.OrdinalIgnoreCase) &&
-               left.Definition.Mode.Equals(
-                   right.Definition.Mode,
-                   StringComparison.OrdinalIgnoreCase) &&
-               left.Definition.DestinationId == right.Definition.DestinationId &&
-               (!left.Definition.Mode.Equals("dmr", StringComparison.OrdinalIgnoreCase) ||
-                left.Definition.Slot == right.Definition.Slot);
+        return left.SessionDefinition.RouteKey == right.SessionDefinition.RouteKey;
     }
 }

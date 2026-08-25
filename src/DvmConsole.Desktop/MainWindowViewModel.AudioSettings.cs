@@ -175,6 +175,12 @@ public sealed partial class MainWindowViewModel
 
     public void RefreshAudioDevices()
     {
+        if (networkDisabledDemo)
+        {
+            InstallDemoAudioDevices();
+            return;
+        }
+
         try
         {
             using IAudioBackend backend = AudioBackendFactory.CreateDefault(
@@ -205,6 +211,37 @@ public sealed partial class MainWindowViewModel
             RefreshAppleVoiceProcessingRouteState();
             AudioStatusText = $"Audio device list unavailable: {exception.Message}";
         }
+    }
+
+    private void InstallDemoAudioDevices()
+    {
+        ReplaceAudioDeviceOptions(
+            audioInputDevices,
+            [new AudioDeviceInfo(
+                "neo-demo-input",
+                "NEO Demo Microphone (synthetic)",
+                AudioDirection.Input,
+                IsDefault: true,
+                IsBluetooth: false)]);
+        ReplaceAudioDeviceOptions(
+            audioOutputDevices,
+            [new AudioDeviceInfo(
+                "neo-demo-output",
+                "NEO Demo Output (synthetic)",
+                AudioDirection.Output,
+                IsDefault: true,
+                IsBluetooth: false)]);
+        audioSettings.AudioInputDeviceIdText = "neo-demo-input";
+        audioSettings.AudioOutputDeviceIdText = "neo-demo-output";
+        audioSettings.SetResolvedDevices(
+            ResolveAudioDeviceOption(audioInputDevices, "neo-demo-input"),
+            ResolveAudioDeviceOption(audioOutputDevices, "neo-demo-output"));
+        foreach (ChannelViewModel channel in Systems.SelectMany(system => system.Channels))
+        {
+            channel.SetOutputDeviceOptions(audioOutputDevices);
+            channel.RestoreOutputDeviceId("neo-demo-output");
+        }
+        AudioStatusText = "Demo audio uses synthetic endpoints; no device was opened.";
     }
 
     private async Task HandleAudioDeviceTopologyChangedAsync(

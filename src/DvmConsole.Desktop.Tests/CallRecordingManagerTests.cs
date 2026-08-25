@@ -13,6 +13,114 @@ namespace DvmConsole.Desktop.Tests;
 public sealed class CallRecordingManagerTests
 {
     [Fact]
+    public async Task ActiveRecordingPersistsCrashDescriptorBeforeCallClose()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "dvmconsole-recording-tests", Guid.NewGuid().ToString("N"));
+        var channel = new ChannelViewModel(new ChannelConfiguration
+        {
+            Name = "Dispatch",
+            System = "System 1",
+            Tgid = "99",
+            Mode = "analog"
+        });
+        using var manager = new CallRecordingManager(root);
+        channel.SetRecordingEnabled(true);
+
+        try
+        {
+            manager.WriteSamples(channel, streamId: 42, sourceId: 7, ActiveSamples());
+
+            string wavePath = Assert.Single(manager.ActivePaths);
+            string descriptorPath = Path.ChangeExtension(wavePath, ".finalize.json");
+            Assert.True(File.Exists(wavePath));
+            Assert.True(File.Exists(descriptorPath));
+            RecordingFinalizationDescriptor descriptor = JsonSerializer.Deserialize<RecordingFinalizationDescriptor>(
+                File.ReadAllText(descriptorPath))!;
+            Assert.Equal(wavePath, descriptor.WavePath);
+            Assert.False(string.IsNullOrWhiteSpace(descriptor.OutputPath));
+
+            Task<RecordingFinalizationResult> finalized = NextFinalizationAsync(manager);
+            manager.StopStream(channel, 42);
+
+            Assert.True((await finalized).IsPlayable);
+            Assert.False(File.Exists(descriptorPath));
+            Assert.False(File.Exists(wavePath));
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task StartupRepairsAndFinalizesInterruptedActiveWave()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "dvmconsole-recording-tests", Guid.NewGuid().ToString("N"));
+        Guid jobId = Guid.NewGuid();
+        string activeDirectory = Path.Combine(root, ".active");
+        string wavePath = Path.Combine(activeDirectory, $"{jobId:N}.wav");
+        string outputPath = Path.Combine(root, "2026-08-24", "System 1", "recovered.opus");
+        Directory.CreateDirectory(Path.GetDirectoryName(outputPath)!);
+
+        try
+        {
+            using (var writer = new PcmWavFileWriter(wavePath, PcmAudioFormat.Voice8KhzMono16Bit))
+                writer.Write(Enumerable.Repeat((short)900, 800).ToArray());
+            using (var stream = new FileStream(wavePath, FileMode.Open, FileAccess.Write, FileShare.Read))
+            {
+                stream.Position = 4;
+                stream.Write(new byte[4]);
+                stream.Position = 40;
+                stream.Write(new byte[4]);
+                stream.Flush(flushToDisk: true);
+            }
+
+            var descriptor = new RecordingFinalizationDescriptor(
+                jobId,
+                DateTimeOffset.Parse("2026-08-24T00:00:00Z"),
+                root,
+                wavePath,
+                outputPath,
+                8_000,
+                1,
+                16,
+                FneTrafficProtocol.Analog,
+                "ANALOG",
+                "RX",
+                "InboundRadio",
+                DateTimeOffset.Parse("2026-08-24T00:00:00Z"),
+                DateTimeOffset.Parse("2026-08-24T00:00:00Z"),
+                "System 1",
+                "Dispatch",
+                99,
+                7,
+                "Unit 7",
+                42,
+                [42],
+                false,
+                null,
+                null,
+                7);
+            new RecordingFinalizationSpool(root).Persist(descriptor);
+
+            await using var restarted = new CallRecordingManager(root);
+            await WaitForAsync(() => File.Exists(outputPath));
+
+            CallRecordingMetadata metadata = Assert.Single(restarted.LoadRecordings());
+            Assert.True(metadata.IsPlayable);
+            Assert.Equal((uint)42, metadata.StreamId);
+            Assert.False(File.Exists(wavePath));
+            Assert.Empty(Directory.GetFiles(activeDirectory, "*.finalize.json"));
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task EpisodeFragmentsProduceOneTarWithEveryPhysicalStreamId()
     {
         string root = Path.Combine(Path.GetTempPath(), "dvmconsole-recording-tests", Guid.NewGuid().ToString("N"));
@@ -1009,4 +1117,15 @@ public sealed class CallRecordingManagerTests
 
     private static short[] ActiveSamples()
         => Enumerable.Repeat((short)900, 160).ToArray();
+
+    private static async Task WaitForAsync(Func<bool> condition)
+    {
+        DateTimeOffset deadline = DateTimeOffset.UtcNow.AddSeconds(5);
+        while (!condition())
+        {
+            if (DateTimeOffset.UtcNow >= deadline)
+                throw new TimeoutException("Timed out waiting for resumed TAR finalization.");
+            await Task.Delay(20);
+        }
+    }
 }

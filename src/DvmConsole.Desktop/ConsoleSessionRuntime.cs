@@ -4,13 +4,14 @@ namespace DvmConsole.Desktop;
 
 internal sealed class ConsoleSessionRuntime : IAsyncDisposable
 {
-    private readonly Func<Task> disposeSession;
-    private readonly List<DispatcherTimerRegistration> timers = [];
-    private readonly AsyncDisposal disposal = new();
+    private readonly ConsoleSessionServices services;
+    private readonly object timerOwnershipSync = new();
+    private readonly DispatcherTimerRegistrationGroup timers = new();
+    private bool timerOwnershipRegistered;
 
-    public ConsoleSessionRuntime(Func<Task> disposeSession)
+    public ConsoleSessionRuntime(ConsoleSessionServices services)
     {
-        this.disposeSession = disposeSession ?? throw new ArgumentNullException(nameof(disposeSession));
+        this.services = services ?? throw new ArgumentNullException(nameof(services));
     }
 
     public void StartTimer(TimeSpan interval, EventHandler tick)
@@ -21,31 +22,91 @@ internal sealed class ConsoleSessionRuntime : IAsyncDisposable
             Interval = interval
         };
         timer.Tick += tick;
-        timers.Add(new DispatcherTimerRegistration(timer, tick));
-        timer.Start();
+        var registration = new DispatcherTimerRegistration(timer, tick);
+        try
+        {
+            EnsureTimerOwnership();
+            timers.AddAndStart(registration);
+        }
+        catch
+        {
+            registration.Dispose();
+            throw;
+        }
     }
 
-    public ValueTask DisposeAsync()
-        => disposal.RunAsync(DisposeCoreAsync);
+    internal int ActiveTimerCount => timers.Count;
 
-    private async Task DisposeCoreAsync()
+    public ValueTask DisposeAsync()
+        => services.DisposeAsync();
+
+    private void EnsureTimerOwnership()
     {
-        var cleanup = new AsyncCleanup();
-        foreach (DispatcherTimerRegistration timer in timers)
-            cleanup.Run(timer.Dispose);
-        timers.Clear();
-        await cleanup.RunTaskAsync(disposeSession).ConfigureAwait(false);
-        cleanup.ThrowIfFailed();
+        lock (timerOwnershipSync)
+        {
+            if (timerOwnershipRegistered)
+                return;
+            services.Timers.Own("dispatcher-timers", timers);
+            timerOwnershipRegistered = true;
+        }
     }
 
     private sealed class DispatcherTimerRegistration(
         DispatcherTimer timer,
         EventHandler tick) : IDisposable
     {
+        public void Start()
+            => timer.Start();
+
         public void Dispose()
         {
             timer.Stop();
             timer.Tick -= tick;
+        }
+    }
+
+    private sealed class DispatcherTimerRegistrationGroup : IDisposable
+    {
+        private readonly object sync = new();
+        private readonly List<DispatcherTimerRegistration> registrations = [];
+        private bool disposed;
+
+        public int Count
+        {
+            get
+            {
+                lock (sync)
+                    return registrations.Count;
+            }
+        }
+
+        public void AddAndStart(DispatcherTimerRegistration registration)
+        {
+            ArgumentNullException.ThrowIfNull(registration);
+            lock (sync)
+            {
+                ObjectDisposedException.ThrowIf(disposed, this);
+                registration.Start();
+                registrations.Add(registration);
+            }
+        }
+
+        public void Dispose()
+        {
+            DispatcherTimerRegistration[] owned;
+            lock (sync)
+            {
+                if (disposed)
+                    return;
+                disposed = true;
+                owned = registrations.ToArray();
+                registrations.Clear();
+            }
+
+            var cleanup = new AsyncCleanup();
+            foreach (DispatcherTimerRegistration registration in owned)
+                cleanup.Run(registration.Dispose);
+            cleanup.ThrowIfFailed();
         }
     }
 }

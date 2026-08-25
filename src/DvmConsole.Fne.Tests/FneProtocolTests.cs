@@ -10,6 +10,18 @@ namespace DvmConsole.Fne.Tests;
 public sealed class FneProtocolTests
 {
     [Fact]
+    public void KeepaliveStreamInitializerCreatesOneStableNonZeroFallback()
+    {
+        var peer = new FnePeer(
+            "TEST",
+            1,
+            new IPEndPoint(IPAddress.Loopback, 62031));
+
+        Assert.True(FnePeerKeepaliveStreamInitializer.TryInitialize(peer));
+        Assert.False(FnePeerKeepaliveStreamInitializer.TryInitialize(peer));
+    }
+
+    [Fact]
     public async Task EncryptedUdpFrameUsesServerCompatibleEcbEnvelope()
     {
         const string keyHex =

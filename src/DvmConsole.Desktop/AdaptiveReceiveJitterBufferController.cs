@@ -53,7 +53,7 @@ internal sealed class AdaptiveReceiveJitterBufferController
                 return;
             }
 
-            if (!ReceiveTrafficClassifier.CarriesVoicePayload(traffic) ||
+            if (!ReceiveTrafficClassifier.CarriesEncodedVoicePayload(traffic) ||
                 traffic.TransportIngressTimestamp <= 0)
             {
                 return;

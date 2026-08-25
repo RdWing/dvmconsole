@@ -53,6 +53,39 @@ public sealed class PcmWavFileWriterTests
     }
 
     [Fact]
+    public void RepairsInterruptedHeaderFromPersistedPcmBytes()
+    {
+        string path = CreatePath();
+        try
+        {
+            using (var writer = new PcmWavFileWriter(path, PcmAudioFormat.Voice8KhzMono16Bit))
+                writer.Write(Enumerable.Repeat((short)1200, 800).ToArray());
+
+            using (var stream = new FileStream(path, FileMode.Open, FileAccess.Write, FileShare.Read))
+            {
+                stream.Position = 4;
+                stream.Write(new byte[4]);
+                stream.Position = 40;
+                stream.Write(new byte[4]);
+                stream.Flush(flushToDisk: true);
+            }
+
+            long samples = PcmWavFileWriter.RepairInterruptedFile(
+                path,
+                PcmAudioFormat.Voice8KhzMono16Bit);
+            byte[] file = File.ReadAllBytes(path);
+
+            Assert.Equal(800, samples);
+            Assert.Equal((uint)(file.Length - 8), BinaryPrimitives.ReadUInt32LittleEndian(file.AsSpan(4, 4)));
+            Assert.Equal((uint)(file.Length - 44), BinaryPrimitives.ReadUInt32LittleEndian(file.AsSpan(40, 4)));
+        }
+        finally
+        {
+            Cleanup(path);
+        }
+    }
+
+    [Fact]
     public void TrimsSilenceWithLegacyPaddingAndReportsActivity()
     {
         string path = CreatePath();

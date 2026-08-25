@@ -11,11 +11,14 @@
   </ItemGroup>
 
   <ItemGroup>
+    <None Include="../../configs/codeplug.demo.yml" Link="Demo/codeplug.yml" CopyToOutputDirectory="PreserveNewest" />
     <None Include="TestData/mixed-card-sizes.yml" CopyToOutputDirectory="PreserveNewest" />
     <None Include="TestData/multiple-systems.yml" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="TestData/duplicate-patch-identities.yml" CopyToOutputDirectory="PreserveNewest" />
     <ProjectReference Include="../DvmConsole.Desktop/DvmConsole.Desktop.csproj" />
     <ProjectReference Include="../DvmConsole.FneClient/DvmConsole.FneClient.csproj" />
     <ProjectReference Include="../DvmConsole.Media/DvmConsole.Media.csproj" />
+    <ProjectReference Include="../DvmConsole.Operations/DvmConsole.Operations.csproj" />
     <ProjectReference Include="../DvmConsole.Vocoder/DvmConsole.Vocoder.csproj" />
   </ItemGroup>
 </Project>

@@ -3,6 +3,7 @@ set -euo pipefail
 
 RID="${1:-}"
 OUTPUT_DIR="${2:-}"
+REPOSITORY_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 verify_macos_deployment_target() {
     local description="$1"
@@ -48,7 +49,7 @@ if [[ ! -d "$OUTPUT_DIR" ]]; then
     exit 3
 fi
 
-for legal_file in LICENSE NOTICES.md; do
+for legal_file in LICENSE; do
     if [[ ! -f "$OUTPUT_DIR/$legal_file" ]]; then
         printf 'Publish is missing required legal notice: %s\n' "$OUTPUT_DIR/$legal_file" >&2
         exit 4
@@ -65,7 +66,35 @@ if [[ -n "$EXPECTED_MACOS_ARCHITECTURE" ]]; then
 fi
 
 if [[ -e "$OUTPUT_DIR/Docs" ]]; then
-    printf 'Publish contains documentation that must be read live from GitHub.\n' >&2
+    printf 'Publish contains the obsolete Docs directory; documentation pages belong under Documentation.\n' >&2
+    exit 4
+fi
+
+REQUIRED_DOCUMENTATION_FILES=(
+    "Getting Started/01-Overview.md"
+    "Getting Started/02-Building.md"
+    "Getting Started/03-Configurations/01-Codeplug Creation.md"
+    "Getting Started/03-Configurations/02-Encryption Keys.md"
+    "Getting Started/03-Configurations/03-RID Aliases.md"
+    "Getting Started/03-Configurations/04-Groups and Patching.md"
+    "Getting Started/03-Configurations/05-Talkgroup Audio Recorder.md"
+    "Getting Started/04-Operations/01-Console Operation.md"
+    "Getting Started/04-Operations/02-Settings Reference.md"
+    "Getting Started/04-Operations/03-Audio Settings.md"
+    "Getting Started/04-Operations/04-Alert Tones.md"
+)
+for relative_document in "${REQUIRED_DOCUMENTATION_FILES[@]}"; do
+    if [[ ! -f "$OUTPUT_DIR/Documentation/$relative_document" ]]; then
+        printf 'Publish is missing documentation: %s\n' "$relative_document" >&2
+        exit 4
+    fi
+done
+
+DEMO_CODEPLUG="$OUTPUT_DIR/Demo/codeplug.yml"
+EXPECTED_DEMO_CODEPLUG="$REPOSITORY_ROOT/configs/codeplug.demo.yml"
+if [[ ! -f "$DEMO_CODEPLUG" ]] ||
+   ! /usr/bin/cmp -s "$EXPECTED_DEMO_CODEPLUG" "$DEMO_CODEPLUG"; then
+    printf 'Publish is missing the exact sanitized network-disabled demonstration codeplug.\n' >&2
     exit 4
 fi
 
@@ -119,6 +148,9 @@ fi
 
 text_files=()
 while IFS= read -r file_name; do
+    if [[ "$file_name" == "$DEMO_CODEPLUG" ]]; then
+        continue
+    fi
     text_files+=("$file_name")
 done < <(/usr/bin/find "$OUTPUT_DIR" -type f \( -name '*.json' -o -name '*.yml' -o -name '*.yaml' -o -name '*.config' -o -name '*.txt' \) -print)
 

@@ -38,6 +38,10 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DvmConsole.MediaProbe", "sr
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DvmConsole.Desktop.Tests", "src\DvmConsole.Desktop.Tests\DvmConsole.Desktop.Tests.csproj", "{DDF17D94-D569-4843-BDA0-249323C5F621}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DvmConsole.Operations", "src\DvmConsole.Operations\DvmConsole.Operations.csproj", "{75A0E4EF-61C7-4D8C-9C95-1B164974E785}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DvmConsole.Operations.Tests", "src\DvmConsole.Operations.Tests\DvmConsole.Operations.Tests.csproj", "{D7DF5F9F-0673-43F8-9C69-6E3250AF4A7E}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -119,5 +123,13 @@ Global
 		{DDF17D94-D569-4843-BDA0-249323C5F621}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{DDF17D94-D569-4843-BDA0-249323C5F621}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{DDF17D94-D569-4843-BDA0-249323C5F621}.Release|Any CPU.Build.0 = Release|Any CPU
+		{75A0E4EF-61C7-4D8C-9C95-1B164974E785}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{75A0E4EF-61C7-4D8C-9C95-1B164974E785}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{75A0E4EF-61C7-4D8C-9C95-1B164974E785}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{75A0E4EF-61C7-4D8C-9C95-1B164974E785}.Release|Any CPU.Build.0 = Release|Any CPU
+		{D7DF5F9F-0673-43F8-9C69-6E3250AF4A7E}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{D7DF5F9F-0673-43F8-9C69-6E3250AF4A7E}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{D7DF5F9F-0673-43F8-9C69-6E3250AF4A7E}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{D7DF5F9F-0673-43F8-9C69-6E3250AF4A7E}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 EndGlobal

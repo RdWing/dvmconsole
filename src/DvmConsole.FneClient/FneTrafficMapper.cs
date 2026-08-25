@@ -1,4 +1,5 @@
 using fnecore;
+using fnecore.DMR;
 
 namespace DvmConsole.FneClient;
 
@@ -34,12 +35,23 @@ internal static class FneTrafficMapper
             args.Slot,
             args.CallType.ToString(),
             args.FrameType.ToString(),
-            args.DataType.ToString(),
+            GetDmrSubtype(args),
             args.PacketSequence,
             args.StreamId,
             args.Data,
             boundaryTimestamp,
             transportTimestamp);
+
+    private static string GetDmrSubtype(DMRDataReceivedEvent args)
+    {
+        if (args.Data.Length <= 15)
+            return args.DataType.ToString();
+
+        byte control = args.Data[15];
+        return (control & 0x20) != 0
+            ? ((DMRDataType)(control & 0x0F)).ToString()
+            : args.DataType.ToString();
+    }
 
     public static FneTrafficFrame FromP25(
         P25DataReceivedEvent args,

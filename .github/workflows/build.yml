@@ -33,17 +33,22 @@ jobs:
 
     steps:
       - name: Check out source and fnecore
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           submodules: recursive
 
       - name: Set up .NET 10
-        uses: actions/setup-dotnet@v6
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6
         with:
           dotnet-version: 10.0.x
 
+      - name: Set up Python 3
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.13"
+
       - name: Set up Rust
-        uses: dtolnay/rust-toolchain@1.85.0
+        uses: dtolnay/rust-toolchain@bc540ba06a4ccee415bb241490e0b25ee8e7d315 # 1.85.0
         with:
           components: rustfmt, clippy
           targets: ${{ matrix.rust_target }}
@@ -56,6 +61,11 @@ jobs:
             printf 'VersionPrefix was not found in src/Directory.Build.props.\n' >&2
             exit 1
           fi
+          source_core="$(python scripts/release_metadata.py version-core --version "$source_version")"
+          if [[ "$source_version" != "$source_core" ]]; then
+            printf 'VersionPrefix must be the numeric SemVer core: %s.\n' "$source_core" >&2
+            exit 1
+          fi
           plist_short_version="$(sed -n '/<key>CFBundleShortVersionString<\/key>/{n;s:.*<string>\(.*\)</string>.*:\1:p;q;}' packaging/macos/Info.plist)"
           plist_bundle_version="$(sed -n '/<key>CFBundleVersion<\/key>/{n;s:.*<string>\(.*\)</string>.*:\1:p;q;}' packaging/macos/Info.plist)"
           if [[ "$plist_short_version" != "$source_version" || "$plist_bundle_version" != "$source_version" ]]; then
@@ -65,8 +75,9 @@ jobs:
           fi
           if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
             package_version="${GITHUB_REF_NAME#v}"
-            if [[ "$package_version" != "$source_version" ]]; then
-              printf 'Tag v%s does not match source version %s.\n' "$package_version" "$source_version" >&2
+            release_core="$(python scripts/release_metadata.py version-core --version "$package_version")"
+            if [[ "$release_core" != "$source_version" ]]; then
+              printf 'Tag v%s does not match source version core %s.\n' "$package_version" "$source_version" >&2
               exit 1
             fi
             printf 'DVM_RELEASE_VERSION=%s\n' "$package_version" >> "$GITHUB_ENV"
@@ -74,6 +85,10 @@ jobs:
             package_version="${source_version}-${GITHUB_SHA::7}"
           fi
           printf 'DVM_PACKAGE_VERSION=%s\n' "$package_version" >> "$GITHUB_ENV"
+
+      - name: Run release metadata tests
+        shell: bash
+        run: python -m unittest discover -s scripts/tests -p 'test_release_metadata.py'
 
       - name: Verify native digital voice
         shell: bash
@@ -104,7 +119,7 @@ jobs:
 
       - name: Upload Avalonia smoke diagnostics
         if: always() && matrix.rid == 'win-x64'
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: avalonia-window-smoke-${{ matrix.rid }}
           path: ${{ runner.temp }}/avalonia-window-smoke.log
@@ -121,6 +136,38 @@ jobs:
         shell: bash
         run: scripts/verify-publish.sh "${{ matrix.rid }}" "$RUNNER_TEMP/dvmconsole-publish/${{ matrix.rid }}"
 
+      - name: Smoke published Windows payload
+        if: matrix.rid == 'win-x64'
+        shell: pwsh
+        run: |
+          $publishDirectory = Join-Path $env:RUNNER_TEMP "dvmconsole-publish\${{ matrix.rid }}"
+          $executable = Join-Path $publishDirectory "DvmConsole.exe"
+          $result = Join-Path $env:RUNNER_TEMP "published-window-smoke.result"
+          $log = Join-Path $env:RUNNER_TEMP "published-window-smoke.log"
+          & $executable --demo --smoke-windows "--smoke-result=$result" *>&1 | Tee-Object -FilePath $log
+          $exitCode = $LASTEXITCODE
+          if ($exitCode -ne 0) {
+            throw "Published Windows payload smoke failed with exit code $exitCode."
+          }
+          if (-not (Test-Path -LiteralPath $result -PathType Leaf)) {
+            throw "Published Windows payload smoke did not write a result."
+          }
+          $status = Get-Content -LiteralPath $result -TotalCount 1
+          if ($status -ne "PASS") {
+            throw "Published Windows payload smoke did not report PASS."
+          }
+
+      - name: Upload published Windows smoke diagnostics
+        if: always() && matrix.rid == 'win-x64'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: published-window-smoke-${{ matrix.rid }}
+          path: |
+            ${{ runner.temp }}/published-window-smoke.log
+            ${{ runner.temp }}/published-window-smoke.result
+          if-no-files-found: warn
+          retention-days: 7
+
       - name: Package unsigned macOS handoff
         if: startsWith(matrix.rid, 'osx-')
         shell: bash
@@ -136,8 +183,22 @@ jobs:
         shell: pwsh
         run: .\scripts\package-desktop.ps1 -PublishDirectory "$env:RUNNER_TEMP\dvmconsole-publish\${{ matrix.rid }}" -OutputArchive "$env:RUNNER_TEMP\dvmconsole-publish\dvmconsole-$($env:DVM_PACKAGE_VERSION)-${{ matrix.rid }}.zip"
 
+      - name: Generate per-package SPDX SBOM
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+        with:
+          file: ${{ runner.temp }}/dvmconsole-publish/dvmconsole-${{ env.DVM_PACKAGE_VERSION }}-${{ matrix.rid }}.zip
+          format: spdx-json
+          output-file: ${{ runner.temp }}/dvmconsole-publish/dvmconsole-${{ env.DVM_PACKAGE_VERSION }}-${{ matrix.rid }}.spdx.json
+          syft-version: v1.51.0
+          upload-artifact: false
+          upload-release-assets: false
+
+      - name: Validate per-package SPDX SBOM
+        shell: bash
+        run: python scripts/release_metadata.py validate-sbom --sbom "$RUNNER_TEMP/dvmconsole-publish/dvmconsole-${DVM_PACKAGE_VERSION}-${{ matrix.rid }}.spdx.json"
+
       - name: Upload unsigned publish artifact
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: dvmconsole-${{ matrix.rid }}
           path: ${{ runner.temp }}/dvmconsole-publish/${{ matrix.rid }}
@@ -145,16 +206,24 @@ jobs:
           retention-days: 7
 
       - name: Upload unsigned package artifact
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: dvmconsole-package-${{ matrix.rid }}
           path: ${{ runner.temp }}/dvmconsole-publish/dvmconsole-${{ env.DVM_PACKAGE_VERSION }}-${{ matrix.rid }}.zip
           if-no-files-found: error
           retention-days: 7
 
+      - name: Upload package SBOM artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: dvmconsole-sbom-${{ matrix.rid }}
+          path: ${{ runner.temp }}/dvmconsole-publish/dvmconsole-${{ env.DVM_PACKAGE_VERSION }}-${{ matrix.rid }}.spdx.json
+          if-no-files-found: error
+          retention-days: 7
+
       - name: Upload test results
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: test-results-${{ matrix.rid }}
           path: ${{ github.workspace }}/**/*.trx
@@ -168,57 +237,257 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      id-token: write
+      attestations: write
 
     steps:
       - name: Check out release notes
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python 3
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.13"
+
+      - name: Verify tagged commit belongs to neo
+        shell: bash
+        run: |
+          tagged_commit="$(git rev-parse "${GITHUB_SHA}^{commit}")"
+          git fetch --no-tags origin '+refs/heads/neo:refs/remotes/origin/neo'
+          if ! git merge-base --is-ancestor "$tagged_commit" refs/remotes/origin/neo; then
+            printf 'Tagged commit %s is not an ancestor of origin/neo.\n' "$tagged_commit" >&2
+            exit 1
+          fi
+          printf 'DVM_TAGGED_COMMIT=%s\n' "$tagged_commit" >> "$GITHUB_ENV"
 
       - name: Download verified release packages
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           pattern: dvmconsole-package-*
           path: release-artifacts
           merge-multiple: true
 
-      - name: Publish GitHub release
+      - name: Download package SBOMs
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          pattern: dvmconsole-sbom-*
+          path: release-artifacts
+          merge-multiple: true
+
+      - name: Assemble and validate release assets
+        id: metadata
         shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
-          shopt -s nullglob
           release_version="${GITHUB_REF_NAME#v}"
           notes_file="docs/releases/${GITHUB_REF_NAME}.md"
+
           if [[ ! -f "$notes_file" ]]; then
             printf 'Release notes are required for %s: %s\n' "$GITHUB_REF_NAME" "$notes_file" >&2
             exit 1
           fi
+          release_title="$(python scripts/release_metadata.py validate-notes \
+            --notes "$notes_file" \
+            --version "$release_version")"
 
-          packages=(release-artifacts/*.zip)
-          if (( ${#packages[@]} != 3 )); then
-            printf 'Expected three release packages, found %s.\n' "${#packages[@]}" >&2
-            exit 1
-          fi
-
-          expected_packages=(
+          release_assets=(
             "release-artifacts/dvmconsole-${release_version}-osx-arm64.zip"
             "release-artifacts/dvmconsole-${release_version}-osx-x64.zip"
             "release-artifacts/dvmconsole-${release_version}-win-x64.zip"
+            "release-artifacts/dvmconsole-${release_version}-osx-arm64.spdx.json"
+            "release-artifacts/dvmconsole-${release_version}-osx-x64.spdx.json"
+            "release-artifacts/dvmconsole-${release_version}-win-x64.spdx.json"
           )
-          for package in "${expected_packages[@]}"; do
-            if [[ ! -f "$package" ]]; then
-              printf 'Expected release package is missing: %s\n' "$package" >&2
-              exit 1
-            fi
+          checksum_subjects=(
+            "dvmconsole-${release_version}-osx-arm64.zip"
+            "dvmconsole-${release_version}-osx-x64.zip"
+            "dvmconsole-${release_version}-win-x64.zip"
+            "dvmconsole-${release_version}-osx-arm64.spdx.json"
+            "dvmconsole-${release_version}-osx-x64.spdx.json"
+            "dvmconsole-${release_version}-win-x64.spdx.json"
+          )
+          checksum_subject_args=()
+          for subject in "${checksum_subjects[@]}"; do
+            checksum_subject_args+=(--expected-subject "$subject")
           done
+          python scripts/release_metadata.py create-checksums \
+            --output release-artifacts/SHA256SUMS \
+            "${release_assets[@]}"
+          python scripts/release_metadata.py verify-checksums \
+            --checksums release-artifacts/SHA256SUMS \
+            --artifacts release-artifacts \
+            "${checksum_subject_args[@]}"
+
+          printf 'version=%s\n' "$release_version" >> "$GITHUB_OUTPUT"
+          printf 'title=%s\n' "$release_title" >> "$GITHUB_OUTPUT"
+
+      - name: Attest package build provenance
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+        with:
+          subject-path: release-artifacts/*.zip
+
+      - name: Attest Apple Silicon package SBOM
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+        with:
+          subject-path: release-artifacts/dvmconsole-${{ steps.metadata.outputs.version }}-osx-arm64.zip
+          sbom-path: release-artifacts/dvmconsole-${{ steps.metadata.outputs.version }}-osx-arm64.spdx.json
+
+      - name: Attest Intel macOS package SBOM
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+        with:
+          subject-path: release-artifacts/dvmconsole-${{ steps.metadata.outputs.version }}-osx-x64.zip
+          sbom-path: release-artifacts/dvmconsole-${{ steps.metadata.outputs.version }}-osx-x64.spdx.json
+
+      - name: Attest Windows package SBOM
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+        with:
+          subject-path: release-artifacts/dvmconsole-${{ steps.metadata.outputs.version }}-win-x64.zip
+          sbom-path: release-artifacts/dvmconsole-${{ steps.metadata.outputs.version }}-win-x64.spdx.json
+
+      - name: Attest release checksums
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+        with:
+          subject-path: release-artifacts/SHA256SUMS
+
+      - name: Upload assembled release suite
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: dvmconsole-release-suite-${{ steps.metadata.outputs.version }}
+          path: |
+            release-artifacts/*.zip
+            release-artifacts/*.spdx.json
+            release-artifacts/SHA256SUMS
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Stage GitHub release as a draft
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DVM_RELEASE_TITLE: ${{ steps.metadata.outputs.title }}
+          DVM_RELEASE_VERSION: ${{ steps.metadata.outputs.version }}
+        run: |
+          release_version="$DVM_RELEASE_VERSION"
+          notes_file="docs/releases/${GITHUB_REF_NAME}.md"
+          release_assets=(
+            "release-artifacts/dvmconsole-${release_version}-osx-arm64.zip"
+            "release-artifacts/dvmconsole-${release_version}-osx-x64.zip"
+            "release-artifacts/dvmconsole-${release_version}-win-x64.zip"
+            "release-artifacts/dvmconsole-${release_version}-osx-arm64.spdx.json"
+            "release-artifacts/dvmconsole-${release_version}-osx-x64.spdx.json"
+            "release-artifacts/dvmconsole-${release_version}-win-x64.spdx.json"
+            "release-artifacts/SHA256SUMS"
+          )
+          release_kind_flags=()
+          if [[ "$release_version" == *-* ]]; then
+            release_kind_flags+=(--prerelease)
+          fi
 
           if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
-            gh release upload "$GITHUB_REF_NAME" "${expected_packages[@]}" --clobber
-            gh release edit "$GITHUB_REF_NAME" \
-              --title "DVM Console ${GITHUB_REF_NAME}" \
-              --notes-file "$notes_file"
+            is_draft="$(gh release view "$GITHUB_REF_NAME" --json isDraft --jq '.isDraft')"
+            if [[ "$is_draft" == true ]]; then
+              gh release upload "$GITHUB_REF_NAME" "${release_assets[@]}" --clobber
+              gh release edit "$GITHUB_REF_NAME" \
+                --title "$DVM_RELEASE_TITLE" \
+                --notes-file "$notes_file" \
+                "${release_kind_flags[@]}"
+            else
+              printf '%s is already published; verifying it without replacing immutable assets.\n' "$GITHUB_REF_NAME"
+            fi
           else
-            gh release create "$GITHUB_REF_NAME" "${expected_packages[@]}" \
-              --title "DVM Console ${GITHUB_REF_NAME}" \
+            gh release create "$GITHUB_REF_NAME" "${release_assets[@]}" \
+              --title "$DVM_RELEASE_TITLE" \
               --notes-file "$notes_file" \
+              "${release_kind_flags[@]}" \
+              --draft \
               --verify-tag
           fi
+
+      - name: Read back staged assets, notes, checksums, and attestations
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DVM_RELEASE_TITLE: ${{ steps.metadata.outputs.title }}
+          DVM_RELEASE_VERSION: ${{ steps.metadata.outputs.version }}
+        run: |
+          release_version="$DVM_RELEASE_VERSION"
+          expected_assets=(
+            "dvmconsole-${release_version}-osx-arm64.zip"
+            "dvmconsole-${release_version}-osx-x64.zip"
+            "dvmconsole-${release_version}-win-x64.zip"
+            "dvmconsole-${release_version}-osx-arm64.spdx.json"
+            "dvmconsole-${release_version}-osx-x64.spdx.json"
+            "dvmconsole-${release_version}-win-x64.spdx.json"
+            "SHA256SUMS"
+          )
+          mapfile -t actual_assets < <(gh release view "$GITHUB_REF_NAME" --json assets --jq '.assets[].name' | sort)
+          mapfile -t sorted_expected < <(printf '%s\n' "${expected_assets[@]}" | sort)
+          if [[ "${actual_assets[*]}" != "${sorted_expected[*]}" ]]; then
+            printf 'Published release asset set does not match the expected release suite.\n' >&2
+            printf 'Expected: %s\n' "${sorted_expected[*]}" >&2
+            printf 'Actual: %s\n' "${actual_assets[*]}" >&2
+            exit 1
+          fi
+
+          readback="$RUNNER_TEMP/release-readback"
+          mkdir -p "$readback"
+          for asset in "${expected_assets[@]}"; do
+            gh release download "$GITHUB_REF_NAME" --dir "$readback" --pattern "$asset"
+          done
+          checksum_subjects=(
+            "dvmconsole-${release_version}-osx-arm64.zip"
+            "dvmconsole-${release_version}-osx-x64.zip"
+            "dvmconsole-${release_version}-win-x64.zip"
+            "dvmconsole-${release_version}-osx-arm64.spdx.json"
+            "dvmconsole-${release_version}-osx-x64.spdx.json"
+            "dvmconsole-${release_version}-win-x64.spdx.json"
+          )
+          checksum_subject_args=()
+          for subject in "${checksum_subjects[@]}"; do
+            checksum_subject_args+=(--expected-subject "$subject")
+          done
+          python scripts/release_metadata.py verify-checksums \
+            --checksums "$readback/SHA256SUMS" \
+            --artifacts "$readback" \
+            "${checksum_subject_args[@]}"
+          gh release view "$GITHUB_REF_NAME" --json body,isPrerelease,name > "$readback/release.json"
+          expected_prerelease=false
+          if [[ "$release_version" == *-* ]]; then
+            expected_prerelease=true
+          fi
+          python -c 'import json,pathlib,sys; release=json.load(open(sys.argv[1], encoding="utf-8")); remote=release["body"].rstrip("\n"); local=pathlib.Path(sys.argv[2]).read_text(encoding="utf-8").rstrip("\n"); expected_prerelease=sys.argv[4] == "true"; sys.exit(0 if remote == local and release["name"] == sys.argv[3] and release["isPrerelease"] is expected_prerelease else "Published release title, notes, or prerelease state do not match the versioned release inputs.")' \
+            "$readback/release.json" \
+            "docs/releases/${GITHUB_REF_NAME}.md" \
+            "$DVM_RELEASE_TITLE" \
+            "$expected_prerelease"
+
+          for target in osx-arm64 osx-x64 win-x64; do
+            package="$readback/dvmconsole-${release_version}-${target}.zip"
+            sbom="$readback/dvmconsole-${release_version}-${target}.spdx.json"
+            gh attestation verify "$package" --repo "$GITHUB_REPOSITORY"
+            spdx_version="$(python -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["spdxVersion"].removeprefix("SPDX-"))' "$sbom")"
+            gh attestation verify "$package" \
+              --repo "$GITHUB_REPOSITORY" \
+              --predicate-type "https://spdx.dev/Document/v${spdx_version}"
+          done
+          gh attestation verify "$readback/SHA256SUMS" --repo "$GITHUB_REPOSITORY"
+
+      - name: Publish verified GitHub release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DVM_RELEASE_VERSION: ${{ steps.metadata.outputs.version }}
+        run: |
+          is_draft="$(gh release view "$GITHUB_REF_NAME" --json isDraft --jq '.isDraft')"
+          if [[ "$is_draft" == true ]]; then
+            gh release edit "$GITHUB_REF_NAME" --draft=false
+          fi
+          expected_prerelease=false
+          if [[ "$DVM_RELEASE_VERSION" == *-* ]]; then
+            expected_prerelease=true
+          fi
+          gh release view "$GITHUB_REF_NAME" --json isDraft,isPrerelease > "$RUNNER_TEMP/published-release-state.json"
+          python -c 'import json,sys; release=json.load(open(sys.argv[1], encoding="utf-8")); expected_prerelease=sys.argv[2] == "true"; sys.exit(0 if release["isDraft"] is False and release["isPrerelease"] is expected_prerelease else "Verified release did not publish with the expected prerelease state.")' \
+            "$RUNNER_TEMP/published-release-state.json" \
+            "$expected_prerelease"

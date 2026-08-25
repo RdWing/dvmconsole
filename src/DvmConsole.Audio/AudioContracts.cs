@@ -153,6 +153,14 @@ public interface IAudioPlaybackCallbackDiagnostics
     long OutputCallbackCount { get; }
 }
 
+// Optional estimate of the interval between a native output callback
+// consuming the final sample and that sample reaching the physical device.
+// Backends expose this only when the platform reports a meaningful value.
+public interface IAudioPlaybackPresentationLatencyDiagnostics
+{
+    TimeSpan OutputPresentationLatency { get; }
+}
+
 // Read-only physical-output health that can cross an intermediate shared
 // mixer. Individual mixer lanes may observe the device, but only the mixer
 // that owns the physical playback endpoint controls continuity or queue depth.

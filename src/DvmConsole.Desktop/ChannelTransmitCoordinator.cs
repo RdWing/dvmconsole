@@ -1,6 +1,7 @@
 using DvmConsole.Audio;
 using DvmConsole.FneClient;
 using DvmConsole.Media;
+using DvmConsole.Operations;
 using DvmConsole.Vocoder;
 
 namespace DvmConsole.Desktop;
@@ -23,10 +24,10 @@ public enum DefaultInputRefreshResult
 // PTT may start several targets, all fed by one microphone capture stream.
 public sealed class ChannelTransmitCoordinator : IAsyncDisposable
 {
-    internal static TimeSpan ColdMicrophoneSettlingDuration { get; } =
-        TimeSpan.FromMilliseconds(650);
     private static TimeSpan MicrophoneReadyTimeout { get; } =
         TimeSpan.FromSeconds(8);
+    private static TimeSpan MicrophonePostCueRecoveryTimeout { get; } =
+        TimeSpan.FromSeconds(2);
     private readonly IP25KeyResolver? p25KeyResolver;
     private readonly IDmrKeyResolver? dmrKeyResolver;
     private readonly INxdnKeyResolver? nxdnKeyResolver;
@@ -46,9 +47,32 @@ public sealed class ChannelTransmitCoordinator : IAsyncDisposable
     private bool disposed;
     private volatile bool microphoneAudioSuppressed;
     private AudioInputProcessingOptions audioInputOptions;
+    private readonly TimeSpan microphoneStaleAfter;
+    private CancellationTokenSource? microphoneMonitorCancellation;
+    private Task microphoneMonitor = Task.CompletedTask;
+    private int microphoneReadinessConfirmed;
 
     public event EventHandler<Exception>? Faulted;
     public event EventHandler<HighQualityBluetoothAudioStatus>? HighQualityBluetoothStatusChanged;
+    public MicrophoneHealth MicrophoneHealth
+    {
+        get
+        {
+            SharedAudioCapture? capture = sharedCapture;
+            if (capture is null)
+                return StoppedMicrophoneHealth;
+            try
+            {
+                return capture.Health;
+            }
+            catch (ObjectDisposedException)
+            {
+                // A health poll may race the final capture lease disposal.
+                return StoppedMicrophoneHealth;
+            }
+        }
+    }
+    public bool IsMicrophoneAudioSuppressed => microphoneAudioSuppressed;
     public ChannelViewModel? ActiveChannel => Volatile.Read(ref activeSnapshot).FirstOrDefault()?.Channel;
     public IReadOnlyList<ChannelViewModel> ActiveChannels => Volatile.Read(ref activeSnapshot)
         .Select(entry => entry.Channel)
@@ -56,6 +80,13 @@ public sealed class ChannelTransmitCoordinator : IAsyncDisposable
     public uint ActiveStreamId => Volatile.Read(ref activeSnapshot).FirstOrDefault()?.StreamId ?? 0;
     public bool ActiveMicrophoneStartedCold { get; private set; }
     public bool? ActiveMicrophoneIsBluetooth { get; private set; }
+
+    private static MicrophoneHealth StoppedMicrophoneHealth { get; } = new(
+        MicrophoneHealthState.Stopped,
+        0,
+        null,
+        null,
+        null);
 
     public async Task<MicrophoneStartExpectation> InspectNextMicrophoneStartAsync(
         CancellationToken cancellationToken = default)
@@ -66,8 +97,16 @@ public sealed class ChannelTransmitCoordinator : IAsyncDisposable
         {
             if (sharedCapture is not null)
             {
+                MicrophoneHealth health = sharedCapture.Health;
+                if (warmCaptureLease is not null &&
+                    active.Count == 0 &&
+                    health.State is MicrophoneHealthState.Stale or MicrophoneHealthState.Faulted)
+                {
+                    await RestartSharedCaptureCoreAsync().ConfigureAwait(false);
+                    health = sharedCapture?.Health ?? health;
+                }
                 return new MicrophoneStartExpectation(
-                    StartsCold: !sharedCapture.IsReady,
+                    StartsCold: health.State != MicrophoneHealthState.Ready,
                     sharedCaptureIsBluetooth);
             }
 
@@ -96,12 +135,16 @@ public sealed class ChannelTransmitCoordinator : IAsyncDisposable
         Func<IAudioBackend>? createAudioBackend = null,
         Func<IVocoderBackend>? createVocoderBackend = null,
         IDmrKeyResolver? dmrKeyResolver = null,
-        INxdnKeyResolver? nxdnKeyResolver = null)
+        INxdnKeyResolver? nxdnKeyResolver = null,
+        TimeSpan? microphoneStaleAfter = null)
     {
         this.p25KeyResolver = p25KeyResolver;
         this.dmrKeyResolver = dmrKeyResolver;
         this.nxdnKeyResolver = nxdnKeyResolver;
         this.audioInputOptions = (audioInputOptions ?? new AudioInputProcessingOptions()).Normalize();
+        this.microphoneStaleAfter = microphoneStaleAfter ?? TimeSpan.FromMilliseconds(250);
+        if (this.microphoneStaleAfter <= TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(nameof(microphoneStaleAfter));
         this.samplesObserver = samplesObserver;
         this.createAudioBackend = createAudioBackend ??
             (() => AudioBackendFactory.CreateDefault(Environment.GetEnvironmentVariable("DVM_AUDIO_LIBRARY")));
@@ -207,13 +250,75 @@ public sealed class ChannelTransmitCoordinator : IAsyncDisposable
         if (Volatile.Read(ref activeSnapshot).Length == 0)
             throw new InvalidOperationException("No transmit call is waiting for microphone audio.");
 
-        return await capture.WaitForSamplesAsync(
+        MicrophoneReadinessTiming timing = await capture.WaitForSamplesAsync(
             timeout ?? MicrophoneReadyTimeout,
             cancellationToken).ConfigureAwait(false);
+        Volatile.Write(ref microphoneReadinessConfirmed, 1);
+        return timing;
+    }
+
+    // Releases the startup gate only after the selected microphone has proven
+    // it resumed following a cold Bluetooth permit-tone route transition.
+    // Once the gate opens, the normal active-transmit stale/fault watchdog is
+    // responsible for failing the call closed.
+    public async Task<TimeSpan> ReleaseMicrophoneAudioAsync(
+        bool requireFreshRecoveryCallback,
+        TimeSpan? recoveryTimeout = null,
+        CancellationToken cancellationToken = default)
+    {
+        ObjectDisposedException.ThrowIf(disposed, this);
+        SharedAudioCapture capture = sharedCapture ??
+            throw new InvalidOperationException("The transmit microphone path has not been started.");
+        if (Volatile.Read(ref activeSnapshot).Length == 0)
+            throw new InvalidOperationException("No transmit call is waiting for microphone audio.");
+
+        TimeSpan recovery = TimeSpan.Zero;
+        if (requireFreshRecoveryCallback)
+        {
+            recovery = await capture.WaitForNextPhysicalSamplesAsync(
+                recoveryTimeout ?? MicrophonePostCueRecoveryTimeout,
+                cancellationToken).ConfigureAwait(false);
+        }
+
+        MicrophoneHealth health = capture.Health;
+        if (health.State != MicrophoneHealthState.Ready)
+        {
+            string detail = string.IsNullOrWhiteSpace(health.Fault)
+                ? health.State == MicrophoneHealthState.Stale
+                    ? $"no fresh samples for {health.LastSampleAge?.TotalMilliseconds:0} ms"
+                    : "capture path is not ready"
+                : health.Fault;
+            throw new IOException(
+                $"Transmit microphone cannot be released while {health.State.ToString().ToLowerInvariant()}: {detail}.");
+        }
+
+        SetMicrophoneAudioSuppressed(false);
+        return recovery;
     }
 
     public Task StartAsync(ChannelViewModel channel, IFneTrafficEndpoint system)
         => StartAsync([new TransmitTarget(channel, system)]);
+
+    // Activates every prepared protocol call as one coordinated transition.
+    // Capture may be prepared well before this point while Bluetooth routes
+    // settle, but no call-start packet is emitted until activation.
+    public async Task ActivateAsync(CancellationToken cancellationToken = default)
+    {
+        ObjectDisposedException.ThrowIf(disposed, this);
+        await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            if (active.Count == 0)
+                throw new InvalidOperationException("No transmit call is prepared for activation.");
+
+            foreach (ActiveTransmit entry in active)
+                entry.Session.Activate();
+        }
+        finally
+        {
+            gate.Release();
+        }
+    }
 
     public async Task StartAsync(IEnumerable<TransmitTarget> targets)
     {
@@ -336,6 +441,8 @@ public sealed class ChannelTransmitCoordinator : IAsyncDisposable
                 PublishActiveSnapshot();
                 ActiveMicrophoneStartedCold = !reusedReadyCapture;
                 ActiveMicrophoneIsBluetooth = sharedCaptureIsBluetooth;
+                Volatile.Write(ref microphoneReadinessConfirmed, reusedReadyCapture ? 1 : 0);
+                StartMicrophoneMonitor();
             }
             catch
             {
@@ -421,9 +528,11 @@ public sealed class ChannelTransmitCoordinator : IAsyncDisposable
 
     private async Task StopCoreAsync(bool clearMicrophoneSuppression)
     {
+        await StopMicrophoneMonitorAsync().ConfigureAwait(false);
         ActiveTransmit[] current = active.ToArray();
         active.Clear();
         PublishActiveSnapshot();
+        Volatile.Write(ref microphoneReadinessConfirmed, 0);
         ActiveMicrophoneStartedCold = false;
         ActiveMicrophoneIsBluetooth = null;
         Exception? failure = null;
@@ -540,6 +649,85 @@ public sealed class ChannelTransmitCoordinator : IAsyncDisposable
 
     private void HandleSessionFaulted(object? sender, Exception exception) => Faulted?.Invoke(this, exception);
 
+    private void StartMicrophoneMonitor()
+    {
+        CancellationTokenSource cancellation = new();
+        microphoneMonitorCancellation = cancellation;
+        microphoneMonitor = MonitorMicrophoneAsync(cancellation.Token);
+    }
+
+    private async Task StopMicrophoneMonitorAsync()
+    {
+        CancellationTokenSource? cancellation = microphoneMonitorCancellation;
+        Task monitor = microphoneMonitor;
+        microphoneMonitorCancellation = null;
+        microphoneMonitor = Task.CompletedTask;
+        if (cancellation is null)
+            return;
+
+        cancellation.Cancel();
+        try
+        {
+            await monitor.ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
+        {
+        }
+        finally
+        {
+            cancellation.Dispose();
+        }
+    }
+
+    private async Task MonitorMicrophoneAsync(CancellationToken cancellationToken)
+    {
+        bool observedReady = Volatile.Read(ref microphoneReadinessConfirmed) != 0;
+        TimeSpan interval = TimeSpan.FromMilliseconds(Math.Clamp(
+            microphoneStaleAfter.TotalMilliseconds / 2,
+            10,
+            250));
+        while (!cancellationToken.IsCancellationRequested)
+        {
+            await Task.Delay(interval, cancellationToken).ConfigureAwait(false);
+            MicrophoneHealth health = MicrophoneHealth;
+            if (health.State == MicrophoneHealthState.Ready)
+            {
+                observedReady = true;
+                Volatile.Write(ref microphoneReadinessConfirmed, 1);
+                continue;
+            }
+            observedReady |= Volatile.Read(ref microphoneReadinessConfirmed) != 0;
+            if (microphoneAudioSuppressed)
+            {
+                // Startup deliberately keeps operator audio gated while a
+                // cold Bluetooth route reopens and warms the duplex output for
+                // the talk-permit cue. CoreAudio can pause capture callbacks
+                // during that transition. There is no microphone audio to
+                // protect until the gate is released, so do not tear down the
+                // shared session (and the cue with it) for that expected gap.
+                continue;
+            }
+            if (!observedReady ||
+                health.State is not (MicrophoneHealthState.Stale or MicrophoneHealthState.Faulted))
+            {
+                continue;
+            }
+
+            // Stop publishing capture callbacks before notifying the owner.
+            // The owner then tears down all active calls and their UI state.
+            SetMicrophoneAudioSuppressed(true);
+            string detail = string.IsNullOrWhiteSpace(health.Fault)
+                ? health.State == MicrophoneHealthState.Stale
+                    ? $"no fresh samples for {health.LastSampleAge?.TotalMilliseconds:0} ms"
+                    : "capture pump faulted"
+                : health.Fault;
+            Faulted?.Invoke(
+                this,
+                new IOException($"Transmit microphone became {health.State.ToString().ToLowerInvariant()}: {detail}."));
+            return;
+        }
+    }
+
     private async Task StartWarmCaptureCoreAsync()
     {
         audioBackend ??= createAudioBackend();
@@ -604,10 +792,9 @@ public sealed class ChannelTransmitCoordinator : IAsyncDisposable
                     samplesObserver(entry.Channel, entry.StreamId, entry.SourceId, args.Samples);
             };
         }
-        TimeSpan readinessDuration = input.IsBluetooth == false
-            ? TimeSpan.Zero
-            : ColdMicrophoneSettlingDuration;
-        var shared = new SharedAudioCapture(capture, readinessDuration);
+        var shared = new SharedAudioCapture(
+            capture,
+            microphoneStaleAfter);
         shared.SetSamplesSuppressed(microphoneAudioSuppressed);
         sharedCaptureFollowsSystemDefault = selection.FollowsSystemDefault;
         sharedCaptureIsBluetooth = input.IsBluetooth;

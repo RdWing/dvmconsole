@@ -3,6 +3,8 @@ using DvmConsole.Core.Configuration;
 using DvmConsole.Core.Runtime;
 using DvmConsole.FneClient;
 using DvmConsole.Media;
+using DvmConsole.Operations;
+using System.Collections.Immutable;
 using System.ComponentModel;
 using System.Globalization;
 using System.Windows.Input;
@@ -13,11 +15,12 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
 {
     private readonly ChannelConfiguration configuration;
     private readonly ChannelRuntime runtime;
+    private readonly ChannelDefinition sessionDefinition;
     private readonly IP25KeyResolver? p25KeyResolver;
     private readonly IDmrKeyResolver? dmrKeyResolver;
     private readonly INxdnKeyResolver? nxdnKeyResolver;
     private readonly RadioAliasIndex aliases;
-    private readonly ReceiveStreamLifecycle receiveLifecycle = ReceiveStreamLifecycle.CreateDefault();
+    private ImmutableHashSet<uint> projectedReceiveStreams = ImmutableHashSet<uint>.Empty;
     private Func<ChannelViewModel, Task>? startAudio;
     private Func<ChannelViewModel, Task>? stopAudio;
     private Func<ChannelViewModel, Task>? startTransmit;
@@ -63,6 +66,9 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
         this.nxdnKeyResolver = nxdnKeyResolver;
         this.aliases = aliases as RadioAliasIndex ?? new RadioAliasIndex(aliases);
         runtime = new ChannelRuntime(ChannelRuntimeDefinition.FromConfiguration(configuration));
+        sessionDefinition = ChannelDefinition.FromRuntime(
+            runtime.Definition,
+            $"{runtime.Definition.SystemName}\u001F{runtime.Definition.Name}");
         transmitEncrypted = runtime.Definition.IsEncrypted;
         runtime.PropertyChanged += HandleRuntimePropertyChanged;
         AudioCommand = new AsyncRelayCommand(() => Task.CompletedTask, () => false);
@@ -143,6 +149,8 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
     public uint? SourceId => runtime.SourceId;
     public uint? StreamId => runtime.StreamId;
     public ChannelRuntimeDefinition Definition => runtime.Definition;
+    public ChannelSessionId SessionId => sessionDefinition.SessionId;
+    public ChannelDefinition SessionDefinition => sessionDefinition;
     public bool IsAudioEnabled => audioEnabled;
     public bool IsAudioSuspended => audioSuspended;
     public bool IsReceivePresentationActive => ReceivePresentationOwner is not null;
@@ -185,7 +193,7 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
             : receivePresentationOwnerResolver?.Invoke();
 
     internal bool IsTrackingReceiveStream(uint streamId)
-        => receiveLifecycle.IsActive(streamId);
+        => Volatile.Read(ref projectedReceiveStreams).Contains(streamId);
 
     internal string ResolveSubscriberAlias(uint sourceId)
         => AliasFileLoader.FindAlias(aliases, sourceId);
@@ -720,6 +728,40 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
         FneTrafficFrame traffic,
         DateTimeOffset now)
     {
+        if (!CanProjectTraffic(
+                systemName,
+                traffic,
+                IsTrackingReceiveStream(traffic.StreamId)))
+            return ChannelTrafficApplyResult.NoMatch;
+
+        ReceiveRouteProjectionDecision projection =
+            ChannelReceiveProjectionCompatibility.Observe(this, traffic, now);
+        return ProjectTraffic(traffic, now, projection);
+    }
+
+    internal ChannelTrafficApplyResult ApplyTraffic(
+        string systemName,
+        FneTrafficFrame traffic,
+        DateTimeOffset now,
+        ReceiveIngressRouteDecision ingressDecision)
+    {
+        if (!CanProjectTraffic(
+                systemName,
+                traffic,
+                ingressDecision.ActiveStreamIds.Contains(traffic.StreamId)) ||
+            ingressDecision.RouteKey != SessionDefinition.RouteKey)
+        {
+            return ChannelTrafficApplyResult.NoMatch;
+        }
+
+        return ProjectTraffic(traffic, now, ingressDecision.PacketDecision);
+    }
+
+    private bool CanProjectTraffic(
+        string systemName,
+        FneTrafficFrame traffic,
+        bool isTrackedReceiveStream)
+    {
         ArgumentException.ThrowIfNullOrWhiteSpace(systemName);
         ArgumentNullException.ThrowIfNull(traffic);
 
@@ -727,15 +769,40 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
             !MatchesProtocol(traffic.Protocol) ||
             traffic.StreamId == 0)
         {
-            return ChannelTrafficApplyResult.NoMatch;
+            return false;
         }
 
         if (runtime.State == ChannelRuntimeState.Transmitting)
-            return ChannelTrafficApplyResult.NoMatch;
+            return false;
+
+        if (ReceiveTrafficClassifier.IsTerminator(traffic))
+            return true;
+
+        if (ReceiveTrafficClassifier.IsDmrPrivacyHeader(traffic))
+        {
+            return isTrackedReceiveStream &&
+                   runtime.Definition.DestinationId == traffic.DestinationId &&
+                   runtime.Definition.Slot == traffic.Slot;
+        }
+
+        if (traffic.DestinationId != runtime.Definition.DestinationId)
+            return false;
+
+        bool isDmrVoiceLcHeader = ReceiveTrafficClassifier.IsDefinitiveStart(traffic);
+        return (MatchesVoiceTraffic(traffic) || isDmrVoiceLcHeader) &&
+               traffic.SourceId != 0;
+    }
+
+    private ChannelTrafficApplyResult ProjectTraffic(
+        FneTrafficFrame traffic,
+        DateTimeOffset now,
+        ReceiveRouteProjectionDecision projection)
+    {
+        Volatile.Write(ref projectedReceiveStreams, projection.ActiveStreamIds);
+        ReceiveStreamDecision decision = projection.StreamDecision;
 
         if (ReceiveTrafficClassifier.IsTerminator(traffic))
         {
-            ReceiveStreamDecision decision = receiveLifecycle.ObserveTerminator(traffic.StreamId, now);
             if (decision.Transition != ReceiveStreamTransition.TerminationPending)
                 return decision.Transition == ReceiveStreamTransition.IgnoredLate
                     ? ToApplyResult(decision)
@@ -748,14 +815,6 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
 
         if (ReceiveTrafficClassifier.IsDmrPrivacyHeader(traffic))
         {
-            if (!receiveLifecycle.IsActive(traffic.StreamId) ||
-                runtime.Definition.DestinationId != traffic.DestinationId ||
-                runtime.Definition.Slot != traffic.Slot)
-            {
-                return ChannelTrafficApplyResult.NoMatch;
-            }
-
-            ReceiveStreamDecision decision = receiveLifecycle.ObserveVoice(traffic.StreamId, now);
             if (decision.Transition is (ReceiveStreamTransition.Continued or ReceiveStreamTransition.Resumed) &&
                 runtime.StreamId == traffic.StreamId)
             {
@@ -764,23 +823,13 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
             return ToApplyResult(decision);
         }
 
-        if (traffic.DestinationId != runtime.Definition.DestinationId)
-            return ChannelTrafficApplyResult.NoMatch;
-
-        bool isDmrVoiceLcHeader = ReceiveTrafficClassifier.IsDefinitiveStart(traffic);
-        if ((!MatchesVoiceTraffic(traffic) && !isDmrVoiceLcHeader) || traffic.SourceId == 0)
-            return ChannelTrafficApplyResult.NoMatch;
-
-        ReceiveStreamDecision voiceDecision = isDmrVoiceLcHeader
-            ? receiveLifecycle.ObserveDefinitiveStart(traffic.StreamId, now)
-            : receiveLifecycle.ObserveVoice(traffic.StreamId, now);
-        if (voiceDecision.Transition != ReceiveStreamTransition.IgnoredLate &&
-            (voiceDecision.Transition != ReceiveStreamTransition.Colliding ||
+        if (decision.Transition != ReceiveStreamTransition.IgnoredLate &&
+            (decision.Transition != ReceiveStreamTransition.Colliding ||
              runtime.State != ChannelRuntimeState.Receiving))
         {
             runtime.MarkReceiving(traffic.SourceId, traffic.StreamId, now);
         }
-        return ToApplyResult(voiceDecision);
+        return ToApplyResult(decision);
     }
 
     public bool TryExpireReceiveState(DateTimeOffset now, TimeSpan timeout)
@@ -794,7 +843,17 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
 
     internal ChannelTrafficApplyResult AdvanceReceiveLifecycle(DateTimeOffset now)
     {
-        ReceiveStreamDecision decision = receiveLifecycle.Advance(now);
+        ReceiveRouteProjectionDecision projection =
+            ChannelReceiveProjectionCompatibility.Advance(this, now);
+        return ProjectReceiveLifecycleDecision(projection, now);
+    }
+
+    internal ChannelTrafficApplyResult ProjectReceiveLifecycleDecision(
+        ReceiveRouteProjectionDecision projection,
+        DateTimeOffset now)
+    {
+        Volatile.Write(ref projectedReceiveStreams, projection.ActiveStreamIds);
+        ReceiveStreamDecision decision = projection.StreamDecision;
         if (decision.Transition is
             ReceiveStreamTransition.GraceExpired or
             ReceiveStreamTransition.TerminationExpired)

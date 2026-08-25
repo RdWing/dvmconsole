@@ -18,7 +18,11 @@ A patch group forwards audio between member resources.
 
 Use a patch group when traffic received on one member should be repeated to other members in the group.
 
-The console applies the source system's adaptive receive jitter buffer once, decodes the source to 8 kHz PCM, and re-encodes that PCM for each destination protocol. This supports cross-protocol patches. It does not pass source vocoder codewords directly to destinations.
+The console applies the source system's adaptive receive jitter buffer once,
+decodes the source to 8 kHz PCM, and re-encodes that PCM for each destination
+protocol. Destination audio follows the protocol's 20 ms transmit clock rather
+than arriving in decoded batches. This supports cross-protocol patches. It does
+not pass source vocoder codewords directly to destinations.
 
 Patch groups have two separate pieces of state:
 

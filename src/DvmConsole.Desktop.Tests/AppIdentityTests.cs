@@ -10,6 +10,6 @@ public sealed class AppIdentityTests
         var app = new App();
         app.Initialize();
 
-        Assert.Equal("DVM Console", app.Name);
+        Assert.Equal("DVM Console NEO", app.Name);
     }
 }

@@ -1,0 +1,221 @@
+using System.Globalization;
+using System.Xml.Linq;
+using Xunit;
+
+namespace DvmConsole.Desktop.Tests;
+
+public sealed class OperatorInterfaceGateTests
+{
+    [Theory]
+    [InlineData(880, false, false, false, true)]
+    [InlineData(1260, false, false, true, true)]
+    [InlineData(1920, true, true, true, false)]
+    public void ResponsiveToolbarShedsConvenienceContentBeforeOperationalControls(
+        double width,
+        bool expectedClocks,
+        bool expectedAlertShortcuts,
+        bool expectedTonesLauncher,
+        bool expectedOverflow)
+    {
+        ResponsiveToolbarVisibility visibility = MainWindowResponsiveToolbarPolicy.Evaluate(width);
+
+        Assert.Equal(expectedClocks, visibility.ShowClocks);
+        Assert.Equal(expectedAlertShortcuts, visibility.ShowAlertToneShortcuts);
+        Assert.Equal(expectedTonesLauncher, visibility.ShowTonesLauncher);
+        Assert.Equal(expectedOverflow, visibility.ShowOverflow);
+
+        string shell = ReadDesktopSource("MainWindow.axaml");
+        Assert.Contains("x:Name=\"toolbarClocks\"", shell, StringComparison.Ordinal);
+        Assert.Contains("x:Name=\"toolbarAlertToneShortcuts\"", shell, StringComparison.Ordinal);
+        Assert.Contains("x:Name=\"toolbarTonesLauncher\"", shell, StringComparison.Ordinal);
+        Assert.Contains("x:Name=\"toolbarOverflowMenu\"", shell, StringComparison.Ordinal);
+        Assert.True(
+            shell.IndexOf("KeepTransmitMicrophoneWarm", StringComparison.Ordinal) <
+            shell.IndexOf("x:Name=\"toolbarClocks\"", StringComparison.Ordinal),
+            "Operational controls must be measured before convenience content in the toolbar.");
+    }
+
+    [Fact]
+    public void MainWindowHasOneClassicCardShellAndNoWorkspaceSwitcher()
+    {
+        string shell = ReadDesktopSource("MainWindow.axaml");
+        string code = ReadDesktopSource("MainWindow.axaml.cs");
+        string commands = ReadDesktopSource("OperatorCommandCatalog.cs");
+
+        Assert.Contains("ItemsControl Classes=\"channel-canvas\"", shell, StringComparison.Ordinal);
+        Assert.DoesNotContain("NeoWorkspaceView", shell, StringComparison.Ordinal);
+        Assert.DoesNotContain("Header=\"Workspace\"", shell, StringComparison.Ordinal);
+        Assert.DoesNotContain("InitializeNeoWorkspace", code, StringComparison.Ordinal);
+        Assert.DoesNotContain("workspace.classic", commands, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("workspace.neo", commands, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("workspace.matrix", commands, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void EngineeringHealthIsAnOptionalTelemetryOnlyView()
+    {
+        XDocument shell = XDocument.Parse(ReadDesktopSource("MainWindow.axaml"));
+        XElement menuItem = shell.Descendants()
+            .Single(element => Attribute(element, "Name") == "engineeringHealthMenuItem");
+        XElement paneHost = shell.Descendants()
+            .Single(element => Attribute(element, "Name") == "engineeringHealthPane");
+
+        Assert.Equal("Engineering Health", Attribute(menuItem, "Header"));
+        Assert.Equal("CheckBox", Attribute(menuItem, "ToggleType"));
+        Assert.Equal("view.engineering-health", Attribute(menuItem, "Tag"));
+        Assert.Equal("HandleOperatorCommandClick", Attribute(menuItem, "Click"));
+        Assert.Equal("False", Attribute(paneHost, "IsVisible"));
+
+        XDocument pane = XDocument.Parse(ReadDesktopSource("EngineeringHealthPane.axaml"));
+        Assert.DoesNotContain(
+            pane.Descendants(),
+            element => element.Name.LocalName is "Button" or "ToggleButton" or "ScrollViewer");
+        Assert.Equal(
+            4,
+            pane.Descendants().Count(element => Attribute(element, "Classes") == "health-cell"));
+        foreach (string binding in new[]
+                 {
+                     "ReceiveQueueHealthText",
+                     "ReceiveLatencyHealthText",
+                     "MicrophoneHealthText",
+                     "TransmitBacklogHealthText",
+                     "FinalizationHealthText",
+                     "CatalogHealthText",
+                     "RouteRecoveryHealthText",
+                     "ConnectionHealthText"
+                 })
+        {
+            Assert.Contains($"{{Binding {binding}}}", pane.ToString(), StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
+    public void ClassicChannelCardRetainsGeometryActionsAndBrushBindings()
+    {
+        XDocument shell = XDocument.Parse(ReadDesktopSource("MainWindow.axaml"));
+        XElement card = shell.Descendants()
+            .Single(element => Attribute(element, "Classes") == "channel-card");
+
+        Assert.Equal("{Binding CardWidth}", Attribute(card, "Width"));
+        Assert.Contains("ChannelCardHeight", Attribute(card, "Height"), StringComparison.Ordinal);
+        Assert.Equal("{Binding CardBackgroundBrush}", Attribute(card, "Background"));
+        Assert.Equal("{Binding CardBorderBrush}", Attribute(card, "BorderBrush"));
+        Assert.Equal("5,5,5,4", Attribute(card, "Padding"));
+
+        XElement layout = card.Elements().Single(element => element.Name.LocalName == "Grid");
+        Assert.Equal("Auto,Auto,Auto,*,24", Attribute(layout, "RowDefinitions"));
+        AssertCardAction(card, "encryption-select", "EncryptionSelectionBrush", "EncryptionSelectionBorderBrush");
+        AssertCardAction(card, "tx-multi", "TransmitSelectionBrush", "TransmitSelectionBorderBrush");
+        AssertCardAction(card, "page-select", "PageSelectionBrush", "PageSelectionBorderBrush");
+        AssertCardAction(card, "alert-select", "AlertSelectionBrush", "AlertSelectionBorderBrush");
+        AssertCardAction(card, "tar-select", "RecordingSelectionBrush", "RecordingSelectionBorderBrush");
+        Assert.Single(card.Descendants(), element =>
+            element.Name.LocalName == "Button" &&
+            Attribute(element, "Classes")?.Split(' ').Contains("ptt") == true);
+        Assert.DoesNotContain(card.Descendants(), element => element.Name.LocalName == "ToggleButton");
+    }
+
+    [Fact]
+    public void SemanticTokensMeetTextAndNonTextContrastTargetsInBothThemes()
+    {
+        XDocument document = XDocument.Parse(ReadDesktopSource("App.axaml"));
+        XElement[] themes = document.Descendants()
+            .Where(element => element.Name.LocalName == "ResourceDictionary")
+            .Where(element => Attribute(element, "Key") is "Light" or "Dark")
+            .ToArray();
+
+        Assert.Equal(2, themes.Length);
+        foreach (XElement theme in themes)
+        {
+            string themeName = Attribute(theme, "Key")!;
+            Dictionary<string, string> colors = theme.Elements()
+                .Where(element => element.Name.LocalName == "SolidColorBrush")
+                .ToDictionary(
+                    element => Attribute(element, "Key")!,
+                    element => Attribute(element, "Color")!,
+                    StringComparer.Ordinal);
+
+            AssertContrast(themeName, colors, "PrimaryTextBrush", "ShellBackgroundBrush", 4.5);
+            AssertContrast(themeName, colors, "MutedTextBrush", "ShellBackgroundBrush", 4.5);
+            AssertContrast(themeName, colors, "OperationalMeterFillBrush", "OperationalMeterTrackBrush", 3.0);
+        }
+    }
+
+    private static void AssertCardAction(
+        XElement card,
+        string className,
+        string backgroundBinding,
+        string borderBinding)
+    {
+        XElement action = card.Descendants().Single(element =>
+            element.Name.LocalName == "Button" &&
+            Attribute(element, "Classes")?.Split(' ').Contains(className) == true);
+        Assert.Equal($"{{Binding {backgroundBinding}}}", Attribute(action, "Background"));
+        Assert.Equal($"{{Binding {borderBinding}}}", Attribute(action, "BorderBrush"));
+    }
+
+    private static void AssertContrast(
+        string theme,
+        IReadOnlyDictionary<string, string> colors,
+        string foreground,
+        string background,
+        double minimum)
+    {
+        Assert.True(colors.ContainsKey(foreground), $"{theme} is missing {foreground}.");
+        Assert.True(colors.ContainsKey(background), $"{theme} is missing {background}.");
+        double ratio = ContrastRatio(colors[foreground], colors[background]);
+        Assert.True(
+            ratio >= minimum,
+            $"{theme} {foreground} on {background} is {ratio:0.00}:1; expected at least {minimum:0.0}:1.");
+    }
+
+    private static double ContrastRatio(string first, string second)
+    {
+        double firstLuminance = RelativeLuminance(first);
+        double secondLuminance = RelativeLuminance(second);
+        return (Math.Max(firstLuminance, secondLuminance) + 0.05) /
+               (Math.Min(firstLuminance, secondLuminance) + 0.05);
+    }
+
+    private static double RelativeLuminance(string color)
+    {
+        string value = color.TrimStart('#');
+        if (value.Length == 8)
+            value = value[2..];
+        Assert.Equal(6, value.Length);
+
+        double Channel(int offset)
+        {
+            double component = int.Parse(
+                value.AsSpan(offset, 2),
+                NumberStyles.HexNumber,
+                CultureInfo.InvariantCulture) / 255d;
+            return component <= 0.04045
+                ? component / 12.92
+                : Math.Pow((component + 0.055) / 1.055, 2.4);
+        }
+
+        return (0.2126 * Channel(0)) + (0.7152 * Channel(2)) + (0.0722 * Channel(4));
+    }
+
+    private static string? Attribute(XElement element, string localName)
+        => element.Attributes()
+            .FirstOrDefault(attribute => attribute.Name.LocalName == localName)?
+            .Value;
+
+    private static string ReadDesktopSource(string fileName)
+        => File.ReadAllText(Path.Combine(FindRepositoryRoot(), "src", "DvmConsole.Desktop", fileName));
+
+    private static string FindRepositoryRoot()
+    {
+        DirectoryInfo? directory = new(AppContext.BaseDirectory);
+        while (directory is not null)
+        {
+            if (File.Exists(Path.Combine(directory.FullName, "dvmconsole.sln")))
+                return directory.FullName;
+            directory = directory.Parent;
+        }
+
+        throw new DirectoryNotFoundException("Could not locate dvmconsole.sln from the test output directory.");
+    }
+}

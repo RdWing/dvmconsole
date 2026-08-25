@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using DvmConsole.Core.Configuration;
 using DvmConsole.Core.Runtime;
 using DvmConsole.Desktop;
@@ -11,7 +12,7 @@ namespace DvmConsole.Desktop.Tests;
 public sealed class PatchForwardingCoordinatorTests
 {
     [Fact]
-    public void ForwardsAnalogAudioAndEndsTheTargetLifecycle()
+    public async Task ForwardsAnalogAudioAndEndsTheTargetLifecycle()
     {
         (ChannelViewModel source, FakeEndpoint sourceSystem) = Create("Source", 100, 1001);
         (ChannelViewModel target, FakeEndpoint targetSystem) = Create("Target", 200, 2002);
@@ -23,8 +24,9 @@ public sealed class PatchForwardingCoordinatorTests
 
         ObserveVoice(coordinator, source, 77, 7001);
         coordinator.ObserveDecodedSamples(source, ActiveSamples());
-        coordinator.ObserveTraffic(source, Terminator(100, 77));
+        coordinator.StopSource(source, 77);
 
+        await WaitForSentCountAsync(targetSystem, 2);
         Assert.Equal(2, targetSystem.Sent.Count);
         Assert.All(targetSystem.Sent, sent => Assert.Equal(FneTrafficProtocol.Analog, sent.Protocol));
         Assert.Equal((byte)AnalogAudioFrameType.VoiceStart, targetSystem.Sent[0].Payload[AnalogVoicePacketCodec.FrameTypeOffset]);
@@ -33,7 +35,7 @@ public sealed class PatchForwardingCoordinatorTests
     }
 
     [Fact]
-    public void DecodedSamplesUseSuppliedStreamIdentityAfterChannelChanges()
+    public async Task DecodedSamplesUseSuppliedStreamIdentityAfterChannelChanges()
     {
         (ChannelViewModel source, FakeEndpoint sourceSystem) = Create("Source", 100, 1001);
         (ChannelViewModel target, FakeEndpoint targetSystem) = Create("Target", 200, 2002);
@@ -61,16 +63,20 @@ public sealed class PatchForwardingCoordinatorTests
 
         coordinator.ObserveDecodedSamples(source, streamId: 77, sourceId: 7001, ActiveSamples());
 
+        await WaitForSentCountAsync(targetSystem, 1);
         Assert.Single(targetSystem.Sent);
         Assert.Equal((byte)AnalogAudioFrameType.VoiceStart, targetSystem.Sent[0].Payload[AnalogVoicePacketCodec.FrameTypeOffset]);
     }
 
     [Fact]
-    public void UsesFallbackOrPassthroughSourceIdAndHonorsOneWayRoutes()
+    public async Task UsesFallbackOrPassthroughSourceIdAndHonorsOneWayRoutes()
     {
         (ChannelViewModel first, FakeEndpoint firstSystem) = Create("First", 100, 1001);
         (ChannelViewModel second, FakeEndpoint secondSystem) = Create("Second", 200, 2002);
-        using var coordinator = new PatchForwardingCoordinator([firstSystem, secondSystem]);
+        var diagnostics = new ConcurrentQueue<PatchForwardingDiagnostic>();
+        using var coordinator = new PatchForwardingCoordinator(
+            [firstSystem, secondSystem],
+            diagnosticObserver: diagnostics.Enqueue);
         coordinator.ApplyMemberships(
             new Dictionary<string, IReadOnlyList<PatchMemberAddress>> { ["Patch"] = [new("First", 100), new("Second", 200)] },
             new Dictionary<string, bool> { ["Patch"] = true });
@@ -81,17 +87,22 @@ public sealed class PatchForwardingCoordinatorTests
 
         ObserveVoice(coordinator, first, 9, 7777);
         coordinator.ObserveDecodedSamples(first, ActiveSamples());
+        await WaitForSentCountAsync(secondSystem, 1);
         Assert.All(secondSystem.Sent, sent => Assert.Equal(2002u, ReadUInt24(sent.Payload, AnalogVoicePacketCodec.SourceIdOffset)));
 
         coordinator.StopAll();
-        secondSystem.Sent.Clear();
+        await WaitForSentCountAsync(secondSystem, 2);
+        secondSystem.ClearSent();
         coordinator.SourceIdPassthrough = true;
         coordinator.ApplyMemberships(new Dictionary<string, IReadOnlyList<PatchMemberAddress>>
         {
             ["Patch"] = [new("First", 100), new("Second", 200)]
         });
         ObserveVoice(coordinator, first, 10, 7777);
-        coordinator.ObserveDecodedSamples(first, ActiveSamples());
+        coordinator.ObserveDecodedSamples(first, streamId: 10, sourceId: 7777, ActiveSamples());
+        await WaitUntilAsync(() => diagnostics.Count(diagnostic =>
+            diagnostic.Kind == PatchForwardingDiagnosticKind.TargetStarted) == 2);
+        await WaitForSentCountAsync(secondSystem, 1);
         Assert.All(secondSystem.Sent, sent => Assert.Equal(7777u, ReadUInt24(sent.Payload, AnalogVoicePacketCodec.SourceIdOffset)));
     }
 
@@ -100,7 +111,10 @@ public sealed class PatchForwardingCoordinatorTests
     {
         (ChannelViewModel source, FakeEndpoint sourceSystem) = Create("Source", 100, 1001);
         (ChannelViewModel target, FakeEndpoint targetSystem) = Create("Target", 200, 2002, connected: false);
-        using var coordinator = new PatchForwardingCoordinator([sourceSystem, targetSystem]);
+        var diagnostics = new List<PatchForwardingDiagnostic>();
+        using var coordinator = new PatchForwardingCoordinator(
+            [sourceSystem, targetSystem],
+            diagnosticObserver: diagnostics.Add);
         coordinator.ApplyMemberships(new Dictionary<string, IReadOnlyList<PatchMemberAddress>>
         {
             ["Patch"] = [new("Source", 100), new("Target", 200)]
@@ -110,14 +124,62 @@ public sealed class PatchForwardingCoordinatorTests
         coordinator.ObserveDecodedSamples(source, ActiveSamples());
 
         Assert.Empty(targetSystem.Sent);
+        PatchForwardingDiagnostic unavailable = Assert.Single(diagnostics);
+        Assert.Equal(PatchForwardingDiagnosticKind.TargetUnavailable, unavailable.Kind);
+        Assert.Contains("disconnected", unavailable.Message, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
-    public void RestartsATargetAfterItsOutboundSessionFails()
+    public void AmbiguousLegacyTargetDoesNotChooseAnArbitraryConfiguredChannel()
+    {
+        (ChannelViewModel source, FakeEndpoint sourceSystem) = Create("Source", 100, 1001);
+        var firstTarget = new ChannelViewModel(new ChannelConfiguration
+        {
+            Name = "Target P25",
+            System = "Target",
+            Tgid = "200",
+            Mode = "p25"
+        });
+        var secondTarget = new ChannelViewModel(new ChannelConfiguration
+        {
+            Name = "Target DMR",
+            System = "Target",
+            Tgid = "200",
+            Mode = "dmr",
+            Slot = 1
+        });
+        var targetSystem = new FakeEndpoint(
+            "Target",
+            [firstTarget, secondTarget],
+            sourceId: 2002,
+            connected: true);
+        var diagnostics = new List<PatchForwardingDiagnostic>();
+        using var coordinator = new PatchForwardingCoordinator(
+            [sourceSystem, targetSystem],
+            diagnosticObserver: diagnostics.Add);
+
+        coordinator.ApplyMemberships(new Dictionary<string, IReadOnlyList<PatchMemberAddress>>
+        {
+            ["Patch"] = [new("Source", 100), new("Target", 200)]
+        });
+        ObserveVoice(coordinator, source, streamId: 1, sourceId: 3000);
+        coordinator.ObserveDecodedSamples(source, ActiveSamples());
+
+        Assert.Empty(targetSystem.Sent);
+        PatchForwardingDiagnostic unavailable = Assert.Single(diagnostics);
+        Assert.Equal(PatchForwardingDiagnosticKind.TargetUnavailable, unavailable.Kind);
+        Assert.Contains("ambiguous", unavailable.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task RestartsATargetAfterItsOutboundSessionFails()
     {
         (ChannelViewModel source, FakeEndpoint sourceSystem) = Create("Source", 100, 1001);
         (ChannelViewModel target, FakeEndpoint targetSystem) = Create("Target", 200, 2002);
-        using var coordinator = new PatchForwardingCoordinator([sourceSystem, targetSystem]);
+        var diagnostics = new ConcurrentQueue<PatchForwardingDiagnostic>();
+        using var coordinator = new PatchForwardingCoordinator(
+            [sourceSystem, targetSystem],
+            diagnosticObserver: diagnostics.Enqueue);
         coordinator.ApplyMemberships(new Dictionary<string, IReadOnlyList<PatchMemberAddress>>
         {
             ["Patch"] = [new("Source", 100), new("Target", 200)]
@@ -126,8 +188,12 @@ public sealed class PatchForwardingCoordinatorTests
 
         targetSystem.ThrowOnNextSend = true;
         coordinator.ObserveDecodedSamples(source, ActiveSamples());
+        await WaitUntilAsync(() => diagnostics.Any(diagnostic =>
+            diagnostic.Kind == PatchForwardingDiagnosticKind.TargetFailed));
+        await WaitForSentCountAsync(targetSystem, 1);
         coordinator.ObserveDecodedSamples(source, ActiveSamples());
 
+        await WaitForSentCountAsync(targetSystem, 2);
         Assert.Equal(2, targetSystem.Sent.Count);
         Assert.Equal(
             (byte)AnalogAudioFrameType.Terminator,
@@ -135,10 +201,17 @@ public sealed class PatchForwardingCoordinatorTests
         Assert.Equal(
             (byte)AnalogAudioFrameType.VoiceStart,
             targetSystem.Sent[1].Payload[AnalogVoicePacketCodec.FrameTypeOffset]);
+        Assert.Contains(diagnostics, diagnostic =>
+            diagnostic.Kind == PatchForwardingDiagnosticKind.TargetFailed &&
+            diagnostic.Message.Contains("transport interruption", StringComparison.OrdinalIgnoreCase));
+        Assert.Equal(
+            2,
+            diagnostics.Count(diagnostic =>
+                diagnostic.Kind == PatchForwardingDiagnosticKind.TargetStarted));
     }
 
     [Fact]
-    public void DisablingActivePatchEndsItsTargetAndDoesNotCascadeIntoAnotherPatch()
+    public async Task DisablingActivePatchEndsItsTargetAndDoesNotCascadeIntoAnotherPatch()
     {
         (ChannelViewModel firstSource, FakeEndpoint firstSystem) = Create("First", 100, 1001);
         (ChannelViewModel sharedMember, FakeEndpoint sharedSystem) = Create("Shared", 200, 2002);
@@ -159,6 +232,7 @@ public sealed class PatchForwardingCoordinatorTests
             oneWayModes);
         ObserveVoice(coordinator, firstSource, 77, 7001);
         coordinator.ObserveDecodedSamples(firstSource, 77, 7001, ActiveSamples());
+        await WaitForSentCountAsync(sharedSystem, 1);
 
         coordinator.ApplyMemberships(
             new Dictionary<string, IReadOnlyList<PatchMemberAddress>>
@@ -166,8 +240,9 @@ public sealed class PatchForwardingCoordinatorTests
                 ["Second patch"] = [new("Shared", 200), new("SecondTarget", 300)]
             },
             oneWayModes);
-        ObserveVoice(coordinator, sharedMember, 900, 7002);
-        coordinator.ObserveDecodedSamples(sharedMember, 900, 7002, ActiveSamples());
+        await WaitForSentCountAsync(sharedSystem, 2);
+        ObserveVoice(coordinator, sharedMember, 900, 2002);
+        coordinator.ObserveDecodedSamples(sharedMember, 900, 2002, ActiveSamples());
 
         Assert.Equal(2, sharedSystem.Sent.Count);
         Assert.Equal(
@@ -177,7 +252,7 @@ public sealed class PatchForwardingCoordinatorTests
     }
 
     [Fact]
-    public void ForwardsDecodedAudioToNxdnTargetLifecycle()
+    public async Task ForwardsDecodedAudioToNxdnTargetLifecycle()
     {
         (ChannelViewModel source, FakeEndpoint sourceSystem) = Create("Source", 100, 1001);
         var target = new ChannelViewModel(new ChannelConfiguration
@@ -199,12 +274,74 @@ public sealed class PatchForwardingCoordinatorTests
         ObserveVoice(coordinator, source, 77, 7001);
         for (int index = 0; index < NxdnVoicePacketCodec.CodewordsPerFrame; index++)
             coordinator.ObserveDecodedSamples(source, ActiveSamples());
-        coordinator.ObserveTraffic(source, Terminator(100, 77));
+        coordinator.StopSource(source, 77);
 
+        await WaitForSentCountAsync(targetSystem, 3);
         Assert.Equal(3, targetSystem.Sent.Count);
         Assert.All(targetSystem.Sent, sent => Assert.Equal(FneTrafficProtocol.Nxdn, sent.Protocol));
         Assert.Equal(NxdnVoicePacketCodec.VoiceCallMessageType, targetSystem.Sent[0].Payload[4]);
         Assert.Equal(NxdnVoicePacketCodec.TransmitReleaseMessageType, targetSystem.Sent[2].Payload[4]);
+    }
+
+    [Fact]
+    public async Task WaitsForRetiringTargetBeforeStartingReplacementStream()
+    {
+        (ChannelViewModel source, FakeEndpoint sourceSystem) = Create("Source", 100, 1001);
+        (ChannelViewModel target, FakeEndpoint targetSystem) = Create("Target", 200, 2002);
+        var diagnostics = new ConcurrentQueue<PatchForwardingDiagnostic>();
+        using var coordinator = new PatchForwardingCoordinator(
+            [sourceSystem, targetSystem],
+            diagnosticObserver: diagnostics.Enqueue);
+        coordinator.ApplyMemberships(new Dictionary<string, IReadOnlyList<PatchMemberAddress>>
+        {
+            ["Patch"] = [new("Source", 100), new("Target", 200)]
+        });
+
+        ObserveVoice(coordinator, source, streamId: 77, sourceId: 7001);
+        coordinator.ObserveDecodedSamples(source, streamId: 77, sourceId: 7001, ActiveSamples());
+        coordinator.StopSource(source, 77);
+
+        FneTrafficFrame replacement = Voice(source, streamId: 78, sourceId: 7002);
+        coordinator.ObserveTraffic(source, replacement);
+        coordinator.ObserveDecodedSamples(source, streamId: 78, sourceId: 7002, ActiveSamples());
+
+        await WaitForSentCountAsync(targetSystem, 3);
+        Assert.Equal(targetSystem.Sent[0].OutboundStreamId, targetSystem.Sent[1].OutboundStreamId);
+        Assert.NotEqual(targetSystem.Sent[1].OutboundStreamId, targetSystem.Sent[2].OutboundStreamId);
+        Assert.DoesNotContain(diagnostics, diagnostic =>
+            diagnostic.Kind == PatchForwardingDiagnosticKind.TargetUnavailable);
+    }
+
+    [Fact]
+    public async Task RawTerminatorCannotSplitAnActivePatchBeforeReceiveLifecycleAcceptsIt()
+    {
+        (ChannelViewModel source, FakeEndpoint sourceSystem) = Create("Source", 100, 1001);
+        (ChannelViewModel target, FakeEndpoint targetSystem) = Create("Target", 200, 2002);
+        using var coordinator = new PatchForwardingCoordinator([sourceSystem, targetSystem]);
+        coordinator.ApplyMemberships(new Dictionary<string, IReadOnlyList<PatchMemberAddress>>
+        {
+            ["Patch"] = [new("Source", 100), new("Target", 200)]
+        });
+
+        ObserveVoice(coordinator, source, streamId: 77, sourceId: 7001);
+        coordinator.ObserveDecodedSamples(source, streamId: 77, sourceId: 7001, ActiveSamples());
+        await WaitForSentCountAsync(targetSystem, 1);
+        uint outboundStreamId = Assert.Single(targetSystem.Sent).OutboundStreamId;
+
+        coordinator.ObserveTraffic(source, Terminator(100, streamId: 77));
+        coordinator.ObserveDecodedSamples(source, streamId: 77, sourceId: 7001, ActiveSamples());
+        await WaitForSentCountAsync(targetSystem, 2);
+
+        Assert.All(targetSystem.Sent, packet => Assert.Equal(outboundStreamId, packet.OutboundStreamId));
+        Assert.DoesNotContain(targetSystem.Sent, packet =>
+            packet.Payload[AnalogVoicePacketCodec.FrameTypeOffset] ==
+            (byte)AnalogAudioFrameType.Terminator);
+
+        coordinator.StopSource(source, 77);
+        await WaitForSentCountAsync(targetSystem, 3);
+        Assert.Equal(
+            (byte)AnalogAudioFrameType.Terminator,
+            targetSystem.Sent[^1].Payload[AnalogVoicePacketCodec.FrameTypeOffset]);
     }
 
     private static (ChannelViewModel Channel, FakeEndpoint System) Create(string system, uint talkgroup, uint sourceId, bool connected = true)
@@ -215,10 +352,24 @@ public sealed class PatchForwardingCoordinatorTests
 
     private static void ObserveVoice(PatchForwardingCoordinator coordinator, ChannelViewModel channel, uint streamId, uint sourceId)
     {
-        FneTrafficFrame voice = new(FneTrafficProtocol.Analog, 1, sourceId, channel.Definition.DestinationId, null, "GROUP", "VOICE", "VOICE", 1, streamId, new byte[AnalogVoicePacketCodec.PacketBytes]);
+        FneTrafficFrame voice = Voice(channel, streamId, sourceId);
         Assert.True(channel.TryApplyTraffic(channel.Definition.SystemName, voice));
         coordinator.ObserveTraffic(channel, voice);
     }
+
+    private static FneTrafficFrame Voice(ChannelViewModel channel, uint streamId, uint sourceId)
+        => new(
+            FneTrafficProtocol.Analog,
+            1,
+            sourceId,
+            channel.Definition.DestinationId,
+            null,
+            "GROUP",
+            "VOICE",
+            "VOICE",
+            1,
+            streamId,
+            new byte[AnalogVoicePacketCodec.PacketBytes]);
 
     private static FneTrafficFrame Terminator(uint destinationId, uint streamId)
         => new(FneTrafficProtocol.Analog, 1, 7001, destinationId, null, "GROUP", "TERMINATOR", "TERMINATOR", 2, streamId, new byte[AnalogVoicePacketCodec.PacketBytes]);
@@ -232,26 +383,49 @@ public sealed class PatchForwardingCoordinatorTests
         return samples;
     }
 
+    private static Task WaitForSentCountAsync(FakeEndpoint endpoint, int expectedCount)
+        => WaitUntilAsync(() => endpoint.Sent.Count >= expectedCount);
+
+    private static async Task WaitUntilAsync(Func<bool> condition)
+    {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+        while (!condition())
+            await Task.Delay(5, timeout.Token);
+    }
+
     private sealed class FakeEndpoint(string name, IReadOnlyList<ChannelViewModel> channels, uint sourceId, bool connected) : IFneTrafficEndpoint
     {
         private uint streamId;
+        private int throwOnNextSend;
+        private readonly ConcurrentQueue<(
+            FneTrafficProtocol Protocol,
+            byte[] Payload,
+            uint OutboundStreamId)> sent = new();
         public string Name => name;
         public IReadOnlyList<ChannelViewModel> Channels => channels;
         public bool IsConnected => connected;
         public uint? SourceId => sourceId;
-        public List<(FneTrafficProtocol Protocol, byte[] Payload)> Sent { get; } = [];
-        public bool ThrowOnNextSend { get; set; }
+        public IReadOnlyList<(
+            FneTrafficProtocol Protocol,
+            byte[] Payload,
+            uint OutboundStreamId)> Sent => sent.ToArray();
+        public bool ThrowOnNextSend
+        {
+            get => Volatile.Read(ref throwOnNextSend) != 0;
+            set => Volatile.Write(ref throwOnNextSend, value ? 1 : 0);
+        }
         public uint CreateStreamId() => ++streamId;
         public void SendTraffic(FneTrafficProtocol protocol, ReadOnlySpan<byte> payload, ushort sequence, uint outboundStreamId)
         {
-            if (ThrowOnNextSend)
+            if (Interlocked.Exchange(ref throwOnNextSend, 0) != 0)
             {
-                ThrowOnNextSend = false;
                 throw new IOException("Simulated patch transport interruption.");
             }
 
-            Sent.Add((protocol, payload.ToArray()));
+            sent.Enqueue((protocol, payload.ToArray(), outboundStreamId));
         }
+
+        public void ClearSent() => sent.Clear();
     }
 
     private sealed class FakeVocoderBackend : IVocoderBackend

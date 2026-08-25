@@ -73,6 +73,7 @@ public sealed class P25TxAudioSessionTests
         Assert.Equal((uint)77, packets[0].Stream);
         Assert.Equal(P25DfsiFrameCodec.Ldu1Duid, packets[0].Payload[22]);
         Assert.Equal(P25DfsiFrameCodec.Ldu2Duid, packets[1].Payload[22]);
+        Assert.Equal((byte)0x04, packets[0].Payload[63]);
 
         Assert.Equal(
             Enumerable.Range(1, P25DfsiFrameCodec.ImbeBytes).Select(value => (byte)value),
@@ -105,6 +106,7 @@ public sealed class P25TxAudioSessionTests
         Assert.Equal(2, session.Process(new short[18 * 160]));
         Assert.Equal(2, packets.Count);
         Assert.Equal((byte)0x08, (byte)(packets[0].Payload[14] & 0x08));
+        Assert.Equal((byte)0x44, packets[0].Payload[63]);
         Assert.Equal(P25DfsiFrameCodec.ClearLduPayloadLength, packets[0].Payload[P25DfsiFrameCodec.RecordLengthOffset]);
 
         var ldu1 = CreateTraffic("LDU1", packets[0].Payload);

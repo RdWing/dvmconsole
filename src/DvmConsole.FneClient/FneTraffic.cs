@@ -22,6 +22,16 @@ public static class FneTrafficProtocolMapper
             ChannelProtocol.Nxdn => FneTrafficProtocol.Nxdn,
             _ => throw new ArgumentOutOfRangeException(nameof(protocol))
         };
+
+    public static ChannelProtocol ToChannelProtocol(FneTrafficProtocol protocol)
+        => protocol switch
+        {
+            FneTrafficProtocol.Analog => ChannelProtocol.Analog,
+            FneTrafficProtocol.Dmr => ChannelProtocol.Dmr,
+            FneTrafficProtocol.P25 => ChannelProtocol.P25,
+            FneTrafficProtocol.Nxdn => ChannelProtocol.Nxdn,
+            _ => throw new ArgumentOutOfRangeException(nameof(protocol))
+        };
 }
 
 // Platform-neutral representation of an inbound FNE media frame. Enum values

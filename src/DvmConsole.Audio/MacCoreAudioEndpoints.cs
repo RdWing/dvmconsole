@@ -39,7 +39,7 @@ internal sealed class MacCoreAudioCapture : IAudioCapture
 
     public event EventHandler<PcmSamplesEventArgs>? SamplesAvailable;
     public PcmAudioFormat Format { get; }
-    public bool IsRunning => pumpCancellation is not null;
+    public bool IsRunning => pumpCancellation is not null && pumpTask is { IsCompleted: false };
 
     public ValueTask StartAsync(CancellationToken cancellationToken = default)
     {
@@ -116,18 +116,29 @@ internal sealed class MacCoreAudioCapture : IAudioCapture
 internal sealed class MacCoreAudioPlayback :
     IAudioPlayback,
     IAudioPlaybackContinuityDiagnostics,
-    IAudioPlaybackCallbackDiagnostics
+    IAudioPlaybackCallbackDiagnostics,
+    IAudioPlaybackPresentationLatencyDiagnostics,
+    IPcmWriteTarget
 {
+    private static readonly TimeSpan DefaultWriteNoProgressTimeout = TimeSpan.FromSeconds(2);
     private readonly NativeCoreAudioApi api;
     private readonly SafeCoreAudioStreamHandle stream;
     private readonly PcmRateConverter? rateConverter;
     private readonly int nativeSampleRate;
+    private readonly TimeSpan writeNoProgressTimeout;
     private bool disposed;
 
-    public MacCoreAudioPlayback(NativeCoreAudioApi api, ulong deviceId, PcmAudioFormat format)
+    public MacCoreAudioPlayback(
+        NativeCoreAudioApi api,
+        ulong deviceId,
+        PcmAudioFormat format,
+        TimeSpan? writeNoProgressTimeout = null)
     {
         MacCoreAudioBackend.ValidatePlaybackFormat(format);
         this.api = api;
+        this.writeNoProgressTimeout = writeNoProgressTimeout ?? DefaultWriteNoProgressTimeout;
+        if (this.writeNoProgressTimeout <= TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(nameof(writeNoProgressTimeout));
         Format = format;
         stream = api.CreateStream(deviceId, input: 0, format.SampleRate, format.Channels, format.BitsPerSample);
         if (stream.IsInvalid)
@@ -151,6 +162,7 @@ internal sealed class MacCoreAudioPlayback :
         api.GetPendingStarvedSamples(stream) /
         (double)checked(nativeSampleRate * Format.Channels));
     public long OutputCallbackCount => checked((long)api.GetOutputCallbackCount(stream));
+    public TimeSpan OutputPresentationLatency => api.GetOutputPresentationLatency(stream);
 
     public void EndExpectedPlayback()
     {
@@ -195,19 +207,23 @@ internal sealed class MacCoreAudioPlayback :
         ReadOnlyMemory<short> samples,
         CancellationToken cancellationToken)
     {
-        short[] buffer = GetZeroOffsetArrayOrCopy(samples);
-        int offset = 0;
-        while (offset < buffer.Length)
+        if (samples.Length == 0)
+            return;
+        short[] buffer = ArrayPool<short>.Shared.Rent(samples.Length);
+        try
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            short[] writeBuffer = offset == 0
-                ? buffer
-                : buffer.AsSpan(offset).ToArray();
-            int written = api.WriteStream(stream, writeBuffer, buffer.Length - offset);
-            MacCoreAudioBackend.EnsureSuccess(written < 0 ? written : 0, "write CoreAudio playback");
-            offset += written;
-            if (written == 0)
-                await Task.Delay(2, cancellationToken).ConfigureAwait(false);
+            samples.Span.CopyTo(buffer);
+            await PcmWriteProgressWatchdog.WriteAllAsync(
+                this,
+                buffer,
+                samples.Length,
+                writeNoProgressTimeout,
+                "CoreAudio output stopped consuming audio for two seconds.",
+                cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            ArrayPool<short>.Shared.Return(buffer);
         }
     }
 
@@ -216,36 +232,17 @@ internal sealed class MacCoreAudioPlayback :
         int sampleCount,
         CancellationToken cancellationToken)
     {
-        int remaining = sampleCount;
-        while (remaining > 0)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            int written = api.WriteStream(stream, buffer, remaining);
-            MacCoreAudioBackend.EnsureSuccess(written < 0 ? written : 0, "write CoreAudio playback");
-            if (written > 0)
-            {
-                remaining -= written;
-                if (remaining > 0)
-                    Array.Copy(buffer, written, buffer, 0, remaining);
-            }
-            else
-            {
-                await Task.Delay(2, cancellationToken).ConfigureAwait(false);
-            }
-        }
+        await PcmWriteProgressWatchdog.WriteAllAsync(
+            this,
+            buffer,
+            sampleCount,
+            writeNoProgressTimeout,
+            "CoreAudio output stopped consuming audio for two seconds.",
+            cancellationToken).ConfigureAwait(false);
     }
 
-    private static short[] GetZeroOffsetArrayOrCopy(ReadOnlyMemory<short> samples)
-    {
-        if (MemoryMarshal.TryGetArray(samples, out ArraySegment<short> segment) &&
-            segment.Array is short[] array &&
-            segment.Offset == 0 &&
-            segment.Count == array.Length)
-        {
-            return array;
-        }
-        return samples.ToArray();
-    }
+    int IPcmWriteTarget.Write(short[] samples, int count)
+        => api.WriteStream(stream, samples, count);
 
     public ValueTask FlushAsync(CancellationToken cancellationToken = default)
     {
@@ -373,7 +370,9 @@ internal sealed class MacVoiceProcessingCapture : IAudioCapture
 internal sealed class MacVoiceProcessingPlayback :
     IAudioPlayback,
     IAudioPlaybackContinuityDiagnostics,
-    IAudioPlaybackCallbackDiagnostics
+    IAudioPlaybackCallbackDiagnostics,
+    IAudioPlaybackPresentationLatencyDiagnostics,
+    IPcmWriteTarget
 {
     private static readonly TimeSpan DefaultWriteNoProgressTimeout = TimeSpan.FromSeconds(2);
     private readonly IVoiceProcessingPlaybackSession session;
@@ -418,6 +417,7 @@ internal sealed class MacVoiceProcessingPlayback :
     public TimeSpan StarvedDuration => session.StarvedDuration;
     public TimeSpan PendingStarvedDuration => session.PendingStarvedDuration;
     public long OutputCallbackCount => session.OutputCallbackCount;
+    public TimeSpan OutputPresentationLatency => session.OutputPresentationLatency;
 
     public void EndExpectedPlayback()
     {
@@ -428,43 +428,28 @@ internal sealed class MacVoiceProcessingPlayback :
     public async ValueTask WriteAsync(ReadOnlyMemory<short> samples, CancellationToken cancellationToken = default)
     {
         ObjectDisposedException.ThrowIf(disposed, this);
-        short[] buffer;
-        if (MemoryMarshal.TryGetArray(samples, out ArraySegment<short> segment) &&
-            segment.Array is short[] array &&
-            segment.Offset == 0 &&
-            segment.Count == array.Length)
+        if (samples.Length == 0)
+            return;
+        short[] buffer = ArrayPool<short>.Shared.Rent(samples.Length);
+        try
         {
-            buffer = array;
+            samples.Span.CopyTo(buffer);
+            await PcmWriteProgressWatchdog.WriteAllAsync(
+                this,
+                buffer,
+                samples.Length,
+                writeNoProgressTimeout,
+                "Apple voice-processing output stopped consuming audio for two seconds.",
+                cancellationToken).ConfigureAwait(false);
         }
-        else
+        finally
         {
-            buffer = samples.ToArray();
-        }
-        int offset = 0;
-        long lastProgress = Stopwatch.GetTimestamp();
-        while (offset < buffer.Length)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            int written = session.Write(
-                offset == 0 ? buffer : buffer.AsSpan(offset).ToArray());
-            if (written < 0)
-                MacCoreAudioBackend.EnsureSuccess(written, "write Apple voice-processing playback");
-            offset += written;
-            if (written > 0)
-            {
-                lastProgress = Stopwatch.GetTimestamp();
-            }
-            else
-            {
-                if (Stopwatch.GetElapsedTime(lastProgress) >= writeNoProgressTimeout)
-                {
-                    throw new IOException(
-                        "Apple voice-processing output stopped consuming audio for two seconds.");
-                }
-                await Task.Delay(2, cancellationToken).ConfigureAwait(false);
-            }
+            ArrayPool<short>.Shared.Return(buffer);
         }
     }
+
+    int IPcmWriteTarget.Write(short[] samples, int count)
+        => session.Write(samples, count);
 
     public ValueTask FlushAsync(CancellationToken cancellationToken = default)
     {

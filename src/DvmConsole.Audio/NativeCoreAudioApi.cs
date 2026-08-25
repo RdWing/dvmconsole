@@ -37,6 +37,7 @@ internal sealed class NativeCoreAudioApi : IDisposable
     private readonly StreamStarvedSamplesDelegate starvedSamples;
     private readonly StreamStarvedSamplesDelegate pendingStarvedSamples;
     private readonly StreamStarvedSamplesDelegate outputCallbackCount;
+    private readonly StreamStarvedSamplesDelegate outputPresentationLatencyNanoseconds;
     private readonly EndPlaybackContinuityDelegate endPlaybackContinuity;
     private readonly DestroyStreamDelegate destroyStream;
     private readonly CreateVoiceProcessingStreamDelegate createVoiceProcessingStream;
@@ -48,6 +49,7 @@ internal sealed class NativeCoreAudioApi : IDisposable
     private readonly StreamStarvedSamplesDelegate voiceProcessingStarvedSamples;
     private readonly StreamStarvedSamplesDelegate voiceProcessingPendingStarvedSamples;
     private readonly StreamStarvedSamplesDelegate voiceProcessingOutputCallbackCount;
+    private readonly StreamStarvedSamplesDelegate voiceProcessingOutputPresentationLatencyNanoseconds;
     private readonly EndPlaybackContinuityDelegate endVoiceProcessingPlaybackContinuity;
     private readonly DestroyStreamDelegate destroyVoiceProcessingStream;
     private readonly AcquireHighQualityBluetoothDelegate acquireHighQualityBluetooth;
@@ -73,6 +75,7 @@ internal sealed class NativeCoreAudioApi : IDisposable
         starvedSamples = Get<StreamStarvedSamplesDelegate>("dvm_audio_stream_starved_samples");
         pendingStarvedSamples = Get<StreamStarvedSamplesDelegate>("dvm_audio_stream_pending_starved_samples");
         outputCallbackCount = Get<StreamStarvedSamplesDelegate>("dvm_audio_stream_output_callback_count");
+        outputPresentationLatencyNanoseconds = Get<StreamStarvedSamplesDelegate>("dvm_audio_stream_output_presentation_latency_ns");
         endPlaybackContinuity = Get<EndPlaybackContinuityDelegate>("dvm_audio_stream_end_playback_continuity");
         destroyStream = Get<DestroyStreamDelegate>("dvm_audio_stream_destroy");
         createVoiceProcessingStream = Get<CreateVoiceProcessingStreamDelegate>("dvm_audio_voice_processing_create");
@@ -84,6 +87,7 @@ internal sealed class NativeCoreAudioApi : IDisposable
         voiceProcessingStarvedSamples = Get<StreamStarvedSamplesDelegate>("dvm_audio_voice_processing_starved_samples");
         voiceProcessingPendingStarvedSamples = Get<StreamStarvedSamplesDelegate>("dvm_audio_voice_processing_pending_starved_samples");
         voiceProcessingOutputCallbackCount = Get<StreamStarvedSamplesDelegate>("dvm_audio_voice_processing_output_callback_count");
+        voiceProcessingOutputPresentationLatencyNanoseconds = Get<StreamStarvedSamplesDelegate>("dvm_audio_voice_processing_output_presentation_latency_ns");
         endVoiceProcessingPlaybackContinuity = Get<EndPlaybackContinuityDelegate>("dvm_audio_voice_processing_end_playback_continuity");
         destroyVoiceProcessingStream = Get<DestroyStreamDelegate>("dvm_audio_voice_processing_destroy");
         acquireHighQualityBluetooth = Get<AcquireHighQualityBluetoothDelegate>("dvm_audio_high_quality_bluetooth_acquire");
@@ -164,6 +168,11 @@ internal sealed class NativeCoreAudioApi : IDisposable
         using var lease = new SafeCoreAudioStreamLease(stream);
         return outputCallbackCount(lease.Handle);
     }
+    public TimeSpan GetOutputPresentationLatency(SafeCoreAudioStreamHandle stream)
+    {
+        using var lease = new SafeCoreAudioStreamLease(stream);
+        return NanosecondsToTimeSpan(outputPresentationLatencyNanoseconds(lease.Handle));
+    }
     public void EndPlaybackContinuity(SafeCoreAudioStreamHandle stream)
     {
         using var lease = new SafeCoreAudioStreamLease(stream);
@@ -213,6 +222,12 @@ internal sealed class NativeCoreAudioApi : IDisposable
         using var lease = new SafeCoreAudioStreamLease(stream);
         return voiceProcessingOutputCallbackCount(lease.Handle);
     }
+    public TimeSpan GetVoiceProcessingOutputPresentationLatency(SafeCoreAudioStreamHandle stream)
+    {
+        using var lease = new SafeCoreAudioStreamLease(stream);
+        return NanosecondsToTimeSpan(
+            voiceProcessingOutputPresentationLatencyNanoseconds(lease.Handle));
+    }
     public void EndVoiceProcessingPlaybackContinuity(SafeCoreAudioStreamHandle stream)
     {
         using var lease = new SafeCoreAudioStreamLease(stream);
@@ -247,6 +262,14 @@ internal sealed class NativeCoreAudioApi : IDisposable
             return new SafeCoreAudioStreamHandle();
         AddReference();
         return new SafeCoreAudioStreamHandle(this, stream, voiceProcessing);
+    }
+
+    private static TimeSpan NanosecondsToTimeSpan(ulong nanoseconds)
+    {
+        ulong ticks = nanoseconds / 100;
+        return ticks > long.MaxValue
+            ? TimeSpan.MaxValue
+            : TimeSpan.FromTicks((long)ticks);
     }
 
     private void AddReference()

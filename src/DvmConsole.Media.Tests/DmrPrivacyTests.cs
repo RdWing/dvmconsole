@@ -52,7 +52,7 @@ public sealed class DmrPrivacyTests
             frameSequence: 9,
             options);
 
-        Assert.Equal((byte)0xA2, packet[15]);
+        Assert.Equal((byte)0xA0, packet[15]);
         Assert.Equal(
             (byte)fnecore.DMR.DMRDataType.VOICE_PI_HEADER,
             new fnecore.DMR.SlotType(packet[DmrVoicePacketCodec.HeaderBytes..]).DataType);
@@ -112,6 +112,8 @@ public sealed class DmrPrivacyTests
         call.Process(new short[480]);
 
         Assert.Equal(3, packets.Count);
+        Assert.Equal((byte)0x21, packets[0][15]);
+        Assert.Equal((byte)0x20, packets[1][15]);
         Assert.True(DmrVoicePacketCodec.TryExtractEncryptionMetadata(packets[1], out var metadata));
         Assert.Equal(DmrPrivacyAlgorithms.Arc4, metadata.AlgorithmId);
         Assert.Equal((byte)0x10, packets[2][15]);

@@ -12,6 +12,7 @@
 
 struct DvmAudioStream {
     AudioUnit unit;
+    AudioDeviceID device;
     int32_t input;
     uint32_t sample_rate;
     uint32_t channels;
@@ -27,6 +28,7 @@ struct DvmAudioStream {
 
 struct DvmVoiceProcessingStream {
     AudioUnit unit;
+    AudioDeviceID output_device;
     uint32_t sample_rate;
     DvmPcmRing capture_ring;
     DvmPcmRing playback_ring;
@@ -135,6 +137,68 @@ static uint32_t nominal_sample_rate(AudioDeviceID device)
     if (AudioObjectGetPropertyData(device, &address, 0, NULL, &size, &sample_rate) != noErr || sample_rate <= 0)
         return 0;
     return (uint32_t)sample_rate;
+}
+
+static uint32_t device_frame_property(
+    AudioDeviceID device,
+    AudioObjectPropertySelector selector,
+    AudioObjectPropertyScope scope)
+{
+    UInt32 frames = 0;
+    UInt32 size = sizeof(frames);
+    AudioObjectPropertyAddress address = {
+        selector,
+        scope,
+        kAudioObjectPropertyElementMain};
+    if (AudioObjectGetPropertyData(
+            device,
+            &address,
+            0,
+            NULL,
+            &size,
+            &frames) != noErr)
+        return 0;
+    return frames;
+}
+
+static uint64_t output_presentation_latency_ns(
+    AudioDeviceID device,
+    AudioUnit unit)
+{
+    uint32_t sample_rate = nominal_sample_rate(device);
+    uint64_t output_frames =
+        (uint64_t)device_frame_property(
+            device,
+            kAudioDevicePropertyBufferFrameSize,
+            kAudioObjectPropertyScopeGlobal) +
+        device_frame_property(
+            device,
+            kAudioDevicePropertySafetyOffset,
+            kAudioObjectPropertyScopeOutput) +
+        device_frame_property(
+            device,
+            kAudioDevicePropertyLatency,
+            kAudioObjectPropertyScopeOutput);
+    double seconds = sample_rate > 0
+        ? (double)output_frames / sample_rate
+        : 0.0;
+
+    Float64 unit_latency = 0;
+    UInt32 unit_latency_size = sizeof(unit_latency);
+    if (unit != NULL &&
+        AudioUnitGetProperty(
+            unit,
+            kAudioUnitProperty_Latency,
+            kAudioUnitScope_Global,
+            0,
+            &unit_latency,
+            &unit_latency_size) == noErr &&
+        unit_latency > 0)
+        seconds += unit_latency;
+
+    return seconds > 0
+        ? (uint64_t)(seconds * 1000000000.0)
+        : 0;
 }
 
 int32_t dvm_audio_get_device_count(int32_t input, int32_t *count)
@@ -439,6 +503,7 @@ DvmVoiceProcessingStream *dvm_audio_voice_processing_create(
     stream->sample_rate = (uint32_t)sample_rate;
     AudioDeviceID input_device = (AudioDeviceID)input_device_id;
     AudioDeviceID output_device = (AudioDeviceID)output_device_id;
+    stream->output_device = output_device;
     int32_t use_system_default_pair =
         input_device == default_device(1) && output_device == default_device(0);
     // On macOS Voice Processing I/O constructs its own aggregate for the
@@ -591,6 +656,14 @@ uint64_t dvm_audio_voice_processing_output_callback_count(DvmVoiceProcessingStre
         : atomic_load_explicit(&stream->output_callback_count, memory_order_acquire);
 }
 
+uint64_t dvm_audio_voice_processing_output_presentation_latency_ns(
+    DvmVoiceProcessingStream *stream)
+{
+    return stream == NULL
+        ? 0
+        : output_presentation_latency_ns(stream->output_device, stream->unit);
+}
+
 void dvm_audio_voice_processing_end_playback_continuity(DvmVoiceProcessingStream *stream)
 {
     if (stream == NULL)
@@ -630,6 +703,7 @@ DvmAudioStream *dvm_audio_stream_create(
         return NULL;
 
     stream->input = input != 0;
+    stream->device = audio_device;
     stream->channels = (uint32_t)channels;
     // The HAL input callback is clocked in hardware frames even when its
     // client format is requested at 8 kHz. Capture at the device rate and let
@@ -815,6 +889,13 @@ uint64_t dvm_audio_stream_output_callback_count(DvmAudioStream *stream)
     return stream == NULL
         ? 0
         : atomic_load_explicit(&stream->output_callback_count, memory_order_acquire);
+}
+
+uint64_t dvm_audio_stream_output_presentation_latency_ns(DvmAudioStream *stream)
+{
+    return stream == NULL || stream->input
+        ? 0
+        : output_presentation_latency_ns(stream->device, stream->unit);
 }
 
 void dvm_audio_stream_end_playback_continuity(DvmAudioStream *stream)

@@ -36,12 +36,14 @@ does not want local audible feedback when an FNE connects or disconnects.
 ## Interface Size
 
 Open **Settings > All console settings** and use the Appearance controls to
-adjust the console display.
+adjust the main console and Console Settings display.
 
 - **Text size** changes the inherited application font size.
-- **Interface scale** scales the complete main console and Console Settings UI.
+- **Interface scale** scales the main console and Console Settings UI.
 
-Both settings apply immediately and are saved for the next launch.
+These settings apply immediately and remain in `UserSettings` schema 6. The
+optional Engineering Health rail stores only its visibility and height in
+`OperatorView.json`; it does not move or rewrite channel cards.
 
 ## Mute RX Audio While Transmitting
 
@@ -205,6 +207,12 @@ most recently completed RX stream, local receive-health counters, and key status
 for configured FNE systems. The view is refreshed at a stable cadence rather
 than for every packet.
 
+When an FNE does not answer login requests, the console keeps the normal first
+retry and then increases the interval through 10, 20, 40, and 60 seconds. The
+interval remains capped at 60 seconds and resets after a successful connection
+or an explicit operator restart. If authorization or configuration begins but
+stops making progress, only that FNE's connection session is recycled.
+
 ### Per-connection RX network jitter buffer
 
 Each FNE connection has independent P25, DMR, and NXDN jitter settings. Choose
@@ -286,10 +294,8 @@ or displayed.
 
 ## Documentation
 
-Opens the searchable documentation viewer. Pages are read live from the
-release-branch documentation tree on GitHub and rendered with headings, lists,
-tables, links, and code blocks. An internet connection is required; Markdown is
-not bundled into the application package.
+Opens the searchable documentation viewer. It renders the user guide, including
+headings, lists, tables, links, and code blocks.
 
 ## About
 

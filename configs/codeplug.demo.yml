@@ -1,0 +1,78 @@
+# Deterministic, fictional, network-disabled DVM Console NEO demonstration.
+# This file is not an operational codeplug and contains no real credentials,
+# systems, talkgroups, subscribers, addresses, or recordings.
+systems:
+  - name: "North Metro"
+    identity: "NEO Demo A"
+    address: "192.0.2.10"
+    port: 62031
+    peerId: 9000001
+    rid: "990001"
+    password: "DEMO_ONLY"
+    encrypted: false
+    presharedKey: "DEMO_ONLY"
+  - name: "Campus Network"
+    identity: "NEO Demo B"
+    address: "198.51.100.20"
+    port: 62031
+    peerId: 9000002
+    rid: "990002"
+    password: "DEMO_ONLY"
+    encrypted: false
+    presharedKey: "DEMO_ONLY"
+
+groups:
+  - name: "Shared Operations"
+    type: "patch"
+  - name: "All Dispatch"
+    type: "multiselect"
+
+zones:
+  - name: "Dispatch"
+    tabColor: "#2F81F7"
+    tabTextColor: "#FFFFFF"
+    channels:
+      - name: "North Dispatch"
+        system: "North Metro"
+        tgid: "3101"
+        mode: "p25"
+        resourceColor: "#173B57"
+      - name: "Transit Operations"
+        system: "North Metro"
+        tgid: "402"
+        mode: "dmr"
+        resourceColor: "#264653"
+        card_size: large
+      - name: "Public Works"
+        system: "North Metro"
+        tgid: "725"
+        mode: "nxdn"
+        resourceColor: "#234B3A"
+  - name: "Campus"
+    tabColor: "#35D07F"
+    tabTextColor: "#07110C"
+    channels:
+      - name: "Campus Services"
+        system: "Campus Network"
+        tgid: "918"
+        mode: "p25"
+        resourceColor: "#29415A"
+      - name: "Events"
+        system: "Campus Network"
+        tgid: "922"
+        mode: "dmr"
+        resourceColor: "#3B3458"
+      - name: "Facilities"
+        system: "Campus Network"
+        tgid: "930"
+        mode: "analog"
+        resourceColor: "#51452A"
+  - name: "Review"
+    tabColor: "#22D3EE"
+    tabTextColor: "#071013"
+    channels:
+      - name: "Training Review"
+        system: "North Metro"
+        tgid: "3199"
+        mode: "p25"
+        resourceColor: "#263747"

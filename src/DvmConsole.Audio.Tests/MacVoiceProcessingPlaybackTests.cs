@@ -26,6 +26,7 @@ public sealed class MacVoiceProcessingPlaybackTests
         public TimeSpan StarvedDuration => TimeSpan.Zero;
         public TimeSpan PendingStarvedDuration => TimeSpan.Zero;
         public long OutputCallbackCount => 0;
+        public TimeSpan OutputPresentationLatency => TimeSpan.Zero;
         public int StartCalls { get; private set; }
         public int WriteCalls { get; private set; }
 
@@ -34,7 +35,7 @@ public sealed class MacVoiceProcessingPlaybackTests
         {
         }
 
-        public int Write(short[] samples)
+        public int Write(short[] samples, int count)
         {
             WriteCalls++;
             return 0;

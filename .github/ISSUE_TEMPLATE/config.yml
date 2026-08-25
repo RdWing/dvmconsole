@@ -1,6 +1,9 @@
 blank_issues_enabled: false
 
 contact_links:
-  - name: DVMProject Community (Discord)
-    url: https://discord.dvmproject.io/
-    about: For questions, discussion, and general support, please join our Discord community.
+  - name: Setup and field-testing discussions
+    url: https://github.com/RdWing/dvmconsole/discussions
+    about: Ask installation, configuration, and field-testing questions without opening a defect.
+  - name: Private security report
+    url: https://github.com/RdWing/dvmconsole/security/advisories/new
+    about: Do not disclose vulnerabilities or sensitive operational information in a public issue.

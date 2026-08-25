@@ -430,3 +430,21 @@ MIGRATION_LEDGER.md
 
 # VS telemetry/session junk
 *.trn
+
+# Maintainer-local project and release material
+/BRAND.md
+/CODE_OF_CONDUCT.md
+/CONTRIBUTING.md
+/GOVERNANCE.md
+/NOTICES.md
+/ROADMAP.md
+/SECURITY.md
+/SUPPORT.md
+/docs/RELEASING.md
+/docs/operator-ui-contract.json
+/docs/releases/README.md
+/docs/releases/_template.md
+/docs/releases/*.evidence-matrix.json
+/site/
+/tools/
+/scripts/capture-demo-screenshots.sh

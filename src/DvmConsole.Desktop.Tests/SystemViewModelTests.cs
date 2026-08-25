@@ -159,8 +159,9 @@ public sealed class SystemViewModelTests
     }
 
     [Fact]
-    public void OperatorToolSectionsFollowConsoleSettingsTabOrder()
+    public void OperatorToolSectionCatalogCoversEachSectionInTabOrder()
     {
+        OperatorToolSectionDefinition[] definitions = OperatorToolSectionCatalog.All.ToArray();
         Assert.Equal(
             [
                 OperatorToolSection.General,
@@ -173,8 +174,18 @@ public sealed class SystemViewModelTests
                 OperatorToolSection.Connections,
                 OperatorToolSection.Ptt
             ],
-            Enum.GetValues<OperatorToolSection>().Where(section =>
-                section is not (OperatorToolSection.Clock or OperatorToolSection.EncryptionKeys)));
+            definitions
+                .Select(definition => definition.Section)
+                .Where(section => section is not (
+                    OperatorToolSection.Clock or OperatorToolSection.EncryptionKeys)));
+        Assert.Equal(Enum.GetValues<OperatorToolSection>(), definitions.Select(definition => definition.Section));
+        Assert.Equal(definitions.Length, definitions.Select(definition => definition.CommandId).Distinct().Count());
+        Assert.All(definitions, definition =>
+        {
+            Assert.False(string.IsNullOrWhiteSpace(definition.DisplayName));
+            Assert.False(string.IsNullOrWhiteSpace(definition.SearchTerms));
+            Assert.StartsWith("settings.", definition.CommandId);
+        });
     }
 
     [Fact]
@@ -299,7 +310,7 @@ public sealed class SystemViewModelTests
 
     [Fact]
     public void ReportsUnreleasedSemanticVersion()
-        => Assert.StartsWith("0.3.8", MainWindow.ApplicationVersion, StringComparison.Ordinal);
+        => Assert.StartsWith("0.4.0", MainWindow.ApplicationVersion, StringComparison.Ordinal);
 
     [Theory]
     [InlineData("0.1.0-alpha.1+abcdef123456", "0.1.0-alpha.1 (abcdef1)")]
@@ -478,6 +489,7 @@ public sealed class SystemViewModelTests
             Assert.False(channel.CanListen);
             Assert.False(channel.CanTransmit);
             Assert.False(channel.CanToggleEncryption);
+            await viewModel.FlushUserSettingsAsync();
             Assert.Equal(codeplugPath, store.Load().LastCodeplugPath);
         }
         finally
@@ -1376,6 +1388,7 @@ public sealed class SystemViewModelTests
             await using MainWindowViewModel viewModel = MainWindowViewModel.Load(codeplugPath, store);
 
             Assert.Equal([Path.GetFullPath(codeplugPath), Path.GetFullPath(otherPath)], viewModel.RecentCodeplugPaths);
+            await viewModel.FlushUserSettingsAsync();
             Assert.Equal(viewModel.RecentCodeplugPaths, store.Load().RecentCodeplugPaths);
             Assert.False(viewModel.HasCodeplugDiagnostics);
         }
@@ -1474,6 +1487,7 @@ public sealed class SystemViewModelTests
                 option => option.IsAdaptive && option.Label == "Adaptive ≤ 1620 ms");
             betaP25.SelectedOption = Assert.Single(betaP25.Options, option => option.IsAdaptive);
 
+            await viewModel.FlushUserSettingsAsync();
             UserSettings persisted = store.Load();
             Assert.Equal(360, persisted.RxJitterBuffersBySystem["Alpha"].P25Milliseconds);
             Assert.False(persisted.RxJitterBuffersBySystem["Alpha"].P25Adaptive);
@@ -1581,12 +1595,15 @@ public sealed class SystemViewModelTests
         {
             await using MainWindowViewModel viewModel = MainWindowViewModel.Load(codeplugPath, store);
             viewModel.TalkPermitTone = true;
+            await viewModel.FlushUserSettingsAsync();
             Assert.True(store.Load().TalkPermitTone);
             viewModel.DarkMode = true;
+            await viewModel.FlushUserSettingsAsync();
             Assert.True(store.Load().DarkMode);
             Assert.True(viewModel.ConnectionChimes);
             viewModel.UiFontSize = 16;
             viewModel.UiScale = 1.25;
+            await viewModel.FlushUserSettingsAsync();
             Assert.Equal(16, store.Load().UiFontSize);
             Assert.Equal(1.25, store.Load().UiScale);
             Assert.Equal(1.25, viewModel.UiScaleTransform.ScaleX);
@@ -1601,6 +1618,7 @@ public sealed class SystemViewModelTests
 
             AudioInputPresetViewModel preset = Assert.Single(viewModel.AudioInputPresets);
             Assert.Equal("Field", preset.Name);
+            await viewModel.FlushUserSettingsAsync();
             Assert.Equal("Field", store.Load().AudioInputPresetName);
             Assert.Equal(1.25, store.Load().AudioInputPresets[0].Gain);
 
@@ -1611,6 +1629,7 @@ public sealed class SystemViewModelTests
 
             viewModel.DeleteAudioInputPreset(preset);
             Assert.Empty(viewModel.AudioInputPresets);
+            await viewModel.FlushUserSettingsAsync();
             Assert.Empty(store.Load().AudioInputPresets);
         }
         finally
@@ -1642,6 +1661,7 @@ public sealed class SystemViewModelTests
                 ? "Windows communications processing"
                 : "DVM Console processing";
             viewModel.ApplyAudioInputSettingsCommand.Execute(null);
+            await viewModel.FlushUserSettingsAsync();
 
             if (OperatingSystem.IsWindows())
             {
@@ -1665,6 +1685,7 @@ public sealed class SystemViewModelTests
                 viewModel.SelectedAudioProcessingMode = "DVM Console processing";
                 viewModel.ApplyAudioInputSettingsCommand.Execute(null);
                 Assert.True(viewModel.IsDvmConsoleProcessingSelected);
+                await viewModel.FlushUserSettingsAsync();
                 Assert.Equal(UserSettings.DvmConsoleAudioProcessingMode, store.Load().AudioProcessingMode);
                 return;
             }
@@ -1707,6 +1728,7 @@ public sealed class SystemViewModelTests
             Assert.Equal("DVM Console processing", viewModel.SelectedAudioProcessingMode);
             Assert.True(viewModel.IsDvmConsoleProcessingSelected);
             Assert.DoesNotContain("Apple voice processing", viewModel.AudioProcessingModeOptions);
+            await viewModel.FlushUserSettingsAsync();
             Assert.Equal(
                 UserSettings.DvmConsoleAudioProcessingMode,
                 store.Load().AudioProcessingMode);
@@ -1753,6 +1775,7 @@ public sealed class SystemViewModelTests
             viewModel.SelectedActiveSystemPttKey = KeyboardPttKey.F4;
             await viewModel.ApplyActiveSystemPttKeySelectionAsync();
 
+            await viewModel.FlushUserSettingsAsync();
             UserSettings saved = store.Load();
             Assert.False(saved.ClockUse24HourTime);
             Assert.False(saved.ClockShowSeconds);
@@ -1765,16 +1788,19 @@ public sealed class SystemViewModelTests
 
             viewModel.SelectedGlobalPttKey = KeyboardPttKey.F4;
             await viewModel.ApplyGlobalPttKeySelectionAsync();
+            await viewModel.FlushUserSettingsAsync();
             Assert.Equal("F3", store.Load().GlobalPttKey);
             Assert.Contains("already assigned", viewModel.TransmitStatusText);
 
             viewModel.SelectedGlobalPttKey = KeyboardPttKey.None;
             await viewModel.ApplyGlobalPttKeySelectionAsync();
+            await viewModel.FlushUserSettingsAsync();
             Assert.Equal("None", store.Load().GlobalPttKey);
             Assert.Equal("Keyboard PTT disabled", viewModel.GlobalPttKeyText);
 
             viewModel.SelectedActiveSystemPttKey = KeyboardPttKey.None;
             await viewModel.ApplyActiveSystemPttKeySelectionAsync();
+            await viewModel.FlushUserSettingsAsync();
             Assert.Equal("None", store.Load().ActiveSystemPttKey);
             Assert.Equal("Keyboard PTT disabled", viewModel.ActiveSystemPttKeyText);
             Assert.NotEmpty(viewModel.ClockText);
@@ -1871,9 +1897,61 @@ public sealed class SystemViewModelTests
             group.SelectedSource = beta;
             viewModel.ApplyPatchGroup(group);
 
+            await viewModel.FlushUserSettingsAsync();
             UserSettings saved = store.Load();
             Assert.Equal("Beta", saved.PatchGroupMemberships["Dispatch Patch"][0].SystemName);
             Assert.Contains("1 destination: Alpha Dispatch", group.OneWayDestinationSummary);
+        }
+        finally
+        {
+            CleanupSettingsPath(settingsPath);
+        }
+    }
+
+    [Fact]
+    public async Task PatchMembershipPersistsAndRestoresExactChannelIdentity()
+    {
+        string codeplugPath = Path.Combine(
+            AppContext.BaseDirectory,
+            "TestData",
+            "duplicate-patch-identities.yml");
+        string settingsPath = CreateSettingsPath();
+        var store = new UserSettingsStore(settingsPath);
+
+        try
+        {
+            await using (MainWindowViewModel viewModel = MainWindowViewModel.Load(codeplugPath, store))
+            {
+                PatchGroupEditorViewModel group = Assert.Single(viewModel.PatchGroups);
+                PatchMemberEditorViewModel source = Assert.Single(
+                    group.Members,
+                    member => member.Channel.Name == "P25 Source");
+                PatchMemberEditorViewModel dmrTarget = Assert.Single(
+                    group.Members,
+                    member => member.Channel.Name == "DMR 99");
+                source.IsMember = true;
+                dmrTarget.IsMember = true;
+                group.IsEnabled = true;
+
+                viewModel.ApplyPatchGroup(group);
+                await viewModel.FlushUserSettingsAsync();
+            }
+
+            UserSettings saved = store.Load();
+            Assert.Equal(
+                ["P25 Source", "DMR 99"],
+                saved.PatchGroupMemberships["Cross Mode"].Select(member => member.ChannelName));
+
+            await using MainWindowViewModel restored = MainWindowViewModel.Load(codeplugPath, store);
+            PatchGroupEditorViewModel restoredGroup = Assert.Single(restored.PatchGroups);
+            Assert.Equal(
+                ["P25 Source", "DMR 99"],
+                restoredGroup.Members
+                    .Where(member => member.IsMember)
+                    .Select(member => member.Channel.Name));
+            Assert.DoesNotContain(
+                restoredGroup.Members,
+                member => member.IsMember && member.Channel.Name == "P25 99");
         }
         finally
         {
@@ -1935,6 +2013,7 @@ public sealed class SystemViewModelTests
 
             viewModel.SetRecordingIgnoredSubscribers(channel, [1001, 42, 1001, 0]);
 
+            await viewModel.FlushUserSettingsAsync();
             Assert.Equal([42u, 1001u], store.Load().RecordingIgnoredSubscriberIds[channel.SettingsKey]);
             Assert.Equal("42, 1001", channel.IgnoredSubscriberIdsText);
         }
@@ -1972,6 +2051,7 @@ public sealed class SystemViewModelTests
 
             Assert.True(viewModel.IsActivitySidebarCollapsed);
             Assert.Equal(34, viewModel.ActivitySidebarWidth);
+            await viewModel.FlushUserSettingsAsync();
             Assert.False(store.Load().ShowCallHistoryPane);
             Assert.Equal("TAR", channel.RecordButtonText);
             Assert.Equal("Disable TAR", channel.RecordingConfigurationButtonText);
@@ -2000,6 +2080,7 @@ public sealed class SystemViewModelTests
 
                 Assert.True(channel.IsRecordingEnabled);
                 Assert.False(channel.IsAudioEnabled);
+                await viewModel.FlushUserSettingsAsync();
                 Assert.Contains(channelKey, store.Load().RecordingEnabledChannelKeys, StringComparer.OrdinalIgnoreCase);
             }
 
@@ -2011,6 +2092,7 @@ public sealed class SystemViewModelTests
             Assert.Equal("Disable TAR", restoredChannel.RecordingConfigurationButtonText);
 
             restoredChannel.SetRecordingEnabled(false);
+            await restored.FlushUserSettingsAsync();
             Assert.DoesNotContain(
                 channelKey,
                 store.Load().RecordingEnabledChannelKeys,
@@ -2061,6 +2143,7 @@ public sealed class SystemViewModelTests
             viewModel.SetReceiveSelectionPreference(additional, enabled: true);
             viewModel.SetReceiveSelectionPreference(restored[0], enabled: false);
 
+            await viewModel.FlushUserSettingsAsync();
             UserSettings saved = store.Load();
             Assert.Equal(
                 new[] { additional.SettingsKey, restored[1].SettingsKey }
@@ -2092,6 +2175,7 @@ public sealed class SystemViewModelTests
 
                 Assert.Equal(347, channel.WidgetX);
                 Assert.Equal(186, channel.WidgetY);
+                await viewModel.FlushUserSettingsAsync();
                 Assert.Equal(347, store.Load().ChannelWidgetPositions[channelKey].X);
             }
 
@@ -2103,6 +2187,7 @@ public sealed class SystemViewModelTests
             restored.ResetLayout();
 
             Assert.True(restored.LockWidgets);
+            await restored.FlushUserSettingsAsync();
             Assert.Empty(store.Load().ChannelWidgetPositions);
             Assert.Equal(0, restoredChannel.WidgetX);
             Assert.Equal(0, restoredChannel.WidgetY);
@@ -2200,6 +2285,7 @@ public sealed class SystemViewModelTests
             Assert.True(await viewModel.ApplySerialPttSettingsAsync());
             Assert.Equal([("/dev/cu.zzz", 19_200)], createdConfigurations);
             Assert.Equal(0, Assert.Single(createdSources).StartCount);
+            await viewModel.FlushUserSettingsAsync();
             UserSettings saved = store.Load();
             Assert.True(saved.SerialPttEnabled);
             Assert.True(saved.SerialPttActiveSystemOnly);
@@ -2220,6 +2306,7 @@ public sealed class SystemViewModelTests
             Assert.True(await viewModel.ApplySerialPttSettingsAsync());
             Assert.Equal(1, createdSources[0].StopCount);
             Assert.Equal(1, createdSources[0].DisposeCount);
+            await viewModel.FlushUserSettingsAsync();
             Assert.False(store.Load().SerialPttEnabled);
             Assert.Equal("Serial PTT is disabled.", viewModel.SerialPttStatusText);
         }

@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
+  <title id="title">DVM Console NEO routed-signal N for dark backgrounds</title>
+  <desc id="desc">A light letter N drawn as one routed signal path with two branch ports.</desc>
+  <path d="M132 388V124L380 388V124" fill="none" stroke="#F4F7FA" stroke-width="42" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M132 216H68M380 296H444" fill="none" stroke="#F4F7FA" stroke-width="30" stroke-linecap="round"/>
+</svg>

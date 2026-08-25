@@ -33,13 +33,33 @@ internal sealed record LocalTonePlaybackRequest(
     TimeSpan TailSilenceDuration,
     TimeSpan OutputPostDrainDuration,
     int MaximumPlaybackAttempts,
-    AudioOutputRoutePolicy RoutePolicy);
+    AudioOutputRoutePolicy RoutePolicy,
+    bool RequireOutputCallbackEvidence = false,
+    bool UseMeasuredOutputPresentationLatency = false);
+
+internal readonly record struct LocalTonePresentationEvidence(
+    long? WarmupCallbacksBefore,
+    long? WarmupCallbacksAfter,
+    long? CueCallbacksBefore,
+    long? CueCallbacksAfter)
+{
+    public bool WarmupCallbackConsumptionObserved =>
+        WarmupCallbacksBefore is long before && WarmupCallbacksAfter > before;
+    public bool CueCallbackConsumptionObserved =>
+        CueCallbacksBefore is long before && CueCallbacksAfter > before;
+    public bool CallbackConsumptionConfirmed =>
+        CueCallbackConsumptionObserved &&
+        (WarmupCallbacksBefore is null || WarmupCallbackConsumptionObserved);
+}
 
 internal sealed record LocalTonePlaybackResult(
     AudioDeviceInfo Output,
     int? QueuedSamples,
     int? ConsumedSamples,
     int Attempts,
+    TimeSpan? MeasuredOutputPresentationLatency,
+    TimeSpan PostDrainWaitDuration,
+    LocalTonePresentationEvidence PresentationEvidence,
     LocalTonePlaybackTiming Timing);
 
 internal sealed record LocalTonePlaybackTiming(
@@ -63,26 +83,30 @@ internal static class LocalToneCues
         OutputWarmupDuration: TimeSpan.FromMilliseconds(300),
         ReopenOutputAfterCueRelease: false,
         LeadSilenceDuration: TimeSpan.Zero,
-        TailSilenceDuration: TimeSpan.FromMilliseconds(80),
+        TailSilenceDuration: TimeSpan.Zero,
         OutputPostDrainDuration: TimeSpan.FromMilliseconds(200),
         MaximumPlaybackAttempts: 3,
-        RoutePolicy: AudioOutputRoutePolicy.TransientRouteChanges);
+        RoutePolicy: AudioOutputRoutePolicy.TransientRouteChanges,
+        RequireOutputCallbackEvidence: true);
 
     // A cold Bluetooth microphone changes the headset's profile in place
     // without necessarily changing its CoreAudio device ID. Discard the
-    // pre-transition playback stream once capture is ready, then warm a fresh
-    // duplex-profile stream before presenting the cue.
+    // pre-transition playback stream after the first physical microphone
+    // callback, then present the cue on a fresh duplex-profile stream.
+    // Operator audio remains gated until capture resumes after output closes.
     public static LocalTonePlaybackRequest ColdStartTalkPermit { get; } = new(
         Frequency: 1200,
-        ToneDuration: TimeSpan.FromMilliseconds(80),
+        ToneDuration: TimeSpan.FromMilliseconds(160),
         Amplitude: 0.40,
-        OutputWarmupDuration: TimeSpan.FromMilliseconds(250),
+        OutputWarmupDuration: TimeSpan.Zero,
         ReopenOutputAfterCueRelease: true,
-        LeadSilenceDuration: TimeSpan.FromMilliseconds(60),
-        TailSilenceDuration: TimeSpan.FromMilliseconds(80),
-        OutputPostDrainDuration: TimeSpan.FromMilliseconds(250),
+        LeadSilenceDuration: TimeSpan.FromMilliseconds(80),
+        TailSilenceDuration: TimeSpan.Zero,
+        OutputPostDrainDuration: TimeSpan.FromMilliseconds(500),
         MaximumPlaybackAttempts: 3,
-        RoutePolicy: AudioOutputRoutePolicy.TransientRouteChanges);
+        RoutePolicy: AudioOutputRoutePolicy.TransientRouteChanges,
+        RequireOutputCallbackEvidence: true,
+        UseMeasuredOutputPresentationLatency: true);
 
     public static LocalTonePlaybackRequest SelectTalkPermit(
         bool microphoneStartedCold,
@@ -228,12 +252,14 @@ internal sealed class LocalTonePlayer : IAsyncDisposable
             request,
             _ => request,
             Task.CompletedTask,
+            beforeCueAsync: null,
             cancellationToken).ConfigureAwait(false);
 
     public async Task<LocalTonePlaybackResult> PlayTalkPermitAsync(
         bool microphoneStartedCold,
         bool? microphoneIsBluetooth,
         Task? cueReleaseBarrier = null,
+        Func<CancellationToken, Task>? beforeCueAsync = null,
         CancellationToken cancellationToken = default)
         => await PlayCoreAsync(
             LocalToneCues.TalkPermit,
@@ -242,12 +268,14 @@ internal sealed class LocalTonePlayer : IAsyncDisposable
                 microphoneIsBluetooth,
                 output.IsBluetooth),
             cueReleaseBarrier ?? Task.CompletedTask,
+            beforeCueAsync,
             cancellationToken).ConfigureAwait(false);
 
     private async Task<LocalTonePlaybackResult> PlayCoreAsync(
         LocalTonePlaybackRequest routeRequest,
         Func<AudioDeviceInfo, LocalTonePlaybackRequest> selectRequest,
         Task cueReleaseBarrier,
+        Func<CancellationToken, Task>? beforeCueAsync,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(routeRequest);
@@ -267,6 +295,7 @@ internal sealed class LocalTonePlayer : IAsyncDisposable
         {
             ObjectDisposedException.ThrowIf(disposed, this);
             Exception? lastFailure = null;
+            bool activationAttempted = false;
             for (int attempt = 1; attempt <= routeRequest.MaximumPlaybackAttempts; attempt++)
             {
                 try
@@ -278,6 +307,13 @@ internal sealed class LocalTonePlayer : IAsyncDisposable
                         attempt,
                         timing,
                         gateAcquired,
+                        async token =>
+                        {
+                            if (beforeCueAsync is null)
+                                return;
+                            activationAttempted = true;
+                            await beforeCueAsync(token).ConfigureAwait(false);
+                        },
                         cancellationToken).ConfigureAwait(false);
                 }
                 catch when (cueReleaseBarrier.IsFaulted || cueReleaseBarrier.IsCanceled)
@@ -286,10 +322,19 @@ internal sealed class LocalTonePlayer : IAsyncDisposable
                 }
                 catch (Exception exception) when (
                     exception is not OperationCanceledException &&
+                    !activationAttempted &&
                     attempt < routeRequest.MaximumPlaybackAttempts)
                 {
                     lastFailure = exception;
                     await delayAsync(routeRequest.RoutePolicy.RetryInterval, cancellationToken).ConfigureAwait(false);
+                }
+                catch (Exception exception) when (
+                    exception is not OperationCanceledException &&
+                    activationAttempted)
+                {
+                    throw new InvalidOperationException(
+                        "The local cue failed after transmit activation; playback was not retried.",
+                        exception);
                 }
                 catch (Exception exception) when (exception is not OperationCanceledException)
                 {
@@ -314,6 +359,7 @@ internal sealed class LocalTonePlayer : IAsyncDisposable
         int attempt,
         Stopwatch timing,
         TimeSpan gateAcquired,
+        Func<CancellationToken, Task> beforeCueAsync,
         CancellationToken cancellationToken)
     {
         using IAudioBackend backend = createAudioBackend();
@@ -371,15 +417,27 @@ internal sealed class LocalTonePlayer : IAsyncDisposable
             var generator = new PcmToneGenerator();
             int? warmupQueued = null;
             int? warmupConsumed = null;
+            long? warmupCallbacksBefore = request.OutputWarmupDuration > TimeSpan.Zero
+                ? GetOutputCallbackCount(activePlayback)
+                : null;
             if (request.OutputWarmupDuration > TimeSpan.Zero)
             {
-                // Render silence through the stream that will carry the cue so
-                // its callbacks and downstream route are active first.
                 short[] warmup = generator.GenerateSilence(request.OutputWarmupDuration);
                 await activePlayback.WriteAsync(warmup, cancellationToken).ConfigureAwait(false);
                 warmupQueued = activePlayback.QueuedSamples;
                 warmupConsumed = await activePlayback.DrainAsync(cancellationToken).ConfigureAwait(false);
                 EnsurePlaybackDrained("warm-up", warmupQueued, warmupConsumed);
+            }
+            long? warmupCallbacksAfter = request.OutputWarmupDuration > TimeSpan.Zero
+                ? GetOutputCallbackCount(activePlayback)
+                : null;
+            if (request.OutputWarmupDuration > TimeSpan.Zero)
+            {
+                EnsureOutputCallbackConsumption(
+                    request,
+                    "warm-up",
+                    warmupCallbacksBefore,
+                    warmupCallbacksAfter);
             }
             TimeSpan outputWarmupDrained = timing.Elapsed;
 
@@ -406,6 +464,8 @@ internal sealed class LocalTonePlayer : IAsyncDisposable
                 }
             }
 
+            await beforeCueAsync(cancellationToken).ConfigureAwait(false);
+
             short[] tone = generator.GenerateTone(
                 request.Frequency,
                 request.ToneDuration,
@@ -414,23 +474,49 @@ internal sealed class LocalTonePlayer : IAsyncDisposable
             short[] leadSilence = request.LeadSilenceDuration > TimeSpan.Zero
                 ? generator.GenerateSilence(request.LeadSilenceDuration)
                 : [];
+            short[] tailSilence = request.TailSilenceDuration > TimeSpan.Zero
+                ? generator.GenerateSilence(request.TailSilenceDuration)
+                : [];
             short[] samples =
             [
                 .. leadSilence,
                 .. tone,
-                .. generator.GenerateSilence(request.TailSilenceDuration)
+                .. tailSilence
             ];
+            long? cueCallbacksBefore = GetOutputCallbackCount(activePlayback);
             await activePlayback.WriteAsync(samples, cancellationToken).ConfigureAwait(false);
             TimeSpan cueQueuedAt = timing.Elapsed;
             int? cueQueued = activePlayback.QueuedSamples;
             int? cueConsumed = await activePlayback.DrainAsync(cancellationToken).ConfigureAwait(false);
             EnsurePlaybackDrained("cue", cueQueued, cueConsumed);
+            long? cueCallbacksAfter = GetOutputCallbackCount(activePlayback);
+            EnsureOutputCallbackConsumption(
+                request,
+                "cue",
+                cueCallbacksBefore,
+                cueCallbacksAfter);
             TimeSpan cueDrainedAt = timing.Elapsed;
 
-            // Queue drainage means CoreAudio or WaveOut accepted the last render
-            // buffer; retain the stream briefly for downstream device latency.
-            if (request.OutputPostDrainDuration > TimeSpan.Zero)
-                await delayAsync(request.OutputPostDrainDuration, cancellationToken).ConfigureAwait(false);
+            AudioDeviceInfo completedOutput = await outputRouteResolver.ResolveAsync(
+                backend,
+                requestedOutputDeviceId,
+                request.RoutePolicy,
+                cancellationToken).ConfigureAwait(false);
+            EnsureSameOutput(finalOutput, completedOutput);
+
+            TimeSpan? measuredPresentationLatency = GetMeasuredPresentationLatency(
+                request,
+                activePlayback);
+            TimeSpan postDrainWait = measuredPresentationLatency is TimeSpan latency
+                ? AddPresentationSchedulingMargin(latency)
+                : request.OutputPostDrainDuration;
+
+            // Queue drainage establishes callback consumption, not physical
+            // presentation. On the experimental cold-Bluetooth path, wait for
+            // CoreAudio's measured device presentation interval. Other paths
+            // retain their existing fixed policy.
+            if (postDrainWait > TimeSpan.Zero)
+                await delayAsync(postDrainWait, cancellationToken).ConfigureAwait(false);
             TimeSpan completedAt = timing.Elapsed;
 
             return new LocalTonePlaybackResult(
@@ -438,6 +524,13 @@ internal sealed class LocalTonePlayer : IAsyncDisposable
                 AddSampleCounts(warmupQueued, cueQueued),
                 AddSampleCounts(warmupConsumed, cueConsumed),
                 attempt,
+                measuredPresentationLatency,
+                postDrainWait,
+                new LocalTonePresentationEvidence(
+                    warmupCallbacksBefore,
+                    warmupCallbacksAfter,
+                    cueCallbacksBefore,
+                    cueCallbacksAfter),
                 new LocalTonePlaybackTiming(
                     gateAcquired,
                     initialRouteResolved,
@@ -494,6 +587,59 @@ internal sealed class LocalTonePlayer : IAsyncDisposable
         {
             throw new IOException(
                 $"The local cue {phase} queued {queuedSamples.Value} samples but consumed only {consumed}.");
+        }
+    }
+
+    private static long? GetOutputCallbackCount(IAudioPlayback playback)
+        => (playback as IAudioPlaybackCallbackDiagnostics)?.OutputCallbackCount;
+
+    private static TimeSpan? GetMeasuredPresentationLatency(
+        LocalTonePlaybackRequest request,
+        IAudioPlayback playback)
+    {
+        if (!request.UseMeasuredOutputPresentationLatency ||
+            playback is not IAudioPlaybackPresentationLatencyDiagnostics diagnostics)
+            return null;
+
+        TimeSpan latency = diagnostics.OutputPresentationLatency;
+        return latency > TimeSpan.Zero && latency < TimeSpan.FromSeconds(5)
+            ? latency
+            : null;
+    }
+
+    private static TimeSpan AddPresentationSchedulingMargin(TimeSpan latency)
+        => latency + TimeSpan.FromMilliseconds(20);
+
+    private static void EnsureOutputCallbackConsumption(
+        LocalTonePlaybackRequest request,
+        string phase,
+        long? callbacksBefore,
+        long? callbacksAfter)
+    {
+        if (!request.RequireOutputCallbackEvidence)
+            return;
+        // Callback progress establishes consumption by the OS audio device.
+        // It does not establish physical audibility; the cold-Bluetooth policy
+        // separately uses the downstream-latency allowance.
+        if (callbacksBefore is null || callbacksAfter is null)
+        {
+            throw new NotSupportedException(
+                $"The local cue output cannot verify native render callbacks during {phase}.");
+        }
+        if (callbacksAfter <= callbacksBefore)
+        {
+            throw new IOException(
+                $"The local cue output drained {phase} samples without a native render callback.");
+        }
+    }
+
+    private static void EnsureSameOutput(AudioDeviceInfo expected, AudioDeviceInfo actual)
+    {
+        if (!actual.Id.Equals(expected.Id, StringComparison.OrdinalIgnoreCase) ||
+            actual.IsBluetooth != expected.IsBluetooth)
+        {
+            throw new IOException(
+                $"The local cue output changed from '{expected.Name}' to '{actual.Name}' during presentation.");
         }
     }
 }

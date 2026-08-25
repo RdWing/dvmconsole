@@ -228,6 +228,34 @@ public sealed class PatchRoutingTests
     }
 
     [Fact]
+    public void AllToAllAllowsDifferentSubscriberToStartReverseLegImmediately()
+    {
+        PatchMemberAddress first = new("Alpha", 100);
+        PatchMemberAddress second = new("Beta", 200);
+        var starts = new List<PatchMemberAddress>();
+        uint nextStreamId = 500;
+        var router = new PatchRoutingTable(
+            (member, _) =>
+            {
+                starts.Add(member);
+                return nextStreamId++;
+            },
+            (_, _, _) => { },
+            (_, _, _, _) => { },
+            member => member.DestinationId + 1_000);
+        router.ApplyMemberships(new Dictionary<string, IReadOnlyList<PatchMemberAddress>>
+        {
+            ["Dispatch"] = [first, second]
+        });
+
+        router.HandleCallStart(first, streamId: 10, sourceId: 42);
+        router.HandleCallEnd(first, streamId: 10);
+        router.HandleCallStart(second, streamId: 20, sourceId: 84);
+
+        Assert.Equal([second, first], starts);
+    }
+
+    [Fact]
     public void DisabledPatchCannotFeedARewrittenEchoIntoAnotherPatch()
     {
         PatchMemberAddress firstSource = new("Alpha", 100);
@@ -267,8 +295,8 @@ public sealed class PatchRoutingTests
                 ["Second patch"] = [sharedMember, secondTarget]
             },
             oneWayModes);
-        router.HandleCallStart(sharedMember, 900, 42);
-        router.HandleAudio(sharedMember, 900, 42, new short[] { 1, 2, 3 });
+        router.HandleCallStart(sharedMember, 900, 999);
+        router.HandleAudio(sharedMember, 900, 999, new short[] { 1, 2, 3 });
 
         Assert.Equal([sharedMember], starts);
         Assert.Equal([sharedMember], ends);

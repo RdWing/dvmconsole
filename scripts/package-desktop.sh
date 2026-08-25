@@ -57,12 +57,14 @@ if [[ -n "$EXPECTED_MACOS_ARCHITECTURE" ]]; then
     mkdir -p "$APP_PATH/Contents/MacOS" "$APP_PATH/Contents/Resources"
     cp "$ROOT_DIR/packaging/macos/Info.plist" "$APP_PATH/Contents/Info.plist"
     if [[ -n "${DVM_RELEASE_VERSION:-}" ]]; then
-        if [[ ! "$DVM_RELEASE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
+        if ! bundle_version="$(python3 "$ROOT_DIR/scripts/release_metadata.py" version-core \
+            --version "$DVM_RELEASE_VERSION")"; then
             printf 'DVM_RELEASE_VERSION is not a valid bundle version: %s\n' "$DVM_RELEASE_VERSION" >&2
             exit 12
         fi
-        /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $DVM_RELEASE_VERSION" "$APP_PATH/Contents/Info.plist"
-        bundle_version="${DVM_RELEASE_VERSION%%-*}"
+        # Apple bundle metadata remains a numeric SemVer core even when the
+        # package and GitHub release carry an alpha, beta, or RC identifier.
+        /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $bundle_version" "$APP_PATH/Contents/Info.plist"
         /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $bundle_version" "$APP_PATH/Contents/Info.plist"
     fi
     cp "$ROOT_DIR/packaging/macos/DVMConsole.icns" "$APP_PATH/Contents/Resources/DVMConsole.icns"

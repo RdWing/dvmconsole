@@ -8,7 +8,7 @@ namespace DvmConsole.Core.Settings;
 public sealed class UserSettingsStore
 {
     private readonly UserSettingsSerializer serializer;
-    private readonly AtomicSettingsFileStore fileStore;
+    private readonly AtomicTextFileStore fileStore;
     private readonly SettingsProfileRepository profiles;
     private readonly UserSettingsNormalizationPipeline normalization;
 
@@ -17,7 +17,7 @@ public sealed class UserSettingsStore
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
         Path = System.IO.Path.GetFullPath(path);
         serializer = new UserSettingsSerializer();
-        fileStore = new AtomicSettingsFileStore(Path);
+        fileStore = new AtomicTextFileStore(Path);
         profiles = new SettingsProfileRepository(ProfilesDirectoryPath);
         normalization = new UserSettingsNormalizationPipeline();
     }
@@ -65,11 +65,20 @@ public sealed class UserSettingsStore
 
     public void Save(UserSettings settings)
     {
+        SaveSnapshot(CaptureSnapshot(settings));
+    }
+
+    public UserSettingsSnapshot CaptureSnapshot(UserSettings settings)
+    {
         ArgumentNullException.ThrowIfNull(settings);
-
         normalization.NormalizeBeforeWrite(settings);
+        return new UserSettingsSnapshot(serializer.Serialize(settings));
+    }
 
-        fileStore.WriteAllText(serializer.Serialize(settings));
+    public void SaveSnapshot(UserSettingsSnapshot snapshot)
+    {
+        ArgumentNullException.ThrowIfNull(snapshot);
+        fileStore.WriteAllText(snapshot.Json);
     }
 
     public void Export(UserSettings settings, string destinationPath)
@@ -177,4 +186,14 @@ public sealed class UserSettingsStore
     private string GetNamedProfilePath(string profileName)
         => profiles.GetPath(profileName);
 
+}
+
+public sealed class UserSettingsSnapshot
+{
+    internal UserSettingsSnapshot(string json)
+    {
+        Json = json;
+    }
+
+    internal string Json { get; }
 }

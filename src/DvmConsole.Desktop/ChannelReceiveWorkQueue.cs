@@ -1,4 +1,5 @@
 using DvmConsole.FneClient;
+using DvmConsole.Operations;
 using System.Diagnostics;
 
 namespace DvmConsole.Desktop;
@@ -14,7 +15,13 @@ internal readonly record struct ReceiveWorkQueueDiagnostics(
     TimeSpan MaximumTransportToFneBoundaryDelay = default,
     TimeSpan MaximumJitterBufferTargetDelay = default,
     long JitterBufferReorderedPackets = 0,
-    long JitterBufferDeadlineMissedPackets = 0);
+    long JitterBufferDeadlineMissedPackets = 0,
+    long WakeSignals = 0,
+    long CoalescedWakeSignals = 0,
+    long WakeWaits = 0,
+    long WakeTimeouts = 0,
+    int PeakPendingFrames = 0,
+    long SpuriousWakeSignals = 0);
 
 internal readonly record struct ReceiveWorkItemTiming(
     FneTrafficFrame Traffic,
@@ -30,6 +37,79 @@ internal readonly record struct ReceiveWorkItemTiming(
     bool JitterBufferReorderedPacket = false,
     int JitterBufferDeadlineMissedPackets = 0);
 
+internal interface IReceiveWorkQueueScheduler
+{
+    long GetTimestamp();
+    ValueTask<bool> WaitAsync(CoalescingWakeSignal signal, TimeSpan timeout);
+}
+
+internal sealed class SystemReceiveWorkQueueScheduler : IReceiveWorkQueueScheduler
+{
+    public static SystemReceiveWorkQueueScheduler Instance { get; } = new();
+
+    private SystemReceiveWorkQueueScheduler()
+    {
+    }
+
+    public long GetTimestamp()
+        => Stopwatch.GetTimestamp();
+
+    public ValueTask<bool> WaitAsync(CoalescingWakeSignal signal, TimeSpan timeout)
+        => signal.WaitAsync(timeout);
+}
+
+// A state change only needs to wake the single channel worker once. Keeping at
+// most one pending signal prevents a burst of already-processed frames from
+// turning into stale, immediate wakeups at a later jitter-buffer deadline.
+internal sealed class CoalescingWakeSignal : IDisposable
+{
+    private readonly SemaphoreSlim signal = new(0, 1);
+    private int pending;
+
+    public bool Set()
+    {
+        if (Interlocked.Exchange(ref pending, 1) != 0)
+            return false;
+
+        signal.Release();
+        return true;
+    }
+
+    public async ValueTask<bool> WaitAsync(TimeSpan timeout)
+    {
+        bool signaled;
+        if (timeout == Timeout.InfiniteTimeSpan)
+        {
+            await signal.WaitAsync().ConfigureAwait(false);
+            signaled = true;
+        }
+        else
+        {
+            signaled = await signal.WaitAsync(timeout).ConfigureAwait(false);
+        }
+
+        if (signaled)
+        {
+            // A Set racing this reset is still observed by the worker's state
+            // recheck; a later Set publishes the next binary signal normally.
+            Volatile.Write(ref pending, 0);
+        }
+        return signaled;
+    }
+
+    internal bool TryConsume()
+    {
+        if (!signal.Wait(0))
+            return false;
+
+        Volatile.Write(ref pending, 0);
+        return true;
+    }
+
+    public void Dispose()
+        => signal.Dispose();
+}
+
 // Keeps receive work ordered for one channel without coupling it to any other
 // channel. The bounded pending buffer prevents a slow decoder or output device
 // from growing an unbounded continuation chain during a busy period.
@@ -42,14 +122,18 @@ internal sealed class ChannelReceiveWorkQueue : IAsyncDisposable
     private readonly Func<ChannelViewModel, FneTrafficFrame, Task> process;
     private readonly Action<ChannelViewModel, ReceiveWorkItemTiming>? timingObserver;
     private readonly Func<ChannelViewModel, FneTrafficProtocol, ReceiveJitterBufferProfile> getJitterBufferProfile;
+    private readonly IReceiveWorkQueueScheduler scheduler;
     private readonly int maxPendingFramesPerChannel;
+    private int currentPendingFrames;
+    private int peakPendingFrames;
     private bool disposed;
 
     public ChannelReceiveWorkQueue(
         Func<ChannelViewModel, FneTrafficFrame, Task> process,
         int maxPendingFramesPerChannel = 64,
         Action<ChannelViewModel, ReceiveWorkItemTiming>? timingObserver = null,
-        Func<ChannelViewModel, FneTrafficProtocol, ReceiveJitterBufferProfile>? getJitterBufferProfile = null)
+        Func<ChannelViewModel, FneTrafficProtocol, ReceiveJitterBufferProfile>? getJitterBufferProfile = null,
+        IReceiveWorkQueueScheduler? scheduler = null)
     {
         this.process = process ?? throw new ArgumentNullException(nameof(process));
         if (maxPendingFramesPerChannel < 1)
@@ -57,6 +141,7 @@ internal sealed class ChannelReceiveWorkQueue : IAsyncDisposable
         this.maxPendingFramesPerChannel = maxPendingFramesPerChannel;
         this.timingObserver = timingObserver;
         this.getJitterBufferProfile = getJitterBufferProfile ?? ((_, _) => default);
+        this.scheduler = scheduler ?? SystemReceiveWorkQueueScheduler.Instance;
     }
 
     public void Start(ChannelViewModel channel)
@@ -82,14 +167,39 @@ internal sealed class ChannelReceiveWorkQueue : IAsyncDisposable
                 : default;
     }
 
+    public ReceiveQueueHealth CaptureHealth()
+    {
+        lock (sync)
+        {
+            long coalescedWakeCount = 0;
+            long spuriousWakeCount = 0;
+            foreach (TimingAccumulator accumulator in timing.Values)
+            {
+                ReceiveWorkQueueDiagnostics diagnostics = accumulator.Snapshot(streamId: null);
+                coalescedWakeCount = SaturatingAdd(
+                    coalescedWakeCount,
+                    diagnostics.CoalescedWakeSignals);
+                spuriousWakeCount = SaturatingAdd(
+                    spuriousWakeCount,
+                    diagnostics.SpuriousWakeSignals);
+            }
+
+            return new ReceiveQueueHealth(
+                Volatile.Read(ref currentPendingFrames),
+                Volatile.Read(ref peakPendingFrames),
+                coalescedWakeCount,
+                spuriousWakeCount);
+        }
+    }
+
     public bool Enqueue(ChannelViewModel channel, FneTrafficFrame traffic)
-        => Enqueue(channel, traffic, Stopwatch.GetTimestamp(), out _);
+        => Enqueue(channel, traffic, scheduler.GetTimestamp(), out _);
 
     public bool Enqueue(
         ChannelViewModel channel,
         FneTrafficFrame traffic,
         out bool droppedFrame)
-        => Enqueue(channel, traffic, Stopwatch.GetTimestamp(), out droppedFrame);
+        => Enqueue(channel, traffic, scheduler.GetTimestamp(), out droppedFrame);
 
     public bool Enqueue(
         ChannelViewModel channel,
@@ -121,7 +231,9 @@ internal sealed class ChannelReceiveWorkQueue : IAsyncDisposable
                     accumulator,
                     maxPendingFramesPerChannel,
                     timingObserver,
-                    getJitterBufferProfile);
+                    getJitterBufferProfile,
+                    scheduler,
+                    ObservePendingDepthChange);
                 workers.Add(channel, worker);
             }
 
@@ -196,13 +308,15 @@ internal sealed class ChannelReceiveWorkQueue : IAsyncDisposable
     {
         private readonly object sync = new();
         private readonly ReceivePacketJitterBuffer<WorkItem> pending;
-        private readonly SemaphoreSlim wakeSignal = new(0);
+        private readonly CoalescingWakeSignal wakeSignal = new();
         private readonly ChannelViewModel channel;
         private readonly Func<ChannelViewModel, FneTrafficFrame, Task> process;
         private readonly TimingAccumulator timing;
         private readonly int maxPendingFrames;
         private readonly Action<ChannelViewModel, ReceiveWorkItemTiming>? timingObserver;
         private readonly Func<ChannelViewModel, FneTrafficProtocol, ReceiveJitterBufferProfile> getJitterBufferProfile;
+        private readonly IReceiveWorkQueueScheduler scheduler;
+        private readonly Action<int> pendingDepthChanged;
         private readonly TaskCompletionSource completion =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
         private readonly List<StreamContinuation> streamContinuations = [];
@@ -216,7 +330,9 @@ internal sealed class ChannelReceiveWorkQueue : IAsyncDisposable
             TimingAccumulator timing,
             int maxPendingFrames,
             Action<ChannelViewModel, ReceiveWorkItemTiming>? timingObserver,
-            Func<ChannelViewModel, FneTrafficProtocol, ReceiveJitterBufferProfile> getJitterBufferProfile)
+            Func<ChannelViewModel, FneTrafficProtocol, ReceiveJitterBufferProfile> getJitterBufferProfile,
+            IReceiveWorkQueueScheduler scheduler,
+            Action<int> pendingDepthChanged)
         {
             this.channel = channel;
             this.process = process;
@@ -224,14 +340,25 @@ internal sealed class ChannelReceiveWorkQueue : IAsyncDisposable
             this.maxPendingFrames = maxPendingFrames;
             this.timingObserver = timingObserver;
             this.getJitterBufferProfile = getJitterBufferProfile;
+            this.scheduler = scheduler;
+            this.pendingDepthChanged = pendingDepthChanged;
             pending = new ReceivePacketJitterBuffer<WorkItem>(
                 item => item.Traffic.StreamId,
                 item => item.Traffic.PacketSequence,
-                item => ReceiveTrafficClassifier.IsTerminator(item.Traffic),
+                item => ReceiveTrafficClassifier.GetJitterPacketKind(item.Traffic),
                 item => item.JitterBufferProfile);
         }
 
         public Task Completion => completion.Task;
+
+        public int PendingCount
+        {
+            get
+            {
+                lock (sync)
+                    return pending.Count;
+            }
+        }
 
         public bool Enqueue(
             FneTrafficFrame traffic,
@@ -246,18 +373,19 @@ internal sealed class ChannelReceiveWorkQueue : IAsyncDisposable
                     return false;
                 }
 
-                droppedFrame = pending.Count >= maxPendingFrames;
+                int previousPendingCount = pending.Count;
+                droppedFrame = previousPendingCount >= maxPendingFrames;
                 if (droppedFrame && !MakeRoomFor(traffic))
                     return false;
 
                 long normalizedIngressTimestamp = ingressTimestamp > 0
                     ? ingressTimestamp
-                    : Stopwatch.GetTimestamp();
+                    : scheduler.GetTimestamp();
                 ReceiveIngressTiming ingressTiming = timing.ObserveIngress(
                     traffic.StreamId,
                     traffic.TransportIngressTimestamp,
                     normalizedIngressTimestamp);
-                long enqueuedTimestamp = Stopwatch.GetTimestamp();
+                long enqueuedTimestamp = scheduler.GetTimestamp();
                 pending.Enqueue(new WorkItem(
                     traffic,
                     ingressTiming.FneInterArrivalDelay,
@@ -266,7 +394,8 @@ internal sealed class ChannelReceiveWorkQueue : IAsyncDisposable
                     normalizedIngressTimestamp,
                     enqueuedTimestamp,
                     getJitterBufferProfile(channel, traffic.Protocol)), enqueuedTimestamp);
-                wakeSignal.Release();
+                pendingDepthChanged(pending.Count - previousPendingCount);
+                SignalWake();
                 if (!running)
                 {
                     running = true;
@@ -281,7 +410,7 @@ internal sealed class ChannelReceiveWorkQueue : IAsyncDisposable
             lock (sync)
             {
                 accepting = false;
-                wakeSignal.Release();
+                SignalWake();
                 if (!running)
                     completion.TrySetResult();
             }
@@ -293,7 +422,7 @@ internal sealed class ChannelReceiveWorkQueue : IAsyncDisposable
             lock (sync)
             {
                 streamContinuations.Add(request);
-                wakeSignal.Release();
+                SignalWake();
                 if (!running)
                 {
                     running = true;
@@ -305,6 +434,9 @@ internal sealed class ChannelReceiveWorkQueue : IAsyncDisposable
 
         public void Dispose()
             => wakeSignal.Dispose();
+
+        private void SignalWake()
+            => timing.RecordWakeRequest(wakeSignal.Set(), pending.Count);
 
         private bool MakeRoomFor(FneTrafficFrame incoming)
         {
@@ -320,7 +452,8 @@ internal sealed class ChannelReceiveWorkQueue : IAsyncDisposable
             }
 
             if (pending.TryRemoveOldest(item =>
-                    !ReceiveTrafficClassifier.IsTerminator(item.Traffic)))
+                    ReceiveTrafficClassifier.GetJitterPacketKind(item.Traffic) ==
+                    ReceiveJitterPacketKind.Voice))
                 return true;
 
             if (!ReceiveTrafficClassifier.IsTerminator(incoming))
@@ -349,13 +482,26 @@ internal sealed class ChannelReceiveWorkQueue : IAsyncDisposable
                     else
                     {
                         hasItem = pending.TryDequeue(
-                            Stopwatch.GetTimestamp(),
+                            scheduler.GetTimestamp(),
                             drain: !accepting,
                             out item,
                             out waitTime,
                             out jitterMetadata);
                         if (hasItem)
+                        {
+                            pendingDepthChanged(-1);
                             processingStreamId = item.Traffic.StreamId;
+                        }
+                    }
+                    if (!hasItem)
+                    {
+                        // Every signal published before this locked state
+                        // inspection is already represented by pending work,
+                        // lifecycle state, or a selected continuation. Consume
+                        // it now so a drained burst cannot become an immediate
+                        // stale wake at a later jitter-buffer deadline.
+                        if (wakeSignal.TryConsume())
+                            timing.RecordSpuriousWake();
                     }
                     if (streamContinuation is null && !hasItem &&
                         pending.Count == 0 && streamContinuations.Count == 0)
@@ -383,14 +529,13 @@ internal sealed class ChannelReceiveWorkQueue : IAsyncDisposable
 
                 if (!hasItem)
                 {
-                    if (waitTime == Timeout.InfiniteTimeSpan)
-                        await wakeSignal.WaitAsync().ConfigureAwait(false);
-                    else
-                        await wakeSignal.WaitAsync(waitTime).ConfigureAwait(false);
+                    bool signaled = await scheduler.WaitAsync(wakeSignal, waitTime)
+                        .ConfigureAwait(false);
+                    timing.RecordWakeWait(signaled);
                     continue;
                 }
 
-                long processingStarted = Stopwatch.GetTimestamp();
+                long processingStarted = scheduler.GetTimestamp();
                 try
                 {
                     await process(channel, item.Traffic).ConfigureAwait(false);
@@ -403,7 +548,7 @@ internal sealed class ChannelReceiveWorkQueue : IAsyncDisposable
                 }
                 finally
                 {
-                    long processingCompleted = Stopwatch.GetTimestamp();
+                    long processingCompleted = scheduler.GetTimestamp();
                     var observed = new ReceiveWorkItemTiming(
                         item.Traffic,
                         item.InterArrivalDelay,
@@ -476,6 +621,12 @@ internal sealed class ChannelReceiveWorkQueue : IAsyncDisposable
         }
     }
 
+    private static int SaturatingAdd(int left, int right)
+        => left > int.MaxValue - right ? int.MaxValue : left + right;
+
+    private static long SaturatingAdd(long left, long right)
+        => left > long.MaxValue - right ? long.MaxValue : left + right;
+
     private readonly record struct ReceiveIngressTiming(
         TimeSpan FneInterArrivalDelay,
         TimeSpan TransportInterArrivalDelay,
@@ -487,6 +638,12 @@ internal sealed class ChannelReceiveWorkQueue : IAsyncDisposable
         private readonly object sync = new();
         private readonly Dictionary<uint, StreamTimingAccumulator> streams = [];
         private readonly LinkedList<uint> streamOrder = [];
+        private long wakeSignals;
+        private long coalescedWakeSignals;
+        private long wakeWaits;
+        private long wakeTimeouts;
+        private long spuriousWakeSignals;
+        private int peakPendingFrames;
 
         public ReceiveIngressTiming ObserveIngress(
             uint streamId,
@@ -505,19 +662,47 @@ internal sealed class ChannelReceiveWorkQueue : IAsyncDisposable
                 GetOrCreate(observed.Traffic.StreamId).Observe(observed);
         }
 
+        public void RecordWakeRequest(bool signaled, int pendingFrames)
+        {
+            lock (sync)
+            {
+                if (signaled)
+                    wakeSignals = SaturatingIncrement(wakeSignals);
+                else
+                    coalescedWakeSignals = SaturatingIncrement(coalescedWakeSignals);
+                peakPendingFrames = Math.Max(peakPendingFrames, pendingFrames);
+            }
+        }
+
+        public void RecordWakeWait(bool signaled)
+        {
+            lock (sync)
+            {
+                wakeWaits = SaturatingIncrement(wakeWaits);
+                if (!signaled)
+                    wakeTimeouts = SaturatingIncrement(wakeTimeouts);
+            }
+        }
+
+        public void RecordSpuriousWake()
+        {
+            lock (sync)
+                spuriousWakeSignals = SaturatingIncrement(spuriousWakeSignals);
+        }
+
         public ReceiveWorkQueueDiagnostics Snapshot(uint? streamId)
         {
             lock (sync)
             {
                 if (streamId is uint selectedStreamId)
                     return streams.TryGetValue(selectedStreamId, out StreamTimingAccumulator? selected)
-                        ? selected.Snapshot()
+                        ? AddQueueMetrics(selected.Snapshot())
                         : default;
 
                 ReceiveWorkQueueDiagnostics aggregate = default;
                 foreach (StreamTimingAccumulator stream in streams.Values)
                     aggregate = Combine(aggregate, stream.Snapshot());
-                return aggregate;
+                return AddQueueMetrics(aggregate);
             }
         }
 
@@ -566,6 +751,21 @@ internal sealed class ChannelReceiveWorkQueue : IAsyncDisposable
 
         private static long SaturatingAdd(long left, long right)
             => left > long.MaxValue - right ? long.MaxValue : left + right;
+
+        private static long SaturatingIncrement(long value)
+            => value == long.MaxValue ? long.MaxValue : value + 1;
+
+        private ReceiveWorkQueueDiagnostics AddQueueMetrics(
+            ReceiveWorkQueueDiagnostics diagnostics)
+            => diagnostics with
+            {
+                WakeSignals = wakeSignals,
+                CoalescedWakeSignals = coalescedWakeSignals,
+                WakeWaits = wakeWaits,
+                WakeTimeouts = wakeTimeouts,
+                PeakPendingFrames = peakPendingFrames,
+                SpuriousWakeSignals = spuriousWakeSignals
+            };
 
         private static TimeSpan Max(TimeSpan left, TimeSpan right)
             => left >= right ? left : right;
@@ -641,6 +841,31 @@ internal sealed class ChannelReceiveWorkQueue : IAsyncDisposable
                     maximumJitterBufferTargetDelay,
                     jitterBufferReorderedPackets,
                     jitterBufferDeadlineMissedPackets);
+        }
+    }
+
+    private void ObservePendingDepthChange(int delta)
+    {
+        if (delta == 0)
+            return;
+
+        int current = Interlocked.Add(ref currentPendingFrames, delta);
+        if (current < 0)
+        {
+            Interlocked.Exchange(ref currentPendingFrames, 0);
+            current = 0;
+        }
+
+        int peak = Volatile.Read(ref peakPendingFrames);
+        while (current > peak)
+        {
+            int observed = Interlocked.CompareExchange(
+                ref peakPendingFrames,
+                current,
+                peak);
+            if (observed == peak)
+                return;
+            peak = observed;
         }
     }
 }

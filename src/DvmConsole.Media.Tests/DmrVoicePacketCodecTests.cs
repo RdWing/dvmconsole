@@ -118,6 +118,20 @@ public sealed class DmrVoicePacketCodecTests
         Assert.Equal(expectedHeader, packet[15]);
     }
 
+    [Theory]
+    [InlineData((byte)0, (byte)0x21)]
+    [InlineData((byte)1, (byte)0xA1)]
+    public void VoiceLinkControlHeaderUsesDataSyncEnvelope(byte slot, byte expectedHeader)
+    {
+        byte[] packet = DmrVoicePacketCodec.CreateVoiceLcHeaderPacket(
+            sourceId: 1,
+            destinationId: 2,
+            slot,
+            frameSequence: 0);
+
+        Assert.Equal(expectedHeader, packet[15]);
+    }
+
     [Fact]
     public async Task DmrSessionDecodesThreeCodewordsToPlaybackFrames()
     {

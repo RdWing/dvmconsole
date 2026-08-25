@@ -6,6 +6,73 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-08-25
+
+### Added
+
+- Add searchable Settings navigation and responsive toolbar overflow.
+- Add an optional, resizable **View > Engineering Health** pane for microphone
+  freshness, receive queue pressure, transmit backlog, recording finalization,
+  catalog work, route recovery, and latency measurements. It remains hidden by
+  default and does not duplicate operational controls.
+- Add release checksums, per-package SPDX SBOMs, and artifact attestations.
+
+### Changed
+
+- Advertise the version-derived `DVMC_NEO_<version>` software identifier to FNE
+  systems instead of the previous `DVMC_AV_<version>` identifier.
+- Move operational models and receive-lifecycle decisions into the Avalonia-free
+  `DvmConsole.Operations` layer. `ConsoleSessionRuntime` now owns session-service
+  lifetime while the existing view-model, audio, and vocoder facades remain
+  compatibility boundaries.
+- Observe each receive packet once through a precomputed route snapshot, replace
+  counting wake permits with a coalesced signal, and time-budget presentation
+  draining. Tracked routing-allocation cases for 1, 10, and 100 channels are at
+  least 80 percent lower.
+- Debounce settings persistence with latest-wins snapshots and explicit flush
+  boundaries so slider changes do not perform filesystem work on the UI thread.
+- Load and prune TAR metadata in one traversal and reconcile recording and
+  history catalogs with keyed linear work.
+- Prepare microphone capture before network activation and pace microphone and
+  patch audio on the protocol's 20 ms clock so callback bursts cannot collapse
+  call startup or overrun a destination.
+
+### Fixed
+
+- Restore the complete DMR call-start envelope, correctly identify DMR privacy
+  headers, and sequence P25 grant demand, voice, and a single terminator so FNE
+  systems receive valid call boundaries. Preserve the protected-service flag
+  on encrypted P25 calls.
+- Seed a nonzero FNE keepalive stream immediately after login so masters can
+  track pings before any inbound voice traffic arrives.
+- Resolve patch members by their configured channel identity, serialize each
+  destination's lifecycle, and scope termination and loop suppression to the
+  actual stream and outbound protocol. This restores cross-protocol and
+  all-to-all patch audio, including an immediate reverse leg after a call ends.
+  Patch target failures are recorded in Debug Logs.
+- Keep receive control and metadata packets out of voice playout deadlines and
+  missing-packet accounting, and do not classify P25 grant-demand control as a
+  call terminator.
+- Recycle an individual FNE connection when its authorization or configuration
+  handshake makes no progress, allowing a busy system to reconnect without
+  restarting the application. Unanswered login requests now retain the normal
+  first retry and then back off to a maximum 60-second interval; a successful
+  login or explicit operator restart resets the cadence.
+- Persist TAR finalization jobs before processing, resume valid jobs after a
+  restart, retry transient failures, and quarantine invalid work without losing
+  the source recording.
+- Reject stale or faulted microphone capture before transmit readiness and
+  recover capture generations deterministically.
+- Release cold Bluetooth talk-permit gating on the first post-transition
+  microphone callback, account for measured output presentation latency, and
+  remove the pilot and cue tail. Faster wired and built-in routes retain their
+  normal startup path, while operator audio remains blocked until the cue path
+  is ready or fails safely.
+- Detect two seconds of CoreAudio write no-progress using one shared watchdog
+  without allocating partial-write buffers.
+- Stop local Space PTT from consuming Space in editable fields or ordinary
+  interactive controls while retaining configured local and OS-global PTT.
+
 ## [0.3.8] - 2026-08-23
 
 ### Changed
@@ -351,7 +418,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Add patches, multi-select groups, call history, recordings, web streams, clocks, layouts, themes, startup behavior, and in-application operator documentation.
 - Add support for local and KMM-provided P25 encryption keys while preserving compatibility with existing variable-length AES key material.
 
-[Unreleased]: https://github.com/RdWing/dvmconsole/compare/v0.3.8...HEAD
+[Unreleased]: https://github.com/RdWing/dvmconsole/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/RdWing/dvmconsole/compare/v0.3.8...v0.4.0
 [0.3.8]: https://github.com/RdWing/dvmconsole/compare/v0.3.7...v0.3.8
 [0.3.7]: https://github.com/RdWing/dvmconsole/compare/v0.3.6...v0.3.7
 [0.3.6]: https://github.com/RdWing/dvmconsole/compare/v0.3.5...v0.3.6

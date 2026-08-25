@@ -1,3 +1,4 @@
+using Avalonia.Controls;
 using Avalonia.Input;
 using DvmConsole.Audio;
 using DvmConsole.Desktop;
@@ -20,4 +21,22 @@ public sealed class WindowPttKeyRouterTests
     [Fact]
     public void RejectsUnrelatedWindowKeys()
         => Assert.False(WindowPttKeyRouter.TryMap(Key.A, out _));
+
+    [Fact]
+    public void SuppressesSpacePttInsideNestedEditableControl()
+    {
+        var editor = new TextBox();
+        var panel = new Border { Child = editor };
+
+        Assert.True(WindowPttInputGuard.ShouldSuppressSpacePtt(editor));
+        Assert.False(WindowPttInputGuard.ShouldSuppressSpacePtt(panel));
+    }
+
+    [Fact]
+    public void SuppressesSpacePttForInteractiveControlsButNotChannelSurface()
+    {
+        Assert.True(WindowPttInputGuard.ShouldSuppressSpacePtt(new Button()));
+        Assert.True(WindowPttInputGuard.ShouldSuppressSpacePtt(new Slider()));
+        Assert.False(WindowPttInputGuard.ShouldSuppressSpacePtt(new Border { Focusable = true }));
+    }
 }

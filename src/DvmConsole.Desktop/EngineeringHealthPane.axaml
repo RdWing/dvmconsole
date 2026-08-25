@@ -1,0 +1,62 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:local="using:DvmConsole.Desktop"
+             x:Class="DvmConsole.Desktop.EngineeringHealthPane"
+             x:DataType="local:EngineeringHealthViewModel">
+  <UserControl.Styles>
+    <Style Selector="Border.health-cell">
+      <Setter Property="Background" Value="{DynamicResource CardBackgroundBrush}" />
+      <Setter Property="BorderBrush" Value="{DynamicResource ControlBorderBrush}" />
+      <Setter Property="BorderThickness" Value="1" />
+      <Setter Property="CornerRadius" Value="4" />
+      <Setter Property="Padding" Value="6,3" />
+    </Style>
+    <Style Selector="TextBlock.health-value">
+      <Setter Property="FontSize" Value="11" />
+      <Setter Property="TextWrapping" Value="Wrap" />
+    </Style>
+  </UserControl.Styles>
+
+  <Border Background="{DynamicResource ShellHeaderBrush}"
+          BorderBrush="{DynamicResource ControlBorderBrush}"
+          BorderThickness="0,1,0,0"
+          Padding="8,5"
+          AutomationProperties.Name="Engineering health telemetry">
+    <Grid RowDefinitions="Auto,*" RowSpacing="4">
+      <Grid ColumnDefinitions="Auto,*" ColumnSpacing="8">
+        <TextBlock FontWeight="SemiBold" Text="Engineering Health" />
+        <TextBlock Grid.Column="1"
+                   Classes="muted"
+                   FontSize="11"
+                   Text="{Binding CapturedAtText}"
+                   TextAlignment="Right" />
+      </Grid>
+      <Grid Grid.Row="1" ColumnDefinitions="*,*,*,*" ColumnSpacing="5">
+        <Border Classes="health-cell">
+          <StackPanel Spacing="2">
+            <TextBlock Classes="health-value" Text="{Binding ReceiveQueueHealthText}" />
+            <TextBlock Classes="health-value" Text="{Binding ReceiveLatencyHealthText}" />
+          </StackPanel>
+        </Border>
+        <Border Grid.Column="1" Classes="health-cell">
+          <StackPanel Spacing="2">
+            <TextBlock Classes="health-value" Text="{Binding MicrophoneHealthText}" />
+            <TextBlock Classes="health-value" Text="{Binding TransmitBacklogHealthText}" />
+          </StackPanel>
+        </Border>
+        <Border Grid.Column="2" Classes="health-cell">
+          <StackPanel Spacing="2">
+            <TextBlock Classes="health-value" Text="{Binding FinalizationHealthText}" />
+            <TextBlock Classes="health-value" Text="{Binding CatalogHealthText}" />
+          </StackPanel>
+        </Border>
+        <Border Grid.Column="3" Classes="health-cell">
+          <StackPanel Spacing="2">
+            <TextBlock Classes="health-value" Text="{Binding RouteRecoveryHealthText}" />
+            <TextBlock Classes="health-value" Text="{Binding ConnectionHealthText}" />
+          </StackPanel>
+        </Border>
+      </Grid>
+    </Grid>
+  </Border>
+</UserControl>

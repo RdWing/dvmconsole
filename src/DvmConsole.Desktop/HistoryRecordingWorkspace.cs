@@ -9,7 +9,7 @@ internal sealed class HistoryRecordingWorkspace : INotifyPropertyChanged
     private readonly object recordingCatalogScanSync = new();
     private readonly ObservableCollection<CallHistoryEntry> filteredCallHistoryEntries = [];
     private readonly ObservableCollection<CallHistoryEntry> activityCallHistoryEntries = [];
-    private readonly ObservableCollection<CallRecordingMetadata> recordingEntries = [];
+    private readonly ResettableObservableCollection<CallRecordingMetadata> recordingEntries = [];
     private string recordingRetentionDaysText;
     private string recordingRootPathText;
     private string callHistoryFilterText = string.Empty;
@@ -56,6 +56,9 @@ internal sealed class HistoryRecordingWorkspace : INotifyPropertyChanged
 
     internal CallHistoryStore History { get; } = new();
     internal ObservableCollection<CallRecordingMetadata> RecordingEntries => recordingEntries;
+
+    internal void ReplaceRecordingEntries(IEnumerable<CallRecordingMetadata> recordings)
+        => recordingEntries.ReplaceAll(recordings);
 
     public ReadOnlyObservableCollection<CallHistoryEntry> CallHistory { get; }
     public ReadOnlyObservableCollection<CallHistoryEntry> FilteredCallHistory { get; }

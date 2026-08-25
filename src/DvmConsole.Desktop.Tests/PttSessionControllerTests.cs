@@ -29,8 +29,14 @@ public sealed class PttSessionControllerTests
 
         Assert.Equal(
             [
-                new PttSourceStateChange(true, PttTargetScope.AllSelectedResources),
-                new PttSourceStateChange(false, PttTargetScope.ActiveSystem)
+                new PttSourceStateChange(
+                    true,
+                    PttTargetScope.AllSelectedResources,
+                    PttActivationSource.SerialHardware),
+                new PttSourceStateChange(
+                    false,
+                    PttTargetScope.ActiveSystem,
+                    PttActivationSource.SerialHardware)
             ],
             changes);
         await controller.DisposeAsync();

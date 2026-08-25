@@ -1,3 +1,4 @@
+using DvmConsole.Operations;
 using Xunit;
 
 namespace DvmConsole.Desktop.Tests;

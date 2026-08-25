@@ -1,11 +1,14 @@
 namespace DvmConsole.Core.Runtime;
 
-// Stable system/talkgroup identity used by patch routing. The router does not
+// Stable configured-channel identity used by patch routing. The router does not
 // know about UI controls or protocol encoders; the host supplies those at the
 // begin/end/audio callback boundary.
 public sealed record PatchMemberAddress
 {
-    public PatchMemberAddress(string systemName, uint destinationId)
+    public PatchMemberAddress(
+        string systemName,
+        uint destinationId,
+        string? channelName = null)
     {
         SystemName = string.IsNullOrWhiteSpace(systemName)
             ? throw new ArgumentException("A patch member system is required.", nameof(systemName))
@@ -13,11 +16,16 @@ public sealed record PatchMemberAddress
         if (destinationId == 0)
             throw new ArgumentOutOfRangeException(nameof(destinationId));
         DestinationId = destinationId;
+        ChannelName = string.IsNullOrWhiteSpace(channelName) ? null : channelName.Trim();
     }
 
     public string SystemName { get; }
     public uint DestinationId { get; }
-    public string Key => $"{SystemName.ToLowerInvariant()}|{DestinationId}";
+    public string? ChannelName { get; }
+    public bool HasConfiguredChannelIdentity => ChannelName is not null;
+    public string Key => ChannelName is null
+        ? $"{SystemName.ToLowerInvariant()}|destination|{DestinationId}"
+        : $"{SystemName.ToLowerInvariant()}|channel|{ChannelName.ToLowerInvariant()}";
 }
 
 // Protocol-independent patch membership and active-call state machine.
@@ -142,7 +150,7 @@ public sealed class PatchRoutingTable
         List<ForwardTarget> stops = [];
         lock (sync)
         {
-            if (loopSuppression.ShouldSuppressInbound(source, streamId))
+            if (loopSuppression.ShouldSuppressInbound(source, streamId, sourceId))
                 return;
 
             DateTimeOffset now = timeProvider.GetUtcNow();
@@ -186,7 +194,7 @@ public sealed class PatchRoutingTable
         List<ForwardTarget> stops = [];
         lock (sync)
         {
-            if (loopSuppression.ShouldSuppressInbound(source, streamId))
+            if (loopSuppression.ShouldSuppressInbound(source, streamId, sourceId))
                 return;
 
             DateTimeOffset now = timeProvider.GetUtcNow();
@@ -266,7 +274,7 @@ public sealed class PatchRoutingTable
             return false;
 
         lock (sync)
-            return loopSuppression.ShouldSuppressInbound(member, streamId);
+            return loopSuppression.ShouldSuppressInbound(member, streamId, sourceId: 0);
     }
 
     public bool IsForwardTargetActive(PatchMemberAddress member)
@@ -285,7 +293,7 @@ public sealed class PatchRoutingTable
         if (streamId == 0)
             return false;
 
-        int removedTargetCount = 0;
+        List<ForwardTarget> removedTargets = [];
         lock (sync)
         {
             foreach (GroupState group in groups.Values)
@@ -297,13 +305,19 @@ public sealed class PatchRoutingTable
                 }
 
                 group.ActiveTargets.Remove(member.Key);
-                removedTargetCount++;
+                removedTargets.Add(target);
             }
 
-            if (removedTargetCount == 0)
+            if (removedTargets.Count == 0)
                 return false;
 
-            loopSuppression.ReleaseTarget(member, streamId, removedTargetCount);
+            foreach (ForwardTarget target in removedTargets)
+            {
+                loopSuppression.ReleaseTarget(
+                    member,
+                    streamId,
+                    target.OutboundSourceId);
+            }
         }
 
         return true;
@@ -357,7 +371,10 @@ public sealed class PatchRoutingTable
                         start.Member,
                         streamId,
                         outboundSourceId);
-                    loopSuppression.ActivateTarget(start.Member, streamId);
+                    loopSuppression.ActivateTarget(
+                        start.Member,
+                        streamId,
+                        outboundSourceId);
                     accepted = true;
                 }
             }
@@ -398,7 +415,10 @@ public sealed class PatchRoutingTable
         foreach (ForwardTarget target in group.ActiveTargets.Values)
         {
             stops.Add(target);
-            loopSuppression.ReleaseTarget(target.Member, target.StreamId);
+            loopSuppression.ReleaseTarget(
+                target.Member,
+                target.StreamId,
+                target.OutboundSourceId);
         }
 
         group.ActiveTargets.Clear();

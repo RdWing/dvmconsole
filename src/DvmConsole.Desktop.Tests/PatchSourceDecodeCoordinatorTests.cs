@@ -35,6 +35,71 @@ public sealed class PatchSourceDecodeCoordinatorTests
     }
 
     [Fact]
+    public async Task TracksOnlyTheSourceStreamCurrentlyOwnedByEachDecoder()
+    {
+        var channel = new ChannelViewModel(new ChannelConfiguration
+        {
+            Name = "Dispatch",
+            System = "System 1",
+            Tgid = "100",
+            Mode = "dmr",
+            Slot = 1
+        });
+        await using var coordinator = new PatchSourceDecodeCoordinator(
+            null,
+            (_, _) => { },
+            () => new FakeVocoderBackend());
+        await coordinator.ApplyChannelsAsync([channel]);
+
+        Assert.False(coordinator.IsTrackingStream(channel, 99));
+        await coordinator.ProcessAsync(channel, CreateDmrTraffic());
+        Assert.True(coordinator.IsTrackingStream(channel, 99));
+        Assert.False(coordinator.IsTrackingStream(channel, 100));
+
+        await coordinator.ProcessAsync(
+            channel,
+            CreateDmrTerminator(destinationId: 100, streamId: 99));
+
+        Assert.False(coordinator.IsTrackingStream(channel, 99));
+    }
+
+    [Fact]
+    public async Task TerminatorRoutingSelectsOnlyThePatchDecoderThatOwnsTheStream()
+    {
+        ChannelViewModel first = DmrChannel("First", destinationId: 100);
+        ChannelViewModel second = DmrChannel("Second", destinationId: 200);
+        await using var coordinator = new PatchSourceDecodeCoordinator(
+            null,
+            (_, _) => { },
+            () => new FakeVocoderBackend());
+        await coordinator.ApplyChannelsAsync([first, second]);
+        await coordinator.ProcessAsync(first, CreateDmrTraffic(destinationId: 100, streamId: 99));
+        await coordinator.ProcessAsync(second, CreateDmrTraffic(destinationId: 200, streamId: 199));
+        var routes = new Dictionary<(FneTrafficProtocol, uint), ChannelViewModel[]>
+        {
+            [(FneTrafficProtocol.Dmr, 100)] = [first],
+            [(FneTrafficProtocol.Dmr, 200)] = [second]
+        };
+        FneTrafficFrame terminator = CreateDmrTerminator(destinationId: 100, streamId: 99);
+
+        ReceiveIngressRoutingDecision ingress = ReceiveAudioTrafficRouter.ObserveIngress(
+            routes,
+            terminator,
+            coordinator.IsTrackingStream);
+        ChannelViewModel target = Assert.Single(ReceiveAudioTrafficRouter.ResolveTargets(
+            routes,
+            coordinator.ActiveChannels,
+            terminator,
+            ingress,
+            coordinator.IsTrackingStream));
+
+        Assert.Same(first, target);
+        await coordinator.ProcessAsync(target, terminator);
+        Assert.False(coordinator.IsTrackingStream(first, 99));
+        Assert.True(coordinator.IsTrackingStream(second, 199));
+    }
+
+    [Fact]
     public async Task DecodesEnabledDmrSourceWithoutOpeningAnAudioBackend()
     {
         var vocoder = new FakeVocoderBackend();
@@ -144,21 +209,47 @@ public sealed class PatchSourceDecodeCoordinatorTests
         Assert.True(coordinator.IsActive(nxdn));
     }
 
-    private static FneTrafficFrame CreateDmrTraffic()
+    private static ChannelViewModel DmrChannel(string name, uint destinationId)
+        => new(new ChannelConfiguration
+        {
+            Name = name,
+            System = "System 1",
+            Tgid = destinationId.ToString(),
+            Mode = "dmr",
+            Slot = 1
+        });
+
+    private static FneTrafficFrame CreateDmrTraffic(
+        uint destinationId = 100,
+        uint streamId = 99)
     {
         return new FneTrafficFrame(
             FneTrafficProtocol.Dmr,
             peerId: 1,
             sourceId: 2,
-            destinationId: 100,
+            destinationId,
             slot: 0,
             callType: "GROUP",
             frameType: "VOICE",
             subtype: "VOICE",
             packetSequence: 1,
-            streamId: 99,
+            streamId,
             payload: new byte[DmrVoicePacketCodec.PacketBytes]);
     }
+
+    private static FneTrafficFrame CreateDmrTerminator(uint destinationId, uint streamId)
+        => new(
+            FneTrafficProtocol.Dmr,
+            peerId: 1,
+            sourceId: 2,
+            destinationId,
+            slot: 0,
+            callType: "GROUP",
+            frameType: "TERMINATOR",
+            subtype: "TERMINATOR_WITH_LC",
+            packetSequence: 2,
+            streamId,
+            payload: new byte[DmrVoicePacketCodec.PacketBytes]);
 
     private sealed class FakeVocoderBackend : IVocoderBackend
     {

@@ -1,4 +1,5 @@
 using DvmConsole.FneClient;
+using DvmConsole.Media;
 
 namespace DvmConsole.Desktop;
 
@@ -9,6 +10,8 @@ internal static class ReceiveTrafficClassifier
     public static bool IsTerminator(FneTrafficFrame traffic)
     {
         ArgumentNullException.ThrowIfNull(traffic);
+        if (IsP25GrantDemand(traffic))
+            return false;
         if (traffic.FrameType.Equals("TERMINATOR", StringComparison.OrdinalIgnoreCase))
             return true;
 
@@ -58,6 +61,42 @@ internal static class ReceiveTrafficClassifier
             FneTrafficProtocol.Analog => true,
             _ => false
         };
+    }
+
+    public static bool CarriesEncodedVoicePayload(FneTrafficFrame traffic)
+    {
+        ArgumentNullException.ThrowIfNull(traffic);
+        if (!CarriesVoicePayload(traffic))
+            return false;
+        return traffic.Protocol != FneTrafficProtocol.Nxdn ||
+               !NxdnVoicePacketCodec.TryExtractCallMetadata(traffic.Payload, out _);
+    }
+
+    public static ReceiveJitterPacketKind GetJitterPacketKind(FneTrafficFrame traffic)
+    {
+        ArgumentNullException.ThrowIfNull(traffic);
+        if (IsTerminator(traffic))
+            return ReceiveJitterPacketKind.Terminator;
+        if (IsDefinitiveStart(traffic) ||
+            IsDmrPrivacyHeader(traffic) ||
+            IsP25GrantDemand(traffic) ||
+            (traffic.Protocol == FneTrafficProtocol.Nxdn &&
+             NxdnVoicePacketCodec.TryExtractCallMetadata(traffic.Payload, out _)))
+        {
+            return ReceiveJitterPacketKind.Metadata;
+        }
+        return CarriesEncodedVoicePayload(traffic) || IsVoiceFrame(traffic.FrameType)
+            ? ReceiveJitterPacketKind.Voice
+            : ReceiveJitterPacketKind.Metadata;
+    }
+
+    public static bool IsP25GrantDemand(FneTrafficFrame traffic)
+    {
+        ArgumentNullException.ThrowIfNull(traffic);
+        return traffic.Protocol == FneTrafficProtocol.P25 &&
+               traffic.Subtype.Equals("TDU", StringComparison.OrdinalIgnoreCase) &&
+               traffic.Payload.Length > 14 &&
+               (traffic.Payload[14] & 0x80) != 0;
     }
 
     public static bool IsVoiceFrame(string frameType)

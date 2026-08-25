@@ -28,6 +28,8 @@ public static class P25DfsiFrameCodec
     public const byte Ldu2Duid = 0x0A;
     public const byte TduDuid = 0x03;
     public const ushort RtpCallEndSequence = ushort.MaxValue;
+    private const byte VoiceServicePriority4 = 0x04;
+    private const byte VoiceServiceProtected = 0x40;
 
     public readonly record struct P25EncryptionMetadata(
         byte AlgorithmId,
@@ -186,6 +188,13 @@ public static class P25DfsiFrameCodec
 
     // Builds a clear P25 LDU1 payload from nine 88-bit IMBE codewords.
     public static byte[] CreateLdu1Payload(uint sourceId, uint destinationId, ReadOnlySpan<byte> imbe)
+        => CreateLdu1Payload(sourceId, destinationId, imbe, encrypted: false);
+
+    private static byte[] CreateLdu1Payload(
+        uint sourceId,
+        uint destinationId,
+        ReadOnlySpan<byte> imbe,
+        bool encrypted)
     {
         ValidateIdentifiers(sourceId, destinationId);
         ValidateImbe(imbe);
@@ -193,11 +202,11 @@ public static class P25DfsiFrameCodec
 
         WriteRecord(payload, 24, 22, 0x62, imbe[0..11], 10, static record => record[6] = 0);
         WriteRecord(payload, 46, 14, 0x63, imbe[11..22], 1, null);
-        WriteRecord(payload, 60, 17, 0x64, imbe[22..33], 5, static record =>
+        WriteRecord(payload, 60, 17, 0x64, imbe[22..33], 5, record =>
         {
             record[1] = 0;
             record[2] = 0;
-            record[3] = 0x04;
+            record[3] = BuildVoiceServiceOptions(encrypted);
         });
         WriteRecord(payload, 77, 17, 0x65, imbe[33..44], 5, record => WriteThreeBytes(record, 1, destinationId));
         WriteRecord(payload, 94, 17, 0x66, imbe[44..55], 5, record => WriteThreeBytes(record, 1, sourceId));
@@ -219,10 +228,17 @@ public static class P25DfsiFrameCodec
         P25EncryptionMetadata metadata)
     {
         ValidateEncryptionMetadata(metadata);
-        byte[] payload = CreateLdu1Payload(sourceId, destinationId, encryptedImbe);
+        byte[] payload = CreateLdu1Payload(
+            sourceId,
+            destinationId,
+            encryptedImbe,
+            encrypted: true);
         WriteEncryptionHeader(payload, metadata);
         return payload;
     }
+
+    private static byte BuildVoiceServiceOptions(bool encrypted)
+        => (byte)(VoiceServicePriority4 | (encrypted ? VoiceServiceProtected : 0));
 
     // Builds a clear P25 LDU2 payload from nine 88-bit IMBE codewords.
     // The encryption-sync fields are zeroed for clear traffic.

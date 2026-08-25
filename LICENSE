@@ -665,10 +665,9 @@ For more information on this, and how to apply and follow the GNU AGPL, see
 THIRD-PARTY SOFTWARE LICENSES AND NOTICES
 ===============================================================================
 
-The DVM Console distribution incorporates the third-party components listed in
-NOTICES.md. Their license terms and required notices follow. The fnecore
-submodule is licensed under the GNU Affero General Public License, version 3,
-whose complete text appears above.
+The DVM Console distribution incorporates third-party components. Their license
+terms and required notices follow. The fnecore submodule is licensed under the
+GNU Affero General Public License, version 3, whose complete text appears above.
 
 
 -------------------------------------------------------------------------------

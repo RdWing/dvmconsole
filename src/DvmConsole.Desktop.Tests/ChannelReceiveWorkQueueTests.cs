@@ -321,6 +321,98 @@ public sealed class ChannelReceiveWorkQueueTests
     }
 
     [Fact]
+    public async Task OneHundredThousandReadyFramesDoNotTurnIntoStaleDelayedFrameWakeups()
+    {
+        const int readyFrameCount = 100_000;
+        const int batchSize = 256;
+        var scheduler = new ManualReceiveWorkQueueScheduler();
+        using var processedSignal = new SemaphoreSlim(0);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        var delayedFrameObserved = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var channel = CreateChannel("Dispatch", "100");
+        int readyFramesProcessed = 0;
+        int droppedReadyFrames = 0;
+        await using var queue = new ChannelReceiveWorkQueue(
+            (_, traffic) =>
+            {
+                if (traffic.Protocol == FneTrafficProtocol.P25)
+                    return Task.CompletedTask;
+
+                Interlocked.Increment(ref readyFramesProcessed);
+                processedSignal.Release();
+                return Task.CompletedTask;
+            },
+            maxPendingFramesPerChannel: batchSize * 2,
+            timingObserver: (_, timing) =>
+            {
+                if (timing.Traffic.Protocol == FneTrafficProtocol.P25)
+                    delayedFrameObserved.TrySetResult();
+            },
+            getJitterBufferProfile: (_, protocol) =>
+                protocol == FneTrafficProtocol.P25
+                    ? new ReceiveJitterBufferProfile(
+                        TimeSpan.FromMilliseconds(20),
+                        TimeSpan.FromMilliseconds(20))
+                    : default,
+            scheduler: scheduler);
+
+        Task? futureFrameEnqueued = null;
+        for (int batchStart = 0; batchStart < readyFrameCount; batchStart += batchSize)
+        {
+            int count = Math.Min(batchSize, readyFrameCount - batchStart);
+            for (int offset = 0; offset < count; offset++)
+            {
+                int index = batchStart + offset;
+                ushort sequence = (ushort)(index % ushort.MaxValue);
+                Assert.True(queue.Enqueue(
+                    channel,
+                    CreateTraffic(sequence),
+                    out bool droppedFrame));
+                if (droppedFrame)
+                    droppedReadyFrames++;
+            }
+
+            if (batchStart + count == readyFrameCount)
+            {
+                futureFrameEnqueued = queue.RunAfterStreamAsync(
+                    channel,
+                    streamId: 99,
+                    () =>
+                    {
+                        Assert.True(queue.Enqueue(
+                            channel,
+                            CreateTraffic(
+                                sequence: 1,
+                                streamId: 100,
+                                protocol: FneTrafficProtocol.P25)));
+                        return Task.CompletedTask;
+                    });
+            }
+
+            for (int offset = 0; offset < count; offset++)
+                await processedSignal.WaitAsync(timeout.Token);
+        }
+
+        Assert.NotNull(futureFrameEnqueued);
+        await futureFrameEnqueued.WaitAsync(timeout.Token);
+        await delayedFrameObserved.Task.WaitAsync(timeout.Token);
+        ReceiveWorkQueueDiagnostics diagnostics = queue.GetDiagnostics(channel);
+
+        Assert.Equal(0, droppedReadyFrames);
+        Assert.Equal(readyFrameCount, Volatile.Read(ref readyFramesProcessed));
+        Assert.Equal(readyFrameCount + 1, diagnostics.ProcessedFrames);
+        Assert.True(diagnostics.CoalescedWakeSignals > 0);
+        Assert.Equal(1, diagnostics.WakeWaits);
+        Assert.Equal(1, diagnostics.WakeTimeouts);
+        Assert.InRange(diagnostics.PeakPendingFrames, 1, batchSize);
+        Assert.InRange(
+            scheduler.TimedOutDuration,
+            TimeSpan.FromMilliseconds(19),
+            TimeSpan.FromMilliseconds(21));
+    }
+
+    [Fact]
     public async Task RemovesPerStreamTimingAfterItsTerminatorIsReported()
     {
         var terminatorReported = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -335,10 +427,46 @@ public sealed class ChannelReceiveWorkQueueTests
 
         queue.Enqueue(channel, CreateTraffic(1, streamId: 42));
         queue.Enqueue(channel, CreateTraffic(2, terminator: true, streamId: 42));
+        Task streamDrained = queue.RunAfterStreamAsync(
+            channel,
+            streamId: 42,
+            () => Task.CompletedTask);
 
         await terminatorReported.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        await streamDrained.WaitAsync(TimeSpan.FromSeconds(2));
 
         Assert.Equal(default, queue.GetDiagnostics(channel, streamId: 42));
+    }
+
+    [Fact]
+    public async Task HealthSnapshotReportsCurrentAndPeakPendingPressure()
+    {
+        var firstStarted = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseFirst = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var channel = CreateChannel("Dispatch", "100");
+        await using var queue = new ChannelReceiveWorkQueue(async (_, traffic) =>
+        {
+            if (traffic.PacketSequence != 1)
+                return;
+            firstStarted.TrySetResult();
+            await releaseFirst.Task;
+        });
+
+        queue.Enqueue(channel, CreateTraffic(1));
+        await firstStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        queue.Enqueue(channel, CreateTraffic(2));
+
+        DvmConsole.Operations.ReceiveQueueHealth active = queue.CaptureHealth();
+        Assert.Equal(1, active.CurrentDepth);
+        Assert.True(active.PeakDepth >= 1);
+
+        releaseFirst.TrySetResult();
+        await queue.StopAsync(channel);
+        DvmConsole.Operations.ReceiveQueueHealth drained = queue.CaptureHealth();
+        Assert.Equal(0, drained.CurrentDepth);
+        Assert.True(drained.PeakDepth >= 1);
     }
 
     private static ChannelViewModel CreateChannel(string name, string tgid)
@@ -354,9 +482,10 @@ public sealed class ChannelReceiveWorkQueueTests
     private static FneTrafficFrame CreateTraffic(
         ushort sequence,
         bool terminator = false,
-        uint streamId = 99)
+        uint streamId = 99,
+        FneTrafficProtocol protocol = FneTrafficProtocol.Dmr)
         => new(
-            FneTrafficProtocol.Dmr,
+            protocol,
             peerId: 1,
             sourceId: 2,
             destinationId: 100,
@@ -367,4 +496,33 @@ public sealed class ChannelReceiveWorkQueueTests
             packetSequence: sequence,
             streamId: streamId,
             payload: []);
+
+    private sealed class ManualReceiveWorkQueueScheduler : IReceiveWorkQueueScheduler
+    {
+        private long timestamp = Stopwatch.Frequency;
+        private long timedOutTicks;
+
+        public TimeSpan TimedOutDuration
+            => Stopwatch.GetElapsedTime(0, Interlocked.Read(ref timedOutTicks));
+
+        public long GetTimestamp()
+            => Interlocked.Read(ref timestamp);
+
+        public ValueTask<bool> WaitAsync(
+            CoalescingWakeSignal signal,
+            TimeSpan timeout)
+        {
+            if (signal.TryConsume())
+                return ValueTask.FromResult(true);
+            if (timeout == Timeout.InfiniteTimeSpan)
+                throw new InvalidOperationException("The deterministic queue unexpectedly waited indefinitely.");
+
+            long elapsedTicks = Math.Max(
+                1,
+                (long)Math.Ceiling(timeout.TotalSeconds * Stopwatch.Frequency));
+            Interlocked.Add(ref timestamp, elapsedTicks);
+            Interlocked.Add(ref timedOutTicks, elapsedTicks);
+            return ValueTask.FromResult(false);
+        }
+    }
 }

@@ -3,9 +3,10 @@
         xmlns:local="using:DvmConsole.Desktop"
         x:Class="DvmConsole.Desktop.MainWindow"
         x:DataType="local:MainWindowViewModel"
-        Title="DVM Console" Width="1260" Height="760" MinWidth="880" MinHeight="560"
+        Title="DVM Console NEO" Width="1260" Height="760" MinWidth="880" MinHeight="560"
         Icon="avares://DvmConsole/Assets/DVMConsole.png"
-        Background="{DynamicResource ShellBackgroundBrush}" Topmost="{Binding KeepWindowOnTop, Mode=TwoWay}" FontSize="{Binding UiFontSize}">
+        Background="{DynamicResource ShellBackgroundBrush}" Topmost="{Binding KeepWindowOnTop, Mode=TwoWay}" FontSize="{Binding UiFontSize}"
+        SizeChanged="HandleResponsiveToolbarSizeChanged">
   <Window.Styles>
     <Style Selector="TextBlock"><Setter Property="Foreground" Value="{DynamicResource PrimaryTextBrush}" /></Style>
     <Style Selector="TextBlock.muted"><Setter Property="Foreground" Value="{DynamicResource MutedTextBrush}" /></Style>
@@ -35,10 +36,10 @@
     <Style Selector="Button.status-card:pressed" x:DataType="local:SystemViewModel"><Setter Property="BorderBrush" Value="{Binding ConnectionBrush}" /></Style>
     <Style Selector="Button.status-card:pressed /template/ ContentPresenter#PART_ContentPresenter" x:DataType="local:SystemViewModel"><Setter Property="BorderBrush" Value="{Binding ConnectionBrush}" /><Setter Property="BorderThickness" Value="2" /></Style>
     <Style Selector="ToggleButton.toolbar-audio"><Setter Property="Width" Value="30" /><Setter Property="Height" Value="26" /><Setter Property="Padding" Value="2,0" /><Setter Property="HorizontalContentAlignment" Value="Center" /><Setter Property="VerticalContentAlignment" Value="Center" /><Setter Property="Background" Value="{DynamicResource ButtonBackgroundBrush}" /><Setter Property="BorderBrush" Value="{DynamicResource ControlBorderBrush}" /><Setter Property="Opacity" Value="1" /></Style>
-    <Style Selector="ToggleButton.mic-warm:checked"><Setter Property="Background" Value="#B45309" /><Setter Property="BorderBrush" Value="#F59E0B" /></Style>
-    <Style Selector="ToggleButton.mic-warm:checked:pointerover"><Setter Property="Background" Value="#92400E" /><Setter Property="BorderBrush" Value="#F59E0B" /></Style>
-    <Style Selector="ToggleButton.output-mute:checked"><Setter Property="Background" Value="#991B1B" /><Setter Property="BorderBrush" Value="#EF4444" /></Style>
-    <Style Selector="ToggleButton.output-mute:checked:pointerover"><Setter Property="Background" Value="#7F1D1D" /><Setter Property="BorderBrush" Value="#EF4444" /></Style>
+    <Style Selector="ToggleButton.mic-warm:checked"><Setter Property="Background" Value="{DynamicResource OperationalAttentionSurfaceBrush}" /><Setter Property="BorderBrush" Value="{DynamicResource OperationalAttentionBorderBrush}" /><Setter Property="Foreground" Value="{DynamicResource OperationalStateTextBrush}" /></Style>
+    <Style Selector="ToggleButton.mic-warm:checked:pointerover"><Setter Property="Background" Value="{DynamicResource OperationalAttentionSurfaceBrush}" /><Setter Property="BorderBrush" Value="{DynamicResource OperationalAttentionBorderBrush}" /></Style>
+    <Style Selector="ToggleButton.output-mute:checked"><Setter Property="Background" Value="{DynamicResource OperationalMuteSurfaceBrush}" /><Setter Property="BorderBrush" Value="{DynamicResource OperationalMuteBorderBrush}" /><Setter Property="Foreground" Value="{DynamicResource OperationalStateTextBrush}" /></Style>
+    <Style Selector="ToggleButton.output-mute:checked:pointerover"><Setter Property="Background" Value="{DynamicResource OperationalMuteSurfaceBrush}" /><Setter Property="BorderBrush" Value="{DynamicResource OperationalMuteBorderBrush}" /></Style>
     <Style Selector="TabItem"><Setter Property="Foreground" Value="{DynamicResource TabTextBrush}" /><Setter Property="Padding" Value="6,8" /><Setter Property="FontSize" Value="{Binding $parent[Window].((local:MainWindowViewModel)DataContext).UiFontSize}" /></Style>
     <Style Selector="TabItem:selected"><Setter Property="Foreground" Value="{DynamicResource SelectedTabTextBrush}" /></Style>
     <Style Selector="ScrollViewer"><Setter Property="AllowAutoHide" Value="True" /></Style>
@@ -47,7 +48,14 @@
   </Window.Styles>
 
   <LayoutTransformControl LayoutTransform="{Binding UiScaleTransform}">
-  <Grid RowDefinitions="Auto,*,Auto" ColumnDefinitions="*,Auto">
+  <Grid x:Name="mainShellGrid" ColumnDefinitions="*,Auto">
+    <Grid.RowDefinitions>
+      <RowDefinition Height="Auto" />
+      <RowDefinition Height="*" />
+      <RowDefinition Height="0" />
+      <RowDefinition Height="0" />
+      <RowDefinition Height="Auto" />
+    </Grid.RowDefinitions>
     <Border Grid.Row="0" Grid.Column="0" Grid.ColumnSpan="2" Background="{DynamicResource ShellHeaderBrush}" Padding="6,0">
       <DockPanel LastChildFill="False">
         <Menu Background="Transparent" Foreground="{DynamicResource PrimaryTextBrush}">
@@ -69,10 +77,10 @@
             <MenuItem Header="Exit" Click="HandleExitClick" />
           </MenuItem>
           <MenuItem Header="Channels">
-            <MenuItem Header="Enable all receive" Click="HandleEnableAllReceiveClick" />
-            <MenuItem Header="Enable all receive (zone)" IsEnabled="{Binding HasSelectedZone}" Click="HandleEnableZoneReceiveClick" />
-            <MenuItem Header="Disable all receive (zone)" IsEnabled="{Binding HasSelectedZone}" Click="HandleDisableZoneReceiveClick" />
-            <MenuItem Header="Disable all receive" Click="HandleDisableAllReceiveClick" />
+            <MenuItem Header="Enable all receive" Tag="channels.receive.enable-all" Click="HandleOperatorCommandClick" />
+            <MenuItem Header="Enable all receive (zone)" Tag="channels.receive.enable-zone" IsEnabled="{Binding HasSelectedZone}" Click="HandleOperatorCommandClick" />
+            <MenuItem Header="Disable all receive (zone)" Tag="channels.receive.disable-zone" IsEnabled="{Binding HasSelectedZone}" Click="HandleOperatorCommandClick" />
+            <MenuItem Header="Disable all receive" Tag="channels.receive.disable-all" Click="HandleOperatorCommandClick" />
             <Separator />
             <MenuItem Header="Global PTT key">
               <MenuItem Header="None (keyboard PTT disabled)" Tag="None" Click="HandleGlobalPttKeyClick" />
@@ -121,16 +129,16 @@
               <MenuItem Header="F19" Tag="F19" Click="HandleActiveSystemPttKeyClick" />
             </MenuItem>
             <Separator />
-            <MenuItem Header="Select/unselect all TX channels" Click="HandleToggleAllTransmitSelectionClick" />
+            <MenuItem Header="Select/unselect all TX channels" Tag="channels.transmit.toggle-all" Click="HandleOperatorCommandClick" />
           </MenuItem>
           <MenuItem Header="Commands">
-            <MenuItem Header="Page Subscriber…" Tag="CallAlert" Click="HandleSubscriberCommandClick" />
-            <MenuItem Header="Radio Check Subscriber…" Tag="RadioCheck" Click="HandleSubscriberCommandClick" />
+            <MenuItem Header="Page Subscriber…" Tag="subscriber.page" Click="HandleOperatorCommandClick" />
+            <MenuItem Header="Radio Check Subscriber…" Tag="subscriber.radio-check" Click="HandleOperatorCommandClick" />
             <Separator />
-            <MenuItem Header="Inhibit Subscriber…" Tag="Inhibit" Click="HandleSubscriberCommandClick" />
-            <MenuItem Header="Uninhibit Subscriber…" Tag="Uninhibit" Click="HandleSubscriberCommandClick" />
+            <MenuItem Header="Inhibit Subscriber…" Tag="subscriber.inhibit" Click="HandleOperatorCommandClick" />
+            <MenuItem Header="Uninhibit Subscriber…" Tag="subscriber.uninhibit" Click="HandleOperatorCommandClick" />
             <Separator />
-            <MenuItem Header="Tones…" Tag="Tones" Click="HandleOpenOperatorToolsClick" />
+            <MenuItem Header="Tones…" Tag="settings.tones" Click="HandleOperatorCommandClick" />
           </MenuItem>
           <MenuItem Header="Settings">
             <MenuItem Header="Toggle push-to-talk mode" IsChecked="{Binding TogglePttMode, Mode=TwoWay}" ToggleType="CheckBox" />
@@ -139,15 +147,15 @@
             <MenuItem Header="Retain patch state on startup" IsChecked="{Binding RetainPatchStateOnStartup, Mode=TwoWay}" ToggleType="CheckBox" />
             <MenuItem Header="Restore selected channels on startup" IsChecked="{Binding RestoreSelectedChannelsOnStartup, Mode=TwoWay}" ToggleType="CheckBox" />
             <Separator />
-            <MenuItem Header="Global PTT settings…" Tag="Ptt" Click="HandleOpenOperatorToolsClick" />
-            <MenuItem Header="Clock settings…" Tag="Clock" Click="HandleOpenOperatorToolsClick" />
-            <MenuItem Header="Audio settings…" Tag="Audio" Click="HandleOpenOperatorToolsClick" />
+            <MenuItem Header="Global PTT settings…" Tag="settings.ptt" Click="HandleOperatorCommandClick" />
+            <MenuItem Header="Clock settings…" Tag="settings.clock" Click="HandleOperatorCommandClick" />
+            <MenuItem Header="Audio settings…" Tag="settings.audio" Click="HandleOperatorCommandClick" />
             <MenuItem Header="Reset settings…" Click="HandleResetSettingsClick" />
-            <MenuItem Header="All console settings…" Tag="General" Click="HandleOpenOperatorToolsClick" />
+            <MenuItem Header="All console settings…" Tag="settings.general" Click="HandleOperatorCommandClick" />
           </MenuItem>
           <MenuItem Header="Audio">
-            <MenuItem Header="Audio settings…" Tag="Audio" Click="HandleOpenOperatorToolsClick" />
-            <MenuItem Header="Web streams…" Tag="Streams" Click="HandleOpenOperatorToolsClick" />
+            <MenuItem Header="Audio settings…" Tag="settings.audio" Click="HandleOperatorCommandClick" />
+            <MenuItem Header="Web streams…" Tag="settings.streams" Click="HandleOperatorCommandClick" />
           </MenuItem>
           <MenuItem Header="View">
             <MenuItem Header="Dark mode" IsChecked="{Binding DarkMode, Mode=TwoWay}" ToggleType="CheckBox" />
@@ -159,31 +167,32 @@
             <MenuItem Header="Lock widgets" IsChecked="{Binding LockWidgets, Mode=TwoWay}" ToggleType="CheckBox" />
             <MenuItem Header="Reset widget layout" Click="HandleResetLayoutClick" />
             <Separator />
-            <MenuItem Header="History…" Tag="History" Click="HandleOpenOperatorToolsClick" />
-            <MenuItem Header="Groups…" Tag="Groups" Click="HandleOpenOperatorToolsClick" />
-            <MenuItem Header="Debug Logs…" Click="HandleOpenDebugLogsClick" />
+            <MenuItem Header="History…" Tag="settings.history" Click="HandleOperatorCommandClick" />
+            <MenuItem Header="Groups…" Tag="settings.groups" Click="HandleOperatorCommandClick" />
+            <MenuItem Header="Debug Logs…" Tag="view.debug-logs" Click="HandleOperatorCommandClick" />
+            <MenuItem x:Name="engineeringHealthMenuItem"
+                      Header="Engineering Health"
+                      ToggleType="CheckBox"
+                      Tag="view.engineering-health"
+                      Click="HandleOperatorCommandClick" />
             <Separator />
             <MenuItem Header="Keep window on top" IsChecked="{Binding KeepWindowOnTop, Mode=TwoWay}" ToggleType="CheckBox" />
           </MenuItem>
           <MenuItem Header="Tools">
             <MenuItem Header="Talkgroup Audio Recorder">
-              <MenuItem Header="Viewer…" Tag="History" Click="HandleOpenOperatorToolsClick" />
-              <MenuItem Header="Configuration…" Tag="Recorder" Click="HandleOpenOperatorToolsClick" />
+              <MenuItem Header="Viewer…" Tag="settings.history" Click="HandleOperatorCommandClick" />
+              <MenuItem Header="Configuration…" Tag="settings.recorder" Click="HandleOperatorCommandClick" />
             </MenuItem>
             <Separator />
-            <MenuItem Header="FNE Connection Manager…" Tag="Connections" Click="HandleOpenOperatorToolsClick" />
-            <MenuItem Header="Encryption Key Status…" Tag="EncryptionKeys" Click="HandleOpenOperatorToolsClick" />
+            <MenuItem Header="FNE Connection Manager…" Tag="settings.connections" Click="HandleOperatorCommandClick" />
+            <MenuItem Header="Encryption Key Status…" Tag="settings.encryption-keys" Click="HandleOperatorCommandClick" />
           </MenuItem>
           <MenuItem Header="Help">
-            <MenuItem Header="Documentation" Click="HandleDocumentationClick" />
-            <MenuItem Header="About" Click="HandleAboutClick" />
+            <MenuItem Header="Documentation" Tag="help.documentation" Click="HandleOperatorCommandClick" />
+            <MenuItem Header="About" Tag="help.about" Click="HandleOperatorCommandClick" />
           </MenuItem>
         </Menu>
         <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" Spacing="10" VerticalAlignment="Center">
-          <ItemsControl ItemsSource="{Binding ToolbarClocks}">
-            <ItemsControl.ItemsPanel><ItemsPanelTemplate><StackPanel Orientation="Horizontal" Spacing="4" /></ItemsPanelTemplate></ItemsControl.ItemsPanel>
-            <ItemsControl.ItemTemplate><DataTemplate x:DataType="local:ToolbarClockViewModel"><Border IsVisible="{Binding Enabled}" Background="{Binding BackgroundBrush}" BorderBrush="{DynamicResource ClockBorderBrush}" BorderThickness="1" CornerRadius="4" Padding="5,2"><StackPanel><TextBlock Foreground="{DynamicResource ClockTextBrush}" FontSize="{Binding $parent[Window].((local:MainWindowViewModel)DataContext).UiCompactFontSize}" Text="{Binding TimeZoneLabel}" HorizontalAlignment="Center" /><TextBlock Foreground="{DynamicResource ClockTextBrush}" FontSize="{Binding $parent[Window].((local:MainWindowViewModel)DataContext).UiSmallFontSize}" Text="{Binding TimeText}" HorizontalAlignment="Center" /></StackPanel></Border></DataTemplate></ItemsControl.ItemTemplate>
-          </ItemsControl>
           <ToggleButton Classes="toolbar-audio mic-warm" Content="🎙️"
                         IsChecked="{Binding KeepTransmitMicrophoneWarm, Mode=TwoWay}"
                         ToolTip.Tip="{Binding KeepTransmitMicrophoneWarmToolTip}"
@@ -207,13 +216,33 @@
                         IsChecked="{Binding OutputMuted, Mode=TwoWay}"
                         ToolTip.Tip="{Binding OutputMuteToolTip}"
                         AutomationProperties.Name="{Binding OutputMuteToolTip}" />
+          <ItemsControl x:Name="toolbarClocks"
+                        ItemsSource="{Binding ToolbarClocks}"
+                        AutomationProperties.Name="Configured toolbar clocks">
+            <ItemsControl.ItemsPanel><ItemsPanelTemplate><StackPanel Orientation="Horizontal" Spacing="4" /></ItemsPanelTemplate></ItemsControl.ItemsPanel>
+            <ItemsControl.ItemTemplate><DataTemplate x:DataType="local:ToolbarClockViewModel"><Border IsVisible="{Binding Enabled}" Background="{Binding BackgroundBrush}" BorderBrush="{DynamicResource ClockBorderBrush}" BorderThickness="1" CornerRadius="4" Padding="5,2"><StackPanel><TextBlock Foreground="{DynamicResource ClockTextBrush}" FontSize="{Binding $parent[Window].((local:MainWindowViewModel)DataContext).UiCompactFontSize}" Text="{Binding TimeZoneLabel}" HorizontalAlignment="Center" /><TextBlock Foreground="{DynamicResource ClockTextBrush}" FontSize="{Binding $parent[Window].((local:MainWindowViewModel)DataContext).UiSmallFontSize}" Text="{Binding TimeText}" HorizontalAlignment="Center" /></StackPanel></Border></DataTemplate></ItemsControl.ItemTemplate>
+          </ItemsControl>
           <StackPanel Orientation="Horizontal" Spacing="4" IsVisible="{Binding ShowAlertTones}">
-            <ItemsControl ItemsSource="{Binding BuiltInAlertTones}">
+            <ItemsControl x:Name="toolbarAlertToneShortcuts"
+                          ItemsSource="{Binding BuiltInAlertTones}"
+                          AutomationProperties.Name="Alert tone shortcuts">
               <ItemsControl.ItemsPanel><ItemsPanelTemplate><StackPanel Orientation="Horizontal" Spacing="4" /></ItemsPanelTemplate></ItemsControl.ItemsPanel>
-              <ItemsControl.ItemTemplate><DataTemplate x:DataType="local:BuiltInAlertToneViewModel"><Button Content="{Binding Name}" Tag="{Binding}" ToolTip.Tip="{Binding Description}" Padding="6,3" Click="HandleToolbarAlertToneClick" /></DataTemplate></ItemsControl.ItemTemplate>
+              <ItemsControl.ItemTemplate><DataTemplate x:DataType="local:BuiltInAlertToneViewModel"><Button Content="{Binding Name}" Tag="{Binding}" ToolTip.Tip="{Binding Description}" Padding="6,3" AutomationProperties.Name="{Binding Description}" Click="HandleToolbarAlertToneClick" /></DataTemplate></ItemsControl.ItemTemplate>
             </ItemsControl>
-            <Button Content="TONES" ToolTip.Tip="Open Console Settings directly to Tones and DTMF" Padding="6,3" Click="HandleToolbarToneToolsClick" />
+            <Button x:Name="toolbarTonesLauncher" Content="TONES" Tag="settings.tones" ToolTip.Tip="Open Console Settings directly to Tones and DTMF" Padding="6,3" AutomationProperties.Name="Open Tones and DTMF" Click="HandleOperatorCommandClick" />
           </StackPanel>
+          <Menu x:Name="toolbarOverflowMenu"
+                Background="Transparent"
+                AutomationProperties.Name="Responsive toolbar overflow">
+            <MenuItem Header="MORE" AutomationProperties.Name="More toolbar items">
+              <MenuItem Header="Configured clocks" Tag="settings.clock" Click="HandleOperatorCommandClick" />
+              <Separator />
+              <MenuItem Header="Send ALERT 1" Tag="{Binding BuiltInAlertTones[0]}" AutomationProperties.Name="Send alert tone 1" Click="HandleResponsiveAlertToneClick" />
+              <MenuItem Header="Send ALERT 2" Tag="{Binding BuiltInAlertTones[1]}" AutomationProperties.Name="Send alert tone 2" Click="HandleResponsiveAlertToneClick" />
+              <MenuItem Header="Send ALERT 3" Tag="{Binding BuiltInAlertTones[2]}" AutomationProperties.Name="Send alert tone 3" Click="HandleResponsiveAlertToneClick" />
+              <MenuItem Header="Tones and DTMF…" Tag="settings.tones" Click="HandleOperatorCommandClick" />
+            </MenuItem>
+          </Menu>
         </StackPanel>
       </DockPanel>
     </Border>
@@ -347,7 +376,21 @@
           </ScrollViewer>
         </Grid>
       </Border>
-    <Border Grid.Row="2" Grid.ColumnSpan="2" Background="{DynamicResource StatusBarBackgroundBrush}" Padding="8,5"><Grid ColumnDefinitions="*,*,*"><TextBlock Classes="eyebrow" Text="{Binding StatusText}" TextTrimming="CharacterEllipsis" /><TextBlock Grid.Column="1" Classes="eyebrow" Text="{Binding AudioStatusText}" TextTrimming="CharacterEllipsis" TextAlignment="Center" /><TextBlock Grid.Column="2" Classes="eyebrow" Text="{Binding TransmitStatusText}" TextTrimming="CharacterEllipsis" TextAlignment="Right" /></Grid></Border>
+    <GridSplitter x:Name="engineeringHealthSplitter"
+                  Grid.Row="2"
+                  Grid.ColumnSpan="2"
+                  HorizontalAlignment="Stretch"
+                  VerticalAlignment="Stretch"
+                  ResizeDirection="Rows"
+                  ResizeBehavior="PreviousAndNext"
+                  Background="{DynamicResource ControlBorderBrush}"
+                  IsVisible="False"
+                  PointerReleased="HandleEngineeringHealthSplitterPointerReleased" />
+    <local:EngineeringHealthPane x:Name="engineeringHealthPane"
+                                 Grid.Row="3"
+                                 Grid.ColumnSpan="2"
+                                 IsVisible="False" />
+    <Border Grid.Row="4" Grid.ColumnSpan="2" Background="{DynamicResource StatusBarBackgroundBrush}" Padding="8,5"><Grid ColumnDefinitions="*,*,*"><TextBlock Classes="eyebrow" Text="{Binding StatusText}" TextTrimming="CharacterEllipsis" /><TextBlock Grid.Column="1" Classes="eyebrow" Text="{Binding AudioStatusText}" TextTrimming="CharacterEllipsis" TextAlignment="Center" /><TextBlock Grid.Column="2" Classes="eyebrow" Text="{Binding TransmitStatusText}" TextTrimming="CharacterEllipsis" TextAlignment="Right" /></Grid></Border>
   </Grid>
   </LayoutTransformControl>
 </Window>

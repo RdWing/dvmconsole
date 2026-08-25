@@ -8,7 +8,7 @@ namespace DvmConsole.Media.Tests;
 public sealed class P25TransmitCaptureSessionTests
 {
     [Fact]
-    public async Task StartsCaptureAfterTduAndEndsWithFourTerminatingTdus()
+    public async Task PreparesCaptureBeforeGrantAndEndsWithOneTerminatingTdu()
     {
         var capture = new FakeCapture();
         var packets = new List<(byte[] Payload, ushort Sequence, uint Stream)>();
@@ -24,17 +24,21 @@ public sealed class P25TransmitCaptureSessionTests
 
         Assert.True(session.IsRunning);
         Assert.True(capture.IsRunning);
+        Assert.False(session.IsActivated);
+        Assert.Empty(packets);
+
+        session.Activate();
+        Assert.True(session.IsActivated);
         Assert.Single(packets);
         Assert.Equal(P25DfsiFrameCodec.TduDuid, packets[0].Payload[22]);
 
         capture.Emit(new short[18 * 160]);
-        Assert.Equal(3, packets.Count);
 
         await session.StopAsync();
 
         Assert.False(session.IsRunning);
         Assert.False(capture.IsRunning);
-        Assert.Equal(7, packets.Count);
+        Assert.Equal(4, packets.Count);
         Assert.Equal(P25DfsiFrameCodec.TduDuid, packets[^1].Payload[22]);
         Assert.Equal(P25DfsiFrameCodec.RtpCallEndSequence, packets[^1].Sequence);
     }

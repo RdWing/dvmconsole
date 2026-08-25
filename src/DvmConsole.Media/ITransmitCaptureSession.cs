@@ -6,6 +6,8 @@ public interface ITransmitCaptureSession : IAsyncDisposable
 {
     event EventHandler<Exception>? Faulted;
     bool IsRunning { get; }
+    bool IsActivated { get; }
     ValueTask StartAsync(CancellationToken cancellationToken = default);
+    void Activate();
     Task StopAsync(CancellationToken cancellationToken = default);
 }

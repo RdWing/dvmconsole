@@ -176,7 +176,8 @@ internal static class SettingsImportPolicy
                     entry => entry.Value.Select(member => new PatchMemberSetting
                     {
                         SystemName = member.SystemName,
-                        DestinationId = member.DestinationId
+                        DestinationId = member.DestinationId,
+                        ChannelName = member.ChannelName
                     }).ToList(),
                     StringComparer.OrdinalIgnoreCase);
             target.PatchGroupModes = new Dictionary<string, bool>(source.PatchGroupModes, StringComparer.OrdinalIgnoreCase);

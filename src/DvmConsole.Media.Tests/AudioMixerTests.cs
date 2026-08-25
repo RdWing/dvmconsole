@@ -219,7 +219,8 @@ public sealed class AudioMixerTests
         {
             StarvedDuration = TimeSpan.FromMilliseconds(40),
             PendingStarvedDuration = TimeSpan.FromMilliseconds(20),
-            OutputCallbackCount = 17
+            OutputCallbackCount = 17,
+            OutputPresentationLatency = TimeSpan.FromMilliseconds(315)
         };
         await using var sharedMixer = new AudioMixer(physicalOutput);
         await using IAudioPlayback sharedLane = sharedMixer.OpenChannel();
@@ -230,6 +231,10 @@ public sealed class AudioMixerTests
         Assert.Equal(TimeSpan.FromMilliseconds(40), diagnostics.PhysicalOutputStarvation);
         Assert.Equal(TimeSpan.FromMilliseconds(20), diagnostics.PendingPhysicalOutputStarvation);
         Assert.Equal(17, diagnostics.PhysicalOutputCallbackCount);
+        Assert.Equal(
+            TimeSpan.FromMilliseconds(315),
+            Assert.IsAssignableFrom<IAudioPlaybackPresentationLatencyDiagnostics>(sharedLane)
+                .OutputPresentationLatency);
         Assert.Null(sharedLane.QueuedSamples);
         Assert.False(sharedLane is IAudioPlaybackContinuityDiagnostics);
     }
@@ -684,13 +689,15 @@ public sealed class AudioMixerTests
     private sealed class ObservablePhysicalPlayback :
         IAudioPlayback,
         IAudioPlaybackContinuityDiagnostics,
-        IAudioPlaybackCallbackDiagnostics
+        IAudioPlaybackCallbackDiagnostics,
+        IAudioPlaybackPresentationLatencyDiagnostics
     {
         public PcmAudioFormat Format => PcmAudioFormat.Voice8KhzMono16Bit;
         public int? QueuedSamples => 0;
         public TimeSpan StarvedDuration { get; init; }
         public TimeSpan PendingStarvedDuration { get; init; }
         public long OutputCallbackCount { get; init; }
+        public TimeSpan OutputPresentationLatency { get; init; }
 
         public void EndExpectedPlayback()
         {

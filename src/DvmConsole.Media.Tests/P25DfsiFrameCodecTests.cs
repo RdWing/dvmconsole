@@ -45,11 +45,33 @@ public sealed class P25DfsiFrameCodecTests
         byte[] ldu2 = P25DfsiFrameCodec.CreateLdu2Payload(99, 100, new byte[P25DfsiFrameCodec.ImbeBytes]);
 
         Assert.Equal((byte)0x08, (byte)(ldu1[14] & 0x08));
+        Assert.Equal((byte)0x04, ldu1[63]);
         Assert.Equal(P25Defines.P25_FT_HDU_VALID, ldu1[180]);
         Assert.Equal(P25Defines.P25_ALGO_UNENCRYPT, ldu1[181]);
         Assert.Equal((byte)0x08, (byte)(ldu2[14] & 0x08));
         Assert.Equal(P25Defines.P25_ALGO_UNENCRYPT, ldu2[112]);
         Assert.Equal(P25Defines.P25_ALGO_UNENCRYPT, ldu2[181]);
+    }
+
+    [Fact]
+    public void EncryptedTransmitPayloadMarksLdu1VoiceServiceAsProtected()
+    {
+        var metadata = new P25DfsiFrameCodec.P25EncryptionMetadata(
+            AlgorithmId: P25Defines.P25_ALGO_AES,
+            KeyId: 3,
+            MessageIndicator: [1, 2, 3, 4, 5, 6, 7, 8, 9]);
+
+        byte[] ldu1 = P25DfsiFrameCodec.CreateEncryptedLdu1Payload(
+            99,
+            100,
+            new byte[P25DfsiFrameCodec.ImbeBytes],
+            metadata);
+
+        Assert.Equal((byte)0x44, ldu1[63]);
+        Assert.Equal(P25Defines.P25_ALGO_AES, ldu1[181]);
+        Assert.Equal((byte)0, ldu1[182]);
+        Assert.Equal((byte)3, ldu1[183]);
+        Assert.Equal(metadata.MessageIndicator.ToArray(), ldu1[184..193]);
     }
 
     [Fact]

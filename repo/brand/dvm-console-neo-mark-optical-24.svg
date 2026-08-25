@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" role="img" aria-labelledby="title">
+  <title id="title">DVM Console NEO routed N 24 pixel optical mark</title>
+  <rect x="0.75" y="0.75" width="22.5" height="22.5" rx="5" fill="#0D1116" stroke="#25313D" stroke-width="1.5"/>
+  <path d="M6 18V6l12 12V6" fill="none" stroke="#22D3EE" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

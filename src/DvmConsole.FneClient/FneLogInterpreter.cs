@@ -7,6 +7,9 @@ internal sealed record FneLogStatusUpdate(FneConnectionState State, string Messa
 
 internal static class FneLogInterpreter
 {
+    public static bool IsLoginRequest(string message)
+        => message.Contains("Sending login request", StringComparison.OrdinalIgnoreCase);
+
     public static DebugLogSeverity MapSeverity(LogLevel level)
         => level switch
         {
@@ -21,7 +24,7 @@ internal static class FneLogInterpreter
         string message,
         FneConnectionState currentState)
     {
-        if (message.Contains("Sending login request", StringComparison.OrdinalIgnoreCase))
+        if (IsLoginRequest(message))
         {
             return new FneLogStatusUpdate(
                 FneConnectionState.WaitingForLogin,

@@ -136,6 +136,43 @@ public sealed class KeyboardPttSourceTests
         Assert.Equal(new[] { true, false }, states);
     }
 
+    [Fact]
+    public async Task InputSuppressionReleasesHoldModeAndIgnoresSpaceUntilCleared()
+    {
+        await using var ptt = new KeyboardPttSource(KeyboardPttKey.Space);
+        var states = new List<bool>();
+        ptt.StateChanged += (_, pressed) => states.Add(pressed);
+        await ptt.StartAsync();
+
+        Assert.True(ptt.HandleKeyDown(KeyboardPttKey.Space));
+        ptt.InputSuppressed = true;
+        Assert.False(ptt.HandleKeyDown(KeyboardPttKey.Space));
+        Assert.False(ptt.HandleKeyUp(KeyboardPttKey.Space));
+        ptt.InputSuppressed = false;
+        Assert.True(ptt.HandleKeyDown(KeyboardPttKey.Space));
+        Assert.True(ptt.HandleKeyUp(KeyboardPttKey.Space));
+
+        Assert.Equal(new[] { true, false, true, false }, states);
+    }
+
+    [Fact]
+    public async Task InputSuppressionSafelyClearsLatchedToggleState()
+    {
+        await using var ptt = new KeyboardPttSource(KeyboardPttKey.Space)
+        {
+            ToggleMode = true
+        };
+        await ptt.StartAsync();
+
+        Assert.True(ptt.HandleKeyDown(KeyboardPttKey.Space));
+        Assert.True(ptt.IsPressed);
+        ptt.InputSuppressed = true;
+        Assert.False(ptt.IsPressed);
+        ptt.InputSuppressed = false;
+        Assert.True(ptt.HandleKeyDown(KeyboardPttKey.Space));
+        Assert.True(ptt.IsPressed);
+    }
+
     private sealed class FakeGlobalKeyboardCapture : IGlobalKeyboardCapture
     {
         public event Action<KeyboardPttKey, bool>? KeyChanged;

@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
   <key>CFBundleDisplayName</key>
-  <string>DVM Console</string>
+  <string>DVM Console NEO</string>
   <key>CFBundleExecutable</key>
   <string>DVM Console</string>
   <key>CFBundleIdentifier</key>
@@ -13,20 +13,20 @@
   <key>CFBundleInfoDictionaryVersion</key>
   <string>6.0</string>
   <key>CFBundleName</key>
-  <string>DVM Console</string>
+  <string>DVM Console NEO</string>
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleShortVersionString</key>
-  <string>0.3.8</string>
+  <string>0.4.0</string>
   <key>CFBundleVersion</key>
-  <string>0.3.8</string>
+  <string>0.4.0</string>
   <key>LSMinimumSystemVersion</key>
   <string>14.0</string>
   <key>NSHighResolutionCapable</key>
   <true/>
   <key>NSMicrophoneUsageDescription</key>
-  <string>DVM Console uses the selected microphone while transmitting radio audio.</string>
+  <string>DVM Console NEO uses the selected microphone while transmitting radio audio.</string>
   <key>NSLocalNetworkUsageDescription</key>
-  <string>DVM Console connects to configured FNE systems on your local network.</string>
+  <string>DVM Console NEO connects to configured FNE systems on your local network.</string>
 </dict>
 </plist>

@@ -79,10 +79,12 @@ Use `osx-x64` instead of `osx-arm64` when packaging for an Intel Mac.
 
 This creates `DVMConsole.app` and a ZIP containing that application bundle.
 
-Do not move or rename files inside the application bundle. The managed assemblies, native libraries, and icon are loaded relative to the bundled executable. The license and third-party notices are included in the package; user-guide documentation is read from GitHub and is not copied into the bundle.
+Do not move or rename files inside the application bundle. The managed
+assemblies, native libraries, icon, license, and third-party notices are loaded
+relative to the application executable.
 
-The package is unsigned. After moving an official release to Applications,
-remove its download quarantine before launching:
+The package is unsigned. After moving a package from an RdWing GitHub Release to
+Applications, remove its download quarantine before launching:
 
 ```sh
 xattr -dr com.apple.quarantine "/Applications/DVMConsole.app"
@@ -114,22 +116,29 @@ Extract the ZIP before launching the self-contained `DvmConsole.exe`.
 
 # Documentation
 
-The source Markdown files remain under:
+Documentation source files are under:
 
 ```
 docs/user-guide
 ```
 
-The files are not copied into build or release output. The in-app viewer reads
-the current pages from the release branch on GitHub, so updated
-documentation is available without rebuilding the application. An internet
-connection is required.
-
 ---
 
 # Tagged Releases
 
-Pushing a version tag such as `v0.3.8` starts the macOS and Windows test and packaging matrix. Both native macOS rows smoke the packaged application bundle, and the Windows row runs the Avalonia headful smoke test. The workflow publishes a GitHub release only after all three target jobs pass and attaches the three versioned ZIP files. Release notes must be supplied in `docs/releases/v<version>.md` before the tag is pushed.
+Pushing a version tag such as `v0.4.0` starts the macOS and Windows test and
+packaging matrix. Both native macOS rows smoke the packaged application bundle,
+and the Windows row runs the Avalonia headful smoke test. Version-matched release
+notes must be present before the tag is pushed.
+
+The workflow stages a draft release containing three versioned ZIPs, three
+per-package SPDX JSON SBOMs, and `SHA256SUMS`. It creates GitHub artifact
+attestations, downloads every staged asset again, verifies hashes, title, notes,
+and attestations, and only then publishes. Source tests, package smoke, live FNE
+trials, and hardware exercise remain distinct evidence tiers in release notes;
+the automated workflow reports only the tiers it can actually perform. Signing
+and notarization are reported when available but are not a gate without
+maintainer-owned credentials.
 
 ---
 

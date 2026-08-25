@@ -74,6 +74,12 @@ public sealed class GlobalKeyboardPttSource : IPttSource
         }
     }
 
+    public bool InputSuppressed
+    {
+        get => stateSource.InputSuppressed;
+        set => stateSource.InputSuppressed = value;
+    }
+
     public async ValueTask StopAsync(CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();

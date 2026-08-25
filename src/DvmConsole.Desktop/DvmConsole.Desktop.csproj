@@ -6,9 +6,9 @@
     <AvaloniaUseCompiledBindingsByDefault>true</AvaloniaUseCompiledBindingsByDefault>
     <ApplicationIcon>Assets/DVMConsole.ico</ApplicationIcon>
     <Authors>RdWing</Authors>
-    <Company>DVMProject</Company>
-    <Product>Digital Voice Modem - Desktop Dispatch Console</Product>
-    <AssemblyTitle>DVM Console</AssemblyTitle>
+    <Company>RdWing</Company>
+    <Product>DVM Console NEO</Product>
+    <AssemblyTitle>DVM Console NEO</AssemblyTitle>
     <Copyright>Copyright © 2025-2026 RdWing</Copyright>
     <PackageLicenseExpression>AGPL-3.0-only</PackageLicenseExpression>
     <RepositoryUrl>https://github.com/RdWing/dvmconsole</RepositoryUrl>
@@ -33,12 +33,20 @@
     <ProjectReference Include="../DvmConsole.Core/DvmConsole.Core.csproj" />
     <ProjectReference Include="../DvmConsole.FneClient/DvmConsole.FneClient.csproj" />
     <ProjectReference Include="../DvmConsole.Media/DvmConsole.Media.csproj" />
+    <ProjectReference Include="../DvmConsole.Operations/DvmConsole.Operations.csproj" />
     <ProjectReference Include="../DvmConsole.Vocoder/DvmConsole.Vocoder.csproj" />
   </ItemGroup>
 
   <ItemGroup>
     <AvaloniaResource Include="Assets/DVMConsole.png" />
     <None Include="../../LICENSE" Link="LICENSE" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
-    <None Include="../../NOTICES.md" Link="NOTICES.md" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <None Include="../../docs/user-guide/**/*.md"
+          Link="Documentation/%(RecursiveDir)%(Filename)%(Extension)"
+          CopyToOutputDirectory="PreserveNewest"
+          CopyToPublishDirectory="PreserveNewest" />
+    <None Include="../../configs/codeplug.demo.yml"
+          Link="Demo/codeplug.yml"
+          CopyToOutputDirectory="PreserveNewest"
+          CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

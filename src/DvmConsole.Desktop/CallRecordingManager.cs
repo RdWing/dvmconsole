@@ -23,7 +23,8 @@ public sealed class CallRecordingManager : IDisposable, IAsyncDisposable
     private readonly Dictionary<(ChannelViewModel Channel, uint StreamId), ActiveRecording> active = [];
     private readonly Dictionary<ChannelViewModel, ActiveRecording> activeTransmit = [];
     private readonly Dictionary<(ChannelViewModel Channel, uint StreamId), TrafficEncryptionMetadata> streamEncryption = [];
-    private readonly RecordingFinalizationQueue finalizationQueue = new();
+    private readonly RecordingFinalizationQueue finalizationQueue;
+    private RecordingFinalizationSpool finalizationSpool;
     private bool disposed;
 
     public CallRecordingManager(
@@ -40,7 +41,11 @@ public sealed class CallRecordingManager : IDisposable, IAsyncDisposable
         this.faultHandler = faultHandler;
         this.retentionDays = retentionDays;
         this.shouldRecordSource = shouldRecordSource ?? ((_, _) => true);
+        finalizationQueue = new RecordingFinalizationQueue();
+        finalizationSpool = new RecordingFinalizationSpool(this.rootPath);
         finalizationQueue.Finalized += HandleRecordingFinalized;
+        finalizationSpool.RecoverOrphanedWaveFiles();
+        ResumePendingFinalizations();
     }
 
     public event EventHandler<RecordingFinalizationResult>? RecordingFinalized;
@@ -77,6 +82,9 @@ public sealed class CallRecordingManager : IDisposable, IAsyncDisposable
         }
     }
 
+    internal RecordingFinalizationSpoolHealth FinalizationHealth
+        => finalizationSpool.GetHealth();
+
     public bool TrySetRootPath(string requestedPath, out string errorMessage)
     {
         errorMessage = string.Empty;
@@ -106,8 +114,18 @@ public sealed class CallRecordingManager : IDisposable, IAsyncDisposable
                 return false;
             }
 
+            if (finalizationSpool.GetHealth().PendingJobs > 0)
+            {
+                errorMessage = "Wait for pending recording finalization before changing the recording folder.";
+                return false;
+            }
+
             rootPath = normalizedPath;
+            finalizationSpool = new RecordingFinalizationSpool(rootPath);
         }
+
+        finalizationSpool.RecoverOrphanedWaveFiles();
+        ResumePendingFinalizations();
 
         return true;
     }
@@ -128,21 +146,28 @@ public sealed class CallRecordingManager : IDisposable, IAsyncDisposable
             },
             cancellationToken);
 
+    internal Task<RecordingCatalogScanResult> LoadAndPruneRecordingsAsync(
+        bool pruneExpired,
+        DateTimeOffset? now = null,
+        CancellationToken cancellationToken = default)
+        => Task.Run(
+            () => catalogStore.Scan(
+                rootPath,
+                pruneExpired ? retentionDays : 0,
+                now ?? DateTimeOffset.UtcNow,
+                cancellationToken),
+            cancellationToken);
+
     public int PruneExpired(DateTimeOffset? now = null)
     {
         if (retentionDays <= 0)
             return 0;
 
-        DateTimeOffset cutoff = (now ?? DateTimeOffset.UtcNow).ToUniversalTime().AddDays(-retentionDays);
-        int deleted = 0;
-        foreach (CallRecordingMetadata metadata in LoadRecordings())
-        {
-            if (metadata.UtcEndTime > cutoff || !DeleteRecording(metadata))
-                continue;
-            deleted++;
-        }
-
-        return deleted;
+        return catalogStore.Scan(
+            rootPath,
+            retentionDays,
+            now ?? DateTimeOffset.UtcNow,
+            CancellationToken.None).PrunedFiles;
     }
 
     public bool DeleteRecording(CallRecordingMetadata metadata)
@@ -196,7 +221,9 @@ public sealed class CallRecordingManager : IDisposable, IAsyncDisposable
                     active[key] = recording;
                 }
 
-                recording.ObservePhysicalStream(physicalStreamId);
+                bool streamIdentityChanged = recording.ObservePhysicalStream(physicalStreamId);
+                if (streamIdentityChanged)
+                    TryPersistActiveSnapshot(channel, recording);
                 recording.Writer.Write(samples.Span);
             }
             catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or InvalidOperationException)
@@ -255,8 +282,11 @@ public sealed class CallRecordingManager : IDisposable, IAsyncDisposable
             if (encryption is TrafficEncryptionMetadata resolved)
             {
                 streamEncryption[(channel, traffic.StreamId)] = resolved;
-                if (active.TryGetValue((channel, traffic.StreamId), out ActiveRecording? current))
-                    current.SetEncryption(resolved);
+                if (active.TryGetValue((channel, traffic.StreamId), out ActiveRecording? current) &&
+                    current.SetEncryption(resolved))
+                {
+                    TryPersistActiveSnapshot(channel, current);
+                }
             }
 
             if (!ReceiveTrafficClassifier.IsTerminator(traffic))
@@ -286,12 +316,18 @@ public sealed class CallRecordingManager : IDisposable, IAsyncDisposable
             if (encryption is TrafficEncryptionMetadata resolved)
             {
                 streamEncryption[(channel, episodeStreamId)] = resolved;
-                if (active.TryGetValue((channel, episodeStreamId), out ActiveRecording? current))
-                    current.SetEncryption(resolved);
+                if (active.TryGetValue((channel, episodeStreamId), out ActiveRecording? current) &&
+                    current.SetEncryption(resolved))
+                {
+                    TryPersistActiveSnapshot(channel, current);
+                }
             }
 
-            if (active.TryGetValue((channel, episodeStreamId), out ActiveRecording? recording))
-                recording.ObservePhysicalStream(physicalStreamId);
+            if (active.TryGetValue((channel, episodeStreamId), out ActiveRecording? recording) &&
+                recording.ObservePhysicalStream(physicalStreamId))
+            {
+                TryPersistActiveSnapshot(channel, recording);
+            }
         }
     }
 
@@ -348,9 +384,47 @@ public sealed class CallRecordingManager : IDisposable, IAsyncDisposable
 
     private void HandleRecordingFinalized(object? sender, RecordingFinalizationResult result)
     {
+        if (result.Descriptor is RecordingFinalizationDescriptor descriptor)
+        {
+            if (result.Error is null)
+            {
+                finalizationSpool.Complete(descriptor);
+            }
+            else if (result.Error is not (IOException or UnauthorizedAccessException))
+            {
+                finalizationSpool.Quarantine(descriptor, result.Diagnostic ?? result.Error.Message);
+            }
+        }
         if (result.Error is Exception exception && result.Channel is ChannelViewModel channel)
             faultHandler?.Invoke(channel, exception);
         RecordingFinalized?.Invoke(this, result);
+    }
+
+    private void ResumePendingFinalizations()
+    {
+        foreach (RecordingFinalizationDescriptor descriptor in finalizationSpool.LoadPending())
+        {
+            try
+            {
+                finalizationQueue.EnqueueAsync(new RecordingFinalizationJob(
+                    descriptor.StreamId,
+                    async cancellationToken => (await FinalizeRecordingAsync(
+                        descriptor,
+                        channel: null,
+                        cancellationToken).ConfigureAwait(false)) with
+                    {
+                        Descriptor = descriptor
+                    }))
+                    .AsTask()
+                    .GetAwaiter()
+                    .GetResult();
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or InvalidOperationException)
+            {
+                // The durable descriptor remains for the next process. A
+                // recovery backlog must not prevent the console from opening.
+            }
+        }
     }
 
     private ActiveRecording CreateActiveRecording(
@@ -360,7 +434,9 @@ public sealed class CallRecordingManager : IDisposable, IAsyncDisposable
         string direction,
         string recordingSourceType)
     {
+        Guid jobId = Guid.NewGuid();
         var recording = new ActiveRecording(
+            jobId,
             streamId,
             DateTimeOffset.UtcNow,
             sourceId,
@@ -369,46 +445,57 @@ public sealed class CallRecordingManager : IDisposable, IAsyncDisposable
                 : string.Empty,
             direction,
             recordingSourceType,
-            new PcmWavFileWriter(CreateTemporaryWavePath(), PcmAudioFormat.Voice8KhzMono16Bit));
+            new PcmWavFileWriter(CreateTemporaryWavePath(jobId), PcmAudioFormat.Voice8KhzMono16Bit));
 
-        if (direction.Equals("TX", StringComparison.OrdinalIgnoreCase))
+        try
         {
-            bool secure = channel.Definition.IsEncrypted && channel.IsTransmitEncrypted;
-            if (secure && EncryptionPresentation.TryParseConfiguredAlgorithm(
-                    channel.Definition,
-                    out byte algorithmId,
-                    out ushort keyId))
+            if (direction.Equals("TX", StringComparison.OrdinalIgnoreCase))
+            {
+                bool secure = channel.Definition.IsEncrypted && channel.IsTransmitEncrypted;
+                if (secure && EncryptionPresentation.TryParseConfiguredAlgorithm(
+                        channel.Definition,
+                        out byte algorithmId,
+                        out ushort keyId))
+                {
+                    recording.SetEncryption(new TrafficEncryptionMetadata(true, algorithmId, keyId));
+                }
+                else
+                {
+                    recording.SetEncryption(new TrafficEncryptionMetadata(secure, 0, 0));
+                }
+            }
+            else if (streamEncryption.TryGetValue((channel, streamId), out TrafficEncryptionMetadata encryption))
+            {
+                recording.SetEncryption(encryption);
+            }
+            else if (channel.Definition.IsEncrypted && EncryptionPresentation.TryParseConfiguredAlgorithm(
+                         channel.Definition,
+                         out byte algorithmId,
+                         out ushort keyId))
             {
                 recording.SetEncryption(new TrafficEncryptionMetadata(true, algorithmId, keyId));
             }
-            else
-            {
-                recording.SetEncryption(new TrafficEncryptionMetadata(secure, 0, 0));
-            }
-        }
-        else if (streamEncryption.TryGetValue((channel, streamId), out TrafficEncryptionMetadata encryption))
-        {
-            recording.SetEncryption(encryption);
-        }
-        else if (channel.Definition.IsEncrypted && EncryptionPresentation.TryParseConfiguredAlgorithm(
-                     channel.Definition,
-                     out byte algorithmId,
-                     out ushort keyId))
-        {
-            recording.SetEncryption(new TrafficEncryptionMetadata(true, algorithmId, keyId));
-        }
 
-        return recording;
+            PersistActiveSnapshot(channel, recording);
+            return recording;
+        }
+        catch
+        {
+            // Closing repairs and flushes the WAV. Never delete a valid source
+            // merely because its durable descriptor could not be written.
+            recording.Writer.Dispose();
+            throw;
+        }
     }
 
-    private string CreateTemporaryWavePath()
+    private string CreateTemporaryWavePath(Guid jobId)
     {
         string directory = Path.Combine(rootPath, ".active");
         Directory.CreateDirectory(directory);
-        return Path.Combine(directory, $"{Guid.NewGuid():N}.wav");
+        return Path.Combine(directory, $"{jobId:N}.wav");
     }
 
-    private static string CreateRecordingPath(RecordingSnapshot snapshot)
+    private static string CreateRecordingPath(RecordingFinalizationDescriptor snapshot)
     {
         DateTimeOffset localStart = snapshot.UtcStartTime.ToLocalTime();
         string dateFolder = localStart.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
@@ -460,29 +547,65 @@ public sealed class CallRecordingManager : IDisposable, IAsyncDisposable
         try
         {
             recording.Writer.Dispose();
-            RecordingSnapshot snapshot = CreateSnapshot(channel, recording);
+            RecordingFinalizationDescriptor snapshot = CreateSnapshot(channel, recording);
+            finalizationSpool.Persist(snapshot);
             finalizationQueue.EnqueueAsync(new RecordingFinalizationJob(
                 recording.StreamId,
-                cancellationToken => FinalizeRecordingAsync(snapshot, channel, cancellationToken)))
+                async cancellationToken => (await FinalizeRecordingAsync(
+                    snapshot,
+                    channel,
+                    cancellationToken).ConfigureAwait(false)) with
+                {
+                    Descriptor = snapshot
+                }))
                 .AsTask()
                 .GetAwaiter()
                 .GetResult();
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or InvalidOperationException or JsonException)
         {
-            TryDelete(recording.Writer.Path);
+            // The descriptor written when the recording became active and the
+            // source WAV both remain for restart recovery.
             faultHandler?.Invoke(channel, exception);
         }
     }
 
-    private RecordingSnapshot CreateSnapshot(ChannelViewModel channel, ActiveRecording recording)
+    private void PersistActiveSnapshot(ChannelViewModel channel, ActiveRecording recording)
+    {
+        RecordingFinalizationDescriptor snapshot = CreateSnapshot(channel, recording);
+        if (string.IsNullOrWhiteSpace(recording.OutputPath))
+            recording.OutputPath = CreateRecordingPath(snapshot);
+        snapshot = snapshot with { OutputPath = recording.OutputPath };
+        finalizationSpool.Persist(snapshot);
+    }
+
+    private void TryPersistActiveSnapshot(ChannelViewModel channel, ActiveRecording recording)
+    {
+        try
+        {
+            PersistActiveSnapshot(channel, recording);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or InvalidOperationException or JsonException)
+        {
+            // Continue writing the source WAV. Its last durable descriptor is
+            // safer than terminating and deleting an otherwise valid capture.
+            faultHandler?.Invoke(channel, exception);
+        }
+    }
+
+    private RecordingFinalizationDescriptor CreateSnapshot(ChannelViewModel channel, ActiveRecording recording)
     {
         FneTrafficProtocol protocol = FneTrafficProtocolMapper.FromChannelProtocol(
             channel.Definition.Protocol);
-        return new RecordingSnapshot(
+        return new RecordingFinalizationDescriptor(
+            recording.JobId,
+            DateTimeOffset.UtcNow,
             rootPath,
             recording.Writer.Path,
-            recording.Writer.Format,
+            recording.OutputPath,
+            recording.Writer.Format.SampleRate,
+            recording.Writer.Format.Channels,
+            recording.Writer.Format.BitsPerSample,
             protocol,
             channel.Definition.Mode.ToUpperInvariant(),
             recording.Direction,
@@ -506,8 +629,8 @@ public sealed class CallRecordingManager : IDisposable, IAsyncDisposable
     }
 
     private async Task<RecordingFinalizationResult> FinalizeRecordingAsync(
-        RecordingSnapshot snapshot,
-        ChannelViewModel channel,
+        RecordingFinalizationDescriptor snapshot,
+        ChannelViewModel? channel,
         CancellationToken cancellationToken)
     {
         string? finalPath = null;
@@ -516,6 +639,26 @@ public sealed class CallRecordingManager : IDisposable, IAsyncDisposable
         try
         {
             cancellationToken.ThrowIfCancellationRequested();
+            if (File.Exists(snapshot.OutputPath))
+            {
+                if (catalogStore.TryRead(
+                        snapshot.OutputPath,
+                        snapshot.RootPath,
+                        out CallRecordingMetadata completedMetadata))
+                {
+                    completed = true;
+                    return new RecordingFinalizationResult(
+                        completedMetadata,
+                        snapshot.StreamId,
+                        "Recovered a completed recording from the finalization spool.",
+                        null)
+                    { Channel = channel };
+                }
+                TryDelete(snapshot.OutputPath);
+            }
+            if (!File.Exists(snapshot.WavePath))
+                throw new InvalidDataException("The finalization source WAV is missing.");
+            PcmWavFileWriter.RepairInterruptedFile(snapshot.WavePath, snapshot.Format);
             PcmWavTrimResult trim = PcmWavSilenceTrimmer.TrimFile(snapshot.WavePath, snapshot.Format);
             if (trim.OutputSamples <= 0 || trim.ActiveSampleCount <= 0 || trim.PeakAmplitude <= 0)
             {
@@ -527,7 +670,13 @@ public sealed class CallRecordingManager : IDisposable, IAsyncDisposable
                 { Channel = channel };
             }
 
-            finalPath = CreateRecordingPath(snapshot);
+            TimeSpan sampleDuration = TimeSpan.FromSeconds(
+                trim.OriginalSamples / (double)(snapshot.Format.SampleRate * snapshot.Format.Channels));
+            DateTimeOffset sampleDerivedEnd = snapshot.UtcStartTime.Add(sampleDuration);
+            if (snapshot.UtcEndTime < sampleDerivedEnd)
+                snapshot = snapshot with { UtcEndTime = sampleDerivedEnd };
+
+            finalPath = snapshot.OutputPath;
             CallRecordingMetadata metadata = CreateMetadata(snapshot, trim, finalPath);
             temporaryOpusPath = $"{finalPath}.{Environment.ProcessId}.{Guid.NewGuid():N}.tmp";
             await OpusRecordingEncoder.EncodeWaveFileAsync(
@@ -570,7 +719,6 @@ public sealed class CallRecordingManager : IDisposable, IAsyncDisposable
                 TryDelete(temporaryOpusPath);
             if (!completed && finalPath is not null)
                 TryDelete(finalPath);
-            TryDelete(snapshot.WavePath);
         }
     }
 
@@ -595,7 +743,7 @@ public sealed class CallRecordingManager : IDisposable, IAsyncDisposable
     }
 
     private static CallRecordingMetadata CreateMetadata(
-        RecordingSnapshot snapshot,
+        RecordingFinalizationDescriptor snapshot,
         PcmWavTrimResult trim,
         string recordingPath)
     {
@@ -664,6 +812,7 @@ public sealed class CallRecordingManager : IDisposable, IAsyncDisposable
     }
 
     private sealed class ActiveRecording(
+        Guid jobId,
         uint streamId,
         DateTimeOffset utcStartTime,
         uint? sourceId,
@@ -672,6 +821,7 @@ public sealed class CallRecordingManager : IDisposable, IAsyncDisposable
         string recordingSourceType,
         PcmWavFileWriter writer)
     {
+        public Guid JobId { get; } = jobId;
         public uint StreamId { get; } = streamId;
         public HashSet<uint> StreamIds { get; } = [streamId];
         public DateTimeOffset UtcStartTime { get; } = utcStartTime;
@@ -680,45 +830,27 @@ public sealed class CallRecordingManager : IDisposable, IAsyncDisposable
         public string Direction { get; } = direction;
         public string RecordingSourceType { get; } = recordingSourceType;
         public PcmWavFileWriter Writer { get; } = writer;
+        public string OutputPath { get; set; } = string.Empty;
         public bool IsSecure { get; private set; }
         public byte? EncryptionAlgorithmId { get; private set; }
         public ushort? EncryptionKeyId { get; private set; }
 
-        public void SetEncryption(TrafficEncryptionMetadata encryption)
+        public bool SetEncryption(TrafficEncryptionMetadata encryption)
         {
+            bool changed = IsSecure != encryption.Secure ||
+                EncryptionAlgorithmId != (encryption.Secure ? encryption.AlgorithmId : null) ||
+                EncryptionKeyId != (encryption.Secure ? encryption.KeyId : null);
             IsSecure = encryption.Secure;
             EncryptionAlgorithmId = encryption.Secure ? encryption.AlgorithmId : null;
             EncryptionKeyId = encryption.Secure ? encryption.KeyId : null;
+            return changed;
         }
 
-        public void ObservePhysicalStream(uint streamId)
+        public bool ObservePhysicalStream(uint streamId)
         {
-            if (streamId != 0)
-                StreamIds.Add(streamId);
+            return streamId != 0 && StreamIds.Add(streamId);
         }
     }
-
-    private sealed record RecordingSnapshot(
-        string RootPath,
-        string WavePath,
-        PcmAudioFormat Format,
-        FneTrafficProtocol Protocol,
-        string ProtocolText,
-        string Direction,
-        string RecordingSourceType,
-        DateTimeOffset UtcStartTime,
-        DateTimeOffset UtcEndTime,
-        string SystemName,
-        string ChannelName,
-        uint TalkgroupId,
-        uint? SourceId,
-        string SubscriberAlias,
-        uint StreamId,
-        IReadOnlyList<uint> StreamIds,
-        bool IsSecure,
-        byte? EncryptionAlgorithmId,
-        ushort? EncryptionKeyId,
-        int? RetentionDays);
 
     private void CloseTransmitCore(ChannelViewModel channel)
     {

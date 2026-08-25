@@ -219,8 +219,7 @@ public sealed class PatchMemberEditorViewModel : INotifyPropertyChanged
 
     public event PropertyChangedEventHandler? PropertyChanged;
     public ChannelViewModel Channel { get; }
-    public string RoutingKey =>
-        $"{Channel.Definition.SystemName.Trim()}|{Channel.Definition.DestinationId}";
+    public string RoutingKey => PatchMemberResolver.FromChannel(Channel).Key;
     public string DisplayName =>
         $"{Channel.Definition.SystemName} / {Channel.Name} ({Channel.ModeText} TGID {Channel.Definition.DestinationId})";
     public bool CanReceive => Channel.CanListen;

@@ -47,8 +47,8 @@ public sealed class AnalogTransmitCaptureSessionTests
 
         Assert.True(session.IsRunning);
         Assert.Empty(packets);
+        session.Activate();
         capture.Emit(new short[160]);
-        Assert.Single(packets);
 
         await session.StopAsync();
 

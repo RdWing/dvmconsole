@@ -11,7 +11,8 @@ internal sealed record DesktopRuntimeDependencies(
     UserSettingsStore UserSettingsStore,
     Func<IReadOnlyList<string>> SerialPortProvider,
     Func<string, int, IPttSource> SerialPttFactory,
-    IUiDispatcher UiDispatcher)
+    IUiDispatcher UiDispatcher,
+    bool NetworkDisabledDemo = false)
 {
     public static DesktopRuntimeDependencies CreateDefault()
         => new(
@@ -101,6 +102,7 @@ internal sealed class ConsoleSessionFactory
         string status = string.IsNullOrWhiteSpace(keyWarning)
             ? loadResult.StatusText
             : $"{loadResult.StatusText}\n{keyWarning}";
+        var services = new ConsoleSessionServices();
         var viewModel = new MainWindowViewModel(
             status,
             CreateSystemViewModels(configuration, zones),
@@ -114,13 +116,17 @@ internal sealed class ConsoleSessionFactory
             dmrKeyRing,
             nxdnKeyRing,
             topology.CodeplugPath,
-            dependencies.UiDispatcher);
+            dependencies.UiDispatcher,
+            services,
+            dependencies.NetworkDisabledDemo);
         viewModel.RecordLoadedCodeplug(topology.CodeplugPath);
         return viewModel;
     }
 
     private MainWindowViewModel CreateEmpty(string status)
-        => new(
+    {
+        var services = new ConsoleSessionServices();
+        return new(
             status,
             [],
             [],
@@ -128,12 +134,16 @@ internal sealed class ConsoleSessionFactory
             groupDefinitions: [],
             serialPortProvider: dependencies.SerialPortProvider,
             serialPttFactory: dependencies.SerialPttFactory,
-            uiDispatcher: dependencies.UiDispatcher);
+            uiDispatcher: dependencies.UiDispatcher,
+            sessionServices: services,
+            networkDisabledDemo: dependencies.NetworkDisabledDemo);
+    }
 
     private MainWindowViewModel CreateRejected(string status, ConsoleTopology topology)
     {
         ConsoleConfiguration configuration = topology.Configuration;
         IReadOnlyList<ZoneViewModel> zones = CreateZones(configuration, null, null, null);
+        var services = new ConsoleSessionServices();
         return new MainWindowViewModel(
             status,
             [],
@@ -144,7 +154,9 @@ internal sealed class ConsoleSessionFactory
             serialPortProvider: dependencies.SerialPortProvider,
             serialPttFactory: dependencies.SerialPttFactory,
             codeplugPath: topology.CodeplugPath,
-            uiDispatcher: dependencies.UiDispatcher);
+            uiDispatcher: dependencies.UiDispatcher,
+            sessionServices: services,
+            networkDisabledDemo: dependencies.NetworkDisabledDemo);
     }
 
     private static IReadOnlyList<ZoneViewModel> CreateZones(

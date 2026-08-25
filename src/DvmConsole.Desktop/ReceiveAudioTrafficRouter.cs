@@ -1,178 +1,154 @@
+using System.Runtime.CompilerServices;
 using DvmConsole.FneClient;
+using DvmConsole.Operations;
 
 namespace DvmConsole.Desktop;
 
-// Selects the receive decode sessions that should get a network frame on the
-// latency-sensitive path. Callers may include TAR-armed sessions that are
-// still opening so their ordered worker can retain the start of the call.
+// Preserves the established receive-routing facade while moving steady-state
+// lookup and lifecycle decisions behind one immutable operations/presentation
+// adapter per route table.
 internal static class ReceiveAudioTrafficRouter
 {
+    private static readonly ConditionalWeakTable<object, ReceiveRoutePresentationAdapter>
+        adapters = new();
+
     public static ChannelViewModel[] ResolveTargets(
-        IReadOnlyDictionary<(FneTrafficProtocol Protocol, uint DestinationId), ChannelViewModel[]> routes,
+        IReadOnlyDictionary<
+            (FneTrafficProtocol Protocol, uint DestinationId),
+            ChannelViewModel[]> routes,
         IReadOnlyList<ChannelViewModel> decodeChannels,
         FneTrafficFrame traffic,
         Func<ChannelViewModel, uint, bool> isTrackingStream)
     {
         ArgumentNullException.ThrowIfNull(routes);
-        ArgumentNullException.ThrowIfNull(decodeChannels);
-        ArgumentNullException.ThrowIfNull(traffic);
-        ArgumentNullException.ThrowIfNull(isTrackingStream);
-
-        if (ReceiveTrafficClassifier.IsTerminator(traffic))
-        {
-            return ResolveTerminatorTargets(
-                routes,
-                decodeChannels,
-                traffic,
-                isTrackingStream);
-        }
-
-        if (!ReceiveTrafficClassifier.CarriesVoicePayload(traffic) &&
-            !ReceiveTrafficClassifier.IsDefinitiveStart(traffic) &&
-            !ReceiveTrafficClassifier.IsDmrPrivacyHeader(traffic))
-        {
-            return [];
-        }
-
-        if (!routes.TryGetValue(
-                (traffic.Protocol, traffic.DestinationId),
-                out ChannelViewModel[]? candidates))
-        {
-            return [];
-        }
-
-        int targetCount = 0;
-        for (int candidateIndex = 0; candidateIndex < candidates.Length; candidateIndex++)
-        {
-            if (IsEligibleVoiceTarget(
-                    candidates,
-                    candidateIndex,
-                    decodeChannels,
-                    traffic))
-            {
-                targetCount++;
-            }
-        }
-
-        if (targetCount == 0)
-            return [];
-
-        var targets = new ChannelViewModel[targetCount];
-        int targetIndex = 0;
-        for (int candidateIndex = 0; candidateIndex < candidates.Length; candidateIndex++)
-        {
-            if (IsEligibleVoiceTarget(
-                    candidates,
-                    candidateIndex,
-                    decodeChannels,
-                    traffic))
-            {
-                targets[targetIndex++] = candidates[candidateIndex];
-            }
-        }
-        return targets;
+        ReceiveRoutePresentationAdapter adapter = GetAdapter(routes);
+        ReceiveIngressRoutingDecision ingressDecision = adapter.ObserveIngress(
+            traffic,
+            isTrackingStream);
+        return adapter.ResolveTargets(
+            decodeChannels,
+            traffic,
+            ingressDecision,
+            isTrackingStream);
     }
 
-    private static ChannelViewModel[] ResolveTerminatorTargets(
-        IReadOnlyDictionary<(FneTrafficProtocol Protocol, uint DestinationId), ChannelViewModel[]> routes,
+    public static ReceiveIngressRoutingDecision ObserveIngress(
+        IReadOnlyDictionary<
+            (FneTrafficProtocol Protocol, uint DestinationId),
+            ChannelViewModel[]> routes,
+        FneTrafficFrame traffic,
+        Func<ChannelViewModel, uint, bool> isTrackingStream,
+        DateTimeOffset? observedAt = null)
+    {
+        ArgumentNullException.ThrowIfNull(routes);
+        return GetAdapter(routes).ObserveIngress(traffic, isTrackingStream, observedAt);
+    }
+
+    public static ChannelViewModel[] ResolveTargets(
+        IReadOnlyDictionary<
+            (FneTrafficProtocol Protocol, uint DestinationId),
+            ChannelViewModel[]> routes,
         IReadOnlyList<ChannelViewModel> decodeChannels,
         FneTrafficFrame traffic,
+        ReceiveIngressRoutingDecision ingressDecision,
         Func<ChannelViewModel, uint, bool> isTrackingStream)
     {
-        int targetCount = 0;
-        for (int index = 0; index < decodeChannels.Count; index++)
-        {
-            if (IsEligibleTerminatorTarget(
-                    routes,
-                    decodeChannels[index],
-                    traffic,
-                    isTrackingStream))
-            {
-                targetCount++;
-            }
-        }
-
-        if (targetCount == 0)
-            return [];
-
-        var targets = new ChannelViewModel[targetCount];
-        int targetIndex = 0;
-        for (int index = 0; index < decodeChannels.Count; index++)
-        {
-            ChannelViewModel channel = decodeChannels[index];
-            if (IsEligibleTerminatorTarget(routes, channel, traffic, isTrackingStream))
-                targets[targetIndex++] = channel;
-        }
-        return targets;
+        ArgumentNullException.ThrowIfNull(routes);
+        return GetAdapter(routes).ResolveTargets(
+            decodeChannels,
+            traffic,
+            ingressDecision,
+            isTrackingStream);
     }
 
-    private static bool IsEligibleVoiceTarget(
-        ChannelViewModel[] candidates,
-        int candidateIndex,
-        IReadOnlyList<ChannelViewModel> decodeChannels,
-        FneTrafficFrame traffic)
-    {
-        ChannelViewModel candidate = candidates[candidateIndex];
-        if (!ContainsReference(decodeChannels, candidate) ||
-            !MatchesProtocolAndSlot(candidate, traffic))
-        {
-            return false;
-        }
-
-        for (int priorIndex = 0; priorIndex < candidateIndex; priorIndex++)
-        {
-            ChannelViewModel prior = candidates[priorIndex];
-            if (ContainsReference(decodeChannels, prior) &&
-                MatchesProtocolAndSlot(prior, traffic) &&
-                ChannelReceiveIdentity.AreEquivalent(prior, candidate))
-            {
-                return false;
-            }
-        }
-        return true;
-    }
-
-    private static bool IsEligibleTerminatorTarget(
-        IReadOnlyDictionary<(FneTrafficProtocol Protocol, uint DestinationId), ChannelViewModel[]> routes,
-        ChannelViewModel channel,
+    public static ChannelViewModel[] ResolvePresentationCandidates(
+        IReadOnlyDictionary<
+            (FneTrafficProtocol Protocol, uint DestinationId),
+            ChannelViewModel[]> routes,
+        IReadOnlyList<ChannelViewModel> systemChannels,
         FneTrafficFrame traffic,
+        Func<ChannelViewModel, bool> isAudioActive,
+        Func<ChannelViewModel, bool> isPatchActive,
         Func<ChannelViewModel, uint, bool> isTrackingStream)
-        => ContainsRoutedChannel(routes, channel) &&
-           MatchesProtocolAndSlot(channel, traffic) &&
-           isTrackingStream(channel, traffic.StreamId);
-
-    private static bool ContainsRoutedChannel(
-        IReadOnlyDictionary<(FneTrafficProtocol Protocol, uint DestinationId), ChannelViewModel[]> routes,
-        ChannelViewModel channel)
     {
-        foreach (ChannelViewModel[] routedChannels in routes.Values)
-        {
-            if (ContainsReference(routedChannels, channel))
-                return true;
-        }
-        return false;
+        ArgumentNullException.ThrowIfNull(routes);
+        ReceiveRoutePresentationAdapter adapter = GetAdapter(routes);
+        return adapter.ResolvePresentationCandidates(
+            systemChannels,
+            traffic,
+            ReceiveIngressRoutingDecision.Empty,
+            isAudioActive,
+            isPatchActive,
+            isTrackingStream);
     }
 
-    private static bool ContainsReference(
-        IReadOnlyList<ChannelViewModel> channels,
-        ChannelViewModel target)
+    public static IReadOnlyList<ReceiveRouteProjectionDecision> Advance(
+        IReadOnlyDictionary<
+            (FneTrafficProtocol Protocol, uint DestinationId),
+            ChannelViewModel[]> routes,
+        DateTimeOffset now)
     {
-        for (int index = 0; index < channels.Count; index++)
-        {
-            if (ReferenceEquals(channels[index], target))
-                return true;
-        }
-        return false;
+        ArgumentNullException.ThrowIfNull(routes);
+        return GetAdapter(routes).Advance(now);
     }
 
-    private static bool MatchesProtocolAndSlot(
-        ChannelViewModel channel,
-        FneTrafficFrame traffic)
+    public static bool IsActive(
+        IReadOnlyDictionary<
+            (FneTrafficProtocol Protocol, uint DestinationId),
+            ChannelViewModel[]> routes,
+        ChannelRouteKey routeKey,
+        uint streamId)
     {
-        FneTrafficProtocol protocol = FneTrafficProtocolMapper.FromChannelProtocol(
-            channel.Definition.Protocol);
-        return protocol == traffic.Protocol &&
-               (traffic.Protocol != FneTrafficProtocol.Dmr ||
-                traffic.Slot == channel.Definition.Slot);
+        ArgumentNullException.ThrowIfNull(routes);
+        return GetAdapter(routes).IsActive(routeKey, streamId);
     }
+
+    public static ChannelViewModel? ResolveProjectionTarget(
+        IReadOnlyDictionary<
+            (FneTrafficProtocol Protocol, uint DestinationId),
+            ChannelViewModel[]> routes,
+        ChannelRouteKey routeKey,
+        uint streamId,
+        Func<ChannelViewModel, bool> isAudioActive,
+        Func<ChannelViewModel, bool> isPatchActive)
+    {
+        ArgumentNullException.ThrowIfNull(routes);
+        return GetAdapter(routes).ResolveProjectionTarget(
+            routeKey,
+            streamId,
+            isAudioActive,
+            isPatchActive);
+    }
+
+    public static ChannelViewModel[] ResolvePresentationCandidates(
+        IReadOnlyDictionary<
+            (FneTrafficProtocol Protocol, uint DestinationId),
+            ChannelViewModel[]> routes,
+        IReadOnlyList<ChannelViewModel> systemChannels,
+        FneTrafficFrame traffic,
+        ReceiveIngressRoutingDecision ingressDecision,
+        Func<ChannelViewModel, bool> isAudioActive,
+        Func<ChannelViewModel, bool> isPatchActive,
+        Func<ChannelViewModel, uint, bool> isTrackingStream)
+    {
+        ArgumentNullException.ThrowIfNull(routes);
+        return GetAdapter(routes).ResolvePresentationCandidates(
+            systemChannels,
+            traffic,
+            ingressDecision,
+            isAudioActive,
+            isPatchActive,
+            isTrackingStream);
+    }
+
+    private static ReceiveRoutePresentationAdapter GetAdapter(
+        IReadOnlyDictionary<
+            (FneTrafficProtocol Protocol, uint DestinationId),
+            ChannelViewModel[]> routes)
+        => adapters.GetValue(
+            routes,
+            static key => new ReceiveRoutePresentationAdapter(
+                (IReadOnlyDictionary<
+                    (FneTrafficProtocol Protocol, uint DestinationId),
+                    ChannelViewModel[]>)key));
 }

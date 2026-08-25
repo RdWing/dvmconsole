@@ -52,4 +52,39 @@ public sealed class RecordingFinalizationQueueTests
                 streamId,
                 _ => Task.FromResult(new RecordingFinalizationResult(null, streamId, null, null)));
     }
+
+    [Fact]
+    public async Task TransientIoFailureRetriesWithoutReorderingLaterJobs()
+    {
+        int attempts = 0;
+        var order = new List<uint>();
+        var allFinalized = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var queue = new RecordingFinalizationQueue();
+        queue.Finalized += (_, result) =>
+        {
+            order.Add(result.StreamId);
+            if (order.Count == 2)
+                allFinalized.TrySetResult();
+        };
+
+        await queue.EnqueueAsync(new RecordingFinalizationJob(
+            1,
+            _ =>
+            {
+                attempts++;
+                return Task.FromResult(attempts == 1
+                    ? new RecordingFinalizationResult(null, 1, "retry", new IOException("temporary"))
+                    : new RecordingFinalizationResult(null, 1, null, null));
+            },
+            RetryDelay: TimeSpan.FromMilliseconds(1)));
+        await queue.EnqueueAsync(new RecordingFinalizationJob(
+            2,
+            _ => Task.FromResult(new RecordingFinalizationResult(null, 2, null, null))));
+
+        await allFinalized.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+        Assert.Equal(2, attempts);
+        Assert.Equal([(uint)1, (uint)2], order);
+        Assert.Equal(RecordingFinalizationQueue.DefaultCapacity, queue.Capacity);
+    }
 }

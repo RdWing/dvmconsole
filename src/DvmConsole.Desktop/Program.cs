@@ -8,7 +8,15 @@ internal static class Program
     [STAThread]
     public static void Main(string[] args)
     {
-        DesktopCrashLog.Install();
+        App.DemoCaptureDirectory = ReadOption(args, "--demo-capture-dir=");
+        App.DemoMode = args.Contains("--demo", StringComparer.Ordinal) ||
+            !string.IsNullOrWhiteSpace(App.DemoCaptureDirectory);
+        DesktopCrashLog.Install(App.DemoMode
+            ? Path.Combine(
+                Path.GetTempPath(),
+                "DvmConsoleNEODemo",
+                $"LastCrash-{Environment.ProcessId}.log")
+            : null);
         try
         {
             ValidateBuiltInVocoder();
@@ -16,7 +24,9 @@ internal static class Program
             App.SmokeResultPath = ReadOption(args, "--smoke-result=");
             if (App.SmokeWindows)
                 App.InitializeSmokeResult();
-            App.ConfigurationPath = args.FirstOrDefault(argument => !argument.StartsWith("-", StringComparison.Ordinal));
+            App.ConfigurationPath = App.DemoMode
+                ? App.ResolveDemoConfigurationPath(AppContext.BaseDirectory)
+                : ReadConfigurationPath(args);
             BuildAvaloniaApp().StartWithClassicDesktopLifetime(args);
         }
         catch (Exception exception)
@@ -34,6 +44,12 @@ internal static class Program
         ArgumentException.ThrowIfNullOrWhiteSpace(prefix);
         string? argument = args.FirstOrDefault(value => value.StartsWith(prefix, StringComparison.Ordinal));
         return argument is null ? null : argument[prefix.Length..];
+    }
+
+    internal static string? ReadConfigurationPath(IEnumerable<string> args)
+    {
+        ArgumentNullException.ThrowIfNull(args);
+        return args.FirstOrDefault(argument => !argument.StartsWith("-", StringComparison.Ordinal));
     }
 
     private static void ValidateBuiltInVocoder()

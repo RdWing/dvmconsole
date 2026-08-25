@@ -7,7 +7,7 @@ namespace DvmConsole.Media.Tests;
 public sealed class P25TxCallSessionTests
 {
     [Fact]
-    public void EmitsGrantDemandVoiceLdUsAndFourTerminatorTdus()
+    public void EmitsGrantDemandVoiceLdUsAndOneTerminatorTdu()
     {
         var packets = new List<(byte[] Payload, ushort Sequence, uint Stream)>();
         using var session = new P25TxCallSession(
@@ -27,17 +27,14 @@ public sealed class P25TxCallSessionTests
         Assert.Equal(2, session.Process(new short[18 * 160]));
         session.End();
 
-        Assert.Equal(7, packets.Count);
+        Assert.Equal(4, packets.Count);
         Assert.Equal((ushort)0, packets[1].Sequence);
         Assert.Equal(P25DfsiFrameCodec.Ldu1Duid, packets[1].Payload[22]);
         Assert.Equal((ushort)1, packets[2].Sequence);
         Assert.Equal(P25DfsiFrameCodec.Ldu2Duid, packets[2].Payload[22]);
-        Assert.All(packets.Skip(3), packet =>
-        {
-            Assert.Equal(P25DfsiFrameCodec.RtpCallEndSequence, packet.Sequence);
-            Assert.Equal(P25DfsiFrameCodec.TduDuid, packet.Payload[22]);
-            Assert.Equal((byte)0, packet.Payload[14]);
-        });
+        Assert.Equal(P25DfsiFrameCodec.RtpCallEndSequence, packets[3].Sequence);
+        Assert.Equal(P25DfsiFrameCodec.TduDuid, packets[3].Payload[22]);
+        Assert.Equal((byte)0, packets[3].Payload[14]);
         Assert.True(session.IsEnded);
         Assert.Equal(18, session.CodewordsEncoded);
         Assert.Equal(2, session.LdusSent);
@@ -72,14 +69,11 @@ public sealed class P25TxCallSessionTests
 
         session.End();
 
-        Assert.Equal(6, packets.Count);
+        Assert.Equal(3, packets.Count);
         Assert.Equal(P25DfsiFrameCodec.Ldu1Duid, packets[1].Payload[22]);
         Assert.Equal((ushort)0, packets[1].Sequence);
-        Assert.All(packets.Skip(2), packet =>
-        {
-            Assert.Equal(P25DfsiFrameCodec.TduDuid, packet.Payload[22]);
-            Assert.Equal(P25DfsiFrameCodec.RtpCallEndSequence, packet.Sequence);
-        });
+        Assert.Equal(P25DfsiFrameCodec.TduDuid, packets[2].Payload[22]);
+        Assert.Equal(P25DfsiFrameCodec.RtpCallEndSequence, packets[2].Sequence);
         Assert.Equal(9, session.CodewordsEncoded);
         Assert.Equal(1, session.LdusSent);
     }

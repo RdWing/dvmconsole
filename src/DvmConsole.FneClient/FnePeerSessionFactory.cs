@@ -71,6 +71,8 @@ internal sealed class FnePeerSession : IFnePeerSession
 
 internal sealed class FnePeerSessionFactory : IFnePeerSessionFactory
 {
+    internal const int DefaultPingIntervalSeconds = 5;
+
     public IFnePeerSession Create(
         FneConnectionOptions options,
         IPEndPoint endpoint,
@@ -91,7 +93,7 @@ internal sealed class FnePeerSessionFactory : IFnePeerSessionFactory
             var peer = new FnePeer("DVMCONSOLE", options.PeerId, endpoint, options.PresharedKey)
             {
                 Passphrase = options.Password,
-                PingTime = 5,
+                PingTime = DefaultPingIntervalSeconds,
                 // The operator debug viewer is the console's complete FNE log sink.
                 // Raw packet tracing remains separately opt-in so payload dumps are
                 // not exposed by enabling the ordinary protocol log stream.

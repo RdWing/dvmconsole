@@ -10,6 +10,7 @@ namespace DvmConsole.Desktop;
 public sealed partial class AboutWindow : Window
 {
     private const string RepositoryUrl = "https://github.com/RdWing/dvmconsole";
+    private const string UpstreamUrl = "https://github.com/DVMProject/dvmconsole";
     private const string LicenseUrl = "https://github.com/RdWing/dvmconsole/blob/neo/LICENSE";
 
     public AboutWindow()
@@ -27,6 +28,9 @@ public sealed partial class AboutWindow : Window
 
     private void HandleRepositoryClick(object? sender, RoutedEventArgs e)
         => OpenUrl(RepositoryUrl);
+
+    private void HandleUpstreamClick(object? sender, RoutedEventArgs e)
+        => OpenUrl(UpstreamUrl);
 
     private void HandleLicenseClick(object? sender, RoutedEventArgs e)
         => OpenUrl(LicenseUrl);

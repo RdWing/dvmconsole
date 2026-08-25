@@ -4,12 +4,16 @@ namespace DvmConsole.Desktop;
 
 internal static class DesktopCrashLog
 {
-    public static string Path => System.IO.Path.Combine(
+    private static string? pathOverride;
+
+    public static string Path => Volatile.Read(ref pathOverride) ?? System.IO.Path.Combine(
         System.IO.Path.GetDirectoryName(UserSettingsStore.DefaultPath) ?? AppContext.BaseDirectory,
         "LastCrash.log");
 
-    public static void Install()
+    public static void Install(string? isolatedPath = null)
     {
+        if (!string.IsNullOrWhiteSpace(isolatedPath))
+            Volatile.Write(ref pathOverride, System.IO.Path.GetFullPath(isolatedPath));
         AppDomain.CurrentDomain.UnhandledException += (_, args) =>
             Write("Unhandled process exception", args.ExceptionObject as Exception);
         TaskScheduler.UnobservedTaskException += (_, args) =>

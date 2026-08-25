@@ -108,9 +108,15 @@ internal sealed class UserSettingsNormalizationPipeline
                 .Select(member => new PatchMemberSetting
                 {
                     SystemName = member.SystemName.Trim(),
-                    DestinationId = member.DestinationId
+                    DestinationId = member.DestinationId,
+                    ChannelName = string.IsNullOrWhiteSpace(member.ChannelName)
+                        ? null
+                        : member.ChannelName.Trim()
                 })
-                .GroupBy(member => $"{member.SystemName.ToLowerInvariant()}|{member.DestinationId}")
+                .GroupBy(member => new Runtime.PatchMemberAddress(
+                    member.SystemName,
+                    member.DestinationId,
+                    member.ChannelName).Key)
                 .Select(group => group.First())
                 .ToList();
         }

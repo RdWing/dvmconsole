@@ -5,6 +5,17 @@ using DvmConsole.FneClient;
 
 namespace DvmConsole.Desktop;
 
+internal sealed record RecordingCatalogReconciliationMetrics(
+    long ExistingEntryVisits,
+    long DesiredRecordingVisits,
+    long KeyLookups,
+    long IdentityCandidateVisits,
+    long MergeVisits)
+{
+    public long TotalWork => ExistingEntryVisits + DesiredRecordingVisits +
+        KeyLookups + IdentityCandidateVisits + MergeVisits;
+}
+
 // One inbound voice stream recorded by the dispatch shell.
 public sealed class CallHistoryEntry : INotifyPropertyChanged
 {
@@ -276,6 +287,7 @@ public sealed class CallHistoryStore
     private static readonly TimeSpan MinimumVisibleCallDuration = TimeSpan.FromMilliseconds(50);
 
     private readonly int maxEntries;
+    private readonly ResettableObservableCollection<CallHistoryEntry> entries = [];
 
     public CallHistoryStore(int maxEntries = DefaultMaxEntries)
     {
@@ -284,7 +296,10 @@ public sealed class CallHistoryStore
         this.maxEntries = maxEntries;
     }
 
-    public ObservableCollection<CallHistoryEntry> Entries { get; } = [];
+    public ObservableCollection<CallHistoryEntry> Entries => entries;
+
+    internal RecordingCatalogReconciliationMetrics LastRecordingCatalogReconciliation { get; private set; }
+        = new(0, 0, 0, 0, 0);
 
     public bool HasActiveReceiveCall(
         string systemName,
@@ -389,16 +404,93 @@ public sealed class CallHistoryStore
     {
         ArgumentNullException.ThrowIfNull(recordings);
         CallRecordingMetadata[] desired = recordings.ToArray();
-        var desiredIds = new HashSet<string>(
+        if (!IsNewestFirst(desired))
+        {
+            Array.Sort(desired, static (left, right) =>
+            {
+                int timestamp = right.UtcStartTime.CompareTo(left.UtcStartTime);
+                return timestamp != 0
+                    ? timestamp
+                    : StringComparer.OrdinalIgnoreCase.Compare(left.FileName, right.FileName);
+            });
+        }
+
+        long existingEntryVisits = entries.Count * 3L;
+        var desiredKeys = new HashSet<string>(
             desired.Select(RecordingKey),
             StringComparer.OrdinalIgnoreCase);
-        string[] removedKeys = Entries
-            .Where(entry => entry.Recording is not null)
-            .Select(entry => RecordingKey(entry.Recording!))
-            .Where(key => !desiredIds.Contains(key))
+        CallHistoryEntry[] sessionEntries = entries
+            .Where(entry => !entry.IsRecordingOnly)
             .ToArray();
-        RemoveRecordingsByKey(removedKeys);
-        AddOrAttachRecordings(desired);
+        Dictionary<string, CallHistoryEntry> existingByRecording = entries
+            .Where(entry => entry.Recording is not null)
+            .GroupBy(entry => RecordingKey(entry.Recording!), StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase);
+        Dictionary<string, CallHistoryEntry[]> callsByIdentity = sessionEntries
+            .Where(entry => !entry.IsEvent)
+            .GroupBy(CallIdentityKey, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group => group.Key, group => group.ToArray(), StringComparer.OrdinalIgnoreCase);
+
+        foreach (CallHistoryEntry entry in sessionEntries)
+        {
+            if (entry.Recording is CallRecordingMetadata recording &&
+                !desiredKeys.Contains(RecordingKey(recording)))
+            {
+                entry.SetRecording(null);
+            }
+        }
+
+        var catalogRows = new List<CallHistoryEntry>(desired.Length);
+        var processedKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        long desiredVisits = 0;
+        long keyLookups = 0;
+        long identityCandidateVisits = 0;
+        foreach (CallRecordingMetadata metadata in desired)
+        {
+            desiredVisits++;
+            string recordingKey = RecordingKey(metadata);
+            if (!processedKeys.Add(recordingKey))
+                continue;
+
+            keyLookups++;
+            if (existingByRecording.TryGetValue(recordingKey, out CallHistoryEntry? existing))
+            {
+                existing.SetRecording(metadata);
+                if (existing.IsRecordingOnly)
+                    catalogRows.Add(existing);
+                continue;
+            }
+
+            CallHistoryEntry? call = null;
+            keyLookups++;
+            if (callsByIdentity.TryGetValue(
+                    RecordingIdentityKey(metadata),
+                    out CallHistoryEntry[]? candidates))
+            {
+                foreach (CallHistoryEntry candidate in candidates)
+                {
+                    identityCandidateVisits++;
+                    if (Math.Abs((candidate.Timestamp - metadata.UtcStartTime).TotalSeconds) <= 5)
+                    {
+                        call = candidate;
+                        break;
+                    }
+                }
+            }
+            if (call is not null)
+                call.SetRecording(metadata);
+            else
+                catalogRows.Add(CallHistoryEntry.CreateRecordingOnly(metadata));
+        }
+
+        List<CallHistoryEntry> merged = MergeNewestFirst(sessionEntries, catalogRows).ToList();
+        entries.ReplaceAll(merged);
+        LastRecordingCatalogReconciliation = new RecordingCatalogReconciliationMetrics(
+            existingEntryVisits,
+            desiredVisits,
+            keyLookups,
+            identityCandidateVisits,
+            merged.Count);
     }
 
     public void RemoveRecordingsByKey(IEnumerable<string> recordingKeys)
@@ -467,6 +559,42 @@ public sealed class CallHistoryStore
         while (index < Entries.Count && Entries[index].Timestamp > entry.Timestamp)
             index++;
         Entries.Insert(index, entry);
+    }
+
+    private static IEnumerable<CallHistoryEntry> MergeNewestFirst(
+        IReadOnlyList<CallHistoryEntry> sessionEntries,
+        IReadOnlyList<CallHistoryEntry> catalogRows)
+    {
+        int sessionIndex = 0;
+        int catalogIndex = 0;
+        while (sessionIndex < sessionEntries.Count && catalogIndex < catalogRows.Count)
+        {
+            if (catalogRows[catalogIndex].Timestamp >= sessionEntries[sessionIndex].Timestamp)
+                yield return catalogRows[catalogIndex++];
+            else
+                yield return sessionEntries[sessionIndex++];
+        }
+        while (sessionIndex < sessionEntries.Count)
+            yield return sessionEntries[sessionIndex++];
+        while (catalogIndex < catalogRows.Count)
+            yield return catalogRows[catalogIndex++];
+    }
+
+    private static bool IsNewestFirst(IReadOnlyList<CallRecordingMetadata> recordings)
+    {
+        for (int index = 1; index < recordings.Count; index++)
+        {
+            if (recordings[index - 1].UtcStartTime < recordings[index].UtcStartTime)
+                return false;
+            if (recordings[index - 1].UtcStartTime == recordings[index].UtcStartTime &&
+                StringComparer.OrdinalIgnoreCase.Compare(
+                    recordings[index - 1].FileName,
+                    recordings[index].FileName) > 0)
+            {
+                return false;
+            }
+        }
+        return true;
     }
 
     private void TrimSessionEntries()

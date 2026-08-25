@@ -44,6 +44,23 @@ public sealed class KeyboardPttSource : IPttSource
     public bool IsPressed { get; private set; }
     public KeyboardPttKey ActivationKey => activationKey;
     public bool ToggleMode { get; set; }
+    public bool InputSuppressed
+    {
+        get => inputSuppressed;
+        set
+        {
+            if (inputSuppressed == value)
+                return;
+            inputSuppressed = value;
+            if (inputSuppressed)
+            {
+                activationKeyDown = false;
+                SetPressed(false);
+            }
+        }
+    }
+
+    private bool inputSuppressed;
 
     public ValueTask StartAsync(CancellationToken cancellationToken = default)
     {
@@ -68,7 +85,7 @@ public sealed class KeyboardPttSource : IPttSource
     public bool HandleKeyDown(KeyboardPttKey key)
     {
         ObjectDisposedException.ThrowIf(disposed, this);
-        if (!started || key != activationKey)
+        if (!started || key != activationKey || inputSuppressed)
             return false;
 
         if (ToggleMode)
@@ -89,7 +106,7 @@ public sealed class KeyboardPttSource : IPttSource
     public bool HandleKeyUp(KeyboardPttKey key)
     {
         ObjectDisposedException.ThrowIf(disposed, this);
-        if (!started || key != activationKey)
+        if (!started || key != activationKey || inputSuppressed)
             return false;
 
         if (ToggleMode)

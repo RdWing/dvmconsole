@@ -6,4 +6,5 @@ public sealed class PatchMemberSetting
 {
     public string SystemName { get; set; } = string.Empty;
     public uint DestinationId { get; set; }
+    public string? ChannelName { get; set; }
 }

@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using DvmConsole.Audio;
 using DvmConsole.FneClient;
 using DvmConsole.Media;
+using DvmConsole.Operations;
 using DvmConsole.Vocoder;
 
 namespace DvmConsole.Desktop;

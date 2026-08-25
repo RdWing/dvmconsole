@@ -99,6 +99,7 @@ public sealed class AudioMixer : IAsyncDisposable
     private readonly short[] silentInputFrame;
     private readonly bool supportsBufferedPlayout;
     private readonly IAudioPlaybackCallbackDiagnostics? callbackDiagnostics;
+    private readonly IAudioPlaybackPresentationLatencyDiagnostics? presentationLatencyDiagnostics;
     private readonly IPhysicalAudioOutputDiagnosticsSource? routedOutputDiagnostics;
     private int nextChannelId;
     private int targetOutputBufferedFrames = NormalOutputBufferedFrames;
@@ -123,6 +124,7 @@ public sealed class AudioMixer : IAsyncDisposable
         outputFrameSamples = checked(frameSamples * output.Format.Channels);
         supportsBufferedPlayout = output.QueuedSamples is not null;
         callbackDiagnostics = output as IAudioPlaybackCallbackDiagnostics;
+        presentationLatencyDiagnostics = output as IAudioPlaybackPresentationLatencyDiagnostics;
         routedOutputDiagnostics = output as IPhysicalAudioOutputDiagnosticsSource;
         lastOutputCallbackCount = ReadPhysicalOutputDiagnostics().OutputCallbackCount ?? 0;
         lastOutputCallbackTimestamp = Stopwatch.GetTimestamp();
@@ -1040,11 +1042,14 @@ public sealed class AudioMixer : IAsyncDisposable
         IAudioBalanceControl,
         IAudioPlaybackInputExpectationControl,
         IAudioPlaybackBoundaryControl,
+        IAudioPlaybackPresentationLatencyDiagnostics,
         IPhysicalAudioOutputDiagnosticsSource
     {
         private bool disposed;
 
         public PcmAudioFormat Format => owner.Format;
+        public TimeSpan OutputPresentationLatency =>
+            owner.presentationLatencyDiagnostics?.OutputPresentationLatency ?? TimeSpan.Zero;
 
         public PhysicalAudioOutputDiagnostics GetPhysicalOutputDiagnostics()
         {

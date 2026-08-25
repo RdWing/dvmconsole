@@ -21,23 +21,58 @@
     <Style Selector="ToggleButton.recorder-system-toggle TextBlock.recorder-system-chevron"><Setter Property="Text" Value="▸" /></Style>
     <Style Selector="ToggleButton.recorder-system-toggle:checked TextBlock.recorder-system-chevron"><Setter Property="Text" Value="▾" /></Style>
     <Style Selector="ListBox.history-list > ListBoxItem"><Setter Property="HorizontalContentAlignment" Value="Stretch" /><Setter Property="Padding" Value="0" /><Setter Property="Margin" Value="0" /><Setter Property="MinHeight" Value="0" /></Style>
+    <Style Selector="ListBox.settings-navigation > ListBoxItem"><Setter Property="HorizontalContentAlignment" Value="Stretch" /><Setter Property="Padding" Value="9,7" /><Setter Property="Margin" Value="0,1" /><Setter Property="CornerRadius" Value="4" /></Style>
+    <Style Selector="ListBox.settings-navigation > ListBoxItem:selected"><Setter Property="Background" Value="#244E73" /><Setter Property="Foreground" Value="White" /><Setter Property="FontWeight" Value="SemiBold" /></Style>
+    <Style Selector="TabControl.settings-content TabItem"><Setter Property="Width" Value="0" /><Setter Property="Height" Value="0" /><Setter Property="MinWidth" Value="0" /><Setter Property="MinHeight" Value="0" /><Setter Property="Padding" Value="0" /><Setter Property="Margin" Value="0" /><Setter Property="Opacity" Value="0" /><Setter Property="IsHitTestVisible" Value="False" /></Style>
     <Style Selector="ScrollViewer"><Setter Property="AllowAutoHide" Value="True" /><Setter Property="VerticalScrollBarVisibility" Value="Hidden" /></Style>
     <Style Selector="ScrollBar"><Setter Property="AllowAutoHide" Value="True" /><Setter Property="ShowDelay" Value="0:0:0" /><Setter Property="HideDelay" Value="0:0:0.7" /></Style>
   </Window.Styles>
 
   <LayoutTransformControl LayoutTransform="{Binding UiScaleTransform}">
   <Grid RowDefinitions="*,Auto">
-    <TabControl x:Name="ToolTabs" Margin="10">
+    <Grid ColumnDefinitions="220,*">
+      <Border Background="{DynamicResource ShellHeaderBrush}"
+              BorderBrush="{DynamicResource ControlBorderBrush}"
+              BorderThickness="0,0,1,0"
+              Padding="10">
+        <Grid RowDefinitions="Auto,Auto,*,Auto" RowSpacing="8">
+          <StackPanel Spacing="2">
+            <TextBlock FontWeight="SemiBold" Text="Console Settings" />
+            <TextBlock Classes="caption" Text="Find a setting or operator tool" />
+          </StackPanel>
+          <TextBox x:Name="SectionSearchBox"
+                   Grid.Row="1"
+                   Watermark="Search settings"
+                   AutomationProperties.Name="Search console settings"
+                   TextChanged="HandleSectionSearchTextChanged" />
+          <ListBox x:Name="SectionNavigation"
+                   Grid.Row="2"
+                   Classes="settings-navigation"
+                   Background="Transparent"
+                   BorderThickness="0"
+                   SelectionChanged="HandleSectionNavigationChanged" />
+          <TextBlock x:Name="NoSettingsSearchResults"
+                     Grid.Row="3"
+                     Classes="caption"
+                     Text="No matching sections"
+                     IsVisible="False" />
+        </Grid>
+      </Border>
+
+    <TabControl x:Name="ToolTabs" Grid.Column="1" Classes="settings-content" Margin="10">
       <TabItem Header="General">
         <ScrollViewer Margin="10">
           <StackPanel Spacing="10">
             <TextBlock Classes="heading" Text="Console Settings" />
             <TextBlock Classes="caption" Text="{Binding SettingsVersionText}" />
-            <TextBlock FontWeight="SemiBold" Text="Appearance" />
-            <Grid ColumnDefinitions="*,*" ColumnSpacing="16">
-              <StackPanel Spacing="4"><TextBlock Classes="caption" Text="{Binding UiFontSizeText}" /><Slider Minimum="11" Maximum="20" TickFrequency="1" IsSnapToTickEnabled="True" Value="{Binding UiFontSize, Mode=TwoWay}" /></StackPanel>
-              <StackPanel Grid.Column="1" Spacing="4"><TextBlock Classes="caption" Text="{Binding UiScaleText}" /><Slider Minimum="0.75" Maximum="1.5" TickFrequency="0.05" IsSnapToTickEnabled="True" Value="{Binding UiScale, Mode=TwoWay}" /></StackPanel>
-            </Grid>
+            <local:AdaptiveSettingsSection Header="Appearance" Description="Adjust interface text size and scale independently.">
+              <local:AdaptiveSettingsSection.SectionContent>
+                <Grid ColumnDefinitions="*,*" ColumnSpacing="16">
+                  <StackPanel Spacing="4"><TextBlock Classes="caption" Text="{Binding UiFontSizeText}" /><Slider Minimum="11" Maximum="20" TickFrequency="1" IsSnapToTickEnabled="True" Value="{Binding UiFontSize, Mode=TwoWay}" /></StackPanel>
+                  <StackPanel Grid.Column="1" Spacing="4"><TextBlock Classes="caption" Text="{Binding UiScaleText}" /><Slider Minimum="0.75" Maximum="1.5" TickFrequency="0.05" IsSnapToTickEnabled="True" Value="{Binding UiScale, Mode=TwoWay}" /></StackPanel>
+                </Grid>
+              </local:AdaptiveSettingsSection.SectionContent>
+            </local:AdaptiveSettingsSection>
             <Separator />
             <CheckBox Content="Toggle global PTT instead of hold-to-talk" IsChecked="{Binding TogglePttMode, Mode=TwoWay}" />
             <CheckBox Content="Talk permit tone" IsChecked="{Binding TalkPermitTone, Mode=TwoWay}" />
@@ -48,12 +83,17 @@
             <CheckBox Content="Dark mode" IsChecked="{Binding DarkMode, Mode=TwoWay}" />
             <CheckBox Content="Keep window on top" IsChecked="{Binding KeepWindowOnTop, Mode=TwoWay}" />
             <Separator />
-            <TextBlock FontWeight="SemiBold" Text="Widgets" />
-            <CheckBox Content="Show system status" IsChecked="{Binding ShowSystemStatus, Mode=TwoWay}" />
-            <CheckBox Content="Show channel widgets" IsChecked="{Binding ShowChannels, Mode=TwoWay}" />
-            <CheckBox Content="Show alert buttons" IsChecked="{Binding ShowAlertTones, Mode=TwoWay}" />
-            <CheckBox Content="Lock channel widget positions" IsChecked="{Binding LockWidgets, Mode=TwoWay}" />
-            <Button Content="Reset widget layout" Click="HandleResetLayoutClick" />
+            <local:AdaptiveSettingsSection Header="Channel widgets" Description="Control the freeform channel-card display and saved layout.">
+              <local:AdaptiveSettingsSection.SectionContent>
+                <StackPanel Spacing="7">
+                  <CheckBox Content="Show system status" IsChecked="{Binding ShowSystemStatus, Mode=TwoWay}" />
+                  <CheckBox Content="Show channel widgets" IsChecked="{Binding ShowChannels, Mode=TwoWay}" />
+                  <CheckBox Content="Show alert buttons" IsChecked="{Binding ShowAlertTones, Mode=TwoWay}" />
+                  <CheckBox Content="Lock channel widget positions" IsChecked="{Binding LockWidgets, Mode=TwoWay}" />
+                  <Button Content="Reset widget layout" HorizontalAlignment="Left" Click="HandleResetLayoutClick" />
+                </StackPanel>
+              </local:AdaptiveSettingsSection.SectionContent>
+            </local:AdaptiveSettingsSection>
             <Separator />
             <TextBlock x:Name="ClockSettingsSection" FontWeight="SemiBold" Text="Toolbar clocks" />
             <TextBlock Classes="caption" Text="Enable slots, choose a UTC offset, and color-code each clock." TextWrapping="Wrap" />
@@ -586,6 +626,7 @@
         </ScrollViewer>
       </TabItem>
     </TabControl>
+    </Grid>
     <Border Grid.Row="1" BorderBrush="#3A4654" BorderThickness="0,1,0,0" Padding="10"><Grid ColumnDefinitions="*,Auto"><TextBlock Classes="caption" Text="{Binding AudioStatusText}" VerticalAlignment="Center" /><Button Grid.Column="1" Content="Close" Click="HandleCloseClick" /></Grid></Border>
   </Grid>
   </LayoutTransformControl>

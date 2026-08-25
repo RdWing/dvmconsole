@@ -4,7 +4,17 @@ namespace DvmConsole.Desktop;
 
 internal sealed record PttSourceStateChange(
     bool Pressed,
-    PttTargetScope Scope);
+    PttTargetScope Scope,
+    PttActivationSource Source);
+
+internal enum PttActivationSource
+{
+    None,
+    LocalChannelControl,
+    WindowLocalKeyboard,
+    OsGlobalKeyboard,
+    SerialHardware
+}
 
 internal sealed record PttSessionStartResult(
     KeyboardPttStartResult GlobalKeyboard,
@@ -23,6 +33,7 @@ internal sealed class PttSessionController : IAsyncDisposable
     private IPttSource? serialPtt;
     private bool eventsAttached;
     private bool started;
+    private bool spaceInputSuppressed;
 
     public PttSessionController(
         PttSettingsViewModel settings,
@@ -185,13 +196,15 @@ internal sealed class PttSessionController : IAsyncDisposable
         if (previous.IsPressed && !anotherSourcePressed)
             await stopLatchedTransmit().ConfigureAwait(false);
 
-        EventHandler<bool> handler = activeSystemOnly
+        EventHandler<KeyboardPttStateChange> handler = activeSystemOnly
             ? HandleActiveSystemKeyboardStateChanged
             : HandleGlobalKeyboardStateChanged;
         previous.StateChanged -= handler;
         await previous.DisposeAsync().ConfigureAwait(false);
 
         var replacement = new KeyboardPttBinding(key, settings.TogglePttMode);
+        replacement.SetInputSuppressed(
+            spaceInputSuppressed && key == KeyboardPttKey.Space);
         if (eventsAttached)
             replacement.StateChanged += handler;
         if (activeSystemOnly)
@@ -219,6 +232,15 @@ internal sealed class PttSessionController : IAsyncDisposable
 
     public bool IsConfiguredKey(KeyboardPttKey key)
         => globalKeyboard.ActivationKey == key || activeSystemKeyboard.ActivationKey == key;
+
+    public void SetSpaceInputSuppressed(bool suppressed)
+    {
+        spaceInputSuppressed = suppressed;
+        globalKeyboard.SetInputSuppressed(
+            suppressed && globalKeyboard.ActivationKey == KeyboardPttKey.Space);
+        activeSystemKeyboard.SetInputSuppressed(
+            suppressed && activeSystemKeyboard.ActivationKey == KeyboardPttKey.Space);
+    }
 
     public ValueTask DisposeAsync()
         => disposal.RunAsync(DisposeCoreAsync);
@@ -279,20 +301,34 @@ internal sealed class PttSessionController : IAsyncDisposable
         }
     }
 
-    private void HandleGlobalKeyboardStateChanged(object? sender, bool pressed)
+    private void HandleGlobalKeyboardStateChanged(object? sender, KeyboardPttStateChange change)
         => StateChanged?.Invoke(
             this,
-            new PttSourceStateChange(pressed, PttTargetScope.AllSelectedResources));
+            new PttSourceStateChange(
+                change.Pressed,
+                PttTargetScope.AllSelectedResources,
+                ToActivationSource(change.Origin)));
 
-    private void HandleActiveSystemKeyboardStateChanged(object? sender, bool pressed)
+    private void HandleActiveSystemKeyboardStateChanged(object? sender, KeyboardPttStateChange change)
         => StateChanged?.Invoke(
             this,
-            new PttSourceStateChange(pressed, PttTargetScope.ActiveSystem));
+            new PttSourceStateChange(
+                change.Pressed,
+                PttTargetScope.ActiveSystem,
+                ToActivationSource(change.Origin)));
 
     private void HandleSerialStateChanged(object? sender, bool pressed)
         => StateChanged?.Invoke(
             this,
-            new PttSourceStateChange(pressed, getSerialTargetScope()));
+            new PttSourceStateChange(
+                pressed,
+                getSerialTargetScope(),
+                PttActivationSource.SerialHardware));
+
+    private static PttActivationSource ToActivationSource(KeyboardPttInputOrigin origin)
+        => origin == KeyboardPttInputOrigin.OsGlobal
+            ? PttActivationSource.OsGlobalKeyboard
+            : PttActivationSource.WindowLocalKeyboard;
 
     private static KeyboardPttStartResult CurrentStartResult(KeyboardPttBinding binding)
         => binding.ActivationKey == KeyboardPttKey.None

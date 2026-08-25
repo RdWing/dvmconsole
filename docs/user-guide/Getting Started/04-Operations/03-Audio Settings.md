@@ -138,9 +138,12 @@ This setting is saved.
 ## Bluetooth PTT timing
 
 Bluetooth headsets still need time to change into their microphone-capable
-duplex profile when a cold PTT begins. DVM Console waits for selected microphone
-samples and completes the talk-permit cue before releasing microphone audio, so
-the operator is not invited to speak into a route that is still changing.
+duplex profile when a cold PTT begins. DVM Console waits for the first non-empty
+selected-microphone callback after the route transition and then completes the
+talk-permit cue. On macOS, the cue path also accounts for the output device's
+reported presentation latency. Microphone audio remains blocked until the cue
+path completes; if it cannot complete, the new PTT call stops without releasing
+operator audio.
 
 The standard DVM Console processing path avoids the additional shared
 full-duplex coordination formerly required by Apple Voice Processing. In live

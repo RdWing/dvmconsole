@@ -1,12 +1,17 @@
 # Overview
 
-The Digital Voice Modem Desktop Dispatch Console is a cross-platform operator console for monitoring and transmitting on DVM FNE talkgroups.
+**DVM Console NEO — Built for busy systems.**
 
-The Avalonia application runs on Apple Silicon and Intel macOS plus Windows
-x64. It keeps the established DVM Console codeplug and FNE behavior while
-providing the same operator workflow across supported platforms.
+DVM Console NEO is an open-source DVM FNE operator console for macOS and
+Windows—live channels, patches, tones, recordings, and diagnostics in one dense
+workspace. The Avalonia application runs on Apple Silicon and Intel macOS plus
+Windows x64.
 
-DVM Console is released as a cross-platform Avalonia application. Test every build with the intended FNE, audio devices, and operator workflow before operational use.
+The project is independently maintained downstream of
+[DVMProject/dvmconsole](https://github.com/DVMProject/dvmconsole).
+
+DVM Console NEO is for amateur and educational use. It is not for public- or
+life-safety operation.
 
 ---
 
@@ -49,6 +54,20 @@ Membership is saved separately from whether a patch is active.
 
 # Main Console
 
+## Operator Workspace
+
+DVM Console NEO uses freeform channel cards grouped by system and zone, with
+saved card positions and the Activity sidebar.
+
+Choose **View > Engineering Health** to show an optional telemetry rail. It is
+hidden by default and contains no transmit, mute, routing, or recording controls.
+It reports receive queue pressure and latency, microphone state/generation/
+cadence, transmit backlog, TAR finalization and catalog work, route recovery,
+and selected-system connection health. Its visibility and height are stored in
+`OperatorView.json` without changing `UserSettings` schema 6 or card positions.
+
+## Channel Interaction
+
 Click a channel card outside its controls to enable or disable local receive audio.
 
 The bottom row contains:
@@ -82,7 +101,9 @@ display-layout change would leave the title bar unreachable.
 
 # Console Settings
 
-Several menu entries open the modeless Console Settings window on a specific page. The window can remain open while the main console is used.
+Several menu entries open the modeless Console Settings window on a specific
+page. Search the left navigation to find a section without closing the window;
+the window can remain open while the main console is used.
 
 Pages include:
 
@@ -134,7 +155,8 @@ If the application closes without an error dialog, inspect `LastCrash.log` befor
 
 - DVMConsole connects to DVM FNE peers; it does not directly control base or mobile radios.
 - Operator audio supports DMR, P25 Phase 1, and NXDN 4800. NXDN 9600/EFR and P25 Phase 2 transport are not implemented.
-- This software is intended for amateur and educational use. Any other use is at the user's discretion and risk.
+- DVM Console NEO is for amateur and educational use. It is not for public- or
+  life-safety operation.
 
 ---
 

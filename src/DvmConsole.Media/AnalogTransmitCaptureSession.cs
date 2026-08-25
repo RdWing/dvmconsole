@@ -33,9 +33,12 @@ public sealed class AnalogTransmitCaptureSession : ITransmitCaptureSession
     public event EventHandler<Exception>? Faulted;
 
     public bool IsRunning => lifecycle.IsRunning;
+    public bool IsActivated => lifecycle.IsActivated;
 
     public ValueTask StartAsync(CancellationToken cancellationToken = default)
         => lifecycle.StartAsync(cancellationToken);
+
+    public void Activate() => lifecycle.Activate();
 
     public Task StopAsync(CancellationToken cancellationToken = default)
         => lifecycle.StopAsync(cancellationToken);

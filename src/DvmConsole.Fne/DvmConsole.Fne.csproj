@@ -14,6 +14,7 @@
     <Compile Include="../../fnecore/**/*.cs" Exclude="../../fnecore/obj/**/*.cs;../../fnecore/bin/**/*.cs;../../fnecore/Udp.cs" />
     <Compile Include="CompatibleUdp.cs" />
     <Compile Include="FneInboundFramePolicy.cs" />
+    <Compile Include="FnePeerKeepaliveStreamInitializer.cs" />
     <Compile Include="FneTransportCryptoCodec.cs" />
     <Compile Include="FneTransportNegotiationState.cs" />
     <Compile Include="InboundReplayWindow.cs" />

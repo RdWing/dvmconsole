@@ -121,6 +121,7 @@ public sealed record FneKeyResponse(
 // Owns one cross-platform FNE peer lifecycle. It does not start until StartAsync is called.
 public sealed class FneConnection : IAsyncDisposable
 {
+    internal static readonly TimeSpan DefaultHandshakeProgressTimeout = TimeSpan.FromSeconds(15);
     internal static TimeSpan P25KeyResponseWindow => PendingP25KeyRequestTracker.ResponseWindow;
 
     internal static string SoftwareIdentifier => FormatSoftwareIdentifier(
@@ -132,10 +133,14 @@ public sealed class FneConnection : IAsyncDisposable
     private readonly IFneEndpointResolver endpointResolver;
     private readonly IFnePeerSessionFactory peerSessionFactory;
     private readonly PendingP25KeyRequestTracker pendingP25KeyRequests;
+    private readonly ReconnectBackoff loginRetryBackoff = new();
+    private readonly TimeProvider timeProvider;
+    private readonly TimeSpan handshakeProgressTimeout;
     private readonly FnePeerStateMonitor stateMonitor = new();
     private readonly object sync = new();
     private readonly SemaphoreSlim lifecycle = new(1, 1);
     private IFnePeerSession? peerSession;
+    private CancellationTokenSource? handshakeRecoveryCancellation;
     private FneConnectionStatus status;
     private long latestTrafficTransportTimestamp;
     private EventHandler<FneTrafficFrame>[] trafficReceivedHandlers = [];
@@ -162,12 +167,17 @@ public sealed class FneConnection : IAsyncDisposable
         FneConnectionOptions options,
         TimeProvider timeProvider,
         IFneEndpointResolver endpointResolver,
-        IFnePeerSessionFactory peerSessionFactory)
+        IFnePeerSessionFactory peerSessionFactory,
+        TimeSpan? handshakeProgressTimeout = null)
     {
         this.options = options ?? throw new ArgumentNullException(nameof(options));
         pendingP25KeyRequests = new PendingP25KeyRequestTracker(timeProvider);
+        this.timeProvider = timeProvider ?? throw new ArgumentNullException(nameof(timeProvider));
         this.endpointResolver = endpointResolver ?? throw new ArgumentNullException(nameof(endpointResolver));
         this.peerSessionFactory = peerSessionFactory ?? throw new ArgumentNullException(nameof(peerSessionFactory));
+        this.handshakeProgressTimeout = handshakeProgressTimeout ?? DefaultHandshakeProgressTimeout;
+        if (this.handshakeProgressTimeout <= TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(nameof(handshakeProgressTimeout));
         status = new FneConnectionStatus(options.Name, FneConnectionState.Disconnected, "Not started", DateTimeOffset.UtcNow);
     }
 
@@ -316,6 +326,7 @@ public sealed class FneConnection : IAsyncDisposable
         await lifecycle.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
+            ResetLoginRetryBackoff();
             await StartCoreAsync(cancellationToken).ConfigureAwait(false);
         }
         finally
@@ -334,6 +345,7 @@ public sealed class FneConnection : IAsyncDisposable
         {
             if (Peer is not null)
                 await StopCoreAsync(cancellationToken).ConfigureAwait(false);
+            ResetLoginRetryBackoff();
             await StartCoreAsync(cancellationToken).ConfigureAwait(false);
         }
         finally
@@ -480,11 +492,17 @@ public sealed class FneConnection : IAsyncDisposable
         string version = string.IsNullOrWhiteSpace(informationalVersion)
             ? fallbackVersion
             : informationalVersion.Trim().Split('+', 2)[0];
-        return $"DVMC_AV_{version}";
+        return $"DVMC_NEO_{version}";
     }
 
     private void HandlePeerConnected(object? sender, PeerConnectedEvent args)
     {
+        if (sender is FnePeer connectedPeer)
+        {
+            ResetLoginRetryBackoff(connectedPeer);
+            FnePeerKeepaliveStreamInitializer.TryInitialize(connectedPeer);
+        }
+
         Publish(FneConnectionState.Connected, "FNE peer connected");
     }
 
@@ -667,10 +685,20 @@ public sealed class FneConnection : IAsyncDisposable
 
     private void HandlePeerLog(LogLevel level, string message)
     {
+        TimeSpan? retryDelay = FneLogInterpreter.IsLoginRequest(message)
+            ? ApplyLoginRetryBackoff()
+            : null;
+        string displayMessage = DebugLogRedactor.Redact(message);
+        if (retryDelay is not null &&
+            !displayMessage.Contains("next retry", StringComparison.OrdinalIgnoreCase))
+        {
+            displayMessage += $"; next retry in {retryDelay.Value.TotalSeconds:0} seconds if unanswered";
+        }
+
         Raise(LogReceived, new FneLogEntry(
             options.Name,
             FneLogInterpreter.MapSeverity(level),
-            DebugLogRedactor.Redact(message),
+            displayMessage,
             DateTimeOffset.UtcNow));
 
         FneLogStatusUpdate? statusUpdate = FneLogInterpreter.InterpretStatus(message, Status.State);
@@ -681,6 +709,33 @@ public sealed class FneConnection : IAsyncDisposable
         // diagnostics, not proof that the transport disconnected. The peer
         // state monitor remains authoritative unless the log explicitly
         // identifies a connection failure above.
+    }
+
+    private TimeSpan? ApplyLoginRetryBackoff()
+    {
+        FnePeer? current;
+        lock (sync)
+            current = peerSession?.Peer;
+        if (current is null)
+            return null;
+
+        TimeSpan normalRetryInterval = TimeSpan.FromSeconds(
+            FnePeerSessionFactory.DefaultPingIntervalSeconds);
+        TimeSpan retryDelay = loginRetryBackoff.NextDelay(normalRetryInterval);
+
+        // FnePeer reads PingTime after emitting the login log entry, so this
+        // application-owned update governs the delay before its next attempt
+        // without modifying the pinned upstream source.
+        current.PingTime = checked((int)retryDelay.TotalSeconds);
+        return retryDelay;
+    }
+
+    private void ResetLoginRetryBackoff(FnePeer? current = null)
+    {
+        loginRetryBackoff.Reset();
+        current ??= Peer;
+        if (current is not null)
+            current.PingTime = FnePeerSessionFactory.DefaultPingIntervalSeconds;
     }
 
     private void StartStateMonitor(FnePeer current)
@@ -695,9 +750,126 @@ public sealed class FneConnection : IAsyncDisposable
     private void Publish(FneConnectionState state, string message)
     {
         FneConnectionStatus next = new(options.Name, state, message, DateTimeOffset.UtcNow);
+        FneConnectionState previousState;
         lock (sync)
+        {
+            previousState = status.State;
             status = next;
+        }
+
+        ObserveHandshakeProgress(previousState, state);
         Raise(StatusChanged, next);
+    }
+
+    private void ObserveHandshakeProgress(
+        FneConnectionState previousState,
+        FneConnectionState state)
+    {
+        bool isHandshakeProgress = state is
+            FneConnectionState.Authenticating or
+            FneConnectionState.Configuring;
+
+        if (isHandshakeProgress)
+        {
+            if (state != previousState)
+                ArmHandshakeRecovery(state);
+            return;
+        }
+
+        CancelHandshakeRecovery();
+    }
+
+    private void ArmHandshakeRecovery(FneConnectionState expectedState)
+    {
+        IFnePeerSession? expectedSession;
+        CancellationTokenSource nextCancellation = new();
+        CancellationTokenSource? previousCancellation;
+
+        lock (sync)
+        {
+            expectedSession = peerSession;
+            if (expectedSession is null)
+            {
+                nextCancellation.Dispose();
+                return;
+            }
+
+            previousCancellation = handshakeRecoveryCancellation;
+            handshakeRecoveryCancellation = nextCancellation;
+        }
+
+        previousCancellation?.Cancel();
+        previousCancellation?.Dispose();
+        _ = RecoverStalledHandshakeAsync(
+            expectedSession,
+            expectedState,
+            nextCancellation.Token);
+    }
+
+    private void CancelHandshakeRecovery()
+    {
+        CancellationTokenSource? current;
+        lock (sync)
+        {
+            current = handshakeRecoveryCancellation;
+            handshakeRecoveryCancellation = null;
+        }
+
+        current?.Cancel();
+        current?.Dispose();
+    }
+
+    private async Task RecoverStalledHandshakeAsync(
+        IFnePeerSession expectedSession,
+        FneConnectionState expectedState,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await Task.Delay(
+                handshakeProgressTimeout,
+                timeProvider,
+                cancellationToken).ConfigureAwait(false);
+            await lifecycle.WaitAsync(cancellationToken).ConfigureAwait(false);
+            try
+            {
+                lock (sync)
+                {
+                    if (!ReferenceEquals(peerSession, expectedSession) ||
+                        status.State != expectedState)
+                    {
+                        return;
+                    }
+                }
+
+                Raise(LogReceived, new FneLogEntry(
+                    options.Name,
+                    DebugLogSeverity.Warning,
+                    "FNE handshake made no progress; recycling this system's network session",
+                    DateTimeOffset.UtcNow));
+                Publish(
+                    FneConnectionState.Faulted,
+                    "FNE handshake stalled; recycling network session");
+
+                await StopCoreAsync(CancellationToken.None).ConfigureAwait(false);
+                await StartCoreAsync(CancellationToken.None).ConfigureAwait(false);
+            }
+            finally
+            {
+                lifecycle.Release();
+            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            // A successful handshake, explicit stop, or newer handshake stage
+            // superseded this recovery attempt.
+        }
+        catch (Exception exception)
+        {
+            // StartCoreAsync publishes the actionable connection fault. Keep the
+            // detached watchdog task from surfacing an unobserved exception.
+            Debug.WriteLine($"FNE handshake recovery failed: {exception.Message}");
+        }
     }
 
     private void Raise<T>(EventHandler<T>? handlers, T args)

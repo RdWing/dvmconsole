@@ -7,7 +7,11 @@
         Icon="avares://DvmConsole/Assets/DVMConsole.png"
         WindowStartupLocation="CenterOwner">
   <Grid Margin="12" RowDefinitions="Auto,*" ColumnDefinitions="250,10,*">
-    <TextBox x:Name="searchBox" Grid.ColumnSpan="3" Watermark="Search documentation…" Margin="0,0,0,10" TextChanged="HandleSearchTextChanged" />
+    <TextBox x:Name="searchBox"
+             Grid.ColumnSpan="3"
+             Margin="0,0,0,10"
+             Watermark="Search documentation…"
+             TextChanged="HandleSearchTextChanged" />
     <Border Grid.Row="1" Background="{DynamicResource CardBackgroundBrush}" BorderBrush="{DynamicResource ControlBorderBrush}" BorderThickness="1" CornerRadius="6" Padding="5">
       <TreeView x:Name="documentTree" SelectionChanged="HandleDocumentSelectionChanged" />
     </Border>

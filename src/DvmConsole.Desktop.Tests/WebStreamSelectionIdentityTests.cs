@@ -58,6 +58,7 @@ public sealed class WebStreamSelectionIdentityTests
             {
                 WebStreamViewModel stream = Assert.Single(trusted.WebStreams);
                 stream.SetPlaybackState(true, false, true, false, "Live");
+                await trusted.FlushUserSettingsAsync();
                 string persisted = Assert.Single(store.Load().SelectedWebStreams);
                 Assert.True(WebStreamSelectionIdentity.IsVersioned(persisted));
             }

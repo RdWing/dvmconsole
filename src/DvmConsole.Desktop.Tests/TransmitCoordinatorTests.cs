@@ -19,10 +19,12 @@ public sealed class TransmitCoordinatorTests
         await using var coordinator = new ChannelTransmitCoordinator(createAudioBackend: () => audio);
 
         await coordinator.StartAsync([new TransmitTarget(first, endpoint), new TransmitTarget(second, endpoint)]);
+        await coordinator.ActivateAsync();
 
         Assert.Equal(1, audio.OpenCaptureCalls);
         Assert.Equal(2, coordinator.ActiveChannels.Count);
         audio.Capture.Emit(new short[160]);
+        await WaitForAsync(() => endpoint.Sent.Count == 2);
         Assert.Equal(2, endpoint.Sent.Count); // one voice packet per target
 
         await coordinator.StopAsync();
@@ -57,6 +59,7 @@ public sealed class TransmitCoordinatorTests
         await coordinator.StartAsync([
             new TransmitTarget(first, endpoint),
             new TransmitTarget(second, endpoint)]);
+        await coordinator.ActivateAsync();
 
         Task publish = Task.Run(() => audio.Capture.Emit(new short[160]));
         await firstObservationEntered.Task.WaitAsync(TimeSpan.FromSeconds(1));
@@ -81,14 +84,16 @@ public sealed class TransmitCoordinatorTests
 
         coordinator.SetMicrophoneAudioSuppressed(true);
         await coordinator.StartAsync(channel, endpoint);
+        await coordinator.ActivateAsync();
         int startupFrameCount = endpoint.Sent.Count;
         audio.Capture.Emit(Enumerable.Repeat((short)1000, 160).ToArray());
 
         Assert.Equal(startupFrameCount, endpoint.Sent.Count);
         Assert.Empty(observed);
 
-        coordinator.SetMicrophoneAudioSuppressed(false);
+        await coordinator.ReleaseMicrophoneAudioAsync(requireFreshRecoveryCallback: false);
         audio.Capture.Emit(Enumerable.Repeat((short)2000, 160).ToArray());
+        await WaitForAsync(() => endpoint.Sent.Count == startupFrameCount + 1);
 
         Assert.Equal(startupFrameCount + 1, endpoint.Sent.Count);
         Assert.Single(observed);
@@ -117,7 +122,7 @@ public sealed class TransmitCoordinatorTests
     [Theory]
     [InlineData(true)]
     [InlineData(null)]
-    public async Task ColdBluetoothOrUnknownMicrophoneReadinessWaitsForSustainedSelectedCaptureSamples(
+    public async Task ColdBluetoothOrUnknownMicrophoneReadinessUsesFirstSelectedCaptureSample(
         bool? inputIsBluetooth)
     {
         var channel = Channel("A", 100);
@@ -133,12 +138,6 @@ public sealed class TransmitCoordinatorTests
         Assert.False(ready.IsCompleted);
 
         audio.Capture.Emit(new short[160]);
-        Assert.False(ready.IsCompleted);
-        int requiredSamples = checked((int)Math.Ceiling(
-            PcmAudioFormat.Voice8KhzMono16Bit.SampleRate *
-            ChannelTransmitCoordinator.ColdMicrophoneSettlingDuration.TotalSeconds));
-        audio.Capture.Emit(new short[requiredSamples - 160]);
-
         await ready;
         await coordinator.StopAsync();
         Assert.False(coordinator.ActiveMicrophoneStartedCold);
@@ -161,6 +160,121 @@ public sealed class TransmitCoordinatorTests
 
         await ready;
         Assert.False(coordinator.ActiveMicrophoneIsBluetooth);
+    }
+
+    [Theory]
+    [InlineData(false, "stale")]
+    [InlineData(true, "faulted")]
+    public async Task ActiveTransmitFailsClosedWhenFreshMicrophoneProgressStops(
+        bool stopCapture,
+        string expectedState)
+    {
+        var channel = Channel("A", 100);
+        var endpoint = new FakeEndpoint("Test", [channel]);
+        var audio = new FakeAudioBackend(inputIsBluetooth: false);
+        await using var coordinator = new ChannelTransmitCoordinator(
+            createAudioBackend: () => audio,
+            microphoneStaleAfter: TimeSpan.FromMilliseconds(40));
+        var faulted = new TaskCompletionSource<Exception>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        coordinator.Faulted += (_, exception) => faulted.TrySetResult(exception);
+
+        coordinator.SetMicrophoneAudioSuppressed(true);
+        await coordinator.StartAsync(channel, endpoint);
+        Task<MicrophoneReadinessTiming> ready = coordinator.WaitForMicrophoneReadyAsync(
+            TimeSpan.FromSeconds(1));
+        audio.Capture.Emit(new short[160]);
+        await ready;
+        coordinator.SetMicrophoneAudioSuppressed(false);
+        int sentBeforeFailure = endpoint.Sent.Count;
+
+        if (stopCapture)
+            await audio.Capture.StopAsync();
+
+        Exception failure = await faulted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        audio.Capture.Emit(new short[160]);
+
+        Assert.IsType<IOException>(failure);
+        Assert.Contains(expectedState, failure.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.True(coordinator.IsMicrophoneAudioSuppressed);
+        Assert.Equal(sentBeforeFailure, endpoint.Sent.Count);
+    }
+
+    [Fact]
+    public async Task StartupGateAllowsColdBluetoothPermitTransitionWithoutFaultingTransmit()
+    {
+        var channel = Channel("A", 100);
+        var endpoint = new FakeEndpoint("Test", [channel]);
+        var audio = new FakeAudioBackend(inputIsBluetooth: true);
+        await using var coordinator = new ChannelTransmitCoordinator(
+            createAudioBackend: () => audio,
+            microphoneStaleAfter: TimeSpan.FromMilliseconds(40));
+        var faulted = new TaskCompletionSource<Exception>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        coordinator.Faulted += (_, exception) => faulted.TrySetResult(exception);
+
+        coordinator.SetMicrophoneAudioSuppressed(true);
+        await coordinator.StartAsync(channel, endpoint);
+        Task<MicrophoneReadinessTiming> ready = coordinator.WaitForMicrophoneReadyAsync(
+            TimeSpan.FromSeconds(1));
+        audio.Capture.Emit(new short[160]);
+        await ready;
+
+        // Opening and warming the post-transition Bluetooth output may pause
+        // input callbacks longer than the normal active-TX stale threshold.
+        await Task.Delay(120);
+
+        Assert.False(faulted.Task.IsCompleted);
+        Assert.Single(coordinator.ActiveChannels);
+
+        // Closing the permit-tone output may be the event that allows capture
+        // to resume. Keep operator audio gated until the first callback that
+        // occurs after the cue has completed.
+        Task<TimeSpan> release = coordinator.ReleaseMicrophoneAudioAsync(
+            requireFreshRecoveryCallback: true,
+            recoveryTimeout: TimeSpan.FromSeconds(1));
+        await Task.Delay(120);
+        Assert.False(release.IsCompleted);
+        Assert.True(coordinator.IsMicrophoneAudioSuppressed);
+        Assert.False(faulted.Task.IsCompleted);
+
+        audio.Capture.Emit(new short[160]);
+        TimeSpan recovery = await release;
+        await Task.Delay(20);
+
+        Assert.True(recovery >= TimeSpan.Zero);
+        Assert.False(faulted.Task.IsCompleted);
+        Assert.False(coordinator.IsMicrophoneAudioSuppressed);
+    }
+
+    [Fact]
+    public async Task ColdBluetoothPostCueRecoveryTimesOutWithoutReleasingOperatorAudio()
+    {
+        var channel = Channel("A", 100);
+        var endpoint = new FakeEndpoint("Test", [channel]);
+        var audio = new FakeAudioBackend(inputIsBluetooth: true);
+        await using var coordinator = new ChannelTransmitCoordinator(
+            createAudioBackend: () => audio,
+            microphoneStaleAfter: TimeSpan.FromMilliseconds(40));
+        var faulted = new TaskCompletionSource<Exception>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        coordinator.Faulted += (_, exception) => faulted.TrySetResult(exception);
+
+        coordinator.SetMicrophoneAudioSuppressed(true);
+        await coordinator.StartAsync(channel, endpoint);
+        Task<MicrophoneReadinessTiming> ready = coordinator.WaitForMicrophoneReadyAsync(
+            TimeSpan.FromSeconds(1));
+        audio.Capture.Emit(new short[160]);
+        await ready;
+
+        await Assert.ThrowsAsync<TimeoutException>(() =>
+            coordinator.ReleaseMicrophoneAudioAsync(
+                requireFreshRecoveryCallback: true,
+                recoveryTimeout: TimeSpan.FromMilliseconds(50)));
+
+        Assert.True(coordinator.IsMicrophoneAudioSuppressed);
+        Assert.False(faulted.Task.IsCompleted);
+        Assert.Single(coordinator.ActiveChannels);
     }
 
     [Fact]
@@ -192,12 +306,36 @@ public sealed class TransmitCoordinatorTests
             createVocoderBackend: () => vocoder);
 
         await Task.Run(() => coordinator.StartAsync(channel, endpoint));
+        await coordinator.ActivateAsync();
         audio.Capture.Emit(new short[160]);
 
         Assert.True(vocoder.CreateSessionCalls > 0);
         Assert.Contains(endpoint.Sent, sent => sent.Protocol == expectedProtocol);
         await coordinator.StopAsync();
         Assert.True(vocoder.IsDisposed);
+    }
+
+    [Fact]
+    public async Task PreparedDigitalCallEmitsNothingUntilExplicitActivation()
+    {
+        var channel = Channel("Digital", 100, "dmr");
+        var endpoint = new FakeEndpoint("Test", [channel]);
+        var audio = new FakeAudioBackend();
+        await using var coordinator = new ChannelTransmitCoordinator(
+            createAudioBackend: () => audio,
+            createVocoderBackend: () => new FakeVocoderBackend());
+
+        await coordinator.StartAsync(channel, endpoint);
+        audio.Capture.Emit(new short[480]);
+        Assert.Empty(endpoint.Sent);
+
+        await coordinator.ActivateAsync();
+        Assert.Single(endpoint.Sent);
+        Assert.Equal(FneTrafficProtocol.Dmr, endpoint.Sent[0].Protocol);
+
+        audio.Capture.Emit(new short[480]);
+        await WaitForAsync(() => endpoint.Sent.Count == 2);
+        Assert.Equal(2, endpoint.Sent.Count);
     }
 
     [Theory]
@@ -279,6 +417,29 @@ public sealed class TransmitCoordinatorTests
 
         Assert.True(coordinator.ActiveMicrophoneStartedCold);
         Assert.True(coordinator.ActiveMicrophoneIsBluetooth);
+    }
+
+    [Fact]
+    public async Task StaleWarmMicrophoneIsRestartedBeforePreflight()
+    {
+        var firstAudio = new FakeAudioBackend(inputDeviceId: "first");
+        var replacementAudio = new FakeAudioBackend(inputDeviceId: "replacement");
+        IAudioBackend[] backends = [firstAudio, replacementAudio];
+        int backendIndex = 0;
+        await using var coordinator = new ChannelTransmitCoordinator(
+            createAudioBackend: () => backends[backendIndex++],
+            microphoneStaleAfter: TimeSpan.FromMilliseconds(20));
+        await coordinator.SetKeepMicrophoneWarmAsync(true);
+        firstAudio.Capture.Emit(new short[160]);
+        await Task.Delay(35);
+
+        MicrophoneStartExpectation expectation =
+            await coordinator.InspectNextMicrophoneStartAsync();
+
+        Assert.True(expectation.StartsCold);
+        Assert.True(firstAudio.Capture.IsDisposed);
+        Assert.True(replacementAudio.Capture.IsRunning);
+        Assert.Equal(2, backendIndex);
     }
 
     [Fact]
@@ -366,10 +527,12 @@ public sealed class TransmitCoordinatorTests
 
         await coordinator.SetKeepMicrophoneWarmAsync(true);
         await coordinator.StartAsync(channel, endpoint);
+        await coordinator.ActivateAsync();
         int before = endpoint.Sent.Count;
 
         await coordinator.SetKeepMicrophoneWarmAsync(false);
         audio.Capture.Emit(Enumerable.Repeat((short)1000, 160).ToArray());
+        await WaitForAsync(() => endpoint.Sent.Count == before + 1);
 
         Assert.True(audio.Capture.IsRunning);
         Assert.False(audio.Capture.IsDisposed);
@@ -420,6 +583,7 @@ public sealed class TransmitCoordinatorTests
         coordinator.Faulted += (_, exception) => fault = exception;
 
         await coordinator.StartAsync(channel, endpoint);
+        await coordinator.ActivateAsync();
         audio.Capture.Emit(new short[160]);
         await WaitForAsync(() => fault is not null);
         await coordinator.StopAsync();

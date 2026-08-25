@@ -8,6 +8,13 @@ internal readonly record struct ReceiveJitterBufferDequeueMetadata(
     TimeSpan TargetDelay,
     bool IsAdaptive);
 
+internal enum ReceiveJitterPacketKind
+{
+    Voice,
+    Metadata,
+    Terminator
+}
+
 // Reorders packets for independent receive streams and releases them against a
 // monotonic playout deadline. Codec-specific loss concealment remains the
 // decoder's responsibility after a deadline expires.
@@ -20,7 +27,7 @@ internal sealed class ReceivePacketJitterBuffer<T>
     private readonly Dictionary<uint, StreamState> streams = [];
     private readonly Func<T, uint> getStreamId;
     private readonly Func<T, ushort> getSequence;
-    private readonly Func<T, bool> isTerminator;
+    private readonly Func<T, ReceiveJitterPacketKind> classify;
     private readonly Func<T, ReceiveJitterBufferProfile> getProfile;
 
     public ReceivePacketJitterBuffer(
@@ -28,10 +35,26 @@ internal sealed class ReceivePacketJitterBuffer<T>
         Func<T, ushort> getSequence,
         Func<T, bool> isTerminator,
         Func<T, ReceiveJitterBufferProfile> getProfile)
+        : this(
+            getStreamId,
+            getSequence,
+            item => isTerminator(item)
+                ? ReceiveJitterPacketKind.Terminator
+                : ReceiveJitterPacketKind.Voice,
+            getProfile)
+    {
+        ArgumentNullException.ThrowIfNull(isTerminator);
+    }
+
+    public ReceivePacketJitterBuffer(
+        Func<T, uint> getStreamId,
+        Func<T, ushort> getSequence,
+        Func<T, ReceiveJitterPacketKind> classify,
+        Func<T, ReceiveJitterBufferProfile> getProfile)
     {
         this.getStreamId = getStreamId ?? throw new ArgumentNullException(nameof(getStreamId));
         this.getSequence = getSequence ?? throw new ArgumentNullException(nameof(getSequence));
-        this.isTerminator = isTerminator ?? throw new ArgumentNullException(nameof(isTerminator));
+        this.classify = classify ?? throw new ArgumentNullException(nameof(classify));
         this.getProfile = getProfile ?? throw new ArgumentNullException(nameof(getProfile));
     }
 
@@ -50,14 +73,18 @@ internal sealed class ReceivePacketJitterBuffer<T>
             streams.Add(streamId, state);
         }
 
-        bool terminator = isTerminator(item);
-        if (!terminator && !state.HasExpectedSequence)
+        ReceiveJitterPacketKind kind = classify(item);
+        if (kind != ReceiveJitterPacketKind.Terminator && !state.HasExpectedSequence)
         {
             state.ExpectedSequence = getSequence(item);
             state.HasExpectedSequence = true;
-            state.NextDeadline = Add(timestamp, profile.TargetDelay);
         }
-        if (terminator)
+        if (kind == ReceiveJitterPacketKind.Voice && !state.HasVoiceDeadline)
+        {
+            state.NextDeadline = Add(timestamp, profile.TargetDelay);
+            state.HasVoiceDeadline = true;
+        }
+        if (kind == ReceiveJitterPacketKind.Terminator)
             state.FlushRequested = true;
 
         packets.AddLast(new BufferedPacket(item));
@@ -96,10 +123,11 @@ internal sealed class ReceivePacketJitterBuffer<T>
         }
 
         BufferedPacket selected = ready.Value;
-        bool reordered = !isTerminator(selected.Item) &&
+        ReceiveJitterPacketKind selectedKind = classify(selected.Item);
+        bool reordered = selectedKind == ReceiveJitterPacketKind.Voice &&
             HasEarlierVoicePacketForSameStream(ready);
         StreamState selectedState = streams[getStreamId(selected.Item)];
-        int missingPackets = isTerminator(selected.Item) || !selectedState.HasExpectedSequence
+        int missingPackets = selectedKind != ReceiveJitterPacketKind.Voice || !selectedState.HasExpectedSequence
             ? 0
             : ForwardDistance(selectedState.ExpectedSequence, getSequence(selected.Item));
         if (missingPackets > MaximumForwardDistance)
@@ -123,7 +151,8 @@ internal sealed class ReceivePacketJitterBuffer<T>
              node is not null;
              node = node.Previous)
         {
-            if (!isTerminator(node.Value.Item) && getStreamId(node.Value.Item) == streamId)
+            if (classify(node.Value.Item) == ReceiveJitterPacketKind.Voice &&
+                getStreamId(node.Value.Item) == streamId)
                 return true;
         }
         return false;
@@ -135,7 +164,7 @@ internal sealed class ReceivePacketJitterBuffer<T>
              candidate is not null;
              candidate = candidate.Next)
         {
-            if (isTerminator(candidate.Value.Item))
+            if (classify(candidate.Value.Item) != ReceiveJitterPacketKind.Voice)
                 continue;
 
             uint streamId = getStreamId(candidate.Value.Item);
@@ -143,7 +172,8 @@ internal sealed class ReceivePacketJitterBuffer<T>
                  later is not null;
                  later = later.Next)
             {
-                if (!isTerminator(later.Value.Item) && getStreamId(later.Value.Item) == streamId)
+                if (classify(later.Value.Item) == ReceiveJitterPacketKind.Voice &&
+                    getStreamId(later.Value.Item) == streamId)
                 {
                     packets.Remove(candidate);
                     return true;
@@ -188,7 +218,8 @@ internal sealed class ReceivePacketJitterBuffer<T>
             T candidate = node.Value.Item;
             if (getStreamId(candidate) != streamId)
                 continue;
-            if (isTerminator(candidate))
+            ReceiveJitterPacketKind kind = classify(candidate);
+            if (kind == ReceiveJitterPacketKind.Terminator)
             {
                 terminator ??= node;
                 continue;
@@ -199,7 +230,11 @@ internal sealed class ReceivePacketJitterBuffer<T>
 
             int distance = ForwardDistance(state.ExpectedSequence, getSequence(candidate));
             if (distance == 0)
+            {
                 exact ??= node;
+                if (kind == ReceiveJitterPacketKind.Metadata)
+                    return new StreamSelection(node, true, timestamp);
+            }
             else if (distance <= MaximumForwardDistance && distance < nearestDistance)
             {
                 nearestFuture = node;
@@ -212,7 +247,8 @@ internal sealed class ReceivePacketJitterBuffer<T>
         if (late is not null)
             return new StreamSelection(late, true, timestamp);
 
-        bool releaseNow = drain || state.FlushRequested || timestamp >= state.NextDeadline;
+        bool releaseNow = drain || state.FlushRequested ||
+            !state.HasVoiceDeadline || timestamp >= state.NextDeadline;
         LinkedListNode<BufferedPacket>? voice = exact ?? nearestFuture;
         if (voice is not null)
             return new StreamSelection(voice, releaseNow, state.NextDeadline);
@@ -229,7 +265,8 @@ internal sealed class ReceivePacketJitterBuffer<T>
         if (!streams.TryGetValue(streamId, out StreamState? state))
             return;
 
-        if (isTerminator(item))
+        ReceiveJitterPacketKind kind = classify(item);
+        if (kind == ReceiveJitterPacketKind.Terminator)
         {
             streams.Remove(streamId);
             return;
@@ -243,9 +280,12 @@ internal sealed class ReceivePacketJitterBuffer<T>
         {
             state.ExpectedSequence = NextSequence(sequence);
             state.HasExpectedSequence = true;
-            long intervals = Math.Max(1, distance + 1L);
-            long next = Add(state.NextDeadline, Multiply(state.Profile.PacketDuration, intervals));
-            state.NextDeadline = next > 0 ? next : timestamp;
+            if (kind == ReceiveJitterPacketKind.Voice)
+            {
+                long intervals = Math.Max(1, distance + 1L);
+                long next = Add(state.NextDeadline, Multiply(state.Profile.PacketDuration, intervals));
+                state.NextDeadline = next > 0 ? next : timestamp;
+            }
         }
 
         ReconcileTerminatorState(streamId);
@@ -256,7 +296,8 @@ internal sealed class ReceivePacketJitterBuffer<T>
         if (!streams.TryGetValue(streamId, out StreamState? state))
             return;
         state.FlushRequested = packets.Any(packet =>
-            getStreamId(packet.Item) == streamId && isTerminator(packet.Item));
+            getStreamId(packet.Item) == streamId &&
+            classify(packet.Item) == ReceiveJitterPacketKind.Terminator);
         if (!packets.Any(packet => getStreamId(packet.Item) == streamId))
             streams.Remove(streamId);
     }
@@ -284,6 +325,7 @@ internal sealed class ReceivePacketJitterBuffer<T>
         public bool HasExpectedSequence { get; set; }
         public ushort ExpectedSequence { get; set; }
         public long NextDeadline { get; set; }
+        public bool HasVoiceDeadline { get; set; }
         public bool FlushRequested { get; set; }
     }
 

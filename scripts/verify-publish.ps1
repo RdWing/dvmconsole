@@ -38,14 +38,42 @@ if (-not (Test-Path -LiteralPath $PublishDirectory -PathType Container)) {
     throw "Publish directory does not exist: $PublishDirectory"
 }
 
-foreach ($FileName in @("DvmConsole.exe", "LICENSE", "NOTICES.md")) {
+foreach ($FileName in @("DvmConsole.exe", "LICENSE")) {
     if (-not (Test-Path -LiteralPath (Join-Path $PublishDirectory $FileName) -PathType Leaf)) {
         throw "Published output is missing required file: $FileName"
     }
 }
 
 if (Test-Path -LiteralPath (Join-Path $PublishDirectory "Docs")) {
-    throw "Publish contains documentation that must be read live from GitHub."
+    throw "Publish contains the obsolete Docs directory; documentation pages belong under Documentation."
+}
+
+$RequiredDocumentationFiles = @(
+    "Getting Started/01-Overview.md",
+    "Getting Started/02-Building.md",
+    "Getting Started/03-Configurations/01-Codeplug Creation.md",
+    "Getting Started/03-Configurations/02-Encryption Keys.md",
+    "Getting Started/03-Configurations/03-RID Aliases.md",
+    "Getting Started/03-Configurations/04-Groups and Patching.md",
+    "Getting Started/03-Configurations/05-Talkgroup Audio Recorder.md",
+    "Getting Started/04-Operations/01-Console Operation.md",
+    "Getting Started/04-Operations/02-Settings Reference.md",
+    "Getting Started/04-Operations/03-Audio Settings.md",
+    "Getting Started/04-Operations/04-Alert Tones.md"
+)
+foreach ($RelativeDocument in $RequiredDocumentationFiles) {
+    $DocumentPath = Join-Path (Join-Path $PublishDirectory "Documentation") $RelativeDocument
+    if (-not (Test-Path -LiteralPath $DocumentPath -PathType Leaf)) {
+        throw "Published output is missing documentation: $RelativeDocument"
+    }
+}
+
+$DemoCodeplug = [IO.Path]::GetFullPath((Join-Path $PublishDirectory "Demo/codeplug.yml"))
+$ExpectedDemoCodeplug = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot "../configs/codeplug.demo.yml"))
+if (-not (Test-Path -LiteralPath $DemoCodeplug -PathType Leaf) -or
+    (Get-FileHash -LiteralPath $DemoCodeplug -Algorithm SHA256).Hash -ne
+        (Get-FileHash -LiteralPath $ExpectedDemoCodeplug -Algorithm SHA256).Hash) {
+    throw "Published output is missing the exact sanitized network-disabled demonstration codeplug."
 }
 
 $DiagnosticsAssembly = Get-ChildItem -LiteralPath $PublishDirectory -Recurse -File -ErrorAction SilentlyContinue |
@@ -85,7 +113,10 @@ if ($null -ne $PrivateCodeplug) {
 
 $TextFilePaths = @(
     Get-ChildItem -LiteralPath $PublishDirectory -Recurse -File -ErrorAction SilentlyContinue |
-        Where-Object { $_.Extension -in @(".json", ".yml", ".yaml", ".config", ".txt") } |
+        Where-Object {
+            $_.Extension -in @(".json", ".yml", ".yaml", ".config", ".txt") -and
+            $_.FullName -ne $DemoCodeplug
+        } |
         Select-Object -ExpandProperty FullName
 )
 if ($TextFilePaths.Count -gt 0 -and

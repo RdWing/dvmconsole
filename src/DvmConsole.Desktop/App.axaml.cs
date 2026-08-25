@@ -1,14 +1,19 @@
 using Avalonia;
+using Avalonia.Controls;
 using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Markup.Xaml;
 using Avalonia.Media;
+using Avalonia.Media.Imaging;
 using Avalonia.Threading;
+using DvmConsole.Core.Settings;
 
 namespace DvmConsole.Desktop;
 
 public sealed class App : Application
 {
     public static string? ConfigurationPath { get; set; }
+    public static bool DemoMode { get; set; }
+    public static string? DemoCaptureDirectory { get; set; }
     public static bool SmokeWindows { get; set; }
     public static string? SmokeResultPath { get; set; }
 
@@ -24,14 +29,50 @@ public sealed class App : Application
     {
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
         {
-            var mainWindow = new MainWindow(ConfigurationPath);
+            MainWindow mainWindow;
+            if (DemoMode)
+            {
+                DemoSessionState demoState = DemoSessionState.Create();
+                try
+                {
+                    mainWindow = new MainWindow(
+                        ConfigurationPath ?? ResolveDemoConfigurationPath(AppContext.BaseDirectory),
+                        new UserSettingsStore(demoState.UserSettingsPath),
+                        new OperatorViewStore(demoState.OperatorViewPath),
+                        demoMode: true);
+                }
+                catch
+                {
+                    demoState.Dispose();
+                    throw;
+                }
+                desktop.Exit += (_, _) => demoState.Dispose();
+            }
+            else
+            {
+                mainWindow = new MainWindow(ConfigurationPath);
+            }
             desktop.MainWindow = mainWindow;
-            if (SmokeWindows)
+            if (!string.IsNullOrWhiteSpace(DemoCaptureDirectory))
+            {
+                Dispatcher.UIThread.Post(() =>
+                    TaskObservation.Observe(CaptureDemoScreenshotsAsync(
+                        desktop,
+                        mainWindow,
+                        DemoCaptureDirectory)));
+            }
+            else if (SmokeWindows)
                 Dispatcher.UIThread.Post(() =>
                     TaskObservation.Observe(SmokeWindowsAsync(desktop, mainWindow)));
         }
 
         base.OnFrameworkInitializationCompleted();
+    }
+
+    internal static string ResolveDemoConfigurationPath(string baseDirectory)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(baseDirectory);
+        return Path.GetFullPath(Path.Combine(baseDirectory, "Demo", "codeplug.yml"));
     }
 
     private static async Task SmokeWindowsAsync(
@@ -90,6 +131,121 @@ public sealed class App : Application
             Console.Error.WriteLine($"Desktop window smoke failed: {exception}");
             desktop.Shutdown(10);
         }
+    }
+
+    private static async Task CaptureDemoScreenshotsAsync(
+        IClassicDesktopStyleApplicationLifetime desktop,
+        MainWindow mainWindow,
+        string captureDirectory)
+    {
+        try
+        {
+            string outputDirectory = Path.GetFullPath(captureDirectory);
+            Directory.CreateDirectory(outputDirectory);
+            mainWindow.Show();
+            if (mainWindow.DataContext is not MainWindowViewModel viewModel)
+                throw new InvalidOperationException("The demo view model was not loaded.");
+
+            async Task CaptureMainAsync(
+                string fileName,
+                bool darkMode,
+                double width,
+                double height,
+                bool showEngineeringHealth)
+            {
+                viewModel.DarkMode = darkMode;
+                mainWindow.PrepareDemoCapture(width, height, showEngineeringHealth);
+                await WaitForRenderAsync();
+                SaveVisual(mainWindow, Path.Combine(outputDirectory, fileName));
+            }
+
+            await CaptureMainAsync(
+                "console-dark.png",
+                darkMode: true,
+                1260,
+                760,
+                showEngineeringHealth: false);
+            await CaptureMainAsync(
+                "console-light.png",
+                darkMode: false,
+                1260,
+                760,
+                showEngineeringHealth: false);
+            await CaptureMainAsync(
+                "console-narrow.png",
+                darkMode: true,
+                880,
+                560,
+                showEngineeringHealth: false);
+            await CaptureMainAsync(
+                "console-wide.png",
+                darkMode: true,
+                1800,
+                900,
+                showEngineeringHealth: false);
+            await CaptureMainAsync(
+                "console-engineering.png",
+                darkMode: true,
+                1260,
+                760,
+                showEngineeringHealth: true);
+
+            mainWindow.PrepareDemoCapture(
+                1260,
+                760,
+                showEngineeringHealth: false);
+            foreach ((string FileName, OperatorToolSection Section) capture in new[]
+                     {
+                         ("history.png", OperatorToolSection.History),
+                         ("settings.png", OperatorToolSection.General)
+                     })
+            {
+                var toolsWindow = new OperatorToolsWindow(viewModel, capture.Section)
+                {
+                    Width = 1180,
+                    Height = 780
+                };
+                toolsWindow.Show(mainWindow);
+                toolsWindow.InvalidateMeasure();
+                toolsWindow.UpdateLayout();
+                await WaitForRenderAsync();
+                SaveVisual(toolsWindow, Path.Combine(outputDirectory, capture.FileName));
+                toolsWindow.Close();
+                await Task.Delay(50);
+            }
+
+            Console.WriteLine($"Demo screenshots written to {outputDirectory}");
+            desktop.Shutdown(0);
+        }
+        catch (Exception exception)
+        {
+            Console.Error.WriteLine($"Demo screenshot capture failed: {exception}");
+            desktop.Shutdown(11);
+        }
+    }
+
+    private static async Task WaitForRenderAsync()
+    {
+        await Dispatcher.UIThread.InvokeAsync(
+            static () => { },
+            DispatcherPriority.Loaded);
+        await Task.Delay(250);
+        await Dispatcher.UIThread.InvokeAsync(
+            static () => { },
+            DispatcherPriority.Render);
+    }
+
+    private static void SaveVisual(Visual visual, string path)
+    {
+        if (visual is Control control)
+            control.UpdateLayout();
+        int width = Math.Max(1, (int)Math.Ceiling(visual.Bounds.Width));
+        int height = Math.Max(1, (int)Math.Ceiling(visual.Bounds.Height));
+        using var bitmap = new RenderTargetBitmap(
+            new PixelSize(width, height),
+            new Vector(96, 96));
+        bitmap.Render(visual);
+        bitmap.Save(path);
     }
 
     internal static void InitializeSmokeResult()

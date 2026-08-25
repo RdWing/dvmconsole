@@ -14,6 +14,16 @@ internal sealed record KeyboardPttStartResult(
     KeyboardPttAvailability Availability,
     Exception? GlobalCaptureError = null);
 
+internal enum KeyboardPttInputOrigin
+{
+    WindowLocal,
+    OsGlobal
+}
+
+internal sealed record KeyboardPttStateChange(
+    bool Pressed,
+    KeyboardPttInputOrigin Origin);
+
 // Owns one keyboard PTT binding and its OS-global/window-local source choice.
 // Target selection remains a view-model policy so this lifecycle adapter can
 // be reused by bindings with different transmit scopes.
@@ -33,7 +43,7 @@ internal sealed class KeyboardPttBinding : IAsyncDisposable
         windowSource.StateChanged += ForwardStateChanged;
     }
 
-    public event EventHandler<bool>? StateChanged;
+    public event EventHandler<KeyboardPttStateChange>? StateChanged;
 
     public KeyboardPttKey ActivationKey => windowSource.ActivationKey;
 
@@ -48,6 +58,13 @@ internal sealed class KeyboardPttBinding : IAsyncDisposable
             if (globalSource is not null)
                 globalSource.ToggleMode = value;
         }
+    }
+
+    public void SetInputSuppressed(bool suppressed)
+    {
+        windowSource.InputSuppressed = suppressed;
+        if (globalSource is not null)
+            globalSource.InputSuppressed = suppressed;
     }
 
     public async ValueTask<KeyboardPttStartResult> StartAsync(
@@ -75,7 +92,8 @@ internal sealed class KeyboardPttBinding : IAsyncDisposable
         {
             var candidate = new GlobalKeyboardPttSource(ActivationKey)
             {
-                ToggleMode = ToggleMode
+                ToggleMode = ToggleMode,
+                InputSuppressed = windowSource.InputSuppressed
             };
             candidate.StateChanged += ForwardStateChanged;
             try
@@ -129,7 +147,13 @@ internal sealed class KeyboardPttBinding : IAsyncDisposable
     }
 
     private void ForwardStateChanged(object? sender, bool pressed)
-        => StateChanged?.Invoke(this, pressed);
+        => StateChanged?.Invoke(
+            this,
+            new KeyboardPttStateChange(
+                pressed,
+                sender is GlobalKeyboardPttSource
+                    ? KeyboardPttInputOrigin.OsGlobal
+                    : KeyboardPttInputOrigin.WindowLocal));
 
     private static bool IsGlobalCaptureFailure(Exception exception)
         => exception is PlatformNotSupportedException or

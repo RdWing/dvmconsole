@@ -19,6 +19,13 @@ public sealed partial class MainWindow : Window
     private static readonly TimeSpan ShutdownTimeout = TimeSpan.FromSeconds(10);
     private readonly MainWindowSessionHost sessionHost;
     private readonly WindowPttKeyRouter pttKeyRouter;
+    private readonly OperatorCommandCatalog operatorCommandCatalog;
+    private readonly UserSettingsStore sessionUserSettingsStore;
+    private readonly OperatorViewStore operatorViewStore;
+    private readonly LatestOperatorViewWriter operatorViewWriter;
+    private readonly OperatorViewSettings operatorViewSettings;
+    private readonly EngineeringHealthViewModel engineeringHealthViewModel;
+    private readonly bool demoMode;
     private MainWindowViewModel viewModel => sessionHost.ViewModel;
     private CardPttController cardPtt => sessionHost.CardPtt;
     private OperatorToolsWindow? operatorToolsWindow;
@@ -44,7 +51,25 @@ public sealed partial class MainWindow : Window
     }
 
     public MainWindow(string? configurationPath)
+        : this(
+            configurationPath,
+            new UserSettingsStore(UserSettingsStore.DefaultPath),
+            new OperatorViewStore(OperatorViewStore.DefaultPath),
+            demoMode: false)
     {
+    }
+
+    internal MainWindow(
+        string? configurationPath,
+        UserSettingsStore sessionUserSettingsStore,
+        OperatorViewStore operatorViewStore,
+        bool demoMode)
+    {
+        this.sessionUserSettingsStore = sessionUserSettingsStore ??
+            throw new ArgumentNullException(nameof(sessionUserSettingsStore));
+        this.operatorViewStore = operatorViewStore ??
+            throw new ArgumentNullException(nameof(operatorViewStore));
+        this.demoMode = demoMode;
         InitializeComponent();
         // Avalonia can leave named controls declared inside nested MenuItems
         // unresolved when the compiled XAML is loaded from a published
@@ -53,9 +78,31 @@ public sealed partial class MainWindow : Window
         recentCodeplugsMenu ??= this.FindControl<MenuItem>("recentCodeplugsMenu");
         namedSettingsProfileLoadMenu ??= this.FindControl<MenuItem>("namedSettingsProfileLoadMenu");
         namedSettingsProfileDeleteMenu ??= this.FindControl<MenuItem>("namedSettingsProfileDeleteMenu");
+        toolbarClocks ??= this.FindControl<ItemsControl>("toolbarClocks")
+            ?? throw new InvalidOperationException("The responsive toolbar clocks were not initialized.");
+        toolbarAlertToneShortcuts ??= this.FindControl<ItemsControl>("toolbarAlertToneShortcuts")
+            ?? throw new InvalidOperationException("The responsive alert shortcuts were not initialized.");
+        toolbarTonesLauncher ??= this.FindControl<Button>("toolbarTonesLauncher")
+            ?? throw new InvalidOperationException("The responsive tones launcher was not initialized.");
+        toolbarOverflowMenu ??= this.FindControl<Menu>("toolbarOverflowMenu")
+            ?? throw new InvalidOperationException("The responsive toolbar overflow was not initialized.");
+        mainShellGrid ??= this.FindControl<Grid>("mainShellGrid")
+            ?? throw new InvalidOperationException("The main shell grid was not initialized.");
+        engineeringHealthMenuItem ??= this.FindControl<MenuItem>("engineeringHealthMenuItem")
+            ?? throw new InvalidOperationException("The Engineering Health menu item was not initialized.");
+        engineeringHealthSplitter ??= this.FindControl<GridSplitter>("engineeringHealthSplitter")
+            ?? throw new InvalidOperationException("The Engineering Health splitter was not initialized.");
+        engineeringHealthPane ??= this.FindControl<EngineeringHealthPane>("engineeringHealthPane")
+            ?? throw new InvalidOperationException("The Engineering Health pane was not initialized.");
         activityCallHistoryList ??= this.FindControl<ItemsControl>("activityCallHistoryList")
             ?? throw new InvalidOperationException("The Activity history list was not initialized.");
-        MainWindowViewModel initialViewModel = MainWindowViewModel.Load(configurationPath);
+        MainWindowViewModel initialViewModel = LoadSessionViewModel(configurationPath);
+        operatorViewSettings = LoadOperatorViewSettings();
+        operatorViewWriter = new LatestOperatorViewWriter(
+            this.operatorViewStore.Save,
+            exception => DesktopCrashLog.Write("Operator view persistence", exception));
+        engineeringHealthViewModel = new EngineeringHealthViewModel(initialViewModel);
+        engineeringHealthPane.DataContext = engineeringHealthViewModel;
         mainWindowPlacement = new MainWindowPlacementController(this, initialViewModel.MainWindowPlacement);
         mainWindowPlacement.PrepareSize();
         activityViewportAnchor = new ScrollViewportAnchor<CallHistoryEntry>(
@@ -67,13 +114,17 @@ public sealed partial class MainWindow : Window
         sessionHost = new MainWindowSessionHost(
             initialViewModel,
             HandleActivityHistoryCollectionChanged,
-            replacement => DataContext = replacement,
+            ApplySessionDataContext,
             CloseModelessViewModelWindows,
             CloseAllModelessWindows);
         pttKeyRouter = new WindowPttKeyRouter(() => viewModel);
+        operatorCommandCatalog = CreateOperatorCommandCatalog();
+        ApplyEngineeringHealthVisibility();
         activityCallHistoryList.LayoutUpdated += HandleActivityHistoryLayoutUpdated;
         AddHandler(InputElement.KeyDownEvent, HandleKeyDown, RoutingStrategies.Tunnel);
         AddHandler(InputElement.KeyUpEvent, HandleKeyUp, RoutingStrategies.Tunnel);
+        AddHandler(InputElement.GotFocusEvent, HandlePttFocusChanged, RoutingStrategies.Bubble, true);
+        AddHandler(InputElement.LostFocusEvent, HandlePttFocusChanged, RoutingStrategies.Bubble, true);
         AddHandler(InputElement.PointerPressedEvent, HandlePttPointerPressed, RoutingStrategies.Tunnel, true);
         AddHandler(InputElement.PointerReleasedEvent, HandlePttPointerReleased, RoutingStrategies.Tunnel, true);
         AddHandler(InputElement.PointerCaptureLostEvent, HandlePttPointerCaptureLost, RoutingStrategies.Bubble, true);
@@ -81,6 +132,8 @@ public sealed partial class MainWindow : Window
         RefreshNamedSettingsProfileMenus();
         Opened += async (_, _) =>
         {
+            ApplyResponsiveToolbarVisibility(
+                MainWindowResponsiveToolbarPolicy.Evaluate(Bounds.Width));
             mainWindowPlacement.RestorePosition();
             mainWindowPlacement.StartTracking();
             ConfigureTransientChannelScrollBars();
@@ -89,6 +142,172 @@ public sealed partial class MainWindow : Window
         };
         LayoutUpdated += (_, _) => ConfigureTransientChannelScrollBars();
         Closing += HandleClosing;
+        Activated += (_, _) => UpdatePttFocusSuppression();
+        Deactivated += async (_, _) =>
+        {
+            pttKeyRouter.UpdateInputFocus(null);
+            await viewModel.FlushUserSettingsAsync().ConfigureAwait(false);
+        };
+    }
+
+    private MainWindowViewModel LoadSessionViewModel(string? configurationPath)
+    {
+        MainWindowViewModel loaded = MainWindowViewModel.Load(
+            configurationPath,
+            sessionUserSettingsStore,
+            networkDisabledDemo: demoMode);
+        if (demoMode)
+            loaded.InitializeDemoScenario();
+        return loaded;
+    }
+
+    private OperatorViewSettings LoadOperatorViewSettings()
+    {
+        try
+        {
+            return operatorViewStore.Load();
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            DesktopCrashLog.Write("Operator view preferences", exception);
+            return new OperatorViewSettings();
+        }
+    }
+
+    private void ApplySessionDataContext(MainWindowViewModel replacement)
+    {
+        DataContext = replacement;
+        engineeringHealthViewModel.ReplaceConsole(replacement);
+    }
+
+    private void SetEngineeringHealthVisible(bool visible, bool persist = true)
+    {
+        if (!visible)
+            CaptureEngineeringHealthHeight();
+        operatorViewSettings.EngineeringHealthVisible = visible;
+        ApplyEngineeringHealthVisibility();
+        if (persist)
+            ScheduleOperatorViewSave();
+    }
+
+    private void ApplyEngineeringHealthVisibility()
+    {
+        bool visible = operatorViewSettings.EngineeringHealthVisible;
+        engineeringHealthPane.IsVisible = visible;
+        engineeringHealthSplitter.IsVisible = visible;
+        engineeringHealthMenuItem.IsChecked = visible;
+        mainShellGrid.RowDefinitions[2].Height = visible ? new GridLength(5) : new GridLength(0);
+        mainShellGrid.RowDefinitions[3].Height = visible
+            ? new GridLength(operatorViewSettings.EngineeringHealthHeight)
+            : new GridLength(0);
+        engineeringHealthViewModel.SetActive(visible);
+    }
+
+    private void HandleEngineeringHealthSplitterPointerReleased(
+        object? sender,
+        PointerReleasedEventArgs e)
+    {
+        CaptureEngineeringHealthHeight();
+        ScheduleOperatorViewSave();
+    }
+
+    private void CaptureEngineeringHealthHeight()
+    {
+        if (!operatorViewSettings.EngineeringHealthVisible)
+            return;
+        double height = mainShellGrid.RowDefinitions[3].ActualHeight;
+        if (!double.IsFinite(height) || height <= 0)
+            return;
+        operatorViewSettings.EngineeringHealthHeight = Math.Clamp(
+            height,
+            OperatorViewSettings.MinimumEngineeringHealthHeight,
+            OperatorViewSettings.MaximumEngineeringHealthHeight);
+    }
+
+    internal void PrepareDemoCapture(
+        double width,
+        double height,
+        bool showEngineeringHealth)
+    {
+        if (!demoMode)
+            throw new InvalidOperationException("Screenshot capture is available only in the isolated demo session.");
+
+        WindowState = WindowState.Normal;
+        Width = Math.Max(MinWidth, width);
+        Height = Math.Max(MinHeight, height);
+        ApplyResponsiveToolbarVisibility(
+            MainWindowResponsiveToolbarPolicy.Evaluate(Width));
+        SetEngineeringHealthVisible(showEngineeringHealth, persist: false);
+    }
+
+    private void ScheduleOperatorViewSave()
+        => operatorViewWriter.Schedule(operatorViewSettings.Snapshot());
+
+    private OperatorCommandCatalog CreateOperatorCommandCatalog()
+    {
+        static Task Run(Action action)
+        {
+            action();
+            return Task.CompletedTask;
+        }
+
+        OperatorCommandDefinition OpenSection(OperatorToolSectionDefinition definition)
+            => new(definition.CommandId, () => Run(() => OpenOperatorTools(definition.Section)));
+
+        return new OperatorCommandCatalog(
+        [
+            new(
+                OperatorCommandIds.Connect,
+                () => Run(() => viewModel.ConnectCommand.Execute(null)),
+                () => viewModel.ConnectCommand.CanExecute(null)),
+            new(
+                OperatorCommandIds.Disconnect,
+                () => Run(() => viewModel.DisconnectCommand.Execute(null)),
+                () => viewModel.DisconnectCommand.CanExecute(null)),
+            new(
+                OperatorCommandIds.EnableAllReceive,
+                viewModel.EnableAllReceiveAsync),
+            new(
+                OperatorCommandIds.DisableAllReceive,
+                viewModel.DisableAllReceiveAsync),
+            new(
+                OperatorCommandIds.EnableZoneReceive,
+                viewModel.EnableSelectedZoneReceiveAsync,
+                () => viewModel.HasSelectedZone),
+            new(
+                OperatorCommandIds.DisableZoneReceive,
+                viewModel.DisableSelectedZoneReceiveAsync,
+                () => viewModel.HasSelectedZone),
+            new(
+                OperatorCommandIds.ToggleAllTransmit,
+                () => Run(viewModel.ToggleAllTransmitSelection)),
+            new(
+                OperatorCommandIds.SubscriberPage,
+                () => OpenSubscriberCommandAsync(P25SubscriberCommand.CallAlert)),
+            new(
+                OperatorCommandIds.SubscriberRadioCheck,
+                () => OpenSubscriberCommandAsync(P25SubscriberCommand.RadioCheck)),
+            new(
+                OperatorCommandIds.SubscriberInhibit,
+                () => OpenSubscriberCommandAsync(P25SubscriberCommand.Inhibit)),
+            new(
+                OperatorCommandIds.SubscriberUninhibit,
+                () => OpenSubscriberCommandAsync(P25SubscriberCommand.Uninhibit)),
+            .. OperatorToolSectionCatalog.All.Select(OpenSection),
+            new(
+                OperatorCommandIds.DebugLogs,
+                () => Run(ShowDebugLogs)),
+            new(
+                OperatorCommandIds.ToggleEngineeringHealth,
+                () => Run(() => SetEngineeringHealthVisible(
+                    !operatorViewSettings.EngineeringHealthVisible))),
+            new(
+                OperatorCommandIds.Documentation,
+                () => Run(ShowDocumentation)),
+            new(
+                OperatorCommandIds.About,
+                () => Run(ShowAbout))
+        ]);
     }
 
     private async void HandleClosing(object? sender, WindowClosingEventArgs e)
@@ -132,6 +351,9 @@ public sealed partial class MainWindow : Window
         cleanup.Run(() =>
             activityCallHistoryList.LayoutUpdated -= HandleActivityHistoryLayoutUpdated);
         cleanup.Run(activityViewportAnchor.Reset);
+        cleanup.Run(CaptureEngineeringHealthHeight);
+        await cleanup.RunTaskAsync(() => engineeringHealthViewModel.DisposeAsync().AsTask());
+        await cleanup.RunTaskAsync(() => operatorViewWriter.DisposeAsync().AsTask());
         await cleanup.RunTaskAsync(() => BoundedShutdown.RunAsync(
             () => sessionHost.DisposeAsync().AsTask(),
             ShutdownTimeout));
@@ -280,6 +502,22 @@ public sealed partial class MainWindow : Window
             await cardPtt.ReleaseAsync(channel);
     }
 
+    internal async Task HandleAccessibleChannelPttKeyDownAsync(ChannelViewModel channel)
+    {
+        ArgumentNullException.ThrowIfNull(channel);
+        if (viewModel.TogglePttMode)
+            await cardPtt.ToggleAsync(channel);
+        else
+            await cardPtt.PressAsync(channel);
+    }
+
+    internal async Task HandleAccessibleChannelPttKeyUpAsync(ChannelViewModel channel)
+    {
+        ArgumentNullException.ThrowIfNull(channel);
+        if (!viewModel.TogglePttMode)
+            await cardPtt.ReleaseAsync(channel);
+    }
+
     private static Button? FindPttButton(object? source)
     {
         for (Visual? visual = source as Visual; visual is not null; visual = visual.GetVisualParent())
@@ -343,7 +581,7 @@ public sealed partial class MainWindow : Window
 
     private async Task OpenCodeplugAsync(string path)
     {
-        var replacement = MainWindowViewModel.Load(path);
+        var replacement = LoadSessionViewModel(path);
         if (!replacement.IsCodeplugLoaded)
         {
             string error = replacement.StatusText;
@@ -440,7 +678,7 @@ public sealed partial class MainWindow : Window
         {
             string? activeCodeplugPath = viewModel.CurrentCodeplugPath;
             viewModel.ImportSettings(path);
-            await ReplaceViewModelAsync(MainWindowViewModel.Load(activeCodeplugPath));
+            await ReplaceViewModelAsync(LoadSessionViewModel(activeCodeplugPath));
             await ShowInformationAsync("Settings imported", "The imported profile has been applied to the current console.");
         }
         catch (Exception exception) when (exception is IOException or InvalidDataException or UnauthorizedAccessException)
@@ -499,7 +737,7 @@ public sealed partial class MainWindow : Window
         try
         {
             viewModel.ImportNamedSettingsProfile(profileName, SettingsImportScope.OperatorState);
-            await ReplaceViewModelAsync(MainWindowViewModel.Load(activeCodeplugPath));
+            await ReplaceViewModelAsync(LoadSessionViewModel(activeCodeplugPath));
             await ShowInformationAsync("Settings profile loaded", $"Applied operator settings from '{profileName}'.");
         }
         catch (Exception exception) when (exception is ArgumentException or IOException or InvalidDataException or UnauthorizedAccessException)
@@ -572,7 +810,7 @@ public sealed partial class MainWindow : Window
 
         string? activeCodeplugPath = viewModel.CurrentCodeplugPath;
         viewModel.ResetSettings();
-        await ReplaceViewModelAsync(MainWindowViewModel.Load(activeCodeplugPath));
+        await ReplaceViewModelAsync(LoadSessionViewModel(activeCodeplugPath));
     }
 
     private async Task ReplaceViewModelAsync(MainWindowViewModel replacement)
@@ -591,6 +829,7 @@ public sealed partial class MainWindow : Window
         DebugLogWindow? logs = debugLogWindow;
         debugLogWindow = null;
         logs?.Close();
+
     }
 
     private void CloseAllModelessWindows()
@@ -610,6 +849,7 @@ public sealed partial class MainWindow : Window
     {
         bool confirmed = false;
         OperatorDialogParts parts = OperatorDialogFactory.CreateConfirmation(title, message, confirmLabel);
+        AttachPttInputSafety(parts.Window);
         parts.CancelButton!.Click += (_, _) => parts.Window.Close();
         parts.PrimaryButton.Click += (_, _) => { confirmed = true; parts.Window.Close(); };
         await parts.Window.ShowDialog(this);
@@ -620,6 +860,7 @@ public sealed partial class MainWindow : Window
     {
         bool confirmed = false;
         OperatorDialogParts parts = OperatorDialogFactory.CreateTextPrompt(title, message, confirmLabel, "Profile name");
+        AttachPttInputSafety(parts.Window);
         TextBox input = parts.Input!;
         parts.CancelButton!.Click += (_, _) => parts.Window.Close();
         parts.PrimaryButton.Click += (_, _) =>
@@ -645,39 +886,24 @@ public sealed partial class MainWindow : Window
     private async Task ShowCodeplugErrorAsync(string message)
     {
         OperatorDialogParts parts = OperatorDialogFactory.CreateMessage("Unable to open codeplug", message, "OK");
+        AttachPttInputSafety(parts.Window);
         parts.PrimaryButton.Click += (_, _) => parts.Window.Close();
         await parts.Window.ShowDialog(this);
     }
 
-    private async void HandleDisableAllReceiveClick(object? sender, RoutedEventArgs e)
-        => await viewModel.DisableAllReceiveAsync();
-
-    private async void HandleEnableAllReceiveClick(object? sender, RoutedEventArgs e)
-        => await viewModel.EnableAllReceiveAsync();
-
-    private async void HandleEnableZoneReceiveClick(object? sender, RoutedEventArgs e)
-        => await viewModel.EnableSelectedZoneReceiveAsync();
-
-    private async void HandleDisableZoneReceiveClick(object? sender, RoutedEventArgs e)
-        => await viewModel.DisableSelectedZoneReceiveAsync();
-
-    private async void HandleSubscriberCommandClick(object? sender, RoutedEventArgs e)
+    private async Task OpenSubscriberCommandAsync(P25SubscriberCommand command)
     {
-        if (sender is not MenuItem { Tag: string value } ||
-            !Enum.TryParse(value, ignoreCase: true, out P25SubscriberCommand command))
-        {
-            return;
-        }
-
         var window = new SubscriberCommandWindow(viewModel, command);
+        AttachPttInputSafety(window);
         await window.ShowDialog(this);
     }
 
-    private void HandleOpenDebugLogsClick(object? sender, RoutedEventArgs e)
+    private void ShowDebugLogs()
     {
         if (debugLogWindow is null)
         {
             debugLogWindow = new DebugLogWindow(viewModel);
+            AttachPttInputSafety(debugLogWindow);
             debugLogWindow.Closed += (_, _) => debugLogWindow = null;
         }
 
@@ -739,18 +965,7 @@ public sealed partial class MainWindow : Window
         e.Handled = true;
     }
 
-    private void HandleOpenOperatorToolsClick(object? sender, RoutedEventArgs e)
-    {
-        if (sender is not MenuItem { Tag: string value } ||
-            !Enum.TryParse(value, ignoreCase: true, out OperatorToolSection section))
-        {
-            return;
-        }
-
-        OpenOperatorTools(section);
-    }
-
-    private void OpenOperatorTools(OperatorToolSection section)
+    internal void OpenOperatorTools(OperatorToolSection section)
     {
         if (operatorToolsWindow is null)
         {
@@ -764,11 +979,12 @@ public sealed partial class MainWindow : Window
         operatorToolsWindow.Activate();
     }
 
-    private void HandleDocumentationClick(object? sender, RoutedEventArgs e)
+    private void ShowDocumentation()
     {
         if (documentationWindow is null)
         {
             documentationWindow = new DocumentationWindow();
+            AttachPttInputSafety(documentationWindow);
             documentationWindow.Closed += (_, _) => documentationWindow = null;
         }
 
@@ -777,11 +993,12 @@ public sealed partial class MainWindow : Window
         documentationWindow.Activate();
     }
 
-    private void HandleAboutClick(object? sender, RoutedEventArgs e)
+    private void ShowAbout()
     {
         if (aboutWindow is null)
         {
             aboutWindow = new AboutWindow();
+            AttachPttInputSafety(aboutWindow);
             aboutWindow.Closed += (_, _) => aboutWindow = null;
         }
 
@@ -817,8 +1034,29 @@ public sealed partial class MainWindow : Window
     private async Task ShowInformationAsync(string title, string message)
     {
         OperatorDialogParts parts = OperatorDialogFactory.CreateMessage(title, message, "OK");
+        AttachPttInputSafety(parts.Window);
         parts.PrimaryButton.Click += (_, _) => parts.Window.Close();
         await parts.Window.ShowDialog(this);
+    }
+
+    private void AttachPttInputSafety(Window window)
+    {
+        ArgumentNullException.ThrowIfNull(window);
+        void Refresh()
+            => pttKeyRouter.UpdateInputFocus(window.FocusManager?.GetFocusedElement());
+
+        window.AddHandler(
+            InputElement.GotFocusEvent,
+            (_, _) => Dispatcher.UIThread.Post(Refresh, DispatcherPriority.Input),
+            RoutingStrategies.Bubble,
+            true);
+        window.AddHandler(
+            InputElement.LostFocusEvent,
+            (_, _) => Dispatcher.UIThread.Post(Refresh, DispatcherPriority.Input),
+            RoutingStrategies.Bubble,
+            true);
+        window.Activated += (_, _) => Refresh();
+        window.Deactivated += (_, _) => pttKeyRouter.UpdateInputFocus(null);
     }
 
     private void HandleTransmitSelectionClick(object? sender, RoutedEventArgs e)
@@ -850,17 +1088,19 @@ public sealed partial class MainWindow : Window
         viewModel.DismissCodeplugDiagnostics();
     }
 
-    private void HandleToggleAllTransmitSelectionClick(object? sender, RoutedEventArgs e)
-        => viewModel.ToggleAllTransmitSelection();
-
     private async void HandleToolbarAlertToneClick(object? sender, RoutedEventArgs e)
     {
         if (sender is Button { Tag: BuiltInAlertToneViewModel tone })
             await viewModel.SendBuiltInAlertToneAsync(tone);
     }
 
-    private void HandleToolbarToneToolsClick(object? sender, RoutedEventArgs e)
-        => OpenOperatorTools(OperatorToolSection.Tones);
+    private async void HandleOperatorCommandClick(object? sender, RoutedEventArgs e)
+    {
+        if (sender is not Control { Tag: string commandId })
+            return;
+
+        await operatorCommandCatalog.ExecuteAsync(commandId).ConfigureAwait(true);
+    }
 
     private async void HandlePlayCallHistoryRecordingClick(object? sender, RoutedEventArgs e)
     {
@@ -897,6 +1137,12 @@ public sealed partial class MainWindow : Window
         if (pttKeyRouter.TryHandleKeyUp(e.Key, out bool handled))
             e.Handled = handled;
     }
+
+    private void HandlePttFocusChanged(object? sender, RoutedEventArgs e)
+        => Dispatcher.UIThread.Post(UpdatePttFocusSuppression, DispatcherPriority.Input);
+
+    private void UpdatePttFocusSuppression()
+        => pttKeyRouter.UpdateInputFocus(FocusManager?.GetFocusedElement());
 
     internal static bool TryMapPttKey(Key key, out KeyboardPttKey pttKey)
         => WindowPttKeyRouter.TryMap(key, out pttKey);

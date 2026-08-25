@@ -3,6 +3,7 @@ using DvmConsole.Core.Runtime;
 using DvmConsole.Desktop;
 using DvmConsole.FneClient;
 using DvmConsole.Media;
+using DvmConsole.Operations;
 using fnecore.P25;
 using Avalonia.Media;
 using Xunit;

@@ -1,7 +1,7 @@
 <Application xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              x:Class="DvmConsole.Desktop.App"
-             Name="DVM Console">
+             Name="DVM Console NEO">
   <Application.Resources>
     <ResourceDictionary>
       <ResourceDictionary.ThemeDictionaries>
@@ -26,6 +26,20 @@
           <SolidColorBrush x:Key="ClockBorderBrush" Color="#65717D" />
           <SolidColorBrush x:Key="WarningBackgroundBrush" Color="#FFF4D6" />
           <SolidColorBrush x:Key="WarningBorderBrush" Color="#B47B18" />
+          <SolidColorBrush x:Key="OperationalTransmitSurfaceBrush" Color="#8C1D18" />
+          <SolidColorBrush x:Key="OperationalTransmitRailBrush" Color="#FDE8E7" />
+          <SolidColorBrush x:Key="OperationalTransmitBorderBrush" Color="#8C1D18" />
+          <SolidColorBrush x:Key="OperationalIdlePillBrush" Color="#38414C" />
+          <SolidColorBrush x:Key="OperationalMuteSurfaceBrush" Color="#8C1D18" />
+          <SolidColorBrush x:Key="OperationalMuteBorderBrush" Color="#8C1D18" />
+          <SolidColorBrush x:Key="OperationalAttentionSurfaceBrush" Color="#7A3E00" />
+          <SolidColorBrush x:Key="OperationalAttentionBorderBrush" Color="#7A3E00" />
+          <SolidColorBrush x:Key="OperationalSelectionSurfaceBrush" Color="#244E73" />
+          <SolidColorBrush x:Key="OperationalSelectionBorderBrush" Color="#005FB8" />
+          <SolidColorBrush x:Key="OperationalMeterTrackBrush" Color="#D0D8E0" />
+          <SolidColorBrush x:Key="OperationalMeterFillBrush" Color="#007A3D" />
+          <SolidColorBrush x:Key="OperationalStateTextBrush" Color="#FFFFFF" />
+          <SolidColorBrush x:Key="BrandAccentBrush" Color="#006A7A" />
         </ResourceDictionary>
         <ResourceDictionary x:Key="Dark">
           <SolidColorBrush x:Key="ShellBackgroundBrush" Color="#0D1116" />
@@ -48,6 +62,20 @@
           <SolidColorBrush x:Key="ClockBorderBrush" Color="#3A4654" />
           <SolidColorBrush x:Key="WarningBackgroundBrush" Color="#332A1A" />
           <SolidColorBrush x:Key="WarningBorderBrush" Color="#7A5C28" />
+          <SolidColorBrush x:Key="OperationalTransmitSurfaceBrush" Color="#B42318" />
+          <SolidColorBrush x:Key="OperationalTransmitRailBrush" Color="#3A1514" />
+          <SolidColorBrush x:Key="OperationalTransmitBorderBrush" Color="#FFB4AB" />
+          <SolidColorBrush x:Key="OperationalIdlePillBrush" Color="#38414C" />
+          <SolidColorBrush x:Key="OperationalMuteSurfaceBrush" Color="#991B1B" />
+          <SolidColorBrush x:Key="OperationalMuteBorderBrush" Color="#FF8A80" />
+          <SolidColorBrush x:Key="OperationalAttentionSurfaceBrush" Color="#92400E" />
+          <SolidColorBrush x:Key="OperationalAttentionBorderBrush" Color="#F59E0B" />
+          <SolidColorBrush x:Key="OperationalSelectionSurfaceBrush" Color="#244E73" />
+          <SolidColorBrush x:Key="OperationalSelectionBorderBrush" Color="#6BB6F0" />
+          <SolidColorBrush x:Key="OperationalMeterTrackBrush" Color="#24303B" />
+          <SolidColorBrush x:Key="OperationalMeterFillBrush" Color="#35D07F" />
+          <SolidColorBrush x:Key="OperationalStateTextBrush" Color="#FFFFFF" />
+          <SolidColorBrush x:Key="BrandAccentBrush" Color="#22D3EE" />
         </ResourceDictionary>
       </ResourceDictionary.ThemeDictionaries>
     </ResourceDictionary>

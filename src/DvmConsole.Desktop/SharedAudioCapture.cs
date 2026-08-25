@@ -1,13 +1,11 @@
 using DvmConsole.Audio;
-using System.Diagnostics;
+using DvmConsole.Operations;
 
 namespace DvmConsole.Desktop;
 
 public sealed record MicrophoneReadinessTiming(
     TimeSpan CaptureStartReturned,
-    TimeSpan FirstSamplesReceived,
-    TimeSpan SustainedReadinessReached,
-    long RequiredSamples);
+    TimeSpan FirstSamplesReceived);
 
 // Fans one microphone capture stream out to independently-owned transmit
 // calls. Each lease has the normal <see cref="IAudioCapture"/> lifecycle,
@@ -16,36 +14,40 @@ public sealed record MicrophoneReadinessTiming(
 // the microphone.
 internal sealed class SharedAudioCapture : IAsyncDisposable
 {
+    private static readonly TimeSpan MaximumCadenceAwareStaleDuration = TimeSpan.FromSeconds(1);
+    private static readonly TimeSpan CallbackCadenceMargin = TimeSpan.FromMilliseconds(50);
+
     private readonly IAudioCapture source;
     private readonly object sync = new();
     private readonly object publicationSync = new();
     private readonly SemaphoreSlim lifecycleGate = new(1, 1);
     private readonly List<Lease> leases = [];
     private Lease[] runningLeases = [];
-    private readonly long requiredReadinessSamples;
+    private readonly TimeProvider timeProvider;
+    private readonly TimeSpan staleAfter;
     private TaskCompletionSource<bool> samplesReady = CreateReadinessSource();
-    private long observedReadinessSamples;
+    private TaskCompletionSource<bool> nextPhysicalSamples = CreatePhysicalSamplesSource();
     private long readinessStartedTimestamp;
     private long captureStartCompletedTimestamp;
     private long firstSamplesTimestamp;
-    private long readinessCompletedTimestamp;
+    private long lastSamplesTimestamp;
+    private long previousSamplesTimestamp;
+    private TimeSpan? callbackCadence;
+    private long captureGeneration;
+    private string? captureFault;
     private bool samplesSuppressed;
     private bool disposed;
 
     public SharedAudioCapture(
         IAudioCapture source,
-        TimeSpan? minimumReadinessDuration = null)
+        TimeSpan? staleAfter = null,
+        TimeProvider? timeProvider = null)
     {
         this.source = source ?? throw new ArgumentNullException(nameof(source));
-        TimeSpan duration = minimumReadinessDuration ?? TimeSpan.Zero;
-        if (duration < TimeSpan.Zero)
-            throw new ArgumentOutOfRangeException(nameof(minimumReadinessDuration));
-        requiredReadinessSamples = Math.Max(
-            1,
-            checked((long)Math.Ceiling(
-                source.Format.SampleRate *
-                source.Format.Channels *
-                duration.TotalSeconds)));
+        this.staleAfter = staleAfter ?? TimeSpan.FromMilliseconds(250);
+        if (this.staleAfter <= TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(nameof(staleAfter));
+        this.timeProvider = timeProvider ?? TimeProvider.System;
         source.SamplesAvailable += HandleSamplesAvailable;
     }
 
@@ -67,7 +69,20 @@ internal sealed class SharedAudioCapture : IAsyncDisposable
             lock (sync)
             {
                 ObjectDisposedException.ThrowIf(disposed, this);
-                return samplesReady.Task.IsCompletedSuccessfully;
+                return GetHealthLocked(timeProvider.GetTimestamp()).State ==
+                    MicrophoneHealthState.Ready;
+            }
+        }
+    }
+
+    public MicrophoneHealth Health
+    {
+        get
+        {
+            lock (sync)
+            {
+                ObjectDisposedException.ThrowIf(disposed, this);
+                return GetHealthLocked(timeProvider.GetTimestamp());
             }
         }
     }
@@ -93,6 +108,7 @@ internal sealed class SharedAudioCapture : IAsyncDisposable
         lock (sync)
         {
             ObjectDisposedException.ThrowIf(disposed, this);
+            EnsureFreshReadinessLocked();
             ready = samplesReady.Task;
         }
 
@@ -100,17 +116,42 @@ internal sealed class SharedAudioCapture : IAsyncDisposable
         lock (sync)
         {
             long started = readinessStartedTimestamp;
-            if (started == 0 || firstSamplesTimestamp == 0 || readinessCompletedTimestamp == 0)
+            if (started == 0 || firstSamplesTimestamp == 0)
                 throw new InvalidOperationException("Microphone readiness completed without timing checkpoints.");
             long captureStarted = captureStartCompletedTimestamp == 0
                 ? firstSamplesTimestamp
                 : captureStartCompletedTimestamp;
             return new MicrophoneReadinessTiming(
-                Stopwatch.GetElapsedTime(started, captureStarted),
-                Stopwatch.GetElapsedTime(started, firstSamplesTimestamp),
-                Stopwatch.GetElapsedTime(started, readinessCompletedTimestamp),
-                requiredReadinessSamples);
+                timeProvider.GetElapsedTime(started, captureStarted),
+                timeProvider.GetElapsedTime(started, firstSamplesTimestamp));
         }
+    }
+
+    // Waits for a physical callback that occurs after this method begins. This
+    // is intentionally distinct from readiness: CoreAudio may pause an
+    // otherwise-ready Bluetooth input while the permit-tone output opens and
+    // closes. Releasing operator audio requires proof that capture resumed
+    // after that route transition, not merely before it.
+    public async Task<TimeSpan> WaitForNextPhysicalSamplesAsync(
+        TimeSpan timeout,
+        CancellationToken cancellationToken = default)
+    {
+        if (timeout <= TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(nameof(timeout));
+
+        Task observed;
+        long started;
+        lock (sync)
+        {
+            ObjectDisposedException.ThrowIf(disposed, this);
+            if (runningLeases.Length == 0)
+                throw new InvalidOperationException("The microphone capture path is not running.");
+            started = timeProvider.GetTimestamp();
+            observed = nextPhysicalSamples.Task;
+        }
+
+        await observed.WaitAsync(timeout, cancellationToken).ConfigureAwait(false);
+        return timeProvider.GetElapsedTime(started, timeProvider.GetTimestamp());
     }
 
     public async ValueTask DisposeAsync()
@@ -136,6 +177,7 @@ internal sealed class SharedAudioCapture : IAsyncDisposable
             foreach (Lease lease in current)
                 lease.MarkDisposed();
             samplesReady.TrySetCanceled();
+            nextPhysicalSamples.TrySetCanceled();
             await source.DisposeAsync().ConfigureAwait(false);
         }
         finally
@@ -161,11 +203,14 @@ internal sealed class SharedAudioCapture : IAsyncDisposable
                     if (startSource)
                     {
                         samplesReady = CreateReadinessSource();
-                        observedReadinessSamples = 0;
-                        readinessStartedTimestamp = Stopwatch.GetTimestamp();
+                        readinessStartedTimestamp = timeProvider.GetTimestamp();
                         captureStartCompletedTimestamp = 0;
                         firstSamplesTimestamp = 0;
-                        readinessCompletedTimestamp = 0;
+                        lastSamplesTimestamp = 0;
+                        previousSamplesTimestamp = 0;
+                        callbackCadence = null;
+                        captureFault = null;
+                        captureGeneration = checked(captureGeneration + 1);
                     }
                     lease.SetRunning(true);
                     PublishRunningLeasesLocked();
@@ -179,7 +224,7 @@ internal sealed class SharedAudioCapture : IAsyncDisposable
             {
                 await source.StartAsync(cancellationToken).ConfigureAwait(false);
                 lock (sync)
-                    captureStartCompletedTimestamp = Stopwatch.GetTimestamp();
+                    captureStartCompletedTimestamp = timeProvider.GetTimestamp();
             }
             catch (Exception exception)
             {
@@ -189,6 +234,7 @@ internal sealed class SharedAudioCapture : IAsyncDisposable
                     {
                         lease.SetRunning(false);
                         PublishRunningLeasesLocked();
+                        captureFault = exception.Message;
                         samplesReady.TrySetException(exception);
                     }
                 }
@@ -262,22 +308,24 @@ internal sealed class SharedAudioCapture : IAsyncDisposable
 
         lock (sync)
         {
-            // Count physical capture before honoring suppression. A cold
-            // Bluetooth endpoint can produce one callback while its duplex
-            // profile is still changing, so transmit readiness can require a
-            // sustained interval rather than treating that callback as proof
-            // that the route has settled.
+            // Observe physical capture before honoring suppression. The first
+            // non-empty callback proves that the selected input has started;
+            // cold Bluetooth release still requires another callback after
+            // the output transition completes.
+            long now = timeProvider.GetTimestamp();
             if (firstSamplesTimestamp == 0)
-                firstSamplesTimestamp = Stopwatch.GetTimestamp();
-            observedReadinessSamples = Math.Min(
-                requiredReadinessSamples,
-                observedReadinessSamples + args.Samples.Length);
-            if (observedReadinessSamples >= requiredReadinessSamples)
             {
-                if (readinessCompletedTimestamp == 0)
-                    readinessCompletedTimestamp = Stopwatch.GetTimestamp();
+                firstSamplesTimestamp = now;
                 samplesReady.TrySetResult(true);
             }
+            if (previousSamplesTimestamp != 0)
+                callbackCadence = timeProvider.GetElapsedTime(previousSamplesTimestamp, now);
+            previousSamplesTimestamp = now;
+            lastSamplesTimestamp = now;
+            captureFault = null;
+            TaskCompletionSource<bool> observedSamples = nextPhysicalSamples;
+            nextPhysicalSamples = CreatePhysicalSamplesSource();
+            observedSamples.TrySetResult(true);
         }
 
         // Keep suppression and lifecycle changes serialized with publication.
@@ -306,6 +354,77 @@ internal sealed class SharedAudioCapture : IAsyncDisposable
 
     private static TaskCompletionSource<bool> CreateReadinessSource()
         => new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    private static TaskCompletionSource<bool> CreatePhysicalSamplesSource()
+        => new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    private void EnsureFreshReadinessLocked()
+    {
+        if (!samplesReady.Task.IsCompletedSuccessfully ||
+            GetHealthLocked(timeProvider.GetTimestamp()).State == MicrophoneHealthState.Ready)
+        {
+            return;
+        }
+
+        samplesReady = CreateReadinessSource();
+        readinessStartedTimestamp = timeProvider.GetTimestamp();
+        captureStartCompletedTimestamp = readinessStartedTimestamp;
+        firstSamplesTimestamp = 0;
+    }
+
+    private MicrophoneHealth GetHealthLocked(long now)
+    {
+        TimeSpan? sampleAge = lastSamplesTimestamp == 0
+            ? null
+            : timeProvider.GetElapsedTime(lastSamplesTimestamp, now);
+        MicrophoneHealthState state;
+        string? fault = captureFault;
+        if (runningLeases.Length == 0)
+        {
+            state = MicrophoneHealthState.Stopped;
+        }
+        else if (!source.IsRunning)
+        {
+            state = MicrophoneHealthState.Faulted;
+            fault ??= "Capture pump is not running.";
+        }
+        else if (!string.IsNullOrWhiteSpace(fault))
+        {
+            state = MicrophoneHealthState.Faulted;
+        }
+        else if (!samplesReady.Task.IsCompletedSuccessfully)
+        {
+            state = MicrophoneHealthState.Starting;
+        }
+        else if (sampleAge is null || sampleAge > GetEffectiveStaleDurationLocked())
+        {
+            state = MicrophoneHealthState.Stale;
+        }
+        else
+        {
+            state = MicrophoneHealthState.Ready;
+        }
+
+        return new MicrophoneHealth(
+            state,
+            captureGeneration,
+            sampleAge,
+            callbackCadence,
+            fault);
+    }
+
+    private TimeSpan GetEffectiveStaleDurationLocked()
+    {
+        if (callbackCadence is not TimeSpan cadence)
+            return staleAfter;
+
+        double adaptiveMilliseconds = Math.Min(
+            MaximumCadenceAwareStaleDuration.TotalMilliseconds,
+            cadence.TotalMilliseconds * 4 + CallbackCadenceMargin.TotalMilliseconds);
+        return TimeSpan.FromMilliseconds(Math.Max(
+            staleAfter.TotalMilliseconds,
+            adaptiveMilliseconds));
+    }
 
     internal sealed class Lease : IAudioCapture
     {

@@ -1,9 +1,11 @@
-using System.Net.Http.Headers;
 using System.Text.RegularExpressions;
 
 namespace DvmConsole.Desktop;
 
-internal sealed record DocumentationPage(string Title, string RelativePath, Uri ContentUri);
+internal sealed record DocumentationPage(
+    string Title,
+    string RelativePath,
+    string FilePath);
 
 internal sealed class DocumentationCatalog
 {
@@ -22,24 +24,14 @@ internal sealed class DocumentationCatalog
         "Getting Started/04-Operations/03-Audio Settings.md",
         "Getting Started/04-Operations/04-Alert Tones.md"
     ];
-    internal static readonly Uri DefaultDocumentationRoot = new(
-        "https://raw.githubusercontent.com/RdWing/dvmconsole/neo/docs/user-guide/");
-    private static readonly HttpClient SharedHttpClient = CreateSharedClient();
-
-    private readonly HttpClient httpClient;
     private readonly IReadOnlyList<DocumentationPage> pages;
 
     public DocumentationCatalog(
-        HttpClient httpClient,
-        Uri documentationRoot,
+        string documentationRoot,
         IEnumerable<string>? pagePaths = null)
     {
-        this.httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
-        ArgumentNullException.ThrowIfNull(documentationRoot);
-        if (!documentationRoot.IsAbsoluteUri || documentationRoot.Scheme != Uri.UriSchemeHttps)
-            throw new ArgumentException(
-                "The documentation root must be an absolute HTTPS URL.",
-                nameof(documentationRoot));
+        ArgumentException.ThrowIfNullOrWhiteSpace(documentationRoot);
+        string rootPath = Path.GetFullPath(documentationRoot);
 
         pages = (pagePaths ?? DefaultPagePaths)
             .Select(NormalizeRelativePath)
@@ -47,13 +39,13 @@ internal sealed class DocumentationCatalog
             .Select(path => new DocumentationPage(
                 FormatTitle(Path.GetFileName(path)),
                 path,
-                new Uri(documentationRoot, path)))
+                Path.Combine(rootPath, path.Replace('/', Path.DirectorySeparatorChar))))
             .OrderBy(page => page.RelativePath, DocumentationPathComparer.Instance)
             .ToArray();
     }
 
     public static DocumentationCatalog OpenDefault()
-        => new(SharedHttpClient, DefaultDocumentationRoot);
+        => new(Path.Combine(AppContext.BaseDirectory, "Documentation"));
 
     public async Task<IReadOnlyList<DocumentationPage>> FindAsync(
         string? searchText = null,
@@ -80,19 +72,13 @@ internal sealed class DocumentationCatalog
     {
         ArgumentNullException.ThrowIfNull(page);
         DocumentationPage? knownPage = pages.FirstOrDefault(candidate =>
-            candidate.RelativePath.Equals(page.RelativePath, StringComparison.OrdinalIgnoreCase) &&
-            candidate.ContentUri == page.ContentUri);
+            candidate.RelativePath.Equals(page.RelativePath, StringComparison.OrdinalIgnoreCase));
         if (knownPage is null)
-            throw new InvalidOperationException("The documentation page is outside the configured GitHub documentation set.");
+            throw new InvalidOperationException("The documentation page is outside the configured documentation set.");
 
-        using var request = new HttpRequestMessage(HttpMethod.Get, knownPage.ContentUri);
-        request.Headers.CacheControl = new CacheControlHeaderValue { NoCache = true };
-        using HttpResponseMessage response = await httpClient.SendAsync(
-            request,
-            HttpCompletionOption.ResponseHeadersRead,
+        return await File.ReadAllTextAsync(
+            knownPage.FilePath,
             cancellationToken).ConfigureAwait(false);
-        response.EnsureSuccessStatusCode();
-        return await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
     }
 
     public static string FormatTitle(string value)
@@ -105,15 +91,8 @@ internal sealed class DocumentationCatalog
     {
         string path = (value ?? string.Empty).Replace('\\', '/').Trim('/');
         if (path.Length == 0 || path.Split('/').Any(segment => segment is "." or ".."))
-            throw new ArgumentException("Documentation paths must remain under the configured GitHub documentation root.", nameof(value));
+            throw new ArgumentException("Documentation paths must remain under the configured documentation root.", nameof(value));
         return path;
-    }
-
-    private static HttpClient CreateSharedClient()
-    {
-        var client = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
-        client.DefaultRequestHeaders.UserAgent.ParseAdd("DVMConsole-Documentation/0.1");
-        return client;
     }
 
     private sealed class DocumentationPathComparer : IComparer<string>

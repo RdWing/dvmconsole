@@ -1,4 +1,8 @@
+using Avalonia;
+using Avalonia.Controls;
+using Avalonia.Controls.Primitives;
 using Avalonia.Input;
+using Avalonia.VisualTree;
 using DvmConsole.Audio;
 
 namespace DvmConsole.Desktop;
@@ -6,6 +10,7 @@ namespace DvmConsole.Desktop;
 internal sealed class WindowPttKeyRouter
 {
     private readonly Func<MainWindowViewModel> getViewModel;
+    private bool spaceInputSuppressed;
 
     public WindowPttKeyRouter(Func<MainWindowViewModel> getViewModel)
     {
@@ -47,6 +52,15 @@ internal sealed class WindowPttKeyRouter
         return key is Key.Space or (>= Key.F1 and <= Key.F19);
     }
 
+    public void UpdateInputFocus(object? focusedElement)
+    {
+        bool suppressed = WindowPttInputGuard.ShouldSuppressSpacePtt(focusedElement);
+        if (spaceInputSuppressed == suppressed)
+            return;
+        spaceInputSuppressed = suppressed;
+        getViewModel().SetSpacePttInputSuppressed(suppressed);
+    }
+
     private bool TryHandle(Key key, bool pressed, out bool handled)
     {
         if (!TryMap(key, out KeyboardPttKey pttKey))
@@ -55,11 +69,44 @@ internal sealed class WindowPttKeyRouter
             return false;
         }
 
+        if (pttKey == KeyboardPttKey.Space && spaceInputSuppressed)
+        {
+            handled = false;
+            return true;
+        }
+
         MainWindowViewModel viewModel = getViewModel();
         bool stateChanged = pressed
             ? viewModel.HandleKeyboardPttDown(pttKey)
             : viewModel.HandleKeyboardPttUp(pttKey);
         handled = stateChanged || viewModel.IsConfiguredPttKey(pttKey);
         return true;
+    }
+}
+
+internal static class WindowPttInputGuard
+{
+    public static bool ShouldSuppressSpacePtt(object? focusedElement)
+    {
+        for (Visual? visual = focusedElement as Visual;
+             visual is not null;
+             visual = visual.GetVisualParent())
+        {
+            if (visual is TextBox or
+                Button or
+                SelectingItemsControl or
+                Slider or
+                ScrollBar or
+                NumericUpDown or
+                DatePicker or
+                TimePicker or
+                MenuItem or
+                TabItem)
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 }

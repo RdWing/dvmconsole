@@ -20,6 +20,7 @@ public sealed partial class OperatorToolsWindow : Window
     private INotifyCollectionChanged? historyCollection;
     private ScrollViewportAnchor<CallHistoryEntry>? historyViewportAnchor;
     private string? pendingSectionAnchorName;
+    private bool synchronizingSectionNavigation;
 
     internal bool IsHistoryViewportHookAttached => historyList is not null;
     internal bool IsPendingSectionNavigation => pendingSectionAnchorName is not null;
@@ -30,6 +31,7 @@ public sealed partial class OperatorToolsWindow : Window
         pttKeyRouter = null!;
         scrollBarHideTimer = CreateScrollBarHideTimer();
         InitializeComponent();
+        PopulateSectionNavigation();
     }
 
     public OperatorToolsWindow(MainWindowViewModel viewModel, OperatorToolSection section)
@@ -49,10 +51,19 @@ public sealed partial class OperatorToolsWindow : Window
         TabControl tabs = ToolTabs ?? this.FindControl<TabControl>("ToolTabs")
             ?? throw new InvalidOperationException("The operator tools tab control could not be loaded.");
         ToolTabs = tabs;
+        SectionNavigation ??= this.FindControl<ListBox>("SectionNavigation")
+            ?? throw new InvalidOperationException("The settings navigation list could not be loaded.");
+        SectionSearchBox ??= this.FindControl<TextBox>("SectionSearchBox")
+            ?? throw new InvalidOperationException("The settings search box could not be loaded.");
+        NoSettingsSearchResults ??= this.FindControl<TextBlock>("NoSettingsSearchResults")
+            ?? throw new InvalidOperationException("The settings search status could not be loaded.");
+        PopulateSectionNavigation();
         DataContext = viewModel;
         SelectSection(section);
         AddHandler(InputElement.KeyDownEvent, HandleKeyDown, RoutingStrategies.Tunnel);
         AddHandler(InputElement.KeyUpEvent, HandleKeyUp, RoutingStrategies.Tunnel);
+        AddHandler(InputElement.GotFocusEvent, HandlePttFocusChanged, RoutingStrategies.Bubble, true);
+        AddHandler(InputElement.LostFocusEvent, HandlePttFocusChanged, RoutingStrategies.Bubble, true);
         AddHandler(InputElement.PointerWheelChangedEvent, HandlePointerWheelChanged, RoutingStrategies.Tunnel);
         historyCollection = viewModel.FilteredCallHistory;
         historyCollection.CollectionChanged += HandleHistoryCollectionChanged;
@@ -60,30 +71,75 @@ public sealed partial class OperatorToolsWindow : Window
         LayoutUpdated += HandleWindowLayoutUpdated;
         ToolTabs.SelectionChanged += HandleToolTabsSelectionChanged;
         Closed += HandleClosed;
+        Activated += (_, _) => UpdatePttFocusSuppression();
+        Deactivated += (_, _) => pttKeyRouter.UpdateInputFocus(null);
         ScheduleHistoryViewportHook();
     }
 
     public void SelectSection(OperatorToolSection section)
     {
         pendingSectionAnchorName = null;
-        if (section == OperatorToolSection.Clock)
+        synchronizingSectionNavigation = true;
+        try
         {
-            ToolTabs.SelectedIndex = (int)OperatorToolSection.General;
-            Dispatcher.UIThread.Post(
-                () => this.FindControl<TextBlock>("ClockSettingsSection")?.BringIntoView(),
-                DispatcherPriority.Background);
-            return;
-        }
+            SelectNavigationItem(section);
+            if (section == OperatorToolSection.Clock)
+            {
+                ToolTabs.SelectedIndex = (int)OperatorToolSection.General;
+                Dispatcher.UIThread.Post(
+                    () => this.FindControl<TextBlock>("ClockSettingsSection")?.BringIntoView(),
+                    DispatcherPriority.Background);
+                return;
+            }
 
-        if (section == OperatorToolSection.EncryptionKeys)
+            if (section == OperatorToolSection.EncryptionKeys)
+            {
+                ToolTabs.SelectedIndex = (int)OperatorToolSection.Connections;
+                pendingSectionAnchorName = "EncryptionKeyStatusSection";
+                SchedulePendingSectionReveal();
+                return;
+            }
+
+            ToolTabs.SelectedIndex = (int)section;
+        }
+        finally
         {
-            ToolTabs.SelectedIndex = (int)OperatorToolSection.Connections;
-            pendingSectionAnchorName = "EncryptionKeyStatusSection";
-            SchedulePendingSectionReveal();
-            return;
+            synchronizingSectionNavigation = false;
         }
+    }
 
-        ToolTabs.SelectedIndex = (int)section;
+    private void SelectNavigationItem(OperatorToolSection section)
+    {
+        ListBoxItem? item = SectionNavigation.Items
+            .OfType<ListBoxItem>()
+            .FirstOrDefault(candidate => TryGetNavigationSection(candidate, out OperatorToolSection candidateSection) &&
+                                         candidateSection == section);
+        if (item is not null)
+            SectionNavigation.SelectedItem = item;
+    }
+
+    private static bool TryGetNavigationSection(ListBoxItem item, out OperatorToolSection section)
+    {
+        if (item.Tag is OperatorToolSectionDefinition definition)
+        {
+            section = definition.Section;
+            return true;
+        }
+        section = default;
+        return false;
+    }
+
+    private void PopulateSectionNavigation()
+    {
+        if (SectionNavigation is null || SectionNavigation.ItemsSource is not null)
+            return;
+        SectionNavigation.ItemsSource = OperatorToolSectionCatalog.All
+            .Select(definition => new ListBoxItem
+            {
+                Content = definition.DisplayName,
+                Tag = definition
+            })
+            .ToArray();
     }
 
     private DispatcherTimer CreateScrollBarHideTimer()
@@ -161,7 +217,54 @@ public sealed partial class OperatorToolsWindow : Window
         => TryAttachHistoryViewportHook();
 
     private void HandleToolTabsSelectionChanged(object? sender, SelectionChangedEventArgs e)
-        => ScheduleHistoryViewportHook();
+    {
+        ScheduleHistoryViewportHook();
+        if (!synchronizingSectionNavigation &&
+            ToolTabs.SelectedIndex >= 0 &&
+            ToolTabs.SelectedIndex <= (int)OperatorToolSection.Ptt)
+        {
+            synchronizingSectionNavigation = true;
+            try
+            {
+                SelectNavigationItem((OperatorToolSection)ToolTabs.SelectedIndex);
+            }
+            finally
+            {
+                synchronizingSectionNavigation = false;
+            }
+        }
+    }
+
+    private void HandleSectionNavigationChanged(object? sender, SelectionChangedEventArgs e)
+    {
+        if (synchronizingSectionNavigation ||
+            SectionNavigation.SelectedItem is not ListBoxItem item ||
+            !TryGetNavigationSection(item, out OperatorToolSection section))
+        {
+            return;
+        }
+
+        SelectSection(section);
+    }
+
+    private void HandleSectionSearchTextChanged(object? sender, TextChangedEventArgs e)
+    {
+        string query = SectionSearchBox.Text?.Trim() ?? string.Empty;
+        int visibleCount = 0;
+        foreach (ListBoxItem item in SectionNavigation.Items.OfType<ListBoxItem>())
+        {
+            string searchTerms = item.Tag is OperatorToolSectionDefinition definition
+                ? definition.SearchTerms
+                : string.Empty;
+            string searchableText = $"{item.Content} {searchTerms}";
+            item.IsVisible = query.Length == 0 ||
+                             searchableText.Contains(query, StringComparison.OrdinalIgnoreCase);
+            if (item.IsVisible)
+                visibleCount++;
+        }
+
+        NoSettingsSearchResults.IsVisible = visibleCount == 0;
+    }
 
     private void ScheduleHistoryViewportHook()
         => Dispatcher.UIThread.Post(TryAttachHistoryViewportHook, DispatcherPriority.Background);
@@ -217,6 +320,15 @@ public sealed partial class OperatorToolsWindow : Window
 
     private void HandleKeyDown(object? sender, KeyEventArgs e)
     {
+        if (e.Key == Key.F &&
+            (e.KeyModifiers & (KeyModifiers.Control | KeyModifiers.Meta)) != 0)
+        {
+            SectionSearchBox.Focus();
+            SectionSearchBox.SelectAll();
+            e.Handled = true;
+            return;
+        }
+
         if (pttKeyRouter.TryHandleKeyDown(e.Key, out bool handled))
             e.Handled = handled;
     }
@@ -226,6 +338,12 @@ public sealed partial class OperatorToolsWindow : Window
         if (pttKeyRouter.TryHandleKeyUp(e.Key, out bool handled))
             e.Handled = handled;
     }
+
+    private void HandlePttFocusChanged(object? sender, RoutedEventArgs e)
+        => Dispatcher.UIThread.Post(UpdatePttFocusSuppression, DispatcherPriority.Input);
+
+    private void UpdatePttFocusSuppression()
+        => pttKeyRouter.UpdateInputFocus(FocusManager?.GetFocusedElement());
 
     private void InitializeComponent()
         => Avalonia.Markup.Xaml.AvaloniaXamlLoader.Load(this);
@@ -523,19 +641,4 @@ public sealed partial class OperatorToolsWindow : Window
     }
 
     private void HandleCloseClick(object? sender, RoutedEventArgs e) => Close();
-}
-
-public enum OperatorToolSection
-{
-    General,
-    Audio,
-    Tones,
-    Streams,
-    Recorder,
-    History,
-    Groups,
-    Connections,
-    Ptt,
-    Clock,
-    EncryptionKeys
 }

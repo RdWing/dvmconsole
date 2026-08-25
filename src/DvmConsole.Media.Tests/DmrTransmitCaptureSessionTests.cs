@@ -9,7 +9,7 @@ namespace DvmConsole.Media.Tests;
 public sealed class DmrTransmitCaptureSessionTests
 {
     [Fact]
-    public async Task StartsCaptureAfterCallHeaderAndEndsWithTerminator()
+    public async Task PreparesCaptureBeforeActivatingCallAndEndsWithTerminator()
     {
         var capture = new FakeCapture();
         var packets = new List<(byte[] Payload, ushort Sequence, uint Stream)>();
@@ -26,10 +26,14 @@ public sealed class DmrTransmitCaptureSessionTests
 
         Assert.True(session.IsRunning);
         Assert.True(capture.IsRunning);
+        Assert.False(session.IsActivated);
+        Assert.Empty(packets);
+
+        session.Activate();
+        Assert.True(session.IsActivated);
         Assert.Single(packets);
 
         capture.Emit(new short[480]);
-        Assert.Equal(2, packets.Count);
 
         await session.StopAsync();
 

@@ -15,11 +15,12 @@ public sealed class ArchitectureBoundaryTests
             ["DvmConsole.Audio"] = [],
             ["DvmConsole.Core"] = [],
             ["DvmConsole.Desktop"] =
-                ["DvmConsole.Audio", "DvmConsole.Core", "DvmConsole.FneClient", "DvmConsole.Media", "DvmConsole.Vocoder"],
+                ["DvmConsole.Audio", "DvmConsole.Core", "DvmConsole.FneClient", "DvmConsole.Media", "DvmConsole.Operations", "DvmConsole.Vocoder"],
             ["DvmConsole.Fne"] = [],
             ["DvmConsole.FneClient"] = ["DvmConsole.Core", "DvmConsole.Fne"],
             ["DvmConsole.Media"] =
                 ["DvmConsole.Audio", "DvmConsole.Core", "DvmConsole.Fne", "DvmConsole.FneClient", "DvmConsole.Vocoder"],
+            ["DvmConsole.Operations"] = ["DvmConsole.Core"],
             ["DvmConsole.Vocoder"] = []
         };
 

@@ -3,12 +3,49 @@ using DvmConsole.Media;
 
 namespace DvmConsole.Desktop;
 
-internal readonly record struct SystemTrafficWorkItem(
+// Captured once at the FNE ingress boundary and then replayed by every media
+// and presentation consumer. Episode and routing decisions describe this
+// packet at arrival time, even if UI presentation is delayed behind newer
+// packets.
+internal readonly record struct ReceivePacketDecisionEnvelope(
     FneTrafficFrame Traffic,
     DateTimeOffset ReceivedAt,
     long ReceivedTimestamp,
+    ReceiveIngressRoutingDecision Routing,
+    ReceiveCallEpisodeObservation? EpisodeObservation,
+    ReceiveCallEpisodeSnapshot? EpisodeSnapshot);
+
+internal readonly record struct SystemTrafficWorkItem(
+    ReceivePacketDecisionEnvelope Decision,
     IReadOnlyList<ChannelViewModel> PreEnqueuedAudioChannels,
-    IReadOnlyList<ChannelViewModel> PreEnqueuedPatchChannels);
+    IReadOnlyList<ChannelViewModel> PreEnqueuedPatchChannels)
+{
+    public FneTrafficFrame Traffic => Decision.Traffic;
+    public DateTimeOffset ReceivedAt => Decision.ReceivedAt;
+    public long ReceivedTimestamp => Decision.ReceivedTimestamp;
+
+    // Retained for focused buffer/controller tests and other callers that do
+    // not own a receive runtime. Production ingress always supplies the fully
+    // observed decision envelope through the primary constructor.
+    public SystemTrafficWorkItem(
+        FneTrafficFrame traffic,
+        DateTimeOffset receivedAt,
+        long receivedTimestamp,
+        IReadOnlyList<ChannelViewModel> preEnqueuedAudioChannels,
+        IReadOnlyList<ChannelViewModel> preEnqueuedPatchChannels)
+        : this(
+            new ReceivePacketDecisionEnvelope(
+                traffic,
+                receivedAt,
+                receivedTimestamp,
+                ReceiveIngressRoutingDecision.Empty,
+                EpisodeObservation: null,
+                EpisodeSnapshot: null),
+            preEnqueuedAudioChannels,
+            preEnqueuedPatchChannels)
+    {
+    }
+}
 
 // Bounds media waiting for the UI-thread routing pass. Lifecycle frames are
 // retained preferentially so dropping stale voice cannot strand a call active.

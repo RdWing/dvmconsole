@@ -1,6 +1,6 @@
-name: Bug Report
-description: Report a reproducible issue with dvmconsole.
-title: "[BUG] "
+name: Bug report
+description: Report a reproducible DVM Console NEO defect with scoped evidence.
+title: "[Bug] "
 labels: ["bug"]
 assignees: []
 
@@ -8,70 +8,172 @@ body:
   - type: markdown
     attributes:
       value: |
-        Thank you for taking the time to report a bug.
-        Please complete all required fields below. Incomplete or environment-specific issues may be closed.
+        Thank you for helping improve DVM Console NEO. Use fictional or redacted data and report only the evidence tier you actually exercised. Use Discussions for setup help and GitHub private vulnerability reporting for security issues.
 
   - type: input
     id: version
     attributes:
-      label: dvmconsole Version
-      description: What version or commit hash are you running?
-      placeholder: e.g. v1.2.0 or commit abc1234
+      label: Version
+      description: What release or commit are you running?
+      placeholder: v0.4.0 or commit abc1234
     validations:
       required: true
 
   - type: dropdown
-    id: architecture
+    id: platform
     attributes:
-      label: Architecture
-      description: What CPU architecture are you running?
+      label: Platform
+      description: Choose the package target or build environment.
       options:
-        - x86
-        - x64
+        - macOS 14+ / Apple Silicon (arm64)
+        - macOS 14+ / Intel (x64)
+        - Windows / x64
+        - Source or custom build
+    validations:
+      required: true
+
+  - type: input
+    id: os_version
+    attributes:
+      label: Operating-system version
+      placeholder: macOS 15.6 or Windows 11 24H2
+    validations:
+      required: true
+
+  - type: dropdown
+    id: build_origin
+    attributes:
+      label: Build origin
+      options:
+        - RdWing GitHub Release package
+        - GitHub Actions artifact
+        - Local source build from this repository
+        - Downstream or modified build
+    validations:
+      required: true
+
+  - type: dropdown
+    id: package_rid
+    attributes:
+      label: Package RID
+      description: Select the exact packaged runtime identifier, or identify a source/custom build.
+      options:
+        - osx-arm64
+        - osx-x64
+        - win-x64
+        - Source or custom build (not an RdWing release package)
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Affected area
+      options:
+        - Connection or FNE traffic
+        - Receive audio or call state
+        - Transmit or PTT
+        - Patching or multi-select
+        - TAR, History, or playback
+        - Audio device or processing
+        - Settings or codeplug loading
+        - User interface or accessibility
+        - Packaging, startup, reload, or shutdown
+        - Documentation or other
+    validations:
+      required: true
+
+  - type: textarea
+    id: audio_route_device
+    attributes:
+      label: Audio route and devices
+      description: For audio or PTT issues, name the selected microphone/input, speaker/output, default or pinned route, and wired, Bluetooth, or other device path. Enter "Not applicable" for unrelated defects.
+      placeholder: Default microphone -> USB headset; pinned output -> Built-in speakers; DVM Console microphone processing
     validations:
       required: true
 
   - type: textarea
     id: description
     attributes:
-      label: Description of the Issue
-      description: Provide a clear and concise description of the problem.
+      label: Problem
+      description: Describe the defect and its operator impact concisely.
     validations:
       required: true
 
   - type: textarea
     id: steps
     attributes:
-      label: Steps to Reproduce
-      description: List the exact steps required to reproduce the issue.
+      label: Minimal reproduction
+      description: Use the public example codeplug or a minimized synthetic configuration whenever possible.
       placeholder: |
-        1. Open dvmconsole
-        2. Load codeplug
-        3. Click...
+        1. Start DVM Console NEO with...
+        2. Select...
+        3. Observe...
     validations:
       required: true
 
   - type: textarea
     id: expected
     attributes:
-      label: Expected Behavior
-      description: What did you expect to happen?
+      label: Expected behavior
     validations:
       required: true
 
   - type: textarea
     id: actual
     attributes:
-      label: Actual Behavior
-      description: What actually happened?
+      label: Actual behavior
     validations:
       required: true
 
   - type: textarea
-    id: logs
+    id: source_evidence
     attributes:
-      label: Relevant Logs or Screenshots
-      description: Paste any relevant console output, logs, or screenshots.
-      render: shell
+      label: Source and automated evidence
+      description: Name the source review, test commands, and results actually collected. Enter "Not run" when none were collected.
+      placeholder: dotnet test ... — 12 passed; reviewed commit abc1234
     validations:
-      required: false
+      required: true
+
+  - type: textarea
+    id: package_evidence
+    attributes:
+      label: Package evidence
+      description: Name the exact package RID and package-smoke result. Enter "Not run" for a source-only report.
+      placeholder: dvmconsole-0.4.0-osx-arm64.zip — reproduced after clean extraction
+    validations:
+      required: true
+
+  - type: textarea
+    id: live_evidence
+    attributes:
+      label: Live FNE evidence
+      description: Name the FNE environment, protocol, and operator paths exercised without exposing operational identifiers. Enter "Not run" if no live FNE was used.
+      placeholder: Sanitized test FNE; P25 receive and card PTT reproduced
+    validations:
+      required: true
+
+  - type: textarea
+    id: hardware_evidence
+    attributes:
+      label: Hardware evidence
+      description: Name the audio, radio, Bluetooth, serial, keyboard, or PTT hardware paths exercised. Enter "Not run" if no physical hardware was used.
+      placeholder: macOS arm64; USB headset microphone/output; local Space PTT. Bluetooth and serial PTT not run.
+    validations:
+      required: true
+
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Redacted diagnostics or screenshots
+      description: Prefer the redacted Debug Log export, then review it manually. Do not include addresses, credentials, keys, aliases, recordings, packet captures, or operational identifiers.
+
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: Privacy and safety acknowledgement
+      options:
+        - label: I reviewed this report and its attachments for private operational data, credentials, keys, recordings, and unredacted identifiers.
+          required: true
+        - label: This report does not claim suitability for public-safety or life-safety-critical use.
+          required: true

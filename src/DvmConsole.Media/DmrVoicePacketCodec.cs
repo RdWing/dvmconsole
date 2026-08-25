@@ -192,7 +192,10 @@ public static class DmrVoicePacketCodec
         ArgumentNullException.ThrowIfNull(privacy);
 
         byte[] packet = CreatePacketHeader(sourceId, destinationId, slot, frameSequence);
-        packet[15] |= (byte)(0x20 | (byte)fnecore.FrameType.DATA_SYNC);
+        // VOICE_PI_HEADER is DMR data type zero, so its DATA_SYNC envelope is
+        // 0x20. Using the generic FNE DATA_SYNC enum value here produces 0x22,
+        // which a master correctly interprets as a call terminator.
+        packet[15] |= (byte)(0x20 | (byte)DMRDataType.VOICE_PI_HEADER);
         byte[] frame = new byte[FrameBytes];
         byte[] raw = new byte[10];
         raw[0] = (byte)(0x20 | privacy.AlgorithmId);
@@ -232,10 +235,9 @@ public static class DmrVoicePacketCodec
             throw new ArgumentOutOfRangeException(nameof(slot));
 
         byte[] packet = CreatePacketHeader(sourceId, destinationId, slot, frameSequence);
-        // The network header carries the FNE frame type, not the DMR slot
-        // data type. Both LC headers and terminators are DATA_SYNC (0x02);
-        // the slot type inside the 33-byte DMR frame distinguishes them.
-        packet[15] |= (byte)(0x20 | (byte)fnecore.FrameType.DATA_SYNC);
+        // DMR control bursts use the DATA_SYNC envelope. The low nibble is the
+        // DMR data type; slot and private-call flags occupy the high bits.
+        packet[15] |= (byte)(0x20 | (byte)dataType);
 
         byte[] frame = new byte[FrameBytes];
         new SlotType { ColorCode = 0, DataType = (byte)dataType }.GetData(ref frame);
