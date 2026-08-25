@@ -2,5 +2,14 @@ root = true
 
 [*.cs]
 # ValueTask instances may be backed by pooled sources and must be consumed.
-# Add further correctness rules here only after the existing tree is clean.
 dotnet_diagnostic.CA2012.severity = warning
+
+# Keep high-signal lifetime and control-flow defects in the build gate without
+# enabling naming, localization, or style rules that do not affect correctness.
+dotnet_diagnostic.CA2200.severity = warning
+
+# Desktop owns the application's longest-lived service graph, so disposal
+# ownership rules are enforced there first and can expand project by project.
+[DvmConsole.Desktop/**/*.cs]
+dotnet_diagnostic.CA2000.severity = warning
+dotnet_diagnostic.CA2213.severity = warning

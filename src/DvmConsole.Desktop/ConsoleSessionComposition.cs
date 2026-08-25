@@ -103,30 +103,33 @@ internal sealed class ConsoleSessionFactory
             ? loadResult.StatusText
             : $"{loadResult.StatusText}\n{keyWarning}";
         var services = new ConsoleSessionServices();
-        var viewModel = new MainWindowViewModel(
-            status,
-            CreateSystemViewModels(configuration, zones),
-            zones,
-            p25KeyRing,
-            dependencies.UserSettingsStore,
-            configuration.EffectiveGroups(),
-            configuration.PatchSourceIdPassthrough,
-            dependencies.SerialPortProvider,
-            dependencies.SerialPttFactory,
-            dmrKeyRing,
-            nxdnKeyRing,
-            topology.CodeplugPath,
-            dependencies.UiDispatcher,
-            services,
-            dependencies.NetworkDisabledDemo);
-        viewModel.RecordLoadedCodeplug(topology.CodeplugPath);
-        return viewModel;
+        return ConsoleSessionConstruction.Create(services, () =>
+        {
+            var viewModel = new MainWindowViewModel(
+                status,
+                CreateSystemViewModels(configuration, zones),
+                zones,
+                p25KeyRing,
+                dependencies.UserSettingsStore,
+                configuration.EffectiveGroups(),
+                configuration.PatchSourceIdPassthrough,
+                dependencies.SerialPortProvider,
+                dependencies.SerialPttFactory,
+                dmrKeyRing,
+                nxdnKeyRing,
+                topology.CodeplugPath,
+                dependencies.UiDispatcher,
+                services,
+                dependencies.NetworkDisabledDemo);
+            viewModel.RecordLoadedCodeplug(topology.CodeplugPath);
+            return viewModel;
+        });
     }
 
     private MainWindowViewModel CreateEmpty(string status)
     {
         var services = new ConsoleSessionServices();
-        return new(
+        return ConsoleSessionConstruction.Create(services, () => new MainWindowViewModel(
             status,
             [],
             [],
@@ -136,7 +139,7 @@ internal sealed class ConsoleSessionFactory
             serialPttFactory: dependencies.SerialPttFactory,
             uiDispatcher: dependencies.UiDispatcher,
             sessionServices: services,
-            networkDisabledDemo: dependencies.NetworkDisabledDemo);
+            networkDisabledDemo: dependencies.NetworkDisabledDemo));
     }
 
     private MainWindowViewModel CreateRejected(string status, ConsoleTopology topology)
@@ -144,7 +147,7 @@ internal sealed class ConsoleSessionFactory
         ConsoleConfiguration configuration = topology.Configuration;
         IReadOnlyList<ZoneViewModel> zones = CreateZones(configuration, null, null, null);
         var services = new ConsoleSessionServices();
-        return new MainWindowViewModel(
+        return ConsoleSessionConstruction.Create(services, () => new MainWindowViewModel(
             status,
             [],
             zones,
@@ -156,7 +159,7 @@ internal sealed class ConsoleSessionFactory
             codeplugPath: topology.CodeplugPath,
             uiDispatcher: dependencies.UiDispatcher,
             sessionServices: services,
-            networkDisabledDemo: dependencies.NetworkDisabledDemo);
+            networkDisabledDemo: dependencies.NetworkDisabledDemo));
     }
 
     private static IReadOnlyList<ZoneViewModel> CreateZones(
@@ -252,5 +255,34 @@ internal sealed class ConsoleSessionFactory
                 systemZones,
                 systemIndex);
         }).ToArray();
+    }
+}
+
+internal static class ConsoleSessionConstruction
+{
+    public static T Create<T>(ConsoleSessionServices services, Func<T> construct)
+    {
+        ArgumentNullException.ThrowIfNull(services);
+        ArgumentNullException.ThrowIfNull(construct);
+        try
+        {
+            return construct();
+        }
+        catch (Exception constructionException)
+        {
+            try
+            {
+                services.DisposeAsync().AsTask().GetAwaiter().GetResult();
+            }
+            catch (Exception cleanupException)
+            {
+                throw new AggregateException(
+                    "Console session construction and rollback both failed.",
+                    constructionException,
+                    cleanupException);
+            }
+
+            throw;
+        }
     }
 }

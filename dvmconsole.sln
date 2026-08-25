@@ -8,7 +8,7 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DvmConsole.Vocoder", "src\D
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DvmConsole.Fne", "src\DvmConsole.Fne\DvmConsole.Fne.csproj", "{84023C2C-8C1F-4782-8523-FD5FBACC6A4A}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DvmConsole.App", "src\DvmConsole.App\DvmConsole.App.csproj", "{A1143381-0381-49AA-A1E0-867D349738C5}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DvmConsole.CodeplugValidator", "src\DvmConsole.CodeplugValidator\DvmConsole.CodeplugValidator.csproj", "{A1143381-0381-49AA-A1E0-867D349738C5}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DvmConsole.Core.Tests", "src\DvmConsole.Core.Tests\DvmConsole.Core.Tests.csproj", "{E9E67F1C-D475-41CF-8308-80E403EFBB69}"
 EndProject

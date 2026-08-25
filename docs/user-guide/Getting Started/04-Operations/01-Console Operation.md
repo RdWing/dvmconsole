@@ -11,7 +11,10 @@ surface. Systems and zones organize the cards; card positions, sizes, and
 controls retain their existing behavior.
 
 The Activity sidebar continues to show recent calls and subscriber-command
-audit entries. Collapse or expand it with the arrow in its header.
+audit entries. Collapse or expand it with the arrow in its header. New calls
+remain in live-follow view while the sidebar is at the top. After the operator
+scrolls down, incoming rows preserve the current visible call instead of
+pushing the list down.
 
 Choose **View > Engineering Health** when runtime telemetry is useful. The
 default-hidden horizontal rail is resizable and reports receive pressure and

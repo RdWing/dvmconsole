@@ -4,17 +4,18 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <EnableNETAnalyzers>true</EnableNETAnalyzers>
-    <!-- Analyzer rules are phased in explicitly in src/.editorconfig so a new
-         SDK cannot silently expand the warnings-as-errors surface. -->
+    <!-- Rules are phased in explicitly in src/.editorconfig so SDK updates
+         cannot silently expand the warnings-as-errors surface. Developer-only
+         probes keep the same small correctness baseline. -->
     <AnalysisLevel>latest</AnalysisLevel>
     <AnalysisMode>None</AnalysisMode>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
 
     <!-- Keep tags in the form v$(Version). -->
-    <VersionPrefix>0.4.0</VersionPrefix>
+    <VersionPrefix>0.4.1</VersionPrefix>
     <Version>$(VersionPrefix)</Version>
-    <AssemblyVersion>0.4.0.0</AssemblyVersion>
-    <FileVersion>0.4.0.0</FileVersion>
+    <AssemblyVersion>0.4.1.0</AssemblyVersion>
+    <FileVersion>0.4.1.0</FileVersion>
     <InformationalVersion>$(Version)</InformationalVersion>
   </PropertyGroup>
 </Project>

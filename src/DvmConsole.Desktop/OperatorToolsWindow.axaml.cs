@@ -17,7 +17,6 @@ public sealed partial class OperatorToolsWindow : Window
     private readonly DispatcherTimer scrollBarHideTimer;
     private ScrollViewer? activeScrollViewer;
     private ListBox? historyList;
-    private INotifyCollectionChanged? historyCollection;
     private ScrollViewportAnchor<CallHistoryEntry>? historyViewportAnchor;
     private string? pendingSectionAnchorName;
     private bool synchronizingSectionNavigation;
@@ -65,8 +64,7 @@ public sealed partial class OperatorToolsWindow : Window
         AddHandler(InputElement.GotFocusEvent, HandlePttFocusChanged, RoutingStrategies.Bubble, true);
         AddHandler(InputElement.LostFocusEvent, HandlePttFocusChanged, RoutingStrategies.Bubble, true);
         AddHandler(InputElement.PointerWheelChangedEvent, HandlePointerWheelChanged, RoutingStrategies.Tunnel);
-        historyCollection = viewModel.FilteredCallHistory;
-        historyCollection.CollectionChanged += HandleHistoryCollectionChanged;
+        viewModel.FilteredCallHistoryChanging += HandleHistoryCollectionChanging;
         Opened += HandleOpened;
         LayoutUpdated += HandleWindowLayoutUpdated;
         ToolTabs.SelectionChanged += HandleToolTabsSelectionChanged;
@@ -293,8 +291,13 @@ public sealed partial class OperatorToolsWindow : Window
         historyList.LayoutUpdated += HandleHistoryListLayoutUpdated;
     }
 
-    private void HandleHistoryCollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
-        => historyViewportAnchor?.Capture();
+    private void HandleHistoryCollectionChanging(object? sender, NotifyCollectionChangedEventArgs e)
+    {
+        if (e.Action == NotifyCollectionChangedAction.Reset)
+            historyViewportAnchor?.Reset();
+        else
+            historyViewportAnchor?.Capture();
+    }
 
     private void HandleHistoryListLayoutUpdated(object? sender, EventArgs e)
         => historyViewportAnchor?.Restore();
@@ -313,9 +316,7 @@ public sealed partial class OperatorToolsWindow : Window
         historyList = null;
         historyViewportAnchor?.Reset();
         historyViewportAnchor = null;
-        if (historyCollection is not null)
-            historyCollection.CollectionChanged -= HandleHistoryCollectionChanged;
-        historyCollection = null;
+        viewModel.FilteredCallHistoryChanging -= HandleHistoryCollectionChanging;
     }
 
     private void HandleKeyDown(object? sender, KeyEventArgs e)
@@ -510,14 +511,8 @@ public sealed partial class OperatorToolsWindow : Window
             viewModel.TrySaveRecordingIgnoredSubscribers(channel);
     }
 
-    private void HandleClearRecordingFiltersClick(object? sender, RoutedEventArgs e)
-        => viewModel.ClearRecordingFilters();
-
     private void HandleClearHistoryFiltersClick(object? sender, RoutedEventArgs e)
         => viewModel.ClearHistoryFilters();
-
-    private void HandleResetRecordingColumnsClick(object? sender, RoutedEventArgs e)
-        => viewModel.ResetRecordingColumns();
 
     private void HandleApplyRecordingRootClick(object? sender, RoutedEventArgs e)
         => viewModel.ApplyRecordingRoot();

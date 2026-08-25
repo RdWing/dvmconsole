@@ -10,6 +10,7 @@ public sealed class OpusOggPcmStreamReader : IAudioPcmStreamReader
     public const int OutputSampleRate = 8000;
 
     private readonly Stream source;
+    private readonly IOpusDecoder decoder;
     private readonly OpusOggReadStream reader;
     private short[] pending = [];
     private int pendingOffset;
@@ -18,9 +19,16 @@ public sealed class OpusOggPcmStreamReader : IAudioPcmStreamReader
     private OpusOggPcmStreamReader(Stream source)
     {
         this.source = source;
-        reader = new OpusOggReadStream(
-            OpusCodecFactory.CreateDecoder(OutputSampleRate, 1),
-            source);
+        decoder = OpusCodecFactory.CreateDecoder(OutputSampleRate, 1);
+        try
+        {
+            reader = new OpusOggReadStream(decoder, source);
+        }
+        catch
+        {
+            decoder.Dispose();
+            throw;
+        }
     }
 
     public int SampleRate => OutputSampleRate;
@@ -82,8 +90,21 @@ public sealed class OpusOggPcmStreamReader : IAudioPcmStreamReader
         if (disposed)
             return ValueTask.CompletedTask;
         disposed = true;
-        reader.Close();
-        source.Dispose();
+        try
+        {
+            reader.Close();
+        }
+        finally
+        {
+            try
+            {
+                decoder.Dispose();
+            }
+            finally
+            {
+                source.Dispose();
+            }
+        }
         return ValueTask.CompletedTask;
     }
 }

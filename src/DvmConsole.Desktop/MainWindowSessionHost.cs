@@ -5,7 +5,7 @@ namespace DvmConsole.Desktop;
 internal sealed class MainWindowSessionHost : IAsyncDisposable
 {
     private readonly SemaphoreSlim transitionGate = new(1, 1);
-    private readonly CollectionChangedSubscription activityHistorySubscription;
+    private readonly NotifyCollectionChangedEventHandler activityHistoryChanging;
     private readonly Action<MainWindowViewModel> setDataContext;
     private readonly Action closeSessionWindows;
     private readonly Action closeAllWindows;
@@ -15,20 +15,19 @@ internal sealed class MainWindowSessionHost : IAsyncDisposable
 
     public MainWindowSessionHost(
         MainWindowViewModel initialViewModel,
-        NotifyCollectionChangedEventHandler activityHistoryChanged,
+        NotifyCollectionChangedEventHandler activityHistoryChanging,
         Action<MainWindowViewModel> setDataContext,
         Action closeSessionWindows,
         Action closeAllWindows)
     {
         viewModel = initialViewModel ?? throw new ArgumentNullException(nameof(initialViewModel));
-        ArgumentNullException.ThrowIfNull(activityHistoryChanged);
+        ArgumentNullException.ThrowIfNull(activityHistoryChanging);
+        this.activityHistoryChanging = activityHistoryChanging;
         this.setDataContext = setDataContext ?? throw new ArgumentNullException(nameof(setDataContext));
         this.closeSessionWindows = closeSessionWindows ?? throw new ArgumentNullException(nameof(closeSessionWindows));
         this.closeAllWindows = closeAllWindows ?? throw new ArgumentNullException(nameof(closeAllWindows));
         cardPtt = CreateCardPtt(viewModel);
-        activityHistorySubscription = new CollectionChangedSubscription(
-            (INotifyCollectionChanged)viewModel.ActivityCallHistory,
-            activityHistoryChanged);
+        viewModel.ActivityCallHistoryChanging += activityHistoryChanging;
         this.setDataContext(viewModel);
     }
 
@@ -47,8 +46,8 @@ internal sealed class MainWindowSessionHost : IAsyncDisposable
             MainWindowViewModel previous = viewModel;
             closeSessionWindows();
             await cardPtt.DisposeAsync();
-            activityHistorySubscription.Rebind(
-                (INotifyCollectionChanged)replacement.ActivityCallHistory);
+            previous.ActivityCallHistoryChanging -= activityHistoryChanging;
+            replacement.ActivityCallHistoryChanging += activityHistoryChanging;
             viewModel = replacement;
             cardPtt = CreateCardPtt(replacement);
             setDataContext(replacement);
@@ -71,7 +70,7 @@ internal sealed class MainWindowSessionHost : IAsyncDisposable
         {
             var cleanup = new AsyncCleanup();
             cleanup.Run(closeAllWindows);
-            cleanup.Run(activityHistorySubscription.Dispose);
+            cleanup.Run(() => viewModel.ActivityCallHistoryChanging -= activityHistoryChanging);
             await cleanup.RunTaskAsync(() => cardPtt.DisposeAsync().AsTask());
             await cleanup.RunTaskAsync(() => viewModel.DisposeAsync().AsTask());
             cleanup.ThrowIfFailed();

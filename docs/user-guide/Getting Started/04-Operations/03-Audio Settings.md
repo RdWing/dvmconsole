@@ -25,6 +25,12 @@ If a specific device is selected, the console uses that device instead.
 
 If a saved device is missing, the console falls back to the system default and reports the change in the audio status.
 
+Choose **Apply** after changing a microphone, output route, or processing value.
+Route changes are applied as one transaction. If the new route fails, DVM
+Console restores the previous devices, processing options, and Keep Mic Warm
+state and leaves the saved configuration unchanged. The Audio status field and
+Debug Logs report the failure.
+
 On macOS, use **Request macOS microphone access** beside **Refresh devices** and
 **Test talk permit tone** to ask for capture permission. If access was previously
 denied, enable DVM Console under **System Settings > Privacy & Security >
@@ -53,9 +59,10 @@ Options include:
 
 If System Default Output is selected, the console follows the current macOS or Windows default playback device.
 
-The speaker button beside Warm mic in the main toolbar mutes live RX presentation
-to configured output devices. Muting does not stop receive decoding, call state,
-patching, or TAR recording, and the mute state resets when the console restarts.
+The three speaker controls beside Keep Mic Warm mute live RX presentation for
+the selected system, selected zone, or all configured output devices. Muting
+does not stop receive decoding, call state, patching, or TAR recording, and the
+mute state resets when the console restarts.
 
 ---
 

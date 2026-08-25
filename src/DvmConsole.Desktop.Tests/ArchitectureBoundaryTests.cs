@@ -11,7 +11,7 @@ public sealed class ArchitectureBoundaryTests
         string sourceRoot = FindSourceRoot();
         var expected = new Dictionary<string, string[]>
         {
-            ["DvmConsole.App"] = ["DvmConsole.Core"],
+            ["DvmConsole.CodeplugValidator"] = ["DvmConsole.Core"],
             ["DvmConsole.Audio"] = [],
             ["DvmConsole.Core"] = [],
             ["DvmConsole.Desktop"] =

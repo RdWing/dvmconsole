@@ -90,6 +90,12 @@ The General page also controls the shared clock display format:
 
 Clock settings are saved and restored on startup. Enabled clock slots, UTC offsets, colors, 12/24-hour mode, and seconds display are all sticky user preferences.
 
+Enabled clocks sit directly to the left of **Keep Mic Warm** and the output-mute
+controls. The flexible space between **Help** and this toolbar group collapses
+before any controls move into **MORE**. At narrower widths, alert shortcuts move
+first, followed by **TONES** and then clocks. The transition accounts for the
+interface scale and number of enabled clocks.
+
 ## Audio Settings
 
 Opens Console Settings on the Audio page.
@@ -109,6 +115,11 @@ one scope does not override another scope that is still muted.
 Microphone gain, EQ, AGC, warm-microphone, and Apply controls wrap onto
 additional rows when Console Settings is narrowed so every control remains
 reachable.
+
+Applying microphone processing or device-route changes is transactional. If the
+runtime route cannot be reconfigured, the previous input, output, processing
+options, and warm-microphone state are restored, the proposed settings are not
+persisted, and the failure is shown in Audio status and Debug Logs.
 
 ## Import / Export Settings
 
@@ -171,7 +182,14 @@ Snaps channel cards back to a grid-style layout.
 
 ## Event History
 
-The Event History can be docked in the collapsible Activity sidebar or opened as a separate window. **Snap detached Event History** keeps the detached window aligned with the main console.
+Recent calls appear in the collapsible Activity sidebar. Open the complete Event
+History from **View > History**, the Activity heading, or **Tools > Talkgroup
+Audio Recorder > Viewer**; each route opens the History page in Console
+Settings.
+
+When either list is scrolled away from the top, incoming calls preserve the
+current visible row instead of pushing the reading position down. A list that
+is already at the top continues following new calls.
 
 ## Groups
 

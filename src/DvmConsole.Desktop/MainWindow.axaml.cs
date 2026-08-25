@@ -113,7 +113,7 @@ public sealed partial class MainWindow : Window
             control => control.DataContext as CallHistoryEntry);
         sessionHost = new MainWindowSessionHost(
             initialViewModel,
-            HandleActivityHistoryCollectionChanged,
+            HandleActivityHistoryCollectionChanging,
             ApplySessionDataContext,
             CloseModelessViewModelWindows,
             CloseAllModelessWindows);
@@ -132,8 +132,7 @@ public sealed partial class MainWindow : Window
         RefreshNamedSettingsProfileMenus();
         Opened += async (_, _) =>
         {
-            ApplyResponsiveToolbarVisibility(
-                MainWindowResponsiveToolbarPolicy.Evaluate(Bounds.Width));
+            RefreshResponsiveToolbarVisibility(Bounds.Width);
             mainWindowPlacement.RestorePosition();
             mainWindowPlacement.StartTracking();
             ConfigureTransientChannelScrollBars();
@@ -235,8 +234,7 @@ public sealed partial class MainWindow : Window
         WindowState = WindowState.Normal;
         Width = Math.Max(MinWidth, width);
         Height = Math.Max(MinHeight, height);
-        ApplyResponsiveToolbarVisibility(
-            MainWindowResponsiveToolbarPolicy.Evaluate(Width));
+        RefreshResponsiveToolbarVisibility(Width);
         SetEngineeringHealthVisible(showEngineeringHealth, persist: false);
     }
 
@@ -360,7 +358,7 @@ public sealed partial class MainWindow : Window
         cleanup.ThrowIfFailed();
     }
 
-    private void HandleActivityHistoryCollectionChanged(
+    private void HandleActivityHistoryCollectionChanging(
         object? sender,
         NotifyCollectionChangedEventArgs e)
     {

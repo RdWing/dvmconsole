@@ -238,7 +238,7 @@ public sealed class SerialPttSource : IPttSource
 
     private static Stream OpenSerialStream(string portName, int baudRate)
     {
-        var port = new SerialPort(portName, baudRate, Parity.None, 8, StopBits.One)
+        SerialPort? port = new(portName, baudRate, Parity.None, 8, StopBits.One)
         {
             NewLine = "\n",
             ReadTimeout = SerialPort.InfiniteTimeout,
@@ -248,12 +248,13 @@ public sealed class SerialPttSource : IPttSource
         try
         {
             port.Open();
-            return new OwnedSerialStream(port.BaseStream, port);
+            var owned = new OwnedSerialStream(port.BaseStream, port);
+            port = null;
+            return owned;
         }
-        catch
+        finally
         {
-            port.Dispose();
-            throw;
+            port?.Dispose();
         }
     }
 
