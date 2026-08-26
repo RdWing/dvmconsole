@@ -564,18 +564,21 @@
               <ItemsControl.ItemTemplate>
                 <DataTemplate x:DataType="local:KeyStatusItemViewModel">
                   <Border Classes="panel">
-                    <Grid ColumnDefinitions="*,*,90,90,140" ColumnSpacing="8">
+                    <Grid ColumnDefinitions="*,*,90,90,2*" ColumnSpacing="8">
                       <StackPanel><TextBlock FontWeight="SemiBold" Text="{Binding ChannelName}" /><TextBlock Classes="caption" Text="{Binding SystemName}" /></StackPanel>
                       <TextBlock Grid.Column="1" Text="{Binding ModeText}" VerticalAlignment="Center" />
                       <TextBlock Grid.Column="2" Text="{Binding AlgorithmIdText}" VerticalAlignment="Center" />
                       <TextBlock Grid.Column="3" Text="{Binding KeyIdText}" VerticalAlignment="Center" />
-                      <TextBlock Grid.Column="4" Text="{Binding StatusText}" VerticalAlignment="Center" />
+                      <StackPanel Grid.Column="4" VerticalAlignment="Center">
+                        <TextBlock Text="{Binding StatusText}" />
+                        <TextBlock Classes="caption" Text="{Binding ConfigurationHint}" TextWrapping="Wrap" IsVisible="{Binding HasConfigurationHint}" />
+                      </StackPanel>
                     </Grid>
                   </Border>
                 </DataTemplate>
               </ItemsControl.ItemTemplate>
             </ItemsControl>
-            <TextBlock Classes="caption" Text="Key material is never displayed or logged; only identifiers and availability are shown." IsVisible="{Binding HasNoKeyStatusItems}" />
+            <TextBlock Classes="caption" Text="Key material is never displayed or logged; only identifiers and availability are shown." />
           </StackPanel>
         </ScrollViewer>
       </TabItem>

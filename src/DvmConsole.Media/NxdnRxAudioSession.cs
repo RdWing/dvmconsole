@@ -14,7 +14,9 @@ public sealed class NxdnRxAudioSession : IAsyncDisposable
     private readonly IAudioPlayback playback;
     private readonly INxdnKeyResolver? keyResolver;
     private readonly string systemName;
+    private readonly IReceivePrivacyPolicy? privacyPolicy;
     private readonly VoicePacketSequenceTracker sequenceTracker = new();
+    private readonly NxdnSacchMessageCollector sacchCollector = new();
     private NxdnPrivacyProcessor? privacyProcessor;
     private byte privacyAlgorithm;
     private byte privacyKeyId;
@@ -24,6 +26,7 @@ public sealed class NxdnRxAudioSession : IAsyncDisposable
     private uint activeStreamId;
     private int lastVoiceCodewordCount;
     private bool hasDecodedVoiceInActiveStream;
+    private bool? activeCallIsEncrypted;
     private bool disposed;
 
     public NxdnRxAudioSession(
@@ -33,7 +36,8 @@ public sealed class NxdnRxAudioSession : IAsyncDisposable
         INxdnKeyResolver? keyResolver = null,
         string? systemName = null,
         string? configuredAlgorithm = null,
-        string? configuredKeyId = null)
+        string? configuredKeyId = null,
+        IReceivePrivacyPolicy? privacyPolicy = null)
     {
         this.selector = selector ?? throw new ArgumentNullException(nameof(selector));
         ArgumentNullException.ThrowIfNull(vocoder);
@@ -42,6 +46,7 @@ public sealed class NxdnRxAudioSession : IAsyncDisposable
         this.playback = playback ?? throw new ArgumentNullException(nameof(playback));
         this.keyResolver = keyResolver;
         this.systemName = systemName ?? string.Empty;
+        this.privacyPolicy = privacyPolicy;
         if (NxdnKeyRing.TryParseAlgorithmId(configuredAlgorithm, out byte algorithm) &&
             NxdnKeyRing.TryParseKeyId(configuredKeyId, out byte keyId))
         {
@@ -69,6 +74,9 @@ public sealed class NxdnRxAudioSession : IAsyncDisposable
             activeStreamId = traffic.StreamId;
             lastVoiceCodewordCount = 0;
             hasDecodedVoiceInActiveStream = false;
+            activeCallIsEncrypted = null;
+            sacchCollector.Reset();
+            InvalidatePrivacyAfterLoss();
         }
         long lostBefore = sequenceTracker.LostPackets;
         if (!sequenceTracker.TryAccept(traffic.StreamId, traffic.PacketSequence))
@@ -77,20 +85,45 @@ public sealed class NxdnRxAudioSession : IAsyncDisposable
         if (lostPackets > 0)
         {
             await ConcealLostPacketsAsync(lostPackets, cancellationToken).ConfigureAwait(false);
+            sacchCollector.Reset();
             InvalidatePrivacyAfterLoss();
         }
 
-        if (NxdnVoicePacketCodec.TryExtractCallMetadata(traffic.Payload, out var metadata))
+        if (NxdnVoicePacketCodec.TryExtractFacchCallMetadata(
+            traffic.Payload,
+            0,
+            out NxdnVoicePacketCodec.CallMetadata firstMetadata))
         {
-            HandleCallMetadata(metadata);
+            HandleCallMetadata(firstMetadata);
+            if (NxdnVoicePacketCodec.TryExtractFacchCallMetadata(
+                traffic.Payload,
+                1,
+                out NxdnVoicePacketCodec.CallMetadata secondMetadata) &&
+                !CallMetadataMatches(firstMetadata, secondMetadata))
+            {
+                HandleCallMetadata(secondMetadata);
+            }
             return 0;
         }
+
+        NxdnVoicePacketCodec.CallMetadata? metadataAfterVoice = null;
+        if (sacchCollector.TryAccept(traffic.Payload, out NxdnVoicePacketCodec.CallMetadata sacchMetadata))
+        {
+            if (sacchMetadata.MessageType == NxdnVoicePacketCodec.VoiceCallIvMessageType)
+                metadataAfterVoice = sacchMetadata;
+            else
+                HandleCallMetadata(sacchMetadata);
+        }
+
+        if (privacyPolicy?.RequireEncryptedTraffic == true && activeCallIsEncrypted != true)
+            return 0;
 
         byte[] ambe = new byte[NxdnVoicePacketCodec.AmbeBytes];
         if (!NxdnVoicePacketCodec.TryExtractAmbe(traffic.Payload, ambe, out int codewordCount))
         {
             MalformedPackets++;
             await ConcealCurrentPacketAsync(cancellationToken).ConfigureAwait(false);
+            sacchCollector.Reset();
             InvalidatePrivacyAfterLoss();
             return 0;
         }
@@ -138,6 +171,8 @@ public sealed class NxdnRxAudioSession : IAsyncDisposable
         }
         await WritePacketSegmentsAsync(packetSamples, concealed, cancellationToken)
             .ConfigureAwait(false);
+        if (metadataAfterVoice is { } completedMetadata)
+            HandleCallMetadata(completedMetadata);
         if (missingPrivacy)
             MalformedPackets++;
         return errors;
@@ -226,15 +261,24 @@ public sealed class NxdnRxAudioSession : IAsyncDisposable
     {
         if (metadata.MessageType == NxdnVoicePacketCodec.TransmitReleaseMessageType)
         {
+            activeCallIsEncrypted = null;
             ClearPrivacy();
             return;
         }
         if (metadata.MessageType == NxdnVoicePacketCodec.VoiceCallMessageType)
         {
-            ClearPrivacy(restoreConfigured: false);
+            activeCallIsEncrypted = metadata.CipherType != 0;
             if (metadata.CipherType == 0)
             {
+                ClearPrivacy(restoreConfigured: false);
                 RestoreConfiguredPrivacy();
+                return;
+            }
+            if (privacyAlgorithm == metadata.CipherType &&
+                privacyKeyId == metadata.KeyId &&
+                privacyKey.Length > 0 &&
+                (privacyProcessor is not null || RequiresMessageIndicator(metadata.CipherType)))
+            {
                 return;
             }
             ConfigurePrivacy(metadata.CipherType, metadata.KeyId);
@@ -250,6 +294,9 @@ public sealed class NxdnRxAudioSession : IAsyncDisposable
                 new NxdnPrivacyOptions(privacyAlgorithm, privacyKeyId, privacyKey, metadata.MessageIndicator));
         }
     }
+
+    private static bool RequiresMessageIndicator(byte algorithm)
+        => algorithm is NxdnPrivacyAlgorithms.Des or NxdnPrivacyAlgorithms.Aes256;
 
     private void ClearPrivacy(bool restoreConfigured = true)
     {
@@ -292,4 +339,15 @@ public sealed class NxdnRxAudioSession : IAsyncDisposable
         if (configuredPrivacyAlgorithm != 0 && configuredPrivacyKeyId != 0)
             ConfigurePrivacy(configuredPrivacyAlgorithm, configuredPrivacyKeyId);
     }
+
+    private static bool CallMetadataMatches(
+        NxdnVoicePacketCodec.CallMetadata first,
+        NxdnVoicePacketCodec.CallMetadata second)
+        => first.MessageType == second.MessageType &&
+            first.SourceId == second.SourceId &&
+            first.DestinationId == second.DestinationId &&
+            first.Group == second.Group &&
+            first.CipherType == second.CipherType &&
+            first.KeyId == second.KeyId &&
+            first.MessageIndicator.AsSpan().SequenceEqual(second.MessageIndicator);
 }

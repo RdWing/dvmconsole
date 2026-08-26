@@ -120,6 +120,11 @@ To edit a group:
 
 The console displays a conflict warning when a channel assignment cannot be used safely. Resolve the listed conflict before relying on that group.
 
+Saving a group immediately replaces the active patch-source membership. If a
+save overlaps an enable or disable action, only the newest requested membership
+is applied. A deselected member should disappear from the editor and forwarding
+path without restarting DVM Console.
+
 ---
 
 # Group PTT

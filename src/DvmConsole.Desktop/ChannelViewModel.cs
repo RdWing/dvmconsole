@@ -11,7 +11,7 @@ using System.Windows.Input;
 
 namespace DvmConsole.Desktop;
 
-public sealed class ChannelViewModel : INotifyPropertyChanged
+public sealed class ChannelViewModel : INotifyPropertyChanged, IReceivePrivacyPolicy
 {
     private readonly ChannelConfiguration configuration;
     private readonly ChannelRuntime runtime;
@@ -255,7 +255,7 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
         runtime.Definition.Mode is ("p25" or "dmr" or "nxdn") &&
         runtime.Definition.IsEncrypted &&
         runtime.Definition.SelectableEncryption &&
-        CanResolveConfiguredKey();
+        (transmitEncrypted || CanResolveConfiguredKey());
     public string EncryptionStatusText => !runtime.Definition.IsEncrypted
         ? "Clear"
         : CanResolveConfiguredKey()
@@ -264,15 +264,20 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
     public string EncryptionButtonText => transmitEncrypted ? "SECURE" : "CLEAR";
     public bool CanListen => runtime.Definition.Mode switch
     {
-        "dmr" or "p25" or "nxdn" => !runtime.Definition.IsEncrypted || CanResolveConfiguredKey(),
+        "dmr" or "p25" or "nxdn" =>
+            !RequireEncryptedTraffic || CanResolveConfiguredKey(),
         "analog" => !runtime.Definition.IsEncrypted,
         _ => false
     };
+    public bool RequireEncryptedTraffic =>
+        runtime.Definition.IsEncrypted &&
+        (!runtime.Definition.SelectableEncryption || transmitEncrypted);
     public bool CanTransmit =>
         !runtime.Definition.RxOnly &&
         runtime.Definition.Mode switch
         {
-            "dmr" or "p25" or "nxdn" => !runtime.Definition.IsEncrypted || CanResolveConfiguredKey(),
+            "dmr" or "p25" or "nxdn" =>
+                !RequireEncryptedTraffic || CanResolveConfiguredKey(),
             "analog" => !runtime.Definition.IsEncrypted,
             _ => false
         };
@@ -375,6 +380,7 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
     {
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CanListen)));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CanTransmit)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CanRecord)));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CanToggleEncryption)));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(EncryptionStatusText)));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(EncryptionButtonText)));
@@ -391,11 +397,7 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
             return;
 
         transmitEncrypted = encrypted;
-        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsTransmitEncrypted)));
-        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(EncryptionButtonText)));
-        NotifyEncryptionAppearanceChanged();
-        (PttCommand as AsyncRelayCommand)?.RaiseCanExecuteChanged();
-        (EncryptionCommand as AsyncRelayCommand)?.RaiseCanExecuteChanged();
+        NotifySelectableEncryptionStateChanged();
     }
 
     public void SetRecordingEnabled(bool enabled)
@@ -933,12 +935,25 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
             return Task.CompletedTask;
 
         transmitEncrypted = !transmitEncrypted;
+        NotifySelectableEncryptionStateChanged();
+        TransmitEncryptionChanged?.Invoke(this, transmitEncrypted);
+        return Task.CompletedTask;
+    }
+
+    private void NotifySelectableEncryptionStateChanged()
+    {
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsTransmitEncrypted)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(RequireEncryptedTraffic)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CanListen)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CanTransmit)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CanRecord)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CanToggleEncryption)));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(EncryptionButtonText)));
         NotifyEncryptionAppearanceChanged();
-        TransmitEncryptionChanged?.Invoke(this, transmitEncrypted);
+        (AudioCommand as AsyncRelayCommand)?.RaiseCanExecuteChanged();
         (PttCommand as AsyncRelayCommand)?.RaiseCanExecuteChanged();
-        return Task.CompletedTask;
+        (RecordingCommand as AsyncRelayCommand)?.RaiseCanExecuteChanged();
+        (EncryptionCommand as AsyncRelayCommand)?.RaiseCanExecuteChanged();
     }
 
     private Task ToggleRecordingAsync()

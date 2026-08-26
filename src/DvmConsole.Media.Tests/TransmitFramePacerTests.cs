@@ -47,7 +47,7 @@ public sealed class TransmitFramePacerTests
 
         pacer.Complete();
         await pacer.Completion;
-        call.End();
+        await call.EndAsync(static _ => ValueTask.CompletedTask, CancellationToken.None);
 
         Assert.Equal(4, packets.Count);
         Assert.Null(pacer.Failure);
@@ -106,6 +106,36 @@ public sealed class TransmitFramePacerTests
         Assert.Empty(faults);
     }
 
+    [Fact]
+    public async Task CaptureLifecycleSerializesConcurrentStartAndDisposal()
+    {
+        var capture = new FakeCapture();
+        var call = new RecordingCall();
+        var faults = new ConcurrentQueue<Exception>();
+        var lifecycle = new TransmitCaptureLifecycle(
+            capture,
+            call,
+            "The test capture session has faulted.",
+            faults.Enqueue);
+
+        await Task.WhenAll(
+            lifecycle.StartAsync().AsTask(),
+            lifecycle.StartAsync().AsTask());
+
+        Assert.Equal(1, capture.StartCalls);
+        await lifecycle.StopAsync();
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            () => lifecycle.StartAsync().AsTask());
+
+        await Task.WhenAll(
+            lifecycle.DisposeAsync().AsTask(),
+            lifecycle.DisposeAsync().AsTask());
+
+        Assert.Equal(1, capture.StopCalls);
+        Assert.Equal(1, capture.DisposeCalls);
+        Assert.Empty(faults);
+    }
+
     private static async Task WaitUntilAsync(Func<bool> condition)
     {
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(2));
@@ -134,21 +164,27 @@ public sealed class TransmitFramePacerTests
         public event EventHandler<PcmSamplesEventArgs>? SamplesAvailable;
         public PcmAudioFormat Format { get; } = PcmAudioFormat.Voice8KhzMono16Bit;
         public bool IsRunning { get; private set; }
+        public int StartCalls { get; private set; }
+        public int StopCalls { get; private set; }
+        public int DisposeCalls { get; private set; }
 
         public ValueTask StartAsync(CancellationToken cancellationToken = default)
         {
+            StartCalls++;
             IsRunning = true;
             return ValueTask.CompletedTask;
         }
 
         public ValueTask StopAsync(CancellationToken cancellationToken = default)
         {
+            StopCalls++;
             IsRunning = false;
             return ValueTask.CompletedTask;
         }
 
         public ValueTask DisposeAsync()
         {
+            DisposeCalls++;
             IsRunning = false;
             return ValueTask.CompletedTask;
         }
@@ -163,7 +199,12 @@ public sealed class TransmitFramePacerTests
 
         public void Start() => Events.Add("start");
         public void Process(ReadOnlySpan<short> samples) => Events.Add($"process:{samples.Length}");
-        public void End() => Events.Add("end");
+        public ValueTask EndAsync(CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            Events.Add("end");
+            return ValueTask.CompletedTask;
+        }
         public void Dispose() => Events.Add("dispose");
     }
 

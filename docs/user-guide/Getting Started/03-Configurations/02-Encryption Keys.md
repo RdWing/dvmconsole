@@ -65,6 +65,11 @@ Fields:
   and AES-256 uses 32. NXDN EHR uses a non-zero 15-bit seed stored in 2 bytes,
   DES uses 8 bytes, and AES-256 uses 32.
 
+Algorithm IDs are protocol-specific and are not interchangeable. P25 AES uses
+`algId: 0x84`, while DMR Association AES-256 uses `algId: 0x05`. A DMR key must
+also declare `protocol: "dmr"`; an entry without `protocol` is treated as P25
+for compatibility with older key files.
+
 ---
 
 # Channel Encryption Fields
@@ -105,7 +110,19 @@ selectable_encryption: true
 
 When enabled, the resource card shows **SELECT** next to the TAR indicator area. Clicking **SELECT** toggles console transmit between encrypted and clear for that system/talkgroup.
 
-The selected encrypted/clear state is saved and restored across restarts. The key and algorithm still come from the codeplug; the toggle only controls whether the console uses them for transmit.
+The selected encrypted/clear state is saved and restored across restarts. The
+key and algorithm still come from the codeplug. **CLEAR** sends clear audio and
+admits clear receive traffic; **SECURE** sends encrypted audio and rejects clear
+receive traffic. Incoming secure calls are decoded only when their on-air
+metadata identifies an available configured key. A selectable channel in
+**CLEAR** can therefore receive clear calls even when that secure key is not
+currently available. DMR
+secure calls also encode late-entry MI fragments and burst-F algorithm/key
+identifiers. The reviewed `dvmhost r05a06_dev` clears burst F while regenerating
+RF, so that identity is not preserved end to end through that host revision.
+NXDN DES/AES calls likewise alternate `VCALL` and successor-IV metadata in
+SACCH while voice continues, allowing recovery at the next eight-frame
+encryption-session boundary when the host preserves the required startup MI.
 
 ---
 
@@ -127,6 +144,10 @@ Clear and MI-instruction KMM responses are accepted. Peer-encrypted KMM response
 # Key Status
 
 Open **Tools > Encryption Key Status** to inspect loaded or received key state for configured encrypted resources. Available entries identify their active source as **local file** or **FNE/KMM**.
+
+When a supported local DMR key is unavailable, the row also shows the required
+`protocol`, `algId`, and key length. This is configuration guidance only; the
+actual key value is never shown.
 
 The status page shows identifiers and availability only. Key material is never displayed or written to the debug log.
 

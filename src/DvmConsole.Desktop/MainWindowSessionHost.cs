@@ -37,6 +37,22 @@ internal sealed class MainWindowSessionHost : IAsyncDisposable
     public ValueTask StartAsync()
         => viewModel.StartKeyboardPttAsync();
 
+    // A replacement session reloads operator settings from the shared store.
+    // Flush the outgoing session before constructing that replacement so two
+    // session-owned writers never race over different settings snapshots.
+    public async Task PrepareForReplacementAsync()
+    {
+        await transitionGate.WaitAsync();
+        try
+        {
+            await viewModel.FlushUserSettingsAsync();
+        }
+        finally
+        {
+            transitionGate.Release();
+        }
+    }
+
     public async Task ReplaceAsync(MainWindowViewModel replacement)
     {
         ArgumentNullException.ThrowIfNull(replacement);
@@ -44,15 +60,34 @@ internal sealed class MainWindowSessionHost : IAsyncDisposable
         try
         {
             MainWindowViewModel previous = viewModel;
-            closeSessionWindows();
-            await cardPtt.DisposeAsync();
-            previous.ActivityCallHistoryChanging -= activityHistoryChanging;
+            CardPttController previousCardPtt = cardPtt;
+            CardPttController replacementCardPtt = CreateCardPtt(replacement);
             replacement.ActivityCallHistoryChanging += activityHistoryChanging;
+            try
+            {
+                await replacement.StartKeyboardPttAsync();
+                closeSessionWindows();
+                setDataContext(replacement);
+            }
+            catch
+            {
+                replacement.ActivityCallHistoryChanging -= activityHistoryChanging;
+                await replacementCardPtt.DisposeAsync();
+                await replacement.DisposeAsync();
+                throw;
+            }
+
+            // Ownership changes only after the replacement is ready and the
+            // window has accepted it. Cleanup failures from the outgoing
+            // session cannot leave the host pointing at a half-installed one.
             viewModel = replacement;
-            cardPtt = CreateCardPtt(replacement);
-            setDataContext(replacement);
-            await previous.DisposeAsync();
-            await replacement.StartKeyboardPttAsync();
+            cardPtt = replacementCardPtt;
+            previous.ActivityCallHistoryChanging -= activityHistoryChanging;
+
+            var cleanup = new AsyncCleanup();
+            await cleanup.RunTaskAsync(() => previousCardPtt.DisposeAsync().AsTask());
+            await cleanup.RunTaskAsync(() => previous.DisposeAsync().AsTask());
+            cleanup.ThrowIfFailed();
         }
         finally
         {

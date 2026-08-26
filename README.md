@@ -51,51 +51,53 @@ multi-system activity understandable.
 
 ## What’s new in DVM Console NEO
 
-### 0.4.1 — Reliability and toolbar update
+### 0.4.2 — Secure voice and live reconfiguration update
 
-This patch release hardens audio-setting changes, receive-episode teardown, and
-session startup while refining the responsive main toolbar introduced in 0.4.0.
+This patch release corrects selectable-encryption receive behavior and secure
+voice signaling while making patch membership and session reloads immediately
+reflect the operator's newest saved configuration.
 
-- The toolbar gap collapses before content, clocks remain beside the audio
-  controls, and scale-aware overflow moves alert shortcuts into **MORE** before
-  **TONES** and clocks.
-- Failed audio-route changes restore the previous devices, processing options,
-  and Keep Mic Warm state instead of saving a partial configuration.
-- Logical receive episodes drain every associated physical stream before live
-  playback and TAR recording targets are completed.
-- Session startup, recording finalization, async command faults, and native or
-  serial resource ownership now have explicit rollback and cleanup paths.
-- A purpose-specific developer codeplug validator replaces the ambiguous
-  console-tool project name; packaged operator behavior is unchanged.
+- Selectable DMR, P25, and NXDN channels use each call's on-air privacy
+  metadata. **CLEAR** admits clear traffic, while **SECURE** is a secure-only
+  receive state and does not admit clear calls.
+- DMR packet handling separates startup privacy, voice, embedded link control,
+  late-entry MI, burst-F signaling, and reverse-channel data; transmit tails
+  retain DMR, P25, and NXDN cadence.
+- NXDN voice remains continuous while `VCALL` and successor-IV metadata rotate
+  through SACCH. The release notes document host-side limits that still affect
+  secure NXDN startup and DMR late entry on RF.
+- Patch-group edits discard superseded membership work, preventing removed
+  members from reappearing or requiring an application restart.
 
-[Read the 0.4.1 release notes →](docs/releases/v0.4.1.md)
+[Read the 0.4.2 release notes →](docs/releases/v0.4.2.md)
 
 ### Prior recent improvements
 
-Recent 0.4.0, 0.3.8, 0.3.7, and 0.3.6 updates also introduced:
+Recent 0.4.1, 0.4.0, 0.3.8, and 0.3.7 updates also introduced:
 
+- **0.4.1 — Reliability and toolbar update:** made toolbar overflow
+  scale-aware, preserved scrolled History positions, made audio-route changes
+  transactional, and hardened receive-episode and session teardown.
 - **0.4.0 — Runtime and workflow update:** added searchable Settings,
   responsive toolbar overflow, optional Engineering Health, mode-correct
   DMR/P25 call boundaries, cross-protocol patch repair, and revised runtime
   ownership and scheduling.
 - **0.3.8 — Receive continuity and audio-path optimization:** drained ended receive streams before cleanup, paced TAR and web-stream PCM, retired failed shared outputs, and standardized macOS microphone processing.
 - **0.3.7 — Patch routing and Apple audio reliability:** made one-way patch direction explicit, prevented duplicate patch PCM, compacted group editing, isolated patch teardown, and bounded audio recovery and Quit.
-- **0.3.6 — Windows audio and recording-history reliability:** replaced the legacy Windows WinMM backend with shared, event-driven WASAPI; added optional endpoint-provided communications processing; and kept completed TAR recordings available after their live History rows expire.
 
-[Read the 0.4.0 release notes →](docs/releases/v0.4.0.md) · [Read the 0.3.8 release notes →](docs/releases/v0.3.8.md) · [Read the 0.3.7 release notes →](docs/releases/v0.3.7.md) · [Read the 0.3.6 release notes →](docs/releases/v0.3.6.md)
+[Read the 0.4.1 release notes →](docs/releases/v0.4.1.md) · [Read the 0.4.0 release notes →](docs/releases/v0.4.0.md) · [Read the 0.3.8 release notes →](docs/releases/v0.3.8.md) · [Read the 0.3.7 release notes →](docs/releases/v0.3.7.md)
 
 ## Download DVM Console NEO
 
 Published release packages are self-contained. Download the package for the
 destination computer and extract the entire archive before starting DVM Console
-NEO. Version 0.4.1 packages use the filenames below. Until that version appears
-on the Releases page, use the assets attached to the current published release.
+NEO. Version 0.4.2 packages use the filenames below.
 
 | Platform | Package | Requirements |
 | --- | --- | --- |
-| Apple Silicon Mac | `dvmconsole-0.4.1-osx-arm64.zip` | macOS 14 or newer |
-| Intel Mac | `dvmconsole-0.4.1-osx-x64.zip` | macOS 14 or newer |
-| Windows PC | `dvmconsole-0.4.1-win-x64.zip` | Windows x64 |
+| Apple Silicon Mac | `dvmconsole-0.4.2-osx-arm64.zip` | macOS 14 or newer |
+| Intel Mac | `dvmconsole-0.4.2-osx-x64.zip` | macOS 14 or newer |
+| Windows PC | `dvmconsole-0.4.2-win-x64.zip` | Windows x64 |
 
 **[Download the latest release →](https://github.com/RdWing/dvmconsole/releases/latest)**
 

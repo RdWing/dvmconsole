@@ -66,6 +66,7 @@ public sealed class P25TxAudioSession : IDisposable
     private int pendingPcmSamples;
     private ushort packetSequence;
     private bool sendLdu1 = true;
+    private List<P25OutboundPacket>? deferredPackets;
     private bool disposed;
 
     public P25TxAudioSession(
@@ -135,7 +136,7 @@ public sealed class P25TxAudioSession : IDisposable
 
     // Pads the final PCM frame and LDU with encoded silence so releasing PTT
     // does not discard the tail of a call.
-    internal int CompleteLdu()
+    private int CompleteLdu()
     {
         ObjectDisposedException.ThrowIf(disposed, this);
         int packetsBefore = LdusSent;
@@ -149,6 +150,25 @@ public sealed class P25TxAudioSession : IDisposable
             Process(new short[VocoderFrameSizes.PcmSamplesPerFrame]);
 
         return LdusSent - packetsBefore;
+    }
+
+    internal IReadOnlyList<P25OutboundPacket> PrepareLduCompletion()
+    {
+        ObjectDisposedException.ThrowIf(disposed, this);
+        if (deferredPackets is not null)
+            throw new InvalidOperationException("P25 LDU completion is already being prepared.");
+
+        var packets = new List<P25OutboundPacket>();
+        deferredPackets = packets;
+        try
+        {
+            CompleteLdu();
+            return packets;
+        }
+        finally
+        {
+            deferredPackets = null;
+        }
     }
 
     public void Dispose()
@@ -220,7 +240,7 @@ public sealed class P25TxAudioSession : IDisposable
                     metadata);
         }
 
-        send(payload, packetSequence, streamId);
+        EmitPacket(payload, packetSequence);
         pendingImbeBytes = 0;
         LdusSent++;
         packetSequence = packetSequence >= P25DfsiFrameCodec.RtpCallEndSequence - 1
@@ -228,4 +248,14 @@ public sealed class P25TxAudioSession : IDisposable
             : (ushort)(packetSequence + 1);
         sendLdu1 = !sendLdu1;
     }
+
+    private void EmitPacket(byte[] payload, ushort sequence)
+    {
+        if (deferredPackets is not null)
+            deferredPackets.Add(new P25OutboundPacket(payload, sequence, streamId));
+        else
+            send(payload, sequence, streamId);
+    }
 }
+
+internal readonly record struct P25OutboundPacket(byte[] Payload, ushort Sequence, uint StreamId);

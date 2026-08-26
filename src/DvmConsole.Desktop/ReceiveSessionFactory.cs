@@ -83,7 +83,8 @@ internal sealed class ReceiveSessionFactory
                 playback,
                 p25KeyResolver,
                 dmrKeyResolver,
-                nxdnKeyResolver);
+                nxdnKeyResolver,
+                channel);
             session.SetGain(gain);
             session.SetBalance(balance);
             vocoderSession = null;

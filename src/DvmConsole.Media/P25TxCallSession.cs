@@ -8,6 +8,7 @@ namespace DvmConsole.Media;
 // uses the same HDU/LDU2 metadata and key-stream boundary as the legacy host.
 public sealed class P25TxCallSession : IDisposable
 {
+    private static readonly TimeSpan LduInterval = TimeSpan.FromMilliseconds(180);
     private readonly uint sourceId;
     private readonly uint destinationId;
     private readonly uint streamId;
@@ -81,20 +82,35 @@ public sealed class P25TxCallSession : IDisposable
         return audio.ProcessSingleTone(frequencyHz);
     }
 
-    public void End()
+    public ValueTask EndAsync(CancellationToken cancellationToken = default)
+        => EndAsync(WaitForNextLduAsync, cancellationToken);
+
+    internal async ValueTask EndAsync(
+        Func<CancellationToken, ValueTask> waitForNextLdu,
+        CancellationToken cancellationToken)
     {
         ObjectDisposedException.ThrowIf(disposed, this);
+        ArgumentNullException.ThrowIfNull(waitForNextLdu);
         if (!started)
             throw new InvalidOperationException("The P25 call has not started.");
         if (ended)
             return;
 
-        audio.CompleteLdu();
+        IReadOnlyList<P25OutboundPacket> completion = audio.PrepareLduCompletion();
+        foreach (P25OutboundPacket packet in completion)
+        {
+            await waitForNextLdu(cancellationToken).ConfigureAwait(false);
+            send(packet.Payload, packet.Sequence, packet.StreamId);
+        }
+        await waitForNextLdu(cancellationToken).ConfigureAwait(false);
         byte[] terminator = P25DfsiFrameCodec.CreateTduPayload(sourceId, destinationId, grantDemand: false);
         send(terminator, P25DfsiFrameCodec.RtpCallEndSequence, streamId);
 
         ended = true;
     }
+
+    private static async ValueTask WaitForNextLduAsync(CancellationToken cancellationToken)
+        => await Task.Delay(LduInterval, cancellationToken).ConfigureAwait(false);
 
     public void Dispose()
     {

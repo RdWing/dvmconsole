@@ -58,6 +58,7 @@ public sealed class DmrVoicePacketCodecTests
         var privacy = new PrivacyLC
         {
             AlgId = DmrPrivacyAlgorithms.Arc4,
+            FID = DmrPrivacyAlgorithms.FeatureId,
             KId = 0x55,
             Group = true,
             DstId = 100
@@ -73,6 +74,27 @@ public sealed class DmrVoicePacketCodecTests
         Assert.Equal(DmrPrivacyAlgorithms.Arc4, metadata.AlgorithmId);
         Assert.Equal((byte)0x55, metadata.KeyId);
         Assert.Equal(new byte[4], metadata.MessageIndicator);
+    }
+
+    [Fact]
+    public void RejectsPrivacyIndicatorFromAnotherFeatureSet()
+    {
+        byte[] frame = new byte[DmrVoicePacketCodec.FrameBytes];
+        var privacy = new PrivacyLC
+        {
+            AlgId = DmrPrivacyAlgorithms.Arc4,
+            FID = 0x20,
+            KId = 0x55,
+            Group = true,
+            DstId = 100
+        };
+        FullLC.EncodePI(privacy, ref frame);
+        new SlotType { ColorCode = 0, DataType = (byte)DMRDataType.VOICE_PI_HEADER }
+            .GetData(ref frame);
+        byte[] packet = new byte[DmrVoicePacketCodec.PacketBytes];
+        frame.CopyTo(packet, DmrVoicePacketCodec.HeaderBytes);
+
+        Assert.False(DmrVoicePacketCodec.TryExtractEncryptionMetadata(packet, out _));
     }
 
     [Fact]
@@ -130,6 +152,64 @@ public sealed class DmrVoicePacketCodecTests
             frameSequence: 0);
 
         Assert.Equal(expectedHeader, packet[15]);
+    }
+
+    [Fact]
+    public void VoiceLinkControlHeaderIsNotClassifiedAsPrivacyIndicator()
+    {
+        byte[] packet = DmrVoicePacketCodec.CreateVoiceLcHeaderPacket(
+            sourceId: 1,
+            destinationId: 2,
+            slot: 0,
+            frameSequence: 0,
+            encrypted: true);
+
+        Assert.False(DmrVoicePacketCodec.IsPrivacyIndicator(packet));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void VoiceLinkControlHeaderReportsEncryptionState(bool encrypted)
+    {
+        byte[] packet = DmrVoicePacketCodec.CreateVoiceLcHeaderPacket(
+            sourceId: 1,
+            destinationId: 2,
+            slot: 0,
+            frameSequence: 0,
+            encrypted);
+
+        Assert.True(DmrVoicePacketCodec.TryExtractVoiceEncryptionState(packet, out bool decoded));
+        Assert.Equal(encrypted, decoded);
+        LC linkControl = Assert.IsType<LC>(FullLC.Decode(
+            packet[DmrVoicePacketCodec.HeaderBytes..],
+            DMRDataType.VOICE_LC_HEADER));
+        Assert.Equal(
+            encrypted ? DmrPrivacyAlgorithms.FeatureId : (byte)0,
+            linkControl.FID);
+        Assert.Equal(encrypted ? 0x40 : 0, linkControl.GetBytes()[2] & 0x40);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void TerminatorPreservesEncryptionServiceOption(bool encrypted)
+    {
+        byte[] packet = DmrVoicePacketCodec.CreateTerminatorPacket(
+            sourceId: 1,
+            destinationId: 2,
+            slot: 0,
+            frameSequence: 7,
+            encrypted);
+
+        LC linkControl = Assert.IsType<LC>(FullLC.Decode(
+            packet[DmrVoicePacketCodec.HeaderBytes..],
+            DMRDataType.TERMINATOR_WITH_LC));
+        Assert.Equal(
+            encrypted ? DmrPrivacyAlgorithms.FeatureId : (byte)0,
+            linkControl.FID);
+        Assert.Equal(encrypted, linkControl.Encrypted);
+        Assert.Equal(encrypted ? 0x40 : 0, linkControl.GetBytes()[2] & 0x40);
     }
 
     [Fact]
@@ -273,6 +353,155 @@ public sealed class DmrVoicePacketCodecTests
         Assert.Equal(3, router.FramesDecoded);
         Assert.Equal(3, vocoder.ParameterDecodeCalls);
         Assert.Equal(0, vocoder.DecodeCalls);
+    }
+
+    [Fact]
+    public async Task RouterDoesNotLetVoiceHeaderConsumeFirstVoiceSequence()
+    {
+        var vocoder = new FakeVocoderSession();
+        var playback = new FakePlayback();
+        await using var router = new DmrRxAudioRouter(
+            new DmrTrafficSelector(100, 1),
+            vocoder,
+            playback);
+        byte[] header = DmrVoicePacketCodec.CreateVoiceLcHeaderPacket(
+            sourceId: 1,
+            destinationId: 100,
+            slot: 1,
+            frameSequence: 0,
+            encrypted: false);
+        byte[] voice = DmrVoicePacketCodec.CreateVoicePacket(
+            sourceId: 1,
+            destinationId: 100,
+            slot: 1,
+            voiceSync: true,
+            embeddedSequence: 0,
+            frameSequence: 0,
+            ambe: new byte[DmrVoicePacketCodec.AmbeBytes]);
+
+        Assert.Equal(0, await router.ProcessAsync(CreateTraffic(
+            100,
+            1,
+            "DATA_SYNC",
+            packetSequence: 10,
+            payload: header)));
+        Assert.Equal(0, await router.ProcessAsync(CreateTraffic(
+            100,
+            1,
+            "VOICE_SYNC",
+            packetSequence: 10,
+            payload: voice)));
+
+        Assert.Equal(0, router.LostPackets);
+        Assert.Equal(0, router.DuplicateOrLatePackets);
+        Assert.Equal(3, router.FramesDecoded);
+        Assert.Equal(3, vocoder.DecodeCalls);
+        Assert.Equal(3, playback.Frames.Count);
+    }
+
+    [Fact]
+    public async Task SelectableReceiverUsesLateEntryMetadataWhenStartupHeadersWereMissed()
+    {
+        byte[] key = Convert.FromHexString("0102030405");
+        var options = new DmrPrivacyOptions(
+            DmrPrivacyAlgorithms.Arc4,
+            keyId: 7,
+            key,
+            Convert.FromHexString("12345678"));
+        var packets = new List<byte[]>();
+        using (var transmitter = new DmrTxCallSession(
+            sourceId: 1,
+            destinationId: 100,
+            slot: 1,
+            streamId: 99,
+            vocoder: new FakeVocoderSession(),
+            send: (payload, _, _) => packets.Add(payload.ToArray()),
+            privacy: options))
+        {
+            transmitter.Start();
+            transmitter.Process(new short[VocoderFrameSizes.PcmSamplesPerFrame * 36]);
+        }
+        byte[][] voicePackets = packets.Skip(2).ToArray();
+        Assert.Equal(12, voicePackets.Length);
+
+        using var keys = new DmrKeyRing("System A", new KeyContainer
+        {
+            Keys =
+            [
+                new KeyEntry
+                {
+                    Protocol = "dmr",
+                    AlgId = DmrPrivacyAlgorithms.Arc4,
+                    KeyId = 7,
+                    Key = Convert.ToHexString(key)
+                }
+            ]
+        });
+        var receiverVocoder = new FakeVocoderSession();
+        var playback = new FakePlayback();
+        await using var receiver = new DmrRxAudioSession(
+            receiverVocoder,
+            playback,
+            keys,
+            "System A",
+            privacyMayVary: true);
+
+        for (int index = 0; index < voicePackets.Length; index++)
+        {
+            string frameType = index % 6 == 0 ? "VOICE_SYNC" : "VOICE";
+            await receiver.ProcessAsync(CreateTraffic(
+                100,
+                1,
+                frameType,
+                packetSequence: (ushort)index,
+                payload: voicePackets[index]));
+        }
+
+        Assert.Equal(18, receiver.FramesDecoded);
+        Assert.Equal(18, receiverVocoder.ParameterDecodeCalls);
+        Assert.Equal(0, receiverVocoder.DecodeCalls);
+        Assert.Equal(18, playback.Frames.Count);
+    }
+
+    [Fact]
+    public async Task SelectableReceiverResolvesClearLateEntryWithReverseChannelSignaling()
+    {
+        var vocoder = new FakeVocoderSession();
+        var playback = new FakePlayback();
+        await using var receiver = new DmrRxAudioSession(
+            vocoder,
+            playback,
+            privacyMayVary: true);
+
+        for (int index = 0; index < 12; index++)
+        {
+            byte voiceBurst = (byte)(index % 6);
+            DmrBurstFSignaling? signaling = voiceBurst == 5
+                ? new DmrBurstFSignaling(IsReverseChannel: true, Payload: 0x0A5)
+                : null;
+            byte[] packet = DmrVoicePacketCodec.CreateVoicePacket(
+                sourceId: 1,
+                destinationId: 100,
+                slot: 1,
+                voiceSync: voiceBurst == 0,
+                embeddedSequence: voiceBurst,
+                frameSequence: (byte)index,
+                ambe: new byte[DmrVoicePacketCodec.AmbeBytes],
+                burstFSignaling: signaling);
+            string frameType = voiceBurst == 0 ? "VOICE_SYNC" : "VOICE";
+
+            await receiver.ProcessAsync(CreateTraffic(
+                100,
+                1,
+                frameType,
+                packetSequence: (ushort)index,
+                payload: packet));
+        }
+
+        Assert.Equal(21, receiver.FramesDecoded);
+        Assert.Equal(21, vocoder.DecodeCalls);
+        Assert.Equal(0, vocoder.ParameterDecodeCalls);
+        Assert.Equal(21, playback.Frames.Count);
     }
 
     [Fact]

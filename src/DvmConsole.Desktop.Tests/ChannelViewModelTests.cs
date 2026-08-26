@@ -802,6 +802,32 @@ public sealed class ChannelViewModelTests
     }
 
     [Fact]
+    public void SelectableClearChannelCanReceiveWithoutAConfiguredSecureKey()
+    {
+        var channel = new ChannelViewModel(new ChannelConfiguration
+        {
+            Name = "Selectable P25",
+            System = "System 1",
+            Tgid = "101",
+            Mode = "p25",
+            Algo = "aes",
+            KeyId = "0x50",
+            SelectableEncryption = true
+        });
+
+        Assert.True(channel.IsTransmitEncrypted);
+        Assert.True(channel.CanToggleEncryption);
+        Assert.False(channel.CanListen);
+
+        channel.EncryptionCommand.Execute(null);
+
+        Assert.False(channel.IsTransmitEncrypted);
+        Assert.True(channel.CanListen);
+        Assert.True(channel.CanTransmit);
+        Assert.False(channel.CanToggleEncryption);
+    }
+
+    [Fact]
     public void RestoredSelectableSecureStateIsPresentedWhenKmmKeyArrives()
     {
         var keyRing = new P25KeyRing();
@@ -819,7 +845,7 @@ public sealed class ChannelViewModelTests
         var changedProperties = new List<string?>();
         channel.PropertyChanged += (_, args) => changedProperties.Add(args.PropertyName);
 
-        Assert.False(channel.CanToggleEncryption);
+        Assert.True(channel.CanToggleEncryption);
         Assert.True(channel.IsTransmitEncrypted);
 
         keyRing.AddOrReplaceFromFne(

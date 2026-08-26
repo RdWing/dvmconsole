@@ -8,7 +8,7 @@ namespace DvmConsole.Media.Tests;
 public sealed class PatchTransmitSessionTests
 {
     [Fact]
-    public void SelectsAnalogPatchLifecycleWithoutAocoder()
+    public async Task SelectsAnalogPatchLifecycleWithoutAocoder()
     {
         var packets = new List<(byte[] Payload, ushort Sequence, uint Stream)>();
         using var session = new PatchTransmitSession(
@@ -20,7 +20,7 @@ public sealed class PatchTransmitSessionTests
 
         session.Start();
         Assert.Equal(1, session.Process(new short[160]));
-        session.End();
+        await session.EndAsync();
 
         Assert.Equal(2, packets.Count);
         Assert.Equal(AnalogAudioFrameType.VoiceStart, (AnalogAudioFrameType)packets[0].Payload[15]);
@@ -28,7 +28,7 @@ public sealed class PatchTransmitSessionTests
     }
 
     [Fact]
-    public void SelectsDmrAndNxdnPatchLifecycles()
+    public async Task SelectsDmrAndNxdnPatchLifecycles()
     {
         var packets = new List<byte[]>();
         using var session = new PatchTransmitSession(
@@ -40,7 +40,7 @@ public sealed class PatchTransmitSessionTests
 
         session.Start();
         Assert.Equal(1, session.Process(new short[480]));
-        session.End();
+        await session.EndAsync();
 
         Assert.Equal(8, packets.Count);
 
@@ -53,7 +53,7 @@ public sealed class PatchTransmitSessionTests
             (payload, _, _) => packets.Add(payload.ToArray()));
         nxdn.Start();
         Assert.Equal(1, nxdn.Process(new short[640]));
-        nxdn.End();
+        await nxdn.EndAsync();
 
         Assert.Equal(3, packets.Count);
         Assert.Equal(NxdnVoicePacketCodec.VoiceCallMessageType, packets[0][4]);

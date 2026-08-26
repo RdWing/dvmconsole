@@ -37,6 +37,29 @@ public sealed class DmrPrivacyTests
     }
 
     [Fact]
+    public void Arc4MatchesDmraDiscardAndMessageIndicatorCycleVectors()
+    {
+        using var privacy = new DmrPrivacyProcessor(
+            new FakeHalfRateSession(),
+            new DmrPrivacyOptions(
+                DmrPrivacyAlgorithms.Arc4,
+                keyId: 1,
+                Convert.FromHexString("0102030405"),
+                Convert.FromHexString("12345678")));
+
+        byte[] parameters = new byte[VocoderFrameSizes.HalfRateParameterBytes];
+        privacy.ProcessParameters(parameters);
+        Assert.Equal(Convert.FromHexString("1D3F3689D45680"), parameters);
+
+        for (int codeword = 1; codeword < 18; codeword++)
+            privacy.ProcessParameters(new byte[VocoderFrameSizes.HalfRateParameterBytes]);
+
+        parameters.AsSpan().Clear();
+        privacy.ProcessParameters(parameters);
+        Assert.Equal(Convert.FromHexString("0858E632BF0D80"), parameters);
+    }
+
+    [Fact]
     public void PrivacyIndicatorRoundTripsAllMetadata()
     {
         var options = new DmrPrivacyOptions(
@@ -91,6 +114,22 @@ public sealed class DmrPrivacyTests
     }
 
     [Fact]
+    public void AesNextMessageIndicatorMatchesReferenceLfsrVector()
+    {
+        byte[] initialMessageIndicator = Convert.FromHexString("12345678");
+        using var privacy = new DmrPrivacyProcessor(
+            new FakeHalfRateSession(),
+            new DmrPrivacyOptions(
+                DmrPrivacyAlgorithms.Aes256,
+                keyId: 0x45,
+                new byte[32],
+                initialMessageIndicator));
+
+        Assert.Equal(Convert.FromHexString("B451463A"), privacy.GetNextMessageIndicator());
+        Assert.Equal(initialMessageIndicator, privacy.MessageIndicator.ToArray());
+    }
+
+    [Fact]
     public void EncryptedCallEmitsVoiceAndPrivacyHeadersBeforeVoice()
     {
         var packets = new List<byte[]>();
@@ -121,7 +160,7 @@ public sealed class DmrPrivacyTests
     }
 
     [Fact]
-    public void EncryptedCallUpdatesPrivacyHeaderBeforeSeventhVoicePacket()
+    public void EncryptedCallKeepsVoiceBurstsContiguousAfterStartupPrivacyHeader()
     {
         var packets = new List<byte[]>();
         var options = new DmrPrivacyOptions(
@@ -141,10 +180,153 @@ public sealed class DmrPrivacyTests
         call.Start();
         call.Process(new short[VocoderFrameSizes.PcmSamplesPerFrame * 21]);
 
-        Assert.Equal(10, packets.Count);
-        Assert.True(DmrVoicePacketCodec.TryExtractEncryptionMetadata(packets[8], out var updated));
-        Assert.NotEqual(options.MessageIndicator.ToArray(), updated.MessageIndicator);
-        Assert.Equal((byte)0x10, packets[9][15]);
+        Assert.Equal(9, packets.Count);
+        Assert.Single(packets, packet => DmrVoicePacketCodec.IsPrivacyIndicator(packet));
+        Assert.All(packets.Skip(2), packet => Assert.False(DmrVoicePacketCodec.IsPrivacyIndicator(packet)));
+        Assert.Equal((byte)0x10, packets[8][15]);
+    }
+
+    [Fact]
+    public void EncryptedSuperframeCarriesLateEntryMiAndBurstFIdentifiers()
+    {
+        byte[] initialMessageIndicator = Convert.FromHexString("12345678");
+        var packets = new List<byte[]>();
+        var options = new DmrPrivacyOptions(
+            DmrPrivacyAlgorithms.Aes256,
+            keyId: 0x45,
+            new byte[32],
+            initialMessageIndicator);
+        using var call = new DmrTxCallSession(
+            sourceId: 1,
+            destinationId: 2,
+            slot: 0,
+            streamId: 3,
+            vocoder: new FakeHalfRateSession(),
+            send: (payload, _, _) => packets.Add(payload.ToArray()),
+            privacy: options);
+
+        call.Start();
+        call.Process(new short[VocoderFrameSizes.PcmSamplesPerFrame * 18]);
+
+        byte[][] voicePackets = packets.Skip(2).ToArray();
+        Assert.Equal(6, voicePackets.Length);
+        var collector = new DmrLateEntryMessageIndicator();
+        byte[] decodedMessageIndicator = [];
+        for (byte burst = 0; burst < voicePackets.Length; burst++)
+        {
+            bool complete = collector.AddVoiceBurst(
+                burst,
+                DmrVoicePacketCodec.ExtractAmbe(voicePackets[burst]),
+                out decodedMessageIndicator);
+            Assert.Equal(burst == 5, complete);
+        }
+        Assert.Equal(Convert.FromHexString("B451463A"), decodedMessageIndicator);
+
+        Assert.True(DmrVoicePacketCodec.TryExtractBurstFSignaling(voicePackets[^1], out var signaling));
+        Assert.False(signaling.IsReverseChannel);
+        Assert.Equal(DmrPrivacyAlgorithms.Aes256, signaling.AlgorithmId);
+        Assert.Equal((byte)0x45, signaling.KeyId);
+    }
+
+    [Fact]
+    public void EncryptedCallMarksEmbeddedGroupLinkControlWithAssociationFeatureSet()
+    {
+        var packets = new List<byte[]>();
+        var options = new DmrPrivacyOptions(
+            DmrPrivacyAlgorithms.Aes256,
+            keyId: 0x45,
+            new byte[32],
+            Convert.FromHexString("12345678"));
+        using var call = new DmrTxCallSession(
+            sourceId: 1,
+            destinationId: 2,
+            slot: 0,
+            streamId: 3,
+            vocoder: new FakeHalfRateSession(),
+            send: (payload, _, _) => packets.Add(payload.ToArray()),
+            privacy: options);
+
+        call.Start();
+        call.Process(new short[VocoderFrameSizes.PcmSamplesPerFrame * 18]);
+
+        var embedded = new fnecore.DMR.EmbeddedData();
+        foreach (byte[] packet in packets.Skip(3).Take(4))
+        {
+            byte[] frame = packet[DmrVoicePacketCodec.HeaderBytes..^2];
+            var header = new fnecore.DMR.EMB();
+            header.Decode(frame);
+            embedded.AddData(ref frame, header.LCSS);
+        }
+
+        fnecore.DMR.LC linkControl = Assert.IsType<fnecore.DMR.LC>(embedded.GetLC());
+        Assert.Equal(DmrPrivacyAlgorithms.FeatureId, linkControl.FID);
+        Assert.True(linkControl.Encrypted);
+        Assert.Equal(0x40, linkControl.GetBytes()[2] & 0x40);
+    }
+
+    [Fact]
+    public void LateEntryMiMatchesIndependentGolayReferenceVector()
+    {
+        byte[,] expectedFragments =
+        {
+            { 0x1, 0x4, 0x7 },
+            { 0x2, 0x5, 0x8 },
+            { 0x3, 0x6, 0x9 },
+            { 0x0, 0xB, 0x8 },
+            { 0xA, 0x6, 0x1 },
+            { 0xC, 0xC, 0x0 }
+        };
+        var encoder = new DmrLateEntryMessageIndicator(Convert.FromHexString("12345678"));
+
+        for (int burst = 0; burst < 6; burst++)
+        {
+            for (int codeword = 0; codeword < 3; codeword++)
+            {
+                byte[] encoded = new byte[DmrVoicePacketCodec.CodewordBytes];
+                encoder.ApplyFragment(encoded, burst, codeword);
+                AssertC3PrefixWireEncoding(expectedFragments[burst, codeword], encoded);
+            }
+        }
+    }
+
+    [Fact]
+    public void BurstFCodecKeepsReverseChannelDistinctFromSingleBurst()
+    {
+        var reverseChannel = new DmrBurstFSignaling(IsReverseChannel: true, Payload: 0x0A5);
+        byte[] packet = DmrVoicePacketCodec.CreateVoicePacket(
+            sourceId: 1,
+            destinationId: 2,
+            slot: 0,
+            voiceSync: false,
+            embeddedSequence: 5,
+            frameSequence: 5,
+            ambe: new byte[DmrVoicePacketCodec.AmbeBytes],
+            burstFSignaling: reverseChannel);
+
+        Assert.True(DmrVoicePacketCodec.TryExtractBurstFSignaling(packet, out var decoded));
+        Assert.True(decoded.IsReverseChannel);
+        Assert.Equal(reverseChannel.Payload, decoded.Payload);
+    }
+
+    [Fact]
+    public void BurstFEncryptionIdentifiersMatchEtsiInterleaveVector()
+    {
+        DmrBurstFSignaling identifiers = DmrBurstFSignaling.EncryptionIdentifiers(
+            DmrPrivacyAlgorithms.Aes256,
+            keyId: 0x45);
+        byte[] packet = DmrVoicePacketCodec.CreateVoicePacket(
+            sourceId: 1,
+            destinationId: 2,
+            slot: 0,
+            voiceSync: false,
+            embeddedSequence: 5,
+            frameSequence: 5,
+            ambe: new byte[DmrVoicePacketCodec.AmbeBytes],
+            burstFSignaling: identifiers);
+
+        Assert.Equal(
+            Convert.FromHexString("6437983B"),
+            ReadBurstFMiddleBytes(packet));
     }
 
     private sealed class FakeHalfRateSession : IHalfRateVocoderSession
@@ -188,5 +370,30 @@ public sealed class DmrPrivacyTests
         public void Dispose()
         {
         }
+    }
+
+    private static void AssertC3PrefixWireEncoding(byte fragment, byte[] codeword)
+    {
+        byte[] expectedByte7ByLowBits = [0x00, 0x10, 0x01, 0x11];
+        byte[] expectedByte8ByHighBits = [0x00, 0x10, 0x01, 0x11];
+
+        Assert.All(codeword[..7], value => Assert.Equal((byte)0, value));
+        Assert.Equal(expectedByte7ByLowBits[fragment & 0x03], codeword[7]);
+        Assert.Equal(expectedByte8ByHighBits[fragment >> 2], codeword[8]);
+    }
+
+    private static byte[] ReadBurstFMiddleBytes(ReadOnlySpan<byte> packet)
+    {
+        ReadOnlySpan<byte> frame = packet.Slice(
+            DmrVoicePacketCodec.HeaderBytes,
+            DmrVoicePacketCodec.FrameBytes);
+        byte[] result = new byte[4];
+        for (int bit = 0; bit < 32; bit++)
+        {
+            int frameBit = 116 + bit;
+            int value = frame[frameBit / 8] >> (7 - frameBit % 8) & 1;
+            result[bit / 8] |= (byte)(value << (7 - bit % 8));
+        }
+        return result;
     }
 }

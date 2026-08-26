@@ -10,7 +10,7 @@ namespace DvmConsole.Desktop;
 // remains independently responsible for operator playback and recording.
 public sealed class PatchSourceDecodeCoordinator : IAsyncDisposable
 {
-    private readonly SemaphoreSlim gate = new(1, 1);
+    private readonly SemaphoreSlim configurationGate = new(1, 1);
     private readonly IP25KeyResolver? p25KeyResolver;
     private readonly IDmrKeyResolver? dmrKeyResolver;
     private readonly INxdnKeyResolver? nxdnKeyResolver;
@@ -19,6 +19,8 @@ public sealed class PatchSourceDecodeCoordinator : IAsyncDisposable
     private readonly object sync = new();
     private readonly Dictionary<ChannelViewModel, SessionState> sessions = [];
     private IVocoderBackend? vocoderBackend;
+    private Task? disposeTask;
+    private long requestedConfigurationRevision;
     private bool disposed;
 
     public PatchSourceDecodeCoordinator(
@@ -92,9 +94,14 @@ public sealed class PatchSourceDecodeCoordinator : IAsyncDisposable
                 (channel.Definition.Mode is "dmr" or "p25" or "nxdn" or "analog"))
             .Distinct()
             .ToArray();
-        await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        long revision = Interlocked.Increment(ref requestedConfigurationRevision);
+        await configurationGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
+            ObjectDisposedException.ThrowIf(disposed, this);
+            if (revision != Volatile.Read(ref requestedConfigurationRevision))
+                return;
+
             HashSet<ChannelViewModel> requestedSet = requested.ToHashSet();
             ChannelViewModel[] removedChannels;
             lock (sync)
@@ -110,7 +117,7 @@ public sealed class PatchSourceDecodeCoordinator : IAsyncDisposable
                 lock (sync)
                     sessions.Remove(channel, out state);
                 if (state is not null)
-                    await state.Session.DisposeAsync().ConfigureAwait(false);
+                    await state.DisposeAsync().ConfigureAwait(false);
             }
 
             foreach (ChannelViewModel channel in requested)
@@ -152,7 +159,8 @@ public sealed class PatchSourceDecodeCoordinator : IAsyncDisposable
                             }),
                         p25KeyResolver,
                         dmrKeyResolver,
-                        nxdnKeyResolver);
+                        nxdnKeyResolver,
+                        channel);
                     createdVocoderSession = null;
                     lock (sync)
                         sessions.Add(channel, new SessionState(session, sampleContext));
@@ -177,7 +185,7 @@ public sealed class PatchSourceDecodeCoordinator : IAsyncDisposable
         }
         finally
         {
-            gate.Release();
+            configurationGate.Release();
         }
     }
 
@@ -190,79 +198,54 @@ public sealed class PatchSourceDecodeCoordinator : IAsyncDisposable
         ArgumentNullException.ThrowIfNull(traffic);
         ObjectDisposedException.ThrowIf(disposed, this);
 
-        await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
-        try
-        {
-            SessionState? state;
-            lock (sync)
-                sessions.TryGetValue(channel, out state);
-            if (state is null)
-                return 0;
+        SessionState? state;
+        lock (sync)
+            sessions.TryGetValue(channel, out state);
+        if (state is null)
+            return 0;
 
-            bool terminator = ReceiveTrafficClassifier.IsTerminator(traffic);
-            if (!terminator &&
-                (ReceiveTrafficClassifier.CarriesVoicePayload(traffic) ||
-                 ReceiveTrafficClassifier.IsDefinitiveStart(traffic)))
-            {
-                lock (sync)
-                    state.ActiveStreamId = traffic.StreamId;
-            }
-            state.SampleContext.Set(traffic.StreamId, traffic.SourceId);
-            try
-            {
-                return await state.Session.ProcessAsync(traffic, cancellationToken).ConfigureAwait(false);
-            }
-            finally
-            {
-                state.SampleContext.Clear();
-                if (terminator)
-                {
-                    lock (sync)
-                    {
-                        if (state.ActiveStreamId == traffic.StreamId)
-                            state.ActiveStreamId = 0;
-                    }
-                }
-            }
-        }
-        finally
-        {
-            gate.Release();
-        }
+        return await state.ProcessAsync(traffic, cancellationToken).ConfigureAwait(false);
     }
 
     public async Task StopAllAsync(CancellationToken cancellationToken = default)
     {
         ObjectDisposedException.ThrowIf(disposed, this);
-        await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        long revision = Interlocked.Increment(ref requestedConfigurationRevision);
+        await configurationGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
+            ObjectDisposedException.ThrowIf(disposed, this);
+            if (revision != Volatile.Read(ref requestedConfigurationRevision))
+                return;
+
             await StopCoreAsync().ConfigureAwait(false);
         }
         finally
         {
-            gate.Release();
+            configurationGate.Release();
         }
     }
 
-    public async ValueTask DisposeAsync()
+    public ValueTask DisposeAsync()
     {
-        if (disposed)
-            return;
+        lock (sync)
+            return new ValueTask(disposeTask ??= DisposeCoreAsync());
+    }
 
-        await gate.WaitAsync().ConfigureAwait(false);
+    private async Task DisposeCoreAsync()
+    {
+        Interlocked.Increment(ref requestedConfigurationRevision);
+        await configurationGate.WaitAsync().ConfigureAwait(false);
         try
         {
-            if (!disposed)
-            {
-                await StopCoreAsync().ConfigureAwait(false);
-                disposed = true;
-            }
+            if (disposed)
+                return;
+            await StopCoreAsync().ConfigureAwait(false);
+            disposed = true;
         }
         finally
         {
-            gate.Release();
-            gate.Dispose();
+            configurationGate.Release();
         }
     }
 
@@ -276,14 +259,14 @@ public sealed class PatchSourceDecodeCoordinator : IAsyncDisposable
         }
 
         foreach (SessionState state in activeSessions)
-            await state.Session.DisposeAsync().ConfigureAwait(false);
+            await state.DisposeAsync().ConfigureAwait(false);
         vocoderBackend?.Dispose();
         vocoderBackend = null;
     }
 
     private bool CanDecode(ChannelViewModel channel)
     {
-        if (!channel.Definition.IsEncrypted)
+        if (!channel.RequireEncryptedTraffic)
             return true;
         return channel.Definition.Mode switch
         {
@@ -327,11 +310,82 @@ public sealed class PatchSourceDecodeCoordinator : IAsyncDisposable
 
     private sealed class SessionState(
         ChannelReceiveAudioSession session,
-        ReceiveSampleContext sampleContext)
+        ReceiveSampleContext sampleContext) : IAsyncDisposable
     {
+        private readonly SemaphoreSlim processingGate = new(1, 1);
+        private readonly object streamSync = new();
+        private bool disposed;
+        private uint activeStreamId;
+
         public ChannelReceiveAudioSession Session { get; } = session;
         public ReceiveSampleContext SampleContext { get; } = sampleContext;
-        public uint ActiveStreamId { get; set; }
+        public uint ActiveStreamId
+        {
+            get
+            {
+                lock (streamSync)
+                    return activeStreamId;
+            }
+        }
+
+        public async Task<int> ProcessAsync(
+            FneTrafficFrame traffic,
+            CancellationToken cancellationToken)
+        {
+            await processingGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+            try
+            {
+                if (disposed)
+                    return 0;
+
+                bool terminator = ReceiveTrafficClassifier.IsTerminator(traffic);
+                if (!terminator &&
+                    (ReceiveTrafficClassifier.CarriesVoicePayload(traffic) ||
+                     ReceiveTrafficClassifier.IsDefinitiveStart(traffic)))
+                {
+                    lock (streamSync)
+                        activeStreamId = traffic.StreamId;
+                }
+
+                SampleContext.Set(traffic.StreamId, traffic.SourceId);
+                try
+                {
+                    return await Session.ProcessAsync(traffic, cancellationToken).ConfigureAwait(false);
+                }
+                finally
+                {
+                    SampleContext.Clear();
+                    if (terminator)
+                    {
+                        lock (streamSync)
+                        {
+                            if (activeStreamId == traffic.StreamId)
+                                activeStreamId = 0;
+                        }
+                    }
+                }
+            }
+            finally
+            {
+                processingGate.Release();
+            }
+        }
+
+        public async ValueTask DisposeAsync()
+        {
+            await processingGate.WaitAsync().ConfigureAwait(false);
+            try
+            {
+                if (disposed)
+                    return;
+                await Session.DisposeAsync().ConfigureAwait(false);
+                disposed = true;
+            }
+            finally
+            {
+                processingGate.Release();
+            }
+        }
     }
 
     private sealed class ReceiveSampleContext

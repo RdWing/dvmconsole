@@ -25,7 +25,11 @@ public sealed class AnalogTransmitCaptureSession : ITransmitCaptureSession
             grantDemand: grantDemand);
         lifecycle = new TransmitCaptureLifecycle(
             capture,
-            new DelegateTransmitCall(call.Start, samples => call.Process(samples), call.End, call.Dispose),
+            new DelegateTransmitCall(
+                call.Start,
+                samples => call.Process(samples),
+                call.End,
+                call.Dispose),
             "The analog capture session has faulted.",
             exception => Faulted?.Invoke(this, exception));
     }

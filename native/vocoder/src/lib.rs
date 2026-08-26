@@ -778,6 +778,16 @@ mod tests {
     }
 
     #[test]
+    fn dmr_interleave_matches_reference_bit_schedule() {
+        let codeword = [0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef, 0x55];
+
+        assert_eq!(
+            dmr_codeword_to_vectors(&codeword),
+            [0x00ff03, 0x61f999, 0x04c5, 0x1557]
+        );
+    }
+
+    #[test]
     fn one_bit_error_is_corrected() {
         let parameters = [0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0x80];
         let mut codeword = natural_to_codeword(MODE_DMR, &parameters);

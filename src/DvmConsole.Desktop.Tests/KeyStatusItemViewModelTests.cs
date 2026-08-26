@@ -40,6 +40,7 @@ public sealed class KeyStatusItemViewModelTests
         Assert.Equal("0x84", item.AlgorithmIdText);
         Assert.Equal("0x0050", item.KeyIdText);
         Assert.Equal("Available · local file", item.StatusText);
+        Assert.False(item.HasConfigurationHint);
         Assert.DoesNotContain("001122", item.AlgorithmIdText + item.KeyIdText + item.StatusText);
 
         resolver.AddOrReplaceFromFne(
@@ -75,6 +76,68 @@ public sealed class KeyStatusItemViewModelTests
         });
 
         Assert.Equal("Key unavailable", KeyStatusItemViewModel.From(p25Channel, new P25KeyRing()).StatusText);
-        Assert.Equal("Key unavailable", KeyStatusItemViewModel.From(dmrChannel, null).StatusText);
+        KeyStatusItemViewModel missingDmr = KeyStatusItemViewModel.From(dmrChannel, null);
+        Assert.Equal("Key unavailable", missingDmr.StatusText);
+        Assert.Equal(
+            "Local entry: protocol: \"dmr\" · algId: 0x05 · key: 32 bytes",
+            missingDmr.ConfigurationHint);
+        Assert.True(missingDmr.HasConfigurationHint);
+    }
+
+    [Fact]
+    public void ResolvesDmrAesUsingTheProtocolSpecificAlgorithmId()
+    {
+        using var resolver = new DmrKeyRing("TYF", new KeyContainer
+        {
+            Keys =
+            [
+                new KeyEntry
+                {
+                    Protocol = "dmr",
+                    KeyId = 0x45,
+                    AlgId = DmrPrivacyAlgorithms.Aes256,
+                    Key = "000102030405060708090A0B0C0D0E0F101112131415161718191A1B1C1D1E1F"
+                }
+            ]
+        });
+        var channel = new ChannelViewModel(new ChannelConfiguration
+        {
+            Name = "11069 Sel AES DMR TS1",
+            System = "TYF",
+            Tgid = "11069",
+            Mode = "dmr",
+            Slot = 1,
+            Algo = "aes",
+            KeyId = "0x45"
+        }, dmrKeyResolver: resolver);
+
+        KeyStatusItemViewModel item = KeyStatusItemViewModel.From(
+            channel,
+            keyResolver: null,
+            dmrKeyResolver: resolver);
+
+        Assert.Equal("0x05", item.AlgorithmIdText);
+        Assert.Equal("0x45", item.KeyIdText);
+        Assert.Equal("Available · local file", item.StatusText);
+        Assert.False(item.HasConfigurationHint);
+    }
+
+    [Fact]
+    public void UnscopedAesEntryDoesNotSatisfyDmrChannel()
+    {
+        using var resolver = new DmrKeyRing("TYF", new KeyContainer
+        {
+            Keys =
+            [
+                new KeyEntry
+                {
+                    KeyId = 0x45,
+                    AlgId = DmrPrivacyAlgorithms.Aes256,
+                    Key = "000102030405060708090A0B0C0D0E0F101112131415161718191A1B1C1D1E1F"
+                }
+            ]
+        });
+
+        Assert.False(resolver.CanResolve("TYF", "aes", "0x45"));
     }
 }

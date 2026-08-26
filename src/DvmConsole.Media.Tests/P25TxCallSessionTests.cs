@@ -7,7 +7,7 @@ namespace DvmConsole.Media.Tests;
 public sealed class P25TxCallSessionTests
 {
     [Fact]
-    public void EmitsGrantDemandVoiceLdUsAndOneTerminatorTdu()
+    public async Task EmitsGrantDemandVoiceLdUsAndOneTerminatorTdu()
     {
         var packets = new List<(byte[] Payload, ushort Sequence, uint Stream)>();
         using var session = new P25TxCallSession(
@@ -25,7 +25,7 @@ public sealed class P25TxCallSessionTests
         Assert.Equal((byte)0x80, packets[0].Payload[14]);
 
         Assert.Equal(2, session.Process(new short[18 * 160]));
-        session.End();
+        await session.EndAsync(static _ => ValueTask.CompletedTask, CancellationToken.None);
 
         Assert.Equal(4, packets.Count);
         Assert.Equal((ushort)0, packets[1].Sequence);
@@ -54,7 +54,7 @@ public sealed class P25TxCallSessionTests
     }
 
     [Fact]
-    public void PadsPartialAudioIntoAnLduBeforeSendingTerminators()
+    public async Task PadsPartialAudioIntoAnLduBeforeSendingTerminators()
     {
         var packets = new List<(byte[] Payload, ushort Sequence)>();
         using var session = new P25TxCallSession(
@@ -67,7 +67,7 @@ public sealed class P25TxCallSessionTests
         session.Start();
         Assert.Equal(0, session.Process(new short[161]));
 
-        session.End();
+        await session.EndAsync(static _ => ValueTask.CompletedTask, CancellationToken.None);
 
         Assert.Equal(3, packets.Count);
         Assert.Equal(P25DfsiFrameCodec.Ldu1Duid, packets[1].Payload[22]);
@@ -76,6 +76,33 @@ public sealed class P25TxCallSessionTests
         Assert.Equal(P25DfsiFrameCodec.RtpCallEndSequence, packets[2].Sequence);
         Assert.Equal(9, session.CodewordsEncoded);
         Assert.Equal(1, session.LdusSent);
+    }
+
+    [Fact]
+    public async Task AsyncEndPacesPaddedLduAndTerminator()
+    {
+        var packets = new List<(byte[] Payload, ushort Sequence)>();
+        var packetCountsAtWait = new List<int>();
+        using var session = new P25TxCallSession(
+            sourceId: 1,
+            destinationId: 2,
+            streamId: 3,
+            vocoder: new FakeVocoderSession(),
+            send: (payload, sequence, _) => packets.Add((payload.ToArray(), sequence)));
+        session.Start();
+        session.Process(new short[160]);
+
+        await session.EndAsync(
+            _ =>
+            {
+                packetCountsAtWait.Add(packets.Count);
+                return ValueTask.CompletedTask;
+            },
+            CancellationToken.None);
+
+        Assert.Equal([1, 2], packetCountsAtWait);
+        Assert.Equal(P25DfsiFrameCodec.Ldu1Duid, packets[1].Payload[22]);
+        Assert.Equal(P25DfsiFrameCodec.TduDuid, packets[2].Payload[22]);
     }
 
     private sealed class FakeVocoderSession : IVocoderSession

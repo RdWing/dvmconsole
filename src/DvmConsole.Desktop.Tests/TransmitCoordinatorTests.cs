@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using DvmConsole.Audio;
 using DvmConsole.Core.Configuration;
 using DvmConsole.Desktop;
@@ -331,7 +332,8 @@ public sealed class TransmitCoordinatorTests
 
         await coordinator.ActivateAsync();
         Assert.Single(endpoint.Sent);
-        Assert.Equal(FneTrafficProtocol.Dmr, endpoint.Sent[0].Protocol);
+        Assert.True(endpoint.Sent.TryPeek(out var firstPacket));
+        Assert.Equal(FneTrafficProtocol.Dmr, firstPacket.Protocol);
 
         audio.Capture.Emit(new short[480]);
         await WaitForAsync(() => endpoint.Sent.Count == 2);
@@ -604,13 +606,13 @@ public sealed class TransmitCoordinatorTests
         public IReadOnlyList<ChannelViewModel> Channels => channels;
         public bool IsConnected => true;
         public uint? SourceId => 1001;
-        public List<(FneTrafficProtocol Protocol, uint StreamId)> Sent { get; } = [];
+        public ConcurrentQueue<(FneTrafficProtocol Protocol, uint StreamId)> Sent { get; } = [];
         public uint CreateStreamId() => ++nextStreamId;
         public void SendTraffic(FneTrafficProtocol protocol, ReadOnlySpan<byte> payload, ushort sequence, uint streamId)
         {
             if (throwOnSend)
                 throw new IOException("test transport fault");
-            Sent.Add((protocol, streamId));
+            Sent.Enqueue((protocol, streamId));
         }
     }
 

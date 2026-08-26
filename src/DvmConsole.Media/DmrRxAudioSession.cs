@@ -8,15 +8,27 @@ namespace DvmConsole.Media;
 // playback device. Call/channel selection remains above this reusable session.
 public sealed class DmrRxAudioSession : IAsyncDisposable
 {
+    private enum UnknownPrivacyResolution
+    {
+        AwaitingMetadata,
+        Clear,
+        Encrypted
+    }
+
     private readonly IVocoderSession vocoder;
     private readonly VoiceFrameDecoder decoder;
     private readonly IAudioPlayback playback;
     private readonly IDmrKeyResolver? keyResolver;
     private readonly string systemName;
     private readonly bool configuredPrivacyRequired;
+    private readonly bool privacyMayVary;
+    private readonly IReceivePrivacyPolicy? privacyPolicy;
+    private readonly DmrLateEntryMessageIndicator lateEntryCollector = new();
     private DmrPrivacyProcessor? privacyProcessor;
     private uint activeStreamId;
     private bool privacyRequired;
+    private bool privacyStateKnown;
+    private bool? streamIsEncrypted;
     private bool hasDecodedVoiceInActiveStream;
     private bool disposed;
 
@@ -25,7 +37,9 @@ public sealed class DmrRxAudioSession : IAsyncDisposable
         IAudioPlayback playback,
         IDmrKeyResolver? keyResolver = null,
         string systemName = "",
-        bool privacyExpected = false)
+        bool privacyExpected = false,
+        bool privacyMayVary = false,
+        IReceivePrivacyPolicy? privacyPolicy = null)
     {
         this.vocoder = vocoder ?? throw new ArgumentNullException(nameof(vocoder));
         decoder = new VoiceFrameDecoder(vocoder, VocoderMode.DmrAmbe);
@@ -33,7 +47,10 @@ public sealed class DmrRxAudioSession : IAsyncDisposable
         this.keyResolver = keyResolver;
         this.systemName = systemName ?? string.Empty;
         configuredPrivacyRequired = privacyExpected;
+        this.privacyMayVary = privacyMayVary;
+        this.privacyPolicy = privacyPolicy;
         privacyRequired = privacyExpected;
+        privacyStateKnown = !privacyMayVary;
     }
 
     public int FramesDecoded { get; private set; }
@@ -53,10 +70,27 @@ public sealed class DmrRxAudioSession : IAsyncDisposable
         }
         activeStreamId = traffic.StreamId;
 
+        if (DmrVoicePacketCodec.TryExtractVoiceEncryptionState(traffic.Payload, out bool encrypted))
+        {
+            streamIsEncrypted = encrypted;
+            privacyStateKnown = true;
+            privacyRequired = configuredPrivacyRequired || encrypted;
+            if (!privacyRequired)
+            {
+                privacyProcessor?.Dispose();
+                privacyProcessor = null;
+            }
+            return 0;
+        }
+
         if (DmrVoicePacketCodec.IsPrivacyIndicator(traffic.Payload))
         {
             if (DmrVoicePacketCodec.TryExtractEncryptionMetadata(traffic.Payload, out var metadata))
+            {
+                streamIsEncrypted = true;
                 PreparePrivacy(traffic.StreamId, metadata);
+                privacyStateKnown = true;
+            }
             else
                 MalformedPackets++;
             return 0;
@@ -64,18 +98,51 @@ public sealed class DmrRxAudioSession : IAsyncDisposable
         if (!traffic.FrameType.Equals("VOICE", StringComparison.OrdinalIgnoreCase) &&
             !traffic.FrameType.Equals("VOICE_SYNC", StringComparison.OrdinalIgnoreCase))
             return 0;
-        if (privacyRequired && privacyProcessor is null)
-        {
-            MalformedPackets++;
-            await ConcealCurrentPacketAsync(cancellationToken).ConfigureAwait(false);
+        if (privacyPolicy?.RequireEncryptedTraffic == true && streamIsEncrypted == false)
             return 0;
-        }
-
         byte[] ambe = new byte[DmrVoicePacketCodec.AmbeBytes];
         if (!DmrVoicePacketCodec.TryExtractAmbe(traffic.Payload, ambe))
         {
             MalformedPackets++;
             privacyProcessor?.SkipCodewords(DmrVoicePacketCodec.CodewordsPerPacket);
+            await ConcealCurrentPacketAsync(cancellationToken).ConfigureAwait(false);
+            return 0;
+        }
+
+        byte voiceBurst = (byte)(traffic.Payload[15] & 0x0F);
+        bool hasLateEntryMi = lateEntryCollector.AddVoiceBurst(
+            voiceBurst,
+            ambe,
+            out byte[] lateEntryMi);
+        DmrBurstFSignaling burstFSignaling = default;
+        bool hasBurstFSignaling = voiceBurst == 5 &&
+            DmrVoicePacketCodec.TryExtractBurstFSignaling(traffic.Payload, out burstFSignaling);
+
+        if (!privacyStateKnown)
+        {
+            UnknownPrivacyResolution resolution = ResolveUnknownPrivacyState(
+                traffic.StreamId,
+                voiceBurst,
+                hasLateEntryMi,
+                lateEntryMi,
+                hasBurstFSignaling,
+                burstFSignaling);
+            if (resolution != UnknownPrivacyResolution.Clear)
+                return 0;
+            if (privacyPolicy?.RequireEncryptedTraffic == true)
+                return 0;
+        }
+
+        if (privacyRequired && privacyProcessor is null)
+        {
+            if (hasLateEntryMi && hasBurstFSignaling && TryPrepareLateEntry(
+                traffic.StreamId,
+                lateEntryMi,
+                burstFSignaling))
+            {
+                return 0;
+            }
+            MalformedPackets++;
             await ConcealCurrentPacketAsync(cancellationToken).ConfigureAwait(false);
             return 0;
         }
@@ -113,6 +180,9 @@ public sealed class DmrRxAudioSession : IAsyncDisposable
 
         await LivePacketAudioWriter.WriteAsync(playback, packetSamples, cancellationToken)
             .ConfigureAwait(false);
+
+        if (privacyProcessor is not null && hasLateEntryMi && hasBurstFSignaling)
+            TryPrepareLateEntry(traffic.StreamId, lateEntryMi, burstFSignaling);
 
         return errors;
     }
@@ -157,6 +227,7 @@ public sealed class DmrRxAudioSession : IAsyncDisposable
 
     internal void InvalidateEncryption()
     {
+        lateEntryCollector.Reset();
         if (!privacyRequired)
             return;
         privacyProcessor?.Dispose();
@@ -190,6 +261,72 @@ public sealed class DmrRxAudioSession : IAsyncDisposable
                 metadata.MessageIndicator));
         activeStreamId = streamId;
         privacyRequired = true;
+        streamIsEncrypted = true;
+    }
+
+    private bool TryPrepareLateEntry(
+        uint streamId,
+        ReadOnlyMemory<byte> messageIndicator,
+        DmrBurstFSignaling signaling)
+    {
+        if (!IsPrivacyAssociation(signaling))
+            return false;
+
+        PreparePrivacy(
+            streamId,
+            new DmrVoicePacketCodec.DmrEncryptionMetadata(
+                signaling.AlgorithmId,
+                signaling.KeyId,
+                DmrPrivacyAlgorithms.FeatureId,
+                0,
+                true,
+                messageIndicator.ToArray()));
+        // Late-entry fragments advertise the MI that becomes active at the
+        // next voice-sync burst, so the new processor is already aligned.
+        return true;
+    }
+
+    private UnknownPrivacyResolution ResolveUnknownPrivacyState(
+        uint streamId,
+        byte voiceBurst,
+        bool hasMessageIndicator,
+        ReadOnlyMemory<byte> messageIndicator,
+        bool hasBurstFSignaling,
+        DmrBurstFSignaling signaling)
+    {
+        if (hasMessageIndicator && hasBurstFSignaling &&
+            TryPrepareLateEntry(streamId, messageIndicator, signaling))
+        {
+            privacyStateKnown = true;
+            privacyRequired = true;
+            return UnknownPrivacyResolution.Encrypted;
+        }
+
+        if (voiceBurst != 5 ||
+            (hasBurstFSignaling && IsPrivacyAssociation(signaling)))
+        {
+            return UnknownPrivacyResolution.AwaitingMetadata;
+        }
+
+        // A complete superframe without encryption identifiers is clear. Burst
+        // F may legitimately carry reverse-channel or unrelated single-burst
+        // signalling, so an all-zero payload is not required.
+        privacyStateKnown = true;
+        privacyRequired = false;
+        streamIsEncrypted = false;
+        return UnknownPrivacyResolution.Clear;
+    }
+
+    private static bool IsPrivacyAssociation(DmrBurstFSignaling signaling)
+    {
+        bool hasSupportedAlgorithm = signaling.AlgorithmId is
+            DmrPrivacyAlgorithms.Arc4 or
+            DmrPrivacyAlgorithms.DesOfb or
+            DmrPrivacyAlgorithms.Aes256;
+        return !signaling.IsReverseChannel &&
+            signaling.Payload != 0 &&
+            hasSupportedAlgorithm &&
+            signaling.KeyId != 0;
     }
 
     private void ClearPrivacyState()
@@ -197,6 +334,9 @@ public sealed class DmrRxAudioSession : IAsyncDisposable
         privacyProcessor?.Dispose();
         privacyProcessor = null;
         privacyRequired = configuredPrivacyRequired;
+        privacyStateKnown = !privacyMayVary;
+        lateEntryCollector.Reset();
         activeStreamId = 0;
+        streamIsEncrypted = null;
     }
 }

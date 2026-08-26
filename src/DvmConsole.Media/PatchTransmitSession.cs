@@ -112,7 +112,7 @@ public sealed class PatchTransmitSession : IDisposable
         return p25.ProcessSingleTone(frequencyHz);
     }
 
-    public void End()
+    public async ValueTask EndAsync(CancellationToken cancellationToken = default)
     {
         ObjectDisposedException.ThrowIf(disposed, this);
         if (!started)
@@ -120,10 +120,17 @@ public sealed class PatchTransmitSession : IDisposable
         if (ended)
             return;
 
-        dmr?.End();
-        p25?.End();
-        nxdn?.End();
-        analog?.End();
+        if (dmr is not null)
+            await dmr.EndAsync(cancellationToken).ConfigureAwait(false);
+        else if (p25 is not null)
+            await p25.EndAsync(cancellationToken).ConfigureAwait(false);
+        else if (nxdn is not null)
+            await nxdn.EndAsync(cancellationToken).ConfigureAwait(false);
+        else
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            analog?.End();
+        }
         ended = true;
     }
 

@@ -310,7 +310,7 @@ public sealed class SystemViewModelTests
 
     [Fact]
     public void ReportsUnreleasedSemanticVersion()
-        => Assert.StartsWith("0.4.1", MainWindow.ApplicationVersion, StringComparison.Ordinal);
+        => Assert.StartsWith("0.4.2", MainWindow.ApplicationVersion, StringComparison.Ordinal);
 
     [Theory]
     [InlineData("0.1.0-alpha.1+abcdef123456", "0.1.0-alpha.1 (abcdef1)")]
@@ -488,6 +488,10 @@ public sealed class SystemViewModelTests
             Assert.False(viewModel.HasCodeplugDiagnostics);
             Assert.False(channel.CanListen);
             Assert.False(channel.CanTransmit);
+            Assert.True(channel.CanToggleEncryption);
+            channel.EncryptionCommand.Execute(null);
+            Assert.True(channel.CanListen);
+            Assert.True(channel.CanTransmit);
             Assert.False(channel.CanToggleEncryption);
             await viewModel.FlushUserSettingsAsync();
             Assert.Equal(codeplugPath, store.Load().LastCodeplugPath);
