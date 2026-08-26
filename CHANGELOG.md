@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+
+- Keep a P25 grant-demand TDU on the terminator lifecycle path because it only
+  requests a peer grant. Begin an accepted call on the first LDU1 while keeping
+  that packet on the 180 ms voice cadence and preserving LDU2 late entry.
+
 ## [0.4.2] - 2026-08-26
 
 ### Added
@@ -157,8 +163,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   all-to-all patch audio, including an immediate reverse leg after a call ends.
   Patch target failures are recorded in Debug Logs.
 - Keep receive control and metadata packets out of voice playout deadlines and
-  missing-packet accounting, and do not classify P25 grant-demand control as a
-  call terminator.
+  missing-packet accounting. This release identified P25 grant-demand control
+  separately from voice payloads but incorrectly classified it as metadata
+  rather than a terminator.
 - Recycle an individual FNE connection when its authorization or configuration
   handshake makes no progress, allowing a busy system to reconnect without
   restarting the application. Unanswered login requests now retain the normal

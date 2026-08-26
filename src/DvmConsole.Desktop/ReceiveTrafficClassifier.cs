@@ -10,8 +10,6 @@ internal static class ReceiveTrafficClassifier
     public static bool IsTerminator(FneTrafficFrame traffic)
     {
         ArgumentNullException.ThrowIfNull(traffic);
-        if (IsP25GrantDemand(traffic))
-            return false;
         if (traffic.FrameType.Equals("TERMINATOR", StringComparison.OrdinalIgnoreCase))
             return true;
 
@@ -32,9 +30,7 @@ internal static class ReceiveTrafficClassifier
     public static bool IsDefinitiveStart(FneTrafficFrame traffic)
     {
         ArgumentNullException.ThrowIfNull(traffic);
-        return traffic.Protocol == FneTrafficProtocol.Dmr &&
-               traffic.FrameType.Equals("DATA_SYNC", StringComparison.OrdinalIgnoreCase) &&
-               traffic.Subtype.Equals("VOICE_LC_HEADER", StringComparison.OrdinalIgnoreCase);
+        return IsDmrVoiceCallStart(traffic) || IsP25VoiceCallStart(traffic);
     }
 
     public static bool IsDmrPrivacyHeader(FneTrafficFrame traffic)
@@ -77,27 +73,35 @@ internal static class ReceiveTrafficClassifier
         ArgumentNullException.ThrowIfNull(traffic);
         if (IsTerminator(traffic))
             return ReceiveJitterPacketKind.Terminator;
+
+        // A P25 call starts with an LDU1, which also carries nine voice
+        // codewords. Keep it on the voice cadence even though it is a
+        // definitive lifecycle boundary.
+        if (CarriesEncodedVoicePayload(traffic))
+            return ReceiveJitterPacketKind.Voice;
+
         if (IsDefinitiveStart(traffic) ||
             IsDmrPrivacyHeader(traffic) ||
-            IsP25GrantDemand(traffic) ||
             (traffic.Protocol == FneTrafficProtocol.Nxdn &&
              NxdnVoicePacketCodec.TryExtractCallMetadata(traffic.Payload, out _)))
         {
             return ReceiveJitterPacketKind.Metadata;
         }
-        return CarriesEncodedVoicePayload(traffic) || IsVoiceFrame(traffic.FrameType)
+        return IsVoiceFrame(traffic.FrameType)
             ? ReceiveJitterPacketKind.Voice
             : ReceiveJitterPacketKind.Metadata;
     }
 
-    public static bool IsP25GrantDemand(FneTrafficFrame traffic)
-    {
-        ArgumentNullException.ThrowIfNull(traffic);
-        return traffic.Protocol == FneTrafficProtocol.P25 &&
-               traffic.Subtype.Equals("TDU", StringComparison.OrdinalIgnoreCase) &&
-               traffic.Payload.Length > 14 &&
-               (traffic.Payload[14] & 0x80) != 0;
-    }
+    private static bool IsDmrVoiceCallStart(FneTrafficFrame traffic)
+        => traffic.Protocol == FneTrafficProtocol.Dmr &&
+           traffic.FrameType.Equals("DATA_SYNC", StringComparison.OrdinalIgnoreCase) &&
+           traffic.Subtype.Equals("VOICE_LC_HEADER", StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsP25VoiceCallStart(FneTrafficFrame traffic)
+        => traffic.Protocol == FneTrafficProtocol.P25 &&
+           traffic.PacketSequence == 0 &&
+           traffic.FrameType.Equals("VOICE", StringComparison.OrdinalIgnoreCase) &&
+           traffic.Subtype.Equals("LDU1", StringComparison.OrdinalIgnoreCase);
 
     public static bool IsVoiceFrame(string frameType)
         => frameType.Equals("VOICE", StringComparison.OrdinalIgnoreCase) ||
