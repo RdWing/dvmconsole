@@ -579,7 +579,19 @@ public sealed partial class MainWindow : Window
 
     private async Task OpenCodeplugAsync(string path)
     {
-        var replacement = LoadSessionViewModel(path);
+        MainWindowViewModel replacement;
+        try
+        {
+            await sessionHost.PrepareForReplacementAsync();
+            replacement = LoadSessionViewModel(path);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            await ShowCodeplugErrorAsync(
+                $"Operator settings could not be saved before loading the codeplug.\n\n{exception.Message}");
+            return;
+        }
+
         if (!replacement.IsCodeplugLoaded)
         {
             string error = replacement.StatusText;
@@ -675,6 +687,7 @@ public sealed partial class MainWindow : Window
         try
         {
             string? activeCodeplugPath = viewModel.CurrentCodeplugPath;
+            await sessionHost.PrepareForReplacementAsync();
             viewModel.ImportSettings(path);
             await ReplaceViewModelAsync(LoadSessionViewModel(activeCodeplugPath));
             await ShowInformationAsync("Settings imported", "The imported profile has been applied to the current console.");
@@ -734,6 +747,7 @@ public sealed partial class MainWindow : Window
         string? activeCodeplugPath = viewModel.CurrentCodeplugPath;
         try
         {
+            await sessionHost.PrepareForReplacementAsync();
             viewModel.ImportNamedSettingsProfile(profileName, SettingsImportScope.OperatorState);
             await ReplaceViewModelAsync(LoadSessionViewModel(activeCodeplugPath));
             await ShowInformationAsync("Settings profile loaded", $"Applied operator settings from '{profileName}'.");
@@ -807,8 +821,16 @@ public sealed partial class MainWindow : Window
         }
 
         string? activeCodeplugPath = viewModel.CurrentCodeplugPath;
-        viewModel.ResetSettings();
-        await ReplaceViewModelAsync(LoadSessionViewModel(activeCodeplugPath));
+        try
+        {
+            await sessionHost.PrepareForReplacementAsync();
+            viewModel.ResetSettings();
+            await ReplaceViewModelAsync(LoadSessionViewModel(activeCodeplugPath));
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            await ShowInformationAsync("Unable to reset settings", exception.Message);
+        }
     }
 
     private async Task ReplaceViewModelAsync(MainWindowViewModel replacement)

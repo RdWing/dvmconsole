@@ -297,7 +297,9 @@ entries first and reports the discarded count.
 
 Opens Console Settings directly at the channel key-status section of the
 **Connections** page. The view displays key identifiers and availability only;
-key material is never displayed or logged.
+key material is never displayed or logged. An unavailable local DMR key also
+shows the protocol, algorithm ID, and required key length expected by the
+configured channel.
 
 Selectable-encryption state is restored independently of key arrival. When a
 restored channel is secure and its configured key is available only from KMM,

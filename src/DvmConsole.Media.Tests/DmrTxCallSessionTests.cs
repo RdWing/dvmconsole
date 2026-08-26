@@ -68,6 +68,79 @@ public sealed class DmrTxCallSessionTests
     }
 
     [Fact]
+    public void SecureCallMarksBothHeaderAndTerminatorEncrypted()
+    {
+        byte[] key = Convert.FromHexString("0102030405");
+        var privacy = new DmrPrivacyOptions(
+            DmrPrivacyAlgorithms.Arc4,
+            keyId: 7,
+            key,
+            Convert.FromHexString("12345678"));
+        var packets = new List<byte[]>();
+        using var session = new DmrTxCallSession(
+            sourceId: 1,
+            destinationId: 2,
+            slot: 0,
+            streamId: 3,
+            vocoder: new FakeHalfRateSession(),
+            send: (payload, _, _) => packets.Add(payload.ToArray()),
+            privacy: privacy);
+
+        session.Start();
+        session.End();
+
+        LC header = Assert.IsType<LC>(FullLC.Decode(
+            packets[0][DmrVoicePacketCodec.HeaderBytes..],
+            DMRDataType.VOICE_LC_HEADER));
+        LC terminator = Assert.IsType<LC>(FullLC.Decode(
+            packets[^1][DmrVoicePacketCodec.HeaderBytes..],
+            DMRDataType.TERMINATOR_WITH_LC));
+        Assert.True(header.Encrypted);
+        Assert.True(terminator.Encrypted);
+        Assert.Equal(DmrPrivacyAlgorithms.FeatureId, header.FID);
+        Assert.Equal(DmrPrivacyAlgorithms.FeatureId, terminator.FID);
+        Assert.Equal(0x40, header.GetBytes()[2] & 0x40);
+        Assert.Equal(0x40, terminator.GetBytes()[2] & 0x40);
+    }
+
+    [Fact]
+    public async Task AsyncEndPacesEveryCompletionBurstAndTerminator()
+    {
+        var packets = new List<byte[]>();
+        var cadence = new ManualCadence();
+        using var session = new DmrTxCallSession(
+            sourceId: 1,
+            destinationId: 2,
+            slot: 0,
+            streamId: 3,
+            vocoder: new FakeVocoderSession(),
+            send: (payload, _, _) => packets.Add(payload.ToArray()));
+
+        session.Start();
+        session.Process(new short[480]);
+        int packetsBeforeEnd = packets.Count;
+        int packetsEmittedByEnd = 8 - packetsBeforeEnd;
+        ValueTask end = session.EndAsync(cadence.WaitAsync, CancellationToken.None);
+
+        await WaitUntilAsync(() => cadence.WaitCount == 1);
+        Assert.Equal(packetsBeforeEnd, packets.Count);
+
+        for (int emitted = 1; emitted <= packetsEmittedByEnd; emitted++)
+        {
+            cadence.Release();
+            await WaitUntilAsync(() => packets.Count == packetsBeforeEnd + emitted);
+            if (emitted < packetsEmittedByEnd)
+                await WaitUntilAsync(() => cadence.WaitCount == emitted + 1);
+        }
+
+        await end;
+
+        Assert.Equal(8, packets.Count);
+        Assert.Equal((byte)0x22, packets[^1][15]);
+        Assert.True(session.IsEnded);
+    }
+
+    [Fact]
     public void RequiresAnExplicitStartBeforeProcessingAudio()
     {
         using var session = new DmrTxCallSession(
@@ -104,5 +177,58 @@ public sealed class DmrTxCallSessionTests
         public void Dispose()
         {
         }
+    }
+
+    private sealed class FakeHalfRateSession : IHalfRateVocoderSession
+    {
+        public int Encode(ReadOnlySpan<short> samples, Span<byte> codeword)
+        {
+            codeword.Clear();
+            return codeword.Length;
+        }
+
+        public int Decode(ReadOnlySpan<byte> codeword, Span<short> samples) => 0;
+        public int EncodeParameters(ReadOnlySpan<short> samples, Span<byte> parameters)
+        {
+            parameters.Clear();
+            return parameters.Length;
+        }
+        public int FlushEncodeParameters(Span<byte> parameters) => 0;
+        public int DecodeParameters(
+            ReadOnlySpan<byte> parameters,
+            Span<short> samples,
+            uint correctedErrors = 0,
+            bool lost = false) => 0;
+        public int ExtractParameters(ReadOnlySpan<byte> codeword, Span<byte> parameters)
+        {
+            parameters.Clear();
+            return parameters.Length;
+        }
+        public void BuildCodeword(ReadOnlySpan<byte> parameters, Span<byte> codeword)
+            => codeword.Clear();
+        public void Dispose() { }
+    }
+
+    private static async Task WaitUntilAsync(Func<bool> condition)
+    {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+        while (!condition())
+            await Task.Delay(5, timeout.Token);
+    }
+
+    private sealed class ManualCadence
+    {
+        private readonly SemaphoreSlim releases = new(0);
+        private int waitCount;
+
+        public int WaitCount => Volatile.Read(ref waitCount);
+
+        public async ValueTask WaitAsync(CancellationToken cancellationToken)
+        {
+            Interlocked.Increment(ref waitCount);
+            await releases.WaitAsync(cancellationToken);
+        }
+
+        public void Release() => releases.Release();
     }
 }

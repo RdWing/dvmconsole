@@ -37,6 +37,60 @@ public sealed class ChannelReceiveAudioSessionTests
     }
 
     [Fact]
+    public async Task SelectableDmrChannelDecodesClearReceiveWithoutPrivacyHeader()
+    {
+        var definition = new ChannelRuntimeDefinition(
+            "Selectable",
+            "System 1",
+            "dmr",
+            100,
+            1,
+            encryptionAlgorithm: "aes",
+            encryptionKeyId: "0x45",
+            selectableEncryption: true);
+        var vocoder = new FakeVocoderSession();
+        var playback = new FakePlayback();
+        await using var session = new ChannelReceiveAudioSession(definition, vocoder, playback);
+
+        byte[] clearHeader = DmrVoicePacketCodec.CreateVoiceLcHeaderPacket(
+            sourceId: 1,
+            destinationId: 100,
+            slot: 1,
+            frameSequence: 0,
+            encrypted: false);
+        await session.ProcessAsync(new FneTrafficFrame(
+            FneTrafficProtocol.Dmr,
+            1,
+            2,
+            100,
+            1,
+            "GROUP",
+            "DATA_SYNC",
+            "VOICE_LC_HEADER",
+            0,
+            99,
+            clearHeader));
+
+        int errors = await session.ProcessAsync(new FneTrafficFrame(
+            FneTrafficProtocol.Dmr,
+            1,
+            2,
+            100,
+            1,
+            "GROUP",
+            "VOICE",
+            "VOICE",
+            1,
+            99,
+            new byte[DmrVoicePacketCodec.PacketBytes]));
+
+        Assert.Equal(0, errors);
+        Assert.Equal(3, session.FramesDecoded);
+        Assert.Equal(0, session.MalformedPackets);
+        Assert.Equal(3, playback.Frames.Count);
+    }
+
+    [Fact]
     public async Task RoutesMatchingP25TrafficThroughTheConfiguredSession()
     {
         var definition = new ChannelRuntimeDefinition("P25", "System 1", "p25", 100, 0);
@@ -50,6 +104,54 @@ public sealed class ChannelReceiveAudioSessionTests
         Assert.Equal(9, session.FramesDecoded);
         Assert.Equal(9, vocoder.DecodeCalls);
         Assert.Equal(9, playback.Frames.Count);
+    }
+
+    [Fact]
+    public async Task SelectableNxdnChannelDecodesClearReceiveWithoutPrivacyIv()
+    {
+        var definition = new ChannelRuntimeDefinition(
+            "Selectable NXDN",
+            "System 1",
+            "nxdn",
+            100,
+            0,
+            encryptionAlgorithm: "aes",
+            encryptionKeyId: "0x05",
+            selectableEncryption: true);
+        var vocoder = new FakeVocoderSession();
+        var playback = new FakePlayback();
+        await using var session = new ChannelReceiveAudioSession(definition, vocoder, playback);
+
+        await session.ProcessAsync(CreateNxdnTraffic(
+            NxdnVoicePacketCodec.CreateCallControlPacket(
+                1,
+                100,
+                true,
+                NxdnVoicePacketCodec.VoiceCallMessageType,
+                0,
+                cipherType: 0,
+                keyId: 0),
+            packetSequence: 0));
+        byte[] clearVoice = NxdnVoicePacketCodec.CreateVoicePacket(
+            1,
+            100,
+            true,
+            1,
+            new byte[NxdnVoicePacketCodec.AmbeBytes]);
+        Assert.False(NxdnVoicePacketCodec.TryExtractCallMetadata(clearVoice, out _));
+        Assert.True(NxdnVoicePacketCodec.TryExtractAmbe(
+            clearVoice,
+            new byte[NxdnVoicePacketCodec.AmbeBytes],
+            out int codewordCount));
+        Assert.Equal(NxdnVoicePacketCodec.CodewordsPerFrame, codewordCount);
+        int errors = await session.ProcessAsync(CreateNxdnTraffic(clearVoice, packetSequence: 1));
+
+        Assert.Equal(0, errors);
+        Assert.Equal(0, session.DuplicateOrLatePackets);
+        Assert.Equal(0, session.LostPackets);
+        Assert.Equal(0, session.MalformedPackets);
+        Assert.Equal(NxdnVoicePacketCodec.CodewordsPerFrame, session.FramesDecoded);
+        Assert.Equal(NxdnVoicePacketCodec.CodewordsPerFrame, playback.Frames.Count);
     }
 
     [Fact]
@@ -250,12 +352,15 @@ public sealed class ChannelReceiveAudioSessionTests
             AnalogVoicePacketCodec.CreatePacket(AnalogAudioFrameType.Voice, 1, 100, samples));
     }
 
-    private static FneTrafficFrame CreateNxdnTraffic()
+    private static FneTrafficFrame CreateNxdnTraffic(byte[]? payload = null, ushort packetSequence = 2)
     {
-        byte[] ambe = Enumerable.Range(1, NxdnVoicePacketCodec.AmbeBytes)
-            .Select(value => (byte)value)
-            .ToArray();
-        byte[] payload = NxdnVoicePacketCodec.CreateVoicePacket(1, 100, true, 0, ambe);
+        if (payload is null)
+        {
+            byte[] ambe = Enumerable.Range(1, NxdnVoicePacketCodec.AmbeBytes)
+                .Select(value => (byte)value)
+                .ToArray();
+            payload = NxdnVoicePacketCodec.CreateVoicePacket(1, 100, true, 0, ambe);
+        }
 
         return new FneTrafficFrame(
             FneTrafficProtocol.Nxdn,
@@ -266,7 +371,7 @@ public sealed class ChannelReceiveAudioSessionTests
             "GROUP",
             "VOICE",
             "VCALL",
-            2,
+            packetSequence,
             99,
             payload);
     }

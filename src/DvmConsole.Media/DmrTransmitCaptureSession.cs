@@ -31,7 +31,11 @@ public sealed class DmrTransmitCaptureSession : ITransmitCaptureSession
             privacy: privacy);
         lifecycle = new TransmitCaptureLifecycle(
             capture,
-            new DelegateTransmitCall(call.Start, samples => call.Process(samples), call.End, call.Dispose),
+            new DelegateTransmitCall(
+                call.Start,
+                samples => call.Process(samples),
+                _ => call.EndAsync(CancellationToken.None),
+                call.Dispose),
             "The DMR capture session has faulted.",
             exception => Faulted?.Invoke(this, exception));
     }

@@ -17,6 +17,36 @@ public sealed class NxdnPrivacyTests
     };
 
     [Theory]
+    [InlineData("ABCDEF1234567890", "8B8DDEEB890F4CF1")]
+    [InlineData("8B8DDEEB890F4CF1", "C83AB2073A8D80E8")]
+    [InlineData("C83AB2073A8D80E8", "6C4663AF3D39244B")]
+    [InlineData("6C4663AF3D39244B", "00A5754C8AC49E3F")]
+    [InlineData("00A5754C8AC49E3F", "81C55D6EA55913C7")]
+    [InlineData("81C55D6EA55913C7", "C5522BA39D354F27")]
+    [InlineData("C5522BA39D354F27", "C8065031EAF69931")]
+    [InlineData("C8065031EAF69931", "03C240EC1877D693")]
+    public void IvGeneratorMatchesPublishedNxdnSecurityVectors(
+        string seed,
+        string expectedNextSeed)
+    {
+        byte[] actual = NxdnInitializationVectorGenerator.GetNextSeed(
+            Convert.FromHexString(seed));
+
+        Assert.Equal(expectedNextSeed, Convert.ToHexString(actual));
+    }
+
+    [Fact]
+    public void AesInitializationVectorMatchesPublishedNxdnSecurityVector()
+    {
+        byte[] actual = NxdnInitializationVectorGenerator.CreateAesInitializationVector(
+            Convert.FromHexString("ABCDEF1234567890"));
+
+        Assert.Equal(
+            "ABCDEF12345678908B8DDEEB890F4CF1",
+            Convert.ToHexString(actual));
+    }
+
+    [Theory]
     [MemberData(nameof(Algorithms))]
     public void PrivacyTransformRoundTripsNaturalAmbeParameters(byte algorithm, byte[] key, byte[] mi)
     {
@@ -36,7 +66,7 @@ public sealed class NxdnPrivacyTests
     }
 
     [Fact]
-    public void DesCallCarriesCipherAndIvBeforeVoice()
+    public void DesCallCarriesVcallAndIvInOneStartupFrameBeforeVoice()
     {
         var packets = new List<byte[]>();
         var options = new NxdnPrivacyOptions(
@@ -52,19 +82,19 @@ public sealed class NxdnPrivacyTests
         call.Start();
         call.Process(new short[VocoderFrameSizes.PcmSamplesPerFrame * 4]);
 
-        Assert.Equal(3, packets.Count);
-        Assert.True(NxdnVoicePacketCodec.TryExtractCallMetadata(packets[0], out var header));
+        Assert.Equal(2, packets.Count);
+        Assert.True(NxdnVoicePacketCodec.TryExtractFacchCallMetadata(packets[0], 0, out var header));
         Assert.Equal(NxdnPrivacyAlgorithms.Des, header.CipherType);
         Assert.Equal((byte)5, header.KeyId);
-        Assert.True(NxdnVoicePacketCodec.TryExtractCallMetadata(packets[1], out var iv));
+        Assert.True(NxdnVoicePacketCodec.TryExtractFacchCallMetadata(packets[0], 1, out var iv));
         Assert.Equal(NxdnVoicePacketCodec.VoiceCallIvMessageType, iv.MessageType);
         Assert.Equal(options.MessageIndicator.ToArray(), iv.MessageIndicator);
-        Assert.True(NxdnVoicePacketCodec.TryExtractAmbe(packets[2], new byte[NxdnVoicePacketCodec.AmbeBytes], out int count));
+        Assert.True(NxdnVoicePacketCodec.TryExtractAmbe(packets[1], new byte[NxdnVoicePacketCodec.AmbeBytes], out int count));
         Assert.Equal(4, count);
     }
 
     [Fact]
-    public void DesCallRotatesMessageIndicatorBeforeNinthVoiceFrame()
+    public void DesCallAlternatesVcallAndSuccessorIvInSacchWithoutDroppingVoice()
     {
         var packets = new List<byte[]>();
         var options = new NxdnPrivacyOptions(
@@ -78,14 +108,65 @@ public sealed class NxdnPrivacyTests
             options);
 
         call.Start();
-        call.Process(new short[VocoderFrameSizes.PcmSamplesPerFrame * 36]);
+        call.Process(new short[VocoderFrameSizes.PcmSamplesPerFrame * 40]);
 
-        Assert.Equal(12, packets.Count);
-        Assert.True(NxdnVoicePacketCodec.TryExtractCallMetadata(packets[10], out var rotatedIv));
+        Assert.Equal(11, packets.Count);
+        Assert.All(
+            packets.Skip(1),
+            packet => Assert.True(NxdnVoicePacketCodec.TryExtractAmbe(
+                packet,
+                new byte[NxdnVoicePacketCodec.AmbeBytes],
+                out int count) && count == 4));
+
+        var collector = new NxdnSacchMessageCollector();
+        NxdnVoicePacketCodec.CallMetadata voiceCall = default;
+        NxdnVoicePacketCodec.CallMetadata rotatedIv = default;
+        for (int index = 1; index <= 4; index++)
+            collector.TryAccept(packets[index], out voiceCall);
+        for (int index = 5; index <= 8; index++)
+            collector.TryAccept(packets[index], out rotatedIv);
+
+        Assert.Equal(NxdnVoicePacketCodec.VoiceCallMessageType, voiceCall.MessageType);
+        Assert.Equal(NxdnPrivacyAlgorithms.Des, voiceCall.CipherType);
         Assert.Equal(NxdnVoicePacketCodec.VoiceCallIvMessageType, rotatedIv.MessageType);
-        Assert.NotEqual(options.MessageIndicator.ToArray(), rotatedIv.MessageIndicator);
-        Assert.True(NxdnVoicePacketCodec.TryExtractAmbe(packets[11], new byte[NxdnVoicePacketCodec.AmbeBytes], out int count));
-        Assert.Equal(4, count);
+        Assert.Equal(
+            NxdnInitializationVectorGenerator.GetNextSeed(options.MessageIndicator.Span),
+            rotatedIv.MessageIndicator);
+
+        Assert.False(collector.TryAccept(packets[9], out _));
+        Assert.False(collector.TryAccept(packets[10], out _));
+    }
+
+    [Fact]
+    public async Task AsyncEndPacesPaddedVoiceFrameAndRelease()
+    {
+        var packets = new List<byte[]>();
+        var packetCountsAtWait = new List<int>();
+        using var call = new NxdnTxCallSession(
+            1001,
+            2002,
+            true,
+            99,
+            new FakeHalfRateSession(),
+            (payload, _, _) => packets.Add(payload.ToArray()));
+        call.Start();
+        call.Process(new short[160]);
+
+        await call.EndAsync(
+            _ =>
+            {
+                packetCountsAtWait.Add(packets.Count);
+                return ValueTask.CompletedTask;
+            },
+            CancellationToken.None);
+
+        Assert.Equal([1, 2], packetCountsAtWait);
+        Assert.True(NxdnVoicePacketCodec.TryExtractAmbe(
+            packets[1],
+            new byte[NxdnVoicePacketCodec.AmbeBytes],
+            out _));
+        Assert.True(NxdnVoicePacketCodec.TryExtractCallMetadata(packets[2], out var release));
+        Assert.Equal(NxdnVoicePacketCodec.TransmitReleaseMessageType, release.MessageType);
     }
 
     [Fact]
@@ -137,17 +218,71 @@ public sealed class NxdnPrivacyTests
         await using var session = new NxdnRxAudioSession(
             new NxdnTrafficSelector(2002), decoder, new DiscardPlayback(), ring, "System A");
 
-        await session.ProcessAsync(Traffic(NxdnVoicePacketCodec.CreateCallControlPacket(
-            1001, 2002, true, NxdnVoicePacketCodec.VoiceCallMessageType, 0, 2, 5), 0));
-        await session.ProcessAsync(Traffic(NxdnVoicePacketCodec.CreateCallControlPacket(
-            1001, 2002, true, NxdnVoicePacketCodec.VoiceCallIvMessageType, 1, messageIndicator: mi), 1));
-        await session.ProcessAsync(Traffic(NxdnVoicePacketCodec.CreateVoicePacket(1001, 2002, true, 2, encrypted), 2));
+        await session.ProcessAsync(Traffic(NxdnVoicePacketCodec.CreatePrivacyCallStartPacket(
+            1001, 2002, true, 0, 2, 5, mi), 0));
+        await session.ProcessAsync(Traffic(NxdnVoicePacketCodec.CreateVoicePacket(
+            1001, 2002, true, 1, encrypted), 1));
 
         Assert.Equal(4, decoder.DecodedParameters.Count);
         byte[] expectedParameters = Enumerable.Range(0, 4)
             .SelectMany(index => clear.AsSpan(index * 9, 7).ToArray())
             .ToArray();
         Assert.Equal(expectedParameters, decoder.DecodedParameters.SelectMany(value => value).ToArray());
+    }
+
+    [Fact]
+    public async Task ReceiveUsesSacchSuccessorIvForLateEntryWithoutStandaloneFacch()
+    {
+        byte[] key = Convert.FromHexString("133457799BBCDFF1");
+        byte[] initialMi = Convert.FromHexString("0123456789ABCDEF");
+        var options = new NxdnPrivacyOptions(NxdnPrivacyAlgorithms.Des, 5, key, initialMi);
+        var packets = new List<byte[]>();
+        using (var call = new NxdnTxCallSession(
+            1001,
+            2002,
+            true,
+            99,
+            new FakeHalfRateSession(),
+            (payload, _, _) => packets.Add(payload.ToArray()),
+            options))
+        {
+            call.Start();
+            call.Process(new short[VocoderFrameSizes.PcmSamplesPerFrame * 48]);
+        }
+
+        using var ring = new NxdnKeyRing("System A", new KeyContainer
+        {
+            Keys = [new KeyEntry
+            {
+                Protocol = "nxdn",
+                AlgId = NxdnPrivacyAlgorithms.Des,
+                KeyId = 5,
+                Key = Convert.ToHexString(key)
+            }]
+        });
+        var decoder = new FakeHalfRateSession();
+        await using var receiver = new NxdnRxAudioSession(
+            new NxdnTrafficSelector(2002),
+            decoder,
+            new DiscardPlayback(),
+            ring,
+            "System A",
+            configuredAlgorithm: "des",
+            configuredKeyId: "5");
+
+        // Skip startup and the first four VCALL voice frames. The next four
+        // frames carry VCALL_IV in SACCH while still using the previous IV;
+        // the following four must decode with the advertised successor.
+        byte[][] lateEntryPackets = packets.Skip(5).Take(8).ToArray();
+        for (int index = 0; index < lateEntryPackets.Length; index++)
+            await receiver.ProcessAsync(Traffic(lateEntryPackets[index], (ushort)index));
+
+        Assert.Equal(32, receiver.FramesDecoded);
+        Assert.Equal(16, decoder.DecodedParameters.Count);
+        Assert.All(
+            decoder.DecodedParameters,
+            parameters => Assert.All(parameters, value => Assert.Equal((byte)0, value)));
+        Assert.Equal(4, receiver.MalformedPackets);
     }
 
     private static FneTrafficFrame Traffic(byte[] payload, ushort sequence) => new(

@@ -222,7 +222,8 @@ public sealed class NxdnPrivacyProcessor : IDisposable
             aes.KeySize = 256;
             aes.Key = key.ToArray();
             cipher = aes;
-            register = ExpandAesIv(messageIndicator);
+            register = NxdnInitializationVectorGenerator.CreateAesInitializationVector(
+                messageIndicator);
         }
         encryptor = cipher.CreateEncryptor();
         // NXDN discards the first DES/AES OFB block.
@@ -247,20 +248,4 @@ public sealed class NxdnPrivacyProcessor : IDisposable
         register = next;
     }
 
-    private static byte[] ExpandAesIv(ReadOnlySpan<byte> mi)
-    {
-        byte[] iv = new byte[16];
-        mi.CopyTo(iv);
-        ulong lfsr = 0;
-        for (int index = 0; index < 8; index++)
-            lfsr = (lfsr << 8) | mi[index];
-        for (int index = 64; index < 128; index++)
-        {
-            ulong bit = ((lfsr >> 63) ^ (lfsr >> 61) ^ (lfsr >> 45) ^
-                (lfsr >> 37) ^ (lfsr >> 26) ^ (lfsr >> 14)) & 1;
-            lfsr = (lfsr << 1) | bit;
-            iv[index / 8] = (byte)((iv[index / 8] << 1) | (byte)bit);
-        }
-        return iv;
-    }
 }

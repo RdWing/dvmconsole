@@ -19,6 +19,7 @@ public sealed class PatchSourceDecodeCoordinator : IAsyncDisposable
     private readonly object sync = new();
     private readonly Dictionary<ChannelViewModel, SessionState> sessions = [];
     private IVocoderBackend? vocoderBackend;
+    private long requestedConfigurationRevision;
     private bool disposed;
 
     public PatchSourceDecodeCoordinator(
@@ -92,9 +93,14 @@ public sealed class PatchSourceDecodeCoordinator : IAsyncDisposable
                 (channel.Definition.Mode is "dmr" or "p25" or "nxdn" or "analog"))
             .Distinct()
             .ToArray();
+        long revision = Interlocked.Increment(ref requestedConfigurationRevision);
         await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
+            ObjectDisposedException.ThrowIf(disposed, this);
+            if (revision != Volatile.Read(ref requestedConfigurationRevision))
+                return;
+
             HashSet<ChannelViewModel> requestedSet = requested.ToHashSet();
             ChannelViewModel[] removedChannels;
             lock (sync)
@@ -234,9 +240,14 @@ public sealed class PatchSourceDecodeCoordinator : IAsyncDisposable
     public async Task StopAllAsync(CancellationToken cancellationToken = default)
     {
         ObjectDisposedException.ThrowIf(disposed, this);
+        long revision = Interlocked.Increment(ref requestedConfigurationRevision);
         await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
+            ObjectDisposedException.ThrowIf(disposed, this);
+            if (revision != Volatile.Read(ref requestedConfigurationRevision))
+                return;
+
             await StopCoreAsync().ConfigureAwait(false);
         }
         finally
@@ -250,6 +261,7 @@ public sealed class PatchSourceDecodeCoordinator : IAsyncDisposable
         if (disposed)
             return;
 
+        Interlocked.Increment(ref requestedConfigurationRevision);
         await gate.WaitAsync().ConfigureAwait(false);
         try
         {

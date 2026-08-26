@@ -1,5 +1,4 @@
 using DvmConsole.Vocoder;
-using System.Security.Cryptography;
 
 namespace DvmConsole.Media;
 
@@ -14,13 +13,14 @@ public sealed class NxdnTxAudioSession : IDisposable
     private readonly VoiceFrameEncoder encoder;
     private readonly NxdnPrivacyProcessor? privacyProcessor;
     private readonly NxdnPrivacyOptions? privacy;
+    private readonly NxdnVoiceSignalingCycle signalingCycle;
     private readonly byte[] pendingAmbe = new byte[NxdnVoicePacketCodec.AmbeBytes];
     private int pendingAmbeBytes;
     private int pendingPcmSamples;
     private ushort packetSequence;
     private byte frameSequence;
     private bool disposed;
-    private bool privacyIvPending;
+    private List<NxdnOutboundPacket>? deferredPackets;
 
     public NxdnTxAudioSession(
         uint sourceId,
@@ -49,6 +49,13 @@ public sealed class NxdnTxAudioSession : IDisposable
         this.packetSequence = packetSequence;
         this.frameSequence = frameSequence;
         this.privacy = privacy;
+        signalingCycle = new NxdnVoiceSignalingCycle(
+            sourceId,
+            destinationId,
+            group,
+            privacy?.AlgorithmId ?? 0,
+            privacy?.KeyId ?? 0,
+            privacy?.MessageIndicator ?? ReadOnlyMemory<byte>.Empty);
         if (privacy is not null)
         {
             if (vocoder is not IHalfRateVocoderSession halfRate)
@@ -84,6 +91,25 @@ public sealed class NxdnTxAudioSession : IDisposable
         return FramesSent - before;
     }
 
+    internal IReadOnlyList<NxdnOutboundPacket> PrepareFrameCompletion()
+    {
+        ObjectDisposedException.ThrowIf(disposed, this);
+        if (deferredPackets is not null)
+            throw new InvalidOperationException("NXDN frame completion is already being prepared.");
+
+        var packets = new List<NxdnOutboundPacket>();
+        deferredPackets = packets;
+        try
+        {
+            CompleteFrame();
+            return packets;
+        }
+        finally
+        {
+            deferredPackets = null;
+        }
+    }
+
     internal void AdvanceSequence()
     {
         packetSequence = packetSequence >= NxdnVoicePacketCodec.RtpCallEndSequence - 1
@@ -98,6 +124,7 @@ public sealed class NxdnTxAudioSession : IDisposable
             return;
         encoder.Dispose();
         privacyProcessor?.Dispose();
+        signalingCycle.Dispose();
         Array.Clear(pendingAmbe);
         pendingAmbeBytes = 0;
         disposed = true;
@@ -105,8 +132,6 @@ public sealed class NxdnTxAudioSession : IDisposable
 
     private void EmitCodeword(ReadOnlyMemory<byte> codeword)
     {
-        if (privacyIvPending)
-            SendNextPrivacyIv();
         Span<byte> destination = pendingAmbe.AsSpan(
             pendingAmbeBytes,
             NxdnVoicePacketCodec.CodewordBytes);
@@ -124,35 +149,24 @@ public sealed class NxdnTxAudioSession : IDisposable
             group,
             frameSequence,
             pendingAmbe,
-            superframePart: (byte)(FramesSent % 4),
+            superframePart: signalingCycle.SuperframePart,
             cipherType: privacy?.AlgorithmId ?? 0,
-            keyId: privacy?.KeyId ?? 0);
-        send(packet, packetSequence, streamId);
+            keyId: privacy?.KeyId ?? 0,
+            sacchMetadata: signalingCycle.CurrentMetadata);
+        EmitPacket(packet, packetSequence);
         pendingAmbeBytes = 0;
         FramesSent++;
         AdvanceSequence();
-        if (privacy is not null &&
-            privacy.AlgorithmId is NxdnPrivacyAlgorithms.Des or NxdnPrivacyAlgorithms.Aes256 &&
-            CodewordsEncoded % 32 == 0)
-        {
-            privacyIvPending = true;
-        }
+        signalingCycle.AdvanceAfterVoiceFrame(privacyProcessor);
     }
 
-    private void SendNextPrivacyIv()
+    private void EmitPacket(byte[] packet, ushort sequence)
     {
-        byte[] messageIndicator = RandomNumberGenerator.GetBytes(NxdnPrivacyAlgorithms.MessageIndicatorBytes);
-        byte[] packet = NxdnVoicePacketCodec.CreateCallControlPacket(
-            sourceId,
-            destinationId,
-            group,
-            NxdnVoicePacketCodec.VoiceCallIvMessageType,
-            frameSequence,
-            messageIndicator: messageIndicator);
-        send(packet, packetSequence, streamId);
-        AdvanceSequence();
-        privacyProcessor!.ResetMessageIndicator(messageIndicator);
-        CryptographicOperations.ZeroMemory(messageIndicator);
-        privacyIvPending = false;
+        if (deferredPackets is not null)
+            deferredPackets.Add(new NxdnOutboundPacket(packet, sequence, streamId));
+        else
+            send(packet, sequence, streamId);
     }
 }
+
+internal readonly record struct NxdnOutboundPacket(byte[] Payload, ushort Sequence, uint StreamId);

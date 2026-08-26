@@ -64,7 +64,8 @@ public static class DmrVoicePacketCodec
             PrivacyLC? privacy = FullLC.DecodePI(frame);
             if (privacy is null)
                 return false;
-            if (privacy.KId == 0 || privacy.AlgId is not (
+            if (privacy.FID != DmrPrivacyAlgorithms.FeatureId ||
+                privacy.KId == 0 || privacy.AlgId is not (
                 DmrPrivacyAlgorithms.Arc4 or
                 DmrPrivacyAlgorithms.DesOfb or
                 DmrPrivacyAlgorithms.Aes256))
@@ -96,13 +97,44 @@ public static class DmrVoicePacketCodec
     {
         if (packet.Length < PacketBytes)
             return false;
-        if ((packet[15] & 0x30) != ((byte)fnecore.FrameType.DATA_SYNC << 4))
+        // The low nibble of the FNE DMR frame-type byte is authoritative.
+        // Decoding only the in-burst slot type can classify a voice-LC header
+        // as PI after FEC correction, even though its network envelope is 0x21.
+        if ((packet[15] & 0x3F) != 0x20)
             return false;
 
         try
         {
             var slotType = new SlotType(packet.Slice(HeaderBytes, FrameBytes).ToArray());
             return slotType.DataType == (byte)DMRDataType.VOICE_PI_HEADER;
+        }
+        catch (ArgumentException)
+        {
+            return false;
+        }
+        catch (IndexOutOfRangeException)
+        {
+            return false;
+        }
+    }
+
+    public static bool TryExtractVoiceEncryptionState(ReadOnlySpan<byte> packet, out bool encrypted)
+    {
+        encrypted = false;
+        if (packet.Length < PacketBytes || (packet[15] & 0x3F) != 0x21)
+            return false;
+
+        try
+        {
+            byte[] frame = packet.Slice(HeaderBytes, FrameBytes).ToArray();
+            var slotType = new SlotType(frame);
+            if (slotType.DataType != (byte)DMRDataType.VOICE_LC_HEADER)
+                return false;
+            LC? linkControl = FullLC.Decode(frame, DMRDataType.VOICE_LC_HEADER);
+            if (linkControl is null)
+                return false;
+            encrypted = linkControl.Encrypted;
+            return true;
         }
         catch (ArgumentException)
         {
@@ -125,7 +157,8 @@ public static class DmrVoicePacketCodec
         byte embeddedSequence,
         byte frameSequence,
         ReadOnlySpan<byte> ambe,
-        EmbeddedData? embeddedData = null)
+        EmbeddedData? embeddedData = null,
+        DmrBurstFSignaling? burstFSignaling = null)
     {
         if (sourceId > 0xFFFFFF)
             throw new ArgumentOutOfRangeException(nameof(sourceId));
@@ -147,14 +180,39 @@ public static class DmrVoicePacketCodec
         frame[19] = (byte)(ambe[13] & 0x0F);
         ambe[14..].CopyTo(frame.AsSpan(20, 13));
 
-        if (!voiceSync && embeddedData is not null)
+        if (!voiceSync)
         {
-            byte lcss = embeddedData.GetData(ref frame, embeddedSequence);
-            new EMB { ColorCode = 0, LCSS = lcss }.Encode(ref frame);
+            byte lcss = 0;
+            if (embeddedSequence is >= 1 and <= 4 && embeddedData is not null)
+                lcss = embeddedData.GetData(ref frame, embeddedSequence);
+            else if (embeddedSequence == 5 && burstFSignaling is { } signaling)
+                signaling.Encode(frame);
+            new EMB
+            {
+                ColorCode = 0,
+                PI = embeddedSequence == 5 && burstFSignaling?.IsReverseChannel == true,
+                LCSS = lcss
+            }.Encode(ref frame);
         }
 
         frame.CopyTo(packet.AsSpan(HeaderBytes));
         return packet;
+    }
+
+    public static bool TryExtractBurstFSignaling(
+        ReadOnlySpan<byte> packet,
+        out DmrBurstFSignaling signaling)
+    {
+        signaling = default;
+        if (packet.Length < PacketBytes || (packet[15] & 0x0F) != 5)
+            return false;
+
+        byte[] frame = packet.Slice(HeaderBytes, FrameBytes).ToArray();
+        var embedded = new EMB();
+        embedded.Decode(frame);
+        if (embedded.LCSS != 0)
+            return false;
+        return DmrBurstFSignaling.TryDecode(frame, embedded.PI, out signaling);
     }
 
     // Creates the DMR voice link-control header that starts a group call.
@@ -214,9 +272,16 @@ public static class DmrVoicePacketCodec
         uint sourceId,
         uint destinationId,
         byte slot,
-        byte frameSequence)
+        byte frameSequence,
+        bool encrypted = false)
     {
-        return CreateControlPacket(sourceId, destinationId, slot, frameSequence, DMRDataType.TERMINATOR_WITH_LC);
+        return CreateControlPacket(
+            sourceId,
+            destinationId,
+            slot,
+            frameSequence,
+            DMRDataType.TERMINATOR_WITH_LC,
+            encrypted);
     }
 
     private static byte[] CreateControlPacket(
@@ -240,16 +305,19 @@ public static class DmrVoicePacketCodec
         packet[15] |= (byte)(0x20 | (byte)dataType);
 
         byte[] frame = new byte[FrameBytes];
-        new SlotType { ColorCode = 0, DataType = (byte)dataType }.GetData(ref frame);
         var lc = new LC
         {
             FLCO = (byte)DMRFLCO.FLCO_GROUP,
+            // DMR Association privacy uses FID 0x10 on the voice LC as well as
+            // on the PI LC. The encrypted service option is a separate bit and
+            // must also remain set for the duration of a protected call.
             FID = encrypted ? DmrPrivacyAlgorithms.FeatureId : (byte)0,
             Encrypted = encrypted,
             SrcId = sourceId,
             DstId = destinationId
         };
         FullLC.Encode(lc, ref frame, dataType);
+        new SlotType { ColorCode = 0, DataType = (byte)dataType }.GetData(ref frame);
         frame.CopyTo(packet.AsSpan(HeaderBytes));
         return packet;
     }

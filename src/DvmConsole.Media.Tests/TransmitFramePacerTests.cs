@@ -163,7 +163,12 @@ public sealed class TransmitFramePacerTests
 
         public void Start() => Events.Add("start");
         public void Process(ReadOnlySpan<short> samples) => Events.Add($"process:{samples.Length}");
-        public void End() => Events.Add("end");
+        public ValueTask EndAsync(CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            Events.Add("end");
+            return ValueTask.CompletedTask;
+        }
         public void Dispose() => Events.Add("dispose");
     }
 

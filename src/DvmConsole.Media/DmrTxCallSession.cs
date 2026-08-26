@@ -8,6 +8,7 @@ namespace DvmConsole.Media;
 // Microphone capture and FNE connection state remain owned by the host.
 public sealed class DmrTxCallSession : IDisposable
 {
+    private static readonly TimeSpan PacketInterval = TimeSpan.FromMilliseconds(60);
     private readonly uint sourceId;
     private readonly uint destinationId;
     private readonly byte slot;
@@ -51,6 +52,9 @@ public sealed class DmrTxCallSession : IDisposable
         var lc = new LC
         {
             FLCO = (byte)DMRFLCO.FLCO_GROUP,
+            // DMR Association privacy marks both the Group Voice Channel User
+            // LC and the separate privacy-indicator LC with its feature-set ID.
+            // The encrypted service option remains an independent LC field.
             FID = privacy is null ? (byte)0 : DmrPrivacyAlgorithms.FeatureId,
             Encrypted = privacy is not null,
             SrcId = sourceId,
@@ -117,23 +121,46 @@ public sealed class DmrTxCallSession : IDisposable
     }
 
     public void End()
+        => EndAsync(static _ => ValueTask.CompletedTask, CancellationToken.None)
+            .AsTask()
+            .GetAwaiter()
+            .GetResult();
+
+    public ValueTask EndAsync(CancellationToken cancellationToken = default)
+        => EndAsync(WaitForNextPacketAsync, cancellationToken);
+
+    internal async ValueTask EndAsync(
+        Func<CancellationToken, ValueTask> waitForNextPacket,
+        CancellationToken cancellationToken)
     {
         ObjectDisposedException.ThrowIf(disposed, this);
+        ArgumentNullException.ThrowIfNull(waitForNextPacket);
         if (!started)
             throw new InvalidOperationException("The DMR call has not started.");
         if (ended)
             return;
 
-        audio.CompleteSuperframe();
+        IReadOnlyList<DmrOutboundPacket> completion = audio.PrepareSuperframeCompletion();
+        foreach (DmrOutboundPacket packet in completion)
+        {
+            await waitForNextPacket(cancellationToken).ConfigureAwait(false);
+            send(packet.Payload, packet.Sequence, packet.StreamId);
+        }
+
+        await waitForNextPacket(cancellationToken).ConfigureAwait(false);
         byte[] terminator = DmrVoicePacketCodec.CreateTerminatorPacket(
             sourceId,
             destinationId,
             slot,
-            sequence.FrameSequence);
+            sequence.FrameSequence,
+            encrypted: privacy is not null);
         send(terminator, sequence.PacketSequence, streamId);
         sequence.Advance();
         ended = true;
     }
+
+    private static async ValueTask WaitForNextPacketAsync(CancellationToken cancellationToken)
+        => await Task.Delay(PacketInterval, cancellationToken).ConfigureAwait(false);
 
     public void Dispose()
     {

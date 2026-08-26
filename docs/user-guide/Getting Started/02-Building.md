@@ -136,7 +136,7 @@ docs/user-guide
 
 # Tagged Releases
 
-Pushing a version tag such as `v0.4.1` starts the macOS and Windows test and
+Pushing a version tag such as `v0.4.2` starts the macOS and Windows test and
 packaging matrix. Both native macOS rows smoke the packaged application bundle,
 and the Windows row runs the Avalonia headful smoke test. Version-matched release
 notes must be present before the tag is pushed.

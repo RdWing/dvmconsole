@@ -6,6 +6,55 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-08-25
+
+### Added
+
+- Show the protocol, algorithm ID, and required key length beside an unavailable
+  local DMR key on the Encryption Key Status page.
+
+### Changed
+
+- Carry the next-superframe DMR Association message indicator in the defined
+  AMBE C3 late-entry fragments, and transmit burst-F single-burst algorithm/key
+  metadata without inserting out-of-cadence privacy headers between voice
+  superframes. Mark protected voice link control and privacy-indicator headers
+  with DMR Association FID `0x10`, require that FID when decoding privacy
+  metadata, and preserve the encrypted service option in the voice header,
+  embedded link control, and terminator.
+- Pace DMR, P25, and NXDN padded transmit tails before their terminators, and
+  carry NXDN DES/AES `VCALL` and successor `VCALL_IV` messages in alternating
+  four-frame SACCH superframes without stealing a voice slot. Send the initial
+  `VCALL` and current IV together in the two FACCH halves, and derive each
+  successor IV with the source-compatible 64-stage LFSR.
+- Document that `dvmhost r05a06_dev` currently clears DMR burst-F single-burst
+  data and replaces the second NXDN startup FACCH half with a copy of the first
+  during network-to-RF regeneration. Console's local codecs retain those
+  fields, but the affected late-entry paths are not end-to-end RF compatible.
+- Flush pending operator settings before replacing the active session during
+  codeplug loads, settings imports, profile changes, and settings resets.
+
+### Fixed
+
+- Start each DMR Association ARC4 privacy cycle after the required 256-byte
+  RC4 discard, matching radio keystream alignment on receive and transmit.
+- Decode clear receive audio on selectable DMR and NXDN channels from the
+  call's on-air encryption state instead of treating the configured transmit
+  capability as mandatory receive privacy.
+- Distinguish DMR voice-LC, privacy, voice, embedded LC, single-burst, and
+  reverse-channel signaling before decoding payload content. Support secure
+  DMR late-entry decoding when the successor MI and burst-F key identity reach
+  Console in a complete voice superframe. Keep call
+  metadata out of voice duplicate/loss acceptance, and resolve clear late entry
+  when burst F carries reverse-channel or other non-privacy signaling.
+- Prevent valid NXDN voice payloads from being corrected into phantom FACCH
+  call-control messages. Reassemble SACCH metadata for encrypted late entry,
+  switch to an advertised successor IV only after its eighth voice frame, and
+  preserve continuous 80 ms voice cadence across IV changes.
+- Apply only the newest patch-source membership request when group edits and
+  enable or disable operations overlap, so removed members do not reappear and
+  edited patches work without restarting DVM Console.
+
 ## [0.4.1] - 2026-08-25
 
 ### Added
@@ -468,7 +517,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Add patches, multi-select groups, call history, recordings, web streams, clocks, layouts, themes, startup behavior, and in-application operator documentation.
 - Add support for local and KMM-provided P25 encryption keys while preserving compatibility with existing variable-length AES key material.
 
-[Unreleased]: https://github.com/RdWing/dvmconsole/compare/v0.4.1...HEAD
+[Unreleased]: https://github.com/RdWing/dvmconsole/compare/v0.4.2...HEAD
+[0.4.2]: https://github.com/RdWing/dvmconsole/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/RdWing/dvmconsole/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/RdWing/dvmconsole/compare/v0.3.8...v0.4.0
 [0.3.8]: https://github.com/RdWing/dvmconsole/compare/v0.3.7...v0.3.8

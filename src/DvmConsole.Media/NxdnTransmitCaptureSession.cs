@@ -28,7 +28,11 @@ public sealed class NxdnTransmitCaptureSession : ITransmitCaptureSession
             privacy);
         lifecycle = new TransmitCaptureLifecycle(
             capture,
-            new DelegateTransmitCall(call.Start, samples => call.Process(samples), call.End, call.Dispose),
+            new DelegateTransmitCall(
+                call.Start,
+                samples => call.Process(samples),
+                _ => call.EndAsync(CancellationToken.None),
+                call.Dispose),
             "The NXDN capture session has faulted.",
             exception => Faulted?.Invoke(this, exception));
     }

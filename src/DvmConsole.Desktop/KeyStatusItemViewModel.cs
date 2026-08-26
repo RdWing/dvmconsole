@@ -10,8 +10,11 @@ public sealed record KeyStatusItemViewModel(
     string ModeText,
     string AlgorithmIdText,
     string KeyIdText,
-    string StatusText)
+    string StatusText,
+    string ConfigurationHint)
 {
+    public bool HasConfigurationHint => !string.IsNullOrEmpty(ConfigurationHint);
+
     public static KeyStatusItemViewModel From(
         ChannelViewModel channel,
         IP25KeyResolver? keyResolver,
@@ -76,6 +79,9 @@ public sealed record KeyStatusItemViewModel(
                             keyId)
                         : "Available · local file"
                     : "Key unavailable";
+        string configurationHint = available
+            ? string.Empty
+            : DescribeLocalKeyRequirement(channel.Definition.Mode, parsedAlgorithm, algorithmId);
 
         return new KeyStatusItemViewModel(
             channel.Definition.SystemName,
@@ -83,7 +89,29 @@ public sealed record KeyStatusItemViewModel(
             channel.ModeText,
             algorithmText,
             keyIdText,
-            statusText);
+            statusText,
+            configurationHint);
+    }
+
+    private static string DescribeLocalKeyRequirement(
+        string protocol,
+        bool parsedAlgorithm,
+        byte algorithmId)
+    {
+        if (!parsedAlgorithm || protocol != "dmr")
+            return string.Empty;
+
+        int keyBytes;
+        try
+        {
+            keyBytes = DmrPrivacyAlgorithms.KeyBytes(algorithmId);
+        }
+        catch (ArgumentOutOfRangeException)
+        {
+            return string.Empty;
+        }
+
+        return $"Local entry: protocol: \"dmr\" · algId: 0x{algorithmId:X2} · key: {keyBytes} bytes";
     }
 
     private static string DescribeAvailableKey(

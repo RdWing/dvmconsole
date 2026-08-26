@@ -135,7 +135,8 @@ public static class NxdnVoicePacketCodec
         byte ran = 0,
         byte superframePart = 0,
         byte cipherType = 0,
-        byte keyId = 0)
+        byte keyId = 0,
+        CallMetadata? sacchMetadata = null)
     {
         ValidateIds(sourceId, destinationId);
         if (ambe.Length < AmbeBytes)
@@ -154,8 +155,9 @@ public static class NxdnVoicePacketCodec
         AddSync(frame);
         EncodeLich(frame, functionChannelType: 2, option: 3);
         Span<byte> linkControl = stackalloc byte[10];
-        linkControl.Clear();
-        WriteVoiceCallLinkControl(linkControl, sourceId, destinationId, group, cipherType, keyId);
+        WriteCallMetadata(
+            linkControl,
+            sacchMetadata ?? CreateVoiceCallMetadata(sourceId, destinationId, group, cipherType, keyId));
         Span<byte> sacchData = stackalloc byte[3];
         sacchData.Clear();
         int sacchBitOffset = superframePart * 18;
@@ -163,6 +165,59 @@ public static class NxdnVoicePacketCodec
             SetBit(sacchData, bit, GetBit(linkControl, sacchBitOffset + bit));
         EncodeSacch(frame, ran, (byte)(3 - superframePart), sacchData);
         ambe[..AmbeBytes].CopyTo(frame[VoiceOffsetBytes..]);
+        Scramble(frame);
+        return packet;
+    }
+
+    // DES and AES call startup uses one FACCH frame: VCALL in the first half
+    // and VCALL_IV in the second. Keeping both messages in one RF frame gives
+    // receivers the cipher selection and current IV before the first voice
+    // frame without inserting a second control-frame delay.
+    public static byte[] CreatePrivacyCallStartPacket(
+        uint sourceId,
+        uint destinationId,
+        bool group,
+        byte frameSequence,
+        byte cipherType,
+        byte keyId,
+        ReadOnlySpan<byte> messageIndicator,
+        byte ran = 0)
+    {
+        ValidateIds(sourceId, destinationId);
+        if (cipherType is not (NxdnPrivacyAlgorithms.Des or NxdnPrivacyAlgorithms.Aes256))
+            throw new ArgumentOutOfRangeException(nameof(cipherType));
+        if (keyId > 63)
+            throw new ArgumentOutOfRangeException(nameof(keyId));
+        if (messageIndicator.Length < NxdnPrivacyAlgorithms.MessageIndicatorBytes)
+        {
+            throw new ArgumentException(
+                "NXDN DES/AES privacy requires an 8-byte message indicator.",
+                nameof(messageIndicator));
+        }
+        if (ran > 63)
+            throw new ArgumentOutOfRangeException(nameof(ran));
+
+        byte[] packet = CreatePacketHeader(
+            sourceId,
+            destinationId,
+            group,
+            VoiceCallMessageType,
+            frameSequence);
+        Span<byte> frame = packet.AsSpan(FrameOffset, FrameBytes);
+        AddSync(frame);
+        EncodeLich(frame, functionChannelType: 0, option: 0);
+        EncodeSacch(frame, ran, structure: 0, [0x10, 0x00, 0x00]);
+
+        Span<byte> voiceCall = stackalloc byte[10];
+        WriteCallMetadata(
+            voiceCall,
+            CreateVoiceCallMetadata(sourceId, destinationId, group, cipherType, keyId));
+        Span<byte> voiceCallIv = stackalloc byte[10];
+        WriteCallMetadata(
+            voiceCallIv,
+            CreateVoiceCallIvMetadata(messageIndicator));
+        EncodeFacch1(frame, Facch1OffsetBits, voiceCall);
+        EncodeFacch1(frame, Facch1OffsetBits + Facch1Bits, voiceCallIv);
         Scramble(frame);
         return packet;
     }
@@ -194,20 +249,14 @@ public static class NxdnVoicePacketCodec
         EncodeLich(frame, functionChannelType: 0, option: 0);
         EncodeSacch(frame, ran, structure: 0, [0x10, 0x00, 0x00]);
 
+        CallMetadata metadata = messageType == VoiceCallIvMessageType
+            ? CreateVoiceCallIvMetadata(messageIndicator)
+            : CreateVoiceCallMetadata(sourceId, destinationId, group, cipherType, keyId) with
+            {
+                MessageType = messageType
+            };
         Span<byte> linkControl = stackalloc byte[10];
-        linkControl.Clear();
-        linkControl[0] = messageType;
-        if (messageType == VoiceCallIvMessageType)
-        {
-            if (messageIndicator.Length < 8)
-                throw new ArgumentException("NXDN DES/AES privacy requires an 8-byte message indicator.", nameof(messageIndicator));
-            messageIndicator[..8].CopyTo(linkControl[1..]);
-        }
-        else
-        {
-            WriteVoiceCallLinkControl(linkControl, sourceId, destinationId, group, cipherType, keyId);
-            linkControl[0] = messageType;
-        }
+        WriteCallMetadata(linkControl, metadata);
 
         EncodeFacch1(frame, Facch1OffsetBits, linkControl);
         EncodeFacch1(frame, Facch1OffsetBits + Facch1Bits, linkControl);
@@ -218,20 +267,90 @@ public static class NxdnVoicePacketCodec
     public static bool TryExtractCallMetadata(ReadOnlySpan<byte> packet, out CallMetadata metadata)
     {
         metadata = default;
+        return TryExtractFacchCallMetadata(packet, 0, out metadata) ||
+            TryExtractFacchCallMetadata(packet, 1, out metadata);
+    }
+
+    public static bool TryExtractFacchCallMetadata(
+        ReadOnlySpan<byte> packet,
+        int facchIndex,
+        out CallMetadata metadata)
+    {
+        metadata = default;
+        if (facchIndex is < 0 or > 1)
+            throw new ArgumentOutOfRangeException(nameof(facchIndex));
+
         Span<byte> frame = stackalloc byte[FrameBytes];
         if (!TryExtractFrame(packet, frame))
             return false;
         Scramble(frame);
-        if (!TryDecodeFacch1(frame, Facch1OffsetBits, out byte[] linkControl) &&
-            !TryDecodeFacch1(frame, Facch1OffsetBits + Facch1Bits, out linkControl))
+        byte lich = DecodeLich(frame);
+        // FACCH call-control frames use the non-steal control-channel LICH.
+        // Voice frames carry AMBE in the same bit region; attempting FACCH
+        // correction there can turn valid voice patterns into phantom VCALL
+        // metadata and silently suppress their audio.
+        if (((lich >> 4) & 0x03) != 0)
+            return false;
+        int offset = Facch1OffsetBits + (facchIndex * Facch1Bits);
+        if (!TryDecodeFacch1(frame, offset, out byte[] linkControl))
+            return false;
+
+        return TryParseCallMetadata(linkControl, out metadata);
+    }
+
+    public static bool TryExtractSacchFragment(
+        ReadOnlySpan<byte> packet,
+        out byte structure,
+        Span<byte> payload)
+    {
+        structure = 0;
+        if (payload.Length < 3)
+            return false;
+
+        Span<byte> frame = stackalloc byte[FrameBytes];
+        if (!TryExtractFrame(packet, frame))
+            return false;
+        Scramble(frame);
+        byte lich = DecodeLich(frame);
+        if (!HasValidLichParity(lich) || ((lich >> 4) & 0x03) != 2)
+            return false;
+
+        Span<int> symbols = stackalloc int[72];
+        symbols.Fill(-1);
+        int input = 0;
+        for (int index = 0; index < symbols.Length; index++)
+        {
+            if (SacchPunctures.Contains(index))
+                continue;
+            symbols[index] = GetBit(frame, SacchOffsetBits + SacchInterleave[input++]) ? 1 : 0;
+        }
+
+        Span<byte> decoded = stackalloc byte[5];
+        if (!TryDecodeConvolution(symbols, decoded, decodedBitCount: 36) ||
+            CreateCrc(decoded, 26, 6, 0x27, 0x3F) != ReadBits(decoded, 26, 6))
         {
             return false;
         }
 
+        structure = (byte)(decoded[0] >> 6);
+        payload[..3].Clear();
+        for (int bit = 0; bit < 18; bit++)
+            SetBit(payload, bit, GetBit(decoded, 8 + bit));
+        return true;
+    }
+
+    public static bool TryParseCallMetadata(
+        ReadOnlySpan<byte> linkControl,
+        out CallMetadata metadata)
+    {
+        metadata = default;
+        if (linkControl.Length < 9)
+            return false;
+
         byte type = (byte)(linkControl[0] & 0x3F);
         if (type == VoiceCallIvMessageType)
         {
-            metadata = new CallMetadata(type, 0, 0, true, 0, 0, linkControl[1..9]);
+            metadata = new CallMetadata(type, 0, 0, true, 0, 0, linkControl[1..9].ToArray());
             return true;
         }
         if (type is not (VoiceCallMessageType or TransmitReleaseMessageType))
@@ -372,19 +491,33 @@ public static class NxdnVoicePacketCodec
             symbols[index] = GetBit(frame, offset + FacchInterleave[input++]) ? 1 : 0;
         }
 
-        const int states = 16;
-        Span<int> metrics = stackalloc int[states];
-        Span<int> next = stackalloc int[states];
-        metrics.Fill(10_000);
+        data = new byte[12];
+        return TryDecodeConvolution(symbols, data, decodedBitCount: 96) &&
+            CreateCrc(data, 80, 12, 0x80F, 0xFFF) == ReadBits(data, 80, 12);
+    }
+
+    private static bool TryDecodeConvolution(
+        ReadOnlySpan<int> symbols,
+        Span<byte> decoded,
+        int decodedBitCount)
+    {
+        const int StateCount = 16;
+        const int UnreachableMetric = 10_000;
+        if (symbols.Length < decodedBitCount * 2 || decoded.Length * 8 < decodedBitCount)
+            return false;
+
+        Span<int> metrics = stackalloc int[StateCount];
+        Span<int> next = stackalloc int[StateCount];
+        metrics.Fill(UnreachableMetric);
         metrics[0] = 0;
-        int[,] previous = new int[96, states];
-        byte[,] decisions = new byte[96, states];
-        for (int step = 0; step < 96; step++)
+        int[,] previous = new int[decodedBitCount, StateCount];
+        byte[,] decisions = new byte[decodedBitCount, StateCount];
+        for (int step = 0; step < decodedBitCount; step++)
         {
-            next.Fill(10_000);
-            for (int state = 0; state < states; state++)
+            next.Fill(UnreachableMetric);
+            for (int state = 0; state < StateCount; state++)
             {
-                if (metrics[state] >= 10_000)
+                if (metrics[state] >= UnreachableMetric)
                     continue;
                 for (int bit = 0; bit <= 1; bit++)
                 {
@@ -412,13 +545,13 @@ public static class NxdnVoicePacketCodec
         }
 
         int finalState = 0;
-        data = new byte[12];
-        for (int step = 95; step >= 0; step--)
+        decoded.Clear();
+        for (int step = decodedBitCount - 1; step >= 0; step--)
         {
-            SetBit(data, step, decisions[step, finalState] != 0);
+            SetBit(decoded, step, decisions[step, finalState] != 0);
             finalState = previous[step, finalState];
         }
-        return CreateCrc(data, 80, 12, 0x80F, 0xFFF) == ReadBits(data, 80, 12);
+        return true;
     }
 
     private static void EncodeConvolution(ReadOnlySpan<byte> input, int bitCount, Span<bool> output)
@@ -491,21 +624,66 @@ public static class NxdnVoicePacketCodec
             throw new ArgumentOutOfRangeException(nameof(destinationId), "NXDN destination IDs are 16-bit non-zero values.");
     }
 
-    private static void WriteVoiceCallLinkControl(
-        Span<byte> linkControl,
+    private static CallMetadata CreateVoiceCallMetadata(
         uint sourceId,
         uint destinationId,
         bool group,
         byte cipherType,
         byte keyId)
+        => new(
+            VoiceCallMessageType,
+            (ushort)sourceId,
+            (ushort)destinationId,
+            group,
+            cipherType,
+            keyId,
+            []);
+
+    private static CallMetadata CreateVoiceCallIvMetadata(ReadOnlySpan<byte> messageIndicator)
     {
-        linkControl[0] = VoiceCallMessageType;
-        linkControl[2] = (byte)((group ? 1 : 4) << 5);
-        linkControl[3] = (byte)(sourceId >> 8);
-        linkControl[4] = (byte)sourceId;
-        linkControl[5] = (byte)(destinationId >> 8);
-        linkControl[6] = (byte)destinationId;
-        linkControl[7] = (byte)((cipherType << 6) | keyId);
+        if (messageIndicator.Length < NxdnPrivacyAlgorithms.MessageIndicatorBytes)
+        {
+            throw new ArgumentException(
+                "NXDN DES/AES privacy requires an 8-byte message indicator.",
+                nameof(messageIndicator));
+        }
+
+        return new CallMetadata(
+            VoiceCallIvMessageType,
+            0,
+            0,
+            true,
+            0,
+            0,
+            messageIndicator[..NxdnPrivacyAlgorithms.MessageIndicatorBytes].ToArray());
+    }
+
+    private static void WriteCallMetadata(Span<byte> linkControl, CallMetadata metadata)
+    {
+        linkControl.Clear();
+        linkControl[0] = metadata.MessageType;
+        if (metadata.MessageType == VoiceCallIvMessageType)
+        {
+            if (metadata.MessageIndicator.Length < NxdnPrivacyAlgorithms.MessageIndicatorBytes)
+            {
+                throw new ArgumentException(
+                    "NXDN VCALL_IV metadata requires an 8-byte message indicator.",
+                    nameof(metadata));
+            }
+            metadata.MessageIndicator.AsSpan(0, NxdnPrivacyAlgorithms.MessageIndicatorBytes)
+                .CopyTo(linkControl[1..]);
+            return;
+        }
+        if (metadata.MessageType is not (VoiceCallMessageType or TransmitReleaseMessageType))
+            throw new ArgumentOutOfRangeException(nameof(metadata));
+
+        linkControl[2] = (byte)((metadata.Group ? 1 : 4) << 5);
+        linkControl[3] = (byte)(metadata.SourceId >> 8);
+        linkControl[4] = (byte)metadata.SourceId;
+        linkControl[5] = (byte)(metadata.DestinationId >> 8);
+        linkControl[6] = (byte)metadata.DestinationId;
+        if (metadata.MessageType == VoiceCallMessageType)
+            linkControl[7] = (byte)((metadata.CipherType << 6) | metadata.KeyId);
     }
 
     private static void WriteThreeBytes(Span<byte> target, int offset, uint value)

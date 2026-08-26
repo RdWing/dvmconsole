@@ -17,13 +17,14 @@ public sealed class DmrTxAudioSession : IDisposable
     private readonly VoiceFrameEncoder encoder;
     private readonly DmrTxPacketSequence sequence;
     private readonly EmbeddedData? embeddedData;
-    private readonly DmrPrivacyOptions? privacy;
     private readonly DmrPrivacyProcessor? privacyProcessor;
+    private readonly DmrBurstFSignaling? encryptedBurstFSignaling;
     private readonly byte[] pendingAmbe = new byte[DmrVoicePacketCodec.AmbeBytes];
+    private DmrLateEntryMessageIndicator? lateEntryMessageIndicator;
     private int pendingAmbeBytes;
     private byte embeddedSequence;
     private int pendingPcmSamples;
-    private bool privacyHeaderPending;
+    private List<DmrOutboundPacket>? deferredPackets;
     private bool disposed;
 
     public DmrTxAudioSession(
@@ -83,7 +84,6 @@ public sealed class DmrTxAudioSession : IDisposable
             throw new ArgumentOutOfRangeException(nameof(embeddedSequence));
         this.embeddedSequence = embeddedSequence;
         this.embeddedData = embeddedData;
-        this.privacy = privacy;
         if (privacy is not null)
         {
             if (vocoder is not IHalfRateVocoderSession halfRateVocoder)
@@ -92,6 +92,9 @@ public sealed class DmrTxAudioSession : IDisposable
                     "DMR privacy requires a vocoder with half-rate parameter access.");
             }
             privacyProcessor = new DmrPrivacyProcessor(halfRateVocoder, privacy);
+            encryptedBurstFSignaling = DmrBurstFSignaling.EncryptionIdentifiers(
+                privacy.AlgorithmId,
+                privacy.KeyId);
         }
         encoder = new VoiceFrameEncoder(vocoder ?? throw new ArgumentNullException(nameof(vocoder)), VocoderMode.DmrAmbe);
     }
@@ -132,6 +135,28 @@ public sealed class DmrTxAudioSession : IDisposable
         return PacketsSent - packetsBefore;
     }
 
+    // Builds the remaining voice bursts without sending them. Call-level
+    // orchestration can then preserve the 60 ms DMR burst cadence before the
+    // terminator instead of overflowing a downstream modem queue.
+    internal IReadOnlyList<DmrOutboundPacket> PrepareSuperframeCompletion()
+    {
+        ObjectDisposedException.ThrowIf(disposed, this);
+        if (deferredPackets is not null)
+            throw new InvalidOperationException("DMR superframe completion is already being prepared.");
+
+        var packets = new List<DmrOutboundPacket>();
+        deferredPackets = packets;
+        try
+        {
+            CompleteSuperframe();
+            return packets;
+        }
+        finally
+        {
+            deferredPackets = null;
+        }
+    }
+
     public void Dispose()
     {
         if (disposed)
@@ -146,9 +171,14 @@ public sealed class DmrTxAudioSession : IDisposable
 
     private void EmitCodeword(ReadOnlyMemory<byte> codeword)
     {
-        if (privacyHeaderPending)
-            SendPrivacyHeader();
-
+        int codewordInBurst = pendingAmbeBytes / VocoderFrameSizes.HalfRateCodewordBytes;
+        if (privacyProcessor is not null && embeddedSequence == 0 && codewordInBurst == 0)
+        {
+            // The late-entry fragments carried by this superframe announce
+            // the MI that becomes active at the following voice-sync burst.
+            lateEntryMessageIndicator = new DmrLateEntryMessageIndicator(
+                privacyProcessor.GetNextMessageIndicator());
+        }
         Span<byte> destination = pendingAmbe.AsSpan(
             pendingAmbeBytes,
             VocoderFrameSizes.HalfRateCodewordBytes);
@@ -156,6 +186,7 @@ public sealed class DmrTxAudioSession : IDisposable
             privacyProcessor.ProcessCodeword(codeword.Span, destination);
         else
             codeword.Span.CopyTo(destination);
+        lateEntryMessageIndicator?.ApplyFragment(destination, embeddedSequence, codewordInBurst);
         pendingAmbeBytes += destination.Length;
         CodewordsEncoded++;
         if (pendingAmbeBytes < pendingAmbe.Length)
@@ -170,43 +201,33 @@ public sealed class DmrTxAudioSession : IDisposable
             embeddedSequence,
             sequence.FrameSequence,
             pendingAmbe,
-            embeddedData);
+            embeddedData,
+            embeddedSequence == 5 ? encryptedBurstFSignaling : null);
         ushort packetSequence = sequence.PacketSequence;
-        send(packet, packetSequence, streamId);
+        EmitPacket(packet, packetSequence);
         pendingAmbeBytes = 0;
         PacketsSent++;
         sequence.Advance();
         if (embeddedSequence >= 5)
+        {
             this.embeddedSequence = 0;
+            lateEntryMessageIndicator = null;
+        }
         else
             this.embeddedSequence++;
 
-        if (privacyProcessor is not null &&
-            CodewordsEncoded % (CodewordsPerPacket * 6) == 0)
-        {
-            privacyHeaderPending = true;
-        }
     }
 
-    private void SendPrivacyHeader()
+    private void EmitPacket(byte[] packet, ushort packetSequence)
     {
-        DmrPrivacyOptions configured = privacy!;
-        var current = new DmrPrivacyOptions(
-            configured.AlgorithmId,
-            configured.KeyId,
-            configured.Key,
-            privacyProcessor!.MessageIndicator);
-        byte[] header = DmrVoicePacketCodec.CreatePrivacyIndicatorPacket(
-            sourceId,
-            destinationId,
-            slot,
-            sequence.FrameSequence,
-            current);
-        send(header, sequence.PacketSequence, streamId);
-        sequence.Advance();
-        privacyHeaderPending = false;
+        if (deferredPackets is not null)
+            deferredPackets.Add(new DmrOutboundPacket(packet, packetSequence, streamId));
+        else
+            send(packet, packetSequence, streamId);
     }
 }
+
+internal readonly record struct DmrOutboundPacket(byte[] Payload, ushort Sequence, uint StreamId);
 
 // Owns the packet and DMR frame sequence numbers for one outbound call.
 // RTP sequence 65535 is reserved for call-end signaling and is never used

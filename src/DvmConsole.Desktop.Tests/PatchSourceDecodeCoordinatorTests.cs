@@ -209,6 +209,35 @@ public sealed class PatchSourceDecodeCoordinatorTests
         Assert.True(coordinator.IsActive(nxdn));
     }
 
+    [Fact]
+    public async Task LatestRequestedSourceSetWinsWhileDecoderIsBusy()
+    {
+        ChannelViewModel active = DmrChannel("Active", destinationId: 100);
+        ChannelViewModel superseded = DmrChannel("Superseded", destinationId: 200);
+        ChannelViewModel expected = DmrChannel("Expected", destinationId: 300);
+        var vocoder = new BlockingVocoderBackend();
+        await using var coordinator = new PatchSourceDecodeCoordinator(
+            null,
+            (_, _) => { },
+            () => vocoder);
+        await coordinator.ApplyChannelsAsync([active]);
+
+        Task<int> processing = Task.Run(() => coordinator.ProcessAsync(
+            active,
+            CreateDmrTraffic(destinationId: 100, streamId: 99)));
+        Assert.True(vocoder.DecodeEntered.Wait(TimeSpan.FromSeconds(2)));
+
+        Task staleApply = coordinator.ApplyChannelsAsync([superseded]);
+        Task latestApply = coordinator.ApplyChannelsAsync([expected]);
+        vocoder.AllowDecode.Set();
+
+        await Task.WhenAll(processing, staleApply, latestApply).WaitAsync(TimeSpan.FromSeconds(2));
+
+        Assert.False(coordinator.IsActive(active));
+        Assert.False(coordinator.IsActive(superseded));
+        Assert.True(coordinator.IsActive(expected));
+    }
+
     private static ChannelViewModel DmrChannel(string name, uint destinationId)
         => new(new ChannelConfiguration
         {
@@ -286,6 +315,59 @@ public sealed class PatchSourceDecodeCoordinatorTests
             codeword[..parameters.Length].CopyTo(parameters);
             return parameters.Length;
         }
+        public void BuildCodeword(ReadOnlySpan<byte> parameters, Span<byte> codeword)
+        {
+            codeword.Clear();
+            parameters.CopyTo(codeword);
+        }
+
+        public void Dispose()
+        {
+        }
+    }
+
+    private sealed class BlockingVocoderBackend : IVocoderBackend
+    {
+        public ManualResetEventSlim DecodeEntered { get; } = new();
+        public ManualResetEventSlim AllowDecode { get; } = new();
+        public string Name => "blocking fake";
+        public bool IsAvailable => true;
+
+        public IVocoderSession CreateSession(VocoderMode mode)
+            => new BlockingVocoderSession(DecodeEntered, AllowDecode);
+
+        public void Dispose()
+        {
+            DecodeEntered.Dispose();
+            AllowDecode.Dispose();
+        }
+    }
+
+    private sealed class BlockingVocoderSession(
+        ManualResetEventSlim decodeEntered,
+        ManualResetEventSlim allowDecode) : IHalfRateVocoderSession
+    {
+        public int Encode(ReadOnlySpan<short> samples, Span<byte> codeword) => 0;
+
+        public int Decode(ReadOnlySpan<byte> codeword, Span<short> samples)
+        {
+            decodeEntered.Set();
+            if (!allowDecode.Wait(TimeSpan.FromSeconds(2)))
+                throw new TimeoutException("The blocking decoder was not released.");
+            samples.Fill(20_000);
+            return 0;
+        }
+
+        public int FlushEncode(Span<byte> codeword) => 0;
+        public int EncodeParameters(ReadOnlySpan<short> samples, Span<byte> parameters) => 0;
+        public int DecodeParameters(ReadOnlySpan<byte> parameters, Span<short> samples, uint correctedErrors = 0, bool lost = false) => 0;
+        public int FlushEncodeParameters(Span<byte> parameters) => 0;
+        public int ExtractParameters(ReadOnlySpan<byte> codeword, Span<byte> parameters)
+        {
+            codeword[..parameters.Length].CopyTo(parameters);
+            return parameters.Length;
+        }
+
         public void BuildCodeword(ReadOnlySpan<byte> parameters, Span<byte> codeword)
         {
             codeword.Clear();

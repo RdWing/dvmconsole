@@ -6,24 +6,40 @@ internal interface ITransmitCall : IDisposable
 {
     void Start();
     void Process(ReadOnlySpan<short> samples);
-    void End();
+    ValueTask EndAsync(CancellationToken cancellationToken);
 }
 
 internal delegate void ProcessTransmitSamples(ReadOnlySpan<short> samples);
+internal delegate ValueTask EndTransmitCall(CancellationToken cancellationToken);
 
 internal sealed class DelegateTransmitCall(
     Action start,
     ProcessTransmitSamples process,
-    Action end,
+    EndTransmitCall end,
     Action dispose) : ITransmitCall
 {
+    public DelegateTransmitCall(
+        Action start,
+        ProcessTransmitSamples process,
+        Action end,
+        Action dispose)
+        : this(start, process, cancellationToken => EndSynchronously(end, cancellationToken), dispose)
+    {
+    }
+
     public void Start() => start();
 
     public void Process(ReadOnlySpan<short> samples) => process(samples);
 
-    public void End() => end();
+    public ValueTask EndAsync(CancellationToken cancellationToken) => end(cancellationToken);
 
     public void Dispose() => dispose();
+
+    private static ValueTask EndSynchronously(Action end, CancellationToken cancellationToken)
+    {
+        end();
+        return ValueTask.CompletedTask;
+    }
 }
 
 internal sealed class TransmitCaptureLifecycle : IAsyncDisposable
@@ -177,7 +193,7 @@ internal sealed class TransmitCaptureLifecycle : IAsyncDisposable
         {
             try
             {
-                call.End();
+                await call.EndAsync(cancellationToken).ConfigureAwait(false);
             }
             catch (Exception exception)
             {

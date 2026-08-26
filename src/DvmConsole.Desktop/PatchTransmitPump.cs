@@ -114,7 +114,7 @@ internal sealed class PatchTransmitPump
             try
             {
                 if (session.IsStarted && !session.IsEnded)
-                    session.End();
+                    await session.EndAsync().ConfigureAwait(false);
             }
             catch (Exception exception)
             {

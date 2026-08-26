@@ -2,10 +2,11 @@ using DvmConsole.Vocoder;
 
 namespace DvmConsole.Media;
 
-// Represents one explicit NXDN 4800 call: duplicated FACCH VCALL, voice, then
-// duplicated FACCH TX_REL on the same FNE stream.
+// Represents one explicit NXDN 4800 call: FACCH startup, continuous voice with
+// SACCH call signaling, then duplicated FACCH TX_REL on the same FNE stream.
 public sealed class NxdnTxCallSession : IDisposable
 {
+    private static readonly TimeSpan FrameInterval = TimeSpan.FromMilliseconds(80);
     private readonly uint sourceId;
     private readonly uint destinationId;
     private readonly bool group;
@@ -45,28 +46,26 @@ public sealed class NxdnTxCallSession : IDisposable
             throw new InvalidOperationException("The NXDN call has already started.");
         if (ended)
             throw new InvalidOperationException("The NXDN call has already ended.");
-        byte[] header = NxdnVoicePacketCodec.CreateCallControlPacket(
-            sourceId,
-            destinationId,
-            group,
-            NxdnVoicePacketCodec.VoiceCallMessageType,
-            audio.FrameSequence,
-            cipherType: privacy?.AlgorithmId ?? 0,
-            keyId: privacy?.KeyId ?? 0);
-        send(header, audio.PacketSequence, streamId);
-        audio.AdvanceSequence();
-        if (privacy is not null && privacy.AlgorithmId != NxdnPrivacyAlgorithms.Ehr)
-        {
-            byte[] iv = NxdnVoicePacketCodec.CreateCallControlPacket(
+        byte[] header = privacy is not null &&
+            privacy.AlgorithmId is NxdnPrivacyAlgorithms.Des or NxdnPrivacyAlgorithms.Aes256
+            ? NxdnVoicePacketCodec.CreatePrivacyCallStartPacket(
                 sourceId,
                 destinationId,
                 group,
-                NxdnVoicePacketCodec.VoiceCallIvMessageType,
                 audio.FrameSequence,
-                messageIndicator: privacy.MessageIndicator.Span);
-            send(iv, audio.PacketSequence, streamId);
-            audio.AdvanceSequence();
-        }
+                privacy.AlgorithmId,
+                privacy.KeyId,
+                privacy.MessageIndicator.Span)
+            : NxdnVoicePacketCodec.CreateCallControlPacket(
+                sourceId,
+                destinationId,
+                group,
+                NxdnVoicePacketCodec.VoiceCallMessageType,
+                audio.FrameSequence,
+                cipherType: privacy?.AlgorithmId ?? 0,
+                keyId: privacy?.KeyId ?? 0);
+        send(header, audio.PacketSequence, streamId);
+        audio.AdvanceSequence();
         started = true;
     }
 
@@ -79,19 +78,40 @@ public sealed class NxdnTxCallSession : IDisposable
     }
 
     public void End()
+        => EndAsync(static _ => ValueTask.CompletedTask, CancellationToken.None)
+            .AsTask()
+            .GetAwaiter()
+            .GetResult();
+
+    public ValueTask EndAsync(CancellationToken cancellationToken = default)
+        => EndAsync(WaitForNextFrameAsync, cancellationToken);
+
+    internal async ValueTask EndAsync(
+        Func<CancellationToken, ValueTask> waitForNextFrame,
+        CancellationToken cancellationToken)
     {
         ObjectDisposedException.ThrowIf(disposed, this);
+        ArgumentNullException.ThrowIfNull(waitForNextFrame);
         if (!started)
             throw new InvalidOperationException("The NXDN call has not started.");
         if (ended)
             return;
-        audio.CompleteFrame();
+        IReadOnlyList<NxdnOutboundPacket> completion = audio.PrepareFrameCompletion();
+        foreach (NxdnOutboundPacket packet in completion)
+        {
+            await waitForNextFrame(cancellationToken).ConfigureAwait(false);
+            send(packet.Payload, packet.Sequence, packet.StreamId);
+        }
+        await waitForNextFrame(cancellationToken).ConfigureAwait(false);
         byte[] terminator = NxdnVoicePacketCodec.CreateCallControlPacket(
             sourceId, destinationId, group, NxdnVoicePacketCodec.TransmitReleaseMessageType, audio.FrameSequence);
         send(terminator, audio.PacketSequence, streamId);
         audio.AdvanceSequence();
         ended = true;
     }
+
+    private static async ValueTask WaitForNextFrameAsync(CancellationToken cancellationToken)
+        => await Task.Delay(FrameInterval, cancellationToken).ConfigureAwait(false);
 
     public void Dispose()
     {

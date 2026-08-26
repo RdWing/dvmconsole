@@ -37,6 +37,22 @@ internal sealed class MainWindowSessionHost : IAsyncDisposable
     public ValueTask StartAsync()
         => viewModel.StartKeyboardPttAsync();
 
+    // A replacement session reloads operator settings from the shared store.
+    // Flush the outgoing session before constructing that replacement so two
+    // session-owned writers never race over different settings snapshots.
+    public async Task PrepareForReplacementAsync()
+    {
+        await transitionGate.WaitAsync();
+        try
+        {
+            await viewModel.FlushUserSettingsAsync();
+        }
+        finally
+        {
+            transitionGate.Release();
+        }
+    }
+
     public async Task ReplaceAsync(MainWindowViewModel replacement)
     {
         ArgumentNullException.ThrowIfNull(replacement);

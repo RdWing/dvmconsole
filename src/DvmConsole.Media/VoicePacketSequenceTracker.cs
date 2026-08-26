@@ -6,6 +6,7 @@ namespace DvmConsole.Media;
 public sealed class VoicePacketSequenceTracker
 {
     private bool hasPacket;
+    private bool lastSequenceIsMetadataOnly;
     private uint streamId;
     private ushort lastSequence;
 
@@ -17,12 +18,18 @@ public sealed class VoicePacketSequenceTracker
         if (!hasPacket || streamId != packetStreamId)
         {
             hasPacket = true;
+            lastSequenceIsMetadataOnly = false;
             streamId = packetStreamId;
             lastSequence = packetSequence;
             return true;
         }
 
         ushort distance = (ushort)(packetSequence - lastSequence);
+        if (distance == 0 && lastSequenceIsMetadataOnly)
+        {
+            lastSequenceIsMetadataOnly = false;
+            return true;
+        }
         if (distance == 0 || distance >= 0x8000)
         {
             DuplicateOrLatePackets++;
@@ -36,6 +43,30 @@ public sealed class VoicePacketSequenceTracker
             lost = Math.Max(0, lost - 1);
         LostPackets += lost;
         lastSequence = packetSequence;
+        lastSequenceIsMetadataOnly = false;
         return true;
+    }
+
+    // Metadata shares the RTP sequence space with voice on some DMR peers, but
+    // other peers reuse the call-start sequence for the first voice burst.
+    // Advance a known stream without treating metadata as accepted media, so
+    // either convention remains valid and cannot suppress the first audio.
+    public void ObserveMetadata(uint packetStreamId, ushort packetSequence)
+    {
+        if (!hasPacket || streamId != packetStreamId)
+        {
+            hasPacket = true;
+            lastSequenceIsMetadataOnly = true;
+            streamId = packetStreamId;
+            lastSequence = packetSequence;
+            return;
+        }
+
+        ushort distance = (ushort)(packetSequence - lastSequence);
+        if (distance == 0 || distance >= 0x8000)
+            return;
+
+        lastSequence = packetSequence;
+        lastSequenceIsMetadataOnly = true;
     }
 }

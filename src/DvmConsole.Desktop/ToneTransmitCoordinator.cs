@@ -239,7 +239,7 @@ public sealed class ToneTransmitCoordinator : IAsyncDisposable
                     }
                 }
 
-                session.End();
+                await session.EndAsync(cancellationToken).ConfigureAwait(false);
             }
             finally
             {
@@ -253,7 +253,7 @@ public sealed class ToneTransmitCoordinator : IAsyncDisposable
                 try
                 {
                     if (session.IsStarted && !session.IsEnded)
-                        session.End();
+                        await session.EndAsync(CancellationToken.None).ConfigureAwait(false);
                 }
                 finally
                 {

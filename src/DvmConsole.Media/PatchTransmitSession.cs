@@ -127,6 +127,28 @@ public sealed class PatchTransmitSession : IDisposable
         ended = true;
     }
 
+    public async ValueTask EndAsync(CancellationToken cancellationToken = default)
+    {
+        ObjectDisposedException.ThrowIf(disposed, this);
+        if (!started)
+            throw new InvalidOperationException("The patch call has not started.");
+        if (ended)
+            return;
+
+        if (dmr is not null)
+            await dmr.EndAsync(cancellationToken).ConfigureAwait(false);
+        else if (p25 is not null)
+            await p25.EndAsync(cancellationToken).ConfigureAwait(false);
+        else if (nxdn is not null)
+            await nxdn.EndAsync(cancellationToken).ConfigureAwait(false);
+        else
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            analog?.End();
+        }
+        ended = true;
+    }
+
     public void Dispose()
     {
         if (disposed)

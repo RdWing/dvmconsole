@@ -28,10 +28,11 @@ public sealed record DmrTrafficSelector
             traffic.DestinationId == DestinationId &&
             traffic.Slot == Slot &&
             (IsVoiceFrame(traffic.FrameType) ||
-             DmrVoicePacketCodec.IsPrivacyIndicator(traffic.Payload));
+             DmrVoicePacketCodec.IsPrivacyIndicator(traffic.Payload) ||
+             DmrVoicePacketCodec.TryExtractVoiceEncryptionState(traffic.Payload, out _));
     }
 
-    private static bool IsVoiceFrame(string? frameType)
+    internal static bool IsVoiceFrame(string? frameType)
     {
         return string.Equals(frameType, "VOICE", StringComparison.OrdinalIgnoreCase) ||
             string.Equals(frameType, "VOICE_SYNC", StringComparison.OrdinalIgnoreCase);

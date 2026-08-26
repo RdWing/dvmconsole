@@ -67,6 +67,7 @@ public sealed class DmrPrivacyProcessor : IDisposable
 {
     private const int CodewordsPerPrivacyCycle = 18;
     private const int ParameterBytes = VocoderFrameSizes.HalfRateParameterBytes;
+    private const int Arc4DiscardBytes = 256;
     private readonly IHalfRateVocoderSession vocoder;
     private readonly byte algorithmId;
     private readonly byte[] key;
@@ -86,6 +87,12 @@ public sealed class DmrPrivacyProcessor : IDisposable
     }
 
     public ReadOnlyMemory<byte> MessageIndicator => messageIndicator;
+
+    public byte[] GetNextMessageIndicator()
+    {
+        ObjectDisposedException.ThrowIf(disposed, this);
+        return CalculateNextMessageIndicator();
+    }
 
     public int ProcessCodeword(ReadOnlySpan<byte> input, Span<byte> output)
     {
@@ -176,14 +183,19 @@ public sealed class DmrPrivacyProcessor : IDisposable
 
     private void AdvanceMessageIndicator()
     {
-        byte[] next = algorithmId switch
+        byte[] next = CalculateNextMessageIndicator();
+        next.CopyTo(messageIndicator, 0);
+    }
+
+    private byte[] CalculateNextMessageIndicator()
+    {
+        return algorithmId switch
         {
             DmrPrivacyAlgorithms.Arc4 => CycleArc4Mi(messageIndicator),
             DmrPrivacyAlgorithms.DesOfb => ExpandDesIv(messageIndicator)[4..8],
             DmrPrivacyAlgorithms.Aes256 => ExpandAesIv(messageIndicator)[4..8],
             _ => throw new InvalidOperationException("Unsupported DMR privacy algorithm.")
         };
-        next.CopyTo(messageIndicator, 0);
     }
 
     private static byte[] CreateArc4Keystream(ReadOnlySpan<byte> key, ReadOnlySpan<byte> mi)
@@ -202,12 +214,14 @@ public sealed class DmrPrivacyProcessor : IDisposable
         byte[] output = new byte[CodewordsPerPrivacyCycle * ParameterBytes];
         int x = 0;
         j = 0;
-        for (int index = 0; index < output.Length; index++)
+        int generatedBytes = Arc4DiscardBytes + output.Length;
+        for (int index = 0; index < generatedBytes; index++)
         {
             x = (x + 1) & 0xFF;
             j = (j + state[x]) & 0xFF;
             (state[x], state[j]) = (state[j], state[x]);
-            output[index] = state[(state[x] + state[j]) & 0xFF];
+            if (index >= Arc4DiscardBytes)
+                output[index - Arc4DiscardBytes] = state[(state[x] + state[j]) & 0xFF];
         }
         CryptographicOperations.ZeroMemory(combined);
         CryptographicOperations.ZeroMemory(state);
