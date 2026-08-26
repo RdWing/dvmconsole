@@ -110,11 +110,13 @@ selectable_encryption: true
 
 When enabled, the resource card shows **SELECT** next to the TAR indicator area. Clicking **SELECT** toggles console transmit between encrypted and clear for that system/talkgroup.
 
-The selected encrypted/clear state is saved and restored across restarts. The key and algorithm still come from the codeplug; the toggle only controls whether the console uses them for transmit.
-
-Receive privacy follows the metadata in each call rather than the current
-transmit-button state. A selectable channel therefore receives clear calls
-without a privacy header and encrypted calls with the configured key. DMR
+The selected encrypted/clear state is saved and restored across restarts. The
+key and algorithm still come from the codeplug. **CLEAR** sends clear audio and
+admits clear receive traffic; **SECURE** sends encrypted audio and rejects clear
+receive traffic. Incoming secure calls are decoded only when their on-air
+metadata identifies an available configured key. A selectable channel in
+**CLEAR** can therefore receive clear calls even when that secure key is not
+currently available. DMR
 secure calls also encode late-entry MI fragments and burst-F algorithm/key
 identifiers. The reviewed `dvmhost r05a06_dev` clears burst F while regenerating
 RF, so that identity is not preserved end to end through that host revision.

@@ -60,15 +60,34 @@ internal sealed class MainWindowSessionHost : IAsyncDisposable
         try
         {
             MainWindowViewModel previous = viewModel;
-            closeSessionWindows();
-            await cardPtt.DisposeAsync();
-            previous.ActivityCallHistoryChanging -= activityHistoryChanging;
+            CardPttController previousCardPtt = cardPtt;
+            CardPttController replacementCardPtt = CreateCardPtt(replacement);
             replacement.ActivityCallHistoryChanging += activityHistoryChanging;
+            try
+            {
+                await replacement.StartKeyboardPttAsync();
+                closeSessionWindows();
+                setDataContext(replacement);
+            }
+            catch
+            {
+                replacement.ActivityCallHistoryChanging -= activityHistoryChanging;
+                await replacementCardPtt.DisposeAsync();
+                await replacement.DisposeAsync();
+                throw;
+            }
+
+            // Ownership changes only after the replacement is ready and the
+            // window has accepted it. Cleanup failures from the outgoing
+            // session cannot leave the host pointing at a half-installed one.
             viewModel = replacement;
-            cardPtt = CreateCardPtt(replacement);
-            setDataContext(replacement);
-            await previous.DisposeAsync();
-            await replacement.StartKeyboardPttAsync();
+            cardPtt = replacementCardPtt;
+            previous.ActivityCallHistoryChanging -= activityHistoryChanging;
+
+            var cleanup = new AsyncCleanup();
+            await cleanup.RunTaskAsync(() => previousCardPtt.DisposeAsync().AsTask());
+            await cleanup.RunTaskAsync(() => previous.DisposeAsync().AsTask());
+            cleanup.ThrowIfFailed();
         }
         finally
         {

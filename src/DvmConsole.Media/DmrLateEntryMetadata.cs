@@ -7,7 +7,7 @@ namespace DvmConsole.Media;
 // in the first four C3 bits of each AMBE codeword across a six-burst voice
 // superframe. Three systematic Golay halves occupy bursts A-C and their
 // parity halves occupy bursts D-F.
-public sealed class DmrLateEntryMessageIndicator
+internal sealed class DmrLateEntryMessageIndicator
 {
     private const int VoiceBurstsPerSuperframe = 6;
     private const int CodewordsPerBurst = DmrVoicePacketCodec.CodewordsPerPacket;

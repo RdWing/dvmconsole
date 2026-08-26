@@ -65,7 +65,7 @@ public sealed class NxdnVoicePacketCodecTests
     }
 
     [Fact]
-    public void CallSessionSendsHeaderVoiceAndReleaseInOrder()
+    public async Task CallSessionSendsHeaderVoiceAndReleaseInOrder()
     {
         var sent = new List<(byte[] Payload, ushort Sequence)>();
         using var call = new NxdnTxCallSession(
@@ -78,7 +78,7 @@ public sealed class NxdnVoicePacketCodecTests
 
         call.Start();
         call.Process(new short[VocoderFrameSizes.PcmSamplesPerFrame * NxdnVoicePacketCodec.CodewordsPerFrame]);
-        call.End();
+        await call.EndAsync(static _ => ValueTask.CompletedTask, CancellationToken.None);
 
         Assert.Equal(4, sent.Count);
         Assert.Equal(NxdnVoicePacketCodec.VoiceCallMessageType, sent[0].Payload[4]);

@@ -120,12 +120,6 @@ public sealed class DmrTxCallSession : IDisposable
         return audio.Process(samples);
     }
 
-    public void End()
-        => EndAsync(static _ => ValueTask.CompletedTask, CancellationToken.None)
-            .AsTask()
-            .GetAwaiter()
-            .GetResult();
-
     public ValueTask EndAsync(CancellationToken cancellationToken = default)
         => EndAsync(WaitForNextPacketAsync, cancellationToken);
 

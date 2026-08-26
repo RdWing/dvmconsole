@@ -6,7 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
-## [0.4.2] - 2026-08-25
+## [0.4.2] - 2026-08-26
 
 ### Added
 
@@ -38,9 +38,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - Start each DMR Association ARC4 privacy cycle after the required 256-byte
   RC4 discard, matching radio keystream alignment on receive and transmit.
-- Decode clear receive audio on selectable DMR and NXDN channels from the
-  call's on-air encryption state instead of treating the configured transmit
-  capability as mandatory receive privacy.
+- Decode selectable DMR, P25, and NXDN receive audio from each call's on-air
+  encryption state. A channel in **CLEAR** can receive clear traffic without a
+  configured secure key; **SECURE** remains secure-only and rejects clear calls.
 - Distinguish DMR voice-LC, privacy, voice, embedded LC, single-burst, and
   reverse-channel signaling before decoding payload content. Support secure
   DMR late-entry decoding when the successor MI and burst-F key identity reach
@@ -50,10 +50,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Prevent valid NXDN voice payloads from being corrected into phantom FACCH
   call-control messages. Reassemble SACCH metadata for encrypted late entry,
   switch to an advertised successor IV only after its eighth voice frame, and
-  preserve continuous 80 ms voice cadence across IV changes.
+  preserve continuous 80 ms voice cadence across IV changes. Rebuild the EHR
+  privacy processor when a new stream or loss boundary repeats its `VCALL`.
 - Apply only the newest patch-source membership request when group edits and
   enable or disable operations overlap, so removed members do not reappear and
-  edited patches work without restarting DVM Console.
+  edited patches work without restarting DVM Console. Isolate each source's
+  decoder so an active call does not stall unrelated patch reconfiguration.
+- Serialize shared FNE transport writes, make microphone-capture start, stop,
+  fault, and disposal one owned lifecycle, and remove digital call-end paths
+  that could bypass protocol tail cadence.
+- Prepare replacement desktop sessions before changing window ownership and
+  clean up the outgoing session without leaving mixed old/new references.
 
 ## [0.4.1] - 2026-08-25
 

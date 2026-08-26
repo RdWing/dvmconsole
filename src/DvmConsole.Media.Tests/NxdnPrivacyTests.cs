@@ -231,6 +231,52 @@ public sealed class NxdnPrivacyTests
     }
 
     [Fact]
+    public async Task EhrReceiveRebuildsPrivacyProcessorAtNewStreamVcall()
+    {
+        byte[] key = Convert.FromHexString("1234");
+        var packets = new List<byte[]>();
+        using (var call = new NxdnTxCallSession(
+            1001,
+            2002,
+            true,
+            99,
+            new FakeHalfRateSession(),
+            (payload, _, _) => packets.Add(payload.ToArray()),
+            new NxdnPrivacyOptions(NxdnPrivacyAlgorithms.Ehr, 5, key)))
+        {
+            call.Start();
+            call.Process(new short[VocoderFrameSizes.PcmSamplesPerFrame * 4]);
+        }
+
+        using var ring = new NxdnKeyRing("System A", new KeyContainer
+        {
+            Keys = [new KeyEntry
+            {
+                Protocol = "nxdn",
+                AlgId = NxdnPrivacyAlgorithms.Ehr,
+                KeyId = 5,
+                Key = Convert.ToHexString(key)
+            }]
+        });
+        var decoder = new FakeHalfRateSession();
+        await using var receiver = new NxdnRxAudioSession(
+            new NxdnTrafficSelector(2002),
+            decoder,
+            new DiscardPlayback(),
+            ring,
+            "System A",
+            configuredAlgorithm: "ehr",
+            configuredKeyId: "5");
+
+        await receiver.ProcessAsync(Traffic(packets[0], 0));
+        await receiver.ProcessAsync(Traffic(packets[1], 1));
+
+        Assert.Equal(4, receiver.FramesDecoded);
+        Assert.Equal(4, decoder.DecodedParameters.Count);
+        Assert.Equal(0, receiver.MalformedPackets);
+    }
+
+    [Fact]
     public async Task ReceiveUsesSacchSuccessorIvForLateEntryWithoutStandaloneFacch()
     {
         byte[] key = Convert.FromHexString("133457799BBCDFF1");

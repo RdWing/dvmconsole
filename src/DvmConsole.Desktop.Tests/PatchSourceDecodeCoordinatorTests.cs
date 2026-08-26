@@ -238,6 +238,31 @@ public sealed class PatchSourceDecodeCoordinatorTests
         Assert.True(coordinator.IsActive(expected));
     }
 
+    [Fact]
+    public async Task AddingSourceDoesNotWaitForUnrelatedDecoder()
+    {
+        ChannelViewModel active = DmrChannel("Active", destinationId: 100);
+        ChannelViewModel added = DmrChannel("Added", destinationId: 200);
+        var vocoder = new BlockingVocoderBackend();
+        await using var coordinator = new PatchSourceDecodeCoordinator(
+            null,
+            (_, _) => { },
+            () => vocoder);
+        await coordinator.ApplyChannelsAsync([active]);
+
+        Task<int> processing = Task.Run(() => coordinator.ProcessAsync(
+            active,
+            CreateDmrTraffic(destinationId: 100, streamId: 99)));
+        Assert.True(vocoder.DecodeEntered.Wait(TimeSpan.FromSeconds(2)));
+
+        await coordinator.ApplyChannelsAsync([active, added]).WaitAsync(TimeSpan.FromSeconds(1));
+
+        Assert.True(coordinator.IsActive(active));
+        Assert.True(coordinator.IsActive(added));
+        vocoder.AllowDecode.Set();
+        await processing.WaitAsync(TimeSpan.FromSeconds(2));
+    }
+
     private static ChannelViewModel DmrChannel(string name, uint destinationId)
         => new(new ChannelConfiguration
         {

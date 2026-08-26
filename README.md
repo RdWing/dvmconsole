@@ -57,8 +57,9 @@ This patch release corrects selectable-encryption receive behavior and secure
 voice signaling while making patch membership and session reloads immediately
 reflect the operator's newest saved configuration.
 
-- Selectable DMR and NXDN channels receive clear and encrypted calls according
-  to each call's on-air metadata rather than the current transmit-button state.
+- Selectable DMR, P25, and NXDN channels use each call's on-air privacy
+  metadata. **CLEAR** admits clear traffic, while **SECURE** is a secure-only
+  receive state and does not admit clear calls.
 - DMR packet handling separates startup privacy, voice, embedded link control,
   late-entry MI, burst-F signaling, and reverse-channel data; transmit tails
   retain DMR, P25, and NXDN cadence.

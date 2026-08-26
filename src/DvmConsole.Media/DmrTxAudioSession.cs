@@ -116,7 +116,7 @@ public sealed class DmrTxAudioSession : IDisposable
     // Pads a released call with encoded silence so no partial PCM/AMBE packet
     // is discarded and the current six-burst DMR superframe is completed
     // before its terminator is emitted.
-    internal int CompleteSuperframe()
+    private int CompleteSuperframe()
     {
         ObjectDisposedException.ThrowIf(disposed, this);
         int packetsBefore = PacketsSent;

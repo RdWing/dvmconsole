@@ -22,7 +22,8 @@ public sealed class DmrRxAudioRouter : IAsyncDisposable
         IDmrKeyResolver? keyResolver = null,
         string systemName = "",
         bool privacyExpected = false,
-        bool privacyMayVary = false)
+        bool privacyMayVary = false,
+        IReceivePrivacyPolicy? privacyPolicy = null)
     {
         this.selector = selector ?? throw new ArgumentNullException(nameof(selector));
         session = new DmrRxAudioSession(
@@ -31,7 +32,8 @@ public sealed class DmrRxAudioRouter : IAsyncDisposable
             keyResolver,
             systemName,
             privacyExpected,
-            privacyMayVary);
+            privacyMayVary,
+            privacyPolicy);
     }
 
     public int FramesDecoded => session.FramesDecoded;

@@ -136,7 +136,7 @@ public sealed class P25TxAudioSession : IDisposable
 
     // Pads the final PCM frame and LDU with encoded silence so releasing PTT
     // does not discard the tail of a call.
-    internal int CompleteLdu()
+    private int CompleteLdu()
     {
         ObjectDisposedException.ThrowIf(disposed, this);
         int packetsBefore = LdusSent;

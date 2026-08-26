@@ -7,7 +7,7 @@ namespace DvmConsole.Media.Tests;
 public sealed class P25TxCallSessionTests
 {
     [Fact]
-    public void EmitsGrantDemandVoiceLdUsAndOneTerminatorTdu()
+    public async Task EmitsGrantDemandVoiceLdUsAndOneTerminatorTdu()
     {
         var packets = new List<(byte[] Payload, ushort Sequence, uint Stream)>();
         using var session = new P25TxCallSession(
@@ -25,7 +25,7 @@ public sealed class P25TxCallSessionTests
         Assert.Equal((byte)0x80, packets[0].Payload[14]);
 
         Assert.Equal(2, session.Process(new short[18 * 160]));
-        session.End();
+        await session.EndAsync(static _ => ValueTask.CompletedTask, CancellationToken.None);
 
         Assert.Equal(4, packets.Count);
         Assert.Equal((ushort)0, packets[1].Sequence);
@@ -54,7 +54,7 @@ public sealed class P25TxCallSessionTests
     }
 
     [Fact]
-    public void PadsPartialAudioIntoAnLduBeforeSendingTerminators()
+    public async Task PadsPartialAudioIntoAnLduBeforeSendingTerminators()
     {
         var packets = new List<(byte[] Payload, ushort Sequence)>();
         using var session = new P25TxCallSession(
@@ -67,7 +67,7 @@ public sealed class P25TxCallSessionTests
         session.Start();
         Assert.Equal(0, session.Process(new short[161]));
 
-        session.End();
+        await session.EndAsync(static _ => ValueTask.CompletedTask, CancellationToken.None);
 
         Assert.Equal(3, packets.Count);
         Assert.Equal(P25DfsiFrameCodec.Ldu1Duid, packets[1].Payload[22]);

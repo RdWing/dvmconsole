@@ -386,7 +386,7 @@ public sealed class ChannelReceiveAudioCoordinator : IAsyncDisposable
                 }
                 return;
             }
-            if (channel.Definition.IsEncrypted &&
+            if (channel.RequireEncryptedTraffic &&
                 !CanResolveEncryption(channel.Definition))
             {
                 throw new NotSupportedException(

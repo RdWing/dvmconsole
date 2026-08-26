@@ -23,7 +23,8 @@ public sealed class ChannelReceiveAudioSession : IAsyncDisposable
         IAudioPlayback playback,
         IP25KeyResolver? keyResolver = null,
         IDmrKeyResolver? dmrKeyResolver = null,
-        INxdnKeyResolver? nxdnKeyResolver = null)
+        INxdnKeyResolver? nxdnKeyResolver = null,
+        IReceivePrivacyPolicy? privacyPolicy = null)
     {
         ArgumentNullException.ThrowIfNull(definition);
         ArgumentNullException.ThrowIfNull(playback);
@@ -42,7 +43,8 @@ public sealed class ChannelReceiveAudioSession : IAsyncDisposable
                     dmrKeyResolver,
                     definition.SystemName,
                     hasFixedPrivacy,
-                    privacyMayVary: definition.SelectableEncryption);
+                    privacyMayVary: definition.SelectableEncryption,
+                    privacyPolicy);
                 break;
             case "p25":
                 ArgumentNullException.ThrowIfNull(vocoder);
@@ -51,7 +53,8 @@ public sealed class ChannelReceiveAudioSession : IAsyncDisposable
                     vocoder,
                     playback,
                     keyResolver,
-                    definition.SystemName);
+                    definition.SystemName,
+                    privacyPolicy);
                 break;
             case "nxdn":
                 ArgumentNullException.ThrowIfNull(vocoder);
@@ -62,7 +65,8 @@ public sealed class ChannelReceiveAudioSession : IAsyncDisposable
                     nxdnKeyResolver,
                     definition.SystemName,
                     hasFixedPrivacy ? definition.EncryptionAlgorithm : null,
-                    hasFixedPrivacy ? definition.EncryptionKeyId : null);
+                    hasFixedPrivacy ? definition.EncryptionKeyId : null,
+                    privacyPolicy);
                 break;
             case "analog":
                 analogSession = new AnalogRxAudioSession(

@@ -112,21 +112,6 @@ public sealed class PatchTransmitSession : IDisposable
         return p25.ProcessSingleTone(frequencyHz);
     }
 
-    public void End()
-    {
-        ObjectDisposedException.ThrowIf(disposed, this);
-        if (!started)
-            throw new InvalidOperationException("The patch call has not started.");
-        if (ended)
-            return;
-
-        dmr?.End();
-        p25?.End();
-        nxdn?.End();
-        analog?.End();
-        ended = true;
-    }
-
     public async ValueTask EndAsync(CancellationToken cancellationToken = default)
     {
         ObjectDisposedException.ThrowIf(disposed, this);

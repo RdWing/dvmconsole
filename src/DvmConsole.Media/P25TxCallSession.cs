@@ -82,12 +82,6 @@ public sealed class P25TxCallSession : IDisposable
         return audio.ProcessSingleTone(frequencyHz);
     }
 
-    public void End()
-        => EndAsync(static _ => ValueTask.CompletedTask, CancellationToken.None)
-            .AsTask()
-            .GetAwaiter()
-            .GetResult();
-
     public ValueTask EndAsync(CancellationToken cancellationToken = default)
         => EndAsync(WaitForNextLduAsync, cancellationToken);
 

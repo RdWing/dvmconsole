@@ -3,7 +3,7 @@ namespace DvmConsole.Media;
 // Filters duplicate and late voice packets while accounting for 16-bit RTP
 // sequence wrap. A new stream starts a fresh sequence, so a reused packet
 // sequence from a later call cannot be mistaken for a duplicate.
-public sealed class VoicePacketSequenceTracker
+internal sealed class VoicePacketSequenceTracker
 {
     private bool hasPacket;
     private bool lastSequenceIsMetadataOnly;

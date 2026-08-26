@@ -9,7 +9,7 @@ namespace DvmConsole.Media.Tests;
 public sealed class DmrTxCallSessionTests
 {
     [Fact]
-    public void EmitsVoiceHeaderVoicePacketAndTerminatorForOneCall()
+    public async Task EmitsVoiceHeaderVoicePacketAndTerminatorForOneCall()
     {
         var packets = new List<(byte[] Payload, ushort Sequence, uint Stream)>();
         using var session = new DmrTxCallSession(
@@ -33,7 +33,7 @@ public sealed class DmrTxCallSessionTests
         Assert.Equal((uint)0xA0B0C0, headerLc.DstId);
 
         Assert.Equal(1, session.Process(new short[480]));
-        session.End();
+        await session.EndAsync(static _ => ValueTask.CompletedTask, CancellationToken.None);
 
         Assert.Equal(8, packets.Count);
         Assert.Equal((ushort)1, packets[1].Sequence);
@@ -47,7 +47,7 @@ public sealed class DmrTxCallSessionTests
     }
 
     [Fact]
-    public void FlushesPartialPcmAndAmbeBeforeCompletingSuperframe()
+    public async Task FlushesPartialPcmAndAmbeBeforeCompletingSuperframe()
     {
         var packets = new List<byte[]>();
         using var session = new DmrTxCallSession(
@@ -60,7 +60,7 @@ public sealed class DmrTxCallSessionTests
 
         session.Start();
         Assert.Equal(0, session.Process(new short[200]));
-        session.End();
+        await session.EndAsync(static _ => ValueTask.CompletedTask, CancellationToken.None);
 
         Assert.Equal(8, packets.Count);
         Assert.Equal((byte)0x10, packets[1][15]);
@@ -68,7 +68,7 @@ public sealed class DmrTxCallSessionTests
     }
 
     [Fact]
-    public void SecureCallMarksBothHeaderAndTerminatorEncrypted()
+    public async Task SecureCallMarksBothHeaderAndTerminatorEncrypted()
     {
         byte[] key = Convert.FromHexString("0102030405");
         var privacy = new DmrPrivacyOptions(
@@ -87,7 +87,7 @@ public sealed class DmrTxCallSessionTests
             privacy: privacy);
 
         session.Start();
-        session.End();
+        await session.EndAsync(static _ => ValueTask.CompletedTask, CancellationToken.None);
 
         LC header = Assert.IsType<LC>(FullLC.Decode(
             packets[0][DmrVoicePacketCodec.HeaderBytes..],

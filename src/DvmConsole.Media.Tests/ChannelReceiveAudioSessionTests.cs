@@ -91,6 +91,54 @@ public sealed class ChannelReceiveAudioSessionTests
     }
 
     [Fact]
+    public async Task SelectableSecureDmrChannelRejectsClearReceive()
+    {
+        var definition = new ChannelRuntimeDefinition(
+            "Selectable",
+            "System 1",
+            "dmr",
+            100,
+            1,
+            encryptionAlgorithm: "aes",
+            encryptionKeyId: "0x45",
+            selectableEncryption: true);
+        var playback = new FakePlayback();
+        await using var session = new ChannelReceiveAudioSession(
+            definition,
+            new FakeVocoderSession(),
+            playback,
+            privacyPolicy: new FixedPrivacyPolicy(requireEncryptedTraffic: true));
+
+        await session.ProcessAsync(new FneTrafficFrame(
+            FneTrafficProtocol.Dmr,
+            1,
+            2,
+            100,
+            1,
+            "GROUP",
+            "DATA_SYNC",
+            "VOICE_LC_HEADER",
+            0,
+            99,
+            DmrVoicePacketCodec.CreateVoiceLcHeaderPacket(1, 100, 1, 0, encrypted: false)));
+        await session.ProcessAsync(new FneTrafficFrame(
+            FneTrafficProtocol.Dmr,
+            1,
+            2,
+            100,
+            1,
+            "GROUP",
+            "VOICE",
+            "VOICE",
+            1,
+            99,
+            new byte[DmrVoicePacketCodec.PacketBytes]));
+
+        Assert.Empty(playback.Frames);
+        Assert.Equal(0, session.FramesDecoded);
+    }
+
+    [Fact]
     public async Task RoutesMatchingP25TrafficThroughTheConfiguredSession()
     {
         var definition = new ChannelRuntimeDefinition("P25", "System 1", "p25", 100, 0);
@@ -104,6 +152,31 @@ public sealed class ChannelReceiveAudioSessionTests
         Assert.Equal(9, session.FramesDecoded);
         Assert.Equal(9, vocoder.DecodeCalls);
         Assert.Equal(9, playback.Frames.Count);
+    }
+
+    [Fact]
+    public async Task SelectableSecureP25ChannelRejectsClearReceive()
+    {
+        var definition = new ChannelRuntimeDefinition(
+            "Selectable P25",
+            "System 1",
+            "p25",
+            100,
+            0,
+            encryptionAlgorithm: "aes",
+            encryptionKeyId: "0x45",
+            selectableEncryption: true);
+        var playback = new FakePlayback();
+        await using var session = new ChannelReceiveAudioSession(
+            definition,
+            new FakeVocoderSession(),
+            playback,
+            privacyPolicy: new FixedPrivacyPolicy(requireEncryptedTraffic: true));
+
+        await session.ProcessAsync(CreateP25Traffic());
+
+        Assert.Empty(playback.Frames);
+        Assert.Equal(0, session.FramesDecoded);
     }
 
     [Fact]
@@ -152,6 +225,48 @@ public sealed class ChannelReceiveAudioSessionTests
         Assert.Equal(0, session.MalformedPackets);
         Assert.Equal(NxdnVoicePacketCodec.CodewordsPerFrame, session.FramesDecoded);
         Assert.Equal(NxdnVoicePacketCodec.CodewordsPerFrame, playback.Frames.Count);
+    }
+
+    [Fact]
+    public async Task SelectableSecureNxdnChannelRejectsClearReceive()
+    {
+        var definition = new ChannelRuntimeDefinition(
+            "Selectable NXDN",
+            "System 1",
+            "nxdn",
+            100,
+            0,
+            encryptionAlgorithm: "aes",
+            encryptionKeyId: "0x05",
+            selectableEncryption: true);
+        var playback = new FakePlayback();
+        await using var session = new ChannelReceiveAudioSession(
+            definition,
+            new FakeVocoderSession(),
+            playback,
+            privacyPolicy: new FixedPrivacyPolicy(requireEncryptedTraffic: true));
+
+        await session.ProcessAsync(CreateNxdnTraffic(
+            NxdnVoicePacketCodec.CreateCallControlPacket(
+                1,
+                100,
+                true,
+                NxdnVoicePacketCodec.VoiceCallMessageType,
+                0,
+                cipherType: 0,
+                keyId: 0),
+            packetSequence: 0));
+        await session.ProcessAsync(CreateNxdnTraffic(
+            NxdnVoicePacketCodec.CreateVoicePacket(
+                1,
+                100,
+                true,
+                1,
+                new byte[NxdnVoicePacketCodec.AmbeBytes]),
+            packetSequence: 1));
+
+        Assert.Empty(playback.Frames);
+        Assert.Equal(0, session.FramesDecoded);
     }
 
     [Fact]
@@ -330,6 +445,11 @@ public sealed class ChannelReceiveAudioSessionTests
             1,
             99,
             payload);
+    }
+
+    private sealed class FixedPrivacyPolicy(bool requireEncryptedTraffic) : IReceivePrivacyPolicy
+    {
+        public bool RequireEncryptedTraffic { get; } = requireEncryptedTraffic;
     }
 
     private static FneTrafficFrame CreateAnalogTraffic()

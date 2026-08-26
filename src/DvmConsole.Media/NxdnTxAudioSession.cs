@@ -79,7 +79,7 @@ public sealed class NxdnTxAudioSession : IDisposable
         return FramesSent - before;
     }
 
-    internal int CompleteFrame()
+    private int CompleteFrame()
     {
         ObjectDisposedException.ThrowIf(disposed, this);
         int before = FramesSent;

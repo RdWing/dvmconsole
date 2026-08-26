@@ -138,6 +138,7 @@ public sealed class FneConnection : IAsyncDisposable
     private readonly TimeSpan handshakeProgressTimeout;
     private readonly FnePeerStateMonitor stateMonitor = new();
     private readonly object sync = new();
+    private readonly object sendSync = new();
     private readonly SemaphoreSlim lifecycle = new(1, 1);
     private IFnePeerSession? peerSession;
     private CancellationTokenSource? handshakeRecoveryCancellation;
@@ -250,11 +251,15 @@ public sealed class FneConnection : IAsyncDisposable
                 throw new InvalidOperationException($"The FNE connection is not ready for traffic ({status.State}).");
         }
 
-        current.SendMasterTraffic(
-            FneTrafficMapper.ToOpcode(protocol),
-            payload.ToArray(),
-            packetSequence,
-            streamId);
+        byte[] ownedPayload = payload.ToArray();
+        lock (sendSync)
+        {
+            current.SendMasterTraffic(
+                FneTrafficMapper.ToOpcode(protocol),
+                ownedPayload,
+                packetSequence,
+                streamId);
+        }
     }
 
     // Requests one P25 key from the connected FNE. The response is accepted
@@ -279,7 +284,8 @@ public sealed class FneConnection : IAsyncDisposable
             expiresAt = RegisterPendingP25KeyRequestCore(algorithmId, keyId);
             try
             {
-                current.SendMasterKeyRequest(algorithmId, keyId, sourceId);
+                lock (sendSync)
+                    current.SendMasterKeyRequest(algorithmId, keyId, sourceId);
             }
             catch
             {
@@ -314,11 +320,14 @@ public sealed class FneConnection : IAsyncDisposable
         // API to fnecore.
         byte[] payload = P25SubscriberFrameEncoder.Encode(message, callData);
 
-        current.SendMasterTraffic(
-            FneBase.CreateOpcode(Constants.NET_FUNC_PROTOCOL, Constants.NET_PROTOCOL_SUBFUNC_P25),
-            payload,
-            current.pktSeq(true),
-            callData.TxStreamID);
+        lock (sendSync)
+        {
+            current.SendMasterTraffic(
+                FneBase.CreateOpcode(Constants.NET_FUNC_PROTOCOL, Constants.NET_PROTOCOL_SUBFUNC_P25),
+                payload,
+                current.pktSeq(true),
+                callData.TxStreamID);
+        }
     }
 
     public async Task StartAsync(CancellationToken cancellationToken = default)
