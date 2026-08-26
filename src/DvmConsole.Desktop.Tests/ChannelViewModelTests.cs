@@ -435,6 +435,67 @@ public sealed class ChannelViewModelTests
     }
 
     [Fact]
+    public void P25GrantDemandTerminatesAndAcceptedLdu1ReopensAReusedStream()
+    {
+        var channel = new ChannelViewModel(new ChannelConfiguration
+        {
+            Name = "Dispatch",
+            System = "System 1",
+            Tgid = "99",
+            Mode = "p25"
+        });
+        DateTimeOffset now = DateTimeOffset.UnixEpoch;
+        const uint streamId = 7;
+
+        Assert.Equal(
+            ReceiveStreamTransition.Started,
+            channel.ApplyTraffic(
+                "System 1",
+                CreateTraffic(
+                    FneTrafficProtocol.P25,
+                    42,
+                    99,
+                    null,
+                    "VOICE",
+                    "LDU1",
+                    streamId,
+                    packetSequence: 1),
+                now).Transition);
+
+        Assert.Equal(
+            ReceiveStreamTransition.TerminationPending,
+            channel.ApplyTraffic(
+                "System 1",
+                CreateTraffic(
+                    FneTrafficProtocol.P25,
+                    42,
+                    99,
+                    null,
+                    "TERMINATOR",
+                    "TDU",
+                    streamId,
+                    packetSequence: P25DfsiFrameCodec.RtpCallEndSequence,
+                    payload: P25DfsiFrameCodec.CreateTduPayload(42, 99, grantDemand: true)),
+                now.AddSeconds(1)).Transition);
+
+        Assert.Equal(
+            ReceiveStreamTransition.Restarted,
+            channel.ApplyTraffic(
+                "System 1",
+                CreateTraffic(
+                    FneTrafficProtocol.P25,
+                    43,
+                    99,
+                    null,
+                    "VOICE",
+                    "LDU1",
+                    streamId,
+                    packetSequence: 0),
+                now.AddSeconds(1.1)).Transition);
+        Assert.Equal((uint)43, channel.SourceId);
+    }
+
+    [Fact]
     public void P25TduCanCloseActiveStreamWhenTerminatorOmitsDestination()
     {
         var channel = new ChannelViewModel(new ChannelConfiguration
@@ -1022,7 +1083,9 @@ public sealed class ChannelViewModelTests
         byte? slot,
         string frameType,
         string subtype,
-        uint streamId)
+        uint streamId,
+        ushort packetSequence = 1,
+        byte[]? payload = null)
     {
         return new FneTrafficFrame(
             protocol,
@@ -1033,8 +1096,8 @@ public sealed class ChannelViewModelTests
             callType: "GROUP",
             frameType,
             subtype,
-            packetSequence: 1,
+            packetSequence,
             streamId,
-            payload: []);
+            payload ?? []);
     }
 }
