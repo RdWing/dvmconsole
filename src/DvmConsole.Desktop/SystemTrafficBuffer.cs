@@ -13,7 +13,8 @@ internal readonly record struct ReceivePacketDecisionEnvelope(
     long ReceivedTimestamp,
     ReceiveIngressRoutingDecision Routing,
     ReceiveCallEpisodeObservation? EpisodeObservation,
-    ReceiveCallEpisodeSnapshot? EpisodeSnapshot);
+    ReceiveCallEpisodeSnapshot? EpisodeSnapshot,
+    bool CanCoalescePresentation = false);
 
 internal readonly record struct SystemTrafficWorkItem(
     ReceivePacketDecisionEnvelope Decision,
@@ -52,6 +53,8 @@ internal readonly record struct SystemTrafficWorkItem(
 internal sealed class SystemTrafficBuffer
 {
     private readonly LinkedList<SystemTrafficWorkItem> pending = [];
+    private readonly Dictionary<PresentationKey, LinkedListNode<SystemTrafficWorkItem>>
+        coalescibleNodes = [];
     private readonly int maximumCount;
 
     public SystemTrafficBuffer(int maximumCount = 256)
@@ -63,6 +66,7 @@ internal sealed class SystemTrafficBuffer
 
     public int Count => pending.Count;
     public long DroppedCount { get; private set; }
+    public long CoalescedCount { get; private set; }
 
     public bool Enqueue(FneTrafficFrame traffic)
         => Enqueue(new SystemTrafficWorkItem(
@@ -75,13 +79,30 @@ internal sealed class SystemTrafficBuffer
     public bool Enqueue(SystemTrafficWorkItem item)
     {
         FneTrafficFrame traffic = item.Traffic;
+        PresentationKey key = traffic is null
+            ? default
+            : PresentationKey.From(traffic);
+        if (item.Decision.CanCoalescePresentation &&
+            traffic is not null &&
+            coalescibleNodes.TryGetValue(key, out LinkedListNode<SystemTrafficWorkItem>? existing))
+        {
+            existing.Value = item;
+            CoalescedCount = SaturatingIncrement(CoalescedCount);
+            return true;
+        }
+
+        if (!item.Decision.CanCoalescePresentation && traffic is not null)
+            coalescibleNodes.Remove(key);
+
         if (pending.Count >= maximumCount)
         {
             DroppedCount++;
-            if (!MakeRoomFor(traffic))
+            if (traffic is null || !MakeRoomFor(traffic))
                 return false;
         }
-        pending.AddLast(item);
+        LinkedListNode<SystemTrafficWorkItem> added = pending.AddLast(item);
+        if (item.Decision.CanCoalescePresentation)
+            coalescibleNodes[key] = added;
         return true;
     }
 
@@ -100,8 +121,9 @@ internal sealed class SystemTrafficBuffer
             return false;
         }
 
-        item = pending.First.Value;
-        pending.RemoveFirst();
+        LinkedListNode<SystemTrafficWorkItem> first = pending.First;
+        item = first.Value;
+        Remove(first);
         return true;
     }
 
@@ -133,15 +155,29 @@ internal sealed class SystemTrafficBuffer
 
         if (candidate is not null)
         {
-            pending.Remove(candidate);
+            Remove(candidate);
             return true;
         }
 
         if (!IsLifecycleTraffic(incoming))
             return false;
 
-        pending.RemoveFirst();
+        Remove(pending.First!);
         return true;
+    }
+
+    private void Remove(LinkedListNode<SystemTrafficWorkItem> node)
+    {
+        if (node.Value.Decision.CanCoalescePresentation)
+        {
+            PresentationKey key = PresentationKey.From(node.Value.Traffic);
+            if (coalescibleNodes.TryGetValue(key, out LinkedListNode<SystemTrafficWorkItem>? tracked) &&
+                ReferenceEquals(tracked, node))
+            {
+                coalescibleNodes.Remove(key);
+            }
+        }
+        pending.Remove(node);
     }
 
     private static bool HasLaterVoiceForSameStream(
@@ -177,5 +213,22 @@ internal sealed class SystemTrafficBuffer
         return ReceiveTrafficClassifier.IsTerminator(traffic) ||
                ReceiveTrafficClassifier.IsDefinitiveStart(traffic) ||
                ReceiveTrafficClassifier.IsDmrPrivacyHeader(traffic);
+    }
+
+    private static long SaturatingIncrement(long value)
+        => value == long.MaxValue ? long.MaxValue : value + 1;
+
+    private readonly record struct PresentationKey(
+        FneTrafficProtocol Protocol,
+        uint DestinationId,
+        byte Slot)
+    {
+        public static PresentationKey From(FneTrafficFrame traffic)
+            => new(
+                traffic.Protocol,
+                traffic.DestinationId,
+                traffic.Protocol == FneTrafficProtocol.Dmr
+                    ? traffic.Slot ?? 0
+                    : (byte)0);
     }
 }

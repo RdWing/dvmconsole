@@ -24,6 +24,9 @@ public sealed partial class MainWindowViewModel
             traffic,
             receivedAt,
             receivedTimestamp);
+        // Connection statistics are thread-safe and account for every packet
+        // before continuation-only UI projection is allowed to coalesce.
+        system.RecordTraffic(decision.Traffic, publishDiagnostics: false);
         ObserveAdaptiveReceiveJitter(system, decision.Traffic);
         ReceiveDispatchTargets preEnqueuedAudioChannels = EnqueuePriorityReceiveAudio(
             system,
@@ -47,7 +50,8 @@ public sealed partial class MainWindowViewModel
             workItem.Decision,
             publishTrafficDiagnostics,
             workItem.PreEnqueuedAudioChannels,
-            workItem.PreEnqueuedPatchChannels);
+            workItem.PreEnqueuedPatchChannels,
+            trafficAlreadyRecorded: true);
 
     internal void ProcessTraffic(
         SystemViewModel system,
@@ -71,7 +75,8 @@ public sealed partial class MainWindowViewModel
             decision,
             publishTrafficDiagnostics,
             ReceiveDispatchTargets.From(preEnqueuedAudioChannels),
-            ReceiveDispatchTargets.From(preEnqueuedPatchChannels));
+            ReceiveDispatchTargets.From(preEnqueuedPatchChannels),
+            trafficAlreadyRecorded: false);
     }
 
     private void ProcessTrafficDecision(
@@ -79,7 +84,8 @@ public sealed partial class MainWindowViewModel
         ReceivePacketDecisionEnvelope decision,
         bool publishTrafficDiagnostics,
         ReceiveDispatchTargets preEnqueuedAudioChannels,
-        ReceiveDispatchTargets preEnqueuedPatchChannels)
+        ReceiveDispatchTargets preEnqueuedPatchChannels,
+        bool trafficAlreadyRecorded)
     {
         FneTrafficFrame traffic = decision.Traffic;
         DateTimeOffset now = decision.ReceivedAt;
@@ -87,7 +93,15 @@ public sealed partial class MainWindowViewModel
         ReceiveCallEpisodeObservation? episodeObservation = decision.EpisodeObservation;
         uint historyStreamId = episodeObservation?.PrimaryStreamId ?? traffic.StreamId;
         ReceiveCallEpisodeSnapshot? episode = decision.EpisodeSnapshot;
-        system.RecordTraffic(traffic, publishTrafficDiagnostics);
+        if (trafficAlreadyRecorded)
+        {
+            if (publishTrafficDiagnostics)
+                system.PublishTrafficDiagnostics();
+        }
+        else
+        {
+            system.RecordTraffic(traffic, publishTrafficDiagnostics);
+        }
         List<ChannelViewModel> activeAudioChannels = [];
         List<ChannelViewModel> activePatchSourceChannels = [];
         bool callHistoryChanged = false;
@@ -286,13 +300,20 @@ public sealed partial class MainWindowViewModel
                 receivedAt);
         }
 
+        bool canCoalescePresentation =
+            routing.IsContinuationOnly &&
+            episodeObservation is not { EpisodeStarted: true } &&
+            episodeObservation is not { StreamAdded: true } &&
+            ReceiveTrafficClassifier.CarriesVoicePayload(traffic) &&
+            TrafficEncryptionMetadataResolver.TryResolve(traffic) is null;
         return new ReceivePacketDecisionEnvelope(
             traffic,
             receivedAt,
             receivedTimestamp,
             routing,
             episodeObservation,
-            episodeSnapshot);
+            episodeSnapshot,
+            canCoalescePresentation);
     }
 
     private bool ProjectReceiveLifecycleDecision(

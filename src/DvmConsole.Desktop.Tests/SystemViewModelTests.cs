@@ -1576,6 +1576,10 @@ public sealed class SystemViewModelTests
         {
             for (int index = 0; index < 20; index++)
                 system.RecordTraffic(traffic, publishDiagnostics: false);
+
+            Assert.Equal(0, notifications);
+            Assert.Contains("20 packets / 60 B", system.StreamTrafficText);
+
             system.PublishTrafficDiagnostics();
 
             Assert.Equal(2, notifications);

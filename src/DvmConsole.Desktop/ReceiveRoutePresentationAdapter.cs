@@ -54,6 +54,11 @@ internal readonly struct ReceiveIngressRoutingDecision
     public static ReceiveIngressRoutingDecision Empty => default;
     public bool HasDecision { get; }
     public int Count => HasDecision ? 1 + (additional?.Length ?? 0) : 0;
+    public bool IsContinuationOnly =>
+        HasDecision &&
+        additional is null &&
+        primary.PrecedingDecisions.Count == 0 &&
+        primary.StreamDecision.Transition == ReceiveStreamTransition.Continued;
 
     public bool TryGet(
         ChannelRouteKey routeKey,

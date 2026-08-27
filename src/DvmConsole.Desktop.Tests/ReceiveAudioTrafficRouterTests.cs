@@ -284,6 +284,8 @@ public sealed class ReceiveAudioTrafficRouterTests
         Assert.Equal(firstRoute.ActiveStreamIds, secondRoute.ActiveStreamIds);
         Assert.Equal(ReceiveStreamTransition.Started, firstRoute.StreamDecision.Transition);
         Assert.Equal(ReceiveStreamTransition.Continued, secondRoute.StreamDecision.Transition);
+        Assert.False(firstDecision.IsContinuationOnly);
+        Assert.True(secondDecision.IsContinuationOnly);
 
         // Simulate an audio/UI backlog presenting packet one only after packet
         // two was already observed at ingress. Replaying the old observation
