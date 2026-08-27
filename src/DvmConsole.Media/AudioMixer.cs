@@ -25,7 +25,8 @@ public sealed record AudioMixerDiagnostics(
     long? PhysicalOutputCallbackCount = null,
     TimeSpan? PhysicalOutputCallbackAge = null,
     long AgedLiveSamples = 0,
-    IReadOnlyList<AudioMixerLaneDiagnostics>? LaneDiagnostics = null);
+    IReadOnlyList<AudioMixerLaneDiagnostics>? LaneDiagnostics = null,
+    AudioOutputPumpDiagnostics OutputPump = default);
 
 public sealed record AudioMixerLaneDiagnostics(
     string Label,
@@ -140,6 +141,7 @@ public sealed class AudioMixer : IAsyncDisposable
         outputPump = new AudioOutputPump(
             output,
             PumpInterval,
+            RequiresTimedOutputPolling,
             FramesNeededForOutputBuffer,
             GetPhysicalQueueDuration,
             ShouldCoalesceFirstFrame,
@@ -176,6 +178,7 @@ public sealed class AudioMixer : IAsyncDisposable
     public AudioMixerDiagnostics GetDiagnostics()
     {
         PhysicalAudioOutputDiagnostics physical = ReadPhysicalOutputDiagnostics();
+        AudioOutputPumpDiagnostics pump = outputPump.GetDiagnostics();
         lock (sync)
         {
             TimeSpan? outputCallbackAge = physical.OutputCallbackCount is null
@@ -188,7 +191,8 @@ public sealed class AudioMixer : IAsyncDisposable
                 physical.StarvedDuration,
                 physical.PendingStarvedDuration,
                 physical.OutputCallbackCount,
-                outputCallbackAge);
+                outputCallbackAge,
+                pump);
         }
     }
 
@@ -414,6 +418,21 @@ public sealed class AudioMixer : IAsyncDisposable
         return Math.Min(
             targetFrames,
             (deficit + outputFrameSamples - 1) / outputFrameSamples);
+    }
+
+    private bool RequiresTimedOutputPolling()
+    {
+        lock (sync)
+        {
+            if (draining)
+                return HasReadyFramesLocked();
+
+            // Once output is primed, keep observing the physical queue until
+            // it drains and FramesNeededForOutputBuffer closes continuity.
+            // Otherwise an entirely idle mixer can sleep until a producer
+            // signals the first complete frame.
+            return outputWasPrimed || CanProduceFrameLocked();
+        }
     }
 
     private TimeSpan GetPhysicalQueueDuration()

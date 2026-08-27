@@ -85,6 +85,8 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
     private readonly ObservableCollection<SubscriberCommandAuditEntry> subscriberCommandAudit = [];
     private readonly BoundedDebugLogBuffer debugLogBuffer = new();
     private readonly FilteredDebugLogCollection filteredDebugLogs;
+    private readonly DebugLogDrainController debugLogDrain;
+    private bool verboseDiagnosticLogging;
     private readonly ObservableCollection<string> recentCodeplugPaths = [];
     private readonly ObservableCollection<WebStreamViewModel> webStreams = [];
     private readonly WebStreamPlaybackCoordinator webStreamPlayback;
@@ -162,6 +164,8 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
         this.networkDisabledDemo = networkDisabledDemo;
         this.userSettingsStore = userSettingsStore ?? new UserSettingsStore(UserSettingsStore.DefaultPath);
         userSettings = this.userSettingsStore.Load();
+        verboseDiagnosticLogging = userSettings.VerboseLoggingEnabled ||
+            VerboseDiagnosticLogging.IsEnabled;
         userSettingsWriter = new LatestUserSettingsWriter(
             this.userSettingsStore.SaveSnapshot,
             exception => DesktopCrashLog.Write("User settings persistence", exception));
@@ -173,7 +177,14 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
         Func<ApplicationAudioConfiguration, Task> reconfigureAudio =
             reconfigureApplicationAudio ?? ReconfigureApplicationAudioAsync;
         filteredDebugLogs = new FilteredDebugLogCollection(debugLogBuffer.Entries);
+        debugLogDrain = new DebugLogDrainController(
+            Dispatcher.UIThread.CheckAccess,
+            action => Dispatcher.UIThread.Post(action, DispatcherPriority.Background),
+            PublishDebugLogBatch,
+            () => Volatile.Read(ref disposeStarted) != 0);
         Systems = systems.ToArray();
+        foreach (SystemViewModel system in Systems)
+            system.SetVerboseLogging(this.verboseDiagnosticLogging);
         Zones = zones.ToArray();
         RegisterSessionOwnership(services);
         loadedCodeplugPath = string.IsNullOrWhiteSpace(codeplugPath)
@@ -1211,6 +1222,26 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
         }
     }
 
+    public bool VerboseLoggingEnabled
+    {
+        get => verboseDiagnosticLogging;
+        set
+        {
+            if (verboseDiagnosticLogging == value)
+                return;
+            verboseDiagnosticLogging = value;
+            userSettings.VerboseLoggingEnabled = value;
+            lock (audioLevelLogSync)
+                audioLevelLogs.Clear();
+            foreach (SystemViewModel system in Systems)
+                system.SetVerboseLogging(value);
+            PersistUserSettings();
+            PropertyChanged?.Invoke(
+                this,
+                new PropertyChangedEventArgs(nameof(VerboseLoggingEnabled)));
+        }
+    }
+
     public bool DarkMode
     {
         get => userSettings.DarkMode;
@@ -1739,7 +1770,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
             Directory.CreateDirectory(directory);
 
         var lines = new List<string> { "Timestamp\tSeverity\tSource\tMessage" };
-        lines.AddRange(DebugLogEntries.Select(entry => string.Join("\t",
+        lines.AddRange(DebugLogEntries.Reverse().Select(entry => string.Join("\t",
             entry.Timestamp.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture),
             entry.SeverityText,
             entry.Source,
@@ -2634,8 +2665,14 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
                 system.KeyResponseReceived -= HandleSystemKeyResponse;
                 system.LogReceived -= HandleSystemLog;
             });
-            await cleanup.RunTaskAsync(() => system.DisposeAsync().AsTask()).ConfigureAwait(false);
         }
+
+        // Each FNE owns an independent peer, monitor, and UDP transport. Start
+        // their teardown together so quit latency is bounded by the slowest
+        // peer instead of accumulating once per configured system.
+        await cleanup.RunTasksAsync(
+            Systems.Select(system => (Func<Task>)(() => system.DisposeAsync().AsTask())))
+            .ConfigureAwait(false);
         cleanup.ThrowIfFailed();
     }
 
@@ -2774,20 +2811,20 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
         DebugLogSeverity severity,
         string message)
     {
-        void Apply()
-        {
-            debugLogBuffer.Add(new DebugLogEntry(
-                timestamp,
-                source,
-                severity,
-                DebugLogRedactor.Redact(message)));
-            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(DebugLogRetentionText)));
-        }
+        DebugLogEntry entry = BoundedDebugLogBuffer.PrepareForRetention(new DebugLogEntry(
+            timestamp,
+            source,
+            severity,
+            DebugLogRedactor.Redact(message)));
+        debugLogDrain.Enqueue(entry);
+    }
 
-        if (Dispatcher.UIThread.CheckAccess())
-            Apply();
-        else
-            Dispatcher.UIThread.Post(Apply);
+    private void PublishDebugLogBatch(IReadOnlyList<DebugLogEntry> batch)
+    {
+        debugLogBuffer.AddRange(batch);
+        PropertyChanged?.Invoke(
+            this,
+            new PropertyChangedEventArgs(nameof(DebugLogRetentionText)));
     }
 
     private void ScheduleConfiguredP25Keys(SystemViewModel system)
@@ -3339,7 +3376,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
         ChannelAudioDirection direction,
         uint streamId = 0)
     {
-        if (samples.IsEmpty)
+        if (!verboseDiagnosticLogging || samples.IsEmpty)
             return;
 
         IReadOnlyList<PcmLevelMeasurement> measurements;
@@ -3386,7 +3423,12 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
     private void HandleAudioMeterTick(object? sender, EventArgs e)
     {
         foreach (ChannelAudioMeterUpdate update in audioMeterPipeline.Advance())
-            update.Channel.SetAudioLevel(update.Level, update.Direction, update.StreamId);
+        {
+            if (update.Direction == ChannelAudioDirection.Receive)
+                update.Channel.SetPresentedReceiveAudioLevel(update.Level);
+            else
+                update.Channel.SetAudioLevel(update.Level, update.Direction, update.StreamId);
+        }
     }
 
     private void ObservePatchDecodedSamples(

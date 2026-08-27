@@ -92,7 +92,8 @@ internal sealed class AudioMixerDiagnosticsAccumulator
         TimeSpan? physicalOutputStarvation,
         TimeSpan? pendingPhysicalOutputStarvation,
         long? physicalOutputCallbackCount,
-        TimeSpan? physicalOutputCallbackAge)
+        TimeSpan? physicalOutputCallbackAge,
+        AudioOutputPumpDiagnostics outputPump)
         => new(
             droppedSamples,
             overflowResynchronizations,
@@ -118,5 +119,6 @@ internal sealed class AudioMixerDiagnosticsAccumulator
                 .Select(diagnostics => diagnostics.Snapshot())
                 .OrderByDescending(diagnostics => diagnostics.DroppedSamples)
                 .ThenByDescending(diagnostics => diagnostics.GapFilledSamples)
-                .ToArray());
+                .ToArray(),
+            outputPump);
 }

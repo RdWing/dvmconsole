@@ -274,6 +274,26 @@ public sealed class ChannelViewModelTests
     }
 
     [Fact]
+    public void PresentedReceiveMeterSurvivesPhysicalStreamHandoff()
+    {
+        var channel = new ChannelViewModel(new ChannelConfiguration
+        {
+            Name = "Dispatch",
+            System = "System 1",
+            Tgid = "99",
+            Mode = "p25"
+        });
+        channel.SetAudioEnabled(true);
+        channel.MarkReceivePlaybackActive(sourceId: 42, streamId: 8);
+
+        // The shared episode lane can still identify its presented samples by
+        // primary stream 7 after the card has advanced to physical stream 8.
+        channel.SetPresentedReceiveAudioLevel(65);
+
+        Assert.Equal(65, channel.AudioLevel);
+    }
+
+    [Fact]
     public void ContinuedVoiceTrafficDoesNotRaiseNonVisualActivityNotifications()
     {
         var channel = new ChannelViewModel(new ChannelConfiguration

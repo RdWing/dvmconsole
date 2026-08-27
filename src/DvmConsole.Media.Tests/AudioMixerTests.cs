@@ -440,6 +440,104 @@ public sealed class AudioMixerTests
         Assert.Equal(
             [0, 20, 40, 60],
             presentationDelays.Select(delay => (int)delay.TotalMilliseconds).ToArray());
+
+        AudioOutputPumpDiagnostics pump = mixer.GetDiagnostics().OutputPump;
+        Assert.True(pump.SignalRequests > 0);
+        Assert.True(pump.SignaledWakeups > 0);
+        Assert.True(pump.FramesWritten >= 4);
+        Assert.True(pump.MultiFrameWakeups > 0);
+        Assert.Equal(pump.SignaledWakeups + pump.TimeoutWakeups, pump.TotalWakeups);
+    }
+
+    [Fact]
+    public async Task CoalescesBurstyPumpSignalsBehindOnePendingWake()
+    {
+        var output = new FakePlayback();
+        using var enteredDrain = new ManualResetEventSlim();
+        using var releaseDrain = new ManualResetEventSlim();
+        using var pump = new AudioOutputPump(
+            output,
+            TimeSpan.FromMilliseconds(10),
+            requiresTimedPolling: () => false,
+            getFramesNeeded: () =>
+            {
+                enteredDrain.Set();
+                releaseDrain.Wait();
+                return 0;
+            },
+            getPresentationDelay: () => TimeSpan.Zero,
+            shouldCoalesceFirstFrame: () => false,
+            TryTakeNoFrame,
+            markOutputPrimed: () => { },
+            observeLateness: _ => { },
+            reportFailure: exception => throw exception);
+
+        try
+        {
+            pump.Signal();
+            Assert.True(enteredDrain.Wait(TimeSpan.FromSeconds(2)));
+
+            for (int index = 0; index < 1_000; index++)
+                pump.Signal();
+
+            AudioOutputPumpDiagnostics diagnostics = pump.GetDiagnostics();
+            Assert.Equal(1_001, diagnostics.SignalRequests);
+            Assert.Equal(999, diagnostics.CoalescedSignalRequests);
+        }
+        finally
+        {
+            releaseDrain.Set();
+            pump.Cancel();
+            await pump.Completion.WaitAsync(TimeSpan.FromSeconds(2));
+        }
+
+        static bool TryTakeNoFrame(
+            out ReadOnlyMemory<short> frame,
+            out MixerPresentationNotification[] notifications,
+            out int notificationCount)
+        {
+            frame = default;
+            notifications = [];
+            notificationCount = 0;
+            return false;
+        }
+    }
+
+    [Fact]
+    public async Task SuspendsTimerWakeupsWhileMixerIsIdle()
+    {
+        var output = new BufferedFakePlayback();
+        await using var mixer = new AudioMixer(output);
+
+        await WaitForAsync(() => mixer.GetDiagnostics().OutputPump.IdleWaits > 0);
+        AudioOutputPumpDiagnostics before = mixer.GetDiagnostics().OutputPump;
+        await Task.Delay(50);
+
+        AudioOutputPumpDiagnostics after = mixer.GetDiagnostics().OutputPump;
+        Assert.Equal(0, after.TimeoutWakeups);
+        Assert.Equal(before.TotalWakeups, after.TotalWakeups);
+        Assert.Equal(0, after.FramesWritten);
+    }
+
+    [Fact]
+    public async Task ReturnsToIdleWaitingAfterCompletedOutputDrains()
+    {
+        var output = new BufferedFakePlayback();
+        await using var mixer = new AudioMixer(output);
+        await using IAudioPlayback channel = mixer.OpenChannel();
+
+        await channel.WriteAsync(Enumerable.Repeat((short)500, 4 * 160).ToArray());
+        await WaitForAsync(() => output.Frames.Count >= 4);
+        await channel.FlushAsync();
+        output.ConsumeAll();
+        await WaitForAsync(() => output.EndExpectedPlaybackCalls > 0);
+        await WaitForAsync(() => mixer.GetDiagnostics().OutputPump.IdleWaits >= 2);
+
+        AudioOutputPumpDiagnostics before = mixer.GetDiagnostics().OutputPump;
+        await Task.Delay(50);
+        AudioOutputPumpDiagnostics after = mixer.GetDiagnostics().OutputPump;
+
+        Assert.Equal(before.TotalWakeups, after.TotalWakeups);
     }
 
     [Fact]

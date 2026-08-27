@@ -54,6 +54,11 @@ internal readonly struct ReceiveIngressRoutingDecision
     public static ReceiveIngressRoutingDecision Empty => default;
     public bool HasDecision { get; }
     public int Count => HasDecision ? 1 + (additional?.Length ?? 0) : 0;
+    public bool IsContinuationOnly =>
+        HasDecision &&
+        additional is null &&
+        primary.PrecedingDecisions.Count == 0 &&
+        primary.StreamDecision.Transition == ReceiveStreamTransition.Continued;
 
     public bool TryGet(
         ChannelRouteKey routeKey,
@@ -200,14 +205,30 @@ internal sealed class ReceiveRoutePresentationAdapter
         ReceiveIngressRoutingDecision ingressDecision,
         Func<ChannelViewModel, uint, bool> isTrackingStream)
     {
+        return ResolveDispatchTargets(
+            decodeChannels,
+            includeRecordingChannels: false,
+            traffic,
+            ingressDecision,
+            isTrackingStream).ToArray();
+    }
+
+    public ReceiveDispatchTargets ResolveDispatchTargets(
+        IReadOnlyList<ChannelViewModel> decodeChannels,
+        bool includeRecordingChannels,
+        FneTrafficFrame traffic,
+        ReceiveIngressRoutingDecision ingressDecision,
+        Func<ChannelViewModel, uint, bool> isTrackingStream)
+    {
         ArgumentNullException.ThrowIfNull(decodeChannels);
         ArgumentNullException.ThrowIfNull(traffic);
         ArgumentNullException.ThrowIfNull(isTrackingStream);
 
         if (ReceiveTrafficClassifier.IsTerminator(traffic))
         {
-            return ResolveTerminatorTargets(
+            return ResolveTerminatorDispatchTargets(
                 decodeChannels,
+                includeRecordingChannels,
                 traffic,
                 ingressDecision,
                 isTrackingStream);
@@ -216,10 +237,10 @@ internal sealed class ReceiveRoutePresentationAdapter
             !ReceiveTrafficClassifier.IsDefinitiveStart(traffic) &&
             !ReceiveTrafficClassifier.IsDmrPrivacyHeader(traffic))
         {
-            return [];
+            return ReceiveDispatchTargets.Empty;
         }
         if (traffic.DestinationId == 0)
-            return [];
+            return ReceiveDispatchTargets.Empty;
 
         byte slot = traffic.Protocol == FneTrafficProtocol.Dmr
             ? traffic.Slot ?? 0
@@ -232,17 +253,17 @@ internal sealed class ReceiveRoutePresentationAdapter
             !ingressDecision.TryGet(routeKey, out ReceiveIngressRouteDecision reduced) ||
             !ShouldDeliver(reduced.Actions))
         {
-            return [];
+            return ReceiveDispatchTargets.Empty;
         }
 
         for (int index = 0; index < candidates.Length; index++)
         {
             ChannelViewModel candidate = candidates[index];
-            if (!ContainsReference(decodeChannels, candidate))
+            if (!IsDecodeEnabled(candidate, decodeChannels, includeRecordingChannels))
                 continue;
-            return [candidate];
+            return ReceiveDispatchTargets.One(candidate);
         }
-        return [];
+        return ReceiveDispatchTargets.Empty;
     }
 
     public ChannelViewModel[] ResolvePresentationCandidates(
@@ -322,14 +343,11 @@ internal sealed class ReceiveRoutePresentationAdapter
                 continue;
 
             ReceiveObservation observation = CreateObservation(traffic, routeKey, observedAt);
-            ChannelReceiveState stateBeforeAdvance = runtime.GetState(routeKey);
-            bool wasActiveAtIngress = stateBeforeAdvance.StreamLifecycle.IsActive(
-                traffic.StreamId);
-            bool hasLiveTombstone =
-                stateBeforeAdvance.StreamLifecycle.Tombstones.TryGetValue(
-                    traffic.StreamId,
-                    out DateTimeOffset tombstoneExpiresAt) &&
-                tombstoneExpiresAt > observation.ObservedAt;
+            bool wasActiveAtIngress = runtime.IsActive(routeKey, traffic.StreamId);
+            bool hasLiveTombstone = runtime.HasLiveTombstone(
+                routeKey,
+                traffic.StreamId,
+                observation.ObservedAt);
             IReadOnlyList<ReceiveRouteProjectionDecision> preceding = AdvanceRoute(
                 routeKey,
                 observation.ObservedAt);
@@ -356,21 +374,25 @@ internal sealed class ReceiveRoutePresentationAdapter
             : ReceiveIngressRoutingDecision.Empty;
     }
 
-    private ChannelViewModel[] ResolveTerminatorTargets(
+    private ReceiveDispatchTargets ResolveTerminatorDispatchTargets(
         IReadOnlyList<ChannelViewModel> decodeChannels,
+        bool includeRecordingChannels,
         FneTrafficFrame traffic,
         ReceiveIngressRoutingDecision ingressDecision,
         Func<ChannelViewModel, uint, bool> isTrackingStream)
     {
         int targetCount = 0;
-        for (int index = 0; index < decodeChannels.Count; index++)
+        for (int index = 0; index < configuredChannelList.Length; index++)
         {
+            ChannelViewModel candidate = configuredChannelList[index];
+            if (!IsDecodeEnabled(candidate, decodeChannels, includeRecordingChannels))
+                continue;
             if (IsTrackedTerminatorTarget(
-                    decodeChannels[index],
+                    candidate,
                     traffic,
                     isTrackingStream) &&
                 ingressDecision.TryGet(
-                    decodeChannels[index].SessionDefinition.RouteKey,
+                    candidate.SessionDefinition.RouteKey,
                     out ReceiveIngressRouteDecision countedDecision) &&
                 ShouldDeliver(countedDecision.Actions))
             {
@@ -378,14 +400,32 @@ internal sealed class ReceiveRoutePresentationAdapter
             }
         }
         if (targetCount == 0)
-            return [];
+            return ReceiveDispatchTargets.Empty;
+
+        if (targetCount == 1)
+        {
+            for (int index = 0; index < configuredChannelList.Length; index++)
+            {
+                ChannelViewModel candidate = configuredChannelList[index];
+                if (IsDecodeEnabled(candidate, decodeChannels, includeRecordingChannels) &&
+                    IsTrackedTerminatorTarget(candidate, traffic, isTrackingStream) &&
+                    ingressDecision.TryGet(
+                        candidate.SessionDefinition.RouteKey,
+                        out ReceiveIngressRouteDecision decision) &&
+                    ShouldDeliver(decision.Actions))
+                {
+                    return ReceiveDispatchTargets.One(candidate);
+                }
+            }
+        }
 
         var targets = new ChannelViewModel[targetCount];
         int targetIndex = 0;
-        for (int index = 0; index < decodeChannels.Count; index++)
+        for (int index = 0; index < configuredChannelList.Length; index++)
         {
-            ChannelViewModel candidate = decodeChannels[index];
-            if (!IsTrackedTerminatorTarget(candidate, traffic, isTrackingStream) ||
+            ChannelViewModel candidate = configuredChannelList[index];
+            if (!IsDecodeEnabled(candidate, decodeChannels, includeRecordingChannels) ||
+                !IsTrackedTerminatorTarget(candidate, traffic, isTrackingStream) ||
                 !ingressDecision.TryGet(
                     candidate.SessionDefinition.RouteKey,
                     out ReceiveIngressRouteDecision replayedDecision) ||
@@ -397,11 +437,11 @@ internal sealed class ReceiveRoutePresentationAdapter
         }
 
         if (targetIndex == targets.Length)
-            return targets;
+            return ReceiveDispatchTargets.FromArray(targets);
         if (targetIndex == 0)
-            return [];
+            return ReceiveDispatchTargets.Empty;
         Array.Resize(ref targets, targetIndex);
-        return targets;
+        return ReceiveDispatchTargets.FromArray(targets);
     }
 
     private ChannelViewModel[] ResolvePresentationTerminatorCandidates(
@@ -684,4 +724,11 @@ internal sealed class ReceiveRoutePresentationAdapter
         }
         return false;
     }
+
+    private static bool IsDecodeEnabled(
+        ChannelViewModel channel,
+        IReadOnlyList<ChannelViewModel> decodeChannels,
+        bool includeRecordingChannels)
+        => (includeRecordingChannels && channel.IsRecordingEnabled) ||
+           ContainsReference(decodeChannels, channel);
 }

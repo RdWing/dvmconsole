@@ -51,4 +51,15 @@ public sealed class FneLogInterpreterTests
         => Assert.Null(FneLogInterpreter.InterpretStatus(
             "Unknown master opcode 7F / 00",
             FneConnectionState.Connected));
+
+    [Theory]
+    [InlineData("(DVMCONSOLE) RPTPING sent to MASTER 127.0.0.1:62031")]
+    [InlineData("(DVMCONSOLE) PEER 1001 MSTPONG received, pongs since connected 9")]
+    public void RecognizesRoutineHealthyKeepalives(string message)
+        => Assert.True(FneLogInterpreter.IsRoutineHealthyKeepalive(message));
+
+    [Fact]
+    public void DoesNotClassifyConnectionFailuresAsRoutineKeepalives()
+        => Assert.False(FneLogInterpreter.IsRoutineHealthyKeepalive(
+            "RPTPING failed because the socket disconnected"));
 }

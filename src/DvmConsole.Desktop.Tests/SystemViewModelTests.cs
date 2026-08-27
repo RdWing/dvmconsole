@@ -1576,6 +1576,10 @@ public sealed class SystemViewModelTests
         {
             for (int index = 0; index < 20; index++)
                 system.RecordTraffic(traffic, publishDiagnostics: false);
+
+            Assert.Equal(0, notifications);
+            Assert.Contains("20 packets / 60 B", system.StreamTrafficText);
+
             system.PublishTrafficDiagnostics();
 
             Assert.Equal(2, notifications);
@@ -1601,6 +1605,10 @@ public sealed class SystemViewModelTests
             viewModel.TalkPermitTone = true;
             await viewModel.FlushUserSettingsAsync();
             Assert.True(store.Load().TalkPermitTone);
+            viewModel.VerboseLoggingEnabled = false;
+            viewModel.VerboseLoggingEnabled = true;
+            await viewModel.FlushUserSettingsAsync();
+            Assert.True(store.Load().VerboseLoggingEnabled);
             viewModel.DarkMode = true;
             await viewModel.FlushUserSettingsAsync();
             Assert.True(store.Load().DarkMode);

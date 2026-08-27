@@ -32,6 +32,25 @@ internal static class ReceiveAudioTrafficRouter
             isTrackingStream);
     }
 
+    public static ReceiveDispatchTargets ResolveDispatchTargets(
+        IReadOnlyDictionary<
+            (FneTrafficProtocol Protocol, uint DestinationId),
+            ChannelViewModel[]> routes,
+        IReadOnlyList<ChannelViewModel> decodeChannels,
+        bool includeRecordingChannels,
+        FneTrafficFrame traffic,
+        ReceiveIngressRoutingDecision ingressDecision,
+        Func<ChannelViewModel, uint, bool> isTrackingStream)
+    {
+        ArgumentNullException.ThrowIfNull(routes);
+        return GetAdapter(routes).ResolveDispatchTargets(
+            decodeChannels,
+            includeRecordingChannels,
+            traffic,
+            ingressDecision,
+            isTrackingStream);
+    }
+
     public static ReceiveIngressRoutingDecision ObserveIngress(
         IReadOnlyDictionary<
             (FneTrafficProtocol Protocol, uint DestinationId),

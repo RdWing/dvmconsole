@@ -18,6 +18,7 @@ public sealed class PatchSourceDecodeCoordinator : IAsyncDisposable
     private readonly Func<IVocoderBackend> createVocoderBackend;
     private readonly object sync = new();
     private readonly Dictionary<ChannelViewModel, SessionState> sessions = [];
+    private ChannelViewModel[] activeChannels = [];
     private IVocoderBackend? vocoderBackend;
     private Task? disposeTask;
     private long requestedConfigurationRevision;
@@ -74,13 +75,7 @@ public sealed class PatchSourceDecodeCoordinator : IAsyncDisposable
     }
 
     public IReadOnlyList<ChannelViewModel> ActiveChannels
-    {
-        get
-        {
-            lock (sync)
-                return sessions.Keys.ToArray();
-        }
-    }
+        => Volatile.Read(ref activeChannels);
 
     public async Task ApplyChannelsAsync(
         IEnumerable<ChannelViewModel> channels,
@@ -115,7 +110,10 @@ public sealed class PatchSourceDecodeCoordinator : IAsyncDisposable
             {
                 SessionState? state;
                 lock (sync)
+                {
                     sessions.Remove(channel, out state);
+                    PublishActiveChannels();
+                }
                 if (state is not null)
                     await state.DisposeAsync().ConfigureAwait(false);
             }
@@ -163,7 +161,10 @@ public sealed class PatchSourceDecodeCoordinator : IAsyncDisposable
                         channel);
                     createdVocoderSession = null;
                     lock (sync)
+                    {
                         sessions.Add(channel, new SessionState(session, sampleContext));
+                        PublishActiveChannels();
+                    }
                 }
                 catch
                 {
@@ -256,6 +257,7 @@ public sealed class PatchSourceDecodeCoordinator : IAsyncDisposable
         {
             activeSessions = sessions.Values.ToArray();
             sessions.Clear();
+            PublishActiveChannels();
         }
 
         foreach (SessionState state in activeSessions)
@@ -285,6 +287,11 @@ public sealed class PatchSourceDecodeCoordinator : IAsyncDisposable
             _ => false
         };
     }
+
+    // Called only while sync is held. Readers receive an immutable snapshot
+    // without taking the lock or allocating on every received packet.
+    private void PublishActiveChannels()
+        => Volatile.Write(ref activeChannels, sessions.Keys.ToArray());
 
     private sealed class ObservedDiscardPlayback(
         PcmAudioFormat format,

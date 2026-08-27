@@ -16,9 +16,24 @@ public sealed record HistoryCatalogFilter(
     DateTimeOffset? StartDate = null,
     DateTimeOffset? EndDate = null)
 {
+    public bool IsUnfiltered =>
+        string.IsNullOrWhiteSpace(SearchText) &&
+        Direction == "All" &&
+        Protocol == "All" &&
+        Encryption == "All" &&
+        string.IsNullOrWhiteSpace(System) &&
+        string.IsNullOrWhiteSpace(Channel) &&
+        string.IsNullOrWhiteSpace(Talkgroup) &&
+        string.IsNullOrWhiteSpace(Subscriber) &&
+        string.IsNullOrWhiteSpace(Alias) &&
+        StartDate is null &&
+        EndDate is null;
+
     public bool Matches(CallHistoryEntry entry)
     {
         ArgumentNullException.ThrowIfNull(entry);
+        if (IsUnfiltered)
+            return true;
 
         if (Direction != "All" && !entry.DirectionText.Equals(Direction, StringComparison.OrdinalIgnoreCase))
             return false;
@@ -32,16 +47,25 @@ public sealed record HistoryCatalogFilter(
             !MatchesText(Channel, entry.DisplayChannelText) ||
             !MatchesText(Talkgroup, entry.DisplayDestinationText) ||
             !MatchesText(Subscriber, entry.DisplaySourceText) ||
-            !MatchesText(Alias, entry.CallerText, entry.Recording?.SubscriberAlias))
+            !MatchesEitherText(Alias, entry.CallerText, entry.Recording?.SubscriberAlias))
         {
             return false;
         }
 
-        DateTime localDate = entry.Timestamp.ToLocalTime().Date;
-        if (StartDate is DateTimeOffset startDate && localDate < startDate.Date)
-            return false;
-        if (EndDate is DateTimeOffset endDate && localDate > endDate.Date)
-            return false;
+        if (StartDate is not null || EndDate is not null)
+        {
+            DateTime localDate = entry.Timestamp.ToLocalTime().Date;
+            if (StartDate is DateTimeOffset startDate && localDate < startDate.Date)
+                return false;
+            if (EndDate is DateTimeOffset endDate && localDate > endDate.Date)
+                return false;
+        }
+
+        // Recording detail strings are intentionally assembled on demand for
+        // display and search. Avoid materializing them for every retained TAR
+        // row when only structured filters (or no filter) are active.
+        if (string.IsNullOrWhiteSpace(SearchText))
+            return true;
 
         return SearchTextMatcher.MatchesAllTerms(
             SearchText,
@@ -62,13 +86,20 @@ public sealed record HistoryCatalogFilter(
             entry.Recording?.SubscriberAlias);
     }
 
-    private static bool MatchesText(string filter, params string?[] values)
+    private static bool MatchesText(string filter, string? value)
     {
         if (string.IsNullOrWhiteSpace(filter))
             return true;
         string trimmed = filter.Trim();
-        return values.Any(value =>
-            !string.IsNullOrWhiteSpace(value) &&
-            value.Contains(trimmed, StringComparison.OrdinalIgnoreCase));
+        return !string.IsNullOrWhiteSpace(value) &&
+               value.Contains(trimmed, StringComparison.OrdinalIgnoreCase);
     }
+
+    private static bool MatchesEitherText(
+        string filter,
+        string? first,
+        string? second)
+        => string.IsNullOrWhiteSpace(filter) ||
+           MatchesText(filter, first) ||
+           MatchesText(filter, second);
 }

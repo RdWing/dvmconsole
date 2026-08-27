@@ -18,6 +18,7 @@ internal sealed class AudioOutputPump : IDisposable
 {
     private readonly IAudioPlayback output;
     private readonly TimeSpan interval;
+    private readonly Func<bool> requiresTimedPolling;
     private readonly Func<int> getFramesNeeded;
     private readonly Func<TimeSpan> getPresentationDelay;
     private readonly Func<bool> shouldCoalesceFirstFrame;
@@ -25,17 +26,20 @@ internal sealed class AudioOutputPump : IDisposable
     private readonly Action markOutputPrimed;
     private readonly Action<TimeSpan> observeLateness;
     private readonly Action<Exception> reportFailure;
+    private readonly AudioOutputPumpDiagnosticsTracker diagnostics = new();
     private readonly CancellationTokenSource cancellation = new();
     private readonly SemaphoreSlim dataAvailable = new(0, 1);
     private readonly TaskCompletionSource completion =
         new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly Thread thread;
+    private int wakePending;
     private long pendingSignalTimestamp;
     private bool disposed;
 
     public AudioOutputPump(
         IAudioPlayback output,
         TimeSpan interval,
+        Func<bool> requiresTimedPolling,
         Func<int> getFramesNeeded,
         Func<TimeSpan> getPresentationDelay,
         Func<bool> shouldCoalesceFirstFrame,
@@ -46,6 +50,8 @@ internal sealed class AudioOutputPump : IDisposable
     {
         this.output = output ?? throw new ArgumentNullException(nameof(output));
         this.interval = interval;
+        this.requiresTimedPolling = requiresTimedPolling ??
+            throw new ArgumentNullException(nameof(requiresTimedPolling));
         this.getFramesNeeded = getFramesNeeded ?? throw new ArgumentNullException(nameof(getFramesNeeded));
         this.getPresentationDelay = getPresentationDelay ?? throw new ArgumentNullException(nameof(getPresentationDelay));
         this.shouldCoalesceFirstFrame = shouldCoalesceFirstFrame ?? throw new ArgumentNullException(nameof(shouldCoalesceFirstFrame));
@@ -72,20 +78,19 @@ internal sealed class AudioOutputPump : IDisposable
 
     public Task Completion => completion.Task;
 
+    public AudioOutputPumpDiagnostics GetDiagnostics() => diagnostics.Snapshot();
+
     public void Signal()
     {
-        Interlocked.CompareExchange(
-            ref pendingSignalTimestamp,
-            Stopwatch.GetTimestamp(),
-            comparand: 0);
-        try
+        diagnostics.RecordSignalRequest();
+        if (Interlocked.CompareExchange(ref wakePending, 1, comparand: 0) != 0)
         {
-            dataAvailable.Release();
+            diagnostics.RecordCoalescedSignalRequest();
+            return;
         }
-        catch (SemaphoreFullException)
-        {
-            // One pending wake is sufficient; the pump drains to its target.
-        }
+
+        Interlocked.Exchange(ref pendingSignalTimestamp, Stopwatch.GetTimestamp());
+        dataAvailable.Release();
     }
 
     public void Cancel() => cancellation.Cancel();
@@ -106,8 +111,22 @@ internal sealed class AudioOutputPump : IDisposable
         {
             while (true)
             {
+                bool timedPolling = requiresTimedPolling();
                 long waitStarted = Stopwatch.GetTimestamp();
-                bool signaled = dataAvailable.Wait(interval, cancellationToken);
+                bool signaled;
+                if (timedPolling)
+                {
+                    signaled = dataAvailable.Wait(interval, cancellationToken);
+                }
+                else
+                {
+                    diagnostics.RecordIdleWait();
+                    dataAvailable.Wait(cancellationToken);
+                    signaled = true;
+                }
+                if (signaled)
+                    Interlocked.Exchange(ref wakePending, 0);
+                diagnostics.RecordWakeup(signaled);
                 long now = Stopwatch.GetTimestamp();
                 TimeSpan lateness = TimeSpan.Zero;
                 if (signaled)
@@ -131,6 +150,7 @@ internal sealed class AudioOutputPump : IDisposable
                 }
 
                 int framesToWrite = getFramesNeeded();
+                int framesWritten = 0;
                 for (int index = 0; index < framesToWrite; index++)
                 {
                     TimeSpan presentationDelay = getPresentationDelay();
@@ -145,6 +165,7 @@ internal sealed class AudioOutputPump : IDisposable
                     try
                     {
                         output.WriteAsync(frame, cancellationToken).AsTask().GetAwaiter().GetResult();
+                        framesWritten++;
                         markOutputPrimed();
                         NotifyPresentations(notifications, notificationCount, presentationDelay);
                     }
@@ -158,6 +179,7 @@ internal sealed class AudioOutputPump : IDisposable
                         }
                     }
                 }
+                diagnostics.RecordFramesWritten(framesWritten);
             }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)

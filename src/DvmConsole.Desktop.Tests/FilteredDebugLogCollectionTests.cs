@@ -16,8 +16,8 @@ public sealed class FilteredDebugLogCollectionTests
         ((INotifyCollectionChanged)filtered.Entries).CollectionChanged +=
             (_, args) => changes.Add(args.Action);
 
-        source.Insert(0, Entry(DebugLogSeverity.Debug, "packet one"));
-        source.Insert(0, Entry(DebugLogSeverity.Info, "call started"));
+        source.Add(Entry(DebugLogSeverity.Debug, "packet one"));
+        source.Add(Entry(DebugLogSeverity.Info, "call started"));
 
         DebugLogEntry visible = Assert.Single(filtered.Entries);
         Assert.Equal("call started", visible.Message);
@@ -42,7 +42,7 @@ public sealed class FilteredDebugLogCollectionTests
         ((INotifyCollectionChanged)filtered.Entries).CollectionChanged +=
             (_, _) => notifications.Add("changed");
 
-        source.Insert(0, incoming);
+        source.Add(incoming);
 
         Assert.Equal(["changing", "changed"], notifications);
         Assert.Equal([incoming, existing], filtered.Entries);
@@ -53,9 +53,9 @@ public sealed class FilteredDebugLogCollectionTests
     {
         var source = new ObservableCollection<DebugLogEntry>
         {
-            Entry(DebugLogSeverity.Info, "newest alpha"),
+            Entry(DebugLogSeverity.Info, "oldest alpha"),
             Entry(DebugLogSeverity.Warning, "middle beta"),
-            Entry(DebugLogSeverity.Info, "oldest alpha")
+            Entry(DebugLogSeverity.Info, "newest alpha")
         };
         using var filtered = new FilteredDebugLogCollection(source);
         var changes = new List<NotifyCollectionChangedAction>();
@@ -68,6 +68,19 @@ public sealed class FilteredDebugLogCollectionTests
             ["newest alpha", "oldest alpha"],
             filtered.Entries.Select(entry => entry.Message));
         Assert.Equal([NotifyCollectionChangedAction.Reset], changes);
+    }
+
+    [Fact]
+    public void EmptySearchDoesNotAllocatePerEntry()
+    {
+        DebugLogEntry entry = Entry(DebugLogSeverity.Info, "message");
+        Assert.True(DebugLogSearch.Matches(entry, string.Empty));
+        long before = GC.GetAllocatedBytesForCurrentThread();
+
+        for (int index = 0; index < 1_000; index++)
+            Assert.True(DebugLogSearch.Matches(entry, string.Empty));
+
+        Assert.Equal(0, GC.GetAllocatedBytesForCurrentThread() - before);
     }
 
     [Fact]

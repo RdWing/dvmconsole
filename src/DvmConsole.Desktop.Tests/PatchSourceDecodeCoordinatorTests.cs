@@ -28,6 +28,10 @@ public sealed class PatchSourceDecodeCoordinatorTests
             () => new FakeVocoderBackend());
 
         await coordinator.ApplyChannelsAsync([channel]);
+        IReadOnlyList<ChannelViewModel> activeSnapshot = coordinator.ActiveChannels;
+
+        Assert.Same(activeSnapshot, coordinator.ActiveChannels);
+        Assert.Same(channel, Assert.Single(activeSnapshot));
         await coordinator.ProcessAsync(channel, CreateDmrTraffic());
 
         Assert.NotEmpty(observed);

@@ -514,14 +514,13 @@ public static class ReceiveStreamReducer
 }
 
 /// <summary>
-/// Compatibility state holder for decoder/session consumers. All behavior is
-/// delegated to the immutable reducer above; presentation code should carry a
-/// captured reduction instead of owning this wrapper.
+/// Compatibility state holder for decoder/session consumers. One wrapper owns
+/// one mutable lifecycle engine; callers can request an immutable snapshot for
+/// diagnostics or replay without paying that cost on every voice packet.
 /// </summary>
 public sealed class ReceiveStreamLifecycle
 {
-    private readonly ReceiveStreamPolicy policy;
-    private ReceiveStreamState state = ReceiveStreamState.Empty;
+    private readonly ReceiveStreamStateMachine stateMachine;
 
     public ReceiveStreamLifecycle(
         TimeSpan inactivityTimeout,
@@ -537,33 +536,27 @@ public sealed class ReceiveStreamLifecycle
     }
 
     private ReceiveStreamLifecycle(ReceiveStreamPolicy policy)
-        => this.policy = policy;
+        => stateMachine = new ReceiveStreamStateMachine(policy);
 
     public static ReceiveStreamLifecycle CreateDefault()
         => new(ReceiveStreamPolicy.Default);
 
-    public uint? ActiveStreamId => state.PrimaryStreamId;
-    public ReceiveStreamState Snapshot => state;
-    public bool IsActive(uint streamId) => state.IsActive(streamId);
+    public uint? ActiveStreamId => stateMachine.PrimaryStreamId;
+    public ReceiveStreamState Snapshot => stateMachine.Snapshot;
+    public bool IsActive(uint streamId) => stateMachine.IsActive(streamId);
 
     public ReceiveStreamDecision ObserveVoice(uint streamId, DateTimeOffset now)
-        => Apply(ReceiveStreamReducer.ObserveVoice(state, streamId, now, policy));
+        => stateMachine.ObserveVoice(streamId, now);
 
     public ReceiveStreamDecision ObserveDefinitiveStart(uint streamId, DateTimeOffset now)
-        => Apply(ReceiveStreamReducer.ObserveDefinitiveStart(state, streamId, now, policy));
+        => stateMachine.ObserveDefinitiveStart(streamId, now);
 
     public ReceiveStreamDecision ObserveTerminator(uint streamId, DateTimeOffset now)
-        => Apply(ReceiveStreamReducer.ObserveTerminator(state, streamId, now, policy));
+        => stateMachine.ObserveTerminator(streamId, now);
 
     public ReceiveStreamDecision Complete(uint streamId, DateTimeOffset now)
-        => Apply(ReceiveStreamReducer.Complete(state, streamId, now, policy));
+        => stateMachine.Complete(streamId, now);
 
     public ReceiveStreamDecision Advance(DateTimeOffset now)
-        => Apply(ReceiveStreamReducer.Advance(state, now, policy));
-
-    private ReceiveStreamDecision Apply(ReceiveStreamReduction reduction)
-    {
-        state = reduction.State;
-        return reduction.Decision;
-    }
+        => stateMachine.Advance(now);
 }

@@ -24,11 +24,14 @@ public sealed partial class MainWindowViewModel
             traffic,
             receivedAt,
             receivedTimestamp);
+        // Connection statistics are thread-safe and account for every packet
+        // before continuation-only UI projection is allowed to coalesce.
+        system.RecordTraffic(decision.Traffic, publishDiagnostics: false);
         ObserveAdaptiveReceiveJitter(system, decision.Traffic);
-        ChannelViewModel[] preEnqueuedAudioChannels = EnqueuePriorityReceiveAudio(
+        ReceiveDispatchTargets preEnqueuedAudioChannels = EnqueuePriorityReceiveAudio(
             system,
             decision);
-        ChannelViewModel[] preEnqueuedPatchChannels = EnqueuePriorityPatchAudio(
+        ReceiveDispatchTargets preEnqueuedPatchChannels = EnqueuePriorityPatchAudio(
             system,
             decision);
         var workItem = new SystemTrafficWorkItem(
@@ -47,7 +50,8 @@ public sealed partial class MainWindowViewModel
             workItem.Decision,
             publishTrafficDiagnostics,
             workItem.PreEnqueuedAudioChannels,
-            workItem.PreEnqueuedPatchChannels);
+            workItem.PreEnqueuedPatchChannels,
+            trafficAlreadyRecorded: true);
 
     internal void ProcessTraffic(
         SystemViewModel system,
@@ -70,16 +74,18 @@ public sealed partial class MainWindowViewModel
             system,
             decision,
             publishTrafficDiagnostics,
-            preEnqueuedAudioChannels,
-            preEnqueuedPatchChannels);
+            ReceiveDispatchTargets.From(preEnqueuedAudioChannels),
+            ReceiveDispatchTargets.From(preEnqueuedPatchChannels),
+            trafficAlreadyRecorded: false);
     }
 
     private void ProcessTrafficDecision(
         SystemViewModel system,
         ReceivePacketDecisionEnvelope decision,
         bool publishTrafficDiagnostics,
-        IReadOnlyList<ChannelViewModel>? preEnqueuedAudioChannels,
-        IReadOnlyList<ChannelViewModel>? preEnqueuedPatchChannels)
+        ReceiveDispatchTargets preEnqueuedAudioChannels,
+        ReceiveDispatchTargets preEnqueuedPatchChannels,
+        bool trafficAlreadyRecorded)
     {
         FneTrafficFrame traffic = decision.Traffic;
         DateTimeOffset now = decision.ReceivedAt;
@@ -87,7 +93,15 @@ public sealed partial class MainWindowViewModel
         ReceiveCallEpisodeObservation? episodeObservation = decision.EpisodeObservation;
         uint historyStreamId = episodeObservation?.PrimaryStreamId ?? traffic.StreamId;
         ReceiveCallEpisodeSnapshot? episode = decision.EpisodeSnapshot;
-        system.RecordTraffic(traffic, publishTrafficDiagnostics);
+        if (trafficAlreadyRecorded)
+        {
+            if (publishTrafficDiagnostics)
+                system.PublishTrafficDiagnostics();
+        }
+        else
+        {
+            system.RecordTraffic(traffic, publishTrafficDiagnostics);
+        }
         List<ChannelViewModel> activeAudioChannels = [];
         List<ChannelViewModel> activePatchSourceChannels = [];
         bool callHistoryChanged = false;
@@ -125,7 +139,7 @@ public sealed partial class MainWindowViewModel
                 continue;
             }
 
-            bool patchAlreadyEnqueued = preEnqueuedPatchChannels?.Contains(channel) == true;
+            bool patchAlreadyEnqueued = preEnqueuedPatchChannels.Contains(channel);
             if (!patchAlreadyEnqueued && patchSourceDecode.IsActive(channel))
                 activePatchSourceChannels.Add(channel);
 
@@ -232,7 +246,7 @@ public sealed partial class MainWindowViewModel
 
         foreach (ChannelViewModel channel in activeAudioChannels)
         {
-            if (preEnqueuedAudioChannels?.Contains(channel) == true)
+            if (preEnqueuedAudioChannels.Contains(channel))
             {
                 if (!ReceiveTrafficClassifier.IsTerminator(traffic))
                     channel.MarkReceivePlaybackActive(traffic.SourceId, traffic.StreamId);
@@ -286,13 +300,20 @@ public sealed partial class MainWindowViewModel
                 receivedAt);
         }
 
+        bool canCoalescePresentation =
+            routing.IsContinuationOnly &&
+            episodeObservation is not { EpisodeStarted: true } &&
+            episodeObservation is not { StreamAdded: true } &&
+            ReceiveTrafficClassifier.CarriesVoicePayload(traffic) &&
+            TrafficEncryptionMetadataResolver.TryResolve(traffic) is null;
         return new ReceivePacketDecisionEnvelope(
             traffic,
             receivedAt,
             receivedTimestamp,
             routing,
             episodeObservation,
-            episodeSnapshot);
+            episodeSnapshot,
+            canCoalescePresentation);
     }
 
     private bool ProjectReceiveLifecycleDecision(
@@ -909,7 +930,7 @@ public sealed partial class MainWindowViewModel
             ReceiveDiagnosticsText.FormatPipelineDelay(channel.Name, timing, maximums));
     }
 
-    private ChannelViewModel[] EnqueuePriorityReceiveAudio(
+    private ReceiveDispatchTargets EnqueuePriorityReceiveAudio(
         SystemViewModel system,
         ReceivePacketDecisionEnvelope decision)
     {
@@ -917,20 +938,24 @@ public sealed partial class MainWindowViewModel
                 system,
                 out IReadOnlyDictionary<(FneTrafficProtocol Protocol, uint DestinationId), ChannelViewModel[]>? routes))
         {
-            return [];
+            return ReceiveDispatchTargets.Empty;
         }
 
-        ChannelViewModel[] targets = ReceiveAudioTrafficRouter.ResolveTargets(
+        ReceiveDispatchTargets targets = ReceiveAudioTrafficRouter.ResolveDispatchTargets(
             routes,
-            GetReceiveDecodeChannels(routes),
+            audioCoordinator.ActiveChannels,
+            includeRecordingChannels: true,
             decision.Traffic,
             decision.Routing,
             (channel, streamId) =>
                 audioCoordinator.IsTrackingStream(channel, streamId) ||
                 channel.IsTrackingReceiveStream(streamId));
-        if (targets.Length == 0)
-            return [];
+        if (targets.Count == 0)
+            return ReceiveDispatchTargets.Empty;
 
+        ChannelViewModel[]? accepted = targets.Count > 1
+            ? new ChannelViewModel[targets.Count]
+            : null;
         int acceptedCount = 0;
         foreach (ChannelViewModel channel in targets)
         {
@@ -939,7 +964,9 @@ public sealed partial class MainWindowViewModel
                     decision.Traffic,
                     decision.ReceivedTimestamp))
             {
-                targets[acceptedCount++] = channel;
+                if (accepted is not null)
+                    accepted[acceptedCount] = channel;
+                acceptedCount++;
                 if (ReceiveTrafficClassifier.IsTerminator(decision.Traffic))
                     channel.MarkReceiveAudioMeterEnded(decision.Traffic.StreamId);
                 else
@@ -947,16 +974,17 @@ public sealed partial class MainWindowViewModel
             }
         }
 
-        if (acceptedCount == targets.Length)
+        if (acceptedCount == targets.Count)
             return targets;
         if (acceptedCount == 0)
-            return [];
+            return ReceiveDispatchTargets.Empty;
 
-        Array.Resize(ref targets, acceptedCount);
-        return targets;
+        ChannelViewModel[] acceptedTargets = accepted!;
+        Array.Resize(ref acceptedTargets, acceptedCount);
+        return ReceiveDispatchTargets.FromArray(acceptedTargets);
     }
 
-    private ChannelViewModel[] EnqueuePriorityPatchAudio(
+    private ReceiveDispatchTargets EnqueuePriorityPatchAudio(
         SystemViewModel system,
         ReceivePacketDecisionEnvelope decision)
     {
@@ -964,19 +992,23 @@ public sealed partial class MainWindowViewModel
                 system,
                 out IReadOnlyDictionary<(FneTrafficProtocol Protocol, uint DestinationId), ChannelViewModel[]>? routes))
         {
-            return [];
+            return ReceiveDispatchTargets.Empty;
         }
 
         IReadOnlyList<ChannelViewModel> activeSources = patchSourceDecode.ActiveChannels;
-        ChannelViewModel[] targets = ReceiveAudioTrafficRouter.ResolveTargets(
+        ReceiveDispatchTargets targets = ReceiveAudioTrafficRouter.ResolveDispatchTargets(
             routes,
             activeSources,
+            includeRecordingChannels: false,
             decision.Traffic,
             decision.Routing,
             patchSourceDecode.IsTrackingStream);
-        if (targets.Length == 0)
-            return [];
+        if (targets.Count == 0)
+            return ReceiveDispatchTargets.Empty;
 
+        ChannelViewModel[]? accepted = targets.Count > 1
+            ? new ChannelViewModel[targets.Count]
+            : null;
         int acceptedCount = 0;
         foreach (ChannelViewModel channel in targets)
         {
@@ -987,27 +1019,21 @@ public sealed partial class MainWindowViewModel
                     decision.ReceivedTimestamp,
                     out _))
             {
-                targets[acceptedCount++] = channel;
+                if (accepted is not null)
+                    accepted[acceptedCount] = channel;
+                acceptedCount++;
             }
         }
 
-        if (acceptedCount == targets.Length)
+        if (acceptedCount == targets.Count)
             return targets;
         if (acceptedCount == 0)
-            return [];
+            return ReceiveDispatchTargets.Empty;
 
-        Array.Resize(ref targets, acceptedCount);
-        return targets;
+        ChannelViewModel[] acceptedTargets = accepted!;
+        Array.Resize(ref acceptedTargets, acceptedCount);
+        return ReceiveDispatchTargets.FromArray(acceptedTargets);
     }
-
-    private IReadOnlyList<ChannelViewModel> GetReceiveDecodeChannels(
-        IReadOnlyDictionary<(FneTrafficProtocol Protocol, uint DestinationId), ChannelViewModel[]> routes)
-        => audioCoordinator.ActiveChannels
-            .Concat(routes.Values
-                .SelectMany(channels => channels)
-                .Where(channel => channel.IsRecordingEnabled))
-            .Distinct()
-            .ToArray();
 
     private void EnqueueReceiveAudio(
         ChannelViewModel channel,

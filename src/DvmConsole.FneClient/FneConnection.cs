@@ -53,6 +53,10 @@ public sealed record FneConnectionOptions(
     // Raw packet contents are never exposed by the rebuild client.
     public bool EnableDiagnostics { get; init; }
 
+    // Initial state for routine high-frequency protocol traces. The desktop
+    // can update it at runtime from its persisted operator setting.
+    public bool EnableVerboseLogging { get; init; } = VerboseDiagnosticLogging.IsEnabled;
+
     public FneTransportEncryptionPreference TransportEncryptionMode { get; init; } =
         FneTransportEncryptionPreference.Auto;
 
@@ -144,6 +148,7 @@ public sealed class FneConnection : IAsyncDisposable
     private CancellationTokenSource? handshakeRecoveryCancellation;
     private FneConnectionStatus status;
     private long latestTrafficTransportTimestamp;
+    private bool verboseLoggingEnabled;
     private EventHandler<FneTrafficFrame>[] trafficReceivedHandlers = [];
 
     public FneConnection(FneConnectionOptions options)
@@ -180,6 +185,7 @@ public sealed class FneConnection : IAsyncDisposable
         if (this.handshakeProgressTimeout <= TimeSpan.Zero)
             throw new ArgumentOutOfRangeException(nameof(handshakeProgressTimeout));
         status = new FneConnectionStatus(options.Name, FneConnectionState.Disconnected, "Not started", DateTimeOffset.UtcNow);
+        verboseLoggingEnabled = options.EnableVerboseLogging;
     }
 
     public event EventHandler<FneConnectionStatus>? StatusChanged;
@@ -198,6 +204,9 @@ public sealed class FneConnection : IAsyncDisposable
         }
     }
     public event EventHandler<FneKeyResponse>? KeyResponseReceived;
+
+    public void SetVerboseLogging(bool enabled)
+        => Volatile.Write(ref verboseLoggingEnabled, enabled);
 
     public FneConnectionStatus Status
     {
@@ -697,6 +706,11 @@ public sealed class FneConnection : IAsyncDisposable
         TimeSpan? retryDelay = FneLogInterpreter.IsLoginRequest(message)
             ? ApplyLoginRetryBackoff()
             : null;
+        if (level == LogLevel.DEBUG &&
+            !Volatile.Read(ref verboseLoggingEnabled) &&
+            FneLogInterpreter.IsRoutineHealthyKeepalive(message))
+            return;
+
         string displayMessage = DebugLogRedactor.Redact(message);
         if (retryDelay is not null &&
             !displayMessage.Contains("next retry", StringComparison.OrdinalIgnoreCase))

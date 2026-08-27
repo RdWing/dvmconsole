@@ -8,6 +8,39 @@ namespace DvmConsole.Desktop.Tests;
 public sealed class SystemTrafficBufferTests
 {
     [Fact]
+    public void CoalescesContinuationPresentationWithoutCountingABacklogDrop()
+    {
+        var buffer = new SystemTrafficBuffer();
+
+        for (ushort sequence = 1; sequence <= 100; sequence++)
+            Assert.True(buffer.Enqueue(WorkItem(sequence, canCoalescePresentation: true)));
+
+        Assert.Equal(1, buffer.Count);
+        Assert.Equal(99, buffer.CoalescedCount);
+        Assert.Equal(0, buffer.DroppedCount);
+        Assert.True(buffer.TryDequeue(out SystemTrafficWorkItem? latest));
+        Assert.Equal((ushort)100, latest!.Value.Traffic.PacketSequence);
+    }
+
+    [Fact]
+    public void LifecycleBoundaryPreventsCoalescingAcrossIt()
+    {
+        var buffer = new SystemTrafficBuffer();
+
+        buffer.Enqueue(WorkItem(1, canCoalescePresentation: true));
+        buffer.Enqueue(WorkItem(2, canCoalescePresentation: false));
+        buffer.Enqueue(WorkItem(3, canCoalescePresentation: true));
+        buffer.Enqueue(WorkItem(4, canCoalescePresentation: true));
+
+        Assert.Equal(3, buffer.Count);
+        Assert.Equal(1, buffer.CoalescedCount);
+        var presented = new List<ushort>();
+        while (buffer.TryDequeue(out SystemTrafficWorkItem? item))
+            presented.Add(item!.Value.Traffic.PacketSequence);
+        Assert.Equal([(ushort)1, (ushort)2, (ushort)4], presented);
+    }
+
+    [Fact]
     public void BoundsVoiceBacklogAndRetainsTerminator()
     {
         var buffer = new SystemTrafficBuffer(maximumCount: 2);
@@ -140,4 +173,22 @@ public sealed class SystemTrafficBufferTests
             sequence,
             streamId,
             []);
+
+    private static SystemTrafficWorkItem WorkItem(
+        ushort sequence,
+        bool canCoalescePresentation)
+    {
+        FneTrafficFrame traffic = Traffic(sequence);
+        return new SystemTrafficWorkItem(
+            new ReceivePacketDecisionEnvelope(
+                traffic,
+                DateTimeOffset.UnixEpoch,
+                sequence,
+                ReceiveIngressRoutingDecision.Empty,
+                EpisodeObservation: null,
+                EpisodeSnapshot: null,
+                canCoalescePresentation),
+            ReceiveDispatchTargets.Empty,
+            ReceiveDispatchTargets.Empty);
+    }
 }

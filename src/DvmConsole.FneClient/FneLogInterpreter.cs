@@ -10,6 +10,10 @@ internal static class FneLogInterpreter
     public static bool IsLoginRequest(string message)
         => message.Contains("Sending login request", StringComparison.OrdinalIgnoreCase);
 
+    public static bool IsRoutineHealthyKeepalive(string message)
+        => message.Contains("RPTPING sent", StringComparison.OrdinalIgnoreCase) ||
+           message.Contains("MSTPONG received", StringComparison.OrdinalIgnoreCase);
+
     public static DebugLogSeverity MapSeverity(LogLevel level)
         => level switch
         {

@@ -11,8 +11,11 @@ namespace DvmConsole.Desktop;
 internal sealed class FilteredDebugLogCollection : IDisposable
 {
     private readonly ObservableCollection<DebugLogEntry> source;
-    private readonly ResettableObservableCollection<DebugLogEntry> filtered = [];
+    private readonly RangeObservableCollection<DebugLogEntry> filtered = [];
     private string severity = "Info";
+    private DebugLogSeverity selectedSeverity = DebugLogSeverity.Info;
+    private bool includeAllSeverities;
+    private bool hasValidSeverity = true;
     private string searchText = string.Empty;
 
     public FilteredDebugLogCollection(ObservableCollection<DebugLogEntry> source)
@@ -40,6 +43,11 @@ internal sealed class FilteredDebugLogCollection : IDisposable
         }
 
         this.severity = normalizedSeverity;
+        includeAllSeverities = normalizedSeverity.Equals("All", StringComparison.OrdinalIgnoreCase);
+        hasValidSeverity = includeAllSeverities || Enum.TryParse(
+            normalizedSeverity,
+            ignoreCase: true,
+            out selectedSeverity);
         this.searchText = normalizedSearchText;
         Rebuild();
     }
@@ -53,40 +61,44 @@ internal sealed class FilteredDebugLogCollection : IDisposable
             e.NewItems is not null &&
             e.NewStartingIndex >= 0)
         {
-            int sourceIndex = e.NewStartingIndex;
-            foreach (DebugLogEntry entry in e.NewItems.OfType<DebugLogEntry>())
+            DebugLogEntry[] matching = e.NewItems
+                .OfType<DebugLogEntry>()
+                .Where(Matches)
+                .Reverse()
+                .ToArray();
+            if (matching.Length > 0)
             {
-                if (Matches(entry))
-                {
-                    int filteredIndex = CountMatchesBefore(sourceIndex);
-                    CollectionChanging?.Invoke(
-                        this,
-                        new NotifyCollectionChangedEventArgs(
-                            NotifyCollectionChangedAction.Add,
-                            entry,
-                            filteredIndex));
-                    filtered.Insert(filteredIndex, entry);
-                }
-                sourceIndex++;
+                CollectionChanging?.Invoke(
+                    this,
+                    new NotifyCollectionChangedEventArgs(
+                        NotifyCollectionChangedAction.Add,
+                        matching,
+                        0));
+                filtered.InsertRange(0, matching);
             }
             return;
         }
 
-        if (e.Action == NotifyCollectionChangedAction.Remove && e.OldItems is not null)
+        if (e.Action == NotifyCollectionChangedAction.Remove &&
+            e.OldItems is not null &&
+            e.OldStartingIndex == 0)
         {
-            foreach (DebugLogEntry entry in e.OldItems.OfType<DebugLogEntry>())
+            int matchingCount = e.OldItems
+                .OfType<DebugLogEntry>()
+                .Count(Matches);
+            if (matchingCount > 0)
             {
-                int index = FindByReference(entry);
-                if (index >= 0)
-                {
-                    CollectionChanging?.Invoke(
-                        this,
-                        new NotifyCollectionChangedEventArgs(
-                            NotifyCollectionChangedAction.Remove,
-                            entry,
-                            index));
-                    filtered.RemoveAt(index);
-                }
+                int filteredIndex = filtered.Count - matchingCount;
+                DebugLogEntry[] removed = filtered
+                    .Skip(filteredIndex)
+                    .ToArray();
+                CollectionChanging?.Invoke(
+                    this,
+                    new NotifyCollectionChangedEventArgs(
+                        NotifyCollectionChangedAction.Remove,
+                        removed,
+                        filteredIndex));
+                filtered.RemoveRange(filteredIndex, matchingCount);
             }
             return;
         }
@@ -94,30 +106,9 @@ internal sealed class FilteredDebugLogCollection : IDisposable
         Rebuild();
     }
 
-    private int CountMatchesBefore(int sourceIndex)
-    {
-        int count = 0;
-        for (int index = 0; index < sourceIndex && index < source.Count; index++)
-        {
-            if (Matches(source[index]))
-                count++;
-        }
-        return count;
-    }
-
-    private int FindByReference(DebugLogEntry entry)
-    {
-        for (int index = 0; index < filtered.Count; index++)
-        {
-            if (ReferenceEquals(filtered[index], entry))
-                return index;
-        }
-        return -1;
-    }
-
     private bool Matches(DebugLogEntry entry)
-        => (severity == "All" ||
-            entry.Severity.ToString().Equals(severity, StringComparison.OrdinalIgnoreCase)) &&
+        => hasValidSeverity &&
+           (includeAllSeverities || entry.Severity == selectedSeverity) &&
            DebugLogSearch.Matches(entry, searchText);
 
     private void Rebuild()
@@ -125,21 +116,6 @@ internal sealed class FilteredDebugLogCollection : IDisposable
         CollectionChanging?.Invoke(
             this,
             new NotifyCollectionChangedEventArgs(NotifyCollectionChangedAction.Reset));
-        filtered.ReplaceAll(source.Where(Matches));
-    }
-
-    private sealed class ResettableObservableCollection<T> : ObservableCollection<T>
-    {
-        public void ReplaceAll(IEnumerable<T> values)
-        {
-            ArgumentNullException.ThrowIfNull(values);
-            Items.Clear();
-            foreach (T value in values)
-                Items.Add(value);
-            OnPropertyChanged(new PropertyChangedEventArgs(nameof(Count)));
-            OnPropertyChanged(new PropertyChangedEventArgs("Item[]"));
-            OnCollectionChanged(new NotifyCollectionChangedEventArgs(
-                NotifyCollectionChangedAction.Reset));
-        }
+        filtered.ReplaceAll(source.Reverse().Where(Matches));
     }
 }

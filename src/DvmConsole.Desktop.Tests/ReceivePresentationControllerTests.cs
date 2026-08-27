@@ -8,6 +8,27 @@ namespace DvmConsole.Desktop.Tests;
 public sealed class ReceivePresentationControllerTests
 {
     [Fact]
+    public async Task BackgroundContinuationBurstPresentsOnlyLatestVisualState()
+    {
+        await using var system = CreateSystem();
+        var posted = new Queue<Action>();
+        var presented = new List<ushort>();
+        var controller = new ReceivePresentationController(
+            () => false,
+            () => false,
+            posted.Enqueue,
+            (_, workItem, _) => presented.Add(workItem.Traffic.PacketSequence));
+
+        for (ushort sequence = 1; sequence <= 100; sequence++)
+            controller.Present(system, CreateWorkItem(sequence, canCoalescePresentation: true));
+
+        Assert.Single(posted);
+        posted.Dequeue()();
+        Assert.Equal([(ushort)100], presented);
+        Assert.Empty(posted);
+    }
+
+    [Fact]
     public async Task BackgroundTrafficIsBatchedAndUiTrafficIsImmediate()
     {
         await using var system = new SystemViewModel(
@@ -119,9 +140,11 @@ public sealed class ReceivePresentationControllerTests
             "Test",
             "127.0.0.1:62031");
 
-    private static SystemTrafficWorkItem CreateWorkItem(ushort sequence)
-        => new(
-            new FneTrafficFrame(
+    private static SystemTrafficWorkItem CreateWorkItem(
+        ushort sequence,
+        bool canCoalescePresentation = false)
+    {
+        var traffic = new FneTrafficFrame(
                 FneTrafficProtocol.Dmr,
                 peerId: 1,
                 sourceId: 2,
@@ -132,9 +155,27 @@ public sealed class ReceivePresentationControllerTests
                 subtype: "VOICE",
                 packetSequence: sequence,
                 streamId: 99,
-                payload: []),
-            DateTimeOffset.UnixEpoch,
-            0,
-            [],
-            []);
+                payload: []);
+        if (!canCoalescePresentation)
+        {
+            return new SystemTrafficWorkItem(
+                traffic,
+                DateTimeOffset.UnixEpoch,
+                0,
+                [],
+                []);
+        }
+
+        return new SystemTrafficWorkItem(
+            new ReceivePacketDecisionEnvelope(
+                traffic,
+                DateTimeOffset.UnixEpoch,
+                sequence,
+                ReceiveIngressRoutingDecision.Empty,
+                EpisodeObservation: null,
+                EpisodeSnapshot: null,
+                CanCoalescePresentation: true),
+            ReceiveDispatchTargets.Empty,
+            ReceiveDispatchTargets.Empty);
+    }
 }

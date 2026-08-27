@@ -1,5 +1,6 @@
 using DvmConsole.Core.Configuration;
 using DvmConsole.FneClient;
+using fnecore;
 using System.Net;
 using Xunit;
 
@@ -131,6 +132,35 @@ public sealed class FneConnectionTests
         Assert.Equal("DEBUG", received.Severity.ToString().ToUpperInvariant());
         Assert.DoesNotContain("secret", received.Message);
         Assert.Contains("payload redacted", received.Message);
+    }
+
+    [Fact]
+    public async Task RoutineKeepaliveLogsAreOptInAndCanBeEnabledAtRuntime()
+    {
+        var options = new FneConnectionOptions(
+            "Test FNE", "Console", "127.0.0.1", 62031, 1001, null, false, null)
+        {
+            EnableVerboseLogging = false
+        };
+        await using var connection = new FneConnection(options);
+        using IFnePeerSession session = connection.CreatePeerSession(
+            new IPEndPoint(IPAddress.Loopback, 62031));
+        var messages = new List<string>();
+        connection.LogReceived += (_, entry) => messages.Add(entry.Message);
+
+        session.Peer.Logger(LogLevel.DEBUG, "(DVMCONSOLE) RPTPING sent to MASTER");
+        session.Peer.Logger(LogLevel.DEBUG, "ordinary lifecycle diagnostic");
+        session.Peer.Logger(LogLevel.WARNING, "RPTPING sent but acknowledgement is overdue");
+
+        Assert.Equal(
+            ["ordinary lifecycle diagnostic", "RPTPING sent but acknowledgement is overdue"],
+            messages);
+
+        connection.SetVerboseLogging(true);
+        session.Peer.Logger(LogLevel.DEBUG, "(DVMCONSOLE) RPTPING sent to MASTER");
+
+        Assert.Equal(3, messages.Count);
+        Assert.Contains("RPTPING sent", messages[2], StringComparison.Ordinal);
     }
 
     [Fact]

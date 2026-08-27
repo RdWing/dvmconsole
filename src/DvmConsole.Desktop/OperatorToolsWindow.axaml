@@ -77,6 +77,12 @@
             <CheckBox Content="Toggle global PTT instead of hold-to-talk" IsChecked="{Binding TogglePttMode, Mode=TwoWay}" />
             <CheckBox Content="Talk permit tone" IsChecked="{Binding TalkPermitTone, Mode=TwoWay}" />
             <CheckBox Content="Connection chimes" IsChecked="{Binding ConnectionChimes, Mode=TwoWay}" />
+            <StackPanel Spacing="2">
+              <CheckBox Content="Enable verbose logging" IsChecked="{Binding VerboseLoggingEnabled, Mode=TwoWay}" />
+              <TextBlock Classes="caption"
+                         Text="Adds per-packet, PCM-level, and routine keepalive details. This can increase CPU and memory use on busy systems."
+                         TextWrapping="Wrap" />
+            </StackPanel>
             <CheckBox Content="Mute RX while transmitting" IsChecked="{Binding MuteRxAudioWhileTransmitting, Mode=TwoWay}" />
             <CheckBox Content="Restore selected channels on startup" IsChecked="{Binding RestoreSelectedChannelsOnStartup, Mode=TwoWay}" />
             <CheckBox Content="Retain patch state on startup" IsChecked="{Binding RetainPatchStateOnStartup, Mode=TwoWay}" />

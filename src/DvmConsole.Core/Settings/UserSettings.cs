@@ -139,6 +139,7 @@ public sealed class UserSettings
     public bool MuteRxAudioWhileTransmitting { get; set; } = true;
     public bool TalkPermitTone { get; set; }
     public bool ConnectionChimes { get; set; } = true;
+    public bool VerboseLoggingEnabled { get; set; }
     public bool DarkMode { get; set; }
     public double UiFontSize { get; set; } = 14;
     public double UiScale { get; set; } = 1.0;

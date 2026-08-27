@@ -92,6 +92,16 @@ internal static class ReceiveDiagnosticsText
                   ? $" (age {callbackAge.TotalMilliseconds:0} ms), "
                   : ", ")
             : string.Empty;
+        string pumpActivity = playback.OutputPump.TotalWakeups == 0
+            ? string.Empty
+            : $", pump signals {playback.OutputPump.SignalRequests:N0} " +
+              $"(coalesced {playback.OutputPump.CoalescedSignalRequests:N0}), " +
+              $"wakeups signaled {playback.OutputPump.SignaledWakeups:N0} / " +
+              $"timer {playback.OutputPump.TimeoutWakeups:N0} / " +
+              $"empty {playback.OutputPump.NoWorkWakeups:N0}, " +
+              $"idle waits {playback.OutputPump.IdleWaits:N0}, " +
+              $"frames written {playback.OutputPump.FramesWritten:N0} " +
+              $"(multi-frame drains {playback.OutputPump.MultiFrameWakeups:N0})";
         string latestOverflow = playback.LastDroppedLane is null
             ? string.Empty
             : $", last overflow {playback.LastDroppedLane} " +
@@ -125,6 +135,7 @@ internal static class ReceiveDiagnosticsText
                $"output target {FramesToMilliseconds(playback.TargetOutputBufferedFrames)} ms, " +
                $"late pump wakes {playback.LatePumpWakes} " +
                $"(max {playback.MaximumPumpLateness.TotalMilliseconds:0} ms)" +
+               pumpActivity +
                latestOverflow +
                worstLaneText;
     }

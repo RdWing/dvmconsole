@@ -105,6 +105,45 @@ public sealed class OperationsModelTests
         Assert.Equal(ReceiveAction.Present | ReceiveAction.Deliver, patch.Actions);
     }
 
+    [Fact]
+    public void RuntimeContinuationPathDoesNotAllocateStateSnapshots()
+    {
+        ChannelDefinition channel = CreateDefinition("alpha");
+        var runtime = new ReceiveRouteRuntime(
+            ReceiveRouteSnapshot.Create(1, [channel]));
+        DateTimeOffset now = DateTimeOffset.Parse("2026-08-24T00:00:00Z");
+        runtime.Observe(Observe(100, ReceiveSignalKind.Voice, now));
+        for (int index = 0; index < 100; index++)
+        {
+            runtime.Observe(new ReceiveObservation(
+                channel.RouteKey,
+                SourceId: 1001,
+                StreamId: 100,
+                Sequence: index + 2,
+                ReceiveSignalKind.Voice,
+                now.AddTicks(index + 1)));
+        }
+        long before = GC.GetAllocatedBytesForCurrentThread();
+
+        ReceiveRouteDecision decision = default;
+        for (int index = 0; index < 10_000; index++)
+        {
+            decision = runtime.Observe(new ReceiveObservation(
+                channel.RouteKey,
+                SourceId: 1001,
+                StreamId: 100,
+                Sequence: index + 102,
+                ReceiveSignalKind.Voice,
+                now.AddTicks(index + 101)));
+        }
+
+        Assert.Equal(ReceiveStreamTransition.Continued, decision.StreamDecision.Transition);
+        Assert.InRange(
+            GC.GetAllocatedBytesForCurrentThread() - before,
+            0,
+            1_024);
+    }
+
     private static ChannelDefinition CreateDefinition(string instance)
         => new(
             new ChannelSessionId("skynet", ChannelProtocol.P25, 3100, 0, instance),
