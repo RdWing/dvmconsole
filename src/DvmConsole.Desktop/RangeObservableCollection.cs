@@ -1,3 +1,4 @@
+using System.Collections;
 using System.Collections.ObjectModel;
 using System.Collections.Specialized;
 using System.ComponentModel;
@@ -28,9 +29,10 @@ internal sealed class RangeObservableCollection<T> : ObservableCollection<T>
                 Items.Insert(index + valueIndex, values[valueIndex]);
         }
 
+        IList changedItems = values as IList ?? values.ToArray();
         PublishChange(new NotifyCollectionChangedEventArgs(
             NotifyCollectionChangedAction.Add,
-            values.ToArray(),
+            changedItems,
             index));
     }
 

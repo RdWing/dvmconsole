@@ -71,6 +71,19 @@ public sealed class FilteredDebugLogCollectionTests
     }
 
     [Fact]
+    public void EmptySearchDoesNotAllocatePerEntry()
+    {
+        DebugLogEntry entry = Entry(DebugLogSeverity.Info, "message");
+        Assert.True(DebugLogSearch.Matches(entry, string.Empty));
+        long before = GC.GetAllocatedBytesForCurrentThread();
+
+        for (int index = 0; index < 1_000; index++)
+            Assert.True(DebugLogSearch.Matches(entry, string.Empty));
+
+        Assert.Equal(0, GC.GetAllocatedBytesForCurrentThread() - before);
+    }
+
+    [Fact]
     public void RetentionTurnoverRemovesAndAddsOnlyAffectedRows()
     {
         var buffer = new BoundedDebugLogBuffer(maximumEntries: 2, maximumBytes: 4_096);

@@ -11,7 +11,6 @@ using DvmConsole.Core.Settings;
 using DvmConsole.FneClient;
 using DvmConsole.Media;
 using DvmConsole.Vocoder;
-using System.Collections.Concurrent;
 using System.Collections.Specialized;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
@@ -86,9 +85,8 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
     private readonly ObservableCollection<SubscriberCommandAuditEntry> subscriberCommandAudit = [];
     private readonly BoundedDebugLogBuffer debugLogBuffer = new();
     private readonly FilteredDebugLogCollection filteredDebugLogs;
-    private readonly ConcurrentQueue<DebugLogEntry> pendingDebugLogs = new();
+    private readonly DebugLogDrainController debugLogDrain;
     private bool verboseDiagnosticLogging;
-    private int debugLogDrainScheduled;
     private readonly ObservableCollection<string> recentCodeplugPaths = [];
     private readonly ObservableCollection<WebStreamViewModel> webStreams = [];
     private readonly WebStreamPlaybackCoordinator webStreamPlayback;
@@ -179,6 +177,11 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
         Func<ApplicationAudioConfiguration, Task> reconfigureAudio =
             reconfigureApplicationAudio ?? ReconfigureApplicationAudioAsync;
         filteredDebugLogs = new FilteredDebugLogCollection(debugLogBuffer.Entries);
+        debugLogDrain = new DebugLogDrainController(
+            Dispatcher.UIThread.CheckAccess,
+            action => Dispatcher.UIThread.Post(action, DispatcherPriority.Background),
+            PublishDebugLogBatch,
+            () => Volatile.Read(ref disposeStarted) != 0);
         Systems = systems.ToArray();
         foreach (SystemViewModel system in Systems)
             system.SetVerboseLogging(this.verboseDiagnosticLogging);
@@ -2802,40 +2805,20 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
         DebugLogSeverity severity,
         string message)
     {
-        pendingDebugLogs.Enqueue(new DebugLogEntry(
+        DebugLogEntry entry = BoundedDebugLogBuffer.PrepareForRetention(new DebugLogEntry(
             timestamp,
             source,
             severity,
             DebugLogRedactor.Redact(message)));
-        if (Interlocked.CompareExchange(ref debugLogDrainScheduled, 1, 0) != 0)
-            return;
-
-        if (Dispatcher.UIThread.CheckAccess())
-            DrainDebugLogs();
-        else
-            Dispatcher.UIThread.Post(DrainDebugLogs, DispatcherPriority.Background);
+        debugLogDrain.Enqueue(entry);
     }
 
-    private void DrainDebugLogs()
+    private void PublishDebugLogBatch(IReadOnlyList<DebugLogEntry> batch)
     {
-        var batch = new List<DebugLogEntry>();
-        while (pendingDebugLogs.TryDequeue(out DebugLogEntry? entry))
-            batch.Add(entry);
-
-        if (batch.Count > 0)
-        {
-            debugLogBuffer.AddRange(batch);
-            PropertyChanged?.Invoke(
-                this,
-                new PropertyChangedEventArgs(nameof(DebugLogRetentionText)));
-        }
-
-        Volatile.Write(ref debugLogDrainScheduled, 0);
-        if (!pendingDebugLogs.IsEmpty &&
-            Interlocked.CompareExchange(ref debugLogDrainScheduled, 1, 0) == 0)
-        {
-            Dispatcher.UIThread.Post(DrainDebugLogs, DispatcherPriority.Background);
-        }
+        debugLogBuffer.AddRange(batch);
+        PropertyChanged?.Invoke(
+            this,
+            new PropertyChangedEventArgs(nameof(DebugLogRetentionText)));
     }
 
     private void ScheduleConfiguredP25Keys(SystemViewModel system)

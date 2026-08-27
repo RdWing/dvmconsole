@@ -13,6 +13,9 @@ internal sealed class FilteredDebugLogCollection : IDisposable
     private readonly ObservableCollection<DebugLogEntry> source;
     private readonly RangeObservableCollection<DebugLogEntry> filtered = [];
     private string severity = "Info";
+    private DebugLogSeverity selectedSeverity = DebugLogSeverity.Info;
+    private bool includeAllSeverities;
+    private bool hasValidSeverity = true;
     private string searchText = string.Empty;
 
     public FilteredDebugLogCollection(ObservableCollection<DebugLogEntry> source)
@@ -40,6 +43,11 @@ internal sealed class FilteredDebugLogCollection : IDisposable
         }
 
         this.severity = normalizedSeverity;
+        includeAllSeverities = normalizedSeverity.Equals("All", StringComparison.OrdinalIgnoreCase);
+        hasValidSeverity = includeAllSeverities || Enum.TryParse(
+            normalizedSeverity,
+            ignoreCase: true,
+            out selectedSeverity);
         this.searchText = normalizedSearchText;
         Rebuild();
     }
@@ -99,8 +107,8 @@ internal sealed class FilteredDebugLogCollection : IDisposable
     }
 
     private bool Matches(DebugLogEntry entry)
-        => (severity == "All" ||
-            entry.Severity.ToString().Equals(severity, StringComparison.OrdinalIgnoreCase)) &&
+        => hasValidSeverity &&
+           (includeAllSeverities || entry.Severity == selectedSeverity) &&
            DebugLogSearch.Matches(entry, searchText);
 
     private void Rebuild()

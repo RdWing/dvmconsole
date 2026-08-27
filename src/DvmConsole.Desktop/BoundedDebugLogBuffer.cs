@@ -61,13 +61,7 @@ internal sealed class BoundedDebugLogBuffer
         {
             DebugLogEntry entry = entries[index] ??
                 throw new ArgumentException("Log entries cannot contain null.", nameof(entries));
-            DebugLogEntry retained = entry.Message.Length <= MaximumMessageCharacters
-                ? entry
-                : entry with
-                {
-                    Message = entry.Message[..MaximumMessageCharacters] +
-                        "… [message truncated to protect session log memory]"
-                };
+            DebugLogEntry retained = PrepareForRetention(entry);
             long entryBytes = EstimateBytes(retained);
             if (entryBytes > maximumBytes)
             {
@@ -109,6 +103,18 @@ internal sealed class BoundedDebugLogBuffer
 
         retainedBytes = remainingBytes + addedBytes;
         Entries.AddRange(retainedEntries);
+    }
+
+    internal static DebugLogEntry PrepareForRetention(DebugLogEntry entry)
+    {
+        ArgumentNullException.ThrowIfNull(entry);
+        return entry.Message.Length <= MaximumMessageCharacters
+            ? entry
+            : entry with
+            {
+                Message = entry.Message[..MaximumMessageCharacters] +
+                    "… [message truncated to protect session log memory]"
+            };
     }
 
     private static long EstimateBytes(DebugLogEntry entry)
