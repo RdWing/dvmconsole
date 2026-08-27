@@ -40,7 +40,15 @@ public sealed class ReceiveDiagnosticsTextTests
                     GapFilledSamples: 240,
                     AgedLiveSamples: 160,
                     PeakBufferedFrames: 18)
-            ]);
+            ],
+            OutputPump: new AudioOutputPumpDiagnostics(
+                SignalRequests: 12,
+                CoalescedSignalRequests: 2,
+                SignaledWakeups: 10,
+                TimeoutWakeups: 20,
+                NoWorkWakeups: 15,
+                FramesWritten: 40,
+                MultiFrameWakeups: 5));
         var pipeline = new ReceiveWorkQueueDiagnostics(
             ProcessedFrames: 10,
             MaximumInterArrivalDelay: TimeSpan.FromMilliseconds(500),
@@ -82,6 +90,9 @@ public sealed class ReceiveDiagnosticsTextTests
         Assert.Contains("worst lane East Bay/Dispatch", message);
         Assert.Contains("live episode handoffs 2", message);
         Assert.Contains("retired-stream audio kept from live output 180 ms", message);
+        Assert.Contains("pump signals 12 (coalesced 2)", message);
+        Assert.Contains("wakeups signaled 10 / timer 20 / empty 15", message);
+        Assert.Contains("frames written 40 (multi-frame drains 5)", message);
     }
 
     [Fact]

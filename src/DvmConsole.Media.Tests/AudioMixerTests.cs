@@ -440,6 +440,26 @@ public sealed class AudioMixerTests
         Assert.Equal(
             [0, 20, 40, 60],
             presentationDelays.Select(delay => (int)delay.TotalMilliseconds).ToArray());
+
+        AudioOutputPumpDiagnostics pump = mixer.GetDiagnostics().OutputPump;
+        Assert.True(pump.SignalRequests > 0);
+        Assert.True(pump.SignaledWakeups > 0);
+        Assert.True(pump.FramesWritten >= 4);
+        Assert.True(pump.MultiFrameWakeups > 0);
+        Assert.Equal(pump.SignaledWakeups + pump.TimeoutWakeups, pump.TotalWakeups);
+    }
+
+    [Fact]
+    public async Task ReportsTimerWakeupsThatFindNoOutputWork()
+    {
+        var output = new BufferedFakePlayback();
+        await using var mixer = new AudioMixer(output);
+
+        await WaitForAsync(() => mixer.GetDiagnostics().OutputPump.TimeoutWakeups > 0);
+
+        AudioOutputPumpDiagnostics pump = mixer.GetDiagnostics().OutputPump;
+        Assert.True(pump.NoWorkWakeups > 0);
+        Assert.Equal(0, pump.FramesWritten);
     }
 
     [Fact]

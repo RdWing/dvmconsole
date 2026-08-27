@@ -25,7 +25,8 @@ public sealed record AudioMixerDiagnostics(
     long? PhysicalOutputCallbackCount = null,
     TimeSpan? PhysicalOutputCallbackAge = null,
     long AgedLiveSamples = 0,
-    IReadOnlyList<AudioMixerLaneDiagnostics>? LaneDiagnostics = null);
+    IReadOnlyList<AudioMixerLaneDiagnostics>? LaneDiagnostics = null,
+    AudioOutputPumpDiagnostics OutputPump = default);
 
 public sealed record AudioMixerLaneDiagnostics(
     string Label,
@@ -176,6 +177,7 @@ public sealed class AudioMixer : IAsyncDisposable
     public AudioMixerDiagnostics GetDiagnostics()
     {
         PhysicalAudioOutputDiagnostics physical = ReadPhysicalOutputDiagnostics();
+        AudioOutputPumpDiagnostics pump = outputPump.GetDiagnostics();
         lock (sync)
         {
             TimeSpan? outputCallbackAge = physical.OutputCallbackCount is null
@@ -188,7 +190,8 @@ public sealed class AudioMixer : IAsyncDisposable
                 physical.StarvedDuration,
                 physical.PendingStarvedDuration,
                 physical.OutputCallbackCount,
-                outputCallbackAge);
+                outputCallbackAge,
+                pump);
         }
     }
 
