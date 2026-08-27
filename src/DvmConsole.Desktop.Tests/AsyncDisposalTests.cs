@@ -48,4 +48,42 @@ public sealed class AsyncDisposalTests
             failure => Assert.IsType<IOException>(failure),
             failure => Assert.IsType<InvalidOperationException>(failure));
     }
+
+    [Fact]
+    public async Task IndependentCleanupTasksStartTogetherAndReportAllFailures()
+    {
+        var firstStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var secondStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var cleanup = new AsyncCleanup();
+
+        Task run = cleanup.RunTasksAsync(
+        [
+            async () =>
+            {
+                firstStarted.TrySetResult();
+                await release.Task;
+                throw new IOException("first");
+            },
+            async () =>
+            {
+                secondStarted.TrySetResult();
+                await release.Task;
+                throw new InvalidOperationException("second");
+            }
+        ]);
+
+        await Task.WhenAll(firstStarted.Task, secondStarted.Task)
+            .WaitAsync(TimeSpan.FromSeconds(1));
+        Assert.False(run.IsCompleted);
+
+        release.TrySetResult();
+        await run.WaitAsync(TimeSpan.FromSeconds(1));
+        AggregateException exception = Assert.Throws<AggregateException>(
+            cleanup.ThrowIfFailed);
+        Assert.Collection(
+            exception.InnerExceptions,
+            failure => Assert.IsType<IOException>(failure),
+            failure => Assert.IsType<InvalidOperationException>(failure));
+    }
 }

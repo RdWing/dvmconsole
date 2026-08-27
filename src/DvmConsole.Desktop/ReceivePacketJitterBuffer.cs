@@ -61,7 +61,8 @@ internal sealed class ReceivePacketJitterBuffer<T>
     public int Count => packets.Count;
 
     public bool ContainsStream(uint streamId)
-        => packets.Any(packet => getStreamId(packet.Item) == streamId);
+        => streams.TryGetValue(streamId, out StreamState? state) &&
+           state.BufferedPacketCount > 0;
 
     public void Enqueue(T item, long timestamp)
     {
@@ -85,9 +86,18 @@ internal sealed class ReceivePacketJitterBuffer<T>
             state.HasVoiceDeadline = true;
         }
         if (kind == ReceiveJitterPacketKind.Terminator)
-            state.FlushRequested = true;
+        {
+            // Preserve prompt lifecycle completion by making the oldest
+            // buffered voice packet eligible immediately. Keep the deadline,
+            // however, and advance it after every released packet. Draining
+            // the entire stream in one pass would turn a short, fragmented
+            // call into a burst at the shared logical playback lane.
+            if (state.HasVoiceDeadline)
+                state.NextDeadline = timestamp;
+        }
 
         packets.AddLast(new BufferedPacket(item));
+        state.BufferedPacketCount++;
     }
 
     public bool TryDequeue(
@@ -133,6 +143,7 @@ internal sealed class ReceivePacketJitterBuffer<T>
         if (missingPackets > MaximumForwardDistance)
             missingPackets = 0;
         packets.Remove(ready);
+        selectedState.BufferedPacketCount--;
         AdvanceStream(selected.Item, timestamp);
         item = selected.Item;
         waitTime = TimeSpan.Zero;
@@ -176,6 +187,7 @@ internal sealed class ReceivePacketJitterBuffer<T>
                     getStreamId(later.Value.Item) == streamId)
                 {
                     packets.Remove(candidate);
+                    streams[streamId].BufferedPacketCount--;
                     return true;
                 }
             }
@@ -193,7 +205,9 @@ internal sealed class ReceivePacketJitterBuffer<T>
                 continue;
             T removed = node.Value.Item;
             packets.Remove(node);
-            ReconcileTerminatorState(getStreamId(removed));
+            uint streamId = getStreamId(removed);
+            streams[streamId].BufferedPacketCount--;
+            RemoveStreamStateWhenEmpty(streamId);
             return true;
         }
         return false;
@@ -247,8 +261,8 @@ internal sealed class ReceivePacketJitterBuffer<T>
         if (late is not null)
             return new StreamSelection(late, true, timestamp);
 
-        bool releaseNow = drain || state.FlushRequested ||
-            !state.HasVoiceDeadline || timestamp >= state.NextDeadline;
+        bool releaseNow = drain || !state.HasVoiceDeadline ||
+            timestamp >= state.NextDeadline;
         LinkedListNode<BufferedPacket>? voice = exact ?? nearestFuture;
         if (voice is not null)
             return new StreamSelection(voice, releaseNow, state.NextDeadline);
@@ -288,18 +302,16 @@ internal sealed class ReceivePacketJitterBuffer<T>
             }
         }
 
-        ReconcileTerminatorState(streamId);
+        RemoveStreamStateWhenEmpty(streamId);
     }
 
-    private void ReconcileTerminatorState(uint streamId)
+    private void RemoveStreamStateWhenEmpty(uint streamId)
     {
-        if (!streams.TryGetValue(streamId, out StreamState? state))
-            return;
-        state.FlushRequested = packets.Any(packet =>
-            getStreamId(packet.Item) == streamId &&
-            classify(packet.Item) == ReceiveJitterPacketKind.Terminator);
-        if (!packets.Any(packet => getStreamId(packet.Item) == streamId))
+        if (streams.TryGetValue(streamId, out StreamState? state) &&
+            state.BufferedPacketCount == 0)
+        {
             streams.Remove(streamId);
+        }
     }
 
     private static int ForwardDistance(ushort expected, ushort actual)
@@ -326,7 +338,7 @@ internal sealed class ReceivePacketJitterBuffer<T>
         public ushort ExpectedSequence { get; set; }
         public long NextDeadline { get; set; }
         public bool HasVoiceDeadline { get; set; }
-        public bool FlushRequested { get; set; }
+        public int BufferedPacketCount { get; set; }
     }
 
     private readonly record struct BufferedPacket(T Item);

@@ -2665,8 +2665,14 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
                 system.KeyResponseReceived -= HandleSystemKeyResponse;
                 system.LogReceived -= HandleSystemLog;
             });
-            await cleanup.RunTaskAsync(() => system.DisposeAsync().AsTask()).ConfigureAwait(false);
         }
+
+        // Each FNE owns an independent peer, monitor, and UDP transport. Start
+        // their teardown together so quit latency is bounded by the slowest
+        // peer instead of accumulating once per configured system.
+        await cleanup.RunTasksAsync(
+            Systems.Select(system => (Func<Task>)(() => system.DisposeAsync().AsTask())))
+            .ConfigureAwait(false);
         cleanup.ThrowIfFailed();
     }
 
@@ -3417,7 +3423,12 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
     private void HandleAudioMeterTick(object? sender, EventArgs e)
     {
         foreach (ChannelAudioMeterUpdate update in audioMeterPipeline.Advance())
-            update.Channel.SetAudioLevel(update.Level, update.Direction, update.StreamId);
+        {
+            if (update.Direction == ChannelAudioDirection.Receive)
+                update.Channel.SetPresentedReceiveAudioLevel(update.Level);
+            else
+                update.Channel.SetAudioLevel(update.Level, update.Direction, update.StreamId);
+        }
     }
 
     private void ObservePatchDecodedSamples(

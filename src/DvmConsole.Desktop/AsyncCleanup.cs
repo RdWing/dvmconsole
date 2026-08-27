@@ -35,6 +35,42 @@ internal sealed class AsyncCleanup
         }
     }
 
+    public async Task RunTasksAsync(IEnumerable<Func<Task>> cleanups)
+    {
+        ArgumentNullException.ThrowIfNull(cleanups);
+
+        var tasks = new List<Task>();
+        try
+        {
+            foreach (Func<Task> cleanup in cleanups)
+            {
+                if (cleanup is null)
+                {
+                    failures.Add(new ArgumentException(
+                        "A cleanup operation cannot be null.",
+                        nameof(cleanups)));
+                    continue;
+                }
+
+                try
+                {
+                    tasks.Add(cleanup());
+                }
+                catch (Exception exception)
+                {
+                    failures.Add(exception);
+                }
+            }
+        }
+        catch (Exception exception)
+        {
+            failures.Add(exception);
+        }
+
+        foreach (Task task in tasks)
+            await RunTaskAsync(() => task).ConfigureAwait(false);
+    }
+
     public void Capture(Exception exception)
         => failures.Add(exception ?? throw new ArgumentNullException(nameof(exception)));
 

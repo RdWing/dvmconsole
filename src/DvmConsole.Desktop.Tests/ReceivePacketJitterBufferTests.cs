@@ -80,6 +80,112 @@ public sealed class ReceivePacketJitterBufferTests
         Assert.Equal(ReceiveJitterPacketKind.Metadata, laterMetadata.Kind);
     }
 
+    [Fact]
+    public void TerminatorStartsAPacedFlushInsteadOfReleasingAllVoiceAtOnce()
+    {
+        ReceiveJitterBufferProfile profile = CreateProfile(180);
+        var buffer = new ReceivePacketJitterBuffer<ClassifiedPacket>(
+            packet => packet.StreamId,
+            packet => packet.Sequence,
+            packet => packet.Kind,
+            packet => packet.Profile);
+        long start = Stopwatch.GetTimestamp();
+        long terminatorArrival = Add(start, 2);
+
+        buffer.Enqueue(new ClassifiedPacket(
+            1, 10, ReceiveJitterPacketKind.Voice, profile), start);
+        buffer.Enqueue(new ClassifiedPacket(
+            1, 11, ReceiveJitterPacketKind.Voice, profile), Add(start, 1));
+        buffer.Enqueue(new ClassifiedPacket(
+            1, 12, ReceiveJitterPacketKind.Terminator, profile), terminatorArrival);
+
+        Assert.True(buffer.TryDequeue(
+            terminatorArrival,
+            drain: false,
+            out ClassifiedPacket firstVoice,
+            out _,
+            out _));
+        Assert.Equal((ushort)10, firstVoice.Sequence);
+
+        Assert.False(buffer.TryDequeue(
+            terminatorArrival,
+            drain: false,
+            out _,
+            out TimeSpan waitTime,
+            out _));
+        Assert.InRange(
+            waitTime,
+            TimeSpan.FromMilliseconds(59),
+            TimeSpan.FromMilliseconds(61));
+
+        long secondDeadline = Add(terminatorArrival, 60);
+        Assert.True(buffer.TryDequeue(
+            secondDeadline,
+            drain: false,
+            out ClassifiedPacket secondVoice,
+            out _,
+            out _));
+        Assert.Equal((ushort)11, secondVoice.Sequence);
+
+        Assert.True(buffer.TryDequeue(
+            secondDeadline,
+            drain: false,
+            out ClassifiedPacket terminator,
+            out _,
+            out _));
+        Assert.Equal(ReceiveJitterPacketKind.Terminator, terminator.Kind);
+    }
+
+    [Fact]
+    public void TerminatorWithoutBufferedVoiceRemainsImmediatelyReady()
+    {
+        ReceiveJitterBufferProfile profile = CreateProfile(180);
+        var buffer = new ReceivePacketJitterBuffer<ClassifiedPacket>(
+            packet => packet.StreamId,
+            packet => packet.Sequence,
+            packet => packet.Kind,
+            packet => packet.Profile);
+        long start = Stopwatch.GetTimestamp();
+
+        buffer.Enqueue(new ClassifiedPacket(
+            1, 10, ReceiveJitterPacketKind.Terminator, profile), start);
+
+        Assert.True(buffer.TryDequeue(
+            start,
+            drain: false,
+            out ClassifiedPacket terminator,
+            out _,
+            out _));
+        Assert.Equal(ReceiveJitterPacketKind.Terminator, terminator.Kind);
+    }
+
+    [Fact]
+    public void StreamPresenceTracksDequeuesAndExplicitRemoval()
+    {
+        ReceiveJitterBufferProfile profile = CreateProfile(0);
+        var buffer = new ReceivePacketJitterBuffer<ClassifiedPacket>(
+            packet => packet.StreamId,
+            packet => packet.Sequence,
+            packet => packet.Kind,
+            packet => packet.Profile);
+        long start = Stopwatch.GetTimestamp();
+
+        buffer.Enqueue(new ClassifiedPacket(
+            1, 10, ReceiveJitterPacketKind.Voice, profile), start);
+        buffer.Enqueue(new ClassifiedPacket(
+            2, 20, ReceiveJitterPacketKind.Voice, profile), start);
+
+        Assert.True(buffer.ContainsStream(1));
+        Assert.True(buffer.ContainsStream(2));
+        Assert.True(buffer.TryDequeue(start, false, out ClassifiedPacket first, out _, out _));
+        Assert.Equal((uint)1, first.StreamId);
+        Assert.False(buffer.ContainsStream(1));
+        Assert.True(buffer.ContainsStream(2));
+
+        Assert.True(buffer.TryRemoveOldest(packet => packet.StreamId == 2));
+        Assert.False(buffer.ContainsStream(2));
+    }
+
     private static ReceiveJitterBufferProfile CreateProfile(int milliseconds)
         => new(
             TimeSpan.FromMilliseconds(60),

@@ -613,6 +613,26 @@ public sealed class ChannelViewModel : INotifyPropertyChanged, IReceivePrivacyPo
         {
             normalized = 0;
         }
+        ApplyAudioLevel(normalized);
+    }
+
+    // Receive meter samples observed at the mixer boundary are already known
+    // to be audible on this channel. Their logical episode lane can outlive
+    // the physical stream ID currently projected by the card, so applying the
+    // physical-ID filter again would hide valid presented audio after a stream
+    // handoff.
+    internal void SetPresentedReceiveAudioLevel(double value)
+    {
+        double normalized = double.IsFinite(value) ? Math.Clamp(value, 0, 100) : 0;
+        bool receiveActive = IsReceivePresentationActive ||
+            Interlocked.Read(ref receiveAudioMeterStreamId) != 0;
+        if (!audioEnabled || audioSuspended || !receiveActive)
+            normalized = 0;
+        ApplyAudioLevel(normalized);
+    }
+
+    private void ApplyAudioLevel(double normalized)
+    {
         if (normalized == 0 ? audioLevel == 0 : Math.Abs(audioLevel - normalized) < 0.25)
             return;
 

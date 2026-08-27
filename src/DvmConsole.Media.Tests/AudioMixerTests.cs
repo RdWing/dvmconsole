@@ -450,6 +450,60 @@ public sealed class AudioMixerTests
     }
 
     [Fact]
+    public async Task CoalescesBurstyPumpSignalsBehindOnePendingWake()
+    {
+        var output = new FakePlayback();
+        using var enteredDrain = new ManualResetEventSlim();
+        using var releaseDrain = new ManualResetEventSlim();
+        using var pump = new AudioOutputPump(
+            output,
+            TimeSpan.FromMilliseconds(10),
+            requiresTimedPolling: () => false,
+            getFramesNeeded: () =>
+            {
+                enteredDrain.Set();
+                releaseDrain.Wait();
+                return 0;
+            },
+            getPresentationDelay: () => TimeSpan.Zero,
+            shouldCoalesceFirstFrame: () => false,
+            TryTakeNoFrame,
+            markOutputPrimed: () => { },
+            observeLateness: _ => { },
+            reportFailure: exception => throw exception);
+
+        try
+        {
+            pump.Signal();
+            Assert.True(enteredDrain.Wait(TimeSpan.FromSeconds(2)));
+
+            for (int index = 0; index < 1_000; index++)
+                pump.Signal();
+
+            AudioOutputPumpDiagnostics diagnostics = pump.GetDiagnostics();
+            Assert.Equal(1_001, diagnostics.SignalRequests);
+            Assert.Equal(999, diagnostics.CoalescedSignalRequests);
+        }
+        finally
+        {
+            releaseDrain.Set();
+            pump.Cancel();
+            await pump.Completion.WaitAsync(TimeSpan.FromSeconds(2));
+        }
+
+        static bool TryTakeNoFrame(
+            out ReadOnlyMemory<short> frame,
+            out MixerPresentationNotification[] notifications,
+            out int notificationCount)
+        {
+            frame = default;
+            notifications = [];
+            notificationCount = 0;
+            return false;
+        }
+    }
+
+    [Fact]
     public async Task SuspendsTimerWakeupsWhileMixerIsIdle()
     {
         var output = new BufferedFakePlayback();

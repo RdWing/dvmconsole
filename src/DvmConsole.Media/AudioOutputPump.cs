@@ -32,6 +32,7 @@ internal sealed class AudioOutputPump : IDisposable
     private readonly TaskCompletionSource completion =
         new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly Thread thread;
+    private int wakePending;
     private long pendingSignalTimestamp;
     private bool disposed;
 
@@ -82,19 +83,14 @@ internal sealed class AudioOutputPump : IDisposable
     public void Signal()
     {
         diagnostics.RecordSignalRequest();
-        Interlocked.CompareExchange(
-            ref pendingSignalTimestamp,
-            Stopwatch.GetTimestamp(),
-            comparand: 0);
-        try
+        if (Interlocked.CompareExchange(ref wakePending, 1, comparand: 0) != 0)
         {
-            dataAvailable.Release();
-        }
-        catch (SemaphoreFullException)
-        {
-            // One pending wake is sufficient; the pump drains to its target.
             diagnostics.RecordCoalescedSignalRequest();
+            return;
         }
+
+        Interlocked.Exchange(ref pendingSignalTimestamp, Stopwatch.GetTimestamp());
+        dataAvailable.Release();
     }
 
     public void Cancel() => cancellation.Cancel();
@@ -128,6 +124,8 @@ internal sealed class AudioOutputPump : IDisposable
                     dataAvailable.Wait(cancellationToken);
                     signaled = true;
                 }
+                if (signaled)
+                    Interlocked.Exchange(ref wakePending, 0);
                 diagnostics.RecordWakeup(signaled);
                 long now = Stopwatch.GetTimestamp();
                 TimeSpan lateness = TimeSpan.Zero;
