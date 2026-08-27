@@ -99,6 +99,7 @@ internal static class ReceiveDiagnosticsText
               $"wakeups signaled {playback.OutputPump.SignaledWakeups:N0} / " +
               $"timer {playback.OutputPump.TimeoutWakeups:N0} / " +
               $"empty {playback.OutputPump.NoWorkWakeups:N0}, " +
+              $"idle waits {playback.OutputPump.IdleWaits:N0}, " +
               $"frames written {playback.OutputPump.FramesWritten:N0} " +
               $"(multi-frame drains {playback.OutputPump.MultiFrameWakeups:N0})";
         string latestOverflow = playback.LastDroppedLane is null

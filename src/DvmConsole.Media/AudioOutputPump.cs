@@ -18,6 +18,7 @@ internal sealed class AudioOutputPump : IDisposable
 {
     private readonly IAudioPlayback output;
     private readonly TimeSpan interval;
+    private readonly Func<bool> requiresTimedPolling;
     private readonly Func<int> getFramesNeeded;
     private readonly Func<TimeSpan> getPresentationDelay;
     private readonly Func<bool> shouldCoalesceFirstFrame;
@@ -37,6 +38,7 @@ internal sealed class AudioOutputPump : IDisposable
     public AudioOutputPump(
         IAudioPlayback output,
         TimeSpan interval,
+        Func<bool> requiresTimedPolling,
         Func<int> getFramesNeeded,
         Func<TimeSpan> getPresentationDelay,
         Func<bool> shouldCoalesceFirstFrame,
@@ -47,6 +49,8 @@ internal sealed class AudioOutputPump : IDisposable
     {
         this.output = output ?? throw new ArgumentNullException(nameof(output));
         this.interval = interval;
+        this.requiresTimedPolling = requiresTimedPolling ??
+            throw new ArgumentNullException(nameof(requiresTimedPolling));
         this.getFramesNeeded = getFramesNeeded ?? throw new ArgumentNullException(nameof(getFramesNeeded));
         this.getPresentationDelay = getPresentationDelay ?? throw new ArgumentNullException(nameof(getPresentationDelay));
         this.shouldCoalesceFirstFrame = shouldCoalesceFirstFrame ?? throw new ArgumentNullException(nameof(shouldCoalesceFirstFrame));
@@ -111,8 +115,19 @@ internal sealed class AudioOutputPump : IDisposable
         {
             while (true)
             {
+                bool timedPolling = requiresTimedPolling();
                 long waitStarted = Stopwatch.GetTimestamp();
-                bool signaled = dataAvailable.Wait(interval, cancellationToken);
+                bool signaled;
+                if (timedPolling)
+                {
+                    signaled = dataAvailable.Wait(interval, cancellationToken);
+                }
+                else
+                {
+                    diagnostics.RecordIdleWait();
+                    dataAvailable.Wait(cancellationToken);
+                    signaled = true;
+                }
                 diagnostics.RecordWakeup(signaled);
                 long now = Stopwatch.GetTimestamp();
                 TimeSpan lateness = TimeSpan.Zero;

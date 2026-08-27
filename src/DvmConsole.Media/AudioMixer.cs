@@ -141,6 +141,7 @@ public sealed class AudioMixer : IAsyncDisposable
         outputPump = new AudioOutputPump(
             output,
             PumpInterval,
+            RequiresTimedOutputPolling,
             FramesNeededForOutputBuffer,
             GetPhysicalQueueDuration,
             ShouldCoalesceFirstFrame,
@@ -417,6 +418,21 @@ public sealed class AudioMixer : IAsyncDisposable
         return Math.Min(
             targetFrames,
             (deficit + outputFrameSamples - 1) / outputFrameSamples);
+    }
+
+    private bool RequiresTimedOutputPolling()
+    {
+        lock (sync)
+        {
+            if (draining)
+                return HasReadyFramesLocked();
+
+            // Once output is primed, keep observing the physical queue until
+            // it drains and FramesNeededForOutputBuffer closes continuity.
+            // Otherwise an entirely idle mixer can sleep until a producer
+            // signals the first complete frame.
+            return outputWasPrimed || CanProduceFrameLocked();
+        }
     }
 
     private TimeSpan GetPhysicalQueueDuration()

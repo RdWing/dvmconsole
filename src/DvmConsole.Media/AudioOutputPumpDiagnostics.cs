@@ -7,7 +7,8 @@ public readonly record struct AudioOutputPumpDiagnostics(
     long TimeoutWakeups,
     long NoWorkWakeups,
     long FramesWritten,
-    long MultiFrameWakeups)
+    long MultiFrameWakeups,
+    long IdleWaits = 0)
 {
     public long TotalWakeups => SignaledWakeups + TimeoutWakeups;
 }
@@ -21,6 +22,7 @@ internal sealed class AudioOutputPumpDiagnosticsTracker
     private long noWorkWakeups;
     private long framesWritten;
     private long multiFrameWakeups;
+    private long idleWaits;
 
     public void RecordSignalRequest() => Interlocked.Increment(ref signalRequests);
 
@@ -34,6 +36,8 @@ internal sealed class AudioOutputPumpDiagnosticsTracker
         else
             Interlocked.Increment(ref timeoutWakeups);
     }
+
+    public void RecordIdleWait() => Interlocked.Increment(ref idleWaits);
 
     public void RecordFramesWritten(int count)
     {
@@ -56,5 +60,6 @@ internal sealed class AudioOutputPumpDiagnosticsTracker
             Interlocked.Read(ref timeoutWakeups),
             Interlocked.Read(ref noWorkWakeups),
             Interlocked.Read(ref framesWritten),
-            Interlocked.Read(ref multiFrameWakeups));
+            Interlocked.Read(ref multiFrameWakeups),
+            Interlocked.Read(ref idleWaits));
 }
