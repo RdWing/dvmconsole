@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using System.Diagnostics.CodeAnalysis;
 using System.Runtime.ExceptionServices;
 using System.Runtime.InteropServices;
 
@@ -338,7 +339,7 @@ internal sealed class WindowsGlobalKeyboardCapture : IGlobalKeyboardCapture
         IntPtr wParam,
         IntPtr lParam);
 
-    [DllImport("kernel32.dll")]
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
     private static extern IntPtr GetModuleHandle(string? moduleName);
 
     [DllImport("kernel32.dll")]
@@ -603,10 +604,16 @@ internal sealed class MacGlobalKeyboardCapture : IGlobalKeyboardCapture
     [DllImport("/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation")]
     private static extern void CFRunLoopStop(IntPtr runLoop);
 
-    [DllImport("/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation")]
+    [DllImport(
+        "/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation",
+        CharSet = CharSet.Ansi)]
+    [SuppressMessage(
+        "Interoperability",
+        "CA2101:Specify marshaling for P/Invoke string arguments",
+        Justification = "CoreFoundation consumes a narrow C string using the explicit UTF-8 encoding argument.")]
     private static extern IntPtr CFStringCreateWithCString(
         IntPtr allocator,
-        string value,
+        [MarshalAs(UnmanagedType.LPStr)] string value,
         uint encoding);
 
     [DllImport("/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation")]

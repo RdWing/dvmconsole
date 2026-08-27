@@ -119,6 +119,28 @@ public sealed class ConsoleSessionRuntimeTests
     }
 
     [Fact]
+    public async Task RuntimeCanOwnAnIdleTimerUntilActivityStartsIt()
+    {
+        var services = new ConsoleSessionServices();
+        var runtime = new ConsoleSessionRuntime(services);
+
+        ConsoleSessionRuntime.ConsoleSessionTimer timer = runtime.CreateTimer(
+            TimeSpan.FromHours(1),
+            static (_, _) => { },
+            startImmediately: false);
+
+        Assert.Equal(1, runtime.ActiveTimerCount);
+        Assert.False(timer.IsRunning);
+        timer.Start();
+        Assert.True(timer.IsRunning);
+        timer.Stop();
+        Assert.False(timer.IsRunning);
+
+        await runtime.DisposeAsync();
+        Assert.Equal(0, runtime.ActiveTimerCount);
+    }
+
+    [Fact]
     public async Task MainWindowFacadeRegistersNamedScopesWithoutMonolithicCleanup()
     {
         string root = Path.Combine(
@@ -134,10 +156,11 @@ public sealed class ConsoleSessionRuntimeTests
                 "Test session",
                 [],
                 [],
-                userSettingsStore: new UserSettingsStore(Path.Combine(root, "UserSettings.json")),
-                serialPortProvider: () => [],
-                sessionServices: services,
-                networkDisabledDemo: true);
+                new MainWindowViewModelOptions(
+                    UserSettingsStore: new UserSettingsStore(Path.Combine(root, "UserSettings.json")),
+                    SerialPortProvider: () => [],
+                    SessionServices: services,
+                    NetworkDisabledDemo: true));
 
             ConsoleSessionServiceOwnership[] ownership = services
                 .SnapshotOwnership()
@@ -164,6 +187,7 @@ public sealed class ConsoleSessionRuntimeTests
                 "audio-work",
                 "source-receive-work",
                 "call-recording-manager",
+                "debug-log-workspace",
                 "user-settings-writer"
             ];
             Assert.All(requiredOwnership, name => Assert.Contains(name, cleanupOrder));

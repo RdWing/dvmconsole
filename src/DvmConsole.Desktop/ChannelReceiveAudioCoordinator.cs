@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using DvmConsole.Audio;
 using DvmConsole.FneClient;
 using DvmConsole.Media;
@@ -6,6 +7,17 @@ using DvmConsole.Operations;
 using DvmConsole.Vocoder;
 
 namespace DvmConsole.Desktop;
+
+internal readonly record struct ReceiveAudioProcessTiming(
+    int FramesDecoded,
+    TimeSpan SessionGateDelay,
+    TimeSpan SessionProcessingDuration,
+    bool? EncryptedSessionProcessing,
+    bool Measured);
+
+internal readonly record struct ReceiveStreamProcessResult(
+    int FramesDecoded,
+    bool? Encrypted);
 
 // Owns explicitly selected receive-audio channels. DMR/P25/NXDN/analog sessions
 // share one output stream through a fixed-rate PCM mixer, and the coordinator
@@ -528,20 +540,43 @@ public sealed class ChannelReceiveAudioCoordinator : IAsyncDisposable
         ChannelViewModel channel,
         FneTrafficFrame traffic,
         CancellationToken cancellationToken = default)
+        => (await ProcessWithTimingAsync(channel, traffic, cancellationToken).ConfigureAwait(false))
+            .FramesDecoded;
+
+    internal async Task<ReceiveAudioProcessTiming> ProcessWithTimingAsync(
+        ChannelViewModel channel,
+        FneTrafficFrame traffic,
+        CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(channel);
         ArgumentNullException.ThrowIfNull(traffic);
         ObjectDisposedException.ThrowIf(disposed, this);
 
         if (!sessions.TryGetValue(channel, out ReceiveStreamSessionRegistry? state) || !state.TryAcquire())
-            return 0;
+            return new ReceiveAudioProcessTiming(
+                FramesDecoded: 0,
+                SessionGateDelay: TimeSpan.Zero,
+                SessionProcessingDuration: TimeSpan.Zero,
+                EncryptedSessionProcessing: null,
+                Measured: false);
 
         bool entered = false;
         try
         {
+            long gateStarted = Stopwatch.GetTimestamp();
             await state.ProcessGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+            TimeSpan gateDelay = Stopwatch.GetElapsedTime(gateStarted);
             entered = true;
-            return await state.ProcessAsync(traffic, cancellationToken).ConfigureAwait(false);
+            long processingStarted = Stopwatch.GetTimestamp();
+            ReceiveStreamProcessResult result = await state
+                .ProcessAsync(traffic, cancellationToken)
+                .ConfigureAwait(false);
+            return new ReceiveAudioProcessTiming(
+                result.FramesDecoded,
+                gateDelay,
+                Stopwatch.GetElapsedTime(processingStarted),
+                result.Encrypted,
+                Measured: true);
         }
         finally
         {
@@ -961,6 +996,7 @@ public sealed class ChannelReceiveAudioCoordinator : IAsyncDisposable
             this.gain = gain;
             this.balance = balance;
             this.livePlaybackEnabled = livePlaybackEnabled;
+            initialStream.Encrypted = GetConfiguredEncryptionState(channel);
             initialStream.Session.SetLivePlaybackEnabled(livePlaybackEnabled);
         }
 
@@ -975,7 +1011,7 @@ public sealed class ChannelReceiveAudioCoordinator : IAsyncDisposable
             }
         }
 
-        public async ValueTask<int> ProcessAsync(
+        public async ValueTask<ReceiveStreamProcessResult> ProcessAsync(
             FneTrafficFrame traffic,
             CancellationToken cancellationToken)
         {
@@ -985,7 +1021,7 @@ public sealed class ChannelReceiveAudioCoordinator : IAsyncDisposable
 
             ReceiveStreamDecision lifecycleDecision = ObserveTraffic(traffic, now);
             if (!lifecycleDecision.AcceptTraffic)
-                return 0;
+                return default;
 
             if (lifecycleDecision.Transition == ReceiveStreamTransition.Restarted &&
                 FindStream(traffic.StreamId) is StreamSessionState restarted)
@@ -999,13 +1035,22 @@ public sealed class ChannelReceiveAudioCoordinator : IAsyncDisposable
                 ? FindStream(traffic.StreamId)
                 : await GetOrCreateStreamAsync(traffic.StreamId, now).ConfigureAwait(false);
             if (stream is null)
-                return 0;
+                return default;
+
+            if (TrafficEncryptionMetadataResolver.TryResolve(traffic) is
+                TrafficEncryptionMetadata encryption)
+            {
+                stream.Encrypted = encryption.Secure;
+            }
 
             stream.SampleContext.Set(traffic.StreamId, traffic.SourceId);
             stream.EpisodePlayback.Bind(playbackEpisodeResolver(channel, traffic));
             try
             {
-                return await stream.Session.ProcessAsync(traffic, cancellationToken).ConfigureAwait(false);
+                int framesDecoded = await stream.Session
+                    .ProcessAsync(traffic, cancellationToken)
+                    .ConfigureAwait(false);
+                return new ReceiveStreamProcessResult(framesDecoded, stream.Encrypted);
             }
             finally
             {
@@ -1256,12 +1301,22 @@ public sealed class ChannelReceiveAudioCoordinator : IAsyncDisposable
             {
                 created.StreamId = streamId;
                 created.LastActivity = now;
+                created.Encrypted = GetConfiguredEncryptionState(channel);
                 created.Session.SetGain(gain);
                 created.Session.SetBalance(balance);
                 created.Session.SetLivePlaybackEnabled(livePlaybackEnabled);
                 streams.Add(streamId, created);
             }
             return created;
+        }
+
+        private static bool? GetConfiguredEncryptionState(ChannelViewModel channel)
+        {
+            if (channel.Definition.Mode == "analog")
+                return false;
+            return channel.Definition.IsEncrypted && !channel.Definition.SelectableEncryption
+                ? true
+                : null;
         }
 
         private ReceiveStreamDecision ObserveTraffic(

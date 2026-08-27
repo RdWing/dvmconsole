@@ -24,7 +24,7 @@ internal sealed class ChannelAudioMeterPipeline
     private readonly object sync = new();
     private readonly Dictionary<MeterKey, MeterState> states = [];
 
-    public void Observe(
+    public bool Observe(
         ChannelViewModel channel,
         uint streamId,
         ReadOnlySpan<short> samples,
@@ -33,11 +33,12 @@ internal sealed class ChannelAudioMeterPipeline
     {
         ArgumentNullException.ThrowIfNull(channel);
         if (streamId == 0 || samples.IsEmpty)
-            return;
+            return false;
 
         double level = ChannelAudioMeter.Calculate(samples, direction);
         lock (sync)
         {
+            bool wasIdle = states.Count == 0;
             var key = new MeterKey(channel, direction, streamId);
             if (!states.TryGetValue(key, out MeterState? state))
             {
@@ -53,6 +54,16 @@ internal sealed class ChannelAudioMeterPipeline
                 samples.Length,
                 checked(Stopwatch.GetTimestamp() + delayTicks));
             state.TrimToMaximum(MaximumBufferedSamples);
+            return wasIdle;
+        }
+    }
+
+    public bool HasActivity
+    {
+        get
+        {
+            lock (sync)
+                return states.Count > 0;
         }
     }
 

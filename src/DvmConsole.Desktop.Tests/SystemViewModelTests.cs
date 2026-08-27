@@ -310,7 +310,7 @@ public sealed class SystemViewModelTests
 
     [Fact]
     public void ReportsUnreleasedSemanticVersion()
-        => Assert.StartsWith("0.4.2", MainWindow.ApplicationVersion, StringComparison.Ordinal);
+        => Assert.StartsWith("0.4.3", MainWindow.ApplicationVersion, StringComparison.Ordinal);
 
     [Theory]
     [InlineData("0.1.0-alpha.1+abcdef123456", "0.1.0-alpha.1 (abcdef1)")]
@@ -915,8 +915,10 @@ public sealed class SystemViewModelTests
             Assert.True(episode.IsActive);
             Assert.Equal("Info", viewModel.DebugLogSeverityFilter);
             Assert.All(viewModel.FilteredDebugLogs, entry => Assert.Equal(DvmConsole.Core.Diagnostics.DebugLogSeverity.Info, entry.Severity));
-            Assert.Contains(viewModel.FilteredDebugLogs, entry => entry.Message.Contains("RX call started", StringComparison.Ordinal));
-            Assert.Contains(viewModel.FilteredDebugLogs, entry => entry.Message.Contains("RX call ended", StringComparison.Ordinal));
+            Assert.Contains(viewModel.FilteredDebugLogs, entry =>
+                entry.Message.Contains("RX logical call episode started", StringComparison.Ordinal) &&
+                entry.Message.Contains("primary physical stream 77", StringComparison.Ordinal));
+            Assert.Contains(viewModel.FilteredDebugLogs, entry => entry.Message.Contains("RX physical stream ended", StringComparison.Ordinal));
             Assert.Contains(viewModel.FilteredDebugLogs, entry => entry.Message.Contains("FNE BER errors 3/141", StringComparison.Ordinal));
             Assert.Contains(viewModel.FilteredDebugLogs, entry => entry.Message.Contains("RSSI -72 dBm", StringComparison.Ordinal));
 
@@ -982,6 +984,9 @@ public sealed class SystemViewModelTests
             viewModel.ExpireStaleReceiveStates(now.AddSeconds(5));
             Assert.False(viewModel.CallHistory[0].IsActive);
             Assert.Equal(ChannelRuntimeState.Idle, channel.State);
+            Assert.Contains(viewModel.DebugLogEntries, entry =>
+                entry.Message.Contains("RX logical call episode ended", StringComparison.Ordinal) &&
+                entry.Message.Contains("1 physical stream", StringComparison.Ordinal));
 
             viewModel.ProcessTraffic(
                 system,
@@ -1026,7 +1031,7 @@ public sealed class SystemViewModelTests
             Assert.False(viewModel.CallHistory.Single(entry => entry.StreamId == 77).IsActive);
             Assert.True(viewModel.CallHistory.Single(entry => entry.StreamId == 78).IsActive);
             Assert.Contains(viewModel.DebugLogEntries, entry =>
-                entry.Message.Contains("RX call timed out", StringComparison.Ordinal) &&
+                entry.Message.Contains("RX physical stream timed out", StringComparison.Ordinal) &&
                 entry.Message.Contains("stream 77", StringComparison.Ordinal));
         }
         finally

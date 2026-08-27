@@ -9,18 +9,15 @@ namespace DvmConsole.Media;
 // that callback synchronously would burst multiple protocol packets.
 internal sealed class TransmitFramePacer
 {
-    private static readonly TimeSpan FrameInterval = TimeSpan.FromMilliseconds(20);
-
     private readonly object sync = new();
     private readonly ProcessTransmitSamples processFrame;
     private readonly Action<Exception> publishFault;
     private readonly Func<CancellationToken, ValueTask>? waitForNextFrame;
-    private readonly TimeProvider timeProvider;
+    private readonly TransmitFrameCadence? cadence;
     private readonly Channel<short[]> frames;
     private readonly short[] partialFrame = new short[VocoderFrameSizes.PcmSamplesPerFrame];
     private readonly Task completion;
     private int partialSampleCount;
-    private long lastFrameStartedTimestamp;
     private bool completed;
 
     public TransmitFramePacer(
@@ -32,7 +29,9 @@ internal sealed class TransmitFramePacer
         this.processFrame = processFrame ?? throw new ArgumentNullException(nameof(processFrame));
         this.publishFault = publishFault ?? throw new ArgumentNullException(nameof(publishFault));
         this.waitForNextFrame = waitForNextFrame;
-        this.timeProvider = timeProvider ?? TimeProvider.System;
+        cadence = waitForNextFrame is null
+            ? new TransmitFrameCadence(timeProvider)
+            : null;
         frames = Channel.CreateUnbounded<short[]>(new UnboundedChannelOptions
         {
             SingleReader = true,
@@ -102,15 +101,15 @@ internal sealed class TransmitFramePacer
             bool firstFrame = true;
             await foreach (short[] frame in frames.Reader.ReadAllAsync().ConfigureAwait(false))
             {
-                if (!firstFrame)
+                if (cadence is not null)
                 {
-                    if (waitForNextFrame is not null)
-                        await waitForNextFrame(CancellationToken.None).ConfigureAwait(false);
-                    else
-                        await WaitForCadenceAsync().ConfigureAwait(false);
+                    await cadence.WaitForNextFrameAsync(CancellationToken.None).ConfigureAwait(false);
+                }
+                else if (!firstFrame)
+                {
+                    await waitForNextFrame!(CancellationToken.None).ConfigureAwait(false);
                 }
 
-                lastFrameStartedTimestamp = timeProvider.GetTimestamp();
                 processFrame(frame);
                 firstFrame = false;
             }
@@ -132,18 +131,6 @@ internal sealed class TransmitFramePacer
             {
                 // Fault reporting must not replace the original media failure.
             }
-        }
-    }
-
-    private async ValueTask WaitForCadenceAsync()
-    {
-        TimeSpan elapsed = timeProvider.GetElapsedTime(
-            lastFrameStartedTimestamp,
-            timeProvider.GetTimestamp());
-        TimeSpan remaining = FrameInterval - elapsed;
-        if (remaining > TimeSpan.Zero)
-        {
-            await Task.Delay(remaining, timeProvider, CancellationToken.None).ConfigureAwait(false);
         }
     }
 }

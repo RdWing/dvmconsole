@@ -6,7 +6,8 @@ internal readonly record struct ReceiveJitterBufferDequeueMetadata(
     bool ReorderedBeforePlayout,
     int MissingPacketsAtDeadline,
     TimeSpan TargetDelay,
-    bool IsAdaptive);
+    bool IsAdaptive,
+    long ReleaseDeadlineTimestamp);
 
 internal enum ReceiveJitterPacketKind
 {
@@ -108,6 +109,7 @@ internal sealed class ReceivePacketJitterBuffer<T>
         out ReceiveJitterBufferDequeueMetadata metadata)
     {
         LinkedListNode<BufferedPacket>? ready = null;
+        StreamSelection readySelection = default;
         long earliestDeadline = long.MaxValue;
 
         foreach ((uint streamId, StreamState state) in streams)
@@ -116,6 +118,7 @@ internal sealed class ReceivePacketJitterBuffer<T>
             if (selection.Node is not null && selection.IsReady)
             {
                 ready = selection.Node;
+                readySelection = selection;
                 break;
             }
             if (selection.Deadline < earliestDeadline)
@@ -137,6 +140,9 @@ internal sealed class ReceivePacketJitterBuffer<T>
         bool reordered = selectedKind == ReceiveJitterPacketKind.Voice &&
             HasEarlierVoicePacketForSameStream(ready);
         StreamState selectedState = streams[getStreamId(selected.Item)];
+        long releaseDeadlineTimestamp = readySelection.UsesVoiceDeadline
+            ? readySelection.Deadline
+            : 0;
         int missingPackets = selectedKind != ReceiveJitterPacketKind.Voice || !selectedState.HasExpectedSequence
             ? 0
             : ForwardDistance(selectedState.ExpectedSequence, getSequence(selected.Item));
@@ -151,7 +157,8 @@ internal sealed class ReceivePacketJitterBuffer<T>
             reordered,
             missingPackets,
             selectedState.Profile.TargetDelay,
-            selectedState.Profile.IsAdaptive);
+            selectedState.Profile.IsAdaptive,
+            releaseDeadlineTimestamp);
         return true;
     }
 
@@ -240,14 +247,14 @@ internal sealed class ReceivePacketJitterBuffer<T>
             }
 
             if (!state.HasExpectedSequence)
-                return new StreamSelection(node, true, timestamp);
+                return new StreamSelection(node, true, timestamp, UsesVoiceDeadline: false);
 
             int distance = ForwardDistance(state.ExpectedSequence, getSequence(candidate));
             if (distance == 0)
             {
                 exact ??= node;
                 if (kind == ReceiveJitterPacketKind.Metadata)
-                    return new StreamSelection(node, true, timestamp);
+                    return new StreamSelection(node, true, timestamp, UsesVoiceDeadline: false);
             }
             else if (distance <= MaximumForwardDistance && distance < nearestDistance)
             {
@@ -259,16 +266,20 @@ internal sealed class ReceivePacketJitterBuffer<T>
         }
 
         if (late is not null)
-            return new StreamSelection(late, true, timestamp);
+            return new StreamSelection(late, true, timestamp, UsesVoiceDeadline: false);
 
         bool releaseNow = drain || !state.HasVoiceDeadline ||
             timestamp >= state.NextDeadline;
         LinkedListNode<BufferedPacket>? voice = exact ?? nearestFuture;
         if (voice is not null)
-            return new StreamSelection(voice, releaseNow, state.NextDeadline);
+            return new StreamSelection(
+                voice,
+                releaseNow,
+                state.NextDeadline,
+                UsesVoiceDeadline: !drain);
 
         if (terminator is not null)
-            return new StreamSelection(terminator, true, timestamp);
+            return new StreamSelection(terminator, true, timestamp, UsesVoiceDeadline: false);
 
         return default;
     }
@@ -345,5 +356,6 @@ internal sealed class ReceivePacketJitterBuffer<T>
     private readonly record struct StreamSelection(
         LinkedListNode<BufferedPacket>? Node,
         bool IsReady,
-        long Deadline);
+        long Deadline,
+        bool UsesVoiceDeadline);
 }

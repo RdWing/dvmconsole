@@ -37,14 +37,29 @@ internal static class ReceiveDiagnosticsText
         string jitterTarget = latest.AdaptiveJitterBuffer
             ? $"adaptive jitter target {latest.JitterBufferTargetDelay.TotalMilliseconds:0} ms"
             : $"fixed jitter {latest.JitterBufferTargetDelay.TotalMilliseconds:0} ms";
+        string queueStages = latest.HasQueueDelayBreakdown
+            ? $"jitter/worker queue {latest.QueueDelay.TotalMilliseconds:0} ms " +
+              $"(jitter hold {latest.JitterBufferHoldDuration.TotalMilliseconds:0} ms; " +
+              $"{jitterTarget}; worker backlog {latest.WorkerBacklogDuration.TotalMilliseconds:0} ms)"
+            : $"jitter/decoder queue {latest.QueueDelay.TotalMilliseconds:0} ms ({jitterTarget})";
+        string processingPrivacy = latest.EncryptedSessionProcessing switch
+        {
+            true => "encrypted key/decrypt/decode/mixer",
+            false => "clear decode/mixer",
+            null => "decode/mixer (privacy not yet signaled)"
+        };
+        string processingStages = latest.HasSessionProcessingBreakdown
+            ? $"session gate {latest.SessionGateDelay.TotalMilliseconds:0} ms, " +
+              $"{processingPrivacy} {latest.SessionProcessingDuration.TotalMilliseconds:0} ms, " +
+              $"processing total {latest.ProcessingDuration.TotalMilliseconds:0} ms"
+            : $"decode/mixer {latest.ProcessingDuration.TotalMilliseconds:0} ms";
         return $"RX pipeline delay on {channelName}: " +
                $"UDP inter-arrival {latest.TransportInterArrivalDelay.TotalMilliseconds:0} ms, " +
                $"socket-to-FNE {latest.TransportToFneBoundaryDelay.TotalMilliseconds:0} ms, " +
                $"FNE inter-arrival {latest.InterArrivalDelay.TotalMilliseconds:0} ms, " +
                $"FNE boundary-to-queue {latest.IngressToQueueDelay.TotalMilliseconds:0} ms, " +
-               $"jitter/decoder queue {latest.QueueDelay.TotalMilliseconds:0} ms " +
-               $"({jitterTarget}), " +
-               $"decode/mixer {latest.ProcessingDuration.TotalMilliseconds:0} ms, " +
+               queueStages + ", " +
+               processingStages + ", " +
                $"total FNE-to-mixer {latest.EndToEndDelay.TotalMilliseconds:0} ms; " +
                $"stream maximum total FNE-to-mixer {maximums.MaximumEndToEndDelay.TotalMilliseconds:0} ms; " +
                $"stream {latest.Traffic.StreamId}, sequence {latest.Traffic.PacketSequence}.";
@@ -71,6 +86,32 @@ internal static class ReceiveDiagnosticsText
                $"{missed} missing network packet{(missed == 1 ? string.Empty : "s")} " +
                $"before sequence {timing.Traffic.PacketSequence} on stream " +
                $"{timing.Traffic.StreamId}.";
+    }
+
+    public static string FormatJitterBufferPublication(
+        string channelName,
+        ReceiveJitterEventPublication publication)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(channelName);
+        string counts = $"restored {publication.ReorderedSincePrevious:N0} delayed packet" +
+            $"{(publication.ReorderedSincePrevious == 1 ? string.Empty : "s")} and advanced across " +
+            $"{publication.MissedSincePrevious:N0} missing network packet" +
+            $"{(publication.MissedSincePrevious == 1 ? string.Empty : "s")}";
+        string totals = $"cumulative restored {publication.TotalReordered:N0}, " +
+            $"missing {publication.TotalMissed:N0}";
+        return publication.Kind switch
+        {
+            ReceiveJitterEventPublicationKind.First =>
+                $"RX jitter buffer first event on {channelName}, physical stream " +
+                $"{publication.StreamId}: {counts}; sequence {publication.LatestSequence}.",
+            ReceiveJitterEventPublicationKind.Periodic =>
+                $"RX jitter buffer update on {channelName}, physical stream " +
+                $"{publication.StreamId}: since previous report {counts}; {totals}; " +
+                $"latest sequence {publication.LatestSequence}.",
+            _ =>
+                $"RX jitter buffer final summary on {channelName}, physical stream " +
+                $"{publication.StreamId}: {totals}; since previous report {counts}."
+        };
     }
 
     private static string FormatPlayback(AudioMixerDiagnostics? playback)
@@ -149,9 +190,13 @@ internal static class ReceiveDiagnosticsText
               $"FNE inter-arrival " +
               $"{pipeline.MaximumInterArrivalDelay.TotalMilliseconds:0} ms, " +
               $"FNE boundary-to-queue {pipeline.MaximumIngressToQueueDelay.TotalMilliseconds:0} ms, " +
-              $"jitter/decoder queue {pipeline.MaximumQueueDelay.TotalMilliseconds:0} ms " +
-              $"(jitter target up to {pipeline.MaximumJitterBufferTargetDelay.TotalMilliseconds:0} ms), " +
-              $"decode/mixer {pipeline.MaximumProcessingDuration.TotalMilliseconds:0} ms, " +
+              $"jitter/worker queue {pipeline.MaximumQueueDelay.TotalMilliseconds:0} ms " +
+              $"(jitter hold max {pipeline.MaximumJitterBufferHoldDuration.TotalMilliseconds:0} ms, " +
+              $"jitter target up to {pipeline.MaximumJitterBufferTargetDelay.TotalMilliseconds:0} ms, " +
+              $"worker backlog max {pipeline.MaximumWorkerBacklogDuration.TotalMilliseconds:0} ms), " +
+              $"session gate max {pipeline.MaximumSessionGateDelay.TotalMilliseconds:0} ms, " +
+              $"session processing max {pipeline.MaximumSessionProcessingDuration.TotalMilliseconds:0} ms, " +
+              $"processing total max {pipeline.MaximumProcessingDuration.TotalMilliseconds:0} ms, " +
               $"total FNE-to-mixer {pipeline.MaximumEndToEndDelay.TotalMilliseconds:0} ms, " +
               $"jitter reordered this stream {pipeline.JitterBufferReorderedPackets:N0}, " +
               $"jitter deadline misses this stream {pipeline.JitterBufferDeadlineMissedPackets:N0}";

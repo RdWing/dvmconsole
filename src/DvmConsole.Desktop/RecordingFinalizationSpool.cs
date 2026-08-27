@@ -47,7 +47,6 @@ internal sealed record RecordingFinalizationSpoolHealth(
 internal sealed class RecordingFinalizationSpool
 {
     private const string DescriptorSuffix = ".finalize.json";
-    private readonly JsonSerializerOptions serializerOptions = new() { WriteIndented = true };
     private readonly string rootPath;
     private readonly string activePath;
     private readonly string quarantinePath;
@@ -76,7 +75,9 @@ internal sealed class RecordingFinalizationSpool
         {
             File.WriteAllText(
                 temporaryPath,
-                JsonSerializer.Serialize(descriptor, serializerOptions));
+                JsonSerializer.Serialize(
+                    descriptor,
+                    DesktopSettingsJsonContext.Default.RecordingFinalizationDescriptor));
             File.Move(temporaryPath, path, overwrite: true);
             lock (sync)
             {
@@ -194,7 +195,7 @@ internal sealed class RecordingFinalizationSpool
                 RecordingFinalizationDescriptor descriptor =
                     JsonSerializer.Deserialize<RecordingFinalizationDescriptor>(
                         File.ReadAllText(descriptorPath),
-                        serializerOptions)
+                        DesktopSettingsJsonContext.Default.RecordingFinalizationDescriptor)
                     ?? throw new InvalidDataException("The finalization descriptor was empty.");
                 Validate(descriptor, requireFiles: true);
                 if (!Path.GetFullPath(descriptorPath).Equals(

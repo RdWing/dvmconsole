@@ -15,6 +15,12 @@ internal sealed class ConsoleSessionRuntime : IAsyncDisposable
     }
 
     public void StartTimer(TimeSpan interval, EventHandler tick)
+        => CreateTimer(interval, tick, startImmediately: true);
+
+    public ConsoleSessionTimer CreateTimer(
+        TimeSpan interval,
+        EventHandler tick,
+        bool startImmediately)
     {
         ArgumentNullException.ThrowIfNull(tick);
         var timer = new DispatcherTimer
@@ -22,11 +28,14 @@ internal sealed class ConsoleSessionRuntime : IAsyncDisposable
             Interval = interval
         };
         timer.Tick += tick;
-        var registration = new DispatcherTimerRegistration(timer, tick);
+        var registration = new ConsoleSessionTimer(timer, tick);
         try
         {
             EnsureTimerOwnership();
-            timers.AddAndStart(registration);
+            if (startImmediately)
+                registration.Start();
+            timers.Add(registration);
+            return registration;
         }
         catch
         {
@@ -51,12 +60,17 @@ internal sealed class ConsoleSessionRuntime : IAsyncDisposable
         }
     }
 
-    private sealed class DispatcherTimerRegistration(
+    internal sealed class ConsoleSessionTimer(
         DispatcherTimer timer,
         EventHandler tick) : IDisposable
     {
+        public bool IsRunning => timer.IsEnabled;
+
         public void Start()
             => timer.Start();
+
+        public void Stop()
+            => timer.Stop();
 
         public void Dispose()
         {
@@ -68,7 +82,7 @@ internal sealed class ConsoleSessionRuntime : IAsyncDisposable
     private sealed class DispatcherTimerRegistrationGroup : IDisposable
     {
         private readonly object sync = new();
-        private readonly List<DispatcherTimerRegistration> registrations = [];
+        private readonly List<ConsoleSessionTimer> registrations = [];
         private bool disposed;
 
         public int Count
@@ -80,20 +94,19 @@ internal sealed class ConsoleSessionRuntime : IAsyncDisposable
             }
         }
 
-        public void AddAndStart(DispatcherTimerRegistration registration)
+        public void Add(ConsoleSessionTimer registration)
         {
             ArgumentNullException.ThrowIfNull(registration);
             lock (sync)
             {
                 ObjectDisposedException.ThrowIf(disposed, this);
-                registration.Start();
                 registrations.Add(registration);
             }
         }
 
         public void Dispose()
         {
-            DispatcherTimerRegistration[] owned;
+            ConsoleSessionTimer[] owned;
             lock (sync)
             {
                 if (disposed)
@@ -104,7 +117,7 @@ internal sealed class ConsoleSessionRuntime : IAsyncDisposable
             }
 
             var cleanup = new AsyncCleanup();
-            foreach (DispatcherTimerRegistration registration in owned)
+            foreach (ConsoleSessionTimer registration in owned)
                 cleanup.Run(registration.Dispose);
             cleanup.ThrowIfFailed();
         }

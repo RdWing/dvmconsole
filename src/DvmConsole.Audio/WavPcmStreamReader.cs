@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Buffers.Binary;
 using System.Text;
 
@@ -10,8 +11,10 @@ namespace DvmConsole.Audio;
 public sealed class WavPcmStreamReader : IAudioPcmStreamReader
 {
     private readonly Stream source;
+    private readonly ArrayPool<byte> bufferPool;
     private readonly int blockAlign;
     private readonly int bytesPerSample;
+    private byte[]? readBuffer;
     private long dataBytesRemaining;
     private bool disposed;
 
@@ -21,9 +24,11 @@ public sealed class WavPcmStreamReader : IAudioPcmStreamReader
         int channels,
         int bitsPerSample,
         int blockAlign,
-        long dataBytesRemaining)
+        long dataBytesRemaining,
+        ArrayPool<byte> bufferPool)
     {
         this.source = source;
+        this.bufferPool = bufferPool;
         SampleRate = sampleRate;
         Channels = channels;
         BitsPerSample = bitsPerSample;
@@ -37,11 +42,18 @@ public sealed class WavPcmStreamReader : IAudioPcmStreamReader
     public int BitsPerSample { get; }
     public bool EndOfStream => dataBytesRemaining < blockAlign;
 
-    public static async Task<WavPcmStreamReader> OpenAsync(
+    public static Task<WavPcmStreamReader> OpenAsync(
         Stream source,
+        CancellationToken cancellationToken = default)
+        => OpenAsync(source, ArrayPool<byte>.Shared, cancellationToken);
+
+    internal static async Task<WavPcmStreamReader> OpenAsync(
+        Stream source,
+        ArrayPool<byte> bufferPool,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(source);
+        ArgumentNullException.ThrowIfNull(bufferPool);
         if (!source.CanRead)
             throw new ArgumentException("The WAV source must be readable.", nameof(source));
 
@@ -101,7 +113,8 @@ public sealed class WavPcmStreamReader : IAudioPcmStreamReader
                         channels,
                         bitsPerSample,
                         blockAlign,
-                        chunkBytes);
+                        chunkBytes,
+                        bufferPool);
                 }
                 else
                 {
@@ -129,8 +142,11 @@ public sealed class WavPcmStreamReader : IAudioPcmStreamReader
 
         int frameCount = (int)Math.Min(destination.Length, dataBytesRemaining / blockAlign);
         int byteCount = checked(frameCount * blockAlign);
-        byte[] buffer = new byte[byteCount];
-        int bytesRead = await ReadAtMostAsync(source, buffer, cancellationToken).ConfigureAwait(false);
+        byte[] buffer = GetReadBuffer(byteCount);
+        int bytesRead = await ReadAtMostAsync(
+            source,
+            buffer.AsMemory(0, byteCount),
+            cancellationToken).ConfigureAwait(false);
         int completeBytes = bytesRead - (bytesRead % blockAlign);
         int completeFrames = completeBytes / blockAlign;
         dataBytesRemaining = Math.Max(0, dataBytesRemaining - completeBytes);
@@ -149,18 +165,76 @@ public sealed class WavPcmStreamReader : IAudioPcmStreamReader
         return completeFrames;
     }
 
+    public async ValueTask<long> SkipSamplesAsync(
+        long sampleCount,
+        CancellationToken cancellationToken = default)
+    {
+        ObjectDisposedException.ThrowIf(disposed, this);
+        if (sampleCount < 0)
+            throw new ArgumentOutOfRangeException(nameof(sampleCount));
+
+        long frames = Math.Min(sampleCount, dataBytesRemaining / blockAlign);
+        long bytes = checked(frames * blockAlign);
+        if (bytes == 0)
+            return 0;
+
+        if (source.CanSeek)
+            source.Seek(bytes, SeekOrigin.Current);
+        else
+            await DiscardDataAsync(bytes, cancellationToken).ConfigureAwait(false);
+        dataBytesRemaining -= bytes;
+        return frames;
+    }
+
     public async ValueTask DisposeAsync()
     {
         if (disposed)
             return;
         disposed = true;
-        await source.DisposeAsync().ConfigureAwait(false);
+        byte[]? buffer = readBuffer;
+        readBuffer = null;
+        try
+        {
+            await source.DisposeAsync().ConfigureAwait(false);
+        }
+        finally
+        {
+            if (buffer is not null)
+                bufferPool.Return(buffer);
+        }
     }
 
     private int ReadSample(byte[] buffer, int offset)
         => BitsPerSample == 16
             ? BinaryPrimitives.ReadInt16LittleEndian(buffer.AsSpan(offset, 2))
             : (buffer[offset] - 128) << 8;
+
+    private byte[] GetReadBuffer(int minimumLength)
+    {
+        if (readBuffer is not null && readBuffer.Length >= minimumLength)
+            return readBuffer;
+
+        byte[] replacement = bufferPool.Rent(minimumLength);
+        if (readBuffer is not null)
+            bufferPool.Return(readBuffer);
+        readBuffer = replacement;
+        return replacement;
+    }
+
+    private async Task DiscardDataAsync(long bytes, CancellationToken cancellationToken)
+    {
+        byte[] buffer = GetReadBuffer((int)Math.Min(bytes, 4096));
+        while (bytes > 0)
+        {
+            int requested = (int)Math.Min(bytes, buffer.Length);
+            int read = await source.ReadAsync(
+                buffer.AsMemory(0, requested),
+                cancellationToken).ConfigureAwait(false);
+            if (read == 0)
+                throw new EndOfStreamException("The WAV stream ended unexpectedly.");
+            bytes -= read;
+        }
+    }
 
     private static async Task<bool> TryReadChunkHeaderAsync(
         Stream source,

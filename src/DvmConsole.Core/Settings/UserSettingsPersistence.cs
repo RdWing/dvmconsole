@@ -1,22 +1,16 @@
-using System.Text.Json;
-using System.Text.Json.Serialization;
-
 namespace DvmConsole.Core.Settings;
 
 internal sealed class UserSettingsSerializer
 {
-    private readonly JsonSerializerOptions options = new()
-    {
-        WriteIndented = true,
-        PropertyNameCaseInsensitive = true,
-        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
-    };
-
     public UserSettings? Deserialize(string json)
-        => JsonSerializer.Deserialize<UserSettings>(json, options);
+        => System.Text.Json.JsonSerializer.Deserialize(
+            json,
+            UserSettingsJsonContext.Default.UserSettings);
 
     public string Serialize(UserSettings settings)
-        => JsonSerializer.Serialize(settings, options);
+        => System.Text.Json.JsonSerializer.Serialize(
+            settings,
+            UserSettingsJsonContext.Default.UserSettings);
 }
 
 internal sealed class SettingsProfileRepository

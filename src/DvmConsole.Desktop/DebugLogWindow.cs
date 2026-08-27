@@ -2,7 +2,6 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
 using Avalonia.Controls.Templates;
-using Avalonia.Data;
 using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Platform.Storage;
@@ -17,6 +16,9 @@ public sealed class DebugLogWindow : Window
 {
     private readonly MainWindowViewModel viewModel;
     private readonly ListBox logs;
+    private readonly TextBox filterInput;
+    private readonly ComboBox severityFilter;
+    private readonly TextBlock retentionText;
     private readonly ScrollViewportAnchor<DebugLogEntry> logViewportAnchor;
 
     public DebugLogWindow(MainWindowViewModel viewModel)
@@ -28,30 +30,23 @@ public sealed class DebugLogWindow : Window
         MinWidth = 720;
         MinHeight = 420;
         WindowStartupLocation = WindowStartupLocation.CenterScreen;
-        this.Bind(BackgroundProperty, new Binding(nameof(MainWindowViewModel.MainBackgroundBrush)));
+        Background = viewModel.MainBackgroundBrush;
         DataContext = viewModel;
-        Bind(FontSizeProperty, new Binding(nameof(MainWindowViewModel.UiFontSize)));
+        FontSize = viewModel.UiFontSize;
 
-        var filterInput = new TextBox
+        filterInput = new TextBox
         {
             Watermark = "Filter source or message (all terms)",
-            MinWidth = 260
+            MinWidth = 260,
+            Text = viewModel.DebugLogFilterText
         };
-        filterInput.Bind(TextBox.TextProperty, new Binding(nameof(MainWindowViewModel.DebugLogFilterText))
-        {
-            Mode = BindingMode.TwoWay
-        });
 
-        var severityFilter = new ComboBox
+        severityFilter = new ComboBox
         {
             ItemsSource = viewModel.DebugLogSeverityFilters,
             SelectedItem = viewModel.DebugLogSeverityFilter,
             MinWidth = 110
         };
-        severityFilter.Bind(ComboBox.SelectedItemProperty, new Binding(nameof(MainWindowViewModel.DebugLogSeverityFilter))
-        {
-            Mode = BindingMode.TwoWay
-        });
 
         logs = new ListBox
         {
@@ -63,7 +58,7 @@ public sealed class DebugLogWindow : Window
             logs,
             Avalonia.Controls.Primitives.ScrollBarVisibility.Disabled);
         logs.Styles.Add(CreateCompactLogItemStyle());
-        logs.Bind(ItemsControl.ItemsSourceProperty, new Binding(nameof(MainWindowViewModel.FilteredDebugLogs)));
+        logs.ItemsSource = viewModel.FilteredDebugLogs;
         logViewportAnchor = new ScrollViewportAnchor<DebugLogEntry>(
             () => logs.GetVisualDescendants().OfType<ScrollViewer>().FirstOrDefault(),
             () => logs.GetVisualDescendants().OfType<ListBoxItem>(),
@@ -99,6 +94,11 @@ public sealed class DebugLogWindow : Window
         Grid.SetColumnSpan(controls.Children[3], 3);
         Grid.SetRow(controls.Children[3], 1);
 
+        retentionText = new TextBlock
+        {
+            Classes = { "muted" },
+            Text = viewModel.DebugLogRetentionText
+        };
         var content = new Grid
         {
             RowDefinitions = new RowDefinitions("Auto,Auto,*,Auto"),
@@ -131,11 +131,7 @@ public sealed class DebugLogWindow : Window
                             Classes = { "muted" },
                             TextWrapping = TextWrapping.Wrap
                         },
-                        new TextBlock
-                        {
-                            Classes = { "muted" },
-                            [!TextBlock.TextProperty] = new Binding(nameof(MainWindowViewModel.DebugLogRetentionText))
-                        }
+                        retentionText
                     }
                 }
             }
@@ -146,6 +142,8 @@ public sealed class DebugLogWindow : Window
         Content = content;
 
         closeButton.Click += (_, _) => Close();
+        filterInput.TextChanged += HandleFilterTextChanged;
+        severityFilter.SelectionChanged += HandleSeveritySelectionChanged;
         clearTextButton.Click += (_, _) =>
         {
             viewModel.DebugLogFilterText = string.Empty;
@@ -153,6 +151,7 @@ public sealed class DebugLogWindow : Window
         };
         exportButton.Click += HandleExportClick;
         viewModel.DebugLogCollectionChanging += HandleDebugLogCollectionChanging;
+        viewModel.PropertyChanged += HandleViewModelPropertyChanged;
         logs.LayoutUpdated += HandleLogsLayoutUpdated;
         Closed += HandleClosed;
     }
@@ -195,7 +194,50 @@ public sealed class DebugLogWindow : Window
         Closed -= HandleClosed;
         logs.LayoutUpdated -= HandleLogsLayoutUpdated;
         viewModel.DebugLogCollectionChanging -= HandleDebugLogCollectionChanging;
+        viewModel.PropertyChanged -= HandleViewModelPropertyChanged;
+        filterInput.TextChanged -= HandleFilterTextChanged;
+        severityFilter.SelectionChanged -= HandleSeveritySelectionChanged;
         logViewportAnchor.Reset();
+    }
+
+    private void HandleFilterTextChanged(object? sender, TextChangedEventArgs e)
+    {
+        string value = filterInput.Text ?? string.Empty;
+        if (!value.Equals(viewModel.DebugLogFilterText, StringComparison.Ordinal))
+            viewModel.DebugLogFilterText = value;
+    }
+
+    private void HandleSeveritySelectionChanged(object? sender, SelectionChangedEventArgs e)
+    {
+        if (severityFilter.SelectedItem is string value &&
+            !value.Equals(viewModel.DebugLogSeverityFilter, StringComparison.Ordinal))
+        {
+            viewModel.DebugLogSeverityFilter = value;
+        }
+    }
+
+    private void HandleViewModelPropertyChanged(
+        object? sender,
+        System.ComponentModel.PropertyChangedEventArgs e)
+    {
+        switch (e.PropertyName)
+        {
+            case nameof(MainWindowViewModel.MainBackgroundBrush):
+                Background = viewModel.MainBackgroundBrush;
+                break;
+            case nameof(MainWindowViewModel.UiFontSize):
+                FontSize = viewModel.UiFontSize;
+                break;
+            case nameof(MainWindowViewModel.DebugLogFilterText):
+                filterInput.Text = viewModel.DebugLogFilterText;
+                break;
+            case nameof(MainWindowViewModel.DebugLogSeverityFilter):
+                severityFilter.SelectedItem = viewModel.DebugLogSeverityFilter;
+                break;
+            case nameof(MainWindowViewModel.DebugLogRetentionText):
+                retentionText.Text = viewModel.DebugLogRetentionText;
+                break;
+        }
     }
 
     private async void HandleExportClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)

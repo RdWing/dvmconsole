@@ -10,14 +10,17 @@ MACOS_DEPLOYMENT_TARGET="14.0"
 
 case "$RID" in
     osx-arm64)
+        TARGET_PLATFORM="macos"
         MACOS_ARCHITECTURE="arm64"
         VOCODER_TARGET="aarch64-apple-darwin"
         ;;
     osx-x64)
+        TARGET_PLATFORM="macos"
         MACOS_ARCHITECTURE="x86_64"
         VOCODER_TARGET="x86_64-apple-darwin"
         ;;
     win-x64)
+        TARGET_PLATFORM="windows"
         MACOS_ARCHITECTURE=""
         VOCODER_TARGET="x86_64-pc-windows-msvc"
         ;;
@@ -45,18 +48,24 @@ dotnet restore "$PROJECT" \
     --force-evaluate \
     --ignore-failed-sources \
     -p:Configuration="$CONFIGURATION" \
+    -p:DvmConsoleTargetPlatform="$TARGET_PLATFORM" \
+    -p:PublishTrimmed=true \
+    -p:TrimMode=partial \
     -p:NuGetAudit=false \
     --verbosity minimal
 PUBLISH_PROPERTIES=(
     -p:UseAppHost=true
     -p:NativeVocoderTarget="$VOCODER_TARGET"
+    -p:DvmConsoleTargetPlatform="$TARGET_PLATFORM"
+    -p:DebugType=None
+    -p:PublishTrimmed=true
+    -p:TrimMode=partial
 )
 if [[ "$RID" == "win-x64" ]]; then
     PUBLISH_PROPERTIES+=(
         -p:PublishSingleFile=true
         -p:IncludeNativeLibrariesForSelfExtract=true
         -p:EnableCompressionInSingleFile=true
-        -p:DebugType=None
     )
 fi
 

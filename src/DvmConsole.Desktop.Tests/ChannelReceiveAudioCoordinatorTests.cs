@@ -12,6 +12,93 @@ namespace DvmConsole.Desktop.Tests;
 public sealed class ChannelReceiveAudioCoordinatorTests
 {
     [Fact]
+    public async Task ReportsSessionGateAndProcessingTimingWithoutChangingProcessContract()
+    {
+        var backend = new FakeAudioBackend();
+        await using var coordinator = new ChannelReceiveAudioCoordinator(
+            () => backend,
+            () => new FakeVocoderBackend());
+        var channel = new ChannelViewModel(new ChannelConfiguration
+        {
+            Name = "Dispatch",
+            System = "System 1",
+            Tgid = "100",
+            Mode = "analog"
+        });
+        await coordinator.StartAsync(channel);
+
+        ReceiveAudioProcessTiming timing = await coordinator.ProcessWithTimingAsync(
+            channel,
+            CreateAnalogTraffic(100));
+
+        Assert.True(timing.Measured);
+        Assert.Equal(false, timing.EncryptedSessionProcessing);
+        Assert.True(timing.SessionGateDelay >= TimeSpan.Zero);
+        Assert.True(timing.SessionProcessingDuration >= TimeSpan.Zero);
+        Assert.True(timing.FramesDecoded >= 0);
+    }
+
+    [Fact]
+    public async Task RetainsSignaledEncryptionTimingAcrossLaterVoiceFrames()
+    {
+        var backend = new FakeAudioBackend();
+        var keyRing = new P25KeyRing("System 1", new KeyContainer
+        {
+            Keys =
+            [
+                new KeyEntry
+                {
+                    KeyId = 0x50,
+                    AlgId = P25Defines.P25_ALGO_AES,
+                    Key = "00112233445566778899AABBCCDDEEFF"
+                }
+            ]
+        });
+        await using var coordinator = new ChannelReceiveAudioCoordinator(
+            () => backend,
+            () => new FakeVocoderBackend(),
+            keyRing);
+        var channel = new ChannelViewModel(new ChannelConfiguration
+        {
+            Name = "Dispatch",
+            System = "System 1",
+            Tgid = "100",
+            Mode = "p25"
+        }, keyRing);
+        await coordinator.StartAsync(channel);
+        byte[] encryptedPayload = P25DfsiFrameCodec.CreateEncryptedLdu1Payload(
+            sourceId: 2,
+            destinationId: 100,
+            encryptedImbe: new byte[P25DfsiFrameCodec.ImbeBytes],
+            metadata: new P25DfsiFrameCodec.P25EncryptionMetadata(
+                P25Defines.P25_ALGO_AES,
+                KeyId: 0x50,
+                MessageIndicator: new byte[9]));
+        var encrypted = new FneTrafficFrame(
+            FneTrafficProtocol.P25,
+            peerId: 1,
+            sourceId: 2,
+            destinationId: 100,
+            slot: null,
+            callType: "GROUP",
+            frameType: "VOICE",
+            subtype: "LDU1",
+            packetSequence: 1,
+            streamId: 99,
+            payload: encryptedPayload);
+
+        ReceiveAudioProcessTiming signaled = await coordinator.ProcessWithTimingAsync(
+            channel,
+            encrypted);
+        ReceiveAudioProcessTiming retained = await coordinator.ProcessWithTimingAsync(
+            channel,
+            CreateP25Traffic(100, packetSequence: 2));
+
+        Assert.Equal(true, signaled.EncryptedSessionProcessing);
+        Assert.Equal(true, retained.EncryptedSessionProcessing);
+    }
+
+    [Fact]
     public async Task ProcessesDifferentChannelsConcurrently()
     {
         var backend = new FakeAudioBackend();

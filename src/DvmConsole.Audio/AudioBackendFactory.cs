@@ -11,6 +11,7 @@ public static class AudioBackendFactory
         string? outputDeviceId = null,
         bool highQualityBluetoothAudio = false)
     {
+#if !DVMCONSOLE_WINDOWS
         if (OperatingSystem.IsMacOS())
         {
             if (processingMode == AudioProcessingMode.WindowsCommunications)
@@ -22,10 +23,13 @@ public static class AudioBackendFactory
                 outputDeviceId,
                 highQualityBluetoothAudio);
         }
+#endif
         if (processingMode == AudioProcessingMode.AppleVoiceProcessing)
             throw new PlatformNotSupportedException("Apple voice processing requires an Apple audio backend.");
+#if !DVMCONSOLE_MACOS
         if (OperatingSystem.IsWindows())
             return new WindowsAudioBackend(processingMode);
+#endif
         if (processingMode == AudioProcessingMode.WindowsCommunications)
             throw new PlatformNotSupportedException("Windows communications processing requires a Windows audio backend.");
 

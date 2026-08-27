@@ -7,6 +7,24 @@ namespace DvmConsole.Desktop.Tests;
 public sealed class ChannelAudioMeterPipelineTests
 {
     [Fact]
+    public void SignalsOnlyTheTransitionFromIdleAndReturnsToIdleAfterDecay()
+    {
+        ChannelViewModel channel = CreateReceivingChannel(FneTrafficProtocol.P25, streamId: 7);
+        var pipeline = new ChannelAudioMeterPipeline();
+        short[] frame = Enumerable.Repeat((short)8_000, 160).ToArray();
+
+        Assert.True(pipeline.Observe(channel, 7, frame, ChannelAudioDirection.Receive));
+        Assert.False(pipeline.Observe(channel, 7, frame, ChannelAudioDirection.Receive));
+        Assert.True(pipeline.HasActivity);
+
+        for (int index = 0; index < 20 && pipeline.HasActivity; index++)
+            pipeline.Advance();
+
+        Assert.False(pipeline.HasActivity);
+        Assert.True(pipeline.Observe(channel, 7, frame, ChannelAudioDirection.Receive));
+    }
+
+    [Fact]
     public void P25FrameBurstIsPresentedAcrossProtocolNeutralRefreshes()
     {
         ChannelViewModel channel = CreateReceivingChannel(FneTrafficProtocol.P25, streamId: 7);

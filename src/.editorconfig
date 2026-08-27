@@ -8,6 +8,12 @@ dotnet_diagnostic.CA2012.severity = warning
 # enabling naming, localization, or style rules that do not affect correctness.
 dotnet_diagnostic.CA2200.severity = warning
 
+# Catch incorrect exception parameter metadata, ambiguous native string
+# marshalling, and cancellation tokens that are accidentally dropped.
+dotnet_diagnostic.CA2208.severity = warning
+dotnet_diagnostic.CA2101.severity = warning
+dotnet_diagnostic.CA2016.severity = warning
+
 # Desktop owns the application's longest-lived service graph, so disposal
 # ownership rules are enforced there first and can expand project by project.
 [DvmConsole.Desktop/**/*.cs]

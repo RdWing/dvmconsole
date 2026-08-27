@@ -15,6 +15,20 @@
     <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
   </PropertyGroup>
 
+  <PropertyGroup Condition="'$(DvmConsoleTargetPlatform)' == 'macos'">
+    <DefineConstants>$(DefineConstants);DVMCONSOLE_MACOS</DefineConstants>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(DvmConsoleTargetPlatform)' == 'windows'">
+    <DefineConstants>$(DefineConstants);DVMCONSOLE_WINDOWS</DefineConstants>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(PublishTrimmed)' == 'true'">
+    <!-- Rooted reflection-heavy dependencies are preserved in full, so their
+         aggregate IL2104 diagnostics do not indicate removed functionality. -->
+    <NoWarn>$(NoWarn);IL2104</NoWarn>
+  </PropertyGroup>
+
   <ItemGroup>
     <Compile Include="../Shared/TaskObservation.cs" Link="Threading/TaskObservation.cs" />
     <Using Include="DvmConsole.Threading" />
@@ -22,7 +36,11 @@
 
   <ItemGroup>
     <PackageReference Include="Avalonia" Version="11.3.18" />
-    <PackageReference Include="Avalonia.Desktop" Version="11.3.18" />
+    <PackageReference Include="Avalonia.Desktop" Version="11.3.18" Condition="'$(DvmConsoleTargetPlatform)' == ''" />
+    <PackageReference Include="Avalonia.Native" Version="11.3.18"
+                      Condition="'$(DvmConsoleTargetPlatform)' == 'macos'" />
+    <PackageReference Include="Avalonia.Win32" Version="11.3.18" Condition="'$(DvmConsoleTargetPlatform)' == 'windows'" />
+    <PackageReference Include="Avalonia.Skia" Version="11.3.18" Condition="'$(DvmConsoleTargetPlatform)' != ''" />
     <PackageReference Include="Avalonia.Themes.Fluent" Version="11.3.18" />
     <PackageReference Include="AvaloniaUI.DiagnosticsSupport" Version="2.2.3" Condition="'$(Configuration)' == 'Debug'" />
     <PackageReference Include="Markdown.Avalonia" Version="11.0.3" />
@@ -35,6 +53,21 @@
     <ProjectReference Include="../DvmConsole.Media/DvmConsole.Media.csproj" />
     <ProjectReference Include="../DvmConsole.Operations/DvmConsole.Operations.csproj" />
     <ProjectReference Include="../DvmConsole.Vocoder/DvmConsole.Vocoder.csproj" />
+  </ItemGroup>
+
+  <!-- These UI/configuration dependencies use runtime discovery internally.
+       Keep them intact during partial linking; application and framework code
+       can still be reduced without risking Markdown, XAML, SVG, or YAML data. -->
+  <ItemGroup Condition="'$(PublishTrimmed)' == 'true'">
+    <TrimmerRootAssembly Include="AvaloniaEdit" />
+    <TrimmerRootAssembly Include="Avalonia.DesignerSupport" />
+    <TrimmerRootAssembly Include="ExCSS" />
+    <TrimmerRootAssembly Include="HtmlAgilityPack" />
+    <TrimmerRootAssembly Include="Markdown.Avalonia" />
+    <TrimmerRootAssembly Include="Markdown.Avalonia.Html" />
+    <TrimmerRootAssembly Include="Markdown.Avalonia.SyntaxHigh" />
+    <TrimmerRootAssembly Include="Svg.Custom" />
+    <TrimmerRootAssembly Include="YamlDotNet" />
   </ItemGroup>
 
   <ItemGroup>

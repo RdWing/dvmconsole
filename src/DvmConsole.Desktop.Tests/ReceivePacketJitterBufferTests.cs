@@ -28,6 +28,7 @@ public sealed class ReceivePacketJitterBufferTests
             out ReceiveJitterBufferDequeueMetadata firstMetadata));
         Assert.Equal((ushort)10, first.Sequence);
         Assert.Equal(TimeSpan.FromMilliseconds(60), firstMetadata.TargetDelay);
+        Assert.Equal(Add(start, 60), firstMetadata.ReleaseDeadlineTimestamp);
 
         Assert.True(buffer.TryDequeue(
             Add(start, 130),
@@ -37,6 +38,7 @@ public sealed class ReceivePacketJitterBufferTests
             out ReceiveJitterBufferDequeueMetadata secondMetadata));
         Assert.Equal((ushort)11, second.Sequence);
         Assert.Equal(TimeSpan.FromMilliseconds(60), secondMetadata.TargetDelay);
+        Assert.Equal(Add(start, 120), secondMetadata.ReleaseDeadlineTimestamp);
 
         buffer.Enqueue(new Packet(2, 20, longerTarget), Add(start, 140));
         Assert.False(buffer.TryDequeue(
@@ -67,8 +69,14 @@ public sealed class ReceivePacketJitterBufferTests
         long start = Stopwatch.GetTimestamp();
 
         buffer.Enqueue(new ClassifiedPacket(1, 0, ReceiveJitterPacketKind.Metadata, profile), start);
-        Assert.True(buffer.TryDequeue(start, false, out ClassifiedPacket startMetadata, out _, out _));
+        Assert.True(buffer.TryDequeue(
+            start,
+            false,
+            out ClassifiedPacket startMetadata,
+            out _,
+            out ReceiveJitterBufferDequeueMetadata startMetadataTiming));
         Assert.Equal(ReceiveJitterPacketKind.Metadata, startMetadata.Kind);
+        Assert.Equal(0, startMetadataTiming.ReleaseDeadlineTimestamp);
 
         buffer.Enqueue(new ClassifiedPacket(1, 1, ReceiveJitterPacketKind.Voice, profile), Add(start, 10));
         Assert.False(buffer.TryDequeue(Add(start, 120), false, out _, out _, out _));

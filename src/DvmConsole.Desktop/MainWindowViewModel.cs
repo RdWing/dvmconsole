@@ -83,9 +83,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
     private ObservableCollection<AudioDeviceOptionViewModel> audioOutputDevices
         => audioSettings.MutableAudioOutputDevices;
     private readonly ObservableCollection<SubscriberCommandAuditEntry> subscriberCommandAudit = [];
-    private readonly BoundedDebugLogBuffer debugLogBuffer = new();
-    private readonly FilteredDebugLogCollection filteredDebugLogs;
-    private readonly DebugLogDrainController debugLogDrain;
+    private readonly DebugLogWorkspace debugLogs;
     private bool verboseDiagnosticLogging;
     private readonly ObservableCollection<string> recentCodeplugPaths = [];
     private readonly ObservableCollection<WebStreamViewModel> webStreams = [];
@@ -97,6 +95,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
     private readonly ChannelAudioMeterPipeline audioMeterPipeline = new();
     private readonly ReceiveDiagnosticsReporter receiveDiagnosticsReporter = new(TimeSpan.FromSeconds(5));
     private readonly ReceivePipelineTimingReporter receivePipelineTimingReporter = new(TimeSpan.FromSeconds(5));
+    private readonly ReceiveJitterEventReporter receiveJitterEventReporter = new(TimeSpan.FromSeconds(5));
     private readonly AdaptiveReceiveJitterBufferController adaptiveReceiveJitter = new();
     private readonly ReceiveJitterBufferEffectivenessTracker receiveJitterEffectiveness = new();
     private readonly ReceiveCallEpisodeTracker receiveCallEpisodes = new();
@@ -108,7 +107,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
     private IReadOnlyDictionary<string, RxJitterBufferSetting> receiveJitterBufferSettingsBySystem =
         new Dictionary<string, RxJitterBufferSetting>(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, FneConnectionState> lastConnectionStates = new(StringComparer.OrdinalIgnoreCase);
-    private readonly IReadOnlyDictionary<SystemViewModel, IReadOnlyDictionary<(FneTrafficProtocol Protocol, uint DestinationId), ChannelViewModel[]>> trafficRoutes;
+    private readonly IReadOnlyDictionary<SystemViewModel, ReceiveAudioTrafficRouter> receiveTrafficRouters;
     private readonly ConnectionChimeTracker connectionChimeTracker = new();
     private readonly ConnectionSessionController connectionSession;
     private readonly P25KeyRequestCoordinator p25KeyRequestCoordinator = new();
@@ -121,6 +120,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
     private readonly CallRecordingManager callRecordings;
     private readonly RecordingPlaybackCoordinator recordingPlayback;
     private readonly ConsoleSessionRuntime sessionRuntime;
+    private readonly ConsoleSessionRuntime.ConsoleSessionTimer audioMeterTimer;
     private readonly AudioRuntimeSettingsTransaction audioRuntimeSettings;
     private Bitmap? userBackgroundBitmap;
     private int disposeStarted;
@@ -131,8 +131,6 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
     private IReadOnlyDictionary<VocoderMode, ReceiveAudioProcessingOptions> receiveAudioProcessingOptions =
         new Dictionary<VocoderMode, ReceiveAudioProcessingOptions>();
     private string clockText = string.Empty;
-    private string debugLogFilterText = string.Empty;
-    private string debugLogSeverityFilter = "Info";
     private bool busy;
     private bool codeplugDiagnosticsDismissed;
     private ChannelViewModel? selectedChannel;
@@ -143,20 +141,22 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
         string statusText,
         IEnumerable<SystemViewModel> systems,
         IEnumerable<ZoneViewModel> zones,
-        IP25KeyResolver? p25KeyResolver = null,
-        UserSettingsStore? userSettingsStore = null,
-        IEnumerable<GroupConfiguration>? groupDefinitions = null,
-        bool patchSourceIdPassthrough = false,
-        Func<IReadOnlyList<string>>? serialPortProvider = null,
-        Func<string, int, IPttSource>? serialPttFactory = null,
-        IDmrKeyResolver? dmrKeyResolver = null,
-        INxdnKeyResolver? nxdnKeyResolver = null,
-        string? codeplugPath = null,
-        IUiDispatcher? uiDispatcher = null,
-        ConsoleSessionServices? sessionServices = null,
-        bool networkDisabledDemo = false,
-        Func<ApplicationAudioConfiguration, Task>? reconfigureApplicationAudio = null)
+        MainWindowViewModelOptions? options = null)
     {
+        options ??= new MainWindowViewModelOptions();
+        IP25KeyResolver? p25KeyResolver = options.P25KeyResolver;
+        UserSettingsStore? userSettingsStore = options.UserSettingsStore;
+        IEnumerable<GroupConfiguration>? groupDefinitions = options.GroupDefinitions;
+        bool patchSourceIdPassthrough = options.PatchSourceIdPassthrough;
+        Func<IReadOnlyList<string>>? serialPortProvider = options.SerialPortProvider;
+        Func<string, int, IPttSource>? serialPttFactory = options.SerialPttFactory;
+        IDmrKeyResolver? dmrKeyResolver = options.DmrKeyResolver;
+        INxdnKeyResolver? nxdnKeyResolver = options.NxdnKeyResolver;
+        string? codeplugPath = options.CodeplugPath;
+        IUiDispatcher? uiDispatcher = options.UiDispatcher;
+        ConsoleSessionServices? sessionServices = options.SessionServices;
+        bool networkDisabledDemo = options.NetworkDisabledDemo;
+        Func<ApplicationAudioConfiguration, Task>? reconfigureApplicationAudio = options.ReconfigureApplicationAudio;
         ConsoleSessionServices services = sessionServices ?? new ConsoleSessionServices();
         sessionRuntime = new ConsoleSessionRuntime(services);
         this.statusText = statusText;
@@ -176,12 +176,11 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
             CreateNativeAudioBackend);
         Func<ApplicationAudioConfiguration, Task> reconfigureAudio =
             reconfigureApplicationAudio ?? ReconfigureApplicationAudioAsync;
-        filteredDebugLogs = new FilteredDebugLogCollection(debugLogBuffer.Entries);
-        debugLogDrain = new DebugLogDrainController(
+        debugLogs = new DebugLogWorkspace(
             Dispatcher.UIThread.CheckAccess,
             action => Dispatcher.UIThread.Post(action, DispatcherPriority.Background),
-            PublishDebugLogBatch,
             () => Volatile.Read(ref disposeStarted) != 0);
+        debugLogs.PropertyChanged += HandleDebugLogWorkspacePropertyChanged;
         Systems = systems.ToArray();
         foreach (SystemViewModel system in Systems)
             system.SetVerboseLogging(this.verboseDiagnosticLogging);
@@ -242,9 +241,10 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
         }
         clockText = FormatClock(DateTime.Now, userSettings.ClockUse24HourTime, userSettings.ClockShowSeconds);
         sessionRuntime.StartTimer(TimeSpan.FromSeconds(1), HandleClockTick);
-        sessionRuntime.StartTimer(
+        audioMeterTimer = sessionRuntime.CreateTimer(
             TimeSpan.FromMilliseconds(ChannelAudioMeterPipeline.RefreshIntervalMilliseconds),
-            HandleAudioMeterTick);
+            HandleAudioMeterTick,
+            startImmediately: false);
         sessionRuntime.StartTimer(TimeSpan.FromSeconds(1), HandleConnectionDiagnosticsTick);
         receiveJitterBufferSettingsBySystem = BuildReceiveJitterBufferSettingsBySystem();
         receiveAudioProcessingOptions = BuildReceiveAudioProcessingOptions();
@@ -289,7 +289,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
             presentationSamplesObserver: HandlePresentedReceiveSamples);
         audioCoordinator.SetReceivePlaybackEpisodeResolver(ResolveReceivePlaybackEpisode);
         audioCoordinator.OutputFailed += HandleReceiveAudioOutputFailed;
-        receiveAudioWork = new ChannelReceiveWorkQueue(
+        receiveAudioWork = ChannelReceiveWorkQueue.CreateWithTiming(
             ProcessAudioAsync,
             timingObserver: (channel, timing) =>
             {
@@ -342,11 +342,12 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
         localTonePlayer = new LocalTonePlayer(
             CreateTransmitAudioBackend,
             () => userSettings.AudioOutputDeviceId);
-        trafficRoutes = Systems.ToDictionary(
+        receiveTrafficRouters = Systems.ToDictionary(
             system => system,
-            system => (IReadOnlyDictionary<(FneTrafficProtocol Protocol, uint DestinationId), ChannelViewModel[]>)system.Channels
-                .GroupBy(channel => (ProtocolFor(channel), channel.Definition.DestinationId))
-                .ToDictionary(group => group.Key, group => group.ToArray()));
+            system => new ReceiveAudioTrafficRouter(
+                system.Channels
+                    .GroupBy(channel => (ProtocolFor(channel), channel.Definition.DestinationId))
+                    .ToDictionary(group => group.Key, group => group.ToArray())));
         RestoreChannelWidgetLayout();
         foreach (ZoneViewModel zone in Zones)
             zone.SetWidgetCardHeight(ChannelCardHeight);
@@ -375,7 +376,6 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
         RefreshPatchMembershipConflicts();
         ToolbarClocks = new ReadOnlyObservableCollection<ToolbarClockViewModel>(toolbarClocks);
         SubscriberCommandAudit = new ReadOnlyObservableCollection<SubscriberCommandAuditEntry>(subscriberCommandAudit);
-        DebugLogEntries = new ReadOnlyObservableCollection<DebugLogEntry>(debugLogBuffer.Entries);
         RecentCodeplugPaths = new ReadOnlyObservableCollection<string>(recentCodeplugPaths);
         WebStreams = new ReadOnlyObservableCollection<WebStreamViewModel>(webStreams);
         foreach (WebStreamViewModel stream in Zones.SelectMany(zone => zone.WebStreams))
@@ -1583,7 +1583,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
     public ReadOnlyObservableCollection<AudioDeviceOptionViewModel> AudioOutputDevices
         => audioSettings.AudioOutputDevices;
     public ReadOnlyObservableCollection<SubscriberCommandAuditEntry> SubscriberCommandAudit { get; }
-    public ReadOnlyObservableCollection<DebugLogEntry> DebugLogEntries { get; }
+    public ReadOnlyObservableCollection<DebugLogEntry> DebugLogEntries => debugLogs.Entries;
     public ReadOnlyObservableCollection<WebStreamViewModel> WebStreams { get; }
     public System.Collections.ObjectModel.ReadOnlyObservableCollection<CallHistoryEntry> CallHistory
         => historyRecording.CallHistory;
@@ -1634,41 +1634,25 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
         : SelectedSystem?.IsConnected == true ? "CONNECTED" : "OFFLINE";
     public string SelectedSystemName => SelectedSystem?.Name ?? "No system";
     public string SystemStatusText => SelectedSystem?.ConnectionStatus ?? "No configured system";
-    public IReadOnlyList<string> DebugLogSeverityFilters { get; } = ["All", "Debug", "Info", "Warning", "Error", "Fatal"];
-    public string DebugLogRetentionText => debugLogBuffer.RetentionText;
-    public IReadOnlyList<DebugLogEntry> FilteredDebugLogs => filteredDebugLogs.Entries;
+    public IReadOnlyList<string> DebugLogSeverityFilters => debugLogs.DebugLogSeverityFilters;
+    public string DebugLogRetentionText => debugLogs.RetentionText;
+    public IReadOnlyList<DebugLogEntry> FilteredDebugLogs => debugLogs.FilteredEntries;
     internal event NotifyCollectionChangedEventHandler? DebugLogCollectionChanging
     {
-        add => filteredDebugLogs.CollectionChanging += value;
-        remove => filteredDebugLogs.CollectionChanging -= value;
+        add => debugLogs.CollectionChanging += value;
+        remove => debugLogs.CollectionChanging -= value;
     }
 
     public string DebugLogFilterText
     {
-        get => debugLogFilterText;
-        set
-        {
-            string normalized = value ?? string.Empty;
-            if (debugLogFilterText == normalized)
-                return;
-            debugLogFilterText = normalized;
-            filteredDebugLogs.SetFilter(DebugLogSeverityFilter, normalized);
-            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(DebugLogFilterText)));
-        }
+        get => debugLogs.FilterText;
+        set => debugLogs.FilterText = value;
     }
 
     public string DebugLogSeverityFilter
     {
-        get => debugLogSeverityFilter;
-        set
-        {
-            string normalized = string.IsNullOrWhiteSpace(value) ? "All" : value;
-            if (debugLogSeverityFilter == normalized)
-                return;
-            debugLogSeverityFilter = normalized;
-            filteredDebugLogs.SetFilter(normalized, DebugLogFilterText);
-            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(DebugLogSeverityFilter)));
-        }
+        get => debugLogs.SeverityFilter;
+        set => debugLogs.SeverityFilter = value;
     }
 
     public string CallHistoryFilterText
@@ -1763,20 +1747,8 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
 
     public void ExportDebugLogs(string path)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(path);
-        string fullPath = Path.GetFullPath(path);
-        string? directory = Path.GetDirectoryName(fullPath);
-        if (!string.IsNullOrWhiteSpace(directory))
-            Directory.CreateDirectory(directory);
-
-        var lines = new List<string> { "Timestamp\tSeverity\tSource\tMessage" };
-        lines.AddRange(DebugLogEntries.Reverse().Select(entry => string.Join("\t",
-            entry.Timestamp.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture),
-            entry.SeverityText,
-            entry.Source,
-            DebugLogRedactor.Redact(entry.Message).Replace("\r", " ").Replace("\n", " "))));
-        File.WriteAllLines(fullPath, lines);
-        StatusText = $"Exported {DebugLogEntries.Count} redacted debug log entr{(DebugLogEntries.Count == 1 ? "y" : "ies")}.";
+        int count = debugLogs.Export(path);
+        StatusText = $"Exported {count} redacted debug log entr{(count == 1 ? "y" : "ies")}.";
     }
     public IBrush ConnectionBrush => SelectedSystem?.IsConnected == true
         ? new SolidColorBrush(Color.Parse("#00C86A"))
@@ -2592,7 +2564,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
         services.Audio.Register(
             "default-device-monitor",
             () => defaultAudioDeviceMonitor.DisposeAsync());
-        services.Presentation.Own("filtered-debug-logs", filteredDebugLogs);
+        services.Presentation.Own("debug-log-workspace", debugLogs);
     }
 
     private async Task DisposeRecordingCatalogScanAsync()
@@ -2612,6 +2584,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
         historyRecording.PropertyChanged -= HandleHistoryRecordingPropertyChanged;
         audioSettings.PropertyChanged -= HandleAudioSettingsPropertyChanged;
         toneWorkspace.PropertyChanged -= HandleToneWorkspacePropertyChanged;
+        debugLogs.PropertyChanged -= HandleDebugLogWorkspacePropertyChanged;
     }
 
     private async Task DisposeTransmitCoordinatorsAsync()
@@ -2810,21 +2783,18 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
         string source,
         DebugLogSeverity severity,
         string message)
-    {
-        DebugLogEntry entry = BoundedDebugLogBuffer.PrepareForRetention(new DebugLogEntry(
-            timestamp,
-            source,
-            severity,
-            DebugLogRedactor.Redact(message)));
-        debugLogDrain.Enqueue(entry);
-    }
+        => debugLogs.Add(timestamp, source, severity, message);
 
-    private void PublishDebugLogBatch(IReadOnlyList<DebugLogEntry> batch)
+    private void HandleDebugLogWorkspacePropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
-        debugLogBuffer.AddRange(batch);
-        PropertyChanged?.Invoke(
-            this,
-            new PropertyChangedEventArgs(nameof(DebugLogRetentionText)));
+        string propertyName = e.PropertyName switch
+        {
+            nameof(DebugLogWorkspace.FilterText) => nameof(DebugLogFilterText),
+            nameof(DebugLogWorkspace.SeverityFilter) => nameof(DebugLogSeverityFilter),
+            nameof(DebugLogWorkspace.RetentionText) => nameof(DebugLogRetentionText),
+            _ => e.PropertyName ?? string.Empty
+        };
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
     }
 
     private void ScheduleConfiguredP25Keys(SystemViewModel system)
@@ -3251,6 +3221,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
                 livePlaybackEnabledWhenCreated: channel.IsAudioEnabled).ConfigureAwait(false);
             receiveAudioWork.Start(channel);
             receivePipelineTimingReporter.Reset(channel);
+            receiveJitterEventReporter.Reset(channel);
         }
         catch (Exception exception)
         {
@@ -3268,6 +3239,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
         try
         {
             await receiveAudioWork.StopAsync(channel).ConfigureAwait(false);
+            receiveJitterEventReporter.Reset(channel);
             await audioCoordinator.StopAsync(channel).ConfigureAwait(false);
         }
         catch (ObjectDisposedException) when (Volatile.Read(ref disposeStarted) != 0)
@@ -3351,12 +3323,14 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
         ReadOnlyMemory<short> samples,
         TimeSpan presentationDelay)
     {
-        audioMeterPipeline.Observe(
+        bool meterWasIdle = audioMeterPipeline.Observe(
             channel,
             streamId,
             samples.Span,
             ChannelAudioDirection.Receive,
             presentationDelay);
+        if (meterWasIdle)
+            StartAudioMeterTimer();
     }
 
     private void HandleTransmitSamples(
@@ -3366,7 +3340,14 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
         ReadOnlyMemory<short> samples)
     {
         callRecordings.WriteTransmitSamples(channel, streamId, sourceId, samples);
-        audioMeterPipeline.Observe(channel, streamId, samples.Span, ChannelAudioDirection.Transmit);
+        if (audioMeterPipeline.Observe(
+                channel,
+                streamId,
+                samples.Span,
+                ChannelAudioDirection.Transmit))
+        {
+            StartAudioMeterTimer();
+        }
         LogVocoderAudioLevel(channel, samples, ChannelAudioDirection.Transmit, streamId);
     }
 
@@ -3429,7 +3410,14 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
             else
                 update.Channel.SetAudioLevel(update.Level, update.Direction, update.StreamId);
         }
+
+        if (!audioMeterPipeline.HasActivity)
+            audioMeterTimer.Stop();
     }
+
+    private void StartAudioMeterTimer()
+        => TaskObservation.Observe(
+            uiDispatcher.InvokeAsync(audioMeterTimer.Start).AsTask());
 
     private void ObservePatchDecodedSamples(
         ChannelViewModel channel,
@@ -3990,9 +3978,34 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
                 episode.PrimaryStreamId,
                 episode.PresentationEndAt,
                 receiveEpisodeId: episode.EpisodeId) || callHistoryChanged;
+            AddDebugLog(
+                now,
+                episode.SystemName,
+                DebugLogSeverity.Info,
+                FormatReceiveEpisodeCompleted(episode));
             StopReceiveEpisodeRecording(episode);
         }
         return callHistoryChanged;
+    }
+
+    private string FormatReceiveEpisodeCompleted(ReceiveCallEpisodeSnapshot episode)
+    {
+        SystemViewModel? system = Systems.FirstOrDefault(candidate => candidate.Name.Equals(
+            episode.SystemName,
+            StringComparison.OrdinalIgnoreCase));
+        string channelName = system?.Channels.FirstOrDefault(channel =>
+            ProtocolFor(channel) == episode.Protocol &&
+            channel.Definition.DestinationId == episode.DestinationId &&
+            (episode.Protocol != FneTrafficProtocol.Dmr || channel.Definition.Slot == episode.Slot))?.Name ??
+            episode.DestinationId.ToString(CultureInfo.InvariantCulture);
+        double durationSeconds = Math.Max(
+            0,
+            (episode.PresentationEndAt - episode.StartedAt).TotalSeconds);
+        return $"RX logical call episode ended on {channelName}: " +
+            $"{episode.Protocol.ToString().ToUpperInvariant()} {episode.SourceId}→{episode.DestinationId}, " +
+            $"episode {episode.EpisodeId}, {episode.StreamIds.Count} physical stream" +
+            $"{(episode.StreamIds.Count == 1 ? string.Empty : "s")}, " +
+            $"duration {durationSeconds:0.0} s.";
     }
 
     private bool IsReceiveEpisodePhysicallyActive(ReceiveCallEpisodeSnapshot episode)

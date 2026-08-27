@@ -679,7 +679,10 @@ public sealed class CallRecordingManager : IDisposable, IAsyncDisposable
             if (!File.Exists(snapshot.WavePath))
                 throw new InvalidDataException("The finalization source WAV is missing.");
             PcmWavFileWriter.RepairInterruptedFile(snapshot.WavePath, snapshot.Format);
-            PcmWavTrimResult trim = PcmWavSilenceTrimmer.TrimFile(snapshot.WavePath, snapshot.Format);
+            PcmWavTrimAnalysis trimAnalysis = PcmWavSilenceTrimmer.AnalyzeFile(
+                snapshot.WavePath,
+                snapshot.Format);
+            PcmWavTrimResult trim = trimAnalysis.Result;
             if (trim.OutputSamples <= 0 || trim.ActiveSampleCount <= 0 || trim.PeakAmplitude <= 0)
             {
                 return new RecordingFinalizationResult(
@@ -699,10 +702,12 @@ public sealed class CallRecordingManager : IDisposable, IAsyncDisposable
             finalPath = snapshot.OutputPath;
             CallRecordingMetadata metadata = CreateMetadata(snapshot, trim, finalPath);
             temporaryOpusPath = $"{finalPath}.{Environment.ProcessId}.{Guid.NewGuid():N}.tmp";
-            await OpusRecordingEncoder.EncodeWaveFileAsync(
+            await OpusRecordingEncoder.EncodeWaveFileRangeAsync(
                 snapshot.WavePath,
                 temporaryOpusPath,
-                catalogStore.CreateTags(metadata),
+                trimAnalysis.StartSample,
+                trim.OutputSamples,
+                tags: catalogStore.CreateTags(metadata),
                 cancellationToken: cancellationToken).ConfigureAwait(false);
             if (!await ContainsDecodableAudioAsync(temporaryOpusPath, cancellationToken).ConfigureAwait(false))
             {

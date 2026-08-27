@@ -35,6 +35,9 @@ dotnet restore $Project `
     --force-evaluate `
     --ignore-failed-sources `
     -p:Configuration=$Configuration `
+    -p:DvmConsoleTargetPlatform=windows `
+    -p:PublishTrimmed=true `
+    -p:TrimMode=partial `
     -p:NuGetAudit=false `
     --verbosity minimal
 if ($LASTEXITCODE -ne 0) {
@@ -43,13 +46,16 @@ if ($LASTEXITCODE -ne 0) {
 
 $PublishProperties = @(
     "-p:UseAppHost=true",
-    "-p:NativeVocoderTarget=x86_64-pc-windows-msvc"
+    "-p:NativeVocoderTarget=x86_64-pc-windows-msvc",
+    "-p:DvmConsoleTargetPlatform=windows",
+    "-p:DebugType=None",
+    "-p:PublishTrimmed=true",
+    "-p:TrimMode=partial"
 )
 $PublishProperties += @(
     "-p:PublishSingleFile=true",
     "-p:IncludeNativeLibrariesForSelfExtract=true",
-    "-p:EnableCompressionInSingleFile=true",
-    "-p:DebugType=None"
+    "-p:EnableCompressionInSingleFile=true"
 )
 
 dotnet publish $Project `
