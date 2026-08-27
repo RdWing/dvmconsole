@@ -1,12 +1,11 @@
-# Building and Packaging
+# Building and packaging
 
-This page explains how to build and package DVM Console.
-
-Most users should download a release package instead of building from source. A complete package is self-contained and does not require the .NET runtime on the destination computer.
+Most users should download a release package. The steps below are for developers
+who need to build or package DVM Console from source.
 
 ---
 
-# Supported Targets
+# Supported targets
 
 - Apple Silicon macOS: `osx-arm64`
 - Intel macOS: `osx-x64`
@@ -16,9 +15,9 @@ The application version is defined centrally in `src/Directory.Build.props`.
 
 ---
 
-# Build Requirements
+# Build requirements
 
-Both build platforms require:
+Install these tools on either build platform:
 
 - Git
 - .NET 10 SDK selected by `global.json`
@@ -26,11 +25,12 @@ Both build platforms require:
 - CMake
 - a C/C++ toolchain
 
-On macOS, install Xcode Command Line Tools. On Windows, install Visual Studio 2022 Build Tools with the **Desktop development with C++** workload.
+On macOS, install Xcode Command Line Tools. On Windows, install Visual Studio
+2022 Build Tools with the **Desktop development with C++** workload.
 
 ---
 
-# Clone and Build
+# Clone and build
 
 Clone the repository with its submodules:
 
@@ -51,7 +51,7 @@ dotnet build dvmconsole.sln
 
 # Test
 
-Run the complete solution tests before packaging:
+Run the complete solution test suite before packaging:
 
 ```sh
 dotnet test dvmconsole.sln --no-restore --disable-build-servers \
@@ -64,13 +64,13 @@ Validate a codeplug without opening the desktop application:
 dotnet run --project src/DvmConsole.CodeplugValidator -- path/to/codeplug.yml
 ```
 
-`DvmConsole.FneProbe`, `DvmConsole.AudioProbe`, and `DvmConsole.MediaProbe` are
-developer-only live validation harnesses for network, hardware-audio, and media
-checks. They are not included as operator applications in release packages.
+Developers can use `DvmConsole.FneProbe`, `DvmConsole.AudioProbe`, and
+`DvmConsole.MediaProbe` for live network, hardware audio, and media checks.
+Release packages do not include these tools as operator applications.
 
 ---
 
-# Package macOS
+# Package for macOS
 
 Publish and verify the Apple Silicon application:
 
@@ -87,26 +87,26 @@ scripts/smoke-desktop-macos.sh \
 
 Use `osx-x64` instead of `osx-arm64` when packaging for an Intel Mac.
 
-This creates `DVMConsole.app` and a ZIP containing that application bundle.
+These commands create `DVMConsole.app` and a ZIP containing the bundle.
 
 Do not move or rename files inside the application bundle. The managed
 assemblies, native libraries, icon, license, and third-party notices are loaded
 relative to the application executable.
 
-The package is unsigned. After moving a package from an RdWing GitHub Release to
-Applications, remove its download quarantine before launching:
+The package is unsigned. After moving an archive from an RdWing GitHub Release
+to Applications, remove its download quarantine before launching:
 
 ```sh
 xattr -dr com.apple.quarantine "/Applications/DVMConsole.app"
 ```
 
-Do not use this command for an app obtained from another source. macOS may also
-request local-network, microphone, Accessibility, or Input Monitoring
-permission for FNE connections, transmit, and OS-global PTT.
+Do not run this command on an app from another source. macOS may also request
+local-network, microphone, Accessibility, or Input Monitoring permission for
+FNE connections, transmit audio, and OS-global PTT.
 
 ---
 
-# Package Windows
+# Package for Windows
 
 From PowerShell:
 
@@ -120,7 +120,7 @@ From PowerShell:
   -OutputArchive C:\Temp\dvmconsole-win-x64.zip
 ```
 
-Extract the ZIP before launching the self-contained `DvmConsole.exe`.
+Extract the ZIP before launching `DvmConsole.exe`.
 
 ---
 
@@ -134,25 +134,24 @@ docs/user-guide
 
 ---
 
-# Tagged Releases
+# Tagged releases
 
-Pushing a version tag such as `v0.4.2` starts the macOS and Windows test and
-packaging matrix. Both native macOS rows smoke the packaged application bundle,
-and the Windows row runs the Avalonia headful smoke test. Version-matched release
-notes must be present before the tag is pushed.
+Pushing a version tag such as `v0.4.3` starts the macOS and Windows test and
+packaging matrix. Both macOS jobs smoke-test the packaged application bundle.
+The Windows job runs the Avalonia headful smoke test. Add version-matched release
+notes before pushing the tag.
 
-The workflow stages a draft release containing three versioned ZIPs, three
-per-package SPDX JSON SBOMs, and `SHA256SUMS`. It creates GitHub artifact
-attestations, downloads every staged asset again, verifies hashes, title, notes,
-and attestations, and only then publishes. Source tests, package smoke, live FNE
-trials, and hardware exercise remain distinct evidence tiers in release notes;
-the automated workflow reports only the tiers it can actually perform. Signing
-and notarization are reported when available but are not a gate without
-maintainer-owned credentials.
+The workflow stages a draft release with three versioned ZIPs, three SPDX JSON
+SBOMs, and `SHA256SUMS`. It creates GitHub artifact attestations, downloads each
+staged asset, and verifies the hashes, title, notes, and attestations before
+publishing. Source tests, package smoke tests, live FNE trials, and hardware
+tests are separate evidence tiers. The workflow reports only the checks it can
+run. Signing and notarization are reported when available but are not required
+without maintainer-owned credentials.
 
 ---
 
-# Release Acceptance
+# Release acceptance
 
 Before handing a package to an operator:
 
@@ -163,4 +162,5 @@ Before handing a package to an operator:
 5. Send QCII and alert audio to at least two armed channels.
 6. Close and reopen the application and confirm settings and channel positions are restored.
 
-Cross-publishing is not a substitute for running the package on real macOS and Windows hardware.
+Cross-publishing does not replace testing the package on real macOS and Windows
+hardware.

@@ -1,24 +1,28 @@
-# Encryption Keys
+# Encryption keys
 
 Encryption keys allow the console to decrypt and transmit protected P25, DMR,
 and NXDN 4800 voice traffic when supported by the connected FNE system.
 
-The console uses two P25 key-material pathways. After an FNE connects, it
-requests every configured P25 algorithm/key ID through KMM. A valid key
-delivered by that FNE takes precedence over the local YAML fallback. DMR and
-NXDN privacy keys are loaded from the local YAML file.
+DVM Console can obtain P25 key material from two places. After an FNE connects,
+the console requests every configured P25 algorithm and key ID through KMM. A
+valid key from that FNE takes precedence over the local YAML fallback. DMR and
+NXDN privacy keys come from the local YAML file.
 
-Keys are isolated by FNE system. Two systems can safely use the same algorithm and key ID with different key material. KMM-delivered material is retained only in memory and is cleared when that system disconnects, revealing the local fallback again.
-
----
-
-# FNE Compatibility
-
-Encryption and key-management behavior depends on the connected FNE. Validate key delivery, algorithm support, and encrypted voice against the exact FNE build used by the deployment.
+Keys are isolated by FNE system. Two systems can use the same algorithm and key
+ID with different material. KMM-delivered keys stay in memory only. When the
+system disconnects, DVM Console removes them and uses the local fallback again.
 
 ---
 
-# Key File Location
+# FNE compatibility
+
+Encryption and key management depend on the connected FNE. Test key delivery,
+algorithm support, and encrypted voice against the exact FNE build used in the
+deployment.
+
+---
+
+# Key file location
 
 Reference the key file with `keyFile` in the codeplug:
 
@@ -26,11 +30,12 @@ Reference the key file with `keyFile` in the codeplug:
 keyFile: "Full/Path/To/Keyfile.clear"
 ```
 
-The key file is optional when every required key will be delivered by FNE/KMM. When present, it provides the fallback for all configured systems.
+The key file is optional when FNE/KMM supplies every required key. If present,
+the file provides fallback keys for all configured systems.
 
 ---
 
-# Key File Format
+# Key file format
 
 The key file contains a `keys` list.
 
@@ -72,7 +77,7 @@ for compatibility with older key files.
 
 ---
 
-# Channel Encryption Fields
+# Channel encryption fields
 
 Encrypted channels can include:
 
@@ -94,11 +99,11 @@ P25 channel key IDs are hexadecimal. The `0x` prefix is recommended for
 clarity; unprefixed P25 values retain the legacy WPF hexadecimal
 interpretation.
 
-If `keyId` is blank or zero, the channel is treated as clear for normal operation.
+If `keyId` is blank or zero, DVM Console treats the channel as clear.
 
 ---
 
-# Selectable Encryption
+# Selectable encryption
 
 P25, DMR, and NXDN secure-capable channels can expose an in-card encryption toggle:
 
@@ -108,46 +113,54 @@ algo: "aes"
 selectable_encryption: true
 ```
 
-When enabled, the resource card shows **SELECT** next to the TAR indicator area. Clicking **SELECT** toggles console transmit between encrypted and clear for that system/talkgroup.
+When enabled, the resource card shows **SELECT** beside the TAR indicator.
+Click **SELECT** to switch transmission between encrypted and clear for that
+system and talkgroup.
 
-The selected encrypted/clear state is saved and restored across restarts. The
-key and algorithm still come from the codeplug. **CLEAR** sends clear audio and
-admits clear receive traffic; **SECURE** sends encrypted audio and rejects clear
-receive traffic. Incoming secure calls are decoded only when their on-air
-metadata identifies an available configured key. A selectable channel in
-**CLEAR** can therefore receive clear calls even when that secure key is not
-currently available. DMR
-secure calls also encode late-entry MI fragments and burst-F algorithm/key
-identifiers. The reviewed `dvmhost r05a06_dev` clears burst F while regenerating
-RF, so that identity is not preserved end to end through that host revision.
-NXDN DES/AES calls likewise alternate `VCALL` and successor-IV metadata in
-SACCH while voice continues, allowing recovery at the next eight-frame
-encryption-session boundary when the host preserves the required startup MI.
+DVM Console saves the selected clear or encrypted state across restarts. The key
+and algorithm still come from the codeplug. **CLEAR** sends and admits clear
+audio. **SECURE** sends encrypted audio and rejects clear calls. DVM Console can
+decode an incoming secure call only when its on-air metadata identifies an
+available configured key. A selectable channel in **CLEAR** can therefore
+receive clear calls even if its secure key is unavailable.
+
+DMR secure calls also carry late-entry MI fragments and burst-F algorithm and
+key identifiers. The reviewed `dvmhost r05a06_dev` clears burst F during RF
+regeneration, so that identity does not survive end to end through that host
+revision. NXDN DES/AES calls alternate `VCALL` and successor-IV metadata in
+SACCH while voice continues. When the host preserves the required startup MI,
+the receiver can recover at the next eight-frame encryption-session boundary.
 
 ---
 
-# FNE Key Requests
+# FNE key requests
 
-After each FNE connection completes, the console requests the distinct algorithm/key IDs configured by that system's encrypted P25 channels. The system `rid` is used as the requesting console identity and must be a valid nonzero 24-bit ID.
+After an FNE connection completes, DVM Console requests the distinct algorithm
+and key IDs used by that system's encrypted P25 channels. The system `rid`
+identifies the requesting console and must be a valid, nonzero 24-bit ID.
 
-The console does not request or consume the FNE key inventory. Each automatic
-KMM request therefore requires a nonzero `keyId` and supported `algo` on at
-least one P25 channel. KMM supplies the requested key material; it does not
-assign keys to channels or send a channel-to-key list.
+DVM Console does not request or use the FNE key inventory. An automatic KMM
+request therefore needs a nonzero `keyId` and supported `algo` on at least one
+P25 channel. KMM supplies the requested material; it does not assign keys to
+channels or send a channel-to-key list.
 
-If the FNE delivers a valid KMM key, it becomes the active key for that system. A response from one FNE is never applied to another FNE, even when both use the same algorithm and key ID. When the connection is lost, its KMM keys are removed and local keys become active again where available.
+A valid KMM key becomes active for the system that delivered it. DVM Console
+never applies a response from one FNE to another, even when both use the same
+algorithm and key ID. If the connection drops, DVM Console removes its KMM keys
+and restores any available local keys.
 
 Clear and MI-instruction KMM responses are accepted. Peer-encrypted KMM responses require the system's separate `kmfPresharedKey`; the FNE transport `presharedKey` is never reused for this purpose.
 
 ---
 
-# Key Status
+# Key status
 
-Open **Tools > Encryption Key Status** to inspect loaded or received key state for configured encrypted resources. Available entries identify their active source as **local file** or **FNE/KMM**.
+Open **Tools > Encryption Key Status** to inspect key availability for
+configured encrypted resources. Available entries identify the active source as
+**local file** or **FNE/KMM**.
 
-When a supported local DMR key is unavailable, the row also shows the required
-`protocol`, `algId`, and key length. This is configuration guidance only; the
-actual key value is never shown.
+When a supported local DMR key is unavailable, its row shows the required
+`protocol`, `algId`, and key length. The page never shows the key value.
 
 The status page shows identifiers and availability only. Key material is never displayed or written to the debug log.
 
@@ -161,7 +174,7 @@ If an encrypted channel does not decrypt correctly:
 
 ---
 
-# Safety Notes
+# Safety notes
 
 - Protect clear key files.
 - Do not commit operational key material to source control.

@@ -6,8 +6,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.4.3] - 2026-08-27
+
 ### Changed
 
+- Reduce package size through platform-specific audio and Avalonia backends,
+  source-generated JSON metadata, partial managed linking, and removal of
+  portable debug symbols.
+- Stop idle audio-meter rendering until new samples arrive, back off stable
+  default-device checks from one to five seconds, and reuse receive routing and
+  decoder state instead of rebuilding common per-packet collections.
+- Pool WAV decode buffers, encode selected Opus ranges directly, and finalize
+  TAR recordings without rewriting the durable WAV before encoding the retained
+  audio range.
+- Send imported WAV and MPEG alert assets through the ordinary audio encoder in
+  every mode. Keep generated tones, DTMF, QCII, and built-in alert sequences on
+  their dedicated generation paths.
+- Summarize jitter evidence per physical receive stream with first, periodic,
+  and final reports. Pipeline diagnostics now separate intentional jitter hold,
+  worker backlog, session-gate waiting, clear or encrypted processing, and mixer
+  admission.
 - Make per-packet transmit, PCM-level, and routine FNE keepalive logging opt-in
   through an **Enable verbose logging** checkbox under General settings. Batch
   retained log updates and add a 50,000-entry safety ceiling within the existing
@@ -15,6 +33,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+- Pace generated and imported alert audio against a compensated 20 ms frame
+  schedule so encode and send work does not accumulate into dropouts. Resume
+  from a late frame without sending a catch-up burst, and retain a final partial
+  analog frame without allocating a new buffer for every full frame.
 - Reduce steady-state receive routing allocations by reusing mutation-time
   decoder snapshots and representing the common single-channel dispatch without
   a per-packet target array.
@@ -541,7 +563,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Add patches, multi-select groups, call history, recordings, web streams, clocks, layouts, themes, startup behavior, and in-application operator documentation.
 - Add support for local and KMM-provided P25 encryption keys while preserving compatibility with existing variable-length AES key material.
 
-[Unreleased]: https://github.com/RdWing/dvmconsole/compare/v0.4.2...HEAD
+[Unreleased]: https://github.com/RdWing/dvmconsole/compare/v0.4.3...HEAD
+[0.4.3]: https://github.com/RdWing/dvmconsole/compare/v0.4.2...v0.4.3
 [0.4.2]: https://github.com/RdWing/dvmconsole/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/RdWing/dvmconsole/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/RdWing/dvmconsole/compare/v0.3.8...v0.4.0

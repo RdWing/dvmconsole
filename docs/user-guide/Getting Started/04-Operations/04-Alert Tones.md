@@ -1,20 +1,20 @@
-# Alert Tones
+# Alert tones
 
 The console supports three built-in alert tones, custom alert audio,
 generated tones, DTMF, and QCII paging.
 
-Alert tones are used for operator alerting workflows such as page/alert tones and channel hold tone behavior.
+Use them for pages, alerts, and channel-hold tone behavior.
 
 ---
 
-# Sending Alert Tones
+# Sending alert tones
 
-The toolbar buttons **ALERT 1**, **ALERT 2**, and **ALERT 3** use the built-in
-console tone generator. They do not depend on external audio files.
+The toolbar buttons **ALERT 1**, **ALERT 2**, and **ALERT 3** use DVM Console's
+built-in tone generator and do not need external audio files.
 
-When the main window narrows, the alert shortcuts move into **MORE** before
-**TONES** or configured clocks. The **MORE** menu provides the same three alert
-actions; selecting one uses the normal armed-resource and validation rules.
+As the main window narrows, the alert shortcuts move into **MORE** before
+**TONES** or the configured clocks. The same three actions are available there
+and follow the normal armed-resource and validation rules.
 
 - **ALERT 1:** continuous 1000 Hz for 3 seconds.
 - **ALERT 2:** alternating 1500 Hz and 800 Hz every 250 milliseconds for seven cycles.
@@ -27,9 +27,11 @@ audio, generated tones, tone presets, or DTMF. Arm `PAGE` on every resource
 that should carry a QCII page. Sending uses all armed resources in the selected
 route.
 
-Alert tone transmit still uses the configured resource, system, talkgroup, mode, and validation rules.
+Alert transmission uses the configured resource, system, talkgroup, mode, and
+validation rules.
 
-If the target TG is unavailable on the connected FNE, the console blocks the action and shows:
+If the target TG is unavailable on the connected FNE, DVM Console blocks the
+action and shows:
 
 ```
 Target TG unavailable on FNE
@@ -37,7 +39,7 @@ Target TG unavailable on FNE
 
 ---
 
-# Console Settings Tones
+# Tones in Console Settings
 
 Open from:
 
@@ -45,7 +47,7 @@ Open from:
 Commands > Tones > QCII / alert tones
 ```
 
-The Tones page allows operators to:
+From the Tones page, operators can:
 
 - view custom alert tones
 - add a new alert tone
@@ -53,29 +55,31 @@ The Tones page allows operators to:
 - save and send DTMF or generated-tone presets
 - send a Quick Call II two-tone page
 
-Changes are saved through the normal settings system.
+The normal settings system saves these changes.
 
 ---
 
-# Audio File Requirements
+# Audio file requirements
 
-Alert tone audio files must be compatible with the console audio pipeline.
+DVM Console accepts PCM WAV or MPEG audio up to 30 seconds and converts it to
+the 8 kHz mono transmit path. If decoding fails, it shows an error without
+keying an `ALERT` resource.
 
-The console accepts PCM WAV or MPEG audio up to 30 seconds and converts it to
-the 8 kHz mono transmit path. If a file cannot be decoded, the console displays
-an error without keying an `ALERT` resource.
+Imported assets are sent as ordinary audio in every digital mode. DVM Console
+does not reinterpret a steady section as a generated tone. Generated tones,
+DTMF, and QCII continue to use their dedicated paths.
 
 ---
 
-# Deleting Alert Tones
+# Deleting alert tones
 
-Deleting a custom alert tone removes it from the list and saved settings.
+Deleting a custom alert tone removes it from both the list and saved settings.
 
 Use the confirmation prompt to avoid accidental removal.
 
 ---
 
-# Operational Notes
+# Operational notes
 
 - Alert tone audio is transmitted to all `ALERT`-armed resources when sent.
 - QCII page audio is transmitted to all `PAGE`-armed resources.

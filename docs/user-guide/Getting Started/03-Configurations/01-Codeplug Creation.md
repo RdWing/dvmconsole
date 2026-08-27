@@ -1,6 +1,7 @@
-# Codeplug Creation
+# Codeplug creation
 
-A codeplug is a YAML configuration file that defines the systems, tabs, resources, and group tabs used by the console.
+A codeplug is a YAML file that defines the console's systems, tabs, resources,
+and group tabs.
 
 At minimum, a codeplug defines:
 
@@ -22,7 +23,7 @@ The Avalonia application preserves the current YAML contract and accepts the leg
 
 ---
 
-# Basic Structure
+# Basic structure
 
 ```yaml
 keyFile: "Full/Path/To/Keyfile.clear"
@@ -43,7 +44,7 @@ zones:
 
 # Systems
 
-Systems define FNE connections.
+Each system defines an FNE connection.
 
 Example:
 
@@ -74,13 +75,17 @@ Fields:
 - `presharedKey`: key used when `encrypted` is enabled.
 - `aliasPath`: optional RID alias YAML file.
 
-The current FNE plaintext and legacy encrypted transports are compatibility protocols, not mutually authenticated sessions. DVM Console rejects malformed frames and exact encrypted packet replays within a bounded receive window, but the transport cannot prove the master's identity or detect every forged packet. Use FNE only across a trusted network or an authenticated VPN.
+The current plaintext and legacy encrypted FNE transports are compatibility
+protocols, not mutually authenticated sessions. DVM Console rejects malformed
+frames and exact encrypted packet replays within a bounded receive window. The
+transport still cannot prove the master's identity or detect every forged
+packet. Use FNE only over a trusted network or authenticated VPN.
 
 ---
 
 # Zones
 
-Zones become main console tabs.
+Each zone becomes a tab in the main console.
 
 Example:
 
@@ -101,13 +106,14 @@ Fields:
 - `channels`: resources shown on that tab.
 - `web_streams`: optional web URL stream chips shown on that tab.
 
-Long tab names are allowed. The console trims long labels so activity icons remain visible.
+Long tab names are allowed. DVM Console trims their labels so activity icons
+remain visible.
 
 ---
 
 # Channels
 
-Channels define resource cards.
+Each channel defines a resource card.
 
 Example:
 
@@ -141,7 +147,8 @@ Fields:
 - `card_size`: optional fixed resource card size. Supported values are `small`, `normal`, and `large`. If omitted or invalid, `normal` is used.
 - `slot`: optional DMR slot field if used by the deployment.
 
-The console validates target TGs against active talkgroup rules received from the connected FNE when a user attempts to transmit or otherwise use the TG.
+Before transmitting or otherwise using a target TG, DVM Console checks it
+against the active talkgroup rules received from the connected FNE.
 
 Card size behavior:
 
@@ -151,9 +158,9 @@ Card size behavior:
 
 ---
 
-# Web Streams
+# Web streams
 
-Web streams define compact URL audio chips on a zone tab.
+Web streams appear as compact audio chips on a zone tab.
 
 Example:
 
@@ -176,13 +183,22 @@ Fields:
 
 Web stream chips start disabled after console load. Click the chip to start or stop local playback.
 
-If **Restore Selected Channels On Startup** is enabled, an active web stream is restarted only when the codeplug path, canonical URL, and configured credentials match the exact stream the operator previously started. Changing any of those values requires one manual start to authorize the new definition. Legacy name-only saved selections remain off until manually selected again.
+With **Restore Selected Channels On Startup** enabled, DVM Console restarts a
+web stream only when its codeplug path, canonical URL, and credentials match the
+stream the operator previously started. After any of those values change, start
+the stream once manually to authorize the new definition. Legacy selections
+saved by name alone remain off until selected again.
 
-Basic Auth credentials are stored in the codeplug file. Protect the file if protected stream credentials are configured.
+Basic Auth credentials are stored in the codeplug. Protect the file when it
+contains stream credentials.
 
-When clicked on, the chip turns amber while connecting. The console tries up to three connection attempts with a short delay between attempts before marking the stream down.
+After you click it, the chip turns amber while connecting. DVM Console makes up
+to three attempts, with a short delay between them, before marking the stream
+down.
 
-When active, the chip turns green when audio is detected. If the stream URL is unreachable or cannot be decoded, the chip turns red and shows `Down`. Click a down stream once to return it to the off state.
+An active chip turns green when DVM Console detects audio. If the URL is
+unreachable or the audio cannot be decoded, the chip turns red and shows
+`Down`. Click a down stream once to turn it off.
 
 Web streams are local monitor widgets only. They are not patch or multi-select members.
 
@@ -190,7 +206,7 @@ Web streams are local monitor widgets only. They are not patch or multi-select m
 
 # Groups
 
-Groups define tabs in the Groups window.
+Each group defines a tab in the Groups window.
 
 Example:
 
@@ -215,9 +231,10 @@ Legacy `patchGroups` entries are treated as patch groups for compatibility.
 
 ---
 
-# Patch Source ID Passthrough
+# Patch source ID passthrough
 
-`patchSourceIdPassthrough` controls source IDs on forwarded patch traffic.
+`patchSourceIdPassthrough` selects the source ID used for forwarded patch
+traffic.
 
 ```yaml
 patchSourceIdPassthrough: false
@@ -229,7 +246,7 @@ When `true`, the console attempts to pass through the inbound source ID while fo
 
 ---
 
-# Key File
+# Key file
 
 Use `keyFile` to reference a YAML key file:
 
@@ -237,11 +254,14 @@ Use `keyFile` to reference a YAML key file:
 keyFile: "Full/Path/To/Keyfile.clear"
 ```
 
-The file is the automatic fallback for configured P25 keys. After each system connects, the console first requests those keys through FNE/KMM; a valid system-scoped KMM key takes precedence until that FNE disconnects. See **Encryption Keys** for the file format and runtime behavior.
+The file provides the fallback for configured P25 keys. After a system
+connects, DVM Console requests its keys through FNE/KMM. A valid KMM key for
+that system takes precedence until the FNE disconnects. See **Encryption Keys**
+for the file format and runtime behavior.
 
 ---
 
-# Example Codeplug
+# Example codeplug
 
 ```yaml
 keyFile: "C:/Example/keys.clear"
@@ -306,7 +326,7 @@ zones:
 
 ---
 
-# Recommended Practices
+# Recommended practices
 
 - Keep system names stable after deployment because channels reference them.
 - Use clear channel names because saved positions and volume are keyed by channel name.

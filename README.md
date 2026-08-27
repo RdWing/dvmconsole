@@ -4,10 +4,11 @@
 
 # DVM Console NEO
 
-### Built for busy systems.
+### Multi-system DVM operation from one desktop
 
-An open-source DVM FNE operator console for macOS and Windows—live channels,
-patches, tones, recordings, and diagnostics in one dense workspace.
+Monitor and transmit across DMR, P25 Phase 1, and NXDN 4800 FNE talkgroups.
+Route patches, send pages and alerts, and review recordings without leaving the
+macOS or Windows operator workspace.
 
 For amateur and educational use. **Not for public- or life-safety operation.**
 
@@ -33,13 +34,12 @@ For amateur and educational use. **Not for public- or life-safety operation.**
 
 </div>
 
-## Built for real operator workflows
+## One workspace, independent channels
 
-DVM Console NEO keeps systems, zones, talkgroups, transmit routes, pages,
-alerts, and recordings in one focused desktop workspace. Each channel remains
-independently controllable. Global and active-system PTT handle broader routing,
-while adaptive receive timing and stream-isolated audio are designed to keep
-multi-system activity understandable.
+Systems and zones organize the channel cards, but each channel keeps its own
+receive, volume, routing, encryption, and recording state. Global and
+active-system PTT cover broader transmit routes. Adaptive receive timing and
+isolated audio state keep simultaneous calls separate.
 
 | Operator need | NEO capability |
 | --- | --- |
@@ -47,34 +47,38 @@ multi-system activity understandable.
 | **Quiet the room without losing evidence** | Mute all RX, the selected system, or the selected zone without stopping decode, call state, patching, or TAR recording. |
 | **Control exactly what transmits** | Per-channel, global, active-system, patch, and multi-select routing with explicit PTT, TX, PAGE, and ALERT selection. |
 | **Investigate receive problems** | Activity and Event History, embedded recording metadata, redacted Debug Log export, and separate network, decoder, mixer, and output-device diagnostics. |
-| **Use the supported operator workstation** | Self-contained packages for Apple Silicon macOS, Intel macOS, and Windows x64. No separate .NET runtime is required. |
+| **Run on a supported workstation** | Packages for Apple Silicon macOS, Intel macOS, and Windows x64. |
 
 ## What’s new in DVM Console NEO
 
-### 0.4.2 — Secure voice and live reconfiguration update
+### 0.4.3 — Efficiency and alert audio update
 
-This patch release corrects selectable-encryption receive behavior and secure
-voice signaling while making patch membership and session reloads immediately
-reflect the operator's newest saved configuration.
+Version 0.4.3 reduces package size, idle work, and receive overhead. It also
+fixes reported dropouts while transmitting generated tones and imported alert
+audio. Existing operator configurations remain compatible.
 
-- Selectable DMR, P25, and NXDN channels use each call's on-air privacy
-  metadata. **CLEAR** admits clear traffic, while **SECURE** is a secure-only
-  receive state and does not admit clear calls.
-- DMR packet handling separates startup privacy, voice, embedded link control,
-  late-entry MI, burst-F signaling, and reverse-channel data; transmit tails
-  retain DMR, P25, and NXDN cadence.
-- NXDN voice remains continuous while `VCALL` and successor-IV metadata rotate
-  through SACCH. The release notes document host-side limits that still affect
-  secure NXDN startup and DMR late entry on RF.
-- Patch-group edits discard superseded membership work, preventing removed
-  members from reappearing or requiring an application restart.
+- Alert audio keeps a stable 20 ms transmit cadence after accounting for encode
+  and send time. Late frames no longer cause accumulated drift or catch-up
+  bursts.
+- Imported WAV and MPEG assets are sent as ordinary audio. Generated tones,
+  DTMF, and QCII continue to use their dedicated paths.
+- Audio meters sleep while idle, stable default-device checks run less often,
+  and receive routing reuses stream state to reduce CPU and allocations.
+- Packages are now smaller because each one carries only its target platform's
+  audio and Avalonia backends and uses partial linking.
+- Debug Logs summarize jitter evidence by stream and separate intentional
+  buffer delay from worker, session, decode, and mixer time. TAR finalization
+  encodes the retained range without first rewriting the source WAV.
 
-[Read the 0.4.2 release notes →](docs/releases/v0.4.2.md)
+[Read the 0.4.3 release notes →](docs/releases/v0.4.3.md)
 
 ### Prior recent improvements
 
-Recent 0.4.1, 0.4.0, 0.3.8, and 0.3.7 updates also introduced:
+Recent releases also include these changes:
 
+- **0.4.2 — Secure voice and live reconfiguration update:** corrected
+  selectable-encryption receive behavior and secure voice signaling, preserved
+  transmit-tail cadence, and made patch and session changes take effect safely.
 - **0.4.1 — Reliability and toolbar update:** made toolbar overflow
   scale-aware, preserved scrolled History positions, made audio-route changes
   transactional, and hardened receive-episode and session teardown.
@@ -82,22 +86,22 @@ Recent 0.4.1, 0.4.0, 0.3.8, and 0.3.7 updates also introduced:
   responsive toolbar overflow, optional Engineering Health, mode-correct
   DMR/P25 call boundaries, cross-protocol patch repair, and revised runtime
   ownership and scheduling.
-- **0.3.8 — Receive continuity and audio-path optimization:** drained ended receive streams before cleanup, paced TAR and web-stream PCM, retired failed shared outputs, and standardized macOS microphone processing.
-- **0.3.7 — Patch routing and Apple audio reliability:** made one-way patch direction explicit, prevented duplicate patch PCM, compacted group editing, isolated patch teardown, and bounded audio recovery and Quit.
+- **0.3.8 — Receive continuity and audio-path optimization:** drained ended
+  receive streams before cleanup, paced TAR and web-stream PCM, retired failed
+  shared outputs, and standardized macOS microphone processing.
 
-[Read the 0.4.1 release notes →](docs/releases/v0.4.1.md) · [Read the 0.4.0 release notes →](docs/releases/v0.4.0.md) · [Read the 0.3.8 release notes →](docs/releases/v0.3.8.md) · [Read the 0.3.7 release notes →](docs/releases/v0.3.7.md)
+[Read the 0.4.2 release notes →](docs/releases/v0.4.2.md) · [Read the 0.4.1 release notes →](docs/releases/v0.4.1.md) · [Read the 0.4.0 release notes →](docs/releases/v0.4.0.md) · [Read the 0.3.8 release notes →](docs/releases/v0.3.8.md)
 
 ## Download DVM Console NEO
 
-Published release packages are self-contained. Download the package for the
-destination computer and extract the entire archive before starting DVM Console
-NEO. Version 0.4.2 packages use the filenames below.
+Download the package for the destination computer and extract the entire
+archive before starting DVM Console NEO. Version 0.4.3 uses these filenames:
 
 | Platform | Package | Requirements |
 | --- | --- | --- |
-| Apple Silicon Mac | `dvmconsole-0.4.2-osx-arm64.zip` | macOS 14 or newer |
-| Intel Mac | `dvmconsole-0.4.2-osx-x64.zip` | macOS 14 or newer |
-| Windows PC | `dvmconsole-0.4.2-win-x64.zip` | Windows x64 |
+| Apple Silicon Mac | `dvmconsole-0.4.3-osx-arm64.zip` | macOS 14 or newer |
+| Intel Mac | `dvmconsole-0.4.3-osx-x64.zip` | macOS 14 or newer |
+| Windows PC | `dvmconsole-0.4.3-win-x64.zip` | Windows x64 |
 
 **[Download the latest release →](https://github.com/RdWing/dvmconsole/releases/latest)**
 
@@ -132,7 +136,7 @@ starting it again.
 <summary><strong>Install on Windows x64</strong></summary>
 
 1. Choose **Extract All** in File Explorer.
-2. Start the self-contained `DvmConsole.exe` from the extracted folder.
+2. Start `DvmConsole.exe` from the extracted folder.
 3. Use **Open Codeplug** to load `codeplug.yml`.
 
 If Microsoft Defender SmartScreen warns about the unsigned package, continue
@@ -142,20 +146,23 @@ If the application closes unexpectedly, preserve
 
 </details>
 
-## Operator capabilities
+## What operators can do
 
 - Monitor and transmit on DMR, P25 Phase 1, and NXDN 4800 FNE talkgroups.
-- Organize resources by system and zone with per-channel receive and routing.
+- Organize resources by system and zone, with separate receive and routing
+  controls for each channel.
 - Key individual channels, every TX-selected channel, or TX-selected channels
   in the active system using on-screen, keyboard, or configured serial PTT.
-- Build patch and multi-select groups without losing independent channel state.
+- Build patch and multi-select groups while keeping each channel's state
+  independent.
 - Send DTMF, generated tones, Quick Call II pages, saved tone patterns, and
   custom alert audio through selected resources.
-- Record talkgroup audio locally in Ogg Opus with catalog metadata embedded in
-  each recording.
+- Record talkgroup audio locally as Ogg Opus, with catalog metadata embedded in
+  each file.
 - Use P25 FNE/KMM key delivery with a local fallback, plus protocol-scoped local
   privacy keys for DMR and NXDN.
-- Follow system-default audio devices or pin fixed microphone and speaker routes.
+- Follow the system-default audio devices or pin specific microphone and speaker
+  routes.
 - Use DVM Console microphone processing on macOS and Windows, with optional
   device-dependent Windows communications processing on supported endpoints.
 
@@ -167,7 +174,7 @@ For a DVM-compatible console that supports direct base or mobile radio
 interfaces, see [RadioConsole2](https://github.com/W3AXL/RadioConsole2) and
 [rc2-dvm](https://github.com/W3AXL/rc2-dvm).
 
-## Start with the guide
+## User guide
 
 | If you want to… | Read… |
 | --- | --- |
@@ -183,14 +190,15 @@ interfaces, see [RadioConsole2](https://github.com/W3AXL/RadioConsole2) and
 
 ## Open source and project lineage
 
-DVM Console NEO is an independently maintained downstream of the original
-[DVMProject/dvmconsole](https://github.com/DVMProject/dvmconsole) codebase. The
-NEO releases in this repository are maintained by RdWing and are not official
-DVMProject releases or an assertion of DVMProject endorsement.
+This repository is an independently maintained downstream version of
+[DVMProject/dvmconsole](https://github.com/DVMProject/dvmconsole). RdWing
+maintains the NEO releases. They are not official DVMProject releases and do not
+imply DVMProject endorsement.
 
-The project is developed in public under the AGPL-3.0-only license. Use GitHub
-Issues for reproducible defects, Discussions for setup and field-testing
-questions, and GitHub private vulnerability reporting for security reports.
+Development takes place in public under the AGPL-3.0-only license. Report
+reproducible defects through GitHub Issues, use Discussions for setup and field
+testing, and send security reports through GitHub private vulnerability
+reporting.
 
 ## Build from source
 
@@ -205,9 +213,9 @@ dotnet restore dvmconsole.sln
 dotnet build dvmconsole.sln
 ```
 
-Use the root `dvmconsole.sln`. Native components are built automatically; the
-repository scripts own publishing, package verification, and macOS smoke tests.
-The network-disabled deterministic demo is available with `--demo`.
+Use the root `dvmconsole.sln`. The build compiles native components
+automatically. Repository scripts handle publishing, package verification, and
+macOS smoke tests. Run the deterministic, network-disabled demo with `--demo`.
 
 ## Network, configuration, and safety
 
@@ -216,27 +224,26 @@ The network-disabled deterministic demo is available with `--demo`.
 > protocols, not mutually authenticated sessions. Use FNE only across a trusted
 > network or an authenticated VPN.
 
-The tracked files under `configs` are public examples. Operational codeplugs,
-clear key files, aliases, recordings, crash logs, and exported diagnostics may
-contain private information and should not be committed.
+Files tracked under `configs` are public examples. Do not commit operational
+codeplugs, clear key files, aliases, recordings, crash logs, or exported
+diagnostics; they may contain private information.
 
 ### Configuration support policy
 
-Project maintainers cannot validate configurations generated, rewritten,
-modified, or "fixed" by AI/LLM tools such as ChatGPT, Copilot, Gemini, Claude,
-or similar services.
+Project maintainers cannot validate configurations that AI/LLM tools such as
+ChatGPT, Copilot, Gemini, Claude, or similar services have generated, rewritten,
+modified, or "fixed."
 
-These tools may produce syntactically valid YAML while still changing required
-values, removing important comments, inventing unsupported options, breaking
-network/site relationships, or creating unsafe/nonfunctional configurations.
+These tools can produce valid YAML while changing required values, removing
+important comments, inventing unsupported options, breaking network or site
+relationships, or creating unsafe or nonfunctional configurations.
 
-If an AI/LLM tool was used to read, modify, or generate a configuration, disclose
-that material use and reproduce the problem with a human-reviewed configuration
-before requesting help.
+If an AI/LLM tool read, changed, or generated a configuration, disclose that use
+and reproduce the problem with a human-reviewed configuration before requesting
+help.
 
-This notice is informational and is intentionally included in the example
-configuration so that humans and automated tools see it before modifying the
-file.
+The example configuration includes this notice so people and automated tools
+see it before changing the file.
 
 > DVMHost/FNE R06A00 or newer is recommended.
 
