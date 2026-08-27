@@ -11,6 +11,66 @@ public sealed class ReceiveStreamLifecycleTests
     private static readonly TimeSpan TombstoneLifetime = TimeSpan.FromSeconds(5);
 
     [Fact]
+    public void MutableLifecycleMatchesImmutableReducerAcrossEdges()
+    {
+        var lifecycle = CreateLifecycle();
+        var policy = new ReceiveStreamPolicy(
+            InactivityTimeout,
+            GracePeriod,
+            TerminatorHold,
+            TombstoneLifetime);
+        ReceiveStreamState expected = ReceiveStreamState.Empty;
+        DateTimeOffset now = DateTimeOffset.UnixEpoch;
+
+        expected = Compare(ReceiveStreamReducer.ObserveVoice(expected, 10, now, policy),
+            lifecycle.ObserveVoice(10, now));
+        expected = Compare(ReceiveStreamReducer.ObserveVoice(expected, 11, now.AddMilliseconds(100), policy),
+            lifecycle.ObserveVoice(11, now.AddMilliseconds(100)));
+        expected = Compare(ReceiveStreamReducer.ObserveTerminator(expected, 10, now.AddSeconds(1), policy),
+            lifecycle.ObserveTerminator(10, now.AddSeconds(1)));
+        expected = Compare(ReceiveStreamReducer.ObserveVoice(expected, 10, now.AddSeconds(2), policy),
+            lifecycle.ObserveVoice(10, now.AddSeconds(2)));
+        expected = Compare(ReceiveStreamReducer.ObserveDefinitiveStart(expected, 12, now.AddSeconds(2.1), policy),
+            lifecycle.ObserveDefinitiveStart(12, now.AddSeconds(2.1)));
+        expected = Compare(ReceiveStreamReducer.Complete(expected, 11, now.AddSeconds(2.2), policy),
+            lifecycle.Complete(11, now.AddSeconds(2.2)));
+        expected = Compare(ReceiveStreamReducer.Advance(expected, now.AddSeconds(4.1), policy),
+            lifecycle.Advance(now.AddSeconds(4.1)));
+        _ = Compare(ReceiveStreamReducer.Advance(expected, now.AddSeconds(6.2), policy),
+            lifecycle.Advance(now.AddSeconds(6.2)));
+
+        ReceiveStreamState Compare(
+            ReceiveStreamReduction reduction,
+            ReceiveStreamDecision actualDecision)
+        {
+            Assert.Equal(reduction.Decision, actualDecision);
+            AssertEquivalent(reduction.State, lifecycle.Snapshot);
+            return reduction.State;
+        }
+    }
+
+    [Fact]
+    public void ContinuedVoiceDoesNotAllocateLifecycleState()
+    {
+        var lifecycle = CreateLifecycle();
+        DateTimeOffset now = DateTimeOffset.UnixEpoch;
+        lifecycle.ObserveVoice(7, now);
+        for (int index = 0; index < 100; index++)
+            lifecycle.ObserveVoice(7, now.AddTicks(index + 1));
+        long before = GC.GetAllocatedBytesForCurrentThread();
+
+        ReceiveStreamDecision decision = default;
+        for (int index = 0; index < 10_000; index++)
+            decision = lifecycle.ObserveVoice(7, now.AddTicks(index + 101));
+
+        Assert.Equal(ReceiveStreamTransition.Continued, decision.Transition);
+        Assert.InRange(
+            GC.GetAllocatedBytesForCurrentThread() - before,
+            0,
+            1_024);
+    }
+
+    [Fact]
     public void TerminatorWaitsForQuietAndAcceptsDelayedVoice()
     {
         var lifecycle = CreateLifecycle();
@@ -156,4 +216,17 @@ public sealed class ReceiveStreamLifecycleTests
 
     private static ReceiveStreamLifecycle CreateLifecycle()
         => new(InactivityTimeout, GracePeriod, TerminatorHold, TombstoneLifetime);
+
+    private static void AssertEquivalent(
+        ReceiveStreamState expected,
+        ReceiveStreamState actual)
+    {
+        Assert.Equal(expected.PrimaryStreamId, actual.PrimaryStreamId);
+        Assert.Equal(expected.NextInsertionOrder, actual.NextInsertionOrder);
+        Assert.Equal(expected.ActiveStreamIds.Order(), actual.ActiveStreamIds.Order());
+        Assert.Equal(expected.ActiveStreams.OrderBy(pair => pair.Key),
+            actual.ActiveStreams.OrderBy(pair => pair.Key));
+        Assert.Equal(expected.Tombstones.OrderBy(pair => pair.Key),
+            actual.Tombstones.OrderBy(pair => pair.Key));
+    }
 }

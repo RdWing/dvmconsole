@@ -124,9 +124,18 @@ public readonly record struct ChannelReceiveDecision(
     ReceiveAction Actions,
     ReceiveStreamDecision StreamDecision);
 
+public readonly record struct ReceiveRouteStatus(
+    uint PrimaryStreamId,
+    ImmutableHashSet<uint> StreamIds)
+{
+    public static ReceiveRouteStatus Idle { get; } = new(
+        0,
+        ImmutableHashSet<uint>.Empty);
+}
+
 public readonly record struct ReceiveRouteDecision(
     ChannelDefinition? Owner,
-    ChannelReceiveState State,
+    ReceiveRouteStatus State,
     ReceiveAction Actions,
     ReceiveStreamDecision StreamDecision);
 
@@ -161,7 +170,7 @@ public sealed class ReceiveRouteRuntime
         {
             return new ReceiveRouteDecision(
                 null,
-                ChannelReceiveState.Idle,
+                ReceiveRouteStatus.Idle,
                 ReceiveAction.None,
                 default);
         }
@@ -169,34 +178,24 @@ public sealed class ReceiveRouteRuntime
         lock (sync)
         {
             states.TryGetValue(routeKey, out RouteState? current);
-            if (current?.LastObservation == observation)
+            if (current is not null && current.LastObservation == observation)
             {
                 return new ReceiveRouteDecision(
                     owner,
-                    current.LastObservationDecision.State,
-                    current.LastObservationDecision.Actions,
-                    current.LastObservationDecision.StreamDecision);
+                    current.LastObservationReduction.State,
+                    current.LastObservationReduction.Actions,
+                    current.LastObservationReduction.StreamDecision);
             }
 
-            ChannelReceiveState state = current?.State ?? ChannelReceiveState.Idle;
+            current ??= AddRouteState(routeKey);
             if (assumeStreamActive &&
                 observation.Kind == ReceiveSignalKind.End &&
-                !state.StreamLifecycle.IsActive(observation.StreamId))
+                !current.IsActive(observation.StreamId))
             {
-                state = new ChannelReceiveState(ReceiveStreamReducer.AssumeActive(
-                    state.StreamLifecycle,
-                    observation.StreamId,
-                    observation.ObservedAt));
+                current.AssumeActive(observation.StreamId, observation.ObservedAt);
             }
 
-            ChannelReceiveDecision reduced = ChannelReceiveReducer.Reduce(
-                state,
-                observation,
-                streamPolicy);
-            if (current is null)
-                states[routeKey] = new RouteState(observation, reduced);
-            else
-                current.Observe(observation, reduced);
+            RouteReduction reduced = current.Observe(observation);
             return new ReceiveRouteDecision(
                 owner,
                 reduced.State,
@@ -215,7 +214,7 @@ public sealed class ReceiveRouteRuntime
         {
             return new ReceiveRouteDecision(
                 null,
-                ChannelReceiveState.Idle,
+                ReceiveRouteStatus.Idle,
                 ReceiveAction.None,
                 default);
         }
@@ -226,16 +225,12 @@ public sealed class ReceiveRouteRuntime
             {
                 return new ReceiveRouteDecision(
                     owner,
-                    ChannelReceiveState.Idle,
+                    ReceiveRouteStatus.Idle,
                     ReceiveAction.None,
                     default);
             }
 
-            ChannelReceiveDecision reduced = ChannelReceiveReducer.Advance(
-                current.State,
-                now,
-                streamPolicy);
-            current.Advance(reduced.State);
+            RouteReduction reduced = current.Advance(now);
             return new ReceiveRouteDecision(
                 owner,
                 reduced.State,
@@ -249,7 +244,19 @@ public sealed class ReceiveRouteRuntime
         lock (sync)
         {
             return states.TryGetValue(routeKey, out RouteState? current) &&
-                   current.State.StreamLifecycle.IsActive(streamId);
+                   current.IsActive(streamId);
+        }
+    }
+
+    public bool HasLiveTombstone(
+        ChannelRouteKey routeKey,
+        uint streamId,
+        DateTimeOffset now)
+    {
+        lock (sync)
+        {
+            return states.TryGetValue(routeKey, out RouteState? current) &&
+                   current.HasLiveTombstone(streamId, now);
         }
     }
 
@@ -258,37 +265,104 @@ public sealed class ReceiveRouteRuntime
         lock (sync)
         {
             return states.TryGetValue(routeKey, out RouteState? current)
-                ? current.State
+                ? new ChannelReceiveState(current.Snapshot)
                 : ChannelReceiveState.Idle;
         }
     }
 
+    private RouteState AddRouteState(ChannelRouteKey routeKey)
+    {
+        var state = new RouteState(streamPolicy);
+        states.Add(routeKey, state);
+        return state;
+    }
+
     private sealed class RouteState
     {
-        public RouteState(
-            ReceiveObservation lastObservation,
-            ChannelReceiveDecision decision)
-        {
-            LastObservation = lastObservation;
-            LastObservationDecision = decision;
-            State = decision.State;
-        }
+        private readonly ReceiveStreamStateMachine stateMachine;
+
+        public RouteState(ReceiveStreamPolicy streamPolicy)
+            => stateMachine = new ReceiveStreamStateMachine(streamPolicy);
 
         public ReceiveObservation LastObservation { get; private set; }
-        public ChannelReceiveDecision LastObservationDecision { get; private set; }
-        public ChannelReceiveState State { get; private set; }
+        public RouteReduction LastObservationReduction { get; private set; }
+        public ReceiveStreamState Snapshot => stateMachine.Snapshot;
 
-        public void Observe(
-            ReceiveObservation observation,
-            ChannelReceiveDecision decision)
+        public bool IsActive(uint streamId) => stateMachine.IsActive(streamId);
+
+        public bool HasLiveTombstone(uint streamId, DateTimeOffset now)
+            => stateMachine.HasLiveTombstone(streamId, now);
+
+        public void AssumeActive(uint streamId, DateTimeOffset now)
+            => stateMachine.AssumeActive(streamId, now);
+
+        public RouteReduction Observe(ReceiveObservation observation)
         {
+            bool wasActive = stateMachine.IsActive(observation.StreamId);
+            ReceiveStreamDecision decision = observation.Kind switch
+            {
+                ReceiveSignalKind.End => stateMachine.ObserveTerminator(
+                    observation.StreamId,
+                    observation.ObservedAt),
+                ReceiveSignalKind.Start => stateMachine.ObserveDefinitiveStart(
+                    observation.StreamId,
+                    observation.ObservedAt),
+                ReceiveSignalKind.Voice => stateMachine.ObserveVoice(
+                    observation.StreamId,
+                    observation.ObservedAt),
+                ReceiveSignalKind.Metadata when wasActive => stateMachine.ObserveVoice(
+                    observation.StreamId,
+                    observation.ObservedAt),
+                _ => new ReceiveStreamDecision(
+                    ReceiveStreamTransition.None,
+                    stateMachine.PrimaryStreamId)
+            };
+            ReceiveAction actions = ChannelReceiveActionPolicy.ForObservation(
+                observation.Kind,
+                decision.Transition);
+            var reduction = new RouteReduction(CurrentStatus, actions, decision);
             LastObservation = observation;
-            LastObservationDecision = decision;
-            State = decision.State;
+            LastObservationReduction = reduction;
+            return reduction;
         }
 
-        public void Advance(ChannelReceiveState state) => State = state;
+        public RouteReduction Advance(DateTimeOffset now)
+        {
+            ReceiveStreamDecision decision = stateMachine.Advance(now);
+            ReceiveAction actions = decision.Transition is
+                ReceiveStreamTransition.GraceExpired or
+                ReceiveStreamTransition.TerminationExpired
+                    ? ReceiveAction.Present
+                    : ReceiveAction.None;
+            return new RouteReduction(CurrentStatus, actions, decision);
+        }
+
+        private ReceiveRouteStatus CurrentStatus => new(
+            stateMachine.PrimaryStreamId ?? 0,
+            stateMachine.ActiveStreamIds);
     }
+
+    private readonly record struct RouteReduction(
+        ReceiveRouteStatus State,
+        ReceiveAction Actions,
+        ReceiveStreamDecision StreamDecision);
+}
+
+internal static class ChannelReceiveActionPolicy
+{
+    private const ReceiveAction DeliveryActions = ReceiveAction.Present | ReceiveAction.Deliver;
+
+    public static ReceiveAction ForObservation(
+        ReceiveSignalKind kind,
+        ReceiveStreamTransition transition)
+        => transition switch
+        {
+            ReceiveStreamTransition.None when kind == ReceiveSignalKind.Metadata
+                => DeliveryActions,
+            ReceiveStreamTransition.None => ReceiveAction.None,
+            ReceiveStreamTransition.IgnoredLate => ReceiveAction.Present,
+            _ => DeliveryActions
+        };
 }
 
 /// <summary>
@@ -297,8 +371,6 @@ public sealed class ReceiveRouteRuntime
 /// </summary>
 public static class ChannelReceiveReducer
 {
-    private const ReceiveAction DeliveryActions = ReceiveAction.Present | ReceiveAction.Deliver;
-
     public static ChannelReceiveDecision Reduce(
         ChannelReceiveState state,
         ReceiveObservation observation,
@@ -339,14 +411,9 @@ public static class ChannelReceiveReducer
                     state.StreamLifecycle.PrimaryStreamId))
         };
 
-        ReceiveAction actions = reduction.Decision.Transition switch
-        {
-            ReceiveStreamTransition.None when observation.Kind == ReceiveSignalKind.Metadata
-                => DeliveryActions,
-            ReceiveStreamTransition.None => ReceiveAction.None,
-            ReceiveStreamTransition.IgnoredLate => ReceiveAction.Present,
-            _ => DeliveryActions
-        };
+        ReceiveAction actions = ChannelReceiveActionPolicy.ForObservation(
+            observation.Kind,
+            reduction.Decision.Transition);
         return new ChannelReceiveDecision(
             new ChannelReceiveState(reduction.State),
             actions,

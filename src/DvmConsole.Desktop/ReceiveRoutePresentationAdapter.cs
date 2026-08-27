@@ -338,14 +338,11 @@ internal sealed class ReceiveRoutePresentationAdapter
                 continue;
 
             ReceiveObservation observation = CreateObservation(traffic, routeKey, observedAt);
-            ChannelReceiveState stateBeforeAdvance = runtime.GetState(routeKey);
-            bool wasActiveAtIngress = stateBeforeAdvance.StreamLifecycle.IsActive(
-                traffic.StreamId);
-            bool hasLiveTombstone =
-                stateBeforeAdvance.StreamLifecycle.Tombstones.TryGetValue(
-                    traffic.StreamId,
-                    out DateTimeOffset tombstoneExpiresAt) &&
-                tombstoneExpiresAt > observation.ObservedAt;
+            bool wasActiveAtIngress = runtime.IsActive(routeKey, traffic.StreamId);
+            bool hasLiveTombstone = runtime.HasLiveTombstone(
+                routeKey,
+                traffic.StreamId,
+                observation.ObservedAt);
             IReadOnlyList<ReceiveRouteProjectionDecision> preceding = AdvanceRoute(
                 routeKey,
                 observation.ObservedAt);
