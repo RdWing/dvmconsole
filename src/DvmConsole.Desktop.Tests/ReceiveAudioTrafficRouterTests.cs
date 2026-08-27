@@ -11,6 +11,7 @@ namespace DvmConsole.Desktop.Tests;
 
 public sealed class ReceiveAudioTrafficRouterTests
 {
+    private readonly ReceiveAudioTrafficRouterTestHarness ReceiveAudioTrafficRouter = new();
     private readonly ITestOutputHelper output;
 
     public ReceiveAudioTrafficRouterTests(ITestOutputHelper output)

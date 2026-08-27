@@ -60,7 +60,11 @@ public sealed class ReceiveDiagnosticsTextTests
             MaximumTransportInterArrivalDelay: TimeSpan.FromMilliseconds(480),
             MaximumTransportToFneBoundaryDelay: TimeSpan.FromMilliseconds(8),
             JitterBufferReorderedPackets: 2,
-            JitterBufferDeadlineMissedPackets: 1);
+            JitterBufferDeadlineMissedPackets: 1,
+            MaximumJitterBufferHoldDuration: TimeSpan.FromMilliseconds(180),
+            MaximumWorkerBacklogDuration: TimeSpan.FromMilliseconds(12),
+            MaximumSessionGateDelay: TimeSpan.FromMilliseconds(2),
+            MaximumSessionProcessingDuration: TimeSpan.FromMilliseconds(4));
 
         string message = ReceiveDiagnosticsText.FormatWarning(
             "Dispatch",
@@ -86,6 +90,10 @@ public sealed class ReceiveDiagnosticsTextTests
         Assert.Contains("stream pipeline maximum UDP inter-arrival 480 ms", message);
         Assert.Contains("socket-to-FNE 8 ms", message);
         Assert.Contains("FNE inter-arrival 500 ms", message);
+        Assert.Contains("jitter hold max 180 ms", message);
+        Assert.Contains("worker backlog max 12 ms", message);
+        Assert.Contains("session gate max 2 ms", message);
+        Assert.Contains("session processing max 4 ms", message);
         Assert.Contains("jitter reordered this stream 2", message);
         Assert.Contains("jitter deadline misses this stream 1", message);
         Assert.Contains("worst lane East Bay/Dispatch", message);
@@ -121,7 +129,14 @@ public sealed class ReceiveDiagnosticsTextTests
             EndToEndDelay: TimeSpan.FromMilliseconds(6),
             TransportInterArrivalDelay: TimeSpan.FromMilliseconds(440),
             TransportToFneBoundaryDelay: TimeSpan.FromMilliseconds(1),
-            JitterBufferTargetDelay: TimeSpan.FromMilliseconds(180));
+            JitterBufferTargetDelay: TimeSpan.FromMilliseconds(180),
+            JitterBufferHoldDuration: TimeSpan.FromMilliseconds(180),
+            WorkerBacklogDuration: TimeSpan.FromMilliseconds(2),
+            SessionGateDelay: TimeSpan.FromMilliseconds(1),
+            SessionProcessingDuration: TimeSpan.FromMilliseconds(3),
+            EncryptedSessionProcessing: true,
+            HasQueueDelayBreakdown: true,
+            HasSessionProcessingBreakdown: true);
         var maximums = new ReceiveWorkQueueDiagnostics(
             ProcessedFrames: 5,
             MaximumInterArrivalDelay: TimeSpan.FromMilliseconds(500),
@@ -129,7 +144,11 @@ public sealed class ReceiveDiagnosticsTextTests
             MaximumQueueDelay: TimeSpan.FromMilliseconds(3),
             MaximumProcessingDuration: TimeSpan.FromMilliseconds(4),
             MaximumEndToEndDelay: TimeSpan.FromMilliseconds(20),
-            MaximumJitterBufferTargetDelay: TimeSpan.FromMilliseconds(180));
+            MaximumJitterBufferTargetDelay: TimeSpan.FromMilliseconds(180),
+            MaximumJitterBufferHoldDuration: TimeSpan.FromMilliseconds(180),
+            MaximumWorkerBacklogDuration: TimeSpan.FromMilliseconds(2),
+            MaximumSessionGateDelay: TimeSpan.FromMilliseconds(1),
+            MaximumSessionProcessingDuration: TimeSpan.FromMilliseconds(3));
 
         string message = ReceiveDiagnosticsText.FormatPipelineDelay(
             "Dispatch",
@@ -140,7 +159,11 @@ public sealed class ReceiveDiagnosticsTextTests
         Assert.Contains("UDP inter-arrival 440 ms", message);
         Assert.Contains("socket-to-FNE 1 ms", message);
         Assert.Contains("FNE boundary-to-queue 1 ms", message);
+        Assert.Contains("jitter hold 180 ms", message);
         Assert.Contains("fixed jitter 180 ms", message);
+        Assert.Contains("worker backlog 2 ms", message);
+        Assert.Contains("session gate 1 ms", message);
+        Assert.Contains("encrypted key/decrypt/decode/mixer 3 ms", message);
         Assert.Contains("total FNE-to-mixer 6 ms", message);
         Assert.Contains("stream maximum total FNE-to-mixer 20 ms", message);
         Assert.EndsWith("stream 34, sequence 12.", message);
@@ -180,5 +203,26 @@ public sealed class ReceiveDiagnosticsTextTests
 
         Assert.Contains("restored delayed sequence 11", message);
         Assert.Contains("before playout", message);
+    }
+
+    [Fact]
+    public void FormatsCoalescedJitterUpdatesAsPhysicalStreamEvidence()
+    {
+        string message = ReceiveDiagnosticsText.FormatJitterBufferPublication(
+            "Dispatch",
+            new ReceiveJitterEventPublication(
+                ReceiveJitterEventPublicationKind.Periodic,
+                StreamId: 34,
+                LatestSequence: 12,
+                ReorderedSincePrevious: 2,
+                MissedSincePrevious: 3,
+                TotalReordered: 4,
+                TotalMissed: 5));
+
+        Assert.Contains("update on Dispatch, physical stream 34", message);
+        Assert.Contains("since previous report restored 2 delayed packets", message);
+        Assert.Contains("advanced across 3 missing network packets", message);
+        Assert.Contains("cumulative restored 4, missing 5", message);
+        Assert.Contains("latest sequence 12", message);
     }
 }

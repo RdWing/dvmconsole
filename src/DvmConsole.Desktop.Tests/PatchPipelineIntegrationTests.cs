@@ -196,6 +196,7 @@ public sealed class PatchPipelineIntegrationTests
         uint sourceId,
         uint streamId)
     {
+        var ReceiveAudioTrafficRouter = new ReceiveAudioTrafficRouterTestHarness();
         IReadOnlyDictionary<(FneTrafficProtocol, uint), ChannelViewModel[]> routes =
             new Dictionary<(FneTrafficProtocol, uint), ChannelViewModel[]>
             {

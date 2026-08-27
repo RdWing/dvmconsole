@@ -1,6 +1,6 @@
-# Groups and Patching
+# Groups and patching
 
-Patch groups and multi-select groups are managed from Console Settings.
+Manage patch and multi-select groups from Console Settings.
 
 Open it from:
 
@@ -8,21 +8,21 @@ Open it from:
 View > Groups
 ```
 
-Groups are defined in the codeplug. Members are assigned in the app by the operator.
+The codeplug defines the groups. The operator assigns their members in DVM
+Console.
 
 ---
 
-# Patch Groups
+# Patch groups
 
-A patch group forwards audio between member resources.
+A patch group forwards received audio from one member to other members in the
+group.
 
-Use a patch group when traffic received on one member should be repeated to other members in the group.
-
-The console applies the source system's adaptive receive jitter buffer once,
-decodes the source to 8 kHz PCM, and re-encodes that PCM for each destination
-protocol. Destination audio follows the protocol's 20 ms transmit clock rather
-than arriving in decoded batches. This supports cross-protocol patches. It does
-not pass source vocoder codewords directly to destinations.
+DVM Console applies the source system's adaptive receive jitter buffer once,
+then decodes the source to 8 kHz PCM and re-encodes it for each destination
+protocol. Destination audio follows the protocol's 20 ms transmit clock instead
+of arriving in decoded batches. This allows cross-protocol patches; source
+vocoder codewords are not passed directly to destinations.
 
 Patch groups have two separate pieces of state:
 
@@ -33,7 +33,7 @@ Membership can exist while the patch is disabled.
 
 ---
 
-# Patch Enable/Disable
+# Enabling and disabling patches
 
 Each patch group has an **Enabled** control on the Groups page.
 
@@ -50,9 +50,9 @@ When a patch is enabled:
 - patch forwarding can occur between members
 - member card indicators show the active patch icon
 
-Patch members are always sticky across restart.
+Patch membership always persists across restarts.
 
-Patch active state only restores on startup when:
+The active state is restored only when this setting is enabled:
 
 ```
 Settings > Retain Patch State on Startup
@@ -60,22 +60,24 @@ Settings > Retain Patch State on Startup
 
 is enabled.
 
-If that setting is off, patches start disabled after restart even though members remain assigned.
+If the setting is off, patches start disabled after a restart but retain their
+members.
 
 ---
 
-# Two-Way Patch
+# Two-way patches
 
 When **Enable One-Way Patch** is off:
 
 - Patch Mode: Two-Way
 - All members can transmit and receive.
 
-In this mode, any listed member can become the active patch source. Audio received from the active source can be forwarded to the other members.
+Any listed member can become the active source. Audio received from that source
+is forwarded to the other members.
 
 ---
 
-# One-Way Patch
+# One-way patches
 
 When **Enable One-Way Patch** is on:
 
@@ -84,7 +86,9 @@ When **Enable One-Way Patch** is on:
 - All other selected members are destinations and receive audio.
 - An RX-only channel can be the source, but every destination must be transmit-capable.
 
-The source is saved first internally for compatibility with existing configurations. When an older one-way patch is loaded, its first saved member is selected as the source.
+DVM Console stores the source first for compatibility with existing
+configurations. When it loads an older one-way patch, the first saved member
+becomes the source.
 
 ```
 Member 1 = Source
@@ -95,19 +99,18 @@ Change the **Source** selector and save the group to route the patch in the othe
 
 ---
 
-# Multi-Select Groups
+# Multi-select groups
 
-A multi-select group is an operator transmit tool.
-
-It lets the console transmit to multiple member resources at the same time using **Multi-Select PTT**.
+A multi-select group lets an operator transmit to several member resources at
+once with **Multi-Select PTT**.
 
 Unlike a patch group, a multi-select group does not forward received audio between members.
 
-Use multi-select when an operator wants to key several resources together from the console.
+Use multi-select to key several resources together from the console.
 
 ---
 
-# Editing Members
+# Editing members
 
 To edit a group:
 
@@ -118,32 +121,35 @@ To edit a group:
 5. For a one-way patch, choose the source. The other selected members are destinations.
 6. Select **Save group**.
 
-The console displays a conflict warning when a channel assignment cannot be used safely. Resolve the listed conflict before relying on that group.
+DVM Console shows a conflict warning when a channel assignment cannot be used
+safely. Resolve the conflict before using the group.
 
-Saving a group immediately replaces the active patch-source membership. If a
-save overlaps an enable or disable action, only the newest requested membership
-is applied. A deselected member should disappear from the editor and forwarding
-path without restarting DVM Console.
+Saving a group immediately replaces its active patch-source membership. If a
+save overlaps an enable or disable action, DVM Console applies only the newest
+membership request. Deselected members leave the editor and forwarding path
+without an application restart.
 
 ---
 
 # Group PTT
 
-Multi-select groups provide a group PTT button. Patch groups forward received traffic when enabled and do not use a separate operator patch PTT control on this page.
+Multi-select groups have a group PTT button. Enabled patch groups forward
+received traffic and do not need a separate operator PTT control on this page.
 
-The console includes a short transmit tail after de-key so final audio frames are not clipped before call end signaling is sent.
+DVM Console adds a short transmit tail after de-key so call-end signaling does
+not clip the final audio frames.
 
 ---
 
-# Card Icons
+# Card icons
 
-Resource cards show an operator-visible indicator for patch or multi-select membership.
+Resource cards show an indicator for patch or multi-select membership.
 
 If a resource belongs to both a patch and a multi-select group, the multi-select indicator takes priority in the card indicator area.
 
 ---
 
-# Persistence Summary
+# Persistence summary
 
 | Item | Persists by default | Notes |
 | --- | --- | --- |
@@ -154,7 +160,7 @@ If a resource belongs to both a patch and a multi-select group, the multi-select
 
 ---
 
-# Operator Tips
+# Operator tips
 
 - Use patch groups for cross-resource receive forwarding.
 - Use multi-select groups for console-originated group transmit.

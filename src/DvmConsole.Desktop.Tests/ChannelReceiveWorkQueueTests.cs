@@ -304,6 +304,48 @@ public sealed class ChannelReceiveWorkQueueTests
     }
 
     [Fact]
+    public async Task DecomposesJitterWorkerGateAndSessionTimingWithoutPerFrameState()
+    {
+        var scheduler = new ManualReceiveWorkQueueScheduler();
+        var observed = new TaskCompletionSource<ReceiveWorkItemTiming>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var channel = CreateChannel("Dispatch", "100");
+        await using ChannelReceiveWorkQueue queue = ChannelReceiveWorkQueue.CreateWithTiming(
+            (_, _) => Task.FromResult(new ReceiveProcessingStageTiming(
+                SessionGateDelay: TimeSpan.FromMilliseconds(2),
+                SessionProcessingDuration: TimeSpan.FromMilliseconds(3),
+                EncryptedSessionProcessing: true)),
+            timingObserver: (_, timing) => observed.TrySetResult(timing),
+            getJitterBufferProfile: (_, _) => new ReceiveJitterBufferProfile(
+                TimeSpan.FromMilliseconds(20),
+                TimeSpan.FromMilliseconds(40)),
+            scheduler: scheduler);
+
+        Assert.True(queue.Enqueue(
+            channel,
+            CreateTraffic(1, protocol: FneTrafficProtocol.P25),
+            out bool dropped));
+        Assert.False(dropped);
+        ReceiveWorkItemTiming timing = await observed.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        ReceiveWorkQueueDiagnostics diagnostics = queue.GetDiagnostics(channel);
+
+        Assert.True(timing.HasQueueDelayBreakdown);
+        Assert.InRange(
+            timing.JitterBufferHoldDuration,
+            TimeSpan.FromMilliseconds(39),
+            TimeSpan.FromMilliseconds(41));
+        Assert.Equal(TimeSpan.Zero, timing.WorkerBacklogDuration);
+        Assert.True(timing.HasSessionProcessingBreakdown);
+        Assert.Equal(TimeSpan.FromMilliseconds(2), timing.SessionGateDelay);
+        Assert.Equal(TimeSpan.FromMilliseconds(3), timing.SessionProcessingDuration);
+        Assert.Equal(true, timing.EncryptedSessionProcessing);
+        Assert.Equal(timing.JitterBufferHoldDuration, diagnostics.MaximumJitterBufferHoldDuration);
+        Assert.Equal(timing.WorkerBacklogDuration, diagnostics.MaximumWorkerBacklogDuration);
+        Assert.Equal(timing.SessionGateDelay, diagnostics.MaximumSessionGateDelay);
+        Assert.Equal(timing.SessionProcessingDuration, diagnostics.MaximumSessionProcessingDuration);
+    }
+
+    [Fact]
     public async Task MeasuresFneInterArrivalDelayPerStream()
     {
         var channel = CreateChannel("Dispatch", "100");

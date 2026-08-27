@@ -1,36 +1,35 @@
-# Console Operation
+# Console operation
 
-This page covers common operator workflows on the main console.
-
----
-
-# Operator Workspace
-
-DVM Console NEO uses a freeform channel-card console as its single operator
-surface. Systems and zones organize the cards; card positions, sizes, and
-controls retain their existing behavior.
-
-The Activity sidebar continues to show recent calls and subscriber-command
-audit entries. Collapse or expand it with the arrow in its header. New calls
-remain in live-follow view while the sidebar is at the top. After the operator
-scrolls down, incoming rows preserve the current visible call instead of
-pushing the list down.
-
-Choose **View > Engineering Health** when runtime telemetry is useful. The
-default-hidden horizontal rail is resizable and reports receive pressure and
-latency, microphone freshness/generation/cadence/faults, transmit backlog, TAR
-finalization/catalog work, route recovery, and connection health. It is
-telemetry-only and does not duplicate PTT, mute, routing, or recording controls.
+This page describes the main console and its common operator workflows.
 
 ---
 
-# Selecting Resources
+# Operator workspace
+
+The main console is a freeform workspace of channel cards organized by system
+and zone. Each card keeps its saved position, configured size, and controls.
+
+The Activity sidebar shows recent calls and subscriber-command audit entries.
+Use the arrow in its header to collapse or expand it. At the top of the list,
+the view follows new calls. After you scroll down, incoming rows do not move the
+call being read.
+
+Choose **View > Engineering Health** to inspect runtime telemetry. This
+resizable horizontal rail is hidden by default. It reports receive pressure and
+latency, microphone freshness, generation, cadence and faults, transmit
+backlog, TAR finalization and catalog work, route recovery, and connection
+health. It has no PTT, mute, routing, or recording controls.
+
+---
+
+# Selecting resources
 
 Click a resource card to select or deselect it.
 
-Selected resources are monitored locally. If a receiving resource is deselected while active, local monitoring for that resource stops and the card RX state is cleared.
+Selected resources play locally. Deselecting an active receiving resource stops
+its local playback and clears the card's RX state.
 
-Use **Channels > Disable all receive** to stop local monitoring on every channel.
+Use **Channels > Disable all receive** to stop local playback on every channel.
 
 Each transmit-capable card has four independent routing controls:
 
@@ -39,22 +38,20 @@ Each transmit-capable card has four independent routing controls:
 - `ALERT` includes the resource when DTMF, a generated tone, a tone preset, or an alert audio file is sent.
 
 Purple indicates an armed selector. Gray indicates that selector is not armed.
-The selectors do not use check marks, and moving the pointer over an armed
-selector does not change its state. Click the selector to arm or disarm only
-that routing path.
+The selectors do not use check marks. Hovering over an armed selector does not
+change it. Click a selector to arm or disarm that routing path.
 
-The `TAR` button occupies the same control row. It enables or disables local
-Talkgroup Audio Recorder capture for that resource. TAR can record inbound
-calls while the card is not selected for live RX. Speaker monitoring remains
-controlled independently by clicking the card, so there is no separate listen
-button.
+The `TAR` button is in the same control row and turns local recording on or off
+for that resource. TAR can record inbound calls when the card is not selected
+for live RX. Clicking the card controls speaker playback separately; there is
+no additional listen button.
 
 The talkgroup and protocol are shown together as `TG 9990 - DMR` or
 `TG 9990 - P25`.
 
 ---
 
-# Resource Card Sizes
+# Resource card sizes
 
 Resource card size is defined in the codeplug with `card_size`.
 
@@ -64,7 +61,7 @@ Supported sizes:
 - `normal`: default card size.
 - `large`: larger card with larger text and controls.
 
-If `card_size` is omitted, the console uses `normal`.
+If `card_size` is omitted, DVM Console uses `normal`.
 
 ---
 
@@ -72,7 +69,7 @@ If `card_size` is omitted, the console uses `normal`.
 
 Use a resource card PTT button to transmit on that resource.
 
-The console supports normal press-and-hold PTT and toggle PTT mode.
+DVM Console supports press-and-hold and toggle PTT.
 
 Toggle PTT mode is controlled by:
 
@@ -84,11 +81,14 @@ Toggle PTT is off by default. If changed, the preference is saved.
 
 ---
 
-# Selectable Encryption
+# Selectable encryption
 
-Secure-capable P25, DMR, and NXDN resources may show **SELECT** in the card text area.
+Secure-capable P25, DMR, and NXDN resources may show **SELECT** in the card text
+area.
 
-Click **SELECT** to toggle that resource between encrypted and clear console transmit. The choice is saved by system/talkgroup and restored on the next startup.
+Click **SELECT** to switch the resource between encrypted and clear transmit.
+DVM Console saves the choice by system and talkgroup and restores it at the
+next startup.
 
 If the resource does not show **SELECT**, encryption behavior is fixed by the codeplug.
 
@@ -96,15 +96,17 @@ If the resource does not show **SELECT**, encryption behavior is fixed by the co
 
 # Global PTT
 
-Global PTT keys every channel with `TX` armed. Active-system PTT keys only the `TX`-armed channels in the system tab that is active when PTT starts. At least one transmit-capable channel must be armed in the applicable scope before PTT can begin.
+Global PTT keys every channel with `TX` armed. Active-system PTT keys only the
+armed channels in the system tab that is active when PTT starts. PTT requires
+at least one transmit-capable channel in the applicable scope.
 
 Choose separate keys under **Channels > Global PTT key** and **Channels > Active-system PTT key**, or configure both under **Console Settings > PTT**. Space and F1 through F19 are supported, and each enabled binding must use a unique key. Both bindings use the same saved press-and-hold or toggle PTT setting. On macOS, OS-global capture may require Accessibility or Input Monitoring permission. When global capture is unavailable, the keys still work while the application has keyboard focus.
 
-The focused-window Space router does not consume Space while an editable field or
-ordinary interactive control has focus. OS-global capture remains available
-where supported. While transmitting, the bottom transmit-status field identifies
-whether window-local keyboard, OS-global keyboard, serial hardware, or a local
-channel control initiated PTT.
+The focused-window Space binding does not consume Space while an editable field
+or ordinary interactive control has focus. OS-global capture remains available
+where supported. During transmit, the status field at the bottom identifies
+whether PTT came from the window-local keyboard, OS-global keyboard, serial
+hardware, or a channel control.
 
 Under **Console Settings > PTT > Serial hardware PTT**, select **Limit serial PTT to TX-selected resources in the active system** to give the serial device the same active-system scope. Leave it clear for the serial device to key every `TX`-selected resource across systems.
 
@@ -113,9 +115,9 @@ access** asks the system for Input Monitoring access again. If macOS has already
 recorded a denial, enable DVM Console manually under **System Settings > Privacy
 & Security > Input Monitoring**.
 
-The keyboard PTT keys remain active while the modeless **Console Settings** window
-has focus. Console Settings can stay open while the operator selects resources or
-uses other controls in the main window.
+Keyboard PTT remains active while the modeless **Console Settings** window has
+focus. The window can stay open while the operator selects resources or uses
+the main console.
 
 The talk permit tone uses the selected output device for card, global, and
 active-system PTT. Global and active-system keybinds complete this cue in both
@@ -124,19 +126,20 @@ press-and-hold and toggle mode before microphone audio is released. Use
 
 ---
 
-# Transmit Tail
+# Transmit tail
 
-When PTT is released, the console briefly holds transmit before sending call-end signaling.
+After PTT is released, DVM Console briefly holds transmit before sending
+call-end signaling.
 
-This short de-key tail helps prevent clipped final syllables and final voice frames.
-
-The tail affects the real transmit path, not only the UI.
+The short de-key tail prevents the final syllables and voice frames from being
+clipped. It is part of the transmit path, not a UI delay.
 
 ---
 
-# Talkgroup Validation
+# Talkgroup validation
 
-When a user tries to transmit or use a talkgroup, the console checks the active talkgroup rules received from the connected FNE.
+Before using a talkgroup for transmit, DVM Console checks the active talkgroup
+rules received from the connected FNE.
 
 If the talkgroup is unavailable on that FNE, the action is blocked and this warning is shown:
 
@@ -148,25 +151,28 @@ This validation is per system and applies to P25 and DMR resources.
 
 ---
 
-# RX Activity
+# RX activity
 
-When selected resources receive traffic, the card shows RX activity and source information.
+When a selected resource receives traffic, its card shows RX activity and
+source information.
 
 Tabs show an audio activity icon when a resource on that tab is receiving. Long tab names are trimmed so the activity icon remains visible.
 
 ---
 
-# Web Stream Chips
+# Web stream chips
 
-Codeplug-defined web stream chips appear on the zone tab where they are configured.
+Codeplug-defined web stream chips appear on their configured zone tabs.
 
 Click a stream chip to start or stop playback. Streams load in the off state unless **Restore Selected Channels On Startup** is enabled and the stream was active at shutdown.
 
 Stream chips use a compact volume slider. User volume changes are saved by stream name, and the chip turns green when audio is detected.
 
-When a stream is starting, the chip turns amber while connecting. The console tries up to three connection attempts before marking the stream down.
+The chip turns amber while connecting. DVM Console tries up to three times
+before marking the stream down.
 
-If a stream URL is unreachable or cannot be decoded, the chip turns red and shows `Down`. Click a down stream once to return it to the off state.
+If a stream URL is unreachable or cannot be decoded, the chip turns red and
+shows `Down`. Click it once to turn the stream off.
 
 Protected streams can use HTTP Basic Auth through `authUsername` and `authPassword` fields in the codeplug.
 
@@ -176,7 +182,7 @@ The reset tab layout action also moves web stream chips on the active tab and sa
 
 ---
 
-# Sticky Selected Channels
+# Restoring selected channels
 
 Controlled by:
 
@@ -197,7 +203,7 @@ When disabled:
 
 ---
 
-# Card Indicator Icons
+# Card indicator icons
 
 The top-right card indicator can show membership state.
 

@@ -109,18 +109,19 @@ internal sealed class ConsoleSessionFactory
                 status,
                 CreateSystemViewModels(configuration, zones),
                 zones,
-                p25KeyRing,
-                dependencies.UserSettingsStore,
-                configuration.EffectiveGroups(),
-                configuration.PatchSourceIdPassthrough,
-                dependencies.SerialPortProvider,
-                dependencies.SerialPttFactory,
-                dmrKeyRing,
-                nxdnKeyRing,
-                topology.CodeplugPath,
-                dependencies.UiDispatcher,
-                services,
-                dependencies.NetworkDisabledDemo);
+                new MainWindowViewModelOptions(
+                    P25KeyResolver: p25KeyRing,
+                    UserSettingsStore: dependencies.UserSettingsStore,
+                    GroupDefinitions: configuration.EffectiveGroups(),
+                    PatchSourceIdPassthrough: configuration.PatchSourceIdPassthrough,
+                    SerialPortProvider: dependencies.SerialPortProvider,
+                    SerialPttFactory: dependencies.SerialPttFactory,
+                    DmrKeyResolver: dmrKeyRing,
+                    NxdnKeyResolver: nxdnKeyRing,
+                    CodeplugPath: topology.CodeplugPath,
+                    UiDispatcher: dependencies.UiDispatcher,
+                    SessionServices: services,
+                    NetworkDisabledDemo: dependencies.NetworkDisabledDemo));
             viewModel.RecordLoadedCodeplug(topology.CodeplugPath);
             return viewModel;
         });
@@ -133,13 +134,14 @@ internal sealed class ConsoleSessionFactory
             status,
             [],
             [],
-            userSettingsStore: dependencies.UserSettingsStore,
-            groupDefinitions: [],
-            serialPortProvider: dependencies.SerialPortProvider,
-            serialPttFactory: dependencies.SerialPttFactory,
-            uiDispatcher: dependencies.UiDispatcher,
-            sessionServices: services,
-            networkDisabledDemo: dependencies.NetworkDisabledDemo));
+            new MainWindowViewModelOptions(
+                UserSettingsStore: dependencies.UserSettingsStore,
+                GroupDefinitions: [],
+                SerialPortProvider: dependencies.SerialPortProvider,
+                SerialPttFactory: dependencies.SerialPttFactory,
+                UiDispatcher: dependencies.UiDispatcher,
+                SessionServices: services,
+                NetworkDisabledDemo: dependencies.NetworkDisabledDemo)));
     }
 
     private MainWindowViewModel CreateRejected(string status, ConsoleTopology topology)
@@ -151,15 +153,16 @@ internal sealed class ConsoleSessionFactory
             status,
             [],
             zones,
-            userSettingsStore: dependencies.UserSettingsStore,
-            groupDefinitions: configuration.EffectiveGroups(),
-            patchSourceIdPassthrough: configuration.PatchSourceIdPassthrough,
-            serialPortProvider: dependencies.SerialPortProvider,
-            serialPttFactory: dependencies.SerialPttFactory,
-            codeplugPath: topology.CodeplugPath,
-            uiDispatcher: dependencies.UiDispatcher,
-            sessionServices: services,
-            networkDisabledDemo: dependencies.NetworkDisabledDemo));
+            new MainWindowViewModelOptions(
+                UserSettingsStore: dependencies.UserSettingsStore,
+                GroupDefinitions: configuration.EffectiveGroups(),
+                PatchSourceIdPassthrough: configuration.PatchSourceIdPassthrough,
+                SerialPortProvider: dependencies.SerialPortProvider,
+                SerialPttFactory: dependencies.SerialPttFactory,
+                CodeplugPath: topology.CodeplugPath,
+                UiDispatcher: dependencies.UiDispatcher,
+                SessionServices: services,
+                NetworkDisabledDemo: dependencies.NetworkDisabledDemo)));
     }
 
     private static IReadOnlyList<ZoneViewModel> CreateZones(

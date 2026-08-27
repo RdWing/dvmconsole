@@ -54,29 +54,38 @@ internal sealed class AudioBackendDeviceTopologyProvider : IAudioDeviceTopologyP
 }
 
 // Polling provides one portable lifecycle for CoreAudio and Windows endpoints.
-// The callback is awaited so route rebuilds never overlap or reorder.
+// Stable topologies back off to reduce idle device enumeration, while a change
+// or transient failure restores the responsive base cadence.
 internal sealed class DefaultAudioDeviceMonitor : IAsyncDisposable
 {
     private static readonly TimeSpan DefaultPollInterval = TimeSpan.FromSeconds(1);
+    private static readonly TimeSpan DefaultMaximumPollInterval = TimeSpan.FromSeconds(5);
     private readonly IAudioDeviceTopologyProvider topologyProvider;
     private readonly Func<AudioDeviceTopologyChange, CancellationToken, Task> changeHandler;
     private readonly TimeSpan pollInterval;
+    private readonly TimeSpan maximumPollInterval;
     private readonly SemaphoreSlim checkGate = new(1, 1);
     private CancellationTokenSource? cancellation;
     private Task monitorTask = Task.CompletedTask;
     private AudioDeviceTopology? previousTopology;
+    private long currentPollIntervalTicks;
     private bool disposed;
 
     public DefaultAudioDeviceMonitor(
         IAudioDeviceTopologyProvider topologyProvider,
         Func<AudioDeviceTopologyChange, CancellationToken, Task> changeHandler,
-        TimeSpan? pollInterval = null)
+        TimeSpan? pollInterval = null,
+        TimeSpan? maximumPollInterval = null)
     {
         this.topologyProvider = topologyProvider ?? throw new ArgumentNullException(nameof(topologyProvider));
         this.changeHandler = changeHandler ?? throw new ArgumentNullException(nameof(changeHandler));
         this.pollInterval = pollInterval ?? DefaultPollInterval;
+        this.maximumPollInterval = maximumPollInterval ?? DefaultMaximumPollInterval;
         if (this.pollInterval <= TimeSpan.Zero)
             throw new ArgumentOutOfRangeException(nameof(pollInterval));
+        if (this.maximumPollInterval < this.pollInterval)
+            throw new ArgumentOutOfRangeException(nameof(maximumPollInterval));
+        currentPollIntervalTicks = this.pollInterval.Ticks;
     }
 
     public void Start()
@@ -92,31 +101,27 @@ internal sealed class DefaultAudioDeviceMonitor : IAsyncDisposable
     internal async Task CheckNowAsync(CancellationToken cancellationToken = default)
     {
         ObjectDisposedException.ThrowIf(disposed, this);
-        await checkGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            AudioDeviceTopology current = topologyProvider.Read();
-            AudioDeviceTopology? previous = previousTopology;
-            if (previous is null)
-            {
-                previousTopology = current;
-                return;
-            }
-            if (previous == current)
-                return;
-
-            await changeHandler(
-                new AudioDeviceTopologyChange(
-                    InputChanged: previous.InputSignature != current.InputSignature,
-                    OutputChanged: previous.OutputSignature != current.OutputSignature),
-                cancellationToken).ConfigureAwait(false);
-            previousTopology = current;
+            bool changed = await CheckTopologyAsync(cancellationToken).ConfigureAwait(false);
+            long currentTicks = CurrentPollInterval.Ticks;
+            long nextTicks = changed
+                ? pollInterval.Ticks
+                : currentTicks >= maximumPollInterval.Ticks / 2
+                    ? maximumPollInterval.Ticks
+                    : currentTicks * 2;
+            TimeSpan next = TimeSpan.FromTicks(nextTicks);
+            Interlocked.Exchange(ref currentPollIntervalTicks, next.Ticks);
         }
-        finally
+        catch
         {
-            checkGate.Release();
+            Interlocked.Exchange(ref currentPollIntervalTicks, pollInterval.Ticks);
+            throw;
         }
     }
+
+    internal TimeSpan CurrentPollInterval
+        => TimeSpan.FromTicks(Interlocked.Read(ref currentPollIntervalTicks));
 
     public async ValueTask DisposeAsync()
     {
@@ -140,7 +145,6 @@ internal sealed class DefaultAudioDeviceMonitor : IAsyncDisposable
 
     private async Task MonitorAsync(CancellationToken cancellationToken)
     {
-        using var timer = new PeriodicTimer(pollInterval);
         while (!cancellationToken.IsCancellationRequested)
         {
             try
@@ -159,13 +163,41 @@ internal sealed class DefaultAudioDeviceMonitor : IAsyncDisposable
 
             try
             {
-                if (!await timer.WaitForNextTickAsync(cancellationToken).ConfigureAwait(false))
-                    return;
+                await Task.Delay(CurrentPollInterval, cancellationToken).ConfigureAwait(false);
             }
             catch (OperationCanceledException)
             {
                 return;
             }
+        }
+    }
+
+    private async Task<bool> CheckTopologyAsync(CancellationToken cancellationToken)
+    {
+        await checkGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            AudioDeviceTopology current = topologyProvider.Read();
+            AudioDeviceTopology? previous = previousTopology;
+            if (previous is null)
+            {
+                previousTopology = current;
+                return true;
+            }
+            if (previous == current)
+                return false;
+
+            await changeHandler(
+                new AudioDeviceTopologyChange(
+                    InputChanged: previous.InputSignature != current.InputSignature,
+                    OutputChanged: previous.OutputSignature != current.OutputSignature),
+                cancellationToken).ConfigureAwait(false);
+            previousTopology = current;
+            return true;
+        }
+        finally
+        {
+            checkGate.Release();
         }
     }
 }

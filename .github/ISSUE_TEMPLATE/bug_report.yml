@@ -15,7 +15,7 @@ body:
     attributes:
       label: Version
       description: What release or commit are you running?
-      placeholder: v0.4.2 or commit abc1234
+      placeholder: v0.4.3 or commit abc1234
     validations:
       required: true
 
@@ -140,7 +140,7 @@ body:
     attributes:
       label: Package evidence
       description: Name the exact package RID and package-smoke result. Enter "Not run" for a source-only report.
-      placeholder: dvmconsole-0.4.2-osx-arm64.zip — reproduced after clean extraction
+      placeholder: dvmconsole-0.4.3-osx-arm64.zip — reproduced after clean extraction
     validations:
       required: true
 

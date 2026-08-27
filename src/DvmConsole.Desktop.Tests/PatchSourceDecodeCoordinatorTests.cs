@@ -10,6 +10,7 @@ namespace DvmConsole.Desktop.Tests;
 
 public sealed class PatchSourceDecodeCoordinatorTests
 {
+    private readonly ReceiveAudioTrafficRouterTestHarness ReceiveAudioTrafficRouter = new();
     [Fact]
     public async Task PatchDecodeObserverReceivesProcessedTrafficIdentity()
     {

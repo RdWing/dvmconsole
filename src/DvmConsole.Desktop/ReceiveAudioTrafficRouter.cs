@@ -1,27 +1,25 @@
-using System.Runtime.CompilerServices;
 using DvmConsole.FneClient;
 using DvmConsole.Operations;
 
 namespace DvmConsole.Desktop;
 
-// Preserves the established receive-routing facade while moving steady-state
-// lookup and lifecycle decisions behind one immutable operations/presentation
-// adapter per route table.
-internal static class ReceiveAudioTrafficRouter
+// Explicitly owns the mutable receive-route lifecycle for one immutable route
+// table. Callers keep this object for as long as the configured routes live.
+internal sealed class ReceiveAudioTrafficRouter
 {
-    private static readonly ConditionalWeakTable<object, ReceiveRoutePresentationAdapter>
-        adapters = new();
+    private readonly ReceiveRoutePresentationAdapter adapter;
 
-    public static ChannelViewModel[] ResolveTargets(
+    public ReceiveAudioTrafficRouter(
         IReadOnlyDictionary<
             (FneTrafficProtocol Protocol, uint DestinationId),
-            ChannelViewModel[]> routes,
+            ChannelViewModel[]> routes)
+        => adapter = new ReceiveRoutePresentationAdapter(routes);
+
+    public ChannelViewModel[] ResolveTargets(
         IReadOnlyList<ChannelViewModel> decodeChannels,
         FneTrafficFrame traffic,
         Func<ChannelViewModel, uint, bool> isTrackingStream)
     {
-        ArgumentNullException.ThrowIfNull(routes);
-        ReceiveRoutePresentationAdapter adapter = GetAdapter(routes);
         ReceiveIngressRoutingDecision ingressDecision = adapter.ObserveIngress(
             traffic,
             isTrackingStream);
@@ -32,18 +30,14 @@ internal static class ReceiveAudioTrafficRouter
             isTrackingStream);
     }
 
-    public static ReceiveDispatchTargets ResolveDispatchTargets(
-        IReadOnlyDictionary<
-            (FneTrafficProtocol Protocol, uint DestinationId),
-            ChannelViewModel[]> routes,
+    public ReceiveDispatchTargets ResolveDispatchTargets(
         IReadOnlyList<ChannelViewModel> decodeChannels,
         bool includeRecordingChannels,
         FneTrafficFrame traffic,
         ReceiveIngressRoutingDecision ingressDecision,
         Func<ChannelViewModel, uint, bool> isTrackingStream)
     {
-        ArgumentNullException.ThrowIfNull(routes);
-        return GetAdapter(routes).ResolveDispatchTargets(
+        return adapter.ResolveDispatchTargets(
             decodeChannels,
             includeRecordingChannels,
             traffic,
@@ -51,47 +45,34 @@ internal static class ReceiveAudioTrafficRouter
             isTrackingStream);
     }
 
-    public static ReceiveIngressRoutingDecision ObserveIngress(
-        IReadOnlyDictionary<
-            (FneTrafficProtocol Protocol, uint DestinationId),
-            ChannelViewModel[]> routes,
+    public ReceiveIngressRoutingDecision ObserveIngress(
         FneTrafficFrame traffic,
         Func<ChannelViewModel, uint, bool> isTrackingStream,
         DateTimeOffset? observedAt = null)
     {
-        ArgumentNullException.ThrowIfNull(routes);
-        return GetAdapter(routes).ObserveIngress(traffic, isTrackingStream, observedAt);
+        return adapter.ObserveIngress(traffic, isTrackingStream, observedAt);
     }
 
-    public static ChannelViewModel[] ResolveTargets(
-        IReadOnlyDictionary<
-            (FneTrafficProtocol Protocol, uint DestinationId),
-            ChannelViewModel[]> routes,
+    public ChannelViewModel[] ResolveTargets(
         IReadOnlyList<ChannelViewModel> decodeChannels,
         FneTrafficFrame traffic,
         ReceiveIngressRoutingDecision ingressDecision,
         Func<ChannelViewModel, uint, bool> isTrackingStream)
     {
-        ArgumentNullException.ThrowIfNull(routes);
-        return GetAdapter(routes).ResolveTargets(
+        return adapter.ResolveTargets(
             decodeChannels,
             traffic,
             ingressDecision,
             isTrackingStream);
     }
 
-    public static ChannelViewModel[] ResolvePresentationCandidates(
-        IReadOnlyDictionary<
-            (FneTrafficProtocol Protocol, uint DestinationId),
-            ChannelViewModel[]> routes,
+    public ChannelViewModel[] ResolvePresentationCandidates(
         IReadOnlyList<ChannelViewModel> systemChannels,
         FneTrafficFrame traffic,
         Func<ChannelViewModel, bool> isAudioActive,
         Func<ChannelViewModel, bool> isPatchActive,
         Func<ChannelViewModel, uint, bool> isTrackingStream)
     {
-        ArgumentNullException.ThrowIfNull(routes);
-        ReceiveRoutePresentationAdapter adapter = GetAdapter(routes);
         return adapter.ResolvePresentationCandidates(
             systemChannels,
             traffic,
@@ -101,48 +82,28 @@ internal static class ReceiveAudioTrafficRouter
             isTrackingStream);
     }
 
-    public static IReadOnlyList<ReceiveRouteProjectionDecision> Advance(
-        IReadOnlyDictionary<
-            (FneTrafficProtocol Protocol, uint DestinationId),
-            ChannelViewModel[]> routes,
-        DateTimeOffset now)
-    {
-        ArgumentNullException.ThrowIfNull(routes);
-        return GetAdapter(routes).Advance(now);
-    }
+    public IReadOnlyList<ReceiveRouteProjectionDecision> Advance(DateTimeOffset now)
+        => adapter.Advance(now);
 
-    public static bool IsActive(
-        IReadOnlyDictionary<
-            (FneTrafficProtocol Protocol, uint DestinationId),
-            ChannelViewModel[]> routes,
+    public bool IsActive(
         ChannelRouteKey routeKey,
         uint streamId)
-    {
-        ArgumentNullException.ThrowIfNull(routes);
-        return GetAdapter(routes).IsActive(routeKey, streamId);
-    }
+        => adapter.IsActive(routeKey, streamId);
 
-    public static ChannelViewModel? ResolveProjectionTarget(
-        IReadOnlyDictionary<
-            (FneTrafficProtocol Protocol, uint DestinationId),
-            ChannelViewModel[]> routes,
+    public ChannelViewModel? ResolveProjectionTarget(
         ChannelRouteKey routeKey,
         uint streamId,
         Func<ChannelViewModel, bool> isAudioActive,
         Func<ChannelViewModel, bool> isPatchActive)
     {
-        ArgumentNullException.ThrowIfNull(routes);
-        return GetAdapter(routes).ResolveProjectionTarget(
+        return adapter.ResolveProjectionTarget(
             routeKey,
             streamId,
             isAudioActive,
             isPatchActive);
     }
 
-    public static ChannelViewModel[] ResolvePresentationCandidates(
-        IReadOnlyDictionary<
-            (FneTrafficProtocol Protocol, uint DestinationId),
-            ChannelViewModel[]> routes,
+    public ChannelViewModel[] ResolvePresentationCandidates(
         IReadOnlyList<ChannelViewModel> systemChannels,
         FneTrafficFrame traffic,
         ReceiveIngressRoutingDecision ingressDecision,
@@ -150,8 +111,7 @@ internal static class ReceiveAudioTrafficRouter
         Func<ChannelViewModel, bool> isPatchActive,
         Func<ChannelViewModel, uint, bool> isTrackingStream)
     {
-        ArgumentNullException.ThrowIfNull(routes);
-        return GetAdapter(routes).ResolvePresentationCandidates(
+        return adapter.ResolvePresentationCandidates(
             systemChannels,
             traffic,
             ingressDecision,
@@ -160,14 +120,4 @@ internal static class ReceiveAudioTrafficRouter
             isTrackingStream);
     }
 
-    private static ReceiveRoutePresentationAdapter GetAdapter(
-        IReadOnlyDictionary<
-            (FneTrafficProtocol Protocol, uint DestinationId),
-            ChannelViewModel[]> routes)
-        => adapters.GetValue(
-            routes,
-            static key => new ReceiveRoutePresentationAdapter(
-                (IReadOnlyDictionary<
-                    (FneTrafficProtocol Protocol, uint DestinationId),
-                    ChannelViewModel[]>)key));
 }

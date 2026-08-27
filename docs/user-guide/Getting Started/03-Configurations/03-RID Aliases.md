@@ -1,6 +1,6 @@
-# RID Aliases
+# RID aliases
 
-RID aliases allow the console to display human-readable names for radio IDs.
+RID aliases give radio IDs human-readable names in the console.
 
 Aliases can appear in places such as:
 
@@ -11,7 +11,7 @@ Aliases can appear in places such as:
 
 ---
 
-# Alias File Location
+# Alias file location
 
 Reference an alias file from a system entry in the codeplug:
 
@@ -21,13 +21,14 @@ systems:
     aliasPath: "Full/Path/To/alias.yml"
 ```
 
-If no alias file is configured or the file is unavailable, the console falls back to numeric RIDs.
+If no alias file is configured or the file is unavailable, DVM Console shows
+numeric RIDs.
 
 ---
 
-# Alias File Format
+# Alias file format
 
-Alias files use a simple YAML list.
+An alias file is a YAML list.
 
 ```yaml
 - alias: "User 1"
@@ -49,7 +50,7 @@ Each RID should appear only once in the file.
 
 ---
 
-# Operational Notes
+# Operational notes
 
 - Alias files are configured per system.
 - A RID may have different meanings on different systems, so keep alias files system-specific when needed.

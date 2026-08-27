@@ -21,7 +21,11 @@ internal readonly record struct ReceiveWorkQueueDiagnostics(
     long WakeWaits = 0,
     long WakeTimeouts = 0,
     int PeakPendingFrames = 0,
-    long SpuriousWakeSignals = 0);
+    long SpuriousWakeSignals = 0,
+    TimeSpan MaximumJitterBufferHoldDuration = default,
+    TimeSpan MaximumWorkerBacklogDuration = default,
+    TimeSpan MaximumSessionGateDelay = default,
+    TimeSpan MaximumSessionProcessingDuration = default);
 
 internal readonly record struct ReceiveWorkItemTiming(
     FneTrafficFrame Traffic,
@@ -35,7 +39,20 @@ internal readonly record struct ReceiveWorkItemTiming(
     TimeSpan JitterBufferTargetDelay = default,
     bool AdaptiveJitterBuffer = false,
     bool JitterBufferReorderedPacket = false,
-    int JitterBufferDeadlineMissedPackets = 0);
+    int JitterBufferDeadlineMissedPackets = 0,
+    TimeSpan JitterBufferHoldDuration = default,
+    TimeSpan WorkerBacklogDuration = default,
+    TimeSpan SessionGateDelay = default,
+    TimeSpan SessionProcessingDuration = default,
+    bool? EncryptedSessionProcessing = null,
+    bool HasQueueDelayBreakdown = false,
+    bool HasSessionProcessingBreakdown = false);
+
+internal readonly record struct ReceiveProcessingStageTiming(
+    TimeSpan SessionGateDelay,
+    TimeSpan SessionProcessingDuration,
+    bool? EncryptedSessionProcessing,
+    bool HasSessionProcessingBreakdown = true);
 
 internal interface IReceiveWorkQueueScheduler
 {
@@ -119,7 +136,9 @@ internal sealed class ChannelReceiveWorkQueue : IAsyncDisposable
     private readonly Dictionary<ChannelViewModel, ChannelWorker> workers = [];
     private readonly Dictionary<ChannelViewModel, TimingAccumulator> timing = [];
     private readonly HashSet<ChannelViewModel> stoppedChannels = [];
-    private readonly Func<ChannelViewModel, FneTrafficFrame, Task> process;
+    private readonly Func<ChannelViewModel, FneTrafficFrame, Task>? process;
+    private readonly Func<ChannelViewModel, FneTrafficFrame, Task<ReceiveProcessingStageTiming>>?
+        processWithTiming;
     private readonly Action<ChannelViewModel, ReceiveWorkItemTiming>? timingObserver;
     private readonly Func<ChannelViewModel, FneTrafficProtocol, ReceiveJitterBufferProfile> getJitterBufferProfile;
     private readonly IReceiveWorkQueueScheduler scheduler;
@@ -134,8 +153,40 @@ internal sealed class ChannelReceiveWorkQueue : IAsyncDisposable
         Action<ChannelViewModel, ReceiveWorkItemTiming>? timingObserver = null,
         Func<ChannelViewModel, FneTrafficProtocol, ReceiveJitterBufferProfile>? getJitterBufferProfile = null,
         IReceiveWorkQueueScheduler? scheduler = null)
+        : this(
+            process ?? throw new ArgumentNullException(nameof(process)),
+            processWithTiming: null,
+            maxPendingFramesPerChannel,
+            timingObserver,
+            getJitterBufferProfile,
+            scheduler)
     {
-        this.process = process ?? throw new ArgumentNullException(nameof(process));
+    }
+
+    public static ChannelReceiveWorkQueue CreateWithTiming(
+        Func<ChannelViewModel, FneTrafficFrame, Task<ReceiveProcessingStageTiming>> process,
+        int maxPendingFramesPerChannel = 64,
+        Action<ChannelViewModel, ReceiveWorkItemTiming>? timingObserver = null,
+        Func<ChannelViewModel, FneTrafficProtocol, ReceiveJitterBufferProfile>? getJitterBufferProfile = null,
+        IReceiveWorkQueueScheduler? scheduler = null)
+        => new(
+            process: null,
+            processWithTiming: process ?? throw new ArgumentNullException(nameof(process)),
+            maxPendingFramesPerChannel,
+            timingObserver,
+            getJitterBufferProfile,
+            scheduler);
+
+    private ChannelReceiveWorkQueue(
+        Func<ChannelViewModel, FneTrafficFrame, Task>? process,
+        Func<ChannelViewModel, FneTrafficFrame, Task<ReceiveProcessingStageTiming>>? processWithTiming,
+        int maxPendingFramesPerChannel,
+        Action<ChannelViewModel, ReceiveWorkItemTiming>? timingObserver,
+        Func<ChannelViewModel, FneTrafficProtocol, ReceiveJitterBufferProfile>? getJitterBufferProfile,
+        IReceiveWorkQueueScheduler? scheduler)
+    {
+        this.process = process;
+        this.processWithTiming = processWithTiming;
         if (maxPendingFramesPerChannel < 1)
             throw new ArgumentOutOfRangeException(nameof(maxPendingFramesPerChannel));
         this.maxPendingFramesPerChannel = maxPendingFramesPerChannel;
@@ -228,6 +279,7 @@ internal sealed class ChannelReceiveWorkQueue : IAsyncDisposable
                 worker = new ChannelWorker(
                     channel,
                     process,
+                    processWithTiming,
                     accumulator,
                     maxPendingFramesPerChannel,
                     timingObserver,
@@ -321,7 +373,9 @@ internal sealed class ChannelReceiveWorkQueue : IAsyncDisposable
         private readonly ReceivePacketJitterBuffer<WorkItem> pending;
         private readonly CoalescingWakeSignal wakeSignal = new();
         private readonly ChannelViewModel channel;
-        private readonly Func<ChannelViewModel, FneTrafficFrame, Task> process;
+        private readonly Func<ChannelViewModel, FneTrafficFrame, Task>? process;
+        private readonly Func<ChannelViewModel, FneTrafficFrame, Task<ReceiveProcessingStageTiming>>?
+            processWithTiming;
         private readonly TimingAccumulator timing;
         private readonly int maxPendingFrames;
         private readonly Action<ChannelViewModel, ReceiveWorkItemTiming>? timingObserver;
@@ -337,7 +391,8 @@ internal sealed class ChannelReceiveWorkQueue : IAsyncDisposable
 
         public ChannelWorker(
             ChannelViewModel channel,
-            Func<ChannelViewModel, FneTrafficFrame, Task> process,
+            Func<ChannelViewModel, FneTrafficFrame, Task>? process,
+            Func<ChannelViewModel, FneTrafficFrame, Task<ReceiveProcessingStageTiming>>? processWithTiming,
             TimingAccumulator timing,
             int maxPendingFrames,
             Action<ChannelViewModel, ReceiveWorkItemTiming>? timingObserver,
@@ -347,6 +402,7 @@ internal sealed class ChannelReceiveWorkQueue : IAsyncDisposable
         {
             this.channel = channel;
             this.process = process;
+            this.processWithTiming = processWithTiming;
             this.timing = timing;
             this.maxPendingFrames = maxPendingFrames;
             this.timingObserver = timingObserver;
@@ -549,9 +605,18 @@ internal sealed class ChannelReceiveWorkQueue : IAsyncDisposable
                 }
 
                 long processingStarted = scheduler.GetTimestamp();
+                ReceiveProcessingStageTiming processingStages = default;
                 try
                 {
-                    await process(channel, item.Traffic).ConfigureAwait(false);
+                    if (processWithTiming is not null)
+                    {
+                        processingStages = await processWithTiming(channel, item.Traffic)
+                            .ConfigureAwait(false);
+                    }
+                    else
+                    {
+                        await process!(channel, item.Traffic).ConfigureAwait(false);
+                    }
                 }
                 catch
                 {
@@ -562,11 +627,18 @@ internal sealed class ChannelReceiveWorkQueue : IAsyncDisposable
                 finally
                 {
                     long processingCompleted = scheduler.GetTimestamp();
+                    TimeSpan queueDelay = Stopwatch.GetElapsedTime(
+                        item.EnqueuedTimestamp,
+                        processingStarted);
+                    TimeSpan jitterHold = CalculateJitterHoldDuration(
+                        item.EnqueuedTimestamp,
+                        processingStarted,
+                        jitterMetadata.ReleaseDeadlineTimestamp);
                     var observed = new ReceiveWorkItemTiming(
                         item.Traffic,
                         item.InterArrivalDelay,
                         Stopwatch.GetElapsedTime(item.IngressTimestamp, item.EnqueuedTimestamp),
-                        Stopwatch.GetElapsedTime(item.EnqueuedTimestamp, processingStarted),
+                        queueDelay,
                         Stopwatch.GetElapsedTime(processingStarted, processingCompleted),
                         Stopwatch.GetElapsedTime(item.IngressTimestamp, processingCompleted),
                         item.TransportInterArrivalDelay,
@@ -574,7 +646,15 @@ internal sealed class ChannelReceiveWorkQueue : IAsyncDisposable
                         jitterMetadata.TargetDelay,
                         jitterMetadata.IsAdaptive,
                         jitterMetadata.ReorderedBeforePlayout,
-                        jitterMetadata.MissingPacketsAtDeadline);
+                        jitterMetadata.MissingPacketsAtDeadline,
+                        jitterHold,
+                        SubtractNonNegative(queueDelay, jitterHold),
+                        processingStages.SessionGateDelay,
+                        processingStages.SessionProcessingDuration,
+                        processingStages.EncryptedSessionProcessing,
+                        HasQueueDelayBreakdown: true,
+                        HasSessionProcessingBreakdown:
+                            processingStages.HasSessionProcessingBreakdown);
                     timing.Observe(observed);
                     try
                     {
@@ -613,6 +693,23 @@ internal sealed class ChannelReceiveWorkQueue : IAsyncDisposable
             continuation = null;
             return false;
         }
+
+        private static TimeSpan CalculateJitterHoldDuration(
+            long enqueuedTimestamp,
+            long processingStarted,
+            long releaseDeadlineTimestamp)
+        {
+            if (releaseDeadlineTimestamp <= enqueuedTimestamp)
+                return TimeSpan.Zero;
+
+            long holdCompleted = Math.Min(processingStarted, releaseDeadlineTimestamp);
+            return holdCompleted <= enqueuedTimestamp
+                ? TimeSpan.Zero
+                : Stopwatch.GetElapsedTime(enqueuedTimestamp, holdCompleted);
+        }
+
+        private static TimeSpan SubtractNonNegative(TimeSpan total, TimeSpan part)
+            => total > part ? total - part : TimeSpan.Zero;
 
         private readonly record struct WorkItem(
             FneTrafficFrame Traffic,
@@ -760,7 +857,19 @@ internal sealed class ChannelReceiveWorkQueue : IAsyncDisposable
                 Max(left.MaximumTransportToFneBoundaryDelay, right.MaximumTransportToFneBoundaryDelay),
                 Max(left.MaximumJitterBufferTargetDelay, right.MaximumJitterBufferTargetDelay),
                 SaturatingAdd(left.JitterBufferReorderedPackets, right.JitterBufferReorderedPackets),
-                SaturatingAdd(left.JitterBufferDeadlineMissedPackets, right.JitterBufferDeadlineMissedPackets));
+                SaturatingAdd(left.JitterBufferDeadlineMissedPackets, right.JitterBufferDeadlineMissedPackets),
+                MaximumJitterBufferHoldDuration: Max(
+                    left.MaximumJitterBufferHoldDuration,
+                    right.MaximumJitterBufferHoldDuration),
+                MaximumWorkerBacklogDuration: Max(
+                    left.MaximumWorkerBacklogDuration,
+                    right.MaximumWorkerBacklogDuration),
+                MaximumSessionGateDelay: Max(
+                    left.MaximumSessionGateDelay,
+                    right.MaximumSessionGateDelay),
+                MaximumSessionProcessingDuration: Max(
+                    left.MaximumSessionProcessingDuration,
+                    right.MaximumSessionProcessingDuration));
 
         private static long SaturatingAdd(long left, long right)
             => left > long.MaxValue - right ? long.MaxValue : left + right;
@@ -796,6 +905,10 @@ internal sealed class ChannelReceiveWorkQueue : IAsyncDisposable
             private TimeSpan maximumProcessingDuration;
             private TimeSpan maximumEndToEndDelay;
             private TimeSpan maximumJitterBufferTargetDelay;
+            private TimeSpan maximumJitterBufferHoldDuration;
+            private TimeSpan maximumWorkerBacklogDuration;
+            private TimeSpan maximumSessionGateDelay;
+            private TimeSpan maximumSessionProcessingDuration;
             private long jitterBufferReorderedPackets;
             private long jitterBufferDeadlineMissedPackets;
 
@@ -834,6 +947,18 @@ internal sealed class ChannelReceiveWorkQueue : IAsyncDisposable
                 maximumJitterBufferTargetDelay = Max(
                     maximumJitterBufferTargetDelay,
                     observed.JitterBufferTargetDelay);
+                maximumJitterBufferHoldDuration = Max(
+                    maximumJitterBufferHoldDuration,
+                    observed.JitterBufferHoldDuration);
+                maximumWorkerBacklogDuration = Max(
+                    maximumWorkerBacklogDuration,
+                    observed.WorkerBacklogDuration);
+                maximumSessionGateDelay = Max(
+                    maximumSessionGateDelay,
+                    observed.SessionGateDelay);
+                maximumSessionProcessingDuration = Max(
+                    maximumSessionProcessingDuration,
+                    observed.SessionProcessingDuration);
                 if (observed.JitterBufferReorderedPacket && jitterBufferReorderedPackets < long.MaxValue)
                     jitterBufferReorderedPackets++;
                 jitterBufferDeadlineMissedPackets = SaturatingAdd(
@@ -853,7 +978,11 @@ internal sealed class ChannelReceiveWorkQueue : IAsyncDisposable
                     maximumTransportToFneBoundaryDelay,
                     maximumJitterBufferTargetDelay,
                     jitterBufferReorderedPackets,
-                    jitterBufferDeadlineMissedPackets);
+                    jitterBufferDeadlineMissedPackets,
+                    MaximumJitterBufferHoldDuration: maximumJitterBufferHoldDuration,
+                    MaximumWorkerBacklogDuration: maximumWorkerBacklogDuration,
+                    MaximumSessionGateDelay: maximumSessionGateDelay,
+                    MaximumSessionProcessingDuration: maximumSessionProcessingDuration);
         }
     }
 

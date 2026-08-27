@@ -1,12 +1,12 @@
 # Talkgroup Audio Recorder
 
-This page covers the built-in **Talkgroup Audio Recorder (TAR)** feature.
-
-TAR records selected talkgroups to compact local `.opus` files. The catalog metadata is embedded in each recording, so new recordings do not need a separate `.json` file.
+The built-in **Talkgroup Audio Recorder (TAR)** saves selected talkgroups as
+local `.opus` files. Each new recording contains its catalog metadata and does
+not need a separate `.json` file.
 
 ---
 
-# Open TAR
+# Opening TAR
 
 Open TAR from:
 
@@ -15,36 +15,36 @@ Tools > Talkgroup Audio Recorder > Viewer
 Tools > Talkgroup Audio Recorder > Configuration
 ```
 
-Use **Viewer** to review and play recordings.
-
-Use **Configuration** to choose the recording folder and decide which talkgroups TAR records.
+Use **Viewer** to review and play recordings. Use **Configuration** to select the
+recording folder and the talkgroups to record.
 
 ---
 
-# What TAR Records
+# What TAR records
 
-TAR records per-call audio, not one long continuous file.
+TAR creates one recording per call instead of one continuous file.
 
 It can record:
 
 - received call audio on TAR-enabled talkgroups
 - console-originated transmit audio on TAR-enabled talkgroups
 
-For received calls, TAR recording is independent from live speaker selection.
-Arming TAR for a resource is enough to decode and record its inbound calls; the
-resource card does not also need to be selected for RX. Speaker playback remains
-off unless the operator separately selects that card.
+Recording a received call does not depend on live speaker selection. Arming TAR
+for a resource is enough to decode and record its inbound calls; the card does
+not also need RX selected. Speaker playback remains off until the operator
+selects the card separately.
 
-Console-originated transmit audio is recorded when a TAR-armed resource
-participates in the transmission.
+TAR records console-originated transmit audio when an armed resource takes part
+in the transmission.
 
 ---
 
-# Recording Folder
+# Recording folder
 
 TAR requires a valid recording folder.
 
-The default location is the `DVMConsole/TAR` folder under the current user's Documents folder.
+The default location is `DVMConsole/TAR` under the current user's Documents
+folder.
 
 You can change this in:
 
@@ -52,11 +52,12 @@ You can change this in:
 Tools > Talkgroup Audio Recorder > Configuration
 ```
 
-If the folder does not exist, the console creates it when TAR settings are saved.
+If the folder does not exist, DVM Console creates it when you save the TAR
+settings.
 
 ---
 
-# Enable Recording
+# Enabling recording
 
 In the TAR Configuration window:
 
@@ -65,11 +66,12 @@ In the TAR Configuration window:
 - click the `TAR` control to enable or disable recording
 - optionally enter ignored subscriber IDs in **Ignore RIDs**
 
-After TAR is enabled for a talkgroup, inbound recording begins automatically
-when matching traffic arrives. Selecting the resource card remains a separate
-live-listening choice.
+After you enable TAR for a talkgroup, recording starts automatically when
+matching traffic arrives. Selecting the resource card for live listening is a
+separate choice.
 
-Ignored subscriber IDs are useful for excluding known announcement or non-essential sources from TAR on a specific talkgroup.
+Use ignored subscriber IDs to exclude known announcements or other unwanted
+sources from TAR on a specific talkgroup.
 
 Enter multiple ignored subscriber IDs separated by commas, spaces, or semicolons.
 
@@ -81,7 +83,7 @@ Example:
 
 ---
 
-# Channel Indicator
+# Channel indicator
 
 When TAR is enabled for a talkgroup, the resource card shows a purple:
 
@@ -91,13 +93,13 @@ TAR
 
 button in the card's bottom control row.
 
-If TAR is not enabled for that talkgroup, nothing is shown.
+If TAR is disabled for the talkgroup, the button is hidden.
 
 ---
 
-# Viewer Basics
+# Viewer basics
 
-The TAR Viewer opens with the newest recordings first.
+The TAR Viewer lists the newest recordings first.
 
 Default fields:
 
@@ -123,13 +125,15 @@ Viewer actions:
 - Open Folder
 - Delete
 
-Completed TAR recordings also remain available from the console History view when older live call rows age past the in-memory session limit. This affects only how recordings are represented in History; file deletion continues to follow the configured TAR retention policy.
+Completed TAR recordings remain available in History after their live call rows
+age past the in-memory session limit. This changes only how History represents
+the recording. File deletion still follows the configured TAR retention policy.
 
 ---
 
-# Advanced Filters
+# Advanced filters
 
-Expand **Advanced Filters** in the TAR Viewer to narrow results.
+Expand **Advanced Filters** in the TAR Viewer to narrow the recording list.
 
 Available filters include:
 
@@ -151,9 +155,8 @@ Use **Clear Filters** to reset the current filter set.
 
 # Retention
 
-TAR retention is real file cleanup.
-
-For each TAR-enabled talkgroup, **Keep Days** controls how long recordings are kept on disk.
+For each TAR-enabled talkgroup, **Keep Days** controls how long recordings stay
+on disk. Retention cleanup deletes files.
 
 Behavior:
 
@@ -175,9 +178,9 @@ Cleanup runs when:
 
 ---
 
-# Recording Folder Structure
+# Recording folder structure
 
-TAR stores recordings in date- and system-organized folders for easier browsing.
+TAR organizes recordings by date and system.
 
 Folder layout:
 
@@ -197,15 +200,19 @@ TAR\
       221530125_System1_3100_1001_SECURE_AES_42.opus
 ```
 
-The date folder and filename time use the local system timezone. The metadata retains UTC start and end timestamps.
+The date folder and filename use the local system time zone. Embedded metadata
+keeps the UTC start and end timestamps.
 
 ---
 
 # Metadata
 
-Each new recording stores its catalog metadata in an OpusTags field inside the `.opus` file.
+Each new recording stores its catalog metadata in an OpusTags field inside the
+`.opus` file.
 
-Legacy `.json` sidecars are not scanned, migrated, or deleted. Older recordings appear in the TAR Viewer only when their metadata is already embedded in the `.opus` file.
+TAR does not scan, migrate, or delete legacy `.json` sidecars. An older
+recording appears in the Viewer only if its `.opus` file already contains the
+metadata.
 
 Metadata includes:
 
@@ -226,7 +233,8 @@ Metadata includes:
 - file size
 - sample rate / bit depth / channel count
 
-This metadata is used by the TAR Viewer and can also be read by tools that inspect OpusTags.
+The TAR Viewer reads this metadata. Other tools that inspect OpusTags can read
+it as well.
 
 ---
 

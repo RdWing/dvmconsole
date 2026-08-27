@@ -102,6 +102,42 @@ public sealed class ReceivePipelineTimingReporterTests
         Assert.False(reporter.ShouldPublish(channel, timing, DateTimeOffset.UtcNow));
     }
 
+    [Fact]
+    public void UsesMeasuredJitterHoldAndWorkerBacklogWhenAvailable()
+    {
+        var reporter = new ReceivePipelineTimingReporter(TimeSpan.FromSeconds(5));
+        var channel = new ChannelViewModel(new ChannelConfiguration
+        {
+            Name = "Dispatch",
+            System = "System 1",
+            Tgid = "100",
+            Mode = "p25"
+        });
+        ReceiveWorkItemTiming intentionalHold = Timing(TimeSpan.FromMilliseconds(360)) with
+        {
+            JitterBufferTargetDelay = TimeSpan.FromMilliseconds(180),
+            JitterBufferHoldDuration = TimeSpan.FromMilliseconds(360),
+            WorkerBacklogDuration = TimeSpan.Zero,
+            HasQueueDelayBreakdown = true
+        };
+
+        Assert.False(reporter.ShouldPublish(
+            channel,
+            intentionalHold,
+            DateTimeOffset.UtcNow));
+
+        ReceiveWorkItemTiming workerBacklog = intentionalHold with
+        {
+            QueueDelay = TimeSpan.FromMilliseconds(560),
+            EndToEndDelay = TimeSpan.FromMilliseconds(560),
+            WorkerBacklogDuration = TimeSpan.FromMilliseconds(200)
+        };
+        Assert.True(reporter.ShouldPublish(
+            channel,
+            workerBacklog,
+            DateTimeOffset.UtcNow));
+    }
+
     private static ReceiveWorkItemTiming Timing(
         TimeSpan total,
         TimeSpan? interArrival = null)

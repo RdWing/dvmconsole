@@ -70,6 +70,34 @@ public sealed class DefaultAudioDeviceMonitorTests
     }
 
     [Fact]
+    public async Task BacksOffWhileStableAndResetsWhenTopologyChanges()
+    {
+        var provider = new FakeTopologyProvider
+        {
+            Current = new AudioDeviceTopology("input-1", "output-1")
+        };
+        await using var monitor = new DefaultAudioDeviceMonitor(
+            provider,
+            (_, _) => Task.CompletedTask,
+            pollInterval: TimeSpan.FromSeconds(1),
+            maximumPollInterval: TimeSpan.FromSeconds(5));
+
+        await monitor.CheckNowAsync();
+        Assert.Equal(TimeSpan.FromSeconds(1), monitor.CurrentPollInterval);
+        await monitor.CheckNowAsync();
+        Assert.Equal(TimeSpan.FromSeconds(2), monitor.CurrentPollInterval);
+        await monitor.CheckNowAsync();
+        Assert.Equal(TimeSpan.FromSeconds(4), monitor.CurrentPollInterval);
+        await monitor.CheckNowAsync();
+        Assert.Equal(TimeSpan.FromSeconds(5), monitor.CurrentPollInterval);
+
+        provider.Current = new AudioDeviceTopology("input-2", "output-1");
+        await monitor.CheckNowAsync();
+
+        Assert.Equal(TimeSpan.FromSeconds(1), monitor.CurrentPollInterval);
+    }
+
+    [Fact]
     public void UsesThePhysicalDefaultIdentityWhenTheDeviceListUsesASyntheticEntry()
     {
         var backend = new SyntheticDefaultAudioBackend

@@ -89,7 +89,8 @@ public sealed class GeneratedToneSequence
                 GeneratedToneStepKind.SingleTone => tones.GenerateTone(step.FrequencyHz, step.Duration, amplitude),
                 GeneratedToneStepKind.Dtmf => dtmf.GenerateDigit(step.Digit, step.Duration, amplitude),
                 GeneratedToneStepKind.Silence => tones.GenerateSilence(step.Duration),
-                _ => throw new ArgumentOutOfRangeException(nameof(step.Kind))
+                _ => throw new InvalidOperationException(
+                    $"Generated tone step kind {step.Kind} is not supported.")
             });
         }
         return samples.ToArray();

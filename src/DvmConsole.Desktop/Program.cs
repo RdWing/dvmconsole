@@ -63,19 +63,28 @@ internal static class Program
 
     public static AppBuilder BuildAvaloniaApp()
     {
+#if DVMCONSOLE_MACOS
+        AppBuilder builder = AppBuilder.Configure<App>()
+            .UseAvaloniaNative()
+            .UseSkia();
+#elif DVMCONSOLE_WINDOWS
+        AppBuilder builder = AppBuilder.Configure<App>()
+            .UseWin32()
+            .UseSkia();
+#else
         AppBuilder builder = AppBuilder.Configure<App>()
             .UsePlatformDetect();
-        if (OperatingSystem.IsMacOS())
+#endif
+#if DVMCONSOLE_MACOS
+        builder = builder.With(new AvaloniaNativePlatformOptions
         {
-            builder = builder.With(new AvaloniaNativePlatformOptions
-            {
-                RenderingMode =
-                [
-                    AvaloniaNativeRenderingMode.Metal,
-                    AvaloniaNativeRenderingMode.Software
-                ]
-            });
-        }
+            RenderingMode =
+            [
+                AvaloniaNativeRenderingMode.Metal,
+                AvaloniaNativeRenderingMode.Software
+            ]
+        });
+#endif
 
         return builder.LogToTrace();
     }

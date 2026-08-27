@@ -25,17 +25,18 @@ public sealed class AudioSettingsApplicationTests
                 "Audio settings test",
                 [],
                 [],
-                userSettingsStore: store,
-                serialPortProvider: () => [],
-                uiDispatcher: ImmediateUiDispatcher.Instance,
-                networkDisabledDemo: true,
-                reconfigureApplicationAudio: configuration =>
-                {
-                    attemptedConfigurations.Add(configuration);
-                    if (Interlocked.Increment(ref attempts) == 1)
-                        return Task.FromException(new IOException("synthetic route failure"));
-                    return Task.CompletedTask;
-                });
+                new MainWindowViewModelOptions(
+                    UserSettingsStore: store,
+                    SerialPortProvider: () => [],
+                    UiDispatcher: ImmediateUiDispatcher.Instance,
+                    NetworkDisabledDemo: true,
+                    ReconfigureApplicationAudio: configuration =>
+                    {
+                        attemptedConfigurations.Add(configuration);
+                        if (Interlocked.Increment(ref attempts) == 1)
+                            return Task.FromException(new IOException("synthetic route failure"));
+                        return Task.CompletedTask;
+                    }));
             viewModel.AudioInputDeviceIdText = "replacement-input";
             viewModel.AudioOutputDeviceIdText = "replacement-output";
 

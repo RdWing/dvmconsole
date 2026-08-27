@@ -117,6 +117,7 @@ internal sealed class StreamSessionState(
     public uint StreamId { get; set; }
     public DateTimeOffset LastActivity { get; set; } = DateTimeOffset.UtcNow;
     public DateTimeOffset? CompletedAt { get; set; }
+    public bool? Encrypted { get; set; }
 
     public ValueTask DisposeAsync() => Session.DisposeAsync();
 }

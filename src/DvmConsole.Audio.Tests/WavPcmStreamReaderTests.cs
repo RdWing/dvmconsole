@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Buffers.Binary;
 using DvmConsole.Audio;
 using Xunit;
@@ -56,6 +57,57 @@ public sealed class WavPcmStreamReaderTests
 
         await Assert.ThrowsAsync<NotSupportedException>(() =>
             WavPcmStreamReader.OpenAsync(new MemoryStream(wav)));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task SkipsPcmFramesOnSeekableAndStreamingSources(bool nonSeekable)
+    {
+        byte[] wav = CreateWav(
+            sampleRate: 8000,
+            channels: 1,
+            bitsPerSample: 16,
+            samples: [100, 200, 300, 400]);
+        Stream source = nonSeekable
+            ? new NonSeekableStream(wav)
+            : new MemoryStream(wav);
+        await using var reader = await WavPcmStreamReader.OpenAsync(source);
+
+        long skipped = await reader.SkipSamplesAsync(2);
+        short[] samples = new short[2];
+        int count = await reader.ReadSamplesAsync(samples);
+
+        Assert.Equal(2, skipped);
+        Assert.Equal(2, count);
+        Assert.Equal([300, 400], samples);
+    }
+
+    [Fact]
+    public async Task ReusesAndReturnsDecodeBufferAcrossReads()
+    {
+        byte[] wav = CreateWav(
+            sampleRate: 8000,
+            channels: 1,
+            bitsPerSample: 16,
+            samples: [100, 200, 300, 400]);
+        var pool = new TrackingArrayPool();
+
+        await using (var reader = await WavPcmStreamReader.OpenAsync(
+            new MemoryStream(wav),
+            pool))
+        {
+            short[] sample = new short[1];
+            Assert.Equal(1, await reader.ReadSamplesAsync(sample));
+            Assert.Equal(100, sample[0]);
+            Assert.Equal(1, await reader.ReadSamplesAsync(sample));
+            Assert.Equal(200, sample[0]);
+            Assert.Equal(1, pool.RentCount);
+            Assert.Equal(0, pool.ReturnCount);
+        }
+
+        Assert.Equal(1, pool.RentCount);
+        Assert.Equal(1, pool.ReturnCount);
     }
 
     private static byte[] CreateWav(
@@ -127,5 +179,23 @@ public sealed class WavPcmStreamReaderTests
     {
         public override bool CanSeek => false;
         public override long Seek(long offset, SeekOrigin loc) => throw new NotSupportedException();
+    }
+
+    private sealed class TrackingArrayPool : ArrayPool<byte>
+    {
+        public int RentCount { get; private set; }
+        public int ReturnCount { get; private set; }
+
+        public override byte[] Rent(int minimumLength)
+        {
+            RentCount++;
+            return new byte[Math.Max(1, minimumLength)];
+        }
+
+        public override void Return(byte[] array, bool clearArray = false)
+        {
+            ArgumentNullException.ThrowIfNull(array);
+            ReturnCount++;
+        }
     }
 }

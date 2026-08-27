@@ -1,16 +1,15 @@
-# Settings Reference
+# Settings reference
 
-This page summarizes user-facing settings in the console.
+This page describes the settings available to operators.
 
 ---
 
-# Settings Menu
+# Settings menu
 
 ## Toggle Push To Talk Mode
 
-When enabled, clicking PTT toggles transmit on or off.
-
-When disabled, PTT behaves as press-and-hold.
+When enabled, each PTT click starts or stops transmit. When disabled, PTT uses
+press-and-hold behavior.
 
 Default:
 
@@ -18,11 +17,11 @@ Default:
 Off
 ```
 
-This setting is saved.
+DVM Console saves this setting.
 
 ## Talk Permit Tone
 
-When enabled, the console plays a short local tone when transmit begins.
+When enabled, DVM Console plays a short local tone when transmit begins.
 
 This is local operator feedback only; it is not transmitted. Global,
 active-system, and serial PTT wait for the cue to complete before microphone
@@ -30,8 +29,8 @@ audio is released, including when the shared PTT setting uses toggle mode.
 
 ## Connection Chimes
 
-Connection chimes are enabled by default. Disable this setting if the operator
-does not want local audible feedback when an FNE connects or disconnects.
+Connection chimes are enabled by default. Turn them off to silence local
+feedback when an FNE connects or disconnects.
 
 ## Interface Size
 
@@ -41,23 +40,26 @@ adjust the main console and Console Settings display.
 - **Text size** changes the inherited application font size.
 - **Interface scale** scales the main console and Console Settings UI.
 
-These settings apply immediately and remain in `UserSettings` schema 6. The
+These settings apply immediately and are stored in `UserSettings` schema 6. The
 optional Engineering Health rail stores only its visibility and height in
-`OperatorView.json`; it does not move or rewrite channel cards.
+`OperatorView.json`. It does not move or rewrite channel cards.
 
 ## Mute RX Audio While Transmitting
 
-When enabled, local RX speaker playback is muted while the console is transmitting.
+When enabled, DVM Console mutes local RX speaker playback during transmit.
 
-This does not block received network traffic, logs, patch forwarding, or RX visual state. It only suppresses local speaker playback during TX.
+Network traffic, logs, patch forwarding, and RX visual state continue. Only the
+local speaker output is muted.
 
-Use this when operators use speakers and you want to reduce the chance of received audio feeding back into the microphone.
+Use this with speakers to reduce the chance that received audio feeds back into
+the microphone.
 
 ## Retain Patch State on Startup
 
-When enabled, patch active/on-off state is restored on startup.
+When enabled, DVM Console restores each patch's active state at startup.
 
-Patch members always persist. This setting only controls whether enabled patches come back enabled after restart.
+Patch membership always persists. This setting controls only whether active
+patches return active after a restart.
 
 Default:
 
@@ -67,15 +69,19 @@ Off
 
 ## Restore Selected Channels On Startup
 
-When enabled, selected resources are restored on startup.
+When enabled, DVM Console restores selected resources at startup.
 
-Configured encrypted P25 resources request keys through KMM whenever the relevant FNE connects, whether or not this setting is enabled. Restored selection state controls only which resources return selected; the local key file remains the automatic fallback.
+Configured encrypted P25 resources request keys through KMM whenever their FNE
+connects, regardless of this setting. Restored selection controls only which
+resources return selected. The local key file remains the automatic fallback.
 
-When disabled, selected resources and per-resource volume do not come back sticky on startup.
+When disabled, resources start unselected and their saved volumes are not
+restored.
 
-## Toolbar Clocks
+## Toolbar clocks
 
-Open **Settings > Clock settings** to show the General page in Console Settings. Up to eight toolbar clocks can be enabled.
+Open **Settings > Clock settings** to show the General page in Console Settings.
+You can enable up to eight toolbar clocks.
 
 Each clock has:
 
@@ -88,17 +94,18 @@ The General page also controls the shared clock display format:
 - `Use 24-hour time`
 - `Show seconds`
 
-Clock settings are saved and restored on startup. Enabled clock slots, UTC offsets, colors, 12/24-hour mode, and seconds display are all sticky user preferences.
+DVM Console restores the enabled slots, UTC offsets, colors, 12/24-hour format,
+and seconds display at startup.
 
 Enabled clocks sit directly to the left of **Keep Mic Warm** and the output-mute
-controls. The flexible space between **Help** and this toolbar group collapses
-before any controls move into **MORE**. At narrower widths, alert shortcuts move
-first, followed by **TONES** and then clocks. The transition accounts for the
-interface scale and number of enabled clocks.
+controls. As the window narrows, the flexible space between **Help** and this
+group collapses first. Alert shortcuts then move into **MORE**, followed by
+**TONES** and the clocks. The transition accounts for interface scale and the
+number of enabled clocks.
 
 ## Audio Settings
 
-Opens Console Settings on the Audio page.
+This opens the Audio page in Console Settings.
 
 See **Audio Settings** for details.
 
@@ -112,20 +119,18 @@ These controls affect speaker playback only. Receive decoding, call lifecycle,
 patching, and TAR recording continue. System and zone scopes compose: restoring
 one scope does not override another scope that is still muted.
 
-Microphone gain, EQ, AGC, warm-microphone, and Apply controls wrap onto
-additional rows when Console Settings is narrowed so every control remains
-reachable.
+When Console Settings is narrow, the microphone gain, EQ, AGC, warm-microphone,
+and Apply controls wrap onto more rows so each one remains reachable.
 
-Applying microphone processing or device-route changes is transactional. If the
-runtime route cannot be reconfigured, the previous input, output, processing
-options, and warm-microphone state are restored, the proposed settings are not
-persisted, and the failure is shown in Audio status and Debug Logs.
+DVM Console applies microphone processing and device-route changes as one
+transaction. If reconfiguration fails, it restores the previous input, output,
+processing options, and warm-microphone state. The failed settings are not
+saved, and Audio status and Debug Logs report the problem.
 
 ## Import / Export Settings
 
-Opens the Settings Transfer window.
-
-Use this to move console preferences between machines without manually copying `UserSettings.json`.
+This opens Settings Transfer, which moves console preferences between machines
+without manually copying `UserSettings.json`.
 
 The transfer file is a portable JSON file. You can choose which categories to export or import, including:
 
@@ -142,54 +147,63 @@ The transfer file is a portable JSON file. You can choose which categories to ex
 
 Press `Ctrl+A` in the transfer window to select all categories.
 
-On import, only the selected categories are replaced. The console reloads the current codeplug/widgets after import so layout and routing changes take effect immediately.
+An import replaces only the selected categories. DVM Console reloads the
+current codeplug and widgets so layout and routing changes take effect
+immediately.
 
 ## Reset Settings
 
-Clears saved user settings.
+This clears saved user settings.
 
-Use with care. This can remove saved window layout, widget positions, audio routing, selected channel state, and other preferences.
+It can remove the saved window layout, widget positions, audio routes, selected
+channel state, and other preferences.
 
 ## Widgets
 
-The General page can show or hide system status cards, channel widgets, and toolbar alert buttons. **Lock channel widget positions** prevents card dragging; clear it to arrange cards on the active tab.
+The General page can show or hide system status cards, channel widgets, and
+toolbar alert buttons. **Lock channel widget positions** prevents dragging.
+Clear it before arranging cards on the active tab.
 
-## Keyboard PTT Keys
+## Keyboard PTT keys
 
-Choose Space or F1 through F19 for global PTT and active-system PTT under **Channels** or **Console Settings > PTT**. Global PTT keys every `TX`-selected resource; active-system PTT limits those resources to the active system tab. The keys must be unique and share the same press-and-hold or toggle setting.
+Choose Space or F1 through F19 for global and active-system PTT under
+**Channels** or **Console Settings > PTT**. Global PTT keys every `TX`-selected
+resource. Active-system PTT limits the selection to the active system tab. The
+two bindings must use different keys and share the press-and-hold or toggle
+setting.
 
-The serial hardware PTT can independently operate all `TX`-selected resources or only those in the active system. Apply the serial settings after changing its scope.
+Serial hardware PTT can operate every `TX`-selected resource or only those in
+the active system. Apply the serial settings after changing this scope.
 
 ---
 
-# View Menu
+# View menu
 
 ## Select User Background
 
-Chooses a custom background image for the main console.
+This selects a custom background image for the main console.
 
 ## Dark Mode
 
-Toggles the app theme.
+This switches the application theme.
 
 ## Lock Widgets
 
-Prevents resource and status widgets from being moved.
+This prevents resource and status widgets from moving.
 
 ## Reset Widget Layout
 
-Snaps channel cards back to a grid-style layout.
+This returns channel cards to a grid layout.
 
 ## Event History
 
-Recent calls appear in the collapsible Activity sidebar. Open the complete Event
-History from **View > History**, the Activity heading, or **Tools > Talkgroup
-Audio Recorder > Viewer**; each route opens the History page in Console
+Recent calls appear in the collapsible Activity sidebar. Open the complete
+history from **View > History**, the Activity heading, or **Tools > Talkgroup
+Audio Recorder > Viewer**. Each route opens the History page in Console
 Settings.
 
-When either list is scrolled away from the top, incoming calls preserve the
-current visible row instead of pushing the reading position down. A list that
-is already at the top continues following new calls.
+When either list is scrolled away from the top, incoming calls do not move the
+visible row. A list already at the top continues to follow new calls.
 
 ## Groups
 
@@ -197,11 +211,11 @@ Opens Console Settings on the Groups page.
 
 ## Keep Window on Top
 
-Keeps the console above other windows.
+This keeps the console above other windows.
 
 ---
 
-# Tools Menu
+# Tools menu
 
 ## Talkgroup Audio Recorder
 
@@ -216,40 +230,40 @@ Sub-items:
 - Viewer
 - Configuration
 
-See **Configurations > Talkgroup Audio Recorder** for TAR recording, retention, playback, filtering, and retention details.
+See **Configurations > Talkgroup Audio Recorder** for recording, playback,
+filtering, and retention details.
 
 ## FNE Connection Manager
 
-Opens the **Connections** page for manual connection controls, the current or
-most recently completed RX stream, local receive-health counters, and key status
-for configured FNE systems. The view is refreshed at a stable cadence rather
-than for every packet.
+This opens the **Connections** page. It has manual connection controls, the
+current or most recently completed RX stream, local receive-health counters,
+and key status for configured FNE systems. The view refreshes at a steady
+cadence instead of once per packet.
 
-When an FNE does not answer login requests, the console keeps the normal first
-retry and then increases the interval through 10, 20, 40, and 60 seconds. The
-interval remains capped at 60 seconds and resets after a successful connection
-or an explicit operator restart. If authorization or configuration begins but
-stops making progress, only that FNE's connection session is recycled.
+If an FNE does not answer login requests, DVM Console uses the normal first
+retry, then waits 10, 20, 40, and 60 seconds between attempts. The interval is
+capped at 60 seconds and resets after a successful connection or operator
+restart. If authorization or configuration starts but stops progressing, DVM
+Console recycles only that FNE's session.
 
 ### Per-connection RX network jitter buffer
 
-Each FNE connection has independent P25, DMR, and NXDN jitter settings. Choose
-**Off**, a fixed packet-aligned delay, or **Adaptive** from the compact selectors
-beside that connection's state-aware Connect/Disconnect and Restart controls. The buffer
-holds complete network packets before decoding. If a packet arrives out of order
-but before its playout deadline, the console restores it to the correct place in
-the stream. If the deadline expires first, playback continues and the decoder
-applies its normal loss concealment; one missing packet cannot stall the call.
+Each FNE connection has separate P25, DMR, and NXDN jitter settings. Choose
+**Off**, a fixed packet-aligned delay, or **Adaptive** beside that connection's
+Connect/Disconnect and Restart controls. The buffer holds complete network
+packets before decoding. If a packet arrives out of order but before its
+playout deadline, DVM Console puts it back in sequence. If the deadline expires
+first, playback continues and the decoder applies its normal loss concealment.
+One missing packet cannot stall the call.
 
-Adaptive mode measures transport arrival variation once per FNE connection and
-protocol. Each new receive stream snapshots the current target for its complete
-call, so simultaneous streams keep independent sequencing and one call never
-changes another call's playout clock. The target rises immediately in whole
-packet steps when late arrival evidence requires more headroom. It falls one
-packet only after three clean completed calls. Missing packets that never arrive
-do not by themselves increase the target. Adaptive is the default for new or
-previously unsaved settings. It starts at zero added frames on a clean
-connection and can learn up to nine frames.
+Adaptive mode measures arrival variation for each FNE connection and protocol.
+At the start of a call, each receive stream takes a snapshot of the current
+target. Simultaneous streams therefore keep separate sequencing and playout
+clocks. The target rises immediately in whole-packet steps when late arrivals
+need more headroom. It falls by one packet after three clean completed calls.
+Packets that never arrive do not increase the target by themselves. Adaptive is
+the default for new or unsaved settings. It starts with no added frames on a
+clean connection and can learn up to nine.
 
 Only protocol-aligned durations are offered:
 
@@ -257,66 +271,61 @@ Only protocol-aligned durations are offered:
 - DMR: zero through nine 60 ms packets; adaptive range 0–540 ms.
 - NXDN: zero through nine 80 ms packets; adaptive range 0–720 ms.
 
-The fixed or currently learned duration is added to the existing decode and
-speaker-output path. In normal conditions, estimated packet-arrival-to-speaker
-latency is the stream's jitter target plus approximately 80–110 ms. The physical
-audio device can add a small route-dependent amount that the application cannot
-measure exactly. Turning the jitter buffer off minimizes latency but removes the
-packet reordering opportunity.
+The fixed or learned duration is added to the decode and speaker path. Under
+normal conditions, estimated packet-arrival-to-speaker latency is the stream's
+jitter target plus about 80–110 ms. The audio device can add a route-dependent
+delay that DVM Console cannot measure. Turning the jitter buffer off minimizes
+latency but removes the chance to reorder packets.
 
-Changing a selection saves that FNE's settings immediately and safely recreates
-active listening and patch-source decode sessions.
+Changing a selection saves that FNE's settings and recreates its active
+listening and patch-source decode sessions.
 
-Below the selectors, **Adaptive learned** shows the current target for every
-protocol using adaptive mode. **Jitter effectiveness** shows how many delayed
-packets were restored before playout and how many expected packets missed their
-deadline. These values refresh at the same stable cadence as the connection
-diagnostics rather than on every packet.
+Below the selectors, **Adaptive learned** shows each protocol's current adaptive
+target. **Jitter effectiveness** counts delayed packets restored before playout
+and expected packets that missed their deadlines. These values refresh with the
+connection diagnostics rather than for every packet.
 
 The FNE identity, jitter selectors, and connection actions wrap onto additional
 rows when the window is narrow. One state-aware button alternates between
 **Connect** and **Disconnect**; **Restart** remains separate.
 
-Debug Logs report a packet successfully restored to playout order as a jitter
-buffer reorder event. A separate warning reports when an expected packet misses
-its deadline and playback advances. Pipeline timing identifies whether the
-stream used a fixed delay or an adaptive target. The `jitter/decoder queue`
-value is one component of the enclosing `total FNE-to-mixer` time, so the two
-values can be nearly identical when decoding and mixer admission take only a few
-milliseconds.
+Debug Logs summarize jitter evidence by receive stream instead of adding an
+entry for every affected packet. They record the first event, periodic updates
+during a long stream, and a final summary of reordered packets and missed
+deadlines. Pipeline timing separates intentional jitter hold, worker backlog,
+session-gate waits, clear or encrypted processing, and mixer admission. These
+are components of `total FNE-to-mixer` time.
 
-Stream-scoped timing high-water marks reset for the next stream. The
-per-connection effectiveness totals retain completed-call evidence until the
-FNE disconnects or its jitter setting changes. Already-emitted reorder,
-deadline, and timing messages remain in the Debug Logs session within the
-displayed 100 MB in-memory limit. Entries are retained only for the current
-application session. When the limit is reached, the window discards the oldest
-entries first and reports the discarded count.
+Timing high-water marks reset for each stream. Connection-level effectiveness
+totals retain completed-call evidence until the FNE disconnects or its jitter
+setting changes. Existing summaries and timing messages remain in Debug Logs
+for the current application session, within the displayed 100 MB memory limit.
+At the limit, the window discards the oldest entries and reports how many were
+removed.
 
 ## Encryption Key Status
 
-Opens Console Settings directly at the channel key-status section of the
-**Connections** page. The view displays key identifiers and availability only;
-key material is never displayed or logged. An unavailable local DMR key also
-shows the protocol, algorithm ID, and required key length expected by the
-configured channel.
+This opens the channel key-status section of **Connections**. The page shows
+only key identifiers and availability; it never displays or logs key material.
+For an unavailable local DMR key, it also shows the protocol, algorithm ID, and
+key length required by the channel.
 
-Selectable-encryption state is restored independently of key arrival. When a
-restored channel is secure and its configured key is available only from KMM,
-the channel remains unavailable during the post-connect request interval. As
-soon as the matching key arrives, its encryption capability refreshes and the
-channel presents the restored **SECURE** control. The key itself is not persisted
-or displayed.
+DVM Console restores selectable-encryption state independently of key arrival.
+If a restored channel is secure and its key is available only through KMM, the
+channel remains unavailable during the post-connect request. When the matching
+key arrives, the encryption state refreshes and the restored **SECURE** control
+appears. DVM Console does not save or display the key itself.
 
 ---
 
-# Help Menu
+# Help menu
 
 ## Documentation
 
-Opens the searchable documentation viewer. It renders the user guide, including
-headings, lists, tables, links, and code blocks.
+This opens the searchable documentation viewer, which renders headings, lists,
+tables, links, and code blocks from the user guide.
 
 ## About
 
-Shows the current application version and seven-character commit ID, copyright, AGPL license notice, project attribution, and repository links.
+This shows the application version, seven-character commit ID, copyright, AGPL
+license notice, project attribution, and repository links.

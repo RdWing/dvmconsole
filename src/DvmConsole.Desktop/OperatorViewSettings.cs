@@ -28,12 +28,6 @@ internal sealed class OperatorViewSettings
 
 internal sealed class OperatorViewStore
 {
-    private static readonly JsonSerializerOptions SerializerOptions = new()
-    {
-        WriteIndented = true,
-        PropertyNameCaseInsensitive = true
-    };
-
     private readonly AtomicTextFileStore fileStore;
 
     public OperatorViewStore(string path)
@@ -60,7 +54,7 @@ internal sealed class OperatorViewStore
         {
             OperatorViewSettings settings = JsonSerializer.Deserialize<OperatorViewSettings>(
                     fileStore.ReadAllText(),
-                    SerializerOptions)
+                    DesktopSettingsJsonContext.Default.OperatorViewSettings)
                 ?? throw new JsonException("Operator view settings were empty.");
             if (settings.SchemaVersion != OperatorViewSettings.CurrentSchemaVersion)
                 throw new JsonException("Unsupported operator view settings schema.");
@@ -81,7 +75,9 @@ internal sealed class OperatorViewStore
         OperatorViewSettings snapshot = settings.Snapshot();
         Normalize(snapshot);
 
-        fileStore.WriteAllText(JsonSerializer.Serialize(snapshot, SerializerOptions));
+        fileStore.WriteAllText(JsonSerializer.Serialize(
+            snapshot,
+            DesktopSettingsJsonContext.Default.OperatorViewSettings));
     }
 
     private static void Normalize(OperatorViewSettings settings)

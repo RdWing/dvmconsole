@@ -10,8 +10,6 @@ internal sealed class OpusRecordingMetadataStore
 {
     internal const string MetadataTag = "DVMCONSOLE_METADATA";
     private const int MaximumEncodedMetadataLength = 32_768;
-    private static readonly JsonSerializerOptions JsonOptions = new();
-
     public IReadOnlyDictionary<string, string> CreateTags(CallRecordingMetadata metadata)
     {
         ArgumentNullException.ThrowIfNull(metadata);
@@ -39,7 +37,9 @@ internal sealed class OpusRecordingMetadataStore
         }
 
         byte[] json = DecodeBase64Url(encoded);
-        CallRecordingMetadata? deserialized = JsonSerializer.Deserialize<CallRecordingMetadata>(json, JsonOptions);
+        CallRecordingMetadata? deserialized = JsonSerializer.Deserialize(
+            json,
+            RecordingMetadataJsonContext.Default.CallRecordingMetadata);
         if (deserialized is null)
             return false;
 
@@ -56,7 +56,9 @@ internal sealed class OpusRecordingMetadataStore
 
     private static string Serialize(CallRecordingMetadata metadata)
     {
-        byte[] json = JsonSerializer.SerializeToUtf8Bytes(metadata, JsonOptions);
+        byte[] json = JsonSerializer.SerializeToUtf8Bytes(
+            metadata,
+            RecordingMetadataJsonContext.Default.CallRecordingMetadata);
         string encoded = Convert.ToBase64String(json)
             .TrimEnd('=')
             .Replace('+', '-')

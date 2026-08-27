@@ -64,7 +64,6 @@ public sealed class ToneTransmitCoordinator : IAsyncDisposable
         {
             ObjectDisposedException.ThrowIf(disposed, this);
             ValidateTargets(requested);
-            double?[] detectedSingleTones = PcmSingleToneAnalyzer.Analyze(samples.Span);
 
             sending = true;
             await Task.WhenAll(requested.Select(target => SendCoreAsync(
@@ -73,7 +72,6 @@ public sealed class ToneTransmitCoordinator : IAsyncDisposable
                 target.System.SourceId!.Value,
                 samples,
                 sequence: null,
-                detectedSingleTones,
                 cancellationToken))).ConfigureAwait(false);
         }
         finally
@@ -112,7 +110,6 @@ public sealed class ToneTransmitCoordinator : IAsyncDisposable
                 target.System.SourceId!.Value,
                 samples: default,
                 sequence,
-                detectedSingleTones: null,
                 cancellationToken))).ConfigureAwait(false);
         }
         finally
@@ -160,7 +157,6 @@ public sealed class ToneTransmitCoordinator : IAsyncDisposable
         uint sourceId,
         ReadOnlyMemory<short> samples,
         GeneratedToneSequence? sequence,
-        IReadOnlyList<double?>? detectedSingleTones,
         CancellationToken cancellationToken)
     {
         ChannelRuntimeDefinition definition = ChannelTransmitDefinitionFactory.Create(channel);
@@ -213,29 +209,28 @@ public sealed class ToneTransmitCoordinator : IAsyncDisposable
 
             try
             {
+                var cadence = new TransmitFrameCadence();
                 if (sequence is not null && definition.Mode == "p25")
                 {
-                    await SendP25SequenceAsync(session, sequence, cancellationToken).ConfigureAwait(false);
-                }
-                else if (detectedSingleTones is not null && definition.Mode == "p25")
-                {
-                    await SendP25DecodedAudioAsync(
-                        session,
-                        samples,
-                        detectedSingleTones,
-                        cancellationToken).ConfigureAwait(false);
+                    await SendP25SequenceAsync(session, sequence, cadence, cancellationToken).ConfigureAwait(false);
                 }
                 else
                 {
                     ReadOnlyMemory<short> pcm = sequence?.RenderPcm() ?? samples;
                     for (int offset = 0; offset < pcm.Length; offset += VocoderFrameSizes.PcmSamplesPerFrame)
                     {
-                        cancellationToken.ThrowIfCancellationRequested();
-                        short[] frame = new short[VocoderFrameSizes.PcmSamplesPerFrame];
-                        int count = Math.Min(frame.Length, pcm.Length - offset);
-                        pcm.Span.Slice(offset, count).CopyTo(frame);
-                        session.Process(frame);
-                        await Task.Delay(TimeSpan.FromMilliseconds(20), cancellationToken).ConfigureAwait(false);
+                        await cadence.WaitForNextFrameAsync(cancellationToken).ConfigureAwait(false);
+                        int count = Math.Min(VocoderFrameSizes.PcmSamplesPerFrame, pcm.Length - offset);
+                        if (count == VocoderFrameSizes.PcmSamplesPerFrame)
+                        {
+                            session.Process(pcm.Span.Slice(offset, count));
+                        }
+                        else
+                        {
+                            var finalFrame = new short[VocoderFrameSizes.PcmSamplesPerFrame];
+                            pcm.Span.Slice(offset, count).CopyTo(finalFrame);
+                            session.Process(finalFrame);
+                        }
                     }
                 }
 
@@ -269,6 +264,7 @@ public sealed class ToneTransmitCoordinator : IAsyncDisposable
     private static async Task SendP25SequenceAsync(
         PatchTransmitSession session,
         GeneratedToneSequence sequence,
+        TransmitFrameCadence cadence,
         CancellationToken cancellationToken)
     {
         short[] pcm = sequence.RenderPcm();
@@ -277,43 +273,13 @@ public sealed class ToneTransmitCoordinator : IAsyncDisposable
         {
             for (int frameIndex = 0; frameIndex < step.FrameCount; frameIndex++)
             {
-                cancellationToken.ThrowIfCancellationRequested();
+                await cadence.WaitForNextFrameAsync(cancellationToken).ConfigureAwait(false);
                 if (step.Kind == GeneratedToneStepKind.SingleTone)
                     session.ProcessP25SingleTone(step.FrequencyHz);
                 else
                     session.Process(pcm.AsSpan(pcmOffset, VocoderFrameSizes.PcmSamplesPerFrame));
                 pcmOffset += VocoderFrameSizes.PcmSamplesPerFrame;
-                await Task.Delay(TimeSpan.FromMilliseconds(20), cancellationToken).ConfigureAwait(false);
             }
-        }
-    }
-
-    private static async Task SendP25DecodedAudioAsync(
-        PatchTransmitSession session,
-        ReadOnlyMemory<short> samples,
-        IReadOnlyList<double?> detectedSingleTones,
-        CancellationToken cancellationToken)
-    {
-        int frameIndex = 0;
-        for (int offset = 0; offset < samples.Length; offset += VocoderFrameSizes.PcmSamplesPerFrame)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            short[] frame = new short[VocoderFrameSizes.PcmSamplesPerFrame];
-            int count = Math.Min(frame.Length, samples.Length - offset);
-            samples.Span.Slice(offset, count).CopyTo(frame);
-            if (count == frame.Length &&
-                frameIndex < detectedSingleTones.Count &&
-                detectedSingleTones[frameIndex] is double frequencyHz)
-            {
-                session.ProcessP25SingleTone(frequencyHz);
-            }
-            else
-            {
-                session.Process(frame);
-            }
-
-            frameIndex++;
-            await Task.Delay(TimeSpan.FromMilliseconds(20), cancellationToken).ConfigureAwait(false);
         }
     }
 

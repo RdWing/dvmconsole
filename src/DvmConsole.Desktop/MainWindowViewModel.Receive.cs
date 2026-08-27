@@ -151,7 +151,7 @@ public sealed partial class MainWindowViewModel
                     now,
                     system.Name,
                     DebugLogSeverity.Info,
-                    $"RX call ended on {channel.Name}: {traffic.Protocol.ToString().ToUpperInvariant()} " +
+                    $"RX physical stream ended on {channel.Name}: {traffic.Protocol.ToString().ToUpperInvariant()} " +
                     $"{traffic.SourceId}→{traffic.DestinationId}, stream {endedStreamId}.");
                 receiveCallEpisodes.ObservePhysicalEnd(
                     system.Name,
@@ -186,8 +186,10 @@ public sealed partial class MainWindowViewModel
                     now,
                     system.Name,
                     DebugLogSeverity.Info,
-                    $"RX call started on {channel.Name}: {traffic.Protocol.ToString().ToUpperInvariant()} " +
-                    $"{traffic.CallType}, {traffic.SourceId}→{traffic.DestinationId}, stream {historyStreamId}" +
+                    $"RX logical call episode started on {channel.Name}: " +
+                    $"{traffic.Protocol.ToString().ToUpperInvariant()} {traffic.CallType}, " +
+                    $"{traffic.SourceId}→{traffic.DestinationId}, episode {episode?.EpisodeId}, " +
+                    $"primary physical stream {historyStreamId}" +
                     (protocolEncrypted ?? channel.Definition.IsEncrypted ? ", encrypted" : ", clear") +
                     $"{DescribeFneSignalQuality(traffic)}.");
                 callHistory.Add(new CallHistoryEntry(
@@ -284,14 +286,11 @@ public sealed partial class MainWindowViewModel
         }
 
         ReceiveIngressRoutingDecision routing = ReceiveIngressRoutingDecision.Empty;
-        if (trafficRoutes.TryGetValue(
+        if (receiveTrafficRouters.TryGetValue(
                 system,
-                out IReadOnlyDictionary<
-                    (FneTrafficProtocol Protocol, uint DestinationId),
-                    ChannelViewModel[]>? routes))
+                out ReceiveAudioTrafficRouter? router))
         {
-            routing = ReceiveAudioTrafficRouter.ObserveIngress(
-                routes,
+            routing = router.ObserveIngress(
                 traffic,
                 (channel, streamId) =>
                     audioCoordinator.IsTrackingStream(channel, streamId) ||
@@ -339,8 +338,8 @@ public sealed partial class MainWindowViewModel
             channel.Definition.SystemName,
             DebugLogSeverity.Info,
             applied.Transition == ReceiveStreamTransition.TerminationExpired
-                ? $"RX call ended on {channel.Name}: stream {streamId}."
-                : $"RX call timed out on {channel.Name}: stream {streamId}.");
+                ? $"RX physical stream ended on {channel.Name}: stream {streamId}."
+                : $"RX physical stream timed out on {channel.Name}: stream {streamId}.");
         receiveCallEpisodes.ObservePhysicalEnd(
             channel.Definition.SystemName,
             ProtocolFor(channel),
@@ -354,23 +353,20 @@ public sealed partial class MainWindowViewModel
     {
         foreach (SystemViewModel system in Systems)
         {
-            if (!trafficRoutes.TryGetValue(
+            if (!receiveTrafficRouters.TryGetValue(
                     system,
-                    out IReadOnlyDictionary<
-                        (FneTrafficProtocol Protocol, uint DestinationId),
-                        ChannelViewModel[]>? routes))
+                    out ReceiveAudioTrafficRouter? router))
             {
                 continue;
             }
 
             foreach (ReceiveRouteProjectionDecision projection in
-                     ReceiveAudioTrafficRouter.Advance(routes, now))
+                     router.Advance(now))
             {
                 uint streamId = projection.StreamDecision.EndedStreamId ??
                     projection.StreamDecision.ActiveStreamId ??
                     projection.PrimaryStreamId;
-                ChannelViewModel? channel = ReceiveAudioTrafficRouter.ResolveProjectionTarget(
-                    routes,
+                ChannelViewModel? channel = router.ResolveProjectionTarget(
                     projection.RouteKey,
                     streamId,
                     audioCoordinator.IsActive,
@@ -394,8 +390,15 @@ public sealed partial class MainWindowViewModel
                 streamId,
                 async () =>
                 {
-                    await audioCoordinator.CompleteStreamAsync(channel, streamId, endedAt)
-                        .ConfigureAwait(false);
+                    try
+                    {
+                        await audioCoordinator.CompleteStreamAsync(channel, streamId, endedAt)
+                            .ConfigureAwait(false);
+                    }
+                    finally
+                    {
+                        PublishFinalReceiveJitterSummary(channel, streamId);
+                    }
                 })
                 .ConfigureAwait(false);
         }
@@ -464,11 +467,10 @@ public sealed partial class MainWindowViewModel
         SystemViewModel system,
         ReceivePacketDecisionEnvelope decision)
     {
-        if (!trafficRoutes.TryGetValue(system, out IReadOnlyDictionary<(FneTrafficProtocol Protocol, uint DestinationId), ChannelViewModel[]>? routes))
+        if (!receiveTrafficRouters.TryGetValue(system, out ReceiveAudioTrafficRouter? router))
             return [];
 
-        return ReceiveAudioTrafficRouter.ResolvePresentationCandidates(
-            routes,
+        return router.ResolvePresentationCandidates(
             system.Channels,
             decision.Traffic,
             decision.Routing,
@@ -493,6 +495,7 @@ public sealed partial class MainWindowViewModel
             }
             receiveAudioWork.Start(channel);
             receivePipelineTimingReporter.Reset(channel);
+            receiveJitterEventReporter.Reset(channel);
             await RunOnUiThreadAsync(() =>
             {
                 channel.SetAudioEnabled(true);
@@ -534,6 +537,7 @@ public sealed partial class MainWindowViewModel
                 receiveRetryAfter.Remove(channel);
                 receiveAudioWork.Start(channel);
                 receivePipelineTimingReporter.Reset(channel);
+                receiveJitterEventReporter.Reset(channel);
             }
             foreach (ChannelViewModel channel in result.Failed)
                 receiveRetryAfter[channel] = retryAt;
@@ -649,6 +653,7 @@ public sealed partial class MainWindowViewModel
                         await audioCoordinator.EnsureDecodeAsync(channel).ConfigureAwait(false);
                     receiveAudioWork.Start(channel);
                     receivePipelineTimingReporter.Reset(channel);
+                    receiveJitterEventReporter.Reset(channel);
                     receiveRetryAfter.Remove(channel);
                     restarted++;
                 }
@@ -685,6 +690,7 @@ public sealed partial class MainWindowViewModel
             else
             {
                 await receiveAudioWork.StopAsync(channel).ConfigureAwait(false);
+                receiveJitterEventReporter.Reset(channel);
                 await Task.Run(() => audioCoordinator.StopAsync(channel)).ConfigureAwait(false);
             }
         }
@@ -791,8 +797,11 @@ public sealed partial class MainWindowViewModel
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SelectedZoneOutputMuteToolTip)));
     }
 
-    private async Task ProcessAudioAsync(ChannelViewModel channel, FneTrafficFrame traffic)
+    private async Task<ReceiveProcessingStageTiming> ProcessAudioAsync(
+        ChannelViewModel channel,
+        FneTrafficFrame traffic)
     {
+        ReceiveProcessingStageTiming processingStages = default;
         try
         {
             // TAR is independent from live RX. Frames can arrive while the
@@ -801,9 +810,16 @@ public sealed partial class MainWindowViewModel
             if (channel.IsRecordingEnabled && !audioCoordinator.IsActive(channel))
                 await EnsureRecordingAudioAsync(channel).ConfigureAwait(false);
             if (!audioCoordinator.IsActive(channel))
-                return;
+                return default;
 
-            await audioCoordinator.ProcessAsync(channel, traffic).ConfigureAwait(false);
+            ReceiveAudioProcessTiming audioTiming = await audioCoordinator
+                .ProcessWithTimingAsync(channel, traffic)
+                .ConfigureAwait(false);
+            processingStages = new ReceiveProcessingStageTiming(
+                audioTiming.SessionGateDelay,
+                audioTiming.SessionProcessingDuration,
+                audioTiming.EncryptedSessionProcessing,
+                audioTiming.Measured);
             PublishReceiveDiagnostics(channel, traffic.StreamId, DateTimeOffset.UtcNow);
         }
         catch (Exception exception)
@@ -811,7 +827,7 @@ public sealed partial class MainWindowViewModel
             if (IsAudioDeviceFailure(exception))
             {
                 if (IsProactiveReceiveOutputRecoveryRunning(channel))
-                    return;
+                    return default;
                 long recoveryStarted = Stopwatch.GetTimestamp();
                 ReceiveRouteRecoveryResult recovery = await RecoverSelectedReceiveAudioAsync(channel).ConfigureAwait(false);
                 ObserveRouteRecovery(
@@ -823,7 +839,7 @@ public sealed partial class MainWindowViewModel
                         ? $"RX audio restarted for {recovery.Restarted.Count} selected channel(s) after an output-device interruption."
                         : recovery.Diagnostic ?? "RX audio unavailable; retrying selected channels.";
                 });
-                return;
+                return default;
             }
 
             Dispatcher.UIThread.Post(() =>
@@ -858,6 +874,8 @@ public sealed partial class MainWindowViewModel
                 }
             }
         }
+
+        return processingStages;
     }
 
     private static string DescribeRouteRecovery(ReceiveRouteRecoveryResult recovery)
@@ -906,15 +924,19 @@ public sealed partial class MainWindowViewModel
     {
         receiveJitterEffectiveness.Observe(channel.Definition.SystemName, timing);
         DateTimeOffset now = DateTimeOffset.UtcNow;
-        if (timing.JitterBufferReorderedPacket || timing.JitterBufferDeadlineMissedPackets > 0)
+        ReceiveJitterEventPublication? jitterPublication = receiveJitterEventReporter.Observe(
+            channel,
+            timing,
+            now);
+        if (jitterPublication is ReceiveJitterEventPublication publication)
         {
             AddDebugLog(
                 now,
                 "RX",
-                timing.JitterBufferDeadlineMissedPackets > 0
+                IsJitterWarning(publication)
                     ? DebugLogSeverity.Warning
                     : DebugLogSeverity.Debug,
-                ReceiveDiagnosticsText.FormatJitterBufferEvent(channel.Name, timing));
+                ReceiveDiagnosticsText.FormatJitterBufferPublication(channel.Name, publication));
         }
 
         if (!receivePipelineTimingReporter.ShouldPublish(channel, timing, now))
@@ -930,19 +952,42 @@ public sealed partial class MainWindowViewModel
             ReceiveDiagnosticsText.FormatPipelineDelay(channel.Name, timing, maximums));
     }
 
+    private void PublishFinalReceiveJitterSummary(
+        ChannelViewModel channel,
+        uint streamId)
+    {
+        ReceiveJitterEventPublication? jitterPublication = receiveJitterEventReporter.Complete(
+            channel,
+            streamId);
+        if (jitterPublication is not ReceiveJitterEventPublication publication)
+            return;
+
+        AddDebugLog(
+            DateTimeOffset.UtcNow,
+            "RX",
+            IsJitterWarning(publication)
+                ? DebugLogSeverity.Warning
+                : DebugLogSeverity.Debug,
+            ReceiveDiagnosticsText.FormatJitterBufferPublication(channel.Name, publication));
+    }
+
+    private static bool IsJitterWarning(ReceiveJitterEventPublication publication)
+        => publication.Kind == ReceiveJitterEventPublicationKind.Final
+            ? publication.TotalMissed > 0
+            : publication.MissedSincePrevious > 0;
+
     private ReceiveDispatchTargets EnqueuePriorityReceiveAudio(
         SystemViewModel system,
         ReceivePacketDecisionEnvelope decision)
     {
-        if (!trafficRoutes.TryGetValue(
+        if (!receiveTrafficRouters.TryGetValue(
                 system,
-                out IReadOnlyDictionary<(FneTrafficProtocol Protocol, uint DestinationId), ChannelViewModel[]>? routes))
+                out ReceiveAudioTrafficRouter? router))
         {
             return ReceiveDispatchTargets.Empty;
         }
 
-        ReceiveDispatchTargets targets = ReceiveAudioTrafficRouter.ResolveDispatchTargets(
-            routes,
+        ReceiveDispatchTargets targets = router.ResolveDispatchTargets(
             audioCoordinator.ActiveChannels,
             includeRecordingChannels: true,
             decision.Traffic,
@@ -988,16 +1033,15 @@ public sealed partial class MainWindowViewModel
         SystemViewModel system,
         ReceivePacketDecisionEnvelope decision)
     {
-        if (!trafficRoutes.TryGetValue(
+        if (!receiveTrafficRouters.TryGetValue(
                 system,
-                out IReadOnlyDictionary<(FneTrafficProtocol Protocol, uint DestinationId), ChannelViewModel[]>? routes))
+                out ReceiveAudioTrafficRouter? router))
         {
             return ReceiveDispatchTargets.Empty;
         }
 
         IReadOnlyList<ChannelViewModel> activeSources = patchSourceDecode.ActiveChannels;
-        ReceiveDispatchTargets targets = ReceiveAudioTrafficRouter.ResolveDispatchTargets(
-            routes,
+        ReceiveDispatchTargets targets = router.ResolveDispatchTargets(
             activeSources,
             includeRecordingChannels: false,
             decision.Traffic,

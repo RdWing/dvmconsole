@@ -6,6 +6,38 @@ namespace DvmConsole.Audio.Tests;
 public sealed class OggOpusTagsTests
 {
     [Fact]
+    public async Task RangeEncodingUsesOnlyTheRequestedPcmDuration()
+    {
+        string root = Path.Combine(
+            Path.GetTempPath(),
+            "dvmconsole-opus-range-tests",
+            Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        string wavPath = Path.Combine(root, "source.wav");
+        string opusPath = Path.Combine(root, "recording.opus");
+        const int rangeSamples = 1_237;
+
+        try
+        {
+            WriteWaveFile(wavPath, Enumerable.Repeat((short)1200, 4_000).ToArray());
+            await OpusRecordingEncoder.EncodeWaveFileRangeAsync(
+                wavPath,
+                opusPath,
+                startSample: 911,
+                sampleCount: rangeSamples);
+
+            (ushort preSkip, long finalGranule) = ReadOpusTiming(opusPath);
+
+            Assert.Equal(preSkip + rangeSamples * 6L, finalGranule);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task FinalGranuleMatchesSourceDurationForPartialOpusFrame()
     {
         string root = Path.Combine(Path.GetTempPath(), "dvmconsole-opus-duration-tests", Guid.NewGuid().ToString("N"));

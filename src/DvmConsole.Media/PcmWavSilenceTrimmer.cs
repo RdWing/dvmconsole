@@ -20,6 +20,29 @@ public static class PcmWavSilenceTrimmer
         int windowSamples = DefaultWindowSamples,
         int paddingMilliseconds = DefaultPaddingMilliseconds)
     {
+        PcmWavTrimAnalysis analysis = AnalyzeFile(
+            path,
+            format,
+            silenceThreshold,
+            windowSamples,
+            paddingMilliseconds);
+        RewriteFile(
+            Path.GetFullPath(path),
+            format,
+            analysis.StartSample,
+            analysis.Result.OutputSamples);
+        return analysis.Result;
+    }
+
+    // Computes the legacy trim bounds without modifying the durable source.
+    // Finalizers can encode this range directly and retain the WAV for retry.
+    public static PcmWavTrimAnalysis AnalyzeFile(
+        string path,
+        PcmAudioFormat format,
+        short silenceThreshold = DefaultSilenceThreshold,
+        int windowSamples = DefaultWindowSamples,
+        int paddingMilliseconds = DefaultPaddingMilliseconds)
+    {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
         ArgumentNullException.ThrowIfNull(format);
         if (format.BitsPerSample != 16 || format.Channels != 1)
@@ -49,15 +72,15 @@ public static class PcmWavSilenceTrimmer
         }
 
         long outputSamples = endSample >= startSample ? endSample - startSample + 1 : 0;
-        RewriteFile(fullPath, format, startSample, outputSamples);
-
-        return new PcmWavTrimResult(
-            scan.TotalSamples,
-            outputSamples,
-            ToMilliseconds(startSample, format.SampleRate),
-            ToMilliseconds(Math.Max(0, scan.TotalSamples - endSample - 1), format.SampleRate),
-            scan.PeakAmplitude,
-            scan.ActiveSampleCount);
+        return new PcmWavTrimAnalysis(
+            startSample,
+            new PcmWavTrimResult(
+                scan.TotalSamples,
+                outputSamples,
+                ToMilliseconds(startSample, format.SampleRate),
+                ToMilliseconds(Math.Max(0, scan.TotalSamples - endSample - 1), format.SampleRate),
+                scan.PeakAmplitude,
+                scan.ActiveSampleCount));
     }
 
     private static ScanResult Scan(
@@ -235,3 +258,7 @@ public sealed record PcmWavTrimResult(
     int TrimTailMs,
     int PeakAmplitude,
     long ActiveSampleCount);
+
+public sealed record PcmWavTrimAnalysis(
+    long StartSample,
+    PcmWavTrimResult Result);

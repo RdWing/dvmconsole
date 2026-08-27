@@ -528,10 +528,11 @@ public sealed class AudioMixerTests
 
         await channel.WriteAsync(Enumerable.Repeat((short)500, 4 * 160).ToArray());
         await WaitForAsync(() => output.Frames.Count >= 4);
+        long idleWaitsBeforeDrain = mixer.GetDiagnostics().OutputPump.IdleWaits;
         await channel.FlushAsync();
-        output.ConsumeAll();
-        await WaitForAsync(() => output.EndExpectedPlaybackCalls > 0);
-        await WaitForAsync(() => mixer.GetDiagnostics().OutputPump.IdleWaits >= 2);
+        await DrainExpectedPlaybackAsync(output);
+        await WaitForAsync(
+            () => mixer.GetDiagnostics().OutputPump.IdleWaits > idleWaitsBeforeDrain);
 
         AudioOutputPumpDiagnostics before = mixer.GetDiagnostics().OutputPump;
         await Task.Delay(50);
@@ -552,10 +553,10 @@ public sealed class AudioMixerTests
 
         output.ConsumeAll();
         await WaitForAsync(() => mixer.GetDiagnostics().LowBufferRecoveries > 0);
+        await WaitForAsync(() => output.Frames.Count >= 10);
 
         AudioMixerDiagnostics diagnostics = mixer.GetDiagnostics();
         Assert.Equal(6, diagnostics.TargetOutputBufferedFrames);
-        Assert.True(output.Frames.Count >= 10);
         Assert.True(diagnostics.PeakBufferedFrames >= 12);
     }
 
@@ -573,9 +574,8 @@ public sealed class AudioMixerTests
         await WaitForAsync(() => output.Frames.Count >= 4);
         output.ConsumeAll();
         await WaitForAsync(() => output.Frames.Count >= 10);
-        output.ConsumeAll();
         await channel.FlushAsync();
-        await WaitForAsync(() => output.EndExpectedPlaybackCalls > 0);
+        await DrainExpectedPlaybackAsync(output);
 
         Assert.Equal(
             TimeSpan.FromMilliseconds(40),
@@ -605,8 +605,7 @@ public sealed class AudioMixerTests
         Assert.Equal(4 * 160, mixer.GetDiagnostics().SuppressedLiveConcealmentSamples);
 
         await channel.FlushAsync();
-        output.ConsumeAll();
-        await WaitForAsync(() => output.EndExpectedPlaybackCalls > 0);
+        await DrainExpectedPlaybackAsync(output);
     }
 
     [Fact]
@@ -698,6 +697,13 @@ public sealed class AudioMixerTests
 
         Assert.True(condition());
     }
+
+    private static Task DrainExpectedPlaybackAsync(BufferedFakePlayback output)
+        => WaitForAsync(() =>
+        {
+            output.ConsumeAll();
+            return output.EndExpectedPlaybackCalls > 0;
+        });
 
     private sealed class FakePlayback : IAudioPlayback
     {

@@ -8,6 +8,29 @@ namespace DvmConsole.Media.Tests;
 public sealed class PcmWavSilenceTrimmerTests
 {
     [Fact]
+    public void AnalyzeReportsTrimRangeWithoutRewritingDurableWave()
+    {
+        string path = CreatePath();
+        try
+        {
+            short[] samples = [0, 0, 800, 900, 0];
+            WriteWave(path, samples);
+            byte[] original = File.ReadAllBytes(path);
+
+            PcmWavTrimAnalysis analysis = PcmWavSilenceTrimmer.AnalyzeFile(
+                path,
+                PcmAudioFormat.Voice8KhzMono16Bit,
+                paddingMilliseconds: 0,
+                windowSamples: 1);
+
+            Assert.Equal(2, analysis.StartSample);
+            Assert.Equal(2, analysis.Result.OutputSamples);
+            Assert.Equal(original, File.ReadAllBytes(path));
+        }
+        finally { Cleanup(path); }
+    }
+
+    [Fact]
     public void AllSilenceIsRetainedByTheLegacyPolicy()
     {
         string path = CreatePath();
