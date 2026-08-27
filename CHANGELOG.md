@@ -6,8 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Changed
+
+- Make per-packet transmit, PCM-level, and routine FNE keepalive logging opt-in
+  through an **Enable verbose logging** checkbox under General settings. Batch
+  retained log updates and add a 50,000-entry safety ceiling within the existing
+  100 MB current-session limit.
+
 ### Fixed
 
+- Reduce steady-state receive routing allocations by reusing mutation-time
+  decoder snapshots and representing the common single-channel dispatch without
+  a per-packet target array.
 - Keep a P25 grant-demand TDU on the terminator lifecycle path because it only
   requests a peer grant. Begin an accepted call on the first LDU1 while keeping
   that packet on the 180 ms voice cadence and preserving LDU2 late entry.

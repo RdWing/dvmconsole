@@ -22,6 +22,7 @@ public sealed class SystemViewModel : IFneTrafficEndpoint, INotifyPropertyChange
     private long nonCallDmrTerminatorCount;
     private long droppedSystemTrafficCount;
     private int trafficDiagnosticsDirty;
+    private bool verboseLoggingEnabled;
     private bool isSelected;
     private ZoneViewModel? selectedZone;
 
@@ -35,6 +36,7 @@ public sealed class SystemViewModel : IFneTrafficEndpoint, INotifyPropertyChange
     {
         this.options = options ?? throw new ArgumentNullException(nameof(options));
         connection = new FneConnection(this.options);
+        verboseLoggingEnabled = options.EnableVerboseLogging;
         Name = name;
         Endpoint = endpoint;
         Channels = channels?.ToArray() ?? [];
@@ -183,12 +185,21 @@ public sealed class SystemViewModel : IFneTrafficEndpoint, INotifyPropertyChange
         connection.SendTraffic(protocol, payload, packetSequence, streamId);
         trafficStatistics.ObserveSend(payload.Length);
         Volatile.Write(ref trafficDiagnosticsDirty, 1);
+        if (!Volatile.Read(ref verboseLoggingEnabled))
+            return;
+
         LogReceived?.Invoke(this, new FneLogEntry(
             Name,
             DebugLogSeverity.Debug,
             $"FNE TX {protocol.ToString().ToUpperInvariant()} vocoder packet; seq {packetSequence}, " +
             $"stream {streamId}, {payload.Length} bytes.",
             DateTimeOffset.Now));
+    }
+
+    internal void SetVerboseLogging(bool enabled)
+    {
+        Volatile.Write(ref verboseLoggingEnabled, enabled);
+        connection.SetVerboseLogging(enabled);
     }
 
     public void RequestP25Key(byte algorithmId, ushort keyId)

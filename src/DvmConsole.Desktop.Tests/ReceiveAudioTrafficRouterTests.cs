@@ -580,6 +580,69 @@ public sealed class ReceiveAudioTrafficRouterTests
             $"snapshot={snapshotBytes:N0} B, legacy={legacyBytes:N0} B, reduction={reduction:P1}.");
     }
 
+    [Fact]
+    public void CommonSingleTargetDispatchRemovesOnePerPacketArrayAcrossTenThousandFrames()
+    {
+        const int iterations = 10_000;
+        ChannelViewModel owner = Channel("Owner", "100", slot: 1);
+        ChannelViewModel[] activeChannels = [owner];
+        var routes = new Dictionary<(FneTrafficProtocol, uint), ChannelViewModel[]>
+        {
+            [(FneTrafficProtocol.Dmr, 100)] = [owner]
+        };
+        FneTrafficFrame traffic = Traffic(slot: 0);
+        Func<ChannelViewModel, uint, bool> untracked = (_, _) => false;
+        ReceiveIngressRoutingDecision ingress = ReceiveAudioTrafficRouter.ObserveIngress(
+            routes,
+            traffic,
+            untracked);
+
+        ReceiveDispatchTargets warmup = ReceiveAudioTrafficRouter.ResolveDispatchTargets(
+            routes,
+            activeChannels,
+            includeRecordingChannels: false,
+            traffic,
+            ingress,
+            untracked);
+        Assert.Same(owner, Assert.Single(warmup));
+
+        long dispatchBytes = MeasureAllocations(() =>
+        {
+            for (int iteration = 0; iteration < iterations; iteration++)
+            {
+                ReceiveDispatchTargets targets = ReceiveAudioTrafficRouter.ResolveDispatchTargets(
+                    routes,
+                    activeChannels,
+                    includeRecordingChannels: false,
+                    traffic,
+                    ingress,
+                    untracked);
+                GC.KeepAlive(targets[0]);
+            }
+        });
+        long legacyBytes = MeasureAllocations(() =>
+        {
+            for (int iteration = 0; iteration < iterations; iteration++)
+            {
+                ChannelViewModel[] targets = ReceiveAudioTrafficRouter.ResolveTargets(
+                    routes,
+                    activeChannels,
+                    traffic,
+                    ingress,
+                    untracked);
+                GC.KeepAlive(targets[0]);
+            }
+        });
+
+        output.WriteLine(
+            $"Single-target dispatch: value-set={dispatchBytes:N0} B, " +
+            $"array={legacyBytes:N0} B over {iterations:N0} frames.");
+        Assert.True(
+            legacyBytes - dispatchBytes >= iterations * 24L,
+            $"Expected at least one small array allocation removed per frame; " +
+            $"value-set={dispatchBytes:N0} B, array={legacyBytes:N0} B.");
+    }
+
     private static ChannelViewModel Channel(
         string name,
         string tgid,

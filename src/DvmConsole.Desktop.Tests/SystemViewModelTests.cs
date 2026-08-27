@@ -1601,6 +1601,10 @@ public sealed class SystemViewModelTests
             viewModel.TalkPermitTone = true;
             await viewModel.FlushUserSettingsAsync();
             Assert.True(store.Load().TalkPermitTone);
+            viewModel.VerboseLoggingEnabled = false;
+            viewModel.VerboseLoggingEnabled = true;
+            await viewModel.FlushUserSettingsAsync();
+            Assert.True(store.Load().VerboseLoggingEnabled);
             viewModel.DarkMode = true;
             await viewModel.FlushUserSettingsAsync();
             Assert.True(store.Load().DarkMode);

@@ -17,8 +17,8 @@ internal readonly record struct ReceivePacketDecisionEnvelope(
 
 internal readonly record struct SystemTrafficWorkItem(
     ReceivePacketDecisionEnvelope Decision,
-    IReadOnlyList<ChannelViewModel> PreEnqueuedAudioChannels,
-    IReadOnlyList<ChannelViewModel> PreEnqueuedPatchChannels)
+    ReceiveDispatchTargets PreEnqueuedAudioChannels,
+    ReceiveDispatchTargets PreEnqueuedPatchChannels)
 {
     public FneTrafficFrame Traffic => Decision.Traffic;
     public DateTimeOffset ReceivedAt => Decision.ReceivedAt;
@@ -41,8 +41,8 @@ internal readonly record struct SystemTrafficWorkItem(
                 ReceiveIngressRoutingDecision.Empty,
                 EpisodeObservation: null,
                 EpisodeSnapshot: null),
-            preEnqueuedAudioChannels,
-            preEnqueuedPatchChannels)
+            ReceiveDispatchTargets.From(preEnqueuedAudioChannels),
+            ReceiveDispatchTargets.From(preEnqueuedPatchChannels))
     {
     }
 }

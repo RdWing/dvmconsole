@@ -138,6 +138,7 @@ public sealed class UserSettingsStoreTests
             Assert.Null(settings.LastCodeplugPath);
             Assert.Null(settings.LastSelectedChannelKey);
             Assert.True(settings.ConnectionChimes);
+            Assert.False(settings.VerboseLoggingEnabled);
             Assert.False(settings.HighQualityBluetoothAudioEnabled);
             Assert.False(settings.KeepTransmitMicrophoneWarm);
             Assert.Equal(4, settings.RxAudioProcessingOptions.Count);
@@ -166,6 +167,26 @@ public sealed class UserSettingsStoreTests
             Assert.Null(settings.MainWindowPlacement.Top);
             Assert.Equal(1260, settings.MainWindowPlacement.Width);
             Assert.Equal(760, settings.MainWindowPlacement.Height);
+        }
+        finally
+        {
+            Cleanup(path);
+        }
+    }
+
+    [Fact]
+    public void PersistsVerboseLoggingWithoutChangingTheSchemaVersion()
+    {
+        string path = CreatePath();
+        try
+        {
+            var store = new UserSettingsStore(path);
+            store.Save(new UserSettings { VerboseLoggingEnabled = true });
+
+            UserSettings loaded = store.Load();
+
+            Assert.True(loaded.VerboseLoggingEnabled);
+            Assert.Equal(UserSettings.CurrentSchemaVersion, loaded.SchemaVersion);
         }
         finally
         {
@@ -1075,6 +1096,7 @@ public sealed class UserSettingsStoreTests
             var profile = new UserSettings
             {
                 TalkPermitTone = true,
+                VerboseLoggingEnabled = true,
                 AudioOutputDeviceId = "profile-output",
                 LastCodeplugPath = "/tmp/profile.yml",
                 DtmfPresets = [new DtmfPresetSetting { Name = "Night" }]
@@ -1103,6 +1125,7 @@ public sealed class UserSettingsStoreTests
             UserSettings merged = store.Load();
 
             Assert.True(merged.TalkPermitTone);
+            Assert.True(merged.VerboseLoggingEnabled);
             Assert.Equal("profile-output", merged.AudioOutputDeviceId);
             Assert.Equal("/tmp/current.yml", merged.LastCodeplugPath);
 

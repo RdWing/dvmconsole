@@ -5,7 +5,8 @@ internal static class SettingsImportPolicy
     public static SettingsImportPreview CreatePreview(string source, UserSettings settings)
     {
         var sections = new List<string>();
-        if (settings.TalkPermitTone || !settings.ConnectionChimes || settings.DarkMode ||
+        if (settings.TalkPermitTone || !settings.ConnectionChimes ||
+            settings.VerboseLoggingEnabled || settings.DarkMode ||
             settings.UiFontSize != 14 || settings.UiScale != 1.0 ||
             settings.TogglePttMode || !string.Equals(settings.GlobalPttKey, "Space", StringComparison.OrdinalIgnoreCase) ||
             !string.Equals(settings.ActiveSystemPttKey, "None", StringComparison.OrdinalIgnoreCase) ||
@@ -89,6 +90,7 @@ internal static class SettingsImportPolicy
             target.SerialPttBaudRate = source.SerialPttBaudRate;
             target.TalkPermitTone = source.TalkPermitTone;
             target.ConnectionChimes = source.ConnectionChimes;
+            target.VerboseLoggingEnabled = source.VerboseLoggingEnabled;
             target.DarkMode = source.DarkMode;
             target.UiFontSize = source.UiFontSize;
             target.UiScale = source.UiScale;

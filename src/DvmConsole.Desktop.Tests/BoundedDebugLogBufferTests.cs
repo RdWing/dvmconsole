@@ -6,7 +6,7 @@ namespace DvmConsole.Desktop.Tests;
 public sealed class BoundedDebugLogBufferTests
 {
     [Fact]
-    public void DefaultSessionLimitIsOneHundredMegabytesWithoutAnEntryCountCeiling()
+    public void DefaultSessionLimitKeepsOneHundredMegabytesAndAddsAnEntrySafetyCeiling()
     {
         var buffer = new BoundedDebugLogBuffer();
 
@@ -14,8 +14,7 @@ public sealed class BoundedDebugLogBufferTests
             buffer.Add(Entry($"entry {index}"));
 
         Assert.Equal(5_001, buffer.Entries.Count);
-        Assert.Contains("limit 100.0 MB", buffer.RetentionText);
-        Assert.DoesNotContain("entries /", buffer.RetentionText);
+        Assert.Contains("limit 50,000 entries / 100.0 MB", buffer.RetentionText);
     }
 
     [Fact]
@@ -27,8 +26,23 @@ public sealed class BoundedDebugLogBufferTests
         buffer.Add(Entry("second"));
         buffer.Add(Entry("third"));
 
-        Assert.Equal(["third", "second"], buffer.Entries.Select(entry => entry.Message));
+        Assert.Equal(["second", "third"], buffer.Entries.Select(entry => entry.Message));
         Assert.Contains("oldest discarded 1", buffer.RetentionText);
+    }
+
+    [Fact]
+    public void AddsOneChronologicalBatchWithOneCollectionNotification()
+    {
+        var buffer = new BoundedDebugLogBuffer(maximumEntries: 10, maximumBytes: 4_096);
+        var changes = new List<System.Collections.Specialized.NotifyCollectionChangedEventArgs>();
+        buffer.Entries.CollectionChanged += (_, change) => changes.Add(change);
+
+        buffer.AddRange([Entry("first"), Entry("second"), Entry("third")]);
+
+        var change = Assert.Single(changes);
+        Assert.Equal(System.Collections.Specialized.NotifyCollectionChangedAction.Add, change.Action);
+        Assert.Equal(3, change.NewItems!.Count);
+        Assert.Equal(["first", "second", "third"], buffer.Entries.Select(entry => entry.Message));
     }
 
     [Fact]

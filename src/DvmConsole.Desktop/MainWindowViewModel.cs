@@ -11,6 +11,7 @@ using DvmConsole.Core.Settings;
 using DvmConsole.FneClient;
 using DvmConsole.Media;
 using DvmConsole.Vocoder;
+using System.Collections.Concurrent;
 using System.Collections.Specialized;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
@@ -85,6 +86,9 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
     private readonly ObservableCollection<SubscriberCommandAuditEntry> subscriberCommandAudit = [];
     private readonly BoundedDebugLogBuffer debugLogBuffer = new();
     private readonly FilteredDebugLogCollection filteredDebugLogs;
+    private readonly ConcurrentQueue<DebugLogEntry> pendingDebugLogs = new();
+    private bool verboseDiagnosticLogging;
+    private int debugLogDrainScheduled;
     private readonly ObservableCollection<string> recentCodeplugPaths = [];
     private readonly ObservableCollection<WebStreamViewModel> webStreams = [];
     private readonly WebStreamPlaybackCoordinator webStreamPlayback;
@@ -162,6 +166,8 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
         this.networkDisabledDemo = networkDisabledDemo;
         this.userSettingsStore = userSettingsStore ?? new UserSettingsStore(UserSettingsStore.DefaultPath);
         userSettings = this.userSettingsStore.Load();
+        verboseDiagnosticLogging = userSettings.VerboseLoggingEnabled ||
+            VerboseDiagnosticLogging.IsEnabled;
         userSettingsWriter = new LatestUserSettingsWriter(
             this.userSettingsStore.SaveSnapshot,
             exception => DesktopCrashLog.Write("User settings persistence", exception));
@@ -174,6 +180,8 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
             reconfigureApplicationAudio ?? ReconfigureApplicationAudioAsync;
         filteredDebugLogs = new FilteredDebugLogCollection(debugLogBuffer.Entries);
         Systems = systems.ToArray();
+        foreach (SystemViewModel system in Systems)
+            system.SetVerboseLogging(this.verboseDiagnosticLogging);
         Zones = zones.ToArray();
         RegisterSessionOwnership(services);
         loadedCodeplugPath = string.IsNullOrWhiteSpace(codeplugPath)
@@ -1211,6 +1219,26 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
         }
     }
 
+    public bool VerboseLoggingEnabled
+    {
+        get => verboseDiagnosticLogging;
+        set
+        {
+            if (verboseDiagnosticLogging == value)
+                return;
+            verboseDiagnosticLogging = value;
+            userSettings.VerboseLoggingEnabled = value;
+            lock (audioLevelLogSync)
+                audioLevelLogs.Clear();
+            foreach (SystemViewModel system in Systems)
+                system.SetVerboseLogging(value);
+            PersistUserSettings();
+            PropertyChanged?.Invoke(
+                this,
+                new PropertyChangedEventArgs(nameof(VerboseLoggingEnabled)));
+        }
+    }
+
     public bool DarkMode
     {
         get => userSettings.DarkMode;
@@ -1739,7 +1767,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
             Directory.CreateDirectory(directory);
 
         var lines = new List<string> { "Timestamp\tSeverity\tSource\tMessage" };
-        lines.AddRange(DebugLogEntries.Select(entry => string.Join("\t",
+        lines.AddRange(DebugLogEntries.Reverse().Select(entry => string.Join("\t",
             entry.Timestamp.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture),
             entry.SeverityText,
             entry.Source,
@@ -2774,20 +2802,40 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
         DebugLogSeverity severity,
         string message)
     {
-        void Apply()
-        {
-            debugLogBuffer.Add(new DebugLogEntry(
-                timestamp,
-                source,
-                severity,
-                DebugLogRedactor.Redact(message)));
-            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(DebugLogRetentionText)));
-        }
+        pendingDebugLogs.Enqueue(new DebugLogEntry(
+            timestamp,
+            source,
+            severity,
+            DebugLogRedactor.Redact(message)));
+        if (Interlocked.CompareExchange(ref debugLogDrainScheduled, 1, 0) != 0)
+            return;
 
         if (Dispatcher.UIThread.CheckAccess())
-            Apply();
+            DrainDebugLogs();
         else
-            Dispatcher.UIThread.Post(Apply);
+            Dispatcher.UIThread.Post(DrainDebugLogs, DispatcherPriority.Background);
+    }
+
+    private void DrainDebugLogs()
+    {
+        var batch = new List<DebugLogEntry>();
+        while (pendingDebugLogs.TryDequeue(out DebugLogEntry? entry))
+            batch.Add(entry);
+
+        if (batch.Count > 0)
+        {
+            debugLogBuffer.AddRange(batch);
+            PropertyChanged?.Invoke(
+                this,
+                new PropertyChangedEventArgs(nameof(DebugLogRetentionText)));
+        }
+
+        Volatile.Write(ref debugLogDrainScheduled, 0);
+        if (!pendingDebugLogs.IsEmpty &&
+            Interlocked.CompareExchange(ref debugLogDrainScheduled, 1, 0) == 0)
+        {
+            Dispatcher.UIThread.Post(DrainDebugLogs, DispatcherPriority.Background);
+        }
     }
 
     private void ScheduleConfiguredP25Keys(SystemViewModel system)
@@ -3339,7 +3387,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
         ChannelAudioDirection direction,
         uint streamId = 0)
     {
-        if (samples.IsEmpty)
+        if (!verboseDiagnosticLogging || samples.IsEmpty)
             return;
 
         IReadOnlyList<PcmLevelMeasurement> measurements;
