@@ -7,6 +7,69 @@ namespace DvmConsole.Desktop.Tests;
 public sealed class HistoryCatalogFilterTests
 {
     [Fact]
+    public void UnfilteredMatchDoesNotMaterializeRecordingSearchText()
+    {
+        var entry = new CallHistoryEntry(
+            DateTimeOffset.UnixEpoch,
+            "Alpha",
+            "Dispatch",
+            42,
+            101,
+            FneTrafficProtocol.P25,
+            17,
+            "Medic 42");
+        entry.SetRecording(new CallRecordingMetadata
+        {
+            FileName = "alpha-dispatch.wav",
+            PeakAmplitude = 9000,
+            OriginalSampleCount = 8000,
+            ActiveSampleCount = 4000
+        });
+        var filter = new HistoryCatalogFilter();
+        Assert.True(filter.IsUnfiltered);
+        Assert.True(filter.Matches(entry));
+        long before = GC.GetAllocatedBytesForCurrentThread();
+
+        bool matches = true;
+        for (int index = 0; index < 1_000; index++)
+            matches &= filter.Matches(entry);
+
+        Assert.True(matches);
+        Assert.Equal(0, GC.GetAllocatedBytesForCurrentThread() - before);
+    }
+
+    [Fact]
+    public void StructuredFilterWithoutSearchSkipsRecordingDetailFormatting()
+    {
+        var entry = new CallHistoryEntry(
+            DateTimeOffset.UnixEpoch,
+            "Alpha",
+            "Dispatch",
+            42,
+            101,
+            FneTrafficProtocol.P25,
+            17,
+            "Medic 42");
+        entry.SetRecording(new CallRecordingMetadata
+        {
+            PeakAmplitude = 9000,
+            OriginalSampleCount = 8000,
+            ActiveSampleCount = 4000
+        });
+        var filter = new HistoryCatalogFilter(Direction: "RX");
+        Assert.False(filter.IsUnfiltered);
+        Assert.True(filter.Matches(entry));
+        long before = GC.GetAllocatedBytesForCurrentThread();
+
+        bool matches = true;
+        for (int index = 0; index < 1_000; index++)
+            matches &= filter.Matches(entry);
+
+        Assert.True(matches);
+        Assert.Equal(0, GC.GetAllocatedBytesForCurrentThread() - before);
+    }
+
+    [Fact]
     public void SearchesCallAndRecordingDetailsThroughOnePrimaryQuery()
     {
         var recording = new CallRecordingMetadata

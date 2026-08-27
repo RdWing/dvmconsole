@@ -198,10 +198,16 @@ internal sealed class HistoryRecordingWorkspace : INotifyPropertyChanged
     }
 
     public void RefreshFilteredCallHistory()
-        => HistoryViewSynchronizer.Synchronize(
+    {
+        HistoryCatalogFilter filter = CreateHistoryFilter();
+        IEnumerable<CallHistoryEntry> desiredEntries = filter.IsUnfiltered
+            ? CallHistory
+            : CallHistory.Where(filter.Matches);
+        HistoryViewSynchronizer.Synchronize(
             filteredCallHistoryEntries,
-            CallHistory.Where(CreateHistoryFilter().Matches),
+            desiredEntries,
             args => FilteredCallHistoryChanging?.Invoke(this, args));
+    }
 
     public void RefreshActivityCallHistory(IEnumerable<CallHistoryEntry> entries)
         => HistoryViewSynchronizer.Synchronize(
@@ -364,10 +370,17 @@ internal static class HistoryViewSynchronizer
         IEnumerable<CallHistoryEntry> desiredEntries,
         Action<NotifyCollectionChangedEventArgs>? collectionChanging = null)
     {
-        CallHistoryEntry[] desired = desiredEntries.ToArray();
-        var desiredSet = new HashSet<CallHistoryEntry>(desired, ReferenceEqualityComparer.Instance);
+        ArgumentNullException.ThrowIfNull(target);
+        ArgumentNullException.ThrowIfNull(desiredEntries);
+        CallHistoryEntry[] desired = desiredEntries as CallHistoryEntry[] ?? desiredEntries.ToArray();
         lock (target)
         {
+            if (HasSameEntries(target, desired))
+                return;
+
+            var desiredSet = new HashSet<CallHistoryEntry>(
+                desired,
+                ReferenceEqualityComparer.Instance);
             for (int index = target.Count - 1; index >= 0; index--)
             {
                 if (!desiredSet.Contains(target[index]))
@@ -404,5 +417,19 @@ internal static class HistoryViewSynchronizer
                 }
             }
         }
+    }
+
+    private static bool HasSameEntries(
+        ObservableCollection<CallHistoryEntry> target,
+        IReadOnlyList<CallHistoryEntry> desired)
+    {
+        if (target.Count != desired.Count)
+            return false;
+        for (int index = 0; index < target.Count; index++)
+        {
+            if (!ReferenceEquals(target[index], desired[index]))
+                return false;
+        }
+        return true;
     }
 }

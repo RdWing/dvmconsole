@@ -8,6 +8,22 @@ namespace DvmConsole.Desktop.Tests;
 public sealed class CallHistoryStoreTests
 {
     [Fact]
+    public void UnchangedHistoryViewPublishesNoCollectionMutations()
+    {
+        CallHistoryEntry[] entries = Enumerable.Range(1, 100)
+            .Select(streamId => CreateEntry((uint)streamId))
+            .ToArray();
+        var target = new ObservableCollection<CallHistoryEntry>(entries);
+        int collectionChanges = 0;
+        target.CollectionChanged += (_, _) => collectionChanges++;
+
+        MainWindowViewModel.SynchronizeHistoryView(target, entries);
+
+        Assert.Equal(0, collectionChanges);
+        Assert.True(target.SequenceEqual(entries));
+    }
+
+    [Fact]
     public void SynchronizesSharedHistoryViewAtomicallyAcrossRefreshes()
     {
         CallHistoryEntry[] entries = Enumerable.Range(1, 12)
