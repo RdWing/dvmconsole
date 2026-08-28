@@ -1,10 +1,63 @@
 using DvmConsole.FneClient;
+using System.Text.Json;
+using System.Text.Json.Nodes;
 using Xunit;
 
 namespace DvmConsole.Desktop.Tests;
 
 public sealed class RecordingFinalizationSpoolTests
 {
+    [Fact]
+    public void LegacyDescriptorWithoutKnownStateRetainsItsBooleanMeaning()
+    {
+        string root = CreateRoot();
+        try
+        {
+            RecordingFinalizationDescriptor descriptor = CreateDescriptor(root);
+            JsonObject json = JsonNode.Parse(JsonSerializer.Serialize(
+                descriptor,
+                DesktopSettingsJsonContext.Default.RecordingFinalizationDescriptor))!.AsObject();
+            json.Remove(nameof(RecordingFinalizationDescriptor.IsEncryptionKnown));
+
+            RecordingFinalizationDescriptor restored = JsonSerializer.Deserialize(
+                json.ToJsonString(),
+                DesktopSettingsJsonContext.Default.RecordingFinalizationDescriptor)!;
+
+            Assert.True(restored.EncryptionKnown);
+            Assert.False(restored.IsSecure);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void CurrentDescriptorPreservesExplicitUnknownState()
+    {
+        string root = CreateRoot();
+        try
+        {
+            RecordingFinalizationDescriptor descriptor = CreateDescriptor(root) with
+            {
+                IsEncryptionKnown = false
+            };
+            string json = JsonSerializer.Serialize(
+                descriptor,
+                DesktopSettingsJsonContext.Default.RecordingFinalizationDescriptor);
+
+            RecordingFinalizationDescriptor restored = JsonSerializer.Deserialize(
+                json,
+                DesktopSettingsJsonContext.Default.RecordingFinalizationDescriptor)!;
+
+            Assert.False(restored.EncryptionKnown);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
     [Fact]
     public void CaptureSnapshotBecomesReadyOnlyAfterRestartOrExplicitClose()
     {

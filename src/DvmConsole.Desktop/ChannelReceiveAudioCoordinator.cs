@@ -1029,10 +1029,10 @@ public sealed class ChannelReceiveAudioCoordinator : IAsyncDisposable
             if (stream is null)
                 return default;
 
-            if (TrafficEncryptionMetadataResolver.TryResolve(traffic) is
-                TrafficEncryptionMetadata encryption)
+            if (EncryptionSnapshotResolver.TryResolve(traffic) is
+                EncryptionSnapshot encryption)
             {
-                stream.Encrypted = encryption.Secure;
+                stream.Encrypted = encryption.IsSecure;
             }
 
             stream.SampleContext.Set(traffic.StreamId, traffic.SourceId);

@@ -196,7 +196,7 @@ internal sealed class SystemTrafficBuffer
 
     private static bool IsLifecycleTraffic(FneTrafficFrame traffic)
     {
-        if (TrafficEncryptionMetadataResolver.TryResolve(traffic) is not null)
+        if (EncryptionSnapshotResolver.TryResolve(traffic) is not null)
             return true;
 
         if (traffic.Protocol == FneTrafficProtocol.Nxdn &&

@@ -106,8 +106,14 @@ public sealed partial class MainWindowViewModel
         List<ChannelViewModel> activePatchSourceChannels = [];
         bool callHistoryChanged = false;
         bool matchedAnyChannel = false;
-        TrafficEncryptionMetadata? protocolEncryption = TrafficEncryptionMetadataResolver.TryResolve(traffic);
-        bool? protocolEncrypted = protocolEncryption?.Secure;
+        EncryptionSnapshot protocolEncryption =
+            EncryptionSnapshotResolver.TryResolve(traffic) ?? EncryptionSnapshot.Unknown;
+        EncryptionSnapshot observedEncryption = protocolEncryption.IsKnown
+            ? protocolEncryption
+            : episode?.Encryption ?? EncryptionSnapshot.Unknown;
+        bool? protocolEncrypted = observedEncryption.IsKnown
+            ? observedEncryption.IsSecure
+            : null;
         foreach (ChannelViewModel channel in ResolveTrafficCandidates(system, decision))
         {
             if (!decision.Routing.TryGet(
@@ -157,7 +163,10 @@ public sealed partial class MainWindowViewModel
                     system.Name,
                     traffic.Protocol,
                     endedStreamId,
-                    endedAt);
+                    endedAt,
+                    ReceiveTrafficClassifier.IsTerminator(traffic)
+                        ? ReceivePhysicalEndReason.ConfirmedTerminator
+                        : ReceivePhysicalEndReason.Replaced);
                 TaskObservation.Observe(FinalizeEndedReceiveStreamAsync(
                     channel,
                     endedStreamId,
@@ -190,7 +199,9 @@ public sealed partial class MainWindowViewModel
                     $"{traffic.Protocol.ToString().ToUpperInvariant()} {traffic.CallType}, " +
                     $"{traffic.SourceId}→{traffic.DestinationId}, episode {episode?.EpisodeId}, " +
                     $"primary physical stream {historyStreamId}" +
-                    (protocolEncrypted ?? channel.Definition.IsEncrypted ? ", encrypted" : ", clear") +
+                    (protocolEncrypted is null
+                        ? ", encryption unknown"
+                        : protocolEncrypted.Value ? ", encrypted" : ", clear") +
                     $"{DescribeFneSignalQuality(traffic)}.");
                 callHistory.Add(new CallHistoryEntry(
                     episode?.StartedAt ?? now,
@@ -201,8 +212,9 @@ public sealed partial class MainWindowViewModel
                     traffic.Protocol,
                     historyStreamId,
                     channel.LastCallerText,
-                    protocolEncrypted ?? channel.Definition.IsEncrypted,
-                    receiveEpisodeId: episode?.EpisodeId));
+                    protocolEncrypted ?? false,
+                    receiveEpisodeId: episode?.EpisodeId,
+                    encryptionKnown: protocolEncrypted is not null));
                 callHistoryChanged = true;
             }
 
@@ -221,15 +233,13 @@ public sealed partial class MainWindowViewModel
                 }
             }
 
-            if (protocolEncrypted is bool encrypted)
+            if (observedEncryption.IsKnown)
             {
                 callHistoryChanged = callHistory.UpdateEncryption(
                     system.Name,
                     traffic.Protocol,
                     historyStreamId,
-                    encrypted,
-                    protocolEncryption?.AlgorithmId,
-                    protocolEncryption?.KeyId,
+                    observedEncryption,
                     channel.Name,
                     traffic.DestinationId,
                     episode?.EpisodeId) || callHistoryChanged;
@@ -304,7 +314,7 @@ public sealed partial class MainWindowViewModel
             episodeObservation is not { EpisodeStarted: true } &&
             episodeObservation is not { StreamAdded: true } &&
             ReceiveTrafficClassifier.CarriesVoicePayload(traffic) &&
-            TrafficEncryptionMetadataResolver.TryResolve(traffic) is null;
+            EncryptionSnapshotResolver.TryResolve(traffic) is null;
         return new ReceivePacketDecisionEnvelope(
             traffic,
             receivedAt,
@@ -344,7 +354,10 @@ public sealed partial class MainWindowViewModel
             channel.Definition.SystemName,
             ProtocolFor(channel),
             streamId,
-            endedAt);
+            endedAt,
+            applied.Transition == ReceiveStreamTransition.TerminationExpired
+                ? ReceivePhysicalEndReason.ConfirmedTerminator
+                : ReceivePhysicalEndReason.InactivityTimeout);
         TaskObservation.Observe(FinalizeEndedReceiveStreamAsync(channel, streamId, endedAt));
         return false;
     }

@@ -1,7 +1,6 @@
 using DvmConsole.Audio;
 using DvmConsole.FneClient;
 using DvmConsole.Media;
-using System.Globalization;
 using System.Text.Json;
 
 namespace DvmConsole.Desktop;
@@ -16,13 +15,15 @@ public sealed class CallRecordingManager : IDisposable, IAsyncDisposable
 
     private readonly object sync = new();
     private readonly RecordingCatalogStore catalogStore = new();
+    private readonly RecordingPathPolicy pathPolicy = new();
+    private readonly RecordingMetadataFactory metadataFactory = new();
     private string rootPath;
     private readonly Action<ChannelViewModel, Exception>? faultHandler;
     private readonly Func<ChannelViewModel, uint, bool> shouldRecordSource;
     private int retentionDays;
     private readonly Dictionary<(ChannelViewModel Channel, uint StreamId), ActiveRecording> active = [];
     private readonly Dictionary<ChannelViewModel, ActiveRecording> activeTransmit = [];
-    private readonly Dictionary<(ChannelViewModel Channel, uint StreamId), TrafficEncryptionMetadata> streamEncryption = [];
+    private readonly Dictionary<(ChannelViewModel Channel, uint StreamId), TrafficEncryptionObservationState> encryptionStates = [];
     private readonly object finalizationScheduleSync = new();
     private readonly HashSet<Guid> scheduledFinalizations = [];
     private readonly RecordingFinalizationQueue finalizationQueue;
@@ -390,12 +391,13 @@ public sealed class CallRecordingManager : IDisposable, IAsyncDisposable
         bool closed;
         lock (sync)
         {
-            TrafficEncryptionMetadata? encryption = TrafficEncryptionMetadataResolver.TryResolve(traffic);
-            if (encryption is TrafficEncryptionMetadata resolved)
+            TrafficEncryptionObservationState encryptionState = GetEncryptionState(
+                channel,
+                traffic.StreamId);
+            if (encryptionState.Observe(traffic))
             {
-                streamEncryption[(channel, traffic.StreamId)] = resolved;
                 if (active.TryGetValue((channel, traffic.StreamId), out ActiveRecording? current) &&
-                    current.SetEncryption(resolved))
+                    current.SetEncryption(encryptionState.Encryption))
                 {
                     TryPersistActiveSnapshot(channel, current);
                 }
@@ -406,7 +408,7 @@ public sealed class CallRecordingManager : IDisposable, IAsyncDisposable
 
             finalization = DetachRecording(channel, traffic.StreamId);
             closed = finalization is not null;
-            streamEncryption.Remove((channel, traffic.StreamId));
+            encryptionStates.Remove((channel, traffic.StreamId));
         }
         EnqueueFinalization(finalization);
         return closed;
@@ -425,12 +427,13 @@ public sealed class CallRecordingManager : IDisposable, IAsyncDisposable
 
         lock (sync)
         {
-            TrafficEncryptionMetadata? encryption = TrafficEncryptionMetadataResolver.TryResolve(traffic);
-            if (encryption is TrafficEncryptionMetadata resolved)
+            TrafficEncryptionObservationState encryptionState = GetEncryptionState(
+                channel,
+                episodeStreamId);
+            if (encryptionState.Observe(traffic))
             {
-                streamEncryption[(channel, episodeStreamId)] = resolved;
                 if (active.TryGetValue((channel, episodeStreamId), out ActiveRecording? current) &&
-                    current.SetEncryption(resolved))
+                    current.SetEncryption(encryptionState.Encryption))
                 {
                     TryPersistActiveSnapshot(channel, current);
                 }
@@ -451,6 +454,12 @@ public sealed class CallRecordingManager : IDisposable, IAsyncDisposable
         lock (sync)
         {
             finalizations = DetachRecordings(channel);
+            foreach ((ChannelViewModel Channel, uint StreamId) key in encryptionStates.Keys
+                         .Where(key => ReferenceEquals(key.Channel, channel))
+                         .ToArray())
+            {
+                encryptionStates.Remove(key);
+            }
             if (DetachTransmitRecording(channel) is PendingFinalization transmit)
                 finalizations.Add(transmit);
         }
@@ -495,7 +504,7 @@ public sealed class CallRecordingManager : IDisposable, IAsyncDisposable
                 .ToList();
             active.Clear();
             activeTransmit.Clear();
-            streamEncryption.Clear();
+            encryptionStates.Clear();
             disposed = true;
         }
 
@@ -582,6 +591,18 @@ public sealed class CallRecordingManager : IDisposable, IAsyncDisposable
         }
     }
 
+    private TrafficEncryptionObservationState GetEncryptionState(
+        ChannelViewModel channel,
+        uint logicalStreamId)
+    {
+        var key = (channel, logicalStreamId);
+        if (encryptionStates.TryGetValue(key, out TrafficEncryptionObservationState? state))
+            return state;
+        state = new TrafficEncryptionObservationState();
+        encryptionStates.Add(key, state);
+        return state;
+    }
+
     private ActiveRecording CreateActiveRecording(
         ChannelViewModel channel,
         uint streamId,
@@ -612,23 +633,27 @@ public sealed class CallRecordingManager : IDisposable, IAsyncDisposable
                         out byte algorithmId,
                         out ushort keyId))
                 {
-                    recording.SetEncryption(new TrafficEncryptionMetadata(true, algorithmId, keyId));
+                    recording.SetEncryption(EncryptionSnapshot.FromConfiguration(
+                        secure: true,
+                        algorithmId,
+                        keyId));
                 }
                 else
                 {
-                    recording.SetEncryption(new TrafficEncryptionMetadata(secure, 0, 0));
+                    recording.SetEncryption(EncryptionSnapshot.FromConfiguration(secure));
                 }
             }
-            else if (streamEncryption.TryGetValue((channel, streamId), out TrafficEncryptionMetadata encryption))
+            else if (encryptionStates.TryGetValue(
+                         (channel, streamId),
+                         out TrafficEncryptionObservationState? encryptionState) &&
+                     encryptionState.Encryption.IsKnown)
             {
-                recording.SetEncryption(encryption);
+                recording.SetEncryption(encryptionState.Encryption);
             }
-            else if (channel.Definition.IsEncrypted && EncryptionPresentation.TryParseConfiguredAlgorithm(
-                         channel.Definition,
-                         out byte algorithmId,
-                         out ushort keyId))
+            else if (FneTrafficProtocolMapper.FromChannelProtocol(channel.Definition.Protocol) ==
+                     FneTrafficProtocol.Analog)
             {
-                recording.SetEncryption(new TrafficEncryptionMetadata(true, algorithmId, keyId));
+                recording.SetEncryption(EncryptionSnapshot.FromConfiguration(secure: false));
             }
 
             PersistActiveSnapshot(channel, recording);
@@ -648,34 +673,6 @@ public sealed class CallRecordingManager : IDisposable, IAsyncDisposable
         string directory = Path.Combine(rootPath, ".active");
         Directory.CreateDirectory(directory);
         return Path.Combine(directory, $"{jobId:N}.wav");
-    }
-
-    private static string CreateRecordingPath(RecordingFinalizationDescriptor snapshot)
-    {
-        DateTimeOffset localStart = snapshot.UtcStartTime.ToLocalTime();
-        string dateFolder = localStart.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
-        string security = snapshot.IsSecure
-            ? EncryptionPresentation.AlgorithmAbbreviation(snapshot.Protocol, snapshot.EncryptionAlgorithmId) is string algorithm &&
-              !string.IsNullOrEmpty(algorithm)
-                ? $"SECURE_{algorithm}"
-                : "SECURE"
-            : "CLEAR";
-        string filename = string.Join(
-            "_",
-            localStart.ToString("HHmmssfff", CultureInfo.InvariantCulture),
-            SanitizeSegment(snapshot.SystemName),
-            snapshot.TalkgroupId.ToString(CultureInfo.InvariantCulture),
-            (snapshot.SourceId ?? 0).ToString(CultureInfo.InvariantCulture),
-            security,
-            snapshot.StreamId.ToString(CultureInfo.InvariantCulture));
-        string directory = System.IO.Path.Combine(snapshot.RootPath, dateFolder, SanitizeSegment(snapshot.SystemName));
-        Directory.CreateDirectory(directory);
-
-        string path = System.IO.Path.Combine(directory, $"{filename}.opus");
-        int suffix = 1;
-        while (File.Exists(path))
-            path = System.IO.Path.Combine(directory, $"{filename}-{suffix++}.opus");
-        return path;
     }
 
     private List<PendingFinalization> DetachRecordings(ChannelViewModel channel)
@@ -703,7 +700,7 @@ public sealed class CallRecordingManager : IDisposable, IAsyncDisposable
             return null;
         }
         active.Remove((channel, streamId));
-        streamEncryption.Remove((channel, streamId));
+        encryptionStates.Remove((channel, streamId));
         return new PendingFinalization(channel, recording);
     }
 
@@ -717,7 +714,7 @@ public sealed class CallRecordingManager : IDisposable, IAsyncDisposable
         try
         {
             recording.CloseWriter();
-            RecordingFinalizationDescriptor snapshot = CreateSnapshot(channel, recording);
+            RecordingFinalizationDescriptor snapshot = CreatePersistableSnapshot(channel, recording);
             finalizationSpool.PersistReady(snapshot);
             TryScheduleFinalization(snapshot, channel);
         }
@@ -732,11 +729,17 @@ public sealed class CallRecordingManager : IDisposable, IAsyncDisposable
 
     private void PersistActiveSnapshot(ChannelViewModel channel, ActiveRecording recording)
     {
-        RecordingFinalizationDescriptor snapshot = CreateSnapshot(channel, recording);
-        if (string.IsNullOrWhiteSpace(recording.OutputPath))
-            recording.OutputPath = CreateRecordingPath(snapshot);
-        snapshot = snapshot with { OutputPath = recording.OutputPath };
+        RecordingFinalizationDescriptor snapshot = CreatePersistableSnapshot(channel, recording);
         finalizationSpool.PersistCaptureSnapshot(snapshot);
+    }
+
+    private RecordingFinalizationDescriptor CreatePersistableSnapshot(
+        ChannelViewModel channel,
+        ActiveRecording recording)
+    {
+        RecordingFinalizationDescriptor snapshot = CreateSnapshot(channel, recording);
+        recording.OutputPath = pathPolicy.CreatePath(snapshot);
+        return snapshot with { OutputPath = recording.OutputPath };
     }
 
     private void TryPersistActiveSnapshot(ChannelViewModel channel, ActiveRecording recording)
@@ -791,10 +794,11 @@ public sealed class CallRecordingManager : IDisposable, IAsyncDisposable
                 .OrderBy(streamId => streamId == recording.StreamId ? 0 : 1)
                 .ThenBy(streamId => streamId)
                 .ToArray(),
-            recording.IsSecure,
-            recording.EncryptionAlgorithmId,
-            recording.EncryptionKeyId,
-            retentionDays > 0 ? retentionDays : null);
+            recording.Encryption.IsSecure,
+            recording.Encryption.AlgorithmId,
+            recording.Encryption.KeyId,
+            retentionDays > 0 ? retentionDays : null,
+            recording.Encryption.IsKnown);
     }
 
     private async Task<RecordingFinalizationResult> FinalizeRecordingAsync(
@@ -849,7 +853,7 @@ public sealed class CallRecordingManager : IDisposable, IAsyncDisposable
                 snapshot = snapshot with { UtcEndTime = sampleDerivedEnd };
 
             finalPath = snapshot.OutputPath;
-            CallRecordingMetadata metadata = CreateMetadata(snapshot, trim, finalPath);
+            CallRecordingMetadata metadata = metadataFactory.Create(snapshot, trim, finalPath);
             temporaryOpusPath = $"{finalPath}.{Environment.ProcessId}.{Guid.NewGuid():N}.tmp";
             await OpusRecordingEncoder.EncodeWaveFileRangeAsync(
                 snapshot.WavePath,
@@ -916,52 +920,6 @@ public sealed class CallRecordingManager : IDisposable, IAsyncDisposable
         }
     }
 
-    private static CallRecordingMetadata CreateMetadata(
-        RecordingFinalizationDescriptor snapshot,
-        PcmWavTrimResult trim,
-        string recordingPath)
-    {
-        return new CallRecordingMetadata
-        {
-            SchemaVersion = 3,
-            Protocol = snapshot.ProtocolText,
-            Direction = snapshot.Direction,
-            RecordingSourceType = snapshot.RecordingSourceType,
-            UtcStartTime = snapshot.UtcStartTime,
-            UtcEndTime = snapshot.UtcEndTime,
-            DurationMs = (long)Math.Round(
-                trim.OutputSamples * 1000d / snapshot.Format.SampleRate,
-                MidpointRounding.AwayFromZero),
-            FilePath = recordingPath,
-            FileName = Path.GetFileName(recordingPath),
-            FileSizeBytes = 0,
-            SampleRate = snapshot.Format.SampleRate,
-            BitsPerSample = snapshot.Format.BitsPerSample,
-            ChannelCount = snapshot.Format.Channels,
-            OriginalSampleCount = trim.OriginalSamples,
-            ActiveSampleCount = trim.ActiveSampleCount,
-            PeakAmplitude = trim.PeakAmplitude,
-            TrimLeadMs = trim.TrimLeadMs,
-            TrimTailMs = trim.TrimTailMs,
-            SystemName = snapshot.SystemName,
-            ChannelName = snapshot.ChannelName,
-            TalkgroupId = snapshot.TalkgroupId,
-            SubscriberId = snapshot.SourceId,
-            SubscriberAlias = snapshot.SubscriberAlias,
-            StreamId = snapshot.StreamId,
-            StreamIds = snapshot.StreamIds.ToList(),
-            IsEncrypted = snapshot.IsSecure,
-            EncryptionAlgorithm = EncryptionPresentation.AlgorithmAbbreviation(
-                snapshot.Protocol,
-                snapshot.EncryptionAlgorithmId),
-            EncryptionKeyId = snapshot.IsSecure && snapshot.EncryptionKeyId is ushort keyId
-                ? $"0x{keyId:X}"
-                : null,
-            RetentionDaysAtRecordTime = snapshot.RetentionDays,
-            PlaybackValidated = true
-        };
-    }
-
     private static void TryDelete(string path)
     {
         try
@@ -975,14 +933,6 @@ public sealed class CallRecordingManager : IDisposable, IAsyncDisposable
         catch (UnauthorizedAccessException)
         {
         }
-    }
-
-    private static string SanitizeSegment(string value)
-    {
-        char[] invalid = System.IO.Path.GetInvalidFileNameChars();
-        string sanitized = new(value.Select(character => invalid.Contains(character) ? '_' : character).ToArray());
-        sanitized = string.IsNullOrWhiteSpace(sanitized) ? "unknown" : sanitized.Trim();
-        return sanitized.Length <= 64 ? sanitized : sanitized[..64];
     }
 
     private sealed class ActiveRecording(
@@ -1007,18 +957,13 @@ public sealed class CallRecordingManager : IDisposable, IAsyncDisposable
         public string RecordingSourceType { get; } = recordingSourceType;
         public PcmWavFileWriter Writer { get; } = writer;
         public string OutputPath { get; set; } = string.Empty;
-        public bool IsSecure { get; private set; }
-        public byte? EncryptionAlgorithmId { get; private set; }
-        public ushort? EncryptionKeyId { get; private set; }
+        public EncryptionSnapshot Encryption { get; private set; }
 
-        public bool SetEncryption(TrafficEncryptionMetadata encryption)
+        public bool SetEncryption(EncryptionSnapshot encryption)
         {
-            bool changed = IsSecure != encryption.Secure ||
-                EncryptionAlgorithmId != (encryption.Secure ? encryption.AlgorithmId : null) ||
-                EncryptionKeyId != (encryption.Secure ? encryption.KeyId : null);
-            IsSecure = encryption.Secure;
-            EncryptionAlgorithmId = encryption.Secure ? encryption.AlgorithmId : null;
-            EncryptionKeyId = encryption.Secure ? encryption.KeyId : null;
+            bool changed = !Encryption.HasSameMetadata(encryption) ||
+                Encryption.IsKnown != encryption.IsKnown;
+            Encryption = encryption;
             return changed;
         }
 

@@ -1,5 +1,7 @@
 using DvmConsole.Desktop;
 using DvmConsole.FneClient;
+using DvmConsole.Media;
+using fnecore.DMR;
 using Xunit;
 
 namespace DvmConsole.Desktop.Tests;
@@ -220,6 +222,119 @@ public sealed class ReceiveCallEpisodeTrackerTests
         Assert.Equal(11, oaklandSecond.StreamIds.Count);
     }
 
+    [Fact]
+    public void ClearDmrCallAfterSecureTerminatorStartsANewEpisode()
+    {
+        var tracker = new ReceiveCallEpisodeTracker();
+        DateTimeOffset now = DateTimeOffset.UnixEpoch;
+
+        ReceiveCallEpisodeObservation secure = tracker.Observe(
+            "Local",
+            DmrFrame(20, "DATA_SYNC", "VOICE_LC_HEADER"),
+            now)!.Value;
+        tracker.Observe(
+            "Local",
+            DmrPrivacyFrame(20, DmrPrivacyAlgorithms.Arc4, keyId: 3),
+            now.AddMilliseconds(1));
+        tracker.Observe(
+            "Local",
+            DmrFrame(20, "TERMINATOR", "TERMINATOR_WITH_LC"),
+            now.AddMilliseconds(100));
+        tracker.ObservePhysicalEnd(
+            "Local",
+            FneTrafficProtocol.Dmr,
+            20,
+            now.AddMilliseconds(100),
+            ReceivePhysicalEndReason.ConfirmedTerminator);
+
+        ReceiveCallEpisodeObservation clear = tracker.Observe(
+            "Local",
+            DmrFrame(20, "DATA_SYNC", "VOICE_LC_HEADER"),
+            now.AddMilliseconds(200))!.Value;
+        tracker.Observe(
+            "Local",
+            DmrFrame(20, "VOICE", "VOICE"),
+            now.AddMilliseconds(201));
+
+        Assert.NotEqual(secure.EpisodeId, clear.EpisodeId);
+        Assert.True(tracker.TryGet("Local", FneTrafficProtocol.Dmr, 20, out var snapshot));
+        Assert.Equal(CallRecordingEncryptionState.Clear, snapshot.Encryption.State);
+    }
+
+    [Fact]
+    public void ExplicitDmrPrivacyHeaderCorrectsInferredClear()
+    {
+        var tracker = new ReceiveCallEpisodeTracker();
+        DateTimeOffset now = DateTimeOffset.UnixEpoch;
+
+        tracker.Observe("Local", DmrFrame(20, "DATA_SYNC", "VOICE_LC_HEADER"), now);
+        tracker.Observe("Local", DmrFrame(20, "VOICE", "VOICE"), now.AddMilliseconds(1));
+        Assert.True(tracker.TryGet("Local", FneTrafficProtocol.Dmr, 20, out var inferred));
+        Assert.Equal(CallRecordingEncryptionState.Clear, inferred.Encryption.State);
+        Assert.Equal(EncryptionEvidence.Inferred, inferred.Encryption.Evidence);
+
+        tracker.Observe(
+            "Local",
+            DmrPrivacyFrame(20, DmrPrivacyAlgorithms.Arc4, keyId: 3),
+            now.AddMilliseconds(2));
+
+        Assert.True(tracker.TryGet("Local", FneTrafficProtocol.Dmr, 20, out var corrected));
+        Assert.Equal(CallRecordingEncryptionState.Secure, corrected.Encryption.State);
+        Assert.Equal(DmrPrivacyAlgorithms.Arc4, corrected.Encryption.AlgorithmId);
+        Assert.Equal((ushort)3, corrected.Encryption.KeyId);
+        Assert.Equal(EncryptionEvidence.Protocol, corrected.Encryption.Evidence);
+    }
+
+    [Fact]
+    public void ConfirmedUnknownCallEndCannotAbsorbReusedStreamStart()
+    {
+        var tracker = new ReceiveCallEpisodeTracker();
+        DateTimeOffset now = DateTimeOffset.UnixEpoch;
+
+        ReceiveCallEpisodeObservation first = tracker.Observe(
+            "Local",
+            DmrFrame(20, "VOICE", "VOICE"),
+            now)!.Value;
+        tracker.Observe(
+            "Local",
+            DmrFrame(20, "TERMINATOR", "TERMINATOR_WITH_LC"),
+            now.AddMilliseconds(100));
+
+        ReceiveCallEpisodeObservation second = tracker.Observe(
+            "Local",
+            DmrFrame(20, "DATA_SYNC", "VOICE_LC_HEADER"),
+            now.AddMilliseconds(200))!.Value;
+
+        Assert.NotEqual(first.EpisodeId, second.EpisodeId);
+        Assert.True(second.EpisodeStarted);
+    }
+
+    [Fact]
+    public void ReplacementEndStillAllowsAContinuationStream()
+    {
+        var tracker = new ReceiveCallEpisodeTracker();
+        DateTimeOffset now = DateTimeOffset.UnixEpoch;
+
+        ReceiveCallEpisodeObservation first = tracker.Observe(
+            "Local",
+            DmrFrame(20, "VOICE", "VOICE"),
+            now)!.Value;
+        tracker.ObservePhysicalEnd(
+            "Local",
+            FneTrafficProtocol.Dmr,
+            20,
+            now.AddMilliseconds(100),
+            ReceivePhysicalEndReason.Replaced);
+
+        ReceiveCallEpisodeObservation continuation = tracker.Observe(
+            "Local",
+            DmrFrame(21, "VOICE", "VOICE"),
+            now.AddMilliseconds(200))!.Value;
+
+        Assert.Equal(first.EpisodeId, continuation.EpisodeId);
+        Assert.False(continuation.EpisodeStarted);
+    }
+
     private static FneTrafficFrame P25(
         uint streamId,
         uint sourceId,
@@ -250,4 +365,43 @@ public sealed class ReceiveCallEpisodeTrackerTests
             packetSequence: 1,
             streamId,
             payload: new byte[55]);
+
+    private static FneTrafficFrame DmrFrame(
+        uint streamId,
+        string frameType,
+        string subtype,
+        byte[]? payload = null)
+        => new(
+            FneTrafficProtocol.Dmr,
+            peerId: 1,
+            sourceId: 42,
+            destinationId: 99,
+            slot: 1,
+            callType: "GROUP",
+            frameType,
+            subtype,
+            packetSequence: 1,
+            streamId,
+            payload ?? new byte[DmrVoicePacketCodec.PacketBytes]);
+
+    private static FneTrafficFrame DmrPrivacyFrame(
+        uint streamId,
+        byte algorithmId,
+        byte keyId)
+    {
+        byte[] frame = new byte[DmrVoicePacketCodec.FrameBytes];
+        var privacy = new PrivacyLC
+        {
+            AlgId = algorithmId,
+            KId = keyId,
+            FID = DmrPrivacyAlgorithms.FeatureId,
+            Group = true,
+            DstId = 99
+        };
+        FullLC.EncodePI(privacy, ref frame);
+        new SlotType { ColorCode = 0, DataType = (byte)DMRDataType.VOICE_PI_HEADER }.GetData(ref frame);
+        byte[] packet = new byte[DmrVoicePacketCodec.PacketBytes];
+        frame.CopyTo(packet, DmrVoicePacketCodec.HeaderBytes);
+        return DmrFrame(streamId, "DATA_SYNC", "VOICE_PI_HEADER", packet);
+    }
 }

@@ -254,7 +254,7 @@ public sealed class ChannelReceiveWorkQueueTests
             now,
             now,
             now,
-            null);
+            EncryptionSnapshot.Unknown);
 
         queue.Enqueue(channel, CreateTraffic(1, streamId: 100));
         await firstStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));

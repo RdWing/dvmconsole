@@ -284,7 +284,7 @@ public sealed class CallRecordingManagerTests
             Assert.Equal((uint)41, metadata.StreamId);
             Assert.Equal(new uint[] { 41, 42 }, metadata.StreamIds);
             Assert.Equal(2, metadata.StreamFragmentCount);
-            Assert.Equal(3, metadata.SchemaVersion);
+            Assert.Equal(CallRecordingMetadata.CurrentSchemaVersion, metadata.SchemaVersion);
         }
         finally
         {
@@ -765,7 +765,7 @@ public sealed class CallRecordingManagerTests
             byte[] dmrFrame = new byte[DmrVoicePacketCodec.FrameBytes];
             var privacy = new PrivacyLC
             {
-                AlgId = DmrPrivacyAlgorithms.Arc4,
+                AlgId = DmrPrivacyAlgorithms.DesOfb,
                 KId = 3,
                 FID = DmrPrivacyAlgorithms.FeatureId,
                 Group = true,
@@ -818,8 +818,281 @@ public sealed class CallRecordingManagerTests
 
             CallRecordingMetadata metadata = manager.LoadRecordings().Single();
             Assert.True(metadata.IsEncrypted);
-            Assert.Equal("RC4", metadata.EncryptionAlgorithm);
-            Assert.EndsWith("_System 1_99_42_SECURE_RC4_61.opus", metadata.FileName, StringComparison.Ordinal);
+            Assert.Equal(CallRecordingEncryptionState.Secure, metadata.EffectiveEncryptionState);
+            Assert.Equal(DmrPrivacyAlgorithms.DesOfb, metadata.EncryptionAlgorithmId);
+            Assert.Equal("DES-OFB", metadata.EncryptionAlgorithm);
+            Assert.Equal((ushort)3, metadata.EncryptionKeyIdValue);
+            Assert.Equal("0x3", metadata.EncryptionKeyId);
+            Assert.EndsWith("_System 1_99_42_SECURE_DES_61.opus", metadata.FileName, StringComparison.Ordinal);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task ClearDmrReceiveOnEncryptedChannelUsesObservedCallState()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "dvmconsole-recording-tests", Guid.NewGuid().ToString("N"));
+        var channel = new ChannelViewModel(new ChannelConfiguration
+        {
+            Name = "Dispatch",
+            System = "System 1",
+            Tgid = "99",
+            Mode = "dmr",
+            Slot = 1,
+            Algo = "aes",
+            KeyId = "3"
+        });
+        using var manager = new CallRecordingManager(root);
+        channel.SetRecordingEnabled(true);
+
+        try
+        {
+            const uint streamId = 62;
+            manager.ObserveTraffic(channel, DmrTraffic("DATA_SYNC", "VOICE_LC_HEADER", streamId));
+            manager.WriteSamples(channel, streamId, sourceId: 42, ActiveSamples());
+            manager.ObserveTraffic(channel, DmrTraffic("VOICE", "VOICE", streamId));
+
+            Task<RecordingFinalizationResult> finalized = NextFinalizationAsync(manager);
+            manager.StopStream(channel, streamId);
+            Assert.True((await finalized).IsPlayable);
+
+            CallRecordingMetadata metadata = Assert.Single(manager.LoadRecordings());
+            Assert.False(metadata.IsEncrypted);
+            Assert.Equal(CallRecordingEncryptionState.Clear, metadata.EffectiveEncryptionState);
+            Assert.Null(metadata.EncryptionAlgorithmId);
+            Assert.Null(metadata.EncryptionKeyIdValue);
+            Assert.EndsWith("_System 1_99_42_CLEAR_62.opus", metadata.FileName, StringComparison.Ordinal);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task LateDmrPrivacyHeaderCorrectsProvisionalClearMetadata()
+    {
+        string root = Path.Combine(
+            Path.GetTempPath(),
+            "dvmconsole-recording-tests",
+            Guid.NewGuid().ToString("N"));
+        var channel = new ChannelViewModel(new ChannelConfiguration
+        {
+            Name = "Dispatch",
+            System = "System 1",
+            Tgid = "99",
+            Mode = "dmr",
+            Slot = 1
+        });
+        using var manager = new CallRecordingManager(root);
+        channel.SetRecordingEnabled(true);
+
+        try
+        {
+            const uint streamId = 65;
+            manager.ObserveTraffic(channel, DmrTraffic("DATA_SYNC", "VOICE_LC_HEADER", streamId));
+            manager.WriteSamples(channel, streamId, sourceId: 42, ActiveSamples());
+            manager.ObserveTraffic(channel, DmrTraffic("VOICE", "VOICE", streamId));
+            manager.ObserveTraffic(
+                channel,
+                DmrPrivacyTraffic(streamId, DmrPrivacyAlgorithms.Arc4, keyId: 3));
+
+            Task<RecordingFinalizationResult> finalized = NextFinalizationAsync(manager);
+            manager.StopStream(channel, streamId);
+            Assert.True((await finalized).IsPlayable);
+
+            CallRecordingMetadata metadata = Assert.Single(manager.LoadRecordings());
+            Assert.Equal(CallRecordingEncryptionState.Secure, metadata.EffectiveEncryptionState);
+            Assert.Equal(DmrPrivacyAlgorithms.Arc4, metadata.EncryptionAlgorithmId);
+            Assert.Equal((ushort)3, metadata.EncryptionKeyIdValue);
+            Assert.Contains("_SECURE_RC4_65.opus", metadata.FileName, StringComparison.Ordinal);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task LateP25MetadataDeterminesFinalNameAndPreservesWireIdentifiers()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "dvmconsole-recording-tests", Guid.NewGuid().ToString("N"));
+        var channel = new ChannelViewModel(new ChannelConfiguration
+        {
+            Name = "Dispatch",
+            System = "System 1",
+            Tgid = "99",
+            Mode = "p25"
+        });
+        using var manager = new CallRecordingManager(root);
+        channel.SetRecordingEnabled(true);
+
+        try
+        {
+            const uint streamId = 63;
+            manager.WriteSamples(channel, streamId, sourceId: 42, ActiveSamples());
+            manager.ObserveTraffic(channel, P25EncryptedTraffic(streamId, P25EncryptionAlgorithms.Aes, 0x50));
+
+            Task<RecordingFinalizationResult> finalized = NextFinalizationAsync(manager);
+            manager.StopStream(channel, streamId);
+            Assert.True((await finalized).IsPlayable);
+
+            CallRecordingMetadata metadata = Assert.Single(manager.LoadRecordings());
+            Assert.True(metadata.IsEncrypted);
+            Assert.Equal(CallRecordingEncryptionState.Secure, metadata.EffectiveEncryptionState);
+            Assert.Equal(P25EncryptionAlgorithms.Aes, metadata.EncryptionAlgorithmId);
+            Assert.Equal((ushort)0x50, metadata.EncryptionKeyIdValue);
+            Assert.EndsWith("_System 1_99_42_SECURE_AES_63.opus", metadata.FileName, StringComparison.Ordinal);
+
+            string encoded = OggOpusTags.Read(metadata.FilePath).Fields[OpusRecordingMetadataStore.MetadataTag];
+            using JsonDocument embedded = DecodeMetadata(encoded);
+            JsonElement payload = embedded.RootElement;
+            Assert.False(payload.TryGetProperty(nameof(CallRecordingMetadata.FilePath), out _));
+            Assert.False(payload.TryGetProperty(nameof(CallRecordingMetadata.FileName), out _));
+            Assert.False(payload.TryGetProperty(nameof(CallRecordingMetadata.FileSizeBytes), out _));
+            Assert.Equal(P25EncryptionAlgorithms.Aes, payload.GetProperty(nameof(CallRecordingMetadata.EncryptionAlgorithmId)).GetByte());
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task ClearP25ReceiveOnFixedSecureChannelFinalizesAsClear()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "dvmconsole-recording-tests", Guid.NewGuid().ToString("N"));
+        var channel = new ChannelViewModel(new ChannelConfiguration
+        {
+            Name = "Dispatch",
+            System = "System 1",
+            Tgid = "99",
+            Mode = "p25",
+            Algo = "aes",
+            KeyId = "0x50"
+        });
+        using var manager = new CallRecordingManager(root);
+        channel.SetRecordingEnabled(true);
+
+        try
+        {
+            const uint streamId = 66;
+            manager.WriteSamples(channel, streamId, sourceId: 42, ActiveSamples());
+            manager.ObserveTraffic(channel, P25ClearTraffic(streamId));
+
+            Task<RecordingFinalizationResult> finalized = NextFinalizationAsync(manager);
+            manager.StopStream(channel, streamId);
+            Assert.True((await finalized).IsPlayable);
+
+            CallRecordingMetadata metadata = Assert.Single(manager.LoadRecordings());
+            Assert.False(metadata.IsEncrypted);
+            Assert.Equal(CallRecordingEncryptionState.Clear, metadata.EffectiveEncryptionState);
+            Assert.Null(metadata.EncryptionAlgorithmId);
+            Assert.Null(metadata.EncryptionKeyIdValue);
+            Assert.EndsWith("_System 1_99_42_CLEAR_66.opus", metadata.FileName, StringComparison.Ordinal);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task LateEntryDmrReceiveWithoutCallMetadataRemainsUnknown()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "dvmconsole-recording-tests", Guid.NewGuid().ToString("N"));
+        var channel = new ChannelViewModel(new ChannelConfiguration
+        {
+            Name = "Dispatch",
+            System = "System 1",
+            Tgid = "99",
+            Mode = "dmr",
+            Slot = 1,
+            Algo = "aes",
+            KeyId = "3"
+        });
+        using var manager = new CallRecordingManager(root);
+        channel.SetRecordingEnabled(true);
+
+        try
+        {
+            const uint streamId = 64;
+            manager.ObserveTraffic(channel, DmrTraffic("VOICE", "VOICE", streamId));
+            manager.WriteSamples(channel, streamId, sourceId: 42, ActiveSamples());
+
+            Task<RecordingFinalizationResult> finalized = NextFinalizationAsync(manager);
+            manager.StopStream(channel, streamId);
+            Assert.True((await finalized).IsPlayable);
+
+            CallRecordingMetadata metadata = Assert.Single(manager.LoadRecordings());
+            Assert.False(metadata.IsEncrypted);
+            Assert.Equal(CallRecordingEncryptionState.Unknown, metadata.EffectiveEncryptionState);
+            Assert.Equal("Unknown", metadata.EncryptionText);
+            Assert.EndsWith("_System 1_99_42_UNKNOWN_64.opus", metadata.FileName, StringComparison.Ordinal);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task NxdnReceivePreservesExactCipherAndKeyIdentifiers()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "dvmconsole-recording-tests", Guid.NewGuid().ToString("N"));
+        var channel = new ChannelViewModel(new ChannelConfiguration
+        {
+            Name = "Dispatch",
+            System = "System 1",
+            Tgid = "99",
+            Mode = "nxdn"
+        });
+        using var manager = new CallRecordingManager(root);
+        channel.SetRecordingEnabled(true);
+
+        try
+        {
+            const uint streamId = 65;
+            byte[] payload = NxdnVoicePacketCodec.CreateCallControlPacket(
+                42,
+                99,
+                group: true,
+                NxdnVoicePacketCodec.VoiceCallMessageType,
+                frameSequence: 1,
+                cipherType: NxdnPrivacyAlgorithms.Ehr,
+                keyId: 7);
+            manager.ObserveTraffic(channel, new FneTrafficFrame(
+                FneTrafficProtocol.Nxdn,
+                1,
+                42,
+                99,
+                null,
+                "GROUP",
+                "VOICE",
+                "VCALL",
+                1,
+                streamId,
+                payload));
+            manager.WriteSamples(channel, streamId, sourceId: 42, ActiveSamples());
+
+            Task<RecordingFinalizationResult> finalized = NextFinalizationAsync(manager);
+            manager.StopStream(channel, streamId);
+            Assert.True((await finalized).IsPlayable);
+
+            CallRecordingMetadata metadata = Assert.Single(manager.LoadRecordings());
+            Assert.Equal(CallRecordingEncryptionState.Secure, metadata.EffectiveEncryptionState);
+            Assert.Equal(NxdnPrivacyAlgorithms.Ehr, metadata.EncryptionAlgorithmId);
+            Assert.Equal((ushort)7, metadata.EncryptionKeyIdValue);
+            Assert.Equal("EHR", metadata.EncryptionAlgorithm);
         }
         finally
         {
@@ -1238,6 +1511,113 @@ public sealed class CallRecordingManagerTests
             packetSequence: 1,
             streamId,
             payload: []);
+
+    private static FneTrafficFrame P25EncryptedTraffic(
+        uint streamId,
+        byte algorithmId,
+        ushort keyId)
+        => new(
+            FneTrafficProtocol.P25,
+            peerId: 1,
+            sourceId: 42,
+            destinationId: 99,
+            slot: null,
+            callType: "GROUP",
+            frameType: "VOICE",
+            subtype: "LDU1",
+            packetSequence: 1,
+            streamId,
+            P25DfsiFrameCodec.CreateEncryptedLdu1Payload(
+                42,
+                99,
+                new byte[P25DfsiFrameCodec.ImbeBytes],
+                new P25DfsiFrameCodec.P25EncryptionMetadata(
+                    algorithmId,
+                    keyId,
+                    [1, 2, 3, 4, 5, 6, 7, 8, 9])));
+
+    private static FneTrafficFrame P25ClearTraffic(uint streamId)
+        => new(
+            FneTrafficProtocol.P25,
+            peerId: 1,
+            sourceId: 42,
+            destinationId: 99,
+            slot: null,
+            callType: "GROUP",
+            frameType: "VOICE",
+            subtype: "LDU1",
+            packetSequence: 1,
+            streamId,
+            P25DfsiFrameCodec.CreateLdu1Payload(
+                42,
+                99,
+                new byte[P25DfsiFrameCodec.ImbeBytes]));
+
+    private static FneTrafficFrame DmrTraffic(
+        string frameType,
+        string subtype,
+        uint streamId)
+        => new(
+            FneTrafficProtocol.Dmr,
+            peerId: 1,
+            sourceId: 42,
+            destinationId: 99,
+            slot: 0,
+            callType: "GROUP",
+            frameType,
+            subtype,
+            packetSequence: 1,
+            streamId,
+            new byte[DmrVoicePacketCodec.PacketBytes]);
+
+    private static FneTrafficFrame DmrPrivacyTraffic(
+        uint streamId,
+        byte algorithmId,
+        byte keyId)
+    {
+        byte[] frame = new byte[DmrVoicePacketCodec.FrameBytes];
+        var privacy = new PrivacyLC
+        {
+            AlgId = algorithmId,
+            KId = keyId,
+            FID = DmrPrivacyAlgorithms.FeatureId,
+            Group = true,
+            DstId = 99
+        };
+        FullLC.EncodePI(privacy, ref frame);
+        new SlotType
+        {
+            ColorCode = 0,
+            DataType = (byte)DMRDataType.VOICE_PI_HEADER
+        }.GetData(ref frame);
+        byte[] packet = new byte[DmrVoicePacketCodec.PacketBytes];
+        frame.CopyTo(packet, DmrVoicePacketCodec.HeaderBytes);
+        return new FneTrafficFrame(
+            FneTrafficProtocol.Dmr,
+            peerId: 1,
+            sourceId: 42,
+            destinationId: 99,
+            slot: 0,
+            callType: "GROUP",
+            frameType: "DATA_SYNC",
+            subtype: "VOICE_PI_HEADER",
+            packetSequence: 1,
+            streamId,
+            packet);
+    }
+
+    private static JsonDocument DecodeMetadata(string encoded)
+    {
+        string base64 = encoded.Replace('-', '+').Replace('_', '/');
+        base64 = (base64.Length % 4) switch
+        {
+            0 => base64,
+            2 => $"{base64}==",
+            3 => $"{base64}=",
+            _ => throw new InvalidDataException("Invalid base64url metadata.")
+        };
+        return JsonDocument.Parse(Convert.FromBase64String(base64));
+    }
 
     private static Task<RecordingFinalizationResult> NextFinalizationAsync(CallRecordingManager manager)
     {

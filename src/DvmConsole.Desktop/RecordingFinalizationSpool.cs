@@ -29,9 +29,16 @@ internal sealed record RecordingFinalizationDescriptor(
     bool IsSecure,
     byte? EncryptionAlgorithmId,
     ushort? EncryptionKeyId,
-    int? RetentionDays)
+    int? RetentionDays,
+    bool? IsEncryptionKnown = null)
 {
     public PcmAudioFormat Format => new(SampleRate, Channels, BitsPerSample);
+    // Descriptors written before schema 4 have no known-state property; their
+    // legacy bool was authoritative and therefore represents known clear or
+    // known secure. New descriptors explicitly write false for unknown.
+    internal bool EncryptionKnown => IsEncryptionKnown ?? true;
+    internal EncryptionSnapshot Encryption =>
+        EncryptionSnapshotSchemaAdapter.FromDescriptor(this);
 }
 
 internal sealed record RecordingFinalizationSpoolHealth(

@@ -72,6 +72,9 @@ operator configurations remain compatible.
   it drains.
 - Channel and patch transmit queues are bounded and measured. TAR finalization
   remains durable when its worker queue is full.
+- TAR recordings distinguish unknown, clear, and secure calls, retain the
+  protocol algorithm and key identifiers when known, and keep reused FNE stream
+  IDs from joining separate calls after a confirmed terminator.
 - Debug Log searches wait briefly for typing to settle before rebuilding the
   visible results.
 - Session startup and shutdown now use explicit ownership and rollback phases.

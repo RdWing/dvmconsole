@@ -3,10 +3,19 @@ using System.Text.Json.Serialization;
 
 namespace DvmConsole.Desktop;
 
+public enum CallRecordingEncryptionState
+{
+    Unknown,
+    Clear,
+    Secure
+}
+
 // Portable catalog metadata embedded directly in Opus recordings.
 // Encryption identifiers are descriptive only; key material is never stored.
 public sealed class CallRecordingMetadata
 {
+    public const int CurrentSchemaVersion = 4;
+
     private List<uint> streamIds = [];
     public int SchemaVersion { get; set; } = 1;
     public string RecordingId { get; set; } = Guid.NewGuid().ToString("N");
@@ -16,8 +25,13 @@ public sealed class CallRecordingMetadata
     public DateTimeOffset UtcStartTime { get; set; }
     public DateTimeOffset UtcEndTime { get; set; }
     public long DurationMs { get; set; }
+    [JsonIgnore]
     public string FilePath { get; set; } = string.Empty;
+
+    [JsonIgnore]
     public string FileName { get; set; } = string.Empty;
+
+    [JsonIgnore]
     public long FileSizeBytes { get; set; }
     public int SampleRate { get; set; }
     public int BitsPerSample { get; set; }
@@ -44,10 +58,24 @@ public sealed class CallRecordingMetadata
         ? StreamIds.Distinct().Count()
         : StreamId is null ? 0 : 1;
     public bool IsEncrypted { get; set; }
+    [JsonConverter(typeof(JsonStringEnumConverter<CallRecordingEncryptionState>))]
+    public CallRecordingEncryptionState EncryptionState { get; set; }
+    public byte? EncryptionAlgorithmId { get; set; }
     public string EncryptionAlgorithm { get; set; } = string.Empty;
+    public ushort? EncryptionKeyIdValue { get; set; }
     public string? EncryptionKeyId { get; set; }
     public int? RetentionDaysAtRecordTime { get; set; }
     public bool PlaybackValidated { get; set; }
+
+    internal void NormalizeCompatibilityFields()
+    {
+        if (SchemaVersion < CurrentSchemaVersion)
+            return;
+        EncryptionSnapshotSchemaAdapter.ApplyToMetadata(
+            this,
+            EncryptionSnapshotSchemaAdapter.FromMetadata(this),
+            EncryptionPresentation.ParseProtocol(Protocol));
+    }
 
     [JsonIgnore]
     public bool IsPlayable =>
@@ -83,13 +111,28 @@ public sealed class CallRecordingMetadata
     public string SubscriberText => SubscriberId?.ToString(CultureInfo.InvariantCulture) ?? string.Empty;
 
     [JsonIgnore]
-    public string EncryptionText => !IsEncrypted
-        ? "Clear"
-        : string.IsNullOrWhiteSpace(EncryptionAlgorithm)
-            ? "Encrypted"
-            : string.IsNullOrWhiteSpace(EncryptionKeyId)
-                ? EncryptionAlgorithm
-                : $"{EncryptionAlgorithm} / {EncryptionKeyId}";
+    public CallRecordingEncryptionState EffectiveEncryptionState =>
+        EncryptionSnapshotSchemaAdapter.FromMetadata(this).State;
+
+    [JsonIgnore]
+    public bool IsEncryptionKnown => EffectiveEncryptionState != CallRecordingEncryptionState.Unknown;
+
+    [JsonIgnore]
+    public string EffectiveEncryptionAlgorithm => !string.IsNullOrWhiteSpace(EncryptionAlgorithm)
+        ? EncryptionAlgorithm.Trim()
+        : EncryptionPresentation.AlgorithmDisplayName(
+            EncryptionPresentation.ParseProtocol(Protocol),
+            EncryptionSnapshotSchemaAdapter.FromMetadata(this).AlgorithmId);
+
+    [JsonIgnore]
+    public string EncryptionText => EffectiveEncryptionState switch
+    {
+        CallRecordingEncryptionState.Unknown => "Unknown",
+        CallRecordingEncryptionState.Clear => "Clear",
+        _ when string.IsNullOrWhiteSpace(EffectiveEncryptionAlgorithm) => "Encrypted",
+        _ when string.IsNullOrWhiteSpace(EncryptionKeyId) => EffectiveEncryptionAlgorithm,
+        _ => $"{EffectiveEncryptionAlgorithm} / {EncryptionKeyId}"
+    };
 
     [JsonIgnore]
     public string TechnicalDetailsText

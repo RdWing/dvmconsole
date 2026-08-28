@@ -24,6 +24,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Keep TAR finalization jobs durable on disk when the bounded in-memory worker
   queue is full. Pending work resumes as capacity becomes available without
   growing an unbounded task backlog.
+- Store TAR encryption as an explicit Unknown, Clear, or Secure state, together
+  with the protocol algorithm and key identifiers when they are known. New
+  recording metadata omits machine-specific catalog paths, while existing Opus
+  recordings remain compatible.
 - Debounce Debug Log text searches by 150 ms and limit the visible projection
   to the newest 5,000 matching rows. The existing retained-session limits and
   redacted export behavior remain unchanged.
@@ -46,6 +50,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Keep live TAR capture snapshots out of the finalization queue until their
   writers close. Finishing another recording can no longer delete an active
   PTT recording or crash Console when the operator releases PTT.
+- Let explicit on-air encryption metadata correct an earlier DMR clear
+  inference. A definitive call start after a confirmed terminator now creates a
+  separate History and TAR episode even when the FNE reuses the stream ID, so
+  adjacent calls cannot share audio or security metadata.
 - Keep PTT release bounded without clipping normally queued speech. Console
   stops accepting microphone audio first, drains roughly one second of accepted
   audio at the normal cadence, and then sends the protocol completion and
