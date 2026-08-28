@@ -1,5 +1,6 @@
 using DvmConsole.Core.Settings;
 using DvmConsole.FneClient;
+using DvmConsole.Operations;
 
 namespace DvmConsole.Desktop;
 
@@ -62,6 +63,9 @@ internal sealed record ReceiveCallEpisodeSnapshot(
 internal sealed class ReceiveCallEpisodeTracker
 {
     private static readonly TimeSpan MappingRetention = TimeSpan.FromSeconds(5);
+    internal const int MaximumTrackedEpisodes = 256;
+    internal const int MaximumStreamsPerEpisode =
+        ReceiveStreamPolicy.DefaultMaximumTrackedStreams;
     private readonly object sync = new();
     private readonly Dictionary<ReceiveCallIdentity, List<EpisodeState>> currentByIdentity = [];
     private readonly Dictionary<PhysicalStreamKey, EpisodeState> byPhysicalStream = [];
@@ -140,6 +144,7 @@ internal sealed class ReceiveCallEpisodeTracker
             bool episodeStarted = episode is null;
             if (episode is null)
             {
+                MakeRoomForEpisode();
                 episode = new EpisodeState(
                     checked(++nextEpisodeId),
                     identity,
@@ -155,8 +160,17 @@ internal sealed class ReceiveCallEpisodeTracker
                 identityEpisodes.Add(episode);
             }
 
-            bool streamAdded = episode.StreamIds.Add(traffic.StreamId);
-            if (streamAdded)
+            EpisodeStreamUpdate streamUpdate = episode.TrackStream(
+                traffic.StreamId,
+                MaximumStreamsPerEpisode);
+            if (streamUpdate.RemovedStreamId is uint removedStreamId)
+            {
+                byPhysicalStream.Remove(new PhysicalStreamKey(
+                    systemName,
+                    traffic.Protocol,
+                    removedStreamId));
+            }
+            if (streamUpdate.Added)
             {
                 episode.LastPhysicalEndAt = null;
                 episode.LastPhysicalEndReason = null;
@@ -164,7 +178,7 @@ internal sealed class ReceiveCallEpisodeTracker
             episode.LastActivityAt = observedAt;
             episode.ObserveEncryption(traffic);
             byPhysicalStream[physicalKey] = episode;
-            return CreateObservation(episode, episodeStarted, streamAdded);
+            return CreateObservation(episode, episodeStarted, streamUpdate.Added);
         }
     }
 
@@ -331,6 +345,19 @@ internal sealed class ReceiveCallEpisodeTracker
         }
     }
 
+    private void MakeRoomForEpisode()
+    {
+        if (episodes.Count < MaximumTrackedEpisodes)
+            return;
+
+        EpisodeState oldest = episodes.Values
+            .OrderBy(candidate => candidate.CompletedAt is null ? 1 : 0)
+            .ThenBy(candidate => candidate.LastActivityAt)
+            .ThenBy(candidate => candidate.EpisodeId)
+            .First();
+        RemoveEpisode(oldest);
+    }
+
     private void RemoveEpisode(EpisodeState episode)
     {
         RemoveCurrentEpisode(episode);
@@ -396,6 +423,10 @@ internal sealed class ReceiveCallEpisodeTracker
                 StringComparer.OrdinalIgnoreCase.GetHashCode(CallType));
     }
 
+    private readonly record struct EpisodeStreamUpdate(
+        bool Added,
+        uint? RemovedStreamId);
+
     private sealed class EpisodeState(
         long episodeId,
         ReceiveCallIdentity identity,
@@ -404,6 +435,7 @@ internal sealed class ReceiveCallEpisodeTracker
         EncryptionSnapshot encryption)
     {
         private readonly TrafficEncryptionObservationState encryptionState = new(encryption);
+        private readonly Queue<uint> replacementStreamOrder = [];
 
         public long EpisodeId { get; } = episodeId;
         public ReceiveCallIdentity Identity { get; } = identity;
@@ -416,6 +448,23 @@ internal sealed class ReceiveCallEpisodeTracker
         public DateTimeOffset? CompletedAt { get; set; }
         public DateTimeOffset? MappingExpiresAt { get; set; }
         public EncryptionSnapshot Encryption => encryptionState.Encryption;
+
+        public EpisodeStreamUpdate TrackStream(uint streamId, int maximumStreams)
+        {
+            if (StreamIds.Contains(streamId))
+                return default;
+
+            uint? removedStreamId = null;
+            if (StreamIds.Count >= maximumStreams)
+            {
+                removedStreamId = replacementStreamOrder.Dequeue();
+                StreamIds.Remove(removedStreamId.Value);
+            }
+
+            StreamIds.Add(streamId);
+            replacementStreamOrder.Enqueue(streamId);
+            return new EpisodeStreamUpdate(Added: true, removedStreamId);
+        }
 
         public bool IsEncryptionCompatible(EncryptionSnapshot candidate)
         {

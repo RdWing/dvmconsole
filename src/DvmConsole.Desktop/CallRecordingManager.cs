@@ -946,6 +946,7 @@ public sealed class CallRecordingManager : IDisposable, IAsyncDisposable
         PcmWavFileWriter writer)
     {
         private readonly object writerSync = new();
+        private readonly Queue<uint> replacementStreamOrder = [];
         private bool writerClosed;
         public Guid JobId { get; } = jobId;
         public uint StreamId { get; } = streamId;
@@ -969,7 +970,18 @@ public sealed class CallRecordingManager : IDisposable, IAsyncDisposable
 
         public bool ObservePhysicalStream(uint streamId)
         {
-            return streamId != 0 && StreamIds.Add(streamId);
+            if (streamId == 0 || StreamIds.Contains(streamId))
+                return false;
+
+            if (StreamIds.Count >= ReceiveCallEpisodeTracker.MaximumStreamsPerEpisode)
+            {
+                uint oldestReplacement = replacementStreamOrder.Dequeue();
+                StreamIds.Remove(oldestReplacement);
+            }
+
+            StreamIds.Add(streamId);
+            replacementStreamOrder.Enqueue(streamId);
+            return true;
         }
 
         public void Write(ReadOnlySpan<short> samples)

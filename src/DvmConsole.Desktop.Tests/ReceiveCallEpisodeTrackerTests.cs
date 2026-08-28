@@ -335,6 +335,45 @@ public sealed class ReceiveCallEpisodeTrackerTests
         Assert.False(continuation.EpisodeStarted);
     }
 
+    [Fact]
+    public void BoundsPhysicalStreamMappingsWithinOneLogicalEpisode()
+    {
+        var tracker = new ReceiveCallEpisodeTracker();
+        DateTimeOffset now = DateTimeOffset.UnixEpoch;
+        int totalStreams = ReceiveCallEpisodeTracker.MaximumStreamsPerEpisode + 2;
+
+        for (uint streamId = 1; streamId <= totalStreams; streamId++)
+            tracker.Observe("SKYNET", P25(streamId, sourceId: 42), now);
+
+        Assert.True(tracker.TryGet("SKYNET", FneTrafficProtocol.P25, 1, out var episode));
+        Assert.Equal(ReceiveCallEpisodeTracker.MaximumStreamsPerEpisode, episode.StreamIds.Count);
+        Assert.False(tracker.TryGet("SKYNET", FneTrafficProtocol.P25, 2, out _));
+        Assert.False(tracker.TryGet("SKYNET", FneTrafficProtocol.P25, 3, out _));
+        Assert.True(tracker.TryGet(
+            "SKYNET",
+            FneTrafficProtocol.P25,
+            checked((uint)totalStreams),
+            out _));
+    }
+
+    [Fact]
+    public void BoundsTheNumberOfTrackedLogicalEpisodes()
+    {
+        var tracker = new ReceiveCallEpisodeTracker();
+        DateTimeOffset now = DateTimeOffset.UnixEpoch;
+        int totalEpisodes = ReceiveCallEpisodeTracker.MaximumTrackedEpisodes + 1;
+
+        for (uint identity = 1; identity <= totalEpisodes; identity++)
+            tracker.Observe("SKYNET", P25(identity, sourceId: identity), now);
+
+        Assert.False(tracker.TryGet("SKYNET", FneTrafficProtocol.P25, 1, out _));
+        Assert.True(tracker.TryGet(
+            "SKYNET",
+            FneTrafficProtocol.P25,
+            checked((uint)totalEpisodes),
+            out _));
+    }
+
     private static FneTrafficFrame P25(
         uint streamId,
         uint sourceId,

@@ -31,11 +31,14 @@ public readonly record struct ReceiveStreamDecision(
 
 public sealed class ReceiveStreamPolicy
 {
+    public const int DefaultMaximumTrackedStreams = 32;
+
     public ReceiveStreamPolicy(
         TimeSpan inactivityTimeout,
         TimeSpan gracePeriod,
         TimeSpan terminatorHold,
-        TimeSpan tombstoneLifetime)
+        TimeSpan tombstoneLifetime,
+        int maximumTrackedStreams = DefaultMaximumTrackedStreams)
     {
         if (inactivityTimeout <= TimeSpan.Zero)
             throw new ArgumentOutOfRangeException(nameof(inactivityTimeout));
@@ -45,11 +48,14 @@ public sealed class ReceiveStreamPolicy
             throw new ArgumentOutOfRangeException(nameof(terminatorHold));
         if (tombstoneLifetime <= TimeSpan.Zero)
             throw new ArgumentOutOfRangeException(nameof(tombstoneLifetime));
+        if (maximumTrackedStreams <= 0)
+            throw new ArgumentOutOfRangeException(nameof(maximumTrackedStreams));
 
         InactivityTimeout = inactivityTimeout;
         GracePeriod = gracePeriod;
         TerminatorHold = terminatorHold;
         TombstoneLifetime = tombstoneLifetime;
+        MaximumTrackedStreams = maximumTrackedStreams;
     }
 
     public static ReceiveStreamPolicy Default { get; } = new(
@@ -62,6 +68,7 @@ public sealed class ReceiveStreamPolicy
     public TimeSpan GracePeriod { get; }
     public TimeSpan TerminatorHold { get; }
     public TimeSpan TombstoneLifetime { get; }
+    public int MaximumTrackedStreams { get; }
 }
 
 public readonly record struct ReceiveStreamActivity(
@@ -155,13 +162,13 @@ public static class ReceiveStreamReducer
 
         if (state.PrimaryStreamId is null)
         {
-            state = AddStream(state, streamId, now, makePrimary: true);
+            state = AddStream(state, streamId, now, makePrimary: true, policy: policy);
             return Result(
                 state,
                 new ReceiveStreamDecision(ReceiveStreamTransition.Started, streamId));
         }
 
-        state = AddStream(state, streamId, now, makePrimary: false);
+        state = AddStream(state, streamId, now, makePrimary: false, policy: policy);
         return Result(
             state,
             new ReceiveStreamDecision(
@@ -194,7 +201,8 @@ public static class ReceiveStreamReducer
                     state,
                     streamId,
                     now,
-                    makePrimary: state.PrimaryStreamId is null);
+                    makePrimary: state.PrimaryStreamId is null,
+                    policy: policy);
                 return Result(
                     state,
                     new ReceiveStreamDecision(
@@ -230,7 +238,8 @@ public static class ReceiveStreamReducer
             state,
             streamId,
             now,
-            makePrimary: state.PrimaryStreamId is null);
+            makePrimary: state.PrimaryStreamId is null,
+            policy: policy);
         return Result(
             state,
             new ReceiveStreamDecision(
@@ -402,7 +411,8 @@ public static class ReceiveStreamReducer
     public static ReceiveStreamState AssumeActive(
         ReceiveStreamState state,
         uint streamId,
-        DateTimeOffset now)
+        DateTimeOffset now,
+        ReceiveStreamPolicy? policy = null)
     {
         ArgumentNullException.ThrowIfNull(state);
         if (streamId == 0)
@@ -410,20 +420,24 @@ public static class ReceiveStreamReducer
         if (state.IsActive(streamId))
             return state;
 
+        policy ??= ReceiveStreamPolicy.Default;
         state = state with { Tombstones = state.Tombstones.Remove(streamId) };
         return AddStream(
             state,
             streamId,
             now,
-            makePrimary: state.PrimaryStreamId is null);
+            makePrimary: state.PrimaryStreamId is null,
+            policy: policy);
     }
 
     private static ReceiveStreamState AddStream(
         ReceiveStreamState state,
         uint streamId,
         DateTimeOffset now,
-        bool makePrimary)
+        bool makePrimary,
+        ReceiveStreamPolicy policy)
     {
+        state = MakeRoomForStream(state, policy.MaximumTrackedStreams);
         var activity = new ReceiveStreamActivity(
             now,
             GraceDeadline: null,
@@ -437,6 +451,21 @@ public static class ReceiveStreamReducer
             ActiveStreamIds = state.ActiveStreamIds.Add(streamId),
             NextInsertionOrder = checked(state.NextInsertionOrder + 1)
         };
+    }
+
+    private static ReceiveStreamState MakeRoomForStream(
+        ReceiveStreamState state,
+        int maximumTrackedStreams)
+    {
+        if (state.ActiveStreams.Count < maximumTrackedStreams)
+            return state;
+
+        uint oldestStreamId = state.ActiveStreams
+            .OrderBy(pair => pair.Value.LastActivity)
+            .ThenBy(pair => pair.Value.InsertionOrder)
+            .Select(pair => pair.Key)
+            .First();
+        return RemoveStreamWithoutTombstone(state, oldestStreamId);
     }
 
     private static ReceiveStreamState RemoveStreamWithoutTombstone(
@@ -462,12 +491,20 @@ public static class ReceiveStreamReducer
         ReceiveStreamPolicy policy)
     {
         state = RemoveStreamWithoutTombstone(state, streamId);
-        return state with
+        state = state with
         {
             Tombstones = state.Tombstones.SetItem(
                 streamId,
                 now + policy.TombstoneLifetime)
         };
+        if (state.Tombstones.Count <= policy.MaximumTrackedStreams)
+            return state;
+
+        uint oldestTombstone = state.Tombstones
+            .OrderBy(pair => pair.Value)
+            .Select(pair => pair.Key)
+            .First();
+        return state with { Tombstones = state.Tombstones.Remove(oldestTombstone) };
     }
 
     private static uint? MostRecentlyPresentableStreamId(
@@ -526,12 +563,14 @@ public sealed class ReceiveStreamLifecycle
         TimeSpan inactivityTimeout,
         TimeSpan gracePeriod,
         TimeSpan terminatorHold,
-        TimeSpan tombstoneLifetime)
+        TimeSpan tombstoneLifetime,
+        int maximumTrackedStreams = ReceiveStreamPolicy.DefaultMaximumTrackedStreams)
         : this(new ReceiveStreamPolicy(
             inactivityTimeout,
             gracePeriod,
             terminatorHold,
-            tombstoneLifetime))
+            tombstoneLifetime,
+            maximumTrackedStreams))
     {
     }
 

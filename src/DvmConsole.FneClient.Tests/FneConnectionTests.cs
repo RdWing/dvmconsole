@@ -113,7 +113,7 @@ public sealed class FneConnectionTests
             "127.0.0.1",
             62031,
             1000001,
-            null,
+            "password",
             false,
             null)
         {
@@ -138,7 +138,7 @@ public sealed class FneConnectionTests
     public async Task RoutineKeepaliveLogsAreOptInAndCanBeEnabledAtRuntime()
     {
         var options = new FneConnectionOptions(
-            "Test FNE", "Console", "127.0.0.1", 62031, 1001, null, false, null)
+            "Test FNE", "Console", "127.0.0.1", 62031, 1001, "password", false, null)
         {
             EnableVerboseLogging = false
         };
@@ -167,7 +167,7 @@ public sealed class FneConnectionTests
     public async Task ProtocolErrorLogDoesNotMasqueradeAsConnectionLoss()
     {
         var options = new FneConnectionOptions(
-            "Test FNE", "TYF_OP1", "127.0.0.1", 62031, 1000001, null, false, null);
+            "Test FNE", "TYF_OP1", "127.0.0.1", 62031, 1000001, "password", false, null);
         await using var connection = new FneConnection(options);
         using IFnePeerSession session = connection.CreatePeerSession(new IPEndPoint(IPAddress.Loopback, 62031));
         fnecore.FnePeer peer = session.Peer;
@@ -181,7 +181,7 @@ public sealed class FneConnectionTests
     public async Task ExplicitSocketErrorStillPublishesConnectionFault()
     {
         var options = new FneConnectionOptions(
-            "Test FNE", "TYF_OP1", "127.0.0.1", 62031, 1000001, null, false, null);
+            "Test FNE", "TYF_OP1", "127.0.0.1", 62031, 1000001, "password", false, null);
         await using var connection = new FneConnection(options);
         using IFnePeerSession session = connection.CreatePeerSession(new IPEndPoint(IPAddress.Loopback, 62031));
         fnecore.FnePeer peer = session.Peer;

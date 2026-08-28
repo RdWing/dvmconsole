@@ -225,6 +225,37 @@ public sealed class ReceiveStreamLifecycleTests
         Assert.Equal((uint)21, lifecycle.ActiveStreamId);
     }
 
+    [Fact]
+    public void BoundsAttackerControlledActiveAndTombstonedStreamIdentities()
+    {
+        var lifecycle = new ReceiveStreamLifecycle(
+            InactivityTimeout,
+            GracePeriod,
+            TerminatorHold,
+            TombstoneLifetime,
+            maximumTrackedStreams: 2);
+        DateTimeOffset now = DateTimeOffset.UnixEpoch;
+
+        lifecycle.ObserveVoice(10, now);
+        lifecycle.ObserveVoice(11, now.AddMilliseconds(1));
+        lifecycle.ObserveVoice(12, now.AddMilliseconds(2));
+
+        Assert.Equal(2, lifecycle.Snapshot.ActiveStreams.Count);
+        Assert.False(lifecycle.IsActive(10));
+        Assert.True(lifecycle.IsActive(11));
+        Assert.True(lifecycle.IsActive(12));
+
+        lifecycle.Complete(11, now.AddMilliseconds(3));
+        lifecycle.Complete(12, now.AddMilliseconds(4));
+        lifecycle.ObserveVoice(13, now.AddMilliseconds(5));
+        lifecycle.Complete(13, now.AddMilliseconds(6));
+
+        Assert.Equal(2, lifecycle.Snapshot.Tombstones.Count);
+        Assert.DoesNotContain((uint)11, lifecycle.Snapshot.Tombstones.Keys);
+        Assert.Contains((uint)12, lifecycle.Snapshot.Tombstones.Keys);
+        Assert.Contains((uint)13, lifecycle.Snapshot.Tombstones.Keys);
+    }
+
     private static ReceiveStreamLifecycle CreateLifecycle()
         => new(InactivityTimeout, GracePeriod, TerminatorHold, TombstoneLifetime);
 

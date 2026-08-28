@@ -272,6 +272,30 @@ public sealed class FneProtocolTests
             Constants.NET_FUNC_KEY_RSP,
             Constants.NET_SUBFUNC_NOP,
             malformedKmm)));
+
+        Assert.True(FneInboundFramePolicy.ShouldDeliverTraffic(CreateFrame(
+            Constants.NET_FUNC_KEY_RSP,
+            Constants.NET_SUBFUNC_NOP,
+            CreateModifyKeyPayload(keyLength: 32))));
+        Assert.False(FneInboundFramePolicy.ShouldDeliverTraffic(CreateFrame(
+            Constants.NET_FUNC_KEY_RSP,
+            Constants.NET_SUBFUNC_NOP,
+            CreateModifyKeyPayload(keyLength: 33))));
+        Assert.False(FneInboundFramePolicy.ShouldDeliverTraffic(CreateFrame(
+            Constants.NET_FUNC_KEY_RSP,
+            Constants.NET_SUBFUNC_NOP,
+            CreateModifyKeyPayload(keyLength: byte.MaxValue))));
+    }
+
+    private static byte[] CreateModifyKeyPayload(byte keyLength)
+    {
+        byte[] payload = new byte[34 + keyLength];
+        payload[11] = (byte)fnecore.P25.KMM.KmmMessageType.MODIFY_KEY_CMD;
+        payload[25] = 0;
+        payload[26] = fnecore.P25.P25Defines.P25_ALGO_AES;
+        payload[27] = keyLength;
+        payload[28] = 1;
+        return payload;
     }
 
     [Fact]
