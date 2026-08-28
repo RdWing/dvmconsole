@@ -90,7 +90,7 @@ public sealed class FneConnectionTests
 
         Assert.Equal("TYF_OP1", peer.Information.Details.Identity);
         Assert.Equal(FneConnection.SoftwareIdentifier, peer.Information.Details.Software);
-        Assert.Equal("DVMC_NEO_0.4.3", peer.Information.Details.Software);
+        Assert.Equal("DVMC_NEO_0.4.4", peer.Information.Details.Software);
         Assert.Equal(options.PeerId, peer.Information.PeerID);
         Assert.Equal(fnecore.ConnectionState.WAITING_LOGIN, peer.Information.State);
         Assert.Equal(fnecore.LogLevel.DEBUG, peer.LogLevel);
@@ -301,6 +301,29 @@ public sealed class FneConnectionTests
     }
 
     [Fact]
+    public async Task LoginAcknowledgementResetsBackoffBeforeHandshakeCompletes()
+    {
+        var sessions = new RecordingPeerSessionFactory();
+        await using var connection = new FneConnection(
+            new FneConnectionOptions("Test", "Test", "127.0.0.1", 62031, 1, null, false, null),
+            TimeProvider.System,
+            new LoopbackEndpointResolver(),
+            sessions);
+
+        await connection.StartAsync();
+        RecordingPeerSession session = sessions.Single();
+        session.Callbacks.Log(fnecore.LogLevel.INFO, "Sending login request to MASTER");
+        session.Callbacks.Log(fnecore.LogLevel.INFO, "Sending login request to MASTER");
+        Assert.Equal(10, session.Peer.PingTime);
+
+        session.Peer.Information.State = fnecore.ConnectionState.WAITING_AUTHORISATION;
+        session.Callbacks.Log(fnecore.LogLevel.INFO, "login ACK received");
+        session.Callbacks.Log(fnecore.LogLevel.INFO, "Sending login request to MASTER");
+
+        Assert.Equal(FnePeerSessionFactory.DefaultPingIntervalSeconds, session.Peer.PingTime);
+    }
+
+    [Fact]
     public async Task StalledHandshakeRecyclesOnlyItsPeerSession()
     {
         var sessions = new RecordingPeerSessionFactory();
@@ -309,7 +332,11 @@ public sealed class FneConnectionTests
             TimeProvider.System,
             new LoopbackEndpointResolver(),
             sessions,
-            TimeSpan.FromMilliseconds(40));
+            TimeSpan.FromMilliseconds(40),
+            TimeSpan.FromMilliseconds(20));
+
+        var messages = new List<string>();
+        connection.LogReceived += (_, entry) => messages.Add(entry.Message);
 
         await connection.StartAsync();
         RecordingPeerSession first = sessions.Single();
@@ -321,6 +348,9 @@ public sealed class FneConnectionTests
         Assert.True(first.IsStopped);
         Assert.True(sessions.Latest().IsStarted);
         Assert.Equal(FneConnectionState.WaitingForLogin, connection.Status.State);
+        Assert.Contains(messages, message => message.Contains(
+            "authentication made no progress",
+            StringComparison.Ordinal));
     }
 
     [Fact]

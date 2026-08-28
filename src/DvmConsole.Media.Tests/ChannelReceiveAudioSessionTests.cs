@@ -91,7 +91,7 @@ public sealed class ChannelReceiveAudioSessionTests
     }
 
     [Fact]
-    public async Task SelectableSecureDmrChannelRejectsClearReceive()
+    public async Task FixedSecureDmrChannelDecodesClearReceive()
     {
         var definition = new ChannelRuntimeDefinition(
             "Selectable",
@@ -101,13 +101,12 @@ public sealed class ChannelReceiveAudioSessionTests
             1,
             encryptionAlgorithm: "aes",
             encryptionKeyId: "0x45",
-            selectableEncryption: true);
+            selectableEncryption: false);
         var playback = new FakePlayback();
         await using var session = new ChannelReceiveAudioSession(
             definition,
             new FakeVocoderSession(),
-            playback,
-            privacyPolicy: new FixedPrivacyPolicy(requireEncryptedTraffic: true));
+            playback);
 
         await session.ProcessAsync(new FneTrafficFrame(
             FneTrafficProtocol.Dmr,
@@ -134,8 +133,8 @@ public sealed class ChannelReceiveAudioSessionTests
             99,
             new byte[DmrVoicePacketCodec.PacketBytes]));
 
-        Assert.Empty(playback.Frames);
-        Assert.Equal(0, session.FramesDecoded);
+        Assert.Equal(3, playback.Frames.Count);
+        Assert.Equal(3, session.FramesDecoded);
     }
 
     [Fact]
@@ -155,7 +154,7 @@ public sealed class ChannelReceiveAudioSessionTests
     }
 
     [Fact]
-    public async Task SelectableSecureP25ChannelRejectsClearReceive()
+    public async Task FixedSecureP25ChannelDecodesClearReceive()
     {
         var definition = new ChannelRuntimeDefinition(
             "Selectable P25",
@@ -165,18 +164,17 @@ public sealed class ChannelReceiveAudioSessionTests
             0,
             encryptionAlgorithm: "aes",
             encryptionKeyId: "0x45",
-            selectableEncryption: true);
+            selectableEncryption: false);
         var playback = new FakePlayback();
         await using var session = new ChannelReceiveAudioSession(
             definition,
             new FakeVocoderSession(),
-            playback,
-            privacyPolicy: new FixedPrivacyPolicy(requireEncryptedTraffic: true));
+            playback);
 
         await session.ProcessAsync(CreateP25Traffic());
 
-        Assert.Empty(playback.Frames);
-        Assert.Equal(0, session.FramesDecoded);
+        Assert.Equal(9, playback.Frames.Count);
+        Assert.Equal(9, session.FramesDecoded);
     }
 
     [Fact]
@@ -228,7 +226,7 @@ public sealed class ChannelReceiveAudioSessionTests
     }
 
     [Fact]
-    public async Task SelectableSecureNxdnChannelRejectsClearReceive()
+    public async Task FixedSecureNxdnChannelDecodesClearReceive()
     {
         var definition = new ChannelRuntimeDefinition(
             "Selectable NXDN",
@@ -238,13 +236,12 @@ public sealed class ChannelReceiveAudioSessionTests
             0,
             encryptionAlgorithm: "aes",
             encryptionKeyId: "0x05",
-            selectableEncryption: true);
+            selectableEncryption: false);
         var playback = new FakePlayback();
         await using var session = new ChannelReceiveAudioSession(
             definition,
             new FakeVocoderSession(),
-            playback,
-            privacyPolicy: new FixedPrivacyPolicy(requireEncryptedTraffic: true));
+            playback);
 
         await session.ProcessAsync(CreateNxdnTraffic(
             NxdnVoicePacketCodec.CreateCallControlPacket(
@@ -265,8 +262,8 @@ public sealed class ChannelReceiveAudioSessionTests
                 new byte[NxdnVoicePacketCodec.AmbeBytes]),
             packetSequence: 1));
 
-        Assert.Empty(playback.Frames);
-        Assert.Equal(0, session.FramesDecoded);
+        Assert.Equal(NxdnVoicePacketCodec.CodewordsPerFrame, playback.Frames.Count);
+        Assert.Equal(NxdnVoicePacketCodec.CodewordsPerFrame, session.FramesDecoded);
     }
 
     [Fact]
@@ -445,11 +442,6 @@ public sealed class ChannelReceiveAudioSessionTests
             1,
             99,
             payload);
-    }
-
-    private sealed class FixedPrivacyPolicy(bool requireEncryptedTraffic) : IReceivePrivacyPolicy
-    {
-        public bool RequireEncryptedTraffic { get; } = requireEncryptedTraffic;
     }
 
     private static FneTrafficFrame CreateAnalogTraffic()

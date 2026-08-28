@@ -56,6 +56,66 @@ public sealed class ArchitectureBoundaryTests
         Assert.Empty(violations);
     }
 
+    [Fact]
+    public void ProductionProjectsKeepApprovedPackageBoundaries()
+    {
+        string sourceRoot = FindSourceRoot();
+        var expected = new Dictionary<string, string[]>
+        {
+            ["DvmConsole.CodeplugValidator"] = [],
+            ["DvmConsole.Audio"] = ["Concentus.Oggfile", "NAudio.Wasapi", "NLayer", "System.IO.Ports"],
+            ["DvmConsole.Core"] = ["YamlDotNet"],
+            ["DvmConsole.Desktop"] =
+            [
+                "Avalonia",
+                "Avalonia.Desktop",
+                "Avalonia.Native",
+                "Avalonia.Skia",
+                "Avalonia.Themes.Fluent",
+                "Avalonia.Win32",
+                "AvaloniaUI.DiagnosticsSupport",
+                "Markdown.Avalonia"
+            ],
+            ["DvmConsole.Fne"] = ["SharpZipLib"],
+            ["DvmConsole.FneClient"] = [],
+            ["DvmConsole.Media"] = [],
+            ["DvmConsole.Operations"] = [],
+            ["DvmConsole.Vocoder"] = []
+        };
+
+        foreach ((string projectName, string[] expectedPackages) in expected)
+        {
+            string projectPath = Path.Combine(sourceRoot, projectName, $"{projectName}.csproj");
+            string[] actualPackages = XDocument.Load(projectPath)
+                .Descendants("PackageReference")
+                .Select(element => (string?)element.Attribute("Include"))
+                .Where(name => name is not null)
+                .Order(StringComparer.Ordinal)
+                .ToArray()!;
+
+            Assert.Equal(expectedPackages.Order(StringComparer.Ordinal), actualPackages);
+            if (!projectName.Equals("DvmConsole.Desktop", StringComparison.Ordinal))
+            {
+                Assert.DoesNotContain(
+                    actualPackages,
+                    package => package.StartsWith("Avalonia", StringComparison.OrdinalIgnoreCase));
+            }
+        }
+    }
+
+    [Fact]
+    public void CompiledDesktopAssemblyDoesNotReferenceTheRawFneAssembly()
+    {
+        string[] references = typeof(MainWindowViewModel).Assembly
+            .GetReferencedAssemblies()
+            .Select(reference => reference.Name ?? string.Empty)
+            .ToArray();
+
+        Assert.DoesNotContain("DvmConsole.Fne", references);
+        Assert.DoesNotContain(references, reference =>
+            reference.Contains("fnecore", StringComparison.OrdinalIgnoreCase));
+    }
+
     private static string FindSourceRoot()
     {
         DirectoryInfo? directory = new(AppContext.BaseDirectory);

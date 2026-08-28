@@ -11,8 +11,15 @@ using System.Windows.Input;
 
 namespace DvmConsole.Desktop;
 
-public sealed class ChannelViewModel : INotifyPropertyChanged, IReceivePrivacyPolicy
+public sealed class ChannelViewModel : INotifyPropertyChanged
 {
+    private static readonly IBrush NormalPeakMarkerBrush =
+        new SolidColorBrush(Color.Parse("#F5F7FA"));
+    private static readonly IBrush YellowPeakMarkerBrush =
+        new SolidColorBrush(Color.Parse("#F2B134"));
+    private static readonly IBrush RedPeakMarkerBrush =
+        new SolidColorBrush(Color.Parse("#E5484D"));
+
     private readonly ChannelConfiguration configuration;
     private readonly ChannelRuntime runtime;
     private readonly ChannelDefinition sessionDefinition;
@@ -38,6 +45,7 @@ public sealed class ChannelViewModel : INotifyPropertyChanged, IReceivePrivacyPo
     private bool recordingEnabled;
     private string lastCallerText = "--";
     private double audioLevel;
+    private double audioPeakLevel;
     private double volume = 1.0;
     private double stereoBalance;
     private long ignoredLatePacketCount;
@@ -91,7 +99,18 @@ public sealed class ChannelViewModel : INotifyPropertyChanged, IReceivePrivacyPo
     public string LastCallerText => lastCallerText;
     public string LastCallerDisplayText => $"Last: {lastCallerText}";
     public double AudioLevel => audioLevel;
-    public double AudioLevelScale => audioLevel / 100;
+    public double AudioFillWidth => AudioMeterWidth * audioLevel / 100;
+    public double AudioPeakLevel => audioPeakLevel;
+    public double AudioPeakMarkerX => Math.Clamp(
+        (AudioMeterWidth * audioPeakLevel / 100) - 1,
+        0,
+        AudioMeterWidth - 2);
+    public IBrush AudioPeakMarkerBrush => audioPeakLevel >= ChannelAudioMeter.RedThresholdDisplayLevel
+        ? RedPeakMarkerBrush
+        : audioPeakLevel >= ChannelAudioMeter.YellowThresholdDisplayLevel
+            ? YellowPeakMarkerBrush
+            : NormalPeakMarkerBrush;
+    public bool IsAudioPeakVisible => audioPeakLevel > 0;
     public double CardWidth => (configuration.CardSize ?? "normal").Trim().ToLowerInvariant() switch
     {
         "small" => 180,
@@ -250,9 +269,9 @@ public sealed class ChannelViewModel : INotifyPropertyChanged, IReceivePrivacyPo
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IgnoredSubscriberIdsText)));
         }
     }
-    public bool CanRecord => runtime.Definition.Mode is ("dmr" or "p25" or "nxdn" or "analog") && CanListen;
+    public bool CanRecord => CanListen;
     public bool CanToggleEncryption =>
-        runtime.Definition.Mode is ("p25" or "dmr" or "nxdn") &&
+        ChannelProtocolMediaMapper.RequiresVocoder(runtime.Definition.Protocol) &&
         runtime.Definition.IsEncrypted &&
         runtime.Definition.SelectableEncryption &&
         (transmitEncrypted || CanResolveConfiguredKey());
@@ -262,40 +281,39 @@ public sealed class ChannelViewModel : INotifyPropertyChanged, IReceivePrivacyPo
             ? "Key available"
             : "Key unavailable";
     public string EncryptionButtonText => transmitEncrypted ? "SECURE" : "CLEAR";
-    public bool CanListen => runtime.Definition.Mode switch
+    public bool CanListen => runtime.Definition.Protocol switch
     {
-        "dmr" or "p25" or "nxdn" =>
-            !RequireEncryptedTraffic || CanResolveConfiguredKey(),
-        "analog" => !runtime.Definition.IsEncrypted,
+        ChannelProtocol.Dmr or ChannelProtocol.P25 or ChannelProtocol.Nxdn => true,
+        ChannelProtocol.Analog => !runtime.Definition.IsEncrypted,
         _ => false
     };
-    public bool RequireEncryptedTraffic =>
-        runtime.Definition.IsEncrypted &&
-        (!runtime.Definition.SelectableEncryption || transmitEncrypted);
     public bool CanTransmit =>
         !runtime.Definition.RxOnly &&
-        runtime.Definition.Mode switch
+        runtime.Definition.Protocol switch
         {
-            "dmr" or "p25" or "nxdn" =>
-                !RequireEncryptedTraffic || CanResolveConfiguredKey(),
-            "analog" => !runtime.Definition.IsEncrypted,
+            ChannelProtocol.Dmr or ChannelProtocol.P25 or ChannelProtocol.Nxdn =>
+                !transmitEncrypted || CanResolveConfiguredKey(),
+            ChannelProtocol.Analog => !runtime.Definition.IsEncrypted,
             _ => false
         };
+    public bool IsPttControlEnabled =>
+        CanTransmit &&
+        (transmitEnabled || !IsReceivePresentationActive);
     public string PttButtonText => transmitEnabled ? "Release" : "PTT";
 
     private bool CanResolveConfiguredKey()
     {
-        return runtime.Definition.Mode switch
+        return runtime.Definition.Protocol switch
         {
-            "p25" => p25KeyResolver?.CanResolve(
+            ChannelProtocol.P25 => p25KeyResolver?.CanResolve(
                 runtime.Definition.SystemName,
                 runtime.Definition.EncryptionAlgorithm,
                 runtime.Definition.EncryptionKeyId) == true,
-            "dmr" => dmrKeyResolver?.CanResolve(
+            ChannelProtocol.Dmr => dmrKeyResolver?.CanResolve(
                 runtime.Definition.SystemName,
                 runtime.Definition.EncryptionAlgorithm,
                 runtime.Definition.EncryptionKeyId) == true,
-            "nxdn" => nxdnKeyResolver?.CanResolve(
+            ChannelProtocol.Nxdn => nxdnKeyResolver?.CanResolve(
                 runtime.Definition.SystemName,
                 runtime.Definition.EncryptionAlgorithm,
                 runtime.Definition.EncryptionKeyId) == true,
@@ -371,24 +389,21 @@ public sealed class ChannelViewModel : INotifyPropertyChanged, IReceivePrivacyPo
     {
         startTransmit = start ?? throw new ArgumentNullException(nameof(start));
         stopTransmit = stop ?? throw new ArgumentNullException(nameof(stop));
-        PttCommand = new AsyncRelayCommand(ToggleTransmitAsync, () => CanTransmit && !transmitBusy);
+        PttCommand = new AsyncRelayCommand(ToggleTransmitAsync, () => IsPttControlEnabled && !transmitBusy);
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(PttCommand)));
         (EncryptionCommand as AsyncRelayCommand)?.RaiseCanExecuteChanged();
     }
 
     public void RefreshEncryptionState()
     {
-        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CanListen)));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CanTransmit)));
-        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CanRecord)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsPttControlEnabled)));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CanToggleEncryption)));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(EncryptionStatusText)));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(EncryptionButtonText)));
         NotifyEncryptionAppearanceChanged();
-        (AudioCommand as AsyncRelayCommand)?.RaiseCanExecuteChanged();
         (PttCommand as AsyncRelayCommand)?.RaiseCanExecuteChanged();
         (EncryptionCommand as AsyncRelayCommand)?.RaiseCanExecuteChanged();
-        (RecordingCommand as AsyncRelayCommand)?.RaiseCanExecuteChanged();
     }
 
     public void RestoreTransmitEncryption(bool encrypted)
@@ -447,7 +462,7 @@ public sealed class ChannelViewModel : INotifyPropertyChanged, IReceivePrivacyPo
                    !string.IsNullOrWhiteSpace(OutputDeviceIdText) &&
                    device.Id.Equals(OutputDeviceIdText, StringComparison.OrdinalIgnoreCase)) ??
                outputDeviceOptions.FirstOrDefault(device => device.IsDefault) ??
-               outputDeviceOptions.FirstOrDefault();
+               (outputDeviceOptions.Count > 0 ? outputDeviceOptions[0] : null);
     }
 
     private void SetVolume(double value, bool raiseChanged)
@@ -545,6 +560,8 @@ public sealed class ChannelViewModel : INotifyPropertyChanged, IReceivePrivacyPo
     private void NotifyReceivePresentationChanged()
     {
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsReceivePresentationActive)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsPttControlEnabled)));
+        (PttCommand as AsyncRelayCommand)?.RaiseCanExecuteChanged();
         RefreshReceivePresentation();
     }
 
@@ -591,9 +608,13 @@ public sealed class ChannelViewModel : INotifyPropertyChanged, IReceivePrivacyPo
     public void SetAudioLevel(
         double value,
         ChannelAudioDirection? direction = null,
-        uint? streamId = null)
+        uint? streamId = null,
+        double? peakValue = null)
     {
         double normalized = double.IsFinite(value) ? Math.Clamp(value, 0, 100) : 0;
+        double normalizedPeak = peakValue is double peak && double.IsFinite(peak)
+            ? Math.Clamp(peak, 0, 100)
+            : normalized;
         long fastReceiveStreamId = Interlocked.Read(ref receiveAudioMeterStreamId);
         if (streamId is uint expectedStreamId)
         {
@@ -612,8 +633,9 @@ public sealed class ChannelViewModel : INotifyPropertyChanged, IReceivePrivacyPo
             (direction == ChannelAudioDirection.Transmit && runtime.State != ChannelRuntimeState.Transmitting))
         {
             normalized = 0;
+            normalizedPeak = 0;
         }
-        ApplyAudioLevel(normalized);
+        ApplyAudioLevel(normalized, normalizedPeak);
     }
 
     // Receive meter samples observed at the mixer boundary are already known
@@ -621,24 +643,48 @@ public sealed class ChannelViewModel : INotifyPropertyChanged, IReceivePrivacyPo
     // the physical stream ID currently projected by the card, so applying the
     // physical-ID filter again would hide valid presented audio after a stream
     // handoff.
-    internal void SetPresentedReceiveAudioLevel(double value)
+    internal void SetPresentedReceiveAudioLevel(double value, double? peakValue = null)
     {
         double normalized = double.IsFinite(value) ? Math.Clamp(value, 0, 100) : 0;
+        double normalizedPeak = peakValue is double peak && double.IsFinite(peak)
+            ? Math.Clamp(peak, 0, 100)
+            : normalized;
         bool receiveActive = IsReceivePresentationActive ||
             Interlocked.Read(ref receiveAudioMeterStreamId) != 0;
         if (!audioEnabled || audioSuspended || !receiveActive)
+        {
             normalized = 0;
-        ApplyAudioLevel(normalized);
+            normalizedPeak = 0;
+        }
+        ApplyAudioLevel(normalized, normalizedPeak);
     }
 
-    private void ApplyAudioLevel(double normalized)
+    private void ApplyAudioLevel(double normalized, double normalizedPeak)
     {
-        if (normalized == 0 ? audioLevel == 0 : Math.Abs(audioLevel - normalized) < 0.25)
+        bool levelChanged = normalized == 0
+            ? audioLevel != 0
+            : Math.Abs(audioLevel - normalized) >= 0.25;
+        bool peakChanged = normalizedPeak == 0
+            ? audioPeakLevel != 0
+            : Math.Abs(audioPeakLevel - normalizedPeak) >= 0.25;
+        if (!levelChanged && !peakChanged)
             return;
 
-        audioLevel = normalized;
-        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(AudioLevel)));
-        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(AudioLevelScale)));
+        if (levelChanged)
+        {
+            audioLevel = normalized;
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(AudioLevel)));
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(AudioFillWidth)));
+        }
+
+        if (peakChanged)
+        {
+            audioPeakLevel = normalizedPeak;
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(AudioPeakLevel)));
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(AudioPeakMarkerX)));
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(AudioPeakMarkerBrush)));
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsAudioPeakVisible)));
+        }
     }
 
     public void SetTransmitEnabled(bool enabled, uint streamId = 0)
@@ -661,7 +707,9 @@ public sealed class ChannelViewModel : INotifyPropertyChanged, IReceivePrivacyPo
         }
         transmitEnabled = enabled;
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsTransmitting)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsPttControlEnabled)));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(PttButtonText)));
+        (PttCommand as AsyncRelayCommand)?.RaiseCanExecuteChanged();
         (EncryptionCommand as AsyncRelayCommand)?.RaiseCanExecuteChanged();
     }
 
@@ -901,7 +949,7 @@ public sealed class ChannelViewModel : INotifyPropertyChanged, IReceivePrivacyPo
     private bool MatchesVoiceTraffic(FneTrafficFrame traffic)
     {
         return ReceiveTrafficClassifier.CarriesVoicePayload(traffic) &&
-               (runtime.Definition.Mode != "dmr" || traffic.Slot == runtime.Definition.Slot);
+               (runtime.Definition.Protocol != ChannelProtocol.Dmr || traffic.Slot == runtime.Definition.Slot);
     }
 
     private bool MatchesProtocol(FneTrafficProtocol protocol)
@@ -963,16 +1011,12 @@ public sealed class ChannelViewModel : INotifyPropertyChanged, IReceivePrivacyPo
     private void NotifySelectableEncryptionStateChanged()
     {
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsTransmitEncrypted)));
-        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(RequireEncryptedTraffic)));
-        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CanListen)));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CanTransmit)));
-        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CanRecord)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsPttControlEnabled)));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CanToggleEncryption)));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(EncryptionButtonText)));
         NotifyEncryptionAppearanceChanged();
-        (AudioCommand as AsyncRelayCommand)?.RaiseCanExecuteChanged();
         (PttCommand as AsyncRelayCommand)?.RaiseCanExecuteChanged();
-        (RecordingCommand as AsyncRelayCommand)?.RaiseCanExecuteChanged();
         (EncryptionCommand as AsyncRelayCommand)?.RaiseCanExecuteChanged();
     }
 
@@ -1014,6 +1058,8 @@ public sealed class ChannelViewModel : INotifyPropertyChanged, IReceivePrivacyPo
         if (args.PropertyName == nameof(ChannelRuntime.State))
         {
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsReceivePresentationActive)));
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsPttControlEnabled)));
+            (PttCommand as AsyncRelayCommand)?.RaiseCanExecuteChanged();
             RefreshReceivePresentation();
         }
     }

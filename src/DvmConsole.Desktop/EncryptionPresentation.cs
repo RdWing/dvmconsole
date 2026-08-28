@@ -54,12 +54,12 @@ internal static class EncryptionPresentation
     {
         algorithmId = 0;
         keyId = 0;
-        return definition.Mode switch
+        return definition.Protocol switch
         {
-            "p25" => P25KeyRing.TryParseAlgorithmId(definition.EncryptionAlgorithm, out algorithmId) &&
-                     P25KeyRing.TryParseKeyId(definition.EncryptionKeyId, out keyId),
-            "dmr" => TryParseDmr(definition, out algorithmId, out keyId),
-            "nxdn" => TryParseNxdn(definition, out algorithmId, out keyId),
+            ChannelProtocol.P25 => P25KeyRing.TryParseAlgorithmId(definition.EncryptionAlgorithm, out algorithmId) &&
+                                   P25KeyRing.TryParseKeyId(definition.EncryptionKeyId, out keyId),
+            ChannelProtocol.Dmr => TryParseDmr(definition, out algorithmId, out keyId),
+            ChannelProtocol.Nxdn => TryParseNxdn(definition, out algorithmId, out keyId),
             _ => false
         };
     }

@@ -143,11 +143,11 @@ public sealed class MacCoreAudioBackend :
     {
         IReadOnlyList<AudioDeviceInfo> devices = EnumerateDevices(direction);
         AudioDeviceInfo device = devices.FirstOrDefault(candidate =>
-                !configuredId.Equals("default", StringComparison.OrdinalIgnoreCase) &&
-                candidate.Id.Equals(configuredId, StringComparison.OrdinalIgnoreCase))
-            ?? devices.FirstOrDefault(candidate => candidate.IsDefault)
-            ?? devices.FirstOrDefault()
-            ?? throw new InvalidOperationException($"No {direction.ToString().ToLowerInvariant()} audio device is available.");
+            !configuredId.Equals("default", StringComparison.OrdinalIgnoreCase) &&
+            candidate.Id.Equals(configuredId, StringComparison.OrdinalIgnoreCase))
+        ?? devices.FirstOrDefault(candidate => candidate.IsDefault)
+        ?? (devices.Count > 0 ? devices[0] : null)
+        ?? throw new InvalidOperationException($"No {direction.ToString().ToLowerInvariant()} audio device is available.");
         return ParseDeviceId(device);
     }
 

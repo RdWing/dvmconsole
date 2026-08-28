@@ -20,6 +20,7 @@ public sealed class CardPttControllerTests
                 startupEntered.SetResult();
                 await allowStartup.Task;
                 events.Add("started");
+                return true;
             },
             _ =>
             {
@@ -47,7 +48,7 @@ public sealed class CardPttControllerTests
             _ =>
             {
                 starts++;
-                return Task.CompletedTask;
+                return Task.FromResult(true);
             },
             _ =>
             {
@@ -74,7 +75,7 @@ public sealed class CardPttControllerTests
             _ =>
             {
                 starts++;
-                return Task.CompletedTask;
+                return Task.FromResult(true);
             },
             _ =>
             {
@@ -100,7 +101,7 @@ public sealed class CardPttControllerTests
         ChannelViewModel channel = CreateChannel();
         int stops = 0;
         var controller = new CardPttController(
-            _ => Task.CompletedTask,
+            _ => Task.FromResult(true),
             _ =>
             {
                 stops++;
@@ -126,6 +127,7 @@ public sealed class CardPttControllerTests
             {
                 startupEntered.SetResult();
                 await allowStartup.Task;
+                return true;
             },
             _ =>
             {
@@ -169,6 +171,7 @@ public sealed class CardPttControllerTests
             {
                 startupEntered.TrySetResult();
                 await allowStartup.Task;
+                return true;
             },
             stoppedChannel =>
             {
@@ -197,7 +200,7 @@ public sealed class CardPttControllerTests
             _ =>
             {
                 starts++;
-                return Task.CompletedTask;
+                return Task.FromResult(true);
             },
             _ =>
             {
@@ -211,6 +214,21 @@ public sealed class CardPttControllerTests
 
         Assert.Equal(0, starts);
         Assert.Equal(0, stops);
+    }
+
+    [Fact]
+    public async Task RejectedToggleDoesNotRemainLatched()
+    {
+        ChannelViewModel channel = CreateChannel();
+        int attempts = 0;
+        var controller = new CardPttController(
+            _ => Task.FromResult(++attempts > 1),
+            _ => Task.CompletedTask);
+
+        await controller.ToggleAsync(channel);
+        await controller.ToggleAsync(channel);
+
+        Assert.Equal(2, attempts);
     }
 
     private static ChannelViewModel CreateChannel()

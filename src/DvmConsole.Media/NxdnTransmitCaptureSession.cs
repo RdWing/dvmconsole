@@ -41,6 +41,7 @@ public sealed class NxdnTransmitCaptureSession : ITransmitCaptureSession
 
     public bool IsRunning => lifecycle.IsRunning;
     public bool IsActivated => lifecycle.IsActivated;
+    public TransmitQueueHealth QueueHealth => lifecycle.QueueHealth;
 
     public ValueTask StartAsync(CancellationToken cancellationToken = default)
         => lifecycle.StartAsync(cancellationToken);

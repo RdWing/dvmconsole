@@ -14,7 +14,8 @@ internal sealed unsafe class NativeVocoderApi : IDisposable
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate IntPtr ErrorDelegate();
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate IntPtr CreateDelegate(uint mode);
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate void DestroyDelegate(IntPtr session);
-    [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate int ConfigureReceiveAudioProcessingDelegate(
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    private delegate int ConfigureReceiveAudioProcessingDelegate(
         IntPtr session,
         [MarshalAs(UnmanagedType.I1)] bool highPassEnabled,
         float highPassFrequencyHz,
@@ -31,7 +32,8 @@ internal sealed unsafe class NativeVocoderApi : IDisposable
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate int FlushDelegate(IntPtr session, byte* output, nuint outputCapacity);
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate int DecodeDelegate(IntPtr session, byte* input, nuint inputLength, short* samples, nuint sampleCapacity);
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate int DecodeLostDelegate(IntPtr session, short* samples, nuint sampleCapacity);
-    [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate int DecodeParametersDelegate(
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    private delegate int DecodeParametersDelegate(
         IntPtr session,
         byte* parameters,
         nuint parameterLength,

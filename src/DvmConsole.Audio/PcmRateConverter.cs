@@ -1,4 +1,5 @@
 using System.Buffers;
+using System.Collections.Concurrent;
 
 namespace DvmConsole.Audio;
 
@@ -8,6 +9,8 @@ namespace DvmConsole.Audio;
 // Nyquist limit do not fold into the radio voice band.
 public sealed class PcmRateConverter
 {
+    private static readonly ConcurrentDictionary<(int InputRate, int OutputRate, int TapCount), double[]>
+        DownsamplingFilterCache = new();
     private const int MinimumDownsamplingFilterTaps = 63;
     private const int MaximumDownsamplingFilterTaps = 511;
     // Preserve roughly the same transition width as the common 48 kHz to
@@ -22,13 +25,17 @@ public sealed class PcmRateConverter
     private readonly int inputRate;
     private readonly int outputRate;
     private readonly int channels;
-    private readonly double step;
-    private readonly List<short> pending = [];
+    private readonly PcmSampleRingBuffer pending = new();
     private readonly double[]? downsamplingCoefficients;
-    private readonly double[]? downsamplingHistory;
-    private int downsamplingHistoryFrameIndex;
-    private bool downsamplingHistoryInitialized;
-    private double sourcePosition;
+    private readonly short[]? firstFilteredFrame;
+    private readonly short[]? secondFilteredFrame;
+    private int firstFilteredFrameIndex = -1;
+    private int secondFilteredFrameIndex = -1;
+    private bool replaceFirstFilteredFrame = true;
+    private bool downsamplingInputInitialized;
+    // Express the next source position in output-rate units. Advancing by the
+    // input rate keeps rational rate pairs deterministic across any chunking.
+    private long sourcePositionNumerator;
 
     public PcmRateConverter(int inputRate, int outputRate, int channels = 1)
     {
@@ -42,12 +49,14 @@ public sealed class PcmRateConverter
         this.inputRate = inputRate;
         this.outputRate = outputRate;
         this.channels = channels;
-        step = (double)inputRate / outputRate;
         if (outputRate < inputRate)
         {
             int tapCount = CalculateDownsamplingFilterTapCount(inputRate, outputRate);
-            downsamplingCoefficients = CreateDownsamplingFilter(inputRate, outputRate, tapCount);
-            downsamplingHistory = new double[checked(tapCount * channels)];
+            downsamplingCoefficients = DownsamplingFilterCache.GetOrAdd(
+                (inputRate, outputRate, tapCount),
+                static key => CreateDownsamplingFilter(key.InputRate, key.OutputRate, key.TapCount));
+            firstFilteredFrame = new short[channels];
+            secondFilteredFrame = new short[channels];
         }
     }
 
@@ -85,14 +94,22 @@ public sealed class PcmRateConverter
             return inputSampleCount;
 
         int totalFrames = checked((pending.Count + inputSampleCount) / channels);
-        if (totalFrames < 2 || sourcePosition + 1 >= totalFrames)
+        long projectedSourcePosition = sourcePositionNumerator;
+        if (downsamplingCoefficients is not null &&
+            !downsamplingInputInitialized &&
+            inputSampleCount > 0)
+        {
+            int prefixFrames = downsamplingCoefficients.Length - 1;
+            totalFrames = checked(totalFrames + prefixFrames);
+            projectedSourcePosition = checked((long)prefixFrames * outputRate);
+        }
+
+        long availablePositionUnits = checked(
+            ((long)(totalFrames - 1) * outputRate) - projectedSourcePosition);
+        if (totalFrames < 2 || availablePositionUnits <= 0)
             return 0;
 
-        double sourceFramesAvailable = totalFrames - 1 - sourcePosition;
-        // Floating-point accumulation can leave sourcePosition infinitesimally
-        // below an exact frame boundary. Reserve one additional frame so the
-        // caller-owned buffer also covers that valid interpolation step.
-        int outputFrames = checked((int)Math.Ceiling(sourceFramesAvailable / step) + 1);
+        int outputFrames = checked((int)((availablePositionUnits + inputRate - 1L) / inputRate));
         return checked(outputFrames * channels);
     }
 
@@ -115,28 +132,36 @@ public sealed class PcmRateConverter
         AppendInput(samples);
 
         int outputIndex = 0;
-        while (sourcePosition + 1 < pending.Count / channels)
+        while (sourcePositionNumerator + outputRate <
+               checked((long)(pending.Count / channels) * outputRate))
         {
-            int frameIndex = (int)sourcePosition;
-            double fraction = sourcePosition - frameIndex;
+            int frameIndex = checked((int)(sourcePositionNumerator / outputRate));
+            double fraction = (sourcePositionNumerator % outputRate) / (double)outputRate;
             for (int channel = 0; channel < channels; channel++)
             {
-                int index = (frameIndex * channels) + channel;
-                int nextIndex = index + channels;
-                double value = pending[index] + ((pending[nextIndex] - pending[index]) * fraction);
+                short current = GetSourceSample(frameIndex, channel);
+                short next = GetSourceSample(frameIndex + 1, channel);
+                double value = current + ((next - current) * fraction);
                 destination[outputIndex++] =
                     (short)Math.Clamp(Math.Round(value), short.MinValue, short.MaxValue);
             }
-            sourcePosition += step;
+            sourcePositionNumerator = checked(sourcePositionNumerator + inputRate);
         }
 
-        int removableFrames = Math.Min(
-            (int)sourcePosition,
-            Math.Max(0, (pending.Count / channels) - 1));
+        int totalPendingFrames = pending.Count / channels;
+        int sourceFrameIndex = checked((int)(sourcePositionNumerator / outputRate));
+        int removableFrames = downsamplingCoefficients is null
+            ? Math.Min(
+                sourceFrameIndex,
+                Math.Max(0, totalPendingFrames - 1))
+            : Math.Min(
+                Math.Max(0, sourceFrameIndex - (downsamplingCoefficients.Length - 1)),
+                Math.Max(0, totalPendingFrames - (downsamplingCoefficients.Length - 1)));
         if (removableFrames > 0)
         {
-            pending.RemoveRange(0, removableFrames * channels);
-            sourcePosition -= removableFrames;
+            pending.RemoveFirst(removableFrames * channels);
+            sourcePositionNumerator -= checked((long)removableFrames * outputRate);
+            InvalidateFilteredFrameCache();
         }
 
         return outputIndex;
@@ -144,84 +169,83 @@ public sealed class PcmRateConverter
 
     private void AppendInput(ReadOnlySpan<short> samples)
     {
-        pending.EnsureCapacity(checked(pending.Count + samples.Length));
-        if (downsamplingCoefficients is null || downsamplingHistory is null)
+        if (downsamplingCoefficients is not null &&
+            !downsamplingInputInitialized &&
+            !samples.IsEmpty)
         {
-            for (int index = 0; index < samples.Length; index++)
-                pending.Add(samples[index]);
-            return;
+            int prefixFrames = downsamplingCoefficients.Length - 1;
+            pending.EnsureCapacity(checked(
+                pending.Count + samples.Length + (prefixFrames * channels)));
+            for (int frame = 0; frame < prefixFrames; frame++)
+            {
+                for (int channel = 0; channel < channels; channel++)
+                    pending.Add(samples[channel]);
+            }
+            sourcePositionNumerator = checked((long)prefixFrames * outputRate);
+            downsamplingInputInitialized = true;
         }
 
-        if (!downsamplingHistoryInitialized && !samples.IsEmpty)
-            InitializeDownsamplingHistory(samples, downsamplingHistory, downsamplingCoefficients.Length);
+        pending.Append(samples);
+    }
 
-        int tapCount = downsamplingCoefficients.Length;
-        for (int frameOffset = 0; frameOffset < samples.Length; frameOffset += channels)
+    private short GetSourceSample(int frameIndex, int channel)
+    {
+        if (downsamplingCoefficients is null)
+            return pending[(frameIndex * channels) + channel];
+
+        if (frameIndex == firstFilteredFrameIndex)
+            return firstFilteredFrame![channel];
+        if (frameIndex == secondFilteredFrameIndex)
+            return secondFilteredFrame![channel];
+
+        short[] target;
+        if (replaceFirstFilteredFrame)
         {
-            int writeOffset = downsamplingHistoryFrameIndex * channels;
-            for (int channel = 0; channel < channels; channel++)
-                downsamplingHistory[writeOffset + channel] = samples[frameOffset + channel];
+            target = firstFilteredFrame!;
+            firstFilteredFrameIndex = frameIndex;
+        }
+        else
+        {
+            target = secondFilteredFrame!;
+            secondFilteredFrameIndex = frameIndex;
+        }
+        replaceFirstFilteredFrame = !replaceFirstFilteredFrame;
+        FilterFrame(frameIndex, target);
+        return target[channel];
+    }
 
-            for (int channel = 0; channel < channels; channel++)
+    private void FilterFrame(int frameIndex, Span<short> destination)
+    {
+        double[] coefficients = downsamplingCoefficients!;
+        int center = coefficients.Length / 2;
+        int oldestFrame = frameIndex - (coefficients.Length - 1);
+
+        for (int channel = 0; channel < channels; channel++)
+        {
+            double filtered = 0;
+            for (int tap = 0; tap < center; tap++)
             {
-                double filtered = FilterDownsampledChannel(
-                    downsamplingHistory,
-                    downsamplingCoefficients,
-                    channel);
-                pending.Add((short)Math.Clamp(
-                    Math.Round(filtered),
-                    short.MinValue,
-                    short.MaxValue));
+                int recentFrame = frameIndex - tap;
+                int pairedOldestFrame = oldestFrame + tap;
+                filtered += coefficients[tap] *
+                    (pending[(recentFrame * channels) + channel] +
+                     pending[(pairedOldestFrame * channels) + channel]);
             }
 
-            downsamplingHistoryFrameIndex++;
-            if (downsamplingHistoryFrameIndex == tapCount)
-                downsamplingHistoryFrameIndex = 0;
+            filtered += coefficients[center] *
+                pending[((frameIndex - center) * channels) + channel];
+            destination[channel] = (short)Math.Clamp(
+                Math.Round(filtered),
+                short.MinValue,
+                short.MaxValue);
         }
     }
 
-    private double FilterDownsampledChannel(
-        double[] history,
-        double[] coefficients,
-        int channel)
+    private void InvalidateFilteredFrameCache()
     {
-        int center = coefficients.Length / 2;
-        int recentFrame = downsamplingHistoryFrameIndex;
-        int oldestFrame = downsamplingHistoryFrameIndex + 1;
-        if (oldestFrame == coefficients.Length)
-            oldestFrame = 0;
-
-        double filtered = 0;
-        for (int tap = 0; tap < center; tap++)
-        {
-            filtered += coefficients[tap] *
-                (history[(recentFrame * channels) + channel] +
-                 history[(oldestFrame * channels) + channel]);
-
-            recentFrame--;
-            if (recentFrame < 0)
-                recentFrame = coefficients.Length - 1;
-            oldestFrame++;
-            if (oldestFrame == coefficients.Length)
-                oldestFrame = 0;
-        }
-
-        return filtered +
-            (coefficients[center] * history[(recentFrame * channels) + channel]);
-    }
-
-    private void InitializeDownsamplingHistory(
-        ReadOnlySpan<short> samples,
-        double[] history,
-        int tapCount)
-    {
-        for (int frame = 0; frame < tapCount; frame++)
-        {
-            int historyOffset = frame * channels;
-            for (int channel = 0; channel < channels; channel++)
-                history[historyOffset + channel] = samples[channel];
-        }
-        downsamplingHistoryInitialized = true;
+        firstFilteredFrameIndex = -1;
+        secondFilteredFrameIndex = -1;
+        replaceFirstFilteredFrame = true;
     }
 
     private static int CalculateDownsamplingFilterTapCount(int inputRate, int outputRate)
@@ -277,5 +301,82 @@ public sealed class PcmRateConverter
                 break;
         }
         return sum;
+    }
+}
+
+// Provides O(1) removal from the front of the streaming sample window. A
+// List<T>.RemoveRange shifted the retained FIR history on every input chunk.
+internal sealed class PcmSampleRingBuffer
+{
+    private const int InitialCapacity = 256;
+    private short[] samples = new short[InitialCapacity];
+    private int head;
+
+    public int Count { get; private set; }
+
+    public short this[int index]
+    {
+        get
+        {
+            if ((uint)index >= (uint)Count)
+                throw new ArgumentOutOfRangeException(nameof(index));
+            int physicalIndex = head + index;
+            if (physicalIndex >= samples.Length)
+                physicalIndex -= samples.Length;
+            return samples[physicalIndex];
+        }
+    }
+
+    public void Add(short sample)
+    {
+        EnsureCapacity(checked(Count + 1));
+        int tail = head + Count;
+        if (tail >= samples.Length)
+            tail -= samples.Length;
+        samples[tail] = sample;
+        Count++;
+    }
+
+    public void Append(ReadOnlySpan<short> values)
+    {
+        if (values.IsEmpty)
+            return;
+        EnsureCapacity(checked(Count + values.Length));
+        int tail = head + Count;
+        if (tail >= samples.Length)
+            tail -= samples.Length;
+        int firstLength = Math.Min(values.Length, samples.Length - tail);
+        values[..firstLength].CopyTo(samples.AsSpan(tail));
+        values[firstLength..].CopyTo(samples);
+        Count += values.Length;
+    }
+
+    public void RemoveFirst(int count)
+    {
+        if (count < 0 || count > Count)
+            throw new ArgumentOutOfRangeException(nameof(count));
+        if (count == 0)
+            return;
+
+        head += count;
+        if (head >= samples.Length)
+            head -= samples.Length;
+        Count -= count;
+        if (Count == 0)
+            head = 0;
+    }
+
+    public void EnsureCapacity(int capacity)
+    {
+        if (capacity <= samples.Length)
+            return;
+
+        int expandedCapacity = Math.Max(capacity, checked(samples.Length * 2));
+        var expanded = new short[expandedCapacity];
+        int firstLength = Math.Min(Count, samples.Length - head);
+        samples.AsSpan(head, firstLength).CopyTo(expanded);
+        samples.AsSpan(0, Count - firstLength).CopyTo(expanded.AsSpan(firstLength));
+        samples = expanded;
+        head = 0;
     }
 }

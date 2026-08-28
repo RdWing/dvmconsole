@@ -38,6 +38,17 @@ if (-not (Test-Path -LiteralPath $PublishDirectory -PathType Container)) {
     throw "Publish directory does not exist: $PublishDirectory"
 }
 
+$PublishFiles = @(Get-ChildItem -LiteralPath $PublishDirectory -Recurse -File -ErrorAction Stop)
+$PublishBytes = ($PublishFiles | Measure-Object -Property Length -Sum).Sum
+$MaximumPublishBytes = 180MB
+$MaximumPublishFiles = 250
+if ($PublishBytes -gt $MaximumPublishBytes) {
+    throw "Publish exceeds the $MaximumPublishBytes byte size budget: $PublishBytes bytes."
+}
+if ($PublishFiles.Count -gt $MaximumPublishFiles) {
+    throw "Publish exceeds the $MaximumPublishFiles file budget: $($PublishFiles.Count) files."
+}
+
 foreach ($FileName in @("DvmConsole.exe", "LICENSE")) {
     if (-not (Test-Path -LiteralPath (Join-Path $PublishDirectory $FileName) -PathType Leaf)) {
         throw "Published output is missing required file: $FileName"
@@ -124,4 +135,4 @@ if ($TextFilePaths.Count -gt 0 -and
     throw "Publish contains credential-like or test-endpoint material."
 }
 
-Write-Host "Publish verification passed: $PublishDirectory ($Runtime)"
+Write-Host "Publish verification passed: $PublishDirectory ($Runtime, $PublishBytes bytes, $($PublishFiles.Count) files)"

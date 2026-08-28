@@ -1,10 +1,26 @@
 using Avalonia.Controls;
+using DvmConsole.Audio;
 using Xunit;
 
 namespace DvmConsole.Desktop.Tests;
 
 public sealed class MainWindowMenuBuilderTests
 {
+    [Fact]
+    public void PttKeyItemsAreGeneratedFromTheSharedKeyEnum()
+    {
+        var menu = new MenuItem();
+
+        MainWindowMenuBuilder.ReplacePttKeyItems(menu, "Disabled", (_, _) => { });
+
+        MenuItem[] items = menu.Items.Cast<MenuItem>().ToArray();
+        Assert.Equal(Enum.GetValues<KeyboardPttKey>().Length, items.Length);
+        Assert.Equal("Disabled", items[0].Header);
+        Assert.Equal("None", items[0].Tag);
+        Assert.Equal("F19", items[^1].Header);
+        Assert.Equal("F19", items[^1].Tag);
+    }
+
     [Fact]
     public void RecentCodeplugItemPreservesFullPathInTagAndTooltip()
     {

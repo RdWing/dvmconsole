@@ -118,11 +118,11 @@ Click **SELECT** to switch transmission between encrypted and clear for that
 system and talkgroup.
 
 DVM Console saves the selected clear or encrypted state across restarts. The key
-and algorithm still come from the codeplug. **CLEAR** sends and admits clear
-audio. **SECURE** sends encrypted audio and rejects clear calls. DVM Console can
-decode an incoming secure call only when its on-air metadata identifies an
-available configured key. A selectable channel in **CLEAR** can therefore
-receive clear calls even if its secure key is unavailable.
+and algorithm still come from the codeplug. **CLEAR** sends clear audio, while
+**SECURE** sends encrypted audio. This selection affects transmit only: clear
+receive audio remains available in either state. DVM Console decodes an incoming
+secure call when its on-air metadata identifies an available configured key.
+The same receive behavior applies to fixed secure channels.
 
 DMR secure calls also carry late-entry MI fragments and burst-F algorithm and
 key identifiers. The reviewed `dvmhost r05a06_dev` clears burst F during RF

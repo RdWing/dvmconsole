@@ -31,12 +31,18 @@ fi
 case "$RID" in
     osx-arm64)
         EXPECTED_MACOS_ARCHITECTURE="arm64"
+        MAXIMUM_PUBLISH_BYTES=$((200 * 1024 * 1024))
+        MAXIMUM_PUBLISH_FILES=800
         ;;
     osx-x64)
         EXPECTED_MACOS_ARCHITECTURE="x86_64"
+        MAXIMUM_PUBLISH_BYTES=$((200 * 1024 * 1024))
+        MAXIMUM_PUBLISH_FILES=800
         ;;
     win-x64)
         EXPECTED_MACOS_ARCHITECTURE=""
+        MAXIMUM_PUBLISH_BYTES=$((180 * 1024 * 1024))
+        MAXIMUM_PUBLISH_FILES=250
         ;;
     *)
         printf 'Supported runtime identifiers: osx-arm64, osx-x64, win-x64\n' >&2
@@ -47,6 +53,17 @@ esac
 if [[ ! -d "$OUTPUT_DIR" ]]; then
     printf 'Publish directory does not exist: %s\n' "$OUTPUT_DIR" >&2
     exit 3
+fi
+
+publish_bytes=$(( $(/usr/bin/du -sk "$OUTPUT_DIR" | /usr/bin/awk '{ print $1 }') * 1024 ))
+publish_files=$(/usr/bin/find "$OUTPUT_DIR" -type f | /usr/bin/wc -l | /usr/bin/tr -d ' ')
+if ((publish_bytes > MAXIMUM_PUBLISH_BYTES)); then
+    printf 'Publish exceeds the %s byte size budget: %s bytes.\n' "$MAXIMUM_PUBLISH_BYTES" "$publish_bytes" >&2
+    exit 4
+fi
+if ((publish_files > MAXIMUM_PUBLISH_FILES)); then
+    printf 'Publish exceeds the %s file budget: %s files.\n' "$MAXIMUM_PUBLISH_FILES" "$publish_files" >&2
+    exit 4
 fi
 
 for legal_file in LICENSE; do
@@ -199,4 +216,5 @@ case "$RID" in
         ;;
 esac
 
-printf 'Publish verification passed: %s (%s)\n' "$OUTPUT_DIR" "$RID"
+printf 'Publish verification passed: %s (%s, %s bytes, %s files)\n' \
+    "$OUTPUT_DIR" "$RID" "$publish_bytes" "$publish_files"

@@ -1,4 +1,5 @@
 using DvmConsole.Audio;
+using DvmConsole.Core.Runtime;
 using DvmConsole.FneClient;
 using DvmConsole.Media;
 using DvmConsole.Vocoder;
@@ -85,8 +86,7 @@ public sealed class PatchSourceDecodeCoordinator : IAsyncDisposable
         ObjectDisposedException.ThrowIf(disposed, this);
 
         ChannelViewModel[] requested = channels
-            .Where(channel => channel is not null &&
-                (channel.Definition.Mode is "dmr" or "p25" or "nxdn" or "analog"))
+            .Where(channel => channel is not null)
             .Distinct()
             .ToArray();
         long revision = Interlocked.Increment(ref requestedConfigurationRevision);
@@ -126,23 +126,16 @@ public sealed class PatchSourceDecodeCoordinator : IAsyncDisposable
                         continue;
                 }
 
-                if (!CanDecode(channel))
-                    continue;
-
                 ChannelReceiveAudioSession? session = null;
                 IVocoderSession? createdVocoderSession = null;
                 var sampleContext = new ReceiveSampleContext();
                 try
                 {
-                    if (channel.Definition.Mode is "dmr" or "p25" or "nxdn")
+                    if (ChannelProtocolMediaMapper.RequiresVocoder(channel.Definition.Protocol))
                     {
                         vocoderBackend ??= createVocoderBackend();
                         createdVocoderSession = vocoderBackend.CreateSession(
-                            channel.Definition.Mode == "dmr"
-                                ? VocoderMode.DmrAmbe
-                                : channel.Definition.Mode == "nxdn"
-                                    ? VocoderMode.NxdnAmbe
-                                : VocoderMode.P25Imbe);
+                            ChannelProtocolMediaMapper.ToVocoderMode(channel.Definition.Protocol));
                     }
 
                     session = new ChannelReceiveAudioSession(
@@ -157,8 +150,7 @@ public sealed class PatchSourceDecodeCoordinator : IAsyncDisposable
                             }),
                         p25KeyResolver,
                         dmrKeyResolver,
-                        nxdnKeyResolver,
-                        channel);
+                        nxdnKeyResolver);
                     createdVocoderSession = null;
                     lock (sync)
                     {
@@ -264,28 +256,6 @@ public sealed class PatchSourceDecodeCoordinator : IAsyncDisposable
             await state.DisposeAsync().ConfigureAwait(false);
         vocoderBackend?.Dispose();
         vocoderBackend = null;
-    }
-
-    private bool CanDecode(ChannelViewModel channel)
-    {
-        if (!channel.RequireEncryptedTraffic)
-            return true;
-        return channel.Definition.Mode switch
-        {
-            "p25" => p25KeyResolver?.CanResolve(
-                channel.Definition.SystemName,
-                channel.Definition.EncryptionAlgorithm,
-                channel.Definition.EncryptionKeyId) == true,
-            "dmr" => dmrKeyResolver?.CanResolve(
-                channel.Definition.SystemName,
-                channel.Definition.EncryptionAlgorithm,
-                channel.Definition.EncryptionKeyId) == true,
-            "nxdn" => nxdnKeyResolver?.CanResolve(
-                channel.Definition.SystemName,
-                channel.Definition.EncryptionAlgorithm,
-                channel.Definition.EncryptionKeyId) == true,
-            _ => false
-        };
     }
 
     // Called only while sync is held. Readers receive an immutable snapshot

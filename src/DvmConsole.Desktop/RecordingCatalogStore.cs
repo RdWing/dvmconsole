@@ -56,8 +56,8 @@ internal sealed class RecordingCatalogStore
 
         foreach (string opusPath in scanSource.EnumerateOpusFiles(
                      rootPath,
-                     cancellationToken,
-                     () => inaccessiblePaths++))
+                     () => inaccessiblePaths++,
+                     cancellationToken))
         {
             cancellationToken.ThrowIfCancellationRequested();
             candidateVisits++;
@@ -205,8 +205,8 @@ internal interface IRecordingCatalogScanSource
 
     IEnumerable<string> EnumerateOpusFiles(
         string rootPath,
-        CancellationToken cancellationToken,
-        Action inaccessiblePathObserved);
+        Action inaccessiblePathObserved,
+        CancellationToken cancellationToken);
 
     bool TryRead(
         string opusPath,
@@ -224,31 +224,81 @@ internal sealed class FileRecordingCatalogScanSource(
 
     public IEnumerable<string> EnumerateOpusFiles(
         string rootPath,
-        CancellationToken cancellationToken,
-        Action inaccessiblePathObserved)
+        Action inaccessiblePathObserved,
+        CancellationToken cancellationToken)
     {
         var pending = new Stack<string>();
         pending.Push(rootPath);
         while (pending.TryPop(out string? directory))
         {
             cancellationToken.ThrowIfCancellationRequested();
-            string[] files;
-            string[] directories;
-            try
+            bool inaccessible = false;
+            foreach (string file in EnumerateAccessible(
+                         () => Directory.EnumerateFiles(
+                             directory,
+                             "*.opus",
+                             SearchOption.TopDirectoryOnly),
+                         ObserveInaccessiblePath))
             {
-                files = Directory.GetFiles(directory, "*.opus", SearchOption.TopDirectoryOnly);
-                directories = Directory.GetDirectories(directory, "*", SearchOption.TopDirectoryOnly);
+                cancellationToken.ThrowIfCancellationRequested();
+                yield return file;
             }
-            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
-            {
-                inaccessiblePathObserved();
+            if (inaccessible)
                 continue;
+
+            foreach (string child in EnumerateAccessible(
+                         () => Directory.EnumerateDirectories(
+                             directory,
+                             "*",
+                             SearchOption.TopDirectoryOnly),
+                         ObserveInaccessiblePath))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                pending.Push(child);
             }
 
-            foreach (string file in files)
-                yield return file;
-            foreach (string child in directories)
-                pending.Push(child);
+            void ObserveInaccessiblePath()
+            {
+                inaccessible = true;
+                inaccessiblePathObserved();
+            }
+        }
+    }
+
+    private static IEnumerable<string> EnumerateAccessible(
+        Func<IEnumerable<string>> enumerate,
+        Action inaccessiblePathObserved)
+    {
+        IEnumerator<string>? enumerator;
+        try
+        {
+            enumerator = enumerate().GetEnumerator();
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            inaccessiblePathObserved();
+            yield break;
+        }
+
+        using (enumerator)
+        {
+            while (true)
+            {
+                string current;
+                try
+                {
+                    if (!enumerator.MoveNext())
+                        yield break;
+                    current = enumerator.Current;
+                }
+                catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+                {
+                    inaccessiblePathObserved();
+                    yield break;
+                }
+
+                yield return current;
+            }
         }
     }
 

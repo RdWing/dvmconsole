@@ -1,4 +1,5 @@
 using DvmConsole.Core.Diagnostics;
+using DvmConsole.Core.Runtime;
 using DvmConsole.FneClient;
 using DvmConsole.Media;
 using DvmConsole.Operations;
@@ -228,7 +229,7 @@ public sealed partial class MainWindowViewModel
             channel.Definition.Slot,
             "GROUP",
             "VOICE",
-            channel.Definition.Mode.Equals("p25", StringComparison.OrdinalIgnoreCase) ? "LDU1" : "VOICE",
+            channel.Definition.Protocol == ChannelProtocol.P25 ? "LDU1" : "VOICE",
             packetSequence: 1,
             streamId,
             ReadOnlySpan<byte>.Empty);

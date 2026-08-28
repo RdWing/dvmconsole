@@ -183,7 +183,18 @@ public sealed class WebStreamPlaybackCoordinatorTests
         public bool IsDispatching => isDispatching.Value;
         public int InvocationCount => Volatile.Read(ref invocationCount);
 
+        public bool CheckAccess() => isDispatching.Value;
+
+        public void Post(Action action, bool background = false)
+            => Dispatch(action);
+
         public ValueTask InvokeAsync(Action action)
+        {
+            Dispatch(action);
+            return ValueTask.CompletedTask;
+        }
+
+        private void Dispatch(Action action)
         {
             Interlocked.Increment(ref invocationCount);
             bool previous = isDispatching.Value;
@@ -191,7 +202,6 @@ public sealed class WebStreamPlaybackCoordinatorTests
             try
             {
                 action();
-                return ValueTask.CompletedTask;
             }
             finally
             {

@@ -14,8 +14,24 @@ dotnet_diagnostic.CA2208.severity = warning
 dotnet_diagnostic.CA2101.severity = warning
 dotnet_diagnostic.CA2016.severity = warning
 
+# Keep the minimum correctness suite enabled without forcing mechanical API
+# rewrites that do not improve behavior or ownership clarity.
+dotnet_diagnostic.CA1512.severity = none
+dotnet_diagnostic.CA1510.severity = none
+dotnet_diagnostic.CA1513.severity = none
+dotnet_diagnostic.CA1822.severity = none
+# Concrete-type suggestions often conflict with the intentional interface
+# seams used for audio, transport, and test substitution.
+dotnet_diagnostic.CA1859.severity = none
+
 # Desktop owns the application's longest-lived service graph, so disposal
 # ownership rules are enforced there first and can expand project by project.
 [DvmConsole.Desktop/**/*.cs]
 dotnet_diagnostic.CA2000.severity = warning
 dotnet_diagnostic.CA2213.severity = warning
+
+[DvmConsole.*.Tests/**/*.cs]
+# Cross-platform fake tests deliberately exercise platform adapters, and
+# inline expected arrays make individual scenarios easier to read.
+dotnet_diagnostic.CA1416.severity = none
+dotnet_diagnostic.CA1861.severity = none

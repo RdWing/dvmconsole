@@ -30,7 +30,7 @@ internal static class ChannelTransmitDefinitionFactory
     {
         ArgumentNullException.ThrowIfNull(channel);
         ArgumentNullException.ThrowIfNull(transmitDefinition);
-        if (!transmitDefinition.IsEncrypted || transmitDefinition.Mode != "p25")
+        if (!transmitDefinition.IsEncrypted || transmitDefinition.Protocol != ChannelProtocol.P25)
             return null;
         if (p25KeyResolver is null ||
             !P25KeyRing.TryParseAlgorithmId(transmitDefinition.EncryptionAlgorithm, out byte algorithmId) ||
@@ -55,7 +55,7 @@ internal static class ChannelTransmitDefinitionFactory
     {
         ArgumentNullException.ThrowIfNull(channel);
         ArgumentNullException.ThrowIfNull(transmitDefinition);
-        if (!transmitDefinition.IsEncrypted || transmitDefinition.Mode != "dmr")
+        if (!transmitDefinition.IsEncrypted || transmitDefinition.Protocol != ChannelProtocol.Dmr)
             return null;
         if (keyResolver is null ||
             !DmrKeyRing.TryParseAlgorithmId(transmitDefinition.EncryptionAlgorithm, out byte algorithmId) ||
@@ -80,7 +80,7 @@ internal static class ChannelTransmitDefinitionFactory
     {
         ArgumentNullException.ThrowIfNull(channel);
         ArgumentNullException.ThrowIfNull(transmitDefinition);
-        if (!transmitDefinition.IsEncrypted || transmitDefinition.Mode != "nxdn")
+        if (!transmitDefinition.IsEncrypted || transmitDefinition.Protocol != ChannelProtocol.Nxdn)
             return null;
         if (keyResolver is null ||
             !NxdnKeyRing.TryParseAlgorithmId(transmitDefinition.EncryptionAlgorithm, out byte algorithmId) ||

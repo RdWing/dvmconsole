@@ -51,7 +51,8 @@ internal sealed class RecordingFinalizationSpool
     private readonly string activePath;
     private readonly string quarantinePath;
     private readonly object sync = new();
-    private readonly Dictionary<Guid, RecordingFinalizationDescriptor> pending = [];
+    private readonly Dictionary<Guid, RecordingFinalizationDescriptor> descriptors = [];
+    private readonly HashSet<Guid> readyToFinalize = [];
     private string? lastError;
     private int quarantinedJobs;
     private int recoveredOrphanedWaveFiles;
@@ -65,7 +66,23 @@ internal sealed class RecordingFinalizationSpool
         quarantinePath = Path.Combine(activePath, "quarantine");
     }
 
-    public string Persist(RecordingFinalizationDescriptor descriptor)
+    /// <summary>
+    /// Persists recovery metadata for a recording that is still being captured.
+    /// The current process must not finalize the recording until its writer is
+    /// closed and the descriptor is explicitly marked ready.
+    /// </summary>
+    public string PersistCaptureSnapshot(RecordingFinalizationDescriptor descriptor)
+        => Persist(descriptor, isReadyToFinalize: false);
+
+    /// <summary>
+    /// Persists a closed recording and makes it eligible for finalization.
+    /// </summary>
+    public string PersistReady(RecordingFinalizationDescriptor descriptor)
+        => Persist(descriptor, isReadyToFinalize: true);
+
+    private string Persist(
+        RecordingFinalizationDescriptor descriptor,
+        bool isReadyToFinalize)
     {
         Validate(descriptor, requireFiles: true);
         Directory.CreateDirectory(activePath);
@@ -82,7 +99,11 @@ internal sealed class RecordingFinalizationSpool
             lock (sync)
             {
                 EnsureDiscoveredCore();
-                pending[descriptor.JobId] = descriptor;
+                descriptors[descriptor.JobId] = descriptor;
+                if (isReadyToFinalize)
+                    readyToFinalize.Add(descriptor.JobId);
+                else
+                    readyToFinalize.Remove(descriptor.JobId);
             }
             return path;
         }
@@ -92,12 +113,13 @@ internal sealed class RecordingFinalizationSpool
         }
     }
 
-    public IReadOnlyList<RecordingFinalizationDescriptor> LoadPending()
+    public IReadOnlyList<RecordingFinalizationDescriptor> LoadReadyFinalizations()
     {
         lock (sync)
         {
             EnsureDiscoveredCore();
-            return pending.Values
+            return descriptors.Values
+                .Where(descriptor => readyToFinalize.Contains(descriptor.JobId))
                 .OrderBy(descriptor => descriptor.CreatedAt)
                 .ThenBy(descriptor => descriptor.JobId)
                 .ToArray();
@@ -125,7 +147,8 @@ internal sealed class RecordingFinalizationSpool
         lock (sync)
         {
             EnsureDiscoveredCore();
-            pending.Remove(descriptor.JobId);
+            descriptors.Remove(descriptor.JobId);
+            readyToFinalize.Remove(descriptor.JobId);
             TryDelete(GetDescriptorPath(descriptor.JobId));
             TryDelete(descriptor.WavePath);
         }
@@ -137,7 +160,8 @@ internal sealed class RecordingFinalizationSpool
         lock (sync)
         {
             EnsureDiscoveredCore();
-            pending.Remove(descriptor.JobId);
+            descriptors.Remove(descriptor.JobId);
+            readyToFinalize.Remove(descriptor.JobId);
             lastError = string.IsNullOrWhiteSpace(diagnostic)
                 ? "Finalization failed permanently."
                 : diagnostic;
@@ -165,11 +189,13 @@ internal sealed class RecordingFinalizationSpool
         {
             EnsureDiscoveredCore();
             DateTimeOffset capturedAt = now ?? DateTimeOffset.UtcNow;
-            TimeSpan? oldestAge = pending.Count == 0
+            TimeSpan? oldestAge = readyToFinalize.Count == 0
                 ? null
-                : capturedAt - pending.Values.Min(descriptor => descriptor.CreatedAt);
+                : capturedAt - readyToFinalize
+                    .Select(jobId => descriptors[jobId].CreatedAt)
+                    .Min();
             return new RecordingFinalizationSpoolHealth(
-                pending.Count,
+                readyToFinalize.Count,
                 quarantinedJobs,
                 oldestAge < TimeSpan.Zero ? TimeSpan.Zero : oldestAge,
                 lastError);
@@ -205,7 +231,11 @@ internal sealed class RecordingFinalizationSpool
                     throw new InvalidDataException(
                         "The finalization descriptor name does not match its job identifier.");
                 }
-                pending[descriptor.JobId] = descriptor;
+                descriptors[descriptor.JobId] = descriptor;
+                // Discovery runs once, before this process creates live writers.
+                // Every descriptor already on disk therefore belongs to an
+                // interrupted process and is safe to resume.
+                readyToFinalize.Add(descriptor.JobId);
                 describedWavePaths.Add(Path.GetFullPath(descriptor.WavePath));
             }
             catch (Exception exception) when (exception is JsonException or IOException or UnauthorizedAccessException or InvalidDataException or ArgumentException or NotSupportedException)

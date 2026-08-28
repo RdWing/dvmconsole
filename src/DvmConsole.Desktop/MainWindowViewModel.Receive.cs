@@ -663,7 +663,7 @@ public sealed partial class MainWindowViewModel
                 }
             }
 
-            Dispatcher.UIThread.Post(() =>
+            uiDispatcher.Post(() =>
                 AudioStatusText = restarted == missing.Length
                     ? $"Restored {restarted} receive decode session(s)."
                     : $"RX decode unavailable; retrying {missing.Length - restarted} session(s).");
@@ -833,7 +833,7 @@ public sealed partial class MainWindowViewModel
                 ObserveRouteRecovery(
                     Stopwatch.GetElapsedTime(recoveryStarted),
                     DescribeRouteRecovery(recovery));
-                Dispatcher.UIThread.Post(() =>
+                uiDispatcher.Post(() =>
                 {
                     AudioStatusText = recovery.Failed.Count == 0
                         ? $"RX audio restarted for {recovery.Restarted.Count} selected channel(s) after an output-device interruption."
@@ -842,7 +842,7 @@ public sealed partial class MainWindowViewModel
                 return default;
             }
 
-            Dispatcher.UIThread.Post(() =>
+            uiDispatcher.Post(() =>
             {
                 channel.SetAudioEnabled(false);
                 AudioStatusText = $"RX audio stopped: {exception.Message}";
@@ -857,7 +857,7 @@ public sealed partial class MainWindowViewModel
                 // open until the logical receive episode's continuation
                 // window expires, allowing a replacement stream to append.
                 channel.MarkReceiveAudioMeterEnded(traffic.StreamId);
-                Dispatcher.UIThread.Post(() =>
+                uiDispatcher.Post(() =>
                     channel.MarkReceivePlaybackEnded(traffic.StreamId));
             }
             else
@@ -912,10 +912,10 @@ public sealed partial class MainWindowViewModel
             AudioStatusText = message;
             AddDebugLog(now, "RX", DebugLogSeverity.Warning, message);
         }
-        if (Dispatcher.UIThread.CheckAccess())
+        if (uiDispatcher.CheckAccess())
             Publish();
         else
-            Dispatcher.UIThread.Post(Publish);
+            uiDispatcher.Post(Publish);
     }
 
     private void HandleReceiveWorkItemTiming(

@@ -192,9 +192,10 @@ public sealed class ConsoleSessionRuntimeTests
             ];
             Assert.All(requiredOwnership, name => Assert.Contains(name, cleanupOrder));
             Assert.Equal("dispatcher-timers", cleanupOrder[0]);
-            Assert.Equal("user-settings-writer", cleanupOrder[^1]);
+            Assert.Equal("systems", cleanupOrder[^1]);
             AssertBefore(cleanupOrder, "ptt-session", "coordinators-under-ptt-gate");
             AssertBefore(cleanupOrder, "audio-work", "source-receive-work");
+            AssertBefore(cleanupOrder, "user-settings-writer", "systems");
         }
         finally
         {
@@ -228,8 +229,72 @@ public sealed class ConsoleSessionRuntimeTests
             services.Presentation.Register("late-registration", () => ValueTask.CompletedTask));
     }
 
+    [Fact]
+    public void OwnedCollectionConstructionRollsBackEarlierResourcesInReverseOrder()
+    {
+        var disposalOrder = new List<int>();
+
+        FormatException failure = Assert.Throws<FormatException>(() =>
+            OwnedResourceCollectionBuilder.Create(
+                3,
+                index => index == 2
+                    ? throw new FormatException("synthetic collection failure")
+                    : new TrackedAsyncDisposable(index, disposalOrder)));
+
+        Assert.Equal("synthetic collection failure", failure.Message);
+        Assert.Equal([1, 0], disposalOrder);
+    }
+
+    [Fact]
+    public void PartiallyConstructedMainWindowRollsBackWithoutMaskingTheOriginalFailure()
+    {
+        string root = Path.Combine(
+            Path.GetTempPath(),
+            "dvmconsole-partial-session-tests",
+            Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        var services = new ConsoleSessionServices();
+        try
+        {
+            FormatException failure = Assert.Throws<FormatException>(() =>
+                ConsoleSessionConstruction.Create(
+                    services,
+                    () => new MainWindowViewModel(
+                        "Test session",
+                        [],
+                        [],
+                        new MainWindowViewModelOptions(
+                            UserSettingsStore: new UserSettingsStore(
+                                Path.Combine(root, "UserSettings.json")),
+                            SerialPortProvider: () => throw new FormatException("serial discovery failed"),
+                            SessionServices: services,
+                            NetworkDisabledDemo: true))));
+
+            Assert.Equal("serial discovery failed", failure.Message);
+            Assert.Equal(0, services.Count);
+            Assert.Throws<ObjectDisposedException>(() =>
+                services.Audio.Register("late-registration", () => ValueTask.CompletedTask));
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
     private static ValueTask NoOp()
         => ValueTask.CompletedTask;
+
+    private sealed class TrackedAsyncDisposable(
+        int id,
+        ICollection<int> disposalOrder) : IAsyncDisposable
+    {
+        public ValueTask DisposeAsync()
+        {
+            disposalOrder.Add(id);
+            return ValueTask.CompletedTask;
+        }
+    }
 
     private static void AssertBefore(string[] values, string first, string second)
         => Assert.True(

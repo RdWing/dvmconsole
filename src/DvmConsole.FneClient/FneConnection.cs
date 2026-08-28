@@ -126,6 +126,7 @@ public sealed record FneKeyResponse(
 public sealed class FneConnection : IAsyncDisposable
 {
     internal static readonly TimeSpan DefaultHandshakeProgressTimeout = TimeSpan.FromSeconds(15);
+    internal static readonly TimeSpan DefaultHandshakeReconnectGracePeriod = TimeSpan.FromSeconds(1);
     internal static TimeSpan P25KeyResponseWindow => PendingP25KeyRequestTracker.ResponseWindow;
 
     internal static string SoftwareIdentifier => FormatSoftwareIdentifier(
@@ -140,6 +141,7 @@ public sealed class FneConnection : IAsyncDisposable
     private readonly ReconnectBackoff loginRetryBackoff = new();
     private readonly TimeProvider timeProvider;
     private readonly TimeSpan handshakeProgressTimeout;
+    private readonly TimeSpan handshakeReconnectGracePeriod;
     private readonly FnePeerStateMonitor stateMonitor = new();
     private readonly object sync = new();
     private readonly object sendSync = new();
@@ -174,7 +176,8 @@ public sealed class FneConnection : IAsyncDisposable
         TimeProvider timeProvider,
         IFneEndpointResolver endpointResolver,
         IFnePeerSessionFactory peerSessionFactory,
-        TimeSpan? handshakeProgressTimeout = null)
+        TimeSpan? handshakeProgressTimeout = null,
+        TimeSpan? handshakeReconnectGracePeriod = null)
     {
         this.options = options ?? throw new ArgumentNullException(nameof(options));
         pendingP25KeyRequests = new PendingP25KeyRequestTracker(timeProvider);
@@ -184,6 +187,9 @@ public sealed class FneConnection : IAsyncDisposable
         this.handshakeProgressTimeout = handshakeProgressTimeout ?? DefaultHandshakeProgressTimeout;
         if (this.handshakeProgressTimeout <= TimeSpan.Zero)
             throw new ArgumentOutOfRangeException(nameof(handshakeProgressTimeout));
+        this.handshakeReconnectGracePeriod = handshakeReconnectGracePeriod ?? DefaultHandshakeReconnectGracePeriod;
+        if (this.handshakeReconnectGracePeriod < TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(nameof(handshakeReconnectGracePeriod));
         status = new FneConnectionStatus(options.Name, FneConnectionState.Disconnected, "Not started", DateTimeOffset.UtcNow);
         verboseLoggingEnabled = options.EnableVerboseLogging;
     }
@@ -703,6 +709,14 @@ public sealed class FneConnection : IAsyncDisposable
 
     private void HandlePeerLog(LogLevel level, string message)
     {
+        if (FneLogInterpreter.IsLoginAcknowledgement(message))
+        {
+            // The master is reachable and has accepted the login packet. Do not
+            // carry earlier unanswered-login delay into recovery from a later
+            // authorization or configuration stall.
+            ResetLoginRetryBackoff();
+        }
+
         TimeSpan? retryDelay = FneLogInterpreter.IsLoginRequest(message)
             ? ApplyLoginRetryBackoff()
             : null;
@@ -865,16 +879,22 @@ public sealed class FneConnection : IAsyncDisposable
                     }
                 }
 
+                string phase = GetHandshakePhaseName(expectedState);
                 Raise(LogReceived, new FneLogEntry(
                     options.Name,
                     DebugLogSeverity.Warning,
-                    "FNE handshake made no progress; recycling this system's network session",
+                    $"FNE {phase} made no progress; closing this system's network session " +
+                    $"and retrying after a {handshakeReconnectGracePeriod.TotalSeconds:0.#} second grace period",
                     DateTimeOffset.UtcNow));
                 Publish(
                     FneConnectionState.Faulted,
-                    "FNE handshake stalled; recycling network session");
+                    $"FNE {phase} stalled; recycling network session");
 
                 await StopCoreAsync(CancellationToken.None).ConfigureAwait(false);
+                await Task.Delay(
+                    handshakeReconnectGracePeriod,
+                    timeProvider,
+                    CancellationToken.None).ConfigureAwait(false);
                 await StartCoreAsync(CancellationToken.None).ConfigureAwait(false);
             }
             finally
@@ -894,6 +914,14 @@ public sealed class FneConnection : IAsyncDisposable
             Debug.WriteLine($"FNE handshake recovery failed: {exception.Message}");
         }
     }
+
+    private static string GetHandshakePhaseName(FneConnectionState state)
+        => state switch
+        {
+            FneConnectionState.Authenticating => "authentication",
+            FneConnectionState.Configuring => "configuration",
+            _ => "handshake"
+        };
 
     private void Raise<T>(EventHandler<T>? handlers, T args)
     {

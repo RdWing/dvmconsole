@@ -570,16 +570,16 @@ public sealed partial class MainWindowViewModel
         }
     }
 
-    private static async Task RunOnUiThreadAsync(Action action)
+    private async Task RunOnUiThreadAsync(Action action)
     {
         ArgumentNullException.ThrowIfNull(action);
-        if (Dispatcher.UIThread.CheckAccess())
+        if (uiDispatcher.CheckAccess())
         {
             action();
             return;
         }
 
-        await Dispatcher.UIThread.InvokeAsync(action);
+        await uiDispatcher.InvokeAsync(action);
     }
 
     internal ChannelViewModel[] ResolveGeneratedToneChannels()

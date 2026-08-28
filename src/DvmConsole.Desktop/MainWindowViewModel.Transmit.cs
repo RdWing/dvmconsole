@@ -24,6 +24,16 @@ public sealed partial class MainWindowViewModel
         if (channels.Count == 0 || transmitCoordinator.ActiveChannel is not null)
             return;
 
+        ChannelViewModel? receivingChannel = channels.FirstOrDefault(
+            channel => channel.IsReceivePresentationActive);
+        if (receivingChannel is not null)
+        {
+            await RunOnUiThreadAsync(() =>
+                TransmitStatusText = $"PTT unavailable: {receivingChannel.Name} is currently receiving.")
+                .ConfigureAwait(false);
+            return;
+        }
+
         TransmitTarget[] targets = channels
             .Select(channel => new TransmitTarget(
                 channel,
@@ -477,7 +487,9 @@ public sealed partial class MainWindowViewModel
             string presentationLatencyText = result.MeasuredOutputPresentationLatency is TimeSpan outputLatency
                 ? $" CoreAudio presentation latency {outputLatency.TotalMilliseconds:0} ms; " +
                   $"post-drain wait {result.PostDrainWaitDuration.TotalMilliseconds:0} ms."
-                : $" Fixed post-drain wait {result.PostDrainWaitDuration.TotalMilliseconds:0} ms.";
+                : result.PostDrainWaitDuration > TimeSpan.Zero
+                    ? $" Fixed post-drain wait {result.PostDrainWaitDuration.TotalMilliseconds:0} ms."
+                    : " No post-drain wait.";
             string pttText = pttTimer is null
                 ? string.Empty
                 : $" PTT sessions {transmitSessionsReadyAt?.TotalMilliseconds:0} ms, " +

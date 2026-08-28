@@ -1,4 +1,5 @@
 using DvmConsole.Operations;
+using DvmConsole.Media;
 using System.ComponentModel;
 
 namespace DvmConsole.Desktop;
@@ -53,7 +54,13 @@ public sealed partial class MainWindowViewModel
             receiveAudioWork.CaptureHealth(),
             patchSourceReceiveWork.CaptureHealth());
         MicrophoneHealth microphone = transmitCoordinator.MicrophoneHealth;
-        int transmitDepth = transmitCoordinator.ActiveChannels.Count;
+        TransmitQueueHealth channelTransmit = transmitCoordinator.QueueHealth;
+        TransmitQueueHealth patchTransmit = patchForwarding.CaptureQueueHealth();
+        int transmitDepth = channelTransmit.Depth + patchTransmit.Depth;
+        int measuredTransmitPeak = channelTransmit.PeakDepth + patchTransmit.PeakDepth;
+        TimeSpan? oldestTransmitAge = Max(
+            channelTransmit.OldestAge,
+            patchTransmit.OldestAge);
         DateTimeOffset capturedAt = DateTimeOffset.UtcNow;
         RecordingFinalizationSpoolHealth finalization = CaptureRecordingFinalizationHealth(capturedAt);
         DateTimeOffset? transmitStartedAt;
@@ -67,7 +74,9 @@ public sealed partial class MainWindowViewModel
 
         lock (runtimeHealthSync)
         {
-            transmitPeakDepth = Math.Max(transmitPeakDepth, transmitDepth);
+            transmitPeakDepth = Math.Max(
+                transmitPeakDepth,
+                Math.Max(transmitDepth, measuredTransmitPeak));
             finalizationPeakDepth = Math.Max(finalizationPeakDepth, finalization.PendingJobs);
             if (transmitDepth > 0)
                 transmitBacklogObservedAt ??= capturedAt;
@@ -102,7 +111,8 @@ public sealed partial class MainWindowViewModel
             new WorkBacklogHealth(
                 transmitDepth,
                 transmitPeak,
-                transmitStartedAt is null ? null : capturedAt - transmitStartedAt.Value,
+                oldestTransmitAge ??
+                    (transmitStartedAt is null ? null : capturedAt - transmitStartedAt.Value),
                 transmitStage,
                 transmitError ?? microphone.Fault),
             new WorkBacklogHealth(
@@ -120,6 +130,15 @@ public sealed partial class MainWindowViewModel
 
     private void ObserveRuntimeReceiveTiming(ReceiveWorkItemTiming timing)
         => receiveLatencyHealth.Observe(timing.EndToEndDelay);
+
+    private static TimeSpan? Max(TimeSpan? first, TimeSpan? second)
+        => (first, second) switch
+        {
+            (null, null) => null,
+            (TimeSpan value, null) => value,
+            (null, TimeSpan value) => value,
+            (TimeSpan left, TimeSpan right) => left >= right ? left : right
+        };
 
     private RecordingFinalizationSpoolHealth CaptureRecordingFinalizationHealth(
         DateTimeOffset capturedAt)

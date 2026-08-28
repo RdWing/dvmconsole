@@ -57,7 +57,7 @@ public sealed class UserSettingsStore
         {
             return new UserSettings();
         }
-        catch (IOException)
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {
             return new UserSettings();
         }

@@ -49,6 +49,13 @@ no additional listen button.
 The talkgroup and protocol are shown together as `TG 9990 - DMR` or
 `TG 9990 - P25`.
 
+The narrow bar above the volume slider shows channel audio level. Receive and
+transmit use the same -50 to 0 dBFS scale. The colored fill is a 50 ms RMS
+reading, and the separate peak marker holds for 750 ms. The marker is white
+below -12 dBFS, yellow from -12 to -6 dBFS, and red at -6 dBFS or above. The
+meter is informational; it does not change gain, AGC, transmitted audio, or
+recorded audio.
+
 ---
 
 # Resource card sizes
@@ -79,6 +86,11 @@ Settings > Toggle Push To Talk Mode
 
 Toggle PTT is off by default. If changed, the preference is saved.
 
+PTT is unavailable while a channel is receiving. Clicking its disabled PTT
+control does not change the channel's RX selection. When PTT is released, DVM
+Console stops accepting microphone input, sends the accepted queue at its
+normal cadence, and then ends the radio call.
+
 ---
 
 # Selectable encryption
@@ -89,6 +101,10 @@ area.
 Click **SELECT** to switch the resource between encrypted and clear transmit.
 DVM Console saves the choice by system and talkgroup and restores it at the
 next startup.
+
+This choice affects transmit only. Clear receive traffic remains audible while
+either **SECURE** or **CLEAR** is selected. Encrypted receive traffic plays when
+its on-air metadata identifies an available key.
 
 If the resource does not show **SELECT**, encryption behavior is fixed by the codeplug.
 

@@ -61,6 +61,29 @@ public sealed class PatchTransmitPumpTests
         Assert.Null(pump.Failure);
     }
 
+    [Fact]
+    public async Task BacklogLimitEndsThePatchInsteadOfGrowingWithoutBound()
+    {
+        using var session = new PatchTransmitSession(
+            new ChannelRuntimeDefinition("DMR", "FNE", "dmr", 99, slot: 0),
+            sourceId: 890,
+            streamId: 101,
+            new FakeVocoderSession(),
+            (_, _, _) => { });
+        var start = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var pump = new PatchTransmitPump(session, start.Task, capacity: 2);
+
+        InvalidOperationException failure = Assert.Throws<InvalidOperationException>(() =>
+            pump.Enqueue(new short[VocoderFrameSizes.PcmSamplesPerFrame * 3]));
+        start.SetResult();
+        await pump.Completion;
+
+        Assert.Contains("safety limit", failure.Message, StringComparison.Ordinal);
+        Assert.Same(failure, pump.Failure);
+        Assert.Equal(2, pump.CaptureHealth().Capacity);
+        Assert.Equal(2, pump.CaptureHealth().PeakDepth);
+    }
+
     private static async Task WaitUntilAsync(Func<bool> condition)
     {
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(2));

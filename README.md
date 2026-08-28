@@ -51,31 +51,41 @@ isolated audio state keep simultaneous calls separate.
 
 ## What’s new in DVM Console NEO
 
-### 0.4.3 — Efficiency and alert audio update
+### 0.4.4 — Connection, audio, and runtime hardening
 
-Version 0.4.3 reduces package size, idle work, and receive overhead. It also
-fixes reported dropouts while transmitting generated tones and imported alert
-audio. Existing operator configurations remain compatible.
+Version 0.4.4 recovers more reliably from stalled FNE handshakes, puts receive
+and transmit meters on the same scale, and bounds queued media work. Existing
+operator configurations remain compatible.
 
-- Alert audio keeps a stable 20 ms transmit cadence after accounting for encode
-  and send time. Late frames no longer cause accumulated drift or catch-up
-  bursts.
-- Imported WAV and MPEG assets are sent as ordinary audio. Generated tones,
-  DTMF, and QCII continue to use their dedicated paths.
-- Audio meters sleep while idle, stable default-device checks run less often,
-  and receive routing reuses stream state to reduce CPU and allocations.
-- Packages are now smaller because each one carries only its target platform's
-  audio and Avalonia backends and uses partial linking.
-- Debug Logs summarize jitter evidence by stream and separate intentional
-  buffer delay from worker, session, decode, and mixer time. TAR finalization
-  encodes the retained range without first rewriting the source WAV.
+- FNE login acknowledgements reset retry pacing. Authentication or
+  configuration that stops making progress now gets a clean session retry with
+  a phase-specific status message.
+- Encrypted digital channels can receive clear calls in either fixed or
+  selectable transmit mode. **SECURE** and **CLEAR** now describe transmit only.
+- Channel meters use a shared -50 to 0 dBFS scale. The fill shows RMS level,
+  while the held peak marker changes from white to yellow and red at the same
+  thresholds as the meter bands.
+- Sample-rate conversion keeps anti-alias filtering continuous across chunk
+  boundaries, including 44.1 kHz input and other non-integer ratios.
+- PTT release drains accepted speech at its normal cadence before ending the
+  call. The standard talk-permit cue no longer adds a fixed 200 ms pause after
+  it drains.
+- Channel and patch transmit queues are bounded and measured. TAR finalization
+  remains durable when its worker queue is full.
+- Debug Log searches wait briefly for typing to settle before rebuilding the
+  visible results.
+- Session startup and shutdown now use explicit ownership and rollback phases.
+  CI also checks formatting, dependency boundaries, and package budgets.
 
-[Read the 0.4.3 release notes →](docs/releases/v0.4.3.md)
+[Read the 0.4.4 release notes →](docs/releases/v0.4.4.md)
 
 ### Prior recent improvements
 
 Recent releases also include these changes:
 
+- **0.4.3 — Efficiency and alert audio update:** reduced package size and idle
+  work, summarized jitter evidence, and corrected pacing for generated and
+  imported alert audio.
 - **0.4.2 — Secure voice and live reconfiguration update:** corrected
   selectable-encryption receive behavior and secure voice signaling, preserved
   transmit-tail cadence, and made patch and session changes take effect safely.
@@ -86,22 +96,19 @@ Recent releases also include these changes:
   responsive toolbar overflow, optional Engineering Health, mode-correct
   DMR/P25 call boundaries, cross-protocol patch repair, and revised runtime
   ownership and scheduling.
-- **0.3.8 — Receive continuity and audio-path optimization:** drained ended
-  receive streams before cleanup, paced TAR and web-stream PCM, retired failed
-  shared outputs, and standardized macOS microphone processing.
 
-[Read the 0.4.2 release notes →](docs/releases/v0.4.2.md) · [Read the 0.4.1 release notes →](docs/releases/v0.4.1.md) · [Read the 0.4.0 release notes →](docs/releases/v0.4.0.md) · [Read the 0.3.8 release notes →](docs/releases/v0.3.8.md)
+[Read the 0.4.3 release notes →](docs/releases/v0.4.3.md) · [Read the 0.4.2 release notes →](docs/releases/v0.4.2.md) · [Read the 0.4.1 release notes →](docs/releases/v0.4.1.md) · [Read the 0.4.0 release notes →](docs/releases/v0.4.0.md)
 
 ## Download DVM Console NEO
 
 Download the package for the destination computer and extract the entire
-archive before starting DVM Console NEO. Version 0.4.3 uses these filenames:
+archive before starting DVM Console NEO. Version 0.4.4 uses these filenames:
 
 | Platform | Package | Requirements |
 | --- | --- | --- |
-| Apple Silicon Mac | `dvmconsole-0.4.3-osx-arm64.zip` | macOS 14 or newer |
-| Intel Mac | `dvmconsole-0.4.3-osx-x64.zip` | macOS 14 or newer |
-| Windows PC | `dvmconsole-0.4.3-win-x64.zip` | Windows x64 |
+| Apple Silicon Mac | `dvmconsole-0.4.4-osx-arm64.zip` | macOS 14 or newer |
+| Intel Mac | `dvmconsole-0.4.4-osx-x64.zip` | macOS 14 or newer |
+| Windows PC | `dvmconsole-0.4.4-win-x64.zip` | Windows x64 |
 
 **[Download the latest release →](https://github.com/RdWing/dvmconsole/releases/latest)**
 

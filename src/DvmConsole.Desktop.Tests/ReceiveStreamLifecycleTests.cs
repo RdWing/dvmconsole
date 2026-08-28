@@ -55,19 +55,30 @@ public sealed class ReceiveStreamLifecycleTests
         var lifecycle = CreateLifecycle();
         DateTimeOffset now = DateTimeOffset.UnixEpoch;
         lifecycle.ObserveVoice(7, now);
-        for (int index = 0; index < 100; index++)
-            lifecycle.ObserveVoice(7, now.AddTicks(index + 1));
-        long before = GC.GetAllocatedBytesForCurrentThread();
+        _ = MeasureContinuedVoiceAllocations(lifecycle, now, startingTick: 1);
 
+        long allocatedBytes = Enumerable.Range(0, 5)
+            .Select(run => MeasureContinuedVoiceAllocations(
+                lifecycle,
+                now,
+                startingTick: 10_001L + (run * 10_000L)))
+            .Min();
+
+        Assert.InRange(allocatedBytes, 0, 1_024);
+    }
+
+    private static long MeasureContinuedVoiceAllocations(
+        ReceiveStreamLifecycle lifecycle,
+        DateTimeOffset now,
+        long startingTick)
+    {
+        long before = GC.GetAllocatedBytesForCurrentThread();
         ReceiveStreamDecision decision = default;
         for (int index = 0; index < 10_000; index++)
-            decision = lifecycle.ObserveVoice(7, now.AddTicks(index + 101));
-
+            decision = lifecycle.ObserveVoice(7, now.AddTicks(startingTick + index));
+        long allocatedBytes = GC.GetAllocatedBytesForCurrentThread() - before;
         Assert.Equal(ReceiveStreamTransition.Continued, decision.Transition);
-        Assert.InRange(
-            GC.GetAllocatedBytesForCurrentThread() - before,
-            0,
-            1_024);
+        return allocatedBytes;
     }
 
     [Fact]

@@ -44,6 +44,7 @@ public sealed class PcmInputProcessor
     private readonly double lowGain;
     private readonly double midGain;
     private readonly double highGain;
+    private readonly bool equalizerEnabled;
     private double lowState;
     private double highState;
     private double previousInput;
@@ -56,6 +57,20 @@ public sealed class PcmInputProcessor
         lowGain = DbToLinear(this.options.LowGainDb);
         midGain = DbToLinear(this.options.MidGainDb);
         highGain = DbToLinear(this.options.HighGainDb);
+        equalizerEnabled = this.options.LowGainDb != 0 ||
+            this.options.MidGainDb != 0 ||
+            this.options.HighGainDb != 0;
+    }
+
+    public static bool RequiresProcessing(AudioInputProcessingOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        AudioInputProcessingOptions normalized = options.Normalize();
+        return normalized.AgcEnabled ||
+            normalized.Gain != 1 ||
+            normalized.LowGainDb != 0 ||
+            normalized.MidGainDb != 0 ||
+            normalized.HighGainDb != 0;
     }
 
     public void Process(ReadOnlySpan<short> input, Span<short> output)
@@ -64,6 +79,24 @@ public sealed class PcmInputProcessor
             throw new ArgumentException("The output buffer is smaller than the input buffer.", nameof(output));
         if (input.IsEmpty)
             return;
+
+        if (!options.AgcEnabled && !equalizerEnabled)
+        {
+            if (options.Gain == 1)
+            {
+                input.CopyTo(output);
+                return;
+            }
+
+            for (int index = 0; index < input.Length; index++)
+            {
+                output[index] = (short)Math.Clamp(
+                    Math.Round(input[index] * options.Gain, MidpointRounding.AwayFromZero),
+                    short.MinValue,
+                    short.MaxValue);
+            }
+            return;
+        }
 
         Span<double> shaped = input.Length <= 2048
             ? stackalloc double[input.Length]
@@ -123,7 +156,8 @@ public sealed class ProcessedAudioCapture : IAudioCapture
     {
         this.source = source ?? throw new ArgumentNullException(nameof(source));
         AudioInputProcessingOptions normalized = (options ?? new AudioInputProcessingOptions()).Normalize();
-        processor = normalized.ProcessingMode == AudioProcessingMode.DvmConsole
+        processor = normalized.ProcessingMode == AudioProcessingMode.DvmConsole &&
+            PcmInputProcessor.RequiresProcessing(normalized)
             ? new PcmInputProcessor(normalized)
             : null;
         Format = source.Format;

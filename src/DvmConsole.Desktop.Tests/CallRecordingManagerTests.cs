@@ -13,6 +13,144 @@ namespace DvmConsole.Desktop.Tests;
 public sealed class CallRecordingManagerTests
 {
     [Fact]
+    public async Task CompletingAnotherJobDoesNotFinalizeAnActiveTransmitRecording()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "dvmconsole-recording-tests", Guid.NewGuid().ToString("N"));
+        var channel = new ChannelViewModel(new ChannelConfiguration
+        {
+            Name = "Dispatch",
+            System = "System 1",
+            Tgid = "99",
+            Mode = "analog"
+        });
+        channel.SetRecordingEnabled(true);
+        await using var manager = new CallRecordingManager(
+            root,
+            faultHandler: null,
+            retentionDays: CallRecordingManager.DefaultRetentionDays,
+            shouldRecordSource: null,
+            finalizationQueueCapacity: 4,
+            finalizeRecording: (descriptor, _, _) => Task.FromResult(
+                new RecordingFinalizationResult(null, descriptor.StreamId, null, null)));
+
+        try
+        {
+            manager.WriteTransmitSamples(channel, streamId: 90, sourceId: 7, ActiveSamples());
+            string transmitWavePath = Assert.Single(manager.ActivePaths);
+
+            manager.WriteSamples(channel, streamId: 41, sourceId: 8, ActiveSamples());
+            Task<RecordingFinalizationResult> receiveFinalized = NextFinalizationAsync(manager);
+            manager.StopStream(channel, 41);
+
+            Assert.Equal((uint)41, (await receiveFinalized).StreamId);
+            Assert.Equal(0, manager.ScheduledFinalizationCount);
+            Assert.True(File.Exists(transmitWavePath));
+
+            Task<RecordingFinalizationResult> transmitFinalized = NextFinalizationAsync(manager);
+            manager.StopTransmit(channel);
+
+            Assert.Equal((uint)90, (await transmitFinalized).StreamId);
+            Assert.False(File.Exists(transmitWavePath));
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void MissingTransmitSourceIsReportedWithoutEscapingPttShutdown()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        string root = Path.Combine(Path.GetTempPath(), "dvmconsole-recording-tests", Guid.NewGuid().ToString("N"));
+        Exception? reported = null;
+        var channel = new ChannelViewModel(new ChannelConfiguration
+        {
+            Name = "Dispatch",
+            System = "System 1",
+            Tgid = "99",
+            Mode = "analog"
+        });
+        channel.SetRecordingEnabled(true);
+        using var manager = new CallRecordingManager(
+            root,
+            faultHandler: (_, exception) => reported = exception);
+
+        try
+        {
+            manager.WriteTransmitSamples(channel, streamId: 90, sourceId: 7, ActiveSamples());
+            File.Delete(Assert.Single(manager.ActivePaths));
+
+            manager.StopTransmit(channel);
+
+            Assert.IsType<InvalidDataException>(reported);
+            Assert.Empty(manager.ActivePaths);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task FinalizationOverflowRemainsDurableWithoutCreatingUnboundedInMemoryWork()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "dvmconsole-recording-tests", Guid.NewGuid().ToString("N"));
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var firstStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        int started = 0;
+        var channel = new ChannelViewModel(new ChannelConfiguration
+        {
+            Name = "Dispatch",
+            System = "System 1",
+            Tgid = "99",
+            Mode = "analog"
+        });
+        channel.SetRecordingEnabled(true);
+        await using var manager = new CallRecordingManager(
+            root,
+            faultHandler: null,
+            retentionDays: CallRecordingManager.DefaultRetentionDays,
+            shouldRecordSource: null,
+            finalizationQueueCapacity: 1,
+            finalizeRecording: async (descriptor, _, cancellationToken) =>
+            {
+                if (Interlocked.Increment(ref started) == 1)
+                    firstStarted.TrySetResult();
+                await release.Task.WaitAsync(cancellationToken);
+                return new RecordingFinalizationResult(null, descriptor.StreamId, null, null);
+            });
+
+        try
+        {
+            for (uint streamId = 1; streamId <= 3; streamId++)
+            {
+                manager.WriteSamples(channel, streamId, sourceId: 7, ActiveSamples());
+                manager.StopStream(channel, streamId);
+            }
+
+            await firstStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+            Assert.Equal(3, manager.FinalizationHealth.PendingJobs);
+            Assert.InRange(manager.ScheduledFinalizationCount, 1, 2);
+
+            release.TrySetResult();
+            await WaitForAsync(() => manager.FinalizationHealth.PendingJobs == 0);
+
+            Assert.Equal(3, Volatile.Read(ref started));
+        }
+        finally
+        {
+            release.TrySetResult();
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task ActiveRecordingPersistsCrashDescriptorBeforeCallClose()
     {
         string root = Path.Combine(Path.GetTempPath(), "dvmconsole-recording-tests", Guid.NewGuid().ToString("N"));
@@ -102,7 +240,7 @@ public sealed class CallRecordingManagerTests
                 null,
                 null,
                 7);
-            new RecordingFinalizationSpool(root).Persist(descriptor);
+            new RecordingFinalizationSpool(root).PersistCaptureSnapshot(descriptor);
 
             await using var restarted = new CallRecordingManager(root);
             await WaitForAsync(() => File.Exists(outputPath));

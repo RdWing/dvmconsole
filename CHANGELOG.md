@@ -6,6 +6,63 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.4.4] - 2026-08-27
+
+### Changed
+
+- Calibrate receive and transmit channel meters on the same -50 to 0 dBFS
+  scale. The fill shows 50 ms RMS level with fast attack and controlled release,
+  while a held peak marker changes from white to yellow at -12 dBFS and red at
+  -6 dBFS.
+- Make downsampling independent of input chunk boundaries at integer and
+  non-integer sample-rate ratios. Keep anti-alias filtering at device and media
+  boundaries, avoid default microphone-processing copies, and remove repeated
+  front-shifting from the streaming resampler.
+- Bound channel and patch transmit queues, report their measured depth, peak,
+  capacity, and oldest-frame age through Engineering Health, and stop stale
+  transmission if a queue reaches its safety limit.
+- Keep TAR finalization jobs durable on disk when the bounded in-memory worker
+  queue is full. Pending work resumes as capacity becomes available without
+  growing an unbounded task backlog.
+- Debounce Debug Log text searches by 150 ms and limit the visible projection
+  to the newest 5,000 matching rows. The existing retained-session limits and
+  redacted export behavior remain unchanged.
+- Separate console composition, restoration, event wiring, ownership, and
+  teardown into explicit phases. Add application-owned formatting checks,
+  dependency-boundary tests, and package size and file-count budgets to CI.
+
+### Fixed
+
+- Reset login retry pacing when an FNE login acknowledgement arrives. If
+  authentication or configuration then makes no progress, close that system's
+  session, wait one second, and retry with a phase-specific status message.
+- Keep the meter's green, yellow, and red bands fixed across the full scale
+  instead of compressing every color into any nonzero fill width.
+- Play clear receive audio on encrypted digital channels in both fixed and
+  selectable transmit modes. The **SECURE**/**CLEAR** selection now affects
+  transmit only; encrypted receive audio still requires the matching key.
+- Treat unreadable operator settings and inaccessible recording-catalog paths
+  as recoverable conditions instead of failing startup or a catalog scan.
+- Keep live TAR capture snapshots out of the finalization queue until their
+  writers close. Finishing another recording can no longer delete an active
+  PTT recording or crash Console when the operator releases PTT.
+- Keep PTT release bounded without clipping normally queued speech. Console
+  stops accepting microphone audio first, drains roughly one second of accepted
+  audio at the normal cadence, and then sends the protocol completion and
+  terminator.
+- Remove the fixed 200 ms post-drain wait from the standard talk-permit cue, so
+  microphone audio can begin as soon as the cue drains. Cold Bluetooth startup
+  still uses measured presentation latency as its safeguard.
+- Disable a channel's PTT control while that channel is actively receiving.
+  A rejected toggle is not left latched, so the next press works normally once
+  the receive call ends, and clicking the disabled PTT area does not toggle the
+  channel's RX selection.
+- Export Debug Logs through the file handle returned by the platform save
+  picker. Exports no longer disappear when a provider does not expose a local
+  path, and the status bar reports the destination or write failure.
+- Roll back partially constructed sessions and dispose owned resources in a
+  defined order without replacing the original startup or shutdown failure.
+
 ## [0.4.3] - 2026-08-27
 
 ### Changed
@@ -563,7 +620,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Add patches, multi-select groups, call history, recordings, web streams, clocks, layouts, themes, startup behavior, and in-application operator documentation.
 - Add support for local and KMM-provided P25 encryption keys while preserving compatibility with existing variable-length AES key material.
 
-[Unreleased]: https://github.com/RdWing/dvmconsole/compare/v0.4.3...HEAD
+[Unreleased]: https://github.com/RdWing/dvmconsole/compare/v0.4.4...HEAD
+[0.4.4]: https://github.com/RdWing/dvmconsole/compare/v0.4.3...v0.4.4
 [0.4.3]: https://github.com/RdWing/dvmconsole/compare/v0.4.2...v0.4.3
 [0.4.2]: https://github.com/RdWing/dvmconsole/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/RdWing/dvmconsole/compare/v0.4.0...v0.4.1

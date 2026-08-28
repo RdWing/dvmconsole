@@ -10,17 +10,25 @@ namespace DvmConsole.Desktop;
 // entire retained session log for every packet.
 internal sealed class FilteredDebugLogCollection : IDisposable
 {
+    internal const int DefaultMaximumVisibleEntries = 5_000;
+
     private readonly ObservableCollection<DebugLogEntry> source;
     private readonly RangeObservableCollection<DebugLogEntry> filtered = [];
+    private readonly int maximumVisibleEntries;
     private string severity = "Info";
     private DebugLogSeverity selectedSeverity = DebugLogSeverity.Info;
     private bool includeAllSeverities;
     private bool hasValidSeverity = true;
     private string searchText = string.Empty;
 
-    public FilteredDebugLogCollection(ObservableCollection<DebugLogEntry> source)
+    public FilteredDebugLogCollection(
+        ObservableCollection<DebugLogEntry> source,
+        int maximumVisibleEntries = DefaultMaximumVisibleEntries)
     {
         this.source = source ?? throw new ArgumentNullException(nameof(source));
+        if (maximumVisibleEntries <= 0)
+            throw new ArgumentOutOfRangeException(nameof(maximumVisibleEntries));
+        this.maximumVisibleEntries = maximumVisibleEntries;
         Entries = new ReadOnlyObservableCollection<DebugLogEntry>(filtered);
         source.CollectionChanged += HandleSourceCollectionChanged;
         Rebuild();
@@ -75,6 +83,7 @@ internal sealed class FilteredDebugLogCollection : IDisposable
                         matching,
                         0));
                 filtered.InsertRange(0, matching);
+                TrimProjection();
             }
             return;
         }
@@ -83,12 +92,16 @@ internal sealed class FilteredDebugLogCollection : IDisposable
             e.OldItems is not null &&
             e.OldStartingIndex == 0)
         {
-            int matchingCount = e.OldItems
+            var removedEntries = e.OldItems
                 .OfType<DebugLogEntry>()
-                .Count(Matches);
-            if (matchingCount > 0)
+                .ToHashSet(ReferenceEqualityComparer.Instance);
+            int visibleRemovalCount = filtered.Count(removedEntries.Contains);
+            if (visibleRemovalCount > 0)
             {
-                int filteredIndex = filtered.Count - matchingCount;
+                // Retention evicts the oldest source rows. Once the projection
+                // is capped, some or all of those rows may already be hidden;
+                // only remove the evicted instances that are actually visible.
+                int filteredIndex = filtered.Count - visibleRemovalCount;
                 DebugLogEntry[] removed = filtered
                     .Skip(filteredIndex)
                     .ToArray();
@@ -98,7 +111,7 @@ internal sealed class FilteredDebugLogCollection : IDisposable
                         NotifyCollectionChangedAction.Remove,
                         removed,
                         filteredIndex));
-                filtered.RemoveRange(filteredIndex, matchingCount);
+                filtered.RemoveRange(filteredIndex, visibleRemovalCount);
             }
             return;
         }
@@ -116,6 +129,23 @@ internal sealed class FilteredDebugLogCollection : IDisposable
         CollectionChanging?.Invoke(
             this,
             new NotifyCollectionChangedEventArgs(NotifyCollectionChangedAction.Reset));
-        filtered.ReplaceAll(source.Reverse().Where(Matches));
+        filtered.ReplaceAll(source.Reverse().Where(Matches).Take(maximumVisibleEntries));
+    }
+
+    private void TrimProjection()
+    {
+        int excess = filtered.Count - maximumVisibleEntries;
+        if (excess <= 0)
+            return;
+
+        int removalIndex = maximumVisibleEntries;
+        DebugLogEntry[] removed = filtered.Skip(removalIndex).ToArray();
+        CollectionChanging?.Invoke(
+            this,
+            new NotifyCollectionChangedEventArgs(
+                NotifyCollectionChangedAction.Remove,
+                removed,
+                removalIndex));
+        filtered.RemoveRange(removalIndex, excess);
     }
 }

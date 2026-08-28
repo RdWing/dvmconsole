@@ -5,7 +5,7 @@ namespace DvmConsole.Desktop;
 // update only their own state.
 public sealed class CardPttController : IAsyncDisposable
 {
-    private readonly Func<ChannelViewModel, Task> start;
+    private readonly Func<ChannelViewModel, Task<bool>> start;
     private readonly Func<ChannelViewModel, Task> stop;
     private readonly SemaphoreSlim gate = new(1, 1);
     private readonly object sync = new();
@@ -16,7 +16,7 @@ public sealed class CardPttController : IAsyncDisposable
     private bool disposed;
 
     public CardPttController(
-        Func<ChannelViewModel, Task> start,
+        Func<ChannelViewModel, Task<bool>> start,
         Func<ChannelViewModel, Task> stop)
     {
         this.start = start ?? throw new ArgumentNullException(nameof(start));
@@ -87,9 +87,21 @@ public sealed class CardPttController : IAsyncDisposable
 
             if (shouldBeActive)
             {
-                await start(channel);
+                bool started = await start(channel);
                 lock (sync)
-                    active.Add(channel);
+                {
+                    if (started)
+                    {
+                        active.Add(channel);
+                    }
+                    else
+                    {
+                        // A rejected toggle (for example, while the channel is
+                        // receiving) must not require a second click merely to
+                        // clear an internal latch that never keyed the radio.
+                        latched.Remove(channel);
+                    }
+                }
             }
             else
             {

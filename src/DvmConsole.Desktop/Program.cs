@@ -49,7 +49,7 @@ internal static class Program
     internal static string? ReadConfigurationPath(IEnumerable<string> args)
     {
         ArgumentNullException.ThrowIfNull(args);
-        return args.FirstOrDefault(argument => !argument.StartsWith("-", StringComparison.Ordinal));
+        return args.FirstOrDefault(argument => !argument.StartsWith('-'));
     }
 
     private static void ValidateBuiltInVocoder()

@@ -92,6 +92,8 @@ internal sealed class TransmitCaptureLifecycle : IAsyncDisposable
         }
     }
 
+    public TransmitQueueHealth QueueHealth => framePacer.CaptureHealth();
+
     public async ValueTask StartAsync(CancellationToken cancellationToken = default)
     {
         await lifecycleGate.WaitAsync(cancellationToken).ConfigureAwait(false);

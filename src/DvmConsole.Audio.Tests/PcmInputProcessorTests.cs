@@ -6,6 +6,48 @@ namespace DvmConsole.Audio.Tests;
 public sealed class PcmInputProcessorTests
 {
     [Fact]
+    public void DefaultProcessingPreservesSamplesExactly()
+    {
+        var processor = new PcmInputProcessor();
+        short[] input = [short.MinValue, -12_345, -1, 0, 1, 12_345, short.MaxValue];
+        var output = new short[input.Length];
+
+        processor.Process(input, output);
+
+        Assert.Equal(input, output);
+    }
+
+    [Fact]
+    public void GainOnlyProcessingUsesOneBoundedPass()
+    {
+        var processor = new PcmInputProcessor(new AudioInputProcessingOptions { Gain = 2 });
+        short[] input = [-20_000, -1_000, 1_000, 20_000];
+        var output = new short[input.Length];
+
+        processor.Process(input, output);
+
+        Assert.Equal([short.MinValue, -2_000, 2_000, short.MaxValue], output);
+    }
+
+    [Fact]
+    public async Task DefaultCaptureProcessingForwardsTheOwnedSourceBuffer()
+    {
+        var source = new TestCapture();
+        await using var capture = new ProcessedAudioCapture(source);
+        ReadOnlyMemory<short> received = default;
+        capture.SamplesAvailable += (_, args) => received = args.Samples;
+
+        short[] samples = [100, -200, 300];
+        source.Emit(samples);
+
+        Assert.True(received.Span.SequenceEqual(samples));
+        Assert.True(System.Runtime.InteropServices.MemoryMarshal.TryGetArray(
+            received,
+            out ArraySegment<short> segment));
+        Assert.Same(samples, segment.Array);
+    }
+
+    [Fact]
     public void AppliesConfiguredGainAndKeepsSamplesBounded()
     {
         var processor = new PcmInputProcessor(new AudioInputProcessingOptions

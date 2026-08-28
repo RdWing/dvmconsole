@@ -26,6 +26,17 @@ public sealed class ChannelCardInputTests
     }
 
     [Fact]
+    public void DisabledPttAreaRemainsInteractiveForTheContainingCard()
+    {
+        var button = new Button { IsEnabled = false };
+        var guard = new Border { Child = button };
+        guard.Classes.Add("ptt-input-guard");
+        var card = new Border { Child = guard };
+
+        Assert.True(ChannelCardInput.IsInteractiveSource(guard, card));
+    }
+
+    [Fact]
     public void PlainCardContentIsNotInteractive()
     {
         var label = new TextBlock { Text = "Dispatch" };

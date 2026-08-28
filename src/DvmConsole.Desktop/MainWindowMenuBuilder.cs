@@ -1,6 +1,7 @@
 using Avalonia.Controls;
 using Avalonia.Interactivity;
 using Avalonia.Media;
+using DvmConsole.Audio;
 
 namespace DvmConsole.Desktop;
 
@@ -9,6 +10,28 @@ namespace DvmConsole.Desktop;
 // persisted codeplug/profile choices into a MenuItem.
 internal static class MainWindowMenuBuilder
 {
+    public static void ReplacePttKeyItems(
+        MenuItem menu,
+        string disabledHeader,
+        EventHandler<RoutedEventArgs> clickHandler)
+    {
+        ArgumentNullException.ThrowIfNull(menu);
+        ArgumentException.ThrowIfNullOrWhiteSpace(disabledHeader);
+        ArgumentNullException.ThrowIfNull(clickHandler);
+
+        menu.Items.Clear();
+        foreach (KeyboardPttKey key in Enum.GetValues<KeyboardPttKey>())
+        {
+            var item = new MenuItem
+            {
+                Header = key == KeyboardPttKey.None ? disabledHeader : key.ToString(),
+                Tag = key.ToString()
+            };
+            item.Click += clickHandler;
+            menu.Items.Add(item);
+        }
+    }
+
     public static void ReplaceItems(
         MenuItem menu,
         IEnumerable<string> entries,

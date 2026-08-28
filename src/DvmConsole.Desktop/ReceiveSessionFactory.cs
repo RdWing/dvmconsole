@@ -24,24 +24,6 @@ internal sealed class ReceiveSessionFactory
         this.samplesObserver = samplesObserver;
     }
 
-    public bool CanResolveEncryption(ChannelRuntimeDefinition definition)
-        => definition.Mode switch
-        {
-            "p25" => p25KeyResolver?.CanResolve(
-                definition.SystemName,
-                definition.EncryptionAlgorithm,
-                definition.EncryptionKeyId) == true,
-            "dmr" => dmrKeyResolver?.CanResolve(
-                definition.SystemName,
-                definition.EncryptionAlgorithm,
-                definition.EncryptionKeyId) == true,
-            "nxdn" => nxdnKeyResolver?.CanResolve(
-                definition.SystemName,
-                definition.EncryptionAlgorithm,
-                definition.EncryptionKeyId) == true,
-            _ => false
-        };
-
     public async ValueTask<StreamSessionState> CreateAsync(
         ChannelViewModel channel,
         ReceiveEpisodePlaybackPool playbackPool,
@@ -69,12 +51,8 @@ internal sealed class ReceiveSessionFactory
 
             if (activeVocoder is not null)
             {
-                VocoderMode mode = channel.Definition.Mode == "dmr"
-                    ? VocoderMode.DmrAmbe
-                    : channel.Definition.Mode == "nxdn"
-                        ? VocoderMode.NxdnAmbe
-                        : VocoderMode.P25Imbe;
-                vocoderSession = activeVocoder.CreateSession(mode);
+                vocoderSession = activeVocoder.CreateSession(
+                    ChannelProtocolMediaMapper.ToVocoderMode(channel.Definition.Protocol));
             }
 
             session = new ChannelReceiveAudioSession(
@@ -83,8 +61,7 @@ internal sealed class ReceiveSessionFactory
                 playback,
                 p25KeyResolver,
                 dmrKeyResolver,
-                nxdnKeyResolver,
-                channel);
+                nxdnKeyResolver);
             session.SetGain(gain);
             session.SetBalance(balance);
             vocoderSession = null;

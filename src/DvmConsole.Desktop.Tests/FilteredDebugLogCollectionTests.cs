@@ -106,6 +106,36 @@ public sealed class FilteredDebugLogCollectionTests
             changes);
     }
 
+    [Fact]
+    public void VisibleProjectionKeepsOnlyTheNewestMatchingRows()
+    {
+        var source = new ObservableCollection<DebugLogEntry>
+        {
+            Entry(DebugLogSeverity.Info, "oldest"),
+            Entry(DebugLogSeverity.Info, "middle")
+        };
+        using var filtered = new FilteredDebugLogCollection(source, maximumVisibleEntries: 2);
+
+        source.Add(Entry(DebugLogSeverity.Info, "newest"));
+
+        Assert.Equal(["newest", "middle"], filtered.Entries.Select(entry => entry.Message));
+    }
+
+    [Fact]
+    public void RetentionDoesNotRemoveAVisibleRowWhenTheEvictedMatchIsOutsideTheProjection()
+    {
+        DebugLogEntry oldest = Entry(DebugLogSeverity.Info, "oldest");
+        DebugLogEntry middle = Entry(DebugLogSeverity.Info, "middle");
+        DebugLogEntry newest = Entry(DebugLogSeverity.Info, "newest");
+        var source = new ObservableCollection<DebugLogEntry> { oldest, middle, newest };
+        using var filtered = new FilteredDebugLogCollection(source, maximumVisibleEntries: 2);
+
+        source.RemoveAt(0);
+        source.Add(Entry(DebugLogSeverity.Debug, "not visible"));
+
+        Assert.Equal(["newest", "middle"], filtered.Entries.Select(entry => entry.Message));
+    }
+
     private static DebugLogEntry Entry(DebugLogSeverity severity, string message)
         => new(DateTimeOffset.UnixEpoch, "Test", severity, message);
 }

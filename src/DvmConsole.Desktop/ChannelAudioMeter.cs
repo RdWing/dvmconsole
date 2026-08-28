@@ -6,34 +6,60 @@ public enum ChannelAudioDirection
     Transmit
 }
 
-// Converts 16-bit voice PCM into a visual-only card meter level. The tuning
-// matches the legacy console: decoded radio audio receives more display gain
-// than local microphone audio.
+public readonly record struct ChannelAudioMeterLevels(
+    double Rms,
+    double Peak);
+
+internal readonly record struct ChannelAudioMeterSample(
+    double MeanSquare,
+    double PeakAmplitude);
+
+// Maps 16-bit voice PCM onto one calibrated digital scale for both receive
+// and transmit. The visible range is -50 to 0 dBFS, so the nominal -25 dBFS
+// speech target sits at the center of the card meter.
 public static class ChannelAudioMeter
 {
-    private const double TransmitGain = 0.85;
-    private const double ReceiveGain = 3.8;
-    private const double RmsWeight = 0.72;
-    private const double PeakWeight = 0.28;
-    private const double NoiseFloor = 0.006;
+    internal const double MinimumDbfs = -50;
+    internal const double MaximumDbfs = 0;
+    internal const double YellowThresholdDisplayLevel = 76;
+    internal const double RedThresholdDisplayLevel = 88;
 
-    public static double Calculate(ReadOnlySpan<short> samples, ChannelAudioDirection direction)
+    public static ChannelAudioMeterLevels Measure(ReadOnlySpan<short> samples)
+        => Scale(Analyze(samples));
+
+    internal static ChannelAudioMeterSample Analyze(ReadOnlySpan<short> samples)
     {
         if (samples.IsEmpty)
-            return 0;
+            return default;
 
         double sumSquares = 0;
         double peak = 0;
         foreach (short sample in samples)
         {
-            double normalized = Math.Abs(sample / 32768d);
-            sumSquares += normalized * normalized;
-            peak = Math.Max(peak, normalized);
+            double amplitude = Math.Abs(sample / 32768d);
+            sumSquares += amplitude * amplitude;
+            peak = Math.Max(peak, amplitude);
         }
 
-        double rms = Math.Sqrt(sumSquares / samples.Length);
-        double blended = (rms * RmsWeight) + (peak * PeakWeight);
-        double gain = direction == ChannelAudioDirection.Receive ? ReceiveGain : TransmitGain;
-        return Math.Clamp((blended - NoiseFloor) * gain * 100, 0, 100);
+        return new ChannelAudioMeterSample(
+            sumSquares / samples.Length,
+            peak);
+    }
+
+    internal static ChannelAudioMeterLevels Scale(ChannelAudioMeterSample sample)
+        => new(
+            ToDisplayLevel(Math.Sqrt(Math.Max(0, sample.MeanSquare))),
+            ToDisplayLevel(sample.PeakAmplitude));
+
+    internal static double ToDisplayLevel(double amplitude)
+    {
+        if (!double.IsFinite(amplitude) || amplitude <= 0)
+            return 0;
+
+        double dbfs = 20 * Math.Log10(Math.Min(amplitude, 1));
+        return Math.Clamp(
+            (dbfs - MinimumDbfs) / (MaximumDbfs - MinimumDbfs) * 100,
+            0,
+            100);
     }
 }

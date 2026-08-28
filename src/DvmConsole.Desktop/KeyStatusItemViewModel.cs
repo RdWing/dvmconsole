@@ -1,3 +1,4 @@
+using DvmConsole.Core.Runtime;
 using DvmConsole.Media;
 
 namespace DvmConsole.Desktop;
@@ -23,8 +24,9 @@ public sealed record KeyStatusItemViewModel(
     {
         ArgumentNullException.ThrowIfNull(channel);
 
-        bool isDmr = channel.Definition.Mode == "dmr";
-        bool isNxdn = channel.Definition.Mode == "nxdn";
+        ChannelProtocol protocol = channel.Definition.Protocol;
+        bool isDmr = protocol == ChannelProtocol.Dmr;
+        bool isNxdn = protocol == ChannelProtocol.Nxdn;
         byte algorithmId;
         bool parsedAlgorithm = isDmr
             ? DmrKeyRing.TryParseAlgorithmId(channel.Definition.EncryptionAlgorithm, out algorithmId)
@@ -50,17 +52,17 @@ public sealed record KeyStatusItemViewModel(
         string keyIdText = parsedKeyId
             ? isDmr || isNxdn ? $"0x{keyId:X2}" : $"0x{keyId:X4}"
             : channel.Definition.EncryptionKeyId ?? "—";
-        bool available = channel.Definition.Mode switch
+        bool available = protocol switch
         {
-            "p25" => keyResolver?.CanResolve(
+            ChannelProtocol.P25 => keyResolver?.CanResolve(
                 channel.Definition.SystemName,
                 channel.Definition.EncryptionAlgorithm,
                 channel.Definition.EncryptionKeyId) == true,
-            "dmr" => dmrKeyResolver?.CanResolve(
+            ChannelProtocol.Dmr => dmrKeyResolver?.CanResolve(
                 channel.Definition.SystemName,
                 channel.Definition.EncryptionAlgorithm,
                 channel.Definition.EncryptionKeyId) == true,
-            "nxdn" => nxdnKeyResolver?.CanResolve(
+            ChannelProtocol.Nxdn => nxdnKeyResolver?.CanResolve(
                 channel.Definition.SystemName,
                 channel.Definition.EncryptionAlgorithm,
                 channel.Definition.EncryptionKeyId) == true,
@@ -68,10 +70,10 @@ public sealed record KeyStatusItemViewModel(
         };
         string statusText = !channel.Definition.IsEncrypted
             ? "Clear"
-            : channel.Definition.Mode is not ("p25" or "dmr" or "nxdn")
+            : !ChannelProtocolMediaMapper.RequiresVocoder(protocol)
                 ? "Unsupported protocol"
                 : available
-                    ? channel.Definition.Mode == "p25"
+                    ? protocol == ChannelProtocol.P25
                         ? DescribeAvailableKey(
                             keyResolver!,
                             channel.Definition.SystemName,
@@ -81,7 +83,7 @@ public sealed record KeyStatusItemViewModel(
                     : "Key unavailable";
         string configurationHint = available
             ? string.Empty
-            : DescribeLocalKeyRequirement(channel.Definition.Mode, parsedAlgorithm, algorithmId);
+            : DescribeLocalKeyRequirement(protocol, parsedAlgorithm, algorithmId);
 
         return new KeyStatusItemViewModel(
             channel.Definition.SystemName,
@@ -94,11 +96,11 @@ public sealed record KeyStatusItemViewModel(
     }
 
     private static string DescribeLocalKeyRequirement(
-        string protocol,
+        ChannelProtocol protocol,
         bool parsedAlgorithm,
         byte algorithmId)
     {
-        if (!parsedAlgorithm || protocol != "dmr")
+        if (!parsedAlgorithm || protocol != ChannelProtocol.Dmr)
             return string.Empty;
 
         int keyBytes;

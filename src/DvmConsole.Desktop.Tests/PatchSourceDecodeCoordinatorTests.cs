@@ -140,7 +140,7 @@ public sealed class PatchSourceDecodeCoordinatorTests
     }
 
     [Fact]
-    public async Task EnablesClearNxdnAndKeepsUnresolvedEncryptedSourcesInactive()
+    public async Task EnablesEncryptedSourcesWithoutKeysForClearPatchTraffic()
     {
         var vocoder = new FakeVocoderBackend();
         var nxdn = new ChannelViewModel(new ChannelConfiguration
@@ -167,8 +167,8 @@ public sealed class PatchSourceDecodeCoordinatorTests
         await coordinator.ApplyChannelsAsync([nxdn, encryptedP25]);
 
         Assert.True(coordinator.IsActive(nxdn));
-        Assert.False(coordinator.IsActive(encryptedP25));
-        Assert.Equal(1, vocoder.CreateSessionCalls);
+        Assert.True(coordinator.IsActive(encryptedP25));
+        Assert.Equal(2, vocoder.CreateSessionCalls);
     }
 
     [Fact]

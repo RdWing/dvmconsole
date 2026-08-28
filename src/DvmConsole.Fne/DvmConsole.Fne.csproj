@@ -1,6 +1,9 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <Nullable>disable</Nullable>
+    <!-- Upstream fnecore is pinned and reviewed at its own boundary; apply the
+         expanded analyzer baseline to application-owned projects only. -->
+    <AnalysisMode>None</AnalysisMode>
     <!-- The pinned upstream sources still use these legacy framework APIs. -->
     <NoWarn>$(NoWarn);CS0672;SYSLIB0003;SYSLIB0021;SYSLIB0023;SYSLIB0051</NoWarn>
     <EnableDefaultCompileItems>false</EnableDefaultCompileItems>

@@ -101,6 +101,10 @@ jobs:
         shell: bash
         run: dotnet restore dvmconsole.sln --force-evaluate --ignore-failed-sources -p:Configuration=Release -p:NuGetAudit=false --verbosity minimal
 
+      - name: Verify application-owned formatting
+        shell: bash
+        run: scripts/verify-format.sh
+
       - name: Run solution tests
         shell: bash
         run: dotnet test dvmconsole.sln --no-restore --configuration Release -p:UseSharedCompilation=false --logger "trx;LogFileName=${{ matrix.rid }}.trx"

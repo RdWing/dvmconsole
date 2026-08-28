@@ -97,13 +97,30 @@ internal sealed class MacCoreAudioCapture : IAudioCapture
                 if (count <= 0)
                     continue;
 
-                short[] samples = new short[count];
-                Array.Copy(buffer, samples, count);
-                if (rateConverter is not null)
-                    samples = rateConverter.Convert(samples);
-                if (samples.Length == 0)
+                if (rateConverter is null)
+                {
+                    short[] samples = buffer.AsSpan(0, count).ToArray();
+                    SamplesAvailable?.Invoke(this, new PcmSamplesEventArgs(samples));
                     continue;
-                SamplesAvailable?.Invoke(this, new PcmSamplesEventArgs(samples));
+                }
+
+                int maximumOutputSamples = rateConverter.GetMaximumOutputSampleCount(count);
+                if (maximumOutputSamples == 0)
+                {
+                    rateConverter.Convert(buffer.AsSpan(0, count), Span<short>.Empty);
+                    continue;
+                }
+
+                var converted = new short[maximumOutputSamples];
+                int convertedCount = rateConverter.Convert(
+                    buffer.AsSpan(0, count),
+                    converted);
+                if (convertedCount > 0)
+                {
+                    SamplesAvailable?.Invoke(
+                        this,
+                        new PcmSamplesEventArgs(converted.AsMemory(0, convertedCount)));
+                }
             }
         }
         catch (OperationCanceledException)
