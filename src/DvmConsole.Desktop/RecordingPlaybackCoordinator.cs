@@ -280,9 +280,36 @@ public sealed class RecordingPlaybackCoordinator : IAsyncDisposable
     }
 
     private void NotifyPlaybackStateChanged(string path, bool isPlaying)
-        => PlaybackStateChanged?.Invoke(
-            this,
-            new RecordingPlaybackStateChangedEventArgs(path, isPlaying));
+    {
+        EventHandler<RecordingPlaybackStateChangedEventArgs>? handlers = PlaybackStateChanged;
+        if (handlers is null)
+            return;
+
+        var eventArgs = new RecordingPlaybackStateChangedEventArgs(path, isPlaying);
+        foreach (EventHandler<RecordingPlaybackStateChangedEventArgs> handler in handlers.GetInvocationList())
+        {
+            try
+            {
+                handler(this, eventArgs);
+            }
+            catch (Exception exception)
+            {
+                ReportObserverFailure(exception);
+            }
+        }
+    }
+
+    private void ReportObserverFailure(Exception exception)
+    {
+        try
+        {
+            faultHandler?.Invoke(exception);
+        }
+        catch
+        {
+            // Diagnostics must not interrupt playback lifecycle cleanup.
+        }
+    }
 
     private IAudioBackend CreateBackend(out bool created)
     {

@@ -1,3 +1,4 @@
+using System.Buffers;
 using DvmConsole.Audio;
 
 namespace DvmConsole.Desktop;
@@ -49,12 +50,13 @@ internal static class GeneratedAudioMonitorSession
     }
 }
 
-// Presents the exact generated 8 kHz PCM sent to radio channels on the
-// operator's configured output. Transmission remains owned by
-// ToneTransmitCoordinator; this class owns only the local monitor stream.
+// Presents an attenuated copy of generated 8 kHz PCM on the operator's
+// configured output. Transmission remains owned by ToneTransmitCoordinator;
+// this class owns only the local monitor stream and never mutates its input.
 internal sealed class GeneratedAudioMonitor : IAsyncDisposable
 {
     private const int PlaybackChunkSamples = 1_600;
+    internal const double OutputGain = 0.70;
     private readonly Func<IAudioBackend> createAudioBackend;
     private readonly Func<string?> getOutputDeviceId;
     private readonly IAudioOutputRouteResolver outputRouteResolver;
@@ -96,13 +98,25 @@ internal sealed class GeneratedAudioMonitor : IAsyncDisposable
                 PcmAudioFormat.Voice8KhzMono16Bit);
 
             var pacer = new RealtimePcmPlaybackPacer(playback.Format);
-            for (int offset = 0; offset < samples.Length; offset += PlaybackChunkSamples)
+            short[] outputBuffer = ArrayPool<short>.Shared.Rent(PlaybackChunkSamples);
+            try
             {
-                await pacer.WaitBeforeWriteAsync(cancellationToken).ConfigureAwait(false);
-                int count = Math.Min(PlaybackChunkSamples, samples.Length - offset);
-                await playback.WriteAsync(samples.Slice(offset, count), cancellationToken)
-                    .ConfigureAwait(false);
-                pacer.ObserveWrittenSamples(count);
+                for (int offset = 0; offset < samples.Length; offset += PlaybackChunkSamples)
+                {
+                    await pacer.WaitBeforeWriteAsync(cancellationToken).ConfigureAwait(false);
+                    int count = Math.Min(PlaybackChunkSamples, samples.Length - offset);
+                    ApplyOutputGain(
+                        samples.Span.Slice(offset, count),
+                        outputBuffer.AsSpan(0, count));
+                    await playback.WriteAsync(
+                        outputBuffer.AsMemory(0, count),
+                        cancellationToken).ConfigureAwait(false);
+                    pacer.ObserveWrittenSamples(count);
+                }
+            }
+            finally
+            {
+                ArrayPool<short>.Shared.Return(outputBuffer);
             }
 
             int? queuedSamples = playback.QueuedSamples;
@@ -122,6 +136,16 @@ internal sealed class GeneratedAudioMonitor : IAsyncDisposable
         }
     }
 
+    private static void ApplyOutputGain(ReadOnlySpan<short> input, Span<short> output)
+    {
+        for (int index = 0; index < input.Length; index++)
+        {
+            output[index] = (short)Math.Round(
+                input[index] * OutputGain,
+                MidpointRounding.AwayFromZero);
+        }
+    }
+
     public async ValueTask DisposeAsync()
     {
         await gate.WaitAsync().ConfigureAwait(false);
@@ -134,7 +158,6 @@ internal sealed class GeneratedAudioMonitor : IAsyncDisposable
         finally
         {
             gate.Release();
-            gate.Dispose();
         }
     }
 }
