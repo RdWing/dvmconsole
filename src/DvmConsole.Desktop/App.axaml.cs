@@ -5,6 +5,7 @@ using Avalonia.Markup.Xaml;
 using Avalonia.Media;
 using Avalonia.Media.Imaging;
 using Avalonia.Threading;
+using DvmConsole.Core.Configuration;
 using DvmConsole.Core.Settings;
 
 namespace DvmConsole.Desktop;
@@ -140,81 +141,7 @@ public sealed class App : Application
     {
         try
         {
-            string outputDirectory = Path.GetFullPath(captureDirectory);
-            Directory.CreateDirectory(outputDirectory);
-            mainWindow.Show();
-            if (mainWindow.DataContext is not MainWindowViewModel viewModel)
-                throw new InvalidOperationException("The demo view model was not loaded.");
-
-            async Task CaptureMainAsync(
-                string fileName,
-                bool darkMode,
-                double width,
-                double height,
-                bool showEngineeringHealth)
-            {
-                viewModel.DarkMode = darkMode;
-                mainWindow.PrepareDemoCapture(width, height, showEngineeringHealth);
-                await WaitForRenderAsync();
-                SaveVisual(mainWindow, Path.Combine(outputDirectory, fileName));
-            }
-
-            await CaptureMainAsync(
-                "console-dark.png",
-                darkMode: true,
-                1260,
-                760,
-                showEngineeringHealth: false);
-            await CaptureMainAsync(
-                "console-light.png",
-                darkMode: false,
-                1260,
-                760,
-                showEngineeringHealth: false);
-            await CaptureMainAsync(
-                "console-narrow.png",
-                darkMode: true,
-                880,
-                560,
-                showEngineeringHealth: false);
-            await CaptureMainAsync(
-                "console-wide.png",
-                darkMode: true,
-                1800,
-                900,
-                showEngineeringHealth: false);
-            await CaptureMainAsync(
-                "console-engineering.png",
-                darkMode: true,
-                1260,
-                760,
-                showEngineeringHealth: true);
-
-            mainWindow.PrepareDemoCapture(
-                1260,
-                760,
-                showEngineeringHealth: false);
-            foreach ((string FileName, OperatorToolSection Section) capture in new[]
-                     {
-                         ("history.png", OperatorToolSection.History),
-                         ("settings.png", OperatorToolSection.General)
-                     })
-            {
-                var toolsWindow = new OperatorToolsWindow(viewModel, capture.Section)
-                {
-                    Width = 1180,
-                    Height = 780
-                };
-                toolsWindow.Show(mainWindow);
-                toolsWindow.InvalidateMeasure();
-                toolsWindow.UpdateLayout();
-                await WaitForRenderAsync();
-                SaveVisual(toolsWindow, Path.Combine(outputDirectory, capture.FileName));
-                toolsWindow.Close();
-                await Task.Delay(50);
-            }
-
-            Console.WriteLine($"Demo screenshots written to {outputDirectory}");
+            await CaptureDemoScreenshotsCoreAsync(mainWindow, captureDirectory);
             desktop.Shutdown(0);
         }
         catch (Exception exception)
@@ -222,6 +149,123 @@ public sealed class App : Application
             Console.Error.WriteLine($"Demo screenshot capture failed: {exception}");
             desktop.Shutdown(11);
         }
+    }
+
+    internal static async Task CaptureDemoScreenshotsCoreAsync(
+        MainWindow mainWindow,
+        string captureDirectory)
+    {
+        Console.WriteLine("Starting deterministic demo screenshot capture.");
+        string outputDirectory = Path.GetFullPath(captureDirectory);
+        Directory.CreateDirectory(outputDirectory);
+        mainWindow.Show();
+        Console.WriteLine("Demo main window opened for capture.");
+        if (mainWindow.DataContext is not MainWindowViewModel viewModel)
+            throw new InvalidOperationException("The demo view model was not loaded.");
+
+        async Task CaptureMainAsync(
+                string fileName,
+                bool darkMode,
+                double width,
+                double height,
+                bool showEngineeringHealth)
+        {
+            viewModel.DarkMode = darkMode;
+            mainWindow.PrepareDemoCapture(width, height, showEngineeringHealth);
+            await WaitForRenderAsync();
+            SaveVisual(mainWindow, Path.Combine(outputDirectory, fileName));
+        }
+
+        await CaptureMainAsync(
+                "console-dark.png",
+                darkMode: true,
+                1260,
+                760,
+                showEngineeringHealth: false);
+        await CaptureMainAsync(
+                "console-light.png",
+                darkMode: false,
+                1260,
+                760,
+                showEngineeringHealth: false);
+        await CaptureMainAsync(
+                "console-narrow.png",
+                darkMode: true,
+                880,
+                560,
+                showEngineeringHealth: false);
+        await CaptureMainAsync(
+                "console-wide.png",
+                darkMode: true,
+                1800,
+                900,
+                showEngineeringHealth: false);
+        await CaptureMainAsync(
+                "console-engineering.png",
+                darkMode: true,
+                1260,
+                760,
+                showEngineeringHealth: true);
+
+        mainWindow.PrepareDemoCapture(
+                1260,
+                760,
+                showEngineeringHealth: false);
+        foreach ((string FileName, OperatorToolSection Section) capture in new[]
+                     {
+                         ("history.png", OperatorToolSection.History),
+                         ("settings.png", OperatorToolSection.General)
+                     })
+        {
+            var toolsWindow = new OperatorToolsWindow(viewModel, capture.Section)
+            {
+                Width = 1180,
+                Height = 780
+            };
+            toolsWindow.Show(mainWindow);
+            toolsWindow.InvalidateMeasure();
+            toolsWindow.UpdateLayout();
+            await WaitForRenderAsync();
+            SaveVisual(toolsWindow, Path.Combine(outputDirectory, capture.FileName));
+            toolsWindow.Close();
+            await Task.Delay(50);
+        }
+
+        foreach ((string FileName, ConfigurationStudioSection Section) capture in new[]
+                     {
+                         ("configuration-studio-shell.png", ConfigurationStudioSection.Overview),
+                         ("configuration-studio-system.png", ConfigurationStudioSection.Systems),
+                         ("configuration-studio-zone.png", ConfigurationStudioSection.Zones),
+                         ("configuration-studio-groups.png", ConfigurationStudioSection.Groups),
+                         ("configuration-studio-encryption.png", ConfigurationStudioSection.EncryptionKeys)
+                     })
+        {
+            ConfigurationStudioWindow studio = mainWindow.CreateConfigurationStudioForCapture(capture.Section);
+            studio.Show(mainWindow);
+            studio.InvalidateMeasure();
+            studio.UpdateLayout();
+            await WaitForRenderAsync();
+            SaveVisual(studio, Path.Combine(outputDirectory, capture.FileName));
+
+            if (capture.Section == ConfigurationStudioSection.Overview)
+            {
+                ConfigurationSavePlan plan = studio.StudioViewModel.CreateSavePlan(
+                    studio.StudioViewModel.Document.SourcePath!);
+                OperatorDialogParts review = OperatorDialogFactory.CreateConfirmation(
+                    "Review & Save",
+                    studio.StudioViewModel.BuildReviewText(plan),
+                    "Save");
+                review.Window.Show(studio);
+                await WaitForRenderAsync();
+                SaveVisual(review.Window, Path.Combine(outputDirectory, "configuration-studio-review.png"));
+                review.Window.Close();
+            }
+
+            studio.CloseForSessionReplacement();
+            await Task.Delay(50);
+        }
+
+        Console.WriteLine($"Demo screenshots written to {outputDirectory}");
     }
 
     private static async Task WaitForRenderAsync()

@@ -123,6 +123,7 @@ internal sealed class UserSettingsNormalizationPipeline
         settings.PatchGroupMemberships = memberships;
         settings.PatchGroupModes = UserSettingsNormalizationRules.NormalizeGroupStates(settings.PatchGroupModes);
         settings.PatchGroupEnabledStates = UserSettingsNormalizationRules.NormalizeGroupStates(settings.PatchGroupEnabledStates);
+        settings.CodeplugGroupStates = NormalizeCodeplugGroupStates(settings.CodeplugGroupStates);
         settings.SelectedWebStreams = UserSettingsNormalizationRules.NormalizeNames(settings.SelectedWebStreams);
         return settings;
     }
@@ -170,5 +171,60 @@ internal sealed class UserSettingsNormalizationPipeline
         settings.ReceiveEnabledChannelKeys = UserSettingsNormalizationRules.NormalizeNames(settings.ReceiveEnabledChannelKeys);
         settings.TransmitSelectedChannelKeys = UserSettingsNormalizationRules.NormalizeNames(settings.TransmitSelectedChannelKeys);
         settings.ChannelWidgetPositions = UserSettingsNormalizationRules.NormalizeWidgetPositions(settings.ChannelWidgetPositions);
+        settings.CodeplugGroupStates = NormalizeCodeplugGroupStates(settings.CodeplugGroupStates);
+    }
+
+    private static Dictionary<string, CodeplugGroupState> NormalizeCodeplugGroupStates(
+        Dictionary<string, CodeplugGroupState>? states)
+    {
+        var normalized = new Dictionary<string, CodeplugGroupState>(StringComparer.OrdinalIgnoreCase);
+        foreach (KeyValuePair<string, CodeplugGroupState> entry in states ?? [])
+        {
+            if (string.IsNullOrWhiteSpace(entry.Key) || entry.Value is null)
+                continue;
+
+            string path;
+            try
+            {
+                path = CodeplugGroupStateStore.NormalizePath(entry.Key);
+            }
+            catch (Exception exception) when (exception is ArgumentException or NotSupportedException or PathTooLongException)
+            {
+                continue;
+            }
+
+            CodeplugGroupState state = entry.Value;
+            var memberships = new Dictionary<string, List<PatchMemberSetting>>(StringComparer.OrdinalIgnoreCase);
+            foreach (KeyValuePair<string, List<PatchMemberSetting>> membership in state.Memberships ?? [])
+            {
+                string groupName = membership.Key?.Trim() ?? string.Empty;
+                if (groupName.Length == 0)
+                    continue;
+                memberships[groupName] = (membership.Value ?? [])
+                    .Where(member => member is not null &&
+                                     !string.IsNullOrWhiteSpace(member.SystemName) &&
+                                     member.DestinationId != 0)
+                    .Select(member => new PatchMemberSetting
+                    {
+                        SystemName = member.SystemName.Trim(),
+                        DestinationId = member.DestinationId,
+                        ChannelName = string.IsNullOrWhiteSpace(member.ChannelName) ? null : member.ChannelName.Trim()
+                    })
+                    .GroupBy(member => new Runtime.PatchMemberAddress(
+                        member.SystemName,
+                        member.DestinationId,
+                        member.ChannelName).Key)
+                    .Select(group => group.First())
+                    .ToList();
+            }
+
+            normalized[path] = new CodeplugGroupState
+            {
+                Memberships = memberships,
+                OneWayModes = UserSettingsNormalizationRules.NormalizeGroupStates(state.OneWayModes),
+                EnabledStates = UserSettingsNormalizationRules.NormalizeGroupStates(state.EnabledStates)
+            };
+        }
+        return normalized;
     }
 }

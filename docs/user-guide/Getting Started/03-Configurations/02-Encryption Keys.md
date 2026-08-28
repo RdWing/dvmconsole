@@ -8,6 +8,16 @@ the console requests every configured P25 algorithm and key ID through KMM. A
 valid key from that FNE takes precedence over the local YAML fallback. DMR and
 NXDN privacy keys come from the local YAML file.
 
+Open **File > Configuration Studio > Encryption Keys** to edit the referenced
+local key file. The table shows protocol, algorithm ID, key ID, masked material,
+and validation status. The inspector never displays key material as plain text.
+
+![Encryption key editor](../../Assets/configuration-studio-encryption.png)
+
+The page edits local YAML keys only. FNE/KMM availability is runtime status and
+cannot be written back to the file. Use **Tools > Encryption Key Status** when
+you need to see whether the running console has a local or KMM-delivered key.
+
 Keys are isolated by FNE system. Two systems can use the same algorithm and key
 ID with different material. KMM-delivered keys stay in memory only. When the
 system disconnects, DVM Console removes them and uses the local fallback again.

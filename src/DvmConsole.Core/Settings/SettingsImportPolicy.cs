@@ -57,7 +57,8 @@ internal static class SettingsImportPolicy
         if (settings.RecordingRetentionDays != 7 || !string.IsNullOrWhiteSpace(settings.RecordingRootPath) ||
             settings.RecordingEnabledChannelKeys.Count > 0 || settings.RecordingIgnoredSubscriberIds.Count > 0 ||
             settings.PatchGroupMemberships.Count > 0 || settings.PatchGroupModes.Count > 0 ||
-            settings.PatchGroupEnabledStates.Count > 0 || settings.RetainPatchStateOnStartup)
+            settings.PatchGroupEnabledStates.Count > 0 || settings.CodeplugGroupStates.Count > 0 ||
+            settings.RetainPatchStateOnStartup)
         {
             sections.Add("Recording/patch");
         }
@@ -184,6 +185,11 @@ internal static class SettingsImportPolicy
                     StringComparer.OrdinalIgnoreCase);
             target.PatchGroupModes = new Dictionary<string, bool>(source.PatchGroupModes, StringComparer.OrdinalIgnoreCase);
             target.PatchGroupEnabledStates = new Dictionary<string, bool>(source.PatchGroupEnabledStates, StringComparer.OrdinalIgnoreCase);
+            target.CodeplugGroupStates = source.CodeplugGroupStates.ToDictionary(
+                entry => entry.Key,
+                entry => entry.Value.Clone(),
+                StringComparer.OrdinalIgnoreCase);
+            target.LegacyPatchGroupStateMigrated = source.LegacyPatchGroupStateMigrated;
             target.RetainPatchStateOnStartup = source.RetainPatchStateOnStartup;
         }
 

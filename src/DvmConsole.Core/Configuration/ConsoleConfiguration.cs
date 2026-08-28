@@ -90,6 +90,8 @@ public sealed class SystemConfiguration
 
     [YamlIgnore]
     public RadioAliasIndex AliasIndex { get; internal set; } = RadioAliasIndex.Empty;
+
+    public override string ToString() => Name;
 }
 
 public sealed class ZoneConfiguration

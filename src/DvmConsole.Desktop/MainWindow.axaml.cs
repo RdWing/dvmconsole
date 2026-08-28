@@ -7,6 +7,7 @@ using Avalonia.Platform.Storage;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
 using DvmConsole.Audio;
+using DvmConsole.Core.Configuration;
 using DvmConsole.Core.Settings;
 using DvmConsole.FneClient;
 using System.Collections.Specialized;
@@ -29,6 +30,7 @@ public sealed partial class MainWindow : Window
     private MainWindowViewModel viewModel => sessionHost.ViewModel;
     private CardPttController cardPtt => sessionHost.CardPtt;
     private OperatorToolsWindow? operatorToolsWindow;
+    private ConfigurationStudioWindow? configurationStudioWindow;
     private DebugLogWindow? debugLogWindow;
     private DocumentationWindow? documentationWindow;
     private AboutWindow? aboutWindow;
@@ -580,6 +582,11 @@ public sealed partial class MainWindow : Window
 
     private async Task OpenCodeplugAsync(string path)
     {
+        if (configurationStudioWindow is { } studio &&
+            !await studio.ConfirmSessionReplacementAsync())
+            return;
+        configurationStudioWindow = null;
+
         MainWindowViewModel replacement;
         try
         {
@@ -602,6 +609,67 @@ public sealed partial class MainWindow : Window
         }
 
         await ReplaceViewModelAsync(replacement);
+    }
+
+    private async void HandleNewConfigurationClick(object? sender, RoutedEventArgs e)
+        => await OpenConfigurationStudioAsync(ConfigurationStudioSection.Overview, createNew: true);
+
+    private async void HandleConfigurationStudioClick(object? sender, RoutedEventArgs e)
+        => await OpenConfigurationStudioAsync(ConfigurationStudioSection.Overview, createNew: false);
+
+    private async void HandleConfigurationGroupsClick(object? sender, RoutedEventArgs e)
+        => await OpenConfigurationStudioAsync(ConfigurationStudioSection.Groups, createNew: false);
+
+    private async Task OpenConfigurationStudioAsync(
+        ConfigurationStudioSection section,
+        bool createNew)
+    {
+        if (configurationStudioWindow is not null)
+        {
+            configurationStudioWindow.SelectSection(section);
+            return;
+        }
+
+        await viewModel.FlushUserSettingsAsync();
+        ConfigurationDocument document;
+        try
+        {
+            string? path = viewModel.CurrentCodeplugPath;
+            document = createNew || string.IsNullOrWhiteSpace(path)
+                ? ConfigurationDocument.CreateNew()
+                : ConfigurationDocument.Open(path);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or InvalidDataException or YamlDotNet.Core.YamlException)
+        {
+            await ShowInformationAsync("Unable to open Configuration Studio", exception.Message);
+            return;
+        }
+
+        configurationStudioWindow = new ConfigurationStudioWindow(
+            document,
+            viewModel,
+            sessionUserSettingsStore,
+            section);
+        AttachPttInputSafety(configurationStudioWindow);
+        configurationStudioWindow.ReloadRequested += OpenCodeplugAsync;
+        configurationStudioWindow.Closed += (_, _) => configurationStudioWindow = null;
+        configurationStudioWindow.Show(this);
+    }
+
+    internal ConfigurationStudioWindow CreateConfigurationStudioForCapture(
+        ConfigurationStudioSection section)
+    {
+        string path = viewModel.CurrentCodeplugPath
+            ?? throw new InvalidOperationException("A loaded demo codeplug is required for Studio capture.");
+        return new ConfigurationStudioWindow(
+            ConfigurationDocument.Open(path),
+            viewModel,
+            sessionUserSettingsStore,
+            section)
+        {
+            Width = 1380,
+            Height = 850
+        };
     }
 
     private void RefreshRecentCodeplugMenu()
@@ -843,6 +911,10 @@ public sealed partial class MainWindow : Window
 
     private void CloseModelessViewModelWindows()
     {
+        ConfigurationStudioWindow? studio = configurationStudioWindow;
+        configurationStudioWindow = null;
+        studio?.CloseForSessionReplacement();
+
         OperatorToolsWindow? tools = operatorToolsWindow;
         operatorToolsWindow = null;
         tools?.Close();

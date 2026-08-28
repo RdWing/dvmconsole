@@ -24,6 +24,11 @@ systems:
 If no alias file is configured or the file is unavailable, DVM Console shows
 numeric RIDs.
 
+Configuration Studio lists alias paths and their tables under **Files &
+Interoperability**. You can add, edit, and remove RID aliases without opening
+the referenced YAML by hand. Saving includes a changed alias file in the same
+review and backup transaction as the codeplug.
+
 ---
 
 # Alias file format

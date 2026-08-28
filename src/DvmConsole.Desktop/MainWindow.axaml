@@ -60,6 +60,9 @@
       <Grid ColumnDefinitions="Auto,*,Auto,Auto">
         <Menu Grid.Column="0" Background="Transparent" Foreground="{DynamicResource PrimaryTextBrush}">
           <MenuItem Header="File">
+            <MenuItem Header="New Configuration…" Click="HandleNewConfigurationClick" />
+            <MenuItem Header="Configuration Studio…" Click="HandleConfigurationStudioClick" />
+            <Separator />
             <MenuItem Header="Open Codeplug…" Click="HandleOpenCodeplugClick" />
             <MenuItem Header="Open Recent" x:Name="recentCodeplugsMenu" />
             <MenuItem Header="Import Settings…" Click="HandleImportSettingsClick" />
@@ -124,7 +127,7 @@
             <MenuItem Header="Reset widget layout" Click="HandleResetLayoutClick" />
             <Separator />
             <MenuItem Header="History…" Tag="settings.history" Click="HandleOperatorCommandClick" />
-            <MenuItem Header="Groups…" Tag="settings.groups" Click="HandleOperatorCommandClick" />
+            <MenuItem Header="Groups…" Click="HandleConfigurationGroupsClick" />
             <MenuItem Header="Debug Logs…" Tag="view.debug-logs" Click="HandleOperatorCommandClick" />
             <MenuItem x:Name="engineeringHealthMenuItem"
                       Header="Engineering Health"

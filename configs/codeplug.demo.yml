@@ -1,6 +1,8 @@
 # Deterministic, fictional, network-disabled DVM Console NEO demonstration.
 # This file is not an operational codeplug and contains no real credentials,
 # systems, talkgroups, subscribers, addresses, or recordings.
+keyFile: "keys.clear"
+
 systems:
   - name: "North Metro"
     identity: "NEO Demo A"
@@ -11,6 +13,7 @@ systems:
     password: "DEMO_ONLY"
     encrypted: false
     presharedKey: "DEMO_ONLY"
+    aliasPath: "aliases.yml"
   - name: "Campus Network"
     identity: "NEO Demo B"
     address: "198.51.100.20"
@@ -20,6 +23,7 @@ systems:
     password: "DEMO_ONLY"
     encrypted: false
     presharedKey: "DEMO_ONLY"
+    aliasPath: "aliases.yml"
 
 groups:
   - name: "Shared Operations"

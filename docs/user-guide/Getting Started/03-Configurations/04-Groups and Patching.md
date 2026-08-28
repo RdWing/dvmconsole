@@ -1,6 +1,6 @@
 # Groups and patching
 
-Manage patch and multi-select groups from Console Settings.
+Manage patch and multi-select groups in Configuration Studio.
 
 Open it from:
 
@@ -8,8 +8,16 @@ Open it from:
 View > Groups
 ```
 
-The codeplug defines the groups. The operator assigns their members in DVM
-Console.
+**View > Groups** opens Studio on the Groups page. The codeplug stores each
+group's name and type. DVM Console stores membership, one-way direction, source
+order, and enabled state in operator settings under the codeplug's normalized
+path. Two codeplugs can use the same group name without sharing state.
+
+![Groups page](../../Assets/configuration-studio-groups.png)
+
+When Studio is editing the active codeplug, enable controls and multi-select PTT
+remain operational. They take effect immediately. Those controls are disabled
+for a new, inactive, or unsaved codeplug.
 
 ---
 
@@ -52,13 +60,8 @@ When a patch is enabled:
 
 Patch membership always persists across restarts.
 
-The active state is restored only when this setting is enabled:
-
-```
-Settings > Retain Patch State on Startup
-```
-
-is enabled.
+The active state is restored only when **Settings > Retain Patch State on
+Startup** is enabled.
 
 If the setting is off, patches start disabled after a restart but retain their
 members.
@@ -95,7 +98,8 @@ Member 1 = Source
 Members 2+ = Destinations
 ```
 
-Change the **Source** selector and save the group to route the patch in the other direction.
+Change the **Source** selector and save the group to route the patch in the
+other direction.
 
 ---
 
@@ -104,7 +108,8 @@ Change the **Source** selector and save the group to route the patch in the othe
 A multi-select group lets an operator transmit to several member resources at
 once with **Multi-Select PTT**.
 
-Unlike a patch group, a multi-select group does not forward received audio between members.
+Unlike a patch group, a multi-select group does not forward received audio
+between members.
 
 Use multi-select to key several resources together from the console.
 
@@ -119,15 +124,19 @@ To edit a group:
 3. Expand **Edit members** and check each channel that should be a member.
 4. For a patch, select **Enabled** and **One-way** as required.
 5. For a one-way patch, choose the source. The other selected members are destinations.
-6. Select **Save group**.
+6. Select **Apply operator state**.
+7. Use **Review & Save** to write the membership and direction changes.
 
 DVM Console shows a conflict warning when a channel assignment cannot be used
 safely. Resolve the conflict before using the group.
 
-Saving a group immediately replaces its active patch-source membership. If a
-save overlaps an enable or disable action, DVM Console applies only the newest
-membership request. Deselected members leave the editor and forwarding path
-without an application restart.
+Applying operator state stages membership and direction in the Studio draft.
+Group definition changes, including a rename or deletion, also wait for Review
+& Save. The review includes the matching operator-settings rename or removal.
+
+An **Enabled** change still takes effect on the active console immediately. It
+uses the last saved membership until the draft is saved and the codeplug is
+reloaded.
 
 ---
 
@@ -145,7 +154,8 @@ not clip the final audio frames.
 
 Resource cards show an indicator for patch or multi-select membership.
 
-If a resource belongs to both a patch and a multi-select group, the multi-select indicator takes priority in the card indicator area.
+If a resource belongs to both a patch and a multi-select group, the multi-select
+indicator takes priority in the card indicator area.
 
 ---
 
@@ -155,7 +165,7 @@ If a resource belongs to both a patch and a multi-select group, the multi-select
 | --- | --- | --- |
 | Patch members | Yes | Always sticky |
 | Patch enabled state | No | Only sticky when Retain Patch State on Startup is enabled |
-| Multi-select members | Yes | Managed from the Groups window |
+| Multi-select members | Yes | Stored for the current codeplug path |
 | Edit mode | No | Clears when editing stops or the Groups window closes |
 
 ---

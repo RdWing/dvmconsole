@@ -40,7 +40,7 @@ adjust the main console and Console Settings display.
 - **Text size** changes the inherited application font size.
 - **Interface scale** scales the main console and Console Settings UI.
 
-These settings apply immediately and are stored in `UserSettings` schema 6. The
+These settings apply immediately and are stored in `UserSettings` schema 7. The
 optional Engineering Health rail stores only its visibility and height in
 `OperatorView.json`. It does not move or rewrite channel cards.
 

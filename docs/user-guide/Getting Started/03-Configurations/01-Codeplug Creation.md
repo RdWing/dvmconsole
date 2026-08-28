@@ -1,270 +1,150 @@
-# Codeplug creation
+# Configuration Studio and codeplugs
 
-A codeplug is a YAML file that defines the console's systems, tabs, resources,
-and group tabs.
+Configuration Studio edits the same YAML codeplug that DVM Console already
+loads. You can still use the file with compatible versions or maintain it by
+hand. Studio keeps your changes in a draft until you review and save them.
 
-At minimum, a codeplug defines:
+Open the current codeplug from:
 
-- `systems`
-- `zones`
-
-Common optional sections include:
-
-- `groups`
-- `keyFile`
-- `patchSourceIdPassthrough`
-- `web_streams` under a zone
-
----
-
-# Compatibility
-
-The Avalonia application preserves the current YAML contract and accepts the legacy `patchGroups` key. Review older codeplugs before use because unsupported or misspelled values can still produce a valid YAML file with incorrect operator behavior.
-
----
-
-# Basic structure
-
-```yaml
-keyFile: "Full/Path/To/Keyfile.clear"
-
-systems:
-  - ...
-
-groups:
-  - ...
-
-patchSourceIdPassthrough: false
-
-zones:
-  - ...
+```
+File > Configuration Studio
 ```
 
----
+To start a new file, choose **File > New Configuration**. The Studio is a
+separate, modeless window, so you can refer to the main console while editing.
+Opening a Studio section again brings the existing window forward.
 
-# Systems
+![Configuration Studio shell](../../Assets/configuration-studio-shell.png)
 
-Each system defines an FNE connection.
+## Finding and editing configuration
 
-Example:
+The left side lists the available sections and searches section names and
+configured items. Most editors use the same layout:
 
-```yaml
-systems:
-  - name: "System 1"
-    identity: "Console 1"
-    address: "fne.example.local"
-    port: 62031
-    peerId: 1000001
-    rid: "1001"
-    password: "RPT_PASSWORD"
-    encrypted: false
-    presharedKey: "123ABC1234"
-    aliasPath: "Full/Path/To/alias.yml"
-```
+- The center table shows many records at once.
+- The inspector on the right edits the selected record.
+- Add, duplicate, delete, and reorder controls sit beside the table they affect.
+- The status bar reports errors and warnings for the whole draft.
 
-Fields:
+An error prevents saving. A warning calls attention to a usable but potentially
+unsafe value, such as an unencrypted HTTP stream.
 
-- `name`: internal system name. Channels reference this value.
-- `identity`: peer identity shown to the FNE.
-- `address`: FNE hostname or IP address.
-- `port`: FNE port.
-- `peerId`: peer ID used for the console connection.
-- `rid`: radio ID used when the console transmits and when it requests configured P25 keys through FNE/KMM.
-- `password`: FNE password.
-- `encrypted`: whether the FNE connection uses transport encryption.
-- `presharedKey`: key used when `encrypted` is enabled.
-- `aliasPath`: optional RID alias YAML file.
+Undo and redo cover draft edits. Closing a changed draft asks before discarding
+it.
 
-The current plaintext and legacy encrypted FNE transports are compatibility
-protocols, not mutually authenticated sessions. DVM Console rejects malformed
-frames and exact encrypted packet replays within a bounded receive window. The
-transport still cannot prove the master's identity or detect every forged
-packet. Use FNE only over a trusted network or authenticated VPN.
+## Systems
 
----
+The FNE Systems page covers the connection name, identity, address, port, peer
+ID, console RID, password, transport encryption, transport mode, transport
+preshared key, KMF preshared key, and RID alias path.
 
-# Zones
+Passwords and preshared keys stay masked. Validation messages name the field but
+never include its value.
 
-Each zone becomes a tab in the main console.
+![FNE system inspector](../../Assets/configuration-studio-system.png)
 
-Example:
+The FNE transport is a compatibility protocol. Use it on a trusted network or
+an authenticated VPN. Enabling transport encryption requires a transport
+preshared key. The KMF preshared key has a separate purpose and is not reused as
+the transport key.
 
-```yaml
-zones:
-  - name: "Primary"
-    tabColor: "#E57373"
-    tabTextColor: "#000000"
-    channels:
-      - ...
-```
+## Zones and channels
 
-Fields:
+Select a zone above the channel table. Channel fields include system,
+destination ID, mode, DMR slot, algorithm, key ID, selectable encryption,
+receive-only state, resource color, and card size. The valid card sizes are
+`small`, `normal`, and `large`.
 
-- `name`: tab label.
-- `tabColor`: tab background color in hex.
-- `tabTextColor`: tab text color in hex.
-- `channels`: resources shown on that tab.
-- `web_streams`: optional web URL stream chips shown on that tab.
+Select several channel rows to apply the current card size or change their
+receive-only state together.
 
-Long tab names are allowed. DVM Console trims their labels so activity icons
-remain visible.
+The preview below the table uses the current theme and the established channel
+card sizes. Preview buttons are disabled. Selecting a row selects its card, and
+dragging a card saves its layout in operator settings. This does not change the
+main console until the saved codeplug is reloaded.
 
----
+![Zone editor and card preview](../../Assets/configuration-studio-zone.png)
 
-# Channels
+The main operator workspace keeps its existing card layout and controls.
+Configuration Studio is the place to edit definitions and prepare a layout.
 
-Each channel defines a resource card.
+## Web streams
 
-Example:
+The Web Streams page shows streams from every zone in one table. The owning zone
+is still explicit. Moving a stream to another zone changes where its
+`web_streams` entry is written.
 
-```yaml
-channels:
-  - name: "Channel 1"
-    system: "System 1"
-    tgid: "2001"
-    mode: "p25"
-    keyId: 0x50
-    algo: "aes"
-    selectable_encryption: true
-    resourceColor: "#150282"
-    rx_only: false
-    card_size: normal
-```
+Each stream has a name, URL, optional Basic Auth username and password, and idle
+color. Use a direct HTTP or HTTPS audio URL. HTTPS is preferred. Stream
+credentials are stored in the codeplug, so protect the file accordingly.
 
-Fields:
+Web streams are local monitor widgets. They cannot be patch or multi-select
+members.
 
-- `name`: resource/card name.
-- `system`: system name from the `systems` section.
-- `tgid`: target talkgroup ID.
-- `mode`: `p25`, `dmr`, `nxdn`, or `analog`. If omitted, P25 is used. NXDN is the 4800-baud voice mode; NXDN 9600/EFR is not implemented in dvmhost.
-- `keyId`: optional encryption key ID. P25 values are hexadecimal; use an
-  `0x` prefix for clarity. Unprefixed P25 values remain hexadecimal for
-  compatibility with WPF-era codeplugs.
-- `algo`: optional encryption algorithm, such as `aes`, `des`, `arc4`, or `none`.
-- `selectable_encryption`: optional flag for P25, DMR, or NXDN secure-capable resources. When `true`, the card shows a **SELECT** toggle so operators can choose encrypted or clear transmit. This requires a valid `keyId` and `algo`.
-- `resourceColor`: optional resource card color in hex.
-- `rx_only`: optional receive-only flag. When `true`, the resource card hides PTT, alert tone select, and channel marker/hold controls, and the resource is skipped by global, patch/group, and alert-tone transmit target paths.
-- `card_size`: optional fixed resource card size. Supported values are `small`, `normal`, and `large`. If omitted or invalid, `normal` is used.
-- `slot`: optional DMR slot field if used by the deployment.
+## Review and save
 
-Before transmitting or otherwise using a target TG, DVM Console checks it
-against the active talkgroup rules received from the connected FNE.
+Select **Review & Save** when the draft is ready. The review lists each file
+that will change, including the codeplug, referenced key or alias files, and
+operator settings.
 
-Card size behavior:
+![Review and save](../../Assets/configuration-studio-review.png)
 
-- `small`: compact status/PTT card. The volume slider, alert tone select, channel marker, and call history buttons are hidden.
-- `normal`: default resource card size and layout.
-- `large`: larger resource card with larger text and controls.
+Studio performs these checks before replacing a file:
 
----
+1. It validates the complete draft and its cross-references.
+2. It compares the current file with the hash recorded when the draft opened.
+3. It stages and validates every changed file.
+4. It creates restricted backups under the DVM Console application data folder.
+5. It replaces the originals. If a later replacement fails, it restores files
+   that were already replaced.
 
-# Web streams
+If another program changed a source file, Studio does not overwrite it. Save the
+draft as a copy, or close and reopen Studio to load the external edit.
 
-Web streams appear as compact audio chips on a zone tab.
+Saving an active codeplug does not change a running FNE session. After the save,
+choose **Disconnect and reload** to use the new topology, or leave the session
+alone and reload later.
 
-Example:
+## Full and sanitized exports
 
-```yaml
-web_streams:
-  - name: "Stream 1"
-    url: "https://streams.example.local/stream-1"
-    authUsername: "stream-user"
-    authPassword: "stream-password"
-    idleColor: "#150282"
-```
+Files & Interoperability has two export choices:
 
-Fields:
+- A full interoperable copy includes credentials, operational addresses, stream
+  URLs, identifiers, and references to local key material. Treat it as a
+  secret.
+- A sanitized support copy removes those values and is suitable for attaching
+  to a troubleshooting report.
 
-- `name`: stream chip label. Keep names unique because saved position, volume, active startup state, and output routing are keyed by name.
-- `url`: direct HTTP or HTTPS audio stream URL. WAV and MP3 are supported by the built-in decoder. Other formats require a compatible FFmpeg executable selected with `DVM_FFMPEG`.
-- `authUsername`: optional HTTP Basic Auth username for protected streams.
-- `authPassword`: optional HTTP Basic Auth password for protected streams.
-- `idleColor`: optional active-idle chip color in hex. If omitted, the standard selected-resource blue is used.
+Review the sanitized copy before sharing it. Site-specific names may still be
+meaningful even after credentials and identifiers are removed.
 
-Web stream chips start disabled after console load. Click the chip to start or stop local playback.
+## YAML interoperability
 
-With **Restore Selected Channels On Startup** enabled, DVM Console restarts a
-web stream only when its codeplug path, canonical URL, and credentials match the
-stream the operator previously started. After any of those values change, start
-the stream once manually to authorize the new definition. Legacy selections
-saved by name alone remain off until selected again.
+Studio writes the same codeplug fields used by DVM Console's runtime loader. It
+does not put group membership, direction, source order, or enabled state into
+the codeplug. Older compatible DVM Console versions can therefore load files
+saved by Studio.
 
-Basic Auth credentials are stored in the codeplug. Protect the file when it
-contains stream credentials.
+Unmatched mapping fields, including legacy fields ignored by the current typed
+model, are retained while their containing record remains in the draft. Studio
+uses canonical formatting for edited sections. Comments and hand formatting in
+those sections may change.
 
-After you click it, the chip turns amber while connecting. DVM Console makes up
-to three attempts, with a short delay between them, before marking the stream
-down.
+YAML anchors, aliases, custom tags, duplicate keys, and multi-document files
+cannot be rewritten safely. Studio opens such files read-only. Maintain those
+constructs by hand or save a compatible copy without them.
 
-An active chip turns green when DVM Console detects audio. If the URL is
-unreachable or the audio cannot be decoded, the chip turns red and shows
-`Down`. Click a down stream once to turn it off.
+Legacy `patchGroups` entries still load. Studio writes group definitions under
+`groups` when it rewrites that section.
 
-Web streams are local monitor widgets only. They are not patch or multi-select members.
+## Manual YAML reference
 
----
-
-# Groups
-
-Each group defines a tab in the Groups window.
-
-Example:
+A codeplug has `systems` and `zones` lists. Common optional fields are `groups`,
+`keyFile`, and `patchSourceIdPassthrough`. Streams remain under their owning
+zone as `web_streams`.
 
 ```yaml
-groups:
-  - name: "Patch 1"
-    type: "patch"
-  - name: "Multi Select 1"
-    type: "multiselect"
-```
-
-Fields:
-
-- `name`: group tab label.
-- `type`: `patch` or `multiselect`.
-
-Group memberships are assigned in the Groups window, not in the codeplug.
-
-Patch group members persist across restart. Patch active state is separate and only persists when **Settings > Retain Patch State on Startup** is enabled.
-
-Legacy `patchGroups` entries are treated as patch groups for compatibility.
-
----
-
-# Patch source ID passthrough
-
-`patchSourceIdPassthrough` selects the source ID used for forwarded patch
-traffic.
-
-```yaml
-patchSourceIdPassthrough: false
-```
-
-When `false`, forwarded patch traffic uses the configured console RID for the destination system.
-
-When `true`, the console attempts to pass through the inbound source ID while forwarding patch audio.
-
----
-
-# Key file
-
-Use `keyFile` to reference a YAML key file:
-
-```yaml
-keyFile: "Full/Path/To/Keyfile.clear"
-```
-
-The file provides the fallback for configured P25 keys. After a system
-connects, DVM Console requests its keys through FNE/KMM. A valid KMM key for
-that system takes precedence until the FNE disconnects. See **Encryption Keys**
-for the file format and runtime behavior.
-
----
-
-# Example codeplug
-
-```yaml
-keyFile: "C:/Example/keys.clear"
+keyFile: "./keys.clear"
 
 systems:
   - name: "System 1"
@@ -275,16 +155,12 @@ systems:
     rid: "1001"
     password: "RPT_PASSWORD"
     encrypted: false
-    presharedKey: "123ABC1234"
-    aliasPath: "C:/Example/alias.yml"
+    transportEncryptionMode: "auto"
+    aliasPath: "./alias.yml"
 
 groups:
-  - name: "Patch 1"
+  - name: "Dispatch Patch"
     type: "patch"
-  - name: "Multi Select 1"
-    type: "multiselect"
-
-patchSourceIdPassthrough: false
 
 zones:
   - name: "Primary"
@@ -297,42 +173,21 @@ zones:
         mode: "p25"
         keyId: 0x50
         algo: "aes"
+        selectable_encryption: true
         resourceColor: "#150282"
+        rx_only: false
         card_size: normal
-
-      - name: "Channel 2"
-        system: "System 1"
-        tgid: "2002"
-        mode: "p25"
-        resourceColor: "#150282"
-        card_size: small
     web_streams:
       - name: "Stream 1"
         url: "https://streams.example.local/stream-1"
-        # Optional HTTP Basic Auth credentials for protected streams.
-        #authUsername: "stream-user"
-        #authPassword: "stream-password"
         idleColor: "#150282"
-
-  - name: "DMR"
-    tabColor: "#81C784"
-    tabTextColor: "#000000"
-    channels:
-      - name: "Channel 3"
-        system: "System 1"
-        tgid: "3001"
-        mode: "dmr"
 ```
 
----
+Channel `mode` accepts `p25`, `dmr`, `nxdn`, or `analog`. DMR channels use
+`slot` 1 or 2. NXDN destination IDs are limited to 16 bits. A receive-only
+channel cannot be a patch destination or another transmit target.
 
-# Recommended practices
-
-- Keep system names stable after deployment because channels reference them.
-- Use clear channel names because saved positions and volume are keyed by channel name.
-- Use clear group names, such as `Patch 1` or `Multi Select 1`.
-- Keep zone tabs short enough for operators to scan quickly.
-- Verify each channel references a valid system.
-- Verify each group has a supported `type`.
-- Keep web stream names stable so saved chip position and volume remain associated with the correct stream.
-- Confirm TGs exist in FNE talkgroup rules before relying on them operationally.
+`patchSourceIdPassthrough` controls the source ID used for forwarded patch
+traffic. When it is false, forwarding uses the configured console RID for the
+destination system. When true, DVM Console attempts to retain the inbound
+source ID.

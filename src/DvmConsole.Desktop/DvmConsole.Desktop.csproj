@@ -81,5 +81,13 @@
           Link="Demo/codeplug.yml"
           CopyToOutputDirectory="PreserveNewest"
           CopyToPublishDirectory="PreserveNewest" />
+    <None Include="../../configs/keys.demo.clear"
+          Link="Demo/keys.clear"
+          CopyToOutputDirectory="PreserveNewest"
+          CopyToPublishDirectory="PreserveNewest" />
+    <None Include="../../configs/aliases.demo.yml"
+          Link="Demo/aliases.yml"
+          CopyToOutputDirectory="PreserveNewest"
+          CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

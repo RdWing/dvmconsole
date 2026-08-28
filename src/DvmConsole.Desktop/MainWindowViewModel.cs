@@ -43,6 +43,8 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
     private readonly UserSettings userSettings;
     private readonly LatestUserSettingsWriter userSettingsWriter;
     private readonly string loadedCodeplugPath;
+    private CodeplugGroupState codeplugGroupState
+        => CodeplugGroupStateStore.GetOrMigrate(userSettings, loadedCodeplugPath);
     private readonly string codeplugDiagnosticsText;
     private readonly ChannelTransmitCoordinator transmitCoordinator;
     private readonly DefaultAudioDeviceMonitor defaultAudioDeviceMonitor;
@@ -438,7 +440,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
 
     public bool IsCodeplugLoaded => Systems.Count > 0;
 
-    public string? CurrentCodeplugPath => userSettings.LastCodeplugPath;
+    public string? CurrentCodeplugPath => loadedCodeplugPath.Length == 0 ? null : loadedCodeplugPath;
 
     public string SettingsVersionText => userSettings.SchemaVersion == UserSettings.CurrentSchemaVersion
         ? $"Profile format v{userSettings.SchemaVersion}"
@@ -3994,6 +3996,18 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
         StatusText = $"Patch group '{group.Name}' {(group.IsEnabled ? "enabled" : "disabled")}.";
     }
 
+    public void SetPatchGroupEnabled(PatchGroupEditorViewModel group)
+    {
+        ArgumentNullException.ThrowIfNull(group);
+        if (!group.IsPatchGroup)
+            return;
+        codeplugGroupState.EnabledStates[group.Name] = group.IsEnabled;
+        ReapplyPatchState();
+        PersistUserSettings();
+        TaskObservation.Observe(SyncPatchSourceDecodeAsync());
+        StatusText = $"Patch group '{group.Name}' {(group.IsEnabled ? "enabled" : "disabled")}.";
+    }
+
     public async Task ToggleMultiSelectPttAsync(PatchGroupEditorViewModel group)
     {
         ArgumentNullException.ThrowIfNull(group);
@@ -4045,11 +4059,11 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
         bool oneWay)
     {
         string normalizedName = groupName.Trim();
-        userSettings.PatchGroupMemberships[normalizedName] = members
+        codeplugGroupState.Memberships[normalizedName] = members
             .Select(PatchMemberResolver.ToSetting)
             .ToList();
-        userSettings.PatchGroupModes[normalizedName] = oneWay;
-        userSettings.PatchGroupEnabledStates[normalizedName] = enabled;
+        codeplugGroupState.OneWayModes[normalizedName] = oneWay;
+        codeplugGroupState.EnabledStates[normalizedName] = enabled;
     }
 
     private IReadOnlyList<PatchGroupEditorViewModel> BuildPatchGroups(
@@ -4066,7 +4080,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
             if (groupName.Length == 0)
                 continue;
 
-            List<PatchMemberSetting> savedMembers = userSettings.PatchGroupMemberships
+            List<PatchMemberSetting> savedMembers = codeplugGroupState.Memberships
                 .TryGetValue(groupName, out List<PatchMemberSetting>? configuredSettings)
                 ? configuredSettings ?? []
                 : [];
@@ -4084,8 +4098,8 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
                 : null;
             bool isMultiSelect = definition.IsMultiselectGroup();
             bool enabled = isMultiSelect ||
-                (userSettings.PatchGroupEnabledStates.TryGetValue(groupName, out bool savedEnabled) && savedEnabled);
-            bool oneWay = userSettings.PatchGroupModes.TryGetValue(groupName, out bool savedOneWay) && savedOneWay;
+                (codeplugGroupState.EnabledStates.TryGetValue(groupName, out bool savedEnabled) && savedEnabled);
+            bool oneWay = codeplugGroupState.OneWayModes.TryGetValue(groupName, out bool savedOneWay) && savedOneWay;
             var group = new PatchGroupEditorViewModel(
                 groupName,
                 enabled,
@@ -4164,11 +4178,11 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
         var memberResolver = new PatchMemberResolver(Systems.SelectMany(system => system.Channels));
         var memberships = new Dictionary<string, IReadOnlyList<PatchMemberAddress>>(StringComparer.OrdinalIgnoreCase);
-        foreach (KeyValuePair<string, List<PatchMemberSetting>> entry in userSettings.PatchGroupMemberships)
+        foreach (KeyValuePair<string, List<PatchMemberSetting>> entry in codeplugGroupState.Memberships)
         {
             if (!patchGroupNames.Contains(entry.Key))
                 continue;
-            if (!userSettings.PatchGroupEnabledStates.TryGetValue(entry.Key, out bool enabled) || !enabled)
+            if (!codeplugGroupState.EnabledStates.TryGetValue(entry.Key, out bool enabled) || !enabled)
                 continue;
 
             memberships[entry.Key] = entry.Value
@@ -4181,7 +4195,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
                 .ToArray();
         }
 
-        patchForwarding.ApplyMemberships(memberships, userSettings.PatchGroupModes);
+        patchForwarding.ApplyMemberships(memberships, codeplugGroupState.OneWayModes);
     }
 
     internal void RecordLoadedCodeplug(string path)

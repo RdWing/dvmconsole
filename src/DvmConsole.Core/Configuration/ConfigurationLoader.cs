@@ -13,6 +13,9 @@ public static class ConfigurationLoader
     public static IReadOnlyList<string> Validate(ConsoleConfiguration configuration)
         => ConfigurationValidator.Validate(configuration);
 
+    public static IReadOnlyList<ConfigurationValidationIssue> ValidateDetailed(ConsoleConfiguration configuration)
+        => ConfigurationValidator.ValidateDetailed(configuration);
+
     public static string ResolvePath(ConsoleConfiguration configuration, string? configuredPath)
         => ConfigurationPathHydrator.ResolvePath(configuration, configuredPath);
 }

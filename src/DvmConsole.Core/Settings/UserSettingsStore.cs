@@ -195,5 +195,5 @@ public sealed class UserSettingsSnapshot
         Json = json;
     }
 
-    internal string Json { get; }
+    public string Json { get; }
 }
