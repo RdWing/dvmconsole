@@ -30,6 +30,7 @@ public sealed class CallHistoryEntry : INotifyPropertyChanged
     private readonly string eventRidText;
     private readonly string eventTgidText;
     private CallRecordingMetadata? recording;
+    private bool isRecordingPlaying;
 
     public CallHistoryEntry(
         DateTimeOffset timestamp,
@@ -132,6 +133,10 @@ public sealed class CallHistoryEntry : INotifyPropertyChanged
 
     public bool HasRecording => recording is not null;
     public bool HasPlayableRecording => recording?.IsPlayable == true;
+    public bool IsRecordingPlaying => isRecordingPlaying;
+    public string RecordingPlaybackToolTip => IsRecordingPlaying
+        ? "Stop TAR recording playback"
+        : "Play validated TAR recording";
     public CallRecordingMetadata? Recording => recording;
     public string RecordingFileName => recording?.FileName ?? string.Empty;
     public string RecordingDetailsText => recording?.TechnicalDetailsText ?? string.Empty;
@@ -150,6 +155,16 @@ public sealed class CallHistoryEntry : INotifyPropertyChanged
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(RecordingPath)));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(Duration)));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(DurationText)));
+    }
+
+    internal void SetRecordingPlaying(bool value)
+    {
+        if (isRecordingPlaying == value)
+            return;
+
+        isRecordingPlaying = value;
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsRecordingPlaying)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(RecordingPlaybackToolTip)));
     }
 
     public bool ObserveStream(uint streamId)

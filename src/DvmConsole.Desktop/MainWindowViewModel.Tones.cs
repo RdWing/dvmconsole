@@ -559,9 +559,18 @@ public sealed partial class MainWindowViewModel
 
         try
         {
-            await toneTransmitCoordinator.SendAsync(targets, sequence);
+            short[] monitorSamples = sequence.RenderPcm();
+            Exception? monitorFailure = await GeneratedAudioMonitorSession.RunAsync(
+                cancellationToken => generatedAudioMonitor.PlayAsync(
+                    monitorSamples,
+                    cancellationToken),
+                () => toneTransmitCoordinator.SendAsync(targets, sequence));
             string targetText = FormatToneTargetText(targets.Select(target => target.Channel));
-            await RunOnUiThreadAsync(() => TransmitStatusText = $"{label} sent on {targetText}.");
+            string monitorStatus = monitorFailure is null
+                ? string.Empty
+                : $" Local monitor unavailable: {monitorFailure.Message}";
+            await RunOnUiThreadAsync(() =>
+                TransmitStatusText = $"{label} sent on {targetText}.{monitorStatus}");
         }
         finally
         {

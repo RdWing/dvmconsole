@@ -76,4 +76,31 @@ public sealed class CallRecordingMetadataTests
         Assert.Equal("Clear", clear.EncryptionText);
         Assert.True(clear.IsEncryptionKnown);
     }
+
+    [Fact]
+    public void HistoryEntryExposesPlaybackActionStateForItsTarButton()
+    {
+        CallHistoryEntry entry = CallHistoryEntry.CreateRecordingOnly(new CallRecordingMetadata
+        {
+            DurationMs = 1_000,
+            PlaybackValidated = true,
+            FilePath = "/recordings/call.opus",
+            FileSizeBytes = 1_000,
+            ActiveSampleCount = 8_000,
+            PeakAmplitude = 100
+        });
+        var changed = new List<string?>();
+        entry.PropertyChanged += (_, e) => changed.Add(e.PropertyName);
+
+        entry.SetRecordingPlaying(true);
+
+        Assert.True(entry.IsRecordingPlaying);
+        Assert.Equal("Stop TAR recording playback", entry.RecordingPlaybackToolTip);
+        Assert.Contains(nameof(CallHistoryEntry.IsRecordingPlaying), changed);
+        Assert.Contains(nameof(CallHistoryEntry.RecordingPlaybackToolTip), changed);
+
+        entry.SetRecordingPlaying(false);
+        Assert.False(entry.IsRecordingPlaying);
+        Assert.Equal("Play validated TAR recording", entry.RecordingPlaybackToolTip);
+    }
 }

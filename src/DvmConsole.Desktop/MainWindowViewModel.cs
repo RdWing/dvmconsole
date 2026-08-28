@@ -49,6 +49,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
     private readonly LatestBooleanStateReconciler warmMicrophoneReconciler;
     private readonly ToneTransmitCoordinator toneTransmitCoordinator;
     private readonly LocalTonePlayer localTonePlayer;
+    private readonly GeneratedAudioMonitor generatedAudioMonitor;
     private readonly PatchForwardingCoordinator patchForwarding;
     private readonly PatchSourceDecodeCoordinator patchSourceDecode;
     private readonly P25KeyRing? p25KeyRing;
@@ -269,6 +270,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
             audioBackendProvider.CreateBackend,
             () => userSettings.AudioOutputDeviceId,
             HandleRecordingPlaybackFaulted);
+        recordingPlayback.PlaybackStateChanged += HandleRecordingPlaybackStateChanged;
         audioCoordinator = new ChannelReceiveAudioCoordinator(
             CreateReceiveAudioBackend,
             CreateReceiveVocoderBackend,
@@ -333,6 +335,9 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
             dmrKeyResolver: dmrKeyResolver,
             nxdnKeyResolver: nxdnKeyResolver);
         localTonePlayer = new LocalTonePlayer(
+            CreateTransmitAudioBackend,
+            () => userSettings.AudioOutputDeviceId);
+        generatedAudioMonitor = new GeneratedAudioMonitor(
             CreateTransmitAudioBackend,
             () => userSettings.AudioOutputDeviceId);
         receiveTrafficRouters = Systems.ToDictionary(
@@ -1824,6 +1829,15 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
         await PlayRecordingAsync(metadata).ConfigureAwait(false);
     }
 
+    public async Task ToggleCallHistoryRecordingPlaybackAsync(CallHistoryEntry entry)
+    {
+        ArgumentNullException.ThrowIfNull(entry);
+        if (entry.IsRecordingPlaying)
+            await StopRecordingPlaybackAsync().ConfigureAwait(false);
+        else
+            await PlayCallHistoryRecordingAsync(entry).ConfigureAwait(false);
+    }
+
     public async Task StopRecordingPlaybackAsync()
     {
         await recordingPlayback.StopAsync().ConfigureAwait(false);
@@ -3204,6 +3218,38 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
     {
         uiDispatcher.Post(() =>
             AudioStatusText = $"Recording playback stopped: {exception.Message}");
+    }
+
+    private void HandleRecordingPlaybackStateChanged(
+        object? sender,
+        RecordingPlaybackStateChangedEventArgs e)
+    {
+        uiDispatcher.Post(() =>
+        {
+            foreach (CallHistoryEntry entry in callHistory.Entries)
+            {
+                entry.SetRecordingPlaying(
+                    e.IsPlaying && RecordingPathEquals(entry.RecordingPath, e.Path));
+            }
+        });
+    }
+
+    private static bool RecordingPathEquals(string candidatePath, string playbackPath)
+    {
+        if (string.IsNullOrWhiteSpace(candidatePath))
+            return false;
+
+        try
+        {
+            return Path.GetFullPath(candidatePath).Equals(
+                playbackPath,
+                StringComparison.OrdinalIgnoreCase);
+        }
+        catch (Exception exception) when (
+            exception is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            return false;
+        }
     }
 
     private void RefreshRecordings(bool pruneExpired = false)

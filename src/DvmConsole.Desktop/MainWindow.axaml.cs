@@ -1126,7 +1126,7 @@ public sealed partial class MainWindow : Window
     private async void HandlePlayCallHistoryRecordingClick(object? sender, RoutedEventArgs e)
     {
         if (sender is Button { Tag: CallHistoryEntry entry })
-            await viewModel.PlayCallHistoryRecordingAsync(entry);
+            await viewModel.ToggleCallHistoryRecordingPlaybackAsync(entry);
     }
 
     private async void HandleGlobalPttKeyClick(object? sender, RoutedEventArgs e)
