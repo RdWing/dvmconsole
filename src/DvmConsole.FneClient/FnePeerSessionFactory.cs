@@ -82,6 +82,7 @@ internal sealed class FnePeerSessionFactory : IFnePeerSessionFactory
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(endpoint);
         ArgumentNullException.ThrowIfNull(callbacks);
+        ValidateSessionPrerequisites(options);
 
         var transportLifetime = new FneTransportLifetime();
         try
@@ -129,6 +130,21 @@ internal sealed class FnePeerSessionFactory : IFnePeerSessionFactory
         {
             transportLifetime.Dispose();
             throw;
+        }
+    }
+
+    internal static void ValidateSessionPrerequisites(FneConnectionOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        if (string.IsNullOrWhiteSpace(options.Password))
+        {
+            throw new InvalidOperationException(
+                $"FNE system '{options.Name}' requires a password before it can connect.");
+        }
+        if (options.Encrypted && string.IsNullOrWhiteSpace(options.PresharedKey))
+        {
+            throw new InvalidOperationException(
+                $"FNE system '{options.Name}' requires a preshared key because transport encryption is enabled.");
         }
     }
 

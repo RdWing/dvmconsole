@@ -62,6 +62,12 @@ internal sealed class RecordingCatalogStore
             cancellationToken.ThrowIfCancellationRequested();
             candidateVisits++;
             scannedFiles++;
+            if (!scanSource.IsSafePath(opusPath, rootPath))
+            {
+                inaccessiblePaths++;
+                continue;
+            }
+
             try
             {
                 metadataReads++;
@@ -74,7 +80,7 @@ internal sealed class RecordingCatalogStore
                 retentionEvaluations++;
                 if (cutoff is not null && metadata.UtcEndTime <= cutoff.Value)
                 {
-                    if (scanSource.TryDelete(opusPath))
+                    if (scanSource.TryDelete(opusPath, rootPath))
                         prunedFiles++;
                     else
                         inaccessiblePaths++;
@@ -213,7 +219,9 @@ internal interface IRecordingCatalogScanSource
         string rootPath,
         out CallRecordingMetadata metadata);
 
-    bool TryDelete(string path);
+    bool IsSafePath(string opusPath, string rootPath);
+
+    bool TryDelete(string path, string rootPath);
 }
 
 internal sealed class FileRecordingCatalogScanSource(
@@ -227,11 +235,15 @@ internal sealed class FileRecordingCatalogScanSource(
         Action inaccessiblePathObserved,
         CancellationToken cancellationToken)
     {
-        var pending = new Stack<string>();
-        pending.Push(rootPath);
-        while (pending.TryPop(out string? directory))
+        var pending = new Stack<(string Path, bool IsRoot)>();
+        pending.Push((rootPath, true));
+        while (pending.TryPop(out (string Path, bool IsRoot) entry))
         {
             cancellationToken.ThrowIfCancellationRequested();
+            if (!entry.IsRoot && IsDirectoryLink(entry.Path, inaccessiblePathObserved))
+                continue;
+
+            string directory = entry.Path;
             bool inaccessible = false;
             foreach (string file in EnumerateAccessible(
                          () => Directory.EnumerateFiles(
@@ -254,7 +266,10 @@ internal sealed class FileRecordingCatalogScanSource(
                          ObserveInaccessiblePath))
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                pending.Push(child);
+                if (IsDirectoryLink(child, inaccessiblePathObserved))
+                    continue;
+
+                pending.Push((child, false));
             }
 
             void ObserveInaccessiblePath()
@@ -262,6 +277,23 @@ internal sealed class FileRecordingCatalogScanSource(
                 inaccessible = true;
                 inaccessiblePathObserved();
             }
+        }
+    }
+
+    private static bool IsDirectoryLink(
+        string path,
+        Action inaccessiblePathObserved)
+    {
+        try
+        {
+            var directory = new DirectoryInfo(path);
+            return directory.LinkTarget is not null ||
+                   (directory.Attributes & FileAttributes.ReparsePoint) != 0;
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            inaccessiblePathObserved();
+            return true;
         }
     }
 
@@ -308,14 +340,61 @@ internal sealed class FileRecordingCatalogScanSource(
         out CallRecordingMetadata metadata)
         => metadataStore.TryRead(opusPath, rootPath, out metadata);
 
-    public bool TryDelete(string path)
+    public bool IsSafePath(string opusPath, string rootPath)
+        => IsPathContainedWithoutLinks(opusPath, rootPath);
+
+    public bool TryDelete(string path, string rootPath)
     {
+        if (!IsPathContainedWithoutLinks(path, rootPath))
+            return false;
+
         try
         {
             File.Delete(path);
             return true;
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            return false;
+        }
+    }
+
+    private static bool IsPathContainedWithoutLinks(string path, string rootPath)
+    {
+        try
+        {
+            string normalizedRoot = Path.GetFullPath(rootPath).TrimEnd(
+                Path.DirectorySeparatorChar,
+                Path.AltDirectorySeparatorChar);
+            string normalizedPath = Path.GetFullPath(path);
+            string rootPrefix = normalizedRoot + Path.DirectorySeparatorChar;
+            StringComparison comparison = OperatingSystem.IsWindows()
+                ? StringComparison.OrdinalIgnoreCase
+                : StringComparison.Ordinal;
+            if (!normalizedPath.StartsWith(rootPrefix, comparison))
+                return false;
+
+            string relativePath = Path.GetRelativePath(normalizedRoot, normalizedPath);
+            string[] segments = relativePath.Split(
+                [Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar],
+                StringSplitOptions.RemoveEmptyEntries);
+            string current = normalizedRoot;
+            for (int index = 0; index < segments.Length - 1; index++)
+            {
+                current = Path.Combine(current, segments[index]);
+                if (IsDirectoryLink(current, static () => { }))
+                    return false;
+            }
+
+            var file = new FileInfo(normalizedPath);
+            return file.LinkTarget is null &&
+                   (file.Attributes & FileAttributes.ReparsePoint) == 0;
+        }
+        catch (Exception exception) when (exception is
+            ArgumentException or
+            IOException or
+            NotSupportedException or
+            UnauthorizedAccessException)
         {
             return false;
         }

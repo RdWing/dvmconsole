@@ -236,6 +236,7 @@ internal sealed class ReceiveStreamStateMachine
 
     private void AddStream(uint streamId, DateTimeOffset now, bool makePrimary)
     {
+        MakeRoomForStream();
         activeStreams.Add(streamId, new ReceiveStreamActivity(
             now,
             GraceDeadline: null,
@@ -246,6 +247,19 @@ internal sealed class ReceiveStreamStateMachine
         if (makePrimary)
             primaryStreamId = streamId;
         nextInsertionOrder = checked(nextInsertionOrder + 1);
+    }
+
+    private void MakeRoomForStream()
+    {
+        if (activeStreams.Count < policy.MaximumTrackedStreams)
+            return;
+
+        uint oldestStreamId = activeStreams
+            .OrderBy(pair => pair.Value.LastActivity)
+            .ThenBy(pair => pair.Value.InsertionOrder)
+            .Select(pair => pair.Key)
+            .First();
+        RemoveStreamWithoutTombstone(oldestStreamId);
     }
 
     private void RemoveStreamWithoutTombstone(uint streamId)
@@ -262,6 +276,14 @@ internal sealed class ReceiveStreamStateMachine
     {
         RemoveStreamWithoutTombstone(streamId);
         tombstones[streamId] = now + policy.TombstoneLifetime;
+        if (tombstones.Count <= policy.MaximumTrackedStreams)
+            return;
+
+        uint oldestTombstone = tombstones
+            .OrderBy(pair => pair.Value)
+            .Select(pair => pair.Key)
+            .First();
+        tombstones.Remove(oldestTombstone);
     }
 
     private uint? MostRecentlyPresentableStreamId()

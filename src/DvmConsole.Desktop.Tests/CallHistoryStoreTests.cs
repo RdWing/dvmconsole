@@ -59,6 +59,22 @@ public sealed class CallHistoryStoreTests
     }
 
     [Fact]
+    public void BoundsPhysicalStreamFragmentsWhilePreservingThePrimaryIdentity()
+    {
+        CallHistoryEntry entry = CreateEntry(1);
+        int totalStreams = ReceiveCallEpisodeTracker.MaximumStreamsPerEpisode + 2;
+
+        for (uint streamId = 2; streamId <= totalStreams; streamId++)
+            entry.ObserveStream(streamId);
+
+        Assert.Equal(ReceiveCallEpisodeTracker.MaximumStreamsPerEpisode, entry.StreamIds.Count);
+        Assert.Contains((uint)1, entry.StreamIds);
+        Assert.DoesNotContain((uint)2, entry.StreamIds);
+        Assert.DoesNotContain((uint)3, entry.StreamIds);
+        Assert.Contains(checked((uint)totalStreams), entry.StreamIds);
+    }
+
+    [Fact]
     public void CompletesMatchingActiveStreamWithDuration()
     {
         var store = new CallHistoryStore();

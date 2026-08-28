@@ -32,4 +32,37 @@ public sealed class FnePeerSessionFactoryTests
         Assert.True(lifetime.IsStopped);
         Assert.False(peer.IsStarted);
     }
+
+    [Fact]
+    public void RejectsMissingPasswordBeforeConstructingThePeer()
+    {
+        var options = new FneConnectionOptions(
+            "Test", "Console", "127.0.0.1", 62031, 1, null, false, null);
+
+        InvalidOperationException error = Assert.Throws<InvalidOperationException>(
+            () => FnePeerSessionFactory.ValidateSessionPrerequisites(options));
+
+        Assert.Contains("requires a password", error.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RejectsEncryptedTransportWithoutAPresharedKey()
+    {
+        var options = new FneConnectionOptions(
+            "Test", "Console", "127.0.0.1", 62031, 1, "password", true, null);
+
+        InvalidOperationException error = Assert.Throws<InvalidOperationException>(
+            () => FnePeerSessionFactory.ValidateSessionPrerequisites(options));
+
+        Assert.Contains("requires a preshared key", error.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AcceptsExplicitPlaintextAndEncryptedSessionPrerequisites()
+    {
+        FnePeerSessionFactory.ValidateSessionPrerequisites(new FneConnectionOptions(
+            "Plaintext", "Console", "127.0.0.1", 62031, 1, "password", false, null));
+        FnePeerSessionFactory.ValidateSessionPrerequisites(new FneConnectionOptions(
+            "Encrypted", "Console", "127.0.0.1", 62031, 1, "password", true, "0011"));
+    }
 }

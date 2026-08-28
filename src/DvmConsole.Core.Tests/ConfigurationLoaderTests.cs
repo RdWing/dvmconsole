@@ -92,6 +92,41 @@ public sealed class ConfigurationLoaderTests
     }
 
     [Fact]
+    public void RejectsEncryptedTransportWithoutChangingPlaintextConfigurationLoading()
+    {
+        var configuration = new ConsoleConfiguration
+        {
+            Systems =
+            [
+                new SystemConfiguration
+                {
+                    Name = "Missing PSK",
+                    Address = "127.0.0.1",
+                    Port = 62031,
+                    Password = "password",
+                    Encrypted = true
+                },
+                new SystemConfiguration
+                {
+                    Name = "Plaintext",
+                    Address = "127.0.0.1",
+                    Port = 62031,
+                    Encrypted = false
+                }
+            ]
+        };
+
+        IReadOnlyList<string> errors = ConfigurationLoader.Validate(configuration);
+
+        Assert.Contains(errors, error => error.Contains(
+            "'Missing PSK' must have a preshared key",
+            StringComparison.Ordinal));
+        Assert.DoesNotContain(errors, error => error.Contains(
+            "'Plaintext'",
+            StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void ResolvesRelativePathsFromTheCodeplugDirectory()
     {
         string path = Path.Combine(AppContext.BaseDirectory, "TestData", "codeplug.example.yml");

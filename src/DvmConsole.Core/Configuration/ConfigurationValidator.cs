@@ -23,6 +23,8 @@ internal static class ConfigurationValidator
                 errors.Add($"System '{system.Name}' must have an address.");
             if (system.Port is < 1 or > 65535)
                 errors.Add($"System '{system.Name}' has an invalid port.");
+            if (system.Encrypted && string.IsNullOrWhiteSpace(system.PresharedKey))
+                errors.Add($"System '{system.Name}' must have a preshared key when FNE transport encryption is enabled.");
             if (system.TransportEncryptionMode is not ("auto" or "ecb" or "cbc"))
                 errors.Add($"System '{system.Name}' has unsupported transport encryption mode '{system.TransportEncryptionMode}'.");
         }

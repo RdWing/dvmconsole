@@ -6,6 +6,7 @@ namespace fnecore;
 internal static class FneInboundFramePolicy
 {
     private const int HeaderLength = 32;
+    private const int MaximumKmmKeyLength = 32;
 
     public static bool AcceptsInbound(FneUdpChannelKind channelKind)
         => channelKind == FneUdpChannelKind.Traffic;
@@ -104,6 +105,9 @@ internal static class FneInboundFramePolicy
 
         int keyLength = kmm[offset + 2];
         int keyCount = kmm[offset + 3];
+        if (keyLength > MaximumKmmKeyLength)
+            return false;
+
         offset += 4;
         for (int index = 0; index < keyCount; index++)
         {

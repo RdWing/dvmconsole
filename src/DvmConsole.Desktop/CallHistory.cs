@@ -157,6 +157,8 @@ public sealed class CallHistoryEntry : INotifyPropertyChanged
         if (streamId == 0 || streamIds.Contains(streamId))
             return false;
 
+        if (streamIds.Count >= ReceiveCallEpisodeTracker.MaximumStreamsPerEpisode)
+            streamIds.RemoveAt(1);
         streamIds.Add(streamId);
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(StreamIds)));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(StreamFragmentCount)));

@@ -294,6 +294,52 @@ public sealed class CallRecordingManagerTests
     }
 
     [Fact]
+    public async Task EpisodeFragmentMetadataBoundsAttackerControlledStreamIdentities()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "dvmconsole-recording-tests", Guid.NewGuid().ToString("N"));
+        var channel = new ChannelViewModel(new ChannelConfiguration
+        {
+            Name = "Dispatch",
+            System = "System 1",
+            Tgid = "99",
+            Mode = "p25"
+        });
+        using var manager = new CallRecordingManager(root);
+        channel.SetRecordingEnabled(true);
+        const uint primaryStreamId = 41;
+        int totalStreams = ReceiveCallEpisodeTracker.MaximumStreamsPerEpisode + 2;
+
+        try
+        {
+            for (uint offset = 0; offset < totalStreams; offset++)
+            {
+                manager.WriteEpisodeSamples(
+                    channel,
+                    primaryStreamId,
+                    primaryStreamId + offset,
+                    sourceId: 7,
+                    ActiveSamples());
+            }
+
+            Task<RecordingFinalizationResult> finalized = NextFinalizationAsync(manager);
+            manager.StopStream(channel, primaryStreamId);
+
+            Assert.True((await finalized).IsPlayable);
+            CallRecordingMetadata metadata = Assert.Single(manager.LoadRecordings());
+            Assert.Equal(ReceiveCallEpisodeTracker.MaximumStreamsPerEpisode, metadata.StreamIds.Count);
+            Assert.Contains(primaryStreamId, metadata.StreamIds);
+            Assert.DoesNotContain(primaryStreamId + 1, metadata.StreamIds);
+            Assert.DoesNotContain(primaryStreamId + 2, metadata.StreamIds);
+            Assert.Contains(primaryStreamId + checked((uint)totalStreams) - 1, metadata.StreamIds);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task DisposalClosesActiveWaveAndDrainsOpusFinalization()
     {
         string root = Path.Combine(Path.GetTempPath(), "dvmconsole-recording-tests", Guid.NewGuid().ToString("N"));
@@ -562,6 +608,78 @@ public sealed class CallRecordingManagerTests
         {
             if (Directory.Exists(root))
                 Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task RetentionDoesNotFollowDirectoryLinksOutsideTheRecordingRoot()
+    {
+        string testRoot = Path.Combine(
+            Path.GetTempPath(),
+            "dvmconsole-recording-tests",
+            Guid.NewGuid().ToString("N"));
+        string recordingRoot = Path.Combine(testRoot, "recordings");
+        string outsideRoot = Path.Combine(testRoot, "outside");
+        Directory.CreateDirectory(recordingRoot);
+        string outsideRecording = await WriteCatalogEntryAsync(
+            outsideRoot,
+            "outside-old",
+            DateTimeOffset.UtcNow.AddDays(-8));
+        Directory.CreateSymbolicLink(
+            Path.Combine(recordingRoot, "linked-outside"),
+            outsideRoot);
+        using var manager = new CallRecordingManager(recordingRoot, retentionDays: 7);
+
+        try
+        {
+            Assert.Equal(0, manager.PruneExpired());
+            Assert.Empty(manager.LoadRecordings());
+            Assert.True(File.Exists(outsideRecording));
+        }
+        finally
+        {
+            if (Directory.Exists(testRoot))
+                Directory.Delete(testRoot, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void RetentionRevalidatesAChildDirectoryBeforeDeletingAnEnumeratedFile()
+    {
+        string testRoot = Path.Combine(
+            Path.GetTempPath(),
+            "dvmconsole-recording-tests",
+            Guid.NewGuid().ToString("N"));
+        string recordingRoot = Path.Combine(testRoot, "recordings");
+        string child = Path.Combine(recordingRoot, "day");
+        string movedChild = Path.Combine(recordingRoot, "day-original");
+        string outsideRoot = Path.Combine(testRoot, "outside");
+        Directory.CreateDirectory(child);
+        Directory.CreateDirectory(outsideRoot);
+        string candidate = Path.Combine(child, "old.opus");
+        File.WriteAllBytes(candidate, [1]);
+        string outsideRecording = Path.Combine(outsideRoot, "old.opus");
+        File.WriteAllBytes(outsideRecording, [2]);
+        var source = new FileRecordingCatalogScanSource(new OpusRecordingMetadataStore());
+
+        try
+        {
+            string enumerated = Assert.Single(source.EnumerateOpusFiles(
+                recordingRoot,
+                static () => { },
+                CancellationToken.None));
+            Directory.Move(child, movedChild);
+            Directory.CreateSymbolicLink(child, outsideRoot);
+
+            Assert.Equal(candidate, enumerated);
+            Assert.False(source.IsSafePath(enumerated, recordingRoot));
+            Assert.False(source.TryDelete(enumerated, recordingRoot));
+            Assert.True(File.Exists(outsideRecording));
+        }
+        finally
+        {
+            if (Directory.Exists(testRoot))
+                Directory.Delete(testRoot, recursive: true);
         }
     }
 

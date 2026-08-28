@@ -153,7 +153,10 @@ public sealed class RecordingCatalogScaleTests
             return true;
         }
 
-        public bool TryDelete(string path)
+        public bool IsSafePath(string opusPath, string rootPath)
+            => true;
+
+        public bool TryDelete(string path, string rootPath)
         {
             DeleteAttempts++;
             return true;
