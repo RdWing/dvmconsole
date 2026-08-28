@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using DvmConsole.Audio;
 using DvmConsole.Media;
 using Xunit;
@@ -68,6 +69,84 @@ public sealed class RecordingPlaybackCoordinatorTests
 
             Assert.False(coordinator.IsPlaying());
             Assert.True(backend.Playback.IsDisposed);
+        }
+        finally
+        {
+            string? directory = Path.GetDirectoryName(path);
+            if (Directory.Exists(directory))
+                Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task ReportsThePlayingPathUntilPlaybackIsStopped()
+    {
+        string path = Path.Combine(
+            Path.GetTempPath(),
+            "dvmconsole-recording-playback-tests",
+            Guid.NewGuid().ToString("N"),
+            "call.wav");
+        var backend = new FakeAudioBackend { BlockWrites = true };
+        var states = new ConcurrentQueue<RecordingPlaybackStateChangedEventArgs>();
+        try
+        {
+            using (var writer = new PcmWavFileWriter(path, PcmAudioFormat.Voice8KhzMono16Bit))
+                writer.Write(Enumerable.Repeat<short>(1200, 1600).ToArray());
+
+            await using var coordinator = new RecordingPlaybackCoordinator(
+                () => backend,
+                () => "output");
+            coordinator.PlaybackStateChanged += (_, state) => states.Enqueue(state);
+
+            await coordinator.StartAsync(path);
+            await WaitForAsync(() => coordinator.IsPlaying(path));
+            await coordinator.StopAsync();
+
+            Assert.Collection(
+                states.ToArray(),
+                state =>
+                {
+                    Assert.True(state.IsPlaying);
+                    Assert.Equal(Path.GetFullPath(path), state.Path);
+                },
+                state =>
+                {
+                    Assert.False(state.IsPlaying);
+                    Assert.Equal(Path.GetFullPath(path), state.Path);
+                });
+        }
+        finally
+        {
+            string? directory = Path.GetDirectoryName(path);
+            if (Directory.Exists(directory))
+                Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task ReportsStoppedWhenPlaybackReachesTheEnd()
+    {
+        string path = Path.Combine(
+            Path.GetTempPath(),
+            "dvmconsole-recording-playback-tests",
+            Guid.NewGuid().ToString("N"),
+            "call.wav");
+        var backend = new FakeAudioBackend();
+        var states = new ConcurrentQueue<bool>();
+        try
+        {
+            using (var writer = new PcmWavFileWriter(path, PcmAudioFormat.Voice8KhzMono16Bit))
+                writer.Write(Enumerable.Repeat<short>(1200, 160).ToArray());
+
+            await using var coordinator = new RecordingPlaybackCoordinator(
+                () => backend,
+                () => "output");
+            coordinator.PlaybackStateChanged += (_, state) => states.Enqueue(state.IsPlaying);
+
+            await coordinator.StartAsync(path);
+            await WaitForAsync(() => states.Count == 2);
+
+            Assert.Equal([true, false], states.ToArray());
         }
         finally
         {

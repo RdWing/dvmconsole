@@ -2,6 +2,12 @@ using DvmConsole.Audio;
 
 namespace DvmConsole.Desktop;
 
+public sealed class RecordingPlaybackStateChangedEventArgs(string path, bool isPlaying) : EventArgs
+{
+    public string Path { get; } = path;
+    public bool IsPlaying { get; } = isPlaying;
+}
+
 // Plays one completed local recording through the configured portable output
 // backend. The coordinator owns only its playback stream; receive routing and
 // recording catalog lifetime remain separate.
@@ -26,6 +32,8 @@ public sealed class RecordingPlaybackCoordinator : IAsyncDisposable
         this.getOutputDeviceId = getOutputDeviceId ?? throw new ArgumentNullException(nameof(getOutputDeviceId));
         this.faultHandler = faultHandler;
     }
+
+    public event EventHandler<RecordingPlaybackStateChangedEventArgs>? PlaybackStateChanged;
 
     public bool IsPlaying(string? path = null)
     {
@@ -75,6 +83,8 @@ public sealed class RecordingPlaybackCoordinator : IAsyncDisposable
                     activeSession = session;
                     currentPath = fullPath;
                 }
+
+                NotifyPlaybackStateChanged(fullPath, isPlaying: true);
 
                 session.RunTask = RunAsync(session);
             }
@@ -152,6 +162,7 @@ public sealed class RecordingPlaybackCoordinator : IAsyncDisposable
                 currentPath = null;
             }
 
+            NotifyPlaybackStateChanged(fullPath, isPlaying: false);
             await session.StopAsync(cancellationToken).ConfigureAwait(false);
             return true;
         }
@@ -182,15 +193,20 @@ public sealed class RecordingPlaybackCoordinator : IAsyncDisposable
     private async Task StopActiveCoreAsync(CancellationToken cancellationToken = default)
     {
         PlaybackSession? session;
+        string? path;
         lock (sync)
         {
             session = activeSession;
+            path = currentPath;
             activeSession = null;
             currentPath = null;
         }
 
         if (session is not null)
+        {
+            NotifyPlaybackStateChanged(path!, isPlaying: false);
             await session.StopAsync(cancellationToken).ConfigureAwait(false);
+        }
     }
 
     private async Task RunAsync(PlaybackSession session)
@@ -237,14 +253,19 @@ public sealed class RecordingPlaybackCoordinator : IAsyncDisposable
                 failure ??= exception;
             }
 
+            string? completedPath = null;
             lock (sync)
             {
                 if (ReferenceEquals(activeSession, session))
                 {
+                    completedPath = currentPath;
                     activeSession = null;
                     currentPath = null;
                 }
             }
+
+            if (completedPath is not null)
+                NotifyPlaybackStateChanged(completedPath, isPlaying: false);
 
             try
             {
@@ -257,6 +278,11 @@ public sealed class RecordingPlaybackCoordinator : IAsyncDisposable
             }
         }
     }
+
+    private void NotifyPlaybackStateChanged(string path, bool isPlaying)
+        => PlaybackStateChanged?.Invoke(
+            this,
+            new RecordingPlaybackStateChangedEventArgs(path, isPlaying));
 
     private IAudioBackend CreateBackend(out bool created)
     {

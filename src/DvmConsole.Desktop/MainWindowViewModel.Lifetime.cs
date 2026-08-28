@@ -21,6 +21,7 @@ public sealed partial class MainWindowViewModel
         services.Audio.Own("reconfiguration-lock", audioReconfigurationLock);
         services.Audio.Register("backend-provider", () => DisposeAsync(audioBackendProvider));
         services.Recording.Register("recording-playback", () => DisposeAsync(recordingPlayback));
+        services.Recording.Register("recording-playback-subscription", DetachRecordingPlaybackSubscription);
         services.Audio.Register("web-stream-playback", () => DisposeAsync(webStreamPlayback));
         services.Audio.Register("receive-audio-coordinator", () => DisposeAsync(audioCoordinator));
         services.Audio.Register("receive-output-failure-subscription", DetachReceiveOutputSubscription);
@@ -50,6 +51,13 @@ public sealed partial class MainWindowViewModel
     {
         if (callRecordings is not null)
             callRecordings.RecordingFinalized -= HandleRecordingFinalized;
+        return ValueTask.CompletedTask;
+    }
+
+    private ValueTask DetachRecordingPlaybackSubscription()
+    {
+        if (recordingPlayback is not null)
+            recordingPlayback.PlaybackStateChanged -= HandleRecordingPlaybackStateChanged;
         return ValueTask.CompletedTask;
     }
 
@@ -119,6 +127,11 @@ public sealed partial class MainWindowViewModel
                 {
                     await cleanup.RunTaskAsync(
                         () => toneTransmitCoordinator.DisposeAsync().AsTask()).ConfigureAwait(false);
+                }
+                if (generatedAudioMonitor is not null)
+                {
+                    await cleanup.RunTaskAsync(
+                        () => generatedAudioMonitor.DisposeAsync().AsTask()).ConfigureAwait(false);
                 }
                 if (localTonePlayer is not null)
                 {
