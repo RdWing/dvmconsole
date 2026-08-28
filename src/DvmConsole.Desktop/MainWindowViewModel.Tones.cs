@@ -564,7 +564,10 @@ public sealed partial class MainWindowViewModel
                 cancellationToken => generatedAudioMonitor.PlayAsync(
                     monitorSamples,
                     cancellationToken),
-                () => toneTransmitCoordinator.SendAsync(targets, sequence));
+                () => toneTransmitCoordinator.SendAsync(
+                    targets,
+                    sequence,
+                    monitorSamples));
             string targetText = FormatToneTargetText(targets.Select(target => target.Channel));
             string monitorStatus = monitorFailure is null
                 ? string.Empty

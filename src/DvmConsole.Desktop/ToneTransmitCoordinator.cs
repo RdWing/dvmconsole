@@ -89,6 +89,23 @@ public sealed class ToneTransmitCoordinator : IAsyncDisposable
         ArgumentNullException.ThrowIfNull(targets);
         ArgumentNullException.ThrowIfNull(sequence);
         ObjectDisposedException.ThrowIf(disposed, this);
+        await SendAsync(
+            targets,
+            sequence,
+            sequence.RenderPcm(),
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    internal async Task SendAsync(
+        IEnumerable<TransmitTarget> targets,
+        GeneratedToneSequence sequence,
+        ReadOnlyMemory<short> renderedSamples,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(targets);
+        ArgumentNullException.ThrowIfNull(sequence);
+        ObjectDisposedException.ThrowIf(disposed, this);
+        ValidateRenderedSamples(sequence, renderedSamples);
 
         TransmitTarget[] requested = targets
             .GroupBy(target => target.Channel)
@@ -108,7 +125,7 @@ public sealed class ToneTransmitCoordinator : IAsyncDisposable
                 target.Channel,
                 target.System,
                 target.System.SourceId!.Value,
-                samples: default,
+                renderedSamples,
                 sequence,
                 cancellationToken))).ConfigureAwait(false);
         }
@@ -116,6 +133,20 @@ public sealed class ToneTransmitCoordinator : IAsyncDisposable
         {
             sending = false;
             gate.Release();
+        }
+    }
+
+    private static void ValidateRenderedSamples(
+        GeneratedToneSequence sequence,
+        ReadOnlyMemory<short> renderedSamples)
+    {
+        int expectedSampleCount = checked(
+            sequence.FrameCount * VocoderFrameSizes.PcmSamplesPerFrame);
+        if (renderedSamples.Length != expectedSampleCount)
+        {
+            throw new ArgumentException(
+                $"Rendered tone audio must contain exactly {expectedSampleCount} samples.",
+                nameof(renderedSamples));
         }
     }
 
@@ -208,23 +239,27 @@ public sealed class ToneTransmitCoordinator : IAsyncDisposable
                 var cadence = new TransmitFrameCadence();
                 if (sequence is not null && definition.Protocol == ChannelProtocol.P25)
                 {
-                    await SendP25SequenceAsync(session, sequence, cadence, cancellationToken).ConfigureAwait(false);
+                    await SendP25SequenceAsync(
+                        session,
+                        sequence,
+                        samples,
+                        cadence,
+                        cancellationToken).ConfigureAwait(false);
                 }
                 else
                 {
-                    ReadOnlyMemory<short> pcm = sequence?.RenderPcm() ?? samples;
-                    for (int offset = 0; offset < pcm.Length; offset += VocoderFrameSizes.PcmSamplesPerFrame)
+                    for (int offset = 0; offset < samples.Length; offset += VocoderFrameSizes.PcmSamplesPerFrame)
                     {
                         await cadence.WaitForNextFrameAsync(cancellationToken).ConfigureAwait(false);
-                        int count = Math.Min(VocoderFrameSizes.PcmSamplesPerFrame, pcm.Length - offset);
+                        int count = Math.Min(VocoderFrameSizes.PcmSamplesPerFrame, samples.Length - offset);
                         if (count == VocoderFrameSizes.PcmSamplesPerFrame)
                         {
-                            session.Process(pcm.Span.Slice(offset, count));
+                            session.Process(samples.Span.Slice(offset, count));
                         }
                         else
                         {
                             var finalFrame = new short[VocoderFrameSizes.PcmSamplesPerFrame];
-                            pcm.Span.Slice(offset, count).CopyTo(finalFrame);
+                            samples.Span.Slice(offset, count).CopyTo(finalFrame);
                             session.Process(finalFrame);
                         }
                     }
@@ -260,10 +295,10 @@ public sealed class ToneTransmitCoordinator : IAsyncDisposable
     private static async Task SendP25SequenceAsync(
         PatchTransmitSession session,
         GeneratedToneSequence sequence,
+        ReadOnlyMemory<short> renderedSamples,
         TransmitFrameCadence cadence,
         CancellationToken cancellationToken)
     {
-        short[] pcm = sequence.RenderPcm();
         int pcmOffset = 0;
         foreach (GeneratedToneStep step in sequence.Steps)
         {
@@ -273,7 +308,9 @@ public sealed class ToneTransmitCoordinator : IAsyncDisposable
                 if (step.Kind == GeneratedToneStepKind.SingleTone)
                     session.ProcessP25SingleTone(step.FrequencyHz);
                 else
-                    session.Process(pcm.AsSpan(pcmOffset, VocoderFrameSizes.PcmSamplesPerFrame));
+                    session.Process(renderedSamples.Span.Slice(
+                        pcmOffset,
+                        VocoderFrameSizes.PcmSamplesPerFrame));
                 pcmOffset += VocoderFrameSizes.PcmSamplesPerFrame;
             }
         }

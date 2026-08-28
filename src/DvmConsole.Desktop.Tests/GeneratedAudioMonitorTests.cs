@@ -49,10 +49,11 @@ public sealed class GeneratedAudioMonitorTests
     }
 
     [Fact]
-    public async Task PlaysExactGeneratedPcmOnTheConfiguredOutput()
+    public async Task AttenuatesOnlyTheConfiguredLocalOutput()
     {
         var backend = new FakeAudioBackend();
-        short[] samples = [0, 125, -250, 500, -1_000];
+        short[] samples = [0, 1_000, -1_000, short.MaxValue, short.MinValue];
+        short[] originalSamples = samples.ToArray();
         await using var monitor = new GeneratedAudioMonitor(
             () => backend,
             () => "alternate",
@@ -62,10 +63,26 @@ public sealed class GeneratedAudioMonitorTests
 
         Assert.Equal("alternate", backend.LastOutputDeviceId);
         Assert.Same(PcmAudioFormat.Voice8KhzMono16Bit, backend.LastFormat);
-        Assert.Equal(samples, Assert.Single(backend.Playback.Frames));
+        Assert.Equal(0.70, GeneratedAudioMonitor.OutputGain);
+        Assert.Equal(
+            [0, 700, -700, 22_937, -22_938],
+            Assert.Single(backend.Playback.Frames));
+        Assert.Equal(originalSamples, samples);
         Assert.True(backend.Playback.DrainCalled);
         Assert.True(backend.Playback.IsDisposed);
         Assert.True(backend.IsDisposed);
+    }
+
+    [Fact]
+    public async Task DisposeAsyncIsIdempotent()
+    {
+        var monitor = new GeneratedAudioMonitor(
+            () => new FakeAudioBackend(),
+            () => "alternate",
+            new ImmediateOutputRouteResolver());
+
+        await monitor.DisposeAsync();
+        await monitor.DisposeAsync();
     }
 
     private sealed class ImmediateOutputRouteResolver : IAudioOutputRouteResolver

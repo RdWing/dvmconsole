@@ -157,6 +157,128 @@ public sealed class RecordingPlaybackCoordinatorTests
     }
 
     [Fact]
+    public async Task ThrowingStateSubscriberDoesNotInterruptPlaybackLifecycle()
+    {
+        string path = Path.Combine(
+            Path.GetTempPath(),
+            "dvmconsole-recording-playback-tests",
+            Guid.NewGuid().ToString("N"),
+            "call.wav");
+        var backend = new FakeAudioBackend { BlockWrites = true };
+        var states = new ConcurrentQueue<bool>();
+        var observerFailures = new ConcurrentQueue<Exception>();
+        try
+        {
+            using (var writer = new PcmWavFileWriter(path, PcmAudioFormat.Voice8KhzMono16Bit))
+                writer.Write(Enumerable.Repeat<short>(1200, 1600).ToArray());
+
+            await using var coordinator = new RecordingPlaybackCoordinator(
+                () => backend,
+                () => "output",
+                observerFailures.Enqueue);
+            coordinator.PlaybackStateChanged += (_, _) =>
+                throw new InvalidOperationException("observer failed");
+            coordinator.PlaybackStateChanged += (_, state) => states.Enqueue(state.IsPlaying);
+
+            await coordinator.StartAsync(path);
+            await WaitForAsync(() => coordinator.IsPlaying(path));
+            await coordinator.StopAsync();
+
+            Assert.Equal([true, false], states.ToArray());
+            Assert.Equal(2, observerFailures.Count);
+            Assert.All(observerFailures, failure =>
+                Assert.Equal("observer failed", failure.Message));
+            Assert.False(coordinator.IsPlaying());
+            Assert.True(backend.Playback.IsDisposed);
+        }
+        finally
+        {
+            string? directory = Path.GetDirectoryName(path);
+            if (Directory.Exists(directory))
+                Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task ThrowingStoppedSubscriberDoesNotInterruptNaturalCompletion()
+    {
+        string path = Path.Combine(
+            Path.GetTempPath(),
+            "dvmconsole-recording-playback-tests",
+            Guid.NewGuid().ToString("N"),
+            "call.wav");
+        var backend = new FakeAudioBackend();
+        var states = new ConcurrentQueue<bool>();
+        var observerFailures = new ConcurrentQueue<Exception>();
+        try
+        {
+            using (var writer = new PcmWavFileWriter(path, PcmAudioFormat.Voice8KhzMono16Bit))
+                writer.Write(Enumerable.Repeat<short>(1200, 160).ToArray());
+
+            await using var coordinator = new RecordingPlaybackCoordinator(
+                () => backend,
+                () => "output",
+                observerFailures.Enqueue);
+            coordinator.PlaybackStateChanged += (_, state) =>
+            {
+                if (!state.IsPlaying)
+                    throw new InvalidOperationException("observer failed");
+            };
+            coordinator.PlaybackStateChanged += (_, state) => states.Enqueue(state.IsPlaying);
+
+            await coordinator.StartAsync(path);
+            await WaitForAsync(() => states.Count == 2 && observerFailures.Count == 1);
+
+            Assert.Equal([true, false], states.ToArray());
+            Assert.Equal("observer failed", Assert.Single(observerFailures).Message);
+            Assert.False(coordinator.IsPlaying());
+            Assert.True(backend.Playback.IsDisposed);
+        }
+        finally
+        {
+            string? directory = Path.GetDirectoryName(path);
+            if (Directory.Exists(directory))
+                Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task ThrowingObserverFaultHandlerDoesNotInterruptPlaybackLifecycle()
+    {
+        string path = Path.Combine(
+            Path.GetTempPath(),
+            "dvmconsole-recording-playback-tests",
+            Guid.NewGuid().ToString("N"),
+            "call.wav");
+        var backend = new FakeAudioBackend { BlockWrites = true };
+        try
+        {
+            using (var writer = new PcmWavFileWriter(path, PcmAudioFormat.Voice8KhzMono16Bit))
+                writer.Write(Enumerable.Repeat<short>(1200, 1600).ToArray());
+
+            await using var coordinator = new RecordingPlaybackCoordinator(
+                () => backend,
+                () => "output",
+                _ => throw new InvalidOperationException("fault handler failed"));
+            coordinator.PlaybackStateChanged += (_, _) =>
+                throw new InvalidOperationException("observer failed");
+
+            await coordinator.StartAsync(path);
+            await WaitForAsync(() => coordinator.IsPlaying(path));
+            await coordinator.StopAsync();
+
+            Assert.False(coordinator.IsPlaying());
+            Assert.True(backend.Playback.IsDisposed);
+        }
+        finally
+        {
+            string? directory = Path.GetDirectoryName(path);
+            if (Directory.Exists(directory))
+                Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task StopIfPlayingWaitsForTheMatchingSessionBeforeFileDeletion()
     {
         string path = Path.Combine(

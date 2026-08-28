@@ -66,6 +66,30 @@ public sealed class ToneTransmitCoordinatorTests
         Assert.Equal(1, backend.Session.SingleToneCalls);
     }
 
+    [Fact]
+    public async Task ExplicitP25SequenceUsesTheProvidedRenderedPcm()
+    {
+        ChannelViewModel channel = CreateP25Channel();
+        var endpoint = new FakeEndpoint(channel);
+        var backend = new RecordingVocoderBackend();
+        await using var coordinator = new ToneTransmitCoordinator(
+            createVocoderBackend: () => backend);
+        var sequence = new GeneratedToneSequence([
+            GeneratedToneStep.Dtmf('1', TimeSpan.FromMilliseconds(20))
+        ]);
+        short[] renderedSamples = Enumerable
+            .Repeat<short>(1_234, VocoderFrameSizes.PcmSamplesPerFrame)
+            .ToArray();
+
+        await coordinator.SendAsync(
+            [new TransmitTarget(channel, endpoint)],
+            sequence,
+            renderedSamples);
+
+        Assert.Equal(renderedSamples, backend.Session.EncodedFrames[0]);
+        Assert.Equal(0, backend.Session.SingleToneCalls);
+    }
+
     private static ChannelViewModel CreateP25Channel()
         => new(new ChannelConfiguration
         {
@@ -115,12 +139,14 @@ public sealed class ToneTransmitCoordinatorTests
 
     private sealed class RecordingVocoderSession : IP25GeneratedToneVocoderSession
     {
+        public List<short[]> EncodedFrames { get; } = [];
         public int EncodeCalls { get; private set; }
         public int SingleToneCalls { get; private set; }
 
         public int Encode(ReadOnlySpan<short> samples, Span<byte> codeword)
         {
             EncodeCalls++;
+            EncodedFrames.Add(samples.ToArray());
             codeword.Fill(0x55);
             return codeword.Length;
         }
