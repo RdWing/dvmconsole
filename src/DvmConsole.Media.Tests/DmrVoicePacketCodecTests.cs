@@ -336,8 +336,7 @@ public sealed class DmrVoicePacketCodecTests
             vocoder,
             playback,
             keys,
-            "System A",
-            privacyExpected: true);
+            "System A");
         byte[] privacy = DmrVoicePacketCodec.CreatePrivacyIndicatorPacket(
             1, 100, 1, 1, options);
         byte[] voice = DmrVoicePacketCodec.CreateVoicePacket(

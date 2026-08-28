@@ -89,6 +89,47 @@ public sealed class PcmRateConverterTests
         Assert.Equal(expected, actual);
     }
 
+    [Theory]
+    [InlineData(44_100, 8_000, 1_137)]
+    [InlineData(32_000, 11_025, 2_103)]
+    public void DownsamplingAtNonIntegerRatiosIsIndependentOfChunkBoundaries(
+        int inputRate,
+        int outputRate,
+        int frequency)
+    {
+        short[] input = CreateTone(inputRate, frequency, amplitude: 10_000, seconds: 1);
+        var wholeInputConverter = new PcmRateConverter(inputRate, outputRate);
+        var chunkedConverter = new PcmRateConverter(inputRate, outputRate);
+
+        short[] expected = wholeInputConverter.Convert(input);
+        var actual = new List<short>();
+        int offset = 0;
+        int[] chunkSizes = [31, 441, 127, 1_003, 58];
+        for (int chunkIndex = 0; offset < input.Length; chunkIndex++)
+        {
+            int count = Math.Min(chunkSizes[chunkIndex % chunkSizes.Length], input.Length - offset);
+            actual.AddRange(chunkedConverter.Convert(input.AsSpan(offset, count)));
+            offset += count;
+        }
+
+        Assert.Equal(outputRate, expected.Length);
+        Assert.Equal(expected, actual);
+    }
+
+    [Fact]
+    public void FortyFourPointOneKilohertzDownsamplingSuppressesStopBand()
+    {
+        const int inputRate = 44_100;
+        const int outputRate = 8_000;
+        var converter = new PcmRateConverter(inputRate, outputRate);
+        short[] input = CreateTone(inputRate, frequency: 6_000, amplitude: 12_000, seconds: 1);
+
+        short[] output = converter.Convert(input);
+
+        double rms = CalculateRms(output.AsSpan(outputRate / 10));
+        Assert.True(rms < 30, $"Expected stop-band RMS below 30, but measured {rms:0.###}.");
+    }
+
     [Fact]
     public void UpsamplingInterpolatesAndKeepsChunkBoundaryState()
     {
@@ -104,11 +145,7 @@ public sealed class PcmRateConverterTests
     [Fact]
     public void StereoConversionPreservesInterleavedChannelSeparation()
     {
-        var converter = Assert.IsType<PcmRateConverter>(Activator.CreateInstance(
-            typeof(PcmRateConverter),
-            8_000,
-            16_000,
-            2));
+        var converter = new PcmRateConverter(8_000, 16_000, channels: 2);
 
         short[] output = converter.Convert(new short[] { 0, 1_000, 100, 1_100 });
 
@@ -164,6 +201,39 @@ public sealed class PcmRateConverterTests
         Assert.Throws<ArgumentException>(() => stereo.GetMaximumOutputSampleCount(1));
         Assert.Throws<ArgumentException>(() => stereo.Convert([0, 1, 2], new short[32]));
         Assert.Throws<ArgumentException>(() => stereo.Convert([0, 1, 2, 3], Span<short>.Empty));
+    }
+
+    [Fact]
+    public void RingBufferWrapsAndGrowsWithoutChangingLogicalSampleOrder()
+    {
+        var buffer = new PcmSampleRingBuffer();
+        short[] initial = Enumerable.Range(0, 256).Select(value => (short)value).ToArray();
+        buffer.Append(initial);
+        buffer.RemoveFirst(200);
+        buffer.Append(Enumerable.Range(256, 400).Select(value => (short)value).ToArray());
+
+        Assert.Equal(456, buffer.Count);
+        Assert.Equal(
+            Enumerable.Range(200, 456).Select(value => (short)value),
+            Enumerable.Range(0, buffer.Count).Select(index => buffer[index]));
+    }
+
+    [Fact]
+    public void LongRunningSmallChunkDownsamplingMatchesWholeInput()
+    {
+        short[] input = CreateTone(48_000, frequency: 1_137, amplitude: 10_000, seconds: 2);
+        var wholeInputConverter = new PcmRateConverter(48_000, 8_000);
+        var streamingConverter = new PcmRateConverter(48_000, 8_000);
+        short[] expected = wholeInputConverter.Convert(input);
+        var actual = new List<short>(expected.Length);
+
+        for (int offset = 0; offset < input.Length; offset += 17)
+        {
+            int count = Math.Min(17, input.Length - offset);
+            actual.AddRange(streamingConverter.Convert(input.AsSpan(offset, count)));
+        }
+
+        Assert.Equal(expected, actual);
     }
 
     private static short[] CreateTone(int sampleRate, int frequency, int amplitude, int seconds)

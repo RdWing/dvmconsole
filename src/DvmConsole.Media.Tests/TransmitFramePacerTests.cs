@@ -9,6 +9,17 @@ namespace DvmConsole.Media.Tests;
 public sealed class TransmitFramePacerTests
 {
     [Fact]
+    public async Task DefaultBacklogIsLimitedToOneSecondOfPacedAudio()
+    {
+        var pacer = new TransmitFramePacer(_ => { }, _ => { });
+
+        Assert.Equal(50, pacer.Capacity);
+
+        pacer.Complete();
+        await pacer.Completion;
+    }
+
+    [Fact]
     public async Task LargeCaptureCallbackCannotBurstTwoP25Ldus()
     {
         var packets = new ConcurrentQueue<byte[]>();
@@ -73,6 +84,27 @@ public sealed class TransmitFramePacerTests
 
         Assert.Equal([160, 40], processed.Select(frame => frame.Length));
         Assert.Null(pacer.Failure);
+    }
+
+    [Fact]
+    public async Task BacklogLimitFailsClosedAndPublishesQueueHealth()
+    {
+        var cadence = new ManualCadence();
+        var faults = new ConcurrentQueue<Exception>();
+        var pacer = new TransmitFramePacer(
+            _ => { },
+            faults.Enqueue,
+            cadence.WaitAsync,
+            capacity: 1);
+
+        Assert.False(pacer.Enqueue(new short[VocoderFrameSizes.PcmSamplesPerFrame * 20]));
+        await pacer.Completion;
+
+        InvalidOperationException failure = Assert.IsType<InvalidOperationException>(pacer.Failure);
+        Assert.Contains("safety limit", failure.Message, StringComparison.Ordinal);
+        Assert.Single(faults);
+        Assert.Equal(1, pacer.CaptureHealth().Capacity);
+        Assert.True(pacer.CaptureHealth().PeakDepth >= 1);
     }
 
     [Fact]

@@ -178,15 +178,11 @@ public sealed class ToneTransmitCoordinator : IAsyncDisposable
 
         try
         {
-            if (definition.Mode is "dmr" or "p25" or "nxdn")
+            if (ChannelProtocolMediaMapper.RequiresVocoder(definition.Protocol))
             {
                 vocoderBackend = createVocoderBackend();
                 vocoderSession = vocoderBackend.CreateSession(
-                    definition.Mode == "dmr"
-                        ? VocoderMode.DmrAmbe
-                        : definition.Mode == "nxdn"
-                            ? VocoderMode.NxdnAmbe
-                            : VocoderMode.P25Imbe);
+                    ChannelProtocolMediaMapper.ToVocoderMode(definition.Protocol));
             }
 
             uint streamId = system.CreateStreamId();
@@ -196,7 +192,7 @@ public sealed class ToneTransmitCoordinator : IAsyncDisposable
                 streamId,
                 vocoderSession,
                 (payload, sequence, stream) => system.SendTraffic(
-                    ToProtocol(definition.Mode),
+                    ChannelProtocolMediaMapper.ToTrafficProtocol(definition.Protocol),
                     payload.Span,
                     sequence,
                     stream),
@@ -210,7 +206,7 @@ public sealed class ToneTransmitCoordinator : IAsyncDisposable
             try
             {
                 var cadence = new TransmitFrameCadence();
-                if (sequence is not null && definition.Mode == "p25")
+                if (sequence is not null && definition.Protocol == ChannelProtocol.P25)
                 {
                     await SendP25SequenceAsync(session, sequence, cadence, cancellationToken).ConfigureAwait(false);
                 }
@@ -282,16 +278,6 @@ public sealed class ToneTransmitCoordinator : IAsyncDisposable
             }
         }
     }
-
-    private static FneTrafficProtocol ToProtocol(string mode)
-        => mode switch
-        {
-            "dmr" => FneTrafficProtocol.Dmr,
-            "p25" => FneTrafficProtocol.P25,
-            "nxdn" => FneTrafficProtocol.Nxdn,
-            "analog" => FneTrafficProtocol.Analog,
-            _ => throw new ArgumentOutOfRangeException(nameof(mode))
-        };
 
     private static async Task SetTransmitStateAsync(
         ChannelViewModel channel,

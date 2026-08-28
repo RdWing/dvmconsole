@@ -1,10 +1,98 @@
 using DvmConsole.FneClient;
+using System.Text.Json;
+using System.Text.Json.Nodes;
 using Xunit;
 
 namespace DvmConsole.Desktop.Tests;
 
 public sealed class RecordingFinalizationSpoolTests
 {
+    [Fact]
+    public void LegacyDescriptorWithoutKnownStateRetainsItsBooleanMeaning()
+    {
+        string root = CreateRoot();
+        try
+        {
+            RecordingFinalizationDescriptor descriptor = CreateDescriptor(root);
+            JsonObject json = JsonNode.Parse(JsonSerializer.Serialize(
+                descriptor,
+                DesktopSettingsJsonContext.Default.RecordingFinalizationDescriptor))!.AsObject();
+            json.Remove(nameof(RecordingFinalizationDescriptor.IsEncryptionKnown));
+
+            RecordingFinalizationDescriptor restored = JsonSerializer.Deserialize(
+                json.ToJsonString(),
+                DesktopSettingsJsonContext.Default.RecordingFinalizationDescriptor)!;
+
+            Assert.True(restored.EncryptionKnown);
+            Assert.False(restored.IsSecure);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void CurrentDescriptorPreservesExplicitUnknownState()
+    {
+        string root = CreateRoot();
+        try
+        {
+            RecordingFinalizationDescriptor descriptor = CreateDescriptor(root) with
+            {
+                IsEncryptionKnown = false
+            };
+            string json = JsonSerializer.Serialize(
+                descriptor,
+                DesktopSettingsJsonContext.Default.RecordingFinalizationDescriptor);
+
+            RecordingFinalizationDescriptor restored = JsonSerializer.Deserialize(
+                json,
+                DesktopSettingsJsonContext.Default.RecordingFinalizationDescriptor)!;
+
+            Assert.False(restored.EncryptionKnown);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void CaptureSnapshotBecomesReadyOnlyAfterRestartOrExplicitClose()
+    {
+        string root = CreateRoot();
+        try
+        {
+            RecordingFinalizationDescriptor descriptor = CreateDescriptor(root);
+            Directory.CreateDirectory(Path.GetDirectoryName(descriptor.WavePath)!);
+            File.WriteAllBytes(descriptor.WavePath, [1, 2, 3]);
+            var currentProcess = new RecordingFinalizationSpool(root);
+
+            currentProcess.PersistCaptureSnapshot(descriptor);
+
+            Assert.Empty(currentProcess.LoadReadyFinalizations());
+            Assert.Equal(0, currentProcess.GetHealth().PendingJobs);
+
+            currentProcess.PersistReady(descriptor);
+
+            Assert.Equal(
+                descriptor.JobId,
+                Assert.Single(currentProcess.LoadReadyFinalizations()).JobId);
+
+            currentProcess.PersistCaptureSnapshot(descriptor);
+            var restartedProcess = new RecordingFinalizationSpool(root);
+
+            Assert.Equal(
+                descriptor.JobId,
+                Assert.Single(restartedProcess.LoadReadyFinalizations()).JobId);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
     [Fact]
     public void PersistsLoadsAndCompletesOneValidatedJob()
     {
@@ -16,8 +104,8 @@ public sealed class RecordingFinalizationSpoolTests
             File.WriteAllBytes(descriptor.WavePath, [1, 2, 3]);
             var spool = new RecordingFinalizationSpool(root);
 
-            string descriptorPath = spool.Persist(descriptor);
-            RecordingFinalizationDescriptor loaded = Assert.Single(spool.LoadPending());
+            string descriptorPath = spool.PersistReady(descriptor);
+            RecordingFinalizationDescriptor loaded = Assert.Single(spool.LoadReadyFinalizations());
 
             Assert.Equal(descriptor.JobId, loaded.JobId);
             Assert.Equal(descriptor.WavePath, loaded.WavePath);
@@ -52,7 +140,7 @@ public sealed class RecordingFinalizationSpoolTests
             };
             var spool = new RecordingFinalizationSpool(root);
 
-            Assert.Throws<InvalidDataException>(() => spool.Persist(descriptor));
+            Assert.Throws<InvalidDataException>(() => spool.PersistReady(descriptor));
         }
         finally
         {
@@ -73,7 +161,7 @@ public sealed class RecordingFinalizationSpoolTests
             File.WriteAllText(Path.Combine(active, "bad.finalize.json"), "{ definitely not json");
             var spool = new RecordingFinalizationSpool(root);
 
-            Assert.Empty(spool.LoadPending());
+            Assert.Empty(spool.LoadReadyFinalizations());
             RecordingFinalizationSpoolHealth health = spool.GetHealth();
 
             Assert.Equal(1, health.QuarantinedJobs);
@@ -108,14 +196,16 @@ public sealed class RecordingFinalizationSpoolTests
                 };
                 Directory.CreateDirectory(Path.GetDirectoryName(descriptor.WavePath)!);
                 File.WriteAllBytes(descriptor.WavePath, source);
-                firstProcess.Persist(descriptor);
+                firstProcess.PersistCaptureSnapshot(descriptor);
                 expected.Add(jobId, source);
             }
 
             // Simulate a process disappearing after durable persistence and a
             // second process reconstructing all work solely from the spool.
             var restartedProcess = new RecordingFinalizationSpool(root);
-            RecordingFinalizationDescriptor[] resumed = restartedProcess.LoadPending().ToArray();
+            RecordingFinalizationDescriptor[] resumed = restartedProcess
+                .LoadReadyFinalizations()
+                .ToArray();
 
             Assert.Equal(100, resumed.Length);
             Assert.Equal(100, restartedProcess.GetHealth().PendingJobs);
@@ -129,7 +219,7 @@ public sealed class RecordingFinalizationSpoolTests
             // Loading is idempotent across another restart and never consumes
             // a valid WAV before successful finalization.
             var secondRestart = new RecordingFinalizationSpool(root);
-            Assert.Equal(100, secondRestart.LoadPending().Count);
+            Assert.Equal(100, secondRestart.LoadReadyFinalizations().Count);
             Assert.All(resumed, descriptor => Assert.True(File.Exists(descriptor.WavePath)));
         }
         finally
@@ -178,7 +268,7 @@ public sealed class RecordingFinalizationSpoolTests
             File.WriteAllBytes(startupOrphan, [1]);
             var spool = new RecordingFinalizationSpool(root);
 
-            Assert.Empty(spool.LoadPending());
+            Assert.Empty(spool.LoadReadyFinalizations());
             Assert.Equal(1, spool.GetHealth().QuarantinedJobs);
 
             string liveWave = Path.Combine(active, $"{Guid.NewGuid():N}.wav");

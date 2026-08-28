@@ -155,10 +155,43 @@ public sealed class OperatorInterfaceGateTests
         AssertCardAction(card, "page-select", "PageSelectionBrush", "PageSelectionBorderBrush");
         AssertCardAction(card, "alert-select", "AlertSelectionBrush", "AlertSelectionBorderBrush");
         AssertCardAction(card, "tar-select", "RecordingSelectionBrush", "RecordingSelectionBorderBrush");
+        XElement pttInputGuard = Assert.Single(card.Descendants(), element =>
+            element.Name.LocalName == "Border" &&
+            Attribute(element, "Classes") == "ptt-input-guard");
+        Assert.Equal("Transparent", Attribute(pttInputGuard, "Background"));
         Assert.Single(card.Descendants(), element =>
             element.Name.LocalName == "Button" &&
             Attribute(element, "Classes")?.Split(' ').Contains("ptt") == true);
         Assert.DoesNotContain(card.Descendants(), element => element.Name.LocalName == "ToggleButton");
+    }
+
+    [Fact]
+    public void ChannelAudioMeterClipsAFullWidthThresholdScale()
+    {
+        XDocument shell = XDocument.Parse(ReadDesktopSource("MainWindow.axaml"));
+        XElement meter = shell.Descendants()
+            .Single(element => Attribute(element, "Classes") == "channel-audio-meter");
+        XElement fillClip = meter.Descendants()
+            .Single(element => Attribute(element, "Classes") == "channel-audio-meter-fill-clip");
+        XElement colorScale = fillClip.Elements()
+            .Single(element => element.Name.LocalName == "Border");
+
+        Assert.Equal("{Binding AudioFillWidth}", Attribute(fillClip, "Width"));
+        Assert.Equal("True", Attribute(fillClip, "ClipToBounds"));
+        Assert.Equal("{Binding AudioMeterWidth}", Attribute(colorScale, "Width"));
+        Assert.DoesNotContain(fillClip.Descendants(), element => element.Name.LocalName == "ScaleTransform");
+
+        string[] offsets = colorScale.Descendants()
+            .Where(element => element.Name.LocalName == "GradientStop")
+            .Select(element => Attribute(element, "Offset")!)
+            .ToArray();
+        Assert.Equal(["0", "0.76", "0.76", "0.88", "0.88", "1"], offsets);
+        Assert.Equal(
+            ChannelAudioMeter.YellowThresholdDisplayLevel / 100,
+            double.Parse(offsets[1], CultureInfo.InvariantCulture));
+        Assert.Equal(
+            ChannelAudioMeter.RedThresholdDisplayLevel / 100,
+            double.Parse(offsets[3], CultureInfo.InvariantCulture));
     }
 
     [Fact]

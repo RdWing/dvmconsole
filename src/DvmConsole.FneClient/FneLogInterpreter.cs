@@ -10,6 +10,9 @@ internal static class FneLogInterpreter
     public static bool IsLoginRequest(string message)
         => message.Contains("Sending login request", StringComparison.OrdinalIgnoreCase);
 
+    public static bool IsLoginAcknowledgement(string message)
+        => message.Contains("login ACK received", StringComparison.OrdinalIgnoreCase);
+
     public static bool IsRoutineHealthyKeepalive(string message)
         => message.Contains("RPTPING sent", StringComparison.OrdinalIgnoreCase) ||
            message.Contains("MSTPONG received", StringComparison.OrdinalIgnoreCase);
@@ -41,7 +44,7 @@ internal static class FneLogInterpreter
         if (message.Contains("Network Received", StringComparison.OrdinalIgnoreCase))
             return new FneLogStatusUpdate(currentState, "FNE traffic packet received");
 
-        if (message.Contains("login ACK received", StringComparison.OrdinalIgnoreCase))
+        if (IsLoginAcknowledgement(message))
         {
             return new FneLogStatusUpdate(
                 FneConnectionState.Authenticating,

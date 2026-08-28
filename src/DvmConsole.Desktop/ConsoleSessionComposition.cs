@@ -91,20 +91,23 @@ internal sealed class ConsoleSessionFactory
             return CreateRejected(loadResult.StatusText, topology);
 
         ConsoleConfiguration configuration = topology.Configuration;
-        (P25KeyRing p25KeyRing, DmrKeyRing dmrKeyRing, NxdnKeyRing nxdnKeyRing) = LoadKeyRings(
-            configuration,
-            out string? keyWarning);
-        IReadOnlyList<ZoneViewModel> zones = CreateZones(
-            configuration,
-            p25KeyRing,
-            dmrKeyRing,
-            nxdnKeyRing);
-        string status = string.IsNullOrWhiteSpace(keyWarning)
-            ? loadResult.StatusText
-            : $"{loadResult.StatusText}\n{keyWarning}";
         var services = new ConsoleSessionServices();
         return ConsoleSessionConstruction.Create(services, () =>
         {
+            (P25KeyRing p25KeyRing, DmrKeyRing dmrKeyRing, NxdnKeyRing nxdnKeyRing) = LoadKeyRings(
+                configuration,
+                out string? keyWarning);
+            services.Connection.Own("p25-key-ring", p25KeyRing);
+            services.Connection.Own("dmr-key-ring", dmrKeyRing);
+            services.Connection.Own("nxdn-key-ring", nxdnKeyRing);
+            IReadOnlyList<ZoneViewModel> zones = CreateZones(
+                configuration,
+                p25KeyRing,
+                dmrKeyRing,
+                nxdnKeyRing);
+            string status = string.IsNullOrWhiteSpace(keyWarning)
+                ? loadResult.StatusText
+                : $"{loadResult.StatusText}\n{keyWarning}";
             var viewModel = new MainWindowViewModel(
                 status,
                 CreateSystemViewModels(configuration, zones),
@@ -208,11 +211,18 @@ internal sealed class ConsoleSessionFactory
         }
         catch (Exception exception) when (exception is IOException or InvalidDataException or FormatException or YamlDotNet.Core.YamlException)
         {
-            warning = $"Encryption keys unavailable: {exception.Message} Encrypted P25 channels are disabled until FNE/KMM supplies their keys. Encrypted DMR and NXDN channels require local keys.";
+            warning = $"Encryption keys unavailable: {exception.Message} Clear receive remains available. Secure transmit and encrypted receive require the applicable key; P25 keys may arrive from FNE/KMM, while DMR and NXDN use local keys.";
             p25Ring.Dispose();
             dmrRing.Dispose();
             nxdnRing.Dispose();
             return (new P25KeyRing(), new DmrKeyRing(), new NxdnKeyRing());
+        }
+        catch
+        {
+            p25Ring.Dispose();
+            dmrRing.Dispose();
+            nxdnRing.Dispose();
+            throw;
         }
         return (p25Ring, dmrRing, nxdnRing);
     }
@@ -232,8 +242,11 @@ internal sealed class ConsoleSessionFactory
             channels.Add(channel);
         }
 
-        return configuration.Systems.Select((system, systemIndex) =>
+        return OwnedResourceCollectionBuilder.Create(
+            configuration.Systems.Count,
+            systemIndex =>
         {
+            SystemConfiguration system = configuration.Systems[systemIndex];
             IBrush systemAccent = SystemAccentPalette.GetBrush(systemIndex);
             IReadOnlyList<ZoneViewModel> systemZones = zones
                 .Select(zone => new ZoneViewModel(
@@ -257,7 +270,7 @@ internal sealed class ConsoleSessionFactory
                     : [],
                 systemZones,
                 systemIndex);
-        }).ToArray();
+        });
     }
 }
 

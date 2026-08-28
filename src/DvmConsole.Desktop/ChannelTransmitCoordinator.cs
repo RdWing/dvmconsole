@@ -1,4 +1,5 @@
 using DvmConsole.Audio;
+using DvmConsole.Core.Runtime;
 using DvmConsole.FneClient;
 using DvmConsole.Media;
 using DvmConsole.Operations;
@@ -73,6 +74,24 @@ public sealed class ChannelTransmitCoordinator : IAsyncDisposable
         }
     }
     public bool IsMicrophoneAudioSuppressed => microphoneAudioSuppressed;
+    public TransmitQueueHealth QueueHealth
+    {
+        get
+        {
+            ActiveTransmit[] snapshot = Volatile.Read(ref activeSnapshot);
+            if (snapshot.Length == 0)
+                return default;
+
+            TransmitQueueHealth[] health = snapshot
+                .Select(entry => entry.Session.QueueHealth)
+                .ToArray();
+            return new TransmitQueueHealth(
+                health.Sum(entry => entry.Depth),
+                health.Sum(entry => entry.PeakDepth),
+                health.Max(entry => entry.OldestAge),
+                health.Sum(entry => entry.Capacity));
+        }
+    }
     public ChannelViewModel? ActiveChannel => Volatile.Read(ref activeSnapshot).FirstOrDefault()?.Channel;
     public IReadOnlyList<ChannelViewModel> ActiveChannels => Volatile.Read(ref activeSnapshot)
         .Select(entry => entry.Channel)
@@ -355,31 +374,24 @@ public sealed class ChannelTransmitCoordinator : IAsyncDisposable
                 else
                     createdSharedCapture = sharedCapture;
 
-                if (requested.Any(target => target.Channel.Definition.Mode != "analog"))
+                if (requested.Any(target => ChannelProtocolMediaMapper.RequiresVocoder(
+                        target.Channel.Definition.Protocol)))
                     createdVocoderBackend = createVocoderBackend();
 
                 foreach (TransmitTarget target in requested)
                 {
-                    bool isDmr = target.Channel.Definition.Mode == "dmr";
-                    bool isNxdn = target.Channel.Definition.Mode == "nxdn";
-                    bool isAnalog = target.Channel.Definition.Mode == "analog";
+                    ChannelProtocol protocol = target.Channel.Definition.Protocol;
                     uint sourceId = target.System.SourceId!.Value;
                     uint streamId = target.System.CreateStreamId();
                     SharedAudioCapture.Lease lease = createdSharedCapture!.CreateLease();
                     Action<ReadOnlyMemory<byte>, ushort, uint> send = (payload, sequence, stream) => target.System.SendTraffic(
-                        isDmr
-                            ? FneTrafficProtocol.Dmr
-                            : isNxdn
-                                ? FneTrafficProtocol.Nxdn
-                            : isAnalog
-                                ? FneTrafficProtocol.Analog
-                                : FneTrafficProtocol.P25,
+                        ChannelProtocolMediaMapper.ToTrafficProtocol(protocol),
                         payload.Span,
                         sequence,
                         stream);
 
                     ITransmitCaptureSession session;
-                    if (isAnalog)
+                    if (protocol == ChannelProtocol.Analog)
                     {
                         session = new AnalogTransmitCaptureSession(
                             lease,
@@ -391,13 +403,10 @@ public sealed class ChannelTransmitCoordinator : IAsyncDisposable
                     else
                     {
                         IVocoderSession vocoder = createdVocoderBackend!.CreateSession(
-                            isDmr
-                                ? VocoderMode.DmrAmbe
-                                : isNxdn
-                                    ? VocoderMode.NxdnAmbe
-                                    : VocoderMode.P25Imbe);
-                        session = isDmr
-                            ? new DmrTransmitCaptureSession(
+                            ChannelProtocolMediaMapper.ToVocoderMode(protocol));
+                        session = protocol switch
+                        {
+                            ChannelProtocol.Dmr => new DmrTransmitCaptureSession(
                                 lease,
                                 vocoder,
                                 sourceId,
@@ -405,24 +414,26 @@ public sealed class ChannelTransmitCoordinator : IAsyncDisposable
                                 target.Channel.Definition.Slot,
                                 streamId,
                                 send,
-                                CreateDmrPrivacyOptions(target.Channel))
-                            : isNxdn
-                                ? new NxdnTransmitCaptureSession(
+                                CreateDmrPrivacyOptions(target.Channel)),
+                            ChannelProtocol.Nxdn => new NxdnTransmitCaptureSession(
                                     lease,
                                     vocoder,
                                     sourceId,
                                     target.Channel.Definition.DestinationId,
                                     streamId,
                                     send,
-                                    privacy: CreateNxdnPrivacyOptions(target.Channel))
-                            : new P25TransmitCaptureSession(
+                                    privacy: CreateNxdnPrivacyOptions(target.Channel)),
+                            ChannelProtocol.P25 => new P25TransmitCaptureSession(
                                 lease,
                                 vocoder,
                                 sourceId,
                                 target.Channel.Definition.DestinationId,
                                 streamId,
                                 send,
-                                CreateP25EncryptionOptions(target.Channel));
+                                CreateP25EncryptionOptions(target.Channel)),
+                            _ => throw new InvalidOperationException(
+                                $"Unsupported transmit protocol '{protocol}'.")
+                        };
                     }
 
                     session.Faulted += HandleSessionFaulted;
@@ -509,6 +520,8 @@ public sealed class ChannelTransmitCoordinator : IAsyncDisposable
         {
             if (!target.Channel.CanTransmit)
                 throw new InvalidOperationException($"{target.Channel.Name} is RX-only or cannot transmit with its configured encryption.");
+            if (target.Channel.IsReceivePresentationActive)
+                throw new InvalidOperationException($"{target.Channel.Name} is currently receiving.");
             if (!target.System.Channels.Contains(target.Channel))
                 throw new InvalidOperationException($"{target.Channel.Name} does not belong to FNE system '{target.System.Name}'.");
             // DMR transmission is intentionally fail-open with respect to the
@@ -518,7 +531,7 @@ public sealed class ChannelTransmitCoordinator : IAsyncDisposable
                 throw new InvalidOperationException($"The FNE system '{target.System.Name}' is not connected.");
             if (target.System.SourceId is not uint sourceId || sourceId == 0)
                 throw new InvalidOperationException($"The FNE system '{target.System.Name}' has no valid transmit RID.");
-            if (target.Channel.Definition.Mode == "nxdn" &&
+            if (target.Channel.Definition.Protocol == ChannelProtocol.Nxdn &&
                 (sourceId > ushort.MaxValue || target.Channel.Definition.DestinationId > ushort.MaxValue))
             {
                 throw new InvalidOperationException("NXDN transmit requires 16-bit source and destination IDs.");
@@ -630,21 +643,17 @@ public sealed class ChannelTransmitCoordinator : IAsyncDisposable
 
     private async Task DisposeEntriesAsync(IEnumerable<ActiveTransmit> entries)
     {
-        Exception? failure = null;
-        foreach (ActiveTransmit entry in entries.Reverse())
-        {
-            entry.Session.Faulted -= HandleSessionFaulted;
-            try
-            {
-                await entry.Session.DisposeAsync().ConfigureAwait(false);
-            }
-            catch (Exception exception)
-            {
-                failure ??= exception;
-            }
-        }
-        if (failure is not null)
-            throw failure;
+        Task[] disposals = entries
+            .Reverse()
+            .Select(DisposeEntryAsync)
+            .ToArray();
+        await Task.WhenAll(disposals).ConfigureAwait(false);
+    }
+
+    private async Task DisposeEntryAsync(ActiveTransmit entry)
+    {
+        entry.Session.Faulted -= HandleSessionFaulted;
+        await entry.Session.DisposeAsync().ConfigureAwait(false);
     }
 
     private void HandleSessionFaulted(object? sender, Exception exception) => Faulted?.Invoke(this, exception);

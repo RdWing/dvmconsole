@@ -15,6 +15,8 @@ internal static class ChannelCardInput
         {
             if (current is Button or Slider)
                 return true;
+            if (current is Control control && control.Classes.Contains("ptt-input-guard"))
+                return true;
 
             current = current switch
             {

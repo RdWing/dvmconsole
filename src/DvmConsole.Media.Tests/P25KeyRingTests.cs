@@ -65,8 +65,8 @@ public sealed class P25KeyRingTests
     public void RejectsUnsupportedLocalKeys()
     {
         Assert.Throws<FormatException>(() => new P25KeyRing(SystemName, new KeyContainer
-            {
-                Keys =
+        {
+            Keys =
                 [
                     new KeyEntry
                     {
@@ -75,7 +75,7 @@ public sealed class P25KeyRingTests
                         Key = "00112233"
                     }
                 ]
-            }));
+        }));
     }
 
     [Fact]
@@ -93,8 +93,8 @@ public sealed class P25KeyRingTests
     public void RejectsIncorrectKeyLengths(byte algorithmId, string key)
     {
         Assert.Throws<FormatException>(() => new P25KeyRing(SystemName, new KeyContainer
-            {
-                Keys =
+        {
+            Keys =
                 [
                     new KeyEntry
                     {
@@ -103,7 +103,7 @@ public sealed class P25KeyRingTests
                         Key = key
                     }
                 ]
-            }));
+        }));
     }
 
     [Theory]
@@ -112,8 +112,8 @@ public sealed class P25KeyRingTests
     public void RejectsEmptyOrOversizedAesKeys(string key)
     {
         Assert.Throws<FormatException>(() => new P25KeyRing(SystemName, new KeyContainer
-            {
-                Keys =
+        {
+            Keys =
                 [
                     new KeyEntry
                     {
@@ -122,7 +122,7 @@ public sealed class P25KeyRingTests
                         Key = key
                     }
                 ]
-            }));
+        }));
     }
 
     [Fact]

@@ -379,7 +379,7 @@ public sealed class WebStreamPlaybackCoordinator : IAsyncDisposable
                    !requestedDeviceId.Equals("default", StringComparison.OrdinalIgnoreCase) &&
                    device.Id.Equals(requestedDeviceId, StringComparison.OrdinalIgnoreCase))
                ?? devices.FirstOrDefault(device => device.IsDefault)
-               ?? devices.FirstOrDefault()
+               ?? (devices.Count > 0 ? devices[0] : null)
                ?? throw new InvalidOperationException("No audio output device is available.");
     }
 

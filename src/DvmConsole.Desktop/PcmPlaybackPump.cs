@@ -28,8 +28,9 @@ internal static class PcmPlaybackPump
             if (sampleCount == 0)
                 return wroteOutput;
 
-            short[] output = rateConverter?.Convert(input.AsSpan(0, sampleCount))
-                ?? input.AsSpan(0, sampleCount).ToArray();
+            ReadOnlyMemory<short> output = rateConverter is null
+                ? input.AsMemory(0, sampleCount)
+                : rateConverter.Convert(input.AsSpan(0, sampleCount));
             if (output.Length == 0)
                 continue;
 

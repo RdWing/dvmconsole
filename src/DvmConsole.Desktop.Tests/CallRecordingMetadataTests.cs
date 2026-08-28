@@ -32,4 +32,48 @@ public sealed class CallRecordingMetadataTests
             StringComparison.Ordinal);
         Assert.Contains("alias Medic 42", metadata.DetailText, StringComparison.Ordinal);
     }
+
+    [Fact]
+    public void RecordingOnlyHistoryRestoresExactEncryptionIdentifiers()
+    {
+        var metadata = new CallRecordingMetadata
+        {
+            SchemaVersion = CallRecordingMetadata.CurrentSchemaVersion,
+            Protocol = "DMR",
+            IsEncrypted = true,
+            EncryptionState = CallRecordingEncryptionState.Secure,
+            EncryptionAlgorithmId = DvmConsole.Media.DmrPrivacyAlgorithms.DesOfb,
+            EncryptionAlgorithm = "DES-OFB",
+            EncryptionKeyIdValue = 0x50,
+            EncryptionKeyId = "0x50"
+        };
+
+        CallHistoryEntry entry = CallHistoryEntry.CreateRecordingOnly(metadata);
+
+        Assert.True(entry.EncryptionKnown);
+        Assert.True(entry.Encrypted);
+        Assert.Equal(DvmConsole.Media.DmrPrivacyAlgorithms.DesOfb, entry.EncryptionAlgorithmId);
+        Assert.Equal((ushort)0x50, entry.EncryptionKeyId);
+        Assert.Equal("Secure · DES", entry.EncryptionText);
+    }
+
+    [Fact]
+    public void CurrentSchemaDistinguishesUnknownFromClear()
+    {
+        var unknown = new CallRecordingMetadata
+        {
+            SchemaVersion = CallRecordingMetadata.CurrentSchemaVersion,
+            EncryptionState = CallRecordingEncryptionState.Unknown
+        };
+        var clear = new CallRecordingMetadata
+        {
+            SchemaVersion = CallRecordingMetadata.CurrentSchemaVersion,
+            EncryptionState = CallRecordingEncryptionState.Clear
+        };
+
+        Assert.Equal("Unknown", unknown.EncryptionText);
+        Assert.False(unknown.IsEncryptionKnown);
+        Assert.Equal("Clear", clear.EncryptionText);
+        Assert.True(clear.IsEncryptionKnown);
+    }
 }

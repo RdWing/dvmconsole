@@ -1,4 +1,6 @@
+using System.Buffers;
 using System.Buffers.Binary;
+using System.Runtime.InteropServices;
 using DvmConsole.Audio;
 
 namespace DvmConsole.Media;
@@ -51,11 +53,36 @@ public sealed class PcmWavFileWriter : IDisposable, IAsyncDisposable
         if (dataBytes > uint.MaxValue - bytesToWrite)
             throw new InvalidOperationException("The WAV recording exceeds the RIFF file-size limit.");
 
-        byte[] bytes = new byte[bytesToWrite];
-        for (int index = 0; index < samples.Length; index++)
-            BinaryPrimitives.WriteInt16LittleEndian(bytes.AsSpan(index * sizeof(short), sizeof(short)), samples[index]);
-
-        stream.Write(bytes);
+        if (BitConverter.IsLittleEndian)
+        {
+            stream.Write(MemoryMarshal.AsBytes(samples));
+        }
+        else
+        {
+            const int ChunkSamples = 2_048;
+            byte[] buffer = ArrayPool<byte>.Shared.Rent(ChunkSamples * sizeof(short));
+            try
+            {
+                for (int offset = 0; offset < samples.Length; offset += ChunkSamples)
+                {
+                    ReadOnlySpan<short> chunk = samples.Slice(
+                        offset,
+                        Math.Min(ChunkSamples, samples.Length - offset));
+                    Span<byte> bytes = buffer.AsSpan(0, chunk.Length * sizeof(short));
+                    for (int index = 0; index < chunk.Length; index++)
+                    {
+                        BinaryPrimitives.WriteInt16LittleEndian(
+                            bytes.Slice(index * sizeof(short), sizeof(short)),
+                            chunk[index]);
+                    }
+                    stream.Write(bytes);
+                }
+            }
+            finally
+            {
+                ArrayPool<byte>.Shared.Return(buffer);
+            }
+        }
         dataBytes += bytesToWrite;
     }
 

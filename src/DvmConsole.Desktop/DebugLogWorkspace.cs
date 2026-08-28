@@ -3,6 +3,7 @@ using System.Collections.ObjectModel;
 using System.Collections.Specialized;
 using System.ComponentModel;
 using System.Globalization;
+using System.Text;
 
 namespace DvmConsole.Desktop;
 
@@ -10,24 +11,32 @@ namespace DvmConsole.Desktop;
 // session. MainWindowViewModel only forwards the binding-facing surface.
 internal sealed class DebugLogWorkspace : INotifyPropertyChanged, IDisposable
 {
+    private static readonly TimeSpan DefaultFilterDebounceInterval = TimeSpan.FromMilliseconds(150);
     private static readonly IReadOnlyList<string> SeverityFilters =
         Array.AsReadOnly(["All", "Debug", "Info", "Warning", "Error", "Fatal"]);
 
     private readonly BoundedDebugLogBuffer buffer = new();
     private readonly FilteredDebugLogCollection filtered;
     private readonly DebugLogDrainController drain;
+    private readonly DebouncedUiAction filterDebounce;
     private string filterText = string.Empty;
     private string severityFilter = "Info";
 
     public DebugLogWorkspace(
         Func<bool> hasUiThreadAccess,
         Action<Action> postToUiThread,
-        Func<bool> isStopped)
+        Func<bool> isStopped,
+        TimeSpan? filterDebounceInterval = null,
+        Func<TimeSpan, CancellationToken, Task>? debounceDelayAsync = null)
     {
         ArgumentNullException.ThrowIfNull(hasUiThreadAccess);
         ArgumentNullException.ThrowIfNull(postToUiThread);
         ArgumentNullException.ThrowIfNull(isStopped);
         filtered = new FilteredDebugLogCollection(buffer.Entries);
+        filterDebounce = new DebouncedUiAction(
+            filterDebounceInterval ?? DefaultFilterDebounceInterval,
+            postToUiThread,
+            debounceDelayAsync);
         drain = new DebugLogDrainController(
             hasUiThreadAccess,
             postToUiThread,
@@ -59,7 +68,7 @@ internal sealed class DebugLogWorkspace : INotifyPropertyChanged, IDisposable
                 return;
 
             filterText = normalized;
-            filtered.SetFilter(SeverityFilter, normalized);
+            filterDebounce.Schedule(() => filtered.SetFilter(SeverityFilter, normalized));
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(FilterText)));
         }
     }
@@ -74,6 +83,7 @@ internal sealed class DebugLogWorkspace : INotifyPropertyChanged, IDisposable
                 return;
 
             severityFilter = normalized;
+            filterDebounce.Cancel();
             filtered.SetFilter(normalized, FilterText);
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SeverityFilter)));
         }
@@ -101,7 +111,26 @@ internal sealed class DebugLogWorkspace : INotifyPropertyChanged, IDisposable
         if (!string.IsNullOrWhiteSpace(directory))
             Directory.CreateDirectory(directory);
 
-        using var writer = new StreamWriter(fullPath, append: false);
+        using var destination = new FileStream(fullPath, FileMode.Create, FileAccess.Write, FileShare.Read);
+        return Export(destination);
+    }
+
+    public int Export(Stream destination)
+    {
+        ArgumentNullException.ThrowIfNull(destination);
+        if (!destination.CanWrite)
+            throw new ArgumentException("The debug-log destination is not writable.", nameof(destination));
+        if (destination.CanSeek)
+        {
+            destination.Position = 0;
+            destination.SetLength(0);
+        }
+
+        using var writer = new StreamWriter(
+            destination,
+            new UTF8Encoding(encoderShouldEmitUTF8Identifier: false),
+            bufferSize: 1_024,
+            leaveOpen: true);
         writer.WriteLine("Timestamp\tSeverity\tSource\tMessage");
         foreach (DebugLogEntry entry in Entries.Reverse())
         {
@@ -113,12 +142,16 @@ internal sealed class DebugLogWorkspace : INotifyPropertyChanged, IDisposable
             writer.Write('\t');
             writer.WriteLine(DebugLogRedactor.Redact(entry.Message).Replace("\r", " ").Replace("\n", " "));
         }
+        writer.Flush();
 
         return Entries.Count;
     }
 
     public void Dispose()
-        => filtered.Dispose();
+    {
+        filterDebounce.Dispose();
+        filtered.Dispose();
+    }
 
     private void PublishBatch(IReadOnlyList<DebugLogEntry> batch)
     {

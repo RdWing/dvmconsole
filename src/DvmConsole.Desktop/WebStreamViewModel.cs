@@ -153,6 +153,6 @@ public sealed class WebStreamViewModel : INotifyPropertyChanged
                    !string.IsNullOrWhiteSpace(OutputDeviceIdText) &&
                    device.Id.Equals(OutputDeviceIdText, StringComparison.OrdinalIgnoreCase)) ??
                outputDeviceOptions.FirstOrDefault(device => device.IsDefault) ??
-               outputDeviceOptions.FirstOrDefault();
+               (outputDeviceOptions.Count > 0 ? outputDeviceOptions[0] : null);
     }
 }

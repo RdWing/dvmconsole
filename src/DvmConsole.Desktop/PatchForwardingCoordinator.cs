@@ -54,6 +54,24 @@ public sealed class PatchForwardingCoordinator : IDisposable
         set => router.SourceIdPassthrough = value;
     }
 
+    internal TransmitQueueHealth CaptureQueueHealth()
+    {
+        PatchTransmitPump[] pumps;
+        lock (sync)
+            pumps = targetPumps.Values.Distinct().ToArray();
+        if (pumps.Length == 0)
+            return default;
+
+        TransmitQueueHealth[] health = pumps
+            .Select(pump => pump.CaptureHealth())
+            .ToArray();
+        return new TransmitQueueHealth(
+            health.Sum(entry => entry.Depth),
+            health.Sum(entry => entry.PeakDepth),
+            health.Max(entry => entry.OldestAge),
+            health.Sum(entry => entry.Capacity));
+    }
+
     public IReadOnlyList<string> GroupNames => router.GroupNames;
 
     public void ApplyMemberships(
@@ -257,13 +275,9 @@ public sealed class PatchForwardingCoordinator : IDisposable
                 channel,
                 transmitDefinition,
                 nxdnKeyResolver);
-            createdVocoderSession = transmitDefinition.Mode is "dmr" or "p25" or "nxdn"
+            createdVocoderSession = ChannelProtocolMediaMapper.RequiresVocoder(transmitDefinition.Protocol)
                 ? (vocoderBackend ??= createVocoderBackend()).CreateSession(
-                    transmitDefinition.Mode == "dmr"
-                        ? VocoderMode.DmrAmbe
-                        : transmitDefinition.Mode == "nxdn"
-                            ? VocoderMode.NxdnAmbe
-                            : VocoderMode.P25Imbe)
+                    ChannelProtocolMediaMapper.ToVocoderMode(transmitDefinition.Protocol))
                 : null;
             session = new PatchTransmitSession(
                 transmitDefinition,
@@ -271,7 +285,7 @@ public sealed class PatchForwardingCoordinator : IDisposable
                 streamId,
                 createdVocoderSession,
                 (payload, sequence, stream) => system.SendTraffic(
-                    ToProtocol(transmitDefinition.Mode),
+                    ChannelProtocolMediaMapper.ToTrafficProtocol(transmitDefinition.Protocol),
                     payload.Span,
                     sequence,
                     stream),
@@ -368,16 +382,6 @@ public sealed class PatchForwardingCoordinator : IDisposable
 
     private static PatchMemberAddress ToAddress(ChannelViewModel channel)
         => PatchMemberResolver.FromChannel(channel);
-
-    private static FneTrafficProtocol ToProtocol(string mode)
-        => mode switch
-        {
-            "dmr" => FneTrafficProtocol.Dmr,
-            "p25" => FneTrafficProtocol.P25,
-            "nxdn" => FneTrafficProtocol.Nxdn,
-            "analog" => FneTrafficProtocol.Analog,
-            _ => throw new ArgumentOutOfRangeException(nameof(mode))
-        };
 
     private static string BuildStreamKey(PatchMemberAddress member, uint streamId)
         => $"{member.Key}|{streamId}";

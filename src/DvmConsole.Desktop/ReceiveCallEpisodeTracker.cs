@@ -33,6 +33,13 @@ internal readonly record struct ReceiveCallEpisodeObservation(
     bool StreamAdded,
     int StreamCount);
 
+internal enum ReceivePhysicalEndReason
+{
+    Replaced,
+    InactivityTimeout,
+    ConfirmedTerminator
+}
+
 internal sealed record ReceiveCallEpisodeSnapshot(
     long EpisodeId,
     string SystemName,
@@ -46,7 +53,7 @@ internal sealed record ReceiveCallEpisodeSnapshot(
     DateTimeOffset StartedAt,
     DateTimeOffset LastActivityAt,
     DateTimeOffset PresentationEndAt,
-    TrafficEncryptionMetadata? Encryption);
+    EncryptionSnapshot Encryption);
 
 // Correlates unstable physical FNE stream IDs without changing decoder,
 // lifecycle, or wire ownership. Physical stream mappings remain available for
@@ -94,9 +101,21 @@ internal sealed class ReceiveCallEpisodeTracker
             {
                 TimeSpan continuationWindow = ReceiveCallEpisodePolicy.GetContinuationWindow(
                     traffic.Protocol);
-                if (!definitiveRestart ||
+                EncryptionSnapshot restartEncryption =
+                    EncryptionSnapshotResolver.TryResolve(traffic) ?? EncryptionSnapshot.Unknown;
+                bool restartAfterConfirmedEnd =
+                    definitiveRestart &&
+                    mapped.LastPhysicalEndReason == ReceivePhysicalEndReason.ConfirmedTerminator;
+                bool restartMustEstablishSecurity =
+                    definitiveRestart &&
+                    mapped.LastPhysicalEndAt is not null &&
+                    mapped.Encryption.IsKnown &&
+                    !restartEncryption.IsKnown;
+                if (!restartAfterConfirmedEnd &&
+                    !restartMustEstablishSecurity &&
+                    (!definitiveRestart ||
                     continuationWindow <= TimeSpan.Zero ||
-                    observedAt - mapped.LastActivityAt <= continuationWindow)
+                    observedAt - mapped.LastActivityAt <= continuationWindow))
                 {
                     ObserveMappedTraffic(mapped, traffic, observedAt);
                     return CreateObservation(mapped, episodeStarted: false, streamAdded: false);
@@ -113,10 +132,11 @@ internal sealed class ReceiveCallEpisodeTracker
 
             TimeSpan window = ReceiveCallEpisodePolicy.GetContinuationWindow(traffic.Protocol);
             var identity = ReceiveCallIdentity.Create(systemName, traffic);
-            TrafficEncryptionMetadata? encryption = TrafficEncryptionMetadataResolver.TryResolve(traffic);
+            EncryptionSnapshot encryption =
+                EncryptionSnapshotResolver.TryResolve(traffic) ?? EncryptionSnapshot.Unknown;
             EpisodeState? episode = window <= TimeSpan.Zero
                 ? null
-                : FindContinuation(identity, encryption, observedAt, window);
+                : FindContinuation(identity, encryption, observedAt, window, definitiveRestart);
             bool episodeStarted = episode is null;
             if (episode is null)
             {
@@ -136,8 +156,13 @@ internal sealed class ReceiveCallEpisodeTracker
             }
 
             bool streamAdded = episode.StreamIds.Add(traffic.StreamId);
+            if (streamAdded)
+            {
+                episode.LastPhysicalEndAt = null;
+                episode.LastPhysicalEndReason = null;
+            }
             episode.LastActivityAt = observedAt;
-            episode.MergeEncryption(encryption);
+            episode.ObserveEncryption(traffic);
             byPhysicalStream[physicalKey] = episode;
             return CreateObservation(episode, episodeStarted, streamAdded);
         }
@@ -168,17 +193,15 @@ internal sealed class ReceiveCallEpisodeTracker
         string systemName,
         FneTrafficProtocol protocol,
         uint physicalStreamId,
-        DateTimeOffset endedAt)
+        DateTimeOffset endedAt,
+        ReceivePhysicalEndReason reason)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(systemName);
         lock (sync)
         {
             var key = new PhysicalStreamKey(systemName, protocol, physicalStreamId);
-            if (byPhysicalStream.TryGetValue(key, out EpisodeState? episode) &&
-                (episode.LastPhysicalEndAt is null || endedAt > episode.LastPhysicalEndAt))
-            {
-                episode.LastPhysicalEndAt = endedAt;
-            }
+            if (byPhysicalStream.TryGetValue(key, out EpisodeState? episode))
+                episode.ObservePhysicalEnd(endedAt, reason);
         }
     }
 
@@ -235,9 +258,10 @@ internal sealed class ReceiveCallEpisodeTracker
 
     private EpisodeState? FindContinuation(
         ReceiveCallIdentity identity,
-        TrafficEncryptionMetadata? encryption,
+        EncryptionSnapshot encryption,
         DateTimeOffset observedAt,
-        TimeSpan window)
+        TimeSpan window,
+        bool definitiveRestart)
     {
         if (!currentByIdentity.TryGetValue(identity, out List<EpisodeState>? candidates))
             return null;
@@ -245,6 +269,8 @@ internal sealed class ReceiveCallEpisodeTracker
         return candidates
             .Where(candidate =>
                 candidate.CompletedAt is null &&
+                (!definitiveRestart ||
+                 candidate.LastPhysicalEndReason != ReceivePhysicalEndReason.ConfirmedTerminator) &&
                 observedAt >= candidate.LastActivityAt &&
                 observedAt - candidate.LastActivityAt <= window &&
                 candidate.IsEncryptionCompatible(encryption))
@@ -259,7 +285,13 @@ internal sealed class ReceiveCallEpisodeTracker
     {
         if (CanStartOrContinueEpisode(traffic) && observedAt > episode.LastActivityAt)
             episode.LastActivityAt = observedAt;
-        episode.MergeEncryption(TrafficEncryptionMetadataResolver.TryResolve(traffic));
+        if (ReceiveTrafficClassifier.IsTerminator(traffic))
+        {
+            episode.ObservePhysicalEnd(
+                observedAt,
+                ReceivePhysicalEndReason.ConfirmedTerminator);
+        }
+        episode.ObserveEncryption(traffic);
     }
 
     private static ReceiveCallEpisodeObservation CreateObservation(
@@ -369,8 +401,10 @@ internal sealed class ReceiveCallEpisodeTracker
         ReceiveCallIdentity identity,
         uint primaryStreamId,
         DateTimeOffset startedAt,
-        TrafficEncryptionMetadata? encryption)
+        EncryptionSnapshot encryption)
     {
+        private readonly TrafficEncryptionObservationState encryptionState = new(encryption);
+
         public long EpisodeId { get; } = episodeId;
         public ReceiveCallIdentity Identity { get; } = identity;
         public uint PrimaryStreamId { get; } = primaryStreamId;
@@ -378,17 +412,41 @@ internal sealed class ReceiveCallEpisodeTracker
         public DateTimeOffset StartedAt { get; } = startedAt;
         public DateTimeOffset LastActivityAt { get; set; } = startedAt;
         public DateTimeOffset? LastPhysicalEndAt { get; set; }
+        public ReceivePhysicalEndReason? LastPhysicalEndReason { get; set; }
         public DateTimeOffset? CompletedAt { get; set; }
         public DateTimeOffset? MappingExpiresAt { get; set; }
-        public TrafficEncryptionMetadata? Encryption { get; private set; } = encryption;
+        public EncryptionSnapshot Encryption => encryptionState.Encryption;
 
-        public bool IsEncryptionCompatible(TrafficEncryptionMetadata? candidate)
-            => Encryption is null || candidate is null || Encryption == candidate;
-
-        public void MergeEncryption(TrafficEncryptionMetadata? candidate)
+        public bool IsEncryptionCompatible(EncryptionSnapshot candidate)
         {
-            if (Encryption is null && candidate is not null)
-                Encryption = candidate;
+            if (!Encryption.IsKnown)
+                return true;
+            if (candidate.IsKnown)
+                return Encryption.HasSameMetadata(candidate);
+
+            // Unknown metadata may extend a known episode only while its
+            // current physical stream is still active. After a physical end,
+            // a replacement stream must establish its own security state so a
+            // new clear call cannot inherit the preceding secure call.
+            return LastPhysicalEndAt is null;
+        }
+
+        public void ObserveEncryption(FneTrafficFrame traffic)
+            => encryptionState.Observe(traffic);
+
+        public void ObservePhysicalEnd(DateTimeOffset endedAt, ReceivePhysicalEndReason reason)
+        {
+            if (LastPhysicalEndAt is null || endedAt > LastPhysicalEndAt)
+            {
+                LastPhysicalEndAt = endedAt;
+                LastPhysicalEndReason = reason;
+                return;
+            }
+            if (endedAt == LastPhysicalEndAt &&
+                reason > LastPhysicalEndReason.GetValueOrDefault())
+            {
+                LastPhysicalEndReason = reason;
+            }
         }
 
         public ReceiveCallEpisodeSnapshot Snapshot()

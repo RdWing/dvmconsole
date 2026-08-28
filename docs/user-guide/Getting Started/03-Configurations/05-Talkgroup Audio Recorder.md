@@ -188,7 +188,7 @@ Folder layout:
 <TAR Root>\
   YYYY-MM-DD\
     <SystemName>\
-      <time>_<system>_<talkgroup>_<rid>_<CLEAR-or-SECURE_algorithm>_<stream>.opus
+      <time>_<system>_<talkgroup>_<rid>_<UNKNOWN-or-CLEAR-or-SECURE_algorithm>_<stream>.opus
 ```
 
 Example structure:
@@ -201,7 +201,8 @@ TAR\
 ```
 
 The date folder and filename use the local system time zone. Embedded metadata
-keeps the UTC start and end timestamps.
+keeps the UTC start and end timestamps. `UNKNOWN` means the call ended before
+the console received enough on-air metadata to classify it as clear or secure.
 
 ---
 
@@ -226,15 +227,16 @@ Metadata includes:
 - talkgroup ID
 - subscriber ID
 - subscriber alias
-- encryption status
-- encryption algorithm, when known
-- encryption key ID, when known
+- encryption state (`Unknown`, `Clear`, or `Secure`)
+- protocol encryption algorithm and numeric identifier, when known
+- encryption key ID in numeric and display form, when known
 - stream ID
 - file size
 - sample rate / bit depth / channel count
 
 The TAR Viewer reads this metadata. Other tools that inspect OpusTags can read
-it as well.
+it as well. New recordings do not embed the local recording root or catalog
+path. The Viewer reconstructs those fields from the file it opened.
 
 ---
 

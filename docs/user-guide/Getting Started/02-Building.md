@@ -54,6 +54,7 @@ dotnet build dvmconsole.sln
 Run the complete solution test suite before packaging:
 
 ```sh
+scripts/verify-format.sh
 dotnet test dvmconsole.sln --no-restore --disable-build-servers \
   --configuration Release /m:1 /p:UseSharedCompilation=false
 ```
@@ -136,7 +137,7 @@ docs/user-guide
 
 # Tagged releases
 
-Pushing a version tag such as `v0.4.3` starts the macOS and Windows test and
+Pushing a version tag such as `v0.4.4` starts the macOS and Windows test and
 packaging matrix. Both macOS jobs smoke-test the packaged application bundle.
 The Windows job runs the Avalonia headful smoke test. Add version-matched release
 notes before pushing the tag.

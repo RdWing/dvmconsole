@@ -45,6 +45,13 @@ internal sealed class RecordingFinalizationQueue : IAsyncDisposable
         return jobs.Writer.WriteAsync(job, cancellationToken);
     }
 
+    public bool TryEnqueue(RecordingFinalizationJob job)
+    {
+        ArgumentNullException.ThrowIfNull(job);
+        ObjectDisposedException.ThrowIf(Volatile.Read(ref disposeStarted) != 0, this);
+        return jobs.Writer.TryWrite(job);
+    }
+
     public async ValueTask DisposeAsync()
     {
         if (Interlocked.Exchange(ref disposeStarted, 1) != 0)

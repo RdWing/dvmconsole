@@ -82,6 +82,49 @@ public sealed class ChannelViewModelTests
     }
 
     [Fact]
+    public void ActiveReceivePresentationDisablesPttUntilTheCallEnds()
+    {
+        var channel = new ChannelViewModel(new ChannelConfiguration
+        {
+            Name = "Dispatch",
+            System = "System 1",
+            Tgid = "99",
+            Mode = "dmr",
+            Slot = 1
+        });
+        channel.SetAudioEnabled(true);
+
+        Assert.True(channel.IsPttControlEnabled);
+
+        channel.MarkReceivePlaybackActive(sourceId: 42, streamId: 7);
+
+        Assert.True(channel.CanTransmit);
+        Assert.False(channel.IsPttControlEnabled);
+
+        channel.MarkReceivePlaybackEnded(streamId: 7);
+
+        Assert.True(channel.IsPttControlEnabled);
+    }
+
+    [Fact]
+    public void ActiveTransmitPresentationKeepsReleaseControlEnabled()
+    {
+        var channel = new ChannelViewModel(new ChannelConfiguration
+        {
+            Name = "Dispatch",
+            System = "System 1",
+            Tgid = "99",
+            Mode = "dmr",
+            Slot = 1
+        });
+
+        channel.SetTransmitEnabled(true, streamId: 7);
+
+        Assert.True(channel.IsPttControlEnabled);
+        Assert.Equal("Release", channel.PttButtonText);
+    }
+
+    [Fact]
     public void ReceiveDisabledCardDoesNotPresentReceivingAudioState()
     {
         var channel = new ChannelViewModel(new ChannelConfiguration
@@ -236,13 +279,12 @@ public sealed class ChannelViewModelTests
             "System 1",
             CreateTraffic(FneTrafficProtocol.P25, 42, 99, null, "VOICE", "LDU1", 7)));
 
-        channel.SetAudioLevel(ChannelAudioMeter.Calculate(
-            Enumerable.Repeat((short)12000, 160).ToArray(),
-            ChannelAudioDirection.Receive),
+        channel.SetAudioLevel(ChannelAudioMeter.Measure(
+            Enumerable.Repeat((short)12000, 160).ToArray()).Rms,
             ChannelAudioDirection.Receive);
 
         Assert.InRange(channel.AudioLevel, 1, 100);
-        Assert.Equal(channel.AudioLevel / 100, channel.AudioLevelScale);
+        Assert.Equal(channel.AudioMeterWidth * channel.AudioLevel / 100, channel.AudioFillWidth);
         Assert.True(channel.TryApplyTraffic(
             "System 1",
             CreateTraffic(FneTrafficProtocol.P25, 42, 0, null, "DATA_SYNC", "TDU", 7)));
@@ -317,15 +359,51 @@ public sealed class ChannelViewModelTests
     }
 
     [Fact]
-    public void ReceiveMeterUsesMoreDisplayGainThanTransmitMeter()
+    public void AudioMeterMapsNominalSpeechToCenterOfDbfsScale()
     {
-        short[] samples = Enumerable.Repeat((short)2000, 160).ToArray();
+        short nominalSpeechSample = (short)Math.Round(
+            short.MaxValue * Math.Pow(10, -25d / 20));
+        short[] samples = Enumerable.Repeat(nominalSpeechSample, 160).ToArray();
 
-        double receive = ChannelAudioMeter.Calculate(samples, ChannelAudioDirection.Receive);
-        double transmit = ChannelAudioMeter.Calculate(samples, ChannelAudioDirection.Transmit);
+        ChannelAudioMeterLevels levels = ChannelAudioMeter.Measure(samples);
 
-        Assert.True(receive > transmit);
-        Assert.Equal(0, ChannelAudioMeter.Calculate([], ChannelAudioDirection.Receive));
+        Assert.InRange(levels.Rms, 49.9, 50.1);
+        Assert.InRange(levels.Peak, 49.9, 50.1);
+        Assert.Equal(default, ChannelAudioMeter.Measure([]));
+    }
+
+    [Fact]
+    public void AudioMeterSeparatesShortPeakFromRmsLevel()
+    {
+        var samples = new short[400];
+        samples[0] = short.MaxValue;
+
+        ChannelAudioMeterLevels levels = ChannelAudioMeter.Measure(samples);
+
+        Assert.InRange(levels.Rms, 47, 49);
+        Assert.InRange(levels.Peak, 99.9, 100);
+    }
+
+    [Theory]
+    [InlineData(75.99, "#F5F7FA")]
+    [InlineData(76, "#F2B134")]
+    [InlineData(87.99, "#F2B134")]
+    [InlineData(88, "#E5484D")]
+    public void AudioPeakMarkerUsesTheMeterThresholdColors(double peakLevel, string expectedColor)
+    {
+        var channel = new ChannelViewModel(new ChannelConfiguration
+        {
+            Name = "Dispatch",
+            System = "System 1",
+            Tgid = "99",
+            Mode = "p25"
+        });
+
+        channel.SetAudioLevel(50, peakValue: peakLevel);
+
+        Assert.Equal(
+            Color.Parse(expectedColor),
+            Assert.IsType<SolidColorBrush>(channel.AudioPeakMarkerBrush).Color);
     }
 
     [Fact]
@@ -788,7 +866,7 @@ public sealed class ChannelViewModelTests
     }
 
     [Fact]
-    public void EncryptedOrUnknownChannelsCannotTransmit()
+    public void EncryptedDigitalChannelsCanReceiveClearTrafficWithoutAKey()
     {
         var encryptedP25 = new ChannelViewModel(new ChannelConfiguration
         {
@@ -810,12 +888,12 @@ public sealed class ChannelViewModelTests
 
         Assert.False(encryptedP25.CanTransmit);
         Assert.False(encryptedDmr.CanTransmit);
-        Assert.False(encryptedP25.CanListen);
-        Assert.False(encryptedDmr.CanListen);
+        Assert.True(encryptedP25.CanListen);
+        Assert.True(encryptedDmr.CanListen);
     }
 
     [Fact]
-    public void EncryptedP25CanListenWhenTheConfiguredKeyResolves()
+    public void EncryptedP25CanTransmitWhenTheConfiguredKeyResolves()
     {
         var keyRing = new P25KeyRing("System 1", new KeyContainer
         {
@@ -868,7 +946,7 @@ public sealed class ChannelViewModelTests
             KeyId = "0x50"
         }, keyRing);
 
-        Assert.False(channel.CanListen);
+        Assert.True(channel.CanListen);
         Assert.False(channel.CanTransmit);
 
         keyRing.AddOrReplaceFromFne(
@@ -883,7 +961,7 @@ public sealed class ChannelViewModelTests
     }
 
     [Fact]
-    public void SelectableClearChannelCanReceiveWithoutAConfiguredSecureKey()
+    public void SelectableChannelCanReceiveClearTrafficInEitherTransmitState()
     {
         var channel = new ChannelViewModel(new ChannelConfiguration
         {
@@ -898,7 +976,8 @@ public sealed class ChannelViewModelTests
 
         Assert.True(channel.IsTransmitEncrypted);
         Assert.True(channel.CanToggleEncryption);
-        Assert.False(channel.CanListen);
+        Assert.True(channel.CanListen);
+        Assert.False(channel.CanTransmit);
 
         channel.EncryptionCommand.Execute(null);
 

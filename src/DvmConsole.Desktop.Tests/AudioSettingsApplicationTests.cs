@@ -72,6 +72,11 @@ public sealed class AudioSettingsApplicationTests
     {
         public static ImmediateUiDispatcher Instance { get; } = new();
 
+        public bool CheckAccess() => true;
+
+        public void Post(Action action, bool background = false)
+            => action();
+
         public ValueTask InvokeAsync(Action action)
         {
             action();

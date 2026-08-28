@@ -42,6 +42,7 @@ internal sealed class OpusRecordingMetadataStore
             RecordingMetadataJsonContext.Default.CallRecordingMetadata);
         if (deserialized is null)
             return false;
+        deserialized.NormalizeCompatibilityFields();
 
         string fullPath = Path.GetFullPath(opusPath);
         if (!IsUnderRoot(fullPath, recordingRoot))

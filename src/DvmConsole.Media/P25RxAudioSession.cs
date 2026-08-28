@@ -15,7 +15,6 @@ public sealed class P25RxAudioSession : IAsyncDisposable
     private readonly IAudioPlayback playback;
     private readonly IP25KeyResolver? keyResolver;
     private readonly string systemName;
-    private readonly IReceivePrivacyPolicy? privacyPolicy;
     private readonly VoicePacketSequenceTracker sequenceTracker = new();
     private P25CryptoState? cryptoState;
     private uint activeStreamId;
@@ -27,15 +26,13 @@ public sealed class P25RxAudioSession : IAsyncDisposable
         IVocoderSession vocoder,
         IAudioPlayback playback,
         IP25KeyResolver? keyResolver = null,
-        string systemName = "",
-        IReceivePrivacyPolicy? privacyPolicy = null)
+        string systemName = "")
     {
         this.selector = selector ?? throw new ArgumentNullException(nameof(selector));
         decoder = new VoiceFrameDecoder(vocoder, VocoderMode.P25Imbe);
         this.playback = playback ?? throw new ArgumentNullException(nameof(playback));
         this.keyResolver = keyResolver;
         this.systemName = systemName ?? string.Empty;
-        this.privacyPolicy = privacyPolicy;
     }
 
     public int FramesDecoded { get; private set; }
@@ -127,9 +124,6 @@ public sealed class P25RxAudioSession : IAsyncDisposable
             await ConcealCurrentLduAsync(cancellationToken).ConfigureAwait(false);
             return 0;
         }
-
-        if (privacyPolicy?.RequireEncryptedTraffic == true && !encryptedStream)
-            return 0;
 
         int errors = 0;
         byte[] codeword = new byte[P25DfsiFrameCodec.CodewordBytes];

@@ -1,7 +1,6 @@
 using DvmConsole.Audio;
 using DvmConsole.FneClient;
 using DvmConsole.Media;
-using System.Globalization;
 using System.Text.Json;
 
 namespace DvmConsole.Desktop;
@@ -16,14 +15,23 @@ public sealed class CallRecordingManager : IDisposable, IAsyncDisposable
 
     private readonly object sync = new();
     private readonly RecordingCatalogStore catalogStore = new();
+    private readonly RecordingPathPolicy pathPolicy = new();
+    private readonly RecordingMetadataFactory metadataFactory = new();
     private string rootPath;
     private readonly Action<ChannelViewModel, Exception>? faultHandler;
     private readonly Func<ChannelViewModel, uint, bool> shouldRecordSource;
     private int retentionDays;
     private readonly Dictionary<(ChannelViewModel Channel, uint StreamId), ActiveRecording> active = [];
     private readonly Dictionary<ChannelViewModel, ActiveRecording> activeTransmit = [];
-    private readonly Dictionary<(ChannelViewModel Channel, uint StreamId), TrafficEncryptionMetadata> streamEncryption = [];
+    private readonly Dictionary<(ChannelViewModel Channel, uint StreamId), TrafficEncryptionObservationState> encryptionStates = [];
+    private readonly object finalizationScheduleSync = new();
+    private readonly HashSet<Guid> scheduledFinalizations = [];
     private readonly RecordingFinalizationQueue finalizationQueue;
+    private readonly Func<
+        RecordingFinalizationDescriptor,
+        ChannelViewModel?,
+        CancellationToken,
+        Task<RecordingFinalizationResult>> finalizeRecording;
     private RecordingFinalizationSpool finalizationSpool;
     private bool disposed;
 
@@ -32,6 +40,27 @@ public sealed class CallRecordingManager : IDisposable, IAsyncDisposable
         Action<ChannelViewModel, Exception>? faultHandler = null,
         int retentionDays = DefaultRetentionDays,
         Func<ChannelViewModel, uint, bool>? shouldRecordSource = null)
+        : this(
+            rootPath,
+            faultHandler,
+            retentionDays,
+            shouldRecordSource,
+            RecordingFinalizationQueue.DefaultCapacity,
+            finalizeRecording: null)
+    {
+    }
+
+    internal CallRecordingManager(
+        string rootPath,
+        Action<ChannelViewModel, Exception>? faultHandler,
+        int retentionDays,
+        Func<ChannelViewModel, uint, bool>? shouldRecordSource,
+        int finalizationQueueCapacity,
+        Func<
+            RecordingFinalizationDescriptor,
+            ChannelViewModel?,
+            CancellationToken,
+            Task<RecordingFinalizationResult>>? finalizeRecording)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(rootPath);
         if (retentionDays < 0)
@@ -41,9 +70,10 @@ public sealed class CallRecordingManager : IDisposable, IAsyncDisposable
         this.faultHandler = faultHandler;
         this.retentionDays = retentionDays;
         this.shouldRecordSource = shouldRecordSource ?? ((_, _) => true);
+        this.finalizeRecording = finalizeRecording ?? FinalizeRecordingAsync;
         finalizationSpool = new RecordingFinalizationSpool(this.rootPath);
         finalizationSpool.RecoverOrphanedWaveFiles();
-        finalizationQueue = new RecordingFinalizationQueue();
+        finalizationQueue = new RecordingFinalizationQueue(finalizationQueueCapacity);
         finalizationQueue.Finalized += HandleRecordingFinalized;
         try
         {
@@ -104,6 +134,15 @@ public sealed class CallRecordingManager : IDisposable, IAsyncDisposable
 
     internal RecordingFinalizationSpoolHealth FinalizationHealth
         => finalizationSpool.GetHealth();
+
+    internal int ScheduledFinalizationCount
+    {
+        get
+        {
+            lock (finalizationScheduleSync)
+                return scheduledFinalizations.Count;
+        }
+    }
 
     public bool TrySetRootPath(string requestedPath, out string errorMessage)
     {
@@ -219,18 +258,23 @@ public sealed class CallRecordingManager : IDisposable, IAsyncDisposable
 
         if (sourceId != 0 && !shouldRecordSource(channel, sourceId))
         {
+            PendingFinalization? finalization;
             lock (sync)
-                CloseCore(channel, episodeStreamId);
+                finalization = DetachRecording(channel, episodeStreamId);
+            EnqueueFinalization(finalization);
             return;
         }
 
+        ActiveRecording? recording = null;
+        PendingFinalization? setupFinalization = null;
+        Exception? setupFailure = null;
         lock (sync)
         {
             ObjectDisposedException.ThrowIf(disposed, this);
             try
             {
                 var key = (channel, episodeStreamId);
-                if (!active.TryGetValue(key, out ActiveRecording? recording))
+                if (!active.TryGetValue(key, out recording))
                 {
                     recording = CreateActiveRecording(
                         channel,
@@ -244,11 +288,32 @@ public sealed class CallRecordingManager : IDisposable, IAsyncDisposable
                 bool streamIdentityChanged = recording.ObservePhysicalStream(physicalStreamId);
                 if (streamIdentityChanged)
                     TryPersistActiveSnapshot(channel, recording);
-                recording.Writer.Write(samples.Span);
             }
             catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or InvalidOperationException)
             {
-                CloseCore(channel, episodeStreamId);
+                setupFinalization = DetachRecording(channel, episodeStreamId, recording);
+                setupFailure = exception;
+            }
+        }
+        EnqueueFinalization(setupFinalization);
+        if (setupFailure is not null)
+        {
+            faultHandler?.Invoke(channel, setupFailure);
+            return;
+        }
+
+        try
+        {
+            recording!.Write(samples.Span);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or InvalidOperationException)
+        {
+            PendingFinalization? failed;
+            lock (sync)
+                failed = DetachRecording(channel, episodeStreamId, recording);
+            if (failed is not null)
+            {
+                EnqueueFinalization(failed);
                 faultHandler?.Invoke(channel, exception);
             }
         }
@@ -264,15 +329,19 @@ public sealed class CallRecordingManager : IDisposable, IAsyncDisposable
         if (samples.IsEmpty || !channel.IsRecordingEnabled || streamId == 0)
             return;
 
+        var finalizations = new List<PendingFinalization>(2);
+        ActiveRecording? recording = null;
+        Exception? setupFailure = null;
         lock (sync)
         {
             ObjectDisposedException.ThrowIf(disposed, this);
             try
             {
-                if (!activeTransmit.TryGetValue(channel, out ActiveRecording? recording) ||
+                if (!activeTransmit.TryGetValue(channel, out recording) ||
                     recording.StreamId != streamId)
                 {
-                    CloseTransmitCore(channel);
+                    if (DetachTransmitRecording(channel) is PendingFinalization previous)
+                        finalizations.Add(previous);
                     recording = CreateActiveRecording(
                         channel,
                         streamId,
@@ -281,12 +350,34 @@ public sealed class CallRecordingManager : IDisposable, IAsyncDisposable
                         "ConsoleTx");
                     activeTransmit[channel] = recording;
                 }
-
-                recording.Writer.Write(samples.Span);
             }
             catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or InvalidOperationException)
             {
-                CloseTransmitCore(channel);
+                if (DetachTransmitRecording(channel, recording) is PendingFinalization failed)
+                    finalizations.Add(failed);
+                setupFailure = exception;
+            }
+        }
+        foreach (PendingFinalization finalization in finalizations)
+            EnqueueFinalization(finalization);
+        if (setupFailure is not null)
+        {
+            faultHandler?.Invoke(channel, setupFailure);
+            return;
+        }
+
+        try
+        {
+            recording!.Write(samples.Span);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or InvalidOperationException)
+        {
+            PendingFinalization? failed;
+            lock (sync)
+                failed = DetachTransmitRecording(channel, recording);
+            if (failed is not null)
+            {
+                EnqueueFinalization(failed);
                 faultHandler?.Invoke(channel, exception);
             }
         }
@@ -296,14 +387,17 @@ public sealed class CallRecordingManager : IDisposable, IAsyncDisposable
     {
         ArgumentNullException.ThrowIfNull(channel);
         ArgumentNullException.ThrowIfNull(traffic);
+        PendingFinalization? finalization = null;
+        bool closed;
         lock (sync)
         {
-            TrafficEncryptionMetadata? encryption = TrafficEncryptionMetadataResolver.TryResolve(traffic);
-            if (encryption is TrafficEncryptionMetadata resolved)
+            TrafficEncryptionObservationState encryptionState = GetEncryptionState(
+                channel,
+                traffic.StreamId);
+            if (encryptionState.Observe(traffic))
             {
-                streamEncryption[(channel, traffic.StreamId)] = resolved;
                 if (active.TryGetValue((channel, traffic.StreamId), out ActiveRecording? current) &&
-                    current.SetEncryption(resolved))
+                    current.SetEncryption(encryptionState.Encryption))
                 {
                     TryPersistActiveSnapshot(channel, current);
                 }
@@ -312,11 +406,12 @@ public sealed class CallRecordingManager : IDisposable, IAsyncDisposable
             if (!ReceiveTrafficClassifier.IsTerminator(traffic))
                 return false;
 
-            bool closed = active.ContainsKey((channel, traffic.StreamId));
-            CloseCore(channel, traffic.StreamId);
-            streamEncryption.Remove((channel, traffic.StreamId));
-            return closed;
+            finalization = DetachRecording(channel, traffic.StreamId);
+            closed = finalization is not null;
+            encryptionStates.Remove((channel, traffic.StreamId));
         }
+        EnqueueFinalization(finalization);
+        return closed;
     }
 
     public void ObserveEpisodeTraffic(
@@ -332,12 +427,13 @@ public sealed class CallRecordingManager : IDisposable, IAsyncDisposable
 
         lock (sync)
         {
-            TrafficEncryptionMetadata? encryption = TrafficEncryptionMetadataResolver.TryResolve(traffic);
-            if (encryption is TrafficEncryptionMetadata resolved)
+            TrafficEncryptionObservationState encryptionState = GetEncryptionState(
+                channel,
+                episodeStreamId);
+            if (encryptionState.Observe(traffic))
             {
-                streamEncryption[(channel, episodeStreamId)] = resolved;
                 if (active.TryGetValue((channel, episodeStreamId), out ActiveRecording? current) &&
-                    current.SetEncryption(resolved))
+                    current.SetEncryption(encryptionState.Encryption))
                 {
                     TryPersistActiveSnapshot(channel, current);
                 }
@@ -354,11 +450,21 @@ public sealed class CallRecordingManager : IDisposable, IAsyncDisposable
     public void StopChannel(ChannelViewModel channel)
     {
         ArgumentNullException.ThrowIfNull(channel);
+        List<PendingFinalization> finalizations;
         lock (sync)
         {
-            CloseCore(channel);
-            CloseTransmitCore(channel);
+            finalizations = DetachRecordings(channel);
+            foreach ((ChannelViewModel Channel, uint StreamId) key in encryptionStates.Keys
+                         .Where(key => ReferenceEquals(key.Channel, channel))
+                         .ToArray())
+            {
+                encryptionStates.Remove(key);
+            }
+            if (DetachTransmitRecording(channel) is PendingFinalization transmit)
+                finalizations.Add(transmit);
         }
+        foreach (PendingFinalization finalization in finalizations)
+            EnqueueFinalization(finalization);
     }
 
     public void StopStream(ChannelViewModel channel, uint streamId)
@@ -366,15 +472,19 @@ public sealed class CallRecordingManager : IDisposable, IAsyncDisposable
         ArgumentNullException.ThrowIfNull(channel);
         if (streamId == 0)
             return;
+        PendingFinalization? finalization;
         lock (sync)
-            CloseCore(channel, streamId);
+            finalization = DetachRecording(channel, streamId);
+        EnqueueFinalization(finalization);
     }
 
     public void StopTransmit(ChannelViewModel channel)
     {
         ArgumentNullException.ThrowIfNull(channel);
+        PendingFinalization? finalization;
         lock (sync)
-            CloseTransmitCore(channel);
+            finalization = DetachTransmitRecording(channel);
+        EnqueueFinalization(finalization);
     }
 
     public void Dispose()
@@ -382,23 +492,24 @@ public sealed class CallRecordingManager : IDisposable, IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
+        List<PendingFinalization> finalizations;
         lock (sync)
         {
             if (disposed)
                 return;
 
-            foreach (ChannelViewModel channel in active.Keys
-                         .Select(key => key.Channel)
-                         .Concat(activeTransmit.Keys)
-                         .Distinct()
-                         .ToArray())
-            {
-                CloseCore(channel);
-                CloseTransmitCore(channel);
-            }
+            finalizations = active
+                .Select(entry => new PendingFinalization(entry.Key.Channel, entry.Value))
+                .Concat(activeTransmit.Select(entry => new PendingFinalization(entry.Key, entry.Value)))
+                .ToList();
+            active.Clear();
+            activeTransmit.Clear();
+            encryptionStates.Clear();
             disposed = true;
         }
 
+        foreach (PendingFinalization finalization in finalizations)
+            EnqueueFinalization(finalization);
         await finalizationQueue.DisposeAsync().ConfigureAwait(false);
     }
 
@@ -406,6 +517,8 @@ public sealed class CallRecordingManager : IDisposable, IAsyncDisposable
     {
         if (result.Descriptor is RecordingFinalizationDescriptor descriptor)
         {
+            lock (finalizationScheduleSync)
+                scheduledFinalizations.Remove(descriptor.JobId);
             if (result.Error is null)
             {
                 finalizationSpool.Complete(descriptor);
@@ -417,34 +530,77 @@ public sealed class CallRecordingManager : IDisposable, IAsyncDisposable
         }
         if (result.Error is Exception exception && result.Channel is ChannelViewModel channel)
             faultHandler?.Invoke(channel, exception);
+
+        bool isDisposed;
+        lock (sync)
+            isDisposed = disposed;
+        if (!isDisposed)
+        {
+            SchedulePendingFinalizations(
+                result.Error is null ? null : result.Descriptor?.JobId);
+        }
+
+        // Notify observers after internal queue bookkeeping is settled so they
+        // see a consistent pending/scheduled state.
         RecordingFinalized?.Invoke(this, result);
     }
 
     private void ResumePendingFinalizations()
+        => SchedulePendingFinalizations(excludedJobId: null);
+
+    private void SchedulePendingFinalizations(Guid? excludedJobId)
     {
-        foreach (RecordingFinalizationDescriptor descriptor in finalizationSpool.LoadPending())
+        foreach (RecordingFinalizationDescriptor descriptor in finalizationSpool.LoadReadyFinalizations())
         {
+            if (descriptor.JobId == excludedJobId)
+                continue;
+            if (!TryScheduleFinalization(descriptor, channel: null))
+                return;
+        }
+    }
+
+    private bool TryScheduleFinalization(
+        RecordingFinalizationDescriptor descriptor,
+        ChannelViewModel? channel)
+    {
+        lock (finalizationScheduleSync)
+        {
+            if (!scheduledFinalizations.Add(descriptor.JobId))
+                return true;
+
             try
             {
-                finalizationQueue.EnqueueAsync(new RecordingFinalizationJob(
+                bool scheduled = finalizationQueue.TryEnqueue(new RecordingFinalizationJob(
                     descriptor.StreamId,
-                    async cancellationToken => (await FinalizeRecordingAsync(
+                    async cancellationToken => (await finalizeRecording(
                         descriptor,
-                        channel: null,
+                        channel,
                         cancellationToken).ConfigureAwait(false)) with
                     {
                         Descriptor = descriptor
-                    }))
-                    .AsTask()
-                    .GetAwaiter()
-                    .GetResult();
+                    }));
+                if (!scheduled)
+                    scheduledFinalizations.Remove(descriptor.JobId);
+                return scheduled;
             }
-            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or InvalidOperationException)
+            catch
             {
-                // The durable descriptor remains for the next process. A
-                // recovery backlog must not prevent the console from opening.
+                scheduledFinalizations.Remove(descriptor.JobId);
+                throw;
             }
         }
+    }
+
+    private TrafficEncryptionObservationState GetEncryptionState(
+        ChannelViewModel channel,
+        uint logicalStreamId)
+    {
+        var key = (channel, logicalStreamId);
+        if (encryptionStates.TryGetValue(key, out TrafficEncryptionObservationState? state))
+            return state;
+        state = new TrafficEncryptionObservationState();
+        encryptionStates.Add(key, state);
+        return state;
     }
 
     private ActiveRecording CreateActiveRecording(
@@ -477,23 +633,27 @@ public sealed class CallRecordingManager : IDisposable, IAsyncDisposable
                         out byte algorithmId,
                         out ushort keyId))
                 {
-                    recording.SetEncryption(new TrafficEncryptionMetadata(true, algorithmId, keyId));
+                    recording.SetEncryption(EncryptionSnapshot.FromConfiguration(
+                        secure: true,
+                        algorithmId,
+                        keyId));
                 }
                 else
                 {
-                    recording.SetEncryption(new TrafficEncryptionMetadata(secure, 0, 0));
+                    recording.SetEncryption(EncryptionSnapshot.FromConfiguration(secure));
                 }
             }
-            else if (streamEncryption.TryGetValue((channel, streamId), out TrafficEncryptionMetadata encryption))
+            else if (encryptionStates.TryGetValue(
+                         (channel, streamId),
+                         out TrafficEncryptionObservationState? encryptionState) &&
+                     encryptionState.Encryption.IsKnown)
             {
-                recording.SetEncryption(encryption);
+                recording.SetEncryption(encryptionState.Encryption);
             }
-            else if (channel.Definition.IsEncrypted && EncryptionPresentation.TryParseConfiguredAlgorithm(
-                         channel.Definition,
-                         out byte algorithmId,
-                         out ushort keyId))
+            else if (FneTrafficProtocolMapper.FromChannelProtocol(channel.Definition.Protocol) ==
+                     FneTrafficProtocol.Analog)
             {
-                recording.SetEncryption(new TrafficEncryptionMetadata(true, algorithmId, keyId));
+                recording.SetEncryption(EncryptionSnapshot.FromConfiguration(secure: false));
             }
 
             PersistActiveSnapshot(channel, recording);
@@ -515,88 +675,71 @@ public sealed class CallRecordingManager : IDisposable, IAsyncDisposable
         return Path.Combine(directory, $"{jobId:N}.wav");
     }
 
-    private static string CreateRecordingPath(RecordingFinalizationDescriptor snapshot)
+    private List<PendingFinalization> DetachRecordings(ChannelViewModel channel)
     {
-        DateTimeOffset localStart = snapshot.UtcStartTime.ToLocalTime();
-        string dateFolder = localStart.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
-        string security = snapshot.IsSecure
-            ? EncryptionPresentation.AlgorithmAbbreviation(snapshot.Protocol, snapshot.EncryptionAlgorithmId) is string algorithm &&
-              !string.IsNullOrEmpty(algorithm)
-                ? $"SECURE_{algorithm}"
-                : "SECURE"
-            : "CLEAR";
-        string filename = string.Join(
-            "_",
-            localStart.ToString("HHmmssfff", CultureInfo.InvariantCulture),
-            SanitizeSegment(snapshot.SystemName),
-            snapshot.TalkgroupId.ToString(CultureInfo.InvariantCulture),
-            (snapshot.SourceId ?? 0).ToString(CultureInfo.InvariantCulture),
-            security,
-            snapshot.StreamId.ToString(CultureInfo.InvariantCulture));
-        string directory = System.IO.Path.Combine(snapshot.RootPath, dateFolder, SanitizeSegment(snapshot.SystemName));
-        Directory.CreateDirectory(directory);
-
-        string path = System.IO.Path.Combine(directory, $"{filename}.opus");
-        int suffix = 1;
-        while (File.Exists(path))
-            path = System.IO.Path.Combine(directory, $"{filename}-{suffix++}.opus");
-        return path;
-    }
-
-    private void CloseCore(ChannelViewModel channel)
-    {
+        var finalizations = new List<PendingFinalization>();
         foreach (uint streamId in active.Keys
                      .Where(key => ReferenceEquals(key.Channel, channel))
                      .Select(key => key.StreamId)
                      .ToArray())
         {
-            CloseCore(channel, streamId);
+            if (DetachRecording(channel, streamId) is PendingFinalization finalization)
+                finalizations.Add(finalization);
         }
+        return finalizations;
     }
 
-    private void CloseCore(ChannelViewModel channel, uint streamId)
+    private PendingFinalization? DetachRecording(
+        ChannelViewModel channel,
+        uint streamId,
+        ActiveRecording? expected = null)
     {
-        if (!active.Remove((channel, streamId), out ActiveRecording? recording))
+        if (!active.TryGetValue((channel, streamId), out ActiveRecording? recording) ||
+            (expected is not null && !ReferenceEquals(recording, expected)))
+        {
+            return null;
+        }
+        active.Remove((channel, streamId));
+        encryptionStates.Remove((channel, streamId));
+        return new PendingFinalization(channel, recording);
+    }
+
+    private void EnqueueFinalization(PendingFinalization? finalization)
+    {
+        if (finalization is null)
             return;
-        streamEncryption.Remove((channel, streamId));
-        EnqueueFinalization(channel, recording);
-    }
 
-    private void EnqueueFinalization(ChannelViewModel channel, ActiveRecording recording)
-    {
+        ChannelViewModel channel = finalization.Channel;
+        ActiveRecording recording = finalization.Recording;
         try
         {
-            recording.Writer.Dispose();
-            RecordingFinalizationDescriptor snapshot = CreateSnapshot(channel, recording);
-            finalizationSpool.Persist(snapshot);
-            finalizationQueue.EnqueueAsync(new RecordingFinalizationJob(
-                recording.StreamId,
-                async cancellationToken => (await FinalizeRecordingAsync(
-                    snapshot,
-                    channel,
-                    cancellationToken).ConfigureAwait(false)) with
-                {
-                    Descriptor = snapshot
-                }))
-                .AsTask()
-                .GetAwaiter()
-                .GetResult();
+            recording.CloseWriter();
+            RecordingFinalizationDescriptor snapshot = CreatePersistableSnapshot(channel, recording);
+            finalizationSpool.PersistReady(snapshot);
+            TryScheduleFinalization(snapshot, channel);
         }
-        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or InvalidOperationException or JsonException)
+        catch (Exception exception) when (IsRecordingStorageFailure(exception))
         {
-            // The descriptor written when the recording became active and the
-            // source WAV both remain for restart recovery.
+            // Report storage and validation failures without allowing a TAR
+            // problem to escape through the operator's PTT event callback.
+            // Any surviving capture snapshot remains available on restart.
             faultHandler?.Invoke(channel, exception);
         }
     }
 
     private void PersistActiveSnapshot(ChannelViewModel channel, ActiveRecording recording)
     {
+        RecordingFinalizationDescriptor snapshot = CreatePersistableSnapshot(channel, recording);
+        finalizationSpool.PersistCaptureSnapshot(snapshot);
+    }
+
+    private RecordingFinalizationDescriptor CreatePersistableSnapshot(
+        ChannelViewModel channel,
+        ActiveRecording recording)
+    {
         RecordingFinalizationDescriptor snapshot = CreateSnapshot(channel, recording);
-        if (string.IsNullOrWhiteSpace(recording.OutputPath))
-            recording.OutputPath = CreateRecordingPath(snapshot);
-        snapshot = snapshot with { OutputPath = recording.OutputPath };
-        finalizationSpool.Persist(snapshot);
+        recording.OutputPath = pathPolicy.CreatePath(snapshot);
+        return snapshot with { OutputPath = recording.OutputPath };
     }
 
     private void TryPersistActiveSnapshot(ChannelViewModel channel, ActiveRecording recording)
@@ -605,13 +748,22 @@ public sealed class CallRecordingManager : IDisposable, IAsyncDisposable
         {
             PersistActiveSnapshot(channel, recording);
         }
-        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or InvalidOperationException or JsonException)
+        catch (Exception exception) when (IsRecordingStorageFailure(exception))
         {
             // Continue writing the source WAV. Its last durable descriptor is
             // safer than terminating and deleting an otherwise valid capture.
             faultHandler?.Invoke(channel, exception);
         }
     }
+
+    private static bool IsRecordingStorageFailure(Exception exception)
+        => exception is IOException or
+            UnauthorizedAccessException or
+            InvalidOperationException or
+            InvalidDataException or
+            JsonException or
+            ArgumentException or
+            NotSupportedException;
 
     private RecordingFinalizationDescriptor CreateSnapshot(ChannelViewModel channel, ActiveRecording recording)
     {
@@ -642,10 +794,11 @@ public sealed class CallRecordingManager : IDisposable, IAsyncDisposable
                 .OrderBy(streamId => streamId == recording.StreamId ? 0 : 1)
                 .ThenBy(streamId => streamId)
                 .ToArray(),
-            recording.IsSecure,
-            recording.EncryptionAlgorithmId,
-            recording.EncryptionKeyId,
-            retentionDays > 0 ? retentionDays : null);
+            recording.Encryption.IsSecure,
+            recording.Encryption.AlgorithmId,
+            recording.Encryption.KeyId,
+            retentionDays > 0 ? retentionDays : null,
+            recording.Encryption.IsKnown);
     }
 
     private async Task<RecordingFinalizationResult> FinalizeRecordingAsync(
@@ -700,7 +853,7 @@ public sealed class CallRecordingManager : IDisposable, IAsyncDisposable
                 snapshot = snapshot with { UtcEndTime = sampleDerivedEnd };
 
             finalPath = snapshot.OutputPath;
-            CallRecordingMetadata metadata = CreateMetadata(snapshot, trim, finalPath);
+            CallRecordingMetadata metadata = metadataFactory.Create(snapshot, trim, finalPath);
             temporaryOpusPath = $"{finalPath}.{Environment.ProcessId}.{Guid.NewGuid():N}.tmp";
             await OpusRecordingEncoder.EncodeWaveFileRangeAsync(
                 snapshot.WavePath,
@@ -767,52 +920,6 @@ public sealed class CallRecordingManager : IDisposable, IAsyncDisposable
         }
     }
 
-    private static CallRecordingMetadata CreateMetadata(
-        RecordingFinalizationDescriptor snapshot,
-        PcmWavTrimResult trim,
-        string recordingPath)
-    {
-        return new CallRecordingMetadata
-        {
-            SchemaVersion = 3,
-            Protocol = snapshot.ProtocolText,
-            Direction = snapshot.Direction,
-            RecordingSourceType = snapshot.RecordingSourceType,
-            UtcStartTime = snapshot.UtcStartTime,
-            UtcEndTime = snapshot.UtcEndTime,
-            DurationMs = (long)Math.Round(
-                trim.OutputSamples * 1000d / snapshot.Format.SampleRate,
-                MidpointRounding.AwayFromZero),
-            FilePath = recordingPath,
-            FileName = Path.GetFileName(recordingPath),
-            FileSizeBytes = 0,
-            SampleRate = snapshot.Format.SampleRate,
-            BitsPerSample = snapshot.Format.BitsPerSample,
-            ChannelCount = snapshot.Format.Channels,
-            OriginalSampleCount = trim.OriginalSamples,
-            ActiveSampleCount = trim.ActiveSampleCount,
-            PeakAmplitude = trim.PeakAmplitude,
-            TrimLeadMs = trim.TrimLeadMs,
-            TrimTailMs = trim.TrimTailMs,
-            SystemName = snapshot.SystemName,
-            ChannelName = snapshot.ChannelName,
-            TalkgroupId = snapshot.TalkgroupId,
-            SubscriberId = snapshot.SourceId,
-            SubscriberAlias = snapshot.SubscriberAlias,
-            StreamId = snapshot.StreamId,
-            StreamIds = snapshot.StreamIds.ToList(),
-            IsEncrypted = snapshot.IsSecure,
-            EncryptionAlgorithm = EncryptionPresentation.AlgorithmAbbreviation(
-                snapshot.Protocol,
-                snapshot.EncryptionAlgorithmId),
-            EncryptionKeyId = snapshot.IsSecure && snapshot.EncryptionKeyId is ushort keyId
-                ? $"0x{keyId:X}"
-                : null,
-            RetentionDaysAtRecordTime = snapshot.RetentionDays,
-            PlaybackValidated = true
-        };
-    }
-
     private static void TryDelete(string path)
     {
         try
@@ -828,14 +935,6 @@ public sealed class CallRecordingManager : IDisposable, IAsyncDisposable
         }
     }
 
-    private static string SanitizeSegment(string value)
-    {
-        char[] invalid = System.IO.Path.GetInvalidFileNameChars();
-        string sanitized = new(value.Select(character => invalid.Contains(character) ? '_' : character).ToArray());
-        sanitized = string.IsNullOrWhiteSpace(sanitized) ? "unknown" : sanitized.Trim();
-        return sanitized.Length <= 64 ? sanitized : sanitized[..64];
-    }
-
     private sealed class ActiveRecording(
         Guid jobId,
         uint streamId,
@@ -846,6 +945,8 @@ public sealed class CallRecordingManager : IDisposable, IAsyncDisposable
         string recordingSourceType,
         PcmWavFileWriter writer)
     {
+        private readonly object writerSync = new();
+        private bool writerClosed;
         public Guid JobId { get; } = jobId;
         public uint StreamId { get; } = streamId;
         public HashSet<uint> StreamIds { get; } = [streamId];
@@ -856,18 +957,13 @@ public sealed class CallRecordingManager : IDisposable, IAsyncDisposable
         public string RecordingSourceType { get; } = recordingSourceType;
         public PcmWavFileWriter Writer { get; } = writer;
         public string OutputPath { get; set; } = string.Empty;
-        public bool IsSecure { get; private set; }
-        public byte? EncryptionAlgorithmId { get; private set; }
-        public ushort? EncryptionKeyId { get; private set; }
+        public EncryptionSnapshot Encryption { get; private set; }
 
-        public bool SetEncryption(TrafficEncryptionMetadata encryption)
+        public bool SetEncryption(EncryptionSnapshot encryption)
         {
-            bool changed = IsSecure != encryption.Secure ||
-                EncryptionAlgorithmId != (encryption.Secure ? encryption.AlgorithmId : null) ||
-                EncryptionKeyId != (encryption.Secure ? encryption.KeyId : null);
-            IsSecure = encryption.Secure;
-            EncryptionAlgorithmId = encryption.Secure ? encryption.AlgorithmId : null;
-            EncryptionKeyId = encryption.Secure ? encryption.KeyId : null;
+            bool changed = !Encryption.HasSameMetadata(encryption) ||
+                Encryption.IsKnown != encryption.IsKnown;
+            Encryption = encryption;
             return changed;
         }
 
@@ -875,12 +971,43 @@ public sealed class CallRecordingManager : IDisposable, IAsyncDisposable
         {
             return streamId != 0 && StreamIds.Add(streamId);
         }
+
+        public void Write(ReadOnlySpan<short> samples)
+        {
+            lock (writerSync)
+            {
+                if (writerClosed)
+                    throw new InvalidOperationException("The recording writer is already closed.");
+                Writer.Write(samples);
+            }
+        }
+
+        public void CloseWriter()
+        {
+            lock (writerSync)
+            {
+                if (writerClosed)
+                    return;
+                Writer.Dispose();
+                writerClosed = true;
+            }
+        }
     }
 
-    private void CloseTransmitCore(ChannelViewModel channel)
+    private PendingFinalization? DetachTransmitRecording(
+        ChannelViewModel channel,
+        ActiveRecording? expected = null)
     {
-        if (!activeTransmit.Remove(channel, out ActiveRecording? recording))
-            return;
-        EnqueueFinalization(channel, recording);
+        if (!activeTransmit.TryGetValue(channel, out ActiveRecording? recording) ||
+            (expected is not null && !ReferenceEquals(recording, expected)))
+        {
+            return null;
+        }
+        activeTransmit.Remove(channel);
+        return new PendingFinalization(channel, recording);
     }
+
+    private sealed record PendingFinalization(
+        ChannelViewModel Channel,
+        ActiveRecording Recording);
 }

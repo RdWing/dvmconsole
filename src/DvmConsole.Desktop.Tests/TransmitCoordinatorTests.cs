@@ -11,6 +11,24 @@ namespace DvmConsole.Desktop.Tests;
 public sealed class TransmitCoordinatorTests
 {
     [Fact]
+    public async Task StartRejectsAChannelWithActiveReceivePlayback()
+    {
+        var channel = Channel("A", 100);
+        channel.SetAudioEnabled(true);
+        channel.MarkReceivePlaybackActive(sourceId: 42, streamId: 7);
+        var endpoint = new FakeEndpoint("Test", [channel]);
+        var audio = new FakeAudioBackend();
+        await using var coordinator = new ChannelTransmitCoordinator(createAudioBackend: () => audio);
+
+        InvalidOperationException exception = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => coordinator.StartAsync(channel, endpoint));
+
+        Assert.Contains("currently receiving", exception.Message, StringComparison.Ordinal);
+        Assert.Equal(0, audio.OpenCaptureCalls);
+        Assert.Empty(coordinator.ActiveChannels);
+    }
+
+    [Fact]
     public async Task AnalogMultiTargetUsesOneCaptureAndCleansUpAllCalls()
     {
         var first = Channel("A", 100);
@@ -596,7 +614,11 @@ public sealed class TransmitCoordinatorTests
 
     private static ChannelViewModel Channel(string name, uint tgid, string mode = "analog") => new(new ChannelConfiguration
     {
-        Name = name, System = "Test", Tgid = tgid.ToString(), Mode = mode, Slot = 1
+        Name = name,
+        System = "Test",
+        Tgid = tgid.ToString(),
+        Mode = mode,
+        Slot = 1
     });
 
     private sealed class FakeEndpoint(string name, IReadOnlyList<ChannelViewModel> channels, bool throwOnSend = false) : IFneTrafficEndpoint

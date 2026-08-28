@@ -583,7 +583,7 @@ public sealed class ChannelReceiveAudioCoordinatorTests
     }
 
     [Fact]
-    public async Task RejectsEncryptedReceiveBeforeOpeningAudioInfrastructure()
+    public async Task OpensEncryptedChannelWithoutAKeyForClearReceive()
     {
         var backend = new FakeAudioBackend();
         var vocoder = new FakeVocoderBackend();
@@ -597,15 +597,15 @@ public sealed class ChannelReceiveAudioCoordinatorTests
             Algo = "aes"
         });
 
-        NotSupportedException exception = await Assert.ThrowsAsync<NotSupportedException>(
-            () => coordinator.StartAsync(channel));
+        await coordinator.StartAsync(channel);
 
-        Assert.Contains("configured key for this protocol", exception.Message);
-
-        Assert.Empty(coordinator.ActiveChannels);
+        Assert.Single(coordinator.ActiveChannels);
         Assert.False(backend.IsDisposed);
         Assert.False(vocoder.IsDisposed);
-        Assert.False(channel.CanListen);
+        Assert.True(channel.CanListen);
+        Assert.False(channel.CanTransmit);
+
+        await coordinator.StopAsync(channel);
     }
 
     [Fact]

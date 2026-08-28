@@ -45,7 +45,7 @@ public sealed class SystemViewModel : IFneTrafficEndpoint, INotifyPropertyChange
         foreach (RxJitterBufferModeViewModel mode in rxJitterBufferModes)
             mode.PropertyChanged += HandleJitterBufferModePropertyChanged;
         StatusAccentBrush = SystemAccentPalette.GetBrush(accentIndex);
-        selectedZone = Zones.FirstOrDefault();
+        selectedZone = Zones.Count > 0 ? Zones[0] : null;
         foreach (ZoneViewModel zone in Zones)
             zone.SetReceiveActivityResolver(() =>
                 zone.Channels.Any(channel => channel.IsReceivePresentationActive));

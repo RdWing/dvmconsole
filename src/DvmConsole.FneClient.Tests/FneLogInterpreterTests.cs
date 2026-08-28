@@ -62,4 +62,10 @@ public sealed class FneLogInterpreterTests
     public void DoesNotClassifyConnectionFailuresAsRoutineKeepalives()
         => Assert.False(FneLogInterpreter.IsRoutineHealthyKeepalive(
             "RPTPING failed because the socket disconnected"));
+
+    [Theory]
+    [InlineData("PEER 123 login ACK received with ID 456", true)]
+    [InlineData("Sending login request to MASTER", false)]
+    public void RecognizesLoginAcknowledgements(string message, bool expected)
+        => Assert.Equal(expected, FneLogInterpreter.IsLoginAcknowledgement(message));
 }

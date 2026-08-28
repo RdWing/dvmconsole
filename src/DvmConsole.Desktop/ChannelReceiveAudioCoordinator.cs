@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using DvmConsole.Audio;
+using DvmConsole.Core.Runtime;
 using DvmConsole.FneClient;
 using DvmConsole.Media;
 using DvmConsole.Operations;
@@ -398,13 +399,6 @@ public sealed class ChannelReceiveAudioCoordinator : IAsyncDisposable
                 }
                 return;
             }
-            if (channel.RequireEncryptedTraffic &&
-                !CanResolveEncryption(channel.Definition))
-            {
-                throw new NotSupportedException(
-                    "Encrypted receive audio requires a configured key for this protocol; this channel cannot be opened safely.");
-            }
-
             IAudioBackend? createdAudio = null;
             IVocoderBackend? createdVocoder = null;
             ReceiveAudioRoute? createdRoute = null;
@@ -417,7 +411,8 @@ public sealed class ChannelReceiveAudioCoordinator : IAsyncDisposable
 
             try
             {
-                IVocoderBackend? activeVocoder = channel.Definition.Mode is "dmr" or "p25" or "nxdn"
+                IVocoderBackend? activeVocoder = ChannelProtocolMediaMapper.RequiresVocoder(
+                    channel.Definition.Protocol)
                     ? vocoderBackend ??= createdVocoder = createVocoderBackend()
                     : null;
                 string? requestedDeviceId = getOutputDeviceId?.Invoke(channel);
@@ -532,9 +527,6 @@ public sealed class ChannelReceiveAudioCoordinator : IAsyncDisposable
         => await receiveSessionFactory
             .CreateAsync(channel, playbackPool, activeVocoder, gain, balance)
             .ConfigureAwait(false);
-
-    private bool CanResolveEncryption(DvmConsole.Core.Runtime.ChannelRuntimeDefinition definition)
-        => receiveSessionFactory.CanResolveEncryption(definition);
 
     public async Task<int> ProcessAsync(
         ChannelViewModel channel,
@@ -685,7 +677,7 @@ public sealed class ChannelReceiveAudioCoordinator : IAsyncDisposable
                 }
             }
 
-            if (sessions.Count == 0)
+            if (sessions.IsEmpty)
             {
                 try
                 {
@@ -996,7 +988,7 @@ public sealed class ChannelReceiveAudioCoordinator : IAsyncDisposable
             this.gain = gain;
             this.balance = balance;
             this.livePlaybackEnabled = livePlaybackEnabled;
-            initialStream.Encrypted = GetConfiguredEncryptionState(channel);
+            initialStream.Encrypted = GetInitialEncryptionState(channel);
             initialStream.Session.SetLivePlaybackEnabled(livePlaybackEnabled);
         }
 
@@ -1037,10 +1029,10 @@ public sealed class ChannelReceiveAudioCoordinator : IAsyncDisposable
             if (stream is null)
                 return default;
 
-            if (TrafficEncryptionMetadataResolver.TryResolve(traffic) is
-                TrafficEncryptionMetadata encryption)
+            if (EncryptionSnapshotResolver.TryResolve(traffic) is
+                EncryptionSnapshot encryption)
             {
-                stream.Encrypted = encryption.Secure;
+                stream.Encrypted = encryption.IsSecure;
             }
 
             stream.SampleContext.Set(traffic.StreamId, traffic.SourceId);
@@ -1301,7 +1293,7 @@ public sealed class ChannelReceiveAudioCoordinator : IAsyncDisposable
             {
                 created.StreamId = streamId;
                 created.LastActivity = now;
-                created.Encrypted = GetConfiguredEncryptionState(channel);
+                created.Encrypted = GetInitialEncryptionState(channel);
                 created.Session.SetGain(gain);
                 created.Session.SetBalance(balance);
                 created.Session.SetLivePlaybackEnabled(livePlaybackEnabled);
@@ -1310,13 +1302,11 @@ public sealed class ChannelReceiveAudioCoordinator : IAsyncDisposable
             return created;
         }
 
-        private static bool? GetConfiguredEncryptionState(ChannelViewModel channel)
+        private static bool? GetInitialEncryptionState(ChannelViewModel channel)
         {
-            if (channel.Definition.Mode == "analog")
+            if (channel.Definition.Protocol == ChannelProtocol.Analog)
                 return false;
-            return channel.Definition.IsEncrypted && !channel.Definition.SelectableEncryption
-                ? true
-                : null;
+            return null;
         }
 
         private ReceiveStreamDecision ObserveTraffic(

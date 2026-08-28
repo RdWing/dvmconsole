@@ -109,8 +109,8 @@ public sealed class RecordingCatalogScaleTests
 
         public IEnumerable<string> EnumerateOpusFiles(
             string rootPath,
-            CancellationToken cancellationToken,
-            Action inaccessiblePathObserved)
+            Action inaccessiblePathObserved,
+            CancellationToken cancellationToken)
         {
             for (int index = 0; index < candidateCount; index++)
             {

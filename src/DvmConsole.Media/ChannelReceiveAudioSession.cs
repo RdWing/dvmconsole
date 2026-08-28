@@ -23,15 +23,13 @@ public sealed class ChannelReceiveAudioSession : IAsyncDisposable
         IAudioPlayback playback,
         IP25KeyResolver? keyResolver = null,
         IDmrKeyResolver? dmrKeyResolver = null,
-        INxdnKeyResolver? nxdnKeyResolver = null,
-        IReceivePrivacyPolicy? privacyPolicy = null)
+        INxdnKeyResolver? nxdnKeyResolver = null)
     {
         ArgumentNullException.ThrowIfNull(definition);
         ArgumentNullException.ThrowIfNull(playback);
 
         Definition = definition;
         this.playback = playback;
-        bool hasFixedPrivacy = HasFixedPrivacy(definition);
         switch (definition.Mode)
         {
             case "dmr":
@@ -42,9 +40,7 @@ public sealed class ChannelReceiveAudioSession : IAsyncDisposable
                     playback,
                     dmrKeyResolver,
                     definition.SystemName,
-                    hasFixedPrivacy,
-                    privacyMayVary: definition.SelectableEncryption,
-                    privacyPolicy);
+                    privacyMayVary: definition.IsEncrypted);
                 break;
             case "p25":
                 ArgumentNullException.ThrowIfNull(vocoder);
@@ -53,8 +49,7 @@ public sealed class ChannelReceiveAudioSession : IAsyncDisposable
                     vocoder,
                     playback,
                     keyResolver,
-                    definition.SystemName,
-                    privacyPolicy);
+                    definition.SystemName);
                 break;
             case "nxdn":
                 ArgumentNullException.ThrowIfNull(vocoder);
@@ -63,10 +58,7 @@ public sealed class ChannelReceiveAudioSession : IAsyncDisposable
                     vocoder,
                     playback,
                     nxdnKeyResolver,
-                    definition.SystemName,
-                    hasFixedPrivacy ? definition.EncryptionAlgorithm : null,
-                    hasFixedPrivacy ? definition.EncryptionKeyId : null,
-                    privacyPolicy);
+                    definition.SystemName);
                 break;
             case "analog":
                 analogSession = new AnalogRxAudioSession(
@@ -79,9 +71,6 @@ public sealed class ChannelReceiveAudioSession : IAsyncDisposable
     }
 
     public ChannelRuntimeDefinition Definition { get; }
-
-    private static bool HasFixedPrivacy(ChannelRuntimeDefinition definition)
-        => definition.IsEncrypted && !definition.SelectableEncryption;
 
     public int FramesDecoded => dmrRouter?.FramesDecoded ?? p25Session?.FramesDecoded ?? nxdnSession?.FramesDecoded ?? analogSession?.FramesDecoded ?? 0;
 

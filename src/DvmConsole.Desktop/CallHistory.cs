@@ -21,9 +21,7 @@ public sealed class CallHistoryEntry : INotifyPropertyChanged
 {
     private readonly List<uint> streamIds;
     private DateTimeOffset? endTimestamp;
-    private bool encrypted;
-    private byte? encryptionAlgorithmId;
-    private ushort? encryptionKeyId;
+    private EncryptionSnapshot encryption;
     private readonly bool isEvent;
     private readonly bool isConsoleTransmission;
     private readonly bool isRecordingOnly;
@@ -50,7 +48,8 @@ public sealed class CallHistoryEntry : INotifyPropertyChanged
         string? eventMessage = null,
         string? eventRidText = null,
         string? eventTgidText = null,
-        long? receiveEpisodeId = null)
+        long? receiveEpisodeId = null,
+        bool encryptionKnown = true)
     {
         Timestamp = timestamp;
         SystemName = systemName;
@@ -60,7 +59,12 @@ public sealed class CallHistoryEntry : INotifyPropertyChanged
         Protocol = protocol;
         StreamId = streamId;
         CallerText = string.IsNullOrWhiteSpace(callerText) ? sourceId.ToString() : callerText.Trim();
-        this.encrypted = encrypted;
+        encryption = encryptionKnown
+            ? EncryptionSnapshot.FromStored(
+                encrypted
+                    ? CallRecordingEncryptionState.Secure
+                    : CallRecordingEncryptionState.Clear)
+            : EncryptionSnapshot.Unknown;
         this.isEvent = isEvent;
         this.isConsoleTransmission = isConsoleTransmission;
         this.isRecordingOnly = isRecordingOnly;
@@ -93,7 +97,8 @@ public sealed class CallHistoryEntry : INotifyPropertyChanged
     public string EventMessage => eventMessage;
     public string EventRidText => eventRidText;
     public string EventTgidText => eventTgidText;
-    public bool Encrypted => !IsEvent && encrypted;
+    public bool Encrypted => !IsEvent && encryption.IsSecure;
+    public bool EncryptionKnown => !IsEvent && encryption.IsKnown;
     public string TimestampText => Timestamp.ToLocalTime().ToString("HH:mm:ss");
     public string DateText => Timestamp.ToLocalTime().ToString("yyyy-MM-dd");
     public string ProtocolText => IsEvent ? "EVENT" : Protocol.ToString().ToUpperInvariant();
@@ -117,11 +122,13 @@ public sealed class CallHistoryEntry : INotifyPropertyChanged
     public string DurationText => Duration is TimeSpan duration
         ? CallDurationTextFormatter.Format(duration)
         : IsEvent ? "—" : "Active";
-    public byte? EncryptionAlgorithmId => encryptionAlgorithmId;
-    public ushort? EncryptionKeyId => encryptionKeyId;
+    public byte? EncryptionAlgorithmId => encryption.AlgorithmId;
+    public ushort? EncryptionKeyId => encryption.KeyId;
     public string EncryptionText => IsEvent
         ? "—"
-        : EncryptionPresentation.StatusText(Encrypted, Protocol, encryptionAlgorithmId);
+        : !EncryptionKnown
+            ? "Unknown"
+        : EncryptionPresentation.StatusText(Encrypted, Protocol, encryption.AlgorithmId);
 
     public bool HasRecording => recording is not null;
     public bool HasPlayableRecording => recording?.IsPlayable == true;
@@ -161,13 +168,8 @@ public sealed class CallHistoryEntry : INotifyPropertyChanged
     {
         ArgumentNullException.ThrowIfNull(metadata);
         bool isTx = metadata.Direction.Equals("TX", StringComparison.OrdinalIgnoreCase);
-        FneTrafficProtocol protocol = metadata.Protocol.Trim().ToUpperInvariant() switch
-        {
-            "P25" => FneTrafficProtocol.P25,
-            "NXDN" => FneTrafficProtocol.Nxdn,
-            "ANALOG" => FneTrafficProtocol.Analog,
-            _ => FneTrafficProtocol.Dmr
-        };
+        FneTrafficProtocol protocol = EncryptionPresentation.ParseProtocol(metadata.Protocol);
+        EncryptionSnapshot encryption = EncryptionSnapshotSchemaAdapter.FromMetadata(metadata);
         string caller = string.IsNullOrWhiteSpace(metadata.SubscriberAlias)
             ? metadata.SubscriberId?.ToString() ?? "Unknown"
             : metadata.SubscriberAlias.Trim();
@@ -180,9 +182,11 @@ public sealed class CallHistoryEntry : INotifyPropertyChanged
             protocol,
             metadata.StreamId ?? 0,
             caller,
-            metadata.IsEncrypted,
+            encryption.IsSecure,
             isConsoleTransmission: isTx,
-            isRecordingOnly: true);
+            isRecordingOnly: true,
+            encryptionKnown: encryption.IsKnown);
+        entry.UpdateEncryption(encryption);
         entry.endTimestamp = metadata.UtcEndTime >= metadata.UtcStartTime
             ? metadata.UtcEndTime
             : metadata.UtcStartTime.AddMilliseconds(Math.Max(0, metadata.DurationMs));
@@ -263,16 +267,21 @@ public sealed class CallHistoryEntry : INotifyPropertyChanged
         => UpdateEncryption(value, null, null);
 
     public bool UpdateEncryption(bool value, byte? algorithmId, ushort? keyId)
+        => UpdateEncryption(EncryptionSnapshot.FromStored(
+            value
+                ? CallRecordingEncryptionState.Secure
+                : CallRecordingEncryptionState.Clear,
+            algorithmId,
+            keyId));
+
+    internal bool UpdateEncryption(EncryptionSnapshot value)
     {
-        if (encrypted == value &&
-            encryptionAlgorithmId == algorithmId &&
-            encryptionKeyId == keyId)
+        if (encryption.HasSameMetadata(value) && encryption.IsKnown == value.IsKnown)
             return false;
 
-        encrypted = value;
-        encryptionAlgorithmId = value ? algorithmId : null;
-        encryptionKeyId = value ? keyId : null;
+        encryption = value;
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(Encrypted)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(EncryptionKnown)));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(EncryptionAlgorithmId)));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(EncryptionKeyId)));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(EncryptionText)));
@@ -700,6 +709,28 @@ public sealed class CallHistoryStore
         string? channelName = null,
         uint? destinationId = null,
         long? receiveEpisodeId = null)
+        => UpdateEncryption(
+            systemName,
+            protocol,
+            streamId,
+            EncryptionSnapshot.FromStored(
+                encrypted
+                    ? CallRecordingEncryptionState.Secure
+                    : CallRecordingEncryptionState.Clear,
+                algorithmId,
+                keyId),
+            channelName,
+            destinationId,
+            receiveEpisodeId);
+
+    internal bool UpdateEncryption(
+        string systemName,
+        FneTrafficProtocol protocol,
+        uint streamId,
+        EncryptionSnapshot encryption,
+        string? channelName = null,
+        uint? destinationId = null,
+        long? receiveEpisodeId = null)
     {
         CallHistoryEntry? entry = FindActiveReceiveCall(
             systemName,
@@ -708,7 +739,7 @@ public sealed class CallHistoryStore
             channelName,
             destinationId,
             receiveEpisodeId);
-        return entry?.UpdateEncryption(encrypted, algorithmId, keyId) == true;
+        return entry?.UpdateEncryption(encryption) == true;
     }
 
     private CallHistoryEntry? FindActiveReceiveCall(

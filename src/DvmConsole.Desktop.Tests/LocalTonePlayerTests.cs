@@ -41,7 +41,7 @@ public sealed class LocalTonePlayerTests
         Assert.Equal(640, samples.Length);
         Assert.Contains(samples, sample => sample != 0);
         Assert.InRange(samples.Max(), 12_000, 14_000);
-        Assert.Equal([TimeSpan.FromMilliseconds(200)], delays);
+        Assert.Empty(delays);
         Assert.False(backend.Playback.WasFlushed);
         Assert.Equal(2, backend.Playback.DrainCount);
         Assert.True(backend.Playback.IsDisposed);
@@ -181,7 +181,7 @@ public sealed class LocalTonePlayerTests
         Assert.Equal(2400, backend.Playback.Frames[0].Length);
         Assert.All(backend.Playback.Frames[0], sample => Assert.Equal((short)0, sample));
         Assert.Equal(640, backend.Playback.Frames[1].Length);
-        Assert.Equal([LocalToneCues.TalkPermit.OutputPostDrainDuration], delays);
+        Assert.Empty(delays);
         Assert.Null(result.MeasuredOutputPresentationLatency);
     }
 
@@ -212,7 +212,7 @@ public sealed class LocalTonePlayerTests
         Assert.Equal(1, backend.OpenPlaybackCount);
         Assert.Equal(2, backend.Playback.Frames.Count);
         Assert.All(backend.Playback.Frames[0], sample => Assert.Equal((short)0, sample));
-        Assert.Equal([LocalToneCues.TalkPermit.OutputPostDrainDuration], delays);
+        Assert.Empty(delays);
         Assert.Null(result.MeasuredOutputPresentationLatency);
     }
 
@@ -411,7 +411,7 @@ public sealed class LocalTonePlayerTests
     public void CueDefinitionsDeclareTheirOutputPreparationPolicy()
     {
         Assert.True(LocalToneCues.TalkPermit.OutputWarmupDuration > TimeSpan.Zero);
-        Assert.True(LocalToneCues.TalkPermit.OutputPostDrainDuration > TimeSpan.Zero);
+        Assert.Equal(TimeSpan.Zero, LocalToneCues.TalkPermit.OutputPostDrainDuration);
         Assert.True(LocalToneCues.TalkPermit.MaximumPlaybackAttempts > 1);
         Assert.True(LocalToneCues.ColdStartTalkPermit.ReopenOutputAfterCueRelease);
         Assert.False(LocalToneCues.TalkPermit.ReopenOutputAfterCueRelease);

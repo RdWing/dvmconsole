@@ -175,6 +175,35 @@ public sealed class UserSettingsStoreTests
     }
 
     [Fact]
+    public void UnreadableSettingsReturnDefaultsOnUnix()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        string path = CreatePath();
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            File.WriteAllText(path, "{ \"LastSelectedSystemName\": \"unreadable\" }");
+            File.SetUnixFileMode(path, UnixFileMode.None);
+
+            UserSettings settings = new UserSettingsStore(path).Load();
+
+            Assert.Null(settings.LastSelectedSystemName);
+        }
+        finally
+        {
+            if (File.Exists(path))
+            {
+                File.SetUnixFileMode(
+                    path,
+                    UnixFileMode.UserRead | UnixFileMode.UserWrite);
+            }
+            Cleanup(path);
+        }
+    }
+
+    [Fact]
     public void PersistsVerboseLoggingWithoutChangingTheSchemaVersion()
     {
         string path = CreatePath();

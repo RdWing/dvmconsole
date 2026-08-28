@@ -71,6 +71,7 @@ public sealed partial class MainWindow : Window
             throw new ArgumentNullException(nameof(operatorViewStore));
         this.demoMode = demoMode;
         InitializeComponent();
+        PopulatePttKeyMenus();
         // Avalonia can leave named controls declared inside nested MenuItems
         // unresolved when the compiled XAML is loaded from a published
         // self-contained apphost. Resolve them from the window name scope
@@ -1209,6 +1210,22 @@ public sealed partial class MainWindow : Window
     private void InitializeComponent()
     {
         Avalonia.Markup.Xaml.AvaloniaXamlLoader.Load(this);
+    }
+
+    private void PopulatePttKeyMenus()
+    {
+        MenuItem globalMenu = this.FindControl<MenuItem>("globalPttKeyMenu")
+            ?? throw new InvalidOperationException("The global PTT key menu was not initialized.");
+        MenuItem activeSystemMenu = this.FindControl<MenuItem>("activeSystemPttKeyMenu")
+            ?? throw new InvalidOperationException("The active-system PTT key menu was not initialized.");
+        MainWindowMenuBuilder.ReplacePttKeyItems(
+            globalMenu,
+            "None (keyboard PTT disabled)",
+            HandleGlobalPttKeyClick);
+        MainWindowMenuBuilder.ReplacePttKeyItems(
+            activeSystemMenu,
+            "None (active-system PTT disabled)",
+            HandleActiveSystemPttKeyClick);
     }
 
     private void HandleOpenRecordingClick(object? sender, RoutedEventArgs e)

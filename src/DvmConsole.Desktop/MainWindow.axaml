@@ -82,52 +82,8 @@
             <MenuItem Header="Disable all receive (zone)" Tag="channels.receive.disable-zone" IsEnabled="{Binding HasSelectedZone}" Click="HandleOperatorCommandClick" />
             <MenuItem Header="Disable all receive" Tag="channels.receive.disable-all" Click="HandleOperatorCommandClick" />
             <Separator />
-            <MenuItem Header="Global PTT key">
-              <MenuItem Header="None (keyboard PTT disabled)" Tag="None" Click="HandleGlobalPttKeyClick" />
-              <MenuItem Header="Space" Tag="Space" Click="HandleGlobalPttKeyClick" />
-              <MenuItem Header="F1" Tag="F1" Click="HandleGlobalPttKeyClick" />
-              <MenuItem Header="F2" Tag="F2" Click="HandleGlobalPttKeyClick" />
-              <MenuItem Header="F3" Tag="F3" Click="HandleGlobalPttKeyClick" />
-              <MenuItem Header="F4" Tag="F4" Click="HandleGlobalPttKeyClick" />
-              <MenuItem Header="F5" Tag="F5" Click="HandleGlobalPttKeyClick" />
-              <MenuItem Header="F6" Tag="F6" Click="HandleGlobalPttKeyClick" />
-              <MenuItem Header="F7" Tag="F7" Click="HandleGlobalPttKeyClick" />
-              <MenuItem Header="F8" Tag="F8" Click="HandleGlobalPttKeyClick" />
-              <MenuItem Header="F9" Tag="F9" Click="HandleGlobalPttKeyClick" />
-              <MenuItem Header="F10" Tag="F10" Click="HandleGlobalPttKeyClick" />
-              <MenuItem Header="F11" Tag="F11" Click="HandleGlobalPttKeyClick" />
-              <MenuItem Header="F12" Tag="F12" Click="HandleGlobalPttKeyClick" />
-              <MenuItem Header="F13" Tag="F13" Click="HandleGlobalPttKeyClick" />
-              <MenuItem Header="F14" Tag="F14" Click="HandleGlobalPttKeyClick" />
-              <MenuItem Header="F15" Tag="F15" Click="HandleGlobalPttKeyClick" />
-              <MenuItem Header="F16" Tag="F16" Click="HandleGlobalPttKeyClick" />
-              <MenuItem Header="F17" Tag="F17" Click="HandleGlobalPttKeyClick" />
-              <MenuItem Header="F18" Tag="F18" Click="HandleGlobalPttKeyClick" />
-              <MenuItem Header="F19" Tag="F19" Click="HandleGlobalPttKeyClick" />
-            </MenuItem>
-            <MenuItem Header="Active-system PTT key">
-              <MenuItem Header="None (active-system PTT disabled)" Tag="None" Click="HandleActiveSystemPttKeyClick" />
-              <MenuItem Header="Space" Tag="Space" Click="HandleActiveSystemPttKeyClick" />
-              <MenuItem Header="F1" Tag="F1" Click="HandleActiveSystemPttKeyClick" />
-              <MenuItem Header="F2" Tag="F2" Click="HandleActiveSystemPttKeyClick" />
-              <MenuItem Header="F3" Tag="F3" Click="HandleActiveSystemPttKeyClick" />
-              <MenuItem Header="F4" Tag="F4" Click="HandleActiveSystemPttKeyClick" />
-              <MenuItem Header="F5" Tag="F5" Click="HandleActiveSystemPttKeyClick" />
-              <MenuItem Header="F6" Tag="F6" Click="HandleActiveSystemPttKeyClick" />
-              <MenuItem Header="F7" Tag="F7" Click="HandleActiveSystemPttKeyClick" />
-              <MenuItem Header="F8" Tag="F8" Click="HandleActiveSystemPttKeyClick" />
-              <MenuItem Header="F9" Tag="F9" Click="HandleActiveSystemPttKeyClick" />
-              <MenuItem Header="F10" Tag="F10" Click="HandleActiveSystemPttKeyClick" />
-              <MenuItem Header="F11" Tag="F11" Click="HandleActiveSystemPttKeyClick" />
-              <MenuItem Header="F12" Tag="F12" Click="HandleActiveSystemPttKeyClick" />
-              <MenuItem Header="F13" Tag="F13" Click="HandleActiveSystemPttKeyClick" />
-              <MenuItem Header="F14" Tag="F14" Click="HandleActiveSystemPttKeyClick" />
-              <MenuItem Header="F15" Tag="F15" Click="HandleActiveSystemPttKeyClick" />
-              <MenuItem Header="F16" Tag="F16" Click="HandleActiveSystemPttKeyClick" />
-              <MenuItem Header="F17" Tag="F17" Click="HandleActiveSystemPttKeyClick" />
-              <MenuItem Header="F18" Tag="F18" Click="HandleActiveSystemPttKeyClick" />
-              <MenuItem Header="F19" Tag="F19" Click="HandleActiveSystemPttKeyClick" />
-            </MenuItem>
+            <MenuItem Header="Global PTT key" x:Name="globalPttKeyMenu" />
+            <MenuItem Header="Active-system PTT key" x:Name="activeSystemPttKeyMenu" />
             <Separator />
             <MenuItem Header="Select/unselect all TX channels" Tag="channels.transmit.toggle-all" Click="HandleOperatorCommandClick" />
           </MenuItem>
@@ -312,16 +268,32 @@
                                   <Grid RowDefinitions="Auto,Auto,Auto,*,24" RowSpacing="3">
                                   <StackPanel Spacing="2"><TextBlock Foreground="{Binding CardTextBrush}" FontWeight="Bold" FontSize="{Binding $parent[Window].((local:MainWindowViewModel)DataContext).UiFontSize}" Text="{Binding Name}" TextTrimming="CharacterEllipsis" /><TextBlock Foreground="{Binding CardTextBrush}" FontSize="{Binding $parent[Window].((local:MainWindowViewModel)DataContext).UiSmallFontSize}" Text="{Binding TalkgroupText}" /></StackPanel>
                                   <TextBlock Grid.Row="1" Foreground="{Binding CardTextBrush}" FontSize="{Binding $parent[Window].((local:MainWindowViewModel)DataContext).UiSmallFontSize}" Text="{Binding LastCallerDisplayText}" TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
-                                  <Border Grid.Row="2" Width="{Binding AudioMeterWidth}" Height="4" Background="#24303B" CornerRadius="2" ClipToBounds="True" HorizontalAlignment="Center">
-                                    <Border Background="#00BE5A" CornerRadius="2" RenderTransformOrigin="0%,50%">
-                                      <Border.RenderTransform>
-                                        <ScaleTransform ScaleX="{Binding AudioLevelScale}" />
-                                      </Border.RenderTransform>
-                                    </Border>
+                                  <Border Grid.Row="2" Classes="channel-audio-meter" Width="{Binding AudioMeterWidth}" Height="4" Background="#24303B" CornerRadius="2" ClipToBounds="True" HorizontalAlignment="Center">
+                                    <Grid>
+                                      <Border Classes="channel-audio-meter-fill-clip" Width="{Binding AudioFillWidth}" HorizontalAlignment="Left" CornerRadius="2" ClipToBounds="True">
+                                        <Border Width="{Binding AudioMeterWidth}" HorizontalAlignment="Left" CornerRadius="2">
+                                          <Border.Background>
+                                            <LinearGradientBrush StartPoint="0%,50%" EndPoint="100%,50%">
+                                              <GradientStop Color="#00BE5A" Offset="0" />
+                                              <GradientStop Color="#00BE5A" Offset="0.76" />
+                                              <GradientStop Color="#F2B134" Offset="0.76" />
+                                              <GradientStop Color="#F2B134" Offset="0.88" />
+                                              <GradientStop Color="#E5484D" Offset="0.88" />
+                                              <GradientStop Color="#E5484D" Offset="1" />
+                                            </LinearGradientBrush>
+                                          </Border.Background>
+                                        </Border>
+                                      </Border>
+                                      <Canvas IsHitTestVisible="False">
+                                        <Border Canvas.Left="{Binding AudioPeakMarkerX}" Width="2" Height="4" Background="{Binding AudioPeakMarkerBrush}" IsVisible="{Binding IsAudioPeakVisible}" />
+                                      </Canvas>
+                                    </Grid>
                                   </Border>
                                   <Grid Grid.Row="3" MinHeight="23" ClipToBounds="False" ColumnDefinitions="*,Auto" ColumnSpacing="4"><local:NeutralSnapSlider Height="36" Minimum="-1" Maximum="1" NeutralValue="0" Value="{Binding VolumeSliderValue, Mode=TwoWay}" VerticalAlignment="Center" ToolTip.Tip="Channel gain: center is 0 dB (1×)"><local:NeutralSnapSlider.RenderTransform><TranslateTransform Y="-4" /></local:NeutralSnapSlider.RenderTransform></local:NeutralSnapSlider><Button Grid.Column="1" Classes="card-action channel-action encryption-select" Content="{Binding EncryptionButtonText}" Background="{Binding EncryptionSelectionBrush}" BorderBrush="{Binding EncryptionSelectionBorderBrush}" Foreground="{Binding EncryptionSelectionTextBrush}" Command="{Binding EncryptionCommand}" IsVisible="{Binding CanToggleEncryption}" IsEnabled="{Binding CanToggleEncryption}" /></Grid>
                                   <Grid Grid.Row="4" ColumnDefinitions="*,Auto,Auto,Auto,Auto" ColumnSpacing="2">
-                                    <Button Classes="ptt" Content="{Binding PttButtonText}" IsEnabled="{Binding CanTransmit}" />
+                                    <Border Classes="ptt-input-guard" Background="Transparent" ToolTip.Tip="Push to talk; unavailable while this channel is receiving">
+                                      <Button Classes="ptt" Content="{Binding PttButtonText}" IsEnabled="{Binding IsPttControlEnabled}" />
+                                    </Border>
                                     <Button Grid.Column="1" Classes="tx-select channel-action tx-multi" Classes.armed="{Binding IsTransmitSelected}" Content="{Binding TransmitSelectionText}" Background="{Binding TransmitSelectionBrush}" BorderBrush="{Binding TransmitSelectionBorderBrush}" IsEnabled="{Binding CanTransmit}" ToolTip.Tip="Include this channel in global multi-select PTT" Click="HandleTransmitSelectionClick" />
                                     <Button Grid.Column="2" Classes="tx-select channel-action page-select" Classes.armed="{Binding IsPageSelected}" Content="{Binding PageSelectionText}" Background="{Binding PageSelectionBrush}" BorderBrush="{Binding PageSelectionBorderBrush}" IsEnabled="{Binding CanTransmit}" ToolTip.Tip="Include this channel when sending QCII pages" Click="HandlePageSelectionClick" />
                                     <Button Grid.Column="3" Classes="tx-select channel-action alert-select" Classes.armed="{Binding IsAlertSelected}" Content="{Binding AlertSelectionText}" Background="{Binding AlertSelectionBrush}" BorderBrush="{Binding AlertSelectionBorderBrush}" IsEnabled="{Binding CanTransmit}" ToolTip.Tip="Include this channel when sending DTMF or alert tones" Click="HandleAlertSelectionClick" />

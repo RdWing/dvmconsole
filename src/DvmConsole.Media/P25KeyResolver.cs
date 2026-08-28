@@ -97,7 +97,7 @@ public sealed class P25KeyRing : IP25KeyResolver, IDisposable
         byte[] normalizedKey = NormalizeKeyMaterial(
             algorithmId,
             key,
-            static message => new ArgumentException(message, "key"));
+            static message => new ArgumentException(message, nameof(key)));
 
         lock (sync)
         {

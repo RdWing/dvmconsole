@@ -9,46 +9,78 @@ namespace DvmConsole.Media;
 // that callback synchronously would burst multiple protocol packets.
 internal sealed class TransmitFramePacer
 {
+    // Fifty 20 ms frames bound an abnormal live microphone backlog to roughly
+    // one second while still allowing ordinary callback bursts to drain.
+    internal const int DefaultCapacity = 50;
     private readonly object sync = new();
     private readonly ProcessTransmitSamples processFrame;
     private readonly Action<Exception> publishFault;
     private readonly Func<CancellationToken, ValueTask>? waitForNextFrame;
     private readonly TransmitFrameCadence? cadence;
-    private readonly Channel<short[]> frames;
+    private readonly Channel<QueuedFrame> frames;
+    private readonly Queue<DateTimeOffset> enqueuedAt = new();
+    private readonly TimeProvider timeProvider;
+    private readonly CancellationTokenSource cancellation = new();
     private readonly short[] partialFrame = new short[VocoderFrameSizes.PcmSamplesPerFrame];
     private readonly Task completion;
     private int partialSampleCount;
+    private int queuedFrameCount;
+    private int peakQueuedFrameCount;
+    private int faultPublished;
     private bool completed;
 
     public TransmitFramePacer(
         ProcessTransmitSamples processFrame,
         Action<Exception> publishFault,
         Func<CancellationToken, ValueTask>? waitForNextFrame = null,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null,
+        int capacity = DefaultCapacity)
     {
         this.processFrame = processFrame ?? throw new ArgumentNullException(nameof(processFrame));
         this.publishFault = publishFault ?? throw new ArgumentNullException(nameof(publishFault));
         this.waitForNextFrame = waitForNextFrame;
+        if (capacity <= 0)
+            throw new ArgumentOutOfRangeException(nameof(capacity));
+        this.timeProvider = timeProvider ?? TimeProvider.System;
         cadence = waitForNextFrame is null
-            ? new TransmitFrameCadence(timeProvider)
+            ? new TransmitFrameCadence(this.timeProvider)
             : null;
-        frames = Channel.CreateUnbounded<short[]>(new UnboundedChannelOptions
+        frames = Channel.CreateBounded<QueuedFrame>(new BoundedChannelOptions(capacity)
         {
             SingleReader = true,
             SingleWriter = false,
-            AllowSynchronousContinuations = false
+            AllowSynchronousContinuations = false,
+            FullMode = BoundedChannelFullMode.Wait
         });
+        Capacity = capacity;
         completion = RunAsync();
     }
 
     public Task Completion => completion;
     public Exception? Failure { get; private set; }
+    public int Capacity { get; }
+
+    public TransmitQueueHealth CaptureHealth()
+    {
+        lock (sync)
+        {
+            TimeSpan? oldestAge = enqueuedAt.Count == 0
+                ? null
+                : timeProvider.GetUtcNow() - enqueuedAt.Peek();
+            return new TransmitQueueHealth(
+                queuedFrameCount,
+                peakQueuedFrameCount,
+                oldestAge,
+                Capacity);
+        }
+    }
 
     public bool Enqueue(ReadOnlySpan<short> samples)
     {
         if (samples.IsEmpty)
             return false;
 
+        Exception? overflow = null;
         lock (sync)
         {
             if (completed)
@@ -61,11 +93,18 @@ internal sealed class TransmitFramePacer
                 partialSampleCount += copyLength;
                 samples = samples[copyLength..];
 
-                if (partialSampleCount == partialFrame.Length)
-                    QueuePartialFrame();
+                if (partialSampleCount == partialFrame.Length && !QueuePartialFrame())
+                {
+                    overflow = FailForOverflow();
+                    break;
+                }
             }
-            return true;
         }
+
+        if (overflow is null)
+            return true;
+        PublishFault(overflow);
+        return false;
     }
 
     // Completes normally after every accepted sample has been processed. A
@@ -73,25 +112,61 @@ internal sealed class TransmitFramePacer
     // existing padding and terminator behavior without losing microphone tail.
     public void Complete()
     {
+        Exception? overflow = null;
         lock (sync)
         {
             if (completed)
                 return;
 
             completed = true;
-            if (partialSampleCount > 0)
-                QueuePartialFrame();
+            if (partialSampleCount > 0 && !QueuePartialFrame())
+                overflow = FailForOverflow();
             frames.Writer.TryComplete();
         }
+        if (overflow is not null)
+            PublishFault(overflow);
     }
 
-    private void QueuePartialFrame()
+    private bool QueuePartialFrame()
     {
         var frame = new short[partialSampleCount];
         partialFrame.AsSpan(0, partialSampleCount).CopyTo(frame);
-        if (!frames.Writer.TryWrite(frame))
-            throw new InvalidOperationException("The transmit frame queue stopped accepting audio.");
+        DateTimeOffset now = timeProvider.GetUtcNow();
+        if (!frames.Writer.TryWrite(new QueuedFrame(frame)))
+            return false;
+        enqueuedAt.Enqueue(now);
+        queuedFrameCount++;
+        peakQueuedFrameCount = Math.Max(peakQueuedFrameCount, queuedFrameCount);
         partialSampleCount = 0;
+        return true;
+    }
+
+    private InvalidOperationException FailForOverflow()
+    {
+        var exception = new InvalidOperationException(
+            $"The transmit audio backlog reached its {Capacity}-frame safety limit.");
+        Failure = exception;
+        completed = true;
+        partialSampleCount = 0;
+        // Cancel before completing the channel. The worker owns disposal of
+        // this source and may finish as soon as the channel is completed.
+        cancellation.Cancel();
+        frames.Writer.TryComplete(exception);
+        return exception;
+    }
+
+    private void PublishFault(Exception exception)
+    {
+        if (Interlocked.Exchange(ref faultPublished, 1) != 0)
+            return;
+        try
+        {
+            publishFault(exception);
+        }
+        catch
+        {
+            // Fault reporting must not replace the media failure.
+        }
     }
 
     private async Task RunAsync()
@@ -99,24 +174,34 @@ internal sealed class TransmitFramePacer
         try
         {
             bool firstFrame = true;
-            await foreach (short[] frame in frames.Reader.ReadAllAsync().ConfigureAwait(false))
+            await foreach (QueuedFrame queued in frames.Reader.ReadAllAsync(cancellation.Token).ConfigureAwait(false))
             {
+                lock (sync)
+                {
+                    if (enqueuedAt.Count > 0)
+                        enqueuedAt.Dequeue();
+                    queuedFrameCount = Math.Max(0, queuedFrameCount - 1);
+                }
                 if (cadence is not null)
                 {
-                    await cadence.WaitForNextFrameAsync(CancellationToken.None).ConfigureAwait(false);
+                    await cadence.WaitForNextFrameAsync(cancellation.Token).ConfigureAwait(false);
                 }
                 else if (!firstFrame)
                 {
-                    await waitForNextFrame!(CancellationToken.None).ConfigureAwait(false);
+                    await waitForNextFrame!(cancellation.Token).ConfigureAwait(false);
                 }
 
-                processFrame(frame);
+                processFrame(queued.Samples);
                 firstFrame = false;
             }
         }
+        catch (OperationCanceledException) when (Failure is not null)
+        {
+            // A bounded-backlog failure cancels queued stale audio immediately.
+        }
         catch (Exception exception)
         {
-            Failure = exception;
+            Failure ??= exception;
             lock (sync)
             {
                 completed = true;
@@ -125,12 +210,18 @@ internal sealed class TransmitFramePacer
             }
             try
             {
-                publishFault(exception);
+                PublishFault(Failure!);
             }
             catch
             {
-                // Fault reporting must not replace the original media failure.
+                // PublishFault already isolates observer failures.
             }
         }
+        finally
+        {
+            cancellation.Dispose();
+        }
     }
+
+    private readonly record struct QueuedFrame(short[] Samples);
 }

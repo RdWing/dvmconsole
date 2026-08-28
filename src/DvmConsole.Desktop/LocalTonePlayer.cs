@@ -84,7 +84,7 @@ internal static class LocalToneCues
         ReopenOutputAfterCueRelease: false,
         LeadSilenceDuration: TimeSpan.Zero,
         TailSilenceDuration: TimeSpan.Zero,
-        OutputPostDrainDuration: TimeSpan.FromMilliseconds(200),
+        OutputPostDrainDuration: TimeSpan.Zero,
         MaximumPlaybackAttempts: 3,
         RoutePolicy: AudioOutputRoutePolicy.TransientRouteChanges,
         RequireOutputCallbackEvidence: true);
@@ -187,7 +187,7 @@ internal sealed class AudioOutputRouteResolver : IAudioOutputRouteResolver
                 ? devices.FirstOrDefault(device =>
                     device.Id.Equals(requestedDeviceId, StringComparison.OrdinalIgnoreCase))
                 : devices.FirstOrDefault(device => device.IsDefault)
-                    ?? devices.FirstOrDefault();
+                    ?? (devices.Count > 0 ? devices[0] : null);
 
             if (candidate is not null &&
                 previousCandidate is not null &&

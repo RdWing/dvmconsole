@@ -243,24 +243,36 @@ public sealed class DebugLogWindow : Window
     private async void HandleExportClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
     {
         if (!StorageProvider.CanSave)
-            return;
-
-        IStorageFile? file = await StorageProvider.SaveFilePickerAsync(new FilePickerSaveOptions
         {
-            Title = "Export Redacted Debug Logs",
-            SuggestedFileName = "dvmconsole-debug.log",
-            DefaultExtension = "log",
-            FileTypeChoices =
-            [
-                new FilePickerFileType("Redacted log")
-                {
-                    Patterns = ["*.log"],
-                    MimeTypes = ["text/plain"]
-                }
-            ]
-        });
-        string? path = file?.TryGetLocalPath();
-        if (!string.IsNullOrWhiteSpace(path))
-            viewModel.ExportDebugLogs(path);
+            viewModel.ReportDebugLogExportFailure("This platform did not provide an available save picker.");
+            return;
+        }
+
+        try
+        {
+            IStorageFile? file = await StorageProvider.SaveFilePickerAsync(new FilePickerSaveOptions
+            {
+                Title = "Export Redacted Debug Logs",
+                SuggestedFileName = "dvmconsole-debug.log",
+                DefaultExtension = "log",
+                FileTypeChoices =
+                [
+                    new FilePickerFileType("Redacted log")
+                    {
+                        Patterns = ["*.log"],
+                        MimeTypes = ["text/plain"]
+                    }
+                ]
+            });
+            if (file is null)
+                return;
+
+            await using Stream destination = await file.OpenWriteAsync();
+            viewModel.ExportDebugLogs(destination, file.Name);
+        }
+        catch (Exception exception)
+        {
+            viewModel.ReportDebugLogExportFailure(exception.Message);
+        }
     }
 }
