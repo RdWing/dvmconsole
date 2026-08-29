@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text;
+using DvmConsole.Core.Configuration;
 
 namespace DvmConsole.Desktop;
 
@@ -25,6 +26,25 @@ internal static class WebStreamSelectionIdentity
             canonicalUrl,
             stream.AuthUsername,
             stream.AuthPassword);
+        return VersionPrefix + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(material)));
+    }
+
+    public static string Create(string? codeplugPath, WebStreamConfiguration stream)
+    {
+        ArgumentNullException.ThrowIfNull(stream);
+        if (string.IsNullOrWhiteSpace(codeplugPath) ||
+            !Uri.TryCreate(stream.Url, UriKind.Absolute, out Uri? uri))
+        {
+            return string.Empty;
+        }
+
+        string canonicalUrl = uri.GetComponents(UriComponents.HttpRequestUrl, UriFormat.UriEscaped);
+        string material = string.Join('\n',
+            Path.GetFullPath(codeplugPath),
+            stream.Name?.Trim() ?? string.Empty,
+            canonicalUrl,
+            stream.AuthUsername?.Trim() ?? string.Empty,
+            stream.AuthPassword ?? string.Empty);
         return VersionPrefix + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(material)));
     }
 

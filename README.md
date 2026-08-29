@@ -32,6 +32,12 @@ For amateur and educational use. **Not for public- or life-safety operation.**
 
 <sub>Public example configuration shown; no operational system data is included.</sub>
 
+<picture>
+  <img alt="Configuration Studio zone editor showing the system, zone, and channel hierarchy, channel table, settings inspector, and live zone layout" src="docs/user-guide/Assets/configuration-studio-zone.png" width="100%">
+</picture>
+
+<sub>Configuration Studio shown with the sanitized demo codeplug.</sub>
+
 </div>
 
 ## One workspace, independent channels
@@ -51,41 +57,41 @@ isolated audio state keep simultaneous calls separate.
 
 ## What’s new in DVM Console NEO
 
-### 0.4.4 — Connection, audio, and runtime hardening
+### 0.5.0 — Configuration Studio
 
-Version 0.4.4 recovers more reliably from stalled FNE handshakes, puts receive
-and transmit meters on the same scale, and bounds queued media work. Existing
-operator configurations remain compatible.
+Version 0.5.0 adds a graphical editor for the YAML codeplug DVM Console already
+uses. Configuration Studio keeps changes in a draft until review and save, and
+the resulting YAML remains available for compatible versions and manual tools.
 
-- FNE login acknowledgements reset retry pacing. Authentication or
-  configuration that stops making progress now gets a clean session retry with
-  a phase-specific status message.
-- Encrypted digital channels can receive clear calls in either fixed or
-  selectable transmit mode. **SECURE** and **CLEAR** now describe transmit only.
-- Channel meters use a shared -50 to 0 dBFS scale. The fill shows RMS level,
-  while the held peak marker changes from white to yellow and red at the same
-  thresholds as the meter bands.
-- Sample-rate conversion keeps anti-alias filtering continuous across chunk
-  boundaries, including 44.1 kHz input and other non-integer ratios.
-- PTT release drains accepted speech at its normal cadence before ending the
-  call. The standard talk-permit cue no longer adds a fixed 200 ms pause after
-  it drains.
-- Channel and patch transmit queues are bounded and measured. TAR finalization
-  remains durable when its worker queue is full.
-- TAR recordings distinguish unknown, clear, and secure calls, retain the
-  protocol algorithm and key identifiers when known, and keep reused FNE stream
-  IDs from joining separate calls after a confirmed terminator.
-- Debug Log searches wait briefly for typing to settle before rebuilding the
-  visible results.
-- Session startup and shutdown now use explicit ownership and rollback phases.
-  CI also checks formatting, dependency boundaries, and package budgets.
+- Navigate the configuration as FNE systems, zones, and channels. Dense tables
+  and inspectors cover connections, resources, web streams, groups, encryption
+  keys, aliases, and referenced files.
+- Open the zone layout drawer to arrange the same channel cards used by the main
+  console on the same two-dimensional canvas. The live operator workspace does
+  not change until the saved codeplug is reloaded.
+- Choose encryption algorithms by name. Studio derives protocol-specific IDs
+  and key lengths, keeps hexadecimal key prefixes visible, and presents YAML
+  `p25` mode as **P25 Phase 1** without a slot field.
+- Review errors and warnings with their section, field path, and explanation.
+  Saves use external-change checks, restricted backups, staged validation, and
+  rollback across the codeplug and referenced files.
+- Keep group definitions in YAML while membership, direction, source order, and
+  enabled state remain per-codeplug operator settings. This avoids adding
+  Studio-only membership fields to interoperable codeplugs.
+- Export a full codeplug copy or a sanitized support copy. Unknown
+  mapping fields are preserved when Studio can safely rewrite their records.
+- Stop active TAR playback from History and hear an attenuated local monitor of
+  generated tones, DTMF, pages, and alerts without changing transmitted audio.
 
-[Read the 0.4.4 release notes →](docs/releases/v0.4.4.md)
+[Read the 0.5.0 release notes →](docs/releases/v0.5.0.md)
 
 ### Prior recent improvements
 
 Recent releases also include these changes:
 
+- **0.4.4 — Connection, audio, and runtime hardening:** improved stalled FNE
+  recovery, unified channel meters, bounded media queues, and strengthened TAR
+  and session lifecycle handling.
 - **0.4.3 — Efficiency and alert audio update:** reduced package size and idle
   work, summarized jitter evidence, and corrected pacing for generated and
   imported alert audio.
@@ -95,23 +101,19 @@ Recent releases also include these changes:
 - **0.4.1 — Reliability and toolbar update:** made toolbar overflow
   scale-aware, preserved scrolled History positions, made audio-route changes
   transactional, and hardened receive-episode and session teardown.
-- **0.4.0 — Runtime and workflow update:** added searchable Settings,
-  responsive toolbar overflow, optional Engineering Health, mode-correct
-  DMR/P25 call boundaries, cross-protocol patch repair, and revised runtime
-  ownership and scheduling.
 
-[Read the 0.4.3 release notes →](docs/releases/v0.4.3.md) · [Read the 0.4.2 release notes →](docs/releases/v0.4.2.md) · [Read the 0.4.1 release notes →](docs/releases/v0.4.1.md) · [Read the 0.4.0 release notes →](docs/releases/v0.4.0.md)
+[Read the 0.4.4 release notes →](docs/releases/v0.4.4.md) · [Read the 0.4.3 release notes →](docs/releases/v0.4.3.md) · [Read the 0.4.2 release notes →](docs/releases/v0.4.2.md) · [Read the 0.4.1 release notes →](docs/releases/v0.4.1.md)
 
 ## Download DVM Console NEO
 
 Download the package for the destination computer and extract the entire
-archive before starting DVM Console NEO. Version 0.4.4 uses these filenames:
+archive before starting DVM Console NEO. Version 0.5.0 uses these filenames:
 
 | Platform | Package | Requirements |
 | --- | --- | --- |
-| Apple Silicon Mac | `dvmconsole-0.4.4-osx-arm64.zip` | macOS 14 or newer |
-| Intel Mac | `dvmconsole-0.4.4-osx-x64.zip` | macOS 14 or newer |
-| Windows PC | `dvmconsole-0.4.4-win-x64.zip` | Windows x64 |
+| Apple Silicon Mac | `dvmconsole-0.5.0-osx-arm64.zip` | macOS 14 or newer |
+| Intel Mac | `dvmconsole-0.5.0-osx-x64.zip` | macOS 14 or newer |
+| Windows PC | `dvmconsole-0.5.0-win-x64.zip` | Windows x64 |
 
 **[Download the latest release →](https://github.com/RdWing/dvmconsole/releases/latest)**
 

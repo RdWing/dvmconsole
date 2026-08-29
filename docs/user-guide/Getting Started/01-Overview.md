@@ -45,7 +45,8 @@ TG 9990 - P25
 
 ## Groups
 
-Define groups in the codeplug and manage them under **View > Groups**.
+Define groups and manage their operator state under **View > Groups**, which
+opens Configuration Studio.
 
 - Patch groups forward received audio between member channels.
 - Multi-select groups key several member channels from one operator PTT.
@@ -67,7 +68,7 @@ rail reports receive queue pressure and latency, microphone state, generation
 and cadence, transmit backlog, TAR finalization and catalog work, route
 recovery, and connection health for the selected system. DVM Console stores its
 visibility and height in `OperatorView.json`; this does not change
-`UserSettings` schema 6 or channel-card positions.
+`UserSettings` schema 7 or channel-card positions.
 
 ## Channel interaction
 
@@ -124,9 +125,13 @@ Pages include:
 - Web streams
 - Talkgroup Audio Recorder configuration and playback
 - Event history tools
-- Patch and multi-select groups
 - FNE connections and encryption key status
 - Appearance, clocks, widgets, startup behavior, and PTT settings
+
+Configuration Studio is a separate modeless window for codeplug definitions,
+referenced key and alias files, and codeplug-scoped group settings. Open it from
+**File > Configuration Studio**. The main operator workspace keeps its existing
+channel cards and controls while the Studio draft is open.
 
 ---
 

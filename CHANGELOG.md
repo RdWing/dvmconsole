@@ -6,6 +6,62 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-08-28
+
+### Added
+
+- Add Configuration Studio, a modeless graphical editor for the existing YAML
+  codeplug. Its searchable hierarchy follows FNE system, zone, and channel
+  ownership, with dense tables and field inspectors for systems, channels, web
+  streams, groups, encryption keys, aliases, and referenced files.
+- Add a slide-out zone layout editor that uses the same channel-card template,
+  dimensions, colors, and two-dimensional canvas as the main console. Cards can
+  be selected from the channel table and moved without changing the live
+  operator workspace.
+- Add draft undo and redo, field and cross-reference validation, external-change
+  detection, atomic multi-file saves, restricted backups, and full or sanitized
+  YAML exports. The validation drawer identifies the affected section, field
+  path, and cause of every error or warning.
+- Add per-codeplug operator settings for group membership, direction, source
+  order, enabled state, and Studio layout identities. Group definitions remain
+  in YAML, preserving compatibility with older DVM Console codeplug readers.
+- Add a stop control for active TAR playback and local monitoring for generated
+  tones, DTMF, pages, and alerts. The monitor copy is attenuated without
+  changing transmitted PCM.
+
+### Changed
+
+- Present `mode: p25` as **P25 Phase 1** throughout Studio and omit the slot
+  editor for P25 Phase 1 channels. DMR slots are displayed as whole numbers.
+- Replace protocol-specific encryption numbers in Studio with named algorithm
+  choices. Channel and local-key identifiers keep a fixed `0x` prefix, and the
+  local-key editor derives the correct algorithm ID and required key length for
+  P25 Phase 1, DMR, or NXDN.
+- Route **View > Groups** to Studio's Groups page. Operational group controls
+  remain immediate only while Studio is editing the active codeplug; definition
+  and membership edits participate in review and save.
+- Preserve unknown YAML mapping fields while their containing records remain in
+  the draft. Edited sections use canonical formatting, and YAML constructs that
+  cannot be rewritten safely open read-only.
+
+### Fixed
+
+- Prevent Configuration Studio menu commands, algorithm selection changes, and
+  invalid draft states from terminating the desktop process. Keep the channel
+  table independently scrollable when the layout drawer is open, and stop
+  selection synchronization from repeatedly pulling overflow rows toward the
+  drawer boundary.
+- Keep draft identity and undo history stable across renames, duplicate names,
+  reordering, deletion, and Save As. Preview settings and group state now follow
+  the intended record instead of a display name alone.
+- Ignore delayed FNE status and P25 KMM scheduling callbacks after session
+  disposal, so session teardown cannot queue work against a closed console.
+- Make generated-audio monitoring and TAR playback cancellation idempotent, and
+  isolate monitor-output failures from the radio transmission.
+- Reject malformed Opus, configuration, FNE, and recording inputs earlier;
+  bound receive episode and stream bookkeeping; and keep recording scans and
+  retention cleanup from following linked paths outside the configured root.
+
 ## [0.4.4] - 2026-08-27
 
 ### Changed
@@ -628,7 +684,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Add patches, multi-select groups, call history, recordings, web streams, clocks, layouts, themes, startup behavior, and in-application operator documentation.
 - Add support for local and KMM-provided P25 encryption keys while preserving compatibility with existing variable-length AES key material.
 
-[Unreleased]: https://github.com/RdWing/dvmconsole/compare/v0.4.4...HEAD
+[Unreleased]: https://github.com/RdWing/dvmconsole/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/RdWing/dvmconsole/compare/v0.4.4...v0.5.0
 [0.4.4]: https://github.com/RdWing/dvmconsole/compare/v0.4.3...v0.4.4
 [0.4.3]: https://github.com/RdWing/dvmconsole/compare/v0.4.2...v0.4.3
 [0.4.2]: https://github.com/RdWing/dvmconsole/compare/v0.4.1...v0.4.2

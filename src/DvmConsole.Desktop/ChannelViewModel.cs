@@ -111,12 +111,14 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
             ? YellowPeakMarkerBrush
             : NormalPeakMarkerBrush;
     public bool IsAudioPeakVisible => audioPeakLevel > 0;
-    public double CardWidth => (configuration.CardSize ?? "normal").Trim().ToLowerInvariant() switch
-    {
-        "small" => 180,
-        "large" => 330,
-        _ => 235
-    };
+    public double CardWidth => ResolveCardWidth(configuration.CardSize);
+    internal static double ResolveCardWidth(string? cardSize)
+        => (cardSize ?? "normal").Trim().ToLowerInvariant() switch
+        {
+            "small" => 180,
+            "large" => 330,
+            _ => 235
+        };
     public double CardContentWidth => CardWidth - 12;
     public double AudioMeterWidth => CardWidth - (CardWidth == 180 ? 20 : 12);
     public double WidgetX => widgetX;

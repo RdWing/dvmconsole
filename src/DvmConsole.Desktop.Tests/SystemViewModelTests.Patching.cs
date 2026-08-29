@@ -90,7 +90,8 @@ public sealed partial class SystemViewModelTests
             await viewModel.FlushUserSettingsAsync();
 
             UserSettings saved = store.Load();
-            Assert.Equal("Beta", saved.PatchGroupMemberships["Dispatch Patch"][0].SystemName);
+            CodeplugGroupState scoped = CodeplugGroupStateStore.GetOrMigrate(saved, codeplugPath);
+            Assert.Equal("Beta", scoped.Memberships["Dispatch Patch"][0].SystemName);
             Assert.Contains("1 destination: Alpha Dispatch", group.OneWayDestinationSummary);
         }
         finally
@@ -121,9 +122,10 @@ public sealed partial class SystemViewModelTests
             }
 
             UserSettings saved = store.Load();
+            CodeplugGroupState scoped = CodeplugGroupStateStore.GetOrMigrate(saved, codeplugPath);
             Assert.Equal(
                 ["P25 Source", "DMR 99"],
-                saved.PatchGroupMemberships["Cross Mode"].Select(member => member.ChannelName));
+                scoped.Memberships["Cross Mode"].Select(member => member.ChannelName));
             await using MainWindowViewModel restored = MainWindowViewModel.Load(codeplugPath, store);
             PatchGroupEditorViewModel restoredGroup = Assert.Single(restored.PatchGroups);
             Assert.Equal(

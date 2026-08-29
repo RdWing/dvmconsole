@@ -12,6 +12,8 @@
 
   <ItemGroup>
     <None Include="../../configs/codeplug.demo.yml" Link="Demo/codeplug.yml" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../configs/keys.demo.clear" Link="Demo/keys.clear" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../configs/aliases.demo.yml" Link="Demo/aliases.yml" CopyToOutputDirectory="PreserveNewest" />
     <None Include="TestData/mixed-card-sizes.yml" CopyToOutputDirectory="PreserveNewest" />
     <None Include="TestData/multiple-systems.yml" CopyToOutputDirectory="PreserveNewest" />
     <None Include="TestData/duplicate-patch-identities.yml" CopyToOutputDirectory="PreserveNewest" />

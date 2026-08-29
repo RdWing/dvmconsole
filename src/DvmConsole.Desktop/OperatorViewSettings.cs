@@ -3,7 +3,7 @@ using DvmConsole.Core.Settings;
 
 namespace DvmConsole.Desktop;
 
-// Optional presentation state stays outside UserSettings schema 6 so the
+// Optional presentation state stays outside UserSettings schema 7 so the
 // established operator, audio, protocol, and card-layout contract is
 // unchanged.
 internal sealed class OperatorViewSettings

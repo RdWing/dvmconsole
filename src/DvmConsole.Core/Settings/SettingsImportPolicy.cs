@@ -15,6 +15,7 @@ internal static class SettingsImportPolicy
             settings.SerialPttBaudRate != 9_600 ||
             !settings.ShowSystemStatus || !settings.ShowChannels || !settings.ShowAlertTones ||
             !settings.LockWidgets || settings.ChannelWidgetPositions.Count > 0 ||
+            settings.CodeplugStudioStates.Count > 0 ||
             !settings.ShowCallHistoryPane || settings.SnapCallHistoryToWindow ||
             !UserSettingsNormalizationRules.WindowPlacementsEqual(settings.MainWindowPlacement, new WindowPlacementSetting
             {
@@ -57,7 +58,8 @@ internal static class SettingsImportPolicy
         if (settings.RecordingRetentionDays != 7 || !string.IsNullOrWhiteSpace(settings.RecordingRootPath) ||
             settings.RecordingEnabledChannelKeys.Count > 0 || settings.RecordingIgnoredSubscriberIds.Count > 0 ||
             settings.PatchGroupMemberships.Count > 0 || settings.PatchGroupModes.Count > 0 ||
-            settings.PatchGroupEnabledStates.Count > 0 || settings.RetainPatchStateOnStartup)
+            settings.PatchGroupEnabledStates.Count > 0 || settings.CodeplugGroupStates.Count > 0 ||
+            settings.RetainPatchStateOnStartup)
         {
             sections.Add("Recording/patch");
         }
@@ -105,6 +107,10 @@ internal static class SettingsImportPolicy
             target.ChannelWidgetPositions = source.ChannelWidgetPositions.ToDictionary(
                 entry => entry.Key,
                 entry => new WidgetPositionSetting { X = entry.Value.X, Y = entry.Value.Y },
+                StringComparer.OrdinalIgnoreCase);
+            target.CodeplugStudioStates = source.CodeplugStudioStates.ToDictionary(
+                entry => entry.Key,
+                entry => entry.Value.Clone(),
                 StringComparer.OrdinalIgnoreCase);
             target.UserBackgroundImage = source.UserBackgroundImage;
             target.ShowCallHistoryPane = source.ShowCallHistoryPane;
@@ -184,6 +190,11 @@ internal static class SettingsImportPolicy
                     StringComparer.OrdinalIgnoreCase);
             target.PatchGroupModes = new Dictionary<string, bool>(source.PatchGroupModes, StringComparer.OrdinalIgnoreCase);
             target.PatchGroupEnabledStates = new Dictionary<string, bool>(source.PatchGroupEnabledStates, StringComparer.OrdinalIgnoreCase);
+            target.CodeplugGroupStates = source.CodeplugGroupStates.ToDictionary(
+                entry => entry.Key,
+                entry => entry.Value.Clone(),
+                StringComparer.OrdinalIgnoreCase);
+            target.LegacyPatchGroupStateMigrated = source.LegacyPatchGroupStateMigrated;
             target.RetainPatchStateOnStartup = source.RetainPatchStateOnStartup;
         }
 

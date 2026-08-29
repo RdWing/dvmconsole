@@ -1,12 +1,28 @@
 # Encryption keys
 
-Encryption keys allow the console to decrypt and transmit protected P25, DMR,
-and NXDN 4800 voice traffic when supported by the connected FNE system.
+Encryption keys allow the console to decrypt and transmit protected P25 Phase
+1, DMR, and NXDN 4800 voice traffic when supported by the connected FNE system.
 
-DVM Console can obtain P25 key material from two places. After an FNE connects,
-the console requests every configured P25 algorithm and key ID through KMM. A
-valid key from that FNE takes precedence over the local YAML fallback. DMR and
-NXDN privacy keys come from the local YAML file.
+DVM Console can obtain P25 Phase 1 key material from two places. After an FNE
+connects, the console requests every configured P25 Phase 1 algorithm and key
+ID through KMM. A valid key from that FNE takes precedence over the local YAML
+fallback. DMR and NXDN privacy keys come from the local YAML file.
+
+Open **File > Configuration Studio > Encryption Keys** to edit the referenced
+local key file. Choose a protocol, then choose an algorithm by name. Studio
+fills in the protocol-specific algorithm ID for you. For example, P25 Phase 1
+AES-256 uses `0x84`, while DMR AES-256 uses `0x05`. The table shows both the
+name and ID so the saved value is easy to check. The inspector never displays
+key material as plain text.
+
+Key IDs are hexadecimal. Studio keeps `0x` in front of the field and accepts
+the digits that follow it. The key file table also shows IDs with the prefix.
+
+![Encryption key editor](../../Assets/configuration-studio-encryption.png)
+
+The page edits local YAML keys only. FNE/KMM availability is runtime status and
+cannot be written back to the file. Use **Tools > Encryption Key Status** when
+you need to see whether the running console has a local or KMM-delivered key.
 
 Keys are isolated by FNE system. Two systems can use the same algorithm and key
 ID with different material. KMM-delivered keys stay in memory only. When the
@@ -61,19 +77,22 @@ keys:
 
 Fields:
 
-- `protocol`: `p25`, `dmr`, or `nxdn`. Entries without this field remain P25
-  for compatibility with existing key files.
-- `keyId`: key ID referenced by channels. NXDN key IDs are 1 through 63.
+- `protocol`: `p25`, `dmr`, or `nxdn`. Studio displays `p25` as P25 Phase 1.
+  Entries without this field remain P25 Phase 1 for compatibility with existing
+  key files.
+- `keyId`: hexadecimal key ID referenced by channels. NXDN key IDs are 1
+  through 63.
 - `algId`: algorithm ID.
-- `key`: key material as hexadecimal without spaces or separators. P25 keeps
-  its established compatibility rules. DMR ARC4 uses 5 bytes, DES-OFB uses 8,
-  and AES-256 uses 32. NXDN EHR uses a non-zero 15-bit seed stored in 2 bytes,
-  DES uses 8 bytes, and AES-256 uses 32.
+- `key`: key material as hexadecimal without spaces or separators. P25 Phase 1
+  keeps its established compatibility rules. DMR ARC4 uses 5 bytes, DES-OFB
+  uses 8, and AES-256 uses 32. NXDN EHR uses a non-zero 15-bit seed stored in 2
+  bytes, DES uses 8 bytes, and AES-256 uses 32.
 
-Algorithm IDs are protocol-specific and are not interchangeable. P25 AES uses
-`algId: 0x84`, while DMR Association AES-256 uses `algId: 0x05`. A DMR key must
-also declare `protocol: "dmr"`; an entry without `protocol` is treated as P25
-for compatibility with older key files.
+Algorithm IDs are protocol-specific and are not interchangeable. Configuration
+Studio chooses the ID from the protocol and algorithm name. In YAML, P25 Phase
+1 AES-256 uses `algId: 0x84`, while DMR Association AES-256 uses `algId: 0x05`.
+A DMR key must also declare `protocol: "dmr"`; an entry without `protocol` is
+treated as P25 Phase 1 for compatibility with older key files.
 
 ---
 
@@ -95,9 +114,10 @@ Supported `algo` values include:
 
 For NXDN, use `ehr`, `des`, or `aes`. NXDN 9600/EFR is not implemented in dvmhost.
 
-P25 channel key IDs are hexadecimal. The `0x` prefix is recommended for
-clarity; unprefixed P25 values retain the legacy WPF hexadecimal
-interpretation.
+Configuration Studio writes channel key IDs with a `0x` prefix. The runtime
+still accepts existing unprefixed values. Unprefixed P25 Phase 1 values retain
+the legacy WPF hexadecimal interpretation, while unprefixed DMR and NXDN values
+retain their decimal interpretation.
 
 If `keyId` is blank or zero, DVM Console treats the channel as clear.
 
@@ -105,7 +125,8 @@ If `keyId` is blank or zero, DVM Console treats the channel as clear.
 
 # Selectable encryption
 
-P25, DMR, and NXDN secure-capable channels can expose an in-card encryption toggle:
+P25 Phase 1, DMR, and NXDN secure-capable channels can expose an in-card
+encryption toggle:
 
 ```yaml
 keyId: 0x50
@@ -136,13 +157,13 @@ the receiver can recover at the next eight-frame encryption-session boundary.
 # FNE key requests
 
 After an FNE connection completes, DVM Console requests the distinct algorithm
-and key IDs used by that system's encrypted P25 channels. The system `rid`
-identifies the requesting console and must be a valid, nonzero 24-bit ID.
+and key IDs used by that system's encrypted P25 Phase 1 channels. The system
+`rid` identifies the requesting console and must be a valid, nonzero 24-bit ID.
 
 DVM Console does not request or use the FNE key inventory. An automatic KMM
 request therefore needs a nonzero `keyId` and supported `algo` on at least one
-P25 channel. KMM supplies the requested material; it does not assign keys to
-channels or send a channel-to-key list.
+P25 Phase 1 channel. KMM supplies the requested material; it does not assign
+keys to channels or send a channel-to-key list.
 
 A valid KMM key becomes active for the system that delivered it. DVM Console
 never applies a response from one FNE to another, even when both use the same
