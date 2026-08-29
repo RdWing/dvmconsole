@@ -57,38 +57,30 @@ isolated audio state keep simultaneous calls separate.
 
 ## What’s new in DVM Console NEO
 
-### 0.5.0 — Configuration Studio
+### 0.5.1 — Windows transmit audio hotfix
 
-Version 0.5.0 adds a graphical editor for the YAML codeplug DVM Console already
-uses. Configuration Studio keeps changes in a draft until review and save, and
-the resulting YAML remains available for compatible versions and manual tools.
+Version 0.5.1 addresses a reported Windows transmit audio problem. Diagnostic
+logs showed outbound P25 packets drifting well beyond their intended cadence
+when timer wakeups ran late.
 
-- Navigate the configuration as FNE systems, zones, and channels. Dense tables
-  and inspectors cover connections, resources, web streams, groups, encryption
-  keys, aliases, and referenced files.
-- Open the zone layout drawer to arrange the same channel cards used by the main
-  console on the same two-dimensional canvas. The live operator workspace does
-  not change until the saved codeplug is reloaded.
-- Choose encryption algorithms by name. Studio derives protocol-specific IDs
-  and key lengths, keeps hexadecimal key prefixes visible, and presents YAML
-  `p25` mode as **P25 Phase 1** without a slot field.
-- Review errors and warnings with their section, field path, and explanation.
-  Saves use external-change checks, restricted backups, staged validation, and
-  rollback across the codeplug and referenced files.
-- Keep group definitions in YAML while membership, direction, source order, and
-  enabled state remain per-codeplug operator settings. This avoids adding
-  Studio-only membership fields to interoperable codeplugs.
-- Export a full codeplug copy or a sanitized support copy. Unknown
-  mapping fields are preserved when Studio can safely rewrite their records.
-- Stop active TAR playback from History and hear an attenuated local monitor of
-  generated tones, DTMF, pages, and alerts without changing transmitted audio.
+- Schedule outbound audio against absolute 20 ms deadlines so one late wakeup
+  does not shift every packet that follows.
+- Rebase safely if transmission falls a full frame behind instead of sending a
+  burst of catch-up packets.
+- Use the same scheduler for patch forwarding while retaining its existing
+  initial delay and bounded backlog protection.
+- Add deterministic coverage for repeated timer overshoot, delayed patch start,
+  clock-frequency conversion, and no-burst recovery.
 
-[Read the 0.5.0 release notes →](docs/releases/v0.5.0.md)
+[Read the 0.5.1 release notes →](docs/releases/v0.5.1.md)
 
 ### Prior recent improvements
 
 Recent releases also include these changes:
 
+- **0.5.0 — Configuration Studio:** added graphical codeplug editing, layout
+  previews, validation, atomic saves, sanitized exports, playback stop, and
+  generated-audio monitoring.
 - **0.4.4 — Connection, audio, and runtime hardening:** improved stalled FNE
   recovery, unified channel meters, bounded media queues, and strengthened TAR
   and session lifecycle handling.
@@ -102,18 +94,18 @@ Recent releases also include these changes:
   scale-aware, preserved scrolled History positions, made audio-route changes
   transactional, and hardened receive-episode and session teardown.
 
-[Read the 0.4.4 release notes →](docs/releases/v0.4.4.md) · [Read the 0.4.3 release notes →](docs/releases/v0.4.3.md) · [Read the 0.4.2 release notes →](docs/releases/v0.4.2.md) · [Read the 0.4.1 release notes →](docs/releases/v0.4.1.md)
+[Read the 0.5.0 release notes →](docs/releases/v0.5.0.md) · [Read the 0.4.4 release notes →](docs/releases/v0.4.4.md) · [Read the 0.4.3 release notes →](docs/releases/v0.4.3.md) · [Read the 0.4.2 release notes →](docs/releases/v0.4.2.md)
 
 ## Download DVM Console NEO
 
 Download the package for the destination computer and extract the entire
-archive before starting DVM Console NEO. Version 0.5.0 uses these filenames:
+archive before starting DVM Console NEO. Version 0.5.1 uses these filenames:
 
 | Platform | Package | Requirements |
 | --- | --- | --- |
-| Apple Silicon Mac | `dvmconsole-0.5.0-osx-arm64.zip` | macOS 14 or newer |
-| Intel Mac | `dvmconsole-0.5.0-osx-x64.zip` | macOS 14 or newer |
-| Windows PC | `dvmconsole-0.5.0-win-x64.zip` | Windows x64 |
+| Apple Silicon Mac | `dvmconsole-0.5.1-osx-arm64.zip` | macOS 14 or newer |
+| Intel Mac | `dvmconsole-0.5.1-osx-x64.zip` | macOS 14 or newer |
+| Windows PC | `dvmconsole-0.5.1-win-x64.zip` | Windows x64 |
 
 **[Download the latest release →](https://github.com/RdWing/dvmconsole/releases/latest)**
 

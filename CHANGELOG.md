@@ -6,6 +6,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-08-29
+
+### Changed
+
+- Give patch forwarding an explicit delayed-start cadence factory, document that
+  cadence state belongs to one serial transmit stream, and cover timer
+  conversion with a non-tick timestamp frequency.
+
+### Fixed
+
+- Keep outbound 20 ms audio frames on absolute deadlines when Windows timer
+  wakeups run late. Small delays no longer accumulate into every later packet,
+  and a stream that falls a full frame behind rebases without sending a catch-up
+  burst.
+- Apply the same absolute scheduler to patch forwarding while preserving its
+  initial frame delay and bounded backlog behavior.
+
 ## [0.5.0] - 2026-08-28
 
 ### Added
@@ -684,7 +701,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Add patches, multi-select groups, call history, recordings, web streams, clocks, layouts, themes, startup behavior, and in-application operator documentation.
 - Add support for local and KMM-provided P25 encryption keys while preserving compatibility with existing variable-length AES key material.
 
-[Unreleased]: https://github.com/RdWing/dvmconsole/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/RdWing/dvmconsole/compare/v0.5.1...HEAD
+[0.5.1]: https://github.com/RdWing/dvmconsole/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/RdWing/dvmconsole/compare/v0.4.4...v0.5.0
 [0.4.4]: https://github.com/RdWing/dvmconsole/compare/v0.4.3...v0.4.4
 [0.4.3]: https://github.com/RdWing/dvmconsole/compare/v0.4.2...v0.4.3

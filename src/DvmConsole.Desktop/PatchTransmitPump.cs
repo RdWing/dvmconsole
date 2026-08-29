@@ -10,7 +10,6 @@ namespace DvmConsole.Desktop;
 // synchronously would burst several destination packets onto the network.
 internal sealed class PatchTransmitPump
 {
-    private static readonly TimeSpan FrameInterval = TimeSpan.FromMilliseconds(20);
     internal const int DefaultCapacity = 250;
 
     private readonly object sync = new();
@@ -29,7 +28,7 @@ internal sealed class PatchTransmitPump
     public PatchTransmitPump(
         PatchTransmitSession session,
         Task? startAfter = null,
-        Func<CancellationToken, ValueTask>? waitForNextFrame = null,
+        Func<TimeSpan, CancellationToken, ValueTask>? delay = null,
         TimeProvider? timeProvider = null,
         int capacity = DefaultCapacity)
     {
@@ -37,8 +36,9 @@ internal sealed class PatchTransmitPump
         if (capacity <= 0)
             throw new ArgumentOutOfRangeException(nameof(capacity));
         this.timeProvider = timeProvider ?? TimeProvider.System;
-        this.waitForNextFrame = waitForNextFrame ??
-            (cancellationToken => new ValueTask(Task.Delay(FrameInterval, cancellationToken)));
+        TransmitFrameCadence cadence =
+            TransmitFrameCadence.StartAfterFrameInterval(this.timeProvider, delay);
+        waitForNextFrame = cadence.WaitForNextFrameAsync;
         frames = Channel.CreateBounded<QueuedFrame>(new BoundedChannelOptions(capacity)
         {
             SingleReader = true,

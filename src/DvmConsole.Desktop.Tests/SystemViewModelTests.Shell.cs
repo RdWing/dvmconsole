@@ -131,7 +131,7 @@ public sealed partial class SystemViewModelTests
 
     [Fact]
     public void ReportsUnreleasedSemanticVersion()
-        => Assert.StartsWith("0.5.0", MainWindow.ApplicationVersion, StringComparison.Ordinal);
+        => Assert.StartsWith("0.5.1", MainWindow.ApplicationVersion, StringComparison.Ordinal);
 
     [Theory]
     [InlineData("0.1.0-alpha.1+abcdef123456", "0.1.0-alpha.1 (abcdef1)")]
