@@ -9,13 +9,28 @@ alias file leaves calls usable but shows numeric RIDs.
 
 ## Review & Save is disabled by errors
 
-The bottom bar shows the error count for the whole draft. Open Overview to read
-the messages together, then select the named section and field. Warnings do not
-block saving.
+Select the error count in the bottom bar to open the validation drawer. Each row
+shows the section, field path, and explanation. Select a row to open the record
+that needs attention. **Review & Save** opens the same drawer automatically
+when an error blocks the save. Warnings do not block saving.
+
+![Configuration validation drawer](../../Assets/configuration-studio-validation.png)
 
 Common errors include a channel that refers to a renamed system, a duplicate
 system or channel identity, an invalid destination ID, an unsupported card size,
 and malformed hexadecimal key material.
+
+For channel encryption, choose an algorithm from the list for that mode. Enter
+only the hexadecimal key ID digits after the fixed `0x` prefix. In the local key
+editor, choose the protocol before the algorithm so Studio can use the correct
+algorithm ID.
+
+## A zone appears under Unassigned or mixed
+
+Every zone should use one FNE system. Studio places a zone under **Unassigned
+or mixed** when its existing channels refer to different systems or to a system
+that is not defined. Select the zone, choose its FNE in **Zone settings**, and
+save. Studio updates the existing `system` field on every channel in that zone.
 
 ## Group controls are unavailable
 

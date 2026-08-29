@@ -2393,6 +2393,9 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
     {
         void Apply()
         {
+            if (Volatile.Read(ref disposeStarted) != 0)
+                return;
+
             system.ApplyStatus(status);
             StatusText = $"{system.Name}: {status.State} — {status.Message}";
             NotifyConnectionPresentationChanged();
@@ -2438,6 +2441,9 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
                 TaskObservation.Observe(PlayConnectionChimeAsync(system.Name, status.State));
             RaiseGeneratedAudioCanExecuteChanged();
         }
+
+        if (Volatile.Read(ref disposeStarted) != 0)
+            return;
 
         if (uiDispatcher.CheckAccess())
             Apply();
@@ -2498,7 +2504,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
         // Request every configured key even when a local fallback is available.
         // Match the legacy console's post-connect settling delay and per-request
         // pacing so an FNE/KMM has time to service every configured key.
-        if (p25KeyRing is null)
+        if (p25KeyRing is null || Volatile.Read(ref disposeStarted) != 0)
             return;
 
         _ = p25KeyRequestCoordinator.Schedule(
@@ -2506,8 +2512,16 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
             ResolveConfiguredP25KeyRequests(system.Channels),
             () => system.IsConnected,
             system.RequestP25Key,
-            exception => uiDispatcher.Post(() =>
-                StatusText = $"{system.Name}: P25 key request unavailable — {exception.Message}"));
+            exception =>
+            {
+                if (Volatile.Read(ref disposeStarted) != 0)
+                    return;
+                uiDispatcher.Post(() =>
+                {
+                    if (Volatile.Read(ref disposeStarted) == 0)
+                        StatusText = $"{system.Name}: P25 key request unavailable — {exception.Message}";
+                });
+            });
     }
 
     private void HandleSystemJitterBufferChanged(object? sender, EventArgs e)

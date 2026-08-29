@@ -19,6 +19,11 @@ public sealed class KeyEntry
 
     public byte[] KeyBytes => ParseHex(Key);
     public string RequiredLength => KeyFileValidator.DescribeRequiredLength(Protocol, AlgId);
+    public string ProtocolDisplayName => ConfigurationProtocolCatalog.DisplayName(Protocol);
+    public string AlgorithmDisplayName =>
+        EncryptionAlgorithmCatalog.FindKeyOption(Protocol, AlgId)?.DisplayName ?? $"Unknown (0x{AlgId:X2})";
+    public string AlgorithmIdText => $"0x{AlgId:X2}";
+    public string KeyIdText => $"0x{KeyId:X}";
 
     private static byte[] ParseHex(string value)
     {
@@ -42,10 +47,6 @@ public sealed class KeyEntry
 
 public static class KeyFileValidator
 {
-    private const int P25Des = 0x81;
-    private const int P25Aes = 0x84;
-    private const int P25Arc4 = 0xAA;
-
     public static IReadOnlyList<ConfigurationValidationIssue> Validate(KeyContainer container)
     {
         ArgumentNullException.ThrowIfNull(container);
@@ -75,23 +76,27 @@ public static class KeyFileValidator
             {
                 issues.Add(Error(
                     path + ".keyId",
-                    $"{label} must use a {protocol.ToUpperInvariant()} key ID between 1 and {maximumKeyId}."));
+                    $"{label} must use a {ConfigurationProtocolCatalog.DisplayName(protocol)} key ID between 1 and {maximumKeyId}."));
             }
 
-            if (!TryGetLengthRule(protocol, key.AlgId, out int minimumBytes, out int maximumBytes, out string algorithmName))
+            EncryptionAlgorithmOption? algorithm = EncryptionAlgorithmCatalog.FindKeyOption(protocol, key.AlgId);
+            if (algorithm is null)
             {
                 issues.Add(Error(
                     path + ".algId",
-                    $"{label} uses unsupported {protocol.ToUpperInvariant()} algorithm ID 0x{key.AlgId:X2}."));
+                    $"{label} uses unsupported {ConfigurationProtocolCatalog.DisplayName(protocol)} algorithm ID 0x{key.AlgId:X2}."));
                 continue;
             }
+
+            int minimumBytes = algorithm.MinimumKeyBytes;
+            int maximumBytes = algorithm.MaximumKeyBytes;
 
             string identity = $"{protocol}\u001F{key.AlgId}\u001F{key.KeyId}";
             if (!identities.Add(identity))
             {
                 issues.Add(Error(
                     path,
-                    $"{label} duplicates the {protocol.ToUpperInvariant()} algorithm 0x{key.AlgId:X2}, key ID {key.KeyId} entry."));
+                    $"{label} duplicates the {ConfigurationProtocolCatalog.DisplayName(protocol)} algorithm 0x{key.AlgId:X2}, key ID {key.KeyId} entry."));
             }
 
             byte[] material;
@@ -112,11 +117,11 @@ public static class KeyFileValidator
                     : $"{minimumBytes} to {maximumBytes} bytes";
                 issues.Add(Error(
                     path + ".key",
-                    $"{label} ({algorithmName}) requires {required} of key material; the current value contains {material.Length} bytes."));
+                    $"{label} ({algorithm.ValidationName}) requires {required} of key material; the current value contains {material.Length} bytes."));
                 continue;
             }
 
-            if (protocol == "nxdn" && key.AlgId == 0x01)
+            if (algorithm.RequiresNonZero15BitSeed)
             {
                 ushort seed = (ushort)((material[0] << 8) | material[1]);
                 if ((seed & 0x7FFF) == 0)
@@ -128,40 +133,8 @@ public static class KeyFileValidator
     }
 
     public static string DescribeRequiredLength(string? protocol, int algorithmId)
-    {
-        if (!TryGetLengthRule((protocol ?? string.Empty).Trim().ToLowerInvariant(), algorithmId,
-                out int minimumBytes, out int maximumBytes, out _))
-        {
-            return "Unsupported algorithm";
-        }
-
-        return minimumBytes == maximumBytes
-            ? $"{minimumBytes} bytes"
-            : $"{minimumBytes}–{maximumBytes} bytes";
-    }
-
-    private static bool TryGetLengthRule(
-        string protocol,
-        int algorithmId,
-        out int minimumBytes,
-        out int maximumBytes,
-        out string algorithmName)
-    {
-        (minimumBytes, maximumBytes, algorithmName) = (protocol, algorithmId) switch
-        {
-            ("p25", P25Aes) => (1, 32, "P25 AES"),
-            ("p25", P25Des) => (8, 8, "P25 DES-OFB"),
-            ("p25", P25Arc4) => (5, 5, "P25 ARC4/ADP"),
-            ("dmr", 0x01) => (5, 5, "DMR ARC4"),
-            ("dmr", 0x02) => (8, 8, "DMR DES-OFB"),
-            ("dmr", 0x05) => (32, 32, "DMR AES-256"),
-            ("nxdn", 0x01) => (2, 2, "NXDN EHR"),
-            ("nxdn", 0x02) => (8, 8, "NXDN DES"),
-            ("nxdn", 0x03) => (32, 32, "NXDN AES-256"),
-            _ => (0, 0, string.Empty)
-        };
-        return minimumBytes != 0;
-    }
+        => EncryptionAlgorithmCatalog.FindKeyOption(protocol, algorithmId)?.RequiredLength
+           ?? "Unsupported algorithm";
 
     private static ConfigurationValidationIssue Error(string path, string message)
         => new(ConfigurationValidationSeverity.Error, "Encryption Keys", path, message);

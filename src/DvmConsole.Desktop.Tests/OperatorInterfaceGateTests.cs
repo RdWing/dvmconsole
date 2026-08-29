@@ -148,28 +148,39 @@ public sealed class OperatorInterfaceGateTests
         Assert.Equal("{Binding CardBorderBrush}", Attribute(card, "BorderBrush"));
         Assert.Equal("5,5,5,4", Attribute(card, "Padding"));
 
-        XElement layout = card.Elements().Single(element => element.Name.LocalName == "Grid");
+        XElement sharedCard = card.Elements().Single(element => element.Name.LocalName == "ChannelCardContent");
+        Assert.Equal("HandleTransmitSelectionClick", Attribute(sharedCard, "TransmitSelectionClick"));
+        Assert.Equal("HandlePageSelectionClick", Attribute(sharedCard, "PageSelectionClick"));
+        Assert.Equal("HandleAlertSelectionClick", Attribute(sharedCard, "AlertSelectionClick"));
+
+        XDocument sharedCardDocument = XDocument.Parse(ReadDesktopSource("ChannelCardContent.axaml"));
+        XElement layout = sharedCardDocument.Root!.Elements().Single(element => element.Name.LocalName == "Grid");
         Assert.Equal("Auto,Auto,Auto,*,24", Attribute(layout, "RowDefinitions"));
-        AssertCardAction(card, "encryption-select", "EncryptionSelectionBrush", "EncryptionSelectionBorderBrush");
-        AssertCardAction(card, "tx-multi", "TransmitSelectionBrush", "TransmitSelectionBorderBrush");
-        AssertCardAction(card, "page-select", "PageSelectionBrush", "PageSelectionBorderBrush");
-        AssertCardAction(card, "alert-select", "AlertSelectionBrush", "AlertSelectionBorderBrush");
-        AssertCardAction(card, "tar-select", "RecordingSelectionBrush", "RecordingSelectionBorderBrush");
-        XElement pttInputGuard = Assert.Single(card.Descendants(), element =>
+        AssertCardAction(layout, "encryption-select", "EncryptionSelectionBrush", "EncryptionSelectionBorderBrush");
+        AssertCardAction(layout, "tx-multi", "TransmitSelectionBrush", "TransmitSelectionBorderBrush");
+        AssertCardAction(layout, "page-select", "PageSelectionBrush", "PageSelectionBorderBrush");
+        AssertCardAction(layout, "alert-select", "AlertSelectionBrush", "AlertSelectionBorderBrush");
+        AssertCardAction(layout, "tar-select", "RecordingSelectionBrush", "RecordingSelectionBorderBrush");
+        XElement pttInputGuard = Assert.Single(layout.Descendants(), element =>
             element.Name.LocalName == "Border" &&
             Attribute(element, "Classes") == "ptt-input-guard");
         Assert.Equal("Transparent", Attribute(pttInputGuard, "Background"));
-        Assert.Single(card.Descendants(), element =>
+        Assert.Single(layout.Descendants(), element =>
             element.Name.LocalName == "Button" &&
             Attribute(element, "Classes")?.Split(' ').Contains("ptt") == true);
-        Assert.DoesNotContain(card.Descendants(), element => element.Name.LocalName == "ToggleButton");
+        Assert.DoesNotContain(layout.Descendants(), element => element.Name.LocalName == "ToggleButton");
+
+        XDocument studio = XDocument.Parse(ReadDesktopSource("ConfigurationStudioWindow.axaml"));
+        XElement studioCard = studio.Descendants()
+            .Single(element => Attribute(element, "Classes") == "channel-card");
+        Assert.Single(studioCard.Elements(), element => element.Name.LocalName == "ChannelCardContent");
     }
 
     [Fact]
     public void ChannelAudioMeterClipsAFullWidthThresholdScale()
     {
-        XDocument shell = XDocument.Parse(ReadDesktopSource("MainWindow.axaml"));
-        XElement meter = shell.Descendants()
+        XDocument sharedCard = XDocument.Parse(ReadDesktopSource("ChannelCardContent.axaml"));
+        XElement meter = sharedCard.Descendants()
             .Single(element => Attribute(element, "Classes") == "channel-audio-meter");
         XElement fillClip = meter.Descendants()
             .Single(element => Attribute(element, "Classes") == "channel-audio-meter-fill-clip");

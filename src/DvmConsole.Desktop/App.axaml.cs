@@ -242,6 +242,8 @@ public sealed class App : Application
         {
             ConfigurationStudioWindow studio = mainWindow.CreateConfigurationStudioForCapture(capture.Section);
             studio.Show(mainWindow);
+            if (capture.Section == ConfigurationStudioSection.Zones)
+                PrepareConfigurationStudioZoneCapture(studio.StudioViewModel);
             studio.InvalidateMeasure();
             studio.UpdateLayout();
             await WaitForRenderAsync();
@@ -265,7 +267,67 @@ public sealed class App : Application
             await Task.Delay(50);
         }
 
+        ConfigurationStudioWindow validationStudio = mainWindow.CreateConfigurationStudioForCapture(
+            ConfigurationStudioSection.Overview);
+        validationStudio.Show(mainWindow);
+        validationStudio.StudioViewModel.SelectedSystem!.Address = string.Empty;
+        validationStudio.StudioViewModel.CommitFieldEdit();
+        validationStudio.StudioViewModel.OpenValidationDrawer();
+        validationStudio.InvalidateMeasure();
+        validationStudio.UpdateLayout();
+        await WaitForRenderAsync();
+        SaveVisual(validationStudio, Path.Combine(outputDirectory, "configuration-studio-validation.png"));
+        validationStudio.CloseForSessionReplacement();
+
+        ConfigurationStudioWindow narrowStudio = mainWindow.CreateConfigurationStudioForCapture(
+            ConfigurationStudioSection.Zones);
+        narrowStudio.Width = 1180;
+        narrowStudio.Height = 760;
+        narrowStudio.Show(mainWindow);
+        PrepareConfigurationStudioZoneCapture(narrowStudio.StudioViewModel);
+        narrowStudio.InvalidateMeasure();
+        narrowStudio.UpdateLayout();
+        await WaitForRenderAsync();
+        SaveVisual(narrowStudio, Path.Combine(outputDirectory, "configuration-studio-zone-narrow.png"));
+        narrowStudio.CloseForSessionReplacement();
+
         Console.WriteLine($"Demo screenshots written to {outputDirectory}");
+    }
+
+    private static void PrepareConfigurationStudioZoneCapture(ConfigurationStudioViewModel studio)
+    {
+        ZoneConfiguration zone = studio.SelectedZone
+            ?? throw new InvalidOperationException("The Studio capture requires a zone.");
+        string[] names =
+        [
+            "Campus Dispatch", "Campus Ops", "Campus Security", "Facilities",
+            "Engineering", "Parking Services", "Campus Event 1", "Campus Event 2",
+            "Shuttle Dispatch", "Shuttle Ops", "Shuttle Drivers", "Help Desk",
+            "IT Support", "Health Center", "Residence Life", "Athletics"
+        ];
+        zone.Name = "Campus Network";
+        zone.Channels.Clear();
+        for (int index = 0; index < names.Length; index++)
+        {
+            zone.Channels.Add(new ChannelConfiguration
+            {
+                Name = names[index],
+                System = "North Metro",
+                Tgid = (3101 + index).ToString(System.Globalization.CultureInfo.InvariantCulture),
+                Mode = "dmr",
+                Slot = index % 3 == 0 ? 2 : 1,
+                Algo = index % 4 == 0 ? "aes" : "none",
+                KeyId = index % 4 == 0 ? "0x2" : null,
+                SelectableEncryption = index == 0,
+                RxOnly = index is 9 or 10,
+                CardSize = index is 0 or 1 or 2 or 8 or 9 ? "normal" : "small",
+                ResourceColor = index % 3 == 0 ? "#087CF1" : index % 3 == 1 ? "#65B95A" : "#22D3EE"
+            });
+        }
+        studio.CommitFieldEdit();
+        studio.SelectedZone = zone;
+        studio.SelectedChannel = zone.Channels[0];
+        studio.IsZonePreviewExpanded = true;
     }
 
     private static async Task WaitForRenderAsync()

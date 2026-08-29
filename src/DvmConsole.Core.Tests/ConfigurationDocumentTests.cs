@@ -226,7 +226,11 @@ public sealed class ConfigurationDocumentTests
             ],
             []);
 
-            Assert.ThrowsAny<IOException>(() => ConfigurationSaveTransaction.Execute(plan, backups));
+            Exception failure = Assert.ThrowsAny<Exception>(
+                () => ConfigurationSaveTransaction.Execute(plan, backups));
+            Assert.True(
+                failure is IOException or UnauthorizedAccessException,
+                $"Expected a file-system failure, but received {failure.GetType().FullName}.");
             Assert.Equal(original, File.ReadAllText(codeplugPath));
         }
         finally
@@ -311,6 +315,63 @@ public sealed class ConfigurationDocumentTests
             issue.Severity == ConfigurationValidationSeverity.Warning &&
             issue.Domain == "Web Streams");
         Assert.Equal("normal", document.Configuration.Zones[0].Channels[0].CardSize);
+    }
+
+    [Fact]
+    public void EncryptionAlgorithmCatalogUsesProtocolSpecificIdentifiers()
+    {
+        EncryptionAlgorithmOption p25Aes = Assert.Single(
+            EncryptionAlgorithmCatalog.ForKeyProtocol("p25"), option => option.DisplayName == "AES-256");
+        EncryptionAlgorithmOption dmrAes = Assert.Single(
+            EncryptionAlgorithmCatalog.ForKeyProtocol("dmr"), option => option.DisplayName == "AES-256");
+        EncryptionAlgorithmOption nxdnEhr = Assert.Single(
+            EncryptionAlgorithmCatalog.ForKeyProtocol("nxdn"), option => option.DisplayName == "EHR");
+
+        Assert.Equal(0x84, p25Aes.AlgorithmId);
+        Assert.Equal(0x05, dmrAes.AlgorithmId);
+        Assert.Equal(0x01, nxdnEhr.AlgorithmId);
+        Assert.Equal("0x84", p25Aes.AlgorithmIdText);
+        Assert.Equal("P25 Phase 1", ConfigurationProtocolCatalog.DisplayName("p25"));
+        Assert.Equal("p25", Assert.Single(
+            ConfigurationProtocolCatalog.ForChannels,
+            option => option.DisplayName == "P25 Phase 1").Value);
+    }
+
+    [Fact]
+    public void ChannelEncryptionValidationIsModeAwareAndAcceptsPrefixedHexKeyIds()
+    {
+        ConfigurationDocument document = ConfigurationDocument.Parse(InteroperableFixture);
+        ChannelConfiguration channel = document.Configuration.Zones[0].Channels[0];
+        channel.Mode = "dmr";
+        channel.Algo = "ehr";
+        channel.KeyId = "0x2A";
+
+        IReadOnlyList<ConfigurationValidationIssue> invalidAlgorithm = document.Validate();
+
+        Assert.Contains(invalidAlgorithm, issue =>
+            issue.Path == "zones[0].channels[0].algo" &&
+            issue.Message.Contains("not available for DMR", StringComparison.Ordinal));
+
+        channel.Algo = "aes";
+        IReadOnlyList<ConfigurationValidationIssue> validEncryption = document.Validate();
+
+        Assert.DoesNotContain(validEncryption, issue =>
+            issue.Path is "zones[0].channels[0].algo" or "zones[0].channels[0].keyId");
+        Assert.True(EncryptionAlgorithmCatalog.TryParseChannelKeyId("dmr", "0x2A", out ushort keyId));
+        Assert.Equal((ushort)0x2A, keyId);
+    }
+
+    [Fact]
+    public void P25Phase1ChannelsDoNotValidateOrRequireDmrSlots()
+    {
+        ConfigurationDocument document = ConfigurationDocument.Parse(InteroperableFixture);
+        ChannelConfiguration channel = document.Configuration.Zones[0].Channels[0];
+        channel.Mode = "p25";
+        channel.Slot = 99;
+
+        IReadOnlyList<ConfigurationValidationIssue> issues = document.Validate();
+
+        Assert.DoesNotContain(issues, issue => issue.Path == "zones[0].channels[0].slot");
     }
 
     [Fact]

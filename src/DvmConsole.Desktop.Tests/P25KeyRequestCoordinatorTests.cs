@@ -83,4 +83,20 @@ public sealed class P25KeyRequestCoordinatorTests
         Assert.Equal([(ushort)0x0050], sent);
         Assert.IsType<InvalidOperationException>(Assert.Single(failures));
     }
+
+    [Fact]
+    public async Task AQueuedStatusCallbackCannotScheduleAfterSessionDisposal()
+    {
+        var sent = new List<ushort>();
+        var coordinator = new P25KeyRequestCoordinator((_, _) => Task.CompletedTask);
+        await coordinator.DisposeAsync();
+
+        await coordinator.Schedule(
+            "SKYNET",
+            [(0x84, 0x0020)],
+            () => true,
+            (_, keyId) => sent.Add(keyId));
+
+        Assert.Empty(sent);
+    }
 }

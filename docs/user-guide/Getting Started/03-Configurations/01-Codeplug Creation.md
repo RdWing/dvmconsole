@@ -18,13 +18,19 @@ Opening a Studio section again brings the existing window forward.
 
 ## Finding and editing configuration
 
-The left side lists the available sections and searches section names and
-configured items. Most editors use the same layout:
+The left side groups configuration as FNE systems, zones, and channels. Open a
+system to see its zones, then open a zone to see its channels. The disclosure
+arrows show which branches can be opened or closed. Search checks the complete
+hierarchy as well as the other Studio sections.
+
+Most editors use the same layout:
 
 - The center table shows many records at once.
 - The inspector on the right edits the selected record.
 - Add, duplicate, delete, and reorder controls sit beside the table they affect.
-- The status bar reports errors and warnings for the whole draft.
+- The status bar reports errors and warnings for the whole draft. Select it to
+  open the validation drawer and see the section, field path, and explanation
+  for each issue.
 
 An error prevents saving. A warning calls attention to a usable but potentially
 unsafe value, such as an unencrypted HTTP stream.
@@ -50,18 +56,38 @@ the transport key.
 
 ## Zones and channels
 
-Select a zone above the channel table. Channel fields include system,
-destination ID, mode, DMR slot, algorithm, key ID, selectable encryption,
-receive-only state, resource color, and card size. The valid card sizes are
-`small`, `normal`, and `large`.
+Open an FNE system in the left hierarchy and select one of its zones. Each zone
+is assigned to one FNE system. The zone inspector shows that assignment and
+lets you change it. Studio then writes the selected system into every channel's
+existing YAML `system` field. There is no separate system selector for each
+channel.
+
+Channel fields include destination ID, mode, algorithm, key ID, selectable
+encryption, receive-only state, resource color, and card size. DMR channels
+also include a slot. The valid card sizes are `small`, `normal`, and `large`.
+The channel list has its own scrollbar, so the layout drawer never hides rows
+that still need editing.
 
 Select several channel rows to apply the current card size or change their
 receive-only state together.
 
-The preview below the table uses the current theme and the established channel
-card sizes. Preview buttons are disabled. Selecting a row selects its card, and
-dragging a card saves its layout in operator settings. This does not change the
-main console until the saved codeplug is reloaded.
+Select **Live zone layout** at the bottom of the channel table to open the
+layout drawer. It uses the same card width, height, spacing, controls, colors,
+and two-dimensional canvas as the main console. The card controls are disabled
+in the drawer. Select a table row to find its card, then drag the card to its
+new position. Studio stores those positions in operator settings when you
+save. The running console keeps its current layout until you reload the saved
+codeplug.
+
+A compatible older codeplug may contain a zone whose channels name different
+systems. Studio places that zone under **Unassigned or mixed**. Choose the
+correct FNE in the zone inspector to make the assignment consistent before
+saving.
+
+The encryption algorithm list changes with the channel mode. It shows the
+supported names instead of asking for a protocol number. Key IDs are shown in
+hexadecimal. The `0x` prefix stays in the field, so you enter only the digits
+that follow it.
 
 ![Zone editor and card preview](../../Assets/configuration-studio-zone.png)
 
@@ -86,6 +112,10 @@ members.
 Select **Review & Save** when the draft is ready. The review lists each file
 that will change, including the codeplug, referenced key or alias files, and
 operator settings.
+
+If the draft has an error, **Review & Save** opens the validation drawer. Select
+an issue to open the record that needs attention. Warnings remain visible but
+do not prevent saving.
 
 ![Review and save](../../Assets/configuration-studio-review.png)
 
@@ -183,9 +213,12 @@ zones:
         idleColor: "#150282"
 ```
 
-Channel `mode` accepts `p25`, `dmr`, `nxdn`, or `analog`. DMR channels use
-`slot` 1 or 2. NXDN destination IDs are limited to 16 bits. A receive-only
-channel cannot be a patch destination or another transmit target.
+Channel `mode` accepts `p25`, `dmr`, `nxdn`, or `analog`. Studio displays the
+YAML value `p25` as **P25 Phase 1**. That value will continue to mean Phase 1
+when Phase 2 support is added. P25 Phase 1 has no timeslots, so Studio hides the
+slot field for those channels. DMR channels use whole-number `slot` values 1 or
+2. NXDN destination IDs are limited to 16 bits. A receive-only channel cannot
+be a patch destination or another transmit target.
 
 `patchSourceIdPassthrough` controls the source ID used for forwarded patch
 traffic. When it is false, forwarding uses the configured console RID for the

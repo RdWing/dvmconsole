@@ -39,10 +39,12 @@ internal sealed class P25KeyRequestCoordinator : IAsyncDisposable
         }
 
         RequestSchedule? replaced;
-        var schedule = new RequestSchedule(new CancellationTokenSource());
+        RequestSchedule schedule;
         lock (sync)
         {
-            ObjectDisposedException.ThrowIf(disposed, this);
+            if (disposed)
+                return Task.CompletedTask;
+            schedule = new RequestSchedule(new CancellationTokenSource());
             schedules.Remove(systemName, out replaced);
             schedules[systemName] = schedule;
         }

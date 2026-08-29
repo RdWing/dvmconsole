@@ -22,7 +22,10 @@ public sealed partial class SystemViewModelTests
 
         try
         {
-            await using MainWindowViewModel viewModel = MainWindowViewModel.Load(path, new UserSettingsStore(settingsPath));
+            await using MainWindowViewModel viewModel = MainWindowViewModel.Load(
+                path,
+                new UserSettingsStore(settingsPath),
+                networkDisabledDemo: true);
             SystemViewModel system = viewModel.Systems[0];
             var historyChanges = new List<NotifyCollectionChangedAction>();
             ((INotifyCollectionChanged)viewModel.FilteredCallHistory).CollectionChanged +=
@@ -158,7 +161,8 @@ public sealed partial class SystemViewModelTests
         {
             await using MainWindowViewModel viewModel = MainWindowViewModel.Load(
                 path,
-                new UserSettingsStore(settingsPath));
+                new UserSettingsStore(settingsPath),
+                networkDisabledDemo: true);
             SystemViewModel system = viewModel.Systems[0];
             ChannelViewModel channel = system.Channels.Single(candidate => candidate.Name == "Alpha Dispatch");
 
@@ -220,7 +224,8 @@ public sealed partial class SystemViewModelTests
         {
             await using MainWindowViewModel viewModel = MainWindowViewModel.Load(
                 path,
-                new UserSettingsStore(settingsPath));
+                new UserSettingsStore(settingsPath),
+                networkDisabledDemo: true);
             SystemViewModel system = viewModel.Systems[0];
             ChannelViewModel channel = system.Channels.Single(candidate => candidate.Name == "Alpha Dispatch");
             channel.SetAudioEnabled(true);
@@ -259,7 +264,8 @@ public sealed partial class SystemViewModelTests
         {
             await using MainWindowViewModel viewModel = MainWindowViewModel.Load(
                 path,
-                new UserSettingsStore(settingsPath));
+                new UserSettingsStore(settingsPath),
+                networkDisabledDemo: true);
             SystemViewModel system = viewModel.Systems[0];
             ChannelViewModel channel = system.Channels.Single(candidate => candidate.Name == "Alpha Operations");
 
@@ -382,7 +388,8 @@ public sealed partial class SystemViewModelTests
         {
             await using MainWindowViewModel viewModel = MainWindowViewModel.Load(
                 path,
-                new UserSettingsStore(settingsPath));
+                new UserSettingsStore(settingsPath),
+                networkDisabledDemo: true);
             SystemViewModel system = viewModel.Systems.Single(candidate => candidate.Name == "Alpha");
             byte[] identifiedPayload = P25DfsiFrameCodec.CreateLdu1Payload(
                 sourceId: 4_500_355,

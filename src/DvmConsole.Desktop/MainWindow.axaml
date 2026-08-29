@@ -268,41 +268,12 @@
                           <ItemsControl.ItemTemplate>
                             <DataTemplate x:DataType="local:ChannelViewModel">
                               <Border Classes="channel-card" Width="{Binding CardWidth}" Height="{Binding $parent[Window].((local:MainWindowViewModel)DataContext).ChannelCardHeight}" Background="{Binding CardBackgroundBrush}" BorderBrush="{Binding CardBorderBrush}" BorderThickness="1" CornerRadius="6" Padding="5,5,5,4" ClipToBounds="True" Focusable="True" PointerPressed="HandleChannelPointerPressed" PointerMoved="HandleChannelPointerMoved" PointerReleased="HandleChannelPointerReleased" PointerCaptureLost="HandleChannelPointerCaptureLost" ToolTip.Tip="Drag to move this channel while widgets are unlocked">
-                                  <Grid RowDefinitions="Auto,Auto,Auto,*,24" RowSpacing="3">
-                                  <StackPanel Spacing="2"><TextBlock Foreground="{Binding CardTextBrush}" FontWeight="Bold" FontSize="{Binding $parent[Window].((local:MainWindowViewModel)DataContext).UiFontSize}" Text="{Binding Name}" TextTrimming="CharacterEllipsis" /><TextBlock Foreground="{Binding CardTextBrush}" FontSize="{Binding $parent[Window].((local:MainWindowViewModel)DataContext).UiSmallFontSize}" Text="{Binding TalkgroupText}" /></StackPanel>
-                                  <TextBlock Grid.Row="1" Foreground="{Binding CardTextBrush}" FontSize="{Binding $parent[Window].((local:MainWindowViewModel)DataContext).UiSmallFontSize}" Text="{Binding LastCallerDisplayText}" TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
-                                  <Border Grid.Row="2" Classes="channel-audio-meter" Width="{Binding AudioMeterWidth}" Height="4" Background="#24303B" CornerRadius="2" ClipToBounds="True" HorizontalAlignment="Center">
-                                    <Grid>
-                                      <Border Classes="channel-audio-meter-fill-clip" Width="{Binding AudioFillWidth}" HorizontalAlignment="Left" CornerRadius="2" ClipToBounds="True">
-                                        <Border Width="{Binding AudioMeterWidth}" HorizontalAlignment="Left" CornerRadius="2">
-                                          <Border.Background>
-                                            <LinearGradientBrush StartPoint="0%,50%" EndPoint="100%,50%">
-                                              <GradientStop Color="#00BE5A" Offset="0" />
-                                              <GradientStop Color="#00BE5A" Offset="0.76" />
-                                              <GradientStop Color="#F2B134" Offset="0.76" />
-                                              <GradientStop Color="#F2B134" Offset="0.88" />
-                                              <GradientStop Color="#E5484D" Offset="0.88" />
-                                              <GradientStop Color="#E5484D" Offset="1" />
-                                            </LinearGradientBrush>
-                                          </Border.Background>
-                                        </Border>
-                                      </Border>
-                                      <Canvas IsHitTestVisible="False">
-                                        <Border Canvas.Left="{Binding AudioPeakMarkerX}" Width="2" Height="4" Background="{Binding AudioPeakMarkerBrush}" IsVisible="{Binding IsAudioPeakVisible}" />
-                                      </Canvas>
-                                    </Grid>
-                                  </Border>
-                                  <Grid Grid.Row="3" MinHeight="23" ClipToBounds="False" ColumnDefinitions="*,Auto" ColumnSpacing="4"><local:NeutralSnapSlider Height="36" Minimum="-1" Maximum="1" NeutralValue="0" Value="{Binding VolumeSliderValue, Mode=TwoWay}" VerticalAlignment="Center" ToolTip.Tip="Channel gain: center is 0 dB (1×)"><local:NeutralSnapSlider.RenderTransform><TranslateTransform Y="-4" /></local:NeutralSnapSlider.RenderTransform></local:NeutralSnapSlider><Button Grid.Column="1" Classes="card-action channel-action encryption-select" Content="{Binding EncryptionButtonText}" Background="{Binding EncryptionSelectionBrush}" BorderBrush="{Binding EncryptionSelectionBorderBrush}" Foreground="{Binding EncryptionSelectionTextBrush}" Command="{Binding EncryptionCommand}" IsVisible="{Binding CanToggleEncryption}" IsEnabled="{Binding CanToggleEncryption}" /></Grid>
-                                  <Grid Grid.Row="4" ColumnDefinitions="*,Auto,Auto,Auto,Auto" ColumnSpacing="2">
-                                    <Border Classes="ptt-input-guard" Background="Transparent" ToolTip.Tip="Push to talk; unavailable while this channel is receiving">
-                                      <Button Classes="ptt" Content="{Binding PttButtonText}" IsEnabled="{Binding IsPttControlEnabled}" />
-                                    </Border>
-                                    <Button Grid.Column="1" Classes="tx-select channel-action tx-multi" Classes.armed="{Binding IsTransmitSelected}" Content="{Binding TransmitSelectionText}" Background="{Binding TransmitSelectionBrush}" BorderBrush="{Binding TransmitSelectionBorderBrush}" IsEnabled="{Binding CanTransmit}" ToolTip.Tip="Include this channel in global multi-select PTT" Click="HandleTransmitSelectionClick" />
-                                    <Button Grid.Column="2" Classes="tx-select channel-action page-select" Classes.armed="{Binding IsPageSelected}" Content="{Binding PageSelectionText}" Background="{Binding PageSelectionBrush}" BorderBrush="{Binding PageSelectionBorderBrush}" IsEnabled="{Binding CanTransmit}" ToolTip.Tip="Include this channel when sending QCII pages" Click="HandlePageSelectionClick" />
-                                    <Button Grid.Column="3" Classes="tx-select channel-action alert-select" Classes.armed="{Binding IsAlertSelected}" Content="{Binding AlertSelectionText}" Background="{Binding AlertSelectionBrush}" BorderBrush="{Binding AlertSelectionBorderBrush}" IsEnabled="{Binding CanTransmit}" ToolTip.Tip="Include this channel when sending DTMF or alert tones" Click="HandleAlertSelectionClick" />
-                                    <Button Grid.Column="4" Classes="tx-select channel-action tar-select" Classes.armed="{Binding IsRecordingEnabled}" Content="{Binding RecordButtonText}" Background="{Binding RecordingSelectionBrush}" BorderBrush="{Binding RecordingSelectionBorderBrush}" Command="{Binding RecordingCommand}" IsEnabled="{Binding CanRecord}" ToolTip.Tip="Toggle Talkgroup Audio Recording" />
-                                  </Grid>
-                                </Grid>
+                                <local:ChannelCardContent
+                                    UiFontSize="{Binding $parent[Window].((local:MainWindowViewModel)DataContext).UiFontSize}"
+                                    UiSmallFontSize="{Binding $parent[Window].((local:MainWindowViewModel)DataContext).UiSmallFontSize}"
+                                    TransmitSelectionClick="HandleTransmitSelectionClick"
+                                    PageSelectionClick="HandlePageSelectionClick"
+                                    AlertSelectionClick="HandleAlertSelectionClick" />
                               </Border>
                             </DataTemplate>
                           </ItemsControl.ItemTemplate>

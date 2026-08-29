@@ -103,7 +103,7 @@ public sealed class RxJitterBufferSetting
 // codeplug. Protocol credentials and encryption keys remain codeplug-owned.
 public sealed class UserSettings
 {
-    public const int CurrentSchemaVersion = 7;
+    public const int CurrentSchemaVersion = 8;
     public const string DvmConsoleAudioProcessingMode = "DvmConsole";
     public const string AppleVoiceProcessingMode = "AppleVoiceProcessing";
     public const string WindowsCommunicationsProcessingMode = "WindowsCommunications";
@@ -185,6 +185,8 @@ public sealed class UserSettings
     public Dictionary<string, bool> PatchGroupModes { get; set; } = new(StringComparer.OrdinalIgnoreCase);
     public Dictionary<string, bool> PatchGroupEnabledStates { get; set; } = new(StringComparer.OrdinalIgnoreCase);
     public Dictionary<string, CodeplugGroupState> CodeplugGroupStates { get; set; }
+        = new(StringComparer.OrdinalIgnoreCase);
+    public Dictionary<string, CodeplugStudioState> CodeplugStudioStates { get; set; }
         = new(StringComparer.OrdinalIgnoreCase);
     public bool LegacyPatchGroupStateMigrated { get; set; }
     public bool RetainPatchStateOnStartup { get; set; }

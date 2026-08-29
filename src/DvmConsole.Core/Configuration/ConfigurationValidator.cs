@@ -103,6 +103,42 @@ public static class ConfigurationValidator
                 if (channel.Mode == "dmr" && channel.Slot is < 1 or > 2)
                     Error("Channels", $"{path}.slot", $"DMR channel '{channel.Name}' must use slot 1 or 2.");
 
+                EncryptionAlgorithmOption? algorithm =
+                    EncryptionAlgorithmCatalog.FindChannelOption(channel.Mode, channel.Algo);
+                if (algorithm is null)
+                {
+                    Error(
+                        "Channels",
+                        $"{path}.algo",
+                        $"Channel '{channel.Name}' uses encryption algorithm '{channel.Algo}', which is not available for {ConfigurationProtocolCatalog.DisplayName(channel.Mode)}.");
+                }
+                else if (algorithm.AlgorithmId is not null)
+                {
+                    if (!EncryptionAlgorithmCatalog.TryParseChannelKeyId(channel.Mode, channel.KeyId, out ushort keyId))
+                    {
+                        Error(
+                            "Channels",
+                            $"{path}.keyId",
+                            $"Channel '{channel.Name}' must have a non-zero hexadecimal key ID when {algorithm.DisplayName} is selected.");
+                    }
+                    else
+                    {
+                        int maximumKeyId = channel.Mode switch
+                        {
+                            "dmr" => byte.MaxValue,
+                            "nxdn" => 63,
+                            _ => ushort.MaxValue
+                        };
+                        if (keyId > maximumKeyId)
+                        {
+                            Error(
+                                "Channels",
+                                $"{path}.keyId",
+                                $"Channel '{channel.Name}' must use a {ConfigurationProtocolCatalog.DisplayName(channel.Mode)} key ID between 0x1 and 0x{maximumKeyId:X}.");
+                        }
+                    }
+                }
+
                 if (channel.CardSize is not ("small" or "normal" or "large"))
                     Error("Channels", $"{path}.card_size", $"Channel '{channel.Name}' has unsupported card size '{channel.CardSize}'. Use Small, Normal, or Large.");
 

@@ -3,11 +3,27 @@ using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Platform.Storage;
+using Avalonia.Threading;
 using DvmConsole.Core.Configuration;
 using DvmConsole.Core.Settings;
 using System.ComponentModel;
 
 namespace DvmConsole.Desktop;
+
+internal enum ConfigurationStudioEditCommand
+{
+    AddChannel,
+    DuplicateChannel,
+    DeleteChannel,
+    MoveChannelUp,
+    MoveChannelDown,
+    ApplySelectedCardSize,
+    SetSelectedRowsRxOnly,
+    SetSelectedRowsTxCapable,
+    AddZone,
+    DuplicateZone,
+    DeleteZone
+}
 
 public sealed partial class ConfigurationStudioWindow : Window
 {
@@ -15,6 +31,10 @@ public sealed partial class ConfigurationStudioWindow : Window
     private readonly UserSettingsStore settingsStore;
     private bool ready;
     private bool allowClose;
+    private bool isClosed;
+    private bool handlingKeySelectionChange;
+    private int queuedSelectionCommitVersion;
+    private int queuedChannelScrollVersion;
     private Control? draggedCard;
     private ConfigurationChannelPreviewViewModel? draggedPreview;
     private Point dragOrigin;
@@ -38,12 +58,17 @@ public sealed partial class ConfigurationStudioWindow : Window
         this.settingsStore = settingsStore ?? throw new ArgumentNullException(nameof(settingsStore));
         InitializeComponent();
         DataContext = new ConfigurationStudioViewModel(document, runtimeViewModel, settingsStore, initialSection);
+        viewModel.PropertyChanged += HandleStudioPropertyChanged;
         foreach (PatchGroupEditorViewModel group in viewModel.OperationalGroups)
             group.PropertyChanged += HandleOperationalGroupPropertyChanged;
-        Opened += (_, _) => ready = true;
+        Opened += HandleOpened;
         Closing += HandleClosing;
         Closed += (_, _) =>
         {
+            isClosed = true;
+            queuedSelectionCommitVersion++;
+            queuedChannelScrollVersion++;
+            viewModel.PropertyChanged -= HandleStudioPropertyChanged;
             foreach (PatchGroupEditorViewModel group in viewModel.OperationalGroups)
                 group.PropertyChanged -= HandleOperationalGroupPropertyChanged;
         };
@@ -53,6 +78,34 @@ public sealed partial class ConfigurationStudioWindow : Window
     private ConfigurationStudioViewModel viewModel
         => (ConfigurationStudioViewModel)DataContext!;
     internal ConfigurationStudioViewModel StudioViewModel => viewModel;
+    internal Func<string, string, string, Task<bool>>? EditMenuConfirmationOverride { get; set; }
+
+    private void HandleOpened(object? sender, EventArgs e)
+    {
+        ready = true;
+        QueueSelectedChannelScroll();
+    }
+
+    private void HandleStudioPropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(ConfigurationStudioViewModel.SelectedChannelRow))
+            QueueSelectedChannelScroll();
+    }
+
+    private void QueueSelectedChannelScroll()
+    {
+        int version = ++queuedChannelScrollVersion;
+        Dispatcher.UIThread.Post(() =>
+        {
+            if (isClosed || version != queuedChannelScrollVersion ||
+                !viewModel.IsZones || viewModel.SelectedChannelRow is not { } row)
+            {
+                return;
+            }
+
+            this.FindControl<ListBox>("channelList")?.ScrollIntoView(row);
+        }, DispatcherPriority.Background);
+    }
 
     public void SelectSection(ConfigurationStudioSection section)
     {
@@ -81,7 +134,11 @@ public sealed partial class ConfigurationStudioWindow : Window
 
     private void HandleDraftFieldEdit(object? sender, RoutedEventArgs e)
     {
-        if (ready)
+        if (!ready)
+            return;
+        if (e is SelectionChangedEventArgs)
+            QueueSelectionCommit(viewModel.CommitFieldEdit);
+        else
             viewModel.CommitFieldEdit();
     }
 
@@ -89,6 +146,55 @@ public sealed partial class ConfigurationStudioWindow : Window
     {
         if (ready)
             viewModel.CommitKeyEdit();
+    }
+
+    private void HandleChannelModeChanged(object? sender, SelectionChangedEventArgs e)
+    {
+        if (ready)
+            QueueSelectionCommit(viewModel.CommitChannelModeEdit);
+    }
+
+    private void HandleChannelAlgorithmChanged(object? sender, SelectionChangedEventArgs e)
+    {
+        if (ready)
+            QueueSelectionCommit(viewModel.CommitChannelAlgorithmEdit);
+    }
+
+    private void HandleKeyProtocolChanged(object? sender, SelectionChangedEventArgs e)
+    {
+        if (!ready || handlingKeySelectionChange || sender is not ComboBox { SelectedItem: ConfigurationProtocolOption })
+            return;
+        QueueSelectionCommit(() =>
+        {
+            handlingKeySelectionChange = true;
+            try
+            {
+                viewModel.CommitKeyProtocolEdit();
+            }
+            finally
+            {
+                handlingKeySelectionChange = false;
+            }
+        });
+    }
+
+    private void HandleKeyAlgorithmChanged(object? sender, SelectionChangedEventArgs e)
+    {
+        if (!ready || handlingKeySelectionChange ||
+            sender is not ComboBox { SelectedItem: EncryptionAlgorithmOption })
+            return;
+        QueueSelectionCommit(() =>
+        {
+            handlingKeySelectionChange = true;
+            try
+            {
+                viewModel.CommitKeyEdit();
+            }
+            finally
+            {
+                handlingKeySelectionChange = false;
+            }
+        });
     }
 
     private void HandleAliasFieldEdit(object? sender, RoutedEventArgs e)
@@ -99,6 +205,86 @@ public sealed partial class ConfigurationStudioWindow : Window
 
     private void HandleUndoClick(object? sender, RoutedEventArgs e) => viewModel.Undo();
     private void HandleRedoClick(object? sender, RoutedEventArgs e) => viewModel.Redo();
+    private void HandleSectionNavigationClick(object? sender, RoutedEventArgs e)
+    {
+        if (sender is Button { Tag: string sectionName } &&
+            Enum.TryParse(sectionName, ignoreCase: true, out ConfigurationStudioSection section))
+            viewModel.SelectSection(section);
+    }
+    private void HandleToggleValidationDrawerClick(object? sender, RoutedEventArgs e)
+        => viewModel.IsValidationDrawerOpen = !viewModel.IsValidationDrawerOpen && viewModel.HasValidationIssues;
+    private void HandleValidationIssueClick(object? sender, RoutedEventArgs e)
+    {
+        if (sender is Button { Tag: ConfigurationValidationIssue issue })
+            viewModel.NavigateToIssue(issue);
+    }
+    private async void HandleEditMenuClick(object? sender, RoutedEventArgs e)
+    {
+        if (sender is MenuItem { Tag: string commandName } &&
+            Enum.TryParse(commandName, ignoreCase: false, out ConfigurationStudioEditCommand command))
+        {
+            await ExecuteEditMenuCommandAsync(command, EditMenuConfirmationOverride);
+        }
+    }
+
+    internal async Task ExecuteEditMenuCommandAsync(
+        ConfigurationStudioEditCommand command,
+        Func<string, string, string, Task<bool>>? confirm = null)
+    {
+        confirm ??= ConfirmAsync;
+        switch (command)
+        {
+            case ConfigurationStudioEditCommand.AddChannel:
+                viewModel.AddChannel();
+                break;
+            case ConfigurationStudioEditCommand.DuplicateChannel:
+                viewModel.DuplicateChannel();
+                break;
+            case ConfigurationStudioEditCommand.DeleteChannel:
+                if (viewModel.SelectedChannel is { } channel &&
+                    await confirm(
+                        "Delete channel",
+                        $"Delete '{channel.Name}'? Saved widget and group references to this channel will be removed when the draft is saved.",
+                        "Delete"))
+                {
+                    viewModel.DeleteChannel();
+                }
+                break;
+            case ConfigurationStudioEditCommand.MoveChannelUp:
+                viewModel.MoveChannel(-1);
+                break;
+            case ConfigurationStudioEditCommand.MoveChannelDown:
+                viewModel.MoveChannel(1);
+                break;
+            case ConfigurationStudioEditCommand.ApplySelectedCardSize:
+                viewModel.ApplySelectedCardSize(SelectedChannelRows());
+                break;
+            case ConfigurationStudioEditCommand.SetSelectedRowsRxOnly:
+                viewModel.SetChannelsRxOnly(SelectedChannelRows(), rxOnly: true);
+                break;
+            case ConfigurationStudioEditCommand.SetSelectedRowsTxCapable:
+                viewModel.SetChannelsRxOnly(SelectedChannelRows(), rxOnly: false);
+                break;
+            case ConfigurationStudioEditCommand.AddZone:
+                viewModel.AddZone();
+                break;
+            case ConfigurationStudioEditCommand.DuplicateZone:
+                viewModel.DuplicateZone();
+                break;
+            case ConfigurationStudioEditCommand.DeleteZone:
+                if (viewModel.SelectedZone is { } zone &&
+                    await confirm(
+                        "Delete zone",
+                        $"Delete '{zone.Name}' and its {zone.Channels.Count} channel(s) and {zone.WebStreams.Count} stream(s)?",
+                        "Delete"))
+                {
+                    viewModel.DeleteZone();
+                }
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(command), command, null);
+        }
+    }
     private void HandleAddSystemClick(object? sender, RoutedEventArgs e) => viewModel.AddSystem();
     private void HandleDuplicateSystemClick(object? sender, RoutedEventArgs e) => viewModel.DuplicateSystem();
     private async void HandleDeleteSystemClick(object? sender, RoutedEventArgs e)
@@ -107,32 +293,26 @@ public sealed partial class ConfigurationStudioWindow : Window
             await ConfirmAsync("Delete system", $"Delete '{system.Name}'? Channels that reference it will be reported as errors until reassigned.", "Delete"))
             viewModel.DeleteSystem();
     }
-    private void HandleAddZoneClick(object? sender, RoutedEventArgs e) => viewModel.AddZone();
-    private void HandleDuplicateZoneClick(object? sender, RoutedEventArgs e) => viewModel.DuplicateZone();
-    private async void HandleDeleteZoneClick(object? sender, RoutedEventArgs e)
-    {
-        if (viewModel.SelectedZone is { } zone &&
-            await ConfirmAsync("Delete zone", $"Delete '{zone.Name}' and its {zone.Channels.Count} channel(s) and {zone.WebStreams.Count} stream(s)?", "Delete"))
-            viewModel.DeleteZone();
-    }
-    private void HandleAddChannelClick(object? sender, RoutedEventArgs e) => viewModel.AddChannel();
-    private void HandleDuplicateChannelClick(object? sender, RoutedEventArgs e) => viewModel.DuplicateChannel();
-    private async void HandleDeleteChannelClick(object? sender, RoutedEventArgs e)
-    {
-        if (viewModel.SelectedChannel is { } channel &&
-            await ConfirmAsync("Delete channel", $"Delete '{channel.Name}'? Saved widget and group references to this channel will be removed when the draft is saved.", "Delete"))
-            viewModel.DeleteChannel();
-    }
-    private void HandleMoveChannelUpClick(object? sender, RoutedEventArgs e) => viewModel.MoveChannel(-1);
-    private void HandleMoveChannelDownClick(object? sender, RoutedEventArgs e) => viewModel.MoveChannel(1);
-    private void HandleBulkCardSizeClick(object? sender, RoutedEventArgs e)
-        => viewModel.ApplySelectedCardSize(SelectedChannelRows());
-    private void HandleBulkRxOnlyClick(object? sender, RoutedEventArgs e)
-        => viewModel.SetChannelsRxOnly(SelectedChannelRows(), rxOnly: true);
-    private void HandleBulkTxCapableClick(object? sender, RoutedEventArgs e)
-        => viewModel.SetChannelsRxOnly(SelectedChannelRows(), rxOnly: false);
     private IEnumerable<ChannelConfiguration> SelectedChannelRows()
-        => channelList.SelectedItems?.OfType<ChannelConfiguration>() ?? [];
+        => this.FindControl<ListBox>("channelList")?.SelectedItems?
+            .OfType<ConfigurationChannelRow>()
+            .Select(row => row.Channel) ?? [];
+    private void HandleCardSizeClick(object? sender, RoutedEventArgs e)
+    {
+        if (sender is Button { Tag: string cardSize } && viewModel.SelectedChannel is { } channel)
+        {
+            channel.CardSize = cardSize;
+            viewModel.CommitFieldEdit();
+        }
+    }
+    private void HandleResourceColorClick(object? sender, RoutedEventArgs e)
+    {
+        if (sender is Button { Tag: string color } && viewModel.SelectedChannel is { } channel)
+        {
+            channel.ResourceColor = color;
+            viewModel.CommitFieldEdit();
+        }
+    }
     private void HandleAddStreamClick(object? sender, RoutedEventArgs e) => viewModel.AddStream();
     private async void HandleDeleteStreamClick(object? sender, RoutedEventArgs e)
     {
@@ -165,7 +345,23 @@ public sealed partial class ConfigurationStudioWindow : Window
     private void HandleStreamZoneChanged(object? sender, SelectionChangedEventArgs e)
     {
         if (ready && sender is ComboBox { SelectedItem: ZoneConfiguration zone })
-            viewModel.MoveSelectedStreamTo(zone);
+            QueueSelectionCommit(() => viewModel.MoveSelectedStreamTo(zone));
+    }
+
+    private void HandleZoneSystemChanged(object? sender, SelectionChangedEventArgs e)
+    {
+        if (ready && sender is ComboBox { SelectedItem: SystemConfiguration })
+            QueueSelectionCommit(viewModel.CommitZoneSystemEdit);
+    }
+
+    private void QueueSelectionCommit(Action commit)
+    {
+        int version = ++queuedSelectionCommitVersion;
+        Dispatcher.UIThread.Post(() =>
+        {
+            if (!isClosed && version == queuedSelectionCommitVersion)
+                commit();
+        }, DispatcherPriority.Background);
     }
 
     private async void HandleApplyPatchGroupClick(object? sender, RoutedEventArgs e)
@@ -200,6 +396,7 @@ public sealed partial class ConfigurationStudioWindow : Window
         dragOrigin = e.GetPosition(this);
         dragX = preview.X;
         dragY = preview.Y;
+        viewModel.BeginPreviewMove();
         viewModel.SelectedChannel = preview.Channel;
         e.Pointer.Capture(control);
         e.Handled = true;
@@ -212,8 +409,8 @@ public sealed partial class ConfigurationStudioWindow : Window
         Point current = e.GetPosition(this);
         viewModel.MovePreviewChannel(
             draggedPreview,
-            dragX + current.X - dragOrigin.X,
-            dragY + current.Y - dragOrigin.Y);
+            dragX + (current.X - dragOrigin.X),
+            dragY + (current.Y - dragOrigin.Y));
         e.Handled = true;
     }
 
@@ -234,6 +431,7 @@ public sealed partial class ConfigurationStudioWindow : Window
 
     private void ClearPreviewDrag()
     {
+        viewModel.CommitPreviewMove();
         draggedCard = null;
         draggedPreview = null;
     }
@@ -270,7 +468,7 @@ public sealed partial class ConfigurationStudioWindow : Window
 
         if (!plan.CanSave)
         {
-            await ShowMessageAsync("Configuration has errors", $"Resolve the errors before saving.\n\n{viewModel.IssueSummary}");
+            viewModel.OpenValidationDrawer();
             return;
         }
         if (!await ConfirmAsync("Review & Save", viewModel.BuildReviewText(plan), "Save"))

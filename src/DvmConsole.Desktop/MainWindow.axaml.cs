@@ -653,7 +653,7 @@ public sealed partial class MainWindow : Window
         AttachPttInputSafety(configurationStudioWindow);
         configurationStudioWindow.ReloadRequested += OpenCodeplugAsync;
         configurationStudioWindow.Closed += (_, _) => configurationStudioWindow = null;
-        configurationStudioWindow.Show(this);
+        configurationStudioWindow.Show();
     }
 
     internal ConfigurationStudioWindow CreateConfigurationStudioForCapture(
@@ -667,8 +667,8 @@ public sealed partial class MainWindow : Window
             sessionUserSettingsStore,
             section)
         {
-            Width = 1380,
-            Height = 850
+            Width = 1488,
+            Height = 1058
         };
     }
 

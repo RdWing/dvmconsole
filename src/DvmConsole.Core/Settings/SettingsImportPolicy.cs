@@ -15,6 +15,7 @@ internal static class SettingsImportPolicy
             settings.SerialPttBaudRate != 9_600 ||
             !settings.ShowSystemStatus || !settings.ShowChannels || !settings.ShowAlertTones ||
             !settings.LockWidgets || settings.ChannelWidgetPositions.Count > 0 ||
+            settings.CodeplugStudioStates.Count > 0 ||
             !settings.ShowCallHistoryPane || settings.SnapCallHistoryToWindow ||
             !UserSettingsNormalizationRules.WindowPlacementsEqual(settings.MainWindowPlacement, new WindowPlacementSetting
             {
@@ -106,6 +107,10 @@ internal static class SettingsImportPolicy
             target.ChannelWidgetPositions = source.ChannelWidgetPositions.ToDictionary(
                 entry => entry.Key,
                 entry => new WidgetPositionSetting { X = entry.Value.X, Y = entry.Value.Y },
+                StringComparer.OrdinalIgnoreCase);
+            target.CodeplugStudioStates = source.CodeplugStudioStates.ToDictionary(
+                entry => entry.Key,
+                entry => entry.Value.Clone(),
                 StringComparer.OrdinalIgnoreCase);
             target.UserBackgroundImage = source.UserBackgroundImage;
             target.ShowCallHistoryPane = source.ShowCallHistoryPane;

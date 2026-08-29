@@ -35,6 +35,7 @@ internal sealed class UserSettingsNormalizationPipeline
         settings.ReceiveEnabledChannelKeys = UserSettingsNormalizationRules.NormalizeNames(settings.ReceiveEnabledChannelKeys);
         settings.TransmitSelectedChannelKeys = UserSettingsNormalizationRules.NormalizeNames(settings.TransmitSelectedChannelKeys);
         settings.ChannelWidgetPositions = UserSettingsNormalizationRules.NormalizeWidgetPositions(settings.ChannelWidgetPositions);
+        settings.CodeplugStudioStates = NormalizeCodeplugStudioStates(settings.CodeplugStudioStates);
         UserSettingsNormalizationRules.NormalizeAudioInputSettings(settings);
         settings.AudioInputPresetName = settings.AudioInputPresetName?.Trim() ?? string.Empty;
         settings.AudioInputPresets = UserSettingsNormalizationRules.NormalizeAudioInputPresets(settings.AudioInputPresets);
@@ -171,7 +172,40 @@ internal sealed class UserSettingsNormalizationPipeline
         settings.ReceiveEnabledChannelKeys = UserSettingsNormalizationRules.NormalizeNames(settings.ReceiveEnabledChannelKeys);
         settings.TransmitSelectedChannelKeys = UserSettingsNormalizationRules.NormalizeNames(settings.TransmitSelectedChannelKeys);
         settings.ChannelWidgetPositions = UserSettingsNormalizationRules.NormalizeWidgetPositions(settings.ChannelWidgetPositions);
+        settings.CodeplugStudioStates = NormalizeCodeplugStudioStates(settings.CodeplugStudioStates);
         settings.CodeplugGroupStates = NormalizeCodeplugGroupStates(settings.CodeplugGroupStates);
+    }
+
+    private static Dictionary<string, CodeplugStudioState> NormalizeCodeplugStudioStates(
+        Dictionary<string, CodeplugStudioState>? states)
+    {
+        var normalized = new Dictionary<string, CodeplugStudioState>(StringComparer.OrdinalIgnoreCase);
+        foreach (KeyValuePair<string, CodeplugStudioState> entry in states ?? [])
+        {
+            if (string.IsNullOrWhiteSpace(entry.Key) || entry.Value is null)
+                continue;
+
+            string path;
+            try
+            {
+                path = CodeplugGroupStateStore.NormalizePath(entry.Key);
+            }
+            catch (Exception exception) when (exception is ArgumentException or NotSupportedException or PathTooLongException)
+            {
+                continue;
+            }
+
+            var assignments = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (KeyValuePair<string, string> assignment in entry.Value.ZoneSystemAssignments ?? [])
+            {
+                string zone = assignment.Key?.Trim() ?? string.Empty;
+                string system = assignment.Value?.Trim() ?? string.Empty;
+                if (zone.Length > 0 && system.Length > 0)
+                    assignments[zone] = system;
+            }
+            normalized[path] = new CodeplugStudioState { ZoneSystemAssignments = assignments };
+        }
+        return normalized;
     }
 
     private static Dictionary<string, CodeplugGroupState> NormalizeCodeplugGroupStates(

@@ -1,184 +1,1018 @@
-<Window xmlns="https://github.com/avaloniaui"
-        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        xmlns:local="using:DvmConsole.Desktop"
-        xmlns:config="using:DvmConsole.Core.Configuration"
-        x:Class="DvmConsole.Desktop.ConfigurationStudioWindow"
-        x:DataType="local:ConfigurationStudioViewModel"
-        Title="DVM Console Configuration Studio"
-        Width="1380" Height="850" MinWidth="1000" MinHeight="650"
-        Background="{DynamicResource ShellBackgroundBrush}"
-        WindowStartupLocation="CenterOwner">
+<?xml version="1.0"?>
+<Window
+    xmlns="https://github.com/avaloniaui"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:local="using:DvmConsole.Desktop"
+    xmlns:config="using:DvmConsole.Core.Configuration"
+    x:Class="DvmConsole.Desktop.ConfigurationStudioWindow"
+    x:DataType="local:ConfigurationStudioViewModel"
+    Title="DVM Console Configuration Studio"
+    Width="1488"
+    Height="1058"
+    MinWidth="1180"
+    MinHeight="760"
+    Background="{DynamicResource StudioCanvasBrush}"
+    WindowStartupLocation="CenterScreen">
+  <Window.Resources>
+    <ResourceDictionary>
+      <local:StringEqualsConverter x:Key="StringEqualsConverter"/>
+      <ResourceDictionary.ThemeDictionaries>
+        <ResourceDictionary x:Key="Dark">
+          <SolidColorBrush x:Key="StudioTopBrush" Color="#081621"/>
+          <SolidColorBrush x:Key="StudioNavigationBrush" Color="#0B1924"/>
+          <SolidColorBrush x:Key="StudioCanvasBrush" Color="#0C1A25"/>
+          <SolidColorBrush x:Key="StudioPanelBrush" Color="#0D1D28"/>
+          <SolidColorBrush x:Key="StudioInspectorBrush" Color="#0B1A25"/>
+          <SolidColorBrush x:Key="StudioFieldBrush" Color="#0A1822"/>
+          <SolidColorBrush x:Key="StudioLineBrush" Color="#2A3A48"/>
+          <SolidColorBrush x:Key="StudioMutedBrush" Color="#AAB6C2"/>
+          <SolidColorBrush x:Key="StudioSelectionBrush" Color="#0B4D8A"/>
+          <SolidColorBrush x:Key="StudioAccentBrush" Color="#087CF1"/>
+          <SolidColorBrush x:Key="StudioPrimaryTextBrush" Color="#E8EDF2"/>
+        </ResourceDictionary>
+        <ResourceDictionary x:Key="Light">
+          <SolidColorBrush x:Key="StudioTopBrush" Color="#E9EEF3"/>
+          <SolidColorBrush x:Key="StudioNavigationBrush" Color="#F3F6F8"/>
+          <SolidColorBrush x:Key="StudioCanvasBrush" Color="#FFFFFF"/>
+          <SolidColorBrush x:Key="StudioPanelBrush" Color="#F7F9FB"/>
+          <SolidColorBrush x:Key="StudioInspectorBrush" Color="#F1F5F8"/>
+          <SolidColorBrush x:Key="StudioFieldBrush" Color="#FFFFFF"/>
+          <SolidColorBrush x:Key="StudioLineBrush" Color="#B7C3CE"/>
+          <SolidColorBrush x:Key="StudioMutedBrush" Color="#52616F"/>
+          <SolidColorBrush x:Key="StudioSelectionBrush" Color="#CBE3FA"/>
+          <SolidColorBrush x:Key="StudioAccentBrush" Color="#006FD6"/>
+          <SolidColorBrush x:Key="StudioPrimaryTextBrush" Color="#17212B"/>
+        </ResourceDictionary>
+      </ResourceDictionary.ThemeDictionaries>
+    </ResourceDictionary>
+  </Window.Resources>
   <Window.Styles>
-    <Style Selector="TextBlock.heading"><Setter Property="FontSize" Value="20" /><Setter Property="FontWeight" Value="SemiBold" /></Style>
-    <Style Selector="TextBlock.subheading"><Setter Property="FontSize" Value="15" /><Setter Property="FontWeight" Value="SemiBold" /></Style>
-    <Style Selector="TextBlock.caption"><Setter Property="Foreground" Value="{DynamicResource MutedTextBrush}" /><Setter Property="FontSize" Value="12" /></Style>
-    <Style Selector="Border.panel"><Setter Property="Background" Value="{DynamicResource CardBackgroundBrush}" /><Setter Property="BorderBrush" Value="{DynamicResource ControlBorderBrush}" /><Setter Property="BorderThickness" Value="1" /><Setter Property="CornerRadius" Value="6" /><Setter Property="Padding" Value="12" /></Style>
-    <Style Selector="Border.dense-row"><Setter Property="BorderBrush" Value="{DynamicResource ControlBorderBrush}" /><Setter Property="BorderThickness" Value="0,0,0,1" /><Setter Property="Padding" Value="7,5" /></Style>
-    <Style Selector="ListBox.navigation > ListBoxItem"><Setter Property="HorizontalContentAlignment" Value="Stretch" /><Setter Property="Padding" Value="9,8" /><Setter Property="Margin" Value="0,1" /><Setter Property="CornerRadius" Value="4" /></Style>
-    <Style Selector="ListBox.navigation > ListBoxItem:selected"><Setter Property="Background" Value="#244E73" /><Setter Property="Foreground" Value="White" /></Style>
-    <Style Selector="ListBox.dense-list > ListBoxItem"><Setter Property="HorizontalContentAlignment" Value="Stretch" /><Setter Property="Padding" Value="0" /><Setter Property="MinHeight" Value="0" /></Style>
-    <Style Selector="Button"><Setter Property="Padding" Value="9,5" /></Style>
-    <Style Selector="TextBox"><Setter Property="MinHeight" Value="30" /></Style>
-    <Style Selector="ComboBox"><Setter Property="MinHeight" Value="30" /></Style>
-  </Window.Styles>
-
-  <Grid RowDefinitions="Auto,*,Auto">
-    <Border Grid.Row="0" Background="{DynamicResource ShellHeaderBrush}" BorderBrush="{DynamicResource ControlBorderBrush}" BorderThickness="0,0,0,1" Padding="12,8">
-      <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
-        <StackPanel Spacing="2">
-          <TextBlock FontSize="17" FontWeight="SemiBold" Text="Configuration Studio" />
-          <TextBlock Classes="caption" Text="{Binding DocumentPathText}" TextTrimming="CharacterEllipsis" />
-        </StackPanel>
-        <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
-          <Button Content="Undo" Click="HandleUndoClick" IsEnabled="{Binding CanUndo}" />
-          <Button Content="Redo" Click="HandleRedoClick" IsEnabled="{Binding CanRedo}" />
-          <Button Content="Save As…" Click="HandleSaveAsClick" IsEnabled="{Binding CanEdit}" />
-          <Button Content="Review &amp; Save" Click="HandleReviewAndSaveClick" IsEnabled="{Binding CanEdit}" />
-        </StackPanel>
-      </Grid>
-    </Border>
-
-    <Grid Grid.Row="1" ColumnDefinitions="230,*" MinHeight="0">
-      <Border Background="{DynamicResource ShellHeaderBrush}" BorderBrush="{DynamicResource ControlBorderBrush}" BorderThickness="0,0,1,0" Padding="10">
-        <Grid RowDefinitions="Auto,Auto,*,Auto" RowSpacing="8">
-          <TextBox Watermark="Search configuration" Text="{Binding SearchText, Mode=TwoWay}" AutomationProperties.Name="Search configuration" />
-          <TextBlock Grid.Row="1" Classes="caption" Text="Configuration" />
-          <ListBox Grid.Row="2" Classes="navigation" Background="Transparent" BorderThickness="0"
-                   ItemsSource="{Binding VisibleNavigation}" SelectedItem="{Binding SelectedNavigation, Mode=TwoWay}">
-            <ListBox.ItemTemplate>
-              <DataTemplate x:DataType="local:ConfigurationStudioNavigationItem">
-                <StackPanel Spacing="1"><TextBlock FontWeight="SemiBold" Text="{Binding Label}" /><TextBlock Classes="caption" Text="{Binding Description}" TextWrapping="Wrap" /></StackPanel>
-              </DataTemplate>
-            </ListBox.ItemTemplate>
-          </ListBox>
-          <Border Grid.Row="3" Classes="panel" Padding="8">
-            <StackPanel Spacing="3">
-              <TextBlock FontWeight="SemiBold" Text="{Binding StatusText}" TextWrapping="Wrap" />
-              <TextBlock Classes="caption" Text="{Binding IssueSummary}" />
-            </StackPanel>
+    <Style Selector="TextBlock">
+      <Setter Property="Foreground" Value="{DynamicResource StudioPrimaryTextBrush}"/>
+    </Style>
+    <Style Selector="TextBlock.heading">
+      <Setter Property="FontSize" Value="19"/>
+      <Setter Property="FontWeight" Value="SemiBold"/>
+    </Style>
+    <Style Selector="TextBlock.subheading">
+      <Setter Property="FontSize" Value="16"/>
+      <Setter Property="FontWeight" Value="SemiBold"/>
+    </Style>
+    <Style Selector="TextBlock.caption">
+      <Setter Property="Foreground" Value="{DynamicResource StudioMutedBrush}"/>
+      <Setter Property="FontSize" Value="12"/>
+    </Style>
+    <Style Selector="Border.panel">
+      <Setter Property="Background" Value="{DynamicResource StudioPanelBrush}"/>
+      <Setter Property="BorderBrush" Value="{DynamicResource StudioLineBrush}"/>
+      <Setter Property="BorderThickness" Value="1"/>
+      <Setter Property="CornerRadius" Value="5"/>
+      <Setter Property="Padding" Value="12"/>
+    </Style>
+    <Style Selector="Border.dense-row">
+      <Setter Property="BorderBrush" Value="{DynamicResource StudioLineBrush}"/>
+      <Setter Property="BorderThickness" Value="0,0,0,1"/>
+      <Setter Property="Padding" Value="8,6"/>
+    </Style>
+    <Style Selector="Border.table-cell">
+      <Setter Property="BorderBrush" Value="{DynamicResource StudioLineBrush}"/>
+      <Setter Property="BorderThickness" Value="1,0,0,0"/>
+      <Setter Property="Padding" Value="10,0"/>
+    </Style>
+    <Style Selector="Button">
+      <Setter Property="Padding" Value="10,6"/>
+      <Setter Property="CornerRadius" Value="3"/>
+    </Style>
+    <Style Selector="Button.nav-button">
+      <Setter Property="HorizontalContentAlignment" Value="Left"/>
+      <Setter Property="Background" Value="Transparent"/>
+      <Setter Property="BorderThickness" Value="0"/>
+      <Setter Property="Padding" Value="8,7"/>
+    </Style>
+    <Style Selector="Button.nav-button:pointerover">
+      <Setter Property="Background" Value="{DynamicResource ButtonHoverBrush}"/>
+    </Style>
+    <Style Selector="Button.nav-group">
+      <Setter Property="HorizontalContentAlignment" Value="Left"/>
+      <Setter Property="Background" Value="Transparent"/>
+      <Setter Property="BorderThickness" Value="0"/>
+      <Setter Property="Padding" Value="8,6"/>
+    </Style>
+    <Style Selector="Expander.live-layout /template/ ToggleButton">
+      <Setter Property="Background" Value="{DynamicResource StudioCanvasBrush}"/>
+      <Setter Property="BorderThickness" Value="0"/>
+      <Setter Property="HorizontalContentAlignment" Value="Left"/>
+      <Setter Property="Padding" Value="12,6"/>
+    </Style>
+    <Style Selector="Expander.live-layout /template/ ToggleButton:pointerover">
+      <Setter Property="Background" Value="{DynamicResource ButtonHoverBrush}"/>
+    </Style>
+    <Style Selector="ListBox.tree-list">
+      <Setter Property="Background" Value="Transparent"/>
+      <Setter Property="BorderThickness" Value="0"/>
+    </Style>
+    <Style Selector="ListBox.tree-list &gt; ListBoxItem">
+      <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+      <Setter Property="Padding" Value="8,5"/>
+      <Setter Property="Margin" Value="0,1"/>
+      <Setter Property="MinHeight" Value="0"/>
+      <Setter Property="CornerRadius" Value="4"/>
+    </Style>
+    <Style Selector="ListBox.tree-list &gt; ListBoxItem:selected">
+      <Setter Property="Background" Value="{DynamicResource StudioSelectionBrush}"/>
+      <Setter Property="Foreground" Value="White"/>
+    </Style>
+    <Style Selector="TreeView.configuration-tree">
+      <Setter Property="Background" Value="Transparent"/>
+      <Setter Property="BorderThickness" Value="0"/>
+    </Style>
+    <Style Selector="TreeView.configuration-tree TreeViewItem" x:DataType="local:ConfigurationHierarchyNode">
+      <Setter Property="IsExpanded" Value="{Binding IsExpanded, Mode=TwoWay}"/>
+    </Style>
+    <Style Selector="TreeView.configuration-tree TreeViewItem:selected">
+      <Setter Property="Background" Value="{DynamicResource StudioSelectionBrush}"/>
+      <Setter Property="Foreground" Value="White"/>
+    </Style>
+    <Style Selector="ListBox.dense-list &gt; ListBoxItem">
+      <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+      <Setter Property="Padding" Value="0"/>
+      <Setter Property="MinHeight" Value="0"/>
+    </Style>
+    <Style Selector="ListBox.channel-grid">
+      <Setter Property="Background" Value="Transparent"/>
+      <Setter Property="BorderThickness" Value="0"/>
+    </Style>
+    <Style Selector="ListBox.channel-grid &gt; ListBoxItem">
+      <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+      <Setter Property="Padding" Value="0"/>
+      <Setter Property="MinHeight" Value="36"/>
+    </Style>
+    <Style Selector="ListBox.channel-grid &gt; ListBoxItem:selected">
+      <Setter Property="Background" Value="{DynamicResource StudioSelectionBrush}"/>
+      <Setter Property="Foreground" Value="White"/>
+    </Style>
+    <Style Selector="TextBox">
+      <Setter Property="MinHeight" Value="34"/>
+      <Setter Property="TextAlignment" Value="Left"/>
+      <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+      <Setter Property="Background" Value="{DynamicResource StudioFieldBrush}"/>
+      <Setter Property="BorderBrush" Value="{DynamicResource StudioLineBrush}"/>
+    </Style>
+    <Style Selector="ComboBox">
+      <Setter Property="MinHeight" Value="34"/>
+      <Setter Property="HorizontalAlignment" Value="Stretch"/>
+      <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+      <Setter Property="Background" Value="{DynamicResource StudioFieldBrush}"/>
+      <Setter Property="BorderBrush" Value="{DynamicResource StudioLineBrush}"/>
+    </Style>
+    <Style Selector="NumericUpDown">
+      <Setter Property="MinHeight" Value="34"/>
+      <Setter Property="HorizontalAlignment" Value="Stretch"/>
+      <Setter Property="Background" Value="{DynamicResource StudioFieldBrush}"/>
+      <Setter Property="BorderBrush" Value="{DynamicResource StudioLineBrush}"/>
+    </Style>
+    <Style Selector="ToggleButton.segment">
+      <Setter Property="Background" Value="Transparent"/>
+      <Setter Property="BorderBrush" Value="{DynamicResource StudioLineBrush}"/>
+      <Setter Property="BorderThickness" Value="1"/>
+      <Setter Property="CornerRadius" Value="0"/>
+      <Setter Property="Padding" Value="12,7"/>
+    </Style>
+    <Style Selector="ToggleButton.segment:checked">
+      <Setter Property="Background" Value="{DynamicResource StudioSelectionBrush}"/>
+      <Setter Property="BorderBrush" Value="{DynamicResource StudioAccentBrush}"/>
+    </Style>
+    <Style Selector="ToggleButton.color-swatch">
+      <Setter Property="Width" Value="27"/>
+      <Setter Property="Height" Value="27"/>
+      <Setter Property="Padding" Value="0"/>
+      <Setter Property="CornerRadius" Value="14"/>
+      <Setter Property="BorderBrush" Value="{DynamicResource StudioLineBrush}"/>
+      <Setter Property="BorderThickness" Value="1"/>
+    </Style>
+    <Style Selector="ToggleButton.color-swatch:checked">
+      <Setter Property="BorderBrush" Value="{DynamicResource StudioAccentBrush}"/>
+      <Setter Property="BorderThickness" Value="3"/>
+    </Style>
+    <Style Selector="Button.ptt">
+      <Setter Property="Height" Value="24"/>
+      <Setter Property="HorizontalAlignment" Value="Stretch"/>
+      <Setter Property="HorizontalContentAlignment" Value="Center"/>
+      <Setter Property="VerticalContentAlignment" Value="Center"/>
+      <Setter Property="Padding" Value="3,0"/>
+      <Setter Property="FontWeight" Value="SemiBold"/>
+      <Setter Property="Background" Value="{DynamicResource PttBackgroundBrush}"/>
+    </Style>
+    <Style Selector="Button.ptt:pointerover">
+      <Setter Property="Background" Value="{DynamicResource PttBackgroundBrush}"/>
+    </Style>
+    <Style Selector="Button.ptt:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+      <Setter Property="Background" Value="{DynamicResource PttBackgroundBrush}"/>
+    </Style>
+    <Style Selector="Button.ptt:pressed">
+      <Setter Property="Background" Value="#0A9B48"/>
+    </Style>
+    <Style Selector="Button.ptt:pressed /template/ ContentPresenter#PART_ContentPresenter">
+      <Setter Property="Background" Value="#0A9B48"/>
+    </Style>
+    <Style Selector="Button.card-action">
+      <Setter Property="Padding" Value="5,2"/>
+      <Setter Property="FontSize" Value="{Binding $parent[Window].((local:ConfigurationStudioViewModel)DataContext).PreviewUiCompactFontSize}"/>
+    </Style>
+    <Style Selector="Button.tx-select">
+      <Setter Property="Height" Value="24"/>
+      <Setter Property="Padding" Value="2,0"/>
+      <Setter Property="HorizontalContentAlignment" Value="Center"/>
+      <Setter Property="VerticalContentAlignment" Value="Center"/>
+      <Setter Property="FontSize" Value="{Binding $parent[Window].((local:ConfigurationStudioViewModel)DataContext).PreviewUiCompactFontSize}"/>
+      <Setter Property="Background" Value="{DynamicResource SelectorBackgroundBrush}"/>
+    </Style>
+    <Style Selector="Button.channel-action">
+      <Setter Property="Template">
+        <ControlTemplate>
+          <Border Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="3" Padding="{TemplateBinding Padding}">
+            <ContentPresenter
+                Content="{TemplateBinding Content}"
+                Foreground="{TemplateBinding Foreground}"
+                HorizontalContentAlignment="{TemplateBinding HorizontalContentAlignment}"
+                VerticalContentAlignment="{TemplateBinding VerticalContentAlignment}"/>
           </Border>
+        </ControlTemplate>
+      </Setter>
+    </Style>
+    <Style Selector="Button.channel-action:disabled">
+      <Setter Property="Opacity" Value="0.55"/>
+    </Style>
+    <Style Selector="Button.issue-row">
+      <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+      <Setter Property="HorizontalAlignment" Value="Stretch"/>
+      <Setter Property="Background" Value="Transparent"/>
+      <Setter Property="BorderThickness" Value="0"/>
+      <Setter Property="Padding" Value="10,8"/>
+    </Style>
+    <Style Selector="Button.issue-row:pointerover">
+      <Setter Property="Background" Value="{DynamicResource ButtonHoverBrush}"/>
+    </Style>
+    <Style Selector="Button.validation-toggle">
+      <Setter Property="HorizontalContentAlignment" Value="Left"/>
+      <Setter Property="Background" Value="Transparent"/>
+      <Setter Property="BorderThickness" Value="0"/>
+      <Setter Property="Padding" Value="0"/>
+    </Style>
+    <Style Selector="Button.validation-toggle:pointerover">
+      <Setter Property="Background" Value="Transparent"/>
+    </Style>
+  </Window.Styles>
+  <Grid RowDefinitions="45,*,68">
+    <Border Grid.Row="0" Background="{DynamicResource StudioTopBrush}" BorderBrush="{DynamicResource StudioLineBrush}" BorderThickness="0,0,0,1">
+      <TextBlock HorizontalAlignment="Center" VerticalAlignment="Center" FontSize="15" FontWeight="Medium" Text="Configuration Studio"/>
+    </Border>
+    <Grid Grid.Row="1" ColumnDefinitions="286,*" MinHeight="0">
+      <Border Background="{DynamicResource StudioNavigationBrush}" BorderBrush="{DynamicResource StudioLineBrush}" BorderThickness="0,0,1,0">
+        <Grid RowDefinitions="Auto,*" MinHeight="0">
+          <TextBox Margin="14,10,14,7" Watermark="Search configuration" Text="{Binding SearchText, Mode=TwoWay}" AutomationProperties.Name="Search configuration"/>
+          <ScrollViewer Grid.Row="1" HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
+            <StackPanel Margin="14,3,10,16" Spacing="2">
+              <Button Classes="nav-button" Tag="Overview" Content="Overview" Click="HandleSectionNavigationClick"/>
+              <TextBlock Margin="8,8,6,3" FontWeight="SemiBold" Text="{Binding SystemNavigationHeading}"/>
+              <TreeView x:Name="configurationTree" Classes="configuration-tree" Margin="0,0,0,6" ItemsSource="{Binding ConfigurationHierarchy}" SelectedItem="{Binding SelectedHierarchyNode, Mode=TwoWay}">
+                <TreeView.ItemTemplate>
+                  <TreeDataTemplate x:DataType="local:ConfigurationHierarchyNode" ItemsSource="{Binding Children}">
+                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="7" MinHeight="25">
+                      <TextBlock VerticalAlignment="Center" Text="{Binding Label}" TextTrimming="CharacterEllipsis"/>
+                      <TextBlock Grid.Column="1" Classes="caption" VerticalAlignment="Center" Text="{Binding CountText}"/>
+                    </Grid>
+                  </TreeDataTemplate>
+                </TreeView.ItemTemplate>
+              </TreeView>
+              <Button Classes="nav-button" Tag="Streams" Content="{Binding StreamNavigationHeading}" Click="HandleSectionNavigationClick"/>
+              <Button Classes="nav-button" Tag="Groups" Content="{Binding GroupNavigationHeading}" Click="HandleSectionNavigationClick"/>
+              <Button Classes="nav-button" Tag="EncryptionKeys" Content="{Binding KeyNavigationHeading}" Click="HandleSectionNavigationClick"/>
+              <Button Classes="nav-button" Tag="Files" Content="{Binding FileNavigationHeading}" Click="HandleSectionNavigationClick"/>
+            </StackPanel>
+          </ScrollViewer>
         </Grid>
       </Border>
-
-      <Grid Grid.Column="1" Margin="12" MinHeight="0">
-        <ScrollViewer IsVisible="{Binding IsOverview}">
+      <Grid Grid.Column="1" MinHeight="0" Background="{DynamicResource StudioCanvasBrush}">
+        <ScrollViewer Margin="18" IsVisible="{Binding IsOverview}">
           <StackPanel Spacing="12">
-            <TextBlock Classes="heading" Text="Overview" />
+            <TextBlock Classes="heading" Text="Overview"/>
             <Border Classes="panel">
               <StackPanel Spacing="7">
-                <TextBlock FontSize="16" Text="Configuration Studio edits the same YAML codeplug that DVM Console already loads. You can still use the file with compatible versions or maintain it by hand. Studio keeps your changes in a draft until you review and save them." TextWrapping="Wrap" />
-                <TextBlock FontWeight="SemiBold" Text="{Binding ConfigurationShapeText}" />
+                <TextBlock
+                    FontSize="16"
+                    Text="Configuration Studio edits the same YAML codeplug that DVM Console already loads. You can still use the file with compatible versions or maintain it by hand. Studio keeps your changes in a draft until you review and save them."
+                    TextWrapping="Wrap"/>
+                <TextBlock FontWeight="SemiBold" Text="{Binding ConfigurationShapeText}"/>
               </StackPanel>
             </Border>
             <Grid ColumnDefinitions="*,*" ColumnSpacing="12">
-              <Border Classes="panel"><StackPanel Spacing="6"><TextBlock Classes="subheading" Text="Validation" /><TextBlock Text="{Binding IssueSummary}" /><ItemsControl ItemsSource="{Binding ValidationIssues}"><ItemsControl.ItemTemplate><DataTemplate x:DataType="config:ConfigurationValidationIssue"><TextBlock Margin="0,2" Text="{Binding Message}" TextWrapping="Wrap" /></DataTemplate></ItemsControl.ItemTemplate></ItemsControl></StackPanel></Border>
-              <Border Grid.Column="1" Classes="panel"><StackPanel Spacing="6"><TextBlock Classes="subheading" Text="Interoperability" /><TextBlock Text="{Binding UnknownFieldsText}" TextWrapping="Wrap" /><TextBlock Classes="caption" Text="Group membership, direction, source order, and enabled state stay in codeplug-scoped operator settings. Only group name and type are written to YAML." TextWrapping="Wrap" /></StackPanel></Border>
+              <Border Classes="panel">
+                <StackPanel Spacing="6">
+                  <TextBlock Classes="subheading" Text="Validation"/>
+                  <TextBlock Text="{Binding IssueSummary}"/>
+                  <ItemsControl ItemsSource="{Binding ValidationIssues}">
+                    <ItemsControl.ItemTemplate>
+                      <DataTemplate x:DataType="config:ConfigurationValidationIssue">
+                        <TextBlock Margin="0,2" Text="{Binding Message}" TextWrapping="Wrap"/>
+                      </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                  </ItemsControl>
+                </StackPanel>
+              </Border>
+              <Border Grid.Column="1" Classes="panel">
+                <StackPanel Spacing="6">
+                  <TextBlock Classes="subheading" Text="Interoperability"/>
+                  <TextBlock Text="{Binding UnknownFieldsText}" TextWrapping="Wrap"/>
+                  <TextBlock Classes="caption" Text="Group membership, direction, source order, and enabled state stay in codeplug-scoped operator settings. Only group name and type are written to YAML." TextWrapping="Wrap"/>
+                </StackPanel>
+              </Border>
             </Grid>
           </StackPanel>
         </ScrollViewer>
-
-        <Grid IsVisible="{Binding IsSystems}" RowDefinitions="Auto,*" RowSpacing="10">
-          <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8"><StackPanel><TextBlock Classes="heading" Text="FNE Systems" /><TextBlock Classes="caption" Text="Connection identity, transport, credentials, and alias file" /></StackPanel><StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="5"><Button Content="Add" Click="HandleAddSystemClick" /><Button Content="Duplicate" Click="HandleDuplicateSystemClick" /><Button Content="Delete" Click="HandleDeleteSystemClick" /></StackPanel></Grid>
+        <Grid Margin="18" IsVisible="{Binding IsSystems}" RowDefinitions="Auto,*" RowSpacing="10">
+          <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+            <StackPanel>
+              <TextBlock Classes="heading" Text="FNE Systems"/>
+              <TextBlock Classes="caption" Text="Connection identity, transport, credentials, and alias file"/>
+            </StackPanel>
+            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="5">
+              <Button Content="Add" Click="HandleAddSystemClick"/>
+              <Button Content="Duplicate" Click="HandleDuplicateSystemClick"/>
+              <Button Content="Delete" Click="HandleDeleteSystemClick"/>
+            </StackPanel>
+          </Grid>
           <Grid Grid.Row="1" ColumnDefinitions="3*,2*" ColumnSpacing="10" MinHeight="0">
             <Border Classes="panel" Padding="0">
               <Grid RowDefinitions="Auto,*">
-                <Border Classes="dense-row" Background="{DynamicResource ShellHeaderBrush}"><Grid ColumnDefinitions="2*,2*,Auto,Auto" ColumnSpacing="8"><TextBlock FontWeight="SemiBold" Text="Name" /><TextBlock Grid.Column="1" FontWeight="SemiBold" Text="Address" /><TextBlock Grid.Column="2" FontWeight="SemiBold" Text="Port" /><TextBlock Grid.Column="3" FontWeight="SemiBold" Text="Encrypted" /></Grid></Border>
+                <Border Classes="dense-row" Background="{DynamicResource ShellHeaderBrush}">
+                  <Grid ColumnDefinitions="2*,2*,Auto,Auto" ColumnSpacing="8">
+                    <TextBlock FontWeight="SemiBold" Text="Name"/>
+                    <TextBlock Grid.Column="1" FontWeight="SemiBold" Text="Address"/>
+                    <TextBlock Grid.Column="2" FontWeight="SemiBold" Text="Port"/>
+                    <TextBlock Grid.Column="3" FontWeight="SemiBold" Text="Encrypted"/>
+                  </Grid>
+                </Border>
                 <ListBox Grid.Row="1" Classes="dense-list" ItemsSource="{Binding Systems}" SelectedItem="{Binding SelectedSystem, Mode=TwoWay}">
-                  <ListBox.ItemTemplate><DataTemplate x:DataType="config:SystemConfiguration"><Border Classes="dense-row"><Grid ColumnDefinitions="2*,2*,Auto,Auto" ColumnSpacing="8"><TextBlock Text="{Binding Name}" /><TextBlock Grid.Column="1" Text="{Binding Address}" /><TextBlock Grid.Column="2" Text="{Binding Port}" /><CheckBox Grid.Column="3" IsChecked="{Binding Encrypted}" IsHitTestVisible="False" /></Grid></Border></DataTemplate></ListBox.ItemTemplate>
+                  <ListBox.ItemTemplate>
+                    <DataTemplate x:DataType="config:SystemConfiguration">
+                      <Border Classes="dense-row">
+                        <Grid ColumnDefinitions="2*,2*,Auto,Auto" ColumnSpacing="8">
+                          <TextBlock Text="{Binding Name}"/>
+                          <TextBlock Grid.Column="1" Text="{Binding Address}"/>
+                          <TextBlock Grid.Column="2" Text="{Binding Port}"/>
+                          <CheckBox Grid.Column="3" IsChecked="{Binding Encrypted}" IsHitTestVisible="False"/>
+                        </Grid>
+                      </Border>
+                    </DataTemplate>
+                  </ListBox.ItemTemplate>
                 </ListBox>
               </Grid>
             </Border>
             <Border Grid.Column="1" Classes="panel">
-              <ScrollViewer><StackPanel Spacing="6" IsEnabled="{Binding CanEdit}">
-                <TextBlock Classes="subheading" Text="System Inspector" />
-                <TextBlock Classes="caption" Text="Name" /><TextBox Text="{Binding SelectedSystem.Name, Mode=TwoWay}" LostFocus="HandleDraftFieldEdit" />
-                <TextBlock Classes="caption" Text="Identity" /><TextBox Text="{Binding SelectedSystem.Identity, Mode=TwoWay}" LostFocus="HandleDraftFieldEdit" />
-                <TextBlock Classes="caption" Text="Address" /><TextBox Text="{Binding SelectedSystem.Address, Mode=TwoWay}" LostFocus="HandleDraftFieldEdit" />
-                <Grid ColumnDefinitions="*,*" ColumnSpacing="8"><StackPanel><TextBlock Classes="caption" Text="Port" /><NumericUpDown Minimum="1" Maximum="65535" Value="{Binding SelectedSystem.Port, Mode=TwoWay}" LostFocus="HandleDraftFieldEdit" /></StackPanel><StackPanel Grid.Column="1"><TextBlock Classes="caption" Text="Peer ID" /><NumericUpDown Minimum="0" Maximum="4294967295" Value="{Binding SelectedSystem.PeerId, Mode=TwoWay}" LostFocus="HandleDraftFieldEdit" /></StackPanel></Grid>
-                <TextBlock Classes="caption" Text="Radio ID (RID)" /><TextBox Text="{Binding SelectedSystem.Rid, Mode=TwoWay}" LostFocus="HandleDraftFieldEdit" />
-                <TextBlock Classes="caption" Text="Password" /><TextBox PasswordChar="●" Text="{Binding SelectedSystem.Password, Mode=TwoWay}" LostFocus="HandleDraftFieldEdit" />
-                <CheckBox Content="Encrypt FNE transport" IsChecked="{Binding SelectedSystem.Encrypted, Mode=TwoWay}" Click="HandleDraftFieldEdit" />
-                <TextBlock Classes="caption" Text="Transport mode" /><ComboBox ItemsSource="{Binding TransportModeOptions}" SelectedItem="{Binding SelectedSystem.TransportEncryptionMode, Mode=TwoWay}" SelectionChanged="HandleDraftFieldEdit" />
-                <TextBlock Classes="caption" Text="Transport preshared key" /><TextBox PasswordChar="●" Text="{Binding SelectedSystem.PresharedKey, Mode=TwoWay}" LostFocus="HandleDraftFieldEdit" />
-                <TextBlock Classes="caption" Text="KMF preshared key" /><TextBox PasswordChar="●" Text="{Binding SelectedSystem.KmfPresharedKey, Mode=TwoWay}" LostFocus="HandleDraftFieldEdit" />
-                <TextBlock Classes="caption" Text="RID alias path" /><TextBox Text="{Binding SelectedSystem.AliasPath, Mode=TwoWay}" LostFocus="HandleDraftFieldEdit" />
-              </StackPanel></ScrollViewer>
+              <ScrollViewer>
+                <StackPanel Spacing="6" IsEnabled="{Binding CanEdit}">
+                  <TextBlock Classes="subheading" Text="System Inspector"/>
+                  <TextBlock Classes="caption" Text="Name"/>
+                  <TextBox Text="{Binding SelectedSystem.Name, Mode=TwoWay}" LostFocus="HandleDraftFieldEdit"/>
+                  <TextBlock Classes="caption" Text="Identity"/>
+                  <TextBox Text="{Binding SelectedSystem.Identity, Mode=TwoWay}" LostFocus="HandleDraftFieldEdit"/>
+                  <TextBlock Classes="caption" Text="Address"/>
+                  <TextBox Text="{Binding SelectedSystem.Address, Mode=TwoWay}" LostFocus="HandleDraftFieldEdit"/>
+                  <Grid ColumnDefinitions="*,*" ColumnSpacing="8">
+                    <StackPanel>
+                      <TextBlock Classes="caption" Text="Port"/>
+                      <NumericUpDown Minimum="1" Maximum="65535" Value="{Binding SelectedSystem.Port, Mode=TwoWay}" LostFocus="HandleDraftFieldEdit"/>
+                    </StackPanel>
+                    <StackPanel Grid.Column="1">
+                      <TextBlock Classes="caption" Text="Peer ID"/>
+                      <NumericUpDown Minimum="0" Maximum="4294967295" Value="{Binding SelectedSystem.PeerId, Mode=TwoWay}" LostFocus="HandleDraftFieldEdit"/>
+                    </StackPanel>
+                  </Grid>
+                  <TextBlock Classes="caption" Text="Radio ID (RID)"/>
+                  <TextBox Text="{Binding SelectedSystem.Rid, Mode=TwoWay}" LostFocus="HandleDraftFieldEdit"/>
+                  <TextBlock Classes="caption" Text="Password"/>
+                  <TextBox PasswordChar="&#x25CF;" Text="{Binding SelectedSystem.Password, Mode=TwoWay}" LostFocus="HandleDraftFieldEdit"/>
+                  <CheckBox Content="Encrypt FNE transport" IsChecked="{Binding SelectedSystem.Encrypted, Mode=TwoWay}" Click="HandleDraftFieldEdit"/>
+                  <TextBlock Classes="caption" Text="Transport mode"/>
+                  <ComboBox ItemsSource="{Binding TransportModeOptions}" SelectedItem="{Binding SelectedSystem.TransportEncryptionMode, Mode=TwoWay}" SelectionChanged="HandleDraftFieldEdit"/>
+                  <TextBlock Classes="caption" Text="Transport preshared key"/>
+                  <TextBox PasswordChar="&#x25CF;" Text="{Binding SelectedSystem.PresharedKey, Mode=TwoWay}" LostFocus="HandleDraftFieldEdit"/>
+                  <TextBlock Classes="caption" Text="KMF preshared key"/>
+                  <TextBox PasswordChar="&#x25CF;" Text="{Binding SelectedSystem.KmfPresharedKey, Mode=TwoWay}" LostFocus="HandleDraftFieldEdit"/>
+                  <TextBlock Classes="caption" Text="RID alias path"/>
+                  <TextBox Text="{Binding SelectedSystem.AliasPath, Mode=TwoWay}" LostFocus="HandleDraftFieldEdit"/>
+                </StackPanel>
+              </ScrollViewer>
             </Border>
           </Grid>
         </Grid>
-
-        <Grid IsVisible="{Binding IsZones}" RowDefinitions="Auto,3*,Auto,2*" RowSpacing="8" MinHeight="0">
-          <Grid ColumnDefinitions="Auto,260,*,Auto" ColumnSpacing="7">
-            <TextBlock VerticalAlignment="Center" FontWeight="SemiBold" Text="Zone" />
-            <ComboBox Grid.Column="1" ItemsSource="{Binding Zones}" SelectedItem="{Binding SelectedZone, Mode=TwoWay}"><ComboBox.ItemTemplate><DataTemplate x:DataType="config:ZoneConfiguration"><TextBlock Text="{Binding Name}" /></DataTemplate></ComboBox.ItemTemplate></ComboBox>
-            <StackPanel Grid.Column="3" Orientation="Horizontal" Spacing="5"><Button Content="Add zone" Click="HandleAddZoneClick" /><Button Content="Duplicate zone" Click="HandleDuplicateZoneClick" /><Button Content="Delete zone" Click="HandleDeleteZoneClick" /></StackPanel>
+        <Grid IsVisible="{Binding IsZones}" ColumnDefinitions="*,316" MinHeight="0">
+          <Grid RowDefinitions="55,*" MinHeight="0">
+            <Border Background="{DynamicResource StudioCanvasBrush}" BorderBrush="{DynamicResource StudioLineBrush}" BorderThickness="0,0,0,1" Padding="20,0,12,0">
+              <Grid ColumnDefinitions="*,216,58" ColumnSpacing="10">
+                <TextBlock VerticalAlignment="Center" FontSize="16" FontWeight="SemiBold" Text="{Binding SelectedZoneHeading}" TextTrimming="CharacterEllipsis"/>
+                <TextBox Grid.Column="1" VerticalAlignment="Center" Watermark="Search channels" Text="{Binding ChannelSearchText, Mode=TwoWay}" AutomationProperties.Name="Search channels"/>
+                <Menu Grid.Column="2" VerticalAlignment="Center" Background="Transparent">
+                  <MenuItem x:Name="editMenuRoot" Header="Edit">
+                    <MenuItem Header="Add channel" Tag="AddChannel" Click="HandleEditMenuClick"/>
+                    <MenuItem Header="Duplicate channel" Tag="DuplicateChannel" Click="HandleEditMenuClick"/>
+                    <MenuItem Header="Delete channel" Tag="DeleteChannel" Click="HandleEditMenuClick"/>
+                    <Separator/>
+                    <MenuItem Header="Move channel up" Tag="MoveChannelUp" Click="HandleEditMenuClick"/>
+                    <MenuItem Header="Move channel down" Tag="MoveChannelDown" Click="HandleEditMenuClick"/>
+                    <Separator/>
+                    <MenuItem Header="Apply selected card size" Tag="ApplySelectedCardSize" Click="HandleEditMenuClick"/>
+                    <MenuItem Header="Set selected rows RX only" Tag="SetSelectedRowsRxOnly" Click="HandleEditMenuClick"/>
+                    <MenuItem Header="Set selected rows TX capable" Tag="SetSelectedRowsTxCapable" Click="HandleEditMenuClick"/>
+                    <Separator/>
+                    <MenuItem Header="Add zone" Tag="AddZone" Click="HandleEditMenuClick"/>
+                    <MenuItem Header="Duplicate zone" Tag="DuplicateZone" Click="HandleEditMenuClick"/>
+                    <MenuItem Header="Delete zone" Tag="DeleteZone" Click="HandleEditMenuClick"/>
+                  </MenuItem>
+                </Menu>
+              </Grid>
+            </Border>
+            <Grid Grid.Row="1" RowDefinitions="37,*,Auto" Background="{DynamicResource StudioCanvasBrush}" ClipToBounds="True">
+              <Border Background="{DynamicResource StudioPanelBrush}" BorderBrush="{DynamicResource StudioLineBrush}" BorderThickness="0,0,0,1">
+                <Grid ColumnDefinitions="48,1.45*,1.15*,105,52,1.0*,78,90">
+                  <Border Grid.Column="1" Classes="table-cell">
+                    <TextBlock VerticalAlignment="Center" FontWeight="Medium" Text="Name"/>
+                  </Border>
+                  <Border Grid.Column="2" Classes="table-cell">
+                    <TextBlock VerticalAlignment="Center" FontWeight="Medium" Text="Destination ID"/>
+                  </Border>
+                  <Border Grid.Column="3" Classes="table-cell">
+                    <TextBlock VerticalAlignment="Center" FontWeight="Medium" Text="Mode"/>
+                  </Border>
+                  <Border Grid.Column="4" Classes="table-cell" Padding="0">
+                    <TextBlock HorizontalAlignment="Center" VerticalAlignment="Center" FontWeight="Medium" Text="Slot"/>
+                  </Border>
+                  <Border Grid.Column="5" Classes="table-cell">
+                    <TextBlock VerticalAlignment="Center" FontWeight="Medium" Text="Encryption"/>
+                  </Border>
+                  <Border Grid.Column="6" Classes="table-cell" Padding="0">
+                    <TextBlock HorizontalAlignment="Center" VerticalAlignment="Center" FontWeight="Medium" Text="RX only"/>
+                  </Border>
+                  <Border Grid.Column="7" Classes="table-cell" Padding="0">
+                    <TextBlock HorizontalAlignment="Center" VerticalAlignment="Center" FontWeight="Medium" Text="Card Size"/>
+                  </Border>
+                </Grid>
+              </Border>
+              <ListBox
+                  x:Name="channelList"
+                  Grid.Row="1"
+                  Classes="channel-grid"
+                  SelectionMode="Multiple"
+                  AutoScrollToSelectedItem="False"
+                  ScrollViewer.BringIntoViewOnFocusChange="False"
+                  ScrollViewer.VerticalScrollBarVisibility="Auto"
+                  ItemsSource="{Binding VisibleChannelRows}"
+                  SelectedItem="{Binding SelectedChannelRow, Mode=TwoWay}">
+                <ListBox.ItemTemplate>
+                  <DataTemplate x:DataType="local:ConfigurationChannelRow">
+                    <Border Height="36" BorderBrush="{DynamicResource StudioLineBrush}" BorderThickness="0,0,0,1">
+                      <Grid ColumnDefinitions="48,1.45*,1.15*,105,52,1.0*,78,90">
+                        <TextBlock HorizontalAlignment="Center" VerticalAlignment="Center" Text="{Binding Number}"/>
+                        <Border Grid.Column="1" Classes="table-cell">
+                          <TextBlock VerticalAlignment="Center" Text="{Binding Name}" TextTrimming="CharacterEllipsis"/>
+                        </Border>
+                        <Border Grid.Column="2" Classes="table-cell">
+                          <TextBlock VerticalAlignment="Center" Text="{Binding DestinationText}" TextTrimming="CharacterEllipsis"/>
+                        </Border>
+                        <Border Grid.Column="3" Classes="table-cell">
+                          <TextBlock VerticalAlignment="Center" Text="{Binding ModeText}"/>
+                        </Border>
+                        <Border Grid.Column="4" Classes="table-cell" Padding="0">
+                          <TextBlock HorizontalAlignment="Center" VerticalAlignment="Center" Text="{Binding SlotText}"/>
+                        </Border>
+                        <Border Grid.Column="5" Classes="table-cell">
+                          <TextBlock VerticalAlignment="Center" Text="{Binding EncryptionText}" TextTrimming="CharacterEllipsis"/>
+                        </Border>
+                        <Border Grid.Column="6" Classes="table-cell" Padding="0">
+                          <CheckBox HorizontalAlignment="Center" VerticalAlignment="Center" IsChecked="{Binding RxOnly}" IsHitTestVisible="False"/>
+                        </Border>
+                        <Border Grid.Column="7" Classes="table-cell" Padding="0">
+                          <TextBlock HorizontalAlignment="Center" VerticalAlignment="Center" Text="{Binding CardSizeText}"/>
+                        </Border>
+                      </Grid>
+                    </Border>
+                  </DataTemplate>
+                </ListBox.ItemTemplate>
+              </ListBox>
+              <Border x:Name="liveZoneLayoutDrawer" Grid.Row="2" Background="{DynamicResource StudioCanvasBrush}" BorderBrush="{DynamicResource StudioLineBrush}" BorderThickness="0,1,0,0" ClipToBounds="True">
+                <Expander Classes="live-layout" Background="{DynamicResource StudioCanvasBrush}" HorizontalContentAlignment="Stretch" IsExpanded="{Binding IsZonePreviewExpanded, Mode=TwoWay}">
+                  <Expander.Header>
+                    <TextBlock Margin="4,7" FontSize="14" Text="Live zone layout"/>
+                  </Expander.Header>
+                  <Border Height="300" Background="{DynamicResource StudioCanvasBrush}" BorderBrush="{DynamicResource StudioLineBrush}" BorderThickness="0,1,0,0">
+                    <Grid RowDefinitions="Auto,*">
+                      <Grid Margin="14,9,14,7" ColumnDefinitions="*,Auto" ColumnSpacing="12">
+                        <TextBlock Classes="caption" Text="Drag cards to edit the same two-dimensional layout used by the main console." TextWrapping="Wrap"/>
+                        <TextBlock Grid.Column="1" Classes="caption" Text="Controls are preview-only"/>
+                      </Grid>
+                      <ScrollViewer Grid.Row="1" HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto" Padding="12,2,10,10">
+                        <ItemsControl ItemsSource="{Binding PreviewChannels}" Width="{Binding PreviewCanvasWidth}" Height="{Binding PreviewCanvasHeight}" HorizontalAlignment="Left" VerticalAlignment="Top">
+                          <ItemsControl.ItemsPanel>
+                            <ItemsPanelTemplate>
+                              <Canvas/>
+                            </ItemsPanelTemplate>
+                          </ItemsControl.ItemsPanel>
+                          <ItemsControl.ItemContainerTheme>
+                            <ControlTheme TargetType="ContentPresenter" x:DataType="local:ConfigurationChannelPreviewViewModel">
+                              <Setter Property="Canvas.Left" Value="{Binding X}"/>
+                              <Setter Property="Canvas.Top" Value="{Binding Y}"/>
+                            </ControlTheme>
+                          </ItemsControl.ItemContainerTheme>
+                          <ItemsControl.ItemTemplate>
+                            <DataTemplate x:DataType="local:ConfigurationChannelPreviewViewModel">
+                              <Border
+                                  Classes="channel-card"
+                                  Width="{Binding CardWidth}"
+                                  Height="{Binding CardHeight}"
+                                  Background="{Binding Card.CardBackgroundBrush}"
+                                  BorderBrush="{Binding BorderBrush}"
+                                  BorderThickness="1"
+                                  CornerRadius="6"
+                                  Padding="5,5,5,4"
+                                  ClipToBounds="True"
+                                  Focusable="True"
+                                  PointerPressed="HandlePreviewPointerPressed"
+                                  PointerMoved="HandlePreviewPointerMoved"
+                                  PointerReleased="HandlePreviewPointerReleased"
+                                  PointerCaptureLost="HandlePreviewPointerCaptureLost"
+                                  ToolTip.Tip="Drag to move this channel in the main console layout">
+                                <local:ChannelCardContent
+                                    DataContext="{Binding Card}"
+                                    UiFontSize="{Binding $parent[Window].((local:ConfigurationStudioViewModel)DataContext).PreviewUiFontSize}"
+                                    UiSmallFontSize="{Binding $parent[Window].((local:ConfigurationStudioViewModel)DataContext).PreviewUiSmallFontSize}"
+                                    IsHitTestVisible="False"/>
+                              </Border>
+                            </DataTemplate>
+                          </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                      </ScrollViewer>
+                    </Grid>
+                  </Border>
+                </Expander>
+              </Border>
+            </Grid>
           </Grid>
-          <Grid Grid.Row="1" ColumnDefinitions="3*,2*" ColumnSpacing="10" MinHeight="0">
-            <Border Classes="panel" Padding="0"><Grid RowDefinitions="Auto,*"><Border Classes="dense-row" Background="{DynamicResource ShellHeaderBrush}"><Grid ColumnDefinitions="2*,2*,Auto,Auto,Auto,Auto" ColumnSpacing="8"><TextBlock FontWeight="SemiBold" Text="Channel" /><TextBlock Grid.Column="1" FontWeight="SemiBold" Text="System" /><TextBlock Grid.Column="2" FontWeight="SemiBold" Text="Destination" /><TextBlock Grid.Column="3" FontWeight="SemiBold" Text="Mode" /><TextBlock Grid.Column="4" FontWeight="SemiBold" Text="Slot" /><TextBlock Grid.Column="5" FontWeight="SemiBold" Text="Size" /></Grid></Border><ListBox x:Name="channelList" Grid.Row="1" Classes="dense-list" SelectionMode="Multiple" ItemsSource="{Binding Channels}" SelectedItem="{Binding SelectedChannel, Mode=TwoWay}"><ListBox.ItemTemplate><DataTemplate x:DataType="config:ChannelConfiguration"><Border Classes="dense-row"><Grid ColumnDefinitions="2*,2*,Auto,Auto,Auto,Auto" ColumnSpacing="8"><TextBlock Text="{Binding Name}" /><TextBlock Grid.Column="1" Text="{Binding System}" /><TextBlock Grid.Column="2" Text="{Binding Tgid}" /><TextBlock Grid.Column="3" Text="{Binding Mode}" /><TextBlock Grid.Column="4" Text="{Binding Slot}" /><TextBlock Grid.Column="5" Text="{Binding CardSize}" /></Grid></Border></DataTemplate></ListBox.ItemTemplate></ListBox></Grid></Border>
-            <Border Grid.Column="1" Classes="panel"><ScrollViewer><StackPanel Spacing="5" IsEnabled="{Binding CanEdit}"><Grid ColumnDefinitions="*,Auto"><TextBlock Classes="subheading" Text="Channel Inspector" /><StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="3"><Button Content="↑" Click="HandleMoveChannelUpClick" /><Button Content="↓" Click="HandleMoveChannelDownClick" /></StackPanel></Grid><TextBlock Classes="caption" Text="Bulk edit selected rows" /><WrapPanel Orientation="Horizontal"><Button Margin="0,0,5,5" Content="Apply card size" Click="HandleBulkCardSizeClick" /><Button Margin="0,0,5,5" Content="Set RX only" Click="HandleBulkRxOnlyClick" /><Button Margin="0,0,5,5" Content="Set TX capable" Click="HandleBulkTxCapableClick" /></WrapPanel><TextBlock Classes="caption" Text="Name" /><TextBox Text="{Binding SelectedChannel.Name, Mode=TwoWay}" LostFocus="HandleDraftFieldEdit" /><TextBlock Classes="caption" Text="System" /><ComboBox ItemsSource="{Binding Systems}" SelectedValueBinding="{Binding Name}" SelectedValue="{Binding SelectedChannel.System, Mode=TwoWay}" SelectionChanged="HandleDraftFieldEdit" /><Grid ColumnDefinitions="*,*" ColumnSpacing="8"><StackPanel><TextBlock Classes="caption" Text="Destination ID" /><TextBox Text="{Binding SelectedChannel.Tgid, Mode=TwoWay}" LostFocus="HandleDraftFieldEdit" /></StackPanel><StackPanel Grid.Column="1"><TextBlock Classes="caption" Text="Mode" /><ComboBox ItemsSource="{Binding ModeOptions}" SelectedItem="{Binding SelectedChannel.Mode, Mode=TwoWay}" SelectionChanged="HandleDraftFieldEdit" /></StackPanel></Grid><Grid ColumnDefinitions="*,*" ColumnSpacing="8"><StackPanel><TextBlock Classes="caption" Text="DMR slot" /><NumericUpDown Minimum="1" Maximum="2" Value="{Binding SelectedChannel.Slot, Mode=TwoWay}" LostFocus="HandleDraftFieldEdit" /></StackPanel><StackPanel Grid.Column="1"><TextBlock Classes="caption" Text="Card size" /><ComboBox ItemsSource="{Binding CardSizeOptions}" SelectedItem="{Binding SelectedChannel.CardSize, Mode=TwoWay}" SelectionChanged="HandleDraftFieldEdit" /></StackPanel></Grid><Grid ColumnDefinitions="*,*" ColumnSpacing="8"><StackPanel><TextBlock Classes="caption" Text="Algorithm" /><TextBox Text="{Binding SelectedChannel.Algo, Mode=TwoWay}" LostFocus="HandleDraftFieldEdit" /></StackPanel><StackPanel Grid.Column="1"><TextBlock Classes="caption" Text="Key ID" /><TextBox Text="{Binding SelectedChannel.KeyId, Mode=TwoWay}" LostFocus="HandleDraftFieldEdit" /></StackPanel></Grid><TextBlock Classes="caption" Text="Resource color" /><TextBox Text="{Binding SelectedChannel.ResourceColor, Mode=TwoWay}" Watermark="#244E73" LostFocus="HandleDraftFieldEdit" /><StackPanel Orientation="Horizontal" Spacing="12"><CheckBox Content="RX only" IsChecked="{Binding SelectedChannel.RxOnly, Mode=TwoWay}" Click="HandleDraftFieldEdit" /><CheckBox Content="Selectable encryption" IsChecked="{Binding SelectedChannel.SelectableEncryption, Mode=TwoWay}" Click="HandleDraftFieldEdit" /></StackPanel><StackPanel Orientation="Horizontal" Spacing="5" Margin="0,6,0,0"><Button Content="Add" Click="HandleAddChannelClick" /><Button Content="Duplicate" Click="HandleDuplicateChannelClick" /><Button Content="Delete" Click="HandleDeleteChannelClick" /></StackPanel></StackPanel></ScrollViewer></Border>
-          </Grid>
-          <TextBlock Grid.Row="2" Classes="caption" Text="Live zone preview — controls are disabled; drag cards to set their saved layout" />
-          <Border Grid.Row="3" Classes="panel" Padding="5" ClipToBounds="True">
-            <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto">
-              <ItemsControl ItemsSource="{Binding PreviewChannels}" Width="1000" Height="650">
-                <ItemsControl.ItemsPanel><ItemsPanelTemplate><Canvas /></ItemsPanelTemplate></ItemsControl.ItemsPanel>
-                <ItemsControl.ItemContainerTheme><ControlTheme TargetType="ContentPresenter" x:DataType="local:ConfigurationChannelPreviewViewModel"><Setter Property="Canvas.Left" Value="{Binding X}" /><Setter Property="Canvas.Top" Value="{Binding Y}" /></ControlTheme></ItemsControl.ItemContainerTheme>
-                <ItemsControl.ItemTemplate><DataTemplate x:DataType="local:ConfigurationChannelPreviewViewModel"><Border Width="{Binding CardWidth}" Height="{Binding CardHeight}" Background="{DynamicResource CardBackgroundBrush}" BorderBrush="{Binding AccentBrush}" BorderThickness="2" CornerRadius="6" Padding="7" PointerPressed="HandlePreviewPointerPressed" PointerMoved="HandlePreviewPointerMoved" PointerReleased="HandlePreviewPointerReleased" PointerCaptureLost="HandlePreviewPointerCaptureLost"><Grid RowDefinitions="Auto,Auto,*,Auto"><Grid ColumnDefinitions="*,Auto"><TextBlock FontWeight="SemiBold" Text="{Binding Name}" TextTrimming="CharacterEllipsis" /><Border Grid.Column="1" Background="{Binding AccentBrush}" CornerRadius="3" Padding="5,1"><TextBlock Foreground="White" FontSize="10" Text="{Binding CardSizeText}" /></Border></Grid><TextBlock Grid.Row="1" Classes="caption" Text="{Binding SystemText}" /><TextBlock Grid.Row="2" VerticalAlignment="Center" HorizontalAlignment="Center" FontWeight="SemiBold" Text="{Binding DestinationText}" /><Grid Grid.Row="3" ColumnDefinitions="*,*" ColumnSpacing="5"><Button Content="SELECT" IsEnabled="False" Padding="2" /><Button Grid.Column="1" Content="PTT" IsEnabled="False" Padding="2" /></Grid></Grid></Border></DataTemplate></ItemsControl.ItemTemplate>
-              </ItemsControl>
+          <Border Grid.Column="1" Background="{DynamicResource StudioInspectorBrush}" BorderBrush="{DynamicResource StudioLineBrush}" BorderThickness="1,0,0,0">
+            <ScrollViewer HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
+              <StackPanel Margin="18,18,18,20" Spacing="8" IsEnabled="{Binding CanEdit}">
+                <TextBlock FontSize="16" FontWeight="SemiBold" Text="Zone settings"/>
+                <TextBlock Classes="caption" Text="Assigned FNE system"/>
+                <ComboBox x:Name="zoneSystemEditor" ItemsSource="{Binding Systems}" SelectedValueBinding="{Binding Name}" SelectedValue="{Binding SelectedZoneSystemName, Mode=TwoWay}" SelectionChanged="HandleZoneSystemChanged"/>
+                <TextBlock Classes="caption" Text="Every channel in this zone uses the assigned FNE system. Studio writes the system value into each channel for YAML compatibility." TextWrapping="Wrap"/>
+                <Border Height="1" Margin="0,8" Background="{DynamicResource StudioLineBrush}"/>
+                <TextBlock Margin="0,0,0,8" FontSize="16" FontWeight="SemiBold" Text="Channel settings"/>
+                <TextBlock Text="Name *"/>
+                <TextBox Text="{Binding SelectedChannel.Name, Mode=TwoWay}" LostFocus="HandleDraftFieldEdit"/>
+                <TextBlock Margin="0,8,0,0" Text="Destination ID *"/>
+                <TextBox Text="{Binding SelectedChannel.Tgid, Mode=TwoWay}" LostFocus="HandleDraftFieldEdit"/>
+                <TextBlock Margin="0,8,0,0" Text="Mode *"/>
+                <ComboBox x:Name="channelModeEditor" ItemsSource="{Binding ModeOptions}" SelectedValueBinding="{Binding Value}" SelectedValue="{Binding SelectedChannel.Mode, Mode=TwoWay}" SelectionChanged="HandleChannelModeChanged">
+                  <ComboBox.ItemTemplate>
+                    <DataTemplate x:DataType="config:ConfigurationProtocolOption">
+                      <TextBlock Text="{Binding DisplayName}"/>
+                    </DataTemplate>
+                  </ComboBox.ItemTemplate>
+                </ComboBox>
+                <StackPanel x:Name="dmrSlotSettings" Spacing="8" IsVisible="{Binding IsSelectedChannelDmr}">
+                  <TextBlock Margin="0,8,0,0" Text="DMR slot *"/>
+                  <NumericUpDown x:Name="dmrSlotEditor" Minimum="1" Maximum="2" Increment="1" FormatString="0" Value="{Binding SelectedChannel.Slot, Mode=TwoWay}" LostFocus="HandleDraftFieldEdit"/>
+                </StackPanel>
+                <TextBlock Margin="0,8,0,0" Text="Encryption algorithm *"/>
+                <ComboBox ItemsSource="{Binding AvailableChannelAlgorithms}" SelectedItem="{Binding SelectedChannelAlgorithm, Mode=TwoWay}" SelectionChanged="HandleChannelAlgorithmChanged">
+                  <ComboBox.ItemTemplate>
+                    <DataTemplate x:DataType="config:EncryptionAlgorithmOption">
+                      <TextBlock Text="{Binding DisplayName}"/>
+                    </DataTemplate>
+                  </ComboBox.ItemTemplate>
+                </ComboBox>
+                <TextBlock Margin="0,8,0,0" Text="Key ID (hex) *"/>
+                <Border Background="{DynamicResource StudioFieldBrush}" BorderBrush="{DynamicResource StudioLineBrush}" BorderThickness="1" CornerRadius="3" IsEnabled="{Binding ChannelEncryptionUsesKey}">
+                  <Grid ColumnDefinitions="Auto,*">
+                    <TextBlock Margin="10,0,2,0" VerticalAlignment="Center" Foreground="{DynamicResource StudioMutedBrush}" Text="0x"/>
+                    <TextBox Grid.Column="1" MinHeight="32" BorderThickness="0" Text="{Binding SelectedChannelKeyIdHexDigits, Mode=TwoWay}" LostFocus="HandleDraftFieldEdit"/>
+                  </Grid>
+                </Border>
+                <CheckBox Margin="0,10,0,0" Content="Selectable encryption" IsChecked="{Binding SelectedChannel.SelectableEncryption, Mode=TwoWay}" Click="HandleDraftFieldEdit"/>
+                <CheckBox Margin="0,4,0,0" Content="RX only" IsChecked="{Binding SelectedChannel.RxOnly, Mode=TwoWay}" Click="HandleDraftFieldEdit"/>
+                <TextBlock Margin="0,14,0,0" Text="Card size *"/>
+                <Grid ColumnDefinitions="*,*,*">
+                  <ToggleButton Classes="segment" Content="Small" Tag="small"
+                      IsChecked="{Binding SelectedChannel.CardSize, Mode=OneWay, Converter={StaticResource StringEqualsConverter}, ConverterParameter=small}"
+                      Click="HandleCardSizeClick"/>
+                  <ToggleButton Grid.Column="1" Classes="segment" Content="Normal" Tag="normal"
+                      IsChecked="{Binding SelectedChannel.CardSize, Mode=OneWay, Converter={StaticResource StringEqualsConverter}, ConverterParameter=normal}"
+                      Click="HandleCardSizeClick"/>
+                  <ToggleButton Grid.Column="2" Classes="segment" Content="Large" Tag="large"
+                      IsChecked="{Binding SelectedChannel.CardSize, Mode=OneWay, Converter={StaticResource StringEqualsConverter}, ConverterParameter=large}"
+                      Click="HandleCardSizeClick"/>
+                </Grid>
+                <TextBlock Margin="0,14,0,0" Text="Resource color"/>
+                <StackPanel Orientation="Horizontal" Spacing="13">
+                  <ToggleButton Classes="color-swatch" Background="#087CF1" Tag="#087CF1"
+                      IsChecked="{Binding SelectedChannel.ResourceColor, Mode=OneWay, Converter={StaticResource StringEqualsConverter}, ConverterParameter=#087CF1}"
+                      Click="HandleResourceColorClick"/>
+                  <ToggleButton Classes="color-swatch" Background="#22D3EE" Tag="#22D3EE"
+                      IsChecked="{Binding SelectedChannel.ResourceColor, Mode=OneWay, Converter={StaticResource StringEqualsConverter}, ConverterParameter=#22D3EE}"
+                      Click="HandleResourceColorClick"/>
+                  <ToggleButton Classes="color-swatch" Background="#65B95A" Tag="#65B95A"
+                      IsChecked="{Binding SelectedChannel.ResourceColor, Mode=OneWay, Converter={StaticResource StringEqualsConverter}, ConverterParameter=#65B95A}"
+                      Click="HandleResourceColorClick"/>
+                  <ToggleButton Classes="color-swatch" Background="#F47A1F" Tag="#F47A1F"
+                      IsChecked="{Binding SelectedChannel.ResourceColor, Mode=OneWay, Converter={StaticResource StringEqualsConverter}, ConverterParameter=#F47A1F}"
+                      Click="HandleResourceColorClick"/>
+                  <ToggleButton Classes="color-swatch" Background="#7E36D4" Tag="#7E36D4"
+                      IsChecked="{Binding SelectedChannel.ResourceColor, Mode=OneWay, Converter={StaticResource StringEqualsConverter}, ConverterParameter=#7E36D4}"
+                      Click="HandleResourceColorClick"/>
+                  <ToggleButton Classes="color-swatch" Background="#DC2F60" Tag="#DC2F60"
+                      IsChecked="{Binding SelectedChannel.ResourceColor, Mode=OneWay, Converter={StaticResource StringEqualsConverter}, ConverterParameter=#DC2F60}"
+                      Click="HandleResourceColorClick"/>
+                </StackPanel>
+              </StackPanel>
             </ScrollViewer>
           </Border>
         </Grid>
-
-        <Grid IsVisible="{Binding IsStreams}" RowDefinitions="Auto,*" RowSpacing="10">
-          <Grid ColumnDefinitions="*,Auto"><StackPanel><TextBlock Classes="heading" Text="Web Streams" /><TextBlock Classes="caption" Text="One aggregate list; zone ownership remains explicit in YAML" /></StackPanel><StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="5"><Button Content="Add" Click="HandleAddStreamClick" /><Button Content="Delete" Click="HandleDeleteStreamClick" /></StackPanel></Grid>
-          <Grid Grid.Row="1" ColumnDefinitions="3*,2*" ColumnSpacing="10" MinHeight="0"><Border Classes="panel" Padding="0"><Grid RowDefinitions="Auto,*"><Border Classes="dense-row" Background="{DynamicResource ShellHeaderBrush}"><Grid ColumnDefinitions="2*,*,3*" ColumnSpacing="8"><TextBlock FontWeight="SemiBold" Text="Name" /><TextBlock Grid.Column="1" FontWeight="SemiBold" Text="Zone" /><TextBlock Grid.Column="2" FontWeight="SemiBold" Text="URL" /></Grid></Border><ListBox Grid.Row="1" Classes="dense-list" ItemsSource="{Binding Streams}" SelectedItem="{Binding SelectedStream, Mode=TwoWay}"><ListBox.ItemTemplate><DataTemplate x:DataType="local:ConfigurationStreamRow"><Border Classes="dense-row"><Grid ColumnDefinitions="2*,*,3*" ColumnSpacing="8"><TextBlock Text="{Binding Stream.Name}" /><TextBlock Grid.Column="1" Text="{Binding ZoneName}" /><TextBlock Grid.Column="2" Text="{Binding Stream.Url}" TextTrimming="CharacterEllipsis" /></Grid></Border></DataTemplate></ListBox.ItemTemplate></ListBox></Grid></Border><Border Grid.Column="1" Classes="panel"><StackPanel Spacing="6" IsEnabled="{Binding CanEdit}"><TextBlock Classes="subheading" Text="Stream Inspector" /><TextBlock Classes="caption" Text="Name" /><TextBox Text="{Binding SelectedStream.Stream.Name, Mode=TwoWay}" LostFocus="HandleDraftFieldEdit" /><TextBlock Classes="caption" Text="Owning zone" /><ComboBox ItemsSource="{Binding Zones}" SelectedItem="{Binding SelectedStream.Zone}" SelectionChanged="HandleStreamZoneChanged"><ComboBox.ItemTemplate><DataTemplate x:DataType="config:ZoneConfiguration"><TextBlock Text="{Binding Name}" /></DataTemplate></ComboBox.ItemTemplate></ComboBox><TextBlock Classes="caption" Text="URL" /><TextBox Text="{Binding SelectedStream.Stream.Url, Mode=TwoWay}" LostFocus="HandleDraftFieldEdit" /><TextBlock Classes="caption" Text="Username" /><TextBox Text="{Binding SelectedStream.Stream.AuthUsername, Mode=TwoWay}" LostFocus="HandleDraftFieldEdit" /><TextBlock Classes="caption" Text="Password" /><TextBox PasswordChar="●" Text="{Binding SelectedStream.Stream.AuthPassword, Mode=TwoWay}" LostFocus="HandleDraftFieldEdit" /><TextBlock Classes="caption" Text="Idle color" /><TextBox Text="{Binding SelectedStream.Stream.IdleColor, Mode=TwoWay}" LostFocus="HandleDraftFieldEdit" /></StackPanel></Border></Grid>
+        <Grid Margin="18" IsVisible="{Binding IsStreams}" RowDefinitions="Auto,*" RowSpacing="10">
+          <Grid ColumnDefinitions="*,Auto">
+            <StackPanel>
+              <TextBlock Classes="heading" Text="Web Streams"/>
+              <TextBlock Classes="caption" Text="One aggregate list; zone ownership remains explicit in YAML"/>
+            </StackPanel>
+            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="5">
+              <Button Content="Add" Click="HandleAddStreamClick"/>
+              <Button Content="Delete" Click="HandleDeleteStreamClick"/>
+            </StackPanel>
+          </Grid>
+          <Grid Grid.Row="1" ColumnDefinitions="3*,2*" ColumnSpacing="10" MinHeight="0">
+            <Border Classes="panel" Padding="0">
+              <Grid RowDefinitions="Auto,*">
+                <Border Classes="dense-row" Background="{DynamicResource ShellHeaderBrush}">
+                  <Grid ColumnDefinitions="2*,*,3*" ColumnSpacing="8">
+                    <TextBlock FontWeight="SemiBold" Text="Name"/>
+                    <TextBlock Grid.Column="1" FontWeight="SemiBold" Text="Zone"/>
+                    <TextBlock Grid.Column="2" FontWeight="SemiBold" Text="URL"/>
+                  </Grid>
+                </Border>
+                <ListBox Grid.Row="1" Classes="dense-list" ItemsSource="{Binding Streams}" SelectedItem="{Binding SelectedStream, Mode=TwoWay}">
+                  <ListBox.ItemTemplate>
+                    <DataTemplate x:DataType="local:ConfigurationStreamRow">
+                      <Border Classes="dense-row">
+                        <Grid ColumnDefinitions="2*,*,3*" ColumnSpacing="8">
+                          <TextBlock Text="{Binding Stream.Name}"/>
+                          <TextBlock Grid.Column="1" Text="{Binding ZoneName}"/>
+                          <TextBlock Grid.Column="2" Text="{Binding Stream.Url}" TextTrimming="CharacterEllipsis"/>
+                        </Grid>
+                      </Border>
+                    </DataTemplate>
+                  </ListBox.ItemTemplate>
+                </ListBox>
+              </Grid>
+            </Border>
+            <Border Grid.Column="1" Classes="panel">
+              <StackPanel Spacing="6" IsEnabled="{Binding CanEdit}">
+                <TextBlock Classes="subheading" Text="Stream Inspector"/>
+                <TextBlock Classes="caption" Text="Name"/>
+                <TextBox Text="{Binding SelectedStream.Stream.Name, Mode=TwoWay}" LostFocus="HandleDraftFieldEdit"/>
+                <TextBlock Classes="caption" Text="Owning zone"/>
+                <ComboBox ItemsSource="{Binding Zones}" SelectedItem="{Binding SelectedStream.Zone}" SelectionChanged="HandleStreamZoneChanged">
+                  <ComboBox.ItemTemplate>
+                    <DataTemplate x:DataType="config:ZoneConfiguration">
+                      <TextBlock Text="{Binding Name}"/>
+                    </DataTemplate>
+                  </ComboBox.ItemTemplate>
+                </ComboBox>
+                <TextBlock Classes="caption" Text="URL"/>
+                <TextBox Text="{Binding SelectedStream.Stream.Url, Mode=TwoWay}" LostFocus="HandleDraftFieldEdit"/>
+                <TextBlock Classes="caption" Text="Username"/>
+                <TextBox Text="{Binding SelectedStream.Stream.AuthUsername, Mode=TwoWay}" LostFocus="HandleDraftFieldEdit"/>
+                <TextBlock Classes="caption" Text="Password"/>
+                <TextBox PasswordChar="&#x25CF;" Text="{Binding SelectedStream.Stream.AuthPassword, Mode=TwoWay}" LostFocus="HandleDraftFieldEdit"/>
+                <TextBlock Classes="caption" Text="Idle color"/>
+                <TextBox Text="{Binding SelectedStream.Stream.IdleColor, Mode=TwoWay}" LostFocus="HandleDraftFieldEdit"/>
+              </StackPanel>
+            </Border>
+          </Grid>
         </Grid>
-
-        <ScrollViewer IsVisible="{Binding IsGroups}">
+        <ScrollViewer Margin="18" IsVisible="{Binding IsGroups}">
           <StackPanel Spacing="10">
-            <TextBlock Classes="heading" Text="Groups" /><TextBlock Classes="caption" Text="YAML stores group name and type. Membership, one-way source order, and enabled state remain codeplug-scoped operator settings." TextWrapping="Wrap" />
+            <TextBlock Classes="heading" Text="Groups"/>
+            <TextBlock Classes="caption" Text="YAML stores group name and type. Membership, one-way source order, and enabled state remain codeplug-scoped operator settings." TextWrapping="Wrap"/>
             <Grid ColumnDefinitions="2*,3*" ColumnSpacing="10">
-              <Border Classes="panel"><StackPanel Spacing="6"><Grid ColumnDefinitions="*,Auto"><TextBlock Classes="subheading" Text="Definitions" /><StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="4"><Button Content="Add" Click="HandleAddGroupClick" /><Button Content="Delete" Click="HandleDeleteGroupClick" /></StackPanel></Grid><ListBox Classes="dense-list" MaxHeight="230" ItemsSource="{Binding Groups}" SelectedItem="{Binding SelectedGroup, Mode=TwoWay}"><ListBox.ItemTemplate><DataTemplate x:DataType="config:GroupConfiguration"><Border Classes="dense-row"><Grid ColumnDefinitions="*,Auto"><TextBlock Text="{Binding Name}" /><TextBlock Grid.Column="1" Classes="caption" Text="{Binding Type}" /></Grid></Border></DataTemplate></ListBox.ItemTemplate></ListBox><TextBlock Classes="caption" Text="Name" /><TextBox Text="{Binding SelectedGroup.Name, Mode=TwoWay}" LostFocus="HandleDraftFieldEdit" /><TextBlock Classes="caption" Text="Type" /><ComboBox ItemsSource="{Binding GroupTypeOptions}" SelectedItem="{Binding SelectedGroup.Type, Mode=TwoWay}" SelectionChanged="HandleDraftFieldEdit" /></StackPanel></Border>
-              <Border Grid.Column="1" Classes="panel"><StackPanel Spacing="7"><TextBlock Classes="subheading" Text="Operator state" /><TextBlock Classes="caption" Text="{Binding OperationalGroupHint}" TextWrapping="Wrap" /><ItemsControl ItemsSource="{Binding OperationalGroups}" IsEnabled="{Binding CanUseOperationalGroups}"><ItemsControl.ItemTemplate><DataTemplate x:DataType="local:PatchGroupEditorViewModel"><Border BorderBrush="{DynamicResource ControlBorderBrush}" BorderThickness="1" CornerRadius="4" Padding="8" Margin="0,0,0,6"><StackPanel Spacing="6"><Grid ColumnDefinitions="*,Auto"><StackPanel><TextBlock FontWeight="SemiBold" Text="{Binding Name}" /><TextBlock Classes="caption" Text="{Binding GroupTypeText}" /></StackPanel><Button Grid.Column="1" IsVisible="{Binding IsMultiSelect}" Content="{Binding PttButtonText}" Tag="{Binding}" Click="HandleMultiSelectPttClick" /></Grid><TextBlock IsVisible="{Binding HasConflicts}" Text="{Binding ConflictSummary}" TextWrapping="Wrap" /><StackPanel Orientation="Horizontal" Spacing="12" IsVisible="{Binding IsPatchGroup}"><CheckBox Content="Enabled" IsChecked="{Binding IsEnabled, Mode=TwoWay}" /><CheckBox Content="One-way" IsChecked="{Binding IsOneWay, Mode=TwoWay}" /></StackPanel><ComboBox IsVisible="{Binding IsOneWay}" ItemsSource="{Binding SourceOptions}" SelectedItem="{Binding SelectedSource, Mode=TwoWay}"><ComboBox.ItemTemplate><DataTemplate x:DataType="local:PatchMemberEditorViewModel"><TextBlock Text="{Binding DisplayName}" /></DataTemplate></ComboBox.ItemTemplate></ComboBox><Expander Header="{Binding MemberEditorHeader}"><ItemsControl ItemsSource="{Binding Members}"><ItemsControl.ItemTemplate><DataTemplate x:DataType="local:PatchMemberEditorViewModel"><StackPanel><CheckBox Content="{Binding DisplayName}" IsChecked="{Binding IsMember, Mode=TwoWay}" IsEnabled="{Binding IsSelectionEnabled}" /><TextBlock Classes="caption" IsVisible="{Binding HasConflict}" Text="{Binding ConflictText}" /></StackPanel></DataTemplate></ItemsControl.ItemTemplate></ItemsControl></Expander><Button HorizontalAlignment="Left" Content="Apply operator state" Tag="{Binding}" Click="HandleApplyPatchGroupClick" /></StackPanel></Border></DataTemplate></ItemsControl.ItemTemplate></ItemsControl></StackPanel></Border>
+              <Border Classes="panel">
+                <StackPanel Spacing="6">
+                  <Grid ColumnDefinitions="*,Auto">
+                    <TextBlock Classes="subheading" Text="Definitions"/>
+                    <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="4">
+                      <Button Content="Add" Click="HandleAddGroupClick"/>
+                      <Button Content="Delete" Click="HandleDeleteGroupClick"/>
+                    </StackPanel>
+                  </Grid>
+                  <ListBox Classes="dense-list" MaxHeight="230" ItemsSource="{Binding Groups}" SelectedItem="{Binding SelectedGroup, Mode=TwoWay}">
+                    <ListBox.ItemTemplate>
+                      <DataTemplate x:DataType="config:GroupConfiguration">
+                        <Border Classes="dense-row">
+                          <Grid ColumnDefinitions="*,Auto">
+                            <TextBlock Text="{Binding Name}"/>
+                            <TextBlock Grid.Column="1" Classes="caption" Text="{Binding Type}"/>
+                          </Grid>
+                        </Border>
+                      </DataTemplate>
+                    </ListBox.ItemTemplate>
+                  </ListBox>
+                  <TextBlock Classes="caption" Text="Name"/>
+                  <TextBox Text="{Binding SelectedGroup.Name, Mode=TwoWay}" LostFocus="HandleDraftFieldEdit"/>
+                  <TextBlock Classes="caption" Text="Type"/>
+                  <ComboBox ItemsSource="{Binding GroupTypeOptions}" SelectedItem="{Binding SelectedGroup.Type, Mode=TwoWay}" SelectionChanged="HandleDraftFieldEdit"/>
+                </StackPanel>
+              </Border>
+              <Border Grid.Column="1" Classes="panel">
+                <StackPanel Spacing="7">
+                  <TextBlock Classes="subheading" Text="Operator state"/>
+                  <TextBlock Classes="caption" Text="{Binding OperationalGroupHint}" TextWrapping="Wrap"/>
+                  <ItemsControl ItemsSource="{Binding OperationalGroups}" IsEnabled="{Binding CanUseOperationalGroups}">
+                    <ItemsControl.ItemTemplate>
+                      <DataTemplate x:DataType="local:PatchGroupEditorViewModel">
+                        <Border BorderBrush="{DynamicResource ControlBorderBrush}" BorderThickness="1" CornerRadius="4" Padding="8" Margin="0,0,0,6">
+                          <StackPanel Spacing="6">
+                            <Grid ColumnDefinitions="*,Auto">
+                              <StackPanel>
+                                <TextBlock FontWeight="SemiBold" Text="{Binding Name}"/>
+                                <TextBlock Classes="caption" Text="{Binding GroupTypeText}"/>
+                              </StackPanel>
+                              <Button Grid.Column="1" IsVisible="{Binding IsMultiSelect}" Content="{Binding PttButtonText}" Tag="{Binding}" Click="HandleMultiSelectPttClick"/>
+                            </Grid>
+                            <TextBlock IsVisible="{Binding HasConflicts}" Text="{Binding ConflictSummary}" TextWrapping="Wrap"/>
+                            <StackPanel Orientation="Horizontal" Spacing="12" IsVisible="{Binding IsPatchGroup}">
+                              <CheckBox Content="Enabled" IsChecked="{Binding IsEnabled, Mode=TwoWay}"/>
+                              <CheckBox Content="One-way" IsChecked="{Binding IsOneWay, Mode=TwoWay}"/>
+                            </StackPanel>
+                            <ComboBox IsVisible="{Binding IsOneWay}" ItemsSource="{Binding SourceOptions}" SelectedItem="{Binding SelectedSource, Mode=TwoWay}">
+                              <ComboBox.ItemTemplate>
+                                <DataTemplate x:DataType="local:PatchMemberEditorViewModel">
+                                  <TextBlock Text="{Binding DisplayName}"/>
+                                </DataTemplate>
+                              </ComboBox.ItemTemplate>
+                            </ComboBox>
+                            <Expander Header="{Binding MemberEditorHeader}">
+                              <ItemsControl ItemsSource="{Binding Members}">
+                                <ItemsControl.ItemTemplate>
+                                  <DataTemplate x:DataType="local:PatchMemberEditorViewModel">
+                                    <StackPanel>
+                                      <CheckBox Content="{Binding DisplayName}" IsChecked="{Binding IsMember, Mode=TwoWay}" IsEnabled="{Binding IsSelectionEnabled}"/>
+                                      <TextBlock Classes="caption" IsVisible="{Binding HasConflict}" Text="{Binding ConflictText}"/>
+                                    </StackPanel>
+                                  </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                              </ItemsControl>
+                            </Expander>
+                            <Button HorizontalAlignment="Left" Content="Apply operator state" Tag="{Binding}" Click="HandleApplyPatchGroupClick"/>
+                          </StackPanel>
+                        </Border>
+                      </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                  </ItemsControl>
+                </StackPanel>
+              </Border>
             </Grid>
           </StackPanel>
         </ScrollViewer>
-
-        <Grid IsVisible="{Binding IsEncryptionKeys}" RowDefinitions="Auto,*" RowSpacing="10">
-          <Grid ColumnDefinitions="*,Auto"><StackPanel><TextBlock Classes="heading" Text="Encryption Keys" /><TextBlock Classes="caption" Text="{Binding KeyFilePathText}" /></StackPanel><StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="5"><Button Content="Add" Click="HandleAddKeyClick" IsEnabled="{Binding HasKeyFile}" /><Button Content="Delete" Click="HandleDeleteKeyClick" IsEnabled="{Binding HasKeyFile}" /></StackPanel></Grid>
-          <Grid Grid.Row="1" ColumnDefinitions="3*,2*" ColumnSpacing="10" MinHeight="0"><Border Classes="panel" Padding="0"><Grid RowDefinitions="Auto,*"><Border Classes="dense-row" Background="{DynamicResource ShellHeaderBrush}"><Grid ColumnDefinitions="*,Auto,Auto,Auto,Auto" ColumnSpacing="12"><TextBlock FontWeight="SemiBold" Text="Protocol" /><TextBlock Grid.Column="1" FontWeight="SemiBold" Text="Algorithm" /><TextBlock Grid.Column="2" FontWeight="SemiBold" Text="Key ID" /><TextBlock Grid.Column="3" FontWeight="SemiBold" Text="Required" /><TextBlock Grid.Column="4" FontWeight="SemiBold" Text="Material" /></Grid></Border><ListBox Grid.Row="1" Classes="dense-list" ItemsSource="{Binding KeyEntries}" SelectedItem="{Binding SelectedKey, Mode=TwoWay}"><ListBox.ItemTemplate><DataTemplate x:DataType="config:KeyEntry"><Border Classes="dense-row"><Grid ColumnDefinitions="*,Auto,Auto,Auto,Auto" ColumnSpacing="12"><TextBlock Text="{Binding Protocol}" /><TextBlock Grid.Column="1" Text="{Binding AlgId}" /><TextBlock Grid.Column="2" Text="{Binding KeyId}" /><TextBlock Grid.Column="3" Text="{Binding RequiredLength}" /><TextBlock Grid.Column="4" Text="••••••••" /></Grid></Border></DataTemplate></ListBox.ItemTemplate></ListBox></Grid></Border><Border Grid.Column="1" Classes="panel"><StackPanel Spacing="6" IsEnabled="{Binding HasKeyFile}"><TextBlock Classes="subheading" Text="Key Inspector" /><TextBlock Classes="caption" Text="Protocol" /><ComboBox ItemsSource="{Binding ProtocolOptions}" SelectedItem="{Binding SelectedKey.Protocol, Mode=TwoWay}" SelectionChanged="HandleKeyFieldEdit" /><Grid ColumnDefinitions="*,*" ColumnSpacing="8"><StackPanel><TextBlock Classes="caption" Text="Algorithm ID" /><NumericUpDown Minimum="0" Maximum="255" Value="{Binding SelectedKey.AlgId, Mode=TwoWay}" LostFocus="HandleKeyFieldEdit" /></StackPanel><StackPanel Grid.Column="1"><TextBlock Classes="caption" Text="Key ID" /><NumericUpDown Minimum="0" Maximum="65535" Value="{Binding SelectedKey.KeyId, Mode=TwoWay}" LostFocus="HandleKeyFieldEdit" /></StackPanel></Grid><TextBlock Classes="caption" Text="Key material (hex)" /><TextBox PasswordChar="●" Text="{Binding SelectedKey.Key, Mode=TwoWay}" LostFocus="HandleKeyFieldEdit" /><TextBlock Classes="caption" Text="Required length" /><TextBlock Text="{Binding SelectedKey.RequiredLength}" /><TextBlock Classes="caption" Text="Key material stays masked and is never included in diagnostics. FNE/KMM-delivered P25 keys are runtime-only and cannot be written back here." TextWrapping="Wrap" /></StackPanel></Border></Grid>
-        </Grid>
-
-        <ScrollViewer IsVisible="{Binding IsFiles}">
-          <StackPanel Spacing="10">
-            <TextBlock Classes="heading" Text="Files &amp; Interoperability" />
-            <Border Classes="panel">
-              <StackPanel Spacing="6">
-                <TextBlock Classes="subheading" Text="Referenced files" />
-                <TextBlock Classes="caption" Text="Key file" />
-                <TextBox Text="{Binding Configuration.KeyFile, Mode=TwoWay}" LostFocus="HandleDraftFieldEdit" />
-                <TextBlock Classes="caption" Text="RID alias paths" />
-                <ItemsControl ItemsSource="{Binding Systems}"><ItemsControl.ItemTemplate><DataTemplate x:DataType="config:SystemConfiguration"><Grid ColumnDefinitions="180,*" ColumnSpacing="8" Margin="0,2"><TextBlock VerticalAlignment="Center" Text="{Binding Name}" /><TextBox Grid.Column="1" Text="{Binding AliasPath, Mode=TwoWay}" LostFocus="HandleDraftFieldEdit" /></Grid></DataTemplate></ItemsControl.ItemTemplate></ItemsControl>
-              </StackPanel>
-            </Border>
-            <Border Classes="panel">
-              <StackPanel Spacing="6">
-                <Grid ColumnDefinitions="*,Auto"><StackPanel><TextBlock Classes="subheading" Text="RID aliases" /><TextBlock Classes="caption" Text="Aliases remain in their referenced YAML files." /></StackPanel><StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="4"><Button Content="Add" Click="HandleAddAliasClick" /><Button Content="Delete" Click="HandleDeleteAliasClick" /></StackPanel></Grid>
-                <ListBox Classes="dense-list" MaxHeight="220" ItemsSource="{Binding Aliases}" SelectedItem="{Binding SelectedAlias, Mode=TwoWay}">
-                  <ListBox.ItemTemplate><DataTemplate x:DataType="local:ConfigurationAliasRow"><Border Classes="dense-row"><Grid ColumnDefinitions="Auto,*,2*" ColumnSpacing="10"><TextBlock Text="{Binding Alias.Rid}" /><TextBlock Grid.Column="1" Text="{Binding Alias.Alias}" /><TextBlock Grid.Column="2" Classes="caption" Text="{Binding FilePath}" TextTrimming="CharacterEllipsis" /></Grid></Border></DataTemplate></ListBox.ItemTemplate>
+        <Grid Margin="18" IsVisible="{Binding IsEncryptionKeys}" RowDefinitions="Auto,*" RowSpacing="10">
+          <Grid ColumnDefinitions="*,Auto">
+            <StackPanel>
+              <TextBlock Classes="heading" Text="Encryption Keys"/>
+              <TextBlock Classes="caption" Text="{Binding KeyFilePathText}"/>
+            </StackPanel>
+            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="5">
+              <Button Content="Add" Click="HandleAddKeyClick" IsEnabled="{Binding HasKeyFile}"/>
+              <Button Content="Delete" Click="HandleDeleteKeyClick" IsEnabled="{Binding HasKeyFile}"/>
+            </StackPanel>
+          </Grid>
+          <Grid Grid.Row="1" ColumnDefinitions="3*,2*" ColumnSpacing="10" MinHeight="0">
+            <Border Classes="panel" Padding="0">
+              <Grid RowDefinitions="Auto,*">
+                <Border Classes="dense-row" Background="{DynamicResource ShellHeaderBrush}">
+                  <Grid ColumnDefinitions="1.4*,2.1*,0.5*,0.55*,0.6*" ColumnSpacing="12">
+                    <TextBlock FontWeight="SemiBold" Text="Protocol"/>
+                    <TextBlock Grid.Column="1" FontWeight="SemiBold" Text="Algorithm"/>
+                    <TextBlock Grid.Column="2" HorizontalAlignment="Right" FontWeight="SemiBold" Text="Key ID"/>
+                    <TextBlock Grid.Column="3" HorizontalAlignment="Right" FontWeight="SemiBold" Text="Required"/>
+                    <TextBlock Grid.Column="4" HorizontalAlignment="Center" FontWeight="SemiBold" Text="Material"/>
+                  </Grid>
+                </Border>
+                <ListBox Grid.Row="1" Classes="dense-list" ItemsSource="{Binding KeyEntries}" SelectedItem="{Binding SelectedKey, Mode=TwoWay}">
+                  <ListBox.ItemTemplate>
+                    <DataTemplate x:DataType="config:KeyEntry">
+                      <Border Classes="dense-row">
+                        <Grid ColumnDefinitions="1.4*,2.1*,0.5*,0.55*,0.6*" ColumnSpacing="12">
+                          <TextBlock Text="{Binding ProtocolDisplayName}"/>
+                          <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6">
+                            <TextBlock Text="{Binding AlgorithmDisplayName}"/>
+                            <TextBlock Classes="caption" Text="{Binding AlgorithmIdText}"/>
+                          </StackPanel>
+                          <TextBlock Grid.Column="2" HorizontalAlignment="Right" Text="{Binding KeyIdText}"/>
+                          <TextBlock Grid.Column="3" HorizontalAlignment="Right" Text="{Binding RequiredLength}"/>
+                          <TextBlock Grid.Column="4" HorizontalAlignment="Center" Text="&#x2022;&#x2022;&#x2022;&#x2022;&#x2022;&#x2022;&#x2022;&#x2022;"/>
+                        </Grid>
+                      </Border>
+                    </DataTemplate>
+                  </ListBox.ItemTemplate>
                 </ListBox>
-                <Grid ColumnDefinitions="*,2*" ColumnSpacing="8"><StackPanel><TextBlock Classes="caption" Text="RID" /><NumericUpDown Minimum="0" Maximum="4294967295" Value="{Binding SelectedAlias.Alias.Rid, Mode=TwoWay}" LostFocus="HandleAliasFieldEdit" /></StackPanel><StackPanel Grid.Column="1"><TextBlock Classes="caption" Text="Alias" /><TextBox Text="{Binding SelectedAlias.Alias.Alias, Mode=TwoWay}" LostFocus="HandleAliasFieldEdit" /></StackPanel></Grid>
+              </Grid>
+            </Border>
+            <Border Grid.Column="1" Classes="panel">
+              <StackPanel Spacing="6" IsEnabled="{Binding HasKeyFile}">
+                <TextBlock Classes="subheading" Text="Key Inspector"/>
+                <TextBlock Classes="caption" Text="Protocol"/>
+                <ComboBox ItemsSource="{Binding ProtocolOptions}" SelectedValueBinding="{Binding Value}" SelectedValue="{Binding SelectedKeyProtocol, Mode=TwoWay}" SelectionChanged="HandleKeyProtocolChanged">
+                  <ComboBox.ItemTemplate>
+                    <DataTemplate x:DataType="config:ConfigurationProtocolOption">
+                      <TextBlock Text="{Binding DisplayName}"/>
+                    </DataTemplate>
+                  </ComboBox.ItemTemplate>
+                </ComboBox>
+                <TextBlock Classes="caption" Text="Encryption algorithm"/>
+                <ComboBox ItemsSource="{Binding AvailableKeyAlgorithms}" SelectedItem="{Binding SelectedKeyAlgorithm, Mode=TwoWay}" SelectionChanged="HandleKeyAlgorithmChanged">
+                  <ComboBox.ItemTemplate>
+                    <DataTemplate x:DataType="config:EncryptionAlgorithmOption">
+                      <Grid ColumnDefinitions="*,Auto" ColumnSpacing="10">
+                        <TextBlock Text="{Binding DisplayName}"/>
+                        <TextBlock Grid.Column="1" Classes="caption" Text="{Binding AlgorithmIdText}"/>
+                      </Grid>
+                    </DataTemplate>
+                  </ComboBox.ItemTemplate>
+                </ComboBox>
+                <TextBlock Classes="caption" Text="Algorithm ID"/>
+                <TextBlock FontWeight="SemiBold" Text="{Binding SelectedKeyAlgorithmIdText}"/>
+                <TextBlock Classes="caption" Text="Key ID (hex)"/>
+                <Border Background="{DynamicResource StudioFieldBrush}" BorderBrush="{DynamicResource StudioLineBrush}" BorderThickness="1" CornerRadius="3">
+                  <Grid ColumnDefinitions="Auto,*">
+                    <TextBlock Margin="10,0,2,0" VerticalAlignment="Center" Foreground="{DynamicResource StudioMutedBrush}" Text="0x"/>
+                    <TextBox Grid.Column="1" MinHeight="32" BorderThickness="0" Text="{Binding SelectedKeyIdHexDigits, Mode=TwoWay}" LostFocus="HandleKeyFieldEdit"/>
+                  </Grid>
+                </Border>
+                <TextBlock Classes="caption" Text="Key material (hex)"/>
+                <TextBox PasswordChar="&#x25CF;" Text="{Binding SelectedKey.Key, Mode=TwoWay}" LostFocus="HandleKeyFieldEdit"/>
+                <TextBlock Classes="caption" Text="Required length"/>
+                <TextBlock Text="{Binding SelectedKey.RequiredLength}"/>
+                <TextBlock Classes="caption" Text="Key material stays masked and is never included in diagnostics. FNE/KMM-delivered P25 Phase 1 keys are runtime-only and cannot be written back here." TextWrapping="Wrap"/>
               </StackPanel>
             </Border>
-            <Border Classes="panel"><StackPanel Spacing="6"><TextBlock Classes="subheading" Text="Unknown YAML fields" /><TextBlock Text="{Binding UnknownFieldsText}" TextWrapping="Wrap" /><ItemsControl ItemsSource="{Binding Document.UnknownFields}"><ItemsControl.ItemTemplate><DataTemplate x:DataType="config:UnknownConfigurationField"><TextBlock Text="{Binding DisplayText}" /></DataTemplate></ItemsControl.ItemTemplate></ItemsControl></StackPanel></Border>
-            <Border Classes="panel"><StackPanel Spacing="6"><TextBlock Classes="subheading" Text="Exports" /><TextBlock Classes="caption" Text="A full interoperable copy includes credentials and references to local key material. A sanitized support copy removes credentials, key material, addresses, URLs, and operational identifiers. Sanitized export is unavailable for YAML that opened read-only because its unsupported constructs cannot be interpreted safely." TextWrapping="Wrap" /><StackPanel Orientation="Horizontal" Spacing="6"><Button Content="Export full copy…" Click="HandleExportFullClick" /><Button Content="Export sanitized support copy…" Click="HandleExportSanitizedClick" IsEnabled="{Binding CanExportSanitized}" /></StackPanel></StackPanel></Border>
+          </Grid>
+        </Grid>
+        <ScrollViewer Margin="18" IsVisible="{Binding IsFiles}">
+          <StackPanel Spacing="10">
+            <TextBlock Classes="heading" Text="Files &amp; Interoperability"/>
+            <Border Classes="panel">
+              <StackPanel Spacing="6">
+                <TextBlock Classes="subheading" Text="Referenced files"/>
+                <TextBlock Classes="caption" Text="Key file"/>
+                <TextBox Text="{Binding Configuration.KeyFile, Mode=TwoWay}" LostFocus="HandleDraftFieldEdit"/>
+                <TextBlock Classes="caption" Text="RID alias paths"/>
+                <ItemsControl ItemsSource="{Binding Systems}">
+                  <ItemsControl.ItemTemplate>
+                    <DataTemplate x:DataType="config:SystemConfiguration">
+                      <Grid ColumnDefinitions="180,*" ColumnSpacing="8" Margin="0,2">
+                        <TextBlock VerticalAlignment="Center" Text="{Binding Name}"/>
+                        <TextBox Grid.Column="1" Text="{Binding AliasPath, Mode=TwoWay}" LostFocus="HandleDraftFieldEdit"/>
+                      </Grid>
+                    </DataTemplate>
+                  </ItemsControl.ItemTemplate>
+                </ItemsControl>
+              </StackPanel>
+            </Border>
+            <Border Classes="panel">
+              <StackPanel Spacing="6">
+                <Grid ColumnDefinitions="*,Auto">
+                  <StackPanel>
+                    <TextBlock Classes="subheading" Text="RID aliases"/>
+                    <TextBlock Classes="caption" Text="Aliases remain in their referenced YAML files."/>
+                  </StackPanel>
+                  <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="4">
+                    <Button Content="Add" Click="HandleAddAliasClick"/>
+                    <Button Content="Delete" Click="HandleDeleteAliasClick"/>
+                  </StackPanel>
+                </Grid>
+                <ListBox Classes="dense-list" MaxHeight="220" ItemsSource="{Binding Aliases}" SelectedItem="{Binding SelectedAlias, Mode=TwoWay}">
+                  <ListBox.ItemTemplate>
+                    <DataTemplate x:DataType="local:ConfigurationAliasRow">
+                      <Border Classes="dense-row">
+                        <Grid ColumnDefinitions="Auto,*,2*" ColumnSpacing="10">
+                          <TextBlock Text="{Binding Alias.Rid}"/>
+                          <TextBlock Grid.Column="1" Text="{Binding Alias.Alias}"/>
+                          <TextBlock Grid.Column="2" Classes="caption" Text="{Binding FilePath}" TextTrimming="CharacterEllipsis"/>
+                        </Grid>
+                      </Border>
+                    </DataTemplate>
+                  </ListBox.ItemTemplate>
+                </ListBox>
+                <Grid ColumnDefinitions="*,2*" ColumnSpacing="8">
+                  <StackPanel>
+                    <TextBlock Classes="caption" Text="RID"/>
+                    <NumericUpDown Minimum="0" Maximum="4294967295" Value="{Binding SelectedAlias.Alias.Rid, Mode=TwoWay}" LostFocus="HandleAliasFieldEdit"/>
+                  </StackPanel>
+                  <StackPanel Grid.Column="1">
+                    <TextBlock Classes="caption" Text="Alias"/>
+                    <TextBox Text="{Binding SelectedAlias.Alias.Alias, Mode=TwoWay}" LostFocus="HandleAliasFieldEdit"/>
+                  </StackPanel>
+                </Grid>
+              </StackPanel>
+            </Border>
+            <Border Classes="panel">
+              <StackPanel Spacing="6">
+                <TextBlock Classes="subheading" Text="Unknown YAML fields"/>
+                <TextBlock Text="{Binding UnknownFieldsText}" TextWrapping="Wrap"/>
+                <ItemsControl ItemsSource="{Binding Document.UnknownFields}">
+                  <ItemsControl.ItemTemplate>
+                    <DataTemplate x:DataType="config:UnknownConfigurationField">
+                      <TextBlock Text="{Binding DisplayText}"/>
+                    </DataTemplate>
+                  </ItemsControl.ItemTemplate>
+                </ItemsControl>
+              </StackPanel>
+            </Border>
+            <Border Classes="panel">
+              <StackPanel Spacing="6">
+                <TextBlock Classes="subheading" Text="Exports"/>
+                <TextBlock
+                    Classes="caption"
+                    Text="A full interoperable copy includes credentials and references to local key material. A sanitized support copy removes credentials, key material, addresses, URLs, and operational identifiers. Sanitized export is unavailable for YAML that opened read-only because its unsupported constructs cannot be interpreted safely."
+                    TextWrapping="Wrap"/>
+                <StackPanel Orientation="Horizontal" Spacing="6">
+                  <Button Content="Export full copy&#x2026;" Click="HandleExportFullClick"/>
+                  <Button Content="Export sanitized support copy&#x2026;" Click="HandleExportSanitizedClick" IsEnabled="{Binding CanExportSanitized}"/>
+                </StackPanel>
+              </StackPanel>
+            </Border>
           </StackPanel>
         </ScrollViewer>
       </Grid>
     </Grid>
-
-    <Border Grid.Row="2" Background="{DynamicResource StatusBarBackgroundBrush}" BorderBrush="{DynamicResource ControlBorderBrush}" BorderThickness="0,1,0,0" Padding="10,6">
-      <Grid ColumnDefinitions="*,Auto"><TextBlock Text="{Binding StatusText}" /><TextBlock Grid.Column="1" Text="{Binding IssueSummary}" /></Grid>
+    <Border
+        Grid.Row="1"
+        Margin="300,0,13,0"
+        VerticalAlignment="Bottom"
+        Height="270"
+        ZIndex="50"
+        IsVisible="{Binding IsValidationDrawerOpen}"
+        Background="{DynamicResource StudioTopBrush}"
+        BorderBrush="{DynamicResource StudioLineBrush}"
+        BorderThickness="1"
+        CornerRadius="6,6,0,0">
+      <Grid RowDefinitions="52,*">
+        <Border BorderBrush="{DynamicResource StudioLineBrush}" BorderThickness="0,0,0,1" Padding="14,0">
+          <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="10">
+            <Ellipse Width="12" Height="12" Fill="{Binding ValidationIndicatorBrush}" VerticalAlignment="Center"/>
+            <StackPanel Grid.Column="1" VerticalAlignment="Center">
+              <TextBlock FontWeight="SemiBold" Text="{Binding ValidationDrawerHeading}"/>
+              <TextBlock Classes="caption" Text="Choose an issue to open the section that needs attention."/>
+            </StackPanel>
+            <Button Grid.Column="2" VerticalAlignment="Center" Content="Close" Click="HandleToggleValidationDrawerClick"/>
+          </Grid>
+        </Border>
+        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
+          <ItemsControl ItemsSource="{Binding ValidationIssues}">
+            <ItemsControl.ItemTemplate>
+              <DataTemplate x:DataType="config:ConfigurationValidationIssue">
+                <Button Classes="issue-row" Tag="{Binding}" Click="HandleValidationIssueClick">
+                  <Grid ColumnDefinitions="82,150,210,*" ColumnSpacing="10">
+                    <TextBlock FontWeight="SemiBold" Text="{Binding Severity}"/>
+                    <TextBlock Grid.Column="1" Text="{Binding Domain}" TextTrimming="CharacterEllipsis"/>
+                    <TextBlock Grid.Column="2" Classes="caption" Text="{Binding Path}" TextTrimming="CharacterEllipsis"/>
+                    <TextBlock Grid.Column="3" Text="{Binding Message}" TextWrapping="Wrap"/>
+                  </Grid>
+                </Button>
+              </DataTemplate>
+            </ItemsControl.ItemTemplate>
+          </ItemsControl>
+        </ScrollViewer>
+      </Grid>
+    </Border>
+    <Border Grid.Row="2" Margin="13,0,13,8" Background="{DynamicResource StudioTopBrush}" BorderBrush="{DynamicResource StudioLineBrush}" BorderThickness="1" CornerRadius="4" Padding="18,8">
+      <Grid ColumnDefinitions="*,Auto" ColumnSpacing="18">
+        <Button Classes="validation-toggle" Click="HandleToggleValidationDrawerClick">
+          <StackPanel Orientation="Horizontal" Spacing="14" VerticalAlignment="Center">
+            <Ellipse Width="24" Height="24" Fill="{Binding ValidationIndicatorBrush}"/>
+            <StackPanel VerticalAlignment="Center">
+              <TextBlock FontWeight="SemiBold" Text="{Binding ValidationStatusText}"/>
+              <TextBlock Classes="caption" Text="Open validation details" IsVisible="{Binding HasValidationIssues}"/>
+            </StackPanel>
+            <Border Width="1" Height="22" Background="{DynamicResource StudioLineBrush}"/>
+            <TextBlock VerticalAlignment="Center" Foreground="{DynamicResource StudioMutedBrush}" Text="Unknown YAML fields preserved"/>
+          </StackPanel>
+        </Button>
+        <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+          <Button Content="Undo" Click="HandleUndoClick" IsEnabled="{Binding CanUndo}"/>
+          <Button Content="Redo" Click="HandleRedoClick" IsEnabled="{Binding CanRedo}"/>
+          <Button Content="Save As&#x2026;" Click="HandleSaveAsClick" IsEnabled="{Binding CanEdit}"/>
+          <Button Content="Export YAML" Click="HandleExportFullClick"/>
+          <Button MinWidth="190" Content="Review &amp; Save" Background="{DynamicResource StudioAccentBrush}" Foreground="White" Click="HandleReviewAndSaveClick" IsEnabled="{Binding CanEdit}"/>
+        </StackPanel>
+      </Grid>
     </Border>
   </Grid>
 </Window>
