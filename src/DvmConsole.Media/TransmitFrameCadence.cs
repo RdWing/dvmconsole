@@ -1,9 +1,16 @@
 namespace DvmConsole.Media;
 
-// Keeps outbound media frames on an absolute 20 ms start cadence. A late timer
-// wake is recovered against the next scheduled deadline instead of permanently
-// slowing the stream. Falling a complete frame behind starts a new cadence so
-// recovery can never emit an immediate catch-up burst.
+/// <summary>
+/// Keeps one outbound media stream on an absolute 20 ms frame-start cadence.
+/// A late timer wake is recovered against the next scheduled deadline instead
+/// of permanently slowing the stream. Falling a complete frame behind starts a
+/// new cadence so recovery can never emit an immediate catch-up burst.
+/// </summary>
+/// <remarks>
+/// Each instance owns the timing state for one transmit stream. Call
+/// <see cref="WaitForNextFrameAsync"/> serially; concurrent callers are not
+/// supported.
+/// </remarks>
 public sealed class TransmitFrameCadence
 {
     private static readonly TimeSpan FrameInterval = TimeSpan.FromMilliseconds(20);
@@ -15,12 +22,19 @@ public sealed class TransmitFrameCadence
     private long nextFrameStartTimestamp;
     private bool frameStarted;
 
-    public TransmitFrameCadence(
-        TimeProvider? timeProvider = null,
-        bool delayFirstFrame = false)
-        : this(timeProvider, delay: null, delayFirstFrame)
+    public TransmitFrameCadence(TimeProvider? timeProvider = null)
+        : this(timeProvider, delay: null, delayFirstFrame: false)
     {
     }
+
+    /// <summary>
+    /// Creates a cadence that waits one frame interval before releasing its
+    /// first frame.
+    /// </summary>
+    public static TransmitFrameCadence StartAfterFrameInterval(
+        TimeProvider? timeProvider = null,
+        Func<TimeSpan, CancellationToken, ValueTask>? delay = null)
+        => new(timeProvider, delay, delayFirstFrame: true);
 
     internal TransmitFrameCadence(
         TimeProvider? timeProvider,
@@ -54,7 +68,7 @@ public sealed class TransmitFrameCadence
 
         long actualStart = timeProvider.GetTimestamp();
         long followingScheduledStart = AddFrameInterval(scheduledStart);
-        nextFrameStartTimestamp = HasReached(actualStart, followingScheduledStart)
+        nextFrameStartTimestamp = IsAtOrAfter(actualStart, followingScheduledStart)
             ? AddFrameInterval(actualStart)
             : followingScheduledStart;
     }
@@ -76,7 +90,7 @@ public sealed class TransmitFrameCadence
     private long AddFrameInterval(long timestamp)
         => unchecked(timestamp + frameIntervalTimestampUnits);
 
-    private bool HasReached(long timestamp, long target)
+    private bool IsAtOrAfter(long timestamp, long target)
         => timeProvider.GetElapsedTime(target, timestamp) >= TimeSpan.Zero;
 
     private async ValueTask DelayAsync(TimeSpan duration, CancellationToken cancellationToken)

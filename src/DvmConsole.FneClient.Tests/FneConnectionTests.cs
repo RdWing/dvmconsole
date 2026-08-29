@@ -90,7 +90,7 @@ public sealed class FneConnectionTests
 
         Assert.Equal("TYF_OP1", peer.Information.Details.Identity);
         Assert.Equal(FneConnection.SoftwareIdentifier, peer.Information.Details.Software);
-        Assert.Equal("DVMC_NEO_0.5.0", peer.Information.Details.Software);
+        Assert.Equal("DVMC_NEO_0.5.1", peer.Information.Details.Software);
         Assert.Equal(options.PeerId, peer.Information.PeerID);
         Assert.Equal(fnecore.ConnectionState.WAITING_LOGIN, peer.Information.State);
         Assert.Equal(fnecore.LogLevel.DEBUG, peer.LogLevel);

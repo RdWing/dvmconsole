@@ -28,7 +28,7 @@ internal sealed class PatchTransmitPump
     public PatchTransmitPump(
         PatchTransmitSession session,
         Task? startAfter = null,
-        Func<CancellationToken, ValueTask>? waitForNextFrame = null,
+        Func<TimeSpan, CancellationToken, ValueTask>? delay = null,
         TimeProvider? timeProvider = null,
         int capacity = DefaultCapacity)
     {
@@ -36,8 +36,9 @@ internal sealed class PatchTransmitPump
         if (capacity <= 0)
             throw new ArgumentOutOfRangeException(nameof(capacity));
         this.timeProvider = timeProvider ?? TimeProvider.System;
-        var cadence = new TransmitFrameCadence(this.timeProvider, delayFirstFrame: true);
-        this.waitForNextFrame = waitForNextFrame ?? cadence.WaitForNextFrameAsync;
+        TransmitFrameCadence cadence =
+            TransmitFrameCadence.StartAfterFrameInterval(this.timeProvider, delay);
+        waitForNextFrame = cadence.WaitForNextFrameAsync;
         frames = Channel.CreateBounded<QueuedFrame>(new BoundedChannelOptions(capacity)
         {
             SingleReader = true,

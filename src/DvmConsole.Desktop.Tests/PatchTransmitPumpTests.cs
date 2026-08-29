@@ -32,28 +32,36 @@ public sealed class PatchTransmitPumpTests
     public async Task ReleasesOnePcmFramePerCadenceBeforeBuildingDmrPacket()
     {
         var sent = new ConcurrentQueue<byte[]>();
+        var vocoder = new FakeVocoderSession();
         using var session = new PatchTransmitSession(
             new ChannelRuntimeDefinition("DMR", "FNE", "dmr", 99, slot: 0),
             sourceId: 890,
             streamId: 101,
-            new FakeVocoderSession(),
+            vocoder,
             (payload, _, _) => sent.Enqueue(payload.ToArray()));
-        var cadence = new ManualCadence();
-        var pump = new PatchTransmitPump(session, waitForNextFrame: cadence.WaitAsync);
+        var time = new ManualTimeProvider();
+        var delay = new ManualDelay(time);
+        var pump = new PatchTransmitPump(
+            session,
+            delay: delay.WaitAsync,
+            timeProvider: time);
 
         Assert.True(pump.Enqueue(new short[VocoderFrameSizes.PcmSamplesPerFrame * 3]));
-        await WaitUntilAsync(() => cadence.WaitCount == 1);
+        await WaitUntilAsync(() => delay.WaitCount == 1);
         Assert.Single(sent);
+        Assert.Equal(0, vocoder.EncodeCount);
 
-        cadence.Release();
-        await WaitUntilAsync(() => cadence.WaitCount == 2);
+        delay.Release();
+        await WaitUntilAsync(() => delay.WaitCount == 2);
         Assert.Single(sent);
+        Assert.Equal(1, vocoder.EncodeCount);
 
-        cadence.Release();
-        await WaitUntilAsync(() => cadence.WaitCount == 3);
+        delay.Release();
+        await WaitUntilAsync(() => delay.WaitCount == 3);
         Assert.Single(sent);
+        Assert.Equal(2, vocoder.EncodeCount);
 
-        cadence.Release();
+        delay.Release();
         await WaitUntilAsync(() => sent.Count == 2);
         pump.Complete();
         await pump.Completion;
@@ -91,26 +99,47 @@ public sealed class PatchTransmitPumpTests
             await Task.Delay(5, timeout.Token);
     }
 
-    private sealed class ManualCadence
+    private sealed class ManualDelay(ManualTimeProvider time)
     {
         private readonly SemaphoreSlim releases = new(0);
         private int waitCount;
 
         public int WaitCount => Volatile.Read(ref waitCount);
 
-        public async ValueTask WaitAsync(CancellationToken cancellationToken)
+        public async ValueTask WaitAsync(
+            TimeSpan duration,
+            CancellationToken cancellationToken)
         {
+            Assert.True(duration > TimeSpan.Zero);
             Interlocked.Increment(ref waitCount);
             await releases.WaitAsync(cancellationToken);
+            time.Advance(duration);
         }
 
         public void Release() => releases.Release();
     }
 
+    private sealed class ManualTimeProvider : TimeProvider
+    {
+        private long timestamp;
+
+        public override long TimestampFrequency => TimeSpan.TicksPerSecond;
+        public override long GetTimestamp() => timestamp;
+        public override DateTimeOffset GetUtcNow()
+            => DateTimeOffset.UnixEpoch + TimeSpan.FromTicks(timestamp);
+
+        public void Advance(TimeSpan duration) => timestamp += duration.Ticks;
+    }
+
     private sealed class FakeVocoderSession : IVocoderSession
     {
+        private int encodeCount;
+
+        public int EncodeCount => Volatile.Read(ref encodeCount);
+
         public int Encode(ReadOnlySpan<short> samples, Span<byte> codeword)
         {
+            Interlocked.Increment(ref encodeCount);
             codeword.Fill(0x5A);
             return codeword.Length;
         }
