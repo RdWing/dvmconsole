@@ -171,6 +171,7 @@ public sealed partial class MainWindowViewModel
                 system.KeyResponseReceived -= HandleSystemKeyResponse;
                 system.LogReceived -= HandleSystemLog;
                 system.TrafficReceived -= HandleSubscribedSystemTraffic;
+                system.TalkgroupAuthorityChanged -= HandleSystemTalkgroupAuthorityChanged;
             });
         }
 

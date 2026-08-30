@@ -486,6 +486,12 @@ public sealed class PatchPipelineIntegrationTests
         public uint? SourceId => sourceId;
         public IReadOnlyList<SentPacket> Sent => sent.ToArray();
 
+        public FneTalkgroupAvailability GetTalkgroupAvailability(
+            FneTrafficProtocol protocol,
+            uint destinationId,
+            byte runtimeSlot)
+            => FneTalkgroupAvailability.Pending;
+
         public uint CreateStreamId() => ++nextStreamId;
 
         public void SendTraffic(

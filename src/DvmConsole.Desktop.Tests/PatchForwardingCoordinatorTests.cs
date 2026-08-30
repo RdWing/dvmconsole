@@ -35,6 +35,83 @@ public sealed class PatchForwardingCoordinatorTests
     }
 
     [Fact]
+    public async Task StartUsesLiveAuthorityWhenThePresentationSnapshotIsStale()
+    {
+        (ChannelViewModel source, FakeEndpoint sourceSystem) = Create("Source", 100, 1001);
+        (ChannelViewModel target, FakeEndpoint targetSystem) = Create("Target", 200, 2002);
+        target.ApplyTalkgroupAvailability(FneTalkgroupAvailability.Unavailable);
+        targetSystem.TalkgroupAvailability = FneTalkgroupAvailability.Available;
+        using var coordinator = new PatchForwardingCoordinator([sourceSystem, targetSystem]);
+        coordinator.ApplyMemberships(new Dictionary<string, IReadOnlyList<PatchMemberAddress>>
+        {
+            ["Patch"] = [new("Source", 100), new("Target", 200)]
+        });
+
+        ObserveVoice(coordinator, source, 77, 7001);
+        coordinator.ObserveDecodedSamples(source, ActiveSamples());
+
+        await WaitForSentCountAsync(targetSystem, 1);
+        Assert.Equal(
+            (byte)AnalogAudioFrameType.VoiceStart,
+            targetSystem.Sent[0].Payload[AnalogVoicePacketCodec.FrameTypeOffset]);
+    }
+
+    [Fact]
+    public void StartRejectsAChannelThatTheLiveAuthorityDoesNotPermit()
+    {
+        (ChannelViewModel source, FakeEndpoint sourceSystem) = Create("Source", 100, 1001);
+        (ChannelViewModel target, FakeEndpoint targetSystem) = Create("Target", 200, 2002);
+        targetSystem.TalkgroupAvailability = FneTalkgroupAvailability.Unavailable;
+        var diagnostics = new List<PatchForwardingDiagnostic>();
+        using var coordinator = new PatchForwardingCoordinator(
+            [sourceSystem, targetSystem],
+            diagnosticObserver: diagnostics.Add);
+        coordinator.ApplyMemberships(new Dictionary<string, IReadOnlyList<PatchMemberAddress>>
+        {
+            ["Patch"] = [new("Source", 100), new("Target", 200)]
+        });
+
+        ObserveVoice(coordinator, source, 77, 7001);
+        coordinator.ObserveDecodedSamples(source, ActiveSamples());
+
+        Assert.Empty(targetSystem.Sent);
+        Assert.Contains(diagnostics, diagnostic =>
+            diagnostic.Kind == PatchForwardingDiagnosticKind.TargetUnavailable &&
+            diagnostic.Message.Contains("FNE does not allow", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task AuthorityChangeStopsAnActivePatchTargetWithATerminator()
+    {
+        (ChannelViewModel source, FakeEndpoint sourceSystem) = Create("Source", 100, 1001);
+        (ChannelViewModel target, FakeEndpoint targetSystem) = Create("Target", 200, 2002);
+        var diagnostics = new ConcurrentQueue<PatchForwardingDiagnostic>();
+        using var coordinator = new PatchForwardingCoordinator(
+            [sourceSystem, targetSystem],
+            diagnosticObserver: diagnostics.Enqueue);
+        coordinator.ApplyMemberships(new Dictionary<string, IReadOnlyList<PatchMemberAddress>>
+        {
+            ["Patch"] = [new("Source", 100), new("Target", 200)]
+        });
+        ObserveVoice(coordinator, source, 77, 7001);
+        coordinator.ObserveDecodedSamples(source, ActiveSamples());
+        await WaitForSentCountAsync(targetSystem, 1);
+
+        targetSystem.TalkgroupAvailability = FneTalkgroupAvailability.Unavailable;
+        target.ApplyTalkgroupAvailability(FneTalkgroupAvailability.Unavailable);
+        int stopped = coordinator.StopUnavailableTargets([target]);
+
+        await WaitForSentCountAsync(targetSystem, 2);
+        Assert.Equal(1, stopped);
+        Assert.Equal(
+            (byte)AnalogAudioFrameType.Terminator,
+            targetSystem.Sent[1].Payload[AnalogVoicePacketCodec.FrameTypeOffset]);
+        Assert.Contains(diagnostics, diagnostic =>
+            diagnostic.Kind == PatchForwardingDiagnosticKind.TargetUnavailable &&
+            diagnostic.StreamId != 0);
+    }
+
+    [Fact]
     public async Task DecodedSamplesUseSuppliedStreamIdentityAfterChannelChanges()
     {
         (ChannelViewModel source, FakeEndpoint sourceSystem) = Create("Source", 100, 1001);
@@ -414,6 +491,13 @@ public sealed class PatchForwardingCoordinatorTests
             get => Volatile.Read(ref throwOnNextSend) != 0;
             set => Volatile.Write(ref throwOnNextSend, value ? 1 : 0);
         }
+        public FneTalkgroupAvailability TalkgroupAvailability { get; set; } =
+            FneTalkgroupAvailability.Pending;
+        public FneTalkgroupAvailability GetTalkgroupAvailability(
+            FneTrafficProtocol protocol,
+            uint destinationId,
+            byte runtimeSlot)
+            => TalkgroupAvailability;
         public uint CreateStreamId() => ++streamId;
         public void SendTraffic(FneTrafficProtocol protocol, ReadOnlySpan<byte> payload, ushort sequence, uint outboundStreamId)
         {

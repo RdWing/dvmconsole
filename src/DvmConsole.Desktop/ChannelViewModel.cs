@@ -42,6 +42,7 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
     private bool alertSelected;
     private bool transmitBusy;
     private bool transmitEncrypted;
+    private FneTalkgroupAvailability talkgroupAvailability = FneTalkgroupAvailability.Pending;
     private bool recordingEnabled;
     private string lastCallerText = "--";
     private double audioLevel;
@@ -289,7 +290,7 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
         ChannelProtocol.Analog => !runtime.Definition.IsEncrypted,
         _ => false
     };
-    public bool CanTransmit =>
+    internal bool CanTransmitByConfiguration =>
         !runtime.Definition.RxOnly &&
         runtime.Definition.Protocol switch
         {
@@ -298,9 +299,26 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
             ChannelProtocol.Analog => !runtime.Definition.IsEncrypted,
             _ => false
         };
+    public bool CanTransmit =>
+        CanTransmitByConfiguration &&
+        talkgroupAvailability != FneTalkgroupAvailability.Unavailable;
     public bool IsPttControlEnabled =>
-        CanTransmit &&
-        (transmitEnabled || !IsReceivePresentationActive);
+        transmitEnabled ||
+        (CanTransmit && !IsReceivePresentationActive);
+    public FneTalkgroupAvailability TalkgroupAvailability => talkgroupAvailability;
+    public bool IsTalkgroupUnavailable =>
+        talkgroupAvailability == FneTalkgroupAvailability.Unavailable;
+    public string TalkgroupUnavailableReason => runtime.Definition.Protocol == ChannelProtocol.Dmr
+        ? $"the FNE does not allow TG {runtime.Definition.DestinationId} on TS{runtime.Definition.Slot + 1}"
+        : $"the FNE does not allow TG {runtime.Definition.DestinationId}";
+    internal string ConfigurationTransmitUnavailableReason => runtime.Definition.RxOnly
+        ? "the channel is receive-only"
+        : transmitEncrypted && !CanResolveConfiguredKey()
+            ? "its encryption key is unavailable"
+            : "the channel is not available for transmit";
+    public string TransmitUnavailableReason => IsTalkgroupUnavailable
+        ? TalkgroupUnavailableReason
+        : ConfigurationTransmitUnavailableReason;
     public string PttButtonText => transmitEnabled ? "Release" : "PTT";
 
     private bool CanResolveConfiguredKey()
@@ -398,6 +416,7 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
 
     public void RefreshEncryptionState()
     {
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(TransmitUnavailableReason)));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CanTransmit)));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsPttControlEnabled)));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CanToggleEncryption)));
@@ -406,6 +425,20 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
         NotifyEncryptionAppearanceChanged();
         (PttCommand as AsyncRelayCommand)?.RaiseCanExecuteChanged();
         (EncryptionCommand as AsyncRelayCommand)?.RaiseCanExecuteChanged();
+    }
+
+    internal void ApplyTalkgroupAvailability(FneTalkgroupAvailability availability)
+    {
+        if (talkgroupAvailability == availability)
+            return;
+
+        talkgroupAvailability = availability;
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(TalkgroupAvailability)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsTalkgroupUnavailable)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(TransmitUnavailableReason)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CanTransmit)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsPttControlEnabled)));
+        (PttCommand as AsyncRelayCommand)?.RaiseCanExecuteChanged();
     }
 
     public void RestoreTransmitEncryption(bool encrypted)

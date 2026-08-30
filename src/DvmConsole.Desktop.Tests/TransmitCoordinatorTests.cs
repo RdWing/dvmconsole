@@ -29,6 +29,52 @@ public sealed class TransmitCoordinatorTests
     }
 
     [Fact]
+    public async Task StartRejectsAnAuthoritativeDmrSlotMismatchBeforeOpeningCapture()
+    {
+        var channel = new ChannelViewModel(new ChannelConfiguration
+        {
+            Name = "DMR Dispatch",
+            System = "Test",
+            Tgid = "748",
+            Mode = "dmr",
+            Slot = 2
+        });
+        var endpoint = new FakeEndpoint("Test", [channel])
+        {
+            TalkgroupAvailability = FneTalkgroupAvailability.Unavailable
+        };
+        var audio = new FakeAudioBackend();
+        await using var coordinator = new ChannelTransmitCoordinator(createAudioBackend: () => audio);
+
+        InvalidOperationException exception = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => coordinator.StartAsync(channel, endpoint));
+
+        Assert.Contains("TG 748", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("TS2", exception.Message, StringComparison.Ordinal);
+        Assert.Equal(0, audio.OpenCaptureCalls);
+        Assert.Empty(coordinator.ActiveChannels);
+    }
+
+    [Fact]
+    public async Task StartUsesLiveAuthorityWhenThePresentationSnapshotIsStale()
+    {
+        ChannelViewModel channel = Channel("Dispatch", 748);
+        channel.ApplyTalkgroupAvailability(FneTalkgroupAvailability.Unavailable);
+        var endpoint = new FakeEndpoint("Test", [channel])
+        {
+            TalkgroupAvailability = FneTalkgroupAvailability.Available
+        };
+        var audio = new FakeAudioBackend();
+        await using var coordinator = new ChannelTransmitCoordinator(createAudioBackend: () => audio);
+
+        await coordinator.StartAsync(channel, endpoint);
+
+        Assert.Single(coordinator.ActiveChannels);
+        Assert.Equal(1, audio.OpenCaptureCalls);
+        await coordinator.StopAsync();
+    }
+
+    [Fact]
     public async Task AnalogMultiTargetUsesOneCaptureAndCleansUpAllCalls()
     {
         var first = Channel("A", 100);
@@ -628,8 +674,15 @@ public sealed class TransmitCoordinatorTests
         public IReadOnlyList<ChannelViewModel> Channels => channels;
         public bool IsConnected => true;
         public uint? SourceId => 1001;
+        public FneTalkgroupAvailability TalkgroupAvailability { get; set; } =
+            FneTalkgroupAvailability.Pending;
         public ConcurrentQueue<(FneTrafficProtocol Protocol, uint StreamId)> Sent { get; } = [];
         public uint CreateStreamId() => ++nextStreamId;
+        public FneTalkgroupAvailability GetTalkgroupAvailability(
+            FneTrafficProtocol protocol,
+            uint destinationId,
+            byte runtimeSlot)
+            => TalkgroupAvailability;
         public void SendTraffic(FneTrafficProtocol protocol, ReadOnlySpan<byte> payload, ushort sequence, uint streamId)
         {
             if (throwOnSend)

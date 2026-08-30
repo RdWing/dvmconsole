@@ -154,8 +154,7 @@ public sealed class ToneTransmitCoordinator : IAsyncDisposable
     {
         foreach (TransmitTarget target in targets)
         {
-            if (!target.Channel.CanTransmit)
-                throw new InvalidOperationException($"{target.Channel.Name} cannot transmit generated audio.");
+            TransmitTargetPolicy.ThrowIfUnavailable(target.Channel, target.System);
             if (!target.System.Channels.Contains(target.Channel))
                 throw new InvalidOperationException($"{target.Channel.Name} does not belong to FNE system '{target.System.Name}'.");
             if (!target.System.IsConnected)

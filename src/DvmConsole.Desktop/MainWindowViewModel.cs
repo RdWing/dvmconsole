@@ -2326,7 +2326,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
         {
             TransmitStatusText = channel.IsReceivePresentationActive
                 ? $"PTT unavailable: {channel.Name} is currently receiving."
-                : $"PTT unavailable for {channel.Name}: the channel is RX-only or its encryption key is unavailable.";
+                : $"PTT unavailable for {channel.Name}: {channel.TransmitUnavailableReason}.";
             return false;
         }
         ObservePttActivationSource(PttActivationSource.LocalChannelControl);

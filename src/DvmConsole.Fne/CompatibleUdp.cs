@@ -113,54 +113,67 @@ internal sealed class FneTransportLifetime : IDisposable
     }
 }
 
+internal sealed record FneTransportObservers(
+    Action<long>? TrafficIngress,
+    Action<FneTalkgroupAnnouncement>? TalkgroupAnnouncement);
+
+internal readonly record struct FneTransportSession(
+    FneTransportEncryptionMode EncryptionMode,
+    FneUdpChannelKind ChannelKind,
+    FneTransportObservers Observers,
+    FneTransportLifetime? Lifetime);
+
 // FnePeer constructs its traffic receiver followed by its metadata receiver.
-// This short-lived ambient scope lets each pinned peer capture an independent
-// transport mode and channel role without maintaining a private fnecore fork.
-public static class FneTransportEncryptionContext
+// This short-lived ambient scope supplies the complete application-owned
+// transport session without adding responsibilities to the encryption facade.
+internal static class FneTransportSessionContext
 {
     private static readonly AsyncLocal<ContextState?> Current = new();
+    private static readonly FneTransportObservers EmptyObservers = new(null, null);
 
-    internal static (
-        FneTransportEncryptionMode Mode,
-        FneUdpChannelKind ChannelKind,
-        Action<long>? TrafficIngressObserver,
-        FneTransportLifetime? Lifetime) Capture()
+    public static FneTransportSession Capture()
     {
         ContextState? state = Current.Value;
         if (state is null)
-            return (FneTransportEncryptionMode.Auto, FneUdpChannelKind.Traffic, null, null);
+        {
+            return new FneTransportSession(
+                FneTransportEncryptionMode.Auto,
+                FneUdpChannelKind.Traffic,
+                EmptyObservers,
+                null);
+        }
 
         FneUdpChannelKind channelKind = state.ReceiverCount++ == 1
             ? FneUdpChannelKind.Metadata
             : FneUdpChannelKind.Traffic;
-        return (state.Mode, channelKind, state.TrafficIngressObserver, state.Lifetime);
+        return new FneTransportSession(
+            state.EncryptionMode,
+            channelKind,
+            state.Observers,
+            state.Lifetime);
     }
 
-    public static IDisposable Use(FneTransportEncryptionMode mode)
-        => Use(mode, trafficIngressObserver: null);
-
     public static IDisposable Use(
-        FneTransportEncryptionMode mode,
-        Action<long>? trafficIngressObserver)
-        => Use(mode, trafficIngressObserver, lifetime: null);
-
-    internal static IDisposable Use(
-        FneTransportEncryptionMode mode,
-        Action<long>? trafficIngressObserver,
+        FneTransportEncryptionMode encryptionMode,
+        FneTransportObservers observers,
         FneTransportLifetime? lifetime)
     {
+        ArgumentNullException.ThrowIfNull(observers);
         ContextState? previous = Current.Value;
-        Current.Value = new ContextState(mode, trafficIngressObserver, lifetime);
+        Current.Value = new ContextState(
+            encryptionMode,
+            observers,
+            lifetime);
         return new Scope(previous);
     }
 
     private sealed class ContextState(
-        FneTransportEncryptionMode mode,
-        Action<long>? trafficIngressObserver,
+        FneTransportEncryptionMode encryptionMode,
+        FneTransportObservers observers,
         FneTransportLifetime? lifetime)
     {
-        public FneTransportEncryptionMode Mode { get; } = mode;
-        public Action<long>? TrafficIngressObserver { get; } = trafficIngressObserver;
+        public FneTransportEncryptionMode EncryptionMode { get; } = encryptionMode;
+        public FneTransportObservers Observers { get; } = observers;
         public FneTransportLifetime? Lifetime { get; } = lifetime;
         public int ReceiverCount { get; set; }
     }
@@ -180,6 +193,22 @@ public static class FneTransportEncryptionContext
     }
 }
 
+// Compatibility facade for consumers that only select transport encryption.
+// Application session composition belongs to FneTransportSessionContext.
+public static class FneTransportEncryptionContext
+{
+    public static IDisposable Use(FneTransportEncryptionMode mode)
+        => Use(mode, trafficIngressObserver: null);
+
+    public static IDisposable Use(
+        FneTransportEncryptionMode mode,
+        Action<long>? trafficIngressObserver)
+        => FneTransportSessionContext.Use(
+            mode,
+            new FneTransportObservers(trafficIngressObserver, null),
+            lifetime: null);
+}
+
 public struct UdpFrame
 {
     public IPEndPoint Endpoint;
@@ -196,6 +225,7 @@ public abstract class UdpBase
     private readonly FneTransportLifetime? transportLifetime;
     private readonly FneUdpChannelKind channelKind;
     private readonly Action<long>? trafficIngressObserver;
+    private readonly Action<FneTalkgroupAnnouncement>? talkgroupAnnouncementObserver;
     private readonly FneTransportNegotiationState encryptionState;
     private readonly InboundReplayWindow replayWindow = new();
     private int stopped;
@@ -203,11 +233,12 @@ public abstract class UdpBase
     protected UdpBase()
     {
         client = new UdpClient();
-        var context = FneTransportEncryptionContext.Capture();
+        FneTransportSession context = FneTransportSessionContext.Capture();
         channelKind = context.ChannelKind;
-        trafficIngressObserver = context.TrafficIngressObserver;
+        trafficIngressObserver = context.Observers.TrafficIngress;
+        talkgroupAnnouncementObserver = context.Observers.TalkgroupAnnouncement;
         transportLifetime = context.Lifetime;
-        encryptionState = new FneTransportNegotiationState(context.Mode);
+        encryptionState = new FneTransportNegotiationState(context.EncryptionMode);
         context.Lifetime?.Register(Stop);
     }
 
@@ -266,6 +297,20 @@ public abstract class UdpBase
                 continue;
             if (wrapped && !replayWindow.TryRemember(result.Buffer))
                 continue;
+            if (talkgroupAnnouncementObserver is not null &&
+                FneInboundFramePolicy.TryParseValidatedTalkgroupAnnouncement(
+                    message,
+                    out FneTalkgroupAnnouncement? announcement))
+            {
+                try
+                {
+                    talkgroupAnnouncementObserver(announcement!);
+                }
+                catch
+                {
+                    // Authority observation must not interrupt the protocol receiver.
+                }
+            }
 
             return new UdpFrame
             {
