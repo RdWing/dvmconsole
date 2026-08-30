@@ -6,6 +6,30 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.5.3] - 2026-08-29
+
+### Changed
+
+- Treat each FNE-sourced talkgroup table as authoritative for console,
+  multi-channel, tone, page, alert, DTMF, and patch transmission.
+- Match DMR authority by talkgroup and timeslot. Match P25, NXDN, and analog
+  authority by destination ID.
+
+### Fixed
+
+- Prevent a locally configured DMR channel from keying on a timeslot that the
+  FNE advertises for the other slot. Invalid targets now disable PTT and produce
+  an operator warning before any call-start or terminator traffic is sent.
+- Stop active console and patch transmissions cleanly when a refreshed FNE
+  table removes their target, and restore availability when later rules permit
+  it again.
+- Reset talkgroup authority on disconnect and publish authority changes in
+  order, so stale session callbacks cannot re-enable or disable targets after a
+  replacement connection takes ownership.
+- Validate and parse FNE talkgroup activation and deactivation announcements at
+  the transport boundary without repeating inbound frame validation in later
+  protocol handlers.
+
 ## [0.5.2] - 2026-08-29
 
 ### Added
@@ -738,7 +762,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Add patches, multi-select groups, call history, recordings, web streams, clocks, layouts, themes, startup behavior, and in-application operator documentation.
 - Add support for local and KMM-provided P25 encryption keys while preserving compatibility with existing variable-length AES key material.
 
-[Unreleased]: https://github.com/RdWing/dvmconsole/compare/v0.5.2...HEAD
+[Unreleased]: https://github.com/RdWing/dvmconsole/compare/v0.5.3...HEAD
+[0.5.3]: https://github.com/RdWing/dvmconsole/compare/v0.5.2...v0.5.3
 [0.5.2]: https://github.com/RdWing/dvmconsole/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/RdWing/dvmconsole/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/RdWing/dvmconsole/compare/v0.4.4...v0.5.0

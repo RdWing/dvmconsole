@@ -1,3 +1,5 @@
+using DvmConsole.Core.Diagnostics;
+using DvmConsole.Core.Runtime;
 using DvmConsole.Core.Settings;
 using DvmConsole.FneClient;
 
@@ -118,8 +120,64 @@ public sealed partial class MainWindowViewModel
             system.LogReceived += HandleSystemLog;
             system.TrafficReceived += HandleSubscribedSystemTraffic;
             system.KeyResponseReceived += HandleSystemKeyResponse;
+            system.TalkgroupAuthorityChanged += HandleSystemTalkgroupAuthorityChanged;
         }
     }
+
+    private void HandleSystemTalkgroupAuthorityChanged(
+        object? sender,
+        FneTalkgroupAuthority authority)
+    {
+        if (sender is not SystemViewModel system)
+            return;
+
+        void Apply()
+        {
+            if (Volatile.Read(ref disposeStarted) != 0)
+                return;
+
+            IReadOnlyList<ChannelViewModel> newlyUnavailable =
+                system.ApplyTalkgroupAuthority(authority);
+            if (newlyUnavailable.Count == 0)
+                return;
+
+            int stoppedPatchTargets = patchForwarding.StopUnavailableTargets(newlyUnavailable);
+            ChannelViewModel[] activeChannels = transmitCoordinator.ActiveChannels.ToArray();
+            bool stopConsoleTransmission = activeChannels.Any(newlyUnavailable.Contains);
+            string channels = string.Join(", ", newlyUnavailable.Select(DescribeUnavailableTalkgroup));
+            string stopped = stopConsoleTransmission || stoppedPatchTargets > 0
+                ? " Active transmission stopped."
+                : string.Empty;
+            string message =
+                $"{system.Name}: FNE talkgroup table does not allow {channels}; PTT disabled.{stopped}";
+            StatusText = message;
+            TransmitStatusText = message;
+            AddDebugLog(DateTimeOffset.Now, "TX", DebugLogSeverity.Warning, message);
+            if (stopConsoleTransmission)
+            {
+                TaskObservation.Observe(
+                    StopTransmitForTalkgroupAuthorityAsync(activeChannels, message));
+            }
+        }
+
+        if (uiDispatcher.CheckAccess())
+            Apply();
+        else
+            uiDispatcher.Post(Apply);
+    }
+
+    private async Task StopTransmitForTalkgroupAuthorityAsync(
+        IReadOnlyCollection<ChannelViewModel> activeChannels,
+        string message)
+    {
+        await StopTransmitAsync(activeChannels).ConfigureAwait(false);
+        await RunOnUiThreadAsync(() => TransmitStatusText = message).ConfigureAwait(false);
+    }
+
+    private static string DescribeUnavailableTalkgroup(ChannelViewModel channel)
+        => channel.Definition.Protocol == ChannelProtocol.Dmr
+            ? $"{channel.Name} (TG {channel.Definition.DestinationId}, TS{channel.Definition.Slot + 1})"
+            : $"{channel.Name} (TG {channel.Definition.DestinationId}, {channel.ModeText})";
 
     private void HandleSubscribedSystemStatus(object? sender, FneConnectionStatus status)
     {

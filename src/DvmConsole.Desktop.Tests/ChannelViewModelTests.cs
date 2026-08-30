@@ -829,9 +829,36 @@ public sealed class ChannelViewModelTests
             Slot = 1
         });
 
-        // Announced FNE talkgroup rules are deliberately not part of channel
-        // transmit eligibility. Only explicit codeplug RX-only policy applies.
+        // The saved configuration remains usable while the FNE's active
+        // talkgroup table has not arrived.
         Assert.True(channel.CanTransmit);
+        Assert.Equal(FneTalkgroupAvailability.Pending, channel.TalkgroupAvailability);
+    }
+
+    [Fact]
+    public void AuthoritativeDmrSlotMismatchDisablesPttWithoutChangingTheChannel()
+    {
+        var channel = new ChannelViewModel(new ChannelConfiguration
+        {
+            Name = "DMR Dispatch",
+            System = "System 1",
+            Tgid = "748",
+            Mode = "dmr",
+            Slot = 2
+        });
+
+        channel.ApplyTalkgroupAvailability(FneTalkgroupAvailability.Unavailable);
+
+        Assert.False(channel.CanTransmit);
+        Assert.False(channel.IsPttControlEnabled);
+        Assert.Equal((byte)1, channel.Definition.Slot);
+        Assert.Contains("TG 748", channel.TransmitUnavailableReason, StringComparison.Ordinal);
+        Assert.Contains("TS2", channel.TransmitUnavailableReason, StringComparison.Ordinal);
+
+        channel.ApplyTalkgroupAvailability(FneTalkgroupAvailability.Available);
+
+        Assert.True(channel.CanTransmit);
+        Assert.True(channel.IsPttControlEnabled);
     }
 
     [Fact]

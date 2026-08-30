@@ -19,7 +19,11 @@ public sealed partial class MainWindowViewModel
             SystemViewModel? system = Systems.FirstOrDefault(candidate => candidate.Name.Equals(
                 channel.Definition.SystemName,
                 StringComparison.OrdinalIgnoreCase));
-            return channel.CanTransmit && system?.IsConnected == true && system.SourceId is uint sourceId && sourceId != 0;
+            return system is not null &&
+                TransmitTargetPolicy.IsAvailable(channel, system) &&
+                system.IsConnected &&
+                system.SourceId is uint sourceId &&
+                sourceId != 0;
         });
     }
 

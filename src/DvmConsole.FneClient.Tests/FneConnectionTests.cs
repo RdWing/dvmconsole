@@ -1,6 +1,7 @@
 using DvmConsole.Core.Configuration;
 using DvmConsole.FneClient;
 using fnecore;
+using System.Collections.Concurrent;
 using System.Net;
 using Xunit;
 
@@ -90,7 +91,7 @@ public sealed class FneConnectionTests
 
         Assert.Equal("TYF_OP1", peer.Information.Details.Identity);
         Assert.Equal(FneConnection.SoftwareIdentifier, peer.Information.Details.Software);
-        Assert.Equal("DVMC_NEO_0.5.2", peer.Information.Details.Software);
+        Assert.Equal("DVMC_NEO_0.5.3", peer.Information.Details.Software);
         Assert.Equal(options.PeerId, peer.Information.PeerID);
         Assert.Equal(fnecore.ConnectionState.WAITING_LOGIN, peer.Information.State);
         Assert.Equal(fnecore.LogLevel.DEBUG, peer.LogLevel);
@@ -405,6 +406,122 @@ public sealed class FneConnectionTests
         Assert.Equal(1, sessions.Count);
         Assert.False(first.IsStopped);
         Assert.Equal(FneConnectionState.Connected, connection.Status.State);
+    }
+
+    [Fact]
+    public async Task TalkgroupAuthorityIsFailOpenUntilTheActiveTableArrives()
+    {
+        var sessions = new RecordingPeerSessionFactory();
+        await using var connection = new FneConnection(
+            new FneConnectionOptions("Test", "Test", "127.0.0.1", 62031, 1, null, false, null),
+            TimeProvider.System,
+            new LoopbackEndpointResolver(),
+            sessions);
+        var published = new List<FneTalkgroupAuthority>();
+        connection.TalkgroupAuthorityChanged += (_, authority) => published.Add(authority);
+
+        await connection.StartAsync();
+        RecordingPeerSession session = sessions.Single();
+        session.Callbacks.TalkgroupAnnouncementReceived(new FneTalkgroupAnnouncement(
+            ContainsActiveTalkgroups: false,
+            [new FneTalkgroupAnnouncementEntry(999, 2, false, false)]));
+
+        Assert.False(connection.TalkgroupAuthority.IsAuthoritative);
+        Assert.Equal(
+            FneTalkgroupAvailability.Pending,
+            connection.TalkgroupAuthority.GetAvailability(FneTrafficProtocol.Dmr, 999, 1));
+        Assert.Empty(published);
+
+        session.Callbacks.TalkgroupAnnouncementReceived(new FneTalkgroupAnnouncement(
+            ContainsActiveTalkgroups: true,
+            [
+                new FneTalkgroupAnnouncementEntry(748, 1, true, false),
+                new FneTalkgroupAnnouncementEntry(747, 2, false, true)
+            ]));
+
+        FneTalkgroupAuthority authority = connection.TalkgroupAuthority;
+        Assert.True(authority.IsAuthoritative);
+        Assert.Equal(
+            FneTalkgroupAvailability.Available,
+            authority.GetAvailability(FneTrafficProtocol.Dmr, 748, runtimeSlot: 0));
+        Assert.Equal(
+            FneTalkgroupAvailability.Unavailable,
+            authority.GetAvailability(FneTrafficProtocol.Dmr, 748, runtimeSlot: 1));
+        Assert.Equal(
+            FneTalkgroupAvailability.Available,
+            authority.GetAvailability(FneTrafficProtocol.P25, 748, runtimeSlot: 1));
+        Assert.Equal(
+            FneTalkgroupAvailability.Available,
+            authority.GetAvailability(FneTrafficProtocol.Nxdn, 748, runtimeSlot: 1));
+        Assert.Equal(
+            FneTalkgroupAvailability.Available,
+            authority.GetAvailability(FneTrafficProtocol.Analog, 748, runtimeSlot: 1));
+        Assert.Equal(
+            FneTalkgroupAvailability.Unavailable,
+            authority.GetAvailability(FneTrafficProtocol.P25, 999, runtimeSlot: 0));
+        Assert.Single(published);
+
+        session.Callbacks.TalkgroupAnnouncementReceived(new FneTalkgroupAnnouncement(
+            ContainsActiveTalkgroups: false,
+            [new FneTalkgroupAnnouncementEntry(748, 1, false, false)]));
+
+        Assert.Equal(
+            FneTalkgroupAvailability.Unavailable,
+            connection.TalkgroupAuthority.GetAvailability(FneTrafficProtocol.P25, 748, runtimeSlot: 0));
+        Assert.Equal(2, published.Count);
+
+        await connection.StopAsync();
+
+        Assert.False(connection.TalkgroupAuthority.IsAuthoritative);
+        Assert.Same(FneTalkgroupAuthority.Pending, published[^1]);
+        int publishedAfterStop = published.Count;
+
+        session.Callbacks.TalkgroupAnnouncementReceived(new FneTalkgroupAnnouncement(
+            ContainsActiveTalkgroups: true,
+            [new FneTalkgroupAnnouncementEntry(123, 1, false, false)]));
+
+        Assert.Same(FneTalkgroupAuthority.Pending, connection.TalkgroupAuthority);
+        Assert.Equal(publishedAfterStop, published.Count);
+    }
+
+    [Fact]
+    public async Task DisconnectResetIsPublishedAfterAnInFlightAuthorityNotification()
+    {
+        var sessions = new RecordingPeerSessionFactory();
+        await using var connection = new FneConnection(
+            new FneConnectionOptions("Test", "Test", "127.0.0.1", 62031, 1, null, false, null),
+            TimeProvider.System,
+            new LoopbackEndpointResolver(),
+            sessions);
+        var published = new ConcurrentQueue<FneTalkgroupAuthority>();
+        var authorityHandlerStarted = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseAuthorityHandler = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        connection.TalkgroupAuthorityChanged += (_, authority) =>
+        {
+            published.Enqueue(authority);
+            if (authority.IsAuthoritative)
+            {
+                authorityHandlerStarted.TrySetResult(true);
+                releaseAuthorityHandler.Task.GetAwaiter().GetResult();
+            }
+        };
+
+        await connection.StartAsync();
+        RecordingPeerSession session = sessions.Single();
+        Task announce = Task.Run(() => session.Callbacks.TalkgroupAnnouncementReceived(
+            new FneTalkgroupAnnouncement(
+                ContainsActiveTalkgroups: true,
+                [new FneTalkgroupAnnouncementEntry(748, 1, false, false)])));
+        await authorityHandlerStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+        session.Callbacks.Disconnected(0);
+        releaseAuthorityHandler.TrySetResult(true);
+        await announce.WaitAsync(TimeSpan.FromSeconds(2));
+
+        Assert.Equal([true, false], published.Select(authority => authority.IsAuthoritative));
+        Assert.Same(FneTalkgroupAuthority.Pending, connection.TalkgroupAuthority);
     }
 
     [Fact]

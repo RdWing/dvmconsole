@@ -158,6 +158,38 @@ public sealed class PatchForwardingCoordinator : IDisposable
         router.ApplyMemberships(new Dictionary<string, IReadOnlyList<PatchMemberAddress>>());
     }
 
+    internal int StopUnavailableTargets(IReadOnlyCollection<ChannelViewModel> channels)
+    {
+        ArgumentNullException.ThrowIfNull(channels);
+        if (channels.Count == 0)
+            return 0;
+
+        HashSet<ChannelViewModel> unavailable = channels.ToHashSet();
+        ActiveTarget[] targets;
+        lock (sync)
+        {
+            targets = activeTargets.Values
+                .Where(target => unavailable.Contains(target.Channel))
+                .Distinct()
+                .ToArray();
+        }
+
+        foreach (ActiveTarget target in targets)
+        {
+            router.ReportTargetFailure(target.Member, target.StreamId);
+            target.Pump.Complete();
+            Report(new PatchForwardingDiagnostic(
+                DateTimeOffset.UtcNow,
+                PatchForwardingDiagnosticKind.TargetUnavailable,
+                target.Member,
+                target.StreamId,
+                $"Patch target stopped on {FormatTarget(target.Member)}, stream {target.StreamId}: " +
+                "the authoritative FNE talkgroup table no longer permits this target."));
+        }
+
+        return targets.Length;
+    }
+
     public void Dispose()
     {
         if (disposed)
@@ -213,9 +245,15 @@ public sealed class PatchForwardingCoordinator : IDisposable
             ReportUnavailable(member, "the target FNE is disconnected");
             return 0;
         }
-        if (!channel.CanTransmit)
+        FneTalkgroupAvailability availability =
+            TransmitTargetPolicy.GetTalkgroupAvailability(channel, system);
+        if (!channel.CanTransmitByConfiguration ||
+            availability == FneTalkgroupAvailability.Unavailable)
         {
-            ReportUnavailable(member, "the target channel cannot transmit");
+            string reason = availability == FneTalkgroupAvailability.Unavailable
+                ? channel.TalkgroupUnavailableReason
+                : channel.ConfigurationTransmitUnavailableReason;
+            ReportUnavailable(member, reason);
             return 0;
         }
         if (sourceId == 0)
@@ -295,7 +333,7 @@ public sealed class PatchForwardingCoordinator : IDisposable
             createdVocoderSession = null;
             pump = new PatchTransmitPump(session, startAfter);
             session = null;
-            var activeTarget = new ActiveTarget(pump);
+            var activeTarget = new ActiveTarget(member, channel, streamId, pump);
             lock (sync)
             {
                 activeTargets[BuildStreamKey(member, streamId)] = activeTarget;
@@ -493,5 +531,9 @@ public sealed class PatchForwardingCoordinator : IDisposable
             $"{mode.ToUpperInvariant()} source {sourceId}, stream {streamId}."));
     }
 
-    private sealed record ActiveTarget(PatchTransmitPump Pump);
+    private sealed record ActiveTarget(
+        PatchMemberAddress Member,
+        ChannelViewModel Channel,
+        uint StreamId,
+        PatchTransmitPump Pump);
 }

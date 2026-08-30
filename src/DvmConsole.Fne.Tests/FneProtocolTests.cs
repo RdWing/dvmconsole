@@ -299,27 +299,86 @@ public sealed class FneProtocolTests
     }
 
     [Fact]
-    public void DisablesUnusedMetadataAndAnnouncementInputs()
+    public void AcceptsOnlyStructurallyValidTalkgroupAnnouncements()
     {
         Assert.False(FneInboundFramePolicy.AcceptsInbound(FneUdpChannelKind.Metadata));
         Assert.True(FneInboundFramePolicy.AcceptsInbound(FneUdpChannelKind.Traffic));
 
         using (FneTransportEncryptionContext.Use(FneTransportEncryptionMode.Auto))
         {
-            Assert.Equal(FneUdpChannelKind.Traffic, FneTransportEncryptionContext.Capture().ChannelKind);
-            Assert.Equal(FneUdpChannelKind.Metadata, FneTransportEncryptionContext.Capture().ChannelKind);
+            Assert.Equal(FneUdpChannelKind.Traffic, FneTransportSessionContext.Capture().ChannelKind);
+            Assert.Equal(FneUdpChannelKind.Metadata, FneTransportSessionContext.Capture().ChannelKind);
         }
 
-        byte[] announcement = new byte[11];
-        FneUtils.WriteBytes(0U, ref announcement, 6);
+        byte[] emptyAnnouncement = new byte[11];
+        FneUtils.WriteBytes(0U, ref emptyAnnouncement, 6);
+        Assert.True(FneInboundFramePolicy.ShouldDeliverTraffic(CreateFrame(
+            Constants.NET_FUNC_MASTER,
+            Constants.NET_MASTER_SUBFUNC_ACTIVE_TGS,
+            emptyAnnouncement)));
+        Assert.True(FneInboundFramePolicy.ShouldDeliverTraffic(CreateFrame(
+            Constants.NET_FUNC_MASTER,
+            Constants.NET_MASTER_SUBFUNC_DEACTIVE_TGS,
+            emptyAnnouncement)));
+
+        byte[] truncatedAnnouncement = new byte[11];
+        FneUtils.WriteBytes(1U, ref truncatedAnnouncement, 6);
         Assert.False(FneInboundFramePolicy.ShouldDeliverTraffic(CreateFrame(
             Constants.NET_FUNC_MASTER,
             Constants.NET_MASTER_SUBFUNC_ACTIVE_TGS,
-            announcement)));
-        Assert.False(FneInboundFramePolicy.ShouldDeliverTraffic(CreateFrame(
+            truncatedAnnouncement)));
+
+        byte[] payload = new byte[21];
+        FneUtils.WriteBytes(2U, ref payload, 6);
+        WriteTalkgroupEntry(payload, 11, destinationId: 748, attributes: 0xC2);
+        WriteTalkgroupEntry(payload, 16, destinationId: 747, attributes: 0x01);
+        byte[] activeFrame = CreateFrame(
+            Constants.NET_FUNC_MASTER,
+            Constants.NET_MASTER_SUBFUNC_ACTIVE_TGS,
+            payload);
+
+        Assert.True(FneInboundFramePolicy.TryParseTalkgroupAnnouncement(
+            activeFrame,
+            out FneTalkgroupAnnouncement? active));
+        Assert.NotNull(active);
+        Assert.True(active!.ContainsActiveTalkgroups);
+        Assert.Collection(
+            active.Entries,
+            entry =>
+            {
+                Assert.Equal((uint)748, entry.DestinationId);
+                Assert.Equal((byte)2, entry.Slot);
+                Assert.True(entry.AffiliationRequired);
+                Assert.True(entry.NonPreferred);
+            },
+            entry =>
+            {
+                Assert.Equal((uint)747, entry.DestinationId);
+                Assert.Equal((byte)1, entry.Slot);
+                Assert.False(entry.AffiliationRequired);
+                Assert.False(entry.NonPreferred);
+            });
+
+        byte[] inactiveFrame = CreateFrame(
             Constants.NET_FUNC_MASTER,
             Constants.NET_MASTER_SUBFUNC_DEACTIVE_TGS,
-            announcement)));
+            payload);
+        Assert.True(FneInboundFramePolicy.TryParseTalkgroupAnnouncement(
+            inactiveFrame,
+            out FneTalkgroupAnnouncement? inactive));
+        Assert.False(inactive!.ContainsActiveTalkgroups);
+    }
+
+    private static void WriteTalkgroupEntry(
+        byte[] payload,
+        int offset,
+        uint destinationId,
+        byte attributes)
+    {
+        payload[offset] = (byte)(destinationId >> 16);
+        payload[offset + 1] = (byte)(destinationId >> 8);
+        payload[offset + 2] = (byte)destinationId;
+        payload[offset + 3] = attributes;
     }
 
     [Fact]

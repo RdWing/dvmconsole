@@ -145,12 +145,18 @@ public sealed class FneConnection : IAsyncDisposable
     private readonly FnePeerStateMonitor stateMonitor = new();
     private readonly object sync = new();
     private readonly object sendSync = new();
+    private readonly Dictionary<(uint DestinationId, byte Slot), FneTalkgroupRule> talkgroupRules = [];
+    private readonly Queue<FneTalkgroupAuthority> talkgroupAuthorityNotifications = [];
     private readonly SemaphoreSlim lifecycle = new(1, 1);
     private IFnePeerSession? peerSession;
     private CancellationTokenSource? handshakeRecoveryCancellation;
     private FneConnectionStatus status;
     private long latestTrafficTransportTimestamp;
     private bool verboseLoggingEnabled;
+    private bool hasAuthoritativeTalkgroupTable;
+    private bool publishingTalkgroupAuthorityNotifications;
+    private FneTalkgroupAuthority talkgroupAuthority = FneTalkgroupAuthority.Pending;
+    private long talkgroupAuthoritySession;
     private EventHandler<FneTrafficFrame>[] trafficReceivedHandlers = [];
 
     public FneConnection(FneConnectionOptions options)
@@ -210,6 +216,7 @@ public sealed class FneConnection : IAsyncDisposable
         }
     }
     public event EventHandler<FneKeyResponse>? KeyResponseReceived;
+    public event EventHandler<FneTalkgroupAuthority>? TalkgroupAuthorityChanged;
 
     public void SetVerboseLogging(bool enabled)
         => Volatile.Write(ref verboseLoggingEnabled, enabled);
@@ -229,6 +236,15 @@ public sealed class FneConnection : IAsyncDisposable
         {
             lock (sync)
                 return peerSession?.Peer;
+        }
+    }
+
+    public FneTalkgroupAuthority TalkgroupAuthority
+    {
+        get
+        {
+            lock (sync)
+                return talkgroupAuthority;
         }
     }
 
@@ -385,6 +401,7 @@ public sealed class FneConnection : IAsyncDisposable
             if (peerSession is not null)
                 throw new InvalidOperationException("The FNE connection is already started.");
         }
+        ResetTalkgroupAuthority();
 
         Publish(FneConnectionState.Starting, $"Resolving {options.Address}:{options.Port}");
         IFnePeerSession? candidate = null;
@@ -411,6 +428,7 @@ public sealed class FneConnection : IAsyncDisposable
                 if (ReferenceEquals(peerSession, candidate))
                     peerSession = null;
             }
+            InvalidateTalkgroupAuthoritySession();
 
             stateMonitor.Cancel();
 
@@ -429,6 +447,7 @@ public sealed class FneConnection : IAsyncDisposable
             }
 
             Publish(FneConnectionState.Faulted, exception.Message);
+            ResetTalkgroupAuthority();
             throw;
         }
     }
@@ -455,14 +474,17 @@ public sealed class FneConnection : IAsyncDisposable
             peerSession = null;
             pendingP25KeyRequests.Clear();
         }
+        InvalidateTalkgroupAuthoritySession();
 
         if (current is null)
         {
+            ResetTalkgroupAuthority();
             Publish(FneConnectionState.Disconnected, "Not started");
             return;
         }
 
         Publish(FneConnectionState.Stopping, "Stopping FNE network services");
+        ResetTalkgroupAuthority();
         await stateMonitor.StopAsync().ConfigureAwait(false);
         DetachPeerHandlers(current.Peer);
 
@@ -494,6 +516,7 @@ public sealed class FneConnection : IAsyncDisposable
 
     internal IFnePeerSession CreatePeerSession(IPEndPoint endpoint)
     {
+        long authoritySession = Interlocked.Increment(ref talkgroupAuthoritySession);
         return peerSessionFactory.Create(
             options,
             endpoint,
@@ -507,6 +530,7 @@ public sealed class FneConnection : IAsyncDisposable
                 HandleP25DataReceived,
                 HandleNxdnDataReceived,
                 HandleAnalogDataReceived,
+                announcement => HandleTalkgroupAnnouncement(authoritySession, announcement),
                 timestamp => Volatile.Write(ref latestTrafficTransportTimestamp, timestamp)));
     }
 
@@ -533,8 +557,100 @@ public sealed class FneConnection : IAsyncDisposable
     private void HandlePeerDisconnected(uint _)
     {
         pendingP25KeyRequests.Clear();
+        ResetTalkgroupAuthority();
         Publish(FneConnectionState.WaitingForLogin, "FNE peer disconnected; waiting to reconnect");
     }
+
+    private void HandleTalkgroupAnnouncement(
+        long authoritySession,
+        FneTalkgroupAnnouncement announcement)
+    {
+        if (authoritySession != Volatile.Read(ref talkgroupAuthoritySession))
+            return;
+
+        bool publishNotifications = false;
+        lock (sync)
+        {
+            if (authoritySession != Volatile.Read(ref talkgroupAuthoritySession))
+                return;
+
+            if (announcement.ContainsActiveTalkgroups)
+            {
+                talkgroupRules.Clear();
+                hasAuthoritativeTalkgroupTable = true;
+            }
+
+            foreach (FneTalkgroupAnnouncementEntry entry in announcement.Entries)
+            {
+                talkgroupRules[(entry.DestinationId, entry.Slot)] = new FneTalkgroupRule(
+                    entry.DestinationId,
+                    entry.Slot,
+                    announcement.ContainsActiveTalkgroups,
+                    entry.AffiliationRequired,
+                    entry.NonPreferred);
+            }
+
+            if (hasAuthoritativeTalkgroupTable)
+            {
+                talkgroupAuthority = FneTalkgroupAuthority.FromRules(talkgroupRules.Values);
+                publishNotifications = EnqueueTalkgroupAuthorityNotificationLocked(talkgroupAuthority);
+            }
+        }
+
+        if (publishNotifications)
+            PublishTalkgroupAuthorityNotifications();
+    }
+
+    private void ResetTalkgroupAuthority()
+    {
+        bool publishNotifications = false;
+        lock (sync)
+        {
+            bool changed = hasAuthoritativeTalkgroupTable || talkgroupRules.Count > 0;
+            hasAuthoritativeTalkgroupTable = false;
+            talkgroupRules.Clear();
+            talkgroupAuthority = FneTalkgroupAuthority.Pending;
+            if (changed)
+            {
+                publishNotifications = EnqueueTalkgroupAuthorityNotificationLocked(
+                    FneTalkgroupAuthority.Pending);
+            }
+        }
+
+        if (publishNotifications)
+            PublishTalkgroupAuthorityNotifications();
+    }
+
+    private bool EnqueueTalkgroupAuthorityNotificationLocked(FneTalkgroupAuthority authority)
+    {
+        talkgroupAuthorityNotifications.Enqueue(authority);
+        if (publishingTalkgroupAuthorityNotifications)
+            return false;
+
+        publishingTalkgroupAuthorityNotifications = true;
+        return true;
+    }
+
+    private void PublishTalkgroupAuthorityNotifications()
+    {
+        while (true)
+        {
+            FneTalkgroupAuthority authority;
+            lock (sync)
+            {
+                if (!talkgroupAuthorityNotifications.TryDequeue(out authority!))
+                {
+                    publishingTalkgroupAuthorityNotifications = false;
+                    return;
+                }
+            }
+
+            Raise(TalkgroupAuthorityChanged, authority);
+        }
+    }
+
+    private void InvalidateTalkgroupAuthoritySession()
+        => Interlocked.Increment(ref talkgroupAuthoritySession);
 
     private void HandleKeyResponse(object? sender, KeyResponseEvent args)
     {

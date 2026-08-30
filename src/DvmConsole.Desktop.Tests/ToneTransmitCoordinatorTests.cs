@@ -32,6 +32,28 @@ public sealed class ToneTransmitCoordinatorTests
     }
 
     [Fact]
+    public async Task GeneratedAudioUsesTheLiveAuthoritySnapshot()
+    {
+        var channel = new ChannelViewModel(new ChannelConfiguration
+        {
+            Name = "Alert",
+            System = "Test",
+            Tgid = "100",
+            Mode = "analog"
+        });
+        channel.ApplyTalkgroupAvailability(FneTalkgroupAvailability.Unavailable);
+        var endpoint = new FakeEndpoint(channel)
+        {
+            TalkgroupAvailability = FneTalkgroupAvailability.Available
+        };
+        await using var coordinator = new ToneTransmitCoordinator();
+
+        await coordinator.SendAsync(channel, endpoint, new short[160]);
+
+        Assert.NotEmpty(endpoint.PacketSequences);
+    }
+
+    [Fact]
     public async Task ImportedP25AudioAlwaysUsesTheOrdinaryPcmEncoder()
     {
         ChannelViewModel channel = CreateP25Channel();
@@ -109,6 +131,14 @@ public sealed class ToneTransmitCoordinatorTests
         public bool IsConnected => true;
         public uint? SourceId => 1001;
         public IReadOnlyList<ushort> PacketSequences => packetSequences.ToArray();
+        public FneTalkgroupAvailability TalkgroupAvailability { get; set; } =
+            FneTalkgroupAvailability.Pending;
+
+        public FneTalkgroupAvailability GetTalkgroupAvailability(
+            FneTrafficProtocol protocol,
+            uint destinationId,
+            byte runtimeSlot)
+            => TalkgroupAvailability;
 
         public uint CreateStreamId() => ++streamId;
 

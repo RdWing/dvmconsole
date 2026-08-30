@@ -74,9 +74,9 @@ public sealed class FneTransportComponentTests
             var lifetime = new FneTransportLifetime();
             UdpReceiver traffic;
             UdpReceiver metadata;
-            using (FneTransportEncryptionContext.Use(
+            using (FneTransportSessionContext.Use(
                        FneTransportEncryptionMode.Auto,
-                       trafficIngressObserver: null,
+                       new FneTransportObservers(null, null),
                        lifetime))
             {
                 traffic = new UdpReceiver();
@@ -103,9 +103,9 @@ public sealed class FneTransportComponentTests
         var lifetime = new FneTransportLifetime();
         lifetime.Dispose();
 
-        using (FneTransportEncryptionContext.Use(
+        using (FneTransportSessionContext.Use(
                    FneTransportEncryptionMode.Auto,
-                   trafficIngressObserver: null,
+                   new FneTransportObservers(null, null),
                    lifetime))
         {
             var receiver = new UdpReceiver();

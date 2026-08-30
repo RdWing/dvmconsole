@@ -59,6 +59,7 @@ public sealed class SystemViewModel : IFneTrafficEndpoint, INotifyPropertyChange
         connection.LogReceived += HandleLogReceived;
         connection.TrafficReceived += HandleTrafficReceived;
         connection.KeyResponseReceived += HandleKeyResponse;
+        connection.TalkgroupAuthorityChanged += HandleTalkgroupAuthorityChanged;
     }
 
     public event PropertyChangedEventHandler? PropertyChanged;
@@ -66,6 +67,7 @@ public sealed class SystemViewModel : IFneTrafficEndpoint, INotifyPropertyChange
     public event EventHandler<FneLogEntry>? LogReceived;
     public event EventHandler<FneTrafficFrame>? TrafficReceived;
     public event EventHandler<FneKeyResponse>? KeyResponseReceived;
+    public event EventHandler<FneTalkgroupAuthority>? TalkgroupAuthorityChanged;
     internal event EventHandler? JitterBufferChanged;
     public string Name { get; }
     public string Endpoint { get; }
@@ -180,6 +182,11 @@ public sealed class SystemViewModel : IFneTrafficEndpoint, INotifyPropertyChange
         await StartAsync(cancellationToken).ConfigureAwait(false);
     }
     public uint CreateStreamId() => connection.CreateStreamId();
+    public FneTalkgroupAvailability GetTalkgroupAvailability(
+        FneTrafficProtocol protocol,
+        uint destinationId,
+        byte runtimeSlot)
+        => connection.TalkgroupAuthority.GetAvailability(protocol, destinationId, runtimeSlot);
     public void SendTraffic(FneTrafficProtocol protocol, ReadOnlySpan<byte> payload, ushort packetSequence, uint streamId)
     {
         connection.SendTraffic(protocol, payload, packetSequence, streamId);
@@ -228,6 +235,29 @@ public sealed class SystemViewModel : IFneTrafficEndpoint, INotifyPropertyChange
     public void ApplyStatus(FneConnectionStatus status)
     {
         ConnectionStatus = $"{status.State}: {status.Message}";
+    }
+
+    internal IReadOnlyList<ChannelViewModel> ApplyTalkgroupAuthority(
+        FneTalkgroupAuthority authority)
+    {
+        ArgumentNullException.ThrowIfNull(authority);
+        var newlyUnavailable = new List<ChannelViewModel>();
+        foreach (ChannelViewModel channel in Channels)
+        {
+            FneTalkgroupAvailability previous = channel.TalkgroupAvailability;
+            FneTalkgroupAvailability next = authority.GetAvailability(
+                FneTrafficProtocolMapper.FromChannelProtocol(channel.Definition.Protocol),
+                channel.Definition.DestinationId,
+                channel.Definition.Slot);
+            channel.ApplyTalkgroupAvailability(next);
+            if (previous != FneTalkgroupAvailability.Unavailable &&
+                next == FneTalkgroupAvailability.Unavailable)
+            {
+                newlyUnavailable.Add(channel);
+            }
+        }
+
+        return newlyUnavailable;
     }
 
     internal void RecordTraffic(FneTrafficFrame traffic, bool publishDiagnostics = true)
@@ -332,6 +362,7 @@ public sealed class SystemViewModel : IFneTrafficEndpoint, INotifyPropertyChange
         connection.LogReceived -= HandleLogReceived;
         connection.TrafficReceived -= HandleTrafficReceived;
         connection.KeyResponseReceived -= HandleKeyResponse;
+        connection.TalkgroupAuthorityChanged -= HandleTalkgroupAuthorityChanged;
         await connection.DisposeAsync().ConfigureAwait(false);
     }
 
@@ -353,6 +384,13 @@ public sealed class SystemViewModel : IFneTrafficEndpoint, INotifyPropertyChange
     private void HandleTrafficReceived(object? sender, FneTrafficFrame traffic)
     {
         TrafficReceived?.Invoke(this, traffic);
+    }
+
+    private void HandleTalkgroupAuthorityChanged(
+        object? sender,
+        FneTalkgroupAuthority authority)
+    {
+        TalkgroupAuthorityChanged?.Invoke(this, authority);
     }
 
     private void ResetPacketDiagnostics()

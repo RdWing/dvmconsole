@@ -12,6 +12,7 @@ internal sealed record FnePeerSessionCallbacks(
     EventHandler<P25DataReceivedEvent> P25DataReceived,
     EventHandler<NXDNDataReceivedEvent> NxdnDataReceived,
     EventHandler<AnalogDataReceivedEvent> AnalogDataReceived,
+    Action<FneTalkgroupAnnouncement> TalkgroupAnnouncementReceived,
     Action<long> TrafficIngressObserved);
 
 internal interface IFnePeerSessionFactory
@@ -87,9 +88,11 @@ internal sealed class FnePeerSessionFactory : IFnePeerSessionFactory
         var transportLifetime = new FneTransportLifetime();
         try
         {
-            using IDisposable encryptionScope = FneTransportEncryptionContext.Use(
+            using IDisposable transportSessionScope = FneTransportSessionContext.Use(
                 ToTransportMode(options.TransportEncryptionMode),
-                callbacks.TrafficIngressObserved,
+                new FneTransportObservers(
+                    callbacks.TrafficIngressObserved,
+                    callbacks.TalkgroupAnnouncementReceived),
                 transportLifetime);
             var peer = new FnePeer("DVMCONSOLE", options.PeerId, endpoint, options.PresharedKey)
             {

@@ -19,6 +19,7 @@
              Exclude="../../fnecore/obj/**/*.cs;../../fnecore/bin/**/*.cs;../../fnecore/Udp.cs;../../fnecore/Properties/AssemblyInfo.cs;../../fnecore/Utility/CommandOptions.cs;../../fnecore/Utility/SemVersion.cs" />
     <Compile Include="CompatibleUdp.cs" />
     <Compile Include="FneInboundFramePolicy.cs" />
+    <Compile Include="FneTalkgroupAnnouncement.cs" />
     <Compile Include="FnePeerKeepaliveStreamInitializer.cs" />
     <Compile Include="FneTransportCryptoCodec.cs" />
     <Compile Include="FneTransportNegotiationState.cs" />
