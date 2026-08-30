@@ -57,26 +57,30 @@ isolated audio state keep simultaneous calls separate.
 
 ## What’s new in DVM Console NEO
 
-### 0.5.3 — FNE transmit-target validation hotfix
+### 0.5.4 — Configuration, recording, and audio reliability
 
-Version 0.5.3 closes a transmit validation gap found after 0.5.2. DVM Console
-now treats each FNE-sourced talkgroup table as authoritative for every outbound
-audio path.
+Version 0.5.4 corrects several lifecycle and persistence problems found during
+a full code-quality audit. The update focuses on safe configuration saves,
+accurate recording history, responsive stream controls, and predictable audio
+cleanup.
 
-- Match DMR targets by both talkgroup and timeslot. P25, NXDN, and analog
-  targets are matched by destination ID.
-- Apply the same live authority check to channel and multi-channel PTT, patches,
-  alerts, pages, DTMF, and generated tones.
-- Disable invalid targets and warn the operator before transmission begins.
-- End an active console or patch transmission cleanly if a refreshed FNE table
-  removes its target.
+- Keep Configuration Studio saves atomic when files or settings change while
+  the review window is open, and reject duplicate output paths.
+- Match TAR recordings to the exact receive episode so rapid calls on the same
+  channel do not attach to the wrong History row.
+- Let Stop cancel a web stream that is still opening, and base FNE connection
+  state and retry timing on typed protocol events instead of log wording.
+- Preserve analog and mixer audio tails during shutdown while making media
+  reader cancellation and native macOS audio cleanup deterministic.
 
-[Read the 0.5.3 release notes →](docs/releases/v0.5.3.md)
+[Read the 0.5.4 release notes →](docs/releases/v0.5.4.md)
 
 ### Prior recent improvements
 
 Recent releases also include these changes:
 
+- **0.5.3 — FNE transmit-target validation hotfix:** made each FNE-sourced
+  talkgroup table authoritative for every outbound audio path.
 - **0.5.2 — Receive audio and session reliability hotfix:** corrected ordered
   P25 receive teardown, mute and TAR separation, FNE session lifetime, immediate
   group operator changes, shutdown retry cancellation, and local tone monitor
@@ -99,18 +103,18 @@ Recent releases also include these changes:
   scale-aware, preserved scrolled History positions, made audio-route changes
   transactional, and hardened receive-episode and session teardown.
 
-[Read the 0.5.2 release notes →](docs/releases/v0.5.2.md) · [Read the 0.5.1 release notes →](docs/releases/v0.5.1.md) · [Read the 0.5.0 release notes →](docs/releases/v0.5.0.md) · [Read the 0.4.4 release notes →](docs/releases/v0.4.4.md)
+[Read the 0.5.3 release notes →](docs/releases/v0.5.3.md) · [Read the 0.5.2 release notes →](docs/releases/v0.5.2.md) · [Read the 0.5.1 release notes →](docs/releases/v0.5.1.md) · [Read the 0.5.0 release notes →](docs/releases/v0.5.0.md)
 
 ## Download DVM Console NEO
 
 Download the package for the destination computer and extract the entire
-archive before starting DVM Console NEO. Version 0.5.3 uses these filenames:
+archive before starting DVM Console NEO. Version 0.5.4 uses these filenames:
 
 | Platform | Package | Requirements |
 | --- | --- | --- |
-| Apple Silicon Mac | `dvmconsole-0.5.3-osx-arm64.zip` | macOS 14 or newer |
-| Intel Mac | `dvmconsole-0.5.3-osx-x64.zip` | macOS 14 or newer |
-| Windows PC | `dvmconsole-0.5.3-win-x64.zip` | Windows x64 |
+| Apple Silicon Mac | `dvmconsole-0.5.4-osx-arm64.zip` | macOS 14 or newer |
+| Intel Mac | `dvmconsole-0.5.4-osx-x64.zip` | macOS 14 or newer |
+| Windows PC | `dvmconsole-0.5.4-win-x64.zip` | Windows x64 |
 
 **[Download the latest release →](https://github.com/RdWing/dvmconsole/releases/latest)**
 
