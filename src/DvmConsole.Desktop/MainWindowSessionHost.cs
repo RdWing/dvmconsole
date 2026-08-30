@@ -9,6 +9,7 @@ internal sealed class MainWindowSessionHost : IAsyncDisposable
     private readonly Action<MainWindowViewModel> setDataContext;
     private readonly Action closeSessionWindows;
     private readonly Action closeAllWindows;
+    private readonly Func<MainWindowViewModel, CancellationToken, Task> quiesceSession;
     private readonly AsyncDisposal disposal = new();
     private MainWindowViewModel viewModel;
     private CardPttController cardPtt;
@@ -18,7 +19,8 @@ internal sealed class MainWindowSessionHost : IAsyncDisposable
         NotifyCollectionChangedEventHandler activityHistoryChanging,
         Action<MainWindowViewModel> setDataContext,
         Action closeSessionWindows,
-        Action closeAllWindows)
+        Action closeAllWindows,
+        Func<MainWindowViewModel, CancellationToken, Task>? quiesceSession = null)
     {
         viewModel = initialViewModel ?? throw new ArgumentNullException(nameof(initialViewModel));
         ArgumentNullException.ThrowIfNull(activityHistoryChanging);
@@ -26,6 +28,7 @@ internal sealed class MainWindowSessionHost : IAsyncDisposable
         this.setDataContext = setDataContext ?? throw new ArgumentNullException(nameof(setDataContext));
         this.closeSessionWindows = closeSessionWindows ?? throw new ArgumentNullException(nameof(closeSessionWindows));
         this.closeAllWindows = closeAllWindows ?? throw new ArgumentNullException(nameof(closeAllWindows));
+        this.quiesceSession = quiesceSession ?? QuiesceSessionAsync;
         cardPtt = CreateCardPtt(viewModel);
         viewModel.ActivityCallHistoryChanging += activityHistoryChanging;
         this.setDataContext(viewModel);
@@ -40,9 +43,9 @@ internal sealed class MainWindowSessionHost : IAsyncDisposable
     // A replacement session reloads operator settings from the shared store.
     // Flush the outgoing session before constructing that replacement so two
     // session-owned writers never race over different settings snapshots.
-    public async Task PrepareForReplacementAsync()
+    public async Task PrepareForReplacementAsync(CancellationToken cancellationToken = default)
     {
-        await transitionGate.WaitAsync();
+        await transitionGate.WaitAsync(cancellationToken);
         try
         {
             await viewModel.FlushUserSettingsAsync();
@@ -53,10 +56,12 @@ internal sealed class MainWindowSessionHost : IAsyncDisposable
         }
     }
 
-    public async Task ReplaceAsync(MainWindowViewModel replacement)
+    public async Task ReplaceAsync(
+        MainWindowViewModel replacement,
+        CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(replacement);
-        await transitionGate.WaitAsync();
+        await transitionGate.WaitAsync(cancellationToken);
         try
         {
             MainWindowViewModel previous = viewModel;
@@ -65,7 +70,12 @@ internal sealed class MainWindowSessionHost : IAsyncDisposable
             replacement.ActivityCallHistoryChanging += activityHistoryChanging;
             try
             {
-                await replacement.StartKeyboardPttAsync();
+                await replacement.StartKeyboardPttAsync(cancellationToken);
+                // The outgoing session can take time to release audio,
+                // recording, and presentation resources. Close its FNE
+                // transports before publishing the replacement so the same
+                // peer identity can never be active from two local sockets.
+                await quiesceSession(previous, cancellationToken);
                 closeSessionWindows();
                 setDataContext(replacement);
             }
@@ -104,6 +114,11 @@ internal sealed class MainWindowSessionHost : IAsyncDisposable
         try
         {
             var cleanup = new AsyncCleanup();
+            // Stop network sessions before the rest of the session graph. In
+            // particular, this cancels a failed peer's login backoff without
+            // making application shutdown wait for the current retry interval.
+            await cleanup.RunTaskAsync(
+                () => quiesceSession(viewModel, CancellationToken.None));
             cleanup.Run(closeAllWindows);
             cleanup.Run(() => viewModel.ActivityCallHistoryChanging -= activityHistoryChanging);
             await cleanup.RunTaskAsync(() => cardPtt.DisposeAsync().AsTask());
@@ -120,4 +135,9 @@ internal sealed class MainWindowSessionHost : IAsyncDisposable
         => new(
             channel => owner.StartChannelTransmitAsync(channel),
             channel => owner.StopChannelTransmitAsync(channel));
+
+    private static Task QuiesceSessionAsync(
+        MainWindowViewModel owner,
+        CancellationToken cancellationToken)
+        => owner.QuiesceFneSessionAsync(cancellationToken);
 }

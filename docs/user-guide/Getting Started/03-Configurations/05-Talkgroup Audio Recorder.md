@@ -32,7 +32,9 @@ It can record:
 Recording a received call does not depend on live speaker selection. Arming TAR
 for a resource is enough to decode and record its inbound calls; the card does
 not also need RX selected. Speaker playback remains off until the operator
-selects the card separately.
+selects the card separately. Global, system, and zone mute controls also affect
+speaker playback only. A muted resource continues to deliver decoded audio to
+TAR without opening a speaker lane.
 
 TAR records console-originated transmit audio when an armed resource takes part
 in the transmission.

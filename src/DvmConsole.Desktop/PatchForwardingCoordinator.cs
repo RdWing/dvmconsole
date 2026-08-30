@@ -143,9 +143,9 @@ public sealed class PatchForwardingCoordinator : IDisposable
             StopSource(source, streamId);
     }
 
-    // Patch teardown follows the receive lifecycle reducer rather than raw
-    // protocol terminators. P25 and other transports may emit provisional or
-    // late end frames that are followed by more voice on the same call.
+    // Callers end forwarding only at an ordered receive boundary or an accepted
+    // lifecycle timeout. This operation is idempotent so timeout cleanup may
+    // safely follow a confirmed terminator.
     public void StopSource(ChannelViewModel source, uint streamId)
     {
         ArgumentNullException.ThrowIfNull(source);

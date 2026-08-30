@@ -6,11 +6,18 @@ namespace DvmConsole.Desktop;
 internal static class GeneratedAudioMonitorSession
 {
     public static async Task<Exception?> RunAsync(
+        bool monitorEnabled,
         Func<CancellationToken, Task> monitorAsync,
         Func<Task> transmitAsync)
     {
         ArgumentNullException.ThrowIfNull(monitorAsync);
         ArgumentNullException.ThrowIfNull(transmitAsync);
+
+        if (!monitorEnabled)
+        {
+            await transmitAsync().ConfigureAwait(false);
+            return null;
+        }
 
         using var monitorCancellation = new CancellationTokenSource();
         Task<Exception?> monitorTask = ObserveMonitorAsync(

@@ -561,6 +561,7 @@ public sealed partial class MainWindowViewModel
         {
             short[] monitorSamples = sequence.RenderPcm();
             Exception? monitorFailure = await GeneratedAudioMonitorSession.RunAsync(
+                LocalToneMonitorEnabled,
                 cancellationToken => generatedAudioMonitor.PlayAsync(
                     monitorSamples,
                     cancellationToken),

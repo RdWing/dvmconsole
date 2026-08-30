@@ -54,6 +54,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
     private readonly GeneratedAudioMonitor generatedAudioMonitor;
     private readonly PatchForwardingCoordinator patchForwarding;
     private readonly PatchSourceDecodeCoordinator patchSourceDecode;
+    private readonly PatchSourceReceivePipeline patchSourceReceivePipeline;
     private readonly P25KeyRing? p25KeyRing;
     private readonly DmrKeyRing? dmrKeyRing;
     private readonly NxdnKeyRing? nxdnKeyRing;
@@ -91,6 +92,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
     private readonly ObservableCollection<WebStreamViewModel> webStreams = [];
     private readonly WebStreamPlaybackCoordinator webStreamPlayback;
     private readonly IUiDispatcher uiDispatcher;
+    private readonly SessionUiCallbackGate sessionUiCallbacks;
     private readonly ReceivePresentationController receivePresentation;
     private readonly object audioLevelLogSync = new();
     private readonly Dictionary<(ChannelViewModel Channel, ChannelAudioDirection Direction), PcmLevelLogState> audioLevelLogs = [];
@@ -165,6 +167,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
         Zones = zones.ToArray();
         services.Connection.Register("systems", () => new ValueTask(DisposeSystemsAsync()));
         this.uiDispatcher = uiDispatcher ?? AvaloniaUiDispatcher.Instance;
+        sessionUiCallbacks = new SessionUiCallbackGate(this.uiDispatcher);
         this.statusText = statusText;
         codeplugDiagnosticsText = statusText;
         this.networkDisabledDemo = networkDisabledDemo;
@@ -299,9 +302,6 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
             (channel, episodeId) => audioCoordinator.CompleteEpisodeAsync(channel, episodeId),
             callRecordings.StopStream,
             ResolveReceiveRecordingTarget);
-        patchSourceReceiveWork = new ChannelReceiveWorkQueue(
-            ProcessPatchSourceAsync,
-            getJitterBufferProfile: GetReceiveJitterBufferProfile);
         receivePresentation = new ReceivePresentationController(
             () => Volatile.Read(ref disposeStarted) != 0,
             this.uiDispatcher.CheckAccess,
@@ -365,6 +365,12 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
             createVocoderBackend: CreateReceiveVocoderBackend,
             dmrKeyResolver: dmrKeyResolver,
             nxdnKeyResolver: nxdnKeyResolver);
+        patchSourceReceivePipeline = new PatchSourceReceivePipeline(
+            patchSourceDecode,
+            patchForwarding);
+        patchSourceReceiveWork = new ChannelReceiveWorkQueue(
+            ProcessPatchSourceAsync,
+            getJitterBufferProfile: GetReceiveJitterBufferProfile);
         RestorePatchState(configuredGroups);
         PatchGroups = BuildPatchGroups(configuredGroups);
         RefreshPatchMembershipConflicts();
@@ -383,7 +389,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
         connectionSession = new ConnectionSessionController(
             Systems,
             SyncPatchSourceDecodeAsync,
-            () => patchSourceDecode.StopAllAsync(),
+            cancellationToken => patchSourceDecode.StopAllAsync(cancellationToken),
             patchForwarding.StopAll,
             SetBusy,
             text => StatusText = text,
@@ -1122,6 +1128,19 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
             userSettings.ConnectionChimes = value;
             PersistUserSettings();
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ConnectionChimes)));
+        }
+    }
+
+    public bool LocalToneMonitorEnabled
+    {
+        get => userSettings.LocalToneMonitorEnabled;
+        set
+        {
+            if (userSettings.LocalToneMonitorEnabled == value)
+                return;
+            userSettings.LocalToneMonitorEnabled = value;
+            PersistUserSettings();
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(LocalToneMonitorEnabled)));
         }
     }
 
@@ -2265,11 +2284,13 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
     {
         if (enabled)
         {
-            bool liveSessionMissing = !receiveOutputMutePolicy.IsMuted(channel) &&
+            bool liveSessionMissing = receiveOutputMutePolicy.ShouldEnableLivePlayback(
+                channel,
+                isTemporarilySuspended: channel.IsAudioSuspended) &&
                 !audioCoordinator.LivePlaybackChannels.Contains(channel);
             if (!channel.IsAudioEnabled ||
                 !audioCoordinator.IsActive(channel) ||
-                (!channel.IsAudioSuspended && liveSessionMissing))
+                liveSessionMissing)
             {
                 await StartAudioAsync(channel, persistSelection: true).ConfigureAwait(false);
             }
@@ -2374,6 +2395,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
 
     public ValueTask DisposeAsync()
     {
+        sessionUiCallbacks.Close();
         Interlocked.Exchange(ref disposeStarted, 1);
         return sessionRuntime.DisposeAsync();
     }
@@ -2605,7 +2627,8 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
 
     private void HandleChannelRecordingChanged(object? sender, bool enabled)
     {
-        if (sender is not ChannelViewModel channel)
+        if (Volatile.Read(ref disposeStarted) != 0 ||
+            sender is not ChannelViewModel channel)
             return;
 
         userSettings.RecordingEnabledChannelKeys.RemoveAll(
@@ -2928,7 +2951,12 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
         {
             await audioCoordinator.EnsureDecodeAsync(
                 channel,
-                livePlaybackEnabledWhenCreated: channel.IsAudioEnabled).ConfigureAwait(false);
+                // TAR always needs decoded PCM, even under an operator mute.
+                // The mute policy controls only whether this decoder also owns
+                // a live speaker lane.
+                livePlaybackEnabledWhenCreated: receiveOutputMutePolicy.ShouldEnableLivePlayback(
+                    channel,
+                    isTemporarilySuspended: channel.IsAudioSuspended)).ConfigureAwait(false);
             receiveAudioWork.Start(channel);
             receivePipelineTimingReporter.Reset(channel);
             receiveJitterEventReporter.Reset(channel);
@@ -3142,11 +3170,17 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
         patchForwarding.ObserveDecodedSamples(channel, streamId, sourceId, samples);
     }
 
-    private async Task SyncPatchSourceDecodeAsync()
+    private async Task SyncPatchSourceDecodeAsync(CancellationToken cancellationToken = default)
     {
         try
         {
-            await patchSourceDecode.ApplyChannelsAsync(GetActivePatchSourceChannels()).ConfigureAwait(false);
+            await patchSourceDecode
+                .ApplyChannelsAsync(GetActivePatchSourceChannels(), cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
         }
         catch (Exception exception)
         {
@@ -3175,7 +3209,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
     {
         try
         {
-            await patchSourceDecode.ProcessAsync(channel, traffic).ConfigureAwait(false);
+            await patchSourceReceivePipeline.ProcessAsync(channel, traffic).ConfigureAwait(false);
         }
         catch (Exception exception)
         {
@@ -3200,7 +3234,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
 
     private void HandleRecordingFaulted(ChannelViewModel channel, Exception exception)
     {
-        uiDispatcher.Post(() =>
+        sessionUiCallbacks.Post(() =>
         {
             channel.SetRecordingEnabled(false);
             AudioStatusText = $"TAR recording stopped: {exception.Message}";
@@ -3209,7 +3243,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
 
     private void HandleRecordingFinalized(object? sender, RecordingFinalizationResult result)
     {
-        uiDispatcher.Post(() =>
+        sessionUiCallbacks.Post(() =>
         {
             if (result.Metadata is CallRecordingMetadata metadata && metadata.IsPlayable)
             {
@@ -3232,7 +3266,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
 
     private void HandleRecordingPlaybackFaulted(Exception exception)
     {
-        uiDispatcher.Post(() =>
+        sessionUiCallbacks.Post(() =>
             AudioStatusText = $"Recording playback stopped: {exception.Message}");
     }
 
@@ -3240,7 +3274,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
         object? sender,
         RecordingPlaybackStateChangedEventArgs e)
     {
-        uiDispatcher.Post(() =>
+        sessionUiCallbacks.Post(() =>
         {
             foreach (CallHistoryEntry entry in callHistory.Entries)
             {
@@ -3935,11 +3969,16 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
 
     private void PersistUserSettings()
     {
+        if (Volatile.Read(ref disposeStarted) != 0)
+            return;
+
         try
         {
             userSettingsWriter.Schedule(userSettingsStore.CaptureSnapshot(userSettings));
         }
-        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        catch (Exception exception) when (
+            exception is IOException or UnauthorizedAccessException ||
+            exception is ObjectDisposedException && Volatile.Read(ref disposeStarted) != 0)
         {
             // Operator state must never prevent the console from running.
         }
@@ -3977,37 +4016,63 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
     public void ApplyPatchGroup(PatchGroupEditorViewModel group)
     {
         ArgumentNullException.ThrowIfNull(group);
-        List<PatchMemberAddress> members = group.GetMembersInRoutingOrder()
-            .Select(member => PatchMemberResolver.FromChannel(member.Channel))
-            .ToList();
+        if (ApplyGroupOperatorStates([group]) is { } error)
+            StatusText = error;
+    }
+
+    public string? ApplyGroupOperatorStates(IEnumerable<PatchGroupEditorViewModel> groups)
+    {
+        ArgumentNullException.ThrowIfNull(groups);
+        PatchGroupEditorViewModel[] distinctGroups = groups
+            .Distinct()
+            .ToArray();
+        if (distinctGroups.Length == 0)
+            return null;
+
+        foreach (PatchGroupEditorViewModel group in distinctGroups)
+        {
+            if (group.IsMultiSelect && ReferenceEquals(activeMultiSelectGroup, group))
+                return $"Stop multi-select PTT for '{group.Name}' before changing its membership.";
+            if (group.GetMembershipValidationError() is { } validationError)
+                return $"{group.GroupTypeText} group '{group.Name}' was not saved. {validationError}";
+        }
+
+        bool patchStateChanged = false;
+        foreach (PatchGroupEditorViewModel group in distinctGroups)
+        {
+            List<PatchMemberAddress> members = group.GetMembersInRoutingOrder()
+                .Select(member => PatchMemberResolver.FromChannel(member.Channel))
+                .ToList();
+            PersistGroupDefinition(
+                group.Name,
+                members,
+                enabled: group.IsPatchGroup ? group.IsEnabled : true,
+                oneWay: group.IsPatchGroup && group.IsOneWay);
+            patchStateChanged |= group.IsPatchGroup;
+        }
+
+        if (patchStateChanged)
+            ReapplyPatchState();
+        PersistUserSettings();
+        RefreshPatchMembershipConflicts();
+        if (patchStateChanged)
+            TaskObservation.Observe(SyncPatchSourceDecodeAsync());
+
+        StatusText = distinctGroups.Length == 1
+            ? FormatAppliedGroupStatus(distinctGroups[0])
+            : $"Saved operator state for {distinctGroups.Length} groups.";
+        return null;
+    }
+
+    private static string FormatAppliedGroupStatus(PatchGroupEditorViewModel group)
+    {
         if (group.IsMultiSelect)
         {
-            if (ReferenceEquals(activeMultiSelectGroup, group))
-            {
-                StatusText = $"Stop multi-select PTT for '{group.Name}' before changing its membership.";
-                return;
-            }
-            if (group.GetMembershipValidationError() is { } validationError)
-            {
-                StatusText = $"Multi-select group '{group.Name}' was not saved. {validationError}";
-                return;
-            }
-            PersistGroupDefinition(group.Name, members, enabled: true, oneWay: false);
-            PersistUserSettings();
-            RefreshPatchMembershipConflicts();
-            StatusText = $"Multi-select group '{group.Name}' saved with {members.Count} member(s).";
-            return;
+            int memberCount = group.Members.Count(member => member.IsMember);
+            return $"Multi-select group '{group.Name}' saved with {memberCount} member(s).";
         }
 
-        if (group.GetMembershipValidationError() is { } patchValidationError)
-        {
-            StatusText = $"Patch group '{group.Name}' was not saved. {patchValidationError}";
-            return;
-        }
-
-        ApplyPatchGroup(group.Name, members, group.IsEnabled, group.IsOneWay);
-        RefreshPatchMembershipConflicts();
-        StatusText = $"Patch group '{group.Name}' {(group.IsEnabled ? "enabled" : "disabled")}.";
+        return $"Patch group '{group.Name}' {(group.IsEnabled ? "enabled" : "disabled")}.";
     }
 
     public void SetPatchGroupEnabled(PatchGroupEditorViewModel group)

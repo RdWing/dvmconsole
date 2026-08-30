@@ -6,6 +6,7 @@ internal static class SettingsImportPolicy
     {
         var sections = new List<string>();
         if (settings.TalkPermitTone || !settings.ConnectionChimes ||
+            !settings.LocalToneMonitorEnabled ||
             settings.VerboseLoggingEnabled || settings.DarkMode ||
             settings.UiFontSize != 14 || settings.UiScale != 1.0 ||
             settings.TogglePttMode || !string.Equals(settings.GlobalPttKey, "Space", StringComparison.OrdinalIgnoreCase) ||
@@ -92,6 +93,7 @@ internal static class SettingsImportPolicy
             target.SerialPttBaudRate = source.SerialPttBaudRate;
             target.TalkPermitTone = source.TalkPermitTone;
             target.ConnectionChimes = source.ConnectionChimes;
+            target.LocalToneMonitorEnabled = source.LocalToneMonitorEnabled;
             target.VerboseLoggingEnabled = source.VerboseLoggingEnabled;
             target.DarkMode = source.DarkMode;
             target.UiFontSize = source.UiFontSize;

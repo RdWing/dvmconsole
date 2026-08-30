@@ -75,8 +75,6 @@ public sealed class ConfigurationStudioViewModel : INotifyPropertyChanged
     private EncryptionAlgorithmOption? selectedKeyAlgorithm;
     private IReadOnlyList<EncryptionAlgorithmOption> availableChannelAlgorithms = [];
     private IReadOnlyList<EncryptionAlgorithmOption> availableKeyAlgorithms = [];
-    private readonly Dictionary<string, List<PatchMemberSetting>> stagedGroupMemberships = new(StringComparer.OrdinalIgnoreCase);
-    private readonly Dictionary<string, bool> stagedGroupModes = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<Guid, string> lastSystemRenameTargets = [];
 
     public ConfigurationStudioViewModel(
@@ -140,6 +138,7 @@ public sealed class ConfigurationStudioViewModel : INotifyPropertyChanged
     public ConfigurationDocument Document => document;
     public ConsoleConfiguration Configuration => document.Configuration;
     public bool CanEdit => !document.IsReadOnly;
+    public bool CanSaveDraft => CanEdit && IsDirty;
     public bool CanExportSanitized => !document.IsReadOnly;
     public bool IsDirty => !string.Equals(currentSnapshot.Fingerprint, savedFingerprint, StringComparison.Ordinal);
     public bool IsKeyFileDirty => keyFilePath is not null &&
@@ -242,8 +241,9 @@ public sealed class ConfigurationStudioViewModel : INotifyPropertyChanged
         runtimeViewModel.CurrentCodeplugPath is not null &&
         string.Equals(Path.GetFullPath(document.SourcePath), Path.GetFullPath(runtimeViewModel.CurrentCodeplugPath), StringComparison.OrdinalIgnoreCase);
     public string OperationalGroupHint => CanUseOperationalGroups
-        ? "Enable and multi-select PTT actions affect the active console immediately. Apply operator state stages membership and direction for Review & Save."
+        ? "Enabled changes apply immediately. Use Apply changes to save membership and direction without rewriting YAML or reconnecting FNE sessions."
         : "Operational controls are unavailable because this draft is unsaved or is not the active codeplug.";
+    public string ReviewSaveButtonText => IsGroups ? "Save YAML changes…" : "Review & Save";
 
     public IReadOnlyList<EncryptionAlgorithmOption> AvailableChannelAlgorithms => availableChannelAlgorithms;
     public IReadOnlyList<EncryptionAlgorithmOption> AvailableKeyAlgorithms => availableKeyAlgorithms;
@@ -872,24 +872,21 @@ public sealed class ConfigurationStudioViewModel : INotifyPropertyChanged
         CommitAliasEdit();
     }
 
-    public string? StageOperationalGroup(PatchGroupEditorViewModel group)
+    public string? ApplyOperationalGroup(PatchGroupEditorViewModel group)
     {
         ArgumentNullException.ThrowIfNull(group);
-        if (group.GetMembershipValidationError() is { } error)
-            return error;
-        ConfigurationStudioDraftSnapshot before = currentSnapshot;
-        stagedGroupMemberships[group.Name] = group.GetMembersInRoutingOrder()
-            .Select(member => new PatchMemberSetting
-            {
-                SystemName = member.Channel.Definition.SystemName,
-                DestinationId = member.Channel.Definition.DestinationId,
-                ChannelName = member.Channel.Name
-            })
-            .ToList();
-        stagedGroupModes[group.Name] = group.IsPatchGroup && group.IsOneWay;
-        CompleteDraftTransition(before);
-        NotifyDocumentState();
-        return null;
+        return runtimeViewModel.ApplyGroupOperatorStates([group]);
+    }
+
+    public string? ApplyAllOperationalGroups()
+        => CanUseOperationalGroups
+            ? runtimeViewModel.ApplyGroupOperatorStates(OperationalGroups)
+            : "Operator state can only be changed for the active codeplug.";
+
+    public void SetOperationalGroupEnabled(PatchGroupEditorViewModel group)
+    {
+        ArgumentNullException.ThrowIfNull(group);
+        runtimeViewModel.SetPatchGroupEnabled(group);
     }
 
     public ConfigurationSavePlan CreateSavePlan(string destinationPath)
@@ -950,12 +947,6 @@ public sealed class ConfigurationStudioViewModel : INotifyPropertyChanged
             CodeplugStudioStateStore.CopyForSaveAs(settings, document.SourcePath, fullDestination);
         }
         ApplyIdentityMigrations(settings, fullDestination, fullDestination);
-        CodeplugGroupState destinationGroupState = CodeplugGroupStateStore.GetOrMigrate(settings, fullDestination);
-        Dictionary<string, string> groupRenames = migrationPlanner.BuildGroupMigrations().Renames;
-        foreach (KeyValuePair<string, List<PatchMemberSetting>> membership in stagedGroupMemberships)
-            destinationGroupState.Memberships[groupRenames.GetValueOrDefault(membership.Key, membership.Key)] = membership.Value;
-        foreach (KeyValuePair<string, bool> mode in stagedGroupModes)
-            destinationGroupState.OneWayModes[groupRenames.GetValueOrDefault(mode.Key, mode.Key)] = mode.Value;
         foreach (KeyValuePair<ChannelConfiguration, WidgetPositionSetting> position in draftWidgetPositions)
         {
             settings.ChannelWidgetPositions[GetChannelSettingsKey(position.Key)] = new WidgetPositionSetting
@@ -1047,8 +1038,6 @@ public sealed class ConfigurationStudioViewModel : INotifyPropertyChanged
                 Y = position.Value.Y
             };
         }
-        stagedGroupMemberships.Clear();
-        stagedGroupModes.Clear();
         migrationPlanner.ResetBaseline(Configuration);
         lastSystemRenameTargets.Clear();
         foreach (OriginalSystemIdentity system in migrationPlanner.OriginalSystems)
@@ -1742,12 +1731,6 @@ public sealed class ConfigurationStudioViewModel : INotifyPropertyChanged
         Dictionary<Guid, string> zoneSystems = draftZoneSystemNames.ToDictionary(
             entry => identities.GetZoneId(entry.Key),
             entry => entry.Value);
-        Dictionary<string, IReadOnlyList<PatchMemberSetting>> memberships = stagedGroupMemberships.ToDictionary(
-            entry => entry.Key,
-            entry => (IReadOnlyList<PatchMemberSetting>)entry.Value.Select(ClonePatchMember).ToArray(),
-            StringComparer.OrdinalIgnoreCase);
-        var modes = new Dictionary<string, bool>(stagedGroupModes, StringComparer.OrdinalIgnoreCase);
-
         var fingerprintComponents = new List<string>
         {
             yaml,
@@ -1766,22 +1749,12 @@ public sealed class ConfigurationStudioViewModel : INotifyPropertyChanged
         fingerprintComponents.AddRange(zoneSystems
             .OrderBy(entry => entry.Key)
             .Select(entry => $"zone-system:{entry.Key}:{entry.Value}"));
-        fingerprintComponents.AddRange(memberships
-            .OrderBy(entry => entry.Key, StringComparer.OrdinalIgnoreCase)
-            .Select(entry => $"group:{entry.Key}:" + string.Join("|", entry.Value.Select(member =>
-                $"{member.SystemName}:{member.DestinationId}:{member.ChannelName}"))));
-        fingerprintComponents.AddRange(modes
-            .OrderBy(entry => entry.Key, StringComparer.OrdinalIgnoreCase)
-            .Select(entry => $"group-mode:{entry.Key}:{entry.Value}"));
-
         return new ConfigurationStudioDraftSnapshot(
             yaml,
             identityLayout,
             referencedFiles,
             positions,
             zoneSystems,
-            memberships,
-            modes,
             ConfigurationStudioDraftSnapshot.ComputeFingerprint(fingerprintComponents));
     }
 
@@ -1855,13 +1828,6 @@ public sealed class ConfigurationStudioViewModel : INotifyPropertyChanged
                 draftZoneSystemNames[zone] = entry.Value;
         }
 
-        stagedGroupMemberships.Clear();
-        foreach (KeyValuePair<string, IReadOnlyList<PatchMemberSetting>> entry in snapshot.StagedGroupMemberships)
-            stagedGroupMemberships[entry.Key] = entry.Value.Select(ClonePatchMember).ToList();
-        stagedGroupModes.Clear();
-        foreach (KeyValuePair<string, bool> entry in snapshot.StagedGroupModes)
-            stagedGroupModes[entry.Key] = entry.Value;
-
         lastSystemRenameTargets.Clear();
         foreach (OriginalSystemIdentity original in migrationPlanner.OriginalSystems)
         {
@@ -1925,14 +1891,6 @@ public sealed class ConfigurationStudioViewModel : INotifyPropertyChanged
         SelectedAlias = Aliases.FirstOrDefault();
     }
 
-    private static PatchMemberSetting ClonePatchMember(PatchMemberSetting member)
-        => new()
-        {
-            SystemName = member.SystemName,
-            DestinationId = member.DestinationId,
-            ChannelName = member.ChannelName
-        };
-
     private void InitializeDraftWidgetPositions()
     {
         foreach (ZoneConfiguration zone in Configuration.Zones)
@@ -1995,7 +1953,8 @@ public sealed class ConfigurationStudioViewModel : INotifyPropertyChanged
         foreach (string name in new[]
                  {
                      nameof(IsOverview), nameof(IsSystems), nameof(IsZones), nameof(IsStreams),
-                     nameof(IsGroups), nameof(IsEncryptionKeys), nameof(IsFiles)
+                     nameof(IsGroups), nameof(IsEncryptionKeys), nameof(IsFiles),
+                     nameof(ReviewSaveButtonText)
                  })
             OnPropertyChanged(name);
     }
@@ -2004,7 +1963,7 @@ public sealed class ConfigurationStudioViewModel : INotifyPropertyChanged
     {
         foreach (string name in new[]
                  {
-                     nameof(IsDirty), nameof(StatusText), nameof(CanUndo), nameof(CanRedo),
+                     nameof(IsDirty), nameof(CanSaveDraft), nameof(StatusText), nameof(CanUndo), nameof(CanRedo),
                      nameof(ConfigurationShapeText), nameof(UnknownFieldsText), nameof(LayoutChanged),
                      nameof(ValidationStatusText), nameof(ValidationDrawerHeading), nameof(ValidationIndicatorBrush),
                      nameof(HasValidationIssues), nameof(HasWarnings), nameof(SelectedZoneHeading),

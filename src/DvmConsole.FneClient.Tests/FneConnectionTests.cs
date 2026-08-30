@@ -90,7 +90,7 @@ public sealed class FneConnectionTests
 
         Assert.Equal("TYF_OP1", peer.Information.Details.Identity);
         Assert.Equal(FneConnection.SoftwareIdentifier, peer.Information.Details.Software);
-        Assert.Equal("DVMC_NEO_0.5.1", peer.Information.Details.Software);
+        Assert.Equal("DVMC_NEO_0.5.2", peer.Information.Details.Software);
         Assert.Equal(options.PeerId, peer.Information.PeerID);
         Assert.Equal(fnecore.ConnectionState.WAITING_LOGIN, peer.Information.State);
         Assert.Equal(fnecore.LogLevel.DEBUG, peer.LogLevel);
@@ -321,6 +321,32 @@ public sealed class FneConnectionTests
         session.Callbacks.Log(fnecore.LogLevel.INFO, "Sending login request to MASTER");
 
         Assert.Equal(FnePeerSessionFactory.DefaultPingIntervalSeconds, session.Peer.PingTime);
+    }
+
+    [Fact]
+    public async Task StopDoesNotWaitForAnActiveLoginRetryDelay()
+    {
+        var loginRequest = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var connection = new FneConnection(new FneConnectionOptions(
+            "Test", "Test", "127.0.0.1", 9, 1, "password", false, null));
+        connection.LogReceived += (_, entry) =>
+        {
+            if (entry.Message.Contains("Sending login request", StringComparison.Ordinal))
+                loginRequest.TrySetResult();
+        };
+
+        await connection.StartAsync();
+        await loginRequest.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        FnePeer peer = Assert.IsType<FnePeer>(connection.Peer);
+        peer.Logger(LogLevel.INFO, "Sending login request to MASTER");
+        Assert.Equal(10, peer.PingTime);
+        await Task.Delay(20);
+
+        await connection.StopAsync().WaitAsync(TimeSpan.FromSeconds(1));
+
+        Assert.Equal(FneConnectionState.Disconnected, connection.Status.State);
+        Assert.Null(connection.Peer);
     }
 
     [Fact]

@@ -6,6 +6,41 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.5.2] - 2026-08-29
+
+### Added
+
+- Add a General setting that disables the attenuated local monitor for
+  generated tones, DTMF, presets, and QCII pages without changing transmitted
+  audio.
+
+### Changed
+
+- Apply Configuration Studio group membership, direction, and enabled state as
+  operator settings without rewriting YAML, disconnecting FNE sessions, or
+  reloading the codeplug. YAML definition changes continue through Review &
+  Save.
+- End patch forwarding at the ordered receive-worker boundary so PCM already
+  held by the adaptive jitter buffer is processed before a confirmed terminator
+  closes the source.
+
+### Fixed
+
+- Release P25 physical receive streams promptly after a confirmed terminator,
+  including short calls that have not filled the live-playback startup cushion.
+  Voice that definitively restarts a reused stream ID receives a fresh decoder.
+- Keep system and zone mute scopes on every live-speaker admission path,
+  including session startup and receive restoration after transmit. Muted
+  resources continue decoding and recording through TAR without opening a
+  speaker lane.
+- Serialize FNE connect, disconnect, and replacement transitions; cancel an
+  in-progress start before disconnecting; and quiesce an outgoing session before
+  the replacement owns its peer identity.
+- Ignore session-owned UI callbacks after disposal starts and bound the entire
+  application shutdown sequence instead of only the final session cleanup.
+  Quiesce FNE sessions first so a failed peer's exponential login retry cannot
+  hold Quit open for its current retry interval.
+
 ## [0.5.1] - 2026-08-29
 
 ### Changed
@@ -701,7 +736,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Add patches, multi-select groups, call history, recordings, web streams, clocks, layouts, themes, startup behavior, and in-application operator documentation.
 - Add support for local and KMM-provided P25 encryption keys while preserving compatibility with existing variable-length AES key material.
 
-[Unreleased]: https://github.com/RdWing/dvmconsole/compare/v0.5.1...HEAD
+[Unreleased]: https://github.com/RdWing/dvmconsole/compare/v0.5.2...HEAD
+[0.5.2]: https://github.com/RdWing/dvmconsole/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/RdWing/dvmconsole/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/RdWing/dvmconsole/compare/v0.4.4...v0.5.0
 [0.4.4]: https://github.com/RdWing/dvmconsole/compare/v0.4.3...v0.4.4

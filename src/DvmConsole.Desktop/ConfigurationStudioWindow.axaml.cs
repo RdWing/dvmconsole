@@ -368,16 +368,58 @@ public sealed partial class ConfigurationStudioWindow : Window
     {
         if (sender is Button { Tag: PatchGroupEditorViewModel group } && viewModel.CanUseOperationalGroups)
         {
-            if (viewModel.StageOperationalGroup(group) is { } error)
-                await ShowMessageAsync("Group state not staged", error);
+            if (viewModel.ApplyOperationalGroup(group) is { } error)
+                await ShowMessageAsync("Group state not applied", error);
         }
+    }
+
+    private async void HandleApplyAllOperatorGroupsClick(object? sender, RoutedEventArgs e)
+        => await ApplyAllOperatorGroupsAsync(closeAfterApply: false);
+
+    private async void HandleApplyOperatorGroupsAndCloseClick(object? sender, RoutedEventArgs e)
+        => await ApplyAllOperatorGroupsAsync(closeAfterApply: true);
+
+    private async Task ApplyAllOperatorGroupsAsync(bool closeAfterApply)
+    {
+        if (viewModel.ApplyAllOperationalGroups() is { } error)
+        {
+            await ShowMessageAsync("Group state not applied", error);
+            return;
+        }
+
+        try
+        {
+            await runtimeViewModel.FlushUserSettingsAsync();
+        }
+        catch (Exception exception) when (
+            exception is IOException or UnauthorizedAccessException or ObjectDisposedException)
+        {
+            await ShowMessageAsync(
+                "Operator state not saved",
+                $"The active console was updated, but the operator settings could not be saved.\n\n{exception.Message}");
+            return;
+        }
+
+        if (!closeAfterApply)
+            return;
+
+        if (viewModel.IsDirty && !await ConfirmAsync(
+                "Discard YAML draft?",
+                "The operator group changes have been applied without reconnecting. Close Configuration Studio and discard the separate unsaved YAML changes?",
+                "Discard YAML draft and close"))
+        {
+            return;
+        }
+
+        allowClose = true;
+        Close();
     }
 
     private void HandleOperationalGroupPropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
         if (ready && e.PropertyName == nameof(PatchGroupEditorViewModel.IsEnabled) &&
             sender is PatchGroupEditorViewModel group && viewModel.CanUseOperationalGroups)
-            runtimeViewModel.SetPatchGroupEnabled(group);
+            viewModel.SetOperationalGroupEnabled(group);
     }
 
     private async void HandleMultiSelectPttClick(object? sender, RoutedEventArgs e)
