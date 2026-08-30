@@ -361,6 +361,8 @@ public sealed class PatchForwardingCoordinator : IDisposable
         }
         catch (Exception exception)
         {
+            EndTarget(member, streamId, sourceId);
+            router.ReportTargetFailure(member, streamId);
             Report(new PatchForwardingDiagnostic(
                 DateTimeOffset.UtcNow,
                 PatchForwardingDiagnosticKind.TargetFailed,
@@ -368,8 +370,6 @@ public sealed class PatchForwardingCoordinator : IDisposable
                 streamId,
                 $"Patch audio failed on {FormatTarget(member)}, stream {streamId}: {exception.Message}",
                 exception));
-            EndTarget(member, streamId, sourceId);
-            router.ReportTargetFailure(member, streamId);
         }
     }
 
@@ -455,6 +455,7 @@ public sealed class PatchForwardingCoordinator : IDisposable
 
         if (target.Pump.Failure is Exception exception)
         {
+            router.ReportTargetFailure(member, streamId);
             Report(new PatchForwardingDiagnostic(
                 DateTimeOffset.UtcNow,
                 PatchForwardingDiagnosticKind.TargetFailed,
@@ -462,7 +463,6 @@ public sealed class PatchForwardingCoordinator : IDisposable
                 streamId,
                 $"Patch target failed on {FormatTarget(member)}, stream {streamId}: {exception.Message}",
                 exception));
-            router.ReportTargetFailure(member, streamId);
             return;
         }
 

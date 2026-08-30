@@ -29,6 +29,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Release P25 physical receive streams promptly after a confirmed terminator,
   including short calls that have not filled the live-playback startup cushion.
   Voice that definitively restarts a reused stream ID receives a fresh decoder.
+- Release failed patch-target state before reporting the failure so the next
+  source audio block can establish a replacement outbound session reliably.
 - Keep system and zone mute scopes on every live-speaker admission path,
   including session startup and receive restoration after transmit. Muted
   resources continue decoding and recording through TAR without opening a
