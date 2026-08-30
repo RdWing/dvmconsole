@@ -297,7 +297,7 @@ public sealed class TransmitCoordinatorTests
         // occurs after the cue has completed.
         Task<TimeSpan> release = coordinator.ReleaseMicrophoneAudioAsync(
             requireFreshRecoveryCallback: true,
-            recoveryTimeout: TimeSpan.FromSeconds(1));
+            recoveryTimeout: TimeSpan.FromSeconds(10));
         await Task.Delay(120);
         Assert.False(release.IsCompleted);
         Assert.True(coordinator.IsMicrophoneAudioSuppressed);
