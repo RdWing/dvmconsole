@@ -50,7 +50,7 @@ public sealed class CallHistoryEntry : INotifyPropertyChanged
         string? eventRidText = null,
         string? eventTgidText = null,
         long? receiveEpisodeId = null,
-        bool encryptionKnown = true)
+        bool encryptionKnown = false)
     {
         Timestamp = timestamp;
         SystemName = systemName;
@@ -202,6 +202,7 @@ public sealed class CallHistoryEntry : INotifyPropertyChanged
             encryption.IsSecure,
             isConsoleTransmission: isTx,
             isRecordingOnly: true,
+            receiveEpisodeId: metadata.ReceiveEpisodeId,
             encryptionKnown: encryption.IsKnown);
         entry.UpdateEncryption(encryption);
         entry.endTimestamp = metadata.UtcEndTime >= metadata.UtcStartTime
@@ -263,7 +264,8 @@ public sealed class CallHistoryEntry : INotifyPropertyChanged
             streamId,
             callerText,
             encrypted,
-            isConsoleTransmission: true);
+            isConsoleTransmission: true,
+            encryptionKnown: true);
         if (encrypted)
             entry.UpdateEncryption(true, encryptionAlgorithmId, encryptionKeyId);
         return entry;
@@ -392,17 +394,9 @@ public sealed class CallHistoryStore
             return byRecordingId;
         }
 
-        string direction = metadata.Direction.Equals("TX", StringComparison.OrdinalIgnoreCase) ? "TX" : "RX";
-        CallHistoryEntry? call = Entries.FirstOrDefault(entry =>
-            !entry.IsEvent &&
-            !entry.IsRecordingOnly &&
-            entry.StreamId == metadata.StreamId &&
-            entry.DirectionText == direction &&
-            entry.ChannelName.Equals(metadata.ChannelName, StringComparison.OrdinalIgnoreCase) &&
-            entry.DestinationId == metadata.TalkgroupId &&
-            entry.SystemName.Equals(metadata.SystemName, StringComparison.OrdinalIgnoreCase) &&
-            entry.ProtocolText.Equals(metadata.Protocol, StringComparison.OrdinalIgnoreCase) &&
-            Math.Abs((entry.Timestamp - metadata.UtcStartTime).TotalSeconds) <= 5);
+        CallHistoryEntry? call = FindBestRecordingCall(
+            Entries.Where(entry => !entry.IsEvent && !entry.IsRecordingOnly),
+            metadata);
         if (call is not null)
         {
             call.SetRecording(metadata);
@@ -456,6 +450,10 @@ public sealed class CallHistoryStore
             .Where(entry => !entry.IsEvent)
             .GroupBy(CallIdentityKey, StringComparer.OrdinalIgnoreCase)
             .ToDictionary(group => group.Key, group => group.ToArray(), StringComparer.OrdinalIgnoreCase);
+        Dictionary<long, CallHistoryEntry[]> callsByEpisode = sessionEntries
+            .Where(entry => !entry.IsEvent && entry.ReceiveEpisodeId is not null)
+            .GroupBy(entry => entry.ReceiveEpisodeId!.Value)
+            .ToDictionary(group => group.Key, group => group.ToArray());
 
         foreach (CallHistoryEntry entry in sessionEntries)
         {
@@ -489,19 +487,13 @@ public sealed class CallHistoryStore
 
             CallHistoryEntry? call = null;
             keyLookups++;
-            if (callsByIdentity.TryGetValue(
-                    RecordingIdentityKey(metadata),
-                    out CallHistoryEntry[]? candidates))
+            CallHistoryEntry[]? candidates = metadata.ReceiveEpisodeId is long episodeId
+                ? callsByEpisode.GetValueOrDefault(episodeId)
+                : callsByIdentity.GetValueOrDefault(RecordingIdentityKey(metadata));
+            if (candidates is not null)
             {
-                foreach (CallHistoryEntry candidate in candidates)
-                {
-                    identityCandidateVisits++;
-                    if (Math.Abs((candidate.Timestamp - metadata.UtcStartTime).TotalSeconds) <= 5)
-                    {
-                        call = candidate;
-                        break;
-                    }
-                }
+                identityCandidateVisits += candidates.Length;
+                call = FindBestRecordingCall(candidates, metadata);
             }
             if (call is not null)
                 call.SetRecording(metadata);
@@ -553,6 +545,10 @@ public sealed class CallHistoryStore
             .Where(entry => !entry.IsEvent && !entry.IsRecordingOnly)
             .GroupBy(CallIdentityKey, StringComparer.OrdinalIgnoreCase)
             .ToDictionary(group => group.Key, group => group.ToArray(), StringComparer.OrdinalIgnoreCase);
+        Dictionary<long, CallHistoryEntry[]> callsByEpisode = Entries
+            .Where(entry => !entry.IsEvent && !entry.IsRecordingOnly && entry.ReceiveEpisodeId is not null)
+            .GroupBy(entry => entry.ReceiveEpisodeId!.Value)
+            .ToDictionary(group => group.Key, group => group.ToArray());
 
         foreach (CallRecordingMetadata metadata in batch)
         {
@@ -563,9 +559,12 @@ public sealed class CallHistoryStore
                 continue;
             }
 
-            CallHistoryEntry? call = callsByIdentity
-                .GetValueOrDefault(RecordingIdentityKey(metadata))?
-                .FirstOrDefault(candidate => Math.Abs((candidate.Timestamp - metadata.UtcStartTime).TotalSeconds) <= 5);
+            CallHistoryEntry[]? candidates = metadata.ReceiveEpisodeId is long episodeId
+                ? callsByEpisode.GetValueOrDefault(episodeId)
+                : callsByIdentity.GetValueOrDefault(RecordingIdentityKey(metadata));
+            CallHistoryEntry? call = candidates is null
+                ? null
+                : FindBestRecordingCall(candidates, metadata);
             if (call is null)
             {
                 call = CallHistoryEntry.CreateRecordingOnly(metadata);
@@ -672,14 +671,27 @@ public sealed class CallHistoryStore
     private static bool RecordingMatchesCall(CallRecordingMetadata recording, CallHistoryEntry call)
     {
         string direction = recording.Direction.Equals("TX", StringComparison.OrdinalIgnoreCase) ? "TX" : "RX";
-        return call.StreamId == recording.StreamId &&
-            call.DirectionText == direction &&
-            call.ChannelName.Equals(recording.ChannelName, StringComparison.OrdinalIgnoreCase) &&
+        bool routeMatches = call.DirectionText == direction &&
             call.DestinationId == recording.TalkgroupId &&
             call.SystemName.Equals(recording.SystemName, StringComparison.OrdinalIgnoreCase) &&
             call.ProtocolText.Equals(recording.Protocol, StringComparison.OrdinalIgnoreCase) &&
+            (recording.SubscriberId is null || call.SourceId == recording.SubscriberId);
+        if (!routeMatches)
+            return false;
+        if (recording.ReceiveEpisodeId is long episodeId)
+            return call.ReceiveEpisodeId == episodeId;
+        return call.StreamId == recording.StreamId &&
+            call.ChannelName.Equals(recording.ChannelName, StringComparison.OrdinalIgnoreCase) &&
             Math.Abs((call.Timestamp - recording.UtcStartTime).TotalSeconds) <= 5;
     }
+
+    private static CallHistoryEntry? FindBestRecordingCall(
+        IEnumerable<CallHistoryEntry> candidates,
+        CallRecordingMetadata recording)
+        => candidates
+            .Where(candidate => RecordingMatchesCall(recording, candidate))
+            .OrderBy(candidate => Math.Abs((candidate.Timestamp - recording.UtcStartTime).Ticks))
+            .FirstOrDefault();
 
     public bool Complete(
         string systemName,

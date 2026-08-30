@@ -10,6 +10,57 @@ namespace DvmConsole.Fne.Tests;
 public sealed class FneProtocolTests
 {
     [Fact]
+    public void LoginRetryObservationUsesTheOutboundProtocolTag()
+    {
+        int observations = 0;
+        using var lifetime = new FneTransportLifetime();
+        using (FneTransportSessionContext.Use(
+            FneTransportEncryptionMode.Auto,
+            new FneTransportObservers(null, null, () => observations++),
+            lifetime))
+        {
+            var probe = new OutboundObservationProbe();
+
+            probe.Observe("RPTLpayload"u8);
+            probe.Observe("RPTPpayload"u8);
+        }
+
+        Assert.Equal(1, observations);
+    }
+
+    [Fact]
+    public async Task ReceiveAfterTransportShutdownReturnsImmediately()
+    {
+        using var lifetime = new FneTransportLifetime();
+        using (FneTransportSessionContext.Use(
+            FneTransportEncryptionMode.Auto,
+            new FneTransportObservers(null, null),
+            lifetime))
+        {
+            _ = new UdpReceiver();
+        }
+
+        lifetime.Dispose();
+
+        using (FneTransportSessionContext.Use(
+            FneTransportEncryptionMode.Auto,
+            new FneTransportObservers(null, null),
+            lifetime))
+        {
+            var stoppedReceiver = new UdpReceiver();
+            UdpFrame stopped = await stoppedReceiver.Receive().WaitAsync(TimeSpan.FromSeconds(1));
+            Assert.Empty(stopped.Message);
+            Assert.Equal(0, stopped.Endpoint.Port);
+        }
+    }
+
+    private sealed class OutboundObservationProbe : UdpBase
+    {
+        public void Observe(ReadOnlySpan<byte> message)
+            => ObserveOutboundFrame(message);
+    }
+
+    [Fact]
     public void KeepaliveStreamInitializerCreatesOneStableNonZeroFallback()
     {
         var peer = new FnePeer(

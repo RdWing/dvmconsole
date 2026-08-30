@@ -134,4 +134,22 @@ public sealed class HistoryCatalogFilterTests
         Assert.False(new HistoryCatalogFilter(Direction: "RX").Matches(entry));
         Assert.False(new HistoryCatalogFilter(Encryption: "Encrypted").Matches(entry));
     }
+
+    [Fact]
+    public void ClearEncryptionFilterExcludesCallsWhoseEncryptionStateIsUnknown()
+    {
+        var entry = new CallHistoryEntry(
+            DateTimeOffset.UtcNow,
+            "System",
+            "Channel",
+            sourceId: 1,
+            destinationId: 2,
+            protocol: FneTrafficProtocol.P25,
+            streamId: 3);
+
+        Assert.Equal("Unknown", entry.EncryptionText);
+        Assert.False(new HistoryCatalogFilter(Encryption: "Clear").Matches(entry));
+        Assert.False(new HistoryCatalogFilter(Encryption: "Encrypted").Matches(entry));
+        Assert.True(new HistoryCatalogFilter(Encryption: "All").Matches(entry));
+    }
 }

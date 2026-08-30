@@ -115,298 +115,34 @@ public static class ReceiveStreamReducer
         uint streamId,
         DateTimeOffset now,
         ReceiveStreamPolicy policy)
-    {
-        Validate(state, streamId, policy);
-        state = PurgeTombstones(state, now);
-        if (state.Tombstones.ContainsKey(streamId))
-        {
-            return Result(
-                state,
-                new ReceiveStreamDecision(
-                    ReceiveStreamTransition.IgnoredLate,
-                    state.PrimaryStreamId));
-        }
-
-        if (state.ActiveStreams.TryGetValue(
-                streamId,
-                out ReceiveStreamActivity activity))
-        {
-            bool resumed = activity.GraceDeadline is not null ||
-                           activity.TerminationDeadline is not null;
-            activity = activity with
-            {
-                LastActivity = now,
-                GraceDeadline = null,
-                TerminationDeadline = activity.TerminationDeadline is null
-                    ? null
-                    : now + policy.TerminatorHold,
-                PendingEndAt = activity.TerminationDeadline is null
-                    ? activity.PendingEndAt
-                    : now
-            };
-            state = state with
-            {
-                ActiveStreams = state.ActiveStreams.SetItem(streamId, activity),
-                PrimaryStreamId = state.PrimaryStreamId ?? streamId
-            };
-            return Result(
-                state,
-                new ReceiveStreamDecision(
-                    streamId == state.PrimaryStreamId
-                        ? resumed
-                            ? ReceiveStreamTransition.Resumed
-                            : ReceiveStreamTransition.Continued
-                        : ReceiveStreamTransition.Colliding,
-                    state.PrimaryStreamId));
-        }
-
-        if (state.PrimaryStreamId is null)
-        {
-            state = AddStream(state, streamId, now, makePrimary: true, policy: policy);
-            return Result(
-                state,
-                new ReceiveStreamDecision(ReceiveStreamTransition.Started, streamId));
-        }
-
-        state = AddStream(state, streamId, now, makePrimary: false, policy: policy);
-        return Result(
-            state,
-            new ReceiveStreamDecision(
-                ReceiveStreamTransition.Colliding,
-                state.PrimaryStreamId));
-    }
+        => Apply(state, policy, machine => machine.ObserveVoice(streamId, now));
 
     public static ReceiveStreamReduction ObserveDefinitiveStart(
         ReceiveStreamState state,
         uint streamId,
         DateTimeOffset now,
         ReceiveStreamPolicy policy)
-    {
-        Validate(state, streamId, policy);
-        state = PurgeTombstones(state, now);
-        state = state with
-        {
-            Tombstones = state.Tombstones.Remove(streamId)
-        };
-
-        if (state.ActiveStreams.TryGetValue(
-                streamId,
-                out ReceiveStreamActivity activity))
-        {
-            if (activity.TerminationDeadline is not null)
-            {
-                DateTimeOffset endedAt = activity.PendingEndAt ?? activity.LastActivity;
-                state = RemoveStreamWithoutTombstone(state, streamId);
-                state = AddStream(
-                    state,
-                    streamId,
-                    now,
-                    makePrimary: state.PrimaryStreamId is null,
-                    policy: policy);
-                return Result(
-                    state,
-                    new ReceiveStreamDecision(
-                        ReceiveStreamTransition.Restarted,
-                        state.PrimaryStreamId,
-                        streamId,
-                        endedAt));
-            }
-
-            bool resumed = activity.GraceDeadline is not null;
-            activity = activity with
-            {
-                LastActivity = now,
-                GraceDeadline = null
-            };
-            state = state with
-            {
-                ActiveStreams = state.ActiveStreams.SetItem(streamId, activity),
-                PrimaryStreamId = state.PrimaryStreamId ?? streamId
-            };
-            return Result(
-                state,
-                new ReceiveStreamDecision(
-                    streamId == state.PrimaryStreamId
-                        ? resumed
-                            ? ReceiveStreamTransition.Resumed
-                            : ReceiveStreamTransition.Continued
-                        : ReceiveStreamTransition.Colliding,
-                    state.PrimaryStreamId));
-        }
-
-        state = AddStream(
-            state,
-            streamId,
-            now,
-            makePrimary: state.PrimaryStreamId is null,
-            policy: policy);
-        return Result(
-            state,
-            new ReceiveStreamDecision(
-                state.PrimaryStreamId == streamId
-                    ? ReceiveStreamTransition.Started
-                    : ReceiveStreamTransition.Colliding,
-                state.PrimaryStreamId));
-    }
+        => Apply(state, policy, machine => machine.ObserveDefinitiveStart(streamId, now));
 
     public static ReceiveStreamReduction ObserveTerminator(
         ReceiveStreamState state,
         uint streamId,
         DateTimeOffset now,
         ReceiveStreamPolicy policy)
-    {
-        Validate(state, streamId, policy);
-        state = PurgeTombstones(state, now);
-        if (state.Tombstones.ContainsKey(streamId))
-        {
-            return Result(
-                state,
-                new ReceiveStreamDecision(
-                    ReceiveStreamTransition.IgnoredLate,
-                    state.PrimaryStreamId));
-        }
-        if (!state.ActiveStreams.TryGetValue(
-                streamId,
-                out ReceiveStreamActivity activity))
-        {
-            return Result(
-                state,
-                new ReceiveStreamDecision(
-                    ReceiveStreamTransition.None,
-                    state.PrimaryStreamId));
-        }
-
-        activity = activity with
-        {
-            TerminationDeadline = activity.TerminationDeadline ?? now + policy.TerminatorHold,
-            PendingEndAt = activity.PendingEndAt ?? now
-        };
-        state = state with
-        {
-            ActiveStreams = state.ActiveStreams.SetItem(streamId, activity)
-        };
-        if (state.PrimaryStreamId == streamId)
-        {
-            state = state with
-            {
-                PrimaryStreamId = MostRecentlyPresentableStreamId(state.ActiveStreams)
-            };
-        }
-        return Result(
-            state,
-            new ReceiveStreamDecision(
-                ReceiveStreamTransition.TerminationPending,
-                state.PrimaryStreamId));
-    }
+        => Apply(state, policy, machine => machine.ObserveTerminator(streamId, now));
 
     public static ReceiveStreamReduction Complete(
         ReceiveStreamState state,
         uint streamId,
         DateTimeOffset now,
         ReceiveStreamPolicy policy)
-    {
-        Validate(state, streamId, policy);
-        state = PurgeTombstones(state, now);
-        if (!state.ActiveStreams.TryGetValue(
-                streamId,
-                out ReceiveStreamActivity activity))
-        {
-            return Result(
-                state,
-                new ReceiveStreamDecision(
-                    ReceiveStreamTransition.None,
-                    state.PrimaryStreamId));
-        }
-
-        DateTimeOffset endedAt = activity.PendingEndAt ?? activity.LastActivity;
-        state = End(state, streamId, now, policy);
-        return Result(
-            state,
-            new ReceiveStreamDecision(
-                ReceiveStreamTransition.TerminationExpired,
-                state.PrimaryStreamId,
-                streamId,
-                endedAt));
-    }
+        => Apply(state, policy, machine => machine.Complete(streamId, now));
 
     public static ReceiveStreamReduction Advance(
         ReceiveStreamState state,
         DateTimeOffset now,
         ReceiveStreamPolicy policy)
-    {
-        ArgumentNullException.ThrowIfNull(state);
-        ArgumentNullException.ThrowIfNull(policy);
-        state = PurgeTombstones(state, now);
-        if (state.ActiveStreams.Count == 0)
-            return Result(state, default);
-
-        foreach ((uint streamId, ReceiveStreamActivity activity) in state.ActiveStreams
-                     .OrderBy(pair => pair.Value.LastActivity)
-                     .ThenBy(pair => pair.Value.InsertionOrder))
-        {
-            if (activity.TerminationDeadline is DateTimeOffset terminationDeadline)
-            {
-                if (now < terminationDeadline)
-                    continue;
-
-                DateTimeOffset endedAt = activity.PendingEndAt ?? activity.LastActivity;
-                state = End(state, streamId, now, policy);
-                return Result(
-                    state,
-                    new ReceiveStreamDecision(
-                        ReceiveStreamTransition.TerminationExpired,
-                        state.PrimaryStreamId,
-                        streamId,
-                        endedAt));
-            }
-
-            DateTimeOffset inactivityDeadline = activity.LastActivity + policy.InactivityTimeout;
-            if (activity.GraceDeadline is null)
-            {
-                if (now < inactivityDeadline)
-                    continue;
-
-                DateTimeOffset graceDeadline = inactivityDeadline + policy.GracePeriod;
-                if (now < graceDeadline)
-                {
-                    ReceiveStreamActivity waiting = activity with
-                    {
-                        GraceDeadline = graceDeadline
-                    };
-                    state = state with
-                    {
-                        ActiveStreams = state.ActiveStreams.SetItem(streamId, waiting)
-                    };
-                    return Result(
-                        state,
-                        new ReceiveStreamDecision(
-                            ReceiveStreamTransition.GraceStarted,
-                            state.PrimaryStreamId));
-                }
-
-                state = End(state, streamId, now, policy);
-                return Result(
-                    state,
-                    new ReceiveStreamDecision(
-                        ReceiveStreamTransition.GraceExpired,
-                        state.PrimaryStreamId,
-                        streamId));
-            }
-
-            if (now < activity.GraceDeadline.Value)
-                continue;
-
-            state = End(state, streamId, now, policy);
-            return Result(
-                state,
-                new ReceiveStreamDecision(
-                    ReceiveStreamTransition.GraceExpired,
-                    state.PrimaryStreamId,
-                    streamId));
-        }
-
-        return Result(state, default);
-    }
+        => Apply(state, policy, machine => machine.Advance(now));
 
     public static ReceiveStreamState AssumeActive(
         ReceiveStreamState state,
@@ -414,139 +150,22 @@ public static class ReceiveStreamReducer
         DateTimeOffset now,
         ReceiveStreamPolicy? policy = null)
     {
-        ArgumentNullException.ThrowIfNull(state);
-        if (streamId == 0)
-            throw new ArgumentOutOfRangeException(nameof(streamId));
-        if (state.IsActive(streamId))
-            return state;
-
-        policy ??= ReceiveStreamPolicy.Default;
-        state = state with { Tombstones = state.Tombstones.Remove(streamId) };
-        return AddStream(
-            state,
-            streamId,
-            now,
-            makePrimary: state.PrimaryStreamId is null,
-            policy: policy);
+        var machine = new ReceiveStreamStateMachine(
+            policy ?? ReceiveStreamPolicy.Default,
+            state);
+        machine.AssumeActive(streamId, now);
+        return machine.Snapshot;
     }
 
-    private static ReceiveStreamState AddStream(
+    private static ReceiveStreamReduction Apply(
         ReceiveStreamState state,
-        uint streamId,
-        DateTimeOffset now,
-        bool makePrimary,
-        ReceiveStreamPolicy policy)
+        ReceiveStreamPolicy policy,
+        Func<ReceiveStreamStateMachine, ReceiveStreamDecision> transition)
     {
-        state = MakeRoomForStream(state, policy.MaximumTrackedStreams);
-        var activity = new ReceiveStreamActivity(
-            now,
-            GraceDeadline: null,
-            TerminationDeadline: null,
-            PendingEndAt: null,
-            state.NextInsertionOrder);
-        return state with
-        {
-            PrimaryStreamId = makePrimary ? streamId : state.PrimaryStreamId,
-            ActiveStreams = state.ActiveStreams.Add(streamId, activity),
-            ActiveStreamIds = state.ActiveStreamIds.Add(streamId),
-            NextInsertionOrder = checked(state.NextInsertionOrder + 1)
-        };
-    }
-
-    private static ReceiveStreamState MakeRoomForStream(
-        ReceiveStreamState state,
-        int maximumTrackedStreams)
-    {
-        if (state.ActiveStreams.Count < maximumTrackedStreams)
-            return state;
-
-        uint oldestStreamId = state.ActiveStreams
-            .OrderBy(pair => pair.Value.LastActivity)
-            .ThenBy(pair => pair.Value.InsertionOrder)
-            .Select(pair => pair.Key)
-            .First();
-        return RemoveStreamWithoutTombstone(state, oldestStreamId);
-    }
-
-    private static ReceiveStreamState RemoveStreamWithoutTombstone(
-        ReceiveStreamState state,
-        uint streamId)
-    {
-        ImmutableDictionary<uint, ReceiveStreamActivity> remaining =
-            state.ActiveStreams.Remove(streamId);
-        return state with
-        {
-            ActiveStreams = remaining,
-            ActiveStreamIds = state.ActiveStreamIds.Remove(streamId),
-            PrimaryStreamId = state.PrimaryStreamId == streamId
-                ? MostRecentlyPresentableStreamId(remaining)
-                : state.PrimaryStreamId
-        };
-    }
-
-    private static ReceiveStreamState End(
-        ReceiveStreamState state,
-        uint streamId,
-        DateTimeOffset now,
-        ReceiveStreamPolicy policy)
-    {
-        state = RemoveStreamWithoutTombstone(state, streamId);
-        state = state with
-        {
-            Tombstones = state.Tombstones.SetItem(
-                streamId,
-                now + policy.TombstoneLifetime)
-        };
-        if (state.Tombstones.Count <= policy.MaximumTrackedStreams)
-            return state;
-
-        uint oldestTombstone = state.Tombstones
-            .OrderBy(pair => pair.Value)
-            .Select(pair => pair.Key)
-            .First();
-        return state with { Tombstones = state.Tombstones.Remove(oldestTombstone) };
-    }
-
-    private static uint? MostRecentlyPresentableStreamId(
-        ImmutableDictionary<uint, ReceiveStreamActivity> streams)
-        => streams
-            .Where(pair => pair.Value.TerminationDeadline is null)
-            .OrderByDescending(pair => pair.Value.LastActivity)
-            .ThenBy(pair => pair.Value.InsertionOrder)
-            .Select(pair => (uint?)pair.Key)
-            .FirstOrDefault();
-
-    private static ReceiveStreamState PurgeTombstones(
-        ReceiveStreamState state,
-        DateTimeOffset now)
-    {
-        ImmutableDictionary<uint, DateTimeOffset>.Builder? retained = null;
-        foreach ((uint streamId, DateTimeOffset expiresAt) in state.Tombstones)
-        {
-            if (expiresAt > now)
-                continue;
-            retained ??= state.Tombstones.ToBuilder();
-            retained.Remove(streamId);
-        }
-        return retained is null
-            ? state
-            : state with { Tombstones = retained.ToImmutable() };
-    }
-
-    private static ReceiveStreamReduction Result(
-        ReceiveStreamState state,
-        ReceiveStreamDecision decision)
-        => new(state, decision);
-
-    private static void Validate(
-        ReceiveStreamState state,
-        uint streamId,
-        ReceiveStreamPolicy policy)
-    {
-        ArgumentNullException.ThrowIfNull(state);
-        ArgumentNullException.ThrowIfNull(policy);
-        if (streamId == 0)
-            throw new ArgumentOutOfRangeException(nameof(streamId));
+        ArgumentNullException.ThrowIfNull(transition);
+        var machine = new ReceiveStreamStateMachine(policy, state);
+        ReceiveStreamDecision decision = transition(machine);
+        return new ReceiveStreamReduction(machine.Snapshot, decision);
     }
 }
 

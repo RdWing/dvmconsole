@@ -58,7 +58,9 @@ public sealed class ChannelReceiveAudioSession : IAsyncDisposable
                     vocoder,
                     playback,
                     nxdnKeyResolver,
-                    definition.SystemName);
+                    definition.SystemName,
+                    definition.SelectableEncryption ? null : definition.EncryptionAlgorithm,
+                    definition.SelectableEncryption ? null : definition.EncryptionKeyId);
                 break;
             case "analog":
                 analogSession = new AnalogRxAudioSession(

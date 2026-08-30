@@ -9,5 +9,5 @@ cd "$REPOSITORY_ROOT"
 dotnet format dvmconsole.sln \
     --no-restore \
     --verify-no-changes \
-    --exclude fnecore src/DvmConsole.Fne \
+    --exclude fnecore \
     --verbosity minimal

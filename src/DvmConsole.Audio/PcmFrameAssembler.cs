@@ -32,12 +32,28 @@ public sealed class PcmFrameAssembler
             if (bufferedSamples != buffer.Length)
                 continue;
 
-            frameReady(buffer.ToArray());
+            short[] completedFrame = buffer.ToArray();
             bufferedSamples = 0;
             framesProduced++;
+            frameReady(completedFrame);
         }
 
         return framesProduced;
+    }
+
+    // Emits the final partial frame with deterministic zero padding. Callers
+    // use this at end-of-stream so captured speech is not silently truncated.
+    public bool FlushPadded(Action<ReadOnlyMemory<short>> frameReady)
+    {
+        ArgumentNullException.ThrowIfNull(frameReady);
+        if (bufferedSamples == 0)
+            return false;
+
+        buffer.AsSpan(bufferedSamples).Clear();
+        short[] completedFrame = buffer.ToArray();
+        bufferedSamples = 0;
+        frameReady(completedFrame);
+        return true;
     }
 
     public void Reset() => bufferedSamples = 0;

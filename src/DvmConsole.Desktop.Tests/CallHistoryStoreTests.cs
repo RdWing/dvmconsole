@@ -401,6 +401,42 @@ public sealed class CallHistoryStoreTests
     }
 
     [Fact]
+    public void RecordingEpisodeIdentityWinsOverReusedStreamAndDuplicateRouteCards()
+    {
+        var store = new CallHistoryStore();
+        var first = new CallHistoryEntry(
+            DateTimeOffset.UnixEpoch,
+            "System 1",
+            "Dispatch A",
+            42,
+            100,
+            FneTrafficProtocol.Dmr,
+            7,
+            receiveEpisodeId: 10);
+        var second = new CallHistoryEntry(
+            DateTimeOffset.UnixEpoch.AddSeconds(1),
+            "System 1",
+            "Dispatch B",
+            42,
+            100,
+            FneTrafficProtocol.Dmr,
+            7,
+            receiveEpisodeId: 11);
+        store.Add(first);
+        store.Add(second);
+        CallRecordingMetadata recording = CreatePlayableRecording(7);
+        recording.ChannelName = "Dispatch A";
+        recording.UtcStartTime = first.Timestamp;
+        recording.ReceiveEpisodeId = 11;
+
+        CallHistoryEntry attached = store.AddOrAttachRecording(recording);
+
+        Assert.Same(second, attached);
+        Assert.Null(first.Recording);
+        Assert.Same(recording, second.Recording);
+    }
+
+    [Fact]
     public void ClearingSessionKeepsAttachedRecordingsInCatalog()
     {
         var store = new CallHistoryStore();

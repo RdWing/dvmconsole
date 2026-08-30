@@ -28,7 +28,7 @@ internal enum ConfigurationStudioEditCommand
 public sealed partial class ConfigurationStudioWindow : Window
 {
     private readonly MainWindowViewModel runtimeViewModel;
-    private readonly UserSettingsStore settingsStore;
+    private readonly ConfigurationStudioSaveService saveService;
     private bool ready;
     private bool allowClose;
     private bool isClosed;
@@ -44,7 +44,7 @@ public sealed partial class ConfigurationStudioWindow : Window
     public ConfigurationStudioWindow()
     {
         runtimeViewModel = null!;
-        settingsStore = null!;
+        saveService = null!;
         InitializeComponent();
     }
 
@@ -55,9 +55,10 @@ public sealed partial class ConfigurationStudioWindow : Window
         ConfigurationStudioSection initialSection)
     {
         this.runtimeViewModel = runtimeViewModel ?? throw new ArgumentNullException(nameof(runtimeViewModel));
-        this.settingsStore = settingsStore ?? throw new ArgumentNullException(nameof(settingsStore));
+        ArgumentNullException.ThrowIfNull(settingsStore);
         InitializeComponent();
         DataContext = new ConfigurationStudioViewModel(document, runtimeViewModel, settingsStore, initialSection);
+        saveService = new ConfigurationStudioSaveService(viewModel, runtimeViewModel, settingsStore);
         viewModel.PropertyChanged += HandleStudioPropertyChanged;
         foreach (PatchGroupEditorViewModel group in viewModel.OperationalGroups)
             group.PropertyChanged += HandleOperationalGroupPropertyChanged;
@@ -496,13 +497,13 @@ public sealed partial class ConfigurationStudioWindow : Window
 
     private async Task ReviewAndSaveAsync(string path)
     {
-        await runtimeViewModel.FlushUserSettingsAsync();
         ConfigurationSavePlan plan;
         try
         {
-            plan = viewModel.CreateSavePlan(path);
+            plan = await saveService.PrepareAsync(path);
         }
-        catch (Exception exception) when (exception is IOException or InvalidOperationException or UnauthorizedAccessException)
+        catch (Exception exception) when (
+            exception is IOException or InvalidOperationException or UnauthorizedAccessException or ObjectDisposedException)
         {
             await ShowMessageAsync("Unable to prepare save", exception.Message);
             return;
@@ -518,14 +519,23 @@ public sealed partial class ConfigurationStudioWindow : Window
 
         try
         {
-            string backupRoot = Path.Combine(
-                Path.GetDirectoryName(settingsStore.Path) ?? AppContext.BaseDirectory,
-                "ConfigurationBackups");
-            ConfigurationSaveResult result = ConfigurationSaveTransaction.Execute(plan, backupRoot);
-            viewModel.AcceptSaved(path, plan);
+            // The Studio is modeless. Rebase immediately before the transaction
+            // so changes made while the review dialog was open cannot be lost.
+            ConfigurationStudioSaveExecution execution = await saveService.ExecuteAsync(path);
+            plan = execution.Plan;
+            if (!plan.CanSave)
+            {
+                viewModel.OpenValidationDrawer();
+                return;
+            }
+            ConfigurationSaveResult result = execution.Result!;
+            string? settingsWarning = execution.SettingsPersistenceFailure is { } settingsFailure
+                ? $"\n\nThe files were saved, but the live operator-settings writer reported a failure. " +
+                  $"The in-memory state was rebased and will be retried on the next settings change.\n\n{settingsFailure.Message}"
+                : null;
             await ShowMessageAsync(
                 "Configuration saved",
-                $"Saved {result.WrittenFiles.Count} file(s).\n\nBackup location:\n{result.BackupDirectory}");
+                $"Saved {result.WrittenFiles.Count} file(s).\n\nBackup location:\n{result.BackupDirectory}{settingsWarning}");
         }
         catch (ConfigurationExternalChangeException exception)
         {
@@ -547,7 +557,7 @@ public sealed partial class ConfigurationStudioWindow : Window
         }
 
         if (runtimeViewModel.CurrentCodeplugPath is not null &&
-            string.Equals(Path.GetFullPath(path), Path.GetFullPath(runtimeViewModel.CurrentCodeplugPath), StringComparison.OrdinalIgnoreCase) &&
+            FileSystemPathIdentity.AreEquivalent(path, runtimeViewModel.CurrentCodeplugPath) &&
             await ConfirmAsync(
                 "Reload active configuration?",
                 "The running FNE sessions still use the previous topology. Disconnect and reload now, or cancel to keep the saved file without changing the active session.",

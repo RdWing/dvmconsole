@@ -115,7 +115,8 @@ internal sealed class FneTransportLifetime : IDisposable
 
 internal sealed record FneTransportObservers(
     Action<long>? TrafficIngress,
-    Action<FneTalkgroupAnnouncement>? TalkgroupAnnouncement);
+    Action<FneTalkgroupAnnouncement>? TalkgroupAnnouncement,
+    Action? LoginRequestSent = null);
 
 internal readonly record struct FneTransportSession(
     FneTransportEncryptionMode EncryptionMode,
@@ -129,7 +130,7 @@ internal readonly record struct FneTransportSession(
 internal static class FneTransportSessionContext
 {
     private static readonly AsyncLocal<ContextState?> Current = new();
-    private static readonly FneTransportObservers EmptyObservers = new(null, null);
+    private static readonly FneTransportObservers EmptyObservers = new(null, null, null);
 
     public static FneTransportSession Capture()
     {
@@ -220,12 +221,11 @@ public abstract class UdpBase
     protected readonly UdpClient client;
 
     private readonly CancellationTokenSource receiveCancellation = new();
-    private readonly TaskCompletionSource<UdpFrame> stoppedReceive =
-        new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly FneTransportLifetime? transportLifetime;
     private readonly FneUdpChannelKind channelKind;
     private readonly Action<long>? trafficIngressObserver;
     private readonly Action<FneTalkgroupAnnouncement>? talkgroupAnnouncementObserver;
+    private readonly Action? loginRequestSentObserver;
     private readonly FneTransportNegotiationState encryptionState;
     private readonly InboundReplayWindow replayWindow = new();
     private int stopped;
@@ -237,6 +237,7 @@ public abstract class UdpBase
         channelKind = context.ChannelKind;
         trafficIngressObserver = context.Observers.TrafficIngress;
         talkgroupAnnouncementObserver = context.Observers.TalkgroupAnnouncement;
+        loginRequestSentObserver = context.Observers.LoginRequestSent;
         transportLifetime = context.Lifetime;
         encryptionState = new FneTransportNegotiationState(context.EncryptionMode);
         context.Lifetime?.Register(Stop);
@@ -257,7 +258,7 @@ public abstract class UdpBase
         while (true)
         {
             if (IsStopped)
-                return await stoppedReceive.Task.ConfigureAwait(false);
+                return StoppedFrame();
 
             UdpReceiveResult result;
             try
@@ -322,6 +323,25 @@ public abstract class UdpBase
 
     protected byte[] WrapForSend(byte[] message)
         => encryptionState.WrapForSend(message);
+
+    protected void ObserveOutboundFrame(ReadOnlySpan<byte> message)
+    {
+        if (channelKind != FneUdpChannelKind.Traffic ||
+            loginRequestSentObserver is null ||
+            !message.StartsWith("RPTL"u8))
+        {
+            return;
+        }
+
+        try
+        {
+            loginRequestSentObserver();
+        }
+        catch
+        {
+            // Retry observation must never interrupt protocol transmission.
+        }
+    }
 
     protected bool IsStopped => Volatile.Read(ref stopped) != 0;
 
@@ -395,6 +415,7 @@ public sealed class UdpReceiver : UdpBase
         if (IsStopped)
             return;
 
+        ObserveOutboundFrame(frame.Message);
         frame.Message = WrapForSend(frame.Message);
         try
         {

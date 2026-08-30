@@ -33,11 +33,21 @@ public static class ConfigurationSaveTransaction
         if (!plan.CanSave)
             throw new InvalidOperationException("The configuration contains errors or no files are scheduled to be saved.");
 
+        StringComparer pathComparer = OperatingSystem.IsWindows()
+            ? StringComparer.OrdinalIgnoreCase
+            : StringComparer.Ordinal;
         ConfigurationFileChange[] changes = plan.Files
             .Select(change => change with { Path = Path.GetFullPath(change.Path) })
-            .GroupBy(change => change.Path, StringComparer.OrdinalIgnoreCase)
-            .Select(group => group.Last())
             .ToArray();
+        string? duplicatePath = changes
+            .GroupBy(change => change.Path, pathComparer)
+            .FirstOrDefault(group => group.Count() > 1)?
+            .Key;
+        if (duplicatePath is not null)
+        {
+            throw new InvalidOperationException(
+                $"Configuration save contains more than one artifact targeting '{duplicatePath}'.");
+        }
 
         foreach (ConfigurationFileChange change in changes)
         {
@@ -74,6 +84,8 @@ public static class ConfigurationSaveTransaction
 
                 string stage = Path.Combine(directory, $".{Path.GetFileName(change.Path)}.{Guid.NewGuid():N}.studio.tmp");
                 File.WriteAllText(stage, change.Content);
+                if (change.ContainsSecrets)
+                    TryRestrictFile(stage);
                 string? backup = null;
                 if (File.Exists(change.Path))
                 {

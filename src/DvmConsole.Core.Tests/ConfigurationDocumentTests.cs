@@ -109,6 +109,57 @@ public sealed class ConfigurationDocumentTests
     }
 
     [Fact]
+    public void InsertingChannelDoesNotCopyUnknownFieldsFromTheDisplacedRow()
+    {
+        ConfigurationDocument document = ConfigurationDocument.Parse("""
+            systems:
+              - name: North
+                address: 127.0.0.1
+                port: 62031
+            zones:
+              - name: Dispatch
+                channels:
+                  - name: Primary
+                    system: North
+                    tgid: '101'
+                    mode: p25
+                    card_size: normal
+                    vendorFlag: retained-only-on-primary
+            groups: []
+            """);
+
+        document.Configuration.Zones[0].Channels.Insert(0, new ChannelConfiguration
+        {
+            Name = "Inserted",
+            System = "North",
+            Tgid = "102",
+            Mode = "p25",
+            CardSize = "normal"
+        });
+
+        string serialized = document.Serialize();
+        int inserted = serialized.IndexOf("name: Inserted", StringComparison.Ordinal);
+        int primary = serialized.IndexOf("name: Primary", StringComparison.Ordinal);
+        int vendor = serialized.IndexOf("vendorFlag: retained-only-on-primary", StringComparison.Ordinal);
+
+        Assert.True(inserted >= 0 && inserted < primary);
+        Assert.True(primary < vendor);
+        Assert.Equal(vendor, serialized.LastIndexOf("vendorFlag: retained-only-on-primary", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void EmptyKnownCollectionsAreNotReportedAsUnknownFields()
+    {
+        ConfigurationDocument document = ConfigurationDocument.Parse("""
+            systems: []
+            zones: []
+            groups: []
+            """);
+
+        Assert.Empty(document.UnknownFields);
+    }
+
+    [Fact]
     public void AnchorsOpenReadOnlyInsteadOfBeingRewritten()
     {
         ConfigurationDocument document = ConfigurationDocument.Parse("""
@@ -187,6 +238,41 @@ public sealed class ConfigurationDocumentTests
 
             Assert.Equal(valid, File.ReadAllText(target));
             Assert.Single(Directory.GetFiles(result.BackupDirectory));
+            if (!OperatingSystem.IsWindows())
+            {
+                Assert.Equal(
+                    UnixFileMode.UserRead | UnixFileMode.UserWrite,
+                    File.GetUnixFileMode(target));
+            }
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void SaveTransactionRejectsCollidingArtifactTargets()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "dvmconsole-studio-collision-tests", Guid.NewGuid().ToString("N"));
+        string target = Path.Combine(root, "codeplug.yml");
+        string backups = Path.Combine(root, "backups");
+        Directory.CreateDirectory(root);
+        try
+        {
+            var plan = new ConfigurationSavePlan(
+            [
+                new ConfigurationFileChange(target, "systems: []\n", null, "Codeplug", true),
+                new ConfigurationFileChange(target, "keys: []\n", null, "Encryption key file", true)
+            ],
+            []);
+
+            InvalidOperationException exception = Assert.Throws<InvalidOperationException>(
+                () => ConfigurationSaveTransaction.Execute(plan, backups));
+
+            Assert.Contains("more than one artifact", exception.Message, StringComparison.Ordinal);
+            Assert.False(File.Exists(target));
         }
         finally
         {

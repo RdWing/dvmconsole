@@ -7,7 +7,7 @@ public sealed partial class MainWindowViewModel
 {
     private void RegisterSessionOwnership(ConsoleSessionServices services)
     {
-        services.Presentation.Register("user-settings-writer", userSettingsWriter.DisposeAsync);
+        services.Presentation.Register("user-settings-persistence", userSettingsPersistence.DisposeAsync);
         services.Transmit.Own("ptt-state-change-lock", pttStateChangeLock);
         services.Presentation.Register(
             "web-stream-subscriptions",

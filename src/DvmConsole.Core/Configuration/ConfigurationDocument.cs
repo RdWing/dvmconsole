@@ -24,6 +24,10 @@ public sealed class ConfigurationDocument
             DefaultValuesHandling.OmitNull |
             DefaultValuesHandling.OmitEmptyCollections)
         .Build();
+    private static readonly ISerializer SchemaSerializer = new SerializerBuilder()
+        .WithNamingConvention(CamelCaseNamingConvention.Instance)
+        .ConfigureDefaultValuesHandling(DefaultValuesHandling.OmitNull)
+        .Build();
 
     private readonly YamlStream sourceTree;
 
@@ -264,7 +268,7 @@ public sealed class ConfigurationDocument
         YamlStream original,
         ConsoleConfiguration configuration)
     {
-        string canonical = Serializer.Serialize(configuration);
+        string canonical = SchemaSerializer.Serialize(configuration);
         var canonicalTree = new YamlStream();
         using (var reader = new StringReader(canonical))
             canonicalTree.Load(reader);
@@ -333,6 +337,7 @@ public sealed class ConfigurationDocument
     {
         if (canonicalItem is YamlMappingNode canonicalMap)
         {
+            bool hasIdentity = false;
             string[][] identityKeys =
             [
                 ["system", "tgid", "mode"],
@@ -344,6 +349,7 @@ public sealed class ConfigurationDocument
             {
                 if (!TryBuildMappingIdentity(canonicalMap, keys, out string? identity))
                     continue;
+                hasIdentity = true;
                 List<YamlNode> matches = originalSequence.Children
                     .Where(item => item is YamlMappingNode originalMap &&
                         TryBuildMappingIdentity(originalMap, keys, out string? originalIdentity) &&
@@ -352,6 +358,8 @@ public sealed class ConfigurationDocument
                 if (matches.Count == 1)
                     return matches[0];
             }
+            if (hasIdentity)
+                return null;
         }
 
         return fallbackIndex < originalSequence.Children.Count

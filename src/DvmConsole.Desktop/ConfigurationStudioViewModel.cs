@@ -239,7 +239,7 @@ public sealed class ConfigurationStudioViewModel : INotifyPropertyChanged
     public bool HasKeyFile => keyFilePath is not null;
     public bool CanUseOperationalGroups => document.SourcePath is not null &&
         runtimeViewModel.CurrentCodeplugPath is not null &&
-        string.Equals(Path.GetFullPath(document.SourcePath), Path.GetFullPath(runtimeViewModel.CurrentCodeplugPath), StringComparison.OrdinalIgnoreCase);
+        FileSystemPathIdentity.AreEquivalent(document.SourcePath, runtimeViewModel.CurrentCodeplugPath);
     public string OperationalGroupHint => CanUseOperationalGroups
         ? "Enabled changes apply immediately. Use Apply changes to save membership and direction without rewriting YAML or reconnecting FNE sessions."
         : "Operational controls are unavailable because this draft is unsaved or is not the active codeplug.";

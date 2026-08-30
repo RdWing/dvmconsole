@@ -7,13 +7,13 @@ internal sealed class ReceiveEpisodeCompletionCoordinator
 {
     private readonly ChannelReceiveWorkQueue receiveWork;
     private readonly Func<ChannelViewModel, long, Task> completePlayback;
-    private readonly Action<ChannelViewModel, uint> stopRecording;
+    private readonly Action<ChannelViewModel, long> stopRecording;
     private readonly Func<ChannelViewModel, ChannelViewModel?> resolveRecordingTarget;
 
     public ReceiveEpisodeCompletionCoordinator(
         ChannelReceiveWorkQueue receiveWork,
         Func<ChannelViewModel, long, Task> completePlayback,
-        Action<ChannelViewModel, uint> stopRecording,
+        Action<ChannelViewModel, long> stopRecording,
         Func<ChannelViewModel, ChannelViewModel?> resolveRecordingTarget)
     {
         this.receiveWork = receiveWork ?? throw new ArgumentNullException(nameof(receiveWork));
@@ -48,7 +48,7 @@ internal sealed class ReceiveEpisodeCompletionCoordinator
                      .OfType<ChannelViewModel>()
                      .Distinct())
         {
-            stopRecording(target, episode.PrimaryStreamId);
+            stopRecording(target, episode.EpisodeId);
         }
     }
 }

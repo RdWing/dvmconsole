@@ -97,6 +97,14 @@ jobs:
           cargo clippy --manifest-path native/vocoder/Cargo.toml --locked --all-targets --target "${{ matrix.rust_target }}" -- -D warnings
           cargo test --manifest-path native/vocoder/Cargo.toml --locked --target "${{ matrix.rust_target }}"
 
+      - name: Verify native macOS audio ring
+        if: startsWith(matrix.rid, 'osx-')
+        shell: bash
+        run: |
+          cmake -S native/dvmaudio -B "$RUNNER_TEMP/dvmaudio-build" -DBUILD_TESTING=ON
+          cmake --build "$RUNNER_TEMP/dvmaudio-build" --parallel
+          ctest --test-dir "$RUNNER_TEMP/dvmaudio-build" --output-on-failure
+
       - name: Restore solution
         shell: bash
         run: dotnet restore dvmconsole.sln --force-evaluate --ignore-failed-sources -p:Configuration=Release -p:NuGetAudit=false --verbosity minimal

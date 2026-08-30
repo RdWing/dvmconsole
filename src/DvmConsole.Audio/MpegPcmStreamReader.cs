@@ -9,8 +9,10 @@ public sealed class MpegPcmStreamReader : IAudioPcmStreamReader
     private readonly Stream source;
     private readonly MpegFile mpegFile;
     private readonly object sync = new();
+    private readonly object lifetimeSync = new();
+    private readonly ExclusiveReaderOperationTracker operations = new();
     private float[] decoded = [];
-    private bool disposed;
+    private Task? disposeTask;
 
     private MpegPcmStreamReader(Stream source)
     {
@@ -30,9 +32,20 @@ public sealed class MpegPcmStreamReader : IAudioPcmStreamReader
     {
         ArgumentNullException.ThrowIfNull(source);
         cancellationToken.ThrowIfCancellationRequested();
+        Task<MpegPcmStreamReader> openTask = Task.Run(
+            () => new MpegPcmStreamReader(source),
+            CancellationToken.None);
+        using CancellationTokenRegistration cancellation = cancellationToken.Register(
+            static state => ((Stream)state!).Dispose(),
+            source);
         try
         {
-            return await Task.Run(() => new MpegPcmStreamReader(source), cancellationToken).ConfigureAwait(false);
+            return await openTask.WaitAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            ObserveCancelledOpen(openTask);
+            throw;
         }
         catch
         {
@@ -41,11 +54,26 @@ public sealed class MpegPcmStreamReader : IAudioPcmStreamReader
         }
     }
 
+    private static void ObserveCancelledOpen(Task<MpegPcmStreamReader> openTask)
+    {
+        _ = openTask.ContinueWith(
+            static completed =>
+            {
+                if (completed.Status == TaskStatus.RanToCompletion)
+                    completed.Result.DisposeAsync().AsTask().GetAwaiter().GetResult();
+                else
+                    _ = completed.Exception;
+            },
+            CancellationToken.None,
+            TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
+    }
+
     public async ValueTask<int> ReadSamplesAsync(
         Memory<short> destination,
         CancellationToken cancellationToken = default)
     {
-        ObjectDisposedException.ThrowIf(disposed, this);
+        using IDisposable operation = operations.Begin(nameof(MpegPcmStreamReader));
         if (destination.IsEmpty)
             return 0;
         cancellationToken.ThrowIfCancellationRequested();
@@ -79,15 +107,18 @@ public sealed class MpegPcmStreamReader : IAudioPcmStreamReader
 
     public ValueTask DisposeAsync()
     {
-        lock (sync)
-        {
-            if (disposed)
-                return ValueTask.CompletedTask;
-            disposed = true;
-            mpegFile.Dispose();
-        }
+        lock (lifetimeSync)
+            return new ValueTask(disposeTask ??= DisposeCoreAsync());
+    }
 
-        return source.DisposeAsync();
+    private async Task DisposeCoreAsync()
+    {
+        Task idle = operations.StopAccepting();
+        source.Dispose();
+        await idle.ConfigureAwait(false);
+        lock (sync)
+            mpegFile.Dispose();
+        await source.DisposeAsync().ConfigureAwait(false);
     }
 
     private int Decode(Memory<short> destination, CancellationToken cancellationToken)
@@ -97,7 +128,6 @@ public sealed class MpegPcmStreamReader : IAudioPcmStreamReader
             int count;
             lock (sync)
             {
-                ObjectDisposedException.ThrowIf(disposed, this);
                 count = mpegFile.ReadSamples(decoded, 0, destination.Length);
             }
 

@@ -2,78 +2,23 @@ namespace DvmConsole.Core.Settings;
 
 internal static class SettingsImportPolicy
 {
+    private static readonly (SettingsImportScope Scope, string Name)[] PreviewSections =
+    [
+        (SettingsImportScope.General, "General"),
+        (SettingsImportScope.Audio, "Audio"),
+        (SettingsImportScope.Connections, "Connections"),
+        (SettingsImportScope.Presets, "Presets"),
+        (SettingsImportScope.RecordingAndPatch, "Recording/patch"),
+        (SettingsImportScope.Session, "Session")
+    ];
+
     public static SettingsImportPreview CreatePreview(string source, UserSettings settings)
     {
-        var sections = new List<string>();
-        if (settings.TalkPermitTone || !settings.ConnectionChimes ||
-            !settings.LocalToneMonitorEnabled ||
-            settings.VerboseLoggingEnabled || settings.DarkMode ||
-            settings.UiFontSize != 14 || settings.UiScale != 1.0 ||
-            settings.TogglePttMode || !string.Equals(settings.GlobalPttKey, "Space", StringComparison.OrdinalIgnoreCase) ||
-            !string.Equals(settings.ActiveSystemPttKey, "None", StringComparison.OrdinalIgnoreCase) ||
-            settings.SerialPttEnabled || settings.SerialPttActiveSystemOnly ||
-            !string.IsNullOrWhiteSpace(settings.SerialPttPortName) ||
-            settings.SerialPttBaudRate != 9_600 ||
-            !settings.ShowSystemStatus || !settings.ShowChannels || !settings.ShowAlertTones ||
-            !settings.LockWidgets || settings.ChannelWidgetPositions.Count > 0 ||
-            settings.CodeplugStudioStates.Count > 0 ||
-            !settings.ShowCallHistoryPane || settings.SnapCallHistoryToWindow ||
-            !UserSettingsNormalizationRules.WindowPlacementsEqual(settings.MainWindowPlacement, new WindowPlacementSetting
-            {
-                Width = 1260,
-                Height = 760
-            }) ||
-            !UserSettingsNormalizationRules.WindowPlacementsEqual(settings.CallHistoryWindowPlacement, new WindowPlacementSetting()) ||
-            settings.UserBackgroundImage is not null)
-        {
-            sections.Add("General");
-        }
-
-        if (!string.Equals(settings.AudioInputDeviceId, "default", StringComparison.OrdinalIgnoreCase) ||
-            !string.Equals(settings.AudioOutputDeviceId, "default", StringComparison.OrdinalIgnoreCase) ||
-            UserSettingsNormalizationRules.HasCustomRxAudioProcessingOptions(settings.RxAudioProcessingOptions) ||
-            !string.Equals(settings.AudioProcessingMode, UserSettings.DvmConsoleAudioProcessingMode, StringComparison.Ordinal) ||
-            settings.HighQualityBluetoothAudioEnabled ||
-            settings.AudioInputAgcEnabled || settings.AudioInputAgcTargetDbfs != -25.0 ||
-            settings.AudioInputPresets.Count > 0 ||
-            settings.ChannelVolumes.Count > 0 || settings.ChannelStereoBalances.Count > 0 ||
-            settings.ChannelOutputDeviceIds.Count > 0 ||
-            settings.WebStreamOutputDeviceIds.Count > 0 || settings.WebStreamVolumes.Count > 0)
-        {
-            sections.Add("Audio");
-        }
-
-        if (!UserSettingsNormalizationRules.RxJitterBufferSettingsEqual(settings.RxJitterBuffer, new RxJitterBufferSetting()) ||
-            settings.RxJitterBuffersBySystem.Count > 0)
-        {
-            sections.Add("Connections");
-        }
-
-        if (settings.DtmfPresets.Count > 0 || settings.TonePresets.Count > 0 || settings.AlertTones.Count > 0 ||
-            !string.Equals(settings.LastDtmfDigits, "123", StringComparison.Ordinal) ||
-            settings.ToneFrequencyHz != 1000 || settings.ToneDurationSeconds != 1.0)
-        {
-            sections.Add("Presets");
-        }
-
-        if (settings.RecordingRetentionDays != 7 || !string.IsNullOrWhiteSpace(settings.RecordingRootPath) ||
-            settings.RecordingEnabledChannelKeys.Count > 0 || settings.RecordingIgnoredSubscriberIds.Count > 0 ||
-            settings.PatchGroupMemberships.Count > 0 || settings.PatchGroupModes.Count > 0 ||
-            settings.PatchGroupEnabledStates.Count > 0 || settings.CodeplugGroupStates.Count > 0 ||
-            settings.RetainPatchStateOnStartup)
-        {
-            sections.Add("Recording/patch");
-        }
-
-        if (!string.IsNullOrWhiteSpace(settings.LastCodeplugPath) || settings.RecentCodeplugPaths.Count > 0 ||
-            !string.IsNullOrWhiteSpace(settings.LastSelectedSystemName) ||
-            !string.IsNullOrWhiteSpace(settings.LastSelectedChannelKey) ||
-            settings.ReceiveEnabledChannelKeys.Count > 0 ||
-            settings.TransmitSelectedChannelKeys.Count > 0 || settings.SelectedWebStreams.Count > 0 ||
-            settings.TransmitEncryptionStates.Count > 0)
-        {
-            sections.Add("Session");
-        }
+        ArgumentNullException.ThrowIfNull(settings);
+        string[] sections = PreviewSections
+            .Where(section => HasNonDefaultValues(settings, section.Scope))
+            .Select(section => section.Name)
+            .ToArray();
 
         return new SettingsImportPreview(source, settings.SchemaVersion, settings.LastCodeplugPath, sections);
     }
@@ -117,6 +62,7 @@ internal static class SettingsImportPolicy
             target.UserBackgroundImage = source.UserBackgroundImage;
             target.ShowCallHistoryPane = source.ShowCallHistoryPane;
             target.SnapCallHistoryToWindow = source.SnapCallHistoryToWindow;
+            target.RestoreSelectedChannelsOnStartup = source.RestoreSelectedChannelsOnStartup;
             target.MainWindowPlacement = UserSettingsNormalizationRules.CopyWindowPlacement(source.MainWindowPlacement);
             target.CallHistoryWindowPlacement = new WindowPlacementSetting
             {
@@ -211,5 +157,17 @@ internal static class SettingsImportPolicy
             target.SelectedWebStreams = source.SelectedWebStreams.ToList();
             target.TransmitEncryptionStates = new Dictionary<string, bool>(source.TransmitEncryptionStates, StringComparer.OrdinalIgnoreCase);
         }
+    }
+
+    private static bool HasNonDefaultValues(UserSettings source, SettingsImportScope scope)
+    {
+        var baseline = new UserSettings { SchemaVersion = source.SchemaVersion };
+        var imported = new UserSettings { SchemaVersion = source.SchemaVersion };
+        Merge(imported, source, scope);
+        var serializer = new UserSettingsSerializer();
+        return !string.Equals(
+            serializer.Serialize(baseline),
+            serializer.Serialize(imported),
+            StringComparison.Ordinal);
     }
 }

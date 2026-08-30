@@ -51,18 +51,20 @@ public static class ConfigurationValidator
         {
             SystemConfiguration system = configuration.Systems[systemIndex];
             string path = $"systems[{systemIndex}]";
+            string systemName = system.Name?.Trim() ?? string.Empty;
             if (string.IsNullOrWhiteSpace(system.Name))
                 Error("Systems", $"{path}.name", "Every system must have a name.");
-            else if (!systemNames.Add(system.Name))
+            else if (!systemNames.Add(systemName))
                 Error("Systems", $"{path}.name", $"System name '{system.Name}' is duplicated.");
 
             if (string.IsNullOrWhiteSpace(system.Address))
                 Error("Systems", $"{path}.address", $"System '{system.Name}' must have an address.");
-            if (system.Port is < 1 or > 65535)
+            if (system.Port is < 1 or > 65534)
                 Error("Systems", $"{path}.port", $"System '{system.Name}' has an invalid port.");
             if (system.Encrypted && string.IsNullOrWhiteSpace(system.PresharedKey))
                 Error("Systems", $"{path}.presharedKey", $"System '{system.Name}' must have a preshared key when FNE transport encryption is enabled.");
-            if (system.TransportEncryptionMode is not ("auto" or "ecb" or "cbc"))
+            string transportEncryptionMode = NormalizeToken(system.TransportEncryptionMode);
+            if (transportEncryptionMode is not ("auto" or "ecb" or "cbc"))
                 Error("Systems", $"{path}.transportEncryptionMode", $"System '{system.Name}' has unsupported transport encryption mode '{system.TransportEncryptionMode}'.");
         }
 
@@ -84,6 +86,8 @@ public static class ConfigurationValidator
                 string path = $"{zonePath}.channels[{channelIndex}]";
                 string channelName = channel.Name?.Trim() ?? string.Empty;
                 string channelSystem = channel.System?.Trim() ?? string.Empty;
+                string channelMode = NormalizeToken(channel.Mode);
+                string cardSize = NormalizeToken(channel.CardSize);
                 if (string.IsNullOrWhiteSpace(channel.Name))
                     Error("Channels", $"{path}.name", $"Zone '{zone.Name}' contains a channel without a name.");
                 else if (!channelNames.Add($"{channelSystem}\u001F{channelName}"))
@@ -92,29 +96,29 @@ public static class ConfigurationValidator
                 if (!systemNames.Contains(channelSystem))
                     Error("Channels", $"{path}.system", $"Channel '{channel.Name}' references unknown system '{channel.System}'.");
 
-                if (channel.Mode is not ("dmr" or "p25" or "nxdn" or "analog"))
+                if (channelMode is not ("dmr" or "p25" or "nxdn" or "analog"))
                     Error("Channels", $"{path}.mode", $"Channel '{channel.Name}' has unsupported mode '{channel.Mode}'.");
 
                 if (!uint.TryParse(channel.Tgid, out uint destinationId) || destinationId == 0)
                     Error("Channels", $"{path}.tgid", $"Channel '{channel.Name}' must have a non-zero numeric destination ID.");
-                else if (channel.Mode == "nxdn" && destinationId > ushort.MaxValue)
+                else if (channelMode == "nxdn" && destinationId > ushort.MaxValue)
                     Error("Channels", $"{path}.tgid", $"NXDN channel '{channel.Name}' must use a 16-bit destination ID.");
 
-                if (channel.Mode == "dmr" && channel.Slot is < 1 or > 2)
+                if (channelMode == "dmr" && channel.Slot is < 1 or > 2)
                     Error("Channels", $"{path}.slot", $"DMR channel '{channel.Name}' must use slot 1 or 2.");
 
                 EncryptionAlgorithmOption? algorithm =
-                    EncryptionAlgorithmCatalog.FindChannelOption(channel.Mode, channel.Algo);
+                    EncryptionAlgorithmCatalog.FindChannelOption(channelMode, channel.Algo);
                 if (algorithm is null)
                 {
                     Error(
                         "Channels",
                         $"{path}.algo",
-                        $"Channel '{channel.Name}' uses encryption algorithm '{channel.Algo}', which is not available for {ConfigurationProtocolCatalog.DisplayName(channel.Mode)}.");
+                        $"Channel '{channel.Name}' uses encryption algorithm '{channel.Algo}', which is not available for {ConfigurationProtocolCatalog.DisplayName(channelMode)}.");
                 }
                 else if (algorithm.AlgorithmId is not null)
                 {
-                    if (!EncryptionAlgorithmCatalog.TryParseChannelKeyId(channel.Mode, channel.KeyId, out ushort keyId))
+                    if (!EncryptionAlgorithmCatalog.TryParseChannelKeyId(channelMode, channel.KeyId, out ushort keyId))
                     {
                         Error(
                             "Channels",
@@ -123,7 +127,7 @@ public static class ConfigurationValidator
                     }
                     else
                     {
-                        int maximumKeyId = channel.Mode switch
+                        int maximumKeyId = channelMode switch
                         {
                             "dmr" => byte.MaxValue,
                             "nxdn" => 63,
@@ -134,12 +138,12 @@ public static class ConfigurationValidator
                             Error(
                                 "Channels",
                                 $"{path}.keyId",
-                                $"Channel '{channel.Name}' must use a {ConfigurationProtocolCatalog.DisplayName(channel.Mode)} key ID between 0x1 and 0x{maximumKeyId:X}.");
+                                $"Channel '{channel.Name}' must use a {ConfigurationProtocolCatalog.DisplayName(channelMode)} key ID between 0x1 and 0x{maximumKeyId:X}.");
                         }
                     }
                 }
 
-                if (channel.CardSize is not ("small" or "normal" or "large"))
+                if (cardSize is not ("small" or "normal" or "large"))
                     Error("Channels", $"{path}.card_size", $"Channel '{channel.Name}' has unsupported card size '{channel.CardSize}'. Use Small, Normal, or Large.");
 
                 if (!string.IsNullOrWhiteSpace(channel.ResourceColor) &&
@@ -194,4 +198,7 @@ public static class ConfigurationValidator
             return false;
         return candidate.Skip(1).All(Uri.IsHexDigit);
     }
+
+    private static string NormalizeToken(string? value)
+        => value?.Trim().ToLowerInvariant() ?? string.Empty;
 }

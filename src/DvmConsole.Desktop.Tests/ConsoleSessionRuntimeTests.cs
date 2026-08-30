@@ -188,14 +188,14 @@ public sealed class ConsoleSessionRuntimeTests
                 "source-receive-work",
                 "call-recording-manager",
                 "debug-log-workspace",
-                "user-settings-writer"
+                "user-settings-persistence"
             ];
             Assert.All(requiredOwnership, name => Assert.Contains(name, cleanupOrder));
             Assert.Equal("dispatcher-timers", cleanupOrder[0]);
             Assert.Equal("systems", cleanupOrder[^1]);
             AssertBefore(cleanupOrder, "ptt-session", "coordinators-under-ptt-gate");
             AssertBefore(cleanupOrder, "audio-work", "source-receive-work");
-            AssertBefore(cleanupOrder, "user-settings-writer", "systems");
+            AssertBefore(cleanupOrder, "user-settings-persistence", "systems");
         }
         finally
         {

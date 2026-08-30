@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Reflection;
 
 namespace DvmConsole.Core.Settings;
 
@@ -7,6 +8,10 @@ namespace DvmConsole.Core.Settings;
 // platform-specific profile location.
 public sealed class UserSettingsStore
 {
+    private static readonly PropertyInfo[] WritableSettingsProperties = typeof(UserSettings)
+        .GetProperties(BindingFlags.Instance | BindingFlags.Public)
+        .Where(property => property.CanRead && property.SetMethod?.IsPublic == true)
+        .ToArray();
     private readonly UserSettingsSerializer serializer;
     private readonly AtomicTextFileStore fileStore;
     private readonly SettingsProfileRepository profiles;
@@ -79,6 +84,17 @@ public sealed class UserSettingsStore
     {
         ArgumentNullException.ThrowIfNull(snapshot);
         fileStore.WriteAllText(snapshot.Json);
+    }
+
+    public void ApplySerializedSnapshot(UserSettings target, string json)
+    {
+        ArgumentNullException.ThrowIfNull(target);
+        ArgumentException.ThrowIfNullOrWhiteSpace(json);
+        UserSettings source = serializer.Deserialize(json)
+            ?? throw new InvalidDataException("The operator-settings snapshot was empty.");
+        normalization.NormalizeAfterLoad(source);
+        foreach (PropertyInfo property in WritableSettingsProperties)
+            property.SetValue(target, property.GetValue(source));
     }
 
     public void Export(UserSettings settings, string destinationPath)

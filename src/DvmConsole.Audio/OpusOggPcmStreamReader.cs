@@ -13,11 +13,11 @@ public sealed class OpusOggPcmStreamReader : IAudioPcmStreamReader
     private readonly IOpusOggPacketReader packetReader;
     private readonly object sync = new();
     private readonly object lifetimeSync = new();
+    private readonly ExclusiveReaderOperationTracker operations = new();
     private short[] pending = [];
     private int pendingOffset;
-    private Task<int>? activeDecodeTask;
+    private Task? disposeTask;
     private bool packetReaderDisposed;
-    private int disposed;
 
     private OpusOggPcmStreamReader(Stream source)
         : this(source, new ConcentusOpusOggPacketReader(source))
@@ -69,22 +69,17 @@ public sealed class OpusOggPcmStreamReader : IAudioPcmStreamReader
         Memory<short> destination,
         CancellationToken cancellationToken = default)
     {
-        ObjectDisposedException.ThrowIf(Volatile.Read(ref disposed) != 0, this);
         cancellationToken.ThrowIfCancellationRequested();
+        IDisposable? operation = operations.Begin(nameof(OpusOggPcmStreamReader));
         if (destination.IsEmpty)
-            return 0;
-
-        Task<int> decodeTask;
-        lock (lifetimeSync)
         {
-            ObjectDisposedException.ThrowIf(Volatile.Read(ref disposed) != 0, this);
-            if (activeDecodeTask is { IsCompleted: false })
-                throw new InvalidOperationException("Concurrent Ogg Opus reads are not supported.");
-            decodeTask = Task.Run(
-                () => Decode(destination, cancellationToken),
-                CancellationToken.None);
-            activeDecodeTask = decodeTask;
+            operation.Dispose();
+            return 0;
         }
+
+        Task<int> decodeTask = Task.Run(
+            () => Decode(destination, cancellationToken),
+            CancellationToken.None);
         using CancellationTokenRegistration cancellation = cancellationToken.Register(
             static state => ((OpusOggPcmStreamReader)state!).source.Dispose(),
             this);
@@ -94,30 +89,30 @@ public sealed class OpusOggPcmStreamReader : IAudioPcmStreamReader
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            ObserveBackgroundDecode(decodeTask);
+            ObserveBackgroundDecode(decodeTask, operation);
+            operation = null;
             throw;
         }
         finally
         {
             if (decodeTask.IsCompleted)
-                ClearActiveDecode(decodeTask);
+                operation?.Dispose();
         }
     }
 
     public ValueTask DisposeAsync()
     {
-        if (Interlocked.Exchange(ref disposed, 1) != 0)
-            return ValueTask.CompletedTask;
-
-        source.Dispose();
-        Task<int>? decodeTask;
         lock (lifetimeSync)
-            decodeTask = activeDecodeTask;
-        if (decodeTask is { IsCompleted: false })
-            ObserveBackgroundDecode(decodeTask);
-        else
-            DisposePacketReader();
-        return ValueTask.CompletedTask;
+            return new ValueTask(disposeTask ??= DisposeCoreAsync());
+    }
+
+    private async Task DisposeCoreAsync()
+    {
+        Task idle = operations.StopAccepting();
+        source.Dispose();
+        await idle.ConfigureAwait(false);
+        DisposePacketReader();
+        await source.DisposeAsync().ConfigureAwait(false);
     }
 
     private static void ObserveCancelledOpen(Task<OpusOggPcmStreamReader> openTask)
@@ -135,30 +130,18 @@ public sealed class OpusOggPcmStreamReader : IAudioPcmStreamReader
             TaskScheduler.Default);
     }
 
-    private void ObserveBackgroundDecode(Task<int> decodeTask)
+    private static void ObserveBackgroundDecode(Task<int> decodeTask, IDisposable operation)
     {
         _ = decodeTask.ContinueWith(
             static (completed, state) =>
             {
-                var owner = (OpusOggPcmStreamReader)state!;
                 _ = completed.Exception;
-                owner.ClearActiveDecode(completed);
-                if (Volatile.Read(ref owner.disposed) != 0)
-                    owner.DisposePacketReader();
+                ((IDisposable)state!).Dispose();
             },
-            this,
+            operation,
             CancellationToken.None,
             TaskContinuationOptions.ExecuteSynchronously,
             TaskScheduler.Default);
-    }
-
-    private void ClearActiveDecode(Task decodeTask)
-    {
-        lock (lifetimeSync)
-        {
-            if (ReferenceEquals(activeDecodeTask, decodeTask))
-                activeDecodeTask = null;
-        }
     }
 
     private void DisposePacketReader()
@@ -180,7 +163,6 @@ public sealed class OpusOggPcmStreamReader : IAudioPcmStreamReader
         {
             lock (sync)
             {
-                ObjectDisposedException.ThrowIf(Volatile.Read(ref disposed) != 0, this);
                 int written = 0;
                 while (written < destination.Length)
                 {

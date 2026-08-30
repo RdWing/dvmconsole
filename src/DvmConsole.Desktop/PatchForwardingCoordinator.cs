@@ -342,13 +342,13 @@ public sealed class PatchForwardingCoordinator : IDisposable
                 startingTargets.Remove(member.Key);
                 ClearUnavailableDiagnostics(member);
             }
-            _ = ObserveTargetStartAsync(
+            TaskObservation.Observe(ObserveTargetStartAsync(
                 member,
                 streamId,
                 sourceId,
                 channel.Definition.Mode,
-                activeTarget);
-            _ = ObserveTargetCompletionAsync(member, streamId, activeTarget);
+                activeTarget));
+            TaskObservation.Observe(ObserveTargetCompletionAsync(member, streamId, activeTarget));
             return streamId;
         }
         catch (Exception exception)

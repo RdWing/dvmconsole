@@ -39,6 +39,7 @@ internal sealed class RecordingMetadataFactory
             SubscriberId = descriptor.SourceId,
             SubscriberAlias = descriptor.SubscriberAlias,
             StreamId = descriptor.StreamId,
+            ReceiveEpisodeId = descriptor.ReceiveEpisodeId,
             StreamIds = descriptor.StreamIds.ToList(),
             RetentionDaysAtRecordTime = descriptor.RetentionDays,
             PlaybackValidated = true

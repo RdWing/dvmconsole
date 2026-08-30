@@ -1,4 +1,5 @@
 using DvmConsole.Audio;
+using DvmConsole.Core.Configuration;
 using DvmConsole.Core.Runtime;
 using DvmConsole.FneClient;
 using DvmConsole.Media;
@@ -267,6 +268,58 @@ public sealed class ChannelReceiveAudioSessionTests
     }
 
     [Fact]
+    public async Task FixedSecureNxdnChannelCanDecryptLateEntryVoiceFromItsDefinition()
+    {
+        byte[] key = Convert.FromHexString("1234");
+        var packets = new List<byte[]>();
+        using (var sender = new NxdnTxCallSession(
+            1,
+            100,
+            true,
+            99,
+            new FakeVocoderSession(),
+            (payload, _, _) => packets.Add(payload.ToArray()),
+            new NxdnPrivacyOptions(NxdnPrivacyAlgorithms.Ehr, 5, key)))
+        {
+            sender.Start();
+            sender.Process(new short[VocoderFrameSizes.PcmSamplesPerFrame * 4]);
+        }
+        using var keyRing = new NxdnKeyRing("System 1", new KeyContainer
+        {
+            Keys =
+            [
+                new KeyEntry
+                {
+                    Protocol = "nxdn",
+                    AlgId = NxdnPrivacyAlgorithms.Ehr,
+                    KeyId = 5,
+                    Key = Convert.ToHexString(key)
+                }
+            ]
+        });
+        var definition = new ChannelRuntimeDefinition(
+            "Secure NXDN",
+            "System 1",
+            "nxdn",
+            100,
+            0,
+            encryptionAlgorithm: "ehr",
+            encryptionKeyId: "5");
+        var vocoder = new FakeVocoderSession();
+        await using var session = new ChannelReceiveAudioSession(
+            definition,
+            vocoder,
+            new FakePlayback(),
+            nxdnKeyResolver: keyRing);
+
+        await session.ProcessAsync(CreateNxdnTraffic(packets[1], packetSequence: 0));
+
+        Assert.Equal(4, session.FramesDecoded);
+        Assert.Equal(4, vocoder.DecodeParameterCalls);
+        Assert.Equal(0, session.MalformedPackets);
+    }
+
+    [Fact]
     public async Task RoutesMatchingAnalogPcmThroughTheConfiguredSession()
     {
         var definition = new ChannelRuntimeDefinition("Analog", "System 1", "analog", 100, 0);
@@ -488,9 +541,10 @@ public sealed class ChannelReceiveAudioSessionTests
             payload);
     }
 
-    private sealed class FakeVocoderSession : IVocoderSession
+    private sealed class FakeVocoderSession : IHalfRateVocoderSession
     {
         public int DecodeCalls { get; private set; }
+        public int DecodeParameterCalls { get; private set; }
         public int Encode(ReadOnlySpan<short> samples, Span<byte> codeword) => 0;
 
         public int Decode(ReadOnlySpan<byte> codeword, Span<short> samples)
@@ -498,6 +552,29 @@ public sealed class ChannelReceiveAudioSessionTests
             DecodeCalls++;
             samples.Fill((short)DecodeCalls);
             return 0;
+        }
+
+        public int FlushEncode(Span<byte> codeword) => 0;
+        public int EncodeParameters(ReadOnlySpan<short> samples, Span<byte> parameters) => 0;
+        public int DecodeParameters(
+            ReadOnlySpan<byte> parameters,
+            Span<short> samples,
+            uint correctedErrors = 0,
+            bool lost = false)
+        {
+            DecodeParameterCalls++;
+            return 0;
+        }
+        public int FlushEncodeParameters(Span<byte> parameters) => 0;
+        public int ExtractParameters(ReadOnlySpan<byte> codeword, Span<byte> parameters)
+        {
+            codeword[..parameters.Length].CopyTo(parameters);
+            return parameters.Length;
+        }
+        public void BuildCodeword(ReadOnlySpan<byte> parameters, Span<byte> codeword)
+        {
+            codeword.Clear();
+            parameters.CopyTo(codeword);
         }
 
         public void Dispose()

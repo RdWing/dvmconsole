@@ -39,9 +39,11 @@ public sealed record HistoryCatalogFilter(
             return false;
         if (Protocol != "All" && !entry.ProtocolText.Equals(Protocol, StringComparison.OrdinalIgnoreCase))
             return false;
-        if (Encryption.Equals("Clear", StringComparison.OrdinalIgnoreCase) && (entry.IsEvent || entry.Encrypted))
+        if (Encryption.Equals("Clear", StringComparison.OrdinalIgnoreCase) &&
+            (entry.IsEvent || !entry.EncryptionKnown || entry.Encrypted))
             return false;
-        if (Encryption.Equals("Encrypted", StringComparison.OrdinalIgnoreCase) && (entry.IsEvent || !entry.Encrypted))
+        if (Encryption.Equals("Encrypted", StringComparison.OrdinalIgnoreCase) &&
+            (entry.IsEvent || !entry.EncryptionKnown || !entry.Encrypted))
             return false;
         if (!MatchesText(System, entry.SystemName) ||
             !MatchesText(Channel, entry.DisplayChannelText) ||

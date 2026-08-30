@@ -148,7 +148,17 @@ public sealed partial class MainWindow : Window
         Deactivated += async (_, _) =>
         {
             pttKeyRouter.UpdateInputFocus(null);
-            await viewModel.FlushUserSettingsAsync().ConfigureAwait(false);
+            try
+            {
+                await viewModel.FlushUserSettingsAsync().ConfigureAwait(false);
+            }
+            catch (Exception exception) when (
+                exception is IOException or UnauthorizedAccessException or ObjectDisposedException)
+            {
+                DesktopCrashLog.Write("Operator settings persistence", exception);
+                await Dispatcher.UIThread.InvokeAsync(() =>
+                    viewModel.ReportUserSettingsPersistenceFailure(exception));
+            }
         };
     }
 
@@ -631,7 +641,18 @@ public sealed partial class MainWindow : Window
             return;
         }
 
-        await viewModel.FlushUserSettingsAsync();
+        try
+        {
+            await viewModel.FlushUserSettingsAsync();
+        }
+        catch (Exception exception) when (
+            exception is IOException or UnauthorizedAccessException or ObjectDisposedException)
+        {
+            await ShowInformationAsync(
+                "Operator settings unavailable",
+                $"Configuration Studio could not be opened because current operator settings could not be saved.\n\n{exception.Message}");
+            return;
+        }
         ConfigurationDocument document;
         try
         {

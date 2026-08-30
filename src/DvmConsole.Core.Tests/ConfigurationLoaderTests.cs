@@ -92,6 +92,69 @@ public sealed class ConfigurationLoaderTests
     }
 
     [Fact]
+    public void ValidationUsesTheSameTrimmedCaseInsensitiveIdentitiesAsRuntime()
+    {
+        var configuration = new ConsoleConfiguration
+        {
+            Systems =
+            [
+                new SystemConfiguration { Name = " North ", Address = "127.0.0.1", Port = 62031 }
+            ],
+            Zones =
+            [
+                new ZoneConfiguration
+                {
+                    Name = "Dispatch",
+                    Channels =
+                    [
+                        new ChannelConfiguration
+                        {
+                            Name = "Primary",
+                            System = "North",
+                            Tgid = "101",
+                            Mode = " P25 ",
+                            CardSize = " Large "
+                        }
+                    ]
+                }
+            ]
+        };
+
+        Assert.Empty(ConfigurationLoader.Validate(configuration));
+
+        configuration.Systems.Add(new SystemConfiguration
+        {
+            Name = "north",
+            Address = "127.0.0.1",
+            Port = 62031
+        });
+        Assert.Contains(
+            ConfigurationLoader.Validate(configuration),
+            error => error.Contains("duplicated", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void ValidationRejectsUnsupportedGroupTypesAndReservedMetadataPort()
+    {
+        var configuration = new ConsoleConfiguration
+        {
+            Systems =
+            [
+                new SystemConfiguration { Name = "North", Address = "127.0.0.1", Port = 65535 }
+            ],
+            Groups =
+            [
+                new GroupConfiguration { Name = "Mystery", Type = "not-a-real-type" }
+            ]
+        };
+
+        IReadOnlyList<string> errors = ConfigurationLoader.Validate(configuration);
+
+        Assert.Contains(errors, error => error.Contains("invalid port", StringComparison.Ordinal));
+        Assert.Contains(errors, error => error.Contains("unsupported type", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void RejectsEncryptedTransportWithoutChangingPlaintextConfigurationLoading()
     {
         var configuration = new ConsoleConfiguration

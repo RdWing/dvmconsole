@@ -1190,6 +1190,73 @@ public sealed class UserSettingsStoreTests
     }
 
     [Fact]
+    public void ImportPreviewAndMergeShareOneScopePolicy()
+    {
+        string path = CreatePath();
+        string importPath = Path.Combine(Path.GetDirectoryName(path)!, "scope-policy-profile.json");
+        try
+        {
+            var sourceStore = new UserSettingsStore(importPath);
+            sourceStore.Save(new UserSettings
+            {
+                ClockShowSeconds = true,
+                KeepTransmitMicrophoneWarm = true,
+                QuickCallToneAFrequencyHz = 432.1,
+                RestoreSelectedChannelsOnStartup = false
+            });
+            var store = new UserSettingsStore(path);
+
+            SettingsImportPreview preview = store.PreviewImport(importPath);
+
+            Assert.Contains("General", preview.PopulatedSections);
+            Assert.Contains("Audio", preview.PopulatedSections);
+            Assert.Contains("Presets", preview.PopulatedSections);
+
+            store.Import(importPath, SettingsImportScope.OperatorState);
+            UserSettings imported = store.Load();
+            Assert.True(imported.ClockShowSeconds);
+            Assert.True(imported.KeepTransmitMicrophoneWarm);
+            Assert.Equal(432.1, imported.QuickCallToneAFrequencyHz);
+            Assert.False(imported.RestoreSelectedChannelsOnStartup);
+        }
+        finally
+        {
+            Cleanup(path);
+        }
+    }
+
+    [Fact]
+    public void SerializedSnapshotCanRebaseAnExistingSettingsOwner()
+    {
+        string path = CreatePath();
+        try
+        {
+            var store = new UserSettingsStore(path);
+            var owned = new UserSettings
+            {
+                DarkMode = false,
+                ChannelVolumes = new Dictionary<string, double> { ["old"] = 0.5 }
+            };
+            var replacement = new UserSettings
+            {
+                DarkMode = true,
+                ChannelVolumes = new Dictionary<string, double> { ["new"] = 1.5 }
+            };
+            UserSettingsSnapshot snapshot = store.CaptureSnapshot(replacement);
+
+            store.ApplySerializedSnapshot(owned, snapshot.Json);
+
+            Assert.True(owned.DarkMode);
+            Assert.False(owned.ChannelVolumes.ContainsKey("old"));
+            Assert.Equal(1.5, owned.ChannelVolumes["new"]);
+        }
+        finally
+        {
+            Cleanup(path);
+        }
+    }
+
+    [Fact]
     public void NamedProfileNamesCannotEscapeProfilesDirectory()
     {
         string path = CreatePath();

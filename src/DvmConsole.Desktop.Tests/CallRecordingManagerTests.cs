@@ -294,6 +294,45 @@ public sealed class CallRecordingManagerTests
     }
 
     [Fact]
+    public async Task ReusedPrimaryStreamCreatesIndependentRecordingsForDistinctEpisodes()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "dvmconsole-recording-tests", Guid.NewGuid().ToString("N"));
+        var channel = new ChannelViewModel(new ChannelConfiguration
+        {
+            Name = "Dispatch",
+            System = "System 1",
+            Tgid = "99",
+            Mode = "p25"
+        });
+        using var manager = new CallRecordingManager(root);
+        channel.SetRecordingEnabled(true);
+
+        try
+        {
+            manager.WriteEpisodeSamples(channel, 41, 41, 7, ActiveSamples(), receiveEpisodeId: 100);
+            manager.WriteEpisodeSamples(channel, 41, 41, 7, ActiveSamples(), receiveEpisodeId: 101);
+            Task<RecordingFinalizationResult> first = NextFinalizationAsync(manager);
+            manager.StopEpisode(channel, 100);
+            Assert.True((await first).IsPlayable);
+            Task<RecordingFinalizationResult> second = NextFinalizationAsync(manager);
+            manager.StopEpisode(channel, 101);
+            Assert.True((await second).IsPlayable);
+
+            Assert.Equal(
+                new long?[] { 100, 101 },
+                manager.LoadRecordings()
+                    .Select(metadata => metadata.ReceiveEpisodeId)
+                    .OrderBy(value => value)
+                    .ToArray());
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task EpisodeFragmentMetadataBoundsAttackerControlledStreamIdentities()
     {
         string root = Path.Combine(Path.GetTempPath(), "dvmconsole-recording-tests", Guid.NewGuid().ToString("N"));

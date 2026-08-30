@@ -366,7 +366,7 @@ public sealed class FneConnection : IAsyncDisposable
         await lifecycle.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            ResetLoginRetryBackoff();
+            ResetLoginCadence();
             await StartCoreAsync(cancellationToken).ConfigureAwait(false);
         }
         finally
@@ -385,7 +385,7 @@ public sealed class FneConnection : IAsyncDisposable
         {
             if (Peer is not null)
                 await StopCoreAsync(cancellationToken).ConfigureAwait(false);
-            ResetLoginRetryBackoff();
+            ResetLoginCadence();
             await StartCoreAsync(cancellationToken).ConfigureAwait(false);
         }
         finally
@@ -417,6 +417,7 @@ public sealed class FneConnection : IAsyncDisposable
             lock (sync)
                 peerSession = candidate;
 
+            ResetLoginCadence(candidate.Peer);
             candidate.Start();
             StartStateMonitor(candidate.Peer);
             Publish(FneConnectionState.WaitingForLogin, "FNE network services started; waiting for login");
@@ -531,7 +532,8 @@ public sealed class FneConnection : IAsyncDisposable
                 HandleNxdnDataReceived,
                 HandleAnalogDataReceived,
                 announcement => HandleTalkgroupAnnouncement(authoritySession, announcement),
-                timestamp => Volatile.Write(ref latestTrafficTransportTimestamp, timestamp)));
+                timestamp => Volatile.Write(ref latestTrafficTransportTimestamp, timestamp),
+                HandleLoginRequestSent));
     }
 
     internal static string FormatSoftwareIdentifier(string? informationalVersion)
@@ -547,7 +549,7 @@ public sealed class FneConnection : IAsyncDisposable
     {
         if (sender is FnePeer connectedPeer)
         {
-            ResetLoginRetryBackoff(connectedPeer);
+            ResetLoginCadence(connectedPeer);
             FnePeerKeepaliveStreamInitializer.TryInitialize(connectedPeer);
         }
 
@@ -825,70 +827,41 @@ public sealed class FneConnection : IAsyncDisposable
 
     private void HandlePeerLog(LogLevel level, string message)
     {
-        if (FneLogInterpreter.IsLoginAcknowledgement(message))
-        {
-            // The master is reachable and has accepted the login packet. Do not
-            // carry earlier unanswered-login delay into recovery from a later
-            // authorization or configuration stall.
-            ResetLoginRetryBackoff();
-        }
-
-        TimeSpan? retryDelay = FneLogInterpreter.IsLoginRequest(message)
-            ? ApplyLoginRetryBackoff()
-            : null;
         if (level == LogLevel.DEBUG &&
             !Volatile.Read(ref verboseLoggingEnabled) &&
             FneLogInterpreter.IsRoutineHealthyKeepalive(message))
             return;
 
         string displayMessage = DebugLogRedactor.Redact(message);
-        if (retryDelay is not null &&
-            !displayMessage.Contains("next retry", StringComparison.OrdinalIgnoreCase))
-        {
-            displayMessage += $"; next retry in {retryDelay.Value.TotalSeconds:0} seconds if unanswered";
-        }
-
         Raise(LogReceived, new FneLogEntry(
             options.Name,
             FneLogInterpreter.MapSeverity(level),
             displayMessage,
             DateTimeOffset.UtcNow));
-
-        FneLogStatusUpdate? statusUpdate = FneLogInterpreter.InterpretStatus(message, Status.State);
-        if (statusUpdate is not null)
-            Publish(statusUpdate.State, statusUpdate.Message);
-
-        // Individual malformed packets and unknown opcodes are protocol
-        // diagnostics, not proof that the transport disconnected. The peer
-        // state monitor remains authoritative unless the log explicitly
-        // identifies a connection failure above.
+        // Logs are diagnostics only. Connection and recovery state comes from
+        // the peer's typed state and lifecycle callbacks, so upstream wording
+        // changes cannot alter transport behavior.
     }
 
-    private TimeSpan? ApplyLoginRetryBackoff()
-    {
-        FnePeer? current;
-        lock (sync)
-            current = peerSession?.Peer;
-        if (current is null)
-            return null;
-
-        TimeSpan normalRetryInterval = TimeSpan.FromSeconds(
-            FnePeerSessionFactory.DefaultPingIntervalSeconds);
-        TimeSpan retryDelay = loginRetryBackoff.NextDelay(normalRetryInterval);
-
-        // FnePeer reads PingTime after emitting the login log entry, so this
-        // application-owned update governs the delay before its next attempt
-        // without modifying the pinned upstream source.
-        current.PingTime = checked((int)retryDelay.TotalSeconds);
-        return retryDelay;
-    }
-
-    private void ResetLoginRetryBackoff(FnePeer? current = null)
+    private void ResetLoginCadence(FnePeer? current = null)
     {
         loginRetryBackoff.Reset();
         current ??= Peer;
         if (current is not null)
             current.PingTime = FnePeerSessionFactory.DefaultPingIntervalSeconds;
+    }
+
+    private void HandleLoginRequestSent()
+    {
+        FnePeer? current;
+        lock (sync)
+            current = peerSession?.Peer;
+        if (current is null)
+            return;
+
+        TimeSpan retryDelay = loginRetryBackoff.NextDelay(
+            TimeSpan.FromSeconds(FnePeerSessionFactory.DefaultPingIntervalSeconds));
+        current.PingTime = checked((int)retryDelay.TotalSeconds);
     }
 
     private void StartStateMonitor(FnePeer current)

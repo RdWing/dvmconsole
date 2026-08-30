@@ -762,6 +762,13 @@ DvmAudioStream *dvm_audio_stream_create(
         format.mSampleRate <= 0)
         goto fail;
     stream->sample_rate = (uint32_t)format.mSampleRate;
+    uint32_t negotiated_ring_samples =
+        stream->sample_rate * stream->channels * DVM_AUDIO_RING_SECONDS;
+    if (negotiated_ring_samples != ring_samples) {
+        dvm_pcm_ring_dispose(&stream->ring);
+        if (dvm_pcm_ring_init(&stream->ring, negotiated_ring_samples) != 0)
+            goto fail;
+    }
 
     if (stream->input) {
         UInt32 maximum_frames = 0;

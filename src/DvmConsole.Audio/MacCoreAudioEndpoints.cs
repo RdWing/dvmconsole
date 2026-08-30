@@ -1,5 +1,6 @@
 using System.Buffers;
 using System.Diagnostics;
+using System.Runtime.ExceptionServices;
 using System.Runtime.InteropServices;
 
 namespace DvmConsole.Audio;
@@ -26,15 +27,30 @@ internal sealed class MacCoreAudioCapture : IAudioCapture
         Format = format;
         highQualitySessionAcquired = highQualityBluetoothAudio &&
             api.AcquireHighQualityBluetooth(deviceId, outputDeviceId) != 0;
-        stream = api.CreateStream(deviceId, input: 1, format.SampleRate, format.Channels, format.BitsPerSample);
-        if (stream.IsInvalid)
+        SafeCoreAudioStreamHandle? createdStream = null;
+        try
         {
+            createdStream = api.CreateStream(
+                deviceId,
+                input: 1,
+                format.SampleRate,
+                format.Channels,
+                format.BitsPerSample);
+            if (createdStream.IsInvalid)
+                throw new InvalidOperationException("CoreAudio could not create the capture stream.");
+            int nativeSampleRate = api.GetSampleRate(createdStream);
+            rateConverter = nativeSampleRate == format.SampleRate
+                ? null
+                : new PcmRateConverter(nativeSampleRate, format.SampleRate);
+            stream = createdStream;
+        }
+        catch
+        {
+            createdStream?.Dispose();
             if (highQualitySessionAcquired)
                 api.ReleaseHighQualityBluetooth();
-            throw new InvalidOperationException("CoreAudio could not create the capture stream.");
+            throw;
         }
-        int nativeSampleRate = api.GetSampleRate(stream);
-        rateConverter = nativeSampleRate == format.SampleRate ? null : new PcmRateConverter(nativeSampleRate, format.SampleRate);
     }
 
     public event EventHandler<PcmSamplesEventArgs>? SamplesAvailable;
@@ -60,29 +76,58 @@ internal sealed class MacCoreAudioCapture : IAudioCapture
         Task? task = pumpTask;
         pumpCancellation = null;
         pumpTask = null;
-        cancellation?.Cancel();
-        if (task is not null)
-            await task.ConfigureAwait(false);
-        cancellation?.Dispose();
+        Exception? pumpFailure = null;
+        try
+        {
+            cancellation?.Cancel();
+            if (task is not null)
+                await task.ConfigureAwait(false);
+        }
+        catch (Exception exception)
+        {
+            pumpFailure = exception;
+        }
+        finally
+        {
+            cancellation?.Dispose();
+            int stopResult = api.StopStream(stream);
+            if (pumpFailure is null)
+                MacCoreAudioBackend.EnsureSuccess(stopResult, "stop CoreAudio capture");
+        }
         cancellationToken.ThrowIfCancellationRequested();
-        MacCoreAudioBackend.EnsureSuccess(api.StopStream(stream), "stop CoreAudio capture");
+        if (pumpFailure is not null)
+            ExceptionDispatchInfo.Capture(pumpFailure).Throw();
     }
 
     public async ValueTask DisposeAsync()
     {
         if (disposed)
             return;
-        await StopAsync().ConfigureAwait(false);
+        Exception? stopFailure = null;
         try
         {
-            stream.Dispose();
+            await StopAsync().ConfigureAwait(false);
+        }
+        catch (Exception exception)
+        {
+            stopFailure = exception;
         }
         finally
         {
-            if (highQualitySessionAcquired)
-                api.ReleaseHighQualityBluetooth();
-            disposed = true;
+            try
+            {
+                stream.Dispose();
+            }
+            finally
+            {
+                if (highQualitySessionAcquired)
+                    api.ReleaseHighQualityBluetooth();
+                disposed = true;
+            }
         }
+
+        if (stopFailure is not null)
+            ExceptionDispatchInfo.Capture(stopFailure).Throw();
     }
 
     private async Task PumpAsync(CancellationToken cancellationToken)
@@ -157,14 +202,33 @@ internal sealed class MacCoreAudioPlayback :
         if (this.writeNoProgressTimeout <= TimeSpan.Zero)
             throw new ArgumentOutOfRangeException(nameof(writeNoProgressTimeout));
         Format = format;
-        stream = api.CreateStream(deviceId, input: 0, format.SampleRate, format.Channels, format.BitsPerSample);
-        if (stream.IsInvalid)
-            throw new InvalidOperationException("CoreAudio could not create the playback stream.");
-        nativeSampleRate = api.GetSampleRate(stream);
-        rateConverter = nativeSampleRate == format.SampleRate
-            ? null
-            : new PcmRateConverter(format.SampleRate, nativeSampleRate, format.Channels);
-        MacCoreAudioBackend.EnsureSuccess(api.StartStream(stream), "start CoreAudio playback");
+        SafeCoreAudioStreamHandle? createdStream = null;
+        try
+        {
+            createdStream = api.CreateStream(
+                deviceId,
+                input: 0,
+                format.SampleRate,
+                format.Channels,
+                format.BitsPerSample);
+            if (createdStream.IsInvalid)
+                throw new InvalidOperationException("CoreAudio could not create the playback stream.");
+            nativeSampleRate = api.GetSampleRate(createdStream);
+            rateConverter = nativeSampleRate == format.SampleRate
+                ? null
+                : new PcmRateConverter(format.SampleRate, nativeSampleRate, format.Channels);
+            MacCoreAudioBackend.EnsureSuccess(api.StartStream(createdStream), "start CoreAudio playback");
+            stream = createdStream;
+        }
+        catch
+        {
+            if (createdStream is not null)
+            {
+                api.StopStream(createdStream);
+                createdStream.Dispose();
+            }
+            throw;
+        }
     }
 
     public PcmAudioFormat Format { get; }
@@ -338,12 +402,25 @@ internal sealed class MacVoiceProcessingCapture : IAudioCapture
 
         pumpCancellation = null;
         pumpTask = null;
-        cancellation.Cancel();
-        if (task is not null)
-            await task.ConfigureAwait(false);
-        cancellation.Dispose();
+        Exception? pumpFailure = null;
+        try
+        {
+            cancellation.Cancel();
+            if (task is not null)
+                await task.ConfigureAwait(false);
+        }
+        catch (Exception exception)
+        {
+            pumpFailure = exception;
+        }
+        finally
+        {
+            cancellation.Dispose();
+            session.StopCapture();
+        }
         cancellationToken.ThrowIfCancellationRequested();
-        session.StopCapture();
+        if (pumpFailure is not null)
+            ExceptionDispatchInfo.Capture(pumpFailure).Throw();
     }
 
     public async ValueTask DisposeAsync()

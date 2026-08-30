@@ -81,6 +81,7 @@ public sealed class AnalogTxAudioSession : IDisposable
         if (ended)
             return;
 
+        assembler.FlushPadded(EmitFrame);
         var silence = new short[AnalogVoicePacketCodec.SamplesPerPacket];
         byte[] terminator = AnalogVoicePacketCodec.CreatePacket(
             AnalogAudioFrameType.Terminator,

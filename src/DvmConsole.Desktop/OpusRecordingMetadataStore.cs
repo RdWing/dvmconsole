@@ -87,6 +87,9 @@ internal sealed class OpusRecordingMetadataStore
         string normalizedPath = Path.GetFullPath(path);
         string normalizedRoot = Path.GetFullPath(root)
             .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
-        return normalizedPath.StartsWith(normalizedRoot, StringComparison.OrdinalIgnoreCase);
+        StringComparison comparison = OperatingSystem.IsWindows()
+            ? StringComparison.OrdinalIgnoreCase
+            : StringComparison.Ordinal;
+        return normalizedPath.StartsWith(normalizedRoot, comparison);
     }
 }

@@ -26,7 +26,6 @@ public sealed class DmrRxAudioSession : IAsyncDisposable
     private uint activeStreamId;
     private bool privacyRequired;
     private bool privacyStateKnown;
-    private bool? streamIsEncrypted;
     private bool hasDecodedVoiceInActiveStream;
     private bool disposed;
 
@@ -65,7 +64,6 @@ public sealed class DmrRxAudioSession : IAsyncDisposable
 
         if (DmrVoicePacketCodec.TryExtractVoiceEncryptionState(traffic.Payload, out bool encrypted))
         {
-            streamIsEncrypted = encrypted;
             privacyStateKnown = true;
             privacyRequired = encrypted;
             if (!privacyRequired)
@@ -80,7 +78,6 @@ public sealed class DmrRxAudioSession : IAsyncDisposable
         {
             if (DmrVoicePacketCodec.TryExtractEncryptionMetadata(traffic.Payload, out var metadata))
             {
-                streamIsEncrypted = true;
                 PreparePrivacy(traffic.StreamId, metadata);
                 privacyStateKnown = true;
             }
@@ -250,7 +247,6 @@ public sealed class DmrRxAudioSession : IAsyncDisposable
                 metadata.MessageIndicator));
         activeStreamId = streamId;
         privacyRequired = true;
-        streamIsEncrypted = true;
     }
 
     private bool TryPrepareLateEntry(
@@ -302,7 +298,6 @@ public sealed class DmrRxAudioSession : IAsyncDisposable
         // signalling, so an all-zero payload is not required.
         privacyStateKnown = true;
         privacyRequired = false;
-        streamIsEncrypted = false;
         return UnknownPrivacyResolution.Clear;
     }
 
@@ -326,6 +321,5 @@ public sealed class DmrRxAudioSession : IAsyncDisposable
         privacyStateKnown = !privacyMayVary;
         lateEntryCollector.Reset();
         activeStreamId = 0;
-        streamIsEncrypted = null;
     }
 }

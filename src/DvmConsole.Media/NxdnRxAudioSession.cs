@@ -25,7 +25,6 @@ public sealed class NxdnRxAudioSession : IAsyncDisposable
     private uint activeStreamId;
     private int lastVoiceCodewordCount;
     private bool hasDecodedVoiceInActiveStream;
-    private bool? activeCallIsEncrypted;
     private bool disposed;
 
     public NxdnRxAudioSession(
@@ -71,9 +70,8 @@ public sealed class NxdnRxAudioSession : IAsyncDisposable
             activeStreamId = traffic.StreamId;
             lastVoiceCodewordCount = 0;
             hasDecodedVoiceInActiveStream = false;
-            activeCallIsEncrypted = null;
             sacchCollector.Reset();
-            InvalidatePrivacyAfterLoss();
+            ResetPrivacyForNewStream();
         }
         long lostBefore = sequenceTracker.LostPackets;
         if (!sequenceTracker.TryAccept(traffic.StreamId, traffic.PacketSequence))
@@ -238,6 +236,12 @@ public sealed class NxdnRxAudioSession : IAsyncDisposable
         privacyProcessor = null;
     }
 
+    private void ResetPrivacyForNewStream()
+    {
+        ClearPrivacy(restoreConfigured: false);
+        RestoreConfiguredPrivacy();
+    }
+
     public async ValueTask DisposeAsync()
     {
         if (disposed)
@@ -255,17 +259,14 @@ public sealed class NxdnRxAudioSession : IAsyncDisposable
     {
         if (metadata.MessageType == NxdnVoicePacketCodec.TransmitReleaseMessageType)
         {
-            activeCallIsEncrypted = null;
-            ClearPrivacy();
+            ClearPrivacy(restoreConfigured: false);
             return;
         }
         if (metadata.MessageType == NxdnVoicePacketCodec.VoiceCallMessageType)
         {
-            activeCallIsEncrypted = metadata.CipherType != 0;
             if (metadata.CipherType == 0)
             {
                 ClearPrivacy(restoreConfigured: false);
-                RestoreConfiguredPrivacy();
                 return;
             }
             if (privacyAlgorithm == metadata.CipherType &&

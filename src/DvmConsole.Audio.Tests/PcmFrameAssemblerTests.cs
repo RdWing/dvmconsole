@@ -45,6 +45,24 @@ public sealed class PcmFrameAssemblerTests
         Assert.Equal(1, assembler.Append(new short[] { 3, 4, 5, 6 }, _ => { }));
     }
 
+    [Fact]
+    public void FailedFrameHandoffIsNotRetriedAsAnEndOfStreamTail()
+    {
+        var assembler = new PcmFrameAssembler(frameSize: 4);
+
+        Assert.Throws<IOException>(() => assembler.Append(
+            new short[] { 1, 2, 3, 4 },
+            _ => throw new IOException("send failed")));
+
+        Assert.Equal(0, assembler.BufferedSamples);
+        Assert.False(assembler.FlushPadded(_ => throw new InvalidOperationException()));
+
+        assembler.Append(new short[] { 5, 6 }, _ => { });
+        Assert.Throws<IOException>(() => assembler.FlushPadded(
+            _ => throw new IOException("tail send failed")));
+        Assert.Equal(0, assembler.BufferedSamples);
+    }
+
     private static short[] CreateSamples(int start, int count)
     {
         return Enumerable.Range(start, count).Select(value => (short)value).ToArray();

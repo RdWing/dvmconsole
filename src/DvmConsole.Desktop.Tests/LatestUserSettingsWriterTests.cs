@@ -1,3 +1,4 @@
+using DvmConsole.Core.Configuration;
 using DvmConsole.Core.Settings;
 using Xunit;
 
@@ -5,6 +6,53 @@ namespace DvmConsole.Desktop.Tests;
 
 public sealed class LatestUserSettingsWriterTests
 {
+    [Fact]
+    public async Task StudioAdoptionRebasesTheLiveInstanceBeforeLaterWrites()
+    {
+        string root = Path.Combine(
+            Path.GetTempPath(),
+            "dvmconsole-settings-writer-tests",
+            Guid.NewGuid().ToString("N"));
+        string runtimePath = Path.Combine(root, "UserSettings.json");
+        string studioPath = Path.Combine(root, "StudioSettings.json");
+        var store = new UserSettingsStore(runtimePath);
+        var settings = new UserSettings { DarkMode = false, AudioInputGain = 1 };
+        store.Save(settings);
+        new UserSettingsStore(studioPath).Save(new UserSettings
+        {
+            DarkMode = true,
+            RestoreSelectedChannelsOnStartup = false,
+            AudioInputGain = 1
+        });
+        var plan = new ConfigurationSavePlan(
+            [
+                new ConfigurationFileChange(
+                    runtimePath,
+                    File.ReadAllText(studioPath),
+                    ExpectedSourceHash: null,
+                    Category: "Operator settings",
+                    ContainsSecrets: true)
+            ],
+            []);
+
+        await using (var persistence = new UserSettingsPersistenceCoordinator(store, settings))
+        {
+            await persistence.AdoptStudioSnapshotAsync(plan);
+            Assert.True(settings.DarkMode);
+            Assert.False(settings.RestoreSelectedChannelsOnStartup);
+
+            settings.AudioInputGain = 0.75;
+            persistence.Schedule();
+            await persistence.FlushAsync();
+        }
+
+        UserSettings saved = store.Load();
+        Assert.True(saved.DarkMode);
+        Assert.False(saved.RestoreSelectedChannelsOnStartup);
+        Assert.Equal(0.75, saved.AudioInputGain);
+        Directory.Delete(root, recursive: true);
+    }
+
     [Fact]
     public async Task OneThousandUpdatesCoalesceToOneBackgroundWrite()
     {

@@ -511,7 +511,6 @@ public sealed class AudioMixer : IAsyncDisposable
             }
 
             PcmMixKernel.Clear(leftMix, rightMix);
-            List<MixerLaneBuffer>? drainedChannels = null;
             MixerPresentationNotification[]? presented = null;
             int presentedCount = 0;
             foreach (MixerLaneBuffer channel in channels.Values)
@@ -561,17 +560,6 @@ public sealed class AudioMixer : IAsyncDisposable
                     channel.LastOutputSample = source[count - 1];
                     channel.HasLastOutputSample = true;
                 }
-                if (channel.Completing && channel.Frames.Count == 0 && channel.PartialCount == 0)
-                {
-                    drainedChannels ??= [];
-                    drainedChannels.Add(channel);
-                }
-            }
-
-            if (drainedChannels is not null)
-            {
-                foreach (MixerLaneBuffer channel in drainedChannels)
-                    RemoveDrainedChannelLocked(channel);
             }
 
             if (PcmMixKernel.Render(
@@ -898,8 +886,6 @@ public sealed class AudioMixer : IAsyncDisposable
             channel.BoundarySmoothingPending = false;
             channel.HasLastOutputSample = false;
             channel.PresentedGapSamples = 0;
-            channel.HandedOffSamples = channel.AcceptedSamples;
-            channel.DrainedSamples = channel.AcceptedSamples;
             channel.PlaybackDrainCompletion?.TrySetResult(TimeSpan.Zero);
             channel.PlaybackDrainCompletion = null;
         }
@@ -991,6 +977,12 @@ public sealed class AudioMixer : IAsyncDisposable
             CompletePlaybackDrainIfSatisfiedLocked(
                 channel,
                 presentationDelay + TimeSpan.FromMilliseconds(20));
+            if (channel.Completing &&
+                channel.Frames.Count == 0 &&
+                channel.PartialCount == 0)
+            {
+                RemoveDrainedChannelLocked(channel);
+            }
         }
     }
 
