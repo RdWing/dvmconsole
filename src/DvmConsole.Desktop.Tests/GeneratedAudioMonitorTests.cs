@@ -11,6 +11,7 @@ public sealed class GeneratedAudioMonitorTests
         bool transmitted = false;
 
         Exception? monitorFailure = await GeneratedAudioMonitorSession.RunAsync(
+            monitorEnabled: true,
             _ => Task.FromException(new IOException("output unavailable")),
             () =>
             {
@@ -30,6 +31,7 @@ public sealed class GeneratedAudioMonitorTests
 
         InvalidOperationException failure = await Assert.ThrowsAsync<InvalidOperationException>(() =>
             GeneratedAudioMonitorSession.RunAsync(
+                monitorEnabled: true,
                 async cancellationToken =>
                 {
                     try
@@ -46,6 +48,30 @@ public sealed class GeneratedAudioMonitorTests
 
         Assert.True(monitorCanceled);
         Assert.Equal("radio unavailable", failure.Message);
+    }
+
+    [Fact]
+    public async Task DisabledMonitorTransmitsWithoutStartingLocalPlayback()
+    {
+        bool monitorStarted = false;
+        bool transmitted = false;
+
+        Exception? monitorFailure = await GeneratedAudioMonitorSession.RunAsync(
+            monitorEnabled: false,
+            _ =>
+            {
+                monitorStarted = true;
+                return Task.CompletedTask;
+            },
+            () =>
+            {
+                transmitted = true;
+                return Task.CompletedTask;
+            });
+
+        Assert.False(monitorStarted);
+        Assert.True(transmitted);
+        Assert.Null(monitorFailure);
     }
 
     [Fact]

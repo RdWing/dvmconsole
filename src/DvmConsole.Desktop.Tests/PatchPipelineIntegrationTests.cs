@@ -155,6 +155,7 @@ public sealed class PatchPipelineIntegrationTests
             (channel, streamId, sourceId, samples) =>
                 forwarding.ObserveDecodedSamples(channel, streamId, sourceId, samples),
             () => new FakeVocoderBackend());
+        var receivePipeline = new PatchSourceReceivePipeline(decoding, forwarding);
         forwarding.ApplyMemberships(new Dictionary<string, IReadOnlyList<PatchMemberAddress>>
         {
             ["Patch Test 1"] =
@@ -169,7 +170,7 @@ public sealed class PatchPipelineIntegrationTests
             first,
             firstSystem,
             decoding,
-            forwarding,
+            receivePipeline,
             sourceId: 7_471,
             streamId: 101);
 
@@ -180,7 +181,7 @@ public sealed class PatchPipelineIntegrationTests
             second,
             secondSystem,
             decoding,
-            forwarding,
+            receivePipeline,
             sourceId: 9_901,
             streamId: 202);
 
@@ -192,7 +193,7 @@ public sealed class PatchPipelineIntegrationTests
         ChannelViewModel source,
         FakeEndpoint sourceSystem,
         PatchSourceDecodeCoordinator decoding,
-        PatchForwardingCoordinator forwarding,
+        PatchSourceReceivePipeline receivePipeline,
         uint sourceId,
         uint streamId)
     {
@@ -214,8 +215,7 @@ public sealed class PatchPipelineIntegrationTests
             ingress,
             decoding.IsTrackingStream));
 
-        forwarding.ObserveTraffic(target, voice);
-        Assert.Equal(0, await decoding.ProcessAsync(target, voice));
+        Assert.Equal(0, await receivePipeline.ProcessAsync(target, voice));
 
         FneTrafficFrame terminator = CreateTerminator(source, sourceId, streamId);
         ReceiveIngressRoutingDecision terminatorIngress = ReceiveAudioTrafficRouter.ObserveIngress(
@@ -229,8 +229,7 @@ public sealed class PatchPipelineIntegrationTests
             terminatorIngress,
             decoding.IsTrackingStream));
         Assert.Same(target, terminatorTarget);
-        forwarding.StopSource(terminatorTarget, streamId);
-        await decoding.ProcessAsync(terminatorTarget, terminator);
+        await receivePipeline.ProcessAsync(terminatorTarget, terminator);
 
         Assert.DoesNotContain(sourceSystem.Sent, packet => packet.StreamId == streamId);
     }

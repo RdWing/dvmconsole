@@ -57,27 +57,31 @@ isolated audio state keep simultaneous calls separate.
 
 ## What’s new in DVM Console NEO
 
-### 0.5.1 — Windows transmit audio hotfix
+### 0.5.2 — Receive audio and session reliability hotfix
 
-Version 0.5.1 addresses a reported Windows transmit audio problem. Diagnostic
-logs showed outbound P25 packets drifting well beyond their intended cadence
-when timer wakeups ran late.
+Version 0.5.2 corrects receive termination, mute, and session-lifetime problems
+reported after 0.5.1. It also separates routine group operator changes from
+YAML saves and adds a switch for local generated-tone monitoring.
 
-- Schedule outbound audio against absolute 20 ms deadlines so one late wakeup
-  does not shift every packet that follows.
-- Rebase safely if transmission falls a full frame behind instead of sending a
-  burst of catch-up packets.
-- Use the same scheduler for patch forwarding while retaining its existing
-  initial delay and bounded backlog protection.
-- Add deterministic coverage for repeated timer overshoot, delayed patch start,
-  clock-frequency conversion, and no-burst recovery.
+- Finish P25 live listening and patch forwarding at the ordered receive
+  boundary, after the adaptive jitter buffer has released earlier audio.
+- Keep system and zone mutes on every speaker-admission path while TAR continues
+  to receive decoded audio and make recordings.
+- Prevent overlapping FNE session ownership during connect, disconnect, reload,
+  and shutdown, cancel failed-login retry waits promptly during Quit, and ignore
+  callbacks from sessions that are being disposed.
+- Apply group membership, direction, and enabled state without rewriting YAML or
+  reconnecting FNE sessions. Generated-tone monitoring can now be disabled
+  without changing transmitted audio.
 
-[Read the 0.5.1 release notes →](docs/releases/v0.5.1.md)
+[Read the 0.5.2 release notes →](docs/releases/v0.5.2.md)
 
 ### Prior recent improvements
 
 Recent releases also include these changes:
 
+- **0.5.1 — Windows transmit audio hotfix:** kept outbound audio and patch
+  forwarding on absolute deadlines when Windows timer wakeups run late.
 - **0.5.0 — Configuration Studio:** added graphical codeplug editing, layout
   previews, validation, atomic saves, sanitized exports, playback stop, and
   generated-audio monitoring.
@@ -94,18 +98,18 @@ Recent releases also include these changes:
   scale-aware, preserved scrolled History positions, made audio-route changes
   transactional, and hardened receive-episode and session teardown.
 
-[Read the 0.5.0 release notes →](docs/releases/v0.5.0.md) · [Read the 0.4.4 release notes →](docs/releases/v0.4.4.md) · [Read the 0.4.3 release notes →](docs/releases/v0.4.3.md) · [Read the 0.4.2 release notes →](docs/releases/v0.4.2.md)
+[Read the 0.5.1 release notes →](docs/releases/v0.5.1.md) · [Read the 0.5.0 release notes →](docs/releases/v0.5.0.md) · [Read the 0.4.4 release notes →](docs/releases/v0.4.4.md) · [Read the 0.4.3 release notes →](docs/releases/v0.4.3.md)
 
 ## Download DVM Console NEO
 
 Download the package for the destination computer and extract the entire
-archive before starting DVM Console NEO. Version 0.5.1 uses these filenames:
+archive before starting DVM Console NEO. Version 0.5.2 uses these filenames:
 
 | Platform | Package | Requirements |
 | --- | --- | --- |
-| Apple Silicon Mac | `dvmconsole-0.5.1-osx-arm64.zip` | macOS 14 or newer |
-| Intel Mac | `dvmconsole-0.5.1-osx-x64.zip` | macOS 14 or newer |
-| Windows PC | `dvmconsole-0.5.1-win-x64.zip` | Windows x64 |
+| Apple Silicon Mac | `dvmconsole-0.5.2-osx-arm64.zip` | macOS 14 or newer |
+| Intel Mac | `dvmconsole-0.5.2-osx-x64.zip` | macOS 14 or newer |
+| Windows PC | `dvmconsole-0.5.2-win-x64.zip` | Windows x64 |
 
 **[Download the latest release →](https://github.com/RdWing/dvmconsole/releases/latest)**
 

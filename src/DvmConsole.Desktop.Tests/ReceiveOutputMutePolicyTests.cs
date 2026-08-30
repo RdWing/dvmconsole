@@ -43,6 +43,71 @@ public sealed class ReceiveOutputMutePolicyTests
         }
     }
 
+    [Fact]
+    public async Task TransmitRestoreCannotBypassAnOperatorMuteScope()
+    {
+        var channel = Channel("Alpha", "Dispatch");
+        var dispatch = new ZoneViewModel("Dispatch", [channel], []);
+        var system = new SystemViewModel(
+            new FneConnectionOptions("Alpha", "Console", "127.0.0.1", 62031, 1, null, false, null),
+            "Alpha",
+            "127.0.0.1:62031",
+            [channel],
+            [dispatch]);
+        var policy = new ReceiveOutputMutePolicy();
+
+        try
+        {
+            channel.SetAudioEnabled(true);
+            channel.SetAudioSuspended(true);
+
+            Assert.False(policy.ShouldEnableLivePlayback(
+                channel,
+                isTemporarilySuspended: true));
+            Assert.True(policy.ShouldEnableLivePlayback(
+                channel,
+                isTemporarilySuspended: false));
+
+            policy.Toggle(system);
+
+            Assert.False(policy.ShouldEnableLivePlayback(
+                channel,
+                isTemporarilySuspended: false));
+        }
+        finally
+        {
+            await system.DisposeAsync();
+        }
+    }
+
+    [Fact]
+    public async Task MutedRecordingChannelStillRequiresDecodeButNotLivePlayback()
+    {
+        var channel = Channel("Alpha", "Dispatch");
+        var system = new SystemViewModel(
+            new FneConnectionOptions("Alpha", "Console", "127.0.0.1", 62031, 1, null, false, null),
+            "Alpha",
+            "127.0.0.1:62031",
+            [channel]);
+        var policy = new ReceiveOutputMutePolicy();
+
+        try
+        {
+            channel.SetAudioEnabled(true);
+            channel.SetRecordingEnabled(true);
+            policy.Toggle(system);
+
+            Assert.True(channel.IsRecordingEnabled);
+            Assert.False(policy.ShouldEnableLivePlayback(
+                channel,
+                isTemporarilySuspended: false));
+        }
+        finally
+        {
+            await system.DisposeAsync();
+        }
+    }
+
     private static ChannelViewModel Channel(string system, string name)
         => new(new ChannelConfiguration
         {

@@ -338,7 +338,10 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private async Task ShutdownAsync()
+    private Task ShutdownAsync()
+        => BoundedShutdown.RunAsync(ShutdownCoreAsync, ShutdownTimeout);
+
+    private async Task ShutdownCoreAsync()
     {
         var cleanup = new AsyncCleanup();
         cleanup.Run(() =>
@@ -355,9 +358,7 @@ public sealed partial class MainWindow : Window
         cleanup.Run(CaptureEngineeringHealthHeight);
         await cleanup.RunTaskAsync(() => engineeringHealthViewModel.DisposeAsync().AsTask());
         await cleanup.RunTaskAsync(() => operatorViewWriter.DisposeAsync().AsTask());
-        await cleanup.RunTaskAsync(() => BoundedShutdown.RunAsync(
-            () => sessionHost.DisposeAsync().AsTask(),
-            ShutdownTimeout));
+        await cleanup.RunTaskAsync(() => sessionHost.DisposeAsync().AsTask());
         cleanup.ThrowIfFailed();
     }
 

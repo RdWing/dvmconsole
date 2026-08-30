@@ -172,9 +172,6 @@ public sealed partial class MainWindowViewModel
                     endedStreamId,
                     endedAt));
             }
-
-            patchForwarding.ObserveTraffic(channel, traffic);
-
             bool canStartHistory = applied.Transition is
                 ReceiveStreamTransition.Started or
                 ReceiveStreamTransition.Restarted or
@@ -637,9 +634,9 @@ public sealed partial class MainWindowViewModel
                 .SelectMany(system => system.Channels)
                 .Where(channel => (channel.IsAudioEnabled || channel.IsRecordingEnabled) &&
                     (!audioCoordinator.IsActive(channel) ||
-                     (channel.IsAudioEnabled &&
-                      !channel.IsAudioSuspended &&
-                      !receiveOutputMutePolicy.IsMuted(channel) &&
+                     (receiveOutputMutePolicy.ShouldEnableLivePlayback(
+                          channel,
+                          isTemporarilySuspended: channel.IsAudioSuspended) &&
                       !livePlaybackChannels.Contains(channel))) &&
                     (!receiveRetryAfter.TryGetValue(channel, out DateTimeOffset retryAt) || retryAt <= now))
                 .Distinct()
@@ -784,9 +781,9 @@ public sealed partial class MainWindowViewModel
                 if (!audioCoordinator.IsActive(channel))
                     continue;
 
-                bool livePlaybackEnabled = channel.IsAudioEnabled &&
-                    !channel.IsAudioSuspended &&
-                    !receiveOutputMutePolicy.IsMuted(channel);
+                bool livePlaybackEnabled = receiveOutputMutePolicy.ShouldEnableLivePlayback(
+                    channel,
+                    isTemporarilySuspended: channel.IsAudioSuspended);
                 await audioCoordinator
                     .SetLivePlaybackEnabledAsync(channel, livePlaybackEnabled)
                     .ConfigureAwait(false);

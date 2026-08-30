@@ -103,7 +103,7 @@ public sealed class RxJitterBufferSetting
 // codeplug. Protocol credentials and encryption keys remain codeplug-owned.
 public sealed class UserSettings
 {
-    public const int CurrentSchemaVersion = 8;
+    public const int CurrentSchemaVersion = 9;
     public const string DvmConsoleAudioProcessingMode = "DvmConsole";
     public const string AppleVoiceProcessingMode = "AppleVoiceProcessing";
     public const string WindowsCommunicationsProcessingMode = "WindowsCommunications";
@@ -139,6 +139,7 @@ public sealed class UserSettings
     public bool MuteRxAudioWhileTransmitting { get; set; } = true;
     public bool TalkPermitTone { get; set; }
     public bool ConnectionChimes { get; set; } = true;
+    public bool LocalToneMonitorEnabled { get; set; } = true;
     public bool VerboseLoggingEnabled { get; set; }
     public bool DarkMode { get; set; }
     public double UiFontSize { get; set; } = 14;

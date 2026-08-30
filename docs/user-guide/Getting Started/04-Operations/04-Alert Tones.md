@@ -57,6 +57,11 @@ From the Tones page, operators can:
 
 The normal settings system saves these changes.
 
+The **Monitor generated tones locally** checkbox under General settings controls
+whether DVM Console plays an attenuated local copy while transmitting generated
+tones, DTMF, presets, and QCII pages. Turning the monitor off does not change the
+radio transmission.
+
 ---
 
 # Audio file requirements

@@ -124,19 +124,23 @@ To edit a group:
 3. Expand **Edit members** and check each channel that should be a member.
 4. For a patch, select **Enabled** and **One-way** as required.
 5. For a one-way patch, choose the source. The other selected members are destinations.
-6. Select **Apply operator state**.
-7. Use **Review & Save** to write the membership and direction changes.
+6. Select **Apply changes** to keep Configuration Studio open, or
+   **Apply & close** when you are finished.
 
 DVM Console shows a conflict warning when a channel assignment cannot be used
 safely. Resolve the conflict before using the group.
 
-Applying operator state stages membership and direction in the Studio draft.
-Group definition changes, including a rename or deletion, also wait for Review
-& Save. The review includes the matching operator-settings rename or removal.
+Membership, direction, and enabled state are codeplug-scoped operator settings.
+They take effect on the active console immediately and do not rewrite YAML,
+disconnect FNE sessions, or require a codeplug reload. Group definition changes,
+including a rename or deletion, still wait for **Review & Save** because the
+definitions belong to the YAML codeplug.
 
-An **Enabled** change still takes effect on the active console immediately. It
-uses the last saved membership until the draft is saved and the codeplug is
-reloaded.
+On the Groups page, **Save YAML changes…** is reserved for definition changes
+such as adding, renaming, changing the type of, or deleting a group. That path
+only becomes available when the YAML draft has changed and offers to disconnect
+and reload because it changes the running topology. Do not use it for routine
+membership, direction, or enabled-state changes.
 
 ---
 

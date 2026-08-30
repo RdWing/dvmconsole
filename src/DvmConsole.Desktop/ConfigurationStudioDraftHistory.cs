@@ -25,8 +25,6 @@ internal sealed record ConfigurationStudioDraftSnapshot(
     ConfigurationStudioReferencedFilesSnapshot ReferencedFiles,
     IReadOnlyDictionary<Guid, WidgetPositionSetting> WidgetPositions,
     IReadOnlyDictionary<Guid, string> ZoneSystemAssignments,
-    IReadOnlyDictionary<string, IReadOnlyList<PatchMemberSetting>> StagedGroupMemberships,
-    IReadOnlyDictionary<string, bool> StagedGroupModes,
     string Fingerprint)
 {
     public static string ComputeFingerprint(IEnumerable<string> components)

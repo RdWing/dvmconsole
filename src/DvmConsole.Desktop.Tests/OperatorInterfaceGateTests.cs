@@ -177,6 +177,21 @@ public sealed class OperatorInterfaceGateTests
     }
 
     [Fact]
+    public void ConfigurationStudioSeparatesOperatorGroupChangesFromYamlSave()
+    {
+        XDocument studio = XDocument.Parse(ReadDesktopSource("ConfigurationStudioWindow.axaml"));
+        XElement applyAndClose = studio.Descendants().Single(element =>
+            Attribute(element, "Name") == "applyOperatorChangesAndCloseButton");
+        XElement yamlSave = studio.Descendants().Single(element =>
+            Attribute(element, "Click") == "HandleReviewAndSaveClick");
+
+        Assert.Equal("Apply & close", Attribute(applyAndClose, "Content"));
+        Assert.Equal("HandleApplyOperatorGroupsAndCloseClick", Attribute(applyAndClose, "Click"));
+        Assert.Equal("{Binding ReviewSaveButtonText}", Attribute(yamlSave, "Content"));
+        Assert.Equal("{Binding CanSaveDraft}", Attribute(yamlSave, "IsEnabled"));
+    }
+
+    [Fact]
     public void ChannelAudioMeterClipsAFullWidthThresholdScale()
     {
         XDocument sharedCard = XDocument.Parse(ReadDesktopSource("ChannelCardContent.axaml"));

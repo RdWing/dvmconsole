@@ -224,6 +224,26 @@ public sealed class UserSettingsStoreTests
     }
 
     [Fact]
+    public void PersistsLocalToneMonitorPreferenceWithTheCurrentSchema()
+    {
+        string path = CreatePath();
+        try
+        {
+            var store = new UserSettingsStore(path);
+            store.Save(new UserSettings { LocalToneMonitorEnabled = false });
+
+            UserSettings loaded = store.Load();
+
+            Assert.False(loaded.LocalToneMonitorEnabled);
+            Assert.Equal(UserSettings.CurrentSchemaVersion, loaded.SchemaVersion);
+        }
+        finally
+        {
+            Cleanup(path);
+        }
+    }
+
+    [Fact]
     public void RxJitterBufferAcceptsOnlyProtocolAlignedDurations()
     {
         string path = CreatePath();
@@ -1125,6 +1145,7 @@ public sealed class UserSettingsStoreTests
             var profile = new UserSettings
             {
                 TalkPermitTone = true,
+                LocalToneMonitorEnabled = false,
                 VerboseLoggingEnabled = true,
                 AudioOutputDeviceId = "profile-output",
                 LastCodeplugPath = "/tmp/profile.yml",
@@ -1154,6 +1175,7 @@ public sealed class UserSettingsStoreTests
             UserSettings merged = store.Load();
 
             Assert.True(merged.TalkPermitTone);
+            Assert.False(merged.LocalToneMonitorEnabled);
             Assert.True(merged.VerboseLoggingEnabled);
             Assert.Equal("profile-output", merged.AudioOutputDeviceId);
             Assert.Equal("/tmp/current.yml", merged.LastCodeplugPath);

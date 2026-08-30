@@ -19,7 +19,6 @@ public sealed class ConfigurationStudioDraftHistoryTests
         Assert.Contains("KeyId: 1", undone.ReferencedFiles.KeyFileContent);
         Assert.Equal(10, Assert.Single(undone.WidgetPositions).Value.X);
         Assert.Equal("North", Assert.Single(undone.ZoneSystemAssignments).Value);
-        Assert.Equal("before", Assert.Single(undone.StagedGroupMemberships).Key);
         Assert.True(history.CanRedo);
 
         ConfigurationStudioDraftSnapshot redone = Assert.IsType<ConfigurationStudioDraftSnapshot>(history.Redo(undone));
@@ -27,7 +26,6 @@ public sealed class ConfigurationStudioDraftHistoryTests
         Assert.Contains("KeyId: 2", redone.ReferencedFiles.KeyFileContent);
         Assert.Equal(40, Assert.Single(redone.WidgetPositions).Value.X);
         Assert.Equal("South", Assert.Single(redone.ZoneSystemAssignments).Value);
-        Assert.Equal("after", Assert.Single(redone.StagedGroupMemberships).Key);
     }
 
     [Fact]
@@ -79,19 +77,6 @@ public sealed class ConfigurationStudioDraftHistoryTests
                 [channelId] = new() { X = x, Y = 20 }
             },
             new Dictionary<Guid, string> { [zoneId] = system },
-            new Dictionary<string, IReadOnlyList<PatchMemberSetting>>
-            {
-                [yaml] =
-                [
-                    new PatchMemberSetting
-                    {
-                        SystemName = system,
-                        DestinationId = checked((uint)keyId),
-                        ChannelName = yaml
-                    }
-                ]
-            },
-            new Dictionary<string, bool> { [yaml] = true },
             fingerprint);
     }
 }

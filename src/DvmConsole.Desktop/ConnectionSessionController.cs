@@ -4,9 +4,12 @@ namespace DvmConsole.Desktop;
 
 internal sealed class ConnectionSessionController
 {
+    private readonly SemaphoreSlim transitionGate = new(1, 1);
+    private readonly object startupCancellationSync = new();
+    private readonly HashSet<CancellationTokenSource> startupCancellations = [];
     private readonly IReadOnlyList<SystemViewModel> systems;
-    private readonly Func<Task> synchronizePatchSources;
-    private readonly Func<Task> stopPatchSources;
+    private readonly Func<CancellationToken, Task> synchronizePatchSources;
+    private readonly Func<CancellationToken, Task> stopPatchSources;
     private readonly Action stopPatchForwarding;
     private readonly Action<bool> setBusy;
     private readonly Action<string> setStatus;
@@ -15,8 +18,8 @@ internal sealed class ConnectionSessionController
 
     public ConnectionSessionController(
         IReadOnlyList<SystemViewModel> systems,
-        Func<Task> synchronizePatchSources,
-        Func<Task> stopPatchSources,
+        Func<CancellationToken, Task> synchronizePatchSources,
+        Func<CancellationToken, Task> stopPatchSources,
         Action stopPatchForwarding,
         Action<bool> setBusy,
         Action<string> setStatus,
@@ -33,14 +36,18 @@ internal sealed class ConnectionSessionController
         this.publishStatus = publishStatus ?? throw new ArgumentNullException(nameof(publishStatus));
     }
 
-    public async Task ConnectAsync()
+    public Task ConnectAsync()
+        => RunStartupTransitionAsync(ConnectCoreAsync);
+
+    private async Task ConnectCoreAsync(CancellationToken cancellationToken)
     {
         setBusy(true);
         setStatus("Starting FNE connection services...");
         try
         {
-            await Task.WhenAll(systems.Select(StartSystemAsync));
-            await synchronizePatchSources().ConfigureAwait(false);
+            await Task.WhenAll(systems.Select(system => StartSystemAsync(system, cancellationToken)));
+            cancellationToken.ThrowIfCancellationRequested();
+            await synchronizePatchSources(cancellationToken).ConfigureAwait(false);
             setStatus("FNE connection services started; waiting for login acknowledgements.");
         }
         finally
@@ -49,15 +56,26 @@ internal sealed class ConnectionSessionController
         }
     }
 
-    public async Task DisconnectAsync()
+    public Task DisconnectAsync()
+        => DisconnectAsync(CancellationToken.None);
+
+    public Task DisconnectAsync(CancellationToken cancellationToken)
+    {
+        CancelStartupTransitions();
+        return RunExclusiveAsync(
+            () => DisconnectCoreAsync(cancellationToken),
+            cancellationToken);
+    }
+
+    private async Task DisconnectCoreAsync(CancellationToken cancellationToken)
     {
         setBusy(true);
         setStatus("Stopping FNE connection services...");
         try
         {
-            await stopPatchSources().ConfigureAwait(false);
+            await stopPatchSources(cancellationToken).ConfigureAwait(false);
             stopPatchForwarding();
-            await Task.WhenAll(systems.Select(system => system.StopAsync()));
+            await Task.WhenAll(systems.Select(system => system.StopAsync(cancellationToken)));
             setStatus("FNE connections stopped.");
         }
         finally
@@ -66,20 +84,32 @@ internal sealed class ConnectionSessionController
         }
     }
 
-    public async Task ToggleAsync(SystemViewModel system)
+    public Task ToggleAsync(SystemViewModel system)
     {
         ArgumentNullException.ThrowIfNull(system);
         if (!systems.Contains(system))
             throw new ArgumentException("The FNE is not part of this console.", nameof(system));
 
+        return RunStartupTransitionAsync(
+            cancellationToken => ToggleCoreAsync(system, cancellationToken));
+    }
+
+    private async Task ToggleCoreAsync(
+        SystemViewModel system,
+        CancellationToken cancellationToken)
+    {
         selectSystem(system);
         if (system.IsConnectionActive)
         {
             setStatus($"Stopping {system.Name}...");
             try
             {
-                await system.StopAsync();
+                await system.StopAsync(cancellationToken);
                 setStatus($"{system.Name}: disconnected.");
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
             }
             catch (Exception exception)
             {
@@ -89,15 +119,83 @@ internal sealed class ConnectionSessionController
         }
 
         setStatus($"Starting {system.Name}...");
-        await StartSystemAsync(system);
-        await synchronizePatchSources();
+        await StartSystemAsync(system, cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
+        await synchronizePatchSources(cancellationToken);
     }
 
-    private async Task StartSystemAsync(SystemViewModel system)
+    private async Task RunStartupTransitionAsync(
+        Func<CancellationToken, Task> operation,
+        CancellationToken cancellationToken = default)
+    {
+        using CancellationTokenSource startupCancellation = cancellationToken.CanBeCanceled
+            ? CancellationTokenSource.CreateLinkedTokenSource(cancellationToken)
+            : new CancellationTokenSource();
+        lock (startupCancellationSync)
+            startupCancellations.Add(startupCancellation);
+
+        try
+        {
+            await RunExclusiveAsync(
+                () => operation(startupCancellation.Token),
+                startupCancellation.Token);
+        }
+        finally
+        {
+            lock (startupCancellationSync)
+                startupCancellations.Remove(startupCancellation);
+        }
+    }
+
+    private void CancelStartupTransitions()
+    {
+        CancellationTokenSource[] pending;
+        lock (startupCancellationSync)
+            pending = startupCancellations.ToArray();
+
+        foreach (CancellationTokenSource cancellation in pending)
+        {
+            try
+            {
+                cancellation.Cancel();
+            }
+            catch (ObjectDisposedException)
+            {
+                // A completed startup can leave the snapshot while cancellation
+                // is being delivered. Its transition no longer needs preemption.
+            }
+        }
+    }
+
+    private async Task RunExclusiveAsync(
+        Func<Task> operation,
+        CancellationToken cancellationToken = default)
+    {
+        // These callbacks update UI-bound state. Preserve the caller's
+        // synchronization context even when this transition had to wait for
+        // an earlier connect or disconnect to finish.
+        await transitionGate.WaitAsync(cancellationToken);
+        try
+        {
+            await operation();
+        }
+        finally
+        {
+            transitionGate.Release();
+        }
+    }
+
+    private async Task StartSystemAsync(
+        SystemViewModel system,
+        CancellationToken cancellationToken)
     {
         try
         {
-            await system.StartAsync().ConfigureAwait(false);
+            await system.StartAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
         }
         catch (Exception exception)
         {

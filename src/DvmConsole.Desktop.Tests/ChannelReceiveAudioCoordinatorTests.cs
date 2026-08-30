@@ -253,6 +253,7 @@ public sealed class ChannelReceiveAudioCoordinatorTests
             Tgid = "100",
             Mode = "analog"
         });
+        channel.SetRecordingEnabled(true);
 
         await coordinator.EnsureDecodeAsync(channel);
         await coordinator.ProcessAsync(channel, CreateAnalogTraffic(100));
@@ -372,7 +373,6 @@ public sealed class ChannelReceiveAudioCoordinatorTests
 
         await coordinator.ProcessAsync(channel, CreateTraffic(100, 0, streamId: 41));
         await coordinator.ProcessAsync(channel, CreateDmrTerminator(100, 0, streamId: 41));
-        await coordinator.CompleteStreamAsync(channel, 41, DateTimeOffset.UtcNow);
         await coordinator.ProcessAsync(channel, CreateTraffic(100, 0, streamId: 42));
 
         Assert.Equal(2, vocoder.CreateSessionCalls);
@@ -450,13 +450,52 @@ public sealed class ChannelReceiveAudioCoordinatorTests
         Assert.Empty(backend.Playback.Frames);
 
         await coordinator.ProcessAsync(channel, CreateDmrTerminator(100, 0));
-        await coordinator.CompleteStreamAsync(
-            channel,
-            streamId: 99,
-            endedAt: DateTimeOffset.UtcNow);
         await WaitForAsync(() => backend.Playback.Frames.Count == 3);
 
+        Assert.False(coordinator.IsTrackingStream(channel, 99));
         Assert.Equal(0, coordinator.GetPlaybackDiagnostics(channel)!.DroppedSamples);
+    }
+
+    [Fact]
+    public async Task VoiceAfterAConfirmedTerminatorUsesANewDecoderOnTheRetainedEpisodeLane()
+    {
+        var backend = new FakeAudioBackend();
+        var vocoder = new DistinctVocoderBackend();
+        await using var coordinator = new ChannelReceiveAudioCoordinator(
+            () => backend,
+            () => vocoder);
+        coordinator.SetReceivePlaybackEpisodeResolver((_, traffic) =>
+            new ReceivePlaybackEpisode(
+                900,
+                41,
+                traffic.StreamId,
+                RetainUntilEpisodeCompletion: true));
+        var channel = new ChannelViewModel(new ChannelConfiguration
+        {
+            Name = "Dispatch",
+            System = "System 1",
+            Tgid = "100",
+            Mode = "dmr",
+            Slot = 1
+        });
+        await coordinator.StartAsync(channel);
+
+        await coordinator.ProcessAsync(channel, CreateTraffic(100, 0, streamId: 41));
+        await coordinator.ProcessAsync(channel, CreateDmrTerminator(100, 0, streamId: 41));
+        Assert.False(coordinator.IsTrackingStream(channel, 41));
+
+        await coordinator.ProcessAsync(
+            channel,
+            CreateTraffic(100, 0, packetSequence: 2, streamId: 41));
+
+        Assert.True(coordinator.IsTrackingStream(channel, 41));
+        Assert.Equal(2, vocoder.CreateSessionCalls);
+        AudioMixerLaneDiagnostics lane = Assert.Single(
+            coordinator.GetPlaybackDiagnostics(channel)!.LaneDiagnostics!);
+        Assert.Contains("episode 900", lane.Label, StringComparison.Ordinal);
+
+        await coordinator.CompleteStreamAsync(channel, 41, DateTimeOffset.UtcNow);
+        await coordinator.CompleteEpisodeAsync(channel, 900);
     }
 
     [Fact]

@@ -77,6 +77,7 @@
             <CheckBox Content="Toggle global PTT instead of hold-to-talk" IsChecked="{Binding TogglePttMode, Mode=TwoWay}" />
             <CheckBox Content="Talk permit tone" IsChecked="{Binding TalkPermitTone, Mode=TwoWay}" />
             <CheckBox Content="Connection chimes" IsChecked="{Binding ConnectionChimes, Mode=TwoWay}" />
+            <CheckBox Content="Monitor generated tones locally" IsChecked="{Binding LocalToneMonitorEnabled, Mode=TwoWay}" />
             <StackPanel Spacing="2">
               <CheckBox Content="Enable verbose logging" IsChecked="{Binding VerboseLoggingEnabled, Mode=TwoWay}" />
               <TextBlock Classes="caption"

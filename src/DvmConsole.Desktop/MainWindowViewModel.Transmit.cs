@@ -573,7 +573,10 @@ public sealed partial class MainWindowViewModel
                 if (keptActive && audioCoordinator.IsActive(channel))
                 {
                     await audioCoordinator.SetGainAsync(channel, GetChannelVolume(channel)).ConfigureAwait(false);
-                    await audioCoordinator.SetLivePlaybackEnabledAsync(channel, enabled: true)
+                    bool enableLivePlayback = receiveOutputMutePolicy.ShouldEnableLivePlayback(
+                        channel,
+                        isTemporarilySuspended: false);
+                    await audioCoordinator.SetLivePlaybackEnabledAsync(channel, enableLivePlayback)
                         .ConfigureAwait(false);
                     await RunOnUiThreadAsync(() => channel.SetAudioSuspended(false)).ConfigureAwait(false);
                 }

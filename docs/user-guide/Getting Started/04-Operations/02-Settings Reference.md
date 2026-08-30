@@ -32,6 +32,15 @@ audio is released, including when the shared PTT setting uses toggle mode.
 Connection chimes are enabled by default. Turn them off to silence local
 feedback when an FNE connects or disconnects.
 
+## Monitor Generated Tones Locally
+
+Generated-tone monitoring is enabled by default. Turn it off to transmit alert
+tones, DTMF, generated-tone presets, and QCII pages without playing the local
+monitor copy through the selected speaker route.
+
+This setting affects only local monitoring. It does not change transmitted
+audio.
+
 ## Interface Size
 
 Open **Settings > All console settings** and use the Appearance controls to
@@ -40,7 +49,7 @@ adjust the main console and Console Settings display.
 - **Text size** changes the inherited application font size.
 - **Interface scale** scales the main console and Console Settings UI.
 
-These settings apply immediately and are stored in `UserSettings` schema 7. The
+These settings apply immediately and are stored in `UserSettings` schema 9. The
 optional Engineering Health rail stores only its visibility and height in
 `OperatorView.json`. It does not move or rewrite channel cards.
 

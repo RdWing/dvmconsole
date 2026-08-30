@@ -287,6 +287,10 @@ public sealed partial class SystemViewModelTests
             viewModel.TalkPermitTone = true;
             await viewModel.FlushUserSettingsAsync();
             Assert.True(store.Load().TalkPermitTone);
+            Assert.True(viewModel.LocalToneMonitorEnabled);
+            viewModel.LocalToneMonitorEnabled = false;
+            await viewModel.FlushUserSettingsAsync();
+            Assert.False(store.Load().LocalToneMonitorEnabled);
             viewModel.VerboseLoggingEnabled = false;
             viewModel.VerboseLoggingEnabled = true;
             await viewModel.FlushUserSettingsAsync();

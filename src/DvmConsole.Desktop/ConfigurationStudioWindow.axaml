@@ -732,7 +732,13 @@
               </Border>
               <Border Grid.Column="1" Classes="panel">
                 <StackPanel Spacing="7">
-                  <TextBlock Classes="subheading" Text="Operator state"/>
+                  <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                    <TextBlock Classes="subheading" Text="Operator state"/>
+                    <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6">
+                      <Button Content="Apply changes" Click="HandleApplyAllOperatorGroupsClick" IsEnabled="{Binding CanUseOperationalGroups}"/>
+                      <Button x:Name="applyOperatorChangesAndCloseButton" Content="Apply &amp; close" Background="{DynamicResource StudioAccentBrush}" Foreground="White" Click="HandleApplyOperatorGroupsAndCloseClick" IsEnabled="{Binding CanUseOperationalGroups}"/>
+                    </StackPanel>
+                  </Grid>
                   <TextBlock Classes="caption" Text="{Binding OperationalGroupHint}" TextWrapping="Wrap"/>
                   <ItemsControl ItemsSource="{Binding OperationalGroups}" IsEnabled="{Binding CanUseOperationalGroups}">
                     <ItemsControl.ItemTemplate>
@@ -770,7 +776,7 @@
                                 </ItemsControl.ItemTemplate>
                               </ItemsControl>
                             </Expander>
-                            <Button HorizontalAlignment="Left" Content="Apply operator state" Tag="{Binding}" Click="HandleApplyPatchGroupClick"/>
+                            <Button HorizontalAlignment="Left" Content="Apply this group" Tag="{Binding}" Click="HandleApplyPatchGroupClick"/>
                           </StackPanel>
                         </Border>
                       </DataTemplate>
@@ -1010,7 +1016,7 @@
           <Button Content="Redo" Click="HandleRedoClick" IsEnabled="{Binding CanRedo}"/>
           <Button Content="Save As&#x2026;" Click="HandleSaveAsClick" IsEnabled="{Binding CanEdit}"/>
           <Button Content="Export YAML" Click="HandleExportFullClick"/>
-          <Button MinWidth="190" Content="Review &amp; Save" Background="{DynamicResource StudioAccentBrush}" Foreground="White" Click="HandleReviewAndSaveClick" IsEnabled="{Binding CanEdit}"/>
+          <Button MinWidth="190" Content="{Binding ReviewSaveButtonText}" Click="HandleReviewAndSaveClick" IsEnabled="{Binding CanSaveDraft}"/>
         </StackPanel>
       </Grid>
     </Border>

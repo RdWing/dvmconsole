@@ -17,6 +17,16 @@ internal sealed class ReceiveOutputMutePolicy
             mutedZones.Any(zone => zone.Channels.Contains(channel));
     }
 
+    public bool ShouldEnableLivePlayback(
+        ChannelViewModel channel,
+        bool isTemporarilySuspended)
+    {
+        ArgumentNullException.ThrowIfNull(channel);
+        return channel.IsAudioEnabled &&
+            !isTemporarilySuspended &&
+            !IsMuted(channel);
+    }
+
     public bool IsMuted(SystemViewModel system)
     {
         ArgumentNullException.ThrowIfNull(system);

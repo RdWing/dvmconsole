@@ -26,4 +26,23 @@ public sealed class BoundedShutdownTests
         Assert.Contains("cleanup", exception.Message, StringComparison.OrdinalIgnoreCase);
         Assert.False(neverCompletes.Task.IsCompleted);
     }
+
+    [Fact]
+    public async Task DeadlineCoversTheEntireCleanupSequence()
+    {
+        var firstStep = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        bool laterStepStarted = false;
+
+        await Assert.ThrowsAsync<TimeoutException>(() =>
+            BoundedShutdown.RunAsync(
+                async () =>
+                {
+                    await firstStep.Task;
+                    laterStepStarted = true;
+                },
+                TimeSpan.FromMilliseconds(25)));
+
+        Assert.False(laterStepStarted);
+    }
 }

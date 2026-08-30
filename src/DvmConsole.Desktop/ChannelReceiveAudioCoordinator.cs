@@ -1012,22 +1012,30 @@ public sealed class ChannelReceiveAudioCoordinator : IAsyncDisposable
             await CompleteExpiredStreamsAsync(now, cancellationToken).ConfigureAwait(false);
 
             ReceiveStreamDecision lifecycleDecision = ObserveTraffic(traffic, now);
+            if (lifecycleDecision.Transition == ReceiveStreamTransition.TerminationPending)
+            {
+                // The receive worker has already drained every earlier jittered
+                // voice packet. Release the physical decoder and mixer producer
+                // now while the logical episode remains available for late voice.
+                await CompletePhysicalStreamIfPresentAsync(
+                        traffic.StreamId,
+                        now,
+                        cancellationToken)
+                    .ConfigureAwait(false);
+                return default;
+            }
             if (!lifecycleDecision.AcceptTraffic)
                 return default;
 
             if (lifecycleDecision.Transition == ReceiveStreamTransition.Restarted &&
                 FindStream(traffic.StreamId) is StreamSessionState restarted)
             {
-                await CompleteTrackedStreamAsync(restarted, now, cancellationToken)
+                await CompletePhysicalStreamAsync(restarted, now, cancellationToken)
                     .ConfigureAwait(false);
             }
 
-            bool terminating = ReceiveTrafficClassifier.IsTerminator(traffic);
-            StreamSessionState? stream = terminating
-                ? FindStream(traffic.StreamId)
-                : await GetOrCreateStreamAsync(traffic.StreamId, now).ConfigureAwait(false);
-            if (stream is null)
-                return default;
+            StreamSessionState stream = await GetOrCreateStreamAsync(traffic.StreamId, now)
+                .ConfigureAwait(false);
 
             if (EncryptionSnapshotResolver.TryResolve(traffic) is
                 EncryptionSnapshot encryption)
@@ -1048,9 +1056,6 @@ public sealed class ChannelReceiveAudioCoordinator : IAsyncDisposable
             {
                 stream.SampleContext.Clear();
                 stream.LastActivity = now;
-                if (terminating)
-                    await CompleteTrackedStreamAsync(stream, now, cancellationToken)
-                        .ConfigureAwait(false);
             }
         }
 
@@ -1063,7 +1068,7 @@ public sealed class ChannelReceiveAudioCoordinator : IAsyncDisposable
             StreamSessionState? stream = FindStream(streamId);
             if (stream is not null)
             {
-                await CompleteTrackedStreamAsync(stream, endedAt, cancellationToken)
+                await CompletePhysicalStreamAsync(stream, endedAt, cancellationToken)
                     .ConfigureAwait(false);
             }
         }
@@ -1348,13 +1353,26 @@ public sealed class ChannelReceiveAudioCoordinator : IAsyncDisposable
                 StreamSessionState? stream = FindStream(streamId);
                 if (stream is not null)
                 {
-                    await CompleteTrackedStreamAsync(stream, now, cancellationToken)
+                    await CompletePhysicalStreamAsync(stream, now, cancellationToken)
                         .ConfigureAwait(false);
                 }
             }
         }
 
-        private async ValueTask CompleteTrackedStreamAsync(
+        private async ValueTask CompletePhysicalStreamIfPresentAsync(
+            uint streamId,
+            DateTimeOffset completedAt,
+            CancellationToken cancellationToken)
+        {
+            StreamSessionState? stream = FindStream(streamId);
+            if (stream is not null)
+            {
+                await CompletePhysicalStreamAsync(stream, completedAt, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+        }
+
+        private async ValueTask CompletePhysicalStreamAsync(
             StreamSessionState stream,
             DateTimeOffset completedAt,
             CancellationToken cancellationToken)
