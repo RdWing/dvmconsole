@@ -57,9 +57,9 @@ isolated audio state keep simultaneous calls separate.
 
 ## What’s new in DVM Console NEO
 
-### 0.5.4 — Configuration, recording, and audio reliability
+### 0.5.5 — Configuration, recording, and audio reliability
 
-Version 0.5.4 corrects several lifecycle and persistence problems found during
+Version 0.5.5 corrects several lifecycle and persistence problems found during
 a full code-quality audit. The update focuses on safe configuration saves,
 accurate recording history, responsive stream controls, and predictable audio
 cleanup.
@@ -73,7 +73,7 @@ cleanup.
 - Preserve analog and mixer audio tails during shutdown while making media
   reader cancellation and native macOS audio cleanup deterministic.
 
-[Read the 0.5.4 release notes →](docs/releases/v0.5.4.md)
+[Read the 0.5.5 release notes →](docs/releases/v0.5.5.md)
 
 ### Prior recent improvements
 
@@ -108,13 +108,13 @@ Recent releases also include these changes:
 ## Download DVM Console NEO
 
 Download the package for the destination computer and extract the entire
-archive before starting DVM Console NEO. Version 0.5.4 uses these filenames:
+archive before starting DVM Console NEO. Version 0.5.5 uses these filenames:
 
 | Platform | Package | Requirements |
 | --- | --- | --- |
-| Apple Silicon Mac | `dvmconsole-0.5.4-osx-arm64.zip` | macOS 14 or newer |
-| Intel Mac | `dvmconsole-0.5.4-osx-x64.zip` | macOS 14 or newer |
-| Windows PC | `dvmconsole-0.5.4-win-x64.zip` | Windows x64 |
+| Apple Silicon Mac | `dvmconsole-0.5.5-osx-arm64.zip` | macOS 14 or newer |
+| Intel Mac | `dvmconsole-0.5.5-osx-x64.zip` | macOS 14 or newer |
+| Windows PC | `dvmconsole-0.5.5-win-x64.zip` | Windows x64 |
 
 **[Download the latest release →](https://github.com/RdWing/dvmconsole/releases/latest)**
 

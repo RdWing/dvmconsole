@@ -251,7 +251,7 @@ public sealed class WebStreamPlaybackCoordinator : IAsyncDisposable
             await pending.Completion.WaitAsync(cancellationToken).ConfigureAwait(false);
         if (session is not null)
             await session.StopAsync(cancellationToken).ConfigureAwait(false);
-        if (session is not null)
+        if (pending is not null || session is not null)
         {
             await SetPlaybackStateAsync(
                 stream,

@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.5.5] - 2026-08-30
+
+### Fixed
+
+- Finish a canceled web-stream start in the `Off` state even when cancellation
+  completes before the concurrent stop operation publishes `Stopping…`.
+- Give the Bluetooth post-cue recovery regression test enough wall-clock
+  allowance to remain deterministic on contended CI runners without changing
+  the production recovery deadline.
+
 ## [0.5.4] - 2026-08-30
 
 ### Changed
@@ -804,7 +814,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Add patches, multi-select groups, call history, recordings, web streams, clocks, layouts, themes, startup behavior, and in-application operator documentation.
 - Add support for local and KMM-provided P25 encryption keys while preserving compatibility with existing variable-length AES key material.
 
-[Unreleased]: https://github.com/RdWing/dvmconsole/compare/v0.5.4...HEAD
+[Unreleased]: https://github.com/RdWing/dvmconsole/compare/v0.5.5...HEAD
+[0.5.5]: https://github.com/RdWing/dvmconsole/compare/v0.5.4...v0.5.5
 [0.5.4]: https://github.com/RdWing/dvmconsole/compare/v0.5.3...v0.5.4
 [0.5.3]: https://github.com/RdWing/dvmconsole/compare/v0.5.2...v0.5.3
 [0.5.2]: https://github.com/RdWing/dvmconsole/compare/v0.5.1...v0.5.2
