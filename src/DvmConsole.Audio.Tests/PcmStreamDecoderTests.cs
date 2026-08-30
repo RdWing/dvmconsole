@@ -46,4 +46,78 @@ public sealed class PcmStreamDecoderTests
         Assert.Contains(samples[..count], sample => sample != 0);
     }
 
+    [Fact]
+    public async Task CancellationInterruptsABlockedMpegOpen()
+    {
+        using var source = new BlockingReadStream();
+        using var cancellation = new CancellationTokenSource();
+        Task<MpegPcmStreamReader> open = MpegPcmStreamReader.OpenAsync(source, cancellation.Token);
+        Assert.True(source.ReadStarted.Wait(TimeSpan.FromSeconds(2)));
+
+        cancellation.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => open)
+            .WaitAsync(TimeSpan.FromSeconds(2));
+        Assert.True(source.WasDisposed);
+    }
+
+    private sealed class BlockingReadStream : Stream
+    {
+        private readonly ManualResetEventSlim released = new();
+        private bool disposed;
+
+        public ManualResetEventSlim ReadStarted { get; } = new();
+        public bool WasDisposed => disposed;
+        public override bool CanRead => true;
+        public override bool CanSeek => true;
+        public override bool CanWrite => false;
+        public override long Length => 4096;
+        public override long Position
+        {
+            get;
+            set;
+        }
+
+        public override int Read(byte[] buffer, int offset, int count)
+        {
+            ReadStarted.Set();
+            released.Wait();
+            throw new ObjectDisposedException(nameof(BlockingReadStream));
+        }
+
+        public override int Read(Span<byte> buffer)
+        {
+            ReadStarted.Set();
+            released.Wait();
+            throw new ObjectDisposedException(nameof(BlockingReadStream));
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing && !disposed)
+            {
+                disposed = true;
+                released.Set();
+                ReadStarted.Dispose();
+                released.Dispose();
+            }
+            base.Dispose(disposing);
+        }
+
+        public override void Flush() => throw new NotSupportedException();
+        public override long Seek(long offset, SeekOrigin origin)
+        {
+            Position = origin switch
+            {
+                SeekOrigin.Begin => offset,
+                SeekOrigin.Current => Position + offset,
+                SeekOrigin.End => Length + offset,
+                _ => throw new ArgumentOutOfRangeException(nameof(origin))
+            };
+            return Position;
+        }
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+    }
+
 }

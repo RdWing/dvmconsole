@@ -111,7 +111,8 @@ public sealed class GroupConfiguration
     public string Type { get; set; } = "patch";
 
     public bool IsPatchGroup()
-        => !string.Equals(Type?.Trim(), "multiselect", StringComparison.OrdinalIgnoreCase);
+        => string.IsNullOrWhiteSpace(Type) ||
+           string.Equals(Type.Trim(), "patch", StringComparison.OrdinalIgnoreCase);
 
     public bool IsMultiselectGroup()
         => string.Equals(Type?.Trim(), "multiselect", StringComparison.OrdinalIgnoreCase);

@@ -58,6 +58,29 @@ public sealed class AnalogTransmitCaptureSessionTests
         Assert.Equal(AnalogAudioFrameType.Terminator, (AnalogAudioFrameType)(packets[^1].Payload[AnalogVoicePacketCodec.FrameTypeOffset] & 0x0F));
     }
 
+    [Fact]
+    public void EndPadsAndSendsTheFinalPartialVoiceFrameBeforeTheTerminator()
+    {
+        var packets = new List<(byte[] Payload, ushort Sequence)>();
+        using var session = new AnalogTxAudioSession(
+            sourceId: 1,
+            destinationId: 2,
+            streamId: 3,
+            send: (payload, sequence, _) => packets.Add((payload.ToArray(), sequence)));
+        short[] partial = Enumerable.Range(1, 37).Select(value => (short)value).ToArray();
+
+        session.Start();
+        Assert.Equal(0, session.Process(partial));
+        session.End();
+
+        Assert.Equal(2, packets.Count);
+        Assert.Equal(AnalogAudioFrameType.VoiceStart, (AnalogAudioFrameType)(packets[0].Payload[AnalogVoicePacketCodec.FrameTypeOffset] & 0x0F));
+        Assert.Equal(ushort.MaxValue, packets[1].Sequence);
+        short[] decoded = AnalogVoicePacketCodec.ExtractPcm(packets[0].Payload);
+        Assert.NotEqual((short)0, decoded[partial.Length - 1]);
+        Assert.Equal(AnalogVoicePacketCodec.DecodeMuLaw(AnalogVoicePacketCodec.EncodeMuLaw(0)), decoded[partial.Length]);
+    }
+
     private sealed class FakeCapture : IAudioCapture
     {
         public event EventHandler<PcmSamplesEventArgs>? SamplesAvailable;

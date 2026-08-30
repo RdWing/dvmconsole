@@ -196,13 +196,7 @@ internal sealed class RecordingCatalogStore
             : metadata.FilePath;
 
     private static bool IsUnderRoot(string rootPath, string path)
-    {
-        string normalizedPath = Path.GetFullPath(path);
-        string normalizedRoot = rootPath.TrimEnd(
-            Path.DirectorySeparatorChar,
-            Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
-        return normalizedPath.StartsWith(normalizedRoot, StringComparison.OrdinalIgnoreCase);
-    }
+        => FileSystemPathIdentity.IsUnderRoot(rootPath, path);
 }
 
 internal interface IRecordingCatalogScanSource

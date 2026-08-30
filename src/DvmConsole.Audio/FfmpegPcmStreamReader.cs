@@ -14,10 +14,12 @@ public sealed class FfmpegPcmStreamReader : IAudioPcmStreamReader
     private readonly Stream output;
     private readonly Task inputTask;
     private readonly Task<string> errorTask;
-    private readonly SemaphoreSlim readGate = new(1, 1);
+    private readonly ExclusiveReaderOperationTracker operations = new();
+    private readonly object lifetimeSync = new();
     private readonly CancellationTokenSource processCancellation = new();
     private byte[] rawSamples = [];
-    private bool disposed;
+    private Task? disposeTask;
+    private int disposed;
 
     private FfmpegPcmStreamReader(Stream source, Process process)
     {
@@ -88,57 +90,56 @@ public sealed class FfmpegPcmStreamReader : IAudioPcmStreamReader
         Memory<short> destination,
         CancellationToken cancellationToken = default)
     {
-        ObjectDisposedException.ThrowIf(disposed, this);
+        using IDisposable operation = operations.Begin(nameof(FfmpegPcmStreamReader));
         if (destination.IsEmpty)
             return 0;
 
-        await readGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         using CancellationTokenRegistration cancellation = cancellationToken.Register(
             static state => ((FfmpegPcmStreamReader)state!).KillProcess(),
             this);
-        try
+        int targetBytes = checked(destination.Length * sizeof(short));
+        EnsureRawBuffer(targetBytes);
+        int byteCount = 0;
+
+        while (byteCount < targetBytes)
         {
-            int targetBytes = checked(destination.Length * sizeof(short));
-            EnsureRawBuffer(targetBytes);
-            int byteCount = 0;
-
-            while (byteCount < targetBytes)
+            int read = await output.ReadAsync(
+                rawSamples.AsMemory(byteCount, targetBytes - byteCount),
+                cancellationToken).ConfigureAwait(false);
+            if (read == 0)
             {
-                int read = await output.ReadAsync(
-                    rawSamples.AsMemory(byteCount, targetBytes - byteCount),
-                    cancellationToken).ConfigureAwait(false);
-                if (read == 0)
-                {
-                    await EnsureProcessCompletedAsync(cancellationToken).ConfigureAwait(false);
-                    break;
-                }
-
-                byteCount += read;
+                await EnsureProcessCompletedAsync(cancellationToken).ConfigureAwait(false);
+                break;
             }
 
-            if ((byteCount & 1) != 0)
-                throw new InvalidDataException("FFmpeg returned an incomplete PCM sample.");
-
-            int sampleCount = byteCount / sizeof(short);
-            for (int index = 0; index < sampleCount; index++)
-            {
-                destination.Span[index] = (short)(rawSamples[index * 2] | (rawSamples[index * 2 + 1] << 8));
-            }
-
-            return sampleCount;
+            byteCount += read;
         }
-        finally
+
+        if ((byteCount & 1) != 0)
+            throw new InvalidDataException("FFmpeg returned an incomplete PCM sample.");
+
+        int sampleCount = byteCount / sizeof(short);
+        for (int index = 0; index < sampleCount; index++)
         {
-            readGate.Release();
+            destination.Span[index] = (short)(rawSamples[index * 2] | (rawSamples[index * 2 + 1] << 8));
         }
+
+        return sampleCount;
     }
 
-    public async ValueTask DisposeAsync()
+    public ValueTask DisposeAsync()
     {
-        if (disposed)
-            return;
-        disposed = true;
+        lock (lifetimeSync)
+            return new ValueTask(disposeTask ??= DisposeCoreAsync());
+    }
+
+    private async Task DisposeCoreAsync()
+    {
+        Task idle = operations.StopAccepting();
+        Interlocked.Exchange(ref disposed, 1);
         KillProcess();
+        source.Dispose();
+        await idle.ConfigureAwait(false);
 
         try
         {
@@ -170,7 +171,6 @@ public sealed class FfmpegPcmStreamReader : IAudioPcmStreamReader
         await source.DisposeAsync().ConfigureAwait(false);
         process.Dispose();
         processCancellation.Dispose();
-        readGate.Dispose();
     }
 
     private async Task CopySourceAsync()
@@ -180,7 +180,7 @@ public sealed class FfmpegPcmStreamReader : IAudioPcmStreamReader
             await using Stream input = process.StandardInput.BaseStream;
             await source.CopyToAsync(input, processCancellation.Token).ConfigureAwait(false);
         }
-        catch (Exception) when (disposed || process.HasExited)
+        catch (Exception) when (Volatile.Read(ref disposed) != 0 || process.HasExited)
         {
             // A stopped or failed decoder closes stdin while the source is still copying.
         }

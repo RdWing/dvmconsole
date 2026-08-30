@@ -14,9 +14,11 @@ public sealed class WavPcmStreamReader : IAudioPcmStreamReader
     private readonly ArrayPool<byte> bufferPool;
     private readonly int blockAlign;
     private readonly int bytesPerSample;
+    private readonly ExclusiveReaderOperationTracker operations = new();
+    private readonly object lifetimeSync = new();
     private byte[]? readBuffer;
     private long dataBytesRemaining;
-    private bool disposed;
+    private Task? disposeTask;
 
     private WavPcmStreamReader(
         Stream source,
@@ -136,7 +138,7 @@ public sealed class WavPcmStreamReader : IAudioPcmStreamReader
         Memory<short> destination,
         CancellationToken cancellationToken = default)
     {
-        ObjectDisposedException.ThrowIf(disposed, this);
+        using IDisposable operation = operations.Begin(nameof(WavPcmStreamReader));
         if (destination.IsEmpty || dataBytesRemaining < blockAlign)
             return 0;
 
@@ -169,7 +171,7 @@ public sealed class WavPcmStreamReader : IAudioPcmStreamReader
         long sampleCount,
         CancellationToken cancellationToken = default)
     {
-        ObjectDisposedException.ThrowIf(disposed, this);
+        using IDisposable operation = operations.Begin(nameof(WavPcmStreamReader));
         if (sampleCount < 0)
             throw new ArgumentOutOfRangeException(nameof(sampleCount));
 
@@ -186,11 +188,17 @@ public sealed class WavPcmStreamReader : IAudioPcmStreamReader
         return frames;
     }
 
-    public async ValueTask DisposeAsync()
+    public ValueTask DisposeAsync()
     {
-        if (disposed)
-            return;
-        disposed = true;
+        lock (lifetimeSync)
+            return new ValueTask(disposeTask ??= DisposeCoreAsync());
+    }
+
+    private async Task DisposeCoreAsync()
+    {
+        Task idle = operations.StopAccepting();
+        source.Dispose();
+        await idle.ConfigureAwait(false);
         byte[]? buffer = readBuffer;
         readBuffer = null;
         try

@@ -41,7 +41,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
     private readonly ChannelReceiveWorkQueue patchSourceReceiveWork;
     private readonly UserSettingsStore userSettingsStore;
     private readonly UserSettings userSettings;
-    private readonly LatestUserSettingsWriter userSettingsWriter;
+    private readonly UserSettingsPersistenceCoordinator userSettingsPersistence;
     private readonly string loadedCodeplugPath;
     private CodeplugGroupState codeplugGroupState
         => CodeplugGroupStateStore.GetOrMigrate(userSettings, loadedCodeplugPath);
@@ -175,9 +175,14 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
         userSettings = this.userSettingsStore.Load();
         verboseDiagnosticLogging = userSettings.VerboseLoggingEnabled ||
             VerboseDiagnosticLogging.IsEnabled;
-        userSettingsWriter = new LatestUserSettingsWriter(
-            this.userSettingsStore.SaveSnapshot,
-            exception => DesktopCrashLog.Write("User settings persistence", exception));
+        userSettingsPersistence = new UserSettingsPersistenceCoordinator(
+            this.userSettingsStore,
+            userSettings,
+            exception =>
+            {
+                DesktopCrashLog.Write("User settings persistence", exception);
+                this.uiDispatcher.Post(() => ReportUserSettingsPersistenceFailure(exception));
+            });
         if (NormalizeHiddenAudioProcessingMode(userSettings))
             PersistUserSettings();
         audioBackendProvider = new ApplicationAudioBackendProvider(
@@ -300,7 +305,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
         receiveEpisodeCompletion = new ReceiveEpisodeCompletionCoordinator(
             receiveAudioWork,
             (channel, episodeId) => audioCoordinator.CompleteEpisodeAsync(channel, episodeId),
-            callRecordings.StopStream,
+            callRecordings.StopEpisode,
             ResolveReceiveRecordingTarget);
         receivePresentation = new ReceivePresentationController(
             () => Volatile.Read(ref disposeStarted) != 0,
@@ -1830,11 +1835,13 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
         try
         {
             await recordingPlayback.StartAsync(recordingPath).ConfigureAwait(false);
-            AudioStatusText = $"Playing recording: {metadata.FileName}";
+            await RunOnUiThreadAsync(() =>
+                AudioStatusText = $"Playing recording: {metadata.FileName}").ConfigureAwait(false);
         }
         catch (Exception exception) when (exception is IOException or InvalidDataException or InvalidOperationException or NotSupportedException)
         {
-            AudioStatusText = $"Unable to play recording: {exception.Message}";
+            await RunOnUiThreadAsync(() =>
+                AudioStatusText = $"Unable to play recording: {exception.Message}").ConfigureAwait(false);
         }
     }
 
@@ -1862,7 +1869,8 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
     public async Task StopRecordingPlaybackAsync()
     {
         await recordingPlayback.StopAsync().ConfigureAwait(false);
-        AudioStatusText = "Recording playback stopped.";
+        await RunOnUiThreadAsync(() =>
+            AudioStatusText = "Recording playback stopped.").ConfigureAwait(false);
     }
 
     public async Task DeleteRecordingAsync(CallRecordingMetadata metadata)
@@ -2023,22 +2031,25 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
         bool firstStart = !pttSession.IsStarted;
         PttSessionStartResult result =
             await pttSession.StartAsync(cancellationToken).ConfigureAwait(false);
-        if (firstStart)
+        await RunOnUiThreadAsync(() =>
         {
-            TransmitStatusText = DescribeKeyboardPttReadiness(
-                result.GlobalKeyboard,
-                result.ActiveSystemKeyboard);
-        }
-        if (!pttSession.HasSerialSource)
-            return;
-        if (result.SerialError is not null)
-        {
-            SerialPttStatusText = $"Serial PTT unavailable on {SerialPttPortName}: {result.SerialError.Message}";
-            TransmitStatusText = $"PTT idle; serial source unavailable: {result.SerialError.Message}";
-            return;
-        }
-        SerialPttStatusText = $"Serial PTT ready on {SerialPttPortName} at {SerialPttBaudRate:N0} baud.";
-        TransmitStatusText = $"PTT idle; serial source {SerialPttPortName} ready for {SerialPttScopeText}.";
+            if (firstStart)
+            {
+                TransmitStatusText = DescribeKeyboardPttReadiness(
+                    result.GlobalKeyboard,
+                    result.ActiveSystemKeyboard);
+            }
+            if (!pttSession.HasSerialSource)
+                return;
+            if (result.SerialError is not null)
+            {
+                SerialPttStatusText = $"Serial PTT unavailable on {SerialPttPortName}: {result.SerialError.Message}";
+                TransmitStatusText = $"PTT idle; serial source unavailable: {result.SerialError.Message}";
+                return;
+            }
+            SerialPttStatusText = $"Serial PTT ready on {SerialPttPortName} at {SerialPttBaudRate:N0} baud.";
+            TransmitStatusText = $"PTT idle; serial source {SerialPttPortName} ready for {SerialPttScopeText}.";
+        }).ConfigureAwait(false);
     }
 
     public void SelectChannel(ChannelViewModel channel)
@@ -3007,12 +3018,14 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
         ChannelViewModel? recordingTarget = ResolveReceiveRecordingTarget(channel);
         if (recordingTarget is not null)
         {
+            ReceiveCallEpisodeSnapshot? episode = ResolveReceiveEpisode(channel, streamId);
             callRecordings.WriteEpisodeSamples(
                 recordingTarget,
-                ResolveReceiveEpisodeStreamId(channel, streamId),
+                episode?.PrimaryStreamId ?? streamId,
                 streamId,
                 sourceId,
-                samples);
+                samples,
+                episode?.EpisodeId);
         }
         LogVocoderAudioLevel(channel, samples, ChannelAudioDirection.Receive, streamId);
     }
@@ -3028,13 +3041,18 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
     }
 
     private uint ResolveReceiveEpisodeStreamId(ChannelViewModel channel, uint physicalStreamId)
+        => ResolveReceiveEpisode(channel, physicalStreamId)?.PrimaryStreamId ?? physicalStreamId;
+
+    private ReceiveCallEpisodeSnapshot? ResolveReceiveEpisode(
+        ChannelViewModel channel,
+        uint physicalStreamId)
         => receiveCallEpisodes.TryGet(
             channel.Definition.SystemName,
             ProtocolFor(channel),
             physicalStreamId,
             out ReceiveCallEpisodeSnapshot? episode)
-            ? episode.PrimaryStreamId
-            : physicalStreamId;
+            ? episode
+            : null;
 
     private ReceivePlaybackEpisode ResolveReceivePlaybackEpisode(
         ChannelViewModel channel,
@@ -3974,7 +3992,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
 
         try
         {
-            userSettingsWriter.Schedule(userSettingsStore.CaptureSnapshot(userSettings));
+            userSettingsPersistence.Schedule();
         }
         catch (Exception exception) when (
             exception is IOException or UnauthorizedAccessException ||
@@ -3985,7 +4003,16 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IAsync
     }
 
     internal Task FlushUserSettingsAsync()
-        => userSettingsWriter.FlushAsync();
+        => userSettingsPersistence.FlushAsync();
+
+    internal Task AdoptStudioUserSettingsAsync(ConfigurationSavePlan plan)
+        => userSettingsPersistence.AdoptStudioSnapshotAsync(plan);
+
+    internal void ReportUserSettingsPersistenceFailure(Exception exception)
+    {
+        ArgumentNullException.ThrowIfNull(exception);
+        StatusText = $"Operator settings could not be saved: {exception.Message}";
+    }
 
     public void ApplyPatchGroup(
         string groupName,

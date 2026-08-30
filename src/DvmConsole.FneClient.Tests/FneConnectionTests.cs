@@ -179,7 +179,7 @@ public sealed class FneConnectionTests
     }
 
     [Fact]
-    public async Task ExplicitSocketErrorStillPublishesConnectionFault()
+    public async Task SocketDiagnosticWordingDoesNotOverrideTypedConnectionState()
     {
         var options = new FneConnectionOptions(
             "Test FNE", "TYF_OP1", "127.0.0.1", 62031, 1000001, "password", false, null);
@@ -189,7 +189,7 @@ public sealed class FneConnectionTests
 
         peer.Logger(fnecore.LogLevel.ERROR, "SOCKET ERROR: connection reset");
 
-        Assert.Equal(FneConnectionState.Faulted, connection.Status.State);
+        Assert.Equal(FneConnectionState.Disconnected, connection.Status.State);
     }
 
     [Fact]
@@ -266,7 +266,7 @@ public sealed class FneConnectionTests
     }
 
     [Fact]
-    public async Task LoginRetriesBackOffAndSuccessfulConnectionRestoresNormalCadence()
+    public async Task DiagnosticWordingCannotChangeLoginCadence()
     {
         var sessions = new RecordingPeerSessionFactory();
         await using var connection = new FneConnection(
@@ -274,22 +274,19 @@ public sealed class FneConnectionTests
             TimeProvider.System,
             new LoopbackEndpointResolver(),
             sessions);
-        var messages = new List<string>();
-        connection.LogReceived += (_, entry) => messages.Add(entry.Message);
-
         await connection.StartAsync();
         RecordingPeerSession session = sessions.Single();
-        int[] expectedIntervals = [5, 10, 20, 40, 60, 60];
+        session.Callbacks.Log(fnecore.LogLevel.ERROR, "master NAK");
+        session.Callbacks.Log(fnecore.LogLevel.ERROR, "SOCKET ERROR");
+        session.Callbacks.Log(fnecore.LogLevel.INFO, "Sending login request to MASTER");
 
-        foreach (int expectedInterval in expectedIntervals)
-        {
-            session.Callbacks.Log(fnecore.LogLevel.INFO, "Sending login request to MASTER");
-            Assert.Equal(expectedInterval, session.Peer.PingTime);
-        }
+        Assert.Equal(FnePeerSessionFactory.DefaultPingIntervalSeconds, session.Peer.PingTime);
+        Assert.Equal(FneConnectionState.WaitingForLogin, connection.Status.State);
 
-        Assert.Contains(messages, message => message.Contains(
-            "next retry in 60 seconds",
-            StringComparison.Ordinal));
+        session.Callbacks.LoginRequestSent();
+        Assert.Equal(5, session.Peer.PingTime);
+        session.Callbacks.LoginRequestSent();
+        Assert.Equal(10, session.Peer.PingTime);
 
         session.Peer.Information.State = fnecore.ConnectionState.RUNNING;
         session.Callbacks.Connected(
@@ -299,10 +296,12 @@ public sealed class FneConnectionTests
 
         session.Callbacks.Log(fnecore.LogLevel.INFO, "Sending login request to MASTER");
         Assert.Equal(FnePeerSessionFactory.DefaultPingIntervalSeconds, session.Peer.PingTime);
+        session.Callbacks.LoginRequestSent();
+        Assert.Equal(FnePeerSessionFactory.DefaultPingIntervalSeconds, session.Peer.PingTime);
     }
 
     [Fact]
-    public async Task LoginAcknowledgementResetsBackoffBeforeHandshakeCompletes()
+    public async Task TypedPeerStateDrivesHandshakeProgressRegardlessOfLogText()
     {
         var sessions = new RecordingPeerSessionFactory();
         await using var connection = new FneConnection(
@@ -313,19 +312,15 @@ public sealed class FneConnectionTests
 
         await connection.StartAsync();
         RecordingPeerSession session = sessions.Single();
-        session.Callbacks.Log(fnecore.LogLevel.INFO, "Sending login request to MASTER");
-        session.Callbacks.Log(fnecore.LogLevel.INFO, "Sending login request to MASTER");
-        Assert.Equal(10, session.Peer.PingTime);
-
         session.Peer.Information.State = fnecore.ConnectionState.WAITING_AUTHORISATION;
-        session.Callbacks.Log(fnecore.LogLevel.INFO, "login ACK received");
-        session.Callbacks.Log(fnecore.LogLevel.INFO, "Sending login request to MASTER");
+        session.Callbacks.Log(fnecore.LogLevel.INFO, "wording changed completely");
 
+        await WaitUntilAsync(() => connection.Status.State == FneConnectionState.Authenticating);
         Assert.Equal(FnePeerSessionFactory.DefaultPingIntervalSeconds, session.Peer.PingTime);
     }
 
     [Fact]
-    public async Task StopDoesNotWaitForAnActiveLoginRetryDelay()
+    public async Task StopDoesNotDependOnLoginLogCadence()
     {
         var loginRequest = new TaskCompletionSource(
             TaskCreationOptions.RunContinuationsAsynchronously);
@@ -341,7 +336,7 @@ public sealed class FneConnectionTests
         await loginRequest.Task.WaitAsync(TimeSpan.FromSeconds(2));
         FnePeer peer = Assert.IsType<FnePeer>(connection.Peer);
         peer.Logger(LogLevel.INFO, "Sending login request to MASTER");
-        Assert.Equal(10, peer.PingTime);
+        Assert.Equal(FnePeerSessionFactory.DefaultPingIntervalSeconds, peer.PingTime);
         await Task.Delay(20);
 
         await connection.StopAsync().WaitAsync(TimeSpan.FromSeconds(1));
@@ -359,7 +354,7 @@ public sealed class FneConnectionTests
             TimeProvider.System,
             new LoopbackEndpointResolver(),
             sessions,
-            TimeSpan.FromMilliseconds(40),
+            TimeSpan.FromMilliseconds(400),
             TimeSpan.FromMilliseconds(20));
 
         var messages = new List<string>();
@@ -368,7 +363,6 @@ public sealed class FneConnectionTests
         await connection.StartAsync();
         RecordingPeerSession first = sessions.Single();
         first.Peer.Information.State = fnecore.ConnectionState.WAITING_AUTHORISATION;
-        first.Callbacks.Log(fnecore.LogLevel.INFO, "login ACK received");
 
         await WaitUntilAsync(() => sessions.Count == 2);
 

@@ -281,6 +281,8 @@ public sealed class PatchForwardingCoordinatorTests
         Assert.Contains(diagnostics, diagnostic =>
             diagnostic.Kind == PatchForwardingDiagnosticKind.TargetFailed &&
             diagnostic.Message.Contains("transport interruption", StringComparison.OrdinalIgnoreCase));
+        await WaitUntilAsync(() => diagnostics.Count(diagnostic =>
+            diagnostic.Kind == PatchForwardingDiagnosticKind.TargetStarted) == 2);
         Assert.Equal(
             2,
             diagnostics.Count(diagnostic =>

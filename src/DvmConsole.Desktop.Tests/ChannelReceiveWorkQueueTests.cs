@@ -234,10 +234,10 @@ public sealed class ChannelReceiveWorkQueueTests
                     events.Add($"playback {episodeId}");
                 return Task.CompletedTask;
             },
-            (_, streamId) =>
+            (_, episodeId) =>
             {
                 lock (events)
-                    events.Add($"recording {streamId}");
+                    events.Add($"recording {episodeId}");
             },
             candidate => candidate);
         DateTimeOffset now = DateTimeOffset.UnixEpoch;
@@ -266,7 +266,7 @@ public sealed class ChannelReceiveWorkQueueTests
         await completion.WaitAsync(TimeSpan.FromSeconds(2));
 
         Assert.Equal(
-            ["packet 100", "packet 200", "playback 900", "recording 100"],
+            ["packet 100", "packet 200", "playback 900", "recording 900"],
             events);
     }
 

@@ -22,7 +22,12 @@ public sealed class App : Application
     {
         AvaloniaXamlLoader.Load(this);
 #if DEBUG
-        this.AttachDeveloperTools();
+        bool isHeadless = AppDomain.CurrentDomain.GetAssemblies().Any(assembly =>
+            assembly.GetName().Name?.StartsWith("Avalonia.Headless", StringComparison.Ordinal) == true);
+        if (!isHeadless)
+        {
+            this.AttachDeveloperTools();
+        }
 #endif
     }
 

@@ -94,6 +94,69 @@ public sealed class WebStreamPlaybackCoordinatorTests
         Assert.True(dispatcher.InvocationCount >= 3);
     }
 
+    [Fact]
+    public async Task StopCancelsAConnectionThatHasNotFinishedOpening()
+    {
+        var backend = new FakeAudioBackend();
+        var enteredOpen = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var stream = new WebStreamViewModel(new WebStreamConfiguration
+        {
+            Name = "Slow stream",
+            Url = "https://example.test/slow"
+        });
+        await using var coordinator = new WebStreamPlaybackCoordinator(
+            () => backend,
+            () => "output",
+            async (_, cancellationToken) =>
+            {
+                enteredOpen.TrySetResult();
+                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+                return Stream.Null;
+            });
+
+        Task start = coordinator.StartAsync(stream);
+        await enteredOpen.Task.WaitAsync(TimeSpan.FromSeconds(1));
+
+        await coordinator.StopAsync(stream).WaitAsync(TimeSpan.FromSeconds(1));
+        await start.WaitAsync(TimeSpan.FromSeconds(1));
+
+        Assert.False(coordinator.IsActive(stream));
+        Assert.False(stream.IsActive);
+        Assert.Equal("Off", stream.StatusText);
+        Assert.True(backend.IsDisposed);
+    }
+
+    [Fact]
+    public async Task DisposeCancelsAConnectionThatHasNotFinishedOpening()
+    {
+        var backend = new FakeAudioBackend();
+        var enteredOpen = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var stream = new WebStreamViewModel(new WebStreamConfiguration
+        {
+            Name = "Slow stream",
+            Url = "https://example.test/slow"
+        });
+        var coordinator = new WebStreamPlaybackCoordinator(
+            () => backend,
+            () => "output",
+            async (_, cancellationToken) =>
+            {
+                enteredOpen.TrySetResult();
+                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+                return Stream.Null;
+            });
+
+        Task start = coordinator.StartAsync(stream);
+        await enteredOpen.Task.WaitAsync(TimeSpan.FromSeconds(1));
+
+        await coordinator.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(1));
+        await start.WaitAsync(TimeSpan.FromSeconds(1));
+
+        Assert.False(stream.IsActive);
+        Assert.Equal("Off", stream.StatusText);
+        Assert.True(backend.IsDisposed);
+    }
+
     private static MemoryStream CreateWav(int sampleCount, short sample, ushort formatTag = 1)
     {
         byte[] data = new byte[sampleCount * sizeof(short)];

@@ -14,7 +14,7 @@ public enum CallRecordingEncryptionState
 // Encryption identifiers are descriptive only; key material is never stored.
 public sealed class CallRecordingMetadata
 {
-    public const int CurrentSchemaVersion = 4;
+    public const int CurrentSchemaVersion = 5;
 
     private List<uint> streamIds = [];
     public int SchemaVersion { get; set; } = 1;
@@ -47,6 +47,7 @@ public sealed class CallRecordingMetadata
     public uint? SubscriberId { get; set; }
     public string SubscriberAlias { get; set; } = string.Empty;
     public uint? StreamId { get; set; }
+    public long? ReceiveEpisodeId { get; set; }
     public List<uint> StreamIds
     {
         get => streamIds;

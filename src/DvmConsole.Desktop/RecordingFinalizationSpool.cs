@@ -30,7 +30,8 @@ internal sealed record RecordingFinalizationDescriptor(
     byte? EncryptionAlgorithmId,
     ushort? EncryptionKeyId,
     int? RetentionDays,
-    bool? IsEncryptionKnown = null)
+    bool? IsEncryptionKnown = null,
+    long? ReceiveEpisodeId = null)
 {
     public PcmAudioFormat Format => new(SampleRate, Channels, BitsPerSample);
     // Descriptors written before schema 4 have no known-state property; their

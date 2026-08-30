@@ -875,12 +875,15 @@ public sealed partial class MainWindowViewModel
                 ChannelViewModel? recordingTarget = ResolveReceiveRecordingTarget(channel);
                 if (recordingTarget is not null)
                 {
-                    uint recordingStreamId = ResolveReceiveEpisodeStreamId(channel, traffic.StreamId);
+                    ReceiveCallEpisodeSnapshot? recordingEpisode = ResolveReceiveEpisode(
+                        channel,
+                        traffic.StreamId);
                     callRecordings.ObserveEpisodeTraffic(
                         recordingTarget,
-                        recordingStreamId,
+                        recordingEpisode?.PrimaryStreamId ?? traffic.StreamId,
                         traffic.StreamId,
-                        traffic);
+                        traffic,
+                        recordingEpisode?.EpisodeId);
                 }
             }
         }

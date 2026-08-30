@@ -18,7 +18,24 @@ internal sealed class ReceiveStreamStateMachine
     private bool activeStreamIdsChanged;
 
     public ReceiveStreamStateMachine(ReceiveStreamPolicy policy)
-        => this.policy = policy ?? throw new ArgumentNullException(nameof(policy));
+        : this(policy, ReceiveStreamState.Empty)
+    {
+    }
+
+    internal ReceiveStreamStateMachine(
+        ReceiveStreamPolicy policy,
+        ReceiveStreamState initialState)
+    {
+        this.policy = policy ?? throw new ArgumentNullException(nameof(policy));
+        ArgumentNullException.ThrowIfNull(initialState);
+        foreach ((uint streamId, ReceiveStreamActivity activity) in initialState.ActiveStreams)
+            activeStreams.Add(streamId, activity);
+        foreach ((uint streamId, DateTimeOffset expiresAt) in initialState.Tombstones)
+            tombstones.Add(streamId, expiresAt);
+        activeStreamIds = initialState.ActiveStreamIds;
+        primaryStreamId = initialState.PrimaryStreamId;
+        nextInsertionOrder = initialState.NextInsertionOrder;
+    }
 
     public uint? PrimaryStreamId => primaryStreamId;
 

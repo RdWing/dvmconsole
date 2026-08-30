@@ -1,11 +1,13 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <Nullable>disable</Nullable>
-    <!-- Upstream fnecore is pinned and reviewed at its own boundary; apply the
-         expanded analyzer baseline to application-owned projects only. -->
-    <AnalysisMode>None</AnalysisMode>
-    <!-- The pinned upstream sources still use these legacy framework APIs. -->
-    <NoWarn>$(NoWarn);CS0672;SYSLIB0003;SYSLIB0021;SYSLIB0023;SYSLIB0051</NoWarn>
+    <!-- Keep the mixed upstream/owned project under the standard analyzer
+         baseline; only the finite upstream compatibility list below is exempt. -->
+    <AnalysisMode>Minimum</AnalysisMode>
+    <!-- The pinned upstream sources still use these legacy framework APIs and
+         predate the SDK's minimum quality rules. Keep this finite compatibility
+         list visible instead of disabling analysis for the whole mixed project. -->
+    <NoWarn>$(NoWarn);CS0672;SYSLIB0003;SYSLIB0021;SYSLIB0023;SYSLIB0051;CA1507;CA1510;CA1512;CA1822;CA1825;CA1829;CA1834;CA1850;CA2208;CA2211</NoWarn>
     <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
     <RootNamespace>fnecore</RootNamespace>
     <AssemblyName>DvmConsole.Fne</AssemblyName>
