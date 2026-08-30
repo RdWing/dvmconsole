@@ -153,6 +153,9 @@ Available filters include:
 
 Use **Clear Filters** to reset the current filter set.
 
+The Clear and Secure filters include only recordings with that confirmed
+encryption state. A recording marked Unknown does not appear in either result.
+
 ---
 
 # Retention
@@ -233,6 +236,7 @@ Metadata includes:
 - protocol encryption algorithm and numeric identifier, when known
 - encryption key ID in numeric and display form, when known
 - stream ID
+- receive episode ID for exact History correlation, when available
 - file size
 - sample rate / bit depth / channel count
 

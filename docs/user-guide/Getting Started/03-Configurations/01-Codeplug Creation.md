@@ -121,11 +121,14 @@ do not prevent saving.
 
 Studio performs these checks before replacing a file:
 
-1. It validates the complete draft and its cross-references.
-2. It compares the current file with the hash recorded when the draft opened.
-3. It stages and validates every changed file.
-4. It creates restricted backups under the DVM Console application data folder.
-5. It replaces the originals. If a later replacement fails, it restores files
+1. It captures the latest values from the open editors and validates the
+   complete draft and its cross-references.
+2. It rejects a plan if two outputs resolve to the same destination path.
+3. It compares each current file with the source hash in the save plan
+   immediately before the commit.
+4. It stages and validates every changed file.
+5. It creates restricted backups under the DVM Console application data folder.
+6. It replaces the originals. If a later replacement fails, it restores files
    that were already replaced.
 
 If another program changed a source file, Studio does not overwrite it. Save the
@@ -134,6 +137,10 @@ draft as a copy, or close and reopen Studio to load the external edit.
 Saving an active codeplug does not change a running FNE session. After the save,
 choose **Disconnect and reload** to use the new topology, or leave the session
 alone and reload later.
+
+If the save includes operator settings, Studio adopts the committed settings
+snapshot immediately. A settings change made elsewhere while the review is open
+is included in the final save instead of being overwritten by an older preview.
 
 ## Full and sanitized exports
 

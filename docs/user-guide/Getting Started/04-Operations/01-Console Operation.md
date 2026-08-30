@@ -194,6 +194,9 @@ Stream chips use a compact volume slider. User volume changes are saved by strea
 The chip turns amber while connecting. DVM Console tries up to three times
 before marking the stream down.
 
+Click an amber stream chip to cancel the pending connection or decoder startup.
+The chip returns to the off state without waiting for that startup to finish.
+
 If a stream URL is unreachable or cannot be decoded, the chip turns red and
 shows `Down`. Click it once to turn the stream off.
 

@@ -6,6 +6,48 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.5.4] - 2026-08-30
+
+### Changed
+
+- Use one receive-stream state machine for live allocation-free processing and
+  immutable policy evaluation.
+- Drive FNE connection state and login retry cadence from typed peer events
+  instead of parsing diagnostic log messages.
+- Give audio stream readers an explicit single-consumer contract with bounded
+  cancellation and disposal behavior.
+- Add receive-episode identity to new TAR metadata while retaining bounded
+  timestamp reconciliation for older recordings.
+
+### Fixed
+
+- Make Configuration Studio flush current editor state before planning and
+  saving, reject duplicate destination paths, preserve restricted permissions
+  on staged secrets and backups, and synchronize saved settings with the live
+  application snapshot.
+- Normalize configuration tokens during validation, reject ports that cannot
+  reserve the required metadata port, preserve empty known YAML collections,
+  and prevent vendor fields from being assigned by list position.
+- Let Stop and disposal cancel a web stream that is still opening without
+  holding the playback gate across network, decode, or audio-device work.
+- Correlate rapid recordings with the exact receive episode, keep encryption
+  filters from treating unknown calls as clear or secure, and apply the host
+  filesystem's path-comparison rules to recording containment checks.
+- Return pending compatible-UDP receives during shutdown, retain exponential
+  FNE login backoff without relying on log text, and keep application-owned FNE
+  code under nullable and analyzer coverage.
+- Reset late-entry NXDN privacy state correctly, flush padded partial analog
+  frames before call termination, and prevent failed PCM frame handoffs from
+  being replayed.
+- Keep mixer lanes alive until the physical output accepts their final samples,
+  and release native macOS audio streams and Bluetooth overrides after startup,
+  pump, stop, or disposal failures.
+- Reallocate the native CoreAudio capture ring after the negotiated sample rate
+  is known, and build and test the native audio component in macOS CI.
+- Marshal post-await desktop state changes back to the UI dispatcher and report
+  settings persistence failures instead of allowing them to escape UI event
+  handlers.
+
 ## [0.5.3] - 2026-08-29
 
 ### Changed
@@ -762,7 +804,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Add patches, multi-select groups, call history, recordings, web streams, clocks, layouts, themes, startup behavior, and in-application operator documentation.
 - Add support for local and KMM-provided P25 encryption keys while preserving compatibility with existing variable-length AES key material.
 
-[Unreleased]: https://github.com/RdWing/dvmconsole/compare/v0.5.3...HEAD
+[Unreleased]: https://github.com/RdWing/dvmconsole/compare/v0.5.4...HEAD
+[0.5.4]: https://github.com/RdWing/dvmconsole/compare/v0.5.3...v0.5.4
 [0.5.3]: https://github.com/RdWing/dvmconsole/compare/v0.5.2...v0.5.3
 [0.5.2]: https://github.com/RdWing/dvmconsole/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/RdWing/dvmconsole/compare/v0.5.0...v0.5.1
