@@ -30,11 +30,13 @@ route.
 Alert transmission uses the configured resource, system, talkgroup, mode, and
 validation rules.
 
-If the target TG is unavailable on the connected FNE, DVM Console blocks the
-action and shows:
+DVM Console treats the connected FNE's talkgroup table as authoritative. Every
+target must be permitted, and DMR targets must also use the advertised
+timeslot. If a target is unavailable, DVM Console blocks the action and shows a
+warning such as:
 
 ```
-Target TG unavailable on FNE
+FNE talkgroup table does not allow Dispatch (TG 748, TS2); PTT disabled.
 ```
 
 ---

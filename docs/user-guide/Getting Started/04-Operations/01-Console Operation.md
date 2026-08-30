@@ -154,16 +154,23 @@ clipped. It is part of the transmit path, not a UI delay.
 
 # Talkgroup validation
 
-Before using a talkgroup for transmit, DVM Console checks the active talkgroup
-rules received from the connected FNE.
+DVM Console treats each FNE-sourced talkgroup table as authoritative for
+transmit targets.
 
-If the talkgroup is unavailable on that FNE, the action is blocked and this warning is shown:
+DMR channels must match both the talkgroup and timeslot. P25, NXDN, and analog
+channels are matched by destination ID. The same check applies to channel PTT,
+multi-channel PTT, patches, alerts, pages, DTMF, and generated tones.
+
+If a target is not permitted, DVM Console disables its PTT control and shows a
+warning such as:
 
 ```
-Target TG unavailable on FNE
+FNE talkgroup table does not allow Dispatch (TG 748, TS2); PTT disabled.
 ```
 
-This validation is per system and applies to P25 and DMR resources.
+If a refreshed table removes an active target, DVM Console ends the affected
+console or patch transmission cleanly. The target becomes available again when
+a later authoritative table permits it.
 
 ---
 
