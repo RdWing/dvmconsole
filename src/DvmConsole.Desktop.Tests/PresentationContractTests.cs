@@ -229,8 +229,8 @@ public sealed class PresentationContractTests
             return ValueTask.CompletedTask;
         }
 
-        public ValueTask BeginPttAsync(ChannelId channelId, CancellationToken cancellationToken = default)
-            => ValueTask.CompletedTask;
+        public ValueTask<bool> BeginPttAsync(ChannelId channelId, CancellationToken cancellationToken = default)
+            => ValueTask.FromResult(true);
 
         public ValueTask EndPttAsync(ChannelId channelId, CancellationToken cancellationToken = default)
             => ValueTask.CompletedTask;

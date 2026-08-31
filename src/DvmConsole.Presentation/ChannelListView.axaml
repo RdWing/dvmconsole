@@ -5,12 +5,21 @@
     xmlns:presentation="using:DvmConsole.Presentation"
     x:DataType="presentation:ConsoleListViewModel">
   <UserControl.Styles>
+    <Style Selector="Button.list-control">
+      <Setter Property="Template">
+        <ControlTemplate>
+          <Border Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="3" Padding="{TemplateBinding Padding}">
+            <ContentPresenter Content="{TemplateBinding Content}" Foreground="{TemplateBinding Foreground}" HorizontalContentAlignment="{TemplateBinding HorizontalContentAlignment}" VerticalContentAlignment="{TemplateBinding VerticalContentAlignment}"/>
+          </Border>
+        </ControlTemplate>
+      </Setter>
+    </Style>
     <Style Selector="Button.list-rx.rx-enabled"><Setter Property="Background" Value="#0F6D3B"/><Setter Property="BorderBrush" Value="#35D07F"/></Style>
     <Style Selector="Button.list-rx.rx-active"><Setter Property="Background" Value="#0B4D8A"/><Setter Property="BorderBrush" Value="#49A8FF"/></Style>
     <Style Selector="Button.list-selector.armed"><Setter Property="Background" Value="{DynamicResource OperationalSelectionSurfaceBrush}"/><Setter Property="BorderBrush" Value="{DynamicResource OperationalSelectionBorderBrush}"/><Setter Property="Foreground" Value="{DynamicResource OperationalStateTextBrush}"/></Style>
     <Style Selector="Button.list-secure.armed"><Setter Property="Background" Value="#92400E"/><Setter Property="BorderBrush" Value="#F59E0B"/><Setter Property="Foreground" Value="White"/></Style>
   </UserControl.Styles>
-  <ListBox ItemsSource="{Binding Items}" SelectionMode="Single" Background="Transparent" BorderThickness="0" ScrollViewer.HorizontalScrollBarVisibility="Disabled" ScrollViewer.VerticalScrollBarVisibility="Auto">
+  <ListBox Classes="channel-list" ItemsSource="{Binding Items}" SelectionMode="Single" Background="Transparent" BorderThickness="0" ScrollViewer.HorizontalScrollBarVisibility="Disabled" ScrollViewer.VerticalScrollBarVisibility="Auto">
     <ListBox.Styles>
       <Style Selector="ListBoxItem"><Setter Property="HorizontalContentAlignment" Value="Stretch"/><Setter Property="Padding" Value="0"/><Setter Property="MinHeight" Value="0"/></Style>
     </ListBox.Styles>
@@ -20,10 +29,10 @@
         <StackPanel>
           <TextBlock Margin="4,10,4,2" FontSize="16" FontWeight="Bold" Text="{Binding SystemHeading}" IsVisible="{Binding ShowsSystemHeading}"/>
           <TextBlock Margin="12,4,4,4" FontSize="13" FontWeight="SemiBold" Opacity="0.8" Text="{Binding ZoneHeading}" IsVisible="{Binding ShowsZoneHeading}"/>
-          <Border Classes="channel-list-row" Margin="0,0,0,4" Padding="7" MinHeight="52" CornerRadius="7" BorderThickness="1" Background="{DynamicResource CardBackgroundBrush}" BorderBrush="{DynamicResource ControlBorderBrush}" PointerReleased="HandleRowPointerReleased" DetachedFromVisualTree="HandleRowDetached">
+          <Border Classes="channel-list-row" Margin="0,0,0,4" Padding="7" MinHeight="52" CornerRadius="7" BorderThickness="1" Background="{DynamicResource CardBackgroundBrush}" BorderBrush="{DynamicResource ControlBorderBrush}" PointerPressed="HandleRowPointerPressed" PointerReleased="HandleRowPointerReleased" DetachedFromVisualTree="HandleRowDetached">
             <Grid RowDefinitions="Auto,Auto">
               <Grid ColumnDefinitions="Auto,*,100,Auto" ColumnSpacing="8" VerticalAlignment="Center">
-                <Button Classes="list-rx" Classes.rx-enabled="{Binding ReceiveEnabled}" Classes.rx-active="{Binding ReceiveActive}" MinWidth="52" MinHeight="44" Content="{Binding ReceiveButtonText}" AutomationProperties.Name="{Binding Name, StringFormat='Toggle receive for {0}'}" Click="HandleReceiveClick"/>
+                <Button Classes="list-control list-rx" Classes.rx-enabled="{Binding ReceiveEnabled}" Classes.rx-active="{Binding ReceiveActive}" MinWidth="52" MinHeight="44" Content="{Binding ReceiveButtonText}" AutomationProperties.Name="{Binding Name, StringFormat='Toggle receive for {0}'}" Click="HandleReceiveClick"/>
                 <StackPanel Grid.Column="1" VerticalAlignment="Center" MinWidth="0">
                   <Grid ColumnDefinitions="*,Auto" ColumnSpacing="5"><TextBlock FontWeight="SemiBold" Text="{Binding Name}" TextTrimming="CharacterEllipsis"/><TextBlock Grid.Column="1" FontSize="11" Text="{Binding StateText}" TextTrimming="CharacterEllipsis"/></Grid>
                   <Grid ColumnDefinitions="Auto,Auto,*,Auto" ColumnSpacing="5"><TextBlock FontSize="11" Opacity="0.75" Text="{Binding TalkgroupText}"/><TextBlock Grid.Column="1" FontSize="11" Opacity="0.75" Text="{Binding ProtocolText}"/><TextBlock Grid.Column="3" FontSize="11" Opacity="0.72" Text="{Binding LastCallerText}" TextTrimming="CharacterEllipsis"/></Grid>
@@ -38,15 +47,15 @@
                     <Canvas IsHitTestVisible="False"><Border Canvas.Left="{Binding MeterPeakX}" Width="2" Height="5" Background="#F5F7FA" IsVisible="{Binding IsMeterPeakVisible}"/></Canvas>
                   </Grid>
                 </Border>
-                <Button Grid.Column="3" Classes="ptt" MinWidth="64" MinHeight="44" Content="{Binding PttText}" IsEnabled="{Binding IsPttEnabled}" AutomationProperties.Name="{Binding Name, StringFormat='Push to talk on {0}'}" PointerPressed="HandlePttPointerPressed" PointerReleased="HandlePttPointerReleased" PointerCaptureLost="HandlePttPointerCaptureLost" KeyDown="HandlePttKeyDown" KeyUp="HandlePttKeyUp"/>
+                <Button Grid.Column="3" Classes="list-control ptt" MinWidth="64" MinHeight="44" Content="{Binding PttText}" IsEnabled="{Binding IsPttEnabled}" AutomationProperties.Name="{Binding Name, StringFormat='Push to talk on {0}'}" KeyDown="HandlePttKeyDown" KeyUp="HandlePttKeyUp"/>
               </Grid>
               <Border Grid.Row="1" Margin="60,6,0,0" Padding="7" CornerRadius="5" Background="{DynamicResource ActivityBackgroundBrush}" IsVisible="{Binding IsExpanded}">
                 <Grid ColumnDefinitions="*,*" RowDefinitions="Auto,Auto,Auto,Auto,Auto" ColumnSpacing="12" RowSpacing="5">
                   <WrapPanel Grid.ColumnSpan="2" Orientation="Horizontal" ItemSpacing="5" LineSpacing="5">
-                    <Button Classes="list-selector" MinWidth="52" MinHeight="44" Content="TX" IsEnabled="{Binding CanSelectTransmitTargets}" Classes.armed="{Binding IsTransmitSelected}" AutomationProperties.Name="{Binding Name, StringFormat='Select transmit for {0}'}" Click="HandleTransmitSelectionClick"/>
-                    <Button Classes="list-selector" MinWidth="58" MinHeight="44" Content="PAGE" IsEnabled="{Binding CanSelectTransmitTargets}" Classes.armed="{Binding IsPageSelected}" AutomationProperties.Name="{Binding Name, StringFormat='Select paging for {0}'}" Click="HandlePageSelectionClick"/>
-                    <Button Classes="list-selector" MinWidth="62" MinHeight="44" Content="ALERT" IsEnabled="{Binding CanSelectTransmitTargets}" Classes.armed="{Binding IsAlertSelected}" AutomationProperties.Name="{Binding Name, StringFormat='Select alert for {0}'}" Click="HandleAlertSelectionClick"/>
-                    <Button Classes="list-secure" MinWidth="72" MinHeight="44" Content="SECURE" IsVisible="{Binding CanToggleEncryption}" IsEnabled="{Binding CanToggleEncryption}" Classes.armed="{Binding IsTransmitEncrypted}" AutomationProperties.Name="{Binding Name, StringFormat='Toggle secure transmit for {0}'}" Click="HandleEncryptionClick"/>
+                    <Button Classes="list-control list-selector" MinWidth="52" MinHeight="44" Content="TX" IsEnabled="{Binding CanSelectTransmitTargets}" Classes.armed="{Binding IsTransmitSelected}" AutomationProperties.Name="{Binding Name, StringFormat='Select transmit for {0}'}" Click="HandleTransmitSelectionClick"/>
+                    <Button Classes="list-control list-selector" MinWidth="58" MinHeight="44" Content="PAGE" IsEnabled="{Binding CanSelectTransmitTargets}" Classes.armed="{Binding IsPageSelected}" AutomationProperties.Name="{Binding Name, StringFormat='Select paging for {0}'}" Click="HandlePageSelectionClick"/>
+                    <Button Classes="list-control list-selector" MinWidth="62" MinHeight="44" Content="ALERT" IsEnabled="{Binding CanSelectTransmitTargets}" Classes.armed="{Binding IsAlertSelected}" AutomationProperties.Name="{Binding Name, StringFormat='Select alert for {0}'}" Click="HandleAlertSelectionClick"/>
+                    <Button Classes="list-control list-secure" MinWidth="72" MinHeight="44" Content="SECURE" IsVisible="{Binding CanToggleEncryption}" IsEnabled="{Binding CanToggleEncryption}" Classes.armed="{Binding IsTransmitEncrypted}" AutomationProperties.Name="{Binding Name, StringFormat='Toggle secure transmit for {0}'}" Click="HandleEncryptionClick"/>
                   </WrapPanel>
                   <TextBlock Grid.Row="1" Grid.ColumnSpan="2" Foreground="#E5484D" Text="{Binding AuthorityText}" TextWrapping="Wrap" IsVisible="{Binding HasAuthorityFailure}"/>
                   <StackPanel Grid.Row="2" Grid.ColumnSpan="2" Spacing="1">

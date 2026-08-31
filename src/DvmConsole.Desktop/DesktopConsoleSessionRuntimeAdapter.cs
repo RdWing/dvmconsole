@@ -194,12 +194,12 @@ internal sealed class DesktopConsoleSessionRuntimeAdapter : IConsoleSessionRunti
             CancellationToken cancellationToken = default)
             => owner.SetChannelReceiveEnabledAsync(GetChannel(channelId), enabled, cancellationToken);
 
-        public async ValueTask BeginPttAsync(
+        public async ValueTask<bool> BeginPttAsync(
             ChannelId channelId,
             CancellationToken cancellationToken = default)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            await owner.StartChannelTransmitAsync(GetChannel(channelId)).ConfigureAwait(false);
+            return await owner.StartChannelTransmitAsync(GetChannel(channelId)).ConfigureAwait(false);
         }
 
         public async ValueTask EndPttAsync(
@@ -214,19 +214,19 @@ internal sealed class DesktopConsoleSessionRuntimeAdapter : IConsoleSessionRunti
             ChannelId channelId,
             bool selected,
             CancellationToken cancellationToken = default)
-            => SetSelection(channelId, selected, static (channel, value) => channel.SetTransmitSelected(value), cancellationToken);
+            => SetSelection(channelId, selected, owner.SetChannelTransmitSelection, cancellationToken);
 
         public ValueTask SetPageSelectedAsync(
             ChannelId channelId,
             bool selected,
             CancellationToken cancellationToken = default)
-            => SetSelection(channelId, selected, static (channel, value) => channel.SetPageSelected(value), cancellationToken);
+            => SetSelection(channelId, selected, owner.SetChannelPageSelection, cancellationToken);
 
         public ValueTask SetAlertSelectedAsync(
             ChannelId channelId,
             bool selected,
             CancellationToken cancellationToken = default)
-            => SetSelection(channelId, selected, static (channel, value) => channel.SetAlertSelected(value), cancellationToken);
+            => SetSelection(channelId, selected, owner.SetChannelAlertSelection, cancellationToken);
 
         public ValueTask SetTransmitEncryptedAsync(
             ChannelId channelId,

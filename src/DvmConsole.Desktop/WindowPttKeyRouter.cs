@@ -93,8 +93,13 @@ internal static class WindowPttInputGuard
              visual is not null;
              visual = visual.GetVisualParent())
         {
+            if (visual is Button button)
+                return !button.Classes.Contains("ptt");
+
+            if (visual is ListBox list && list.Classes.Contains("channel-list"))
+                return false;
+
             if (visual is TextBox or
-                Button or
                 SelectingItemsControl or
                 Slider or
                 ScrollBar or

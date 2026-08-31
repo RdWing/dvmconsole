@@ -144,12 +144,7 @@ internal sealed class MainWindowSessionHost : IAsyncDisposable
 
     private static ChannelPttController CreateChannelPtt(IConsoleApplicationSession session)
         => new(
-            async (channelId, cancellationToken) =>
-            {
-                await session.Commands.BeginPttAsync(channelId, cancellationToken);
-                return session.Snapshot.Channels.TryGetValue(channelId, out ChannelControlSnapshot? channel) &&
-                    channel.Transmitting;
-            },
+            (channelId, cancellationToken) => session.Commands.BeginPttAsync(channelId, cancellationToken),
             (channelId, cancellationToken) => session.Commands.EndPttAsync(channelId, cancellationToken));
 
     private IConsoleApplicationSession CreateApplicationSession(MainWindowViewModel owner)
