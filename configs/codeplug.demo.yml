@@ -32,26 +32,133 @@ groups:
     type: "multiselect"
 
 zones:
-  - name: "Dispatch"
+  - name: "Campus Network"
     tabColor: "#2F81F7"
     tabTextColor: "#FFFFFF"
     channels:
-      - name: "North Dispatch"
+      - name: "Campus Dispatch"
         system: "North Metro"
         tgid: "3101"
-        mode: "p25"
-        resourceColor: "#173B57"
-      - name: "Transit Operations"
-        system: "North Metro"
-        tgid: "402"
         mode: "dmr"
-        resourceColor: "#264653"
-        card_size: large
-      - name: "Public Works"
+        slot: 2
+        algo: "aes"
+        keyId: "0x2"
+        selectable_encryption: true
+        card_size: normal
+        resourceColor: "#087CF1"
+      - name: "Campus Ops"
         system: "North Metro"
-        tgid: "725"
-        mode: "nxdn"
-        resourceColor: "#234B3A"
+        tgid: "3102"
+        mode: "dmr"
+        slot: 1
+        card_size: normal
+        resourceColor: "#65B95A"
+      - name: "Campus Security"
+        system: "North Metro"
+        tgid: "3103"
+        mode: "dmr"
+        slot: 1
+        card_size: normal
+        resourceColor: "#22D3EE"
+      - name: "Facilities"
+        system: "North Metro"
+        tgid: "3104"
+        mode: "dmr"
+        slot: 2
+        card_size: small
+        resourceColor: "#087CF1"
+      - name: "Engineering"
+        system: "North Metro"
+        tgid: "3105"
+        mode: "dmr"
+        slot: 1
+        algo: "aes"
+        keyId: "0x2"
+        card_size: small
+        resourceColor: "#65B95A"
+      - name: "Parking Services"
+        system: "North Metro"
+        tgid: "3106"
+        mode: "dmr"
+        slot: 1
+        card_size: small
+        resourceColor: "#22D3EE"
+      - name: "Campus Event 1"
+        system: "North Metro"
+        tgid: "3107"
+        mode: "dmr"
+        slot: 2
+        card_size: small
+        resourceColor: "#087CF1"
+      - name: "Campus Event 2"
+        system: "North Metro"
+        tgid: "3108"
+        mode: "dmr"
+        slot: 1
+        card_size: small
+        resourceColor: "#65B95A"
+      - name: "Shuttle Dispatch"
+        system: "North Metro"
+        tgid: "3109"
+        mode: "dmr"
+        slot: 1
+        algo: "aes"
+        keyId: "0x2"
+        card_size: normal
+        resourceColor: "#22D3EE"
+      - name: "Shuttle Ops"
+        system: "North Metro"
+        tgid: "3110"
+        mode: "dmr"
+        slot: 2
+        rx_only: true
+        card_size: normal
+        resourceColor: "#087CF1"
+      - name: "Shuttle Drivers"
+        system: "North Metro"
+        tgid: "3111"
+        mode: "dmr"
+        slot: 1
+        rx_only: true
+        card_size: small
+        resourceColor: "#65B95A"
+      - name: "Help Desk"
+        system: "North Metro"
+        tgid: "3112"
+        mode: "dmr"
+        slot: 1
+        card_size: small
+        resourceColor: "#22D3EE"
+      - name: "IT Support"
+        system: "North Metro"
+        tgid: "3113"
+        mode: "dmr"
+        slot: 2
+        algo: "aes"
+        keyId: "0x2"
+        card_size: small
+        resourceColor: "#087CF1"
+      - name: "Health Center"
+        system: "North Metro"
+        tgid: "3114"
+        mode: "dmr"
+        slot: 1
+        card_size: small
+        resourceColor: "#65B95A"
+      - name: "Residence Life"
+        system: "North Metro"
+        tgid: "3115"
+        mode: "dmr"
+        slot: 1
+        card_size: small
+        resourceColor: "#22D3EE"
+      - name: "Athletics"
+        system: "North Metro"
+        tgid: "3116"
+        mode: "dmr"
+        slot: 2
+        card_size: small
+        resourceColor: "#087CF1"
   - name: "Campus"
     tabColor: "#35D07F"
     tabTextColor: "#07110C"

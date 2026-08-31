@@ -94,7 +94,7 @@ public sealed class ConfigurationStudioRenderTests
         string demoCodeplug = Path.Combine(AppContext.BaseDirectory, "Demo", "codeplug.yml");
         using DemoSessionState demoState = DemoSessionState.Create();
         var settingsStore = new UserSettingsStore(demoState.UserSettingsPath);
-        const string channelKey = "North Metro\u001FNorth Dispatch";
+        const string channelKey = "North Metro\u001FCampus Dispatch";
         settingsStore.Save(new UserSettings
         {
             LastCodeplugPath = demoCodeplug,
@@ -649,6 +649,11 @@ public sealed class ConfigurationStudioRenderTests
                 });
             });
         });
+        ZoneConfiguration mixedModeZone = Assert.Single(
+            viewModel.Zones,
+            zone => zone.Channels.Any(channel => channel.Mode == "p25") &&
+                    zone.Channels.Any(channel => channel.Mode == "dmr"));
+        viewModel.SelectedZone = mixedModeZone;
         Assert.NotEmpty(viewModel.VisibleChannelRows);
         ConfigurationChannelRow p25Row = Assert.Single(
             viewModel.VisibleChannelRows,
@@ -748,9 +753,9 @@ public sealed class ConfigurationStudioRenderTests
         Assert.Equal(0x05, viewModel.SelectedKey.AlgId);
         Assert.Equal("0x05", viewModel.SelectedKeyAlgorithmIdText);
 
-        viewModel.ChannelSearchText = "North Dispatch";
+        viewModel.ChannelSearchText = "Campus Services";
         ConfigurationChannelRow row = Assert.Single(viewModel.VisibleChannelRows);
-        Assert.Equal("North Dispatch", row.Name);
+        Assert.Equal("Campus Services", row.Name);
         viewModel.ChannelSearchText = "no matching channel";
         Assert.Empty(viewModel.VisibleChannelRows);
         viewModel.ChannelSearchText = string.Empty;
@@ -806,7 +811,7 @@ public sealed class ConfigurationStudioRenderTests
         UserSettings settings = settingsStore.Load();
         settings.LastSelectedSystemName = "North Metro";
         settings.RxJitterBuffersBySystem["North Metro"] = new RxJitterBufferSetting();
-        settings.ChannelVolumes["North Metro\u001FNorth Dispatch"] = 0.5;
+        settings.ChannelVolumes["North Metro\u001FCampus Dispatch"] = 0.5;
         CodeplugGroupState state = CodeplugGroupStateStore.GetOrMigrate(settings, activeCodeplug);
         state.Memberships["Shared Operations"] =
         [
@@ -814,7 +819,7 @@ public sealed class ConfigurationStudioRenderTests
             {
                 SystemName = "North Metro",
                 DestinationId = 3101,
-                ChannelName = "North Dispatch"
+                ChannelName = "Campus Dispatch"
             }
         ];
         settingsStore.Save(settings);
@@ -841,7 +846,7 @@ public sealed class ConfigurationStudioRenderTests
         Assert.Equal("Regional Dispatch", migratedGroupState.Memberships["Regional Operations"][0].ChannelName);
         string review = savePlanner.BuildReviewText(plan);
         Assert.Contains("System state: North Metro → North Regional", review, StringComparison.Ordinal);
-        Assert.Contains("Channel state: North Metro/North Dispatch → North Regional/Regional Dispatch", review, StringComparison.Ordinal);
+        Assert.Contains("Channel state: North Metro/Campus Dispatch → North Regional/Regional Dispatch", review, StringComparison.Ordinal);
         Assert.Contains("Group state: Shared Operations → Regional Operations", review, StringComparison.Ordinal);
 
         string saveAsDirectory = Path.Combine(Path.GetTempPath(), "dvmconsole-studio-saveas-tests", Guid.NewGuid().ToString("N"));

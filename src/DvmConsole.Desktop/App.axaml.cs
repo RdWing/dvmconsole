@@ -307,35 +307,12 @@ public sealed class App : Avalonia.Application
 
     private static void PrepareConfigurationStudioZoneCapture(ConfigurationStudioViewModel studio)
     {
-        ZoneConfiguration zone = studio.SelectedZone
-            ?? throw new InvalidOperationException("The Studio capture requires a zone.");
-        string[] names =
-        [
-            "Campus Dispatch", "Campus Ops", "Campus Security", "Facilities",
-            "Engineering", "Parking Services", "Campus Event 1", "Campus Event 2",
-            "Shuttle Dispatch", "Shuttle Ops", "Shuttle Drivers", "Help Desk",
-            "IT Support", "Health Center", "Residence Life", "Athletics"
-        ];
-        zone.Name = "Campus Network";
-        zone.Channels.Clear();
-        for (int index = 0; index < names.Length; index++)
-        {
-            zone.Channels.Add(new ChannelConfiguration
-            {
-                Name = names[index],
-                System = "North Metro",
-                Tgid = (3101 + index).ToString(System.Globalization.CultureInfo.InvariantCulture),
-                Mode = "dmr",
-                Slot = index % 3 == 0 ? 2 : 1,
-                Algo = index % 4 == 0 ? "aes" : "none",
-                KeyId = index % 4 == 0 ? "0x2" : null,
-                SelectableEncryption = index == 0,
-                RxOnly = index is 9 or 10,
-                CardSize = index is 0 or 1 or 2 or 8 or 9 ? "normal" : "small",
-                ResourceColor = index % 3 == 0 ? "#087CF1" : index % 3 == 1 ? "#65B95A" : "#22D3EE"
-            });
-        }
-        studio.CommitFieldEdit();
+        ZoneConfiguration zone = studio.Zones.SingleOrDefault(
+            candidate => candidate.Name.Equals("Campus Network", StringComparison.Ordinal))
+            ?? throw new InvalidOperationException("The Studio capture requires the expanded Campus Network demo zone.");
+        if (zone.Channels.Count != 16)
+            throw new InvalidOperationException("The expanded Campus Network demo zone must contain 16 channels.");
+
         studio.SelectedZone = zone;
         studio.SelectedChannel = zone.Channels[0];
         studio.IsZonePreviewExpanded = true;
