@@ -1,6 +1,7 @@
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Globalization;
+using DvmConsole.Application;
 using DvmConsole.FneClient;
 
 namespace DvmConsole.Desktop;
@@ -17,7 +18,7 @@ internal sealed record RecordingCatalogReconciliationMetrics(
 }
 
 // One inbound voice stream recorded by the dispatch shell.
-public sealed class CallHistoryEntry : INotifyPropertyChanged
+public sealed class CallHistoryEntry : INotifyPropertyChanged, DvmConsole.Presentation.ICallHistoryItemViewModel
 {
     private readonly List<uint> streamIds;
     private DateTimeOffset? endTimestamp;
@@ -50,8 +51,12 @@ public sealed class CallHistoryEntry : INotifyPropertyChanged
         string? eventRidText = null,
         string? eventTgidText = null,
         long? receiveEpisodeId = null,
-        bool encryptionKnown = false)
+        bool encryptionKnown = false,
+        CallId? callId = null,
+        ChannelId? channelId = null)
     {
+        Id = callId ?? CallId.New();
+        ChannelId = channelId;
         Timestamp = timestamp;
         SystemName = systemName;
         ChannelName = channelName;
@@ -78,6 +83,8 @@ public sealed class CallHistoryEntry : INotifyPropertyChanged
     }
 
     public event PropertyChangedEventHandler? PropertyChanged;
+    public CallId Id { get; }
+    public ChannelId? ChannelId { get; }
     public DateTimeOffset Timestamp { get; }
     public DateTimeOffset? EndTimestamp => endTimestamp;
     public string SystemName { get; }
@@ -252,7 +259,8 @@ public sealed class CallHistoryEntry : INotifyPropertyChanged
         string? callerText = null,
         bool encrypted = false,
         byte? encryptionAlgorithmId = null,
-        ushort? encryptionKeyId = null)
+        ushort? encryptionKeyId = null,
+        ChannelId? channelId = null)
     {
         var entry = new CallHistoryEntry(
             timestamp,
@@ -265,7 +273,8 @@ public sealed class CallHistoryEntry : INotifyPropertyChanged
             callerText,
             encrypted,
             isConsoleTransmission: true,
-            encryptionKnown: true);
+            encryptionKnown: true,
+            channelId: channelId);
         if (encrypted)
             entry.UpdateEncryption(true, encryptionAlgorithmId, encryptionKeyId);
         return entry;
@@ -311,20 +320,23 @@ public sealed class CallHistoryEntry : INotifyPropertyChanged
 // Bounded newest-first call history for the Avalonia shell.
 public sealed class CallHistoryStore
 {
-    public const int DefaultMaxEntries = 100;
+    public const int DefaultMaxEntries = ConsoleCallHistory.DefaultMaximumEntries;
     private static readonly TimeSpan MinimumVisibleCallDuration = TimeSpan.FromMilliseconds(50);
 
     private readonly int maxEntries;
     private readonly ResettableObservableCollection<CallHistoryEntry> entries = [];
+    private readonly ConsoleCallHistory applicationHistory;
 
     public CallHistoryStore(int maxEntries = DefaultMaxEntries)
     {
         if (maxEntries < 1)
             throw new ArgumentOutOfRangeException(nameof(maxEntries));
         this.maxEntries = maxEntries;
+        applicationHistory = new ConsoleCallHistory(maxEntries);
     }
 
     public ObservableCollection<CallHistoryEntry> Entries => entries;
+    internal IReadOnlyList<ConsoleCallHistoryRecord> ApplicationHistory => applicationHistory.Snapshot;
 
     internal RecordingCatalogReconciliationMetrics LastRecordingCatalogReconciliation { get; private set; }
         = new(0, 0, 0, 0, 0);
@@ -336,15 +348,13 @@ public sealed class CallHistoryStore
         string channelName,
         uint destinationId,
         long? receiveEpisodeId = null)
-        => Entries.Any(candidate =>
-            candidate.IsActive &&
-            !candidate.IsConsoleTransmission &&
-            candidate.StreamId == streamId &&
-            (receiveEpisodeId is null || candidate.ReceiveEpisodeId == receiveEpisodeId) &&
-            candidate.Protocol == protocol &&
-            candidate.DestinationId == destinationId &&
-            candidate.ChannelName.Equals(channelName, StringComparison.OrdinalIgnoreCase) &&
-            candidate.SystemName.Equals(systemName, StringComparison.OrdinalIgnoreCase));
+        => applicationHistory.FindActiveReceive(
+            systemName,
+            ToRadioProtocol(protocol),
+            streamId,
+            channelName,
+            destinationId,
+            receiveEpisodeId) is not null;
 
     public bool ObserveReceiveStream(
         string systemName,
@@ -362,7 +372,10 @@ public sealed class CallHistoryStore
             channelName,
             destinationId,
             receiveEpisodeId);
-        return entry?.ObserveStream(physicalStreamId) == true;
+        if (entry?.ObserveStream(physicalStreamId) != true)
+            return false;
+        applicationHistory.ObserveStream(entry.Id, physicalStreamId);
+        return true;
     }
 
     public void Add(CallHistoryEntry entry)
@@ -380,6 +393,8 @@ public sealed class CallHistoryStore
                 Entries.Remove(archived);
             }
         }
+        if (!entry.IsRecordingOnly)
+            applicationHistory.Add(ProjectApplicationHistory(entry));
         InsertNewestFirst(entry);
         TrimSessionEntries();
     }
@@ -438,14 +453,14 @@ public sealed class CallHistoryStore
         long existingEntryVisits = entries.Count * 3L;
         var desiredKeys = new HashSet<string>(
             desired.Select(RecordingKey),
-            StringComparer.OrdinalIgnoreCase);
+            StringComparer.Ordinal);
         CallHistoryEntry[] sessionEntries = entries
             .Where(entry => !entry.IsRecordingOnly)
             .ToArray();
         Dictionary<string, CallHistoryEntry> existingByRecording = entries
             .Where(entry => entry.Recording is not null)
-            .GroupBy(entry => RecordingKey(entry.Recording!), StringComparer.OrdinalIgnoreCase)
-            .ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase);
+            .GroupBy(entry => RecordingKey(entry.Recording!), StringComparer.Ordinal)
+            .ToDictionary(group => group.Key, group => group.First(), StringComparer.Ordinal);
         Dictionary<string, CallHistoryEntry[]> callsByIdentity = sessionEntries
             .Where(entry => !entry.IsEvent)
             .GroupBy(CallIdentityKey, StringComparer.OrdinalIgnoreCase)
@@ -465,7 +480,7 @@ public sealed class CallHistoryStore
         }
 
         var catalogRows = new List<CallHistoryEntry>(desired.Length);
-        var processedKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var processedKeys = new HashSet<string>(StringComparer.Ordinal);
         long desiredVisits = 0;
         long keyLookups = 0;
         long identityCandidateVisits = 0;
@@ -514,7 +529,7 @@ public sealed class CallHistoryStore
     public void RemoveRecordingsByKey(IEnumerable<string> recordingKeys)
     {
         ArgumentNullException.ThrowIfNull(recordingKeys);
-        var keys = new HashSet<string>(recordingKeys, StringComparer.OrdinalIgnoreCase);
+        var keys = new HashSet<string>(recordingKeys, StringComparer.Ordinal);
         if (keys.Count == 0)
             return;
 
@@ -539,8 +554,8 @@ public sealed class CallHistoryStore
 
         Dictionary<string, CallHistoryEntry> byRecording = Entries
             .Where(entry => entry.Recording is not null)
-            .GroupBy(entry => RecordingKey(entry.Recording!), StringComparer.OrdinalIgnoreCase)
-            .ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase);
+            .GroupBy(entry => RecordingKey(entry.Recording!), StringComparer.Ordinal)
+            .ToDictionary(group => group.Key, group => group.First(), StringComparer.Ordinal);
         Dictionary<string, CallHistoryEntry[]> callsByIdentity = Entries
             .Where(entry => !entry.IsEvent && !entry.IsRecordingOnly)
             .GroupBy(CallIdentityKey, StringComparer.OrdinalIgnoreCase)
@@ -642,13 +657,27 @@ public sealed class CallHistoryStore
         if (!string.IsNullOrWhiteSpace(left.RecordingId) && !string.IsNullOrWhiteSpace(right.RecordingId))
             return left.RecordingId.Equals(right.RecordingId, StringComparison.OrdinalIgnoreCase);
         return !string.IsNullOrWhiteSpace(left.FilePath) &&
-            left.FilePath.Equals(right.FilePath, StringComparison.OrdinalIgnoreCase);
+            !string.IsNullOrWhiteSpace(right.FilePath) &&
+            FileSystemPathIdentity.AreEquivalent(left.FilePath, right.FilePath);
     }
 
     private static string RecordingKey(CallRecordingMetadata recording)
         => !string.IsNullOrWhiteSpace(recording.RecordingId)
-            ? recording.RecordingId
-            : recording.FilePath;
+            ? $"id:{recording.RecordingId.ToUpperInvariant()}"
+            : $"path:{NormalizeRecordingPath(recording.FilePath)}";
+
+    private static string NormalizeRecordingPath(string path)
+    {
+        try
+        {
+            return Path.GetFullPath(path);
+        }
+        catch (Exception exception) when (
+            exception is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            return path;
+        }
+    }
 
     private static string CallIdentityKey(CallHistoryEntry call)
         => string.Join('\u001f',
@@ -711,13 +740,17 @@ public sealed class CallHistoryStore
             receiveEpisodeId);
         if (entry is null)
             return false;
+        applicationHistory.Complete(entry.Id, timestamp);
         entry.Complete(timestamp);
         // Busy FNEs can announce and immediately replace a stream before one
         // complete voice frame arrives. Do not leave those sub-frame shells as
         // duplicate-looking 0.0s calls. If TAR later finalizes playable audio,
         // AddOrAttachRecording restores it as a recording-backed catalog row.
         if (!entry.HasRecording && entry.Duration < MinimumVisibleCallDuration)
+        {
             Entries.Remove(entry);
+            applicationHistory.Remove(entry.Id);
+        }
         return true;
     }
 
@@ -768,7 +801,10 @@ public sealed class CallHistoryStore
             channelName,
             destinationId,
             receiveEpisodeId);
-        return entry?.UpdateEncryption(encryption) == true;
+        if (entry?.UpdateEncryption(encryption) != true)
+            return false;
+        applicationHistory.UpdateEncryption(entry.Id, ToApplicationEncryption(encryption));
+        return true;
     }
 
     private CallHistoryEntry? FindActiveReceiveCall(
@@ -778,15 +814,18 @@ public sealed class CallHistoryStore
         string? channelName,
         uint? destinationId,
         long? receiveEpisodeId = null)
-        => Entries.FirstOrDefault(candidate =>
-            candidate.IsActive &&
-            !candidate.IsConsoleTransmission &&
-            candidate.StreamId == streamId &&
-            (receiveEpisodeId is null || candidate.ReceiveEpisodeId == receiveEpisodeId) &&
-            candidate.Protocol == protocol &&
-            (channelName is null || candidate.ChannelName.Equals(channelName, StringComparison.OrdinalIgnoreCase)) &&
-            (destinationId is null || candidate.DestinationId == destinationId) &&
-            candidate.SystemName.Equals(systemName, StringComparison.OrdinalIgnoreCase));
+    {
+        CallId? id = applicationHistory.FindActiveReceive(
+            systemName,
+            ToRadioProtocol(protocol),
+            streamId,
+            channelName,
+            destinationId,
+            receiveEpisodeId);
+        return id is null
+            ? null
+            : Entries.FirstOrDefault(candidate => candidate.Id == id.Value);
+    }
 
     public void AddEvent(
         DateTimeOffset timestamp,
@@ -807,7 +846,8 @@ public sealed class CallHistoryStore
         string? callerText = null,
         bool encrypted = false,
         byte? encryptionAlgorithmId = null,
-        ushort? encryptionKeyId = null)
+        ushort? encryptionKeyId = null,
+        ChannelId? channelId = null)
         => Add(CallHistoryEntry.CreateConsoleTransmission(
             timestamp,
             systemName,
@@ -819,7 +859,8 @@ public sealed class CallHistoryStore
             callerText,
             encrypted,
             encryptionAlgorithmId,
-            encryptionKeyId));
+            encryptionKeyId,
+            channelId));
 
     public bool CompleteConsoleTransmission(
         string systemName,
@@ -829,16 +870,18 @@ public sealed class CallHistoryStore
         string? channelName = null,
         uint? destinationId = null)
     {
-        CallHistoryEntry? entry = Entries.FirstOrDefault(candidate =>
-            candidate.IsActive &&
-            candidate.IsConsoleTransmission &&
-            candidate.StreamId == streamId &&
-            candidate.Protocol == protocol &&
-            (channelName is null || candidate.ChannelName.Equals(channelName, StringComparison.OrdinalIgnoreCase)) &&
-            (destinationId is null || candidate.DestinationId == destinationId) &&
-            candidate.SystemName.Equals(systemName, StringComparison.OrdinalIgnoreCase));
+        CallId? id = applicationHistory.FindActiveTransmit(
+            systemName,
+            ToRadioProtocol(protocol),
+            streamId,
+            channelName,
+            destinationId);
+        CallHistoryEntry? entry = id is null
+            ? null
+            : Entries.FirstOrDefault(candidate => candidate.Id == id.Value);
         if (entry is null)
             return false;
+        applicationHistory.Complete(entry.Id, timestamp);
         entry.Complete(timestamp);
         return true;
     }
@@ -851,7 +894,57 @@ public sealed class CallHistoryStore
             .ToArray();
         foreach (CallHistoryEntry entry in Entries.Where(entry => !entry.IsRecordingOnly).ToArray())
             Entries.Remove(entry);
+        applicationHistory.Clear();
         foreach (CallRecordingMetadata recording in attachedRecordings)
             AddOrAttachRecording(recording);
     }
+
+    private static ConsoleCallHistoryRecord ProjectApplicationHistory(CallHistoryEntry entry)
+        => new(
+            entry.Id,
+            entry.Timestamp,
+            entry.EndTimestamp,
+            SystemId.FromName(entry.SystemName),
+            entry.SystemName,
+            entry.ChannelId,
+            entry.ChannelName,
+            ToRadioProtocol(entry.Protocol),
+            entry.SourceId,
+            entry.DestinationId,
+            entry.StreamId,
+            entry.StreamIds.ToArray(),
+            entry.ReceiveEpisodeId,
+            entry.CallerText,
+            entry.IsEvent
+                ? ConsoleCallDirection.Event
+                : entry.IsConsoleTransmission
+                    ? ConsoleCallDirection.Transmit
+                    : ConsoleCallDirection.Receive,
+            new RecordingEncryptionDescriptor(
+                entry.EncryptionKnown,
+                entry.Encrypted,
+                entry.EncryptionAlgorithmId,
+                entry.EncryptionKeyId),
+            entry.EventSource,
+            entry.EventMessage,
+            entry.EventRidText,
+            entry.EventTgidText);
+
+    private static RecordingEncryptionDescriptor ToApplicationEncryption(EncryptionSnapshot encryption)
+        => new(
+            encryption.IsKnown,
+            encryption.IsSecure,
+            encryption.AlgorithmId,
+            encryption.KeyId);
+
+    private static DvmConsole.Core.Runtime.RadioMediaProtocol ToRadioProtocol(
+        FneTrafficProtocol protocol)
+        => protocol switch
+        {
+            FneTrafficProtocol.Dmr => DvmConsole.Core.Runtime.RadioMediaProtocol.Dmr,
+            FneTrafficProtocol.P25 => DvmConsole.Core.Runtime.RadioMediaProtocol.P25,
+            FneTrafficProtocol.Nxdn => DvmConsole.Core.Runtime.RadioMediaProtocol.Nxdn,
+            FneTrafficProtocol.Analog => DvmConsole.Core.Runtime.RadioMediaProtocol.Analog,
+            _ => throw new ArgumentOutOfRangeException(nameof(protocol))
+        };
 }

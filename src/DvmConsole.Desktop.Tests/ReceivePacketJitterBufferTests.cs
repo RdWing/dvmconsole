@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using DvmConsole.Application;
 using Xunit;
 
 namespace DvmConsole.Desktop.Tests;

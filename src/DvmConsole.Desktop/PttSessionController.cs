@@ -1,4 +1,5 @@
 using DvmConsole.Audio;
+using DvmConsole.Ptt;
 
 namespace DvmConsole.Desktop;
 
@@ -24,20 +25,20 @@ internal sealed record PttSessionStartResult(
 internal sealed class PttSessionController : IAsyncDisposable
 {
     private readonly PttSettingsViewModel settings;
-    private readonly Func<string, int, IPttSource> serialPttFactory;
+    private readonly Func<string, int, IPttInputSourceFactory> serialPttFactory;
     private readonly Func<PttTargetScope> getSerialTargetScope;
     private readonly SemaphoreSlim serialChangeGate = new(1, 1);
     private readonly AsyncDisposal disposal = new();
     private KeyboardPttBinding globalKeyboard;
     private KeyboardPttBinding activeSystemKeyboard;
-    private IPttSource? serialPtt;
+    private IPttInputSource? serialPtt;
     private bool eventsAttached;
     private bool started;
     private bool spaceInputSuppressed;
 
     public PttSessionController(
         PttSettingsViewModel settings,
-        Func<string, int, IPttSource> serialPttFactory,
+        Func<string, int, IPttInputSourceFactory> serialPttFactory,
         Func<PttTargetScope> getSerialTargetScope)
     {
         this.settings = settings ?? throw new ArgumentNullException(nameof(settings));
@@ -49,6 +50,18 @@ internal sealed class PttSessionController : IAsyncDisposable
         activeSystemKeyboard = new KeyboardPttBinding(
             settings.SelectedActiveSystemPttKey,
             settings.TogglePttMode);
+    }
+
+    public PttSessionController(
+        PttSettingsViewModel settings,
+        Func<string, int, IPttSource> serialPttFactory,
+        Func<PttTargetScope> getSerialTargetScope)
+        : this(
+            settings,
+            (portName, baudRate) => new DelegateSerialPttInputSourceFactory(
+                () => serialPttFactory(portName, baudRate)),
+            getSerialTargetScope)
+    {
     }
 
     public event EventHandler<PttSourceStateChange>? StateChanged;
@@ -73,8 +86,12 @@ internal sealed class PttSessionController : IAsyncDisposable
         }
 
         serialPtt = serialPttFactory(
-            settings.SerialPttPortName,
-            settings.SerialPttBaudRate);
+                settings.SerialPttPortName,
+                settings.SerialPttBaudRate)
+            .CreateAsync()
+            .AsTask()
+            .GetAwaiter()
+            .GetResult();
     }
 
     public void AttachEvents()
@@ -145,7 +162,7 @@ internal sealed class PttSessionController : IAsyncDisposable
         await serialChangeGate.WaitAsync().ConfigureAwait(false);
         try
         {
-            IPttSource? previous = serialPtt;
+            IPttInputSource? previous = serialPtt;
             serialPtt = null;
             if (previous is not null)
                 await StopAndDisposeSerialPttAsync(previous).ConfigureAwait(false);
@@ -154,10 +171,12 @@ internal sealed class PttSessionController : IAsyncDisposable
             if (!enabled)
                 return;
 
-            IPttSource? candidate = null;
+            IPttInputSource? candidate = null;
             try
             {
-                candidate = serialPttFactory(portName, baudRate);
+                candidate = await serialPttFactory(portName, baudRate)
+                    .CreateAsync()
+                    .ConfigureAwait(false);
                 if (eventsAttached)
                     candidate.StateChanged += HandleSerialStateChanged;
                 if (started)
@@ -270,7 +289,7 @@ internal sealed class PttSessionController : IAsyncDisposable
         {
             try
             {
-                IPttSource? currentSerialPtt = serialPtt;
+                IPttInputSource? currentSerialPtt = serialPtt;
                 serialPtt = null;
                 if (currentSerialPtt is not null)
                 {
@@ -288,7 +307,7 @@ internal sealed class PttSessionController : IAsyncDisposable
         cleanup.ThrowIfFailed();
     }
 
-    private async Task StopAndDisposeSerialPttAsync(IPttSource source)
+    private async Task StopAndDisposeSerialPttAsync(IPttInputSource source)
     {
         try
         {
@@ -342,4 +361,5 @@ internal sealed class PttSessionController : IAsyncDisposable
             ArgumentException or
             PlatformNotSupportedException or
             System.ComponentModel.Win32Exception;
+
 }

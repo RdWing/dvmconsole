@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using YamlDotNet.Serialization;
 using YamlDotNet.Serialization.NamingConventions;
 
@@ -5,6 +6,8 @@ namespace DvmConsole.Core.Configuration;
 
 public static class AliasFileLoader
 {
+    [UnconditionalSuppressMessage("AOT", "IL3050", Justification =
+        "Temporary Phase 2 YAML allowlist: migrate this builder to a generated StaticContext without changing the interoperable YAML schema.")]
     private static readonly ISerializer Serializer = new SerializerBuilder()
         .WithNamingConvention(CamelCaseNamingConvention.Instance)
         .ConfigureDefaultValuesHandling(DefaultValuesHandling.OmitNull | DefaultValuesHandling.OmitEmptyCollections)
@@ -21,6 +24,8 @@ public static class AliasFileLoader
         return Parse(File.ReadAllText(fullPath));
     }
 
+    [UnconditionalSuppressMessage("AOT", "IL3050", Justification =
+        "Temporary Phase 2 YAML allowlist: migrate this builder to a generated StaticContext without changing the interoperable YAML schema.")]
     public static List<RadioAlias> Parse(string yaml)
     {
         ArgumentNullException.ThrowIfNull(yaml);

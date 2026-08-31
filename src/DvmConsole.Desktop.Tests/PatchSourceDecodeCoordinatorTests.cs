@@ -1,4 +1,5 @@
 using DvmConsole.Audio;
+using DvmConsole.Application;
 using DvmConsole.Core.Configuration;
 using DvmConsole.Desktop;
 using DvmConsole.FneClient;
@@ -29,10 +30,10 @@ public sealed class PatchSourceDecodeCoordinatorTests
             () => new FakeVocoderBackend());
 
         await coordinator.ApplyChannelsAsync([channel]);
-        IReadOnlyList<ChannelViewModel> activeSnapshot = coordinator.ActiveChannels;
+        IReadOnlyList<ChannelId> activeSnapshot = coordinator.ActiveChannels;
 
         Assert.Same(activeSnapshot, coordinator.ActiveChannels);
-        Assert.Same(channel, Assert.Single(activeSnapshot));
+        Assert.Equal((ChannelId)channel, Assert.Single(activeSnapshot));
         await coordinator.ProcessAsync(channel, CreateDmrTraffic());
 
         Assert.NotEmpty(observed);
@@ -90,13 +91,16 @@ public sealed class PatchSourceDecodeCoordinatorTests
         ReceiveIngressRoutingDecision ingress = ReceiveAudioTrafficRouter.ObserveIngress(
             routes,
             terminator,
-            coordinator.IsTrackingStream);
+            (channel, streamId) => coordinator.IsTrackingStream(channel, streamId));
+        ChannelViewModel[] activeChannels = new[] { first, second }
+            .Where(channel => coordinator.ActiveChannels.Contains((ChannelId)channel))
+            .ToArray();
         ChannelViewModel target = Assert.Single(ReceiveAudioTrafficRouter.ResolveTargets(
             routes,
-            coordinator.ActiveChannels,
+            activeChannels,
             terminator,
             ingress,
-            coordinator.IsTrackingStream));
+            (channel, streamId) => coordinator.IsTrackingStream(channel, streamId)));
 
         Assert.Same(first, target);
         await coordinator.ProcessAsync(target, terminator);

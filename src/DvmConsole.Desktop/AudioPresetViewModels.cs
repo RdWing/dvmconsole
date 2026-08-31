@@ -1,10 +1,11 @@
 using DvmConsole.Core.Settings;
+using DvmConsole.Presentation;
 using System.ComponentModel;
 using System.Runtime.CompilerServices;
 
 namespace DvmConsole.Desktop;
 
-public sealed class DtmfPresetViewModel
+public sealed class DtmfPresetViewModel : IDtmfPresetViewModel
 {
     public DtmfPresetViewModel(DtmfPresetSetting setting)
     {
@@ -34,7 +35,7 @@ public sealed class DtmfPresetViewModel
             : $"{step.Digit}/{step.DurationSeconds:0.###}s";
 }
 
-public sealed class TonePresetViewModel
+public sealed class TonePresetViewModel : ITonePresetViewModel
 {
     public TonePresetViewModel(TonePresetSetting setting)
     {
@@ -66,7 +67,7 @@ public sealed class TonePresetViewModel
             : $"{step.FrequencyHz:0.###}Hz/{step.DurationSeconds:0.###}s";
 }
 
-public sealed class ToneSequenceStepViewModel : INotifyPropertyChanged
+public sealed class ToneSequenceStepViewModel : IToneSequenceStepViewModel, INotifyPropertyChanged
 {
     private bool isSilence;
     private string frequencyText;

@@ -1,3 +1,5 @@
+using DvmConsole.Application;
+
 namespace DvmConsole.Desktop;
 
 internal sealed class ReceivePipelineTimingReporter
@@ -30,7 +32,7 @@ internal sealed class ReceivePipelineTimingReporter
             latest.EndToEndDelay,
             latest);
         if (latest.TransportInterArrivalDelay < InterArrivalWarningThreshold &&
-            latest.TransportToFneBoundaryDelay < WarningThreshold &&
+            latest.TransportToApplicationBoundaryDelay < WarningThreshold &&
             latest.InterArrivalDelay < InterArrivalWarningThreshold &&
             unexpectedEndToEndDelay < WarningThreshold &&
             unexpectedQueueDelay < WarningThreshold &&

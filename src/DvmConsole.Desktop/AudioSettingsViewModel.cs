@@ -21,7 +21,6 @@ internal sealed class AudioSettingsViewModel : INotifyPropertyChanged
     private string audioInputHighGainText;
     private string audioInputAgcTargetDbfsText;
     private bool audioInputAgcEnabled;
-    private bool highQualityBluetoothAudioEnabled;
     private string selectedAudioProcessingMode;
     private string audioInputPresetNameText;
     private AudioDeviceOptionViewModel? selectedAudioInputDevice;
@@ -38,7 +37,6 @@ internal sealed class AudioSettingsViewModel : INotifyPropertyChanged
         audioInputHighGainText = settings.AudioInputEqHighGainDb.ToString("0.###", CultureInfo.InvariantCulture);
         audioInputAgcTargetDbfsText = settings.AudioInputAgcTargetDbfs.ToString("0.###", CultureInfo.InvariantCulture);
         audioInputAgcEnabled = settings.AudioInputAgcEnabled;
-        highQualityBluetoothAudioEnabled = settings.HighQualityBluetoothAudioEnabled;
         this.selectedAudioProcessingMode = selectedAudioProcessingMode;
         audioInputPresetNameText = settings.AudioInputPresetName;
 
@@ -151,12 +149,6 @@ internal sealed class AudioSettingsViewModel : INotifyPropertyChanged
     {
         get => audioInputAgcTargetDbfsText;
         set => SetField(ref audioInputAgcTargetDbfsText, value ?? string.Empty);
-    }
-
-    public bool HighQualityBluetoothAudioEnabled
-    {
-        get => highQualityBluetoothAudioEnabled;
-        set => SetField(ref highQualityBluetoothAudioEnabled, value);
     }
 
     public string SelectedAudioProcessingMode

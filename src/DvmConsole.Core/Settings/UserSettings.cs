@@ -103,7 +103,7 @@ public sealed class RxJitterBufferSetting
 // codeplug. Protocol credentials and encryption keys remain codeplug-owned.
 public sealed class UserSettings
 {
-    public const int CurrentSchemaVersion = 9;
+    public const int CurrentSchemaVersion = 10;
     public const string DvmConsoleAudioProcessingMode = "DvmConsole";
     public const string AppleVoiceProcessingMode = "AppleVoiceProcessing";
     public const string WindowsCommunicationsProcessingMode = "WindowsCommunications";
@@ -126,7 +126,6 @@ public sealed class UserSettings
     [JsonPropertyName("RxAudioProcessingEnabled")]
     public bool? LegacyRxAudioProcessingEnabled { get; set; }
     public string AudioProcessingMode { get; set; } = DvmConsoleAudioProcessingMode;
-    public bool HighQualityBluetoothAudioEnabled { get; set; }
     public bool AudioInputAgcEnabled { get; set; }
     public double AudioInputAgcTargetDbfs { get; set; } = -25.0;
     public bool KeepTransmitMicrophoneWarm { get; set; } = false;
@@ -154,6 +153,7 @@ public sealed class UserSettings
     public bool LockWidgets { get; set; } = true;
     public Dictionary<string, WidgetPositionSetting> ChannelWidgetPositions { get; set; } = new(StringComparer.OrdinalIgnoreCase);
     public string? UserBackgroundImage { get; set; }
+    public string? UserBackgroundAssetId { get; set; }
     public bool TogglePttMode { get; set; }
     // Portable name of the key that activates global PTT.  The desktop host
     // maps this to its platform key enum so Core remains UI-independent.
@@ -189,6 +189,10 @@ public sealed class UserSettings
         = new(StringComparer.OrdinalIgnoreCase);
     public Dictionary<string, CodeplugStudioState> CodeplugStudioStates { get; set; }
         = new(StringComparer.OrdinalIgnoreCase);
+    public Dictionary<string, ConfigurationOperatorState> ConfigurationOperatorStates { get; set; }
+        = new(StringComparer.OrdinalIgnoreCase);
+    public string? ActiveConfigurationOperatorStateId { get; set; }
+    public bool LegacyConfigurationOperatorStateMigrated { get; set; }
     public bool LegacyPatchGroupStateMigrated { get; set; }
     public bool RetainPatchStateOnStartup { get; set; }
     public bool RestoreSelectedChannelsOnStartup { get; set; } = true;

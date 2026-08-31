@@ -47,6 +47,25 @@ public sealed class PcmStreamDecoderTests
     }
 
     [Fact]
+    public async Task DecodesMpegFromContinuousNonSeekableStreamWithUnknownLength()
+    {
+        await using var source = new RepeatingNonSeekableReadStream(
+            Convert.FromBase64String(SampleMp3Base64));
+        await using IAudioPcmStreamReader reader = await PcmStreamDecoder.OpenAsync(source);
+        short[] samples = new short[160];
+
+        bool producedAudio = false;
+        for (int attempt = 0; attempt < 10 && !producedAudio; attempt++)
+        {
+            int count = await reader.ReadSamplesAsync(samples);
+            Assert.True(count > 0);
+            producedAudio = samples[..count].Any(sample => sample != 0);
+        }
+
+        Assert.True(producedAudio);
+    }
+
+    [Fact]
     public async Task CancellationInterruptsABlockedMpegOpen()
     {
         using var source = new BlockingReadStream();
@@ -72,11 +91,7 @@ public sealed class PcmStreamDecoderTests
         public override bool CanSeek => true;
         public override bool CanWrite => false;
         public override long Length => 4096;
-        public override long Position
-        {
-            get;
-            set;
-        }
+        public override long Position { get; set; }
 
         public override int Read(byte[] buffer, int offset, int count)
         {
@@ -105,6 +120,7 @@ public sealed class PcmStreamDecoderTests
         }
 
         public override void Flush() => throw new NotSupportedException();
+
         public override long Seek(long offset, SeekOrigin origin)
         {
             Position = origin switch
@@ -116,6 +132,45 @@ public sealed class PcmStreamDecoderTests
             };
             return Position;
         }
+
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+    }
+
+    private sealed class RepeatingNonSeekableReadStream(byte[] content) : Stream
+    {
+        private int offset;
+
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => throw new NotSupportedException();
+        public override long Position
+        {
+            get => throw new NotSupportedException();
+            set => throw new NotSupportedException();
+        }
+
+        public override int Read(byte[] buffer, int bufferOffset, int count)
+            => Read(buffer.AsSpan(bufferOffset, count));
+        public override int Read(Span<byte> buffer)
+        {
+            for (int index = 0; index < buffer.Length; index++)
+            {
+                buffer[index] = content[offset];
+                offset = (offset + 1) % content.Length;
+            }
+            return buffer.Length;
+        }
+        public override ValueTask<int> ReadAsync(
+            Memory<byte> buffer,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return ValueTask.FromResult(Read(buffer.Span));
+        }
+        public override void Flush() => throw new NotSupportedException();
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
         public override void SetLength(long value) => throw new NotSupportedException();
         public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
     }

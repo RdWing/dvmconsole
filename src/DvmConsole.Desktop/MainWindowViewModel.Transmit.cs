@@ -1,4 +1,5 @@
 using DvmConsole.Audio;
+using DvmConsole.Application;
 using DvmConsole.Core.Diagnostics;
 using System.Diagnostics;
 
@@ -25,7 +26,7 @@ public sealed partial class MainWindowViewModel
             return;
 
         ChannelViewModel? receivingChannel = channels.FirstOrDefault(
-            channel => channel.IsReceivePresentationActive);
+            channel => channel.IsReceivePresentationActive && !channel.HasCallPriority);
         if (receivingChannel is not null)
         {
             await RunOnUiThreadAsync(() =>
@@ -36,12 +37,12 @@ public sealed partial class MainWindowViewModel
 
         TransmitTarget[] targets = channels
             .Select(channel => new TransmitTarget(
-                channel,
+                channel.ToTransmitDescriptor(),
                 Systems.FirstOrDefault(candidate => candidate.Name.Equals(
                     channel.Definition.SystemName,
                     StringComparison.OrdinalIgnoreCase))!))
             .ToArray();
-        ChannelViewModel? missingSystemChannel = targets
+        TransmitChannelDescriptor? missingSystemChannel = targets
             .FirstOrDefault(target => target.System is null)?.Channel;
         if (missingSystemChannel is not null)
         {
@@ -137,7 +138,7 @@ public sealed partial class MainWindowViewModel
                 cueBarrierReleasedAt = startupTimer.Elapsed;
             }
             TimeSpan microphoneReadyAt = startupTimer.Elapsed;
-            ChannelViewModel[] activeChannels = transmitCoordinator.ActiveChannels.ToArray();
+            ChannelViewModel[] activeChannels = ResolveChannels(transmitCoordinator.ActiveChannels);
             var startupDiagnostics = new TransmitStartupDiagnostics(
                 transmitSessionsReadyAt,
                 cueBarrierReleasedAt,
@@ -260,12 +261,14 @@ public sealed partial class MainWindowViewModel
         await RunOnUiThreadAsync(() =>
         {
             foreach (ChannelViewModel channel in activeChannels)
-                channel.SetTransmitEnabled(true, transmitCoordinator.GetActiveStreamId(channel));
+                channel.SetTransmitEnabled(
+                    true,
+                    transmitCoordinator.GetActiveStreamId(new ChannelId(channel.SessionId)));
             foreach (ChannelViewModel channel in activeChannels)
             {
                 TransmitTarget target = targets.First(candidate =>
-                    ReferenceEquals(candidate.Channel, channel));
-                uint streamId = transmitCoordinator.GetActiveStreamId(channel);
+                    candidate.Channel.Id == new ChannelId(channel.SessionId));
+                uint streamId = transmitCoordinator.GetActiveStreamId(new ChannelId(channel.SessionId));
                 bool secure = channel.Definition.IsEncrypted && channel.IsTransmitEncrypted;
                 byte? algorithmId = null;
                 ushort? keyId = null;
@@ -307,7 +310,8 @@ public sealed partial class MainWindowViewModel
                     callerText: "Console",
                     encrypted: secure,
                     encryptionAlgorithmId: algorithmId,
-                    encryptionKeyId: keyId);
+                    encryptionKeyId: keyId,
+                    channelId: new ChannelId(channel.SessionId));
             }
 
             NotifyCallHistoryChanged();
@@ -389,7 +393,9 @@ public sealed partial class MainWindowViewModel
     private async Task StopTransmitAsync(IReadOnlyCollection<ChannelViewModel> channels)
     {
         (ChannelViewModel Channel, uint StreamId)[] activeStreams = channels
-            .Select(channel => (channel, transmitCoordinator.GetActiveStreamId(channel)))
+            .Select(channel => (
+                channel,
+                transmitCoordinator.GetActiveStreamId(new ChannelId(channel.SessionId))))
             .Where(entry => entry.Item2 != 0)
             .ToArray();
         Exception? stopFailure = null;
@@ -595,7 +601,7 @@ public sealed partial class MainWindowViewModel
         await audioReconfigurationLock.WaitAsync().ConfigureAwait(false);
         try
         {
-            ChannelViewModel[] receivingChannels = audioCoordinator.LivePlaybackChannels.ToArray();
+            ChannelViewModel[] receivingChannels = ResolveChannels(audioCoordinator.LivePlaybackChannels);
             if (receivingChannels.Length == 0)
                 return;
 

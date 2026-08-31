@@ -113,6 +113,26 @@ public sealed class UserSettingsStore
         fileStore.CopyTo(destination);
     }
 
+    public void Export(UserSettings settings, Stream destination)
+    {
+        ArgumentNullException.ThrowIfNull(settings);
+        ArgumentNullException.ThrowIfNull(destination);
+        if (!destination.CanWrite)
+            throw new ArgumentException("The settings destination must be writable.", nameof(destination));
+
+        UserSettingsSnapshot snapshot = CaptureSnapshot(settings);
+        SaveSnapshot(snapshot);
+        if (destination.CanSeek)
+            destination.SetLength(0);
+        using var writer = new StreamWriter(
+            destination,
+            new System.Text.UTF8Encoding(encoderShouldEmitUTF8Identifier: false),
+            bufferSize: 4096,
+            leaveOpen: true);
+        writer.Write(snapshot.Json);
+        writer.Flush();
+    }
+
     public SettingsImportPreview PreviewImport(string sourcePath)
     {
         string source = ResolveSettingsFilePath(sourcePath);
@@ -167,6 +187,32 @@ public sealed class UserSettingsStore
         return Load();
     }
 
+    public UserSettings Import(
+        Stream source,
+        SettingsImportScope scope = SettingsImportScope.All)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        if (!source.CanRead)
+            throw new ArgumentException("The settings source must be readable.", nameof(source));
+        using var reader = new StreamReader(
+            source,
+            System.Text.Encoding.UTF8,
+            detectEncodingFromByteOrderMarks: true,
+            bufferSize: 4096,
+            leaveOpen: true);
+        UserSettings imported = ReadSettingsJson(reader.ReadToEnd());
+        if (scope == SettingsImportScope.All)
+        {
+            Save(imported);
+            return Load();
+        }
+
+        UserSettings current = Load();
+        SettingsImportPolicy.Merge(current, imported, scope);
+        Save(current);
+        return Load();
+    }
+
     private static string ResolveSettingsFilePath(string sourcePath)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(sourcePath);
@@ -177,21 +223,21 @@ public sealed class UserSettingsStore
     }
 
     private UserSettings ReadSettingsFile(string source)
-    {
-        UserSettings imported;
+        => ReadSettingsJson(File.ReadAllText(source));
 
+    private UserSettings ReadSettingsJson(string json)
+    {
         try
         {
-            imported = serializer.Deserialize(File.ReadAllText(source))
+            UserSettings imported = serializer.Deserialize(json)
                 ?? throw new InvalidDataException("The settings file did not contain a settings object.");
+            normalization.NormalizeBeforeWrite(imported);
+            return imported;
         }
         catch (JsonException exception)
         {
             throw new InvalidDataException("The settings file is not valid DVM Console JSON.", exception);
         }
-
-        normalization.NormalizeBeforeWrite(imported);
-        return imported;
     }
 
 

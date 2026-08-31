@@ -28,7 +28,7 @@ internal sealed class OpusRecordingMetadataStore
         ArgumentException.ThrowIfNullOrWhiteSpace(recordingRoot);
         metadata = null!;
 
-        OggOpusTagSet tags = OggOpusTags.Read(opusPath);
+        OggOpusTagSet tags = DesktopRecordingFileCodec.ReadOpusTags(opusPath);
         if (!tags.Fields.TryGetValue(MetadataTag, out string? encoded) ||
             string.IsNullOrWhiteSpace(encoded) ||
             encoded.Length > MaximumEncodedMetadataLength)
@@ -83,13 +83,5 @@ internal sealed class OpusRecordingMetadataStore
     }
 
     private static bool IsUnderRoot(string path, string root)
-    {
-        string normalizedPath = Path.GetFullPath(path);
-        string normalizedRoot = Path.GetFullPath(root)
-            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
-        StringComparison comparison = OperatingSystem.IsWindows()
-            ? StringComparison.OrdinalIgnoreCase
-            : StringComparison.Ordinal;
-        return normalizedPath.StartsWith(normalizedRoot, comparison);
-    }
+        => FileSystemPathIdentity.IsUnderRoot(root, path);
 }

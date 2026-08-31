@@ -1,0 +1,45 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:presentation="using:DvmConsole.Presentation"
+             x:Class="DvmConsole.Presentation.ConfigurationStudioNavigationView"
+             x:DataType="presentation:IConfigurationStudioNavigationViewModel">
+  <Border x:Name="NavigationBorder" Background="{DynamicResource StudioNavigationBrush}"
+          BorderBrush="{DynamicResource StudioLineBrush}"
+          BorderThickness="0,0,1,0">
+    <Grid RowDefinitions="Auto,*" MinHeight="0">
+      <TextBox x:Name="NavigationSearch" Margin="14,10,14,7"
+               Watermark="Search configuration"
+               Text="{Binding SearchText, Mode=TwoWay}"
+               AutomationProperties.Name="Search configuration" />
+      <ScrollViewer x:Name="NavigationScroller"
+                    Grid.Row="1"
+                    HorizontalScrollBarVisibility="Disabled"
+                    VerticalScrollBarVisibility="Auto">
+        <StackPanel Margin="14,3,10,16" Spacing="2">
+          <Button Classes="nav-button" Content="Overview" Click="HandleOverviewClick" AutomationProperties.Name="Configuration overview" />
+          <TextBlock Margin="8,8,6,3" FontWeight="SemiBold" Text="{Binding SystemNavigationHeading}" />
+          <TreeView x:Name="ConfigurationTree"
+                    Classes="configuration-tree"
+                    Margin="0,0,0,6"
+                    ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                    ScrollViewer.VerticalScrollBarVisibility="Disabled"
+                    ItemsSource="{Binding ConfigurationHierarchy}"
+                    SelectedItem="{Binding SelectedHierarchyNode, Mode=TwoWay}">
+            <TreeView.ItemTemplate>
+              <TreeDataTemplate x:DataType="presentation:IConfigurationHierarchyNode" ItemsSource="{Binding Children}">
+                <Grid ColumnDefinitions="*,Auto" ColumnSpacing="7" MinHeight="25">
+                  <TextBlock VerticalAlignment="Center" Text="{Binding Label}" TextTrimming="CharacterEllipsis" />
+                  <TextBlock Grid.Column="1" Classes="caption" VerticalAlignment="Center" Text="{Binding CountText}" />
+                </Grid>
+              </TreeDataTemplate>
+            </TreeView.ItemTemplate>
+          </TreeView>
+          <Button Classes="nav-button" Content="{Binding StreamNavigationHeading}" Click="HandleStreamsClick" AutomationProperties.Name="Web stream configurations" />
+          <Button x:Name="GroupsNavigationButton" Classes="nav-button" Content="{Binding GroupNavigationHeading}" Click="HandleGroupsClick" AutomationProperties.Name="Group configurations" />
+          <Button x:Name="EncryptionKeysNavigationButton" Classes="nav-button" Content="{Binding KeyNavigationHeading}" Click="HandleEncryptionKeysClick" AutomationProperties.Name="Encryption keys" />
+          <Button Classes="nav-button" Content="{Binding FileNavigationHeading}" Click="HandleFilesClick" AutomationProperties.Name="Configuration files" />
+        </StackPanel>
+      </ScrollViewer>
+    </Grid>
+  </Border>
+</UserControl>

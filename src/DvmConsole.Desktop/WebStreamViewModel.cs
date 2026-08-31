@@ -1,10 +1,11 @@
 using DvmConsole.Core.Configuration;
+using DvmConsole.Presentation;
 using System.ComponentModel;
 using System.Windows.Input;
 
 namespace DvmConsole.Desktop;
 
-public sealed class WebStreamViewModel : INotifyPropertyChanged
+public sealed class WebStreamViewModel : INotifyPropertyChanged, IWebStreamViewModel
 {
     private Func<WebStreamViewModel, Task>? start;
     private Func<WebStreamViewModel, Task>? stop;
@@ -62,6 +63,12 @@ public sealed class WebStreamViewModel : INotifyPropertyChanged
             if (value is not null)
                 OutputDeviceIdText = value.Id;
         }
+    }
+    System.Collections.IEnumerable IWebStreamViewModel.OutputDeviceOptions => OutputDeviceOptions;
+    IAudioDeviceOptionViewModel? IWebStreamViewModel.SelectedOutputDevice
+    {
+        get => SelectedOutputDevice;
+        set => SelectedOutputDevice = value as AudioDeviceOptionViewModel;
     }
     public double Volume
     {

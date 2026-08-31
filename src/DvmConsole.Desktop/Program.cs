@@ -54,7 +54,7 @@ internal static class Program
 
     private static void ValidateBuiltInVocoder()
     {
-        using var backend = new SoftwareVocoderBackend();
+        using IVocoderBackend backend = new NativeVocoderFactory().Create();
         foreach (VocoderMode mode in Enum.GetValues<VocoderMode>())
         {
             using IVocoderSession session = backend.CreateSession(mode);

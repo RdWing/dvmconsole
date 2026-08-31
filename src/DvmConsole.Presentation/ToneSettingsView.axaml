@@ -1,0 +1,154 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:presentation="using:DvmConsole.Presentation"
+             x:Class="DvmConsole.Presentation.ToneSettingsView"
+             x:DataType="presentation:IToneSettingsViewModel">
+  <UserControl.Styles>
+    <Style Selector="Button"><Setter Property="MinHeight" Value="44"/></Style>
+    <Style Selector="CheckBox"><Setter Property="MinHeight" Value="44"/></Style>
+    <Style Selector="TextBox"><Setter Property="MinHeight" Value="44"/></Style>
+  </UserControl.Styles>
+  <ScrollViewer x:Name="ToneSettingsScroller" Margin="10">
+    <StackPanel Spacing="12">
+      <TextBlock Classes="heading" Text="Tones and DTMF"/>
+      <Border Classes="panel">
+        <StackPanel Spacing="8">
+          <TextBlock FontWeight="SemiBold" Text="DTMF"/>
+          <WrapPanel ItemSpacing="8" LineSpacing="8">
+            <TextBox Width="180"
+                     Watermark="Digits"
+                     Text="{Binding DtmfDigits, Mode=TwoWay}"
+                     AutomationProperties.Name="DTMF digits"/>
+            <Button Content="Send"
+                    Command="{Binding SendDtmfCommand}"
+                    ScrollViewer.BringIntoViewOnFocusChange="False"
+                    AutomationProperties.Name="Send DTMF"/>
+            <TextBox Width="200"
+                     Watermark="Preset name"
+                     Text="{Binding DtmfPresetName, Mode=TwoWay}"
+                     AutomationProperties.Name="DTMF preset name"/>
+            <Button Content="Save preset"
+                    Command="{Binding SaveDtmfPresetCommand}"
+                    AutomationProperties.Name="Save DTMF preset"/>
+          </WrapPanel>
+          <ItemsControl ItemsSource="{Binding DtmfPresets}">
+            <ItemsControl.ItemTemplate>
+              <DataTemplate x:DataType="presentation:IDtmfPresetViewModel">
+                <StackPanel Margin="0,4" Spacing="4">
+                  <TextBlock Text="{Binding DisplayText}" TextWrapping="Wrap"/>
+                  <WrapPanel ItemSpacing="8" LineSpacing="8">
+                    <Button Content="Use" Tag="{Binding}" AutomationProperties.Name="Use DTMF preset" Click="HandleUseDtmfPresetClick"/>
+                    <Button Content="Send" Tag="{Binding}" ScrollViewer.BringIntoViewOnFocusChange="False" AutomationProperties.Name="Send DTMF preset" Click="HandleSendDtmfPresetClick"/>
+                    <Button Content="Delete" Tag="{Binding}" AutomationProperties.Name="Delete DTMF preset" Click="HandleDeleteDtmfPresetClick"/>
+                  </WrapPanel>
+                </StackPanel>
+              </DataTemplate>
+            </ItemsControl.ItemTemplate>
+          </ItemsControl>
+        </StackPanel>
+      </Border>
+      <Border Classes="panel">
+        <StackPanel Spacing="8">
+          <TextBlock FontWeight="SemiBold" Text="Alert / QCII tone pattern"/>
+          <TextBlock Classes="caption"
+                     Text="Build an ordered pattern of 300–2500 Hz tones and silent holds. Every step remains in one call."
+                     TextWrapping="Wrap"/>
+          <ItemsControl ItemsSource="{Binding ToneSequenceSteps}">
+            <ItemsControl.ItemTemplate>
+              <DataTemplate x:DataType="presentation:IToneSequenceStepViewModel">
+                <WrapPanel ItemSpacing="8" LineSpacing="8" Margin="0,3">
+                  <CheckBox Content="Silence"
+                            IsChecked="{Binding IsSilence, Mode=TwoWay}"
+                            AutomationProperties.Name="Silent tone step"/>
+                  <TextBox Width="110"
+                           Watermark="300–2500 Hz"
+                           Text="{Binding FrequencyText, Mode=TwoWay}"
+                           AutomationProperties.Name="Tone step frequency"/>
+                  <TextBox Width="110"
+                           Watermark="Seconds"
+                           Text="{Binding DurationText, Mode=TwoWay}"
+                           AutomationProperties.Name="Tone step duration"/>
+                  <Button Content="↑" Tag="{Binding}" AutomationProperties.Name="Move tone step up" Click="HandleMoveToneStepUpClick"/>
+                  <Button Content="↓" Tag="{Binding}" AutomationProperties.Name="Move tone step down" Click="HandleMoveToneStepDownClick"/>
+                  <Button Content="Remove" Tag="{Binding}" AutomationProperties.Name="Remove tone step" Click="HandleRemoveToneStepClick"/>
+                </WrapPanel>
+              </DataTemplate>
+            </ItemsControl.ItemTemplate>
+          </ItemsControl>
+          <WrapPanel ItemSpacing="8" LineSpacing="8">
+            <Button Content="Add tone" AutomationProperties.Name="Add tone step" Click="HandleAddToneStepClick"/>
+            <Button Content="Add silence" AutomationProperties.Name="Add silent tone step" Click="HandleAddSilenceStepClick"/>
+            <Button Content="Send pattern" Command="{Binding SendToneCommand}" ScrollViewer.BringIntoViewOnFocusChange="False" AutomationProperties.Name="Send tone pattern"/>
+            <TextBox Width="200"
+                     Watermark="Preset name"
+                     Text="{Binding TonePresetName, Mode=TwoWay}"
+                     AutomationProperties.Name="Tone preset name"/>
+            <Button Content="Save preset" Command="{Binding SaveTonePresetCommand}" AutomationProperties.Name="Save tone preset"/>
+          </WrapPanel>
+          <ItemsControl ItemsSource="{Binding TonePresets}">
+            <ItemsControl.ItemTemplate>
+              <DataTemplate x:DataType="presentation:ITonePresetViewModel">
+                <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12" Margin="0,3">
+                  <TextBlock Text="{Binding Name}"
+                             VerticalAlignment="Center"
+                             TextTrimming="CharacterEllipsis"/>
+                  <WrapPanel Grid.Column="1" ItemSpacing="8" LineSpacing="8">
+                    <Button Content="Use" Tag="{Binding}" AutomationProperties.Name="Use tone preset" Click="HandleUseTonePresetClick"/>
+                    <Button Content="Send" Tag="{Binding}" ScrollViewer.BringIntoViewOnFocusChange="False" AutomationProperties.Name="Send tone preset" Click="HandleSendTonePresetClick"/>
+                    <Button Content="Delete" Tag="{Binding}" AutomationProperties.Name="Delete tone preset" Click="HandleDeleteTonePresetClick"/>
+                  </WrapPanel>
+                </Grid>
+              </DataTemplate>
+            </ItemsControl.ItemTemplate>
+          </ItemsControl>
+        </StackPanel>
+      </Border>
+      <Border Classes="panel">
+        <StackPanel Spacing="8">
+          <TextBlock FontWeight="SemiBold" Text="Quick Call II / page"/>
+          <TextBlock Classes="caption"
+                     Text="Tone A is sent for 1 second, then tone B for 3 seconds in the same call. Frequencies must be 300–2500 Hz. Arm PAGE on the channel cards to choose targets; PAGE clears after a successful send."
+                     TextWrapping="Wrap"/>
+          <WrapPanel ItemSpacing="8" LineSpacing="8">
+            <TextBox Width="110" Watermark="Tone A Hz" Text="{Binding QuickCallToneAText, Mode=TwoWay}" AutomationProperties.Name="Quick Call tone A"/>
+            <TextBox Width="110" Watermark="Tone B Hz" Text="{Binding QuickCallToneBText, Mode=TwoWay}" AutomationProperties.Name="Quick Call tone B"/>
+            <Button Content="Send QCII page" ScrollViewer.BringIntoViewOnFocusChange="False" AutomationProperties.Name="Send Quick Call page" Click="HandleSendQuickCallClick"/>
+          </WrapPanel>
+        </StackPanel>
+      </Border>
+      <Border Classes="panel">
+        <StackPanel Spacing="8">
+          <TextBlock FontWeight="SemiBold" Text="Custom alert assets"/>
+          <TextBlock Classes="caption"
+                     Text="Import PCM WAV, MPEG, or Ogg Opus audio up to 30 seconds. Audio is decoded to 8 kHz mono; sustained single tones use the optimized P25 tone path while all other audio uses the normal voice encoder."
+                     TextWrapping="Wrap"/>
+          <WrapPanel ItemSpacing="8" LineSpacing="8">
+            <TextBox Width="240"
+                     Watermark="Display name (optional)"
+                     Text="{Binding AlertToneNameText, Mode=TwoWay}"
+                     AutomationProperties.Name="Alert audio display name"/>
+            <Button Content="Import audio…" AutomationProperties.Name="Import alert audio" Click="HandleImportAlertToneClick"/>
+          </WrapPanel>
+          <ItemsControl ItemsSource="{Binding AlertTones}">
+            <ItemsControl.ItemTemplate>
+              <DataTemplate x:DataType="presentation:IAlertToneViewModel">
+                <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12" Margin="0,3">
+                  <TextBlock Text="{Binding Name}"
+                             VerticalAlignment="Center"
+                             TextTrimming="CharacterEllipsis"/>
+                  <WrapPanel Grid.Column="1" ItemSpacing="8" LineSpacing="8">
+                    <Button Content="Send" Tag="{Binding}" ScrollViewer.BringIntoViewOnFocusChange="False" AutomationProperties.Name="Send alert audio" Click="HandleSendAlertToneClick"/>
+                    <Button Content="Delete" Tag="{Binding}" AutomationProperties.Name="Delete alert audio" Click="HandleDeleteAlertToneClick"/>
+                  </WrapPanel>
+                </Grid>
+              </DataTemplate>
+            </ItemsControl.ItemTemplate>
+          </ItemsControl>
+        </StackPanel>
+      </Border>
+      <TextBlock Classes="caption"
+                 Text="DTMF, generated tones, presets, and alert assets transmit to all ALERT-armed channels. QCII transmits to all PAGE-armed channels."
+                 TextWrapping="Wrap"/>
+    </StackPanel>
+  </ScrollViewer>
+</UserControl>

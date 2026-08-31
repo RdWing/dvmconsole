@@ -1,4 +1,6 @@
 using System.Collections.Specialized;
+using DvmConsole.Application;
+using DvmConsole.Presentation;
 
 namespace DvmConsole.Desktop;
 
@@ -12,7 +14,8 @@ internal sealed class MainWindowSessionHost : IAsyncDisposable
     private readonly Func<MainWindowViewModel, CancellationToken, Task> quiesceSession;
     private readonly AsyncDisposal disposal = new();
     private MainWindowViewModel viewModel;
-    private CardPttController cardPtt;
+    private IConsoleApplicationSession applicationSession;
+    private ChannelPttController cardPtt;
 
     public MainWindowSessionHost(
         MainWindowViewModel initialViewModel,
@@ -29,13 +32,15 @@ internal sealed class MainWindowSessionHost : IAsyncDisposable
         this.closeSessionWindows = closeSessionWindows ?? throw new ArgumentNullException(nameof(closeSessionWindows));
         this.closeAllWindows = closeAllWindows ?? throw new ArgumentNullException(nameof(closeAllWindows));
         this.quiesceSession = quiesceSession ?? QuiesceSessionAsync;
-        cardPtt = CreateCardPtt(viewModel);
+        applicationSession = CreateApplicationSession(viewModel);
+        cardPtt = CreateChannelPtt(applicationSession);
         viewModel.ActivityCallHistoryChanging += activityHistoryChanging;
         this.setDataContext(viewModel);
     }
 
     public MainWindowViewModel ViewModel => viewModel;
-    public CardPttController CardPtt => cardPtt;
+    public IConsoleApplicationSession ApplicationSession => applicationSession;
+    public ChannelPttController ChannelPtt => cardPtt;
 
     public ValueTask StartAsync()
         => viewModel.StartKeyboardPttAsync();
@@ -48,7 +53,7 @@ internal sealed class MainWindowSessionHost : IAsyncDisposable
         await transitionGate.WaitAsync(cancellationToken);
         try
         {
-            await viewModel.FlushUserSettingsAsync();
+            await applicationSession.FlushSettingsAsync(cancellationToken);
         }
         finally
         {
@@ -65,8 +70,10 @@ internal sealed class MainWindowSessionHost : IAsyncDisposable
         try
         {
             MainWindowViewModel previous = viewModel;
-            CardPttController previousCardPtt = cardPtt;
-            CardPttController replacementCardPtt = CreateCardPtt(replacement);
+            IConsoleApplicationSession previousApplicationSession = applicationSession;
+            ChannelPttController previousCardPtt = cardPtt;
+            IConsoleApplicationSession replacementApplicationSession = CreateApplicationSession(replacement);
+            ChannelPttController replacementCardPtt = CreateChannelPtt(replacementApplicationSession);
             replacement.ActivityCallHistoryChanging += activityHistoryChanging;
             try
             {
@@ -75,13 +82,14 @@ internal sealed class MainWindowSessionHost : IAsyncDisposable
                 // recording, and presentation resources. Close its FNE
                 // transports before publishing the replacement so the same
                 // peer identity can never be active from two local sockets.
-                await quiesceSession(previous, cancellationToken);
+                await previousApplicationSession.QuiesceAsync(cancellationToken);
                 closeSessionWindows();
                 setDataContext(replacement);
             }
             catch
             {
                 replacement.ActivityCallHistoryChanging -= activityHistoryChanging;
+                await replacementApplicationSession.DisposeAsync();
                 await replacementCardPtt.DisposeAsync();
                 await replacement.DisposeAsync();
                 throw;
@@ -91,10 +99,12 @@ internal sealed class MainWindowSessionHost : IAsyncDisposable
             // window has accepted it. Cleanup failures from the outgoing
             // session cannot leave the host pointing at a half-installed one.
             viewModel = replacement;
+            applicationSession = replacementApplicationSession;
             cardPtt = replacementCardPtt;
             previous.ActivityCallHistoryChanging -= activityHistoryChanging;
 
             var cleanup = new AsyncCleanup();
+            await cleanup.RunTaskAsync(() => previousApplicationSession.DisposeAsync().AsTask());
             await cleanup.RunTaskAsync(() => previousCardPtt.DisposeAsync().AsTask());
             await cleanup.RunTaskAsync(() => previous.DisposeAsync().AsTask());
             cleanup.ThrowIfFailed();
@@ -118,9 +128,10 @@ internal sealed class MainWindowSessionHost : IAsyncDisposable
             // particular, this cancels a failed peer's login backoff without
             // making application shutdown wait for the current retry interval.
             await cleanup.RunTaskAsync(
-                () => quiesceSession(viewModel, CancellationToken.None));
+                () => applicationSession.QuiesceAsync(CancellationToken.None).AsTask());
             cleanup.Run(closeAllWindows);
             cleanup.Run(() => viewModel.ActivityCallHistoryChanging -= activityHistoryChanging);
+            await cleanup.RunTaskAsync(() => applicationSession.DisposeAsync().AsTask());
             await cleanup.RunTaskAsync(() => cardPtt.DisposeAsync().AsTask());
             await cleanup.RunTaskAsync(() => viewModel.DisposeAsync().AsTask());
             cleanup.ThrowIfFailed();
@@ -131,10 +142,21 @@ internal sealed class MainWindowSessionHost : IAsyncDisposable
         }
     }
 
-    private static CardPttController CreateCardPtt(MainWindowViewModel owner)
+    private static ChannelPttController CreateChannelPtt(IConsoleApplicationSession session)
         => new(
-            channel => owner.StartChannelTransmitAsync(channel),
-            channel => owner.StopChannelTransmitAsync(channel));
+            async (channelId, cancellationToken) =>
+            {
+                await session.Commands.BeginPttAsync(channelId, cancellationToken);
+                return session.Snapshot.Channels.TryGetValue(channelId, out ChannelControlSnapshot? channel) &&
+                    channel.Transmitting;
+            },
+            (channelId, cancellationToken) => session.Commands.EndPttAsync(channelId, cancellationToken));
+
+    private IConsoleApplicationSession CreateApplicationSession(MainWindowViewModel owner)
+        => new ConsoleApplicationSession(new DesktopConsoleSessionRuntimeAdapter(
+            owner,
+            cancellationToken => new ValueTask(quiesceSession(owner, cancellationToken)),
+            cancellationToken => new ValueTask(owner.FlushUserSettingsAsync().WaitAsync(cancellationToken))));
 
     private static Task QuiesceSessionAsync(
         MainWindowViewModel owner,

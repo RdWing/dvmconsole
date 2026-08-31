@@ -1,5 +1,5 @@
 using DvmConsole.Audio;
-using DvmConsole.FneClient;
+using DvmConsole.Core.Runtime;
 using DvmConsole.Vocoder;
 using fnecore.P25;
 
@@ -40,7 +40,7 @@ public sealed class P25RxAudioSession : IAsyncDisposable
     public long LostPackets => sequenceTracker.LostPackets;
     public long DuplicateOrLatePackets => sequenceTracker.DuplicateOrLatePackets;
 
-    public async ValueTask<int> ProcessAsync(FneTrafficFrame traffic, CancellationToken cancellationToken = default)
+    public async ValueTask<int> ProcessAsync(IRadioMediaFrame traffic, CancellationToken cancellationToken = default)
     {
         ObjectDisposedException.ThrowIf(disposed, this);
         ArgumentNullException.ThrowIfNull(traffic);
@@ -232,7 +232,7 @@ public sealed class P25RxAudioSession : IAsyncDisposable
         disposed = true;
     }
 
-    private void PrepareForLdu1(FneTrafficFrame traffic)
+    private void PrepareForLdu1(IRadioMediaFrame traffic)
     {
         // dvmhost emits HDU encryption metadata only at call start. Later
         // LDU1 DATA_UNIT frames rely on the next MI carried by the preceding
@@ -301,7 +301,7 @@ public sealed class P25RxAudioSession : IAsyncDisposable
             throw new NotSupportedException("P25 encrypted receive could not process the configured key stream.");
     }
 
-    private void AdvanceAfterLdu2(FneTrafficFrame traffic, int errors)
+    private void AdvanceAfterLdu2(IRadioMediaFrame traffic, int errors)
     {
         if (P25DfsiFrameCodec.TryExtractEncryptionMetadata(
                 traffic,

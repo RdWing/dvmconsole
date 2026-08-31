@@ -161,6 +161,8 @@ public sealed partial class MainWindowViewModel
     private async Task DisposeSystemsAsync()
     {
         var cleanup = new AsyncCleanup();
+        radioIngress.TrafficReceived -= HandleSubscribedSystemTraffic;
+        radioIngress.AuthorityChanged -= HandleSystemTalkgroupAuthorityChanged;
         foreach (SystemViewModel system in Systems)
         {
             cleanup.Run(() =>
@@ -170,8 +172,6 @@ public sealed partial class MainWindowViewModel
                 system.StatusChanged -= HandleSubscribedSystemStatus;
                 system.KeyResponseReceived -= HandleSystemKeyResponse;
                 system.LogReceived -= HandleSystemLog;
-                system.TrafficReceived -= HandleSubscribedSystemTraffic;
-                system.TalkgroupAuthorityChanged -= HandleSystemTalkgroupAuthorityChanged;
             });
         }
 

@@ -11,35 +11,35 @@ namespace DvmConsole.Media;
 public sealed class PcmWavFileWriter : IDisposable, IAsyncDisposable
 {
     private const int HeaderLength = 44;
-    private readonly FileStream stream;
+    private readonly Stream stream;
     private readonly PcmAudioFormat format;
+    private readonly bool leaveOpen;
     private long dataBytes;
     private bool disposed;
 
-    public PcmWavFileWriter(string path, PcmAudioFormat format)
+    public PcmWavFileWriter(
+        Stream stream,
+        PcmAudioFormat format,
+        bool leaveOpen = false)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+        ArgumentNullException.ThrowIfNull(stream);
         ArgumentNullException.ThrowIfNull(format);
+        if (!stream.CanWrite || !stream.CanSeek)
+        {
+            throw new ArgumentException(
+                "WAV recording requires a writable, seekable stream.",
+                nameof(stream));
+        }
         if (format.BitsPerSample != 16)
             throw new ArgumentException("WAV recording requires 16-bit PCM.", nameof(format));
 
-        Path = System.IO.Path.GetFullPath(path);
-        string? directory = System.IO.Path.GetDirectoryName(Path);
-        if (!string.IsNullOrWhiteSpace(directory))
-            Directory.CreateDirectory(directory);
-
+        this.stream = stream;
         this.format = format;
-        stream = new FileStream(
-            Path,
-            FileMode.CreateNew,
-            FileAccess.ReadWrite,
-            FileShare.Read,
-            bufferSize: 16 * 1024,
-            options: FileOptions.SequentialScan);
+        this.leaveOpen = leaveOpen;
+        stream.SetLength(0);
         WriteHeader(0);
     }
 
-    public string Path { get; }
     public PcmAudioFormat Format => format;
     public long SamplesWritten => dataBytes / (format.BitsPerSample / 8);
 
@@ -94,11 +94,12 @@ public sealed class PcmWavFileWriter : IDisposable, IAsyncDisposable
         try
         {
             WriteHeader((uint)dataBytes);
-            stream.Flush(flushToDisk: true);
+            stream.Flush();
         }
         finally
         {
-            stream.Dispose();
+            if (!leaveOpen)
+                stream.Dispose();
             disposed = true;
         }
     }
@@ -111,26 +112,27 @@ public sealed class PcmWavFileWriter : IDisposable, IAsyncDisposable
 
     /// <summary>
     /// Repairs the length fields of an interrupted writer from the bytes that
-    /// actually reached disk. The fixed PCM format and RIFF signatures are
+    /// actually reached the durable stream. The fixed PCM format and RIFF signatures are
     /// validated before any data is changed.
     /// </summary>
-    public static long RepairInterruptedFile(string path, PcmAudioFormat format)
+    public static long RepairInterruptedStream(Stream stream, PcmAudioFormat format)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+        ArgumentNullException.ThrowIfNull(stream);
         ArgumentNullException.ThrowIfNull(format);
+        if (!stream.CanRead || !stream.CanWrite || !stream.CanSeek)
+        {
+            throw new ArgumentException(
+                "Interrupted WAV repair requires a readable, writable, seekable stream.",
+                nameof(stream));
+        }
         if (format.BitsPerSample != 16)
             throw new ArgumentException("WAV recording requires 16-bit PCM.", nameof(format));
-
-        using var source = new FileStream(
-            System.IO.Path.GetFullPath(path),
-            FileMode.Open,
-            FileAccess.ReadWrite,
-            FileShare.Read);
-        if (source.Length < HeaderLength)
+        if (stream.Length < HeaderLength)
             throw new InvalidDataException("Interrupted WAV is shorter than its header.");
 
         Span<byte> existingHeader = stackalloc byte[HeaderLength];
-        source.ReadExactly(existingHeader);
+        stream.Position = 0;
+        stream.ReadExactly(existingHeader);
         if (!existingHeader[..4].SequenceEqual("RIFF"u8) ||
             !existingHeader[8..12].SequenceEqual("WAVE"u8) ||
             !existingHeader[12..16].SequenceEqual("fmt "u8) ||
@@ -139,13 +141,13 @@ public sealed class PcmWavFileWriter : IDisposable, IAsyncDisposable
             throw new InvalidDataException("Interrupted recording is not a supported PCM WAV file.");
         }
 
-        long audioBytes = source.Length - HeaderLength;
+        long audioBytes = stream.Length - HeaderLength;
         int blockAlignment = checked(format.Channels * (format.BitsPerSample / 8));
         if (audioBytes > uint.MaxValue || audioBytes % blockAlignment != 0)
             throw new InvalidDataException("Interrupted WAV has an invalid PCM payload length.");
 
-        WriteHeader(source, format, checked((uint)audioBytes));
-        source.Flush(flushToDisk: true);
+        WriteHeader(stream, format, checked((uint)audioBytes));
+        stream.Flush();
         return audioBytes / blockAlignment;
     }
 

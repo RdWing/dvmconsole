@@ -17,6 +17,22 @@ internal sealed class ReceiveOutputMutePolicy
             mutedZones.Any(zone => zone.Channels.Contains(channel));
     }
 
+    public string? GetEffectiveReason(ChannelViewModel channel, bool globallyMuted)
+    {
+        ArgumentNullException.ThrowIfNull(channel);
+        if (globallyMuted)
+            return "global output mute";
+
+        SystemViewModel? system = mutedSystems.FirstOrDefault(candidate =>
+            candidate.Channels.Contains(channel));
+        if (system is not null)
+            return $"system {system.Name} output mute";
+
+        ZoneViewModel? zone = mutedZones.FirstOrDefault(candidate =>
+            candidate.Channels.Contains(channel));
+        return zone is null ? null : $"zone {zone.Name} output mute";
+    }
+
     public bool ShouldEnableLivePlayback(
         ChannelViewModel channel,
         bool isTemporarilySuspended)

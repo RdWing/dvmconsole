@@ -1,3 +1,4 @@
+using DvmConsole.Application;
 using DvmConsole.FneClient;
 using DvmConsole.Media;
 using Xunit;
@@ -58,7 +59,7 @@ public sealed class ReceiveDiagnosticsTextTests
             MaximumProcessingDuration: TimeSpan.FromMilliseconds(4),
             MaximumEndToEndDelay: TimeSpan.FromMilliseconds(5),
             MaximumTransportInterArrivalDelay: TimeSpan.FromMilliseconds(480),
-            MaximumTransportToFneBoundaryDelay: TimeSpan.FromMilliseconds(8),
+            MaximumTransportToApplicationBoundaryDelay: TimeSpan.FromMilliseconds(8),
             JitterBufferReorderedPackets: 2,
             JitterBufferDeadlineMissedPackets: 1,
             MaximumJitterBufferHoldDuration: TimeSpan.FromMilliseconds(180),
@@ -128,7 +129,7 @@ public sealed class ReceiveDiagnosticsTextTests
             ProcessingDuration: TimeSpan.FromMilliseconds(3),
             EndToEndDelay: TimeSpan.FromMilliseconds(6),
             TransportInterArrivalDelay: TimeSpan.FromMilliseconds(440),
-            TransportToFneBoundaryDelay: TimeSpan.FromMilliseconds(1),
+            TransportToApplicationBoundaryDelay: TimeSpan.FromMilliseconds(1),
             JitterBufferTargetDelay: TimeSpan.FromMilliseconds(180),
             JitterBufferHoldDuration: TimeSpan.FromMilliseconds(180),
             WorkerBacklogDuration: TimeSpan.FromMilliseconds(2),

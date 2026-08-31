@@ -1,0 +1,91 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:presentation="using:DvmConsole.Presentation"
+             x:Class="DvmConsole.Presentation.ConfigurationLibraryView"
+             x:DataType="presentation:ConfigurationLibraryViewModel">
+  <UserControl.Styles>
+    <Style Selector="Button.library-action">
+      <Setter Property="MinHeight" Value="44" />
+      <Setter Property="Padding" Value="12,7" />
+    </Style>
+    <Style Selector="Border.library-row">
+      <Setter Property="Background" Value="{DynamicResource CardBackgroundBrush}" />
+      <Setter Property="BorderBrush" Value="{DynamicResource ControlBorderBrush}" />
+      <Setter Property="BorderThickness" Value="1" />
+      <Setter Property="CornerRadius" Value="7" />
+      <Setter Property="Padding" Value="12" />
+      <Setter Property="Margin" Value="0,0,0,8" />
+    </Style>
+  </UserControl.Styles>
+  <Grid RowDefinitions="Auto,*,Auto" Margin="16">
+    <Grid Grid.Row="0" ColumnDefinitions="*,Auto" Margin="0,0,0,12">
+      <StackPanel>
+        <TextBlock Text="Configuration Library" FontSize="22" FontWeight="SemiBold" />
+        <TextBlock Text="Managed revisions remain available even when imported YAML is moved or removed."
+                   TextWrapping="Wrap" Opacity="0.72" />
+      </StackPanel>
+      <Button Grid.Column="1" Classes="library-action" Content="Refresh"
+              IsEnabled="{Binding !IsBusy}" Click="HandleRefreshClick"
+              AutomationProperties.Name="Refresh configuration library" />
+    </Grid>
+
+    <ScrollViewer Grid.Row="1" HorizontalScrollBarVisibility="Disabled"
+                  VerticalScrollBarVisibility="Auto">
+      <StackPanel>
+        <TextBlock Text="{Binding StatusText}" Margin="0,0,0,10" TextWrapping="Wrap" />
+        <ListBox x:Name="ConfigurationsList" ItemsSource="{Binding Configurations}"
+                 Background="Transparent" BorderThickness="0"
+                 IsVisible="{Binding HasConfigurations}"
+                 AutomationProperties.Name="Saved configurations">
+          <ListBox.ItemTemplate>
+            <DataTemplate x:DataType="presentation:ConfigurationLibraryItemViewModel">
+              <Border Classes="library-row">
+                <Grid RowDefinitions="Auto,Auto">
+                  <StackPanel MinWidth="0">
+                    <TextBlock Text="{Binding Name}" FontWeight="SemiBold" TextWrapping="Wrap" />
+                    <TextBlock Text="{Binding StateText}" TextWrapping="Wrap" Opacity="0.8" />
+                    <TextBlock Text="{Binding RevisionText}" TextWrapping="Wrap" Opacity="0.65" />
+                    <TextBlock Text="{Binding ModifiedText}" TextWrapping="Wrap" Opacity="0.65" />
+                  </StackPanel>
+                  <WrapPanel Grid.Row="1" Orientation="Horizontal" Margin="0,10,0,0">
+                    <Button Classes="library-action" Margin="0,0,8,0"
+                            Content="{Binding ActivateText}" IsEnabled="{Binding CanActivate}"
+                            Tag="{Binding}" Click="HandleActivateClick"
+                            AutomationProperties.Name="{Binding ActivateText}" />
+                    <Button Classes="library-action" Content="Move to Trash"
+                            IsEnabled="{Binding CanMoveToTrash}" Tag="{Binding}"
+                            Click="HandleTrashClick"
+                            AutomationProperties.Name="Move configuration to trash" />
+                  </WrapPanel>
+                </Grid>
+              </Border>
+            </DataTemplate>
+          </ListBox.ItemTemplate>
+        </ListBox>
+
+        <Expander Header="{Binding TrashSummary}" IsVisible="{Binding HasTrash}" Margin="0,12,0,0">
+          <ListBox x:Name="TrashList" ItemsSource="{Binding Trash}"
+                   Background="Transparent" BorderThickness="0"
+                   AutomationProperties.Name="Configuration library trash">
+            <ListBox.ItemTemplate>
+              <DataTemplate x:DataType="presentation:ConfigurationLibraryItemViewModel">
+                <Border Classes="library-row">
+                  <Grid RowDefinitions="Auto,Auto">
+                    <StackPanel MinWidth="0">
+                      <TextBlock Text="{Binding Name}" FontWeight="SemiBold" TextWrapping="Wrap" />
+                      <TextBlock Text="{Binding RevisionText}" Opacity="0.65" />
+                    </StackPanel>
+                    <Button Grid.Row="1" Classes="library-action" Content="Restore"
+                            HorizontalAlignment="Left" Margin="0,10,0,0"
+                            Tag="{Binding}" Click="HandleRestoreClick"
+                            AutomationProperties.Name="Restore configuration from trash" />
+                  </Grid>
+                </Border>
+              </DataTemplate>
+            </ListBox.ItemTemplate>
+          </ListBox>
+        </Expander>
+      </StackPanel>
+    </ScrollViewer>
+  </Grid>
+</UserControl>

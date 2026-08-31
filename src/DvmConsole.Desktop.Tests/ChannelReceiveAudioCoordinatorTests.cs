@@ -1,4 +1,5 @@
 using DvmConsole.Audio;
+using DvmConsole.Application;
 using DvmConsole.Core.Configuration;
 using DvmConsole.Desktop;
 using DvmConsole.FneClient;
@@ -267,7 +268,7 @@ public sealed class ChannelReceiveAudioCoordinatorTests
         await coordinator.ProcessAsync(channel, CreateAnalogTraffic(100, packetSequence: 2));
         await WaitForAsync(() => backend.Playback.Frames.Count > 0);
 
-        Assert.Same(channel, Assert.Single(coordinator.LivePlaybackChannels));
+        Assert.Equal((ChannelId)channel, Assert.Single(coordinator.LivePlaybackChannels));
     }
 
     [Fact]
@@ -810,10 +811,6 @@ public sealed class ChannelReceiveAudioCoordinatorTests
     {
         var backend = new FakeAudioBackend();
         var vocoder = new FakeVocoderBackend();
-        await using var coordinator = new ChannelReceiveAudioCoordinator(
-            () => backend,
-            () => vocoder,
-            getOutputDeviceId: channel => channel.Name == "Alternate" ? "alternate" : "output");
         var defaultChannel = new ChannelViewModel(new ChannelConfiguration
         {
             Name = "Default",
@@ -830,6 +827,11 @@ public sealed class ChannelReceiveAudioCoordinatorTests
             Mode = "dmr",
             Slot = 2
         });
+        await using var coordinator = new ChannelReceiveAudioCoordinator(
+            () => backend,
+            () => vocoder,
+            getOutputDeviceId: channelId =>
+                channelId == alternateChannel ? "alternate" : "output");
 
         await coordinator.StartAsync(defaultChannel);
         await coordinator.StartAsync(alternateChannel);
@@ -989,7 +991,7 @@ public sealed class ChannelReceiveAudioCoordinatorTests
         await using var coordinator = new ChannelReceiveAudioCoordinator(
             () => backends[backendIndex++],
             () => new FakeVocoderBackend(),
-            getOutputDeviceId: channel => ReferenceEquals(channel, unaffected) ? "alternate" : null);
+            getOutputDeviceId: channelId => channelId == unaffected ? "alternate" : null);
         await coordinator.StartAsync(failed);
         await coordinator.StartAsync(unaffected);
         await coordinator.ProcessAsync(unaffected, CreateTraffic(101, 1, streamId: 200));
@@ -1003,7 +1005,7 @@ public sealed class ChannelReceiveAudioCoordinatorTests
         ReceiveRouteRecoveryResult recovery = await coordinator.RecoverSelectedAsync([failed]);
 
         Assert.Single(recovery.Restarted);
-        Assert.Same(failed, recovery.Restarted[0]);
+        Assert.Equal((ChannelId)failed, recovery.Restarted[0]);
         Assert.True(coordinator.IsActive(unaffected));
         Assert.False(alternateBackend.AlternatePlayback.IsDisposed);
         int framesBefore = alternateBackend.AlternatePlayback.Frames.Count;
@@ -1099,7 +1101,7 @@ public sealed class ChannelReceiveAudioCoordinatorTests
         await using var coordinator = new ChannelReceiveAudioCoordinator(
             () => backends[backendIndex++],
             () => new FakeVocoderBackend(),
-            getOutputDeviceId: channel => ReferenceEquals(channel, fixedChannel) ? "built-in" : "default");
+            getOutputDeviceId: channelId => channelId == fixedChannel ? "built-in" : "default");
         await coordinator.StartAsync(fixedChannel);
         await coordinator.StartAsync(defaultChannel);
         Assert.True(duplicateBackend.IsDisposed);
@@ -1107,7 +1109,7 @@ public sealed class ChannelReceiveAudioCoordinatorTests
         ReceiveRouteRecoveryResult result = await coordinator.RefreshSystemDefaultOutputAsync();
 
         Assert.Single(result.Restarted);
-        Assert.Same(defaultChannel, result.Restarted[0]);
+        Assert.Equal((ChannelId)defaultChannel, result.Restarted[0]);
         Assert.False(sharedBackend.IsDisposed);
         Assert.True(coordinator.IsActive(fixedChannel));
         Assert.True(coordinator.IsActive(defaultChannel));

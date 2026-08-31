@@ -6,10 +6,13 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <ProjectReference Include="../DvmConsole.Audio/DvmConsole.Audio.csproj" />
+    <ProjectReference Include="../DvmConsole.Audio.Abstractions/DvmConsole.Audio.Abstractions.csproj" />
+    <ProjectReference Include="../DvmConsole.Audio.Core/DvmConsole.Audio.Core.csproj" />
+    <ProjectReference Include="../DvmConsole.Audio.Desktop/DvmConsole.Audio.Desktop.csproj" />
     <ProjectReference Include="../DvmConsole.Core/DvmConsole.Core.csproj" />
     <ProjectReference Include="../DvmConsole.FneClient/DvmConsole.FneClient.csproj" />
     <ProjectReference Include="../DvmConsole.Media/DvmConsole.Media.csproj" />
-    <ProjectReference Include="../DvmConsole.Vocoder/DvmConsole.Vocoder.csproj" />
+    <ProjectReference Include="../DvmConsole.Vocoder.Abstractions/DvmConsole.Vocoder.Abstractions.csproj" />
+    <ProjectReference Include="../DvmConsole.Vocoder.Native/DvmConsole.Vocoder.Native.csproj" />
   </ItemGroup>
 </Project>

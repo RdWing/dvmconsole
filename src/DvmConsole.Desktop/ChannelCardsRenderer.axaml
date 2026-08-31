@@ -1,0 +1,58 @@
+<UserControl
+    x:Class="DvmConsole.Desktop.ChannelCardsRenderer"
+    xmlns="https://github.com/avaloniaui"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:local="using:DvmConsole.Desktop"
+    xmlns:presentation="using:DvmConsole.Presentation"
+    x:DataType="local:MainWindowViewModel">
+  <TabControl ItemsSource="{Binding Systems}" SelectedItem="{Binding SelectedSystem, Mode=TwoWay}" IsVisible="{Binding ShowChannels}">
+    <TabControl.ItemTemplate>
+      <DataTemplate x:DataType="local:SystemViewModel">
+        <StackPanel Spacing="3">
+          <StackPanel Orientation="Horizontal" Spacing="5"><TextBlock Text="{Binding Name}" /><TextBlock Foreground="{Binding StatusAccentBrush}" Text="{Binding StatusGlyph}" /></StackPanel>
+          <Border Height="3" CornerRadius="2" Background="{Binding StatusAccentBrush}" Opacity="{Binding ActivityBarOpacity}" />
+        </StackPanel>
+      </DataTemplate>
+    </TabControl.ItemTemplate>
+    <TabControl.ContentTemplate>
+      <DataTemplate x:DataType="local:SystemViewModel">
+        <TabControl Classes="zone-tabs" ItemsSource="{Binding Zones}" SelectedItem="{Binding SelectedZone, Mode=TwoWay}">
+          <TabControl.ItemTemplate>
+            <DataTemplate x:DataType="local:ZoneViewModel">
+              <Border Background="{Binding TabBrush}" CornerRadius="4" Padding="5,2">
+                <StackPanel Spacing="3"><TextBlock Foreground="{Binding TabTextBrush}" Text="{Binding Name}" /><Border Height="3" CornerRadius="2" Background="{Binding ActivityBrush}" Opacity="{Binding ActivityBarOpacity}" /></StackPanel>
+              </Border>
+            </DataTemplate>
+          </TabControl.ItemTemplate>
+          <TabControl.ContentTemplate>
+            <DataTemplate x:DataType="local:ZoneViewModel">
+              <ScrollViewer x:Name="channelScrollViewer" HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto" Padding="0">
+                <ItemsControl Classes="channel-canvas" ItemsSource="{Binding Channels}" Width="{Binding WidgetCanvasWidth}" Height="{Binding WidgetCanvasHeight}" HorizontalAlignment="Left" VerticalAlignment="Top">
+                  <ItemsControl.ItemsPanel><ItemsPanelTemplate><Canvas /></ItemsPanelTemplate></ItemsControl.ItemsPanel>
+                  <ItemsControl.Styles>
+                    <Style Selector="ItemsControl.channel-canvas > ContentPresenter" x:DataType="local:ChannelViewModel">
+                      <Setter Property="Canvas.Left" Value="{Binding WidgetX}" />
+                      <Setter Property="Canvas.Top" Value="{Binding WidgetY}" />
+                    </Style>
+                  </ItemsControl.Styles>
+                  <ItemsControl.ItemTemplate>
+                    <DataTemplate x:DataType="local:ChannelViewModel">
+                      <Border Classes="channel-card" Width="{Binding CardWidth}" Height="{Binding $parent[UserControl].((local:MainWindowViewModel)DataContext).ChannelCardHeight}" Background="{Binding CardBackgroundBrush}" BorderBrush="{Binding CardBorderBrush}" BorderThickness="1" CornerRadius="6" Padding="5,5,5,4" ClipToBounds="True" Focusable="True" PointerPressed="HandleChannelPointerPressed" PointerMoved="HandleChannelPointerMoved" PointerReleased="HandleChannelPointerReleased" PointerCaptureLost="HandleChannelPointerCaptureLost" ToolTip.Tip="Drag to move this channel while widgets are unlocked">
+                        <presentation:ChannelCardContent
+                            UiFontSize="{Binding $parent[UserControl].((local:MainWindowViewModel)DataContext).UiFontSize}"
+                            UiSmallFontSize="{Binding $parent[UserControl].((local:MainWindowViewModel)DataContext).UiSmallFontSize}"
+                            TransmitSelectionClick="HandleTransmitSelectionClick"
+                            PageSelectionClick="HandlePageSelectionClick"
+                            AlertSelectionClick="HandleAlertSelectionClick" />
+                      </Border>
+                    </DataTemplate>
+                  </ItemsControl.ItemTemplate>
+                </ItemsControl>
+              </ScrollViewer>
+            </DataTemplate>
+          </TabControl.ContentTemplate>
+        </TabControl>
+      </DataTemplate>
+    </TabControl.ContentTemplate>
+  </TabControl>
+</UserControl>

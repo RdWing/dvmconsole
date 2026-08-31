@@ -70,14 +70,23 @@ internal sealed class ScrollViewportAnchor<T> where T : class
         Control? anchorControl = getItemControls()
             .FirstOrDefault(control => ReferenceEquals(getItem(control), anchor));
         Point? anchorPosition = anchorControl?.TranslatePoint(default, scrollViewer);
-        double itemDelta = anchorPosition is Point position
+        double anchorDelta = anchorPosition is Point position
             ? position.Y - pendingAnchorY
-            : scrollViewer.Extent.Height - pendingExtentHeight;
+            : 0;
+        double extentDelta = scrollViewer.Extent.Height - pendingExtentHeight;
+        double? resolvedDelta = ScrollViewportAnchorMath.ResolveLayoutDelta(
+            anchorPosition is not null,
+            anchorDelta,
+            extentDelta);
+        if (resolvedDelta is not double itemDelta)
+        {
+            // ItemsControl layout can notify before its containing ScrollViewer
+            // incorporates a newly inserted top row. Keep the anchor until a
+            // later layout pass exposes either the row or extent movement.
+            return;
+        }
 
         pendingAnchor = null;
-        if (Math.Abs(itemDelta) <= 0.25)
-            return;
-
         double desiredOffset = ScrollViewportAnchorMath.CalculateOffset(
             scrollViewer.Offset.Y,
             itemDelta,
@@ -103,6 +112,18 @@ internal sealed class ScrollViewportAnchor<T> where T : class
 
 internal static class ScrollViewportAnchorMath
 {
+    public static double? ResolveLayoutDelta(
+        bool anchorWasLocated,
+        double anchorDelta,
+        double extentDelta)
+    {
+        if (anchorWasLocated && Math.Abs(anchorDelta) > 0.25)
+            return anchorDelta;
+        if (Math.Abs(extentDelta) > 0.25)
+            return extentDelta;
+        return null;
+    }
+
     public static double CalculateOffset(
         double currentOffset,
         double itemDelta,

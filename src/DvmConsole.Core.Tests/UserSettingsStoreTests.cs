@@ -29,11 +29,8 @@ public sealed class UserSettingsStoreTests
 
             Assert.Equal(UserSettings.CurrentSchemaVersion, settings.SchemaVersion);
             Assert.Equal($"Schema {schemaVersion}", settings.LastSelectedSystemName);
-            if (schemaVersion == 1)
-                Assert.False(settings.HighQualityBluetoothAudioEnabled);
             if (schemaVersion == 2)
             {
-                Assert.True(settings.HighQualityBluetoothAudioEnabled);
                 Assert.All(settings.RxAudioProcessingOptions.Values, option =>
                 {
                     Assert.False(option.HighPassFilterEnabled);
@@ -139,7 +136,6 @@ public sealed class UserSettingsStoreTests
             Assert.Null(settings.LastSelectedChannelKey);
             Assert.True(settings.ConnectionChimes);
             Assert.False(settings.VerboseLoggingEnabled);
-            Assert.False(settings.HighQualityBluetoothAudioEnabled);
             Assert.False(settings.KeepTransmitMicrophoneWarm);
             Assert.Equal(4, settings.RxAudioProcessingOptions.Count);
             Assert.All(settings.RxAudioProcessingOptions.Values, option =>
@@ -444,7 +440,7 @@ public sealed class UserSettingsStoreTests
     }
 
     [Fact]
-    public void LegacyBluetoothDefaultRequiresFreshOptIn()
+    public void ObsoleteHighQualityBluetoothSettingIsIgnoredAndOmittedOnSave()
     {
         string path = CreatePath();
         try
@@ -460,7 +456,43 @@ public sealed class UserSettingsStoreTests
             UserSettings settings = new UserSettingsStore(path).Load();
 
             Assert.Equal(UserSettings.CurrentSchemaVersion, settings.SchemaVersion);
-            Assert.False(settings.HighQualityBluetoothAudioEnabled);
+            new UserSettingsStore(path).Save(settings);
+            Assert.DoesNotContain(
+                "HighQualityBluetoothAudioEnabled",
+                File.ReadAllText(path),
+                StringComparison.Ordinal);
+        }
+        finally
+        {
+            Cleanup(path);
+        }
+    }
+
+    [Fact]
+    public void ManagedAlertAssetsPersistWithoutARequiredDesktopPath()
+    {
+        string path = CreatePath();
+        Guid assetId = Guid.NewGuid();
+        try
+        {
+            var store = new UserSettingsStore(path);
+            store.Save(new UserSettings
+            {
+                AlertTones =
+                [
+                    new AlertToneSetting
+                    {
+                        Name = "Evacuate",
+                        AssetId = assetId.ToString("D"),
+                        FileName = "evacuate.wav"
+                    }
+                ]
+            });
+
+            AlertToneSetting tone = Assert.Single(store.Load().AlertTones);
+            Assert.Equal(assetId.ToString("N"), tone.AssetId);
+            Assert.Equal("evacuate.wav", tone.FileName);
+            Assert.Equal(string.Empty, tone.FilePath);
         }
         finally
         {
@@ -638,7 +670,6 @@ public sealed class UserSettingsStoreTests
                     }
                 },
                 AudioProcessingMode = UserSettings.AppleVoiceProcessingMode,
-                HighQualityBluetoothAudioEnabled = false,
                 AudioInputAgcEnabled = true,
                 AudioInputAgcTargetDbfs = -30,
                 KeepTransmitMicrophoneWarm = true,
@@ -776,7 +807,6 @@ public sealed class UserSettingsStoreTests
             Assert.Equal(-24, dmrRx.CompressorThresholdDbfs);
             Assert.Equal(4.5, dmrRx.CompressorMakeupGainDb);
             Assert.Equal(UserSettings.AppleVoiceProcessingMode, loaded.AudioProcessingMode);
-            Assert.False(loaded.HighQualityBluetoothAudioEnabled);
             Assert.True(loaded.AudioInputAgcEnabled);
             Assert.Equal(-30, loaded.AudioInputAgcTargetDbfs);
             Assert.True(loaded.KeepTransmitMicrophoneWarm);
@@ -957,6 +987,50 @@ public sealed class UserSettingsStoreTests
             store.Reset();
             Assert.False(File.Exists(path));
             Assert.Null(store.Load().LastCodeplugPath);
+        }
+        finally
+        {
+            Cleanup(path);
+        }
+    }
+
+    [Fact]
+    public void StreamExportAndImportDoNotRequireFilesystemDocumentPaths()
+    {
+        string path = CreatePath();
+        try
+        {
+            var store = new UserSettingsStore(path);
+            using var exported = new MemoryStream();
+
+            store.Export(new UserSettings
+            {
+                TalkPermitTone = true,
+                GlobalPttKey = "F4"
+            }, exported);
+
+            Assert.True(exported.CanWrite);
+            exported.Position = 0;
+            string json = new StreamReader(exported, leaveOpen: true).ReadToEnd();
+            Assert.Contains("\"TalkPermitTone\": true", json, StringComparison.Ordinal);
+            Assert.DoesNotContain("HighQualityBluetoothAudioEnabled", json, StringComparison.OrdinalIgnoreCase);
+
+            using var imported = new MemoryStream(System.Text.Encoding.UTF8.GetBytes("""
+                {
+                  "talkPermitTone": false,
+                  "globalPttKey": "f9",
+                  "HighQualityBluetoothAudioEnabled": true
+                }
+                """));
+            UserSettings loaded = store.Import(imported);
+
+            Assert.True(imported.CanRead);
+            Assert.False(loaded.TalkPermitTone);
+            Assert.Equal("F9", loaded.GlobalPttKey);
+            Assert.DoesNotContain(
+                "HighQualityBluetoothAudioEnabled",
+                File.ReadAllText(path),
+                StringComparison.OrdinalIgnoreCase);
         }
         finally
         {
@@ -1190,34 +1264,17 @@ public sealed class UserSettingsStoreTests
     }
 
     [Fact]
-    public void ImportPreviewAndMergeShareOneScopePolicy()
+    public void NamedProfileNamesCannotEscapeProfilesDirectory()
     {
         string path = CreatePath();
-        string importPath = Path.Combine(Path.GetDirectoryName(path)!, "scope-policy-profile.json");
         try
         {
-            var sourceStore = new UserSettingsStore(importPath);
-            sourceStore.Save(new UserSettings
-            {
-                ClockShowSeconds = true,
-                KeepTransmitMicrophoneWarm = true,
-                QuickCallToneAFrequencyHz = 432.1,
-                RestoreSelectedChannelsOnStartup = false
-            });
             var store = new UserSettingsStore(path);
 
-            SettingsImportPreview preview = store.PreviewImport(importPath);
-
-            Assert.Contains("General", preview.PopulatedSections);
-            Assert.Contains("Audio", preview.PopulatedSections);
-            Assert.Contains("Presets", preview.PopulatedSections);
-
-            store.Import(importPath, SettingsImportScope.OperatorState);
-            UserSettings imported = store.Load();
-            Assert.True(imported.ClockShowSeconds);
-            Assert.True(imported.KeepTransmitMicrophoneWarm);
-            Assert.Equal(432.1, imported.QuickCallToneAFrequencyHz);
-            Assert.False(imported.RestoreSelectedChannelsOnStartup);
+            Assert.Throws<ArgumentException>(() => store.SaveNamedProfile("../outside", new UserSettings()));
+            Assert.Throws<ArgumentException>(() => store.PreviewNamedProfile("../outside"));
+            Assert.Throws<ArgumentException>(() => store.SaveNamedProfile("Shift:Night", new UserSettings()));
+            Assert.Throws<ArgumentException>(() => store.SaveNamedProfile("CON", new UserSettings()));
         }
         finally
         {
@@ -1257,17 +1314,34 @@ public sealed class UserSettingsStoreTests
     }
 
     [Fact]
-    public void NamedProfileNamesCannotEscapeProfilesDirectory()
+    public void ImportPreviewAndMergeShareOneScopePolicy()
     {
         string path = CreatePath();
+        string importPath = Path.Combine(Path.GetDirectoryName(path)!, "scope-policy-profile.json");
         try
         {
+            var sourceStore = new UserSettingsStore(importPath);
+            sourceStore.Save(new UserSettings
+            {
+                ClockShowSeconds = true,
+                KeepTransmitMicrophoneWarm = true,
+                QuickCallToneAFrequencyHz = 432.1,
+                RestoreSelectedChannelsOnStartup = false
+            });
             var store = new UserSettingsStore(path);
 
-            Assert.Throws<ArgumentException>(() => store.SaveNamedProfile("../outside", new UserSettings()));
-            Assert.Throws<ArgumentException>(() => store.PreviewNamedProfile("../outside"));
-            Assert.Throws<ArgumentException>(() => store.SaveNamedProfile("Shift:Night", new UserSettings()));
-            Assert.Throws<ArgumentException>(() => store.SaveNamedProfile("CON", new UserSettings()));
+            SettingsImportPreview preview = store.PreviewImport(importPath);
+
+            Assert.Contains("General", preview.PopulatedSections);
+            Assert.Contains("Audio", preview.PopulatedSections);
+            Assert.Contains("Presets", preview.PopulatedSections);
+
+            store.Import(importPath, SettingsImportScope.OperatorState);
+            UserSettings imported = store.Load();
+            Assert.True(imported.ClockShowSeconds);
+            Assert.True(imported.KeepTransmitMicrophoneWarm);
+            Assert.Equal(432.1, imported.QuickCallToneAFrequencyHz);
+            Assert.False(imported.RestoreSelectedChannelsOnStartup);
         }
         finally
         {

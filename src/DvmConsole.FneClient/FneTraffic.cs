@@ -37,7 +37,7 @@ public static class FneTrafficProtocolMapper
 // Platform-neutral representation of an inbound FNE media frame. Enum values
 // from the legacy protocol library are intentionally represented as strings so
 // the desktop/audio layers do not depend on fnecore implementation types.
-public sealed record FneTrafficFrame
+public sealed record FneTrafficFrame : IRadioMediaFrame
 {
     public FneTrafficFrame(
         FneTrafficProtocol protocol,
@@ -75,6 +75,14 @@ public sealed record FneTrafficFrame
     }
 
     public FneTrafficProtocol Protocol { get; }
+    RadioMediaProtocol IRadioMediaFrame.Protocol => Protocol switch
+    {
+        FneTrafficProtocol.Dmr => RadioMediaProtocol.Dmr,
+        FneTrafficProtocol.P25 => RadioMediaProtocol.P25,
+        FneTrafficProtocol.Nxdn => RadioMediaProtocol.Nxdn,
+        FneTrafficProtocol.Analog => RadioMediaProtocol.Analog,
+        _ => throw new ArgumentOutOfRangeException(nameof(Protocol))
+    };
     public uint PeerId { get; }
     public uint SourceId { get; }
     public uint DestinationId { get; }

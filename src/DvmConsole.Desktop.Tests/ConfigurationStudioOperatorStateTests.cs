@@ -1,5 +1,6 @@
 using DvmConsole.Core.Configuration;
 using DvmConsole.Core.Settings;
+using DvmConsole.Presentation;
 using Xunit;
 
 namespace DvmConsole.Desktop.Tests;
@@ -43,17 +44,25 @@ public sealed class ConfigurationStudioOperatorStateTests
         try
         {
             await using MainWindowViewModel runtime = MainWindowViewModel.Load(codeplugPath, store);
+            CodeplugStudioState studioState = CodeplugStudioStateStore.Get(store.Load(), codeplugPath);
             var studio = new ConfigurationStudioViewModel(
                 ConfigurationDocument.Open(codeplugPath),
+                runtime.ConfigurationReference?.Id,
+                codeplugPath,
                 runtime,
-                store,
+                new DesktopConfigurationStudioCompanionSource(),
+                new DesktopConfigurationStudioPreviewFactory(),
+                new ConfigurationStudioInitialState(
+                    new Dictionary<string, ConfigurationStudioPosition>(),
+                    studioState.ZoneSystemAssignments,
+                    studioState.CallPrioritySystemNames),
                 ConfigurationStudioSection.Groups);
             PatchGroupEditorViewModel group = Assert.Single(
                 studio.OperationalGroups,
                 candidate => candidate.IsPatchGroup);
             PatchMemberEditorViewModel beta = Assert.Single(
                 group.Members,
-                member => member.Channel.Definition.SystemName == "Beta" && member.IsMember);
+                member => member.Channel.SystemName == "Beta" && member.IsMember);
 
             beta.IsMember = false;
             group.IsEnabled = false;

@@ -1,5 +1,7 @@
 namespace DvmConsole.Desktop;
 
+using DvmConsole.Application;
+
 public sealed record RecordingFinalizationResult(
     CallRecordingMetadata? Metadata,
     uint StreamId,
@@ -7,7 +9,7 @@ public sealed record RecordingFinalizationResult(
     Exception? Error)
 {
     public bool IsPlayable => Metadata?.IsPlayable == true;
-    internal ChannelViewModel? Channel { get; init; }
+    internal ChannelId? ChannelId { get; init; }
     internal RecordingFinalizationDescriptor? Descriptor { get; init; }
 }
 

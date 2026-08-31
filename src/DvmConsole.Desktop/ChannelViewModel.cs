@@ -1,9 +1,11 @@
 using Avalonia.Media;
+using DvmConsole.Application;
 using DvmConsole.Core.Configuration;
 using DvmConsole.Core.Runtime;
 using DvmConsole.FneClient;
 using DvmConsole.Media;
 using DvmConsole.Operations;
+using DvmConsole.Presentation;
 using System.Collections.Immutable;
 using System.ComponentModel;
 using System.Globalization;
@@ -11,8 +13,41 @@ using System.Windows.Input;
 
 namespace DvmConsole.Desktop;
 
-public sealed class ChannelViewModel : INotifyPropertyChanged
+public sealed class ChannelViewModel :
+    IChannelCardViewModel,
+    IChannelAudioRouteViewModel,
+    IRecorderChannelViewModel,
+    IPatchMemberChannelViewModel,
+    INotifyPropertyChanged
 {
+    public static implicit operator DvmConsole.Application.ChannelId(ChannelViewModel channel)
+    {
+        ArgumentNullException.ThrowIfNull(channel);
+        return new DvmConsole.Application.ChannelId(channel.SessionId);
+    }
+
+    public static implicit operator DvmConsole.Application.ChannelRecordingDescriptor(
+        ChannelViewModel channel)
+    {
+        ArgumentNullException.ThrowIfNull(channel);
+        return new DvmConsole.Application.ChannelRecordingDescriptor(
+            new DvmConsole.Application.ChannelId(channel.SessionId),
+            channel.Definition,
+            channel.IsRecordingEnabled,
+            channel.IsTransmitEncrypted,
+            channel.StreamId,
+            channel.SourceId);
+    }
+
+    public static implicit operator DvmConsole.Application.ReceiveChannelDescriptor(
+        ChannelViewModel channel)
+    {
+        ArgumentNullException.ThrowIfNull(channel);
+        return new DvmConsole.Application.ReceiveChannelDescriptor(
+            new DvmConsole.Application.ChannelId(channel.SessionId),
+            channel.Definition);
+    }
+
     private static readonly IBrush NormalPeakMarkerBrush =
         new SolidColorBrush(Color.Parse("#F5F7FA"));
     private static readonly IBrush YellowPeakMarkerBrush =
@@ -42,6 +77,7 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
     private bool alertSelected;
     private bool transmitBusy;
     private bool transmitEncrypted;
+    private bool hasCallPriority;
     private FneTalkgroupAvailability talkgroupAvailability = FneTalkgroupAvailability.Pending;
     private bool recordingEnabled;
     private string lastCallerText = "--";
@@ -54,6 +90,8 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
     private long receiveAudioMeterStreamId;
     private uint? receivePlaybackSourceId;
     private uint? receivePlaybackStreamId;
+    private uint receiveEncryptionStreamId;
+    private TrafficEncryptionObservationState receiveEncryptionState = new();
     private string ignoredSubscriberIdsText = string.Empty;
     private string outputDeviceIdText = string.Empty;
     private IReadOnlyList<AudioDeviceOptionViewModel> outputDeviceOptions = [];
@@ -93,7 +131,11 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
     public event EventHandler<double>? StereoBalanceChanged;
 
     public string Name => runtime.Definition.Name;
+    public DvmConsole.Application.ChannelId Id => new(SessionId);
+    public string RoutingKey => PatchMemberResolver.FromChannel(this).Key;
     public string SettingsKey => $"{runtime.Definition.SystemName}\u001F{runtime.Definition.Name}";
+    public string SystemName => runtime.Definition.SystemName;
+    public uint DestinationId => runtime.Definition.DestinationId;
     public string ModeText => runtime.Definition.Mode.ToUpperInvariant();
     public string TalkgroupText => $"TG {runtime.Definition.DestinationId} - {ModeText}";
     public string DestinationText => $"{runtime.Definition.SystemName} / TGID {runtime.Definition.DestinationId}";
@@ -182,6 +224,8 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
     public bool IsPageSelected => pageSelected;
     public bool IsAlertSelected => alertSelected;
     public bool IsTransmitEncrypted => transmitEncrypted;
+    public bool HasCallPriority => hasCallPriority;
+    public bool ObservedReceiveEncrypted => receiveEncryptionState.Encryption.IsSecure;
     public bool IsRecordingEnabled => recordingEnabled;
     public string RecordButtonText => "TAR";
     public string RecordingConfigurationButtonText => recordingEnabled ? "Disable TAR" : "Enable TAR";
@@ -261,6 +305,13 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
                 OutputDeviceIdText = value.Id;
         }
     }
+    System.Collections.IEnumerable IChannelAudioRouteViewModel.OutputDeviceOptions
+        => OutputDeviceOptions;
+    IAudioDeviceOptionViewModel? IChannelAudioRouteViewModel.SelectedOutputDevice
+    {
+        get => SelectedOutputDevice;
+        set => SelectedOutputDevice = value as AudioDeviceOptionViewModel;
+    }
     public string IgnoredSubscriberIdsText
     {
         get => ignoredSubscriberIdsText;
@@ -278,6 +329,8 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
         runtime.Definition.IsEncrypted &&
         runtime.Definition.SelectableEncryption &&
         (transmitEncrypted || CanResolveConfiguredKey());
+    internal bool TransmitKeyAvailable =>
+        !runtime.Definition.IsEncrypted || CanResolveConfiguredKey();
     public string EncryptionStatusText => !runtime.Definition.IsEncrypted
         ? "Clear"
         : CanResolveConfiguredKey()
@@ -304,7 +357,7 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
         talkgroupAvailability != FneTalkgroupAvailability.Unavailable;
     public bool IsPttControlEnabled =>
         transmitEnabled ||
-        (CanTransmit && !IsReceivePresentationActive);
+        (CanTransmit && (hasCallPriority || !IsReceivePresentationActive));
     public FneTalkgroupAvailability TalkgroupAvailability => talkgroupAvailability;
     public bool IsTalkgroupUnavailable =>
         talkgroupAvailability == FneTalkgroupAvailability.Unavailable;
@@ -903,6 +956,15 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
         DateTimeOffset now,
         ReceiveRouteProjectionDecision projection)
     {
+        if (!ReceiveTrafficClassifier.IsTerminator(traffic) && receiveEncryptionStreamId != traffic.StreamId)
+        {
+            receiveEncryptionStreamId = traffic.StreamId;
+            receiveEncryptionState = new TrafficEncryptionObservationState();
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ObservedReceiveEncrypted)));
+        }
+        if (receiveEncryptionState.Observe(traffic))
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ObservedReceiveEncrypted)));
+
         Volatile.Write(ref projectedReceiveStreams, projection.ActiveStreamIds);
         ReceiveStreamDecision decision = projection.StreamDecision;
 
@@ -1034,13 +1096,29 @@ public sealed class ChannelViewModel : INotifyPropertyChanged
 
     private Task ToggleEncryptionAsync()
     {
-        if (!CanToggleEncryption || transmitEnabled)
-            return Task.CompletedTask;
+        SetTransmitEncrypted(!transmitEncrypted);
+        return Task.CompletedTask;
+    }
 
-        transmitEncrypted = !transmitEncrypted;
+    internal void SetTransmitEncrypted(bool encrypted)
+    {
+        if (transmitEncrypted == encrypted || !CanToggleEncryption || transmitEnabled)
+            return;
+
+        transmitEncrypted = encrypted;
         NotifySelectableEncryptionStateChanged();
         TransmitEncryptionChanged?.Invoke(this, transmitEncrypted);
-        return Task.CompletedTask;
+    }
+
+    internal void SetHasCallPriority(bool enabled)
+    {
+        if (hasCallPriority == enabled)
+            return;
+
+        hasCallPriority = enabled;
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(HasCallPriority)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsPttControlEnabled)));
+        (PttCommand as AsyncRelayCommand)?.RaiseCanExecuteChanged();
     }
 
     private void NotifySelectableEncryptionStateChanged()

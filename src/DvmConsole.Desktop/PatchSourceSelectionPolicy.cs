@@ -1,3 +1,5 @@
+using DvmConsole.Presentation;
+
 namespace DvmConsole.Desktop;
 
 // Keeps patch direction semantics out of the receive pipeline. One-way
@@ -22,12 +24,13 @@ internal static class PatchSourceSelectionPolicy
     {
         if (group.IsOneWay)
         {
-            if (group.SelectedSource is not null)
-                yield return group.SelectedSource.Channel;
+            if (group.SelectedSource?.Channel is ChannelViewModel source)
+                yield return source;
             yield break;
         }
 
         foreach (PatchMemberEditorViewModel member in group.Members.Where(member => member.IsMember))
-            yield return member.Channel;
+            if (member.Channel is ChannelViewModel channel)
+                yield return channel;
     }
 }

@@ -1,0 +1,93 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:presentation="using:DvmConsole.Presentation"
+             xmlns:config="using:DvmConsole.Core.Configuration"
+             x:Class="DvmConsole.Presentation.ConfigurationStudioStreamsView"
+             x:DataType="presentation:ConfigurationStudioViewModel">
+  <UserControl.Styles>
+    <Style Selector="Button"><Setter Property="MinHeight" Value="44"/></Style>
+    <Style Selector="ComboBox"><Setter Property="MinHeight" Value="44"/></Style>
+    <Style Selector="TextBox"><Setter Property="MinHeight" Value="44"/></Style>
+  </UserControl.Styles>
+  <ScrollViewer x:Name="StreamsScroller" Margin="18" IsVisible="{Binding IsStreams}">
+    <StackPanel Spacing="10">
+      <WrapPanel ItemSpacing="8" LineSpacing="8">
+        <StackPanel Width="320">
+          <TextBlock Classes="heading" Text="Web Streams"/>
+          <TextBlock Classes="caption"
+                     Text="One aggregate list; zone ownership remains explicit in YAML"
+                     TextWrapping="Wrap"/>
+        </StackPanel>
+        <Button Content="Add" AutomationProperties.Name="Add web stream" Click="HandleAddStreamClick"/>
+        <Button Content="Delete" AutomationProperties.Name="Delete web stream" Click="HandleDeleteStreamClick"/>
+      </WrapPanel>
+      <Grid x:Name="StreamsBody" ColumnDefinitions="3*,2*" ColumnSpacing="10" MinHeight="0">
+        <Border x:Name="StreamsListPanel" Classes="panel" Padding="0">
+          <Grid RowDefinitions="Auto,*">
+            <Border Classes="dense-row" Background="{DynamicResource ShellHeaderBrush}">
+              <Grid ColumnDefinitions="2*,*,3*" ColumnSpacing="8">
+                <TextBlock FontWeight="SemiBold" Text="Name"/>
+                <TextBlock Grid.Column="1" FontWeight="SemiBold" Text="Zone"/>
+                <TextBlock Grid.Column="2" FontWeight="SemiBold" Text="URL"/>
+              </Grid>
+            </Border>
+            <ListBox Grid.Row="1"
+                     Classes="dense-list"
+                     ItemsSource="{Binding Streams}"
+                     SelectedItem="{Binding SelectedStream, Mode=TwoWay}"
+                     AutomationProperties.Name="Web streams">
+              <ListBox.ItemTemplate>
+                <DataTemplate x:DataType="presentation:ConfigurationStreamRow">
+                  <Border Classes="dense-row">
+                    <Grid ColumnDefinitions="2*,*,3*" ColumnSpacing="8">
+                      <TextBlock Text="{Binding Stream.Name}" TextWrapping="Wrap"/>
+                      <TextBlock Grid.Column="1" Text="{Binding ZoneName}" TextWrapping="Wrap"/>
+                      <TextBlock Grid.Column="2" Text="{Binding Stream.Url}" TextTrimming="CharacterEllipsis"/>
+                    </Grid>
+                  </Border>
+                </DataTemplate>
+              </ListBox.ItemTemplate>
+            </ListBox>
+          </Grid>
+        </Border>
+        <Border x:Name="StreamInspector" Grid.Column="1" Classes="panel">
+          <StackPanel Spacing="6" IsEnabled="{Binding CanEdit}">
+            <TextBlock Classes="subheading" Text="Stream Inspector"/>
+            <TextBlock Classes="caption" Text="Name"/>
+            <TextBox Text="{Binding SelectedStream.Stream.Name, Mode=TwoWay}"
+                     LostFocus="HandleDraftFieldEdit"
+                     AutomationProperties.Name="Web stream name"/>
+            <TextBlock Classes="caption" Text="Owning zone"/>
+            <ComboBox ItemsSource="{Binding Zones}"
+                      SelectedItem="{Binding SelectedStream.Zone}"
+                      SelectionChanged="HandleStreamZoneChanged"
+                      AutomationProperties.Name="Web stream owning zone">
+              <ComboBox.ItemTemplate>
+                <DataTemplate x:DataType="config:ZoneConfiguration">
+                  <TextBlock Text="{Binding Name}"/>
+                </DataTemplate>
+              </ComboBox.ItemTemplate>
+            </ComboBox>
+            <TextBlock Classes="caption" Text="URL"/>
+            <TextBox Text="{Binding SelectedStream.Stream.Url, Mode=TwoWay}"
+                     LostFocus="HandleDraftFieldEdit"
+                     AutomationProperties.Name="Web stream URL"/>
+            <TextBlock Classes="caption" Text="Username"/>
+            <TextBox Text="{Binding SelectedStream.Stream.AuthUsername, Mode=TwoWay}"
+                     LostFocus="HandleDraftFieldEdit"
+                     AutomationProperties.Name="Web stream username"/>
+            <TextBlock Classes="caption" Text="Password"/>
+            <TextBox PasswordChar="&#x25CF;"
+                     Text="{Binding SelectedStream.Stream.AuthPassword, Mode=TwoWay}"
+                     LostFocus="HandleDraftFieldEdit"
+                     AutomationProperties.Name="Web stream password"/>
+            <TextBlock Classes="caption" Text="Idle color"/>
+            <TextBox Text="{Binding SelectedStream.Stream.IdleColor, Mode=TwoWay}"
+                     LostFocus="HandleDraftFieldEdit"
+                     AutomationProperties.Name="Web stream idle color"/>
+          </StackPanel>
+        </Border>
+      </Grid>
+    </StackPanel>
+  </ScrollViewer>
+</UserControl>

@@ -1,3 +1,4 @@
+using DvmConsole.Application;
 using DvmConsole.Operations;
 using DvmConsole.Media;
 using System.ComponentModel;
@@ -31,7 +32,7 @@ public sealed partial class MainWindowViewModel
         };
 
     public IReadOnlyList<ChannelViewModel> RuntimeActiveTransmitChannels
-        => transmitCoordinator.ActiveChannels;
+        => ResolveChannels(transmitCoordinator.ActiveChannels);
 
     public string MicrophoneInputSourceText
     {

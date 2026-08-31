@@ -1,0 +1,103 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:presentation="using:DvmConsole.Presentation"
+             x:Class="DvmConsole.Presentation.ConnectionsSettingsView"
+             x:DataType="presentation:IConnectionsSettingsViewModel">
+  <UserControl.Styles>
+    <Style Selector="Button"><Setter Property="MinHeight" Value="44"/></Style>
+    <Style Selector="ComboBox"><Setter Property="MinHeight" Value="44"/></Style>
+  </UserControl.Styles>
+  <ScrollViewer x:Name="ConnectionsScrollViewer" Margin="10">
+    <StackPanel Spacing="12" Margin="0,0,0,20">
+      <TextBlock Classes="heading" Text="FNE Connections and Key Status"/>
+      <ItemsControl ItemsSource="{Binding ConnectionSystems}">
+        <ItemsControl.ItemTemplate>
+          <DataTemplate x:DataType="presentation:IConnectionSystemViewModel">
+            <Border Classes="panel" Margin="0,0,0,8">
+              <StackPanel Spacing="6">
+                <WrapPanel ItemSpacing="16" LineSpacing="8">
+                  <StackPanel Width="260">
+                    <TextBlock FontWeight="SemiBold" Text="{Binding Name}" TextWrapping="Wrap"/>
+                    <TextBlock Classes="caption" Text="{Binding Endpoint}" TextWrapping="Wrap"/>
+                  </StackPanel>
+                  <StackPanel Spacing="2">
+                    <TextBlock Classes="caption" FontWeight="SemiBold" Text="RX jitter"/>
+                    <ItemsControl ItemsSource="{Binding RxJitterBufferModes}"
+                                  ToolTip.Tip="Fixed or adaptive packet-aligned receive delay. Adaptive learns per connection and protocol; changes save and apply immediately.">
+                      <ItemsControl.ItemsPanel>
+                        <ItemsPanelTemplate><WrapPanel ItemSpacing="8" LineSpacing="8"/></ItemsPanelTemplate>
+                      </ItemsControl.ItemsPanel>
+                      <ItemsControl.ItemTemplate>
+                        <DataTemplate x:DataType="presentation:IRxJitterBufferModeViewModel">
+                          <StackPanel Width="136" Spacing="1">
+                            <TextBlock Classes="caption" Text="{Binding ModeName}"/>
+                            <ComboBox ItemsSource="{Binding Options}"
+                                      SelectedItem="{Binding SelectedOption, Mode=TwoWay}"
+                                      AutomationProperties.Name="{Binding ModeName}">
+                              <ComboBox.ItemTemplate>
+                                <DataTemplate x:DataType="presentation:IRxJitterBufferOptionViewModel">
+                                  <TextBlock Text="{Binding Label}"/>
+                                </DataTemplate>
+                              </ComboBox.ItemTemplate>
+                            </ComboBox>
+                          </StackPanel>
+                        </DataTemplate>
+                      </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                  </StackPanel>
+                  <WrapPanel ItemSpacing="8" LineSpacing="8" VerticalAlignment="Bottom">
+                    <Button Content="{Binding ConnectionButtonText}"
+                            Tag="{Binding}"
+                            AutomationProperties.Name="{Binding ConnectionButtonText}"
+                            Click="HandleToggleConnectionClick"/>
+                    <Button Content="Restart"
+                            Tag="{Binding}"
+                            AutomationProperties.Name="Restart connection"
+                            Click="HandleRestartConnectionClick"/>
+                  </WrapPanel>
+                </WrapPanel>
+                <TextBlock Classes="caption" Text="{Binding AdaptiveJitterLearnedText}" TextWrapping="Wrap"/>
+                <TextBlock Classes="caption" Text="{Binding JitterBufferEffectivenessText}" TextWrapping="Wrap"/>
+                <TextBlock Text="{Binding ConnectionStatus}" TextWrapping="Wrap"/>
+                <TextBlock Classes="caption" Text="{Binding TrafficTotalsText}" TextWrapping="Wrap"/>
+                <TextBlock Classes="caption" Text="{Binding StreamTrafficText}" TextWrapping="Wrap"/>
+                <TextBlock Classes="caption" Text="{Binding ConnectionHealthText}" TextWrapping="Wrap"/>
+              </StackPanel>
+            </Border>
+          </DataTemplate>
+        </ItemsControl.ItemTemplate>
+      </ItemsControl>
+
+      <TextBlock x:Name="EncryptionKeyStatusSection"
+                 FontWeight="SemiBold"
+                 Text="Channel key status"/>
+      <ItemsControl ItemsSource="{Binding KeyStatusItems}">
+        <ItemsControl.ItemTemplate>
+          <DataTemplate x:DataType="presentation:IKeyStatusItemViewModel">
+            <Border Classes="panel" Margin="0,0,0,8">
+              <StackPanel Spacing="6">
+                <StackPanel>
+                  <TextBlock FontWeight="SemiBold" Text="{Binding ChannelName}" TextWrapping="Wrap"/>
+                  <TextBlock Classes="caption" Text="{Binding SystemName}" TextWrapping="Wrap"/>
+                </StackPanel>
+                <WrapPanel ItemSpacing="16" LineSpacing="4">
+                  <StackPanel Width="120"><TextBlock Classes="caption" Text="Mode"/><TextBlock Text="{Binding ModeText}"/></StackPanel>
+                  <StackPanel Width="120"><TextBlock Classes="caption" Text="Algorithm"/><TextBlock Text="{Binding AlgorithmIdText}"/></StackPanel>
+                  <StackPanel Width="120"><TextBlock Classes="caption" Text="Key ID"/><TextBlock Text="{Binding KeyIdText}"/></StackPanel>
+                </WrapPanel>
+                <TextBlock Text="{Binding StatusText}" TextWrapping="Wrap"/>
+                <TextBlock Classes="caption"
+                           Text="{Binding ConfigurationHint}"
+                           TextWrapping="Wrap"
+                           IsVisible="{Binding HasConfigurationHint}"/>
+              </StackPanel>
+            </Border>
+          </DataTemplate>
+        </ItemsControl.ItemTemplate>
+      </ItemsControl>
+      <TextBlock Classes="caption"
+                 Text="Key material is never displayed or logged; only identifiers and availability are shown."
+                 TextWrapping="Wrap"/>
+    </StackPanel>
+  </ScrollViewer>
+</UserControl>

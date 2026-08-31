@@ -1,5 +1,6 @@
 using DvmConsole.Core.Runtime;
 using DvmConsole.Core.Settings;
+using DvmConsole.Presentation;
 
 namespace DvmConsole.Desktop;
 
@@ -49,6 +50,15 @@ internal sealed class PatchMemberResolver
             channel.Definition.SystemName,
             channel.Definition.DestinationId,
             channel.Definition.Name);
+    }
+
+    public static PatchMemberAddress FromChannel(IPatchMemberChannelViewModel channel)
+    {
+        ArgumentNullException.ThrowIfNull(channel);
+        return new PatchMemberAddress(
+            channel.SystemName,
+            channel.DestinationId,
+            channel.Name);
     }
 
     public static PatchMemberSetting ToSetting(PatchMemberAddress member)

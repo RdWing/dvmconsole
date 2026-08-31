@@ -14,6 +14,7 @@ internal sealed class RecordingMetadataFactory
         var metadata = new CallRecordingMetadata
         {
             SchemaVersion = CallRecordingMetadata.CurrentSchemaVersion,
+            RecordingId = (descriptor.RecordingId ?? descriptor.JobId).ToString("N"),
             Protocol = descriptor.ProtocolText,
             Direction = descriptor.Direction,
             RecordingSourceType = descriptor.RecordingSourceType,

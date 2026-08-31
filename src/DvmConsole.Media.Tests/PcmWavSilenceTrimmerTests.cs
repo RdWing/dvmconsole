@@ -10,43 +10,33 @@ public sealed class PcmWavSilenceTrimmerTests
     [Fact]
     public void AnalyzeReportsTrimRangeWithoutRewritingDurableWave()
     {
-        string path = CreatePath();
-        try
-        {
-            short[] samples = [0, 0, 800, 900, 0];
-            WriteWave(path, samples);
-            byte[] original = File.ReadAllBytes(path);
+        using MemoryStream source = CreateWave([0, 0, 800, 900, 0]);
+        byte[] original = source.ToArray();
 
-            PcmWavTrimAnalysis analysis = PcmWavSilenceTrimmer.AnalyzeFile(
-                path,
-                PcmAudioFormat.Voice8KhzMono16Bit,
-                paddingMilliseconds: 0,
-                windowSamples: 1);
+        PcmWavTrimAnalysis analysis = PcmWavSilenceTrimmer.Analyze(
+            source,
+            PcmAudioFormat.Voice8KhzMono16Bit,
+            paddingMilliseconds: 0,
+            windowSamples: 1);
 
-            Assert.Equal(2, analysis.StartSample);
-            Assert.Equal(2, analysis.Result.OutputSamples);
-            Assert.Equal(original, File.ReadAllBytes(path));
-        }
-        finally { Cleanup(path); }
+        Assert.Equal(2, analysis.StartSample);
+        Assert.Equal(2, analysis.Result.OutputSamples);
+        Assert.Equal(original, source.ToArray());
     }
 
     [Fact]
     public void AllSilenceIsRetainedByTheLegacyPolicy()
     {
-        string path = CreatePath();
-        try
-        {
-            WriteWave(path, new short[320]);
+        using MemoryStream source = CreateWave(new short[320]);
+        using var destination = new MemoryStream();
 
-            PcmWavTrimResult result = PcmWavSilenceTrimmer.TrimFile(
-                path, PcmAudioFormat.Voice8KhzMono16Bit, paddingMilliseconds: 0);
+        PcmWavTrimResult result = PcmWavSilenceTrimmer.Trim(
+            source, destination, PcmAudioFormat.Voice8KhzMono16Bit, paddingMilliseconds: 0);
 
-            Assert.Equal(320, result.OriginalSamples);
-            Assert.Equal(320, result.OutputSamples);
-            Assert.Equal(0, result.TrimTailMs);
-            Assert.Equal(44 + (320 * sizeof(short)), new FileInfo(path).Length);
-        }
-        finally { Cleanup(path); }
+        Assert.Equal(320, result.OriginalSamples);
+        Assert.Equal(320, result.OutputSamples);
+        Assert.Equal(0, result.TrimTailMs);
+        Assert.Equal(44 + (320 * sizeof(short)), destination.Length);
     }
 
     [Theory]
@@ -55,37 +45,37 @@ public sealed class PcmWavSilenceTrimmerTests
     [InlineData(short.MinValue, true)]
     public void UsesInclusiveThresholdAndSafelyMeasuresShortMinValue(short sample, bool active)
     {
-        string path = CreatePath();
-        try
-        {
-            WriteWave(path, [0, sample, 0]);
-            PcmWavTrimResult result = PcmWavSilenceTrimmer.TrimFile(
-                path, PcmAudioFormat.Voice8KhzMono16Bit, paddingMilliseconds: 0, windowSamples: 1);
+        using MemoryStream source = CreateWave([0, sample, 0]);
+        using var destination = new MemoryStream();
+        PcmWavTrimResult result = PcmWavSilenceTrimmer.Trim(
+            source,
+            destination,
+            PcmAudioFormat.Voice8KhzMono16Bit,
+            paddingMilliseconds: 0,
+            windowSamples: 1);
 
-            Assert.Equal(active ? 1 : 0, result.ActiveSampleCount);
-            Assert.Equal(active ? 1 : 3, result.OutputSamples);
-            Assert.Equal(Math.Abs((int)sample), result.PeakAmplitude);
-        }
-        finally { Cleanup(path); }
+        Assert.Equal(active ? 1 : 0, result.ActiveSampleCount);
+        Assert.Equal(active ? 1 : 3, result.OutputSamples);
+        Assert.Equal(Math.Abs((int)sample), result.PeakAmplitude);
     }
 
     [Fact]
     public void PreservesLegacyShiftedTrailingWindowForNonDivisibleRecording()
     {
-        string path = CreatePath();
-        try
-        {
-            short[] samples = new short[325];
-            samples[165] = 1000;
-            WriteWave(path, samples);
+        short[] samples = new short[325];
+        samples[165] = 1000;
+        using MemoryStream source = CreateWave(samples);
+        using var destination = new MemoryStream();
 
-            PcmWavTrimResult result = PcmWavSilenceTrimmer.TrimFile(
-                path, PcmAudioFormat.Voice8KhzMono16Bit, windowSamples: 160, paddingMilliseconds: 0);
+        PcmWavTrimResult result = PcmWavSilenceTrimmer.Trim(
+            source,
+            destination,
+            PcmAudioFormat.Voice8KhzMono16Bit,
+            windowSamples: 160,
+            paddingMilliseconds: 0);
 
-            Assert.Equal(160, result.TrimLeadMs * 8);
-            Assert.Equal(165, result.OutputSamples);
-        }
-        finally { Cleanup(path); }
+        Assert.Equal(160, result.TrimLeadMs * 8);
+        Assert.Equal(165, result.OutputSamples);
     }
 
     [Theory]
@@ -94,16 +84,15 @@ public sealed class PcmWavSilenceTrimmerTests
     [InlineData("RIFF", "WAVE", "JUNK")]
     public void RejectsNoncanonicalHeadersWithoutReplacingRecording(string riff, string wave, string data)
     {
-        string path = CreatePath();
-        try
-        {
-            WriteWave(path, [1, 2], riff, wave, data);
-            byte[] original = File.ReadAllBytes(path);
+        using MemoryStream source = CreateWave([1, 2], riff, wave, data);
+        using var destination = new MemoryStream();
+        byte[] original = source.ToArray();
 
-            Assert.Throws<InvalidDataException>(() => PcmWavSilenceTrimmer.TrimFile(path, PcmAudioFormat.Voice8KhzMono16Bit));
-            Assert.Equal(original, File.ReadAllBytes(path));
-        }
-        finally { Cleanup(path); }
+        Assert.Throws<InvalidDataException>(() => PcmWavSilenceTrimmer.Trim(
+            source,
+            destination,
+            PcmAudioFormat.Voice8KhzMono16Bit));
+        Assert.Equal(original, source.ToArray());
     }
 
     [Theory]
@@ -112,21 +101,24 @@ public sealed class PcmWavSilenceTrimmerTests
     [InlineData(5)]
     public void RejectsTruncatedOrSizeMismatchedDataWithoutReplacingRecording(int declaredBytes)
     {
-        string path = CreatePath();
-        try
-        {
-            WriteWave(path, [1000, 0], declaredBytes: declaredBytes);
-            byte[] original = File.ReadAllBytes(path);
+        using MemoryStream source = CreateWave([1000, 0], declaredBytes: declaredBytes);
+        using var destination = new MemoryStream();
+        byte[] original = source.ToArray();
 
-            Assert.Throws<InvalidDataException>(() => PcmWavSilenceTrimmer.TrimFile(path, PcmAudioFormat.Voice8KhzMono16Bit));
-            Assert.Equal(original, File.ReadAllBytes(path));
-        }
-        finally { Cleanup(path); }
+        Assert.Throws<InvalidDataException>(() => PcmWavSilenceTrimmer.Trim(
+            source,
+            destination,
+            PcmAudioFormat.Voice8KhzMono16Bit));
+        Assert.Equal(original, source.ToArray());
     }
 
-    private static void WriteWave(string path, short[] samples, string riff = "RIFF", string wave = "WAVE", string data = "data", int? declaredBytes = null)
+    private static MemoryStream CreateWave(
+        short[] samples,
+        string riff = "RIFF",
+        string wave = "WAVE",
+        string data = "data",
+        int? declaredBytes = null)
     {
-        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         byte[] bytes = new byte[44 + samples.Length * 2];
         System.Text.Encoding.ASCII.GetBytes(riff).CopyTo(bytes, 0);
         BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(4, 4), (uint)(bytes.Length - 8));
@@ -143,9 +135,6 @@ public sealed class PcmWavSilenceTrimmerTests
         BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(40, 4), (uint)(declaredBytes ?? samples.Length * 2));
         for (int index = 0; index < samples.Length; index++)
             BinaryPrimitives.WriteInt16LittleEndian(bytes.AsSpan(44 + index * 2, 2), samples[index]);
-        File.WriteAllBytes(path, bytes);
+        return new MemoryStream(bytes, writable: true);
     }
-
-    private static string CreatePath() => Path.Combine(Path.GetTempPath(), "dvmconsole-wav-trimmer-tests", $"{Guid.NewGuid():N}.wav");
-    private static void Cleanup(string path) { if (File.Exists(path)) File.Delete(path); }
 }

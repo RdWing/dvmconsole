@@ -59,6 +59,21 @@ public sealed class CallHistoryStoreTests
     }
 
     [Fact]
+    public void DefaultHistoryCapacityRetainsFiveThousandSessionEntries()
+    {
+        var store = new CallHistoryStore();
+
+        for (uint streamId = 1; streamId <= CallHistoryStore.DefaultMaxEntries + 1; streamId++)
+            store.Add(CreateEntry(streamId));
+
+        Assert.Equal(5_000, CallHistoryStore.DefaultMaxEntries);
+        Assert.Equal(CallHistoryStore.DefaultMaxEntries, store.Entries.Count(entry => !entry.IsRecordingOnly));
+        Assert.Equal((uint)5_001, store.Entries[0].StreamId);
+        Assert.Equal((uint)2, store.Entries[^1].StreamId);
+        Assert.DoesNotContain(store.Entries, entry => entry.StreamId == 1);
+    }
+
+    [Fact]
     public void BoundsPhysicalStreamFragmentsWhilePreservingThePrimaryIdentity()
     {
         CallHistoryEntry entry = CreateEntry(1);

@@ -1,3 +1,4 @@
+using DvmConsole.Application;
 using DvmConsole.FneClient;
 using Xunit;
 

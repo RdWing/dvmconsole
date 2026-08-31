@@ -13,13 +13,17 @@ public sealed class DebugLogWorkspaceTests
             postToUiThread: action => action(),
             isStopped: () => false);
         var changedProperties = new List<string?>();
+        var published = new List<DebugLogEntry>();
         workspace.PropertyChanged += (_, args) => changedProperties.Add(args.PropertyName);
+        workspace.EntryPublished += (_, entry) => published.Add(entry);
         DateTimeOffset timestamp = new(2026, 8, 27, 12, 0, 0, TimeSpan.Zero);
 
         workspace.Add(timestamp, "FNE", DebugLogSeverity.Info, "Connection established");
         workspace.Add(timestamp, "FNE", DebugLogSeverity.Warning, "password=secret");
 
         Assert.Equal(2, workspace.Entries.Count);
+        Assert.Equal(2, published.Count);
+        Assert.Equal("[sensitive diagnostic message redacted]", published[1].Message);
         Assert.Single(workspace.FilteredEntries);
         Assert.Equal("Connection established", workspace.FilteredEntries[0].Message);
         Assert.Contains(nameof(DebugLogWorkspace.RetentionText), changedProperties);
@@ -57,6 +61,27 @@ public sealed class DebugLogWorkspaceTests
             if (Directory.Exists(root))
                 Directory.Delete(root, recursive: true);
         }
+    }
+
+    [Theory]
+    [InlineData(DebugLogSeverity.Debug, DvmConsole.Application.ConsoleLogLevel.Debug)]
+    [InlineData(DebugLogSeverity.Info, DvmConsole.Application.ConsoleLogLevel.Information)]
+    [InlineData(DebugLogSeverity.Warning, DvmConsole.Application.ConsoleLogLevel.Warning)]
+    [InlineData(DebugLogSeverity.Error, DvmConsole.Application.ConsoleLogLevel.Error)]
+    [InlineData(DebugLogSeverity.Fatal, DvmConsole.Application.ConsoleLogLevel.Error)]
+    public void PortableSessionLogProjectionPreservesRedactedEntry(
+        DebugLogSeverity severity,
+        DvmConsole.Application.ConsoleLogLevel expectedLevel)
+    {
+        var entry = new DebugLogEntry(DateTimeOffset.UnixEpoch, "FNE", severity, "redacted message");
+
+        DvmConsole.Application.ConsoleLogEvent projected =
+            DesktopConsoleSessionRuntimeAdapter.ProjectLog(entry);
+
+        Assert.Equal(entry.Timestamp, projected.Timestamp);
+        Assert.Equal(expectedLevel, projected.Level);
+        Assert.Equal(entry.Source, projected.Category);
+        Assert.Equal(entry.Message, projected.Message);
     }
 
     [Fact]

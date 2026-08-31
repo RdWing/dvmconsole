@@ -1,0 +1,64 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:presentation="using:DvmConsole.Presentation"
+             x:Class="DvmConsole.Presentation.WebStreamsSettingsView"
+             x:DataType="presentation:IWebStreamsSettingsViewModel">
+  <UserControl.Styles>
+    <Style Selector="Button"><Setter Property="MinHeight" Value="44"/></Style>
+    <Style Selector="Slider"><Setter Property="MinHeight" Value="44"/></Style>
+    <Style Selector="ComboBox"><Setter Property="MinHeight" Value="44"/></Style>
+  </UserControl.Styles>
+  <ScrollViewer Margin="10">
+    <StackPanel Spacing="10">
+      <TextBlock Classes="heading" Text="Web Streams"/>
+      <ItemsControl ItemsSource="{Binding WebStreams}">
+        <ItemsControl.ItemTemplate>
+          <DataTemplate x:DataType="presentation:IWebStreamViewModel">
+            <Border Classes="panel" Margin="0,0,0,8">
+              <StackPanel Spacing="8">
+                <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                  <StackPanel>
+                    <TextBlock FontWeight="SemiBold" Text="{Binding Name}" TextWrapping="Wrap"/>
+                    <TextBlock Classes="caption" Text="{Binding StatusText}" TextWrapping="Wrap"/>
+                  </StackPanel>
+                  <Button Grid.Column="1"
+                          Content="{Binding ToggleButtonText}"
+                          Command="{Binding ToggleCommand}"
+                          AutomationProperties.Name="{Binding ToggleButtonText}"/>
+                </Grid>
+                <WrapPanel ItemSpacing="12" LineSpacing="8">
+                  <StackPanel Width="180" Spacing="2">
+                    <TextBlock Text="Volume"/>
+                    <Slider Minimum="0"
+                            Maximum="4"
+                            Value="{Binding Volume, Mode=TwoWay}"
+                            AutomationProperties.Name="Stream volume"/>
+                  </StackPanel>
+                  <StackPanel Width="220" Spacing="2">
+                    <TextBlock Text="Output"/>
+                    <ComboBox ItemsSource="{Binding OutputDeviceOptions}"
+                              SelectedItem="{Binding SelectedOutputDevice, Mode=TwoWay}"
+                              AutomationProperties.Name="Stream output device">
+                      <ComboBox.ItemTemplate>
+                        <DataTemplate x:DataType="presentation:IAudioDeviceOptionViewModel">
+                          <TextBlock Text="{Binding DisplayName}"/>
+                        </DataTemplate>
+                      </ComboBox.ItemTemplate>
+                    </ComboBox>
+                  </StackPanel>
+                  <Button Content="Save route"
+                          Tag="{Binding}"
+                          AutomationProperties.Name="Save stream output route"
+                          Click="HandleSaveRouteClick"/>
+                </WrapPanel>
+              </StackPanel>
+            </Border>
+          </DataTemplate>
+        </ItemsControl.ItemTemplate>
+      </ItemsControl>
+      <TextBlock Classes="caption"
+                 Text="Streams are loaded from the active configuration."
+                 TextWrapping="Wrap"/>
+    </StackPanel>
+  </ScrollViewer>
+</UserControl>

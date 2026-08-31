@@ -117,4 +117,48 @@ public sealed class FneTransportComponentTests
             });
         }
     }
+
+    [Fact]
+    public void ClosingFramePolicyOnlyMatchesRepeaterClosingOpcode()
+    {
+        byte[] frame = new byte[32];
+        frame[18] = Constants.NET_FUNC_RPT_CLOSING;
+        frame[19] = Constants.NET_SUBFUNC_NOP;
+
+        Assert.True(FneClosingFramePolicy.IsRepeaterClosing(frame));
+
+        frame[18] = Constants.NET_FUNC_PING;
+        Assert.False(FneClosingFramePolicy.IsRepeaterClosing(frame));
+        Assert.False(FneClosingFramePolicy.IsRepeaterClosing(new byte[19]));
+    }
+
+    [Fact]
+    public async Task SendingClosingFrameCompletesStoppingTransportAndBlockedReceive()
+    {
+        var lifetime = new FneTransportLifetime();
+        UdpReceiver receiver;
+        using (FneTransportSessionContext.Use(
+                   FneTransportEncryptionMode.Auto,
+                   new FneTransportObservers(null, null),
+                   lifetime))
+        {
+            receiver = new UdpReceiver();
+        }
+        receiver.Connect(new IPEndPoint(IPAddress.Loopback, 62031));
+        Task<UdpFrame> receive = receiver.Receive();
+        byte[] closing = new byte[32];
+        closing[18] = Constants.NET_FUNC_RPT_CLOSING;
+        closing[19] = Constants.NET_SUBFUNC_NOP;
+
+        lifetime.BeginStop();
+        receiver.Send(new UdpFrame
+        {
+            Endpoint = new IPEndPoint(IPAddress.Loopback, 62031),
+            Message = closing
+        });
+
+        UdpFrame stopped = await receive.WaitAsync(TimeSpan.FromSeconds(1));
+        Assert.True(lifetime.IsStopped);
+        Assert.Empty(stopped.Message);
+    }
 }

@@ -1,5 +1,6 @@
 using DvmConsole.Core.Settings;
 using DvmConsole.Desktop;
+using DvmConsole.Presentation;
 using Xunit;
 
 namespace DvmConsole.Desktop.Tests;
@@ -81,8 +82,8 @@ public sealed partial class SystemViewModelTests
             PatchGroupEditorViewModel group = Assert.Single(viewModel.PatchGroups, candidate => candidate.IsPatchGroup);
             PatchMemberEditorViewModel beta = Assert.Single(
                 group.SourceOptions,
-                member => member.Channel.Definition.SystemName == "Beta");
-            Assert.Equal("Alpha", group.SelectedSource?.Channel.Definition.SystemName);
+                member => member.Channel.SystemName == "Beta");
+            Assert.Equal("Alpha", group.SelectedSource?.Channel.SystemName);
             Assert.Equal("Edit members (2 selected)", group.MemberEditorHeader);
 
             group.SelectedSource = beta;

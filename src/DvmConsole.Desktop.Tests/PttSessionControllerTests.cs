@@ -1,4 +1,5 @@
 using DvmConsole.Audio;
+using DvmConsole.Ptt;
 using DvmConsole.Desktop;
 using Xunit;
 

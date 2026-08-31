@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using DvmConsole.Audio;
+using DvmConsole.Application;
 using DvmConsole.Core.Configuration;
 using DvmConsole.Desktop;
 using DvmConsole.FneClient;
@@ -83,7 +84,9 @@ public sealed class TransmitCoordinatorTests
         var audio = new FakeAudioBackend();
         await using var coordinator = new ChannelTransmitCoordinator(createAudioBackend: () => audio);
 
-        await coordinator.StartAsync([new TransmitTarget(first, endpoint), new TransmitTarget(second, endpoint)]);
+        await coordinator.StartAsync([
+            new TransmitTarget(first.ToTransmitDescriptor(), endpoint),
+            new TransmitTarget(second.ToTransmitDescriptor(), endpoint)]);
         await coordinator.ActivateAsync();
 
         Assert.Equal(1, audio.OpenCaptureCalls);
@@ -109,12 +112,12 @@ public sealed class TransmitCoordinatorTests
         var audio = new FakeAudioBackend();
         var firstObservationEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var allowObservationToContinue = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var observed = new List<ChannelViewModel>();
+        var observed = new List<ChannelId>();
         await using var coordinator = new ChannelTransmitCoordinator(
             samplesObserver: (channel, _, _, _) =>
             {
                 observed.Add(channel);
-                if (ReferenceEquals(channel, first))
+                if (channel == new ChannelId(first.SessionId))
                 {
                     firstObservationEntered.TrySetResult();
                     allowObservationToContinue.Task.GetAwaiter().GetResult();
@@ -122,8 +125,8 @@ public sealed class TransmitCoordinatorTests
             },
             createAudioBackend: () => audio);
         await coordinator.StartAsync([
-            new TransmitTarget(first, endpoint),
-            new TransmitTarget(second, endpoint)]);
+            new TransmitTarget(first.ToTransmitDescriptor(), endpoint),
+            new TransmitTarget(second.ToTransmitDescriptor(), endpoint)]);
         await coordinator.ActivateAsync();
 
         Task publish = Task.Run(() => audio.Capture.Emit(new short[160]));
@@ -132,7 +135,9 @@ public sealed class TransmitCoordinatorTests
         allowObservationToContinue.TrySetResult();
         await publish.WaitAsync(TimeSpan.FromSeconds(1));
 
-        Assert.Equal([first, second], observed);
+        Assert.Equal(
+            [new ChannelId(first.SessionId), new ChannelId(second.SessionId)],
+            observed);
         Assert.Empty(coordinator.ActiveChannels);
     }
 
@@ -623,19 +628,19 @@ public sealed class TransmitCoordinatorTests
     }
 
     [Fact]
-    public async Task ReportsHighQualityBluetoothStatusAfterCaptureStarts()
+    public async Task CallPriorityAllowsTransmitPreparationDuringReceivePlayback()
     {
-        var channel = Channel("Analog", 100);
+        var channel = Channel("Priority", 100);
+        channel.SetAudioEnabled(true);
+        channel.MarkReceivePlaybackActive(sourceId: 42, streamId: 7);
+        channel.SetHasCallPriority(true);
         var endpoint = new FakeEndpoint("Test", [channel]);
-        var audio = new FakeAudioBackend(
-            highQualityBluetoothStatus: HighQualityBluetoothAudioStatus.Active);
+        var audio = new FakeAudioBackend();
         await using var coordinator = new ChannelTransmitCoordinator(createAudioBackend: () => audio);
-        HighQualityBluetoothAudioStatus? reported = null;
-        coordinator.HighQualityBluetoothStatusChanged += (_, status) => reported = status;
 
         await coordinator.StartAsync(channel, endpoint);
 
-        Assert.Equal(HighQualityBluetoothAudioStatus.Active, reported);
+        Assert.Single(coordinator.ActiveChannels);
     }
 
     [Fact]
@@ -672,6 +677,10 @@ public sealed class TransmitCoordinatorTests
         private uint nextStreamId;
         public string Name => name;
         public IReadOnlyList<ChannelViewModel> Channels => channels;
+        public IReadOnlyCollection<TransmitChannelDescriptor> ChannelDescriptors
+            => channels.Select(channel => channel.ToTransmitDescriptor()).ToArray();
+        public IReadOnlyCollection<ChannelId> ChannelIds
+            => channels.Select(channel => new ChannelId(channel.SessionId)).ToArray();
         public bool IsConnected => true;
         public uint? SourceId => 1001;
         public FneTalkgroupAvailability TalkgroupAvailability { get; set; } =
@@ -693,17 +702,15 @@ public sealed class TransmitCoordinatorTests
 
     private sealed class FakeAudioBackend(
         bool failStart = false,
-        HighQualityBluetoothAudioStatus highQualityBluetoothStatus = HighQualityBluetoothAudioStatus.Off,
         string inputDeviceId = "input",
         bool? inputIsBluetooth = false)
-        : IAudioBackend, IHighQualityBluetoothAudioStatus
+        : IAudioBackend
     {
         public FakeCapture Capture { get; } = new(failStart);
         public int OpenCaptureCalls { get; private set; }
         public bool IsDisposed { get; private set; }
         public string? LastInputDeviceId { get; private set; }
         public string Name => "test";
-        public HighQualityBluetoothAudioStatus HighQualityBluetoothStatus => highQualityBluetoothStatus;
         public IReadOnlyList<AudioDeviceInfo> EnumerateDevices(AudioDirection direction)
             => [new AudioDeviceInfo(
                 direction == AudioDirection.Input ? inputDeviceId : "output",

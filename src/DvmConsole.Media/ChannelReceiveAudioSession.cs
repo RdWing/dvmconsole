@@ -1,6 +1,5 @@
 using DvmConsole.Audio;
 using DvmConsole.Core.Runtime;
-using DvmConsole.FneClient;
 using DvmConsole.Vocoder;
 
 namespace DvmConsole.Media;
@@ -99,7 +98,7 @@ public sealed class ChannelReceiveAudioSession : IAsyncDisposable
     }
 
     public ValueTask<int> ProcessAsync(
-        FneTrafficFrame traffic,
+        IRadioMediaFrame traffic,
         CancellationToken cancellationToken = default)
     {
         ObjectDisposedException.ThrowIf(disposed, this);

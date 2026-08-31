@@ -33,8 +33,9 @@ internal enum FneUdpChannelKind
 }
 
 // Owns the UDP receivers created for one FnePeer. The pinned peer's Stop()
-// does not close its sockets, so the application session explicitly releases
-// them after the peer has sent its closing packet.
+// cancels its own loop tokens but does not close these sockets, so the
+// compatibility transport releases them as soon as the closing packet has
+// been attempted. Dispose remains the idempotent fallback for partial starts.
 internal sealed class FneTransportLifetime : IDisposable
 {
     private readonly object sync = new();
@@ -347,6 +348,8 @@ public abstract class UdpBase
 
     protected bool IsStopping => transportLifetime?.IsStopping == true;
 
+    protected void CompleteTransportStop() => transportLifetime?.Dispose();
+
     private void Stop()
     {
         if (Interlocked.Exchange(ref stopped, 1) != 0)
@@ -415,6 +418,8 @@ public sealed class UdpReceiver : UdpBase
         if (IsStopped)
             return;
 
+        bool completesTransportStop =
+            IsStopping && FneClosingFramePolicy.IsRepeaterClosing(frame.Message);
         ObserveOutboundFrame(frame.Message);
         frame.Message = WrapForSend(frame.Message);
         try
@@ -433,5 +438,23 @@ public sealed class UdpReceiver : UdpBase
             // Let peer shutdown continue even when its best-effort close
             // packet cannot be delivered to an already-lost endpoint.
         }
+        finally
+        {
+            if (completesTransportStop)
+                CompleteTransportStop();
+        }
     }
+}
+
+internal static class FneClosingFramePolicy
+{
+    // The FNE extension begins after the 12-byte RTP header. Its function and
+    // subfunction occupy extension bytes 6 and 7 respectively.
+    private const int FunctionOffset = 18;
+    private const int SubFunctionOffset = 19;
+
+    public static bool IsRepeaterClosing(ReadOnlySpan<byte> message)
+        => message.Length > SubFunctionOffset &&
+           message[FunctionOffset] == Constants.NET_FUNC_RPT_CLOSING &&
+           message[SubFunctionOffset] == Constants.NET_SUBFUNC_NOP;
 }

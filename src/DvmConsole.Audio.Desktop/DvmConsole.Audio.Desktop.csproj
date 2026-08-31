@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <RootNamespace>DvmConsole.Audio</RootNamespace>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(DvmConsoleTargetPlatform)' == 'macos'">
+    <DefineConstants>$(DefineConstants);DVMCONSOLE_MACOS</DefineConstants>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(DvmConsoleTargetPlatform)' == 'windows'">
+    <DefineConstants>$(DefineConstants);DVMCONSOLE_WINDOWS</DefineConstants>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../DvmConsole.Audio.Abstractions/DvmConsole.Audio.Abstractions.csproj" />
+    <ProjectReference Include="../DvmConsole.Audio.Core/DvmConsole.Audio.Core.csproj" />
+    <ProjectReference Include="../DvmConsole.Audio.MacOS/DvmConsole.Audio.MacOS.csproj"
+                      Condition="'$(DvmConsoleTargetPlatform)' != 'windows'" />
+    <ProjectReference Include="../DvmConsole.Audio.Windows/DvmConsole.Audio.Windows.csproj"
+                      Condition="'$(DvmConsoleTargetPlatform)' != 'macos'" />
+  </ItemGroup>
+</Project>

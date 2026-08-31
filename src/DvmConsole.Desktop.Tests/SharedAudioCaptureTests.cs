@@ -1,3 +1,4 @@
+using DvmConsole.Application;
 using DvmConsole.Audio;
 using DvmConsole.Operations;
 using Xunit;

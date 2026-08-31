@@ -8,16 +8,14 @@ set(CMAKE_C_STANDARD_REQUIRED ON)
 add_library(dvmaudio SHARED
     dvm_pcm_ring.c
     dvmaudio.c
-    high_quality_bluetooth.m
     privacy_permissions.m)
-set_source_files_properties(high_quality_bluetooth.m privacy_permissions.m PROPERTIES
+set_source_files_properties(privacy_permissions.m PROPERTIES
     COMPILE_OPTIONS "-fobjc-arc;-fblocks")
 target_compile_options(dvmaudio PRIVATE -Wall -Wextra -Wpedantic)
 target_link_libraries(dvmaudio PRIVATE
     "-framework AudioToolbox"
     "-framework AudioUnit"
     "-framework AVFoundation"
-    "-framework AVFAudio"
     "-framework CoreAudio"
     "-framework CoreFoundation"
     "-framework Foundation")

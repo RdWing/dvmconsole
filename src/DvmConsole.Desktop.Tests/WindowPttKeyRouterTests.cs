@@ -2,6 +2,7 @@ using Avalonia.Controls;
 using Avalonia.Input;
 using DvmConsole.Audio;
 using DvmConsole.Desktop;
+using DvmConsole.Ptt;
 using Xunit;
 
 namespace DvmConsole.Desktop.Tests;

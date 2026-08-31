@@ -1,3 +1,4 @@
+using DvmConsole.Application;
 using DvmConsole.FneClient;
 using DvmConsole.Media;
 
@@ -14,7 +15,8 @@ internal readonly record struct ReceivePacketDecisionEnvelope(
     ReceiveIngressRoutingDecision Routing,
     ReceiveCallEpisodeObservation? EpisodeObservation,
     ReceiveCallEpisodeSnapshot? EpisodeSnapshot,
-    bool CanCoalescePresentation = false);
+    bool CanCoalescePresentation = false,
+    IReadOnlyList<ChannelId>? CandidateChannelIds = null);
 
 internal readonly record struct SystemTrafficWorkItem(
     ReceivePacketDecisionEnvelope Decision,

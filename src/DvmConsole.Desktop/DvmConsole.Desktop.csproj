@@ -47,12 +47,21 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="../DvmConsole.Audio/DvmConsole.Audio.csproj" />
+    <ProjectReference Include="../DvmConsole.Application/DvmConsole.Application.csproj" />
+    <ProjectReference Include="../DvmConsole.Audio.Abstractions/DvmConsole.Audio.Abstractions.csproj" />
+    <ProjectReference Include="../DvmConsole.Audio.Core/DvmConsole.Audio.Core.csproj" />
+    <ProjectReference Include="../DvmConsole.Audio.Desktop/DvmConsole.Audio.Desktop.csproj" />
+    <ProjectReference Include="../DvmConsole.Configuration.Yaml/DvmConsole.Configuration.Yaml.csproj" />
+    <ProjectReference Include="../DvmConsole.Ptt.Abstractions/DvmConsole.Ptt.Abstractions.csproj" />
+    <ProjectReference Include="../DvmConsole.Ptt.Desktop/DvmConsole.Ptt.Desktop.csproj" />
+    <ProjectReference Include="../DvmConsole.Presentation/DvmConsole.Presentation.csproj" />
+    <ProjectReference Include="../DvmConsole.Storage/DvmConsole.Storage.csproj" />
     <ProjectReference Include="../DvmConsole.Core/DvmConsole.Core.csproj" />
     <ProjectReference Include="../DvmConsole.FneClient/DvmConsole.FneClient.csproj" />
     <ProjectReference Include="../DvmConsole.Media/DvmConsole.Media.csproj" />
     <ProjectReference Include="../DvmConsole.Operations/DvmConsole.Operations.csproj" />
-    <ProjectReference Include="../DvmConsole.Vocoder/DvmConsole.Vocoder.csproj" />
+    <ProjectReference Include="../DvmConsole.Vocoder.Abstractions/DvmConsole.Vocoder.Abstractions.csproj" />
+    <ProjectReference Include="../DvmConsole.Vocoder.Native/DvmConsole.Vocoder.Native.csproj" />
   </ItemGroup>
 
   <!-- These UI/configuration dependencies use runtime discovery internally.

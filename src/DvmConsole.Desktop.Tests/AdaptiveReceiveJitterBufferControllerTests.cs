@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using DvmConsole.Application;
 using DvmConsole.Core.Settings;
 using DvmConsole.FneClient;
 using Xunit;

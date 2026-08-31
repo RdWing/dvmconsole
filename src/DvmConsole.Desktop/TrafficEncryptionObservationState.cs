@@ -1,4 +1,4 @@
-using DvmConsole.FneClient;
+using DvmConsole.Core.Runtime;
 
 namespace DvmConsole.Desktop;
 
@@ -12,7 +12,7 @@ internal sealed class TrafficEncryptionObservationState(
 
     public EncryptionSnapshot Encryption { get; private set; } = initialEncryption;
 
-    public bool Observe(FneTrafficFrame traffic)
+    public bool Observe(IRadioMediaFrame traffic)
     {
         ArgumentNullException.ThrowIfNull(traffic);
         EncryptionSnapshot? resolved = EncryptionSnapshotResolver.TryResolve(traffic);
@@ -22,7 +22,7 @@ internal sealed class TrafficEncryptionObservationState(
             return Apply(explicitEncryption);
         }
 
-        if (traffic.Protocol != FneTrafficProtocol.Dmr)
+        if (traffic.Protocol != RadioMediaProtocol.Dmr)
             return false;
         if (ReceiveTrafficClassifier.IsDefinitiveStart(traffic))
         {

@@ -1,4 +1,5 @@
 using DvmConsole.Desktop;
+using DvmConsole.Application;
 using DvmConsole.Core.Settings;
 using Xunit;
 
@@ -141,6 +142,30 @@ public sealed class ConsoleSessionRuntimeTests
     }
 
     [Fact]
+    public async Task RuntimeUsesTheInjectedApplicationScheduler()
+    {
+        var services = new ConsoleSessionServices();
+        var scheduler = new FakeApplicationScheduler();
+        var runtime = new ConsoleSessionRuntime(services, scheduler);
+        int ticks = 0;
+
+        ConsoleSessionRuntime.ConsoleSessionTimer timer = runtime.CreateTimer(
+            TimeSpan.FromSeconds(3),
+            (_, _) => ticks++,
+            startImmediately: false);
+
+        FakeScheduledWork work = Assert.Single(scheduler.Works);
+        Assert.Equal(TimeSpan.FromSeconds(3), work.Interval);
+        Assert.False(timer.IsRunning);
+        timer.Start();
+        await work.FireAsync();
+        Assert.Equal(1, ticks);
+
+        await runtime.DisposeAsync();
+        Assert.True(work.IsDisposed);
+    }
+
+    [Fact]
     public async Task MainWindowFacadeRegistersNamedScopesWithoutMonolithicCleanup()
     {
         string root = Path.Combine(
@@ -183,6 +208,7 @@ public sealed class ConsoleSessionRuntimeTests
                 "dispatcher-timers",
                 "ptt-session",
                 "coordinators-under-ptt-gate",
+                "radio-session-ingress",
                 "systems",
                 "audio-work",
                 "source-receive-work",
@@ -194,6 +220,7 @@ public sealed class ConsoleSessionRuntimeTests
             Assert.Equal("dispatcher-timers", cleanupOrder[0]);
             Assert.Equal("systems", cleanupOrder[^1]);
             AssertBefore(cleanupOrder, "ptt-session", "coordinators-under-ptt-gate");
+            AssertBefore(cleanupOrder, "radio-session-ingress", "systems");
             AssertBefore(cleanupOrder, "audio-work", "source-receive-work");
             AssertBefore(cleanupOrder, "user-settings-persistence", "systems");
         }
@@ -284,6 +311,52 @@ public sealed class ConsoleSessionRuntimeTests
 
     private static ValueTask NoOp()
         => ValueTask.CompletedTask;
+
+    private sealed class FakeApplicationScheduler : IApplicationScheduler
+    {
+        public List<FakeScheduledWork> Works { get; } = [];
+
+        public IScheduledWork CreatePeriodic(
+            TimeSpan interval,
+            Func<CancellationToken, ValueTask> callback,
+            bool startImmediately = true)
+        {
+            var work = new FakeScheduledWork(interval, callback, startImmediately);
+            Works.Add(work);
+            return work;
+        }
+    }
+
+    private sealed class FakeScheduledWork(
+        TimeSpan interval,
+        Func<CancellationToken, ValueTask> callback,
+        bool startImmediately) : IScheduledWork
+    {
+        public TimeSpan Interval { get; } = interval;
+        public bool IsRunning { get; private set; } = startImmediately;
+        public bool IsDisposed { get; private set; }
+
+        public void Start()
+        {
+            ObjectDisposedException.ThrowIf(IsDisposed, this);
+            IsRunning = true;
+        }
+
+        public void Stop() => IsRunning = false;
+
+        public async ValueTask FireAsync()
+        {
+            if (IsRunning)
+                await callback(CancellationToken.None);
+        }
+
+        public ValueTask DisposeAsync()
+        {
+            Stop();
+            IsDisposed = true;
+            return ValueTask.CompletedTask;
+        }
+    }
 
     private sealed class TrackedAsyncDisposable(
         int id,

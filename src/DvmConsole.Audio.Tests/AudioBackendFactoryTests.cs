@@ -6,22 +6,19 @@ namespace DvmConsole.Audio.Tests;
 public sealed class AudioBackendFactoryTests
 {
     [Fact]
-    public void HighQualityBluetoothRequiresExplicitOptIn()
+    public void DoesNotExposeRemovedHighQualityBluetoothOption()
     {
-        object? factoryDefault = typeof(AudioBackendFactory)
+        Assert.DoesNotContain(
+            typeof(AudioBackendFactory)
             .GetMethod(nameof(AudioBackendFactory.CreateDefault))!
-            .GetParameters()
-            .Single(parameter => parameter.Name == "highQualityBluetoothAudio")
-            .DefaultValue;
-        object? backendDefault = typeof(MacCoreAudioBackend)
+            .GetParameters(),
+            parameter => parameter.Name == "highQualityBluetoothAudio");
+        Assert.DoesNotContain(
+            typeof(MacCoreAudioBackend)
             .GetConstructors()
             .Single()
-            .GetParameters()
-            .Single(parameter => parameter.Name == "highQualityBluetoothAudio")
-            .DefaultValue;
-
-        Assert.Equal(false, factoryDefault);
-        Assert.Equal(false, backendDefault);
+            .GetParameters(),
+            parameter => parameter.Name == "highQualityBluetoothAudio");
     }
 
     [Fact]

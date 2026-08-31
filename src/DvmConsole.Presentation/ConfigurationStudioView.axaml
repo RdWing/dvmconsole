@@ -1,0 +1,346 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:presentation="using:DvmConsole.Presentation"
+             xmlns:config="using:DvmConsole.Core.Configuration"
+             x:Class="DvmConsole.Presentation.ConfigurationStudioView"
+             x:Name="StudioRoot"
+             x:DataType="presentation:ConfigurationStudioViewModel"
+             Background="{DynamicResource StudioCanvasBrush}">
+  <UserControl.Resources>
+    <ResourceDictionary>
+      <ResourceDictionary.ThemeDictionaries>
+        <ResourceDictionary x:Key="Dark">
+          <SolidColorBrush x:Key="StudioTopBrush" Color="#081621"/>
+          <SolidColorBrush x:Key="StudioNavigationBrush" Color="#0B1924"/>
+          <SolidColorBrush x:Key="StudioCanvasBrush" Color="#0C1A25"/>
+          <SolidColorBrush x:Key="StudioPanelBrush" Color="#0D1D28"/>
+          <SolidColorBrush x:Key="StudioInspectorBrush" Color="#0B1A25"/>
+          <SolidColorBrush x:Key="StudioFieldBrush" Color="#0A1822"/>
+          <SolidColorBrush x:Key="StudioLineBrush" Color="#2A3A48"/>
+          <SolidColorBrush x:Key="StudioMutedBrush" Color="#AAB6C2"/>
+          <SolidColorBrush x:Key="StudioSelectionBrush" Color="#0B4D8A"/>
+          <SolidColorBrush x:Key="StudioAccentBrush" Color="#087CF1"/>
+          <SolidColorBrush x:Key="StudioPrimaryTextBrush" Color="#E8EDF2"/>
+        </ResourceDictionary>
+        <ResourceDictionary x:Key="Light">
+          <SolidColorBrush x:Key="StudioTopBrush" Color="#E9EEF3"/>
+          <SolidColorBrush x:Key="StudioNavigationBrush" Color="#F3F6F8"/>
+          <SolidColorBrush x:Key="StudioCanvasBrush" Color="#FFFFFF"/>
+          <SolidColorBrush x:Key="StudioPanelBrush" Color="#F7F9FB"/>
+          <SolidColorBrush x:Key="StudioInspectorBrush" Color="#F1F5F8"/>
+          <SolidColorBrush x:Key="StudioFieldBrush" Color="#FFFFFF"/>
+          <SolidColorBrush x:Key="StudioLineBrush" Color="#B7C3CE"/>
+          <SolidColorBrush x:Key="StudioMutedBrush" Color="#52616F"/>
+          <SolidColorBrush x:Key="StudioSelectionBrush" Color="#CBE3FA"/>
+          <SolidColorBrush x:Key="StudioAccentBrush" Color="#006FD6"/>
+          <SolidColorBrush x:Key="StudioPrimaryTextBrush" Color="#17212B"/>
+        </ResourceDictionary>
+      </ResourceDictionary.ThemeDictionaries>
+    </ResourceDictionary>
+  </UserControl.Resources>
+  <UserControl.Styles>
+    <Style Selector="TextBlock">
+      <Setter Property="Foreground" Value="{DynamicResource StudioPrimaryTextBrush}"/>
+    </Style>
+    <Style Selector="TextBlock.heading">
+      <Setter Property="FontSize" Value="19"/>
+      <Setter Property="FontWeight" Value="SemiBold"/>
+    </Style>
+    <Style Selector="TextBlock.subheading">
+      <Setter Property="FontSize" Value="16"/>
+      <Setter Property="FontWeight" Value="SemiBold"/>
+    </Style>
+    <Style Selector="TextBlock.caption">
+      <Setter Property="Foreground" Value="{DynamicResource StudioMutedBrush}"/>
+      <Setter Property="FontSize" Value="12"/>
+    </Style>
+    <Style Selector="Border.panel">
+      <Setter Property="Background" Value="{DynamicResource StudioPanelBrush}"/>
+      <Setter Property="BorderBrush" Value="{DynamicResource StudioLineBrush}"/>
+      <Setter Property="BorderThickness" Value="1"/>
+      <Setter Property="CornerRadius" Value="5"/>
+      <Setter Property="Padding" Value="12"/>
+    </Style>
+    <Style Selector="Border.dense-row">
+      <Setter Property="BorderBrush" Value="{DynamicResource StudioLineBrush}"/>
+      <Setter Property="BorderThickness" Value="0,0,0,1"/>
+      <Setter Property="Padding" Value="8,6"/>
+    </Style>
+    <Style Selector="Border.table-cell">
+      <Setter Property="BorderBrush" Value="{DynamicResource StudioLineBrush}"/>
+      <Setter Property="BorderThickness" Value="1,0,0,0"/>
+      <Setter Property="Padding" Value="10,0"/>
+    </Style>
+    <Style Selector="Button">
+      <Setter Property="Padding" Value="10,6"/>
+      <Setter Property="CornerRadius" Value="3"/>
+    </Style>
+    <Style Selector="Button.nav-button">
+      <Setter Property="HorizontalContentAlignment" Value="Left"/>
+      <Setter Property="Background" Value="Transparent"/>
+      <Setter Property="BorderThickness" Value="0"/>
+      <Setter Property="Padding" Value="8,7"/>
+    </Style>
+    <Style Selector="Button.nav-button:pointerover">
+      <Setter Property="Background" Value="{DynamicResource ButtonHoverBrush}"/>
+    </Style>
+    <Style Selector="Button.nav-group">
+      <Setter Property="HorizontalContentAlignment" Value="Left"/>
+      <Setter Property="Background" Value="Transparent"/>
+      <Setter Property="BorderThickness" Value="0"/>
+      <Setter Property="Padding" Value="8,6"/>
+    </Style>
+    <Style Selector="Expander.live-layout /template/ ToggleButton">
+      <Setter Property="Background" Value="{DynamicResource StudioCanvasBrush}"/>
+      <Setter Property="BorderThickness" Value="0"/>
+      <Setter Property="HorizontalContentAlignment" Value="Left"/>
+      <Setter Property="Padding" Value="12,6"/>
+    </Style>
+    <Style Selector="Expander.live-layout /template/ ToggleButton:pointerover">
+      <Setter Property="Background" Value="{DynamicResource ButtonHoverBrush}"/>
+    </Style>
+    <Style Selector="ListBox.tree-list">
+      <Setter Property="Background" Value="Transparent"/>
+      <Setter Property="BorderThickness" Value="0"/>
+    </Style>
+    <Style Selector="ListBox.tree-list &gt; ListBoxItem">
+      <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+      <Setter Property="Padding" Value="8,5"/>
+      <Setter Property="Margin" Value="0,1"/>
+      <Setter Property="MinHeight" Value="0"/>
+      <Setter Property="CornerRadius" Value="4"/>
+    </Style>
+    <Style Selector="ListBox.tree-list &gt; ListBoxItem:selected">
+      <Setter Property="Background" Value="{DynamicResource StudioSelectionBrush}"/>
+      <Setter Property="Foreground" Value="White"/>
+    </Style>
+    <Style Selector="TreeView.configuration-tree">
+      <Setter Property="Background" Value="Transparent"/>
+      <Setter Property="BorderThickness" Value="0"/>
+    </Style>
+    <Style Selector="TreeView.configuration-tree TreeViewItem" x:DataType="presentation:ConfigurationHierarchyNode">
+      <Setter Property="IsExpanded" Value="{Binding IsExpanded, Mode=TwoWay}"/>
+    </Style>
+    <Style Selector="TreeView.configuration-tree TreeViewItem:selected">
+      <Setter Property="Background" Value="{DynamicResource StudioSelectionBrush}"/>
+      <Setter Property="Foreground" Value="White"/>
+    </Style>
+    <Style Selector="ListBox.dense-list &gt; ListBoxItem">
+      <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+      <Setter Property="Padding" Value="0"/>
+      <Setter Property="MinHeight" Value="0"/>
+    </Style>
+    <Style Selector="ListBox.channel-grid">
+      <Setter Property="Background" Value="Transparent"/>
+      <Setter Property="BorderThickness" Value="0"/>
+    </Style>
+    <Style Selector="ListBox.channel-grid &gt; ListBoxItem">
+      <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+      <Setter Property="Padding" Value="0"/>
+      <Setter Property="MinHeight" Value="36"/>
+    </Style>
+    <Style Selector="ListBox.channel-grid &gt; ListBoxItem:selected">
+      <Setter Property="Background" Value="{DynamicResource StudioSelectionBrush}"/>
+      <Setter Property="Foreground" Value="White"/>
+    </Style>
+    <Style Selector="TextBox">
+      <Setter Property="MinHeight" Value="34"/>
+      <Setter Property="TextAlignment" Value="Left"/>
+      <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+      <Setter Property="Background" Value="{DynamicResource StudioFieldBrush}"/>
+      <Setter Property="BorderBrush" Value="{DynamicResource StudioLineBrush}"/>
+    </Style>
+    <Style Selector="ComboBox">
+      <Setter Property="MinHeight" Value="34"/>
+      <Setter Property="HorizontalAlignment" Value="Stretch"/>
+      <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+      <Setter Property="Background" Value="{DynamicResource StudioFieldBrush}"/>
+      <Setter Property="BorderBrush" Value="{DynamicResource StudioLineBrush}"/>
+    </Style>
+    <Style Selector="NumericUpDown">
+      <Setter Property="MinHeight" Value="34"/>
+      <Setter Property="HorizontalAlignment" Value="Stretch"/>
+      <Setter Property="Background" Value="{DynamicResource StudioFieldBrush}"/>
+      <Setter Property="BorderBrush" Value="{DynamicResource StudioLineBrush}"/>
+    </Style>
+    <Style Selector="ToggleButton.segment">
+      <Setter Property="Background" Value="Transparent"/>
+      <Setter Property="BorderBrush" Value="{DynamicResource StudioLineBrush}"/>
+      <Setter Property="BorderThickness" Value="1"/>
+      <Setter Property="CornerRadius" Value="0"/>
+      <Setter Property="Padding" Value="12,7"/>
+    </Style>
+    <Style Selector="ToggleButton.segment:checked">
+      <Setter Property="Background" Value="{DynamicResource StudioSelectionBrush}"/>
+      <Setter Property="BorderBrush" Value="{DynamicResource StudioAccentBrush}"/>
+    </Style>
+    <Style Selector="ToggleButton.color-swatch">
+      <Setter Property="Width" Value="27"/>
+      <Setter Property="Height" Value="27"/>
+      <Setter Property="Padding" Value="0"/>
+      <Setter Property="CornerRadius" Value="14"/>
+      <Setter Property="BorderBrush" Value="{DynamicResource StudioLineBrush}"/>
+      <Setter Property="BorderThickness" Value="1"/>
+    </Style>
+    <Style Selector="ToggleButton.color-swatch:checked">
+      <Setter Property="BorderBrush" Value="{DynamicResource StudioAccentBrush}"/>
+      <Setter Property="BorderThickness" Value="3"/>
+    </Style>
+    <Style Selector="Button.ptt">
+      <Setter Property="Height" Value="24"/>
+      <Setter Property="HorizontalAlignment" Value="Stretch"/>
+      <Setter Property="HorizontalContentAlignment" Value="Center"/>
+      <Setter Property="VerticalContentAlignment" Value="Center"/>
+      <Setter Property="Padding" Value="3,0"/>
+      <Setter Property="FontWeight" Value="SemiBold"/>
+      <Setter Property="Background" Value="{DynamicResource PttBackgroundBrush}"/>
+    </Style>
+    <Style Selector="Button.ptt:pointerover">
+      <Setter Property="Background" Value="{DynamicResource PttBackgroundBrush}"/>
+    </Style>
+    <Style Selector="Button.ptt:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+      <Setter Property="Background" Value="{DynamicResource PttBackgroundBrush}"/>
+    </Style>
+    <Style Selector="Button.ptt:pressed">
+      <Setter Property="Background" Value="#0A9B48"/>
+    </Style>
+    <Style Selector="Button.ptt:pressed /template/ ContentPresenter#PART_ContentPresenter">
+      <Setter Property="Background" Value="#0A9B48"/>
+    </Style>
+    <Style Selector="Button.card-action">
+      <Setter Property="Padding" Value="5,2"/>
+    </Style>
+    <Style Selector="Button.tx-select">
+      <Setter Property="Height" Value="24"/>
+      <Setter Property="Padding" Value="2,0"/>
+      <Setter Property="HorizontalContentAlignment" Value="Center"/>
+      <Setter Property="VerticalContentAlignment" Value="Center"/>
+      <Setter Property="Background" Value="{DynamicResource SelectorBackgroundBrush}"/>
+    </Style>
+    <Style Selector="Button.channel-action">
+      <Setter Property="Template">
+        <ControlTemplate>
+          <Border Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="3" Padding="{TemplateBinding Padding}">
+            <ContentPresenter
+                Content="{TemplateBinding Content}"
+                Foreground="{TemplateBinding Foreground}"
+                HorizontalContentAlignment="{TemplateBinding HorizontalContentAlignment}"
+                VerticalContentAlignment="{TemplateBinding VerticalContentAlignment}"/>
+          </Border>
+        </ControlTemplate>
+      </Setter>
+    </Style>
+    <Style Selector="Button.channel-action:disabled">
+      <Setter Property="Opacity" Value="0.55"/>
+    </Style>
+    <Style Selector="Button.issue-row">
+      <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+      <Setter Property="HorizontalAlignment" Value="Stretch"/>
+      <Setter Property="Background" Value="Transparent"/>
+      <Setter Property="BorderThickness" Value="0"/>
+      <Setter Property="Padding" Value="10,8"/>
+    </Style>
+    <Style Selector="Button.issue-row:pointerover">
+      <Setter Property="Background" Value="{DynamicResource ButtonHoverBrush}"/>
+    </Style>
+    <Style Selector="Button.validation-toggle">
+      <Setter Property="HorizontalContentAlignment" Value="Left"/>
+      <Setter Property="Background" Value="Transparent"/>
+      <Setter Property="BorderThickness" Value="0"/>
+      <Setter Property="Padding" Value="0"/>
+    </Style>
+    <Style Selector="Button.validation-toggle:pointerover">
+      <Setter Property="Background" Value="Transparent"/>
+    </Style>
+  </UserControl.Styles>
+  <Grid x:Name="ShellLayout" RowDefinitions="45,*,74">
+    <Border Grid.Row="0" Background="{DynamicResource StudioTopBrush}" BorderBrush="{DynamicResource StudioLineBrush}" BorderThickness="0,0,0,1">
+      <TextBlock HorizontalAlignment="Center" VerticalAlignment="Center" FontSize="15" FontWeight="Medium" Text="Configuration Studio"/>
+    </Border>
+    <Grid x:Name="Workspace" Grid.Row="1" ColumnDefinitions="286,*" MinHeight="0">
+      <presentation:ConfigurationStudioNavigationView x:Name="Navigation" SectionRequested="HandleSharedSectionNavigationRequested" />
+      <Grid x:Name="PageHost" Grid.Column="1" MinHeight="0" Background="{DynamicResource StudioCanvasBrush}">
+        <presentation:ConfigurationStudioOverviewView/>
+        <presentation:ConfigurationStudioSystemsView DeleteRequested="HandleSharedDeleteSystemRequested"/>
+        <presentation:ConfigurationStudioZonesView x:Name="zonesView"
+            EditCommandRequested="HandleSharedStudioEditCommandRequested"/>
+        <presentation:ConfigurationStudioStreamsView
+            DeleteRequested="HandleSharedDeleteStreamRequested"/>
+        <presentation:ConfigurationStudioGroupsView
+            DeleteRequested="HandleSharedDeleteGroupRequested"
+            ApplyGroupRequested="HandleSharedApplyPatchGroupRequested"
+            ApplyAllRequested="HandleSharedApplyAllOperatorGroupsRequested"
+            ApplyAllAndCloseRequested="HandleSharedApplyOperatorGroupsAndCloseRequested"
+            ToggleMultiSelectPttRequested="HandleSharedMultiSelectPttRequested"/>
+        <presentation:ConfigurationStudioKeysView
+            DeleteRequested="HandleSharedDeleteKeyRequested"/>
+        <presentation:ConfigurationStudioFilesView
+            DeleteAliasRequested="HandleSharedDeleteAliasRequested"
+            ExportFullRequested="HandleSharedExportFullRequested"
+            ExportSanitizedRequested="HandleSharedExportSanitizedRequested"/>
+      </Grid>
+    </Grid>
+    <Border x:Name="ValidationDrawer"
+        Grid.Row="1"
+        Margin="300,0,13,0"
+        VerticalAlignment="Bottom"
+        Height="270"
+        ZIndex="50"
+        IsVisible="{Binding IsValidationDrawerOpen}"
+        Background="{DynamicResource StudioTopBrush}"
+        BorderBrush="{DynamicResource StudioLineBrush}"
+        BorderThickness="1"
+        CornerRadius="6,6,0,0">
+      <Grid RowDefinitions="52,*">
+        <Border BorderBrush="{DynamicResource StudioLineBrush}" BorderThickness="0,0,0,1" Padding="14,0">
+          <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="10">
+            <Ellipse Width="12" Height="12" Fill="{Binding ValidationIndicatorBrush}" VerticalAlignment="Center"/>
+            <StackPanel Grid.Column="1" VerticalAlignment="Center">
+              <TextBlock FontWeight="SemiBold" Text="{Binding ValidationDrawerHeading}"/>
+              <TextBlock Classes="caption" Text="Choose an issue to open the section that needs attention."/>
+            </StackPanel>
+            <Button Grid.Column="2" VerticalAlignment="Center" Content="Close" Click="HandleToggleValidationDrawerClick"/>
+          </Grid>
+        </Border>
+        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
+          <ItemsControl ItemsSource="{Binding ValidationIssues}">
+            <ItemsControl.ItemTemplate>
+              <DataTemplate x:DataType="config:ConfigurationValidationIssue">
+                <Button Classes="issue-row" Tag="{Binding}" Click="HandleValidationIssueClick">
+                  <Grid ColumnDefinitions="82,150,210,*" ColumnSpacing="10">
+                    <TextBlock FontWeight="SemiBold" Text="{Binding Severity}"/>
+                    <TextBlock Grid.Column="1" Text="{Binding Domain}" TextTrimming="CharacterEllipsis"/>
+                    <TextBlock Grid.Column="2" Classes="caption" Text="{Binding Path}" TextTrimming="CharacterEllipsis"/>
+                    <TextBlock Grid.Column="3" Text="{Binding Message}" TextWrapping="Wrap"/>
+                  </Grid>
+                </Button>
+              </DataTemplate>
+            </ItemsControl.ItemTemplate>
+          </ItemsControl>
+        </ScrollViewer>
+      </Grid>
+    </Border>
+    <Border x:Name="Footer" Grid.Row="2" Margin="13,0,13,8" Background="{DynamicResource StudioTopBrush}" BorderBrush="{DynamicResource StudioLineBrush}" BorderThickness="1" CornerRadius="4" Padding="18,12,18,6">
+      <Grid x:Name="FooterGrid" ColumnDefinitions="340,*" ColumnSpacing="18">
+        <Button x:Name="ValidationToggle" Classes="validation-toggle" Click="HandleToggleValidationDrawerClick" AutomationProperties.Name="Configuration validation details">
+          <StackPanel Orientation="Horizontal" Spacing="14" VerticalAlignment="Center">
+            <Ellipse Width="24" Height="24" Fill="{Binding ValidationIndicatorBrush}"/>
+            <StackPanel VerticalAlignment="Center">
+              <TextBlock FontWeight="SemiBold" Text="{Binding ValidationStatusText}"/>
+              <TextBlock Classes="caption" Text="Open validation details" IsVisible="{Binding HasValidationIssues}"/>
+            </StackPanel>
+            <Border Width="1" Height="22" Background="{DynamicResource StudioLineBrush}"/>
+            <TextBlock VerticalAlignment="Center" Foreground="{DynamicResource StudioMutedBrush}" Text="Unknown YAML fields preserved"/>
+          </StackPanel>
+        </Button>
+        <StackPanel x:Name="FooterActions" Grid.Column="1" MinHeight="34" Orientation="Horizontal" Spacing="6" HorizontalAlignment="Right" VerticalAlignment="Center">
+          <Button Content="Undo" Click="HandleUndoClick" IsEnabled="{Binding CanUndo}" AutomationProperties.Name="Undo configuration edit"/>
+          <Button Content="Redo" Click="HandleRedoClick" IsEnabled="{Binding CanRedo}" AutomationProperties.Name="Redo configuration edit"/>
+          <Button Content="Save a Copy" Click="HandleSaveAsClick" IsEnabled="{Binding CanEdit}" AutomationProperties.Name="Save configuration copy"/>
+          <Button Content="Export YAML" Click="HandleExportFullClick" AutomationProperties.Name="Export configuration YAML"/>
+          <Button MinWidth="180" Content="{Binding ReviewSaveButtonText}" Click="HandleReviewAndSaveClick" IsEnabled="{Binding CanSaveDraft}" AutomationProperties.Name="Review and save configuration"/>
+        </StackPanel>
+      </Grid>
+    </Border>
+  </Grid>
+</UserControl>

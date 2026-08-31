@@ -4,6 +4,7 @@ using Avalonia.Controls.Primitives;
 using Avalonia.Input;
 using Avalonia.VisualTree;
 using DvmConsole.Audio;
+using DvmConsole.Ptt;
 
 namespace DvmConsole.Desktop;
 

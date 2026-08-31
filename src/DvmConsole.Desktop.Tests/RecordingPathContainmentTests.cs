@@ -29,4 +29,19 @@ public sealed class RecordingPathContainmentTests
             Directory.Delete(parent, recursive: true);
         }
     }
+
+    [Fact]
+    public void PathIdentityPreservesCaseSensitiveFileNamesOutsideWindows()
+    {
+        string root = Path.Combine(Path.GetTempPath(), $"path-identity-{Guid.NewGuid():N}");
+        string lower = Path.Combine(root, "call.opus");
+        string upper = Path.Combine(root, "CALL.opus");
+
+        Assert.Equal(
+            OperatingSystem.IsWindows(),
+            FileSystemPathIdentity.AreEquivalent(lower, upper));
+        Assert.Equal(
+            OperatingSystem.IsWindows(),
+            FileSystemPathIdentity.Comparer.Equals(lower, upper));
+    }
 }

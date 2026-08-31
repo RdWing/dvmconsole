@@ -1,4 +1,5 @@
 using System.Globalization;
+using DvmConsole.Core.Runtime;
 using DvmConsole.FneClient;
 
 namespace DvmConsole.Desktop;
@@ -46,6 +47,12 @@ internal static class EncryptionSnapshotSchemaAdapter
         ushort? keyId = metadata.EncryptionKeyIdValue ?? ParseKeyId(metadata.EncryptionKeyId);
         return EncryptionSnapshot.FromStored(state, algorithmId, keyId);
     }
+
+    public static void ApplyToMetadata(
+        CallRecordingMetadata metadata,
+        EncryptionSnapshot encryption,
+        RadioMediaProtocol protocol)
+        => ApplyToMetadata(metadata, encryption, EncryptionPresentation.ToFneProtocol(protocol));
 
     public static void ApplyToMetadata(
         CallRecordingMetadata metadata,

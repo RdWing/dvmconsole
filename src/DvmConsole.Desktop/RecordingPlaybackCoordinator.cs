@@ -1,291 +1,139 @@
+using System.Runtime.CompilerServices;
+using DvmConsole.Application;
 using DvmConsole.Audio;
+using ApplicationPlaybackCoordinator = DvmConsole.Application.RecordingPlaybackCoordinator;
+using ApplicationPlaybackStateChangedEventArgs = DvmConsole.Application.RecordingPlaybackStateChangedEventArgs;
 
 namespace DvmConsole.Desktop;
 
-public sealed class RecordingPlaybackStateChangedEventArgs(string path, bool isPlaying) : EventArgs
+public sealed class RecordingPlaybackStateChangedEventArgs(
+    RecordingId recordingId,
+    string path,
+    bool isPlaying) : EventArgs
 {
+    public RecordingId RecordingId { get; } = recordingId;
     public string Path { get; } = path;
     public bool IsPlaying { get; } = isPlaying;
 }
 
-// Plays one completed local recording through the configured portable output
-// backend. The coordinator owns only its playback stream; receive routing and
-// recording catalog lifetime remain separate.
+/// <summary>
+/// Desktop compatibility facade for recording playback. Application owns the
+/// playback lifecycle by stable ID; this adapter retains path-based calls for
+/// legacy catalog entries and older desktop callers.
+/// </summary>
 public sealed class RecordingPlaybackCoordinator : IAsyncDisposable
 {
-    private readonly object sync = new();
-    private readonly SemaphoreSlim gate = new(1, 1);
-    private readonly Func<IAudioBackend> createAudioBackend;
-    private readonly Func<string?> getOutputDeviceId;
+    private readonly RecordingPlaybackStoreAdapter store;
+    private readonly ApplicationPlaybackCoordinator inner;
     private readonly Action<Exception>? faultHandler;
-    private IAudioBackend? audioBackend;
-    private PlaybackSession? activeSession;
-    private string? currentPath;
-    private bool disposed;
+
+    public RecordingPlaybackCoordinator(
+        IRecordingStore recordingStore,
+        Func<IAudioBackend> createAudioBackend,
+        Func<string?> getOutputDeviceId,
+        Action<Exception>? faultHandler = null,
+        Action<RecordingPlaybackStartupMetrics>? startupObserver = null)
+    {
+        this.faultHandler = faultHandler;
+        store = new RecordingPlaybackStoreAdapter(
+            recordingStore ?? throw new ArgumentNullException(nameof(recordingStore)));
+        inner = CreateInner(createAudioBackend, getOutputDeviceId, faultHandler, startupObserver);
+    }
 
     public RecordingPlaybackCoordinator(
         Func<IAudioBackend> createAudioBackend,
         Func<string?> getOutputDeviceId,
-        Action<Exception>? faultHandler = null)
+        Action<Exception>? faultHandler = null,
+        Action<RecordingPlaybackStartupMetrics>? startupObserver = null)
     {
-        this.createAudioBackend = createAudioBackend ?? throw new ArgumentNullException(nameof(createAudioBackend));
-        this.getOutputDeviceId = getOutputDeviceId ?? throw new ArgumentNullException(nameof(getOutputDeviceId));
         this.faultHandler = faultHandler;
+        store = new RecordingPlaybackStoreAdapter();
+        inner = CreateInner(createAudioBackend, getOutputDeviceId, faultHandler, startupObserver);
     }
 
     public event EventHandler<RecordingPlaybackStateChangedEventArgs>? PlaybackStateChanged;
 
     public bool IsPlaying(string? path = null)
+        => path is null
+            ? inner.IsPlaying()
+            : store.TryGetId(path, out RecordingId id) && inner.IsPlaying(id);
+
+    public bool IsPlaying(RecordingId recordingId) => inner.IsPlaying(recordingId);
+
+    public Task StartAsync(string path, CancellationToken cancellationToken = default)
     {
-        lock (sync)
-        {
-            return activeSession is not null &&
-                (path is null || string.Equals(currentPath, path, StringComparison.OrdinalIgnoreCase));
-        }
+        RecordingId recordingId = store.RegisterPath(path);
+        return inner.StartAsync(recordingId, cancellationToken);
     }
 
-    public async Task StartAsync(string path, CancellationToken cancellationToken = default)
+    public Task StartAsync(
+        RecordingId recordingId,
+        string? legacyPath = null,
+        CancellationToken cancellationToken = default)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(path);
-        string fullPath = Path.GetFullPath(path);
-        if (!File.Exists(fullPath))
-            throw new FileNotFoundException("The recording file was not found.", fullPath);
-
-        await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
-        try
-        {
-            ObjectDisposedException.ThrowIf(disposed, this);
-            await StopActiveCoreAsync(cancellationToken).ConfigureAwait(false);
-
-            Stream? source = null;
-            IAudioPcmStreamReader? reader = null;
-            IAudioPlayback? playback = null;
-            bool createdBackend = false;
-            try
-            {
-                IAudioBackend backend = audioBackend ??= CreateBackend(out createdBackend);
-                AudioDeviceInfo output = ResolveOutputDevice(backend, getOutputDeviceId());
-                source = new FileStream(fullPath, FileMode.Open, FileAccess.Read, FileShare.Read);
-                reader = await PcmStreamDecoder.OpenAsync(source, cancellationToken).ConfigureAwait(false);
-                source = null;
-                playback = backend.OpenPlayback(output, PcmAudioFormat.Voice8KhzMono16Bit);
-
-                var session = new PlaybackSession(
-                    reader,
-                    playback,
-                    reader.SampleRate == PcmAudioFormat.Voice8KhzMono16Bit.SampleRate
-                        ? null
-                        : new PcmRateConverter(reader.SampleRate, PcmAudioFormat.Voice8KhzMono16Bit.SampleRate));
-                reader = null;
-                playback = null;
-                lock (sync)
-                {
-                    activeSession = session;
-                    currentPath = fullPath;
-                }
-
-                NotifyPlaybackStateChanged(fullPath, isPlaying: true);
-
-                session.RunTask = RunAsync(session);
-            }
-            catch
-            {
-                await DisposeIfCreatedAsync(playback, reader, source).ConfigureAwait(false);
-                if (createdBackend && !IsPlaying())
-                {
-                    audioBackend?.Dispose();
-                    audioBackend = null;
-                }
-
-                throw;
-            }
-        }
-        finally
-        {
-            gate.Release();
-        }
+        if (!string.IsNullOrWhiteSpace(legacyPath))
+            store.RegisterPath(legacyPath, recordingId);
+        return inner.StartAsync(recordingId, cancellationToken);
     }
 
-    public async Task StopAsync(CancellationToken cancellationToken = default)
-    {
-        await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
-        try
-        {
-            await StopActiveCoreAsync(cancellationToken).ConfigureAwait(false);
-        }
-        finally
-        {
-            gate.Release();
-        }
-    }
+    public Task StopAsync(CancellationToken cancellationToken = default)
+        => inner.StopAsync(cancellationToken);
 
-    // Stops the current recording and drops the cached backend before an
-    // application-wide output route is replaced.
-    public async Task ResetAudioBackendAsync(CancellationToken cancellationToken = default)
-    {
-        IAudioBackend? oldBackend;
-        await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
-        try
-        {
-            ObjectDisposedException.ThrowIf(disposed, this);
-            await StopActiveCoreAsync(cancellationToken).ConfigureAwait(false);
-            oldBackend = audioBackend;
-            audioBackend = null;
-        }
-        finally
-        {
-            gate.Release();
-        }
-        oldBackend?.Dispose();
-    }
+    public Task ResetAudioBackendAsync(CancellationToken cancellationToken = default)
+        => inner.ResetAudioBackendAsync(cancellationToken);
 
-    public async Task<bool> StopIfPlayingAsync(
+    public Task<bool> StopIfPlayingAsync(
         string path,
         CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
-        string fullPath = Path.GetFullPath(path);
-        await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
-        try
-        {
-            PlaybackSession? session;
-            lock (sync)
-            {
-                if (activeSession is null ||
-                    !string.Equals(currentPath, fullPath, StringComparison.OrdinalIgnoreCase))
-                {
-                    return false;
-                }
-
-                session = activeSession;
-                activeSession = null;
-                currentPath = null;
-            }
-
-            NotifyPlaybackStateChanged(fullPath, isPlaying: false);
-            await session.StopAsync(cancellationToken).ConfigureAwait(false);
-            return true;
-        }
-        finally
-        {
-            gate.Release();
-        }
+        return store.TryGetId(path, out RecordingId id)
+            ? inner.StopIfPlayingAsync(id, cancellationToken)
+            : Task.FromResult(false);
     }
 
-    public async ValueTask DisposeAsync()
+    public Task<bool> StopIfPlayingAsync(
+        RecordingId recordingId,
+        CancellationToken cancellationToken = default)
+        => inner.StopIfPlayingAsync(recordingId, cancellationToken);
+
+    public ValueTask DisposeAsync()
     {
-        await gate.WaitAsync().ConfigureAwait(false);
-        try
-        {
-            if (disposed)
-                return;
-            disposed = true;
-            await StopActiveCoreAsync().ConfigureAwait(false);
-            audioBackend?.Dispose();
-            audioBackend = null;
-        }
-        finally
-        {
-            gate.Release();
-        }
+        inner.PlaybackStateChanged -= HandlePlaybackStateChanged;
+        return inner.DisposeAsync();
     }
 
-    private async Task StopActiveCoreAsync(CancellationToken cancellationToken = default)
+    private ApplicationPlaybackCoordinator CreateInner(
+        Func<IAudioBackend> createAudioBackend,
+        Func<string?> getOutputDeviceId,
+        Action<Exception>? faultHandler,
+        Action<RecordingPlaybackStartupMetrics>? startupObserver)
     {
-        PlaybackSession? session;
-        string? path;
-        lock (sync)
-        {
-            session = activeSession;
-            path = currentPath;
-            activeSession = null;
-            currentPath = null;
-        }
-
-        if (session is not null)
-        {
-            NotifyPlaybackStateChanged(path!, isPlaying: false);
-            await session.StopAsync(cancellationToken).ConfigureAwait(false);
-        }
+        var coordinator = new ApplicationPlaybackCoordinator(
+            store,
+            createAudioBackend,
+            getOutputDeviceId,
+            faultHandler,
+            startupObserver);
+        coordinator.PlaybackStateChanged += HandlePlaybackStateChanged;
+        return coordinator;
     }
 
-    private async Task RunAsync(PlaybackSession session)
+    private void HandlePlaybackStateChanged(
+        object? sender,
+        ApplicationPlaybackStateChangedEventArgs e)
     {
-        Exception? failure = null;
-        bool completedNaturally = false;
-        try
-        {
-            await PcmPlaybackPump.RunAsync(
-                session.Reader,
-                session.Playback,
-                session.RateConverter,
-                session.Cancellation.Token).ConfigureAwait(false);
-            completedNaturally = true;
-        }
-        catch (OperationCanceledException) when (session.Cancellation.IsCancellationRequested)
-        {
-            // Expected when an operator stops playback or the application closes.
-        }
-        catch (Exception exception)
-        {
-            failure = exception;
-        }
-        finally
-        {
-            try
-            {
-                if (completedNaturally && failure is null)
-                    await session.Playback.DrainAsync().ConfigureAwait(false);
-                else
-                    await session.Playback.FlushAsync().ConfigureAwait(false);
-            }
-            catch (Exception exception)
-            {
-                failure ??= exception;
-            }
-
-            try
-            {
-                await session.DisposeResourcesAsync().ConfigureAwait(false);
-            }
-            catch (Exception exception)
-            {
-                failure ??= exception;
-            }
-
-            string? completedPath = null;
-            lock (sync)
-            {
-                if (ReferenceEquals(activeSession, session))
-                {
-                    completedPath = currentPath;
-                    activeSession = null;
-                    currentPath = null;
-                }
-            }
-
-            if (completedPath is not null)
-                NotifyPlaybackStateChanged(completedPath, isPlaying: false);
-
-            try
-            {
-                if (failure is not null)
-                    faultHandler?.Invoke(failure);
-            }
-            finally
-            {
-                session.CompleteLifecycle();
-            }
-        }
-    }
-
-    private void NotifyPlaybackStateChanged(string path, bool isPlaying)
-    {
+        string path = store.TryGetPath(e.RecordingId, out string resolvedPath)
+            ? resolvedPath
+            : string.Empty;
         EventHandler<RecordingPlaybackStateChangedEventArgs>? handlers = PlaybackStateChanged;
         if (handlers is null)
             return;
 
-        var eventArgs = new RecordingPlaybackStateChangedEventArgs(path, isPlaying);
+        var eventArgs = new RecordingPlaybackStateChangedEventArgs(
+            e.RecordingId,
+            path,
+            e.IsPlaying);
         foreach (EventHandler<RecordingPlaybackStateChangedEventArgs> handler in handlers.GetInvocationList())
         {
             try
@@ -294,108 +142,121 @@ public sealed class RecordingPlaybackCoordinator : IAsyncDisposable
             }
             catch (Exception exception)
             {
-                ReportObserverFailure(exception);
+                try
+                {
+                    faultHandler?.Invoke(exception);
+                }
+                catch
+                {
+                    // Diagnostics must not interrupt playback lifecycle cleanup.
+                }
             }
         }
     }
 
-    private void ReportObserverFailure(Exception exception)
-    {
-        try
-        {
-            faultHandler?.Invoke(exception);
-        }
-        catch
-        {
-            // Diagnostics must not interrupt playback lifecycle cleanup.
-        }
-    }
-
-    private IAudioBackend CreateBackend(out bool created)
-    {
-        IAudioBackend backend = createAudioBackend();
-        created = true;
-        return backend;
-    }
-
-    private static AudioDeviceInfo ResolveOutputDevice(IAudioBackend backend, string? requestedDeviceId)
-    {
-        IReadOnlyList<AudioDeviceInfo> devices = backend.EnumerateDevices(AudioDirection.Output);
-        return devices.FirstOrDefault(device =>
-                   !string.IsNullOrWhiteSpace(requestedDeviceId) &&
-                   !requestedDeviceId.Equals("default", StringComparison.OrdinalIgnoreCase) &&
-                   device.Id.Equals(requestedDeviceId, StringComparison.OrdinalIgnoreCase))
-               ?? devices.FirstOrDefault(device => device.IsDefault)
-               ?? (devices.Count > 0 ? devices[0] : null)
-               ?? throw new InvalidOperationException("No audio output device is available.");
-    }
-
-    private static async Task DisposeIfCreatedAsync(
-        IAudioPlayback? playback,
-        IAudioPcmStreamReader? reader,
-        Stream? source)
-    {
-        if (playback is not null)
-            await playback.DisposeAsync().ConfigureAwait(false);
-        if (reader is not null)
-            await reader.DisposeAsync().ConfigureAwait(false);
-        if (source is not null)
-            await source.DisposeAsync().ConfigureAwait(false);
-    }
-
-    private sealed class PlaybackSession(
-        IAudioPcmStreamReader reader,
-        IAudioPlayback playback,
-        PcmRateConverter? rateConverter)
+    private sealed class RecordingPlaybackStoreAdapter : IRecordingStore
     {
         private readonly object sync = new();
-        private bool cancellationDisposed;
+        private readonly IRecordingStore? inner;
+        private readonly Dictionary<RecordingId, string> pathsById = [];
+        private readonly Dictionary<string, RecordingId> idsByPath =
+            new(FileSystemPathIdentity.Comparer);
 
-        public IAudioPcmStreamReader Reader { get; } = reader;
-        public IAudioPlayback Playback { get; } = playback;
-        public PcmRateConverter? RateConverter { get; } = rateConverter;
-        public CancellationTokenSource Cancellation { get; } = new();
-        public Task? RunTask { get; set; }
-
-        public async Task StopAsync(CancellationToken cancellationToken)
+        public RecordingPlaybackStoreAdapter(IRecordingStore? inner = null)
         {
-            Task? runTask;
+            this.inner = inner;
+        }
+
+        public RecordingId RegisterPath(string path, RecordingId? recordingId = null)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(path);
+            string fullPath = Path.GetFullPath(path);
+            if (!File.Exists(fullPath))
+                throw new FileNotFoundException("The recording file was not found.", fullPath);
+
             lock (sync)
             {
-                if (!cancellationDisposed)
-                    Cancellation.Cancel();
-                runTask = RunTask;
-            }
+                if (recordingId is null && idsByPath.TryGetValue(fullPath, out RecordingId existing))
+                    return existing;
 
-            if (runTask is not null)
-                await runTask.WaitAsync(cancellationToken).ConfigureAwait(false);
-            else
-            {
-                await DisposeResourcesAsync().ConfigureAwait(false);
-                CompleteLifecycle();
+                RecordingId id = recordingId ?? RecordingId.New();
+                pathsById[id] = fullPath;
+                idsByPath[fullPath] = id;
+                return id;
             }
         }
 
-        public async Task DisposeResourcesAsync()
+        public bool TryGetId(string path, out RecordingId recordingId)
         {
             try
             {
-                await Playback.DisposeAsync().ConfigureAwait(false);
+                string fullPath = Path.GetFullPath(path);
+                lock (sync)
+                    return idsByPath.TryGetValue(fullPath, out recordingId);
             }
-            finally
+            catch (Exception exception) when (
+                exception is ArgumentException or NotSupportedException or PathTooLongException)
             {
-                await Reader.DisposeAsync().ConfigureAwait(false);
+                recordingId = default;
+                return false;
             }
         }
 
-        public void CompleteLifecycle()
+        public bool TryGetPath(RecordingId recordingId, out string path)
         {
             lock (sync)
+                return pathsById.TryGetValue(recordingId, out path!);
+        }
+
+        public ValueTask<IRecordingWriteHandle> CreateAsync(
+            CallId callId,
+            ChannelId channelId,
+            DateTimeOffset startedAt,
+            string mediaType,
+            CancellationToken cancellationToken = default)
+            => inner?.CreateAsync(callId, channelId, startedAt, mediaType, cancellationToken)
+               ?? ValueTask.FromException<IRecordingWriteHandle>(
+                   new NotSupportedException("The legacy playback adapter is read-only."));
+
+        public async ValueTask<Stream> OpenReadAsync(
+            RecordingId id,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (TryGetPath(id, out string registeredPath))
+                return OpenPath(registeredPath);
+
+            if (inner is not null)
+                return await inner.OpenReadAsync(id, cancellationToken).ConfigureAwait(false);
+
+            throw new KeyNotFoundException($"Recording '{id}' has no desktop path fallback.");
+        }
+
+        private static FileStream OpenPath(string path)
+        {
+            return new FileStream(
+                path,
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.Read,
+                64 * 1024,
+                FileOptions.Asynchronous);
+        }
+
+        public async IAsyncEnumerable<RecordingDescriptor> ListAsync(
+            [EnumeratorCancellation] CancellationToken cancellationToken = default)
+        {
+            if (inner is null)
             {
-                if (cancellationDisposed)
-                    return;
-                Cancellation.Dispose();
-                cancellationDisposed = true;
+                cancellationToken.ThrowIfCancellationRequested();
+                yield break;
+            }
+
+            await foreach (RecordingDescriptor descriptor in inner
+                               .ListAsync(cancellationToken)
+                               .ConfigureAwait(false))
+            {
+                yield return descriptor;
             }
         }
     }

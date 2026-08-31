@@ -1,0 +1,92 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:presentation="using:DvmConsole.Presentation"
+             x:Class="DvmConsole.Presentation.GroupSettingsView"
+             x:DataType="presentation:IGroupSettingsViewModel">
+  <UserControl.Styles>
+    <Style Selector="Button"><Setter Property="MinHeight" Value="44"/></Style>
+    <Style Selector="CheckBox"><Setter Property="MinHeight" Value="44"/></Style>
+    <Style Selector="ComboBox"><Setter Property="MinHeight" Value="44"/></Style>
+  </UserControl.Styles>
+  <ScrollViewer x:Name="GroupSettingsScroller" Margin="10">
+    <StackPanel Spacing="10">
+      <TextBlock Classes="heading" Text="Patch and Multi-select Groups"/>
+      <ItemsControl ItemsSource="{Binding PatchGroups}">
+        <ItemsControl.ItemTemplate>
+          <DataTemplate x:DataType="presentation:PatchGroupEditorViewModel">
+            <Border Classes="panel" Margin="0,0,0,10">
+              <StackPanel Spacing="8">
+                <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                  <StackPanel>
+                    <TextBlock FontWeight="SemiBold" Text="{Binding Name}" TextWrapping="Wrap"/>
+                    <TextBlock Classes="caption" Text="{Binding GroupTypeText}"/>
+                  </StackPanel>
+                  <Button Grid.Column="1"
+                          IsVisible="{Binding IsMultiSelect}"
+                          Content="{Binding PttButtonText}"
+                          Tag="{Binding}"
+                          AutomationProperties.Name="{Binding PttButtonText}"
+                          Click="HandleMultiSelectPttClick"/>
+                </Grid>
+                <Border IsVisible="{Binding HasConflicts}"
+                        HorizontalAlignment="Left"
+                        Background="#4A2C16"
+                        BorderBrush="#B86B2B"
+                        BorderThickness="1"
+                        CornerRadius="4"
+                        Padding="8">
+                  <TextBlock Text="{Binding ConflictSummary}" TextWrapping="Wrap"/>
+                </Border>
+                <WrapPanel ItemSpacing="12" LineSpacing="4" IsVisible="{Binding IsPatchGroup}">
+                  <CheckBox Content="Enabled"
+                            IsChecked="{Binding IsEnabled, Mode=TwoWay}"
+                            AutomationProperties.Name="Enable patch group"/>
+                  <CheckBox Content="One-way"
+                            IsChecked="{Binding IsOneWay, Mode=TwoWay}"
+                            AutomationProperties.Name="Use one-way patch direction"/>
+                </WrapPanel>
+                <StackPanel Spacing="4" IsVisible="{Binding IsOneWay}">
+                  <TextBlock Text="Source"/>
+                  <ComboBox ItemsSource="{Binding SourceOptions}"
+                            SelectedItem="{Binding SelectedSource, Mode=TwoWay}"
+                            AutomationProperties.Name="One-way patch source">
+                    <ComboBox.ItemTemplate>
+                      <DataTemplate x:DataType="presentation:PatchMemberEditorViewModel">
+                        <TextBlock Text="{Binding DisplayName}" TextTrimming="CharacterEllipsis"/>
+                      </DataTemplate>
+                    </ComboBox.ItemTemplate>
+                  </ComboBox>
+                  <TextBlock Classes="caption" Text="{Binding OneWayDestinationSummary}" TextWrapping="Wrap"/>
+                </StackPanel>
+                <Expander Header="{Binding MemberEditorHeader}">
+                  <ItemsControl ItemsSource="{Binding Members}" Margin="0,6,0,0">
+                    <ItemsControl.ItemTemplate>
+                      <DataTemplate x:DataType="presentation:PatchMemberEditorViewModel">
+                        <StackPanel Spacing="1">
+                          <CheckBox Content="{Binding DisplayName}"
+                                    IsChecked="{Binding IsMember, Mode=TwoWay}"
+                                    IsEnabled="{Binding IsSelectionEnabled}"
+                                    AutomationProperties.Name="{Binding DisplayName}"/>
+                          <TextBlock Classes="caption"
+                                     IsVisible="{Binding HasConflict}"
+                                     Text="{Binding ConflictText}"
+                                     TextWrapping="Wrap"
+                                     Margin="24,0,0,3"/>
+                        </StackPanel>
+                      </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                  </ItemsControl>
+                </Expander>
+                <Button HorizontalAlignment="Left"
+                        Content="Save group"
+                        Tag="{Binding}"
+                        AutomationProperties.Name="Save patch group"
+                        Click="HandleSaveGroupClick"/>
+              </StackPanel>
+            </Border>
+          </DataTemplate>
+        </ItemsControl.ItemTemplate>
+      </ItemsControl>
+    </StackPanel>
+  </ScrollViewer>
+</UserControl>

@@ -1,3 +1,4 @@
+using DvmConsole.Application;
 using DvmConsole.Core.Settings;
 using Xunit;
 
@@ -19,6 +20,7 @@ public sealed class ConfigurationStudioDraftHistoryTests
         Assert.Contains("KeyId: 1", undone.ReferencedFiles.KeyFileContent);
         Assert.Equal(10, Assert.Single(undone.WidgetPositions).Value.X);
         Assert.Equal("North", Assert.Single(undone.ZoneSystemAssignments).Value);
+        Assert.Single(undone.CallPrioritySystemIds);
         Assert.True(history.CanRedo);
 
         ConfigurationStudioDraftSnapshot redone = Assert.IsType<ConfigurationStudioDraftSnapshot>(history.Redo(undone));
@@ -26,6 +28,7 @@ public sealed class ConfigurationStudioDraftHistoryTests
         Assert.Contains("KeyId: 2", redone.ReferencedFiles.KeyFileContent);
         Assert.Equal(40, Assert.Single(redone.WidgetPositions).Value.X);
         Assert.Equal("South", Assert.Single(redone.ZoneSystemAssignments).Value);
+        Assert.Single(redone.CallPrioritySystemIds);
     }
 
     [Fact]
@@ -77,6 +80,7 @@ public sealed class ConfigurationStudioDraftHistoryTests
                 [channelId] = new() { X = x, Y = 20 }
             },
             new Dictionary<Guid, string> { [zoneId] = system },
+            new HashSet<Guid> { systemId },
             fingerprint);
     }
 }

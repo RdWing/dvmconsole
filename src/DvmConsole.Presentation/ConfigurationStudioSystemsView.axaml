@@ -1,0 +1,107 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:presentation="using:DvmConsole.Presentation"
+             xmlns:config="using:DvmConsole.Core.Configuration"
+             x:Class="DvmConsole.Presentation.ConfigurationStudioSystemsView"
+             x:DataType="presentation:ConfigurationStudioViewModel">
+  <UserControl.Styles>
+    <Style Selector="Button"><Setter Property="MinHeight" Value="44"/></Style>
+    <Style Selector="CheckBox"><Setter Property="MinHeight" Value="44"/></Style>
+    <Style Selector="ComboBox"><Setter Property="MinHeight" Value="44"/></Style>
+    <Style Selector="TextBox"><Setter Property="MinHeight" Value="44"/></Style>
+    <Style Selector="NumericUpDown"><Setter Property="MinHeight" Value="44"/></Style>
+  </UserControl.Styles>
+  <ScrollViewer x:Name="SystemsScroller" Margin="18" IsVisible="{Binding IsSystems}">
+    <StackPanel Spacing="10">
+      <WrapPanel ItemSpacing="8" LineSpacing="8">
+        <StackPanel Width="320">
+          <TextBlock Classes="heading" Text="FNE Systems"/>
+          <TextBlock Classes="caption"
+                     Text="Connection identity, transport, credentials, and alias file"
+                     TextWrapping="Wrap"/>
+        </StackPanel>
+        <Button Content="Add" AutomationProperties.Name="Add system" Click="HandleAddSystemClick"/>
+        <Button Content="Duplicate" AutomationProperties.Name="Duplicate system" Click="HandleDuplicateSystemClick"/>
+        <Button Content="Delete" AutomationProperties.Name="Delete system" Click="HandleDeleteSystemClick"/>
+      </WrapPanel>
+      <Grid x:Name="SystemsBody" ColumnDefinitions="3*,2*" ColumnSpacing="10">
+        <Border x:Name="SystemsListPanel" Classes="panel" Padding="0">
+          <ListBox x:Name="SystemsList"
+                   Classes="dense-list"
+                   ItemsSource="{Binding Systems}"
+                   SelectedItem="{Binding SelectedSystem, Mode=TwoWay}">
+            <ListBox.ItemTemplate>
+              <DataTemplate x:DataType="config:SystemConfiguration">
+                <Border Classes="dense-row">
+                  <Grid ColumnDefinitions="*,Auto" RowDefinitions="Auto,Auto" ColumnSpacing="12">
+                    <TextBlock x:Name="SystemName" FontWeight="SemiBold" Text="{Binding Name}" TextTrimming="CharacterEllipsis"/>
+                    <WrapPanel Grid.Row="1" ItemSpacing="8">
+                      <TextBlock x:Name="SystemAddress" Classes="caption" Text="{Binding Address}" TextTrimming="CharacterEllipsis" MaxWidth="210"/>
+                      <TextBlock Text="{Binding Port, StringFormat='Port {0}'}"/>
+                    </WrapPanel>
+                    <CheckBox Grid.Column="1"
+                              Grid.RowSpan="2"
+                              MinHeight="44"
+                              Content="Encrypted"
+                              IsChecked="{Binding Encrypted}"
+                              IsHitTestVisible="False"
+                              HorizontalAlignment="Right"
+                              VerticalAlignment="Center"
+                              AutomationProperties.Name="Encrypted transport"/>
+                  </Grid>
+                </Border>
+              </DataTemplate>
+            </ListBox.ItemTemplate>
+          </ListBox>
+        </Border>
+        <Border x:Name="SystemInspector" Grid.Column="1" Classes="panel">
+          <StackPanel Spacing="6" IsEnabled="{Binding CanEdit}">
+            <TextBlock Classes="subheading" Text="System Inspector"/>
+            <TextBlock Classes="caption" Text="Name"/>
+            <TextBox Text="{Binding SelectedSystem.Name, Mode=TwoWay}" LostFocus="HandleDraftFieldEdit" AutomationProperties.Name="System name"/>
+            <TextBlock Classes="caption" Text="Identity"/>
+            <TextBox Text="{Binding SelectedSystem.Identity, Mode=TwoWay}" LostFocus="HandleDraftFieldEdit" AutomationProperties.Name="System identity"/>
+            <TextBlock Classes="caption" Text="Address"/>
+            <TextBox Text="{Binding SelectedSystem.Address, Mode=TwoWay}" LostFocus="HandleDraftFieldEdit" AutomationProperties.Name="System address"/>
+            <WrapPanel ItemSpacing="8" LineSpacing="8">
+              <StackPanel Width="140">
+                <TextBlock Classes="caption" Text="Port"/>
+                <NumericUpDown Minimum="1" Maximum="65535" Value="{Binding SelectedSystem.Port, Mode=TwoWay}" LostFocus="HandleDraftFieldEdit" AutomationProperties.Name="System port"/>
+              </StackPanel>
+              <StackPanel Width="140">
+                <TextBlock Classes="caption" Text="Peer ID"/>
+                <NumericUpDown Minimum="0" Maximum="4294967295" Value="{Binding SelectedSystem.PeerId, Mode=TwoWay}" LostFocus="HandleDraftFieldEdit" AutomationProperties.Name="System peer ID"/>
+              </StackPanel>
+            </WrapPanel>
+            <TextBlock Classes="caption" Text="Radio ID (RID)"/>
+            <TextBox Text="{Binding SelectedSystem.Rid, Mode=TwoWay}" LostFocus="HandleDraftFieldEdit" AutomationProperties.Name="System radio ID"/>
+            <CheckBox x:Name="hasCallPriorityCheckBox"
+                      Content="Has Call Priority"
+                      IsChecked="{Binding SelectedSystemHasCallPriority, Mode=TwoWay}"
+                      AutomationProperties.Name="Has Call Priority"/>
+            <TextBlock Classes="caption"
+                       Text="Allows this console to transmit over an active received call when the FNE peer is configured with call priority. Stored in Neo operator settings, not in codeplug YAML."
+                       TextWrapping="Wrap"/>
+            <TextBlock Classes="caption" Text="Password"/>
+            <TextBox PasswordChar="&#x25CF;" Text="{Binding SelectedSystem.Password, Mode=TwoWay}" LostFocus="HandleDraftFieldEdit" AutomationProperties.Name="System password"/>
+            <CheckBox Content="Encrypt FNE transport"
+                      IsChecked="{Binding SelectedSystem.Encrypted, Mode=TwoWay}"
+                      AutomationProperties.Name="Encrypt FNE transport"
+                      Click="HandleDraftFieldEdit"/>
+            <TextBlock Classes="caption" Text="Transport mode"/>
+            <ComboBox ItemsSource="{Binding TransportModeOptions}"
+                      SelectedItem="{Binding SelectedSystem.TransportEncryptionMode, Mode=TwoWay}"
+                      AutomationProperties.Name="Transport encryption mode"
+                      SelectionChanged="HandleDraftFieldEdit"/>
+            <TextBlock Classes="caption" Text="Transport preshared key"/>
+            <TextBox PasswordChar="&#x25CF;" Text="{Binding SelectedSystem.PresharedKey, Mode=TwoWay}" LostFocus="HandleDraftFieldEdit" AutomationProperties.Name="Transport preshared key"/>
+            <TextBlock Classes="caption" Text="KMF preshared key"/>
+            <TextBox PasswordChar="&#x25CF;" Text="{Binding SelectedSystem.KmfPresharedKey, Mode=TwoWay}" LostFocus="HandleDraftFieldEdit" AutomationProperties.Name="KMF preshared key"/>
+            <TextBlock Classes="caption" Text="RID alias reference"/>
+            <TextBox Text="{Binding SelectedSystem.AliasPath, Mode=TwoWay}" LostFocus="HandleDraftFieldEdit" AutomationProperties.Name="RID alias reference"/>
+          </StackPanel>
+        </Border>
+      </Grid>
+    </StackPanel>
+  </ScrollViewer>
+</UserControl>

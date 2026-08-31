@@ -5,7 +5,9 @@ using System.Runtime.CompilerServices;
 
 namespace DvmConsole.Desktop;
 
-public sealed class RxAudioProcessingModeViewModel : INotifyPropertyChanged
+public sealed class RxAudioProcessingModeViewModel :
+    INotifyPropertyChanged,
+    DvmConsole.Presentation.IRxAudioProcessingModeViewModel
 {
     private bool highPassFilterEnabled;
     private decimal highPassFrequencyHz;

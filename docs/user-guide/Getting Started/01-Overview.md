@@ -59,8 +59,16 @@ Membership is saved separately from whether a patch is active.
 
 ## Operator workspace
 
-The main console has freeform channel cards grouped by system and zone. It saves
-card positions and shows recent calls in the Activity sidebar.
+The main console offers two renderers under **View > Channel view**:
+
+- **Cards** is the desktop default. It keeps the established freeform channel
+  cards, geometry, colors, and saved positions.
+- **List** is a compact, virtualized view grouped by system and zone. Select a
+  non-control part of a row to expand its volume and detailed state.
+
+Below 600 logical pixels DVM Console temporarily uses List so controls remain
+reachable. Returning to a wider window restores the saved desktop preference;
+the forced narrow state does not move or overwrite card positions.
 
 Choose **View > Engineering Health** to open the optional telemetry rail. It is
 hidden by default and has no transmit, mute, routing, or recording controls. The
@@ -128,10 +136,16 @@ Pages include:
 - FNE connections and encryption key status
 - Appearance, clocks, widgets, startup behavior, and PTT settings
 
-Configuration Studio is a separate modeless window for codeplug definitions,
-referenced key and alias files, and codeplug-scoped group settings. Open it from
-**File > Configuration Studio**. The main operator workspace keeps its existing
-channel cards and controls while the Studio draft is open.
+Configuration Studio is a separate modeless window for configuration
+definitions, referenced key and alias files, and configuration-scoped group
+settings. Open it from **File > Configuration Studio**. The main operator
+workspace keeps its current renderer and controls while the Studio draft is
+open.
+
+**File > Configuration Library** shows the app-owned configurations and their
+active, pending-reload, and trash state. Opening an external YAML codeplug
+imports a managed revision; later Studio saves do not overwrite that original
+file. YAML remains available through full and sanitized export.
 
 ---
 

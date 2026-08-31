@@ -12,6 +12,8 @@ who need to build or package DVM Console from source.
 - 64-bit Windows: `win-x64`
 
 The application version is defined centrally in `src/Directory.Build.props`.
+The implemented portability boundaries and remaining platform-host work are
+summarized in the current release notes and reflected by the project graph.
 
 ---
 
@@ -137,7 +139,7 @@ docs/user-guide
 
 # Tagged releases
 
-Pushing a version tag such as `v0.5.5` starts the macOS and Windows test and
+Pushing a version tag such as `v0.6.0` starts the macOS and Windows test and
 packaging matrix. Both macOS jobs smoke-test the packaged application bundle.
 The Windows job runs the Avalonia headful smoke test. Add version-matched release
 notes before pushing the tag.

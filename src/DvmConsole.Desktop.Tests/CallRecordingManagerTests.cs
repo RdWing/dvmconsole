@@ -1,4 +1,5 @@
 using DvmConsole.Core.Configuration;
+using DvmConsole.Core.Runtime;
 using DvmConsole.Audio;
 using DvmConsole.Desktop;
 using DvmConsole.FneClient;
@@ -29,6 +30,7 @@ public sealed class CallRecordingManagerTests
             faultHandler: null,
             retentionDays: CallRecordingManager.DefaultRetentionDays,
             shouldRecordSource: null,
+            resolveSubscriberAlias: null,
             finalizationQueueCapacity: 4,
             finalizeRecording: (descriptor, _, _) => Task.FromResult(
                 new RecordingFinalizationResult(null, descriptor.StreamId, null, null)));
@@ -116,6 +118,7 @@ public sealed class CallRecordingManagerTests
             faultHandler: null,
             retentionDays: CallRecordingManager.DefaultRetentionDays,
             shouldRecordSource: null,
+            resolveSubscriberAlias: null,
             finalizationQueueCapacity: 1,
             finalizeRecording: async (descriptor, _, cancellationToken) =>
             {
@@ -203,7 +206,7 @@ public sealed class CallRecordingManagerTests
 
         try
         {
-            using (var writer = new PcmWavFileWriter(wavePath, PcmAudioFormat.Voice8KhzMono16Bit))
+            using (var writer = PcmWavTestFile.Create(wavePath, PcmAudioFormat.Voice8KhzMono16Bit))
                 writer.Write(Enumerable.Repeat((short)900, 800).ToArray());
             using (var stream = new FileStream(wavePath, FileMode.Open, FileAccess.Write, FileShare.Read))
             {
@@ -223,7 +226,7 @@ public sealed class CallRecordingManagerTests
                 8_000,
                 1,
                 16,
-                FneTrafficProtocol.Analog,
+                RadioMediaProtocol.Analog,
                 "ANALOG",
                 "RX",
                 "InboundRadio",
@@ -562,7 +565,7 @@ public sealed class CallRecordingManagerTests
             }
 
             Assert.Empty(Directory.GetFiles(root, "*.json", SearchOption.AllDirectories));
-            OggOpusTagSet tags = OggOpusTags.Read(firstPath);
+            OggOpusTagSet tags = DesktopRecordingFileCodec.ReadOpusTags(firstPath);
             Assert.True(tags.Fields.ContainsKey(OpusRecordingMetadataStore.MetadataTag));
             CallRecordingMetadata metadata = Assert.Single(manager.LoadRecordings());
             Assert.Equal("ANALOG", metadata.Protocol);
@@ -1107,7 +1110,7 @@ public sealed class CallRecordingManagerTests
             Assert.Equal((ushort)0x50, metadata.EncryptionKeyIdValue);
             Assert.EndsWith("_System 1_99_42_SECURE_AES_63.opus", metadata.FileName, StringComparison.Ordinal);
 
-            string encoded = OggOpusTags.Read(metadata.FilePath).Fields[OpusRecordingMetadataStore.MetadataTag];
+            string encoded = DesktopRecordingFileCodec.ReadOpusTags(metadata.FilePath).Fields[OpusRecordingMetadataStore.MetadataTag];
             using JsonDocument embedded = DecodeMetadata(encoded);
             JsonElement payload = embedded.RootElement;
             Assert.False(payload.TryGetProperty(nameof(CallRecordingMetadata.FilePath), out _));
@@ -1405,7 +1408,7 @@ public sealed class CallRecordingManagerTests
         string root = Path.Combine(Path.GetTempPath(), "dvmconsole-recording-tests", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
         string wavPath = Path.Combine(root, "legacy.wav");
-        using (var writer = new PcmWavFileWriter(wavPath, PcmAudioFormat.Voice8KhzMono16Bit))
+        using (var writer = PcmWavTestFile.Create(wavPath, PcmAudioFormat.Voice8KhzMono16Bit))
             writer.Write(Enumerable.Repeat((short)1200, 800).ToArray());
         string sidecarPath = Path.ChangeExtension(wavPath, ".json");
         File.WriteAllText(sidecarPath, JsonSerializer.Serialize(new
@@ -1446,9 +1449,9 @@ public sealed class CallRecordingManagerTests
         Directory.CreateDirectory(root);
         string wavPath = Path.Combine(root, "source.wav");
         string opusPath = Path.Combine(root, "legacy.opus");
-        using (var writer = new PcmWavFileWriter(wavPath, PcmAudioFormat.Voice8KhzMono16Bit))
+        using (var writer = PcmWavTestFile.Create(wavPath, PcmAudioFormat.Voice8KhzMono16Bit))
             writer.Write(Enumerable.Repeat((short)1200, 800).ToArray());
-        await OpusRecordingEncoder.EncodeWaveFileAsync(wavPath, opusPath);
+        await DesktopRecordingFileCodec.EncodeWaveAsync(wavPath, opusPath);
         File.Delete(wavPath);
 
         string sidecarPath = Path.ChangeExtension(opusPath, ".json");
@@ -1484,7 +1487,7 @@ public sealed class CallRecordingManagerTests
         {
             Assert.Empty(manager.LoadRecordings());
             Assert.True(File.Exists(sidecarPath));
-            Assert.False(OggOpusTags.Read(opusPath).Fields.ContainsKey(OpusRecordingMetadataStore.MetadataTag));
+            Assert.False(DesktopRecordingFileCodec.ReadOpusTags(opusPath).Fields.ContainsKey(OpusRecordingMetadataStore.MetadataTag));
 
             await using IAudioPcmStreamReader reader = await PcmStreamDecoder.OpenAsync(File.OpenRead(opusPath));
             short[] decoded = new short[1600];
@@ -1558,7 +1561,7 @@ public sealed class CallRecordingManagerTests
             Assert.Empty(manager.LoadRecordings());
 
             File.Delete(wavPath);
-            using (var writer = new PcmWavFileWriter(wavPath, PcmAudioFormat.Voice8KhzMono16Bit))
+            using (var writer = PcmWavTestFile.Create(wavPath, PcmAudioFormat.Voice8KhzMono16Bit))
                 writer.Write(Enumerable.Repeat((short)1200, 800).ToArray());
 
             Assert.Empty(manager.LoadRecordings());
@@ -1612,7 +1615,7 @@ public sealed class CallRecordingManagerTests
         Directory.CreateDirectory(directory);
         string wavPath = Path.Combine(directory, $"{name}.wav");
         string opusPath = Path.Combine(directory, $"{name}.opus");
-        using (var writer = new PcmWavFileWriter(wavPath, PcmAudioFormat.Voice8KhzMono16Bit))
+        using (var writer = PcmWavTestFile.Create(wavPath, PcmAudioFormat.Voice8KhzMono16Bit))
             writer.Write(Enumerable.Repeat((short)1200, 800).ToArray());
         var metadata = new CallRecordingMetadata
         {
@@ -1633,7 +1636,7 @@ public sealed class CallRecordingManagerTests
             ChannelName = "Dispatch",
             PlaybackValidated = true
         };
-        await OpusRecordingEncoder.EncodeWaveFileAsync(
+        await DesktopRecordingFileCodec.EncodeWaveAsync(
             wavPath,
             opusPath,
             new OpusRecordingMetadataStore().CreateTags(metadata));

@@ -1,5 +1,6 @@
 using System.Text;
 using DvmConsole.Audio;
+using DvmConsole.Ptt;
 using Xunit;
 
 namespace DvmConsole.Audio.Tests;

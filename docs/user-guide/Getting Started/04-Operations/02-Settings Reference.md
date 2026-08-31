@@ -214,6 +214,13 @@ Settings.
 When either list is scrolled away from the top, incoming calls do not move the
 visible row. A list already at the top continues to follow new calls.
 
+The complete Event History retains the newest 5,000 calls and events from the
+current application session, including entries without TAR recordings. These
+non-recorded entries are cleared when the application exits. TAR recording
+catalog rows remain available according to the configured recording retention
+policy. To keep the main console responsive, its compact Activity sidebar shows
+only the newest 100 entries matching its current filters.
+
 ## Groups
 
 Opens Console Settings on the Groups page.

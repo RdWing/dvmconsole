@@ -29,12 +29,23 @@ internal sealed class UserSettingsPersistenceCoordinator : IAsyncDisposable
     public Task FlushAsync()
         => writer.FlushAsync();
 
-    public async Task AdoptStudioSnapshotAsync(ConfigurationSavePlan plan)
+    public Task AdoptStudioSnapshotAsync(ConfigurationSavePlan plan)
     {
         ArgumentNullException.ThrowIfNull(plan);
         ConfigurationFileChange settingsChange = plan.Files.Single(change =>
             change.Category.Equals("Operator settings", StringComparison.Ordinal));
-        store.ApplySerializedSnapshot(settings, settingsChange.Content);
+        return AdoptSerializedSnapshotAsync(settingsChange.Content);
+    }
+
+    public async Task AdoptSnapshotAsync(UserSettingsSnapshot snapshot)
+    {
+        ArgumentNullException.ThrowIfNull(snapshot);
+        await AdoptSerializedSnapshotAsync(snapshot.Json).ConfigureAwait(false);
+    }
+
+    private async Task AdoptSerializedSnapshotAsync(string json)
+    {
+        store.ApplySerializedSnapshot(settings, json);
         Schedule();
         await FlushAsync().ConfigureAwait(false);
     }

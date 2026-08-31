@@ -6,8 +6,13 @@ This page describes the main console and its common operator workflows.
 
 # Operator workspace
 
-The main console is a freeform workspace of channel cards organized by system
-and zone. Each card keeps its saved position, configured size, and controls.
+The main console uses the Cards workspace by default. Cards are organized by
+system and zone, and each managed configuration keeps its own saved positions,
+configured sizes, and operator state.
+
+Choose **View > Channel view > List** for a compact virtualized renderer grouped
+by system and zone. DVM Console temporarily forces List below 600 logical pixels
+without changing the saved desktop preference or card positions.
 
 The Activity sidebar shows recent calls and subscriber-command audit entries.
 Use the arrow in its header to collapse or expand it. At the top of the list,
@@ -19,6 +24,23 @@ resizable horizontal rail is hidden by default. It reports receive pressure and
 latency, microphone freshness, generation, cadence and faults, transmit
 backlog, TAR finalization and catalog work, route recovery, and connection
 health. It has no PTT, mute, routing, or recording controls.
+
+## List view
+
+Each collapsed List row shows RX state, channel/talkgroup/protocol, current
+state, last caller, the same threshold-colored RMS/peak meter, and fail-safe
+PTT. RX, PTT, and selector controls do not also expand the row.
+
+Select the non-control area to expand the row. The expanded area provides the
+channel volume control and compact operational state. Selectable-encryption
+channels use the same **SECURE/CLEAR** transmit choice as Cards. Balance and
+output route remain in Audio settings so the line layout stays compact.
+
+The volume slider defaults to its center position and uses the same slightly
+sticky center behavior as Cards. Expansion is session-only and never changes a
+saved card position. Any row recycling, renderer change, navigation,
+deactivation, session replacement, or shutdown releases held PTT through the
+same idempotent controller used by Cards.
 
 ---
 
@@ -125,6 +147,9 @@ whether PTT came from the window-local keyboard, OS-global keyboard, serial
 hardware, or a channel control.
 
 Under **Console Settings > PTT > Serial hardware PTT**, select **Limit serial PTT to TX-selected resources in the active system** to give the serial device the same active-system scope. Leave it clear for the serial device to key every `TX`-selected resource across systems.
+
+Serial and OS-global keyboard PTT are desktop-only capabilities. On-screen PTT
+does not depend on a physical input source.
 
 On macOS, **Console Settings > PTT > Keyboard PTT > Request macOS keyboard
 access** asks the system for Input Monitoring access again. If macOS has already

@@ -1,6 +1,7 @@
 using System.Collections.Specialized;
 using DvmConsole.Core.Settings;
 using DvmConsole.Desktop;
+using DvmConsole.Presentation;
 using Xunit;
 
 namespace DvmConsole.Desktop.Tests;
@@ -146,7 +147,7 @@ public sealed class MainWindowSessionHostTests
                 candidate => candidate.IsPatchGroup);
             PatchMemberEditorViewModel beta = Assert.Single(
                 group.Members,
-                member => member.IsMember && member.Channel.Definition.SystemName == "Beta");
+                member => member.IsMember && member.Channel.SystemName == "Beta");
             beta.IsMember = false;
             initial.ApplyPatchGroup(group);
 
@@ -159,7 +160,7 @@ public sealed class MainWindowSessionHostTests
             PatchMemberEditorViewModel selected = Assert.Single(
                 reloaded.Members,
                 member => member.IsMember);
-            Assert.Equal("Alpha", selected.Channel.Definition.SystemName);
+            Assert.Equal("Alpha", selected.Channel.SystemName);
 
             await host.ReplaceAsync(replacement);
             replacement = null;

@@ -1,4 +1,5 @@
 using DvmConsole.Audio;
+using DvmConsole.Application;
 using DvmConsole.Media;
 
 namespace DvmConsole.Desktop;
@@ -55,7 +56,7 @@ internal static class ReceiveDiagnosticsText
             : $"decode/mixer {latest.ProcessingDuration.TotalMilliseconds:0} ms";
         return $"RX pipeline delay on {channelName}: " +
                $"UDP inter-arrival {latest.TransportInterArrivalDelay.TotalMilliseconds:0} ms, " +
-               $"socket-to-FNE {latest.TransportToFneBoundaryDelay.TotalMilliseconds:0} ms, " +
+               $"socket-to-FNE {latest.TransportToApplicationBoundaryDelay.TotalMilliseconds:0} ms, " +
                $"FNE inter-arrival {latest.InterArrivalDelay.TotalMilliseconds:0} ms, " +
                $"FNE boundary-to-queue {latest.IngressToQueueDelay.TotalMilliseconds:0} ms, " +
                queueStages + ", " +
@@ -186,7 +187,7 @@ internal static class ReceiveDiagnosticsText
             ? string.Empty
             : $"; RX stream pipeline maximum UDP inter-arrival " +
               $"{pipeline.MaximumTransportInterArrivalDelay.TotalMilliseconds:0} ms, " +
-              $"socket-to-FNE {pipeline.MaximumTransportToFneBoundaryDelay.TotalMilliseconds:0} ms, " +
+              $"socket-to-FNE {pipeline.MaximumTransportToApplicationBoundaryDelay.TotalMilliseconds:0} ms, " +
               $"FNE inter-arrival " +
               $"{pipeline.MaximumInterArrivalDelay.TotalMilliseconds:0} ms, " +
               $"FNE boundary-to-queue {pipeline.MaximumIngressToQueueDelay.TotalMilliseconds:0} ms, " +

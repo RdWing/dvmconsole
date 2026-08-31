@@ -18,7 +18,7 @@ public sealed class RecordingPlaybackCoordinatorTests
         var backend = new FakeAudioBackend();
         try
         {
-            using (var writer = new PcmWavFileWriter(path, PcmAudioFormat.Voice8KhzMono16Bit))
+            using (var writer = PcmWavTestFile.Create(path, PcmAudioFormat.Voice8KhzMono16Bit))
                 writer.Write(Enumerable.Repeat<short>(1200, 1600).ToArray());
 
             await using (var coordinator = new RecordingPlaybackCoordinator(
@@ -56,7 +56,7 @@ public sealed class RecordingPlaybackCoordinatorTests
         var backend = new FakeAudioBackend { BlockWrites = true };
         try
         {
-            using (var writer = new PcmWavFileWriter(path, PcmAudioFormat.Voice8KhzMono16Bit))
+            using (var writer = PcmWavTestFile.Create(path, PcmAudioFormat.Voice8KhzMono16Bit))
                 writer.Write(Enumerable.Repeat<short>(1200, 1600).ToArray());
 
             await using var coordinator = new RecordingPlaybackCoordinator(
@@ -90,7 +90,7 @@ public sealed class RecordingPlaybackCoordinatorTests
         var states = new ConcurrentQueue<RecordingPlaybackStateChangedEventArgs>();
         try
         {
-            using (var writer = new PcmWavFileWriter(path, PcmAudioFormat.Voice8KhzMono16Bit))
+            using (var writer = PcmWavTestFile.Create(path, PcmAudioFormat.Voice8KhzMono16Bit))
                 writer.Write(Enumerable.Repeat<short>(1200, 1600).ToArray());
 
             await using var coordinator = new RecordingPlaybackCoordinator(
@@ -124,6 +124,41 @@ public sealed class RecordingPlaybackCoordinatorTests
     }
 
     [Fact]
+    public async Task KnownDesktopPathBypassesRecordingCatalogLookup()
+    {
+        string path = Path.Combine(
+            Path.GetTempPath(),
+            "dvmconsole-recording-playback-tests",
+            Guid.NewGuid().ToString("N"),
+            "call.wav");
+        var backend = new FakeAudioBackend();
+        var store = new CatalogLookupRejectingRecordingStore();
+        var recordingId = DvmConsole.Application.RecordingId.New();
+        try
+        {
+            using (var writer = PcmWavTestFile.Create(path, PcmAudioFormat.Voice8KhzMono16Bit))
+                writer.Write(Enumerable.Repeat<short>(1200, 160).ToArray());
+
+            await using var coordinator = new RecordingPlaybackCoordinator(
+                store,
+                () => backend,
+                () => "output");
+
+            await coordinator.StartAsync(recordingId, path);
+            await WaitForAsync(() => !coordinator.IsPlaying(recordingId));
+
+            Assert.Equal(0, store.OpenReadCalls);
+            Assert.Single(backend.Playback.Frames);
+        }
+        finally
+        {
+            string? directory = Path.GetDirectoryName(path);
+            if (Directory.Exists(directory))
+                Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task ReportsStoppedWhenPlaybackReachesTheEnd()
     {
         string path = Path.Combine(
@@ -135,7 +170,7 @@ public sealed class RecordingPlaybackCoordinatorTests
         var states = new ConcurrentQueue<bool>();
         try
         {
-            using (var writer = new PcmWavFileWriter(path, PcmAudioFormat.Voice8KhzMono16Bit))
+            using (var writer = PcmWavTestFile.Create(path, PcmAudioFormat.Voice8KhzMono16Bit))
                 writer.Write(Enumerable.Repeat<short>(1200, 160).ToArray());
 
             await using var coordinator = new RecordingPlaybackCoordinator(
@@ -147,6 +182,45 @@ public sealed class RecordingPlaybackCoordinatorTests
             await WaitForAsync(() => states.Count == 2);
 
             Assert.Equal([true, false], states.ToArray());
+        }
+        finally
+        {
+            string? directory = Path.GetDirectoryName(path);
+            if (Directory.Exists(directory))
+                Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task ReportsFirstOutputStartupStagesAfterPrefetchedAudioIsWritten()
+    {
+        string path = Path.Combine(
+            Path.GetTempPath(),
+            "dvmconsole-recording-playback-tests",
+            Guid.NewGuid().ToString("N"),
+            "call.wav");
+        var backend = new FakeAudioBackend();
+        var metrics = new ConcurrentQueue<DvmConsole.Application.RecordingPlaybackStartupMetrics>();
+        try
+        {
+            using (var writer = PcmWavTestFile.Create(path, PcmAudioFormat.Voice8KhzMono16Bit))
+                writer.Write(Enumerable.Repeat<short>(1200, 160).ToArray());
+
+            await using var coordinator = new RecordingPlaybackCoordinator(
+                () => backend,
+                () => "output",
+                startupObserver: metrics.Enqueue);
+
+            await coordinator.StartAsync(path);
+            await WaitForAsync(() => !coordinator.IsPlaying());
+
+            DvmConsole.Application.RecordingPlaybackStartupMetrics observed = Assert.Single(metrics);
+            Assert.True(observed.SourceOpen >= TimeSpan.Zero);
+            Assert.True(observed.DecoderOpen >= observed.SourceOpen);
+            Assert.True(observed.FirstDecode >= observed.DecoderOpen);
+            Assert.True(observed.OutputOpen >= observed.FirstDecode);
+            Assert.True(observed.FirstOutput >= observed.OutputOpen);
+            Assert.Single(backend.Playback.Frames);
         }
         finally
         {
@@ -169,7 +243,7 @@ public sealed class RecordingPlaybackCoordinatorTests
         var observerFailures = new ConcurrentQueue<Exception>();
         try
         {
-            using (var writer = new PcmWavFileWriter(path, PcmAudioFormat.Voice8KhzMono16Bit))
+            using (var writer = PcmWavTestFile.Create(path, PcmAudioFormat.Voice8KhzMono16Bit))
                 writer.Write(Enumerable.Repeat<short>(1200, 1600).ToArray());
 
             await using var coordinator = new RecordingPlaybackCoordinator(
@@ -212,7 +286,7 @@ public sealed class RecordingPlaybackCoordinatorTests
         var observerFailures = new ConcurrentQueue<Exception>();
         try
         {
-            using (var writer = new PcmWavFileWriter(path, PcmAudioFormat.Voice8KhzMono16Bit))
+            using (var writer = PcmWavTestFile.Create(path, PcmAudioFormat.Voice8KhzMono16Bit))
                 writer.Write(Enumerable.Repeat<short>(1200, 160).ToArray());
 
             await using var coordinator = new RecordingPlaybackCoordinator(
@@ -253,7 +327,7 @@ public sealed class RecordingPlaybackCoordinatorTests
         var backend = new FakeAudioBackend { BlockWrites = true };
         try
         {
-            using (var writer = new PcmWavFileWriter(path, PcmAudioFormat.Voice8KhzMono16Bit))
+            using (var writer = PcmWavTestFile.Create(path, PcmAudioFormat.Voice8KhzMono16Bit))
                 writer.Write(Enumerable.Repeat<short>(1200, 1600).ToArray());
 
             await using var coordinator = new RecordingPlaybackCoordinator(
@@ -289,7 +363,7 @@ public sealed class RecordingPlaybackCoordinatorTests
         var backend = new FakeAudioBackend { BlockWrites = true };
         try
         {
-            using (var writer = new PcmWavFileWriter(path, PcmAudioFormat.Voice8KhzMono16Bit))
+            using (var writer = PcmWavTestFile.Create(path, PcmAudioFormat.Voice8KhzMono16Bit))
                 writer.Write(Enumerable.Repeat<short>(1200, 1600).ToArray());
 
             await using var coordinator = new RecordingPlaybackCoordinator(
@@ -325,9 +399,9 @@ public sealed class RecordingPlaybackCoordinatorTests
         var backend = new FakeAudioBackend { BlockWrites = true };
         try
         {
-            using (var writer = new PcmWavFileWriter(playingPath, PcmAudioFormat.Voice8KhzMono16Bit))
+            using (var writer = PcmWavTestFile.Create(playingPath, PcmAudioFormat.Voice8KhzMono16Bit))
                 writer.Write(Enumerable.Repeat<short>(1200, 1600).ToArray());
-            using (var writer = new PcmWavFileWriter(otherPath, PcmAudioFormat.Voice8KhzMono16Bit))
+            using (var writer = PcmWavTestFile.Create(otherPath, PcmAudioFormat.Voice8KhzMono16Bit))
                 writer.Write(Enumerable.Repeat<short>(1200, 1600).ToArray());
 
             await using var coordinator = new RecordingPlaybackCoordinator(
@@ -361,7 +435,7 @@ public sealed class RecordingPlaybackCoordinatorTests
         Exception? failure = null;
         try
         {
-            using (var writer = new PcmWavFileWriter(path, PcmAudioFormat.Voice8KhzMono16Bit))
+            using (var writer = PcmWavTestFile.Create(path, PcmAudioFormat.Voice8KhzMono16Bit))
                 writer.Write(Enumerable.Repeat<short>(1200, 1600).ToArray());
 
             await using var coordinator = new RecordingPlaybackCoordinator(
@@ -433,6 +507,37 @@ public sealed class RecordingPlaybackCoordinatorTests
         }
 
         public void Dispose() => IsDisposed = true;
+    }
+
+    private sealed class CatalogLookupRejectingRecordingStore :
+        DvmConsole.Application.IRecordingStore
+    {
+        public int OpenReadCalls { get; private set; }
+
+        public ValueTask<DvmConsole.Application.IRecordingWriteHandle> CreateAsync(
+            DvmConsole.Application.CallId callId,
+            DvmConsole.Application.ChannelId channelId,
+            DateTimeOffset startedAt,
+            string mediaType,
+            CancellationToken cancellationToken = default)
+            => throw new NotSupportedException();
+
+        public ValueTask<Stream> OpenReadAsync(
+            DvmConsole.Application.RecordingId id,
+            CancellationToken cancellationToken = default)
+        {
+            OpenReadCalls++;
+            throw new InvalidOperationException("Known desktop paths must not rescan the recording catalog.");
+        }
+
+        public async IAsyncEnumerable<DvmConsole.Application.RecordingDescriptor> ListAsync(
+            [System.Runtime.CompilerServices.EnumeratorCancellation]
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            await Task.CompletedTask;
+            yield break;
+        }
     }
 
     private sealed class FakePlayback : IAudioPlayback
