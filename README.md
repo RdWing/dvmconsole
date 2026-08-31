@@ -8,7 +8,9 @@
 
 Monitor and transmit across DMR, P25 Phase 1, and NXDN 4800 FNE talkgroups.
 Route patches, send pages and alerts, and review recordings without leaving the
-macOS or Windows operator workspace.
+macOS or Windows operator workspace. 
+
+NEO is a ground-up cross-platform application that retains the repository lineage and FNE interoperability of the original DVMConsole.
 
 For amateur and educational use. **Not for public- or life-safety operation.**
 
