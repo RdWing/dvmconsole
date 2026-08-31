@@ -1,3 +1,4 @@
+using DvmConsole.Core.Configuration;
 using DvmConsole.Core.Settings;
 using Xunit;
 
@@ -50,6 +51,15 @@ public sealed class DemoSessionTests
             $"dvmconsole-demo-host-{Guid.NewGuid():N}");
         Assert.True(File.Exists(demoPath), $"Missing bundled demo codeplug at {demoPath}");
 
+        ConsoleConfiguration configuration = ConfigurationLoader.Load(demoPath);
+        ZoneConfiguration expandedZone = Assert.Single(
+            configuration.Zones,
+            zone => zone.Name == "Campus Network");
+        Assert.Equal(16, expandedZone.Channels.Count);
+        Assert.Equal("Campus Dispatch", expandedZone.Channels[0].Name);
+        Assert.Contains(expandedZone.Channels, channel => channel.SelectableEncryption);
+        Assert.Equal(2, expandedZone.Channels.Count(channel => channel.RxOnly));
+
         try
         {
             using DemoSessionState state = DemoSessionState.Create(temporaryParent);
@@ -68,7 +78,7 @@ public sealed class DemoSessionTests
             Assert.True(viewModel.IsCodeplugLoaded);
             Assert.True(viewModel.IsNetworkDisabledDemo);
             Assert.Equal(2, viewModel.Systems.Count);
-            Assert.Equal(7, viewModel.Systems.SelectMany(system => system.Channels).Count());
+            Assert.Equal(20, viewModel.Systems.SelectMany(system => system.Channels).Count());
             Assert.Contains(
                 viewModel.AudioInputDevices,
                 device => device.Name == "NEO Demo Microphone (synthetic)");

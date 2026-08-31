@@ -33,6 +33,8 @@ For amateur and educational use. **Not for public- or life-safety operation.**
 <sub>Public example configuration shown; no operational system data is included.</sub>
 
 <picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/user-guide/Assets/configuration-studio-zone.png">
+  <source media="(prefers-color-scheme: light)" srcset="docs/user-guide/Assets/configuration-studio-zone-light.png">
   <img alt="Configuration Studio zone editor showing the system, zone, and channel hierarchy, channel table, settings inspector, and live zone layout" src="docs/user-guide/Assets/configuration-studio-zone.png" width="100%">
 </picture>
 

@@ -45,50 +45,50 @@ public sealed partial class MainWindowViewModel
 
         SystemViewModel? northMetro = FindDemoSystem("North Metro");
         SystemViewModel? campus = FindDemoSystem("Campus Network");
-        ChannelViewModel? northDispatch = FindDemoChannel("North Dispatch");
-        ChannelViewModel? transit = FindDemoChannel("Transit Operations");
-        ChannelViewModel? publicWorks = FindDemoChannel("Public Works");
+        ChannelViewModel? campusDispatch = FindDemoChannel("Campus Dispatch");
+        ChannelViewModel? campusOps = FindDemoChannel("Campus Ops");
+        ChannelViewModel? campusSecurity = FindDemoChannel("Campus Security");
         ChannelViewModel? campusServices = FindDemoChannel("Campus Services");
         ChannelViewModel? events = FindDemoChannel("Events");
         ChannelViewModel? facilities = FindDemoChannel("Facilities");
 
         if (northMetro is not null)
             SelectedSystem = northMetro;
-        if (transit is not null)
-            SelectChannel(transit);
+        if (campusOps is not null)
+            SelectChannel(campusOps);
 
-        northDispatch?.SetTransmitSelected(true);
-        transit?.SetTransmitSelected(true);
-        publicWorks?.SetPageSelected(true);
-        transit?.SetAlertSelected(true);
+        campusDispatch?.SetTransmitSelected(true);
+        campusOps?.SetTransmitSelected(true);
+        campusSecurity?.SetPageSelected(true);
+        campusOps?.SetAlertSelected(true);
         events?.SetPageSelected(true);
         facilities?.SetAlertSelected(true);
-        transit?.RestoreRecordingEnabled(true);
+        campusOps?.RestoreRecordingEnabled(true);
         campusServices?.RestoreRecordingEnabled(true);
-        publicWorks?.RestoreRecordingEnabled(true);
+        campusSecurity?.RestoreRecordingEnabled(true);
 
-        if (northDispatch is not null)
+        if (campusDispatch is not null)
         {
             const uint transmitStreamId = 0x4E454F01;
             ObservePttActivationSource(PttActivationSource.LocalChannelControl);
-            northDispatch.SetTransmitEnabled(true, transmitStreamId);
+            campusDispatch.SetTransmitEnabled(true, transmitStreamId);
             callHistory.AddConsoleTransmission(
                 DemoTimelineOrigin.AddMinutes(9),
-                northDispatch.Definition.SystemName,
-                northDispatch.Name,
+                campusDispatch.Definition.SystemName,
+                campusDispatch.Name,
                 990001,
-                northDispatch.Definition.DestinationId,
-                ProtocolFor(northDispatch),
+                campusDispatch.Definition.DestinationId,
+                ProtocolFor(campusDispatch),
                 transmitStreamId,
                 "NEO Demo Console",
-                channelId: new ChannelId(northDispatch.SessionId));
+                channelId: new ChannelId(campusDispatch.SessionId));
         }
 
-        if (northMetro is not null && transit is not null)
+        if (northMetro is not null && campusOps is not null)
         {
-            PresentDemoReceive(northMetro, transit, 42017, 0x4E454F11, 72);
+            PresentDemoReceive(northMetro, campusOps, 42017, 0x4E454F11, 72);
             AddActiveDemoCall(
-                transit,
+                campusOps,
                 42017,
                 0x4E454F11,
                 DemoTimelineOrigin.AddMinutes(8).AddSeconds(54));
@@ -104,7 +104,7 @@ public sealed partial class MainWindowViewModel
         }
 
         AddCompletedDemoCall(
-            publicWorks,
+            campusSecurity,
             33412,
             0x4E454F31,
             DemoTimelineOrigin.AddMinutes(7),
@@ -117,7 +117,7 @@ public sealed partial class MainWindowViewModel
             TimeSpan.FromSeconds(42));
 
         AddDemoRecording(
-            publicWorks,
+            campusSecurity,
             33412,
             "Field Unit 34",
             0x4E454F31,
