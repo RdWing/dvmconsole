@@ -207,6 +207,48 @@ public sealed class OperatorInterfaceGateTests
     }
 
     [Fact]
+    public void ClassicChannelPttColorDoesNotChangeForTransientPointerStates()
+    {
+        XDocument shell = XDocument.Parse(ReadDesktopSource("MainWindow.axaml"));
+        XElement[] pttPointerStyles = shell.Descendants()
+            .Where(element => element.Name.LocalName == "Style")
+            .Where(element => Attribute(element, "Selector") is string selector &&
+                selector.StartsWith("Button.ptt:", StringComparison.Ordinal))
+            .ToArray();
+
+        Assert.NotEmpty(pttPointerStyles);
+        Assert.All(pttPointerStyles, style => Assert.All(
+            style.Elements().Where(element => element.Name.LocalName == "Setter" &&
+                Attribute(element, "Property") == "Background"),
+            setter => Assert.Equal(
+                "{DynamicResource PttBackgroundBrush}",
+                Attribute(setter, "Value"))));
+    }
+
+    [Fact]
+    public void ListControlColorsOnlyFollowOperationalStateClasses()
+    {
+        XDocument list = XDocument.Parse(ReadPresentationSource("ChannelListView.axaml"));
+        XElement[] controls = list.Descendants()
+            .Where(element => element.Name.LocalName == "Button")
+            .ToArray();
+        Assert.NotEmpty(controls);
+        Assert.All(controls, control => Assert.Contains(
+            "list-control",
+            Attribute(control, "Classes")?.Split(' ') ?? []));
+        Assert.Single(list.Descendants(), element =>
+            element.Name.LocalName == "Style" &&
+            Attribute(element, "Selector") == "Button.list-control" &&
+            element.Descendants().Any(descendant => descendant.Name.LocalName == "ControlTemplate"));
+
+        XDocument shell = XDocument.Parse(ReadDesktopSource("MainWindow.axaml"));
+        Assert.Single(shell.Descendants(), element =>
+            element.Name.LocalName == "Style" &&
+            Attribute(element, "Selector") is string selector &&
+            selector.Contains(":not(.list-control):pointerover", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void ConfigurationStudioSeparatesOperatorGroupChangesFromYamlSave()
     {
         XDocument studio = XDocument.Parse(ReadPresentationSource("ConfigurationStudioView.axaml"));

@@ -3,6 +3,7 @@ using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.LogicalTree;
+using Avalonia.Threading;
 using Avalonia.VisualTree;
 using DvmConsole.Application;
 
@@ -11,10 +12,16 @@ namespace DvmConsole.Presentation;
 public sealed partial class ChannelListView : UserControl
 {
     private Func<bool> useTogglePtt = static () => false;
+    private ChannelListItemViewModel? anchoredItem;
+    private ScrollViewer? anchoredScroller;
+    private double anchoredItemY;
 
     public ChannelListView()
     {
         InitializeComponent();
+        AddHandler(InputElement.PointerPressedEvent, HandlePttPointerPressed, RoutingStrategies.Tunnel, true);
+        AddHandler(InputElement.PointerReleasedEvent, HandlePttPointerReleased, RoutingStrategies.Tunnel, true);
+        AddHandler(InputElement.PointerCaptureLostEvent, HandlePttPointerCaptureLost, RoutingStrategies.Bubble, true);
     }
 
     public void Attach(
@@ -34,6 +41,7 @@ public sealed partial class ChannelListView : UserControl
     {
         if (DataContext is not ConsoleListViewModel viewModel)
             return;
+        ClearRowAnchor();
         DataContext = null;
         await viewModel.DisposeAsync();
     }
@@ -73,12 +81,27 @@ public sealed partial class ChannelListView : UserControl
         e.Handled = true;
     }
 
-    private void HandleRowPointerReleased(object? sender, PointerReleasedEventArgs e)
+    private void HandleRowPointerPressed(object? sender, PointerPressedEventArgs e)
     {
         if (sender is not Control row || IsInteractiveSource(e.Source, row))
             return;
-        if (row.DataContext is ChannelListItemViewModel item)
-            item.ToggleExpansion();
+
+        CaptureRowAnchor(row);
+        e.Handled = true;
+    }
+
+    private async void HandleRowPointerReleased(object? sender, PointerReleasedEventArgs e)
+    {
+        if (sender is not Control row || IsInteractiveSource(e.Source, row) ||
+            row.DataContext is not ChannelListItemViewModel item)
+        {
+            return;
+        }
+
+        e.Handled = true;
+        item.ToggleExpansion();
+        await Dispatcher.UIThread.InvokeAsync(static () => { }, DispatcherPriority.Background);
+        RestoreRowAnchor();
     }
 
     private async void HandleRowDetached(object? sender, VisualTreeAttachmentEventArgs e)
@@ -92,8 +115,8 @@ public sealed partial class ChannelListView : UserControl
 
     private async void HandlePttPointerPressed(object? sender, PointerPressedEventArgs e)
     {
-        if (sender is not Button button ||
-            button.DataContext is not ChannelListItemViewModel item ||
+        Button? button = FindPttButton(e.Source);
+        if (button?.DataContext is not ChannelListItemViewModel item ||
             DataContext is not ConsoleListViewModel viewModel ||
             !e.GetCurrentPoint(button).Properties.IsLeftButtonPressed)
         {
@@ -111,7 +134,8 @@ public sealed partial class ChannelListView : UserControl
 
     private async void HandlePttPointerReleased(object? sender, PointerReleasedEventArgs e)
     {
-        if (useTogglePtt() || sender is not Button { DataContext: ChannelListItemViewModel item } ||
+        Button? button = e.Pointer.Captured as Button ?? FindPttButton(e.Source);
+        if (useTogglePtt() || button?.DataContext is not ChannelListItemViewModel item ||
             DataContext is not ConsoleListViewModel viewModel)
         {
             return;
@@ -123,7 +147,8 @@ public sealed partial class ChannelListView : UserControl
 
     private async void HandlePttPointerCaptureLost(object? sender, PointerCaptureLostEventArgs e)
     {
-        if (!useTogglePtt() && sender is Button { DataContext: ChannelListItemViewModel item } &&
+        Button? button = FindPttButton(e.Source);
+        if (!useTogglePtt() && button?.DataContext is ChannelListItemViewModel item &&
             DataContext is ConsoleListViewModel viewModel)
         {
             await viewModel.ReleasePttAsync(item.Id);
@@ -169,6 +194,65 @@ public sealed partial class ChannelListView : UserControl
 
     private static ChannelListItemViewModel? DataContextOf(object? sender)
         => (sender as Control)?.DataContext as ChannelListItemViewModel;
+
+    private static Button? FindPttButton(object? source)
+    {
+        for (Visual? visual = source as Visual; visual is not null; visual = visual.GetVisualParent())
+        {
+            if (visual is Button button && button.Classes.Contains("ptt"))
+                return button;
+        }
+        return null;
+    }
+
+    private void CaptureRowAnchor(Control row)
+    {
+        ClearRowAnchor();
+        if (row.DataContext is not ChannelListItemViewModel item)
+            return;
+
+        ScrollViewer? scroller = row.GetVisualAncestors().OfType<ScrollViewer>().FirstOrDefault();
+        Point? position = scroller is null ? null : row.TranslatePoint(default, scroller);
+        if (scroller is null || position is null)
+            return;
+
+        anchoredItem = item;
+        anchoredScroller = scroller;
+        anchoredItemY = position.Value.Y;
+    }
+
+    private void RestoreRowAnchor()
+    {
+        ChannelListItemViewModel? item = anchoredItem;
+        ScrollViewer? scroller = anchoredScroller;
+        double initialY = anchoredItemY;
+        ClearRowAnchor();
+        if (item is null || scroller is null)
+            return;
+
+        Control? row = this.GetVisualDescendants()
+            .OfType<Border>()
+            .FirstOrDefault(candidate =>
+                candidate.Classes.Contains("channel-list-row") &&
+                ReferenceEquals(candidate.DataContext, item));
+        Point? position = row?.TranslatePoint(default, scroller);
+        if (position is null)
+            return;
+
+        double maximumOffset = Math.Max(0, scroller.Extent.Height - scroller.Viewport.Height);
+        double desiredOffset = Math.Clamp(
+            scroller.Offset.Y + position.Value.Y - initialY,
+            0,
+            maximumOffset);
+        scroller.Offset = new Vector(scroller.Offset.X, desiredOffset);
+    }
+
+    private void ClearRowAnchor()
+    {
+        anchoredItem = null;
+        anchoredScroller = null;
+        anchoredItemY = 0;
+    }
 
     private static bool IsInteractiveSource(object? source, Control row)
     {

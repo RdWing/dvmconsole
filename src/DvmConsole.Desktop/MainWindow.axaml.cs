@@ -486,10 +486,22 @@ public sealed partial class MainWindow : Window
         if (Interlocked.Exchange(ref shutdownStarted, 1) != 0)
             return;
 
+        WindowPlacementSetting closingPlacement = mainWindowPlacement.GetPlacementForPersistence();
+        mainWindowPlacement.Dispose();
+
         // Remove the console from view immediately while the bounded cleanup
         // finishes releasing PTT, recordings, audio, and network ownership.
         // The native window is closed only after that safety work completes.
         Hide();
+
+        try
+        {
+            await viewModel.SaveMainWindowPlacementAsync(closingPlacement);
+        }
+        catch (Exception exception)
+        {
+            DesktopCrashLog.Write("Main window placement persistence", exception);
+        }
 
         try
         {
@@ -512,9 +524,6 @@ public sealed partial class MainWindow : Window
     private async Task ShutdownCoreAsync()
     {
         var cleanup = new AsyncCleanup();
-        cleanup.Run(() =>
-            viewModel.SaveMainWindowPlacement(mainWindowPlacement.GetPlacementForPersistence()));
-        cleanup.Run(mainWindowPlacement.Dispose);
         cleanup.Run(() =>
         {
             foreach (DispatcherTimer timer in scrollBarTimers)

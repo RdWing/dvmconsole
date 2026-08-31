@@ -38,6 +38,8 @@ public sealed class WindowPttKeyRouterTests
     {
         Assert.True(WindowPttInputGuard.ShouldSuppressSpacePtt(new Button()));
         Assert.True(WindowPttInputGuard.ShouldSuppressSpacePtt(new Slider()));
+        Assert.False(WindowPttInputGuard.ShouldSuppressSpacePtt(new Button { Classes = { "ptt" } }));
+        Assert.False(WindowPttInputGuard.ShouldSuppressSpacePtt(new ListBox { Classes = { "channel-list" } }));
         Assert.False(WindowPttInputGuard.ShouldSuppressSpacePtt(new Border { Focusable = true }));
     }
 }

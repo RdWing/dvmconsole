@@ -544,7 +544,7 @@ public sealed partial class MainWindowViewModel :
         Height = userSettings.MainWindowPlacement.Height
     };
 
-    internal void SaveMainWindowPlacement(WindowPlacementSetting placement)
+    internal async Task SaveMainWindowPlacementAsync(WindowPlacementSetting placement)
     {
         ArgumentNullException.ThrowIfNull(placement);
         userSettings.MainWindowPlacement = new WindowPlacementSetting
@@ -555,6 +555,7 @@ public sealed partial class MainWindowViewModel :
             Height = placement.Height
         };
         PersistUserSettings();
+        await FlushUserSettingsAsync().ConfigureAwait(false);
     }
 
     public ReadOnlyObservableCollection<string> RecentCodeplugPaths { get; }
@@ -2206,6 +2207,9 @@ public sealed partial class MainWindowViewModel :
     }
 
     public void ToggleChannelTransmitSelection(ChannelViewModel channel)
+        => SetChannelTransmitSelection(channel, !channel.IsTransmitSelected);
+
+    internal void SetChannelTransmitSelection(ChannelViewModel channel, bool selected)
     {
         ArgumentNullException.ThrowIfNull(channel);
         if (!channel.CanTransmit)
@@ -2214,7 +2218,7 @@ public sealed partial class MainWindowViewModel :
             return;
         }
 
-        channel.SetTransmitSelected(!channel.IsTransmitSelected);
+        channel.SetTransmitSelected(selected);
         userSettings.TransmitSelectedChannelKeys = Systems
             .SelectMany(system => system.Channels)
             .Where(candidate => candidate.IsTransmitSelected)
@@ -2253,6 +2257,9 @@ public sealed partial class MainWindowViewModel :
     }
 
     public void ToggleChannelPageSelection(ChannelViewModel channel)
+        => SetChannelPageSelection(channel, !channel.IsPageSelected);
+
+    internal void SetChannelPageSelection(ChannelViewModel channel, bool selected)
     {
         ArgumentNullException.ThrowIfNull(channel);
         if (!channel.CanTransmit)
@@ -2261,13 +2268,16 @@ public sealed partial class MainWindowViewModel :
             return;
         }
 
-        channel.SetPageSelected(!channel.IsPageSelected);
+        channel.SetPageSelected(selected);
         TransmitStatusText = channel.IsPageSelected
             ? $"{channel.Name} armed for QCII paging."
             : $"{channel.Name} removed from QCII paging.";
     }
 
     public void ToggleChannelAlertSelection(ChannelViewModel channel)
+        => SetChannelAlertSelection(channel, !channel.IsAlertSelected);
+
+    internal void SetChannelAlertSelection(ChannelViewModel channel, bool selected)
     {
         ArgumentNullException.ThrowIfNull(channel);
         if (!channel.CanTransmit)
@@ -2276,7 +2286,7 @@ public sealed partial class MainWindowViewModel :
             return;
         }
 
-        channel.SetAlertSelected(!channel.IsAlertSelected);
+        channel.SetAlertSelected(selected);
         RaiseGeneratedAudioCanExecuteChanged();
         TransmitStatusText = channel.IsAlertSelected
             ? $"{channel.Name} armed for DTMF and alert tones."

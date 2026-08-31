@@ -7,7 +7,7 @@ public interface IConsoleCommands
         bool enabled,
         CancellationToken cancellationToken = default);
 
-    ValueTask BeginPttAsync(
+    ValueTask<bool> BeginPttAsync(
         ChannelId channelId,
         CancellationToken cancellationToken = default);
 
@@ -51,8 +51,8 @@ public sealed class NoOpConsoleCommands : IConsoleCommands
     public ValueTask SetReceiveEnabledAsync(ChannelId channelId, bool enabled, CancellationToken cancellationToken = default)
         => ValueTask.CompletedTask;
 
-    public ValueTask BeginPttAsync(ChannelId channelId, CancellationToken cancellationToken = default)
-        => ValueTask.CompletedTask;
+    public ValueTask<bool> BeginPttAsync(ChannelId channelId, CancellationToken cancellationToken = default)
+        => ValueTask.FromResult(false);
 
     public ValueTask EndPttAsync(ChannelId channelId, CancellationToken cancellationToken = default)
         => ValueTask.CompletedTask;

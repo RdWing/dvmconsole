@@ -1,6 +1,8 @@
+using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
 using Avalonia.Automation;
+using Avalonia.Headless;
 using Avalonia.Headless.XUnit;
 using Avalonia.Input;
 using Avalonia.Media;
@@ -236,6 +238,126 @@ public sealed class PresentationRenderTests
             Assert.NotEmpty(interactive);
             Assert.All(interactive, control =>
                 Assert.False(string.IsNullOrWhiteSpace(AutomationProperties.GetName(control))));
+        }
+        finally
+        {
+            await list.DetachAsync();
+            host.Close();
+        }
+    }
+
+    [AvaloniaFact]
+    public async Task ListPttPointerInputSupportsHoldAndToggleModes()
+    {
+        var holdCommands = new RecordingConsoleCommands();
+        await using ConsoleApplicationSession holdSession = CreateSession(1, holdCommands);
+        await using var holdPtt = new ChannelPttController(
+            holdCommands.BeginPttAsync,
+            holdCommands.EndPttAsync);
+        var holdList = new ChannelListView();
+        holdList.Attach(holdSession, holdPtt, static () => false);
+        var holdHost = new Window { Width = 880, Height = 300, Content = holdList };
+
+        try
+        {
+            holdHost.Show();
+            holdHost.UpdateLayout();
+            Button holdButton = FindListPttButton(holdList);
+            Point holdPoint = holdButton.TranslatePoint(
+                new Point(holdButton.Bounds.Width / 2, holdButton.Bounds.Height / 2),
+                holdHost)!.Value;
+
+            holdHost.MouseDown(holdPoint, MouseButton.Left, RawInputModifiers.None);
+            await Dispatcher.UIThread.InvokeAsync(static () => { }, DispatcherPriority.Background);
+            Assert.Equal(1, holdCommands.PttStarts);
+            Assert.Equal(0, holdCommands.PttStops);
+
+            holdHost.MouseUp(holdPoint, MouseButton.Left, RawInputModifiers.None);
+            await Dispatcher.UIThread.InvokeAsync(static () => { }, DispatcherPriority.Background);
+            Assert.Equal(1, holdCommands.PttStops);
+        }
+        finally
+        {
+            await holdList.DetachAsync();
+            holdHost.Close();
+        }
+
+        var toggleCommands = new RecordingConsoleCommands();
+        await using ConsoleApplicationSession toggleSession = CreateSession(1, toggleCommands);
+        await using var togglePtt = new ChannelPttController(
+            toggleCommands.BeginPttAsync,
+            toggleCommands.EndPttAsync);
+        var toggleList = new ChannelListView();
+        toggleList.Attach(toggleSession, togglePtt, static () => true);
+        var toggleHost = new Window { Width = 880, Height = 300, Content = toggleList };
+
+        try
+        {
+            toggleHost.Show();
+            toggleHost.UpdateLayout();
+            Button toggleButton = FindListPttButton(toggleList);
+            Point togglePoint = toggleButton.TranslatePoint(
+                new Point(toggleButton.Bounds.Width / 2, toggleButton.Bounds.Height / 2),
+                toggleHost)!.Value;
+
+            toggleHost.MouseDown(togglePoint, MouseButton.Left, RawInputModifiers.None);
+            toggleHost.MouseUp(togglePoint, MouseButton.Left, RawInputModifiers.None);
+            await Dispatcher.UIThread.InvokeAsync(static () => { }, DispatcherPriority.Background);
+            Assert.Equal(1, toggleCommands.PttStarts);
+            Assert.Equal(0, toggleCommands.PttStops);
+
+            toggleHost.MouseDown(togglePoint, MouseButton.Left, RawInputModifiers.None);
+            toggleHost.MouseUp(togglePoint, MouseButton.Left, RawInputModifiers.None);
+            await Dispatcher.UIThread.InvokeAsync(static () => { }, DispatcherPriority.Background);
+            Assert.Equal(1, toggleCommands.PttStarts);
+            Assert.Equal(1, toggleCommands.PttStops);
+        }
+        finally
+        {
+            await toggleList.DetachAsync();
+            toggleHost.Close();
+        }
+    }
+
+    [AvaloniaFact]
+    public async Task ExpandingAListRowPreservesItsViewportPosition()
+    {
+        await using ConsoleApplicationSession session = CreateSession(channelCount: 34);
+        await using var ptt = new ChannelPttController(
+            static (_, _) => ValueTask.FromResult(true),
+            static (_, _) => ValueTask.CompletedTask);
+        var list = new ChannelListView();
+        list.Attach(session, ptt);
+        var host = new Window { Width = 880, Height = 320, Content = list };
+
+        try
+        {
+            host.Show();
+            host.UpdateLayout();
+            ScrollViewer scroller = Assert.Single(list.GetVisualDescendants().OfType<ScrollViewer>());
+            scroller.Offset = new Vector(0, 700);
+            host.UpdateLayout();
+            Border row = list.GetVisualDescendants()
+                .OfType<Border>()
+                .Where(candidate => candidate.Classes.Contains("channel-list-row"))
+                .First(candidate => candidate.TranslatePoint(default, scroller) is Point position &&
+                    position.Y >= 0 && position.Y + candidate.Bounds.Height <= scroller.Viewport.Height);
+            object? rowItem = row.DataContext;
+            double initialY = row.TranslatePoint(default, scroller)!.Value.Y;
+            Point clickPoint = row.TranslatePoint(new Point(150, 24), host)!.Value;
+
+            host.MouseDown(clickPoint, MouseButton.Left, RawInputModifiers.None);
+            host.MouseUp(clickPoint, MouseButton.Left, RawInputModifiers.None);
+            await Dispatcher.UIThread.InvokeAsync(static () => { }, DispatcherPriority.Background);
+            host.UpdateLayout();
+
+            Border restoredRow = Assert.Single(
+                list.GetVisualDescendants().OfType<Border>(),
+                candidate => candidate.Classes.Contains("channel-list-row") &&
+                    ReferenceEquals(candidate.DataContext, rowItem));
+            double restoredY = restoredRow.TranslatePoint(default, scroller)!.Value.Y;
+            Assert.Equal(initialY, restoredY, precision: 1);
+            Assert.True(Assert.IsType<ChannelListItemViewModel>(rowItem).IsExpanded);
         }
         finally
         {
@@ -991,7 +1113,14 @@ public sealed class PresentationRenderTests
         }
     }
 
-    private static ConsoleApplicationSession CreateSession(int channelCount)
+    private static Button FindListPttButton(ChannelListView list)
+        => Assert.Single(
+            list.GetVisualDescendants().OfType<Button>(),
+            button => button.Classes.Contains("ptt"));
+
+    private static ConsoleApplicationSession CreateSession(
+        int channelCount,
+        IConsoleCommands? commands = null)
     {
         var systemId = SystemId.FromName("Test System");
         var zoneId = ZoneId.FromName("Test Zone");
@@ -1030,7 +1159,7 @@ public sealed class PresentationRenderTests
         return new ConsoleApplicationSession(
             topology,
             new ConsoleRuntimeSnapshot(1, null, states, false, "Ready"),
-            new NoOpConsoleCommands());
+            commands ?? new NoOpConsoleCommands());
     }
 
     private static ChannelControlSnapshot CreateState(ChannelDescriptor descriptor, int index)
@@ -1063,6 +1192,45 @@ public sealed class PresentationRenderTests
             Fault: null,
             TransmitEncryptionConfigured: index == 0,
             TransmitEncryptionSelectable: index == 0);
+
+    private sealed class RecordingConsoleCommands : IConsoleCommands
+    {
+        public int PttStarts { get; private set; }
+        public int PttStops { get; private set; }
+
+        public ValueTask SetReceiveEnabledAsync(ChannelId channelId, bool enabled, CancellationToken cancellationToken = default)
+            => ValueTask.CompletedTask;
+
+        public ValueTask<bool> BeginPttAsync(ChannelId channelId, CancellationToken cancellationToken = default)
+        {
+            PttStarts++;
+            return ValueTask.FromResult(true);
+        }
+
+        public ValueTask EndPttAsync(ChannelId channelId, CancellationToken cancellationToken = default)
+        {
+            PttStops++;
+            return ValueTask.CompletedTask;
+        }
+
+        public ValueTask SetTransmitSelectedAsync(ChannelId channelId, bool selected, CancellationToken cancellationToken = default)
+            => ValueTask.CompletedTask;
+
+        public ValueTask SetPageSelectedAsync(ChannelId channelId, bool selected, CancellationToken cancellationToken = default)
+            => ValueTask.CompletedTask;
+
+        public ValueTask SetAlertSelectedAsync(ChannelId channelId, bool selected, CancellationToken cancellationToken = default)
+            => ValueTask.CompletedTask;
+
+        public ValueTask SetTransmitEncryptedAsync(ChannelId channelId, bool encrypted, CancellationToken cancellationToken = default)
+            => ValueTask.CompletedTask;
+
+        public ValueTask SetChannelGainAsync(ChannelId channelId, double gain, CancellationToken cancellationToken = default)
+            => ValueTask.CompletedTask;
+
+        public ValueTask SetChannelBalanceAsync(ChannelId channelId, double balance, CancellationToken cancellationToken = default)
+            => ValueTask.CompletedTask;
+    }
 
     private sealed class TestCallHistoryViewModel : ICallHistoryViewModel
     {
