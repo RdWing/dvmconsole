@@ -8,9 +8,10 @@
 
 Monitor and transmit across DMR, P25 Phase 1, and NXDN 4800 FNE talkgroups.
 Route patches, send pages and alerts, and review recordings without leaving the
-macOS or Windows operator workspace. 
+macOS or Windows operator workspace.
 
-NEO is a ground-up cross-platform application that retains the repository lineage and FNE interoperability of the original DVMConsole.
+NEO is a ground-up cross-platform application that retains the repository
+lineage and FNE interoperability of the original DVMConsole.
 
 For amateur and educational use. **Not for public- or life-safety operation.**
 
@@ -61,6 +62,13 @@ isolated audio state keep simultaneous calls separate.
 
 ## What’s new in DVM Console NEO
 
+### 0.6.1 — Small hotfix release
+
+Version 0.6.1 fixes control state, PTT input, row expansion, and window placement
+in the compact List workspace. It also expands the network-disabled demo.
+
+[Read the 0.6.1 release notes →](docs/releases/v0.6.1.md)
+
 ### 0.6.0 — Portability-first runtime and shared presentation
 
 Version 0.6.0 completes the first portability refactor while keeping macOS and
@@ -82,50 +90,22 @@ Windows as the supported runtime targets.
 
 ### Prior recent improvements
 
-Recent releases also include these changes:
+The five releases from 0.5.1 through 0.5.5 improved transmit pacing, receive and
+session teardown, FNE transmit-target validation, Studio saves, TAR matching,
+web-stream cancellation, and native-audio cleanup.
 
-- **0.5.5 — Web-stream cancellation stabilization:** ensured a canceled stream
-  start reliably returns to the off state and hardened its timing regression.
-- **0.5.4 — Configuration, recording, FNE, and audio reliability:** made Studio
-  saves safer, correlated TAR by receive episode, made stream startup
-  cancellable, and tightened protocol, decoder, mixer, and native-audio
-  lifecycle handling.
-- **0.5.3 — FNE transmit-target validation hotfix:** made each FNE talkgroup
-  table authoritative for every transmit path, including DMR timeslot matching.
-- **0.5.2 — Receive audio and session reliability hotfix:** corrected ordered
-  P25 receive teardown, mute and TAR separation, FNE session lifetime, immediate
-  group operator changes, shutdown retry cancellation, and local tone monitor
-  control.
-- **0.5.1 — Windows transmit audio hotfix:** kept outbound audio and patch
-  forwarding on absolute deadlines when Windows timer wakeups run late.
-- **0.5.0 — Configuration Studio:** added graphical codeplug editing, layout
-  previews, validation, atomic saves, sanitized exports, playback stop, and
-  generated-audio monitoring.
-- **0.4.4 — Connection, audio, and runtime hardening:** improved stalled FNE
-  recovery, unified channel meters, bounded media queues, and strengthened TAR
-  and session lifecycle handling.
-- **0.4.3 — Efficiency and alert audio update:** reduced package size and idle
-  work, summarized jitter evidence, and corrected pacing for generated and
-  imported alert audio.
-- **0.4.2 — Secure voice and live reconfiguration update:** corrected
-  selectable-encryption receive behavior and secure voice signaling, preserved
-  transmit-tail cadence, and made patch and session changes take effect safely.
-- **0.4.1 — Reliability and toolbar update:** made toolbar overflow
-  scale-aware, preserved scrolled History positions, made audio-route changes
-  transactional, and hardened receive-episode and session teardown.
-
-[Read the 0.5.5 release notes →](docs/releases/v0.5.5.md) · [Read the 0.5.4 release notes →](docs/releases/v0.5.4.md) · [Read the 0.5.3 release notes →](docs/releases/v0.5.3.md) · [Read the 0.5.2 release notes →](docs/releases/v0.5.2.md)
+[Read the 0.5.5 release notes →](docs/releases/v0.5.5.md) · [Browse the full changelog →](CHANGELOG.md)
 
 ## Download DVM Console NEO
 
 Download the package for the destination computer and extract the entire
-archive before starting DVM Console NEO. Version 0.6.0 uses these filenames:
+archive before starting DVM Console NEO. Version 0.6.1 uses these filenames:
 
 | Platform | Package | Requirements |
 | --- | --- | --- |
-| Apple Silicon Mac | `dvmconsole-0.6.0-osx-arm64.zip` | macOS 14 or newer |
-| Intel Mac | `dvmconsole-0.6.0-osx-x64.zip` | macOS 14 or newer |
-| Windows PC | `dvmconsole-0.6.0-win-x64.zip` | Windows x64 |
+| Apple Silicon Mac | `dvmconsole-0.6.1-osx-arm64.zip` | macOS 14 or newer |
+| Intel Mac | `dvmconsole-0.6.1-osx-x64.zip` | macOS 14 or newer |
+| Windows PC | `dvmconsole-0.6.1-win-x64.zip` | Windows x64 |
 
 **[Download the latest release →](https://github.com/RdWing/dvmconsole/releases/latest)**
 

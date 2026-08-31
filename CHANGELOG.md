@@ -6,6 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-08-31
+
+### Added
+
+- Expand the network-disabled demo with a larger multi-zone workspace.
+
+### Fixed
+
+- Restore List control colors, hold and toggle PTT input, keyboard Space PTT,
+  immediate PTT start confirmation, and stable row position during expansion.
+- Save the exact main-window size and position before Quit completes.
+
 ## [0.6.0] - 2026-08-30
 
 ### Added
@@ -893,7 +905,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Add patches, multi-select groups, call history, recordings, web streams, clocks, layouts, themes, startup behavior, and in-application operator documentation.
 - Add support for local and KMM-provided P25 encryption keys while preserving compatibility with existing variable-length AES key material.
 
-[Unreleased]: https://github.com/RdWing/dvmconsole/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/RdWing/dvmconsole/compare/v0.6.1...HEAD
+[0.6.1]: https://github.com/RdWing/dvmconsole/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/RdWing/dvmconsole/compare/v0.5.5...v0.6.0
 [0.5.5]: https://github.com/RdWing/dvmconsole/compare/v0.5.4...v0.5.5
 [0.5.4]: https://github.com/RdWing/dvmconsole/compare/v0.5.3...v0.5.4

@@ -139,7 +139,7 @@ docs/user-guide
 
 # Tagged releases
 
-Pushing a version tag such as `v0.6.0` starts the macOS and Windows test and
+Pushing a version tag such as `v0.6.1` starts the macOS and Windows test and
 packaging matrix. Both macOS jobs smoke-test the packaged application bundle.
 The Windows job runs the Avalonia headful smoke test. Add version-matched release
 notes before pushing the tag.
