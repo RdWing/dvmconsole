@@ -1,4 +1,5 @@
 using DvmConsole.Audio;
+using DvmConsole.Application;
 using Xunit;
 
 namespace DvmConsole.Desktop.Tests;
@@ -83,7 +84,7 @@ public sealed class GeneratedAudioMonitorTests
         await using var monitor = new GeneratedAudioMonitor(
             () => backend,
             () => "alternate",
-            new ImmediateOutputRouteResolver());
+            ResolveOutputImmediatelyAsync);
 
         await monitor.PlayAsync(samples);
 
@@ -105,26 +106,22 @@ public sealed class GeneratedAudioMonitorTests
         var monitor = new GeneratedAudioMonitor(
             () => new FakeAudioBackend(),
             () => "alternate",
-            new ImmediateOutputRouteResolver());
+            ResolveOutputImmediatelyAsync);
 
         await monitor.DisposeAsync();
         await monitor.DisposeAsync();
     }
 
-    private sealed class ImmediateOutputRouteResolver : IAudioOutputRouteResolver
+    private static Task<AudioDeviceInfo> ResolveOutputImmediatelyAsync(
+        IAudioBackend backend,
+        string? requestedDeviceId,
+        CancellationToken cancellationToken)
     {
-        public Task<AudioDeviceInfo> ResolveAsync(
-            IAudioBackend backend,
-            string? requestedDeviceId,
-            AudioOutputRoutePolicy policy,
-            CancellationToken cancellationToken)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            AudioDeviceInfo output = backend
-                .EnumerateDevices(AudioDirection.Output)
-                .Single(device => device.Id == requestedDeviceId);
-            return Task.FromResult(output);
-        }
+        cancellationToken.ThrowIfCancellationRequested();
+        AudioDeviceInfo output = backend
+            .EnumerateDevices(AudioDirection.Output)
+            .Single(device => device.Id == requestedDeviceId);
+        return Task.FromResult(output);
     }
 
     private sealed class FakeAudioBackend : IAudioBackend

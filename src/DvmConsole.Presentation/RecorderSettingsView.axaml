@@ -1,0 +1,135 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:presentation="using:DvmConsole.Presentation"
+             x:Class="DvmConsole.Presentation.RecorderSettingsView"
+             x:DataType="presentation:IRecorderSettingsViewModel">
+  <UserControl.Styles>
+    <Style Selector="Button"><Setter Property="MinHeight" Value="44"/></Style>
+    <Style Selector="ToggleButton"><Setter Property="MinHeight" Value="44"/></Style>
+    <Style Selector="TextBox"><Setter Property="MinHeight" Value="44"/></Style>
+    <Style Selector="Button.tar-select:pointerover" x:DataType="presentation:IRecorderChannelViewModel">
+      <Setter Property="Background" Value="{Binding RecordingSelectionBrush}"/>
+      <Setter Property="BorderBrush" Value="{Binding RecordingSelectionBorderBrush}"/>
+    </Style>
+    <Style Selector="Button.tar-select:pressed" x:DataType="presentation:IRecorderChannelViewModel">
+      <Setter Property="Background" Value="{Binding RecordingSelectionBrush}"/>
+      <Setter Property="BorderBrush" Value="{Binding RecordingSelectionBorderBrush}"/>
+    </Style>
+    <Style Selector="ToggleButton.recorder-system-toggle">
+      <Setter Property="Background" Value="Transparent"/>
+      <Setter Property="BorderBrush" Value="Transparent"/>
+      <Setter Property="BorderThickness" Value="0"/>
+      <Setter Property="Padding" Value="0,6"/>
+      <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+    </Style>
+    <Style Selector="ToggleButton.recorder-system-toggle:pointerover">
+      <Setter Property="Background" Value="Transparent"/>
+      <Setter Property="BorderBrush" Value="Transparent"/>
+    </Style>
+    <Style Selector="ToggleButton.recorder-system-toggle:pressed">
+      <Setter Property="Background" Value="Transparent"/>
+      <Setter Property="BorderBrush" Value="Transparent"/>
+    </Style>
+    <Style Selector="ToggleButton.recorder-system-toggle:checked">
+      <Setter Property="Background" Value="Transparent"/>
+      <Setter Property="BorderBrush" Value="Transparent"/>
+    </Style>
+    <Style Selector="ToggleButton.recorder-system-toggle TextBlock.recorder-system-chevron">
+      <Setter Property="Text" Value="▸"/>
+    </Style>
+    <Style Selector="ToggleButton.recorder-system-toggle:checked TextBlock.recorder-system-chevron">
+      <Setter Property="Text" Value="▾"/>
+    </Style>
+  </UserControl.Styles>
+  <ScrollViewer x:Name="RecorderScroller" Margin="10">
+    <StackPanel Spacing="12">
+      <TextBlock Classes="heading" Text="Talkgroup Audio Recorder"/>
+      <Border Classes="panel" IsVisible="{Binding IsExternalRecordingLocationAvailable}">
+        <StackPanel Spacing="6">
+          <TextBlock FontWeight="SemiBold" Text="Desktop recording location"/>
+          <TextBlock Classes="caption"
+                     Text="Choose an optional external location for completed recordings."
+                     TextWrapping="Wrap"/>
+          <WrapPanel ItemSpacing="8" LineSpacing="8">
+            <TextBox Width="300"
+                     Text="{Binding RecordingLocationText, Mode=TwoWay}"
+                     AutomationProperties.Name="Recording location"/>
+            <Button Content="Browse…"
+                    AutomationProperties.Name="Choose recording location"
+                    Click="HandleChooseRecordingLocationClick"/>
+            <Button Content="Apply location"
+                    AutomationProperties.Name="Apply recording location"
+                    Click="HandleApplyRecordingLocationClick"/>
+          </WrapPanel>
+        </StackPanel>
+      </Border>
+      <WrapPanel ItemSpacing="8" LineSpacing="8">
+        <StackPanel Width="120" Spacing="2">
+          <TextBlock Text="Retention days"/>
+          <TextBox Text="{Binding RecordingRetentionDaysText, Mode=TwoWay}"
+                   AutomationProperties.Name="Recording retention days"/>
+        </StackPanel>
+        <Button Content="Apply and prune"
+                Command="{Binding ApplyRecordingRetentionCommand}"
+                VerticalAlignment="Bottom"
+                AutomationProperties.Name="Apply recording retention and prune"/>
+        <TextBlock Width="300"
+                   Classes="caption"
+                   Text="Completed recordings, search, and playback are available in History."
+                   TextWrapping="Wrap"
+                   VerticalAlignment="Center"/>
+      </WrapPanel>
+      <TextBlock FontWeight="SemiBold" Text="Channel recording configuration"/>
+      <ItemsControl ItemsSource="{Binding RecorderSystems}">
+        <ItemsControl.ItemTemplate>
+          <DataTemplate x:DataType="presentation:IRecorderSystemViewModel">
+            <StackPanel Margin="0,2,0,6">
+              <ToggleButton x:Name="SystemToggle"
+                            Classes="recorder-system-toggle"
+                            IsChecked="True"
+                            AutomationProperties.Name="{Binding Name}">
+                <Grid ColumnDefinitions="*,Auto">
+                  <TextBlock FontWeight="SemiBold" Text="{Binding Name}" TextWrapping="Wrap"/>
+                  <TextBlock Grid.Column="1" Classes="recorder-system-chevron" Opacity="0.72"/>
+                </Grid>
+              </ToggleButton>
+              <ItemsControl ItemsSource="{Binding RecorderChannels}"
+                            IsVisible="{Binding IsChecked, ElementName=SystemToggle}">
+                <ItemsControl.ItemTemplate>
+                  <DataTemplate x:DataType="presentation:IRecorderChannelViewModel">
+                    <Border Classes="panel recorder-channel-row" Margin="0,0,0,4" Padding="8,4">
+                      <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                        <WrapPanel ItemSpacing="8" LineSpacing="6">
+                          <StackPanel Width="200" VerticalAlignment="Center">
+                            <TextBlock Text="{Binding Name}" TextTrimming="CharacterEllipsis"/>
+                            <TextBlock Classes="caption" Text="{Binding DestinationText}" TextTrimming="CharacterEllipsis"/>
+                          </StackPanel>
+                          <TextBox Width="260"
+                                   Watermark="Ignored RIDs, comma separated"
+                                   Text="{Binding IgnoredSubscriberIdsText, Mode=TwoWay}"
+                                   AutomationProperties.Name="Ignored subscriber IDs"/>
+                          <Button Content="Save ignored RIDs"
+                                  Tag="{Binding}"
+                                  AutomationProperties.Name="Save ignored subscriber IDs"
+                                  Click="HandleSaveIgnoredSubscribersClick"/>
+                        </WrapPanel>
+                        <Button Grid.Column="1"
+                                Classes="tar-select"
+                                Content="{Binding RecordingConfigurationButtonText}"
+                                Background="{Binding RecordingSelectionBrush}"
+                                BorderBrush="{Binding RecordingSelectionBorderBrush}"
+                                Command="{Binding RecordingCommand}"
+                                VerticalAlignment="Center"
+                                AutomationProperties.Name="{Binding RecordingConfigurationButtonText}"/>
+                      </Grid>
+                    </Border>
+                  </DataTemplate>
+                </ItemsControl.ItemTemplate>
+              </ItemsControl>
+            </StackPanel>
+          </DataTemplate>
+        </ItemsControl.ItemTemplate>
+      </ItemsControl>
+    </StackPanel>
+  </ScrollViewer>
+</UserControl>

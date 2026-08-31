@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Security.Cryptography;
 using System.Text;
 using YamlDotNet.RepresentationModel;
@@ -13,17 +14,23 @@ public sealed record UnknownConfigurationField(string Path, string Name)
 
 public sealed class ConfigurationDocument
 {
+    [UnconditionalSuppressMessage("AOT", "IL3050", Justification =
+        "Temporary Phase 2 YAML allowlist: migrate this builder to a generated StaticContext while preserving unknown-field and read-only behavior.")]
     private static readonly IDeserializer Deserializer = new DeserializerBuilder()
         .WithNamingConvention(CamelCaseNamingConvention.Instance)
         .IgnoreUnmatchedProperties()
         .Build();
 
+    [UnconditionalSuppressMessage("AOT", "IL3050", Justification =
+        "Temporary Phase 2 YAML allowlist: migrate this builder to a generated StaticContext while preserving unknown-field and read-only behavior.")]
     private static readonly ISerializer Serializer = new SerializerBuilder()
         .WithNamingConvention(CamelCaseNamingConvention.Instance)
         .ConfigureDefaultValuesHandling(
             DefaultValuesHandling.OmitNull |
             DefaultValuesHandling.OmitEmptyCollections)
         .Build();
+    [UnconditionalSuppressMessage("AOT", "IL3050", Justification =
+        "Temporary Phase 2 YAML allowlist: migrate this builder to a generated StaticContext while preserving unknown-field and read-only behavior.")]
     private static readonly ISerializer SchemaSerializer = new SerializerBuilder()
         .WithNamingConvention(CamelCaseNamingConvention.Instance)
         .ConfigureDefaultValuesHandling(DefaultValuesHandling.OmitNull)
@@ -152,6 +159,41 @@ public sealed class ConfigurationDocument
 
     public void MarkDirty() => IsDirty = true;
 
+    public void RemoveWebStreamAuthorization()
+    {
+        if (IsReadOnly)
+        {
+            throw new InvalidOperationException(
+                ReadOnlyReason ?? "This YAML document cannot be safely rewritten.");
+        }
+
+        foreach (WebStreamConfiguration stream in Configuration.Zones.SelectMany(zone => zone.WebStreams))
+        {
+            stream.AuthUsername = null;
+            stream.AuthPassword = null;
+        }
+
+        if (sourceTree.Documents.Count > 0 &&
+            sourceTree.Documents[0].RootNode is YamlMappingNode root &&
+            TryGetMappingValue(root, "zones", out YamlSequenceNode? zones) &&
+            zones is not null)
+        {
+            foreach (YamlMappingNode zone in zones.Children.OfType<YamlMappingNode>())
+            {
+                if (!TryGetMappingValue(zone, "web_streams", out YamlSequenceNode? streams) ||
+                    streams is null)
+                    continue;
+                foreach (YamlMappingNode stream in streams.Children.OfType<YamlMappingNode>())
+                {
+                    RemoveMappingEntry(stream, "authUsername");
+                    RemoveMappingEntry(stream, "authPassword");
+                }
+            }
+        }
+
+        IsDirty = true;
+    }
+
     public IReadOnlyList<ConfigurationValidationIssue> Validate()
         => ConfigurationValidator.ValidateDetailed(Configuration);
 
@@ -241,6 +283,28 @@ public sealed class ConfigurationDocument
         }
 
         return null;
+    }
+
+    private static bool TryGetMappingValue<TNode>(
+        YamlMappingNode mapping,
+        string name,
+        out TNode? value)
+        where TNode : YamlNode
+    {
+        KeyValuePair<YamlNode, YamlNode> entry = mapping.Children.FirstOrDefault(candidate =>
+            candidate.Key is YamlScalarNode scalar &&
+            string.Equals(scalar.Value, name, StringComparison.Ordinal));
+        value = entry.Value as TNode;
+        return value is not null;
+    }
+
+    private static void RemoveMappingEntry(YamlMappingNode mapping, string name)
+    {
+        YamlNode? key = mapping.Children.Keys.FirstOrDefault(candidate =>
+            candidate is YamlScalarNode scalar &&
+            string.Equals(scalar.Value, name, StringComparison.Ordinal));
+        if (key is not null)
+            mapping.Children.Remove(key);
     }
 
     private static IEnumerable<YamlNode> EnumerateNodes(YamlNode node)

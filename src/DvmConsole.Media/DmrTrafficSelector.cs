@@ -1,4 +1,4 @@
-using DvmConsole.FneClient;
+using DvmConsole.Core.Runtime;
 
 namespace DvmConsole.Media;
 
@@ -21,10 +21,10 @@ public sealed record DmrTrafficSelector
     public uint DestinationId { get; }
     public byte Slot { get; }
 
-    public bool Matches(FneTrafficFrame traffic)
+    public bool Matches(IRadioMediaFrame traffic)
     {
         ArgumentNullException.ThrowIfNull(traffic);
-        return traffic.Protocol == FneTrafficProtocol.Dmr &&
+        return traffic.Protocol == RadioMediaProtocol.Dmr &&
             traffic.DestinationId == DestinationId &&
             traffic.Slot == Slot &&
             (IsVoiceFrame(traffic.FrameType) ||

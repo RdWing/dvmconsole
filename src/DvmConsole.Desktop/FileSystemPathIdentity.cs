@@ -6,6 +6,10 @@ internal static class FileSystemPathIdentity
         ? StringComparison.OrdinalIgnoreCase
         : StringComparison.Ordinal;
 
+    public static StringComparer Comparer => OperatingSystem.IsWindows()
+        ? StringComparer.OrdinalIgnoreCase
+        : StringComparer.Ordinal;
+
     public static bool AreEquivalent(string first, string second)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(first);

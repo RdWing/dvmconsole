@@ -1,4 +1,5 @@
 using DvmConsole.Audio;
+using DvmConsole.Ptt;
 
 namespace DvmConsole.AudioProbe;
 
@@ -101,12 +102,10 @@ internal static class Program
         await capture.StartAsync().ConfigureAwait(false);
         await playback.WriteAsync(new short[PcmAudioFormat.Voice8KhzMono16Bit.SampleRate * seconds]).ConfigureAwait(false);
         await Task.Delay(TimeSpan.FromSeconds(seconds)).ConfigureAwait(false);
-        HighQualityBluetoothAudioStatus bluetoothStatus = backend.HighQualityBluetoothStatus;
         await capture.StopAsync().ConfigureAwait(false);
 
         Console.WriteLine($"Input: {input.Id}: {input.Name}");
         Console.WriteLine($"Output: {output.Id}: {output.Name}");
-        Console.WriteLine($"High-quality Bluetooth: {bluetoothStatus}");
         Console.WriteLine($"Audio stream test completed; captured {capturedSamples} PCM samples; peak level {peakSample}.");
         return 0;
     }

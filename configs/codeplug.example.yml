@@ -123,7 +123,7 @@ zones:
     # Stream position, volume, and output routing are saved by stream name.
     web_streams:
       - name: "Stream 1"
-        # Direct HTTP(S) audio stream URL. WAV and MP3 are built in; set DVM_FFMPEG for other formats.
+        # Direct HTTP(S) audio stream URL. PCM WAV, MPEG/MP3, and Ogg Opus are supported.
         url: "https://streams.example.local/stream-1"
         # Optional HTTP Basic Auth credentials for protected streams.
         # These are stored in the codeplug, so protect access to the file.

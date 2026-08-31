@@ -6,6 +6,7 @@ using DvmConsole.Core.Settings;
 using DvmConsole.Desktop;
 using DvmConsole.FneClient;
 using DvmConsole.Media;
+using DvmConsole.Ptt;
 using System.Globalization;
 using Xunit;
 
@@ -13,6 +14,33 @@ namespace DvmConsole.Desktop.Tests;
 
 public sealed partial class SystemViewModelTests
 {
+    [Fact]
+    public async Task LoadsCallPriorityFromConfigurationScopedOperatorSettings()
+    {
+        string codeplugPath = Path.Combine(AppContext.BaseDirectory, "TestData", "multiple-systems.yml");
+        string settingsPath = CreateSettingsPath();
+        var store = new UserSettingsStore(settingsPath);
+        var settings = new UserSettings();
+        CodeplugStudioStateStore.Get(settings, codeplugPath).CallPrioritySystemNames.Add("Alpha");
+        store.Save(settings);
+
+        try
+        {
+            await using MainWindowViewModel viewModel = MainWindowViewModel.Load(codeplugPath, store);
+
+            SystemViewModel alpha = Assert.Single(viewModel.Systems, system => system.Name == "Alpha");
+            SystemViewModel beta = Assert.Single(viewModel.Systems, system => system.Name == "Beta");
+            Assert.True(alpha.HasCallPriority);
+            Assert.All(alpha.Channels, channel => Assert.True(channel.HasCallPriority));
+            Assert.False(beta.HasCallPriority);
+            Assert.All(beta.Channels, channel => Assert.False(channel.HasCallPriority));
+        }
+        finally
+        {
+            CleanupSettingsPath(settingsPath);
+        }
+    }
+
     [Fact]
     public async Task PersistsAndRestoresTheSelectedChannel()
     {
@@ -346,13 +374,8 @@ public sealed partial class SystemViewModelTests
         try
         {
             await using MainWindowViewModel viewModel = MainWindowViewModel.Load(codeplugPath, store);
-            Assert.Equal(
-                OperatingSystem.IsMacOSVersionAtLeast(26),
-                viewModel.IsHighQualityBluetoothAudioAvailable);
-
             viewModel.AudioInputDeviceIdText = "input-device-42";
             viewModel.AudioOutputDeviceIdText = "output-device-84";
-            viewModel.HighQualityBluetoothAudioEnabled = false;
             viewModel.AudioInputAgcEnabled = true;
             viewModel.AudioInputAgcTargetDbfsText = "-30";
             viewModel.SelectedAudioProcessingMode = OperatingSystem.IsWindows()
@@ -376,7 +399,6 @@ public sealed partial class SystemViewModelTests
                     windowsSettings.AudioProcessingMode);
                 Assert.Equal("input-device-42", windowsSettings.AudioInputDeviceId);
                 Assert.Equal("output-device-84", windowsSettings.AudioOutputDeviceId);
-                Assert.False(windowsSettings.HighQualityBluetoothAudioEnabled);
                 Assert.Contains("depend on Windows", viewModel.AudioProcessingDescription, StringComparison.OrdinalIgnoreCase);
                 Assert.Contains("bypassed", viewModel.AudioProcessingDescription, StringComparison.OrdinalIgnoreCase);
 
@@ -397,7 +419,6 @@ public sealed partial class SystemViewModelTests
             Assert.Equal(UserSettings.DvmConsoleAudioProcessingMode, portableSettings.AudioProcessingMode);
             Assert.Equal("input-device-42", portableSettings.AudioInputDeviceId);
             Assert.Equal("output-device-84", portableSettings.AudioOutputDeviceId);
-            Assert.False(portableSettings.HighQualityBluetoothAudioEnabled);
             Assert.True(portableSettings.AudioInputAgcEnabled);
             Assert.Equal(-30, portableSettings.AudioInputAgcTargetDbfs);
             Assert.DoesNotContain("echo cancellation", viewModel.AudioProcessingDescription, StringComparison.OrdinalIgnoreCase);

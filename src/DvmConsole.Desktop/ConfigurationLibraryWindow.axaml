@@ -1,0 +1,13 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:presentation="using:DvmConsole.Presentation"
+        x:Class="DvmConsole.Desktop.ConfigurationLibraryWindow"
+        Title="Configuration Library" Width="760" Height="640"
+        MinWidth="420" MinHeight="420"
+        WindowStartupLocation="CenterOwner">
+  <presentation:ConfigurationLibraryView x:Name="libraryView"
+      RefreshRequested="HandleRefreshRequested"
+      ActivateRequested="HandleActivateRequested"
+      TrashRequested="HandleTrashRequested"
+      RestoreRequested="HandleRestoreRequested" />
+</Window>

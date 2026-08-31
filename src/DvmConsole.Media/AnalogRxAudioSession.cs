@@ -1,5 +1,5 @@
 using DvmConsole.Audio;
-using DvmConsole.FneClient;
+using DvmConsole.Core.Runtime;
 
 namespace DvmConsole.Media;
 
@@ -19,7 +19,7 @@ public sealed class AnalogRxAudioSession : IAsyncDisposable
     public int FramesDecoded { get; private set; }
     public long MalformedPackets { get; private set; }
 
-    public async ValueTask<int> ProcessAsync(FneTrafficFrame traffic, CancellationToken cancellationToken = default)
+    public async ValueTask<int> ProcessAsync(IRadioMediaFrame traffic, CancellationToken cancellationToken = default)
     {
         ObjectDisposedException.ThrowIf(disposed, this);
         ArgumentNullException.ThrowIfNull(traffic);

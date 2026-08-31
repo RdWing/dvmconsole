@@ -6,6 +6,85 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-08-30
+
+### Added
+
+- Add an Avalonia-free application session boundary with stable system, zone,
+  channel, call, recording, stream, patch, configuration, and session IDs.
+  Runtime control snapshots, meters, and logs now cross that boundary as
+  separate immutable streams.
+- Add replaceable audio, vocoder, PTT, configuration, asset, recording,
+  lifecycle, permission, clock, and scheduler contracts. Desktop macOS and
+  Windows implementations remain the supported hosts.
+- Add the app-owned Configuration Library with immutable revisions, managed
+  companions, recoverable trash, active-revision tracking, legacy YAML import,
+  Save a Copy, and full or sanitized YAML export.
+- Add a shared, virtualized channel List view grouped by system and zone. Cards
+  remain the desktop default; the responsive shared presentation forces List
+  below 600 logical pixels without changing the saved desktop preference.
+- Add headless presentation coverage for desktop, narrow, and phone widths,
+  1.5x UI scale, light and dark themes, long labels, 30-plus channels, PTT
+  safety, Configuration Library, and Configuration Studio states.
+
+### Changed
+
+- Move reusable console, settings, history, Configuration Studio, and
+  Configuration Library pages into a shared Avalonia Presentation project.
+  Desktop windows retain lifetimes, placement, pickers, clipboard, process
+  launching, and physical PTT routing.
+- Split audio into contract, managed core, macOS, Windows, and desktop-selection
+  assemblies; split vocoder contracts from the native implementation; and move
+  focused/global keyboard and serial PTT into desktop-only packages.
+- Make configuration, asset, and recording flows use IDs plus stream/document
+  handles. External YAML is now an import/export format rather than the live
+  backing file for an active session.
+- Save configuration-scoped channel layouts and operator state by managed
+  configuration ID. Existing path-keyed layouts are attributed during legacy
+  import without changing the original codeplug or companion files.
+- Compact Configuration Studio, connections, tones, custom alerts, audio
+  routes, recorder settings, and Event History while retaining responsive
+  stacking and 44-pixel touch targets on phone-width layouts.
+- Retain 5,000 current-session entries in Event History instead of 100,
+  including entries without recordings. TAR catalog rows remain independently
+  retained, while the compact Activity sidebar stays bounded to its newest 100
+  matching entries.
+- Predecode the first TAR playback block before opening the output endpoint and
+  publish startup-stage timing, reducing avoidable playback delay and making
+  device-route delays diagnosable.
+- Coalesce meter and control projection updates, avoid rebuilding unchanged
+  console snapshots, and keep programmatic List gain changes from feeding back
+  as operator commands.
+
+### Fixed
+
+- Restore legacy channel-card positions when a pre-0.6 codeplug is first
+  imported, then keep layouts isolated per managed configuration.
+- Keep Configuration Studio navigation, tables, preview, and footer controls
+  independently scrollable and visible at supported desktop and narrow widths.
+- Carry forward FNE call-priority configuration and current talkgroup-table
+  authority behavior through the new runtime and Presentation boundaries.
+- Start web streams without passing an invalid negative buffer count to the
+  managed decoder.
+- Restore saved microphone-processing values and compact per-channel output,
+  recorder, and Event History rows without exposing recording filenames.
+- Keep Event History anchored when new calls arrive and avoid tone-window
+  jump-scrolling on Send and Send QCII actions.
+- Use platform-correct filesystem identity for managed configuration,
+  recording, and playback paths: case-insensitive on Windows and case-sensitive
+  on macOS and Linux.
+- Run Configuration Library disk work away from Avalonia synchronization
+  contexts while retaining the compatibility startup bridge, preventing slow
+  or stalled startup, reload, and headless shutdown paths.
+
+### Removed
+
+- Remove the unused external FFmpeg decoder fallback. PCM WAV, MPEG/MP3, and
+  Ogg Opus streams continue to use the existing managed decoders.
+- Remove the abandoned high-quality Bluetooth mode and its native macOS
+  activation shim. Ordinary Bluetooth route detection, cold-PTT safeguards,
+  default-device tracking, and Keep Mic Warm behavior remain unchanged.
+
 ## [0.5.5] - 2026-08-30
 
 ### Fixed
@@ -814,7 +893,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Add patches, multi-select groups, call history, recordings, web streams, clocks, layouts, themes, startup behavior, and in-application operator documentation.
 - Add support for local and KMM-provided P25 encryption keys while preserving compatibility with existing variable-length AES key material.
 
-[Unreleased]: https://github.com/RdWing/dvmconsole/compare/v0.5.5...HEAD
+[Unreleased]: https://github.com/RdWing/dvmconsole/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/RdWing/dvmconsole/compare/v0.5.5...v0.6.0
 [0.5.5]: https://github.com/RdWing/dvmconsole/compare/v0.5.4...v0.5.5
 [0.5.4]: https://github.com/RdWing/dvmconsole/compare/v0.5.3...v0.5.4
 [0.5.3]: https://github.com/RdWing/dvmconsole/compare/v0.5.2...v0.5.3

@@ -1,8 +1,10 @@
 # Configuration Studio and codeplugs
 
-Configuration Studio edits the same YAML codeplug that DVM Console already
-loads. You can still use the file with compatible versions or maintain it by
-hand. Studio keeps your changes in a draft until you review and save them.
+Configuration Studio edits an app-owned configuration. YAML remains the
+interoperable import/export format, but an imported file is no longer the live
+backing file. DVM Console copies the YAML and approved companion files into the
+Configuration Library, assigns a stable configuration ID, and commits immutable
+revisions. Studio keeps changes in a draft until you review and save them.
 
 Open the current codeplug from:
 
@@ -10,11 +12,41 @@ Open the current codeplug from:
 File > Configuration Studio
 ```
 
-To start a new file, choose **File > New Configuration**. The Studio is a
-separate, modeless window, so you can refer to the main console while editing.
-Opening a Studio section again brings the existing window forward.
+To create a configuration from scratch, choose **File > New Configuration**.
+To import an existing YAML codeplug, choose **File > Open Codeplug**. The
+Studio is a separate, modeless window, so you can refer to the main console
+while editing. Opening a Studio section again brings the existing window
+forward.
+
+Use **File > Configuration Library** to activate, duplicate, remove, or restore
+managed configurations. Only committed revisions can be activated. Removing an
+inactive configuration moves it to recoverable library trash; it never deletes
+an imported source file.
 
 ![Configuration Studio shell](../../Assets/configuration-studio-shell.png)
+
+## Importing an existing codeplug
+
+On the first upgraded launch, DVM Console imports the previous
+`LastCodeplugPath` before creating the session. Other recent paths remain lazy
+legacy candidates and are imported only when selected. A command-line YAML path
+is imported and activated.
+
+Import identity includes the source origin, YAML content, resolved companion
+mapping, and companion hashes. Reopening an unchanged source reuses the managed
+entry. If only the source changed and the managed entry has not diverged, the
+import appends a revision. If both changed, DVM Console asks whether to import
+as new, replace with a recoverable revision, or cancel; it does not merge YAML.
+
+Safe same-folder key and alias references are copied automatically. Absolute or
+out-of-tree companions require explicit approval or selection. Missing-file
+warnings remain visible, and a reimport never silently substitutes a stale
+managed companion.
+
+Legacy card positions and other safely attributable operator state move to the
+managed configuration ID during import. Ambiguous state is assigned only to the
+previously active codeplug, and security-sensitive web-stream authorization is
+never guessed.
 
 ## Finding and editing configuration
 
@@ -109,9 +141,9 @@ members.
 
 ## Review and save
 
-Select **Review & Save** when the draft is ready. The review lists each file
-that will change, including the codeplug, referenced key or alias files, and
-operator settings.
+Select **Review & Save** when the draft is ready. The review lists the managed
+YAML, referenced key or alias companions, and configuration-scoped operator
+state that will be committed.
 
 If the draft has an error, **Review & Save** opens the validation drawer. Select
 an issue to open the record that needs attention. Warnings remain visible but
@@ -119,32 +151,25 @@ do not prevent saving.
 
 ![Review and save](../../Assets/configuration-studio-review.png)
 
-Studio performs these checks before replacing a file:
+Studio performs these checks before committing a revision:
 
-1. It captures the latest values from the open editors and validates the
-   complete draft and its cross-references.
-2. It rejects a plan if two outputs resolve to the same destination path.
-3. It compares each current file with the source hash in the save plan
-   immediately before the commit.
-4. It stages and validates every changed file.
-5. It creates restricted backups under the DVM Console application data folder.
-6. It replaces the originals. If a later replacement fails, it restores files
-   that were already replaced.
+1. It validates the complete draft and its cross-references.
+2. It verifies the active Studio draft and managed companion set.
+3. It writes a new immutable revision and atomically updates the catalog.
+4. It leaves every imported source file unchanged.
 
-If another program changed a source file, Studio does not overwrite it. Save the
-draft as a copy, or close and reopen Studio to load the external edit.
+Saving the active configuration does not change the running FNE session. The
+library marks the entry **Pending Reload**. Choose **Disconnect and reload** to
+activate that committed revision, or leave the current session on its earlier
+revision and reload later.
 
-Saving an active codeplug does not change a running FNE session. After the save,
-choose **Disconnect and reload** to use the new topology, or leave the session
-alone and reload later.
-
-If the save includes operator settings, Studio adopts the committed settings
-snapshot immediately. A settings change made elsewhere while the review is open
-is included in the final save instead of being overwritten by an older preview.
+**Save a Copy** creates a new configuration ID. It copies non-trust
+configuration state but does not copy import provenance or automatic web-stream
+authorization.
 
 ## Full and sanitized exports
 
-Files & Interoperability has two export choices:
+**Export YAML** and Files & Interoperability provide two export choices:
 
 - A full interoperable copy includes credentials, operational addresses, stream
   URLs, identifiers, and references to local key material. Treat it as a
@@ -152,15 +177,20 @@ Files & Interoperability has two export choices:
 - A sanitized support copy removes those values and is suitable for attaching
   to a troubleshooting report.
 
+Exports use the platform's selected document handle. Companion files are
+written beside the YAML with safe relative references, and DVM Console reads
+the exported bundle back before reporting success. Export never changes the
+current configuration ID, active revision, or Studio dirty baseline.
+
 Review the sanitized copy before sharing it. Site-specific names may still be
 meaningful even after credentials and identifiers are removed.
 
 ## YAML interoperability
 
-Studio writes the same codeplug fields used by DVM Console's runtime loader. It
-does not put group membership, direction, source order, or enabled state into
-the codeplug. Older compatible DVM Console versions can therefore load files
-saved by Studio.
+Studio exports the same codeplug fields used by DVM Console's runtime loader.
+It does not put group membership, direction, source order, or enabled state
+into YAML. Older compatible DVM Console versions can therefore load a full
+export produced by Studio.
 
 Unmatched mapping fields, including legacy fields ignored by the current typed
 model, are retained while their containing record remains in the draft. Studio

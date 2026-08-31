@@ -5,8 +5,6 @@ internal sealed class UserSettingsNormalizationPipeline
     public UserSettings NormalizeAfterLoad(UserSettings settings)
     {
         int storedSchemaVersion = settings.SchemaVersion;
-        if (storedSchemaVersion < 2)
-            settings.HighQualityBluetoothAudioEnabled = false;
         UserSettingsNormalizationRules.NormalizeRxAudioProcessingOptions(settings, storedSchemaVersion < 3);
         settings.RxJitterBuffer = RxJitterBufferSetting.Normalize(settings.RxJitterBuffer);
         settings.RxJitterBuffersBySystem = UserSettingsNormalizationRules.NormalizeRxJitterBuffersBySystem(
@@ -29,6 +27,7 @@ internal sealed class UserSettingsNormalizationPipeline
         settings.UserBackgroundImage = string.IsNullOrWhiteSpace(settings.UserBackgroundImage)
             ? null
             : settings.UserBackgroundImage.Trim();
+        settings.UserBackgroundAssetId = NormalizeGuid(settings.UserBackgroundAssetId);
         settings.RecentCodeplugPaths = UserSettingsNormalizationRules.NormalizeRecentCodeplugPaths(settings.RecentCodeplugPaths);
         settings.ToolbarClocks = UserSettingsNormalizationRules.NormalizeToolbarClocks(settings.ToolbarClocks);
         UserSettingsNormalizationRules.NormalizeUiSettings(settings);
@@ -125,17 +124,16 @@ internal sealed class UserSettingsNormalizationPipeline
         settings.PatchGroupModes = UserSettingsNormalizationRules.NormalizeGroupStates(settings.PatchGroupModes);
         settings.PatchGroupEnabledStates = UserSettingsNormalizationRules.NormalizeGroupStates(settings.PatchGroupEnabledStates);
         settings.CodeplugGroupStates = NormalizeCodeplugGroupStates(settings.CodeplugGroupStates);
+        settings.ConfigurationOperatorStates = NormalizeConfigurationOperatorStates(
+            settings.ConfigurationOperatorStates);
+        settings.ActiveConfigurationOperatorStateId = NormalizeGuid(
+            settings.ActiveConfigurationOperatorStateId);
         settings.SelectedWebStreams = UserSettingsNormalizationRules.NormalizeNames(settings.SelectedWebStreams);
         return settings;
     }
 
     public void NormalizeBeforeWrite(UserSettings settings)
     {
-        // Schema 1 defaulted this option on, so a stored true value does not
-        // prove that the operator selected it. Require a fresh opt-in after
-        // migration; schema 2 true values are always an explicit selection.
-        if (settings.SchemaVersion < 2)
-            settings.HighQualityBluetoothAudioEnabled = false;
         UserSettingsNormalizationRules.NormalizeRxAudioProcessingOptions(settings, settings.SchemaVersion < 3);
         settings.RxJitterBuffer = RxJitterBufferSetting.Normalize(settings.RxJitterBuffer);
         settings.RxJitterBuffersBySystem = UserSettingsNormalizationRules.NormalizeRxJitterBuffersBySystem(
@@ -174,7 +172,15 @@ internal sealed class UserSettingsNormalizationPipeline
         settings.ChannelWidgetPositions = UserSettingsNormalizationRules.NormalizeWidgetPositions(settings.ChannelWidgetPositions);
         settings.CodeplugStudioStates = NormalizeCodeplugStudioStates(settings.CodeplugStudioStates);
         settings.CodeplugGroupStates = NormalizeCodeplugGroupStates(settings.CodeplugGroupStates);
+        settings.ConfigurationOperatorStates = NormalizeConfigurationOperatorStates(
+            settings.ConfigurationOperatorStates);
+        settings.ActiveConfigurationOperatorStateId = NormalizeGuid(
+            settings.ActiveConfigurationOperatorStateId);
+        settings.UserBackgroundAssetId = NormalizeGuid(settings.UserBackgroundAssetId);
     }
+
+    private static string? NormalizeGuid(string? value)
+        => Guid.TryParse(value?.Trim(), out Guid parsed) ? parsed.ToString("N") : null;
 
     private static Dictionary<string, CodeplugStudioState> NormalizeCodeplugStudioStates(
         Dictionary<string, CodeplugStudioState>? states)
@@ -203,7 +209,12 @@ internal sealed class UserSettingsNormalizationPipeline
                 if (zone.Length > 0 && system.Length > 0)
                     assignments[zone] = system;
             }
-            normalized[path] = new CodeplugStudioState { ZoneSystemAssignments = assignments };
+            normalized[path] = new CodeplugStudioState
+            {
+                ZoneSystemAssignments = assignments,
+                CallPrioritySystemNames = UserSettingsNormalizationRules.NormalizeNames(
+                    entry.Value.CallPrioritySystemNames)
+            };
         }
         return normalized;
     }
@@ -260,5 +271,115 @@ internal sealed class UserSettingsNormalizationPipeline
             };
         }
         return normalized;
+    }
+
+    private static Dictionary<string, ConfigurationOperatorState> NormalizeConfigurationOperatorStates(
+        Dictionary<string, ConfigurationOperatorState>? states)
+    {
+        var normalized = new Dictionary<string, ConfigurationOperatorState>(StringComparer.OrdinalIgnoreCase);
+        foreach (KeyValuePair<string, ConfigurationOperatorState> entry in states ?? [])
+        {
+            string? id = NormalizeGuid(entry.Key);
+            if (id is null || entry.Value is null)
+                continue;
+
+            ConfigurationOperatorState state = entry.Value.Clone();
+            state.ChannelWidgetPositions = UserSettingsNormalizationRules.NormalizeWidgetPositions(
+                state.ChannelWidgetPositions);
+            state.ReceiveEnabledChannelKeys = UserSettingsNormalizationRules.NormalizeNames(
+                state.ReceiveEnabledChannelKeys);
+            state.TransmitSelectedChannelKeys = UserSettingsNormalizationRules.NormalizeNames(
+                state.TransmitSelectedChannelKeys);
+            state.ChannelVolumes = state.ChannelVolumes
+                .Where(item => !string.IsNullOrWhiteSpace(item.Key))
+                .ToDictionary(
+                    item => item.Key.Trim(),
+                    item => UserSettingsNormalizationRules.NormalizeChannelVolume(item.Value),
+                    StringComparer.OrdinalIgnoreCase);
+            state.ChannelStereoBalances = UserSettingsNormalizationRules.NormalizeChannelStereoBalances(
+                state.ChannelStereoBalances);
+            state.ChannelOutputDeviceIds = UserSettingsNormalizationRules.NormalizeChannelOutputDevices(
+                state.ChannelOutputDeviceIds);
+            state.WebStreamOutputDeviceIds = UserSettingsNormalizationRules.NormalizeChannelOutputDevices(
+                state.WebStreamOutputDeviceIds);
+            state.WebStreamVolumes = UserSettingsNormalizationRules.NormalizeWebStreamVolumes(
+                state.WebStreamVolumes);
+            state.RecordingEnabledChannelKeys = UserSettingsNormalizationRules.NormalizeNames(
+                state.RecordingEnabledChannelKeys);
+            state.RecordingIgnoredSubscriberIds = state.RecordingIgnoredSubscriberIds
+                .Where(item => !string.IsNullOrWhiteSpace(item.Key))
+                .ToDictionary(
+                    item => item.Key.Trim(),
+                    item => (item.Value ?? []).Where(value => value != 0).Distinct().ToList(),
+                    StringComparer.OrdinalIgnoreCase);
+            state.GroupState = NormalizeConfigurationGroupState(state.GroupState);
+            state.StudioState = NormalizeConfigurationStudioState(state.StudioState);
+            state.SelectedWebStreams = UserSettingsNormalizationRules.NormalizeNames(state.SelectedWebStreams);
+            state.TransmitEncryptionStates = new Dictionary<string, bool>(
+                state.TransmitEncryptionStates ?? [],
+                StringComparer.OrdinalIgnoreCase);
+            state.LastSelectedSystemName = string.IsNullOrWhiteSpace(state.LastSelectedSystemName)
+                ? null
+                : state.LastSelectedSystemName.Trim();
+            state.LastSelectedChannelKey = string.IsNullOrWhiteSpace(state.LastSelectedChannelKey)
+                ? null
+                : state.LastSelectedChannelKey.Trim();
+            normalized[id] = state;
+        }
+        return normalized;
+    }
+
+    private static CodeplugStudioState NormalizeConfigurationStudioState(CodeplugStudioState? state)
+    {
+        var assignments = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (KeyValuePair<string, string> assignment in state?.ZoneSystemAssignments ?? [])
+        {
+            string zone = assignment.Key?.Trim() ?? string.Empty;
+            string system = assignment.Value?.Trim() ?? string.Empty;
+            if (zone.Length > 0 && system.Length > 0)
+                assignments[zone] = system;
+        }
+        return new CodeplugStudioState
+        {
+            ZoneSystemAssignments = assignments,
+            CallPrioritySystemNames = UserSettingsNormalizationRules.NormalizeNames(
+                state?.CallPrioritySystemNames)
+        };
+    }
+
+    private static CodeplugGroupState NormalizeConfigurationGroupState(CodeplugGroupState? state)
+    {
+        state ??= new CodeplugGroupState();
+        var memberships = new Dictionary<string, List<PatchMemberSetting>>(StringComparer.OrdinalIgnoreCase);
+        foreach (KeyValuePair<string, List<PatchMemberSetting>> membership in state.Memberships ?? [])
+        {
+            string groupName = membership.Key?.Trim() ?? string.Empty;
+            if (groupName.Length == 0)
+                continue;
+            memberships[groupName] = (membership.Value ?? [])
+                .Where(member => member is not null &&
+                                 !string.IsNullOrWhiteSpace(member.SystemName) &&
+                                 member.DestinationId != 0)
+                .Select(member => new PatchMemberSetting
+                {
+                    SystemName = member.SystemName.Trim(),
+                    DestinationId = member.DestinationId,
+                    ChannelName = string.IsNullOrWhiteSpace(member.ChannelName)
+                        ? null
+                        : member.ChannelName.Trim()
+                })
+                .GroupBy(member => new Runtime.PatchMemberAddress(
+                    member.SystemName,
+                    member.DestinationId,
+                    member.ChannelName).Key)
+                .Select(group => group.First())
+                .ToList();
+        }
+        return new CodeplugGroupState
+        {
+            Memberships = memberships,
+            OneWayModes = UserSettingsNormalizationRules.NormalizeGroupStates(state.OneWayModes),
+            EnabledStates = UserSettingsNormalizationRules.NormalizeGroupStates(state.EnabledStates)
+        };
     }
 }

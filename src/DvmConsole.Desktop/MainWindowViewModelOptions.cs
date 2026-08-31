@@ -1,7 +1,10 @@
 using DvmConsole.Audio;
+using DvmConsole.Application;
 using DvmConsole.Core.Configuration;
 using DvmConsole.Core.Settings;
 using DvmConsole.Media;
+using DvmConsole.Ptt;
+using DvmConsole.Vocoder;
 
 namespace DvmConsole.Desktop;
 
@@ -20,4 +23,10 @@ internal sealed record MainWindowViewModelOptions(
     IUiDispatcher? UiDispatcher = null,
     ConsoleSessionServices? SessionServices = null,
     bool NetworkDisabledDemo = false,
-    Func<ApplicationAudioConfiguration, Task>? ReconfigureApplicationAudio = null);
+    Func<ApplicationAudioConfiguration, Task>? ReconfigureApplicationAudio = null,
+    ConfigurationReference? ConfigurationReference = null,
+    bool MigrateLegacyConfigurationOperatorState = false,
+    IAssetStore? AssetStore = null,
+    IDesktopPrivacyPermissionService? PrivacyPermissionService = null,
+    IAudioBackendFactory? AudioBackendFactory = null,
+    IVocoderFactory? VocoderFactory = null);

@@ -11,6 +11,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="../DvmConsole.FneClient/DvmConsole.FneClient.csproj" />
     <ProjectReference Include="../DvmConsole.Media/DvmConsole.Media.csproj" />
   </ItemGroup>
 </Project>

@@ -1,4 +1,4 @@
-using DvmConsole.FneClient;
+using DvmConsole.Core.Runtime;
 
 namespace DvmConsole.Media;
 
@@ -14,10 +14,10 @@ public sealed record AnalogTrafficSelector
 
     public uint DestinationId { get; }
 
-    public bool Matches(FneTrafficFrame traffic)
+    public bool Matches(IRadioMediaFrame traffic)
     {
         ArgumentNullException.ThrowIfNull(traffic);
-        return traffic.Protocol == FneTrafficProtocol.Analog &&
+        return traffic.Protocol == RadioMediaProtocol.Analog &&
             traffic.DestinationId == DestinationId &&
             string.Equals(traffic.FrameType, "VOICE", StringComparison.OrdinalIgnoreCase);
     }

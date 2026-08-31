@@ -1,0 +1,113 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:presentation="using:DvmConsole.Presentation"
+             x:Class="DvmConsole.Presentation.CallHistoryView"
+             x:DataType="presentation:ICallHistoryViewModel">
+  <UserControl.Styles>
+    <Style Selector="Border.history-row">
+      <Setter Property="Background" Value="{DynamicResource CardBackgroundBrush}" />
+      <Setter Property="BorderBrush" Value="{DynamicResource ControlBorderBrush}" />
+      <Setter Property="BorderThickness" Value="1" />
+      <Setter Property="CornerRadius" Value="4" />
+      <Setter Property="Padding" Value="6,4" />
+      <Setter Property="Margin" Value="0,0,0,3" />
+    </Style>
+    <Style Selector="Button.history-action">
+      <Setter Property="Padding" Value="7,3" />
+      <Setter Property="MinHeight" Value="0" />
+    </Style>
+    <Style Selector="ListBox.history-list > ListBoxItem">
+      <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+      <Setter Property="Padding" Value="0" />
+      <Setter Property="Margin" Value="0" />
+      <Setter Property="MinHeight" Value="0" />
+    </Style>
+    <Style Selector="TextBlock.history-heading">
+      <Setter Property="FontWeight" Value="SemiBold" />
+    </Style>
+    <Style Selector="TextBlock.history-caption">
+      <Setter Property="Opacity" Value="0.72" />
+    </Style>
+    <Style Selector="Expander /template/ ToggleButton#PART_Header">
+      <Setter Property="AutomationProperties.Name" Value="Advanced history filters" />
+    </Style>
+  </UserControl.Styles>
+
+  <Grid Margin="10" RowDefinitions="Auto,Auto,*" RowSpacing="10">
+    <Grid RowDefinitions="Auto,Auto" ColumnDefinitions="*,Auto" RowSpacing="8" ColumnSpacing="8">
+      <TextBlock Classes="history-heading" Text="Event History" VerticalAlignment="Center" />
+      <WrapPanel Grid.Column="1" ItemSpacing="8">
+        <Button Content="Export CSV…" AutomationProperties.Name="Export call history as CSV" Click="HandleExportClick" />
+        <Button Content="Clear session" AutomationProperties.Name="Clear session history" Click="HandleClearClick" />
+      </WrapPanel>
+      <TextBox Grid.Row="1" Grid.ColumnSpan="2"
+               Watermark="Search events, calls, aliases, IDs, filenames, and diagnostics"
+               Text="{Binding CallHistoryFilterText, Mode=TwoWay}" />
+    </Grid>
+    <Expander Grid.Row="1" Header="Advanced filters">
+      <StackPanel Spacing="8" Margin="0,8,0,0">
+        <WrapPanel ItemSpacing="8" LineSpacing="8">
+          <StackPanel Orientation="Horizontal" Spacing="6"><TextBlock Text="Direction" VerticalAlignment="Center" /><ComboBox Width="140" ItemsSource="{Binding RecordingDirectionFilters}" SelectedItem="{Binding RecordingDirectionFilter, Mode=TwoWay}" /></StackPanel>
+          <StackPanel Orientation="Horizontal" Spacing="6"><TextBlock Text="Protocol" VerticalAlignment="Center" /><ComboBox Width="140" ItemsSource="{Binding RecordingProtocolFilters}" SelectedItem="{Binding RecordingProtocolFilter, Mode=TwoWay}" /></StackPanel>
+          <StackPanel Orientation="Horizontal" Spacing="6"><TextBlock Text="Encryption" VerticalAlignment="Center" /><ComboBox Width="140" ItemsSource="{Binding RecordingEncryptionFilters}" SelectedItem="{Binding RecordingEncryptionFilter, Mode=TwoWay}" /></StackPanel>
+          <Button Content="Clear filters" AutomationProperties.Name="Clear call history filters" Click="HandleClearFiltersClick" />
+        </WrapPanel>
+        <WrapPanel ItemSpacing="8" LineSpacing="8">
+          <TextBox Width="150" Watermark="System" Text="{Binding RecordingSystemFilterText, Mode=TwoWay}" />
+          <TextBox Width="150" Watermark="Channel" Text="{Binding RecordingChannelFilterText, Mode=TwoWay}" />
+          <TextBox Width="150" Watermark="Talkgroup ID" Text="{Binding RecordingTalkgroupFilterText, Mode=TwoWay}" />
+          <TextBox Width="150" Watermark="Subscriber ID" Text="{Binding RecordingSubscriberFilterText, Mode=TwoWay}" />
+          <TextBox Width="150" Watermark="Alias" Text="{Binding RecordingAliasFilterText, Mode=TwoWay}" />
+        </WrapPanel>
+        <WrapPanel ItemSpacing="8" LineSpacing="8">
+          <StackPanel Orientation="Horizontal" Spacing="6"><TextBlock Text="From" VerticalAlignment="Center" /><DatePicker Width="190" SelectedDate="{Binding RecordingStartDateFilter, Mode=TwoWay}" /></StackPanel>
+          <StackPanel Orientation="Horizontal" Spacing="6"><TextBlock Text="Through" VerticalAlignment="Center" /><DatePicker Width="190" SelectedDate="{Binding RecordingEndDateFilter, Mode=TwoWay}" /></StackPanel>
+          <TextBlock Classes="history-caption" Text="{Binding HistoryFilterSummary}" TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
+        </WrapPanel>
+      </StackPanel>
+    </Expander>
+    <ListBox x:Name="HistoryList"
+             Grid.Row="2"
+             Classes="history-list"
+             ItemsSource="{Binding FilteredCallHistory}"
+             Background="Transparent"
+             BorderThickness="0"
+             AutoScrollToSelectedItem="False"
+             ScrollViewer.BringIntoViewOnFocusChange="False">
+      <ListBox.ItemsPanel>
+        <ItemsPanelTemplate><VirtualizingStackPanel /></ItemsPanelTemplate>
+      </ListBox.ItemsPanel>
+      <ListBox.ItemTemplate>
+        <DataTemplate x:DataType="presentation:ICallHistoryItemViewModel">
+          <Border Classes="history-row">
+            <Grid Classes="history-row-layout" RowDefinitions="Auto,Auto,Auto" ColumnDefinitions="80,*,Auto" ColumnSpacing="7" RowSpacing="3">
+              <TextBlock Text="{Binding TimestampText}" VerticalAlignment="Center" />
+              <TextBlock Grid.Column="1" FontWeight="SemiBold" Text="{Binding DisplayChannelText}" TextTrimming="CharacterEllipsis" />
+              <WrapPanel Grid.Row="1" Grid.ColumnSpan="2" ItemSpacing="8" LineSpacing="4">
+                <TextBlock Classes="history-caption" Text="{Binding SystemName}" TextTrimming="CharacterEllipsis" />
+                <TextBlock Classes="history-caption" Text="{Binding DirectionText}" />
+                <TextBlock Classes="history-caption" Text="{Binding ProtocolText}" />
+                <TextBlock Classes="history-caption" Text="{Binding DurationText}" />
+                <TextBlock Classes="history-caption" Text="{Binding EncryptionText}" TextTrimming="CharacterEllipsis" />
+              </WrapPanel>
+              <TextBlock Grid.Row="2" Classes="history-caption" Text="{Binding DateText}" />
+              <TextBlock Grid.Row="2" Grid.Column="1" Classes="history-caption" Text="{Binding RouteText}" TextTrimming="CharacterEllipsis" />
+              <WrapPanel Grid.Column="2"
+                         Grid.RowSpan="3"
+                         Classes="history-actions"
+                         ItemSpacing="4"
+                         VerticalAlignment="Center"
+                         HorizontalAlignment="Right"
+                         IsVisible="{Binding HasRecording}">
+                <Button Classes="history-action" Content="Play" AutomationProperties.Name="Play call recording" Tag="{Binding}" IsEnabled="{Binding HasPlayableRecording}" ToolTip.Tip="Play validated TAR recording" Click="HandlePlayClick" />
+                <Button Classes="history-action" Content="Stop" AutomationProperties.Name="Stop call recording playback" Click="HandleStopClick" />
+                <Button Classes="history-action" Content="Open" AutomationProperties.Name="Open call recording" Tag="{Binding}" IsEnabled="{Binding HasPlayableRecording}" ToolTip.Tip="{Binding RecordingDetailsText}" Click="HandleOpenClick" />
+                <Button Classes="history-action" Content="Delete" AutomationProperties.Name="Delete call recording" Tag="{Binding}" Click="HandleDeleteClick" />
+              </WrapPanel>
+            </Grid>
+          </Border>
+        </DataTemplate>
+      </ListBox.ItemTemplate>
+    </ListBox>
+  </Grid>
+</UserControl>

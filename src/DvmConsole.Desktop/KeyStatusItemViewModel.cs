@@ -1,5 +1,7 @@
+using DvmConsole.Application;
 using DvmConsole.Core.Runtime;
 using DvmConsole.Media;
+using DvmConsole.Presentation;
 
 namespace DvmConsole.Desktop;
 
@@ -12,7 +14,7 @@ public sealed record KeyStatusItemViewModel(
     string AlgorithmIdText,
     string KeyIdText,
     string StatusText,
-    string ConfigurationHint)
+    string ConfigurationHint) : IKeyStatusItemViewModel
 {
     public bool HasConfigurationHint => !string.IsNullOrEmpty(ConfigurationHint);
 

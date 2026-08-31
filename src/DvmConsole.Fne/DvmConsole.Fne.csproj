@@ -1,6 +1,13 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <Nullable>disable</Nullable>
+    <!-- Temporary Phase 2 trim/AOT allowlist. The pinned upstream FneUtils
+         memory primitive emits a DynamicMethod at runtime. Keep this one
+         assembly explicitly non-trimmable until that implementation is
+         replaced; portable DVM Console assemblies remain analyzer-gated. -->
+    <IsTrimmable>false</IsTrimmable>
+    <EnableTrimAnalyzer>false</EnableTrimAnalyzer>
+    <EnableAotAnalyzer>false</EnableAotAnalyzer>
     <!-- Keep the mixed upstream/owned project under the standard analyzer
          baseline; only the finite upstream compatibility list below is exempt. -->
     <AnalysisMode>Minimum</AnalysisMode>

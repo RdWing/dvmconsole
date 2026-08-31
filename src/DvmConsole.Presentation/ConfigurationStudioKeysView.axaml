@@ -1,0 +1,88 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:config="using:DvmConsole.Core.Configuration"
+             xmlns:presentation="using:DvmConsole.Presentation"
+             x:Class="DvmConsole.Presentation.ConfigurationStudioKeysView"
+             x:DataType="presentation:ConfigurationStudioViewModel">
+  <Grid Margin="18" IsVisible="{Binding IsEncryptionKeys}" RowDefinitions="Auto,*" RowSpacing="10">
+    <Grid ColumnDefinitions="*,Auto">
+      <StackPanel>
+        <TextBlock Classes="heading" Text="Encryption Keys"/>
+        <TextBlock Classes="caption" Text="{Binding KeyFileIdentifierText}"/>
+      </StackPanel>
+      <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="5">
+        <Button Content="Add" AutomationProperties.Name="Add encryption key" Click="HandleAddKeyClick" IsEnabled="{Binding HasKeyFile}"/>
+        <Button Content="Delete" AutomationProperties.Name="Delete encryption key" Click="HandleDeleteKeyClick" IsEnabled="{Binding HasKeyFile}"/>
+      </StackPanel>
+    </Grid>
+    <Grid Grid.Row="1" ColumnDefinitions="3*,2*" ColumnSpacing="10" MinHeight="0">
+      <Border Classes="panel" Padding="0">
+        <Grid RowDefinitions="Auto,*">
+          <Border Classes="dense-row" Background="{DynamicResource ShellHeaderBrush}">
+            <Grid ColumnDefinitions="1.4*,2.1*,0.5*,0.55*,0.6*" ColumnSpacing="12">
+              <TextBlock FontWeight="SemiBold" Text="Protocol"/>
+              <TextBlock Grid.Column="1" FontWeight="SemiBold" Text="Algorithm"/>
+              <TextBlock Grid.Column="2" HorizontalAlignment="Right" FontWeight="SemiBold" Text="Key ID"/>
+              <TextBlock Grid.Column="3" HorizontalAlignment="Right" FontWeight="SemiBold" Text="Required"/>
+              <TextBlock Grid.Column="4" HorizontalAlignment="Center" FontWeight="SemiBold" Text="Material"/>
+            </Grid>
+          </Border>
+          <ListBox Grid.Row="1" Classes="dense-list" ItemsSource="{Binding KeyEntries}" SelectedItem="{Binding SelectedKey, Mode=TwoWay}">
+            <ListBox.ItemTemplate>
+              <DataTemplate x:DataType="config:KeyEntry">
+                <Border Classes="dense-row">
+                  <Grid ColumnDefinitions="1.4*,2.1*,0.5*,0.55*,0.6*" ColumnSpacing="12">
+                    <TextBlock Text="{Binding ProtocolDisplayName}"/>
+                    <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6">
+                      <TextBlock Text="{Binding AlgorithmDisplayName}"/>
+                      <TextBlock Classes="caption" Text="{Binding AlgorithmIdText}"/>
+                    </StackPanel>
+                    <TextBlock Grid.Column="2" HorizontalAlignment="Right" Text="{Binding KeyIdText}"/>
+                    <TextBlock Grid.Column="3" HorizontalAlignment="Right" Text="{Binding RequiredLength}"/>
+                    <TextBlock Grid.Column="4" HorizontalAlignment="Center" Text="&#x2022;&#x2022;&#x2022;&#x2022;&#x2022;&#x2022;&#x2022;&#x2022;"/>
+                  </Grid>
+                </Border>
+              </DataTemplate>
+            </ListBox.ItemTemplate>
+          </ListBox>
+        </Grid>
+      </Border>
+      <Border Grid.Column="1" Classes="panel">
+        <StackPanel Spacing="6" IsEnabled="{Binding HasKeyFile}">
+          <TextBlock Classes="subheading" Text="Key Inspector"/>
+          <TextBlock Classes="caption" Text="Protocol"/>
+          <ComboBox ItemsSource="{Binding ProtocolOptions}" SelectedValueBinding="{Binding Value}" SelectedValue="{Binding SelectedKeyProtocol, Mode=TwoWay}" SelectionChanged="HandleKeyProtocolChanged">
+            <ComboBox.ItemTemplate>
+              <DataTemplate x:DataType="config:ConfigurationProtocolOption"><TextBlock Text="{Binding DisplayName}"/></DataTemplate>
+            </ComboBox.ItemTemplate>
+          </ComboBox>
+          <TextBlock Classes="caption" Text="Encryption algorithm"/>
+          <ComboBox ItemsSource="{Binding AvailableKeyAlgorithms}" SelectedItem="{Binding SelectedKeyAlgorithm, Mode=TwoWay}" SelectionChanged="HandleKeyAlgorithmChanged">
+            <ComboBox.ItemTemplate>
+              <DataTemplate x:DataType="config:EncryptionAlgorithmOption">
+                <Grid ColumnDefinitions="*,Auto" ColumnSpacing="10">
+                  <TextBlock Text="{Binding DisplayName}"/>
+                  <TextBlock Grid.Column="1" Classes="caption" Text="{Binding AlgorithmIdText}"/>
+                </Grid>
+              </DataTemplate>
+            </ComboBox.ItemTemplate>
+          </ComboBox>
+          <TextBlock Classes="caption" Text="Algorithm ID"/>
+          <TextBlock FontWeight="SemiBold" Text="{Binding SelectedKeyAlgorithmIdText}"/>
+          <TextBlock Classes="caption" Text="Key ID (hex)"/>
+          <Border Background="{DynamicResource StudioFieldBrush}" BorderBrush="{DynamicResource StudioLineBrush}" BorderThickness="1" CornerRadius="3">
+            <Grid ColumnDefinitions="Auto,*">
+              <TextBlock Margin="10,0,2,0" VerticalAlignment="Center" Foreground="{DynamicResource StudioMutedBrush}" Text="0x"/>
+              <TextBox Grid.Column="1" MinHeight="32" BorderThickness="0" Text="{Binding SelectedKeyIdHexDigits, Mode=TwoWay}" LostFocus="HandleKeyFieldEdit"/>
+            </Grid>
+          </Border>
+          <TextBlock Classes="caption" Text="Key material (hex)"/>
+          <TextBox PasswordChar="&#x25CF;" Text="{Binding SelectedKey.Key, Mode=TwoWay}" LostFocus="HandleKeyFieldEdit"/>
+          <TextBlock Classes="caption" Text="Required length"/>
+          <TextBlock Text="{Binding SelectedKey.RequiredLength}"/>
+          <TextBlock Classes="caption" Text="Key material stays masked and is never included in diagnostics. FNE/KMM-delivered P25 Phase 1 keys are runtime-only and cannot be written back here." TextWrapping="Wrap"/>
+        </StackPanel>
+      </Border>
+    </Grid>
+  </Grid>
+</UserControl>

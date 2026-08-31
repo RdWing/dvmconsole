@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using DvmConsole.Application;
 using DvmConsole.Core.Configuration;
 using DvmConsole.Core.Runtime;
 using DvmConsole.Desktop;
@@ -482,6 +483,10 @@ public sealed class PatchForwardingCoordinatorTests
             uint OutboundStreamId)> sent = new();
         public string Name => name;
         public IReadOnlyList<ChannelViewModel> Channels => channels;
+        public IReadOnlyCollection<TransmitChannelDescriptor> ChannelDescriptors
+            => channels.Select(channel => channel.ToTransmitDescriptor()).ToArray();
+        public IReadOnlyCollection<ChannelId> ChannelIds
+            => channels.Select(channel => new ChannelId(channel.SessionId)).ToArray();
         public bool IsConnected => connected;
         public uint? SourceId => sourceId;
         public IReadOnlyList<(

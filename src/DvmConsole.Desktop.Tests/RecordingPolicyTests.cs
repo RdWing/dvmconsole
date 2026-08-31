@@ -1,4 +1,5 @@
 using DvmConsole.Desktop;
+using DvmConsole.Core.Runtime;
 using DvmConsole.FneClient;
 using DvmConsole.Media;
 using Xunit;
@@ -86,7 +87,7 @@ public sealed class RecordingPolicyTests
             8_000,
             1,
             16,
-            FneTrafficProtocol.Dmr,
+            RadioMediaProtocol.Dmr,
             "DMR",
             "RX",
             "InboundRadio",

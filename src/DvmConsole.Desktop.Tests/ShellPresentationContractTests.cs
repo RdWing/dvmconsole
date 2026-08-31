@@ -71,6 +71,23 @@ public sealed class ShellPresentationContractTests
             ScrollViewportAnchorMath.CalculateOffset(currentOffset, itemDelta, extentHeight, viewportHeight));
 
     [Fact]
+    public void ScrollViewportAnchorWaitsForContainingScrollerLayout()
+    {
+        Assert.Null(ScrollViewportAnchorMath.ResolveLayoutDelta(
+            anchorWasLocated: true,
+            anchorDelta: 0,
+            extentDelta: 0));
+        Assert.Equal(52, ScrollViewportAnchorMath.ResolveLayoutDelta(
+            anchorWasLocated: true,
+            anchorDelta: 0,
+            extentDelta: 52));
+        Assert.Equal(48, ScrollViewportAnchorMath.ResolveLayoutDelta(
+            anchorWasLocated: true,
+            anchorDelta: 48,
+            extentDelta: 52));
+    }
+
+    [Fact]
     public void CallHistoryExposesCompactLocalDateBelowTheTime()
     {
         DateTimeOffset timestamp = new(2026, 8, 19, 21, 22, 23, TimeSpan.Zero);
@@ -122,6 +139,29 @@ public sealed class ShellPresentationContractTests
 
         Assert.Same(recordingOnly, Assert.Single(selected));
         Assert.True(selected[0].IsRecordingOnly);
+    }
+
+    [Fact]
+    public void ActivitySidebarRemainsBoundedWhenFullHistoryRetentionIsLarger()
+    {
+        CallHistoryEntry[] history = Enumerable.Range(1, MainWindowViewModel.MaximumActivityHistoryEntries + 1)
+            .Select(streamId => new CallHistoryEntry(
+                DateTimeOffset.UtcNow,
+                "SKYNET",
+                "Dispatch",
+                1001,
+                100,
+                FneTrafficProtocol.P25,
+                (uint)streamId))
+            .ToArray();
+
+        CallHistoryEntry[] selected = MainWindowViewModel.SelectActivityHistory(
+            history,
+            "SKYNET",
+            selectedZoneChannelNames: null);
+
+        Assert.Equal(100, MainWindowViewModel.MaximumActivityHistoryEntries);
+        Assert.Equal(MainWindowViewModel.MaximumActivityHistoryEntries, selected.Length);
     }
 
     [Fact]

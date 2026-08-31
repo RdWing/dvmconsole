@@ -82,7 +82,6 @@ internal static class SettingsImportPolicy
                 entry => UserSettingsNormalizationRules.NormalizeRxAudioProcessingMode(entry.Value),
                 StringComparer.OrdinalIgnoreCase);
             target.AudioProcessingMode = source.AudioProcessingMode;
-            target.HighQualityBluetoothAudioEnabled = source.HighQualityBluetoothAudioEnabled;
             target.AudioInputAgcEnabled = source.AudioInputAgcEnabled;
             target.AudioInputAgcTargetDbfs = source.AudioInputAgcTargetDbfs;
             target.KeepTransmitMicrophoneWarm = source.KeepTransmitMicrophoneWarm;

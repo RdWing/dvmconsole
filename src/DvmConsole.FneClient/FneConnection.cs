@@ -578,7 +578,6 @@ public sealed class FneConnection : IAsyncDisposable
 
             if (announcement.ContainsActiveTalkgroups)
             {
-                talkgroupRules.Clear();
                 hasAuthoritativeTalkgroupTable = true;
             }
 
@@ -600,7 +599,28 @@ public sealed class FneConnection : IAsyncDisposable
         }
 
         if (publishNotifications)
+        {
+            PublishTalkgroupAuthorityLog(announcement);
             PublishTalkgroupAuthorityNotifications();
+        }
+    }
+
+    private void PublishTalkgroupAuthorityLog(FneTalkgroupAnnouncement announcement)
+    {
+        int active;
+        int total;
+        lock (sync)
+        {
+            active = talkgroupRules.Values.Count(rule => rule.IsActive);
+            total = talkgroupRules.Count;
+        }
+        string update = announcement.ContainsActiveTalkgroups ? "active" : "inactive";
+        Raise(LogReceived, new FneLogEntry(
+            options.Name,
+            DebugLogSeverity.Info,
+            $"FNE talkgroup table ingested {announcement.Entries.Count} {update} " +
+            $"entr{(announcement.Entries.Count == 1 ? "y" : "ies")}; {active} active of {total} known",
+            DateTimeOffset.UtcNow));
     }
 
     private void ResetTalkgroupAuthority()

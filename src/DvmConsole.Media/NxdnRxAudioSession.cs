@@ -1,5 +1,5 @@
 using DvmConsole.Audio;
-using DvmConsole.FneClient;
+using DvmConsole.Core.Runtime;
 using DvmConsole.Vocoder;
 
 namespace DvmConsole.Media;
@@ -58,7 +58,7 @@ public sealed class NxdnRxAudioSession : IAsyncDisposable
     public long DuplicateOrLatePackets => sequenceTracker.DuplicateOrLatePackets;
 
     public async ValueTask<int> ProcessAsync(
-        FneTrafficFrame traffic,
+        IRadioMediaFrame traffic,
         CancellationToken cancellationToken = default)
     {
         ObjectDisposedException.ThrowIf(disposed, this);

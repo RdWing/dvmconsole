@@ -1,3 +1,4 @@
+using DvmConsole.Application;
 using DvmConsole.Core.Settings;
 using Xunit;
 
@@ -5,6 +6,42 @@ namespace DvmConsole.Desktop.Tests;
 
 public sealed class AudioSettingsApplicationTests
 {
+    [Fact]
+    public async Task PrivacyRequestsUseInjectedHostServiceWithoutPlatformTypes()
+    {
+        string root = Path.Combine(
+            Path.GetTempPath(),
+            "dvmconsole-audio-settings-tests",
+            Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            var permissions = new StubPrivacyPermissionService();
+            await using var viewModel = new MainWindowViewModel(
+                "Permission test",
+                [],
+                [],
+                new MainWindowViewModelOptions(
+                    UserSettingsStore: new UserSettingsStore(Path.Combine(root, "UserSettings.json")),
+                    SerialPortProvider: () => [],
+                    UiDispatcher: ImmediateUiDispatcher.Instance,
+                    NetworkDisabledDemo: true,
+                    PrivacyPermissionService: permissions));
+
+            Assert.True(viewModel.IsMacOsPermissionRequestAvailable);
+            viewModel.RequestMacOsKeyboardPermission();
+            Assert.Contains("keyboard access requested", viewModel.AudioStatusText, StringComparison.OrdinalIgnoreCase);
+
+            await viewModel.RequestMacOsMicrophonePermissionAsync();
+            Assert.Contains("microphone access is denied", viewModel.AudioStatusText, StringComparison.OrdinalIgnoreCase);
+            Assert.Equal(1, permissions.MicrophoneRequests);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
     [Fact]
     public async Task FailedRouteChangeRollsBackRuntimeAndDoesNotPersistDraft()
     {
@@ -81,6 +118,26 @@ public sealed class AudioSettingsApplicationTests
         {
             action();
             return ValueTask.CompletedTask;
+        }
+    }
+
+    private sealed class StubPrivacyPermissionService : IDesktopPrivacyPermissionService
+    {
+        public bool IsMacOsPermissionRequestAvailable => true;
+        public int MicrophoneRequests { get; private set; }
+
+        public KeyboardPermissionState RequestKeyboardAccess()
+            => KeyboardPermissionState.Requested;
+
+        public ValueTask<MicrophonePermissionState> GetStateAsync(
+            CancellationToken cancellationToken = default)
+            => ValueTask.FromResult(MicrophonePermissionState.Denied);
+
+        public ValueTask<MicrophonePermissionState> RequestAsync(
+            CancellationToken cancellationToken = default)
+        {
+            MicrophoneRequests++;
+            return ValueTask.FromResult(MicrophonePermissionState.Denied);
         }
     }
 }

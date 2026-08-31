@@ -22,7 +22,19 @@ case "$RID" in
     win-x64)
         TARGET_PLATFORM="windows"
         MACOS_ARCHITECTURE=""
-        VOCODER_TARGET="x86_64-pc-windows-msvc"
+        if [[ -n "${DVM_WINDOWS_VOCODER_TARGET:-}" ]]; then
+            VOCODER_TARGET="$DVM_WINDOWS_VOCODER_TARGET"
+        elif [[ "${OS:-}" == "Windows_NT" ]]; then
+            # Git Bash includes MinGW tools on hosted Windows runners, but the
+            # native Windows toolchain installed by CI is the MSVC target.
+            VOCODER_TARGET="x86_64-pc-windows-msvc"
+        elif command -v x86_64-w64-mingw32-gcc >/dev/null 2>&1; then
+            # Unix release engineering can produce a Windows C-ABI DLL with
+            # MinGW. Native Windows builds use MSVC above.
+            VOCODER_TARGET="x86_64-pc-windows-gnu"
+        else
+            VOCODER_TARGET="x86_64-pc-windows-msvc"
+        fi
         ;;
     *)
         printf 'Supported runtime identifiers: osx-arm64, osx-x64, win-x64\n' >&2

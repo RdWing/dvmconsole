@@ -26,4 +26,5 @@ public sealed class FneLogInterpreterTests
     public void DoesNotClassifyConnectionFailuresAsRoutineKeepalives()
         => Assert.False(FneLogInterpreter.IsRoutineHealthyKeepalive(
             "RPTPING failed because the socket disconnected"));
+
 }

@@ -46,6 +46,7 @@ internal sealed class DebugLogWorkspace : INotifyPropertyChanged, IDisposable
     }
 
     public event PropertyChangedEventHandler? PropertyChanged;
+    public event EventHandler<DebugLogEntry>? EntryPublished;
 
     public event NotifyCollectionChangedEventHandler? CollectionChanging
     {
@@ -100,6 +101,7 @@ internal sealed class DebugLogWorkspace : INotifyPropertyChanged, IDisposable
             source,
             severity,
             DebugLogRedactor.Redact(message)));
+        EntryPublished?.Invoke(this, entry);
         drain.Enqueue(entry);
     }
 

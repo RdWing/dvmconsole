@@ -142,6 +142,7 @@ jobs:
         shell: bash
         env:
           CONFIGURATION: Release
+          DVM_WINDOWS_VOCODER_TARGET: ${{ matrix.rust_target }}
         run: scripts/publish-desktop.sh "${{ matrix.rid }}" "$RUNNER_TEMP/dvmconsole-publish/${{ matrix.rid }}"
 
       - name: Verify published output

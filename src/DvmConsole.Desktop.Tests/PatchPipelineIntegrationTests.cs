@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using DvmConsole.Application;
 using DvmConsole.Core.Configuration;
 using DvmConsole.Core.Runtime;
 using DvmConsole.Desktop;
@@ -207,13 +208,18 @@ public sealed class PatchPipelineIntegrationTests
         ReceiveIngressRoutingDecision ingress = ReceiveAudioTrafficRouter.ObserveIngress(
             routes,
             voice,
-            decoding.IsTrackingStream);
+            (channel, candidateStreamId) => decoding.IsTrackingStream(channel, candidateStreamId));
+        ChannelViewModel[] activeChannels = routes.Values
+            .SelectMany(channels => channels)
+            .Where(channel => decoding.ActiveChannels.Contains((ChannelId)channel))
+            .Distinct()
+            .ToArray();
         ChannelViewModel target = Assert.Single(ReceiveAudioTrafficRouter.ResolveTargets(
             routes,
-            decoding.ActiveChannels,
+            activeChannels,
             voice,
             ingress,
-            decoding.IsTrackingStream));
+            (channel, candidateStreamId) => decoding.IsTrackingStream(channel, candidateStreamId)));
 
         Assert.Equal(0, await receivePipeline.ProcessAsync(target, voice));
 
@@ -221,13 +227,13 @@ public sealed class PatchPipelineIntegrationTests
         ReceiveIngressRoutingDecision terminatorIngress = ReceiveAudioTrafficRouter.ObserveIngress(
             routes,
             terminator,
-            decoding.IsTrackingStream);
+            (channel, candidateStreamId) => decoding.IsTrackingStream(channel, candidateStreamId));
         ChannelViewModel terminatorTarget = Assert.Single(ReceiveAudioTrafficRouter.ResolveTargets(
             routes,
-            decoding.ActiveChannels,
+            activeChannels,
             terminator,
             terminatorIngress,
-            decoding.IsTrackingStream));
+            (channel, candidateStreamId) => decoding.IsTrackingStream(channel, candidateStreamId)));
         Assert.Same(target, terminatorTarget);
         await receivePipeline.ProcessAsync(terminatorTarget, terminator);
 
@@ -482,6 +488,10 @@ public sealed class PatchPipelineIntegrationTests
 
         public string Name => name;
         public IReadOnlyList<ChannelViewModel> Channels => channels;
+        public IReadOnlyCollection<TransmitChannelDescriptor> ChannelDescriptors
+            => channels.Select(channel => channel.ToTransmitDescriptor()).ToArray();
+        public IReadOnlyCollection<ChannelId> ChannelIds
+            => channels.Select(channel => new ChannelId(channel.SessionId)).ToArray();
         public bool IsConnected => true;
         public uint? SourceId => sourceId;
         public IReadOnlyList<SentPacket> Sent => sent.ToArray();

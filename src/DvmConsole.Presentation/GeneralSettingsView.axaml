@@ -1,0 +1,96 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:presentation="using:DvmConsole.Presentation"
+             x:Class="DvmConsole.Presentation.GeneralSettingsView"
+             x:DataType="presentation:IGeneralSettingsViewModel">
+  <UserControl.Styles>
+    <Style Selector="Button"><Setter Property="MinHeight" Value="44"/></Style>
+    <Style Selector="CheckBox"><Setter Property="MinHeight" Value="44"/></Style>
+    <Style Selector="Slider"><Setter Property="MinHeight" Value="44"/></Style>
+  </UserControl.Styles>
+  <ScrollViewer Margin="10">
+    <StackPanel Spacing="10">
+      <TextBlock Classes="heading" Text="Console Settings"/>
+      <TextBlock Classes="caption" Text="{Binding SettingsVersionText}"/>
+      <presentation:AdaptiveSettingsSection Header="Appearance" Description="Adjust interface text size and scale independently.">
+        <presentation:AdaptiveSettingsSection.SectionContent>
+          <WrapPanel ItemSpacing="16" LineSpacing="8">
+            <StackPanel Width="260" Spacing="4">
+              <TextBlock Classes="caption" Text="{Binding UiFontSizeText}"/>
+              <Slider Minimum="11" Maximum="20" TickFrequency="1" IsSnapToTickEnabled="True" Value="{Binding UiFontSize, Mode=TwoWay}" AutomationProperties.Name="Interface text size"/>
+            </StackPanel>
+            <StackPanel Width="260" Spacing="4">
+              <TextBlock Classes="caption" Text="{Binding UiScaleText}"/>
+              <Slider Minimum="0.75" Maximum="1.5" TickFrequency="0.05" IsSnapToTickEnabled="True" Value="{Binding UiScale, Mode=TwoWay}" AutomationProperties.Name="Interface scale"/>
+            </StackPanel>
+          </WrapPanel>
+        </presentation:AdaptiveSettingsSection.SectionContent>
+      </presentation:AdaptiveSettingsSection>
+      <Separator/>
+      <WrapPanel ItemSpacing="14" LineSpacing="2">
+        <CheckBox Content="Toggle global PTT instead of hold-to-talk" IsChecked="{Binding TogglePttMode, Mode=TwoWay}"/>
+        <CheckBox Content="Talk permit tone" IsChecked="{Binding TalkPermitTone, Mode=TwoWay}"/>
+        <CheckBox Content="Connection chimes" IsChecked="{Binding ConnectionChimes, Mode=TwoWay}"/>
+        <CheckBox Content="Monitor generated tones locally" IsChecked="{Binding LocalToneMonitorEnabled, Mode=TwoWay}"/>
+        <CheckBox Content="Mute RX while transmitting" IsChecked="{Binding MuteRxAudioWhileTransmitting, Mode=TwoWay}"/>
+        <CheckBox Content="Restore selected channels on startup" IsChecked="{Binding RestoreSelectedChannelsOnStartup, Mode=TwoWay}"/>
+        <CheckBox Content="Retain patch state on startup" IsChecked="{Binding RetainPatchStateOnStartup, Mode=TwoWay}"/>
+        <CheckBox Content="Dark mode" IsChecked="{Binding DarkMode, Mode=TwoWay}"/>
+        <CheckBox Content="Keep window on top" IsChecked="{Binding KeepWindowOnTop, Mode=TwoWay}"/>
+      </WrapPanel>
+      <StackPanel Spacing="2">
+        <CheckBox Content="Enable verbose logging" IsChecked="{Binding VerboseLoggingEnabled, Mode=TwoWay}"/>
+        <TextBlock Classes="caption" Text="Adds per-packet, PCM-level, and routine keepalive details. This can increase CPU and memory use on busy systems." TextWrapping="Wrap"/>
+      </StackPanel>
+      <Separator/>
+      <presentation:AdaptiveSettingsSection Header="Channel widgets" Description="Control the freeform channel-card display and saved layout.">
+        <presentation:AdaptiveSettingsSection.SectionContent>
+          <WrapPanel ItemSpacing="14" LineSpacing="2">
+            <CheckBox Content="Show system status" IsChecked="{Binding ShowSystemStatus, Mode=TwoWay}"/>
+            <CheckBox Content="Show channel widgets" IsChecked="{Binding ShowChannels, Mode=TwoWay}"/>
+            <CheckBox Content="Show alert buttons" IsChecked="{Binding ShowAlertTones, Mode=TwoWay}"/>
+            <CheckBox Content="Lock channel widget positions" IsChecked="{Binding LockWidgets, Mode=TwoWay}"/>
+            <Button Content="Reset widget layout" AutomationProperties.Name="Reset channel widget layout" Click="HandleResetLayoutClick"/>
+          </WrapPanel>
+        </presentation:AdaptiveSettingsSection.SectionContent>
+      </presentation:AdaptiveSettingsSection>
+      <Separator/>
+      <TextBlock x:Name="ClockSettingsSection" FontWeight="SemiBold" Text="Toolbar clocks"/>
+      <TextBlock Classes="caption" Text="Enable slots, choose a UTC offset, and color-code each clock." TextWrapping="Wrap"/>
+      <ItemsControl ItemsSource="{Binding ToolbarClocks}">
+        <ItemsControl.ItemsPanel><ItemsPanelTemplate><WrapPanel ItemWidth="340" ItemSpacing="8" LineSpacing="8"/></ItemsPanelTemplate></ItemsControl.ItemsPanel>
+        <ItemsControl.ItemTemplate>
+          <DataTemplate x:DataType="presentation:IToolbarClockViewModel">
+            <Border Classes="panel">
+              <StackPanel Spacing="6">
+                <WrapPanel ItemSpacing="8" LineSpacing="4">
+                  <CheckBox Content="{Binding SlotLabel}" IsChecked="{Binding Enabled, Mode=TwoWay}"/>
+                  <TextBlock Classes="caption" Text="{Binding TimeZoneLabel}" VerticalAlignment="Center"/>
+                </WrapPanel>
+                <WrapPanel ItemSpacing="8" LineSpacing="6">
+                  <ComboBox Width="145" ItemsSource="{Binding UtcOffsetOptions}" SelectedItem="{Binding SelectedUtcOffsetOption, Mode=TwoWay}">
+                    <ComboBox.ItemTemplate><DataTemplate x:DataType="presentation:IToolbarClockUtcOffsetOption"><TextBlock Text="{Binding Label}"/></DataTemplate></ComboBox.ItemTemplate>
+                  </ComboBox>
+                  <ComboBox Width="160" ItemsSource="{Binding ColorOptions}" SelectedItem="{Binding SelectedColorOption, Mode=TwoWay}">
+                    <ComboBox.ItemTemplate><DataTemplate x:DataType="presentation:IToolbarClockColorOption"><StackPanel Orientation="Horizontal" Spacing="6"><Border Width="14" Height="14" Background="{Binding ColorBrush}" CornerRadius="3"/><TextBlock Text="{Binding Label}"/></StackPanel></DataTemplate></ComboBox.ItemTemplate>
+                  </ComboBox>
+                </WrapPanel>
+              </StackPanel>
+            </Border>
+          </DataTemplate>
+        </ItemsControl.ItemTemplate>
+      </ItemsControl>
+      <Button Content="Save toolbar clocks" AutomationProperties.Name="Save toolbar clocks" HorizontalAlignment="Left" Click="HandleSaveToolbarClocksClick"/>
+      <Separator/>
+      <TextBlock FontWeight="SemiBold" Text="Clock"/>
+      <WrapPanel ItemSpacing="14" LineSpacing="2">
+        <CheckBox Content="Use 24-hour time" IsChecked="{Binding ClockUse24HourTime, Mode=TwoWay}"/>
+        <CheckBox Content="Show seconds" IsChecked="{Binding ClockShowSeconds, Mode=TwoWay}"/>
+      </WrapPanel>
+      <WrapPanel ItemSpacing="12" LineSpacing="4">
+        <StackPanel Orientation="Horizontal" Spacing="4"><TextBlock Classes="caption" Text="Global PTT key:"/><TextBlock Classes="caption" Text="{Binding GlobalPttKeyText}"/></StackPanel>
+        <StackPanel Orientation="Horizontal" Spacing="4"><TextBlock Classes="caption" Text="Active-system PTT key:"/><TextBlock Classes="caption" Text="{Binding ActiveSystemPttKeyText}"/></StackPanel>
+      </WrapPanel>
+    </StackPanel>
+  </ScrollViewer>
+</UserControl>

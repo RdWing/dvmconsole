@@ -1,4 +1,4 @@
-using DvmConsole.FneClient;
+using DvmConsole.Core.Runtime;
 using DvmConsole.Media;
 
 namespace DvmConsole.Desktop;
@@ -75,10 +75,10 @@ internal readonly record struct EncryptionSnapshot
 
 internal static class EncryptionSnapshotResolver
 {
-    public static EncryptionSnapshot? TryResolve(FneTrafficFrame traffic)
+    public static EncryptionSnapshot? TryResolve(IRadioMediaFrame traffic)
     {
         ArgumentNullException.ThrowIfNull(traffic);
-        if (traffic.Protocol == FneTrafficProtocol.P25 &&
+        if (traffic.Protocol == RadioMediaProtocol.P25 &&
             P25DfsiFrameCodec.TryExtractEncryptionMetadata(
                 traffic,
                 out P25DfsiFrameCodec.P25EncryptionMetadata p25Metadata))
@@ -89,7 +89,7 @@ internal static class EncryptionSnapshotResolver
                 p25Metadata.KeyId);
         }
 
-        if (traffic.Protocol == FneTrafficProtocol.Dmr &&
+        if (traffic.Protocol == RadioMediaProtocol.Dmr &&
             traffic.FrameType.Equals("DATA_SYNC", StringComparison.OrdinalIgnoreCase) &&
             traffic.Subtype.Equals("VOICE_PI_HEADER", StringComparison.OrdinalIgnoreCase) &&
             DmrVoicePacketCodec.TryExtractEncryptionMetadata(
@@ -102,7 +102,7 @@ internal static class EncryptionSnapshotResolver
                 dmrMetadata.KeyId);
         }
 
-        if (traffic.Protocol == FneTrafficProtocol.Nxdn &&
+        if (traffic.Protocol == RadioMediaProtocol.Nxdn &&
             NxdnVoicePacketCodec.TryExtractCallMetadata(
                 traffic.Payload,
                 out NxdnVoicePacketCodec.CallMetadata nxdnMetadata) &&

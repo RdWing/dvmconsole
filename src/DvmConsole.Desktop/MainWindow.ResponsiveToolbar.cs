@@ -1,6 +1,7 @@
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Interactivity;
+using DvmConsole.Presentation;
 
 namespace DvmConsole.Desktop;
 
@@ -47,8 +48,11 @@ internal static class MainWindowResponsiveToolbarPolicy
 
 public sealed partial class MainWindow
 {
-    private void HandleResponsiveToolbarSizeChanged(object? sender, SizeChangedEventArgs e)
-        => RefreshResponsiveToolbarVisibility(e.NewSize.Width);
+    private async void HandleResponsiveToolbarSizeChanged(object? sender, SizeChangedEventArgs e)
+    {
+        RefreshResponsiveToolbarVisibility(e.NewSize.Width);
+        await SwitchChannelRendererAsync(e.NewSize.Width);
+    }
 
     private void RefreshResponsiveToolbarVisibility(double availableWidth)
     {
@@ -83,5 +87,50 @@ public sealed partial class MainWindow
     {
         if (sender is MenuItem { Tag: BuiltInAlertToneViewModel tone })
             await viewModel.SendBuiltInAlertToneAsync(tone).ConfigureAwait(true);
+    }
+
+    private async void HandleCardsRendererClick(object? sender, RoutedEventArgs e)
+    {
+        operatorViewSettings.ChannelRenderer = ConsoleRendererPreference.Cards;
+        ScheduleOperatorViewSave();
+        await SwitchChannelRendererAsync(Bounds.Width);
+    }
+
+    private async void HandleListRendererClick(object? sender, RoutedEventArgs e)
+    {
+        operatorViewSettings.ChannelRenderer = ConsoleRendererPreference.List;
+        ScheduleOperatorViewSave();
+        await SwitchChannelRendererAsync(Bounds.Width);
+    }
+
+    private async ValueTask SwitchChannelRendererAsync(double logicalWidth)
+    {
+        ResponsivePresentation resolved = ResponsivePresentationPolicy.Resolve(
+            logicalWidth,
+            operatorViewSettings.ChannelRenderer);
+        if (resolved.EffectiveRenderer != effectiveRenderer)
+            await channelPtt.ReleaseAllAsync();
+        ApplyChannelRenderer(logicalWidth, releasePtt: false);
+    }
+
+    private void ApplyChannelRenderer(double logicalWidth, bool releasePtt)
+    {
+        ResponsivePresentation resolved = ResponsivePresentationPolicy.Resolve(
+            logicalWidth,
+            operatorViewSettings.ChannelRenderer);
+        if (releasePtt && resolved.EffectiveRenderer != effectiveRenderer)
+            TaskObservation.Observe(channelPtt.ReleaseAllAsync().AsTask());
+        effectiveRenderer = resolved.EffectiveRenderer;
+        channelRendererHost.Content = effectiveRenderer == ConsoleRendererPreference.Cards
+            ? cardsRenderer
+            : listRenderer;
+        cardsRendererMenuItem.IsEnabled =
+            effectiveRenderer != ConsoleRendererPreference.Cards && logicalWidth >= ResponsivePresentationPolicy.NarrowMinimum;
+        listRendererMenuItem.IsEnabled = effectiveRenderer != ConsoleRendererPreference.List;
+        cardsRendererMenuItem.IsChecked = effectiveRenderer == ConsoleRendererPreference.Cards;
+        listRendererMenuItem.IsChecked = effectiveRenderer == ConsoleRendererPreference.List;
+        ToolTip.SetTip(cardsRendererMenuItem, logicalWidth < ResponsivePresentationPolicy.NarrowMinimum
+            ? "List is required below 600 logical pixels; the saved desktop preference is unchanged."
+            : null);
     }
 }

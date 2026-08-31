@@ -1,4 +1,5 @@
 using DvmConsole.Audio;
+using DvmConsole.Application;
 using Xunit;
 
 namespace DvmConsole.Desktop.Tests;
@@ -119,7 +120,7 @@ public sealed class ApplicationAudioBackendProviderTests
     }
 
     private static ApplicationAudioConfiguration CreateConfiguration(AudioProcessingMode mode)
-        => new(mode, "default", "default", false);
+        => new(mode, "default", "default");
 
     private static async Task WaitForAsync(Func<bool> condition)
     {

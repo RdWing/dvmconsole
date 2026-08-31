@@ -1,0 +1,42 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:presentation="using:DvmConsole.Presentation"
+             xmlns:config="using:DvmConsole.Core.Configuration"
+             x:Class="DvmConsole.Presentation.ConfigurationStudioOverviewView"
+             x:DataType="presentation:ConfigurationStudioViewModel">
+  <ScrollViewer x:Name="OverviewScroller" Margin="18" IsVisible="{Binding IsOverview}">
+    <StackPanel Spacing="12">
+      <TextBlock Classes="heading" Text="Overview"/>
+      <Border Classes="panel">
+        <StackPanel Spacing="7">
+          <TextBlock FontSize="16"
+                     Text="Configuration Studio edits the same interoperable YAML configuration that DVM Console already loads. Studio keeps changes in a draft until you review and save them."
+                     TextWrapping="Wrap"/>
+          <TextBlock FontWeight="SemiBold" Text="{Binding ConfigurationShapeText}" TextWrapping="Wrap"/>
+        </StackPanel>
+      </Border>
+      <Border Classes="panel">
+        <StackPanel Spacing="6">
+          <TextBlock Classes="subheading" Text="Validation"/>
+          <TextBlock Text="{Binding IssueSummary}" TextWrapping="Wrap"/>
+          <ItemsControl ItemsSource="{Binding ValidationIssues}">
+            <ItemsControl.ItemTemplate>
+              <DataTemplate x:DataType="config:ConfigurationValidationIssue">
+                <TextBlock Margin="0,2" Text="{Binding Message}" TextWrapping="Wrap"/>
+              </DataTemplate>
+            </ItemsControl.ItemTemplate>
+          </ItemsControl>
+        </StackPanel>
+      </Border>
+      <Border Classes="panel">
+        <StackPanel Spacing="6">
+          <TextBlock Classes="subheading" Text="Interoperability"/>
+          <TextBlock Text="{Binding UnknownFieldsText}" TextWrapping="Wrap"/>
+          <TextBlock Classes="caption"
+                     Text="Group membership, direction, source order, and enabled state stay in configuration-scoped operator settings. Only group name and type are written to YAML."
+                     TextWrapping="Wrap"/>
+        </StackPanel>
+      </Border>
+    </StackPanel>
+  </ScrollViewer>
+</UserControl>

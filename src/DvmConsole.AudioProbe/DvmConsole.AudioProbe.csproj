@@ -6,6 +6,11 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <ProjectReference Include="../DvmConsole.Audio/DvmConsole.Audio.csproj" />
+    <ProjectReference Include="../DvmConsole.Audio.Abstractions/DvmConsole.Audio.Abstractions.csproj" />
+    <ProjectReference Include="../DvmConsole.Audio.Core/DvmConsole.Audio.Core.csproj" />
+    <ProjectReference Include="../DvmConsole.Audio.Desktop/DvmConsole.Audio.Desktop.csproj" />
+    <ProjectReference Include="../DvmConsole.Audio.MacOS/DvmConsole.Audio.MacOS.csproj" />
+    <ProjectReference Include="../DvmConsole.Ptt.Abstractions/DvmConsole.Ptt.Abstractions.csproj" />
+    <ProjectReference Include="../DvmConsole.Ptt.Desktop/DvmConsole.Ptt.Desktop.csproj" />
   </ItemGroup>
 </Project>

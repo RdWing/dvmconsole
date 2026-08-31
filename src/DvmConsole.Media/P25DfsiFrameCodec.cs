@@ -1,4 +1,4 @@
-using DvmConsole.FneClient;
+using DvmConsole.Core.Runtime;
 using fnecore.P25;
 
 namespace DvmConsole.Media;
@@ -42,7 +42,7 @@ public static class P25DfsiFrameCodec
     private static readonly int[] RecordOffsets = [0, 22, 36, 53, 70, 87, 104, 121, 138];
     private static readonly int[] CodewordOffsets = [10, 1, 5, 5, 5, 5, 5, 5, 4];
 
-    public static bool TryExtractImbe(FneTrafficFrame traffic, Span<byte> imbe)
+    public static bool TryExtractImbe(IRadioMediaFrame traffic, Span<byte> imbe)
     {
         Span<bool> available = stackalloc bool[CodewordsPerLdu];
         return TryExtractImbeFrames(traffic, imbe, available) &&
@@ -53,12 +53,12 @@ public static class P25DfsiFrameCodec
     // A damaged DFSI record must not discard the other eight codewords: the
     // receive session submits only the unavailable slot as a decoder erasure.
     public static bool TryExtractImbeFrames(
-        FneTrafficFrame traffic,
+        IRadioMediaFrame traffic,
         Span<byte> imbe,
         Span<bool> available)
     {
         ArgumentNullException.ThrowIfNull(traffic);
-        if (traffic.Protocol != FneTrafficProtocol.P25 ||
+        if (traffic.Protocol != RadioMediaProtocol.P25 ||
             !IsVoiceLdu(traffic) ||
             imbe.Length < ImbeBytes ||
             available.Length < CodewordsPerLdu)
@@ -70,7 +70,7 @@ public static class P25DfsiFrameCodec
         return TryExtractImbeFrames(traffic.Payload, ldu1, imbe, available);
     }
 
-    public static byte[] ExtractImbe(FneTrafficFrame traffic)
+    public static byte[] ExtractImbe(IRadioMediaFrame traffic)
     {
         byte[] imbe = new byte[ImbeBytes];
         if (!TryExtractImbe(traffic, imbe))
@@ -83,14 +83,14 @@ public static class P25DfsiFrameCodec
     // header until link control arrives, even though LDU1 contains the real
     // subscriber and talkgroup identifiers.
     public static bool TryExtractCallIdentifiers(
-        FneTrafficFrame traffic,
+        IRadioMediaFrame traffic,
         out uint sourceId,
         out uint destinationId)
     {
         ArgumentNullException.ThrowIfNull(traffic);
         sourceId = 0;
         destinationId = 0;
-        if (traffic.Protocol != FneTrafficProtocol.P25 || !IsVoiceLdu(traffic))
+        if (traffic.Protocol != RadioMediaProtocol.P25 || !IsVoiceLdu(traffic))
             return false;
 
         ReadOnlySpan<byte> payload = traffic.Payload;
@@ -131,12 +131,12 @@ public static class P25DfsiFrameCodec
     // next message indicator and key identity in its encryption-sync records.
     // A clear LDU2 has zeroed sync fields and returns false.
     public static bool TryExtractEncryptionMetadata(
-        FneTrafficFrame traffic,
+        IRadioMediaFrame traffic,
         out P25EncryptionMetadata metadata)
     {
         ArgumentNullException.ThrowIfNull(traffic);
         metadata = default;
-        if (traffic.Protocol != FneTrafficProtocol.P25 || !IsVoiceLdu(traffic))
+        if (traffic.Protocol != RadioMediaProtocol.P25 || !IsVoiceLdu(traffic))
             return false;
 
         bool ldu1 = string.Equals(traffic.Subtype, "LDU1", StringComparison.OrdinalIgnoreCase);
@@ -344,7 +344,7 @@ public static class P25DfsiFrameCodec
         return true;
     }
 
-    private static bool IsVoiceLdu(FneTrafficFrame traffic)
+    private static bool IsVoiceLdu(IRadioMediaFrame traffic)
     {
         return string.Equals(traffic.FrameType, "VOICE", StringComparison.OrdinalIgnoreCase) &&
             (string.Equals(traffic.Subtype, "LDU1", StringComparison.OrdinalIgnoreCase) ||

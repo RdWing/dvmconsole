@@ -56,6 +56,33 @@ public sealed class PcmPlaybackPumpTests
     }
 
     [Fact]
+    public async Task PrefetchedSamplesAreWrittenBeforeReadingTheNextChunk()
+    {
+        var reader = new FakeReader(new short[] { 4, 5 });
+        var playback = new FakePlayback();
+        int firstOutputSignals = 0;
+
+        bool wroteOutput = await PcmPlaybackPump.RunAsync(
+            reader,
+            playback,
+            rateConverter: null,
+            CancellationToken.None,
+            () =>
+            {
+                firstOutputSignals++;
+                return ValueTask.CompletedTask;
+            },
+            prefetchedSamples: new short[] { 1, 2, 3 });
+
+        Assert.True(wroteOutput);
+        Assert.Equal(1, firstOutputSignals);
+        Assert.Collection(
+            playback.Writes,
+            first => Assert.Equal([1, 2, 3], first),
+            second => Assert.Equal([4, 5], second));
+    }
+
+    [Fact]
     public async Task WaitsForPlaybackPacingBeforeWritingTheNextChunk()
     {
         var reader = new FakeReader(

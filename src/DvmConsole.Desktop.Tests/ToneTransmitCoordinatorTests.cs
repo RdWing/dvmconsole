@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using DvmConsole.Audio;
+using DvmConsole.Application;
 using DvmConsole.Core.Configuration;
 using DvmConsole.Desktop;
 using DvmConsole.FneClient;
@@ -83,7 +84,8 @@ public sealed class ToneTransmitCoordinatorTests
             GeneratedToneStep.Tone(1_000, TimeSpan.FromMilliseconds(20))
         ]);
 
-        await coordinator.SendAsync([new TransmitTarget(channel, endpoint)], sequence);
+        await coordinator.SendAsync([
+            new TransmitTarget(channel.ToTransmitDescriptor(), endpoint)], sequence);
 
         Assert.Equal(1, backend.Session.SingleToneCalls);
     }
@@ -104,7 +106,7 @@ public sealed class ToneTransmitCoordinatorTests
             .ToArray();
 
         await coordinator.SendAsync(
-            [new TransmitTarget(channel, endpoint)],
+            [new TransmitTarget(channel.ToTransmitDescriptor(), endpoint)],
             sequence,
             renderedSamples);
 
@@ -128,6 +130,10 @@ public sealed class ToneTransmitCoordinatorTests
 
         public string Name => "Test";
         public IReadOnlyList<ChannelViewModel> Channels { get; } = [channel];
+        public IReadOnlyCollection<TransmitChannelDescriptor> ChannelDescriptors
+            => Channels.Select(candidate => candidate.ToTransmitDescriptor()).ToArray();
+        public IReadOnlyCollection<ChannelId> ChannelIds
+            => Channels.Select(candidate => new ChannelId(candidate.SessionId)).ToArray();
         public bool IsConnected => true;
         public uint? SourceId => 1001;
         public IReadOnlyList<ushort> PacketSequences => packetSequences.ToArray();

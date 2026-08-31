@@ -1,0 +1,143 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:presentation="using:DvmConsole.Presentation"
+             xmlns:config="using:DvmConsole.Core.Configuration"
+             x:Class="DvmConsole.Presentation.ConfigurationStudioGroupsView"
+             x:DataType="presentation:ConfigurationStudioViewModel">
+  <UserControl.Styles>
+    <Style Selector="Button"><Setter Property="MinHeight" Value="44"/></Style>
+    <Style Selector="CheckBox"><Setter Property="MinHeight" Value="44"/></Style>
+    <Style Selector="ComboBox"><Setter Property="MinHeight" Value="44"/></Style>
+    <Style Selector="TextBox"><Setter Property="MinHeight" Value="44"/></Style>
+  </UserControl.Styles>
+  <ScrollViewer x:Name="GroupsScroller" Margin="18" IsVisible="{Binding IsGroups}">
+    <StackPanel Spacing="10">
+      <TextBlock Classes="heading" Text="Groups"/>
+      <TextBlock Classes="caption"
+                 Text="YAML stores group name and type. Membership, one-way source order, and enabled state remain codeplug-scoped operator settings."
+                 TextWrapping="Wrap"/>
+      <Grid x:Name="GroupsBody" ColumnDefinitions="2*,3*" ColumnSpacing="10">
+        <Border x:Name="GroupDefinitionsPanel" Classes="panel">
+          <StackPanel Spacing="6">
+            <WrapPanel ItemSpacing="8" LineSpacing="8">
+              <TextBlock Classes="subheading" Width="180" VerticalAlignment="Center" Text="Definitions"/>
+              <Button Content="Add" AutomationProperties.Name="Add group" Click="HandleAddGroupClick"/>
+              <Button Content="Delete" AutomationProperties.Name="Delete group" Click="HandleDeleteGroupClick"/>
+            </WrapPanel>
+            <ListBox Classes="dense-list"
+                     MaxHeight="230"
+                     ItemsSource="{Binding Groups}"
+                     SelectedItem="{Binding SelectedGroup, Mode=TwoWay}"
+                     AutomationProperties.Name="Group definitions">
+              <ListBox.ItemTemplate>
+                <DataTemplate x:DataType="config:GroupConfiguration">
+                  <Border Classes="dense-row">
+                    <Grid ColumnDefinitions="*,Auto">
+                      <TextBlock Text="{Binding Name}" TextWrapping="Wrap"/>
+                      <TextBlock Grid.Column="1" Classes="caption" Text="{Binding Type}"/>
+                    </Grid>
+                  </Border>
+                </DataTemplate>
+              </ListBox.ItemTemplate>
+            </ListBox>
+            <TextBlock Classes="caption" Text="Name"/>
+            <TextBox Text="{Binding SelectedGroup.Name, Mode=TwoWay}"
+                     LostFocus="HandleDraftFieldEdit"
+                     AutomationProperties.Name="Group name"/>
+            <TextBlock Classes="caption" Text="Type"/>
+            <ComboBox ItemsSource="{Binding GroupTypeOptions}"
+                      SelectedItem="{Binding SelectedGroup.Type, Mode=TwoWay}"
+                      SelectionChanged="HandleDraftFieldEdit"
+                      AutomationProperties.Name="Group type"/>
+          </StackPanel>
+        </Border>
+        <Border x:Name="GroupOperatorPanel" Grid.Column="1" Classes="panel">
+          <StackPanel Spacing="7">
+            <WrapPanel ItemSpacing="8" LineSpacing="8">
+              <TextBlock Classes="subheading" Width="180" VerticalAlignment="Center" Text="Operator state"/>
+              <Button Content="Apply changes"
+                      AutomationProperties.Name="Apply all operator group changes"
+                      Click="HandleApplyAllOperatorGroupsClick"
+                      IsEnabled="{Binding CanUseOperationalGroups}"/>
+              <Button x:Name="applyOperatorChangesAndCloseButton"
+                      Content="Apply &amp; close"
+                      Background="{DynamicResource StudioAccentBrush}"
+                      Foreground="White"
+                      AutomationProperties.Name="Apply operator group changes and close"
+                      Click="HandleApplyOperatorGroupsAndCloseClick"
+                      IsEnabled="{Binding CanUseOperationalGroups}"/>
+            </WrapPanel>
+            <TextBlock Classes="caption" Text="{Binding OperationalGroupHint}" TextWrapping="Wrap"/>
+            <ItemsControl ItemsSource="{Binding OperationalGroups}" IsEnabled="{Binding CanUseOperationalGroups}">
+              <ItemsControl.ItemTemplate>
+                <DataTemplate x:DataType="presentation:PatchGroupEditorViewModel">
+                  <Border BorderBrush="{DynamicResource ControlBorderBrush}"
+                          BorderThickness="1"
+                          CornerRadius="4"
+                          Padding="8"
+                          Margin="0,0,0,6">
+                    <StackPanel Spacing="6">
+                      <WrapPanel ItemSpacing="8" LineSpacing="8">
+                        <StackPanel Width="180">
+                          <TextBlock FontWeight="SemiBold" Text="{Binding Name}" TextWrapping="Wrap"/>
+                          <TextBlock Classes="caption" Text="{Binding GroupTypeText}"/>
+                        </StackPanel>
+                        <Button IsVisible="{Binding IsMultiSelect}"
+                                Content="{Binding PttButtonText}"
+                                Tag="{Binding}"
+                                AutomationProperties.Name="{Binding PttButtonText}"
+                                Click="HandleMultiSelectPttClick"/>
+                      </WrapPanel>
+                      <TextBlock IsVisible="{Binding HasConflicts}" Text="{Binding ConflictSummary}" TextWrapping="Wrap"/>
+                      <WrapPanel ItemSpacing="12" LineSpacing="4" IsVisible="{Binding IsPatchGroup}">
+                        <CheckBox Content="Enabled"
+                                  IsChecked="{Binding IsEnabled, Mode=TwoWay}"
+                                  AutomationProperties.Name="Patch group enabled"/>
+                        <CheckBox Content="One-way"
+                                  IsChecked="{Binding IsOneWay, Mode=TwoWay}"
+                                  AutomationProperties.Name="One-way patch"/>
+                      </WrapPanel>
+                      <ComboBox IsVisible="{Binding IsOneWay}"
+                                ItemsSource="{Binding SourceOptions}"
+                                SelectedItem="{Binding SelectedSource, Mode=TwoWay}"
+                                AutomationProperties.Name="One-way patch source">
+                        <ComboBox.ItemTemplate>
+                          <DataTemplate x:DataType="presentation:PatchMemberEditorViewModel">
+                            <TextBlock Text="{Binding DisplayName}"/>
+                          </DataTemplate>
+                        </ComboBox.ItemTemplate>
+                      </ComboBox>
+                      <Expander Header="{Binding MemberEditorHeader}">
+                        <ItemsControl ItemsSource="{Binding Members}">
+                          <ItemsControl.ItemTemplate>
+                            <DataTemplate x:DataType="presentation:PatchMemberEditorViewModel">
+                              <StackPanel>
+                                <CheckBox Content="{Binding DisplayName}"
+                                          IsChecked="{Binding IsMember, Mode=TwoWay}"
+                                          IsEnabled="{Binding IsSelectionEnabled}"
+                                          AutomationProperties.Name="{Binding DisplayName}"/>
+                                <TextBlock Classes="caption"
+                                           IsVisible="{Binding HasConflict}"
+                                           Text="{Binding ConflictText}"
+                                           TextWrapping="Wrap"/>
+                              </StackPanel>
+                            </DataTemplate>
+                          </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                      </Expander>
+                      <Button HorizontalAlignment="Left"
+                              Content="Apply this group"
+                              Tag="{Binding}"
+                              AutomationProperties.Name="Apply this operator group"
+                              Click="HandleApplyPatchGroupClick"/>
+                    </StackPanel>
+                  </Border>
+                </DataTemplate>
+              </ItemsControl.ItemTemplate>
+            </ItemsControl>
+          </StackPanel>
+        </Border>
+      </Grid>
+    </StackPanel>
+  </ScrollViewer>
+</UserControl>

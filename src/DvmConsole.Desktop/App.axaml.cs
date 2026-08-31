@@ -7,11 +7,15 @@ using Avalonia.Media.Imaging;
 using Avalonia.Threading;
 using DvmConsole.Core.Configuration;
 using DvmConsole.Core.Settings;
+using DvmConsole.Presentation;
 
 namespace DvmConsole.Desktop;
 
-public sealed class App : Application
+public sealed class App : Avalonia.Application
 {
+#if DEBUG
+    private static int developerToolsAttached;
+#endif
     public static string? ConfigurationPath { get; set; }
     public static bool DemoMode { get; set; }
     public static string? DemoCaptureDirectory { get; set; }
@@ -24,10 +28,8 @@ public sealed class App : Application
 #if DEBUG
         bool isHeadless = AppDomain.CurrentDomain.GetAssemblies().Any(assembly =>
             assembly.GetName().Name?.StartsWith("Avalonia.Headless", StringComparison.Ordinal) == true);
-        if (!isHeadless)
-        {
+        if (!isHeadless && Interlocked.Exchange(ref developerToolsAttached, 1) == 0)
             this.AttachDeveloperTools();
-        }
 #endif
     }
 
@@ -108,7 +110,11 @@ public sealed class App : Application
                 if (section == OperatorToolSection.History && !window.IsHistoryViewportHookAttached)
                     throw new InvalidOperationException("The deferred History list did not initialize its viewport handling.");
                 if (section == OperatorToolSection.EncryptionKeys && window.IsPendingSectionNavigation)
-                    throw new InvalidOperationException("Encryption Key Status did not reveal the channel key-status section.");
+                {
+                    throw new InvalidOperationException(
+                        "Encryption Key Status did not reveal the channel key-status section. " +
+                        window.PendingSectionNavigationDiagnostic);
+                }
                 window.Close();
             }
 
@@ -256,11 +262,11 @@ public sealed class App : Application
 
             if (capture.Section == ConfigurationStudioSection.Overview)
             {
-                ConfigurationSavePlan plan = studio.StudioViewModel.CreateSavePlan(
+                ConfigurationSavePlan plan = studio.CreateSavePlanForCapture(
                     studio.StudioViewModel.Document.SourcePath!);
                 OperatorDialogParts review = OperatorDialogFactory.CreateConfirmation(
                     "Review & Save",
-                    studio.StudioViewModel.BuildReviewText(plan),
+                    studio.BuildSaveReviewForCapture(plan),
                     "Save");
                 review.Window.Show(studio);
                 await WaitForRenderAsync();

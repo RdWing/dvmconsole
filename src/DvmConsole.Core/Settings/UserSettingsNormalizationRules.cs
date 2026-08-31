@@ -479,16 +479,28 @@ internal static class UserSettingsNormalizationRules
 
     internal static List<AlertToneSetting> NormalizeAlertTones(IEnumerable<AlertToneSetting>? tones)
         => (tones ?? [])
-            .Where(tone => tone is not null && !string.IsNullOrWhiteSpace(tone.FilePath))
+            .Where(tone => tone is not null && (
+                Guid.TryParse(tone.AssetId, out _) ||
+                !string.IsNullOrWhiteSpace(tone.FilePath)))
             .Select(tone => new AlertToneSetting
             {
                 Name = string.IsNullOrWhiteSpace(tone.Name)
-                    ? System.IO.Path.GetFileNameWithoutExtension(tone.FilePath.Trim())
+                    ? System.IO.Path.GetFileNameWithoutExtension(
+                        !string.IsNullOrWhiteSpace(tone.FileName)
+                            ? tone.FileName.Trim()
+                            : tone.FilePath.Trim())
                     : tone.Name.Trim(),
+                AssetId = Guid.TryParse(tone.AssetId, out Guid assetId)
+                    ? assetId.ToString("N")
+                    : null,
+                FileName = !string.IsNullOrWhiteSpace(tone.FileName)
+                    ? System.IO.Path.GetFileName(tone.FileName.Trim())
+                    : System.IO.Path.GetFileName(tone.FilePath.Trim()),
                 FilePath = tone.FilePath.Trim()
             })
-            .Where(tone => tone.FilePath.Length > 0)
-            .GroupBy(tone => tone.FilePath, StringComparer.OrdinalIgnoreCase)
+            .GroupBy(
+                tone => tone.AssetId ?? tone.FilePath,
+                StringComparer.OrdinalIgnoreCase)
             .Select(group => group.First())
             .ToList();
 

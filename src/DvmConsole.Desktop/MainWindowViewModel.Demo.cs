@@ -1,3 +1,4 @@
+using DvmConsole.Application;
 using DvmConsole.Core.Diagnostics;
 using DvmConsole.Core.Runtime;
 using DvmConsole.FneClient;
@@ -79,7 +80,8 @@ public sealed partial class MainWindowViewModel
                 northDispatch.Definition.DestinationId,
                 ProtocolFor(northDispatch),
                 transmitStreamId,
-                "NEO Demo Console");
+                "NEO Demo Console",
+                channelId: new ChannelId(northDispatch.SessionId));
         }
 
         if (northMetro is not null && transit is not null)
@@ -258,7 +260,8 @@ public sealed partial class MainWindowViewModel
             channel.Definition.DestinationId,
             ProtocolFor(channel),
             streamId,
-            callerText: sourceId.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            callerText: sourceId.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            channelId: new ChannelId(channel.SessionId));
         entry.Complete(startedAt.Add(duration));
         callHistory.Add(entry);
     }
@@ -276,7 +279,8 @@ public sealed partial class MainWindowViewModel
             channel.Definition.DestinationId,
             ProtocolFor(channel),
             streamId,
-            callerText: sourceId.ToString(System.Globalization.CultureInfo.InvariantCulture)));
+            callerText: sourceId.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            channelId: new ChannelId(channel.SessionId)));
 
     private void AddDemoRecording(
         ChannelViewModel? channel,

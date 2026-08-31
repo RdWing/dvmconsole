@@ -1,4 +1,4 @@
-using DvmConsole.FneClient;
+using DvmConsole.Core.Runtime;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Xunit;
@@ -295,7 +295,7 @@ public sealed class RecordingFinalizationSpoolTests
             8_000,
             1,
             16,
-            FneTrafficProtocol.P25,
+            RadioMediaProtocol.P25,
             "P25",
             "RX",
             "InboundRadio",

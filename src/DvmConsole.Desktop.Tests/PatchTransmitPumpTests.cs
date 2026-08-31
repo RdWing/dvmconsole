@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using DvmConsole.Application;
 using DvmConsole.Core.Runtime;
 using DvmConsole.Media;
 using DvmConsole.Vocoder;

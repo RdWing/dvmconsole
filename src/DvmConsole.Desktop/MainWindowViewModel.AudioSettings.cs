@@ -1,7 +1,9 @@
 using DvmConsole.Audio;
+using DvmConsole.Application;
 using DvmConsole.Core.Diagnostics;
 using DvmConsole.Core.Settings;
 using DvmConsole.FneClient;
+using DvmConsole.Presentation;
 using DvmConsole.Vocoder;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
@@ -108,17 +110,12 @@ public sealed partial class MainWindowViewModel
         AudioProcessingMode processingMode = GetSelectedAudioProcessingMode();
         string deviceId = AudioInputDeviceIdText.Trim();
         string outputDeviceId = AudioOutputDeviceIdText.Trim();
-        bool highQualityBluetoothAudio = OperatingSystem.IsMacOSVersionAtLeast(26)
-            ? HighQualityBluetoothAudioEnabled
-            : userSettings.HighQualityBluetoothAudioEnabled;
         var proposedConfiguration = new ApplicationAudioConfiguration(
             processingMode,
             deviceId,
-            outputDeviceId,
-            highQualityBluetoothAudio);
+            outputDeviceId);
         bool audioRouteChanged =
             previousConfiguration.ProcessingMode != proposedConfiguration.ProcessingMode ||
-            previousConfiguration.HighQualityBluetoothAudio != proposedConfiguration.HighQualityBluetoothAudio ||
             !previousConfiguration.InputDeviceId.Equals(
                 proposedConfiguration.InputDeviceId,
                 StringComparison.OrdinalIgnoreCase) ||
@@ -164,7 +161,6 @@ public sealed partial class MainWindowViewModel
             AudioProcessingMode.WindowsCommunications => UserSettings.WindowsCommunicationsProcessingMode,
             _ => UserSettings.DvmConsoleAudioProcessingMode
         };
-        userSettings.HighQualityBluetoothAudioEnabled = highQualityBluetoothAudio;
         userSettings.AudioInputAgcEnabled = AudioInputAgcEnabled;
         userSettings.AudioInputAgcTargetDbfs = agcTargetDbfs;
         userSettings.AudioInputGain = gain;
@@ -240,8 +236,7 @@ public sealed partial class MainWindowViewModel
 
         try
         {
-            using IAudioBackend backend = AudioBackendFactory.CreateDefault(
-                Environment.GetEnvironmentVariable("DVM_AUDIO_LIBRARY"));
+            using IAudioBackend backend = audioBackendFactory.Create(AudioBackendConfiguration.Default);
             IReadOnlyList<AudioDeviceInfo> inputs = backend.EnumerateDevices(AudioDirection.Input);
             IReadOnlyList<AudioDeviceInfo> outputs = backend.EnumerateDevices(AudioDirection.Output);
 
@@ -318,12 +313,12 @@ public sealed partial class MainWindowViewModel
                     .RefreshSystemDefaultOutputAsync(cancellationToken)
                     .ConfigureAwait(false);
                 DateTimeOffset retryAt = DateTimeOffset.UtcNow.AddSeconds(5);
-                foreach (ChannelViewModel channel in outputRefresh.Restarted)
+                foreach (ChannelViewModel channel in ResolveChannels(outputRefresh.Restarted))
                 {
                     receiveRetryAfter.Remove(channel);
                     receiveAudioWork.Start(channel);
                 }
-                foreach (ChannelViewModel channel in outputRefresh.Failed)
+                foreach (ChannelViewModel channel in ResolveChannels(outputRefresh.Failed))
                     receiveRetryAfter[channel] = retryAt;
             }
 
@@ -405,7 +400,7 @@ public sealed partial class MainWindowViewModel
         await audioReconfigurationLock.WaitAsync();
         try
         {
-            ChannelViewModel[] activeChannels = audioCoordinator.ActiveChannels.ToArray();
+            ChannelViewModel[] activeChannels = ResolveChannels(audioCoordinator.ActiveChannels);
             WebStreamViewModel[] activeStreams = webStreamPlayback.ActiveStreams.ToArray();
 
             foreach (ChannelViewModel channel in activeChannels)
@@ -428,7 +423,7 @@ public sealed partial class MainWindowViewModel
             foreach (WebStreamViewModel stream in activeStreams)
                 await webStreamPlayback.StartAsync(stream).ConfigureAwait(false);
 
-            int restarted = activeChannels.Count(audioCoordinator.IsActive);
+            int restarted = activeChannels.Count(channel => audioCoordinator.IsActive(channel));
             AudioStatusText =
                 $"Audio route changed; restarted {restarted} of {activeChannels.Length} receive session(s) " +
                 $"and {activeStreams.Count(webStreamPlayback.IsActive)} of {activeStreams.Length} web stream(s).";
@@ -503,7 +498,10 @@ public sealed partial class MainWindowViewModel
         RxJitterBufferSetting configured = GetReceiveJitterBufferSetting(systemName);
         ReceiveJitterBufferConfiguration configuration =
             ReceiveJitterBufferPolicy.GetConfiguration(protocol, configured);
-        return adaptiveReceiveJitter.GetProfile(systemName, protocol, configuration);
+        return adaptiveReceiveJitter.GetProfile(
+            systemName,
+            FneReceiveWorkQueueAdapter.ToRadioProtocol(protocol),
+            configuration);
     }
 
     private void ObserveAdaptiveReceiveJitter(
@@ -513,7 +511,11 @@ public sealed partial class MainWindowViewModel
         RxJitterBufferSetting configured = GetReceiveJitterBufferSetting(system.Name);
         ReceiveJitterBufferConfiguration configuration =
             ReceiveJitterBufferPolicy.GetConfiguration(traffic.Protocol, configured);
-        adaptiveReceiveJitter.Observe(system.Name, traffic, configuration);
+        adaptiveReceiveJitter.Observe(
+            system.Name,
+            traffic,
+            traffic.TransportIngressTimestamp,
+            configuration);
     }
 
     private RxJitterBufferSetting GetReceiveJitterBufferSetting(string systemName)
@@ -566,7 +568,10 @@ public sealed partial class MainWindowViewModel
     {
         ReceiveJitterBufferConfiguration configuration =
             ReceiveJitterBufferPolicy.GetConfiguration(protocol, settings);
-        return adaptiveReceiveJitter.GetProfile(systemName, protocol, configuration).TargetDelay;
+        return adaptiveReceiveJitter.GetProfile(
+            systemName,
+            FneReceiveWorkQueueAdapter.ToRadioProtocol(protocol),
+            configuration).TargetDelay;
     }
 
     private async Task RestartReceiveVocoderSessionsAsync()
@@ -577,7 +582,7 @@ public sealed partial class MainWindowViewModel
         await audioReconfigurationLock.WaitAsync().ConfigureAwait(false);
         try
         {
-            ChannelViewModel[] activeChannels = audioCoordinator.ActiveChannels.ToArray();
+            ChannelViewModel[] activeChannels = ResolveChannels(audioCoordinator.ActiveChannels);
             if (activeChannels.Length > 0)
             {
                 foreach (ChannelViewModel channel in activeChannels)
@@ -595,7 +600,9 @@ public sealed partial class MainWindowViewModel
             ChannelViewModel[] patchChannels = GetActivePatchSourceChannels();
             await DrainPatchSourceWorkAsync().ConfigureAwait(false);
             await patchSourceDecode.StopAllAsync().ConfigureAwait(false);
-            await patchSourceDecode.ApplyChannelsAsync(patchChannels).ConfigureAwait(false);
+            await patchSourceDecode.ApplyChannelsAsync(
+                patchChannels.Select(channel => (DvmConsole.Application.ReceiveChannelDescriptor)channel))
+                .ConfigureAwait(false);
         }
         finally
         {

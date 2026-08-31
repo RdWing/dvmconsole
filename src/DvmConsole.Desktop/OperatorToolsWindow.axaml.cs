@@ -6,6 +6,7 @@ using Avalonia.Platform.Storage;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
 using DvmConsole.Media;
+using DvmConsole.Presentation;
 using System.Collections.Specialized;
 
 namespace DvmConsole.Desktop;
@@ -15,14 +16,35 @@ public sealed partial class OperatorToolsWindow : Window
     private readonly MainWindowViewModel viewModel;
     private readonly WindowPttKeyRouter pttKeyRouter;
     private readonly DispatcherTimer scrollBarHideTimer;
+    private ContentControl toolContent = null!;
+    private GeneralSettingsView? generalSettingsView;
+    private CallHistoryView? historyView;
+    private DvmConsole.Presentation.ConnectionsSettingsView? connectionsSettingsView;
+    private OperatorToolSection? mountedSection;
     private ScrollViewer? activeScrollViewer;
     private ListBox? historyList;
     private ScrollViewportAnchor<CallHistoryEntry>? historyViewportAnchor;
     private string? pendingSectionAnchorName;
     private bool synchronizingSectionNavigation;
+    private bool closed;
 
     internal bool IsHistoryViewportHookAttached => historyList is not null;
     internal bool IsPendingSectionNavigation => pendingSectionAnchorName is not null;
+    internal string PendingSectionNavigationDiagnostic
+    {
+        get
+        {
+            DvmConsole.Presentation.ConnectionsSettingsView? view = ResolveConnectionsSettingsView();
+            ScrollViewer? scroller = view?.GetVisualDescendants().OfType<ScrollViewer>().FirstOrDefault();
+            TextBlock? anchor = view?.GetVisualDescendants()
+                .OfType<TextBlock>()
+                .FirstOrDefault(candidate => candidate.Text == "Channel key status");
+            return $"section={mountedSection}; " +
+                   $"view={view?.Bounds}; " +
+                   $"scroller={scroller?.Bounds}; extent={scroller?.Extent}; viewport={scroller?.Viewport}; " +
+                   $"anchor={anchor?.Bounds}; attached={anchor?.IsAttachedToVisualTree()}";
+        }
+    }
 
     public OperatorToolsWindow()
     {
@@ -30,6 +52,7 @@ public sealed partial class OperatorToolsWindow : Window
         pttKeyRouter = null!;
         scrollBarHideTimer = CreateScrollBarHideTimer();
         InitializeComponent();
+        ResolveShellControls();
         PopulateSectionNavigation();
     }
 
@@ -47,15 +70,7 @@ public sealed partial class OperatorToolsWindow : Window
         this.pttKeyRouter = pttKeyRouter ?? throw new ArgumentNullException(nameof(pttKeyRouter));
         scrollBarHideTimer = CreateScrollBarHideTimer();
         InitializeComponent();
-        TabControl tabs = ToolTabs ?? this.FindControl<TabControl>("ToolTabs")
-            ?? throw new InvalidOperationException("The operator tools tab control could not be loaded.");
-        ToolTabs = tabs;
-        SectionNavigation ??= this.FindControl<ListBox>("SectionNavigation")
-            ?? throw new InvalidOperationException("The settings navigation list could not be loaded.");
-        SectionSearchBox ??= this.FindControl<TextBox>("SectionSearchBox")
-            ?? throw new InvalidOperationException("The settings search box could not be loaded.");
-        NoSettingsSearchResults ??= this.FindControl<TextBlock>("NoSettingsSearchResults")
-            ?? throw new InvalidOperationException("The settings search status could not be loaded.");
+        ResolveShellControls();
         PopulateSectionNavigation();
         DataContext = viewModel;
         SelectSection(section);
@@ -67,15 +82,29 @@ public sealed partial class OperatorToolsWindow : Window
         viewModel.FilteredCallHistoryChanging += HandleHistoryCollectionChanging;
         Opened += HandleOpened;
         LayoutUpdated += HandleWindowLayoutUpdated;
-        ToolTabs.SelectionChanged += HandleToolTabsSelectionChanged;
         Closed += HandleClosed;
         Activated += (_, _) => UpdatePttFocusSuppression();
         Deactivated += (_, _) => pttKeyRouter.UpdateInputFocus(null);
         ScheduleHistoryViewportHook();
     }
 
+    private void ResolveShellControls()
+    {
+        toolContent = this.FindControl<ContentControl>("ToolContent")
+            ?? throw new InvalidOperationException("The operator tools content host could not be loaded.");
+        SectionNavigation ??= this.FindControl<ListBox>("SectionNavigation")
+            ?? throw new InvalidOperationException("The settings navigation list could not be loaded.");
+        SectionSearchBox ??= this.FindControl<TextBox>("SectionSearchBox")
+            ?? throw new InvalidOperationException("The settings search box could not be loaded.");
+        NoSettingsSearchResults ??= this.FindControl<TextBlock>("NoSettingsSearchResults")
+            ?? throw new InvalidOperationException("The settings search status could not be loaded.");
+    }
+
     public void SelectSection(OperatorToolSection section)
     {
+        if (closed)
+            return;
+
         pendingSectionAnchorName = null;
         synchronizingSectionNavigation = true;
         try
@@ -83,22 +112,22 @@ public sealed partial class OperatorToolsWindow : Window
             SelectNavigationItem(section);
             if (section == OperatorToolSection.Clock)
             {
-                ToolTabs.SelectedIndex = (int)OperatorToolSection.General;
+                MountSection(OperatorToolSection.General);
                 Dispatcher.UIThread.Post(
-                    () => this.FindControl<TextBlock>("ClockSettingsSection")?.BringIntoView(),
+                    TryRevealClockSettings,
                     DispatcherPriority.Background);
                 return;
             }
 
             if (section == OperatorToolSection.EncryptionKeys)
             {
-                ToolTabs.SelectedIndex = (int)OperatorToolSection.Connections;
+                MountSection(OperatorToolSection.Connections);
                 pendingSectionAnchorName = "EncryptionKeyStatusSection";
                 SchedulePendingSectionReveal();
                 return;
             }
 
-            ToolTabs.SelectedIndex = (int)section;
+            MountSection(section);
         }
         finally
         {
@@ -177,60 +206,37 @@ public sealed partial class OperatorToolsWindow : Window
 
     private void SchedulePendingSectionReveal()
     {
-        if (pendingSectionAnchorName is null)
+        if (closed || pendingSectionAnchorName is null)
             return;
 
         Dispatcher.UIThread.Post(() =>
         {
-            if (!TryRevealPendingSection())
+            if (!TryRevealPendingSection() && !closed)
                 Dispatcher.UIThread.Post(() => TryRevealPendingSection(), DispatcherPriority.Background);
         }, DispatcherPriority.Loaded);
     }
 
     private bool TryRevealPendingSection()
     {
+        if (closed)
+        {
+            pendingSectionAnchorName = null;
+            return true;
+        }
         if (pendingSectionAnchorName is null)
             return true;
 
-        Control? anchor = this.FindControl<Control>(pendingSectionAnchorName);
-        ScrollViewer? scrollViewer = this.FindControl<ScrollViewer>("ConnectionsScrollViewer");
-        if (anchor is null || scrollViewer is null || anchor.Bounds.Height <= 0)
+        DvmConsole.Presentation.ConnectionsSettingsView? view = ResolveConnectionsSettingsView();
+        if (view is null || !view.TryBringKeyStatusIntoView())
             return false;
-
-        Point? position = anchor.TranslatePoint(default, scrollViewer);
-        if (position is null)
-            return false;
-
-        double maximumOffset = Math.Max(0, scrollViewer.Extent.Height - scrollViewer.Viewport.Height);
-        double desiredOffset = Math.Clamp(
-            scrollViewer.Offset.Y + position.Value.Y - 8,
-            0,
-            maximumOffset);
-        scrollViewer.Offset = new Vector(scrollViewer.Offset.X, desiredOffset);
         pendingSectionAnchorName = null;
         return true;
     }
 
     private void HandleWindowLayoutUpdated(object? sender, EventArgs e)
-        => TryAttachHistoryViewportHook();
-
-    private void HandleToolTabsSelectionChanged(object? sender, SelectionChangedEventArgs e)
     {
-        ScheduleHistoryViewportHook();
-        if (!synchronizingSectionNavigation &&
-            ToolTabs.SelectedIndex >= 0 &&
-            ToolTabs.SelectedIndex <= (int)OperatorToolSection.Ptt)
-        {
-            synchronizingSectionNavigation = true;
-            try
-            {
-                SelectNavigationItem((OperatorToolSection)ToolTabs.SelectedIndex);
-            }
-            finally
-            {
-                synchronizingSectionNavigation = false;
-            }
-        }
+        TryAttachHistoryViewportHook();
+        TryRevealPendingSection();
     }
 
     private void HandleSectionNavigationChanged(object? sender, SelectionChangedEventArgs e)
@@ -265,14 +271,17 @@ public sealed partial class OperatorToolsWindow : Window
     }
 
     private void ScheduleHistoryViewportHook()
-        => Dispatcher.UIThread.Post(TryAttachHistoryViewportHook, DispatcherPriority.Background);
+    {
+        if (!closed)
+            Dispatcher.UIThread.Post(TryAttachHistoryViewportHook, DispatcherPriority.Background);
+    }
 
     private void TryAttachHistoryViewportHook()
     {
-        if (historyList is not null)
+        if (closed || historyList is not null)
             return;
 
-        ListBox? list = HistoryList ??
+        ListBox? list = historyView?.HistoryItems ??
             this.FindControl<ListBox>("HistoryList") ??
             this.GetVisualDescendants()
                 .OfType<ListBox>()
@@ -281,7 +290,6 @@ public sealed partial class OperatorToolsWindow : Window
             return;
 
         historyList = list;
-        LayoutUpdated -= HandleWindowLayoutUpdated;
         historyViewportAnchor = new ScrollViewportAnchor<CallHistoryEntry>(
             GetHistoryScrollViewer,
             () => list.GetVisualDescendants().OfType<ListBoxItem>(),
@@ -307,16 +315,22 @@ public sealed partial class OperatorToolsWindow : Window
 
     private void HandleClosed(object? sender, EventArgs e)
     {
+        closed = true;
+        pendingSectionAnchorName = null;
         scrollBarHideTimer.Stop();
         Opened -= HandleOpened;
         LayoutUpdated -= HandleWindowLayoutUpdated;
-        ToolTabs.SelectionChanged -= HandleToolTabsSelectionChanged;
+        DetachHistoryViewport();
+        viewModel.FilteredCallHistoryChanging -= HandleHistoryCollectionChanging;
+    }
+
+    private void DetachHistoryViewport()
+    {
         if (historyList is not null)
             historyList.LayoutUpdated -= HandleHistoryListLayoutUpdated;
         historyList = null;
         historyViewportAnchor?.Reset();
         historyViewportAnchor = null;
-        viewModel.FilteredCallHistoryChanging -= HandleHistoryCollectionChanging;
     }
 
     private void HandleKeyDown(object? sender, KeyEventArgs e)
@@ -341,10 +355,32 @@ public sealed partial class OperatorToolsWindow : Window
     }
 
     private void HandlePttFocusChanged(object? sender, RoutedEventArgs e)
-        => Dispatcher.UIThread.Post(UpdatePttFocusSuppression, DispatcherPriority.Input);
+    {
+        if (!closed)
+            Dispatcher.UIThread.Post(UpdatePttFocusSuppression, DispatcherPriority.Input);
+    }
 
     private void UpdatePttFocusSuppression()
-        => pttKeyRouter.UpdateInputFocus(FocusManager?.GetFocusedElement());
+    {
+        if (!closed)
+            pttKeyRouter.UpdateInputFocus(FocusManager?.GetFocusedElement());
+    }
+
+    private void TryRevealClockSettings()
+    {
+        if (!closed)
+            ResolveGeneralSettingsView()?.BringClockSettingsIntoView();
+    }
+
+    private GeneralSettingsView? ResolveGeneralSettingsView()
+        => generalSettingsView ??= this.GetVisualDescendants()
+            .OfType<GeneralSettingsView>()
+            .FirstOrDefault();
+
+    private DvmConsole.Presentation.ConnectionsSettingsView? ResolveConnectionsSettingsView()
+        => connectionsSettingsView ??= this.GetVisualDescendants()
+            .OfType<DvmConsole.Presentation.ConnectionsSettingsView>()
+            .FirstOrDefault();
 
     private void InitializeComponent()
         => Avalonia.Markup.Xaml.AvaloniaXamlLoader.Load(this);
@@ -352,103 +388,115 @@ public sealed partial class OperatorToolsWindow : Window
     private async void HandleTestPermitToneClick(object? sender, RoutedEventArgs e)
         => await viewModel.TestTalkPermitToneAsync();
 
-    private void HandleRequestMacOsMicrophonePermissionClick(object? sender, RoutedEventArgs e)
-        => viewModel.RequestMacOsMicrophonePermission();
+    private async void HandleRequestMacOsMicrophonePermissionClick(object? sender, RoutedEventArgs e)
+        => await viewModel.RequestMacOsMicrophonePermissionAsync();
 
-    private void HandleRequestMacOsKeyboardPermissionClick(object? sender, RoutedEventArgs e)
-        => viewModel.RequestMacOsKeyboardPermission();
+    private async void HandleSharedTestPermitToneRequested(object? sender, EventArgs e)
+        => await viewModel.TestTalkPermitToneAsync();
 
-    private void HandleSaveAudioInputPresetClick(object? sender, RoutedEventArgs e)
+    private async void HandleSharedMicrophonePermissionRequested(object? sender, EventArgs e)
+        => await viewModel.RequestMacOsMicrophonePermissionAsync();
+
+    private void HandleSharedSaveAudioInputPresetRequested(object? sender, EventArgs e)
         => viewModel.SaveAudioInputPreset();
 
-    private void HandleUseAudioInputPresetClick(object? sender, RoutedEventArgs e)
+    private void HandleSharedUseAudioInputPresetRequested(object? sender, AudioInputPresetEventArgs e)
     {
-        if (sender is Button { Tag: AudioInputPresetViewModel preset })
+        if (e.Preset is AudioInputPresetViewModel preset)
             viewModel.UseAudioInputPreset(preset);
     }
 
-    private void HandleDeleteAudioInputPresetClick(object? sender, RoutedEventArgs e)
+    private void HandleSharedDeleteAudioInputPresetRequested(object? sender, AudioInputPresetEventArgs e)
     {
-        if (sender is Button { Tag: AudioInputPresetViewModel preset })
+        if (e.Preset is AudioInputPresetViewModel preset)
             viewModel.DeleteAudioInputPreset(preset);
     }
 
-    private void HandleUseDtmfPresetClick(object? sender, RoutedEventArgs e)
+    private void HandleSharedKeyboardPermissionRequested(object? sender, EventArgs e)
+        => viewModel.RequestMacOsKeyboardPermission();
+
+    private void HandleSharedUseDtmfPresetRequested(object? sender, DtmfPresetEventArgs e)
     {
-        if (sender is Button { Tag: DtmfPresetViewModel preset })
+        if (e.Preset is DtmfPresetViewModel preset)
             viewModel.UseDtmfPreset(preset);
     }
 
-    private async void HandleSendDtmfPresetClick(object? sender, RoutedEventArgs e)
+    private async void HandleSharedSendDtmfPresetRequested(object? sender, DtmfPresetEventArgs e)
     {
-        if (sender is Button { Tag: DtmfPresetViewModel preset })
+        if (e.Preset is DtmfPresetViewModel preset)
             await viewModel.SendDtmfPresetAsync(preset);
     }
 
-    private void HandleDeleteDtmfPresetClick(object? sender, RoutedEventArgs e)
+    private void HandleSharedDeleteDtmfPresetRequested(object? sender, DtmfPresetEventArgs e)
     {
-        if (sender is Button { Tag: DtmfPresetViewModel preset })
+        if (e.Preset is DtmfPresetViewModel preset)
             viewModel.DeleteDtmfPreset(preset);
     }
 
-    private void HandleUseTonePresetClick(object? sender, RoutedEventArgs e)
+    private void HandleSharedUseTonePresetRequested(object? sender, TonePresetEventArgs e)
     {
-        if (sender is Button { Tag: TonePresetViewModel preset })
+        if (e.Preset is TonePresetViewModel preset)
             viewModel.UseTonePreset(preset);
     }
 
-    private async void HandleSendTonePresetClick(object? sender, RoutedEventArgs e)
+    private async void HandleSharedSendTonePresetRequested(object? sender, TonePresetEventArgs e)
     {
-        if (sender is Button { Tag: TonePresetViewModel preset })
+        if (e.Preset is TonePresetViewModel preset)
             await viewModel.SendTonePresetAsync(preset);
     }
 
-    private async void HandleSendQuickCallClick(object? sender, RoutedEventArgs e)
+    private void HandleSharedDeleteTonePresetRequested(object? sender, TonePresetEventArgs e)
+    {
+        if (e.Preset is TonePresetViewModel preset)
+            viewModel.DeleteTonePreset(preset);
+    }
+
+    private async void HandleSharedSendQuickCallRequested(object? sender, EventArgs e)
         => await viewModel.SendQuickCallAsync();
 
-    private void HandleAddToneStepClick(object? sender, RoutedEventArgs e)
+    private void HandleSharedAddToneStepRequested(object? sender, EventArgs e)
         => viewModel.AddToneSequenceStep(silence: false);
 
-    private void HandleAddSilenceStepClick(object? sender, RoutedEventArgs e)
+    private void HandleSharedAddSilenceStepRequested(object? sender, EventArgs e)
         => viewModel.AddToneSequenceStep(silence: true);
 
-    private void HandleRemoveToneStepClick(object? sender, RoutedEventArgs e)
+    private void HandleSharedRemoveToneStepRequested(object? sender, ToneSequenceStepEventArgs e)
     {
-        if (sender is Button { Tag: ToneSequenceStepViewModel step })
+        if (e.Step is ToneSequenceStepViewModel step)
             viewModel.RemoveToneSequenceStep(step);
     }
 
-    private void HandleMoveToneStepUpClick(object? sender, RoutedEventArgs e)
+    private void HandleSharedMoveToneStepUpRequested(object? sender, ToneSequenceStepEventArgs e)
     {
-        if (sender is Button { Tag: ToneSequenceStepViewModel step })
+        if (e.Step is ToneSequenceStepViewModel step)
             viewModel.MoveToneSequenceStep(step, -1);
     }
 
-    private void HandleMoveToneStepDownClick(object? sender, RoutedEventArgs e)
+    private void HandleSharedMoveToneStepDownRequested(object? sender, ToneSequenceStepEventArgs e)
     {
-        if (sender is Button { Tag: ToneSequenceStepViewModel step })
+        if (e.Step is ToneSequenceStepViewModel step)
             viewModel.MoveToneSequenceStep(step, 1);
     }
 
-    private void HandleSaveToolbarClocksClick(object? sender, RoutedEventArgs e)
+    private void HandleSharedSaveToolbarClocksRequested(object? sender, EventArgs e)
         => viewModel.SaveToolbarClocks();
 
-    private void HandleResetLayoutClick(object? sender, RoutedEventArgs e)
+    private void HandleSharedResetLayoutRequested(object? sender, EventArgs e)
         => viewModel.ResetLayout();
 
-    private void HandleRefreshSerialPttDevicesClick(object? sender, RoutedEventArgs e)
+    private void HandleSharedRefreshSerialPttDevicesRequested(object? sender, EventArgs e)
         => viewModel.RefreshSerialPttDevices();
 
-    private async void HandleApplySerialPttSettingsClick(object? sender, RoutedEventArgs e)
+    private async void HandleSharedApplySerialPttSettingsRequested(object? sender, EventArgs e)
         => await viewModel.ApplySerialPttSettingsAsync();
 
-    private async void HandleApplyGlobalPttKeyClick(object? sender, RoutedEventArgs e)
+    private async void HandleSharedApplyGlobalPttKeyRequested(object? sender, EventArgs e)
         => await viewModel.ApplyGlobalPttKeySelectionAsync();
 
-    private async void HandleApplyActiveSystemPttKeyClick(object? sender, RoutedEventArgs e)
+    private async void HandleSharedApplyActiveSystemPttKeyRequested(object? sender, EventArgs e)
         => await viewModel.ApplyActiveSystemPttKeySelectionAsync();
 
-    private async void HandleImportAlertToneClick(object? sender, RoutedEventArgs e)
+    private async void HandleSharedImportAlertToneRequested(object? sender, EventArgs e)
     {
         if (!StorageProvider.CanOpen)
             return;
@@ -470,54 +518,57 @@ public sealed partial class OperatorToolsWindow : Window
         if (files.Count == 0)
             return;
 
-        string? path = files[0].TryGetLocalPath();
-        if (!string.IsNullOrWhiteSpace(path))
-            viewModel.AddAlertTone(path);
+        using IStorageFile file = files[0];
+        await using Stream source = await file.OpenReadAsync();
+        await viewModel.AddAlertToneAsync(
+            file.Name,
+            MainWindowViewModel.ResolveAlertMediaType(file.Name),
+            source);
     }
 
-    private async void HandleSendAlertToneClick(object? sender, RoutedEventArgs e)
+    private async void HandleSharedSendAlertToneRequested(object? sender, AlertToneEventArgs e)
     {
-        if (sender is Button { Tag: AlertToneViewModel tone })
+        if (e.Tone is AlertToneViewModel tone)
             await viewModel.SendAlertToneAsync(tone);
     }
 
-    private void HandleDeleteAlertToneClick(object? sender, RoutedEventArgs e)
+    private void HandleSharedDeleteAlertToneRequested(object? sender, AlertToneEventArgs e)
     {
-        if (sender is Button { Tag: AlertToneViewModel tone })
+        if (e.Tone is AlertToneViewModel tone)
             viewModel.DeleteAlertTone(tone);
     }
 
-    private void HandleDeleteTonePresetClick(object? sender, RoutedEventArgs e)
+    private void HandleSharedSaveWebStreamOutputDeviceRequested(
+        object? sender,
+        WebStreamRouteSaveEventArgs e)
     {
-        if (sender is Button { Tag: TonePresetViewModel preset })
-            viewModel.DeleteTonePreset(preset);
-    }
-
-    private void HandleSaveWebStreamOutputDeviceClick(object? sender, RoutedEventArgs e)
-    {
-        if (sender is Button { Tag: WebStreamViewModel stream })
+        if (e.Stream is WebStreamViewModel stream)
             viewModel.SaveWebStreamOutputDevice(stream);
     }
 
-    private void HandleSaveOutputDeviceClick(object? sender, RoutedEventArgs e)
+    private void HandleSharedSaveChannelOutputRouteRequested(
+        object? sender,
+        ChannelAudioRouteEventArgs e)
     {
-        if (sender is Button { Tag: ChannelViewModel channel })
+        if (e.Channel is ChannelViewModel channel)
             viewModel.SaveChannelOutputDevice(channel);
     }
 
-    private void HandleSaveIgnoredSubscribersClick(object? sender, RoutedEventArgs e)
+    private void HandleSharedSaveIgnoredSubscribersRequested(
+        object? sender,
+        RecorderChannelEventArgs e)
     {
-        if (sender is Button { Tag: ChannelViewModel channel })
+        if (e.Channel is ChannelViewModel channel)
             viewModel.TrySaveRecordingIgnoredSubscribers(channel);
     }
 
     private void HandleClearHistoryFiltersClick(object? sender, RoutedEventArgs e)
         => viewModel.ClearHistoryFilters();
 
-    private void HandleApplyRecordingRootClick(object? sender, RoutedEventArgs e)
+    private void HandleSharedApplyRecordingLocationRequested(object? sender, EventArgs e)
         => viewModel.ApplyRecordingRoot();
 
-    private async void HandleChooseRecordingRootClick(object? sender, RoutedEventArgs e)
+    private async void HandleSharedChooseRecordingLocationRequested(object? sender, EventArgs e)
     {
         if (!StorageProvider.CanOpen)
             return;
@@ -562,12 +613,55 @@ public sealed partial class OperatorToolsWindow : Window
 
     private async void HandleDeleteRecordingClick(object? sender, RoutedEventArgs e)
     {
-        if (sender is Button { Tag: CallRecordingMetadata metadata } &&
-            await ConfirmAsync(
+        if (sender is Button { Tag: CallRecordingMetadata metadata })
+            await ConfirmAndDeleteRecordingAsync(metadata);
+    }
+
+    private void HandleSharedHistoryClearFiltersRequested(object? sender, EventArgs e)
+        => viewModel.ClearHistoryFilters();
+
+    private void HandleSharedHistoryClearRequested(object? sender, EventArgs e)
+        => viewModel.ClearCallHistory();
+
+    private void HandleSharedHistoryExportRequested(object? sender, EventArgs e)
+        => HandleExportCallHistoryClick(sender, new RoutedEventArgs());
+
+    private async void HandleSharedHistoryPlayRequested(
+        object? sender,
+        CallHistoryItemEventArgs e)
+    {
+        if (e.Item is CallHistoryEntry entry)
+            await viewModel.PlayCallHistoryRecordingAsync(entry);
+    }
+
+    private async void HandleSharedHistoryStopRequested(object? sender, EventArgs e)
+        => await viewModel.StopRecordingPlaybackAsync();
+
+    private void HandleSharedHistoryOpenRequested(
+        object? sender,
+        CallHistoryItemEventArgs e)
+    {
+        if (e.Item is CallHistoryEntry { Recording: { } metadata })
+            viewModel.OpenRecording(metadata);
+    }
+
+    private async void HandleSharedHistoryDeleteRequested(
+        object? sender,
+        CallHistoryItemEventArgs e)
+    {
+        if (e.Item is CallHistoryEntry { Recording: { } metadata })
+            await ConfirmAndDeleteRecordingAsync(metadata);
+    }
+
+    private async Task ConfirmAndDeleteRecordingAsync(CallRecordingMetadata metadata)
+    {
+        if (await ConfirmAsync(
                 "Delete recording",
                 $"Delete '{metadata.FileName}' and its catalog metadata? This cannot be undone.",
                 "Delete"))
+        {
             await viewModel.DeleteRecordingAsync(metadata);
+        }
     }
 
     private async Task<bool> ConfirmAsync(string title, string message, string confirmLabel)
@@ -584,17 +678,11 @@ public sealed partial class OperatorToolsWindow : Window
         return confirmed;
     }
 
-    private void HandleApplyPatchGroupClick(object? sender, RoutedEventArgs e)
-    {
-        if (sender is Button { Tag: PatchGroupEditorViewModel group })
-            viewModel.ApplyPatchGroup(group);
-    }
+    private void HandleSharedSavePatchGroupRequested(object? sender, PatchGroupEventArgs e)
+        => viewModel.ApplyPatchGroup(e.Group);
 
-    private async void HandleMultiSelectPttClick(object? sender, RoutedEventArgs e)
-    {
-        if (sender is Button { Tag: PatchGroupEditorViewModel group })
-            await viewModel.ToggleMultiSelectPttAsync(group);
-    }
+    private async void HandleSharedToggleMultiSelectPttRequested(object? sender, PatchGroupEventArgs e)
+        => await viewModel.ToggleMultiSelectPttAsync(e.Group);
 
     private async void HandleExportCallHistoryClick(object? sender, RoutedEventArgs e)
     {
@@ -615,23 +703,29 @@ public sealed partial class OperatorToolsWindow : Window
                 }
             ]
         });
-        string? path = file?.TryGetLocalPath();
-        if (!string.IsNullOrWhiteSpace(path))
-            viewModel.ExportCallHistory(path);
+        if (file is null)
+            return;
+        using (file)
+        await using (Stream destination = await file.OpenWriteAsync())
+            viewModel.ExportCallHistory(destination, leaveOpen: true);
     }
 
     private void HandleClearCallHistoryClick(object? sender, RoutedEventArgs e)
         => viewModel.ClearCallHistory();
 
-    private async void HandleToggleSystemConnectionClick(object? sender, RoutedEventArgs e)
+    private async void HandleSharedToggleSystemConnectionRequested(
+        object? sender,
+        ConnectionSystemEventArgs e)
     {
-        if (sender is Button { Tag: SystemViewModel system })
+        if (e.System is SystemViewModel system)
             await viewModel.ToggleSystemConnectionAsync(system);
     }
 
-    private async void HandleRestartSystemClick(object? sender, RoutedEventArgs e)
+    private async void HandleSharedRestartSystemRequested(
+        object? sender,
+        ConnectionSystemEventArgs e)
     {
-        if (sender is Button { Tag: SystemViewModel system })
+        if (e.System is SystemViewModel system)
             await system.RestartAsync();
     }
 

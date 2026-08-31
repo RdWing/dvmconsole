@@ -1,9 +1,13 @@
 using Avalonia.Media;
+using DvmConsole.Application;
 using DvmConsole.Audio;
 using DvmConsole.Core.Configuration;
 using DvmConsole.Core.Settings;
 using DvmConsole.FneClient;
 using DvmConsole.Media;
+using DvmConsole.Ptt;
+using DvmConsole.Storage;
+using DvmConsole.Vocoder;
 
 namespace DvmConsole.Desktop;
 
@@ -12,20 +16,32 @@ internal sealed record DesktopRuntimeDependencies(
     Func<IReadOnlyList<string>> SerialPortProvider,
     Func<string, int, IPttSource> SerialPttFactory,
     IUiDispatcher UiDispatcher,
+    IAssetStore AssetStore,
+    IAudioBackendFactory AudioBackendFactory,
+    IVocoderFactory VocoderFactory,
     bool NetworkDisabledDemo = false)
 {
     public static DesktopRuntimeDependencies CreateDefault()
-        => new(
-            new UserSettingsStore(UserSettingsStore.DefaultPath),
+    {
+        var settingsStore = new UserSettingsStore(UserSettingsStore.DefaultPath);
+        string appDataRoot = Path.GetDirectoryName(settingsStore.Path) ?? AppContext.BaseDirectory;
+        return new(
+            settingsStore,
             SerialPttSource.GetAvailablePortNames,
             (portName, baudRate) => new SerialPttSource(portName, baudRate),
-            AvaloniaUiDispatcher.Instance);
+            AvaloniaUiDispatcher.Instance,
+            new ManagedAssetStore(Path.Combine(appDataRoot, "Assets")),
+            new DesktopAudioBackendFactory(Environment.GetEnvironmentVariable("DVM_AUDIO_LIBRARY")),
+            new NativeVocoderFactory());
+    }
 }
 
 internal sealed record ConsoleTopology(
     ConsoleConfiguration Configuration,
     string CodeplugPath,
-    IReadOnlyList<string> ValidationErrors)
+    IReadOnlyList<string> ValidationErrors,
+    ConfigurationReference? ConfigurationReference = null,
+    bool MigrateLegacyConfigurationOperatorState = false)
 {
     public bool IsValid => ValidationErrors.Count == 0;
 }
@@ -41,9 +57,13 @@ internal sealed class ConsoleSessionLoader
         this.settingsStore = settingsStore ?? throw new ArgumentNullException(nameof(settingsStore));
     }
 
-    public ConsoleSessionLoadResult Load(string? configurationPath)
+    public ConsoleSessionLoadResult Load(
+        string? configurationPath,
+        ConfigurationReference? configurationReference = null,
+        bool useLegacyPathFallback = true,
+        bool migrateLegacyConfigurationOperatorState = false)
     {
-        if (string.IsNullOrWhiteSpace(configurationPath))
+        if (useLegacyPathFallback && string.IsNullOrWhiteSpace(configurationPath))
             configurationPath = settingsStore.Load().LastCodeplugPath;
 
         if (string.IsNullOrWhiteSpace(configurationPath))
@@ -63,7 +83,12 @@ internal sealed class ConsoleSessionLoader
             string loadedCodeplugPath = configuration.SourcePath ?? Path.GetFullPath(configurationPath);
             return new ConsoleSessionLoadResult(
                 status,
-                new ConsoleTopology(configuration, loadedCodeplugPath, errors.ToArray()));
+                new ConsoleTopology(
+                    configuration,
+                    loadedCodeplugPath,
+                    errors.ToArray(),
+                    configurationReference,
+                    migrateLegacyConfigurationOperatorState));
         }
         catch (Exception exception) when (exception is IOException or InvalidDataException or FormatException or YamlDotNet.Core.YamlException)
         {
@@ -91,6 +116,18 @@ internal sealed class ConsoleSessionFactory
             return CreateRejected(loadResult.StatusText, topology);
 
         ConsoleConfiguration configuration = topology.Configuration;
+        UserSettings sessionSettings = dependencies.UserSettingsStore.Load();
+        if (topology.ConfigurationReference is { } configurationReference)
+        {
+            ConfigurationOperatorStateStore.Activate(
+                sessionSettings,
+                configurationReference.Id.ToString(),
+                topology.CodeplugPath,
+                topology.MigrateLegacyConfigurationOperatorState);
+        }
+        CodeplugStudioState studioState = CodeplugStudioStateStore.Get(
+            sessionSettings,
+            topology.CodeplugPath);
         var services = new ConsoleSessionServices();
         return ConsoleSessionConstruction.Create(services, () =>
         {
@@ -110,7 +147,10 @@ internal sealed class ConsoleSessionFactory
                 : $"{loadResult.StatusText}\n{keyWarning}";
             var viewModel = new MainWindowViewModel(
                 status,
-                CreateSystemViewModels(configuration, zones),
+                CreateSystemViewModels(
+                    configuration,
+                    zones,
+                    studioState.CallPrioritySystemNames),
                 zones,
                 new MainWindowViewModelOptions(
                     P25KeyResolver: p25KeyRing,
@@ -124,8 +164,14 @@ internal sealed class ConsoleSessionFactory
                     CodeplugPath: topology.CodeplugPath,
                     UiDispatcher: dependencies.UiDispatcher,
                     SessionServices: services,
-                    NetworkDisabledDemo: dependencies.NetworkDisabledDemo));
-            viewModel.RecordLoadedCodeplug(topology.CodeplugPath);
+                    NetworkDisabledDemo: dependencies.NetworkDisabledDemo,
+                    ConfigurationReference: topology.ConfigurationReference,
+                    MigrateLegacyConfigurationOperatorState: topology.MigrateLegacyConfigurationOperatorState,
+                    AssetStore: dependencies.AssetStore,
+                    AudioBackendFactory: dependencies.AudioBackendFactory,
+                    VocoderFactory: dependencies.VocoderFactory));
+            if (topology.ConfigurationReference is null)
+                viewModel.RecordLoadedCodeplug(topology.CodeplugPath);
             return viewModel;
         });
     }
@@ -144,7 +190,10 @@ internal sealed class ConsoleSessionFactory
                 SerialPttFactory: dependencies.SerialPttFactory,
                 UiDispatcher: dependencies.UiDispatcher,
                 SessionServices: services,
-                NetworkDisabledDemo: dependencies.NetworkDisabledDemo)));
+                NetworkDisabledDemo: dependencies.NetworkDisabledDemo,
+                AssetStore: dependencies.AssetStore,
+                AudioBackendFactory: dependencies.AudioBackendFactory,
+                VocoderFactory: dependencies.VocoderFactory)));
     }
 
     private MainWindowViewModel CreateRejected(string status, ConsoleTopology topology)
@@ -165,7 +214,11 @@ internal sealed class ConsoleSessionFactory
                 CodeplugPath: topology.CodeplugPath,
                 UiDispatcher: dependencies.UiDispatcher,
                 SessionServices: services,
-                NetworkDisabledDemo: dependencies.NetworkDisabledDemo)));
+                NetworkDisabledDemo: dependencies.NetworkDisabledDemo,
+                ConfigurationReference: topology.ConfigurationReference,
+                AssetStore: dependencies.AssetStore,
+                AudioBackendFactory: dependencies.AudioBackendFactory,
+                VocoderFactory: dependencies.VocoderFactory)));
     }
 
     private static IReadOnlyList<ZoneViewModel> CreateZones(
@@ -229,7 +282,8 @@ internal sealed class ConsoleSessionFactory
 
     private static IReadOnlyList<SystemViewModel> CreateSystemViewModels(
         ConsoleConfiguration configuration,
-        IReadOnlyList<ZoneViewModel> zones)
+        IReadOnlyList<ZoneViewModel> zones,
+        IReadOnlyCollection<string> callPrioritySystemNames)
     {
         var channelsBySystem = new Dictionary<string, List<ChannelViewModel>>(StringComparer.OrdinalIgnoreCase);
         foreach (ChannelViewModel channel in zones.SelectMany(zone => zone.Channels))
@@ -261,15 +315,23 @@ internal sealed class ConsoleSessionFactory
                 .Where(zone => zone.Channels.Count > 0)
                 .ToArray();
 
-            return new SystemViewModel(
-                FneConnectionOptions.FromConfiguration(system),
-                system.Name,
-                $"{system.Address}:{system.Port}",
+            FneConnectionOptions options = FneConnectionOptions.FromConfiguration(system);
+            IReadOnlyList<ChannelViewModel> systemChannels =
                 channelsBySystem.TryGetValue(system.Name, out List<ChannelViewModel>? channels)
                     ? channels
-                    : [],
+                    : [];
+            var radioSessionFactory = new FneRadioSessionFactory(
+                options,
+                () => systemChannels.Select(channel => channel.ToTransmitDescriptor()).ToArray());
+            return new SystemViewModel(
+                options,
+                system.Name,
+                $"{system.Address}:{system.Port}",
+                systemChannels,
                 systemZones,
-                systemIndex);
+                systemIndex,
+                radioSessionFactory,
+                callPrioritySystemNames.Contains(system.Name, StringComparer.OrdinalIgnoreCase));
         });
     }
 }

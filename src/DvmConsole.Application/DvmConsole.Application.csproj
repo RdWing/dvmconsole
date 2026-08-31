@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <RootNamespace>DvmConsole.Application</RootNamespace>
+    <IsTrimmable>true</IsTrimmable>
+    <EnableTrimAnalyzer>true</EnableTrimAnalyzer>
+    <EnableAotAnalyzer>true</EnableAotAnalyzer>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../DvmConsole.Audio.Abstractions/DvmConsole.Audio.Abstractions.csproj" />
+    <ProjectReference Include="../DvmConsole.Audio.Core/DvmConsole.Audio.Core.csproj" />
+    <ProjectReference Include="../DvmConsole.Core/DvmConsole.Core.csproj" />
+    <ProjectReference Include="../DvmConsole.Media/DvmConsole.Media.csproj" />
+    <ProjectReference Include="../DvmConsole.Operations/DvmConsole.Operations.csproj" />
+    <ProjectReference Include="../DvmConsole.Ptt.Abstractions/DvmConsole.Ptt.Abstractions.csproj" />
+    <ProjectReference Include="../DvmConsole.Vocoder.Abstractions/DvmConsole.Vocoder.Abstractions.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="DvmConsole" />
+    <InternalsVisibleTo Include="DvmConsole.Desktop.Tests" />
+    <InternalsVisibleTo Include="DvmConsole.Presentation" />
+  </ItemGroup>
+</Project>

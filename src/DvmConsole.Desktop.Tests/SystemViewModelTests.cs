@@ -6,6 +6,8 @@ using DvmConsole.Core.Runtime;
 using DvmConsole.Desktop;
 using DvmConsole.FneClient;
 using DvmConsole.Media;
+using DvmConsole.Presentation;
+using DvmConsole.Ptt;
 using System.Collections.Specialized;
 using System.Globalization;
 using fnecore.DMR;

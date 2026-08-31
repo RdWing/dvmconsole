@@ -1,5 +1,6 @@
 using Avalonia.Threading;
 using DvmConsole.Audio;
+using DvmConsole.Application;
 using DvmConsole.Core.Settings;
 using DvmConsole.FneClient;
 using System.Globalization;
@@ -20,7 +21,7 @@ public sealed partial class MainWindowViewModel
                 channel.Definition.SystemName,
                 StringComparison.OrdinalIgnoreCase));
             return system is not null &&
-                TransmitTargetPolicy.IsAvailable(channel, system) &&
+                TransmitTargetPolicy.IsAvailable(channel.ToTransmitDescriptor(), system) &&
                 system.IsConnected &&
                 system.SourceId is uint sourceId &&
                 sourceId != 0;
@@ -322,7 +323,7 @@ public sealed partial class MainWindowViewModel
         }
     }
 
-    public bool AddAlertTone(string path)
+    public async Task<bool> AddAlertToneAsync(string path)
     {
         try
         {
@@ -330,20 +331,46 @@ public sealed partial class MainWindowViewModel
             if (!File.Exists(fullPath))
                 throw new FileNotFoundException("The alert audio file was not found.", fullPath);
 
+            await using FileStream source = File.OpenRead(fullPath);
+            return await AddAlertToneAsync(
+                Path.GetFileName(fullPath),
+                ResolveAlertMediaType(fullPath),
+                source);
+        }
+        catch (Exception exception)
+        {
+            TransmitStatusText = $"Alert asset unavailable: {exception.Message}";
+            return false;
+        }
+    }
+
+    public async Task<bool> AddAlertToneAsync(
+        string displayName,
+        string mediaType,
+        Stream content,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(displayName);
+        ArgumentException.ThrowIfNullOrWhiteSpace(mediaType);
+        ArgumentNullException.ThrowIfNull(content);
+        try
+        {
             string name = string.IsNullOrWhiteSpace(AlertToneNameText)
-                ? Path.GetFileNameWithoutExtension(fullPath)
+                ? Path.GetFileNameWithoutExtension(displayName)
                 : AlertToneNameText.Trim();
             if (string.IsNullOrWhiteSpace(name) || name.Length > 80)
-                throw new ArgumentException("Alert tone names must contain 1–80 characters.", nameof(path));
+                throw new ArgumentException("Alert tone names must contain 1–80 characters.", nameof(displayName));
 
-            AlertToneViewModel? existing = alertTones.FirstOrDefault(tone =>
-                tone.FilePath.Equals(fullPath, StringComparison.OrdinalIgnoreCase));
-            if (existing is not null)
-                alertTones.Remove(existing);
+            AssetDescriptor imported = await assetStore.ImportAsync(
+                displayName,
+                mediaType,
+                content,
+                cancellationToken);
             alertTones.Add(new AlertToneViewModel(new AlertToneSetting
             {
                 Name = name,
-                FilePath = fullPath
+                AssetId = imported.Id.ToString(),
+                FileName = Path.GetFileName(displayName)
             }));
             userSettings.AlertTones = alertTones.Select(tone => tone.ToSetting()).ToList();
             PersistUserSettings();
@@ -373,7 +400,8 @@ public sealed partial class MainWindowViewModel
         ArgumentNullException.ThrowIfNull(tone);
         try
         {
-            short[] samples = await PcmAudioFileLoader.LoadAsync(tone.FilePath);
+            Stream source = await OpenAlertToneAsync(tone);
+            short[] samples = await PcmAudioFileLoader.LoadAsync(source);
             ChannelViewModel[] alertTargets = ResolveGeneratedToneChannels();
             await SendGeneratedToneAsync(
                 samples,
@@ -385,6 +413,37 @@ public sealed partial class MainWindowViewModel
             TransmitStatusText = $"Alert asset unavailable: {exception.Message}";
         }
     }
+
+    private async ValueTask<Stream> OpenAlertToneAsync(AlertToneViewModel tone)
+    {
+        if (Guid.TryParse(tone.AssetId, out Guid managedId))
+            return await assetStore.OpenReadAsync(new AssetId(managedId));
+
+        if (string.IsNullOrWhiteSpace(tone.FilePath) || !File.Exists(tone.FilePath))
+            throw new FileNotFoundException("The alert audio asset is not available.", tone.FilePath);
+
+        // One-time migration for pre-library desktop settings. The original
+        // remains untouched and the next settings write omits its path.
+        await using FileStream source = File.OpenRead(tone.FilePath);
+        AssetDescriptor imported = await assetStore.ImportAsync(
+            tone.FileName,
+            ResolveAlertMediaType(tone.FilePath),
+            source);
+        tone.SetManagedAsset(imported.Id);
+        userSettings.AlertTones = alertTones.Select(item => item.ToSetting()).ToList();
+        PersistUserSettings();
+        return await assetStore.OpenReadAsync(imported.Id);
+    }
+
+    internal static string ResolveAlertMediaType(string path)
+        => Path.GetExtension(path).ToLowerInvariant() switch
+        {
+            ".wav" => "audio/wav",
+            ".mp3" or ".mp2" or ".mpeg" => "audio/mpeg",
+            ".opus" => "audio/opus",
+            ".ogg" => "audio/ogg",
+            _ => "application/octet-stream"
+        };
 
     public async Task SendBuiltInAlertToneAsync(BuiltInAlertToneViewModel tone)
     {
@@ -513,7 +572,7 @@ public sealed partial class MainWindowViewModel
         TransmitTarget[] targets = channels
             .Distinct()
             .Select(channel => new TransmitTarget(
-                channel,
+                channel.ToTransmitDescriptor(),
                 Systems.FirstOrDefault(candidate => candidate.Name.Equals(
                     channel.Definition.SystemName,
                     StringComparison.OrdinalIgnoreCase)) ?? throw new InvalidOperationException(
@@ -527,7 +586,8 @@ public sealed partial class MainWindowViewModel
         try
         {
             await toneTransmitCoordinator.SendAsync(targets, samples);
-            string targetText = FormatToneTargetText(targets.Select(target => target.Channel));
+            string targetText = FormatToneTargetText(
+                targets.Select(target => ResolveChannel(target.Channel.Id)));
             await RunOnUiThreadAsync(() => TransmitStatusText = $"{label} sent on {targetText}.");
         }
         finally
@@ -550,7 +610,7 @@ public sealed partial class MainWindowViewModel
         TransmitTarget[] targets = channels
             .Distinct()
             .Select(channel => new TransmitTarget(
-                channel,
+                channel.ToTransmitDescriptor(),
                 Systems.FirstOrDefault(candidate => candidate.Name.Equals(
                     channel.Definition.SystemName,
                     StringComparison.OrdinalIgnoreCase)) ?? throw new InvalidOperationException(
@@ -573,7 +633,8 @@ public sealed partial class MainWindowViewModel
                     targets,
                     sequence,
                     monitorSamples));
-            string targetText = FormatToneTargetText(targets.Select(target => target.Channel));
+            string targetText = FormatToneTargetText(
+                targets.Select(target => ResolveChannel(target.Channel.Id)));
             string monitorStatus = monitorFailure is null
                 ? string.Empty
                 : $" Local monitor unavailable: {monitorFailure.Message}";

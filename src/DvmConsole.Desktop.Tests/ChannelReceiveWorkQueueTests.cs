@@ -1,4 +1,6 @@
 using DvmConsole.Core.Configuration;
+using DvmConsole.Core.Runtime;
+using DvmConsole.Application;
 using DvmConsole.Desktop;
 using DvmConsole.FneClient;
 using System.Diagnostics;
@@ -18,7 +20,7 @@ public sealed class ChannelReceiveWorkQueueTests
         var second = CreateChannel("Second", "101");
         await using var queue = new ChannelReceiveWorkQueue(async (channel, _) =>
         {
-            if (ReferenceEquals(channel, first))
+            if (channel == new ChannelId(first.SessionId))
             {
                 firstStarted.TrySetResult();
                 await releaseFirst.Task;
@@ -226,20 +228,27 @@ public sealed class ChannelReceiveWorkQueueTests
                 await releaseFirst.Task;
             }
         });
-        var coordinator = new ReceiveEpisodeCompletionCoordinator(
-            queue,
-            (_, episodeId) =>
+        var channelId = new ChannelId(channel.SessionId);
+        var port = new TestReceiveEpisodeCompletionPort(
+            (id, streamIds, continuation) =>
             {
+                Assert.Equal(channelId, id);
+                return queue.RunAfterStreamsAsync(channel, streamIds, continuation);
+            },
+            (id, episodeId) =>
+            {
+                Assert.Equal(channelId, id);
                 lock (events)
                     events.Add($"playback {episodeId}");
                 return Task.CompletedTask;
             },
-            (_, episodeId) =>
+            (id, episodeId) =>
             {
+                Assert.Equal(channelId, id);
                 lock (events)
                     events.Add($"recording {episodeId}");
-            },
-            candidate => candidate);
+            });
+        var coordinator = new ReceiveEpisodeCompletionCoordinator(port);
         DateTimeOffset now = DateTimeOffset.UnixEpoch;
         var episode = new ReceiveCallEpisodeSnapshot(
             900,
@@ -259,7 +268,12 @@ public sealed class ChannelReceiveWorkQueueTests
         queue.Enqueue(channel, CreateTraffic(1, streamId: 100));
         await firstStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
         queue.Enqueue(channel, CreateTraffic(2, streamId: 200));
-        Task completion = coordinator.CompleteAsync(episode, [channel]);
+        Task completion = coordinator.CompleteAsync(
+            new ReceiveEpisodeCompletion(
+                episode.EpisodeId,
+                episode.PrimaryStreamId,
+                episode.StreamIds),
+            [channelId]);
 
         Assert.False(completion.IsCompleted);
         releaseFirst.TrySetResult();
@@ -392,12 +406,12 @@ public sealed class ChannelReceiveWorkQueueTests
         ReceiveWorkItemTiming timing = await observed.Task.WaitAsync(TimeSpan.FromSeconds(2));
 
         Assert.InRange(
-            timing.TransportToFneBoundaryDelay,
+            timing.TransportToApplicationBoundaryDelay,
             TimeSpan.FromMilliseconds(45),
             TimeSpan.FromMilliseconds(55));
         Assert.Equal(
-            timing.TransportToFneBoundaryDelay,
-            queue.GetDiagnostics(channel).MaximumTransportToFneBoundaryDelay);
+            timing.TransportToApplicationBoundaryDelay,
+            queue.GetDiagnostics(channel).MaximumTransportToApplicationBoundaryDelay);
     }
 
     [Fact]
@@ -478,7 +492,7 @@ public sealed class ChannelReceiveWorkQueueTests
         await using var queue = new ChannelReceiveWorkQueue(
             (_, traffic) =>
             {
-                if (traffic.Protocol == FneTrafficProtocol.P25)
+                if (traffic.Protocol == RadioMediaProtocol.P25)
                     return Task.CompletedTask;
 
                 Interlocked.Increment(ref readyFramesProcessed);
@@ -488,11 +502,11 @@ public sealed class ChannelReceiveWorkQueueTests
             maxPendingFramesPerChannel: batchSize * 2,
             timingObserver: (_, timing) =>
             {
-                if (timing.Traffic.Protocol == FneTrafficProtocol.P25)
+                if (timing.Traffic.Protocol == RadioMediaProtocol.P25)
                     delayedFrameObserved.TrySetResult();
             },
             getJitterBufferProfile: (_, protocol) =>
-                protocol == FneTrafficProtocol.P25
+                protocol == RadioMediaProtocol.P25
                     ? new ReceiveJitterBufferProfile(
                         TimeSpan.FromMilliseconds(20),
                         TimeSpan.FromMilliseconds(20))
@@ -650,6 +664,11 @@ public sealed class ChannelReceiveWorkQueueTests
         public long GetTimestamp()
             => Interlocked.Read(ref timestamp);
 
+        public long TimestampFrequency => Stopwatch.Frequency;
+
+        public TimeSpan GetElapsedTime(long startTimestamp, long endTimestamp)
+            => Stopwatch.GetElapsedTime(startTimestamp, endTimestamp);
+
         public ValueTask<bool> WaitAsync(
             CoalescingWakeSignal signal,
             TimeSpan timeout)
@@ -666,5 +685,26 @@ public sealed class ChannelReceiveWorkQueueTests
             Interlocked.Add(ref timedOutTicks, elapsedTicks);
             return ValueTask.FromResult(false);
         }
+    }
+
+    private sealed class TestReceiveEpisodeCompletionPort(
+        Func<ChannelId, IReadOnlyCollection<uint>, Func<Task>, Task> runAfterStreams,
+        Func<ChannelId, long, Task> completePlayback,
+        Action<ChannelId, long> stopRecording) : IReceiveEpisodeCompletionPort
+    {
+        public Task RunAfterStreamsAsync(
+            ChannelId channelId,
+            IReadOnlyCollection<uint> streamIds,
+            Func<Task> continuation)
+            => runAfterStreams(channelId, streamIds, continuation);
+
+        public Task CompletePlaybackAsync(ChannelId channelId, long episodeId)
+            => completePlayback(channelId, episodeId);
+
+        public ChannelId? ResolveRecordingTarget(ChannelId channelId)
+            => channelId;
+
+        public void StopRecording(ChannelId channelId, long episodeId)
+            => stopRecording(channelId, episodeId);
     }
 }

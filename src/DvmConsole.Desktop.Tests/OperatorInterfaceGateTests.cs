@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Xml.Linq;
+using DvmConsole.Application;
 using Xunit;
 
 namespace DvmConsole.Desktop.Tests;
@@ -85,16 +86,45 @@ public sealed class OperatorInterfaceGateTests
     public void MainWindowHasOneClassicCardShellAndNoWorkspaceSwitcher()
     {
         string shell = ReadDesktopSource("MainWindow.axaml");
+        string cards = ReadDesktopSource("ChannelCardsRenderer.axaml");
         string code = ReadDesktopSource("MainWindow.axaml.cs");
         string commands = ReadDesktopSource("OperatorCommandCatalog.cs");
 
-        Assert.Contains("ItemsControl Classes=\"channel-canvas\"", shell, StringComparison.Ordinal);
+        Assert.Contains("ItemsControl Classes=\"channel-canvas\"", cards, StringComparison.Ordinal);
+        Assert.Contains("x:Name=\"channelRendererHost\"", shell, StringComparison.Ordinal);
+        XDocument document = XDocument.Parse(shell);
+        XElement cardsMenuItem = document.Descendants()
+            .Single(element => Attribute(element, "Name") == "cardsRendererMenuItem");
+        XElement listMenuItem = document.Descendants()
+            .Single(element => Attribute(element, "Name") == "listRendererMenuItem");
+        Assert.Equal("Cards", Attribute(cardsMenuItem, "Header"));
+        Assert.Equal("List", Attribute(listMenuItem, "Header"));
+        Assert.Equal("Radio", Attribute(cardsMenuItem, "ToggleType"));
+        Assert.Equal("Radio", Attribute(listMenuItem, "ToggleType"));
+        Assert.Equal("Channel view", Attribute(cardsMenuItem.Parent!, "Header"));
+        Assert.Equal("View", Attribute(cardsMenuItem.Parent!.Parent!, "Header"));
+        Assert.DoesNotContain("cardsRendererButton", shell, StringComparison.Ordinal);
+        Assert.DoesNotContain("listRendererButton", shell, StringComparison.Ordinal);
         Assert.DoesNotContain("NeoWorkspaceView", shell, StringComparison.Ordinal);
         Assert.DoesNotContain("Header=\"Workspace\"", shell, StringComparison.Ordinal);
         Assert.DoesNotContain("InitializeNeoWorkspace", code, StringComparison.Ordinal);
         Assert.DoesNotContain("workspace.classic", commands, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("workspace.neo", commands, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("workspace.matrix", commands, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void MacOsPackagedSmokeUsesAnIsolatedDemoProfile()
+    {
+        string script = File.ReadAllText(Path.Combine(
+            FindRepositoryRoot(),
+            "scripts",
+            "smoke-desktop-macos.sh"));
+
+        Assert.Contains(
+            "--args --demo --smoke-windows",
+            script,
+            StringComparison.Ordinal);
     }
 
     [Fact]
@@ -138,8 +168,8 @@ public sealed class OperatorInterfaceGateTests
     [Fact]
     public void ClassicChannelCardRetainsGeometryActionsAndBrushBindings()
     {
-        XDocument shell = XDocument.Parse(ReadDesktopSource("MainWindow.axaml"));
-        XElement card = shell.Descendants()
+        XDocument cards = XDocument.Parse(ReadDesktopSource("ChannelCardsRenderer.axaml"));
+        XElement card = cards.Descendants()
             .Single(element => Attribute(element, "Classes") == "channel-card");
 
         Assert.Equal("{Binding CardWidth}", Attribute(card, "Width"));
@@ -153,7 +183,7 @@ public sealed class OperatorInterfaceGateTests
         Assert.Equal("HandlePageSelectionClick", Attribute(sharedCard, "PageSelectionClick"));
         Assert.Equal("HandleAlertSelectionClick", Attribute(sharedCard, "AlertSelectionClick"));
 
-        XDocument sharedCardDocument = XDocument.Parse(ReadDesktopSource("ChannelCardContent.axaml"));
+        XDocument sharedCardDocument = XDocument.Parse(ReadPresentationSource("ChannelCardContent.axaml"));
         XElement layout = sharedCardDocument.Root!.Elements().Single(element => element.Name.LocalName == "Grid");
         Assert.Equal("Auto,Auto,Auto,*,24", Attribute(layout, "RowDefinitions"));
         AssertCardAction(layout, "encryption-select", "EncryptionSelectionBrush", "EncryptionSelectionBorderBrush");
@@ -170,7 +200,7 @@ public sealed class OperatorInterfaceGateTests
             Attribute(element, "Classes")?.Split(' ').Contains("ptt") == true);
         Assert.DoesNotContain(layout.Descendants(), element => element.Name.LocalName == "ToggleButton");
 
-        XDocument studio = XDocument.Parse(ReadDesktopSource("ConfigurationStudioWindow.axaml"));
+        XDocument studio = XDocument.Parse(ReadPresentationSource("ConfigurationStudioZonesView.axaml"));
         XElement studioCard = studio.Descendants()
             .Single(element => Attribute(element, "Classes") == "channel-card");
         Assert.Single(studioCard.Elements(), element => element.Name.LocalName == "ChannelCardContent");
@@ -179,8 +209,9 @@ public sealed class OperatorInterfaceGateTests
     [Fact]
     public void ConfigurationStudioSeparatesOperatorGroupChangesFromYamlSave()
     {
-        XDocument studio = XDocument.Parse(ReadDesktopSource("ConfigurationStudioWindow.axaml"));
-        XElement applyAndClose = studio.Descendants().Single(element =>
+        XDocument studio = XDocument.Parse(ReadPresentationSource("ConfigurationStudioView.axaml"));
+        XDocument sharedGroups = XDocument.Parse(ReadPresentationSource("ConfigurationStudioGroupsView.axaml"));
+        XElement applyAndClose = sharedGroups.Descendants().Single(element =>
             Attribute(element, "Name") == "applyOperatorChangesAndCloseButton");
         XElement yamlSave = studio.Descendants().Single(element =>
             Attribute(element, "Click") == "HandleReviewAndSaveClick");
@@ -194,7 +225,7 @@ public sealed class OperatorInterfaceGateTests
     [Fact]
     public void ChannelAudioMeterClipsAFullWidthThresholdScale()
     {
-        XDocument sharedCard = XDocument.Parse(ReadDesktopSource("ChannelCardContent.axaml"));
+        XDocument sharedCard = XDocument.Parse(ReadPresentationSource("ChannelCardContent.axaml"));
         XElement meter = sharedCard.Descendants()
             .Single(element => Attribute(element, "Classes") == "channel-audio-meter");
         XElement fillClip = meter.Descendants()
@@ -310,6 +341,9 @@ public sealed class OperatorInterfaceGateTests
 
     private static string ReadDesktopSource(string fileName)
         => File.ReadAllText(Path.Combine(FindRepositoryRoot(), "src", "DvmConsole.Desktop", fileName));
+
+    private static string ReadPresentationSource(string fileName)
+        => File.ReadAllText(Path.Combine(FindRepositoryRoot(), "src", "DvmConsole.Presentation", fileName));
 
     private static string FindRepositoryRoot()
     {

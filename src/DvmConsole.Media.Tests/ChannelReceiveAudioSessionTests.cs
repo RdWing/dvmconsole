@@ -556,6 +556,7 @@ public sealed class ChannelReceiveAudioSessionTests
 
         public int FlushEncode(Span<byte> codeword) => 0;
         public int EncodeParameters(ReadOnlySpan<short> samples, Span<byte> parameters) => 0;
+
         public int DecodeParameters(
             ReadOnlySpan<byte> parameters,
             Span<short> samples,
@@ -565,12 +566,15 @@ public sealed class ChannelReceiveAudioSessionTests
             DecodeParameterCalls++;
             return 0;
         }
+
         public int FlushEncodeParameters(Span<byte> parameters) => 0;
+
         public int ExtractParameters(ReadOnlySpan<byte> codeword, Span<byte> parameters)
         {
             codeword[..parameters.Length].CopyTo(parameters);
             return parameters.Length;
         }
+
         public void BuildCodeword(ReadOnlySpan<byte> parameters, Span<byte> codeword)
         {
             codeword.Clear();

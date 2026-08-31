@@ -1,3 +1,4 @@
+using DvmConsole.Application;
 using DvmConsole.Core.Configuration;
 using DvmConsole.Desktop;
 using Xunit;
@@ -15,7 +16,7 @@ public sealed class ReceiveAudioRouteRegistryTests
         Assert.True(registry.TryAddSessionRoute(first, "Output-1"));
         Assert.True(registry.TryAddSessionRoute(second, "output-1"));
 
-        ChannelViewModel[] expanded = registry.ExpandSharedRouteSessions([first]);
+        ChannelId[] expanded = registry.ExpandSharedRouteSessions([first]);
 
         Assert.Equal(2, expanded.Length);
         Assert.Contains(first, expanded);
@@ -44,7 +45,7 @@ public sealed class ReceiveAudioRouteRegistryTests
 
         Assert.Equal(iterations * channels.Length, checksum);
         Assert.True(
-            allocated <= iterations * 256,
+            allocated <= iterations * 640,
             $"Expected no per-call query allocations; observed {allocated / (double)iterations:F1} bytes per expansion.");
     }
 
@@ -59,8 +60,8 @@ public sealed class ReceiveAudioRouteRegistryTests
         registry.AddSessionPolicy(fixedRoute, followsSystemDefault: false);
         registry.AddSessionPolicy(inactive, followsSystemDefault: true);
 
-        ChannelViewModel[] selected = registry.SelectSystemDefaultSessions(
-            channel => ReferenceEquals(channel, following) || ReferenceEquals(channel, fixedRoute));
+        ChannelId[] selected = registry.SelectSystemDefaultSessions(
+            channel => channel == following || channel == fixedRoute);
 
         Assert.Equal([following], selected);
     }

@@ -13,10 +13,12 @@ public sealed class ConfigurationStudioSettingsTests
 
         CodeplugStudioState first = CodeplugStudioStateStore.Get(settings, path);
         first.ZoneSystemAssignments["Empty Zone"] = "North";
+        first.CallPrioritySystemNames.Add("North");
 
         CodeplugStudioState same = CodeplugStudioStateStore.Get(settings, Path.GetFullPath(path));
         Assert.Same(first, same);
         Assert.Equal("North", same.ZoneSystemAssignments["Empty Zone"]);
+        Assert.Equal(["North"], same.CallPrioritySystemNames);
     }
 
     [Fact]
@@ -26,11 +28,14 @@ public sealed class ConfigurationStudioSettingsTests
         string source = Path.Combine(Path.GetTempPath(), "configuration-studio", "source.yml");
         string destination = Path.Combine(Path.GetTempPath(), "configuration-studio", "copy.yml");
         CodeplugStudioStateStore.Get(settings, source).ZoneSystemAssignments["Empty Zone"] = "North";
+        CodeplugStudioStateStore.Get(settings, source).CallPrioritySystemNames.Add("North");
 
         CodeplugStudioState copy = CodeplugStudioStateStore.CopyForSaveAs(settings, source, destination);
         copy.ZoneSystemAssignments["Empty Zone"] = "South";
 
         Assert.Equal("North", CodeplugStudioStateStore.Get(settings, source).ZoneSystemAssignments["Empty Zone"]);
         Assert.Equal("South", CodeplugStudioStateStore.Get(settings, destination).ZoneSystemAssignments["Empty Zone"]);
+        Assert.Equal(["North"], CodeplugStudioStateStore.Get(settings, source).CallPrioritySystemNames);
+        Assert.Equal(["North"], CodeplugStudioStateStore.Get(settings, destination).CallPrioritySystemNames);
     }
 }

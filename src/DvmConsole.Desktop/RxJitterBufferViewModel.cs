@@ -1,4 +1,5 @@
 using DvmConsole.Core.Settings;
+using DvmConsole.Presentation;
 using System.ComponentModel;
 
 namespace DvmConsole.Desktop;
@@ -13,9 +14,9 @@ internal enum RxJitterBufferProtocol
 public sealed record RxJitterBufferOption(
     int Milliseconds,
     bool IsAdaptive,
-    string Label);
+    string Label) : IRxJitterBufferOptionViewModel;
 
-public sealed class RxJitterBufferModeViewModel : INotifyPropertyChanged
+public sealed class RxJitterBufferModeViewModel : IRxJitterBufferModeViewModel, INotifyPropertyChanged
 {
     private RxJitterBufferOption selectedOption;
     private int lastFixedMilliseconds;
@@ -65,6 +66,16 @@ public sealed class RxJitterBufferModeViewModel : INotifyPropertyChanged
             if (!value.IsAdaptive)
                 lastFixedMilliseconds = value.Milliseconds;
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SelectedOption)));
+        }
+    }
+    System.Collections.IEnumerable IRxJitterBufferModeViewModel.Options => Options;
+    IRxJitterBufferOptionViewModel IRxJitterBufferModeViewModel.SelectedOption
+    {
+        get => SelectedOption;
+        set
+        {
+            if (value is RxJitterBufferOption option)
+                SelectedOption = option;
         }
     }
 

@@ -9,36 +9,22 @@ public sealed class PcmAudioFileLoaderTests
     [Fact]
     public async Task LoadsPcmWavAsEightKhzMonoSamples()
     {
-        string path = Path.Combine(Path.GetTempPath(), $"dvmconsole-alert-{Guid.NewGuid():N}.wav");
-        try
-        {
-            await File.WriteAllBytesAsync(path, CreateWav(8000, [1000, -2000, 3000]));
+        using var source = new MemoryStream(CreateWav(8000, [1000, -2000, 3000]));
 
-            short[] samples = await PcmAudioFileLoader.LoadAsync(path);
+        short[] samples = await PcmAudioFileLoader.LoadAsync(source);
 
-            Assert.Equal([1000, -2000, 3000], samples);
-        }
-        finally
-        {
-            File.Delete(path);
-        }
+        Assert.Equal([1000, -2000, 3000], samples);
     }
 
     [Fact]
     public async Task RejectsAlertAudioLongerThanConfiguredLimit()
     {
-        string path = Path.Combine(Path.GetTempPath(), $"dvmconsole-alert-{Guid.NewGuid():N}.wav");
-        try
-        {
-            await File.WriteAllBytesAsync(path, CreateWav(8000, Enumerable.Repeat((short)1, 801).ToArray()));
+        using var source = new MemoryStream(CreateWav(
+            8000,
+            Enumerable.Repeat((short)1, 801).ToArray()));
 
-            await Assert.ThrowsAsync<InvalidDataException>(() =>
-                PcmAudioFileLoader.LoadAsync(path, TimeSpan.FromMilliseconds(100)));
-        }
-        finally
-        {
-            File.Delete(path);
-        }
+        await Assert.ThrowsAsync<InvalidDataException>(() =>
+            PcmAudioFileLoader.LoadAsync(source, TimeSpan.FromMilliseconds(100)));
     }
 
     private static byte[] CreateWav(int sampleRate, IReadOnlyList<short> samples)

@@ -1,3 +1,4 @@
+using DvmConsole.Application;
 using DvmConsole.Core.Diagnostics;
 using DvmConsole.Core.Runtime;
 using DvmConsole.Core.Settings;
@@ -118,17 +119,18 @@ public sealed partial class MainWindowViewModel
             system.PropertyChanged += HandleSystemPropertyChanged;
             system.StatusChanged += HandleSubscribedSystemStatus;
             system.LogReceived += HandleSystemLog;
-            system.TrafficReceived += HandleSubscribedSystemTraffic;
             system.KeyResponseReceived += HandleSystemKeyResponse;
-            system.TalkgroupAuthorityChanged += HandleSystemTalkgroupAuthorityChanged;
         }
+        radioIngress.TrafficReceived += HandleSubscribedSystemTraffic;
+        radioIngress.AuthorityChanged += HandleSystemTalkgroupAuthorityChanged;
     }
 
     private void HandleSystemTalkgroupAuthorityChanged(
         object? sender,
-        FneTalkgroupAuthority authority)
+        TalkgroupAuthorityRecord authority)
     {
-        if (sender is not SystemViewModel system)
+        SystemViewModel? system = Systems.FirstOrDefault(candidate => candidate.Id == authority.SystemId);
+        if (system is null)
             return;
 
         void Apply()
@@ -136,13 +138,14 @@ public sealed partial class MainWindowViewModel
             if (Volatile.Read(ref disposeStarted) != 0)
                 return;
 
-            IReadOnlyList<ChannelViewModel> newlyUnavailable =
-                system.ApplyTalkgroupAuthority(authority);
+            IReadOnlyList<ChannelViewModel> newlyUnavailable = ApplyTalkgroupAuthority(
+                system,
+                authority);
             if (newlyUnavailable.Count == 0)
                 return;
 
             int stoppedPatchTargets = patchForwarding.StopUnavailableTargets(newlyUnavailable);
-            ChannelViewModel[] activeChannels = transmitCoordinator.ActiveChannels.ToArray();
+            ChannelViewModel[] activeChannels = ResolveChannels(transmitCoordinator.ActiveChannels);
             bool stopConsoleTransmission = activeChannels.Any(newlyUnavailable.Contains);
             string channels = string.Join(", ", newlyUnavailable.Select(DescribeUnavailableTalkgroup));
             string stopped = stopConsoleTransmission || stoppedPatchTargets > 0
@@ -179,15 +182,50 @@ public sealed partial class MainWindowViewModel
             ? $"{channel.Name} (TG {channel.Definition.DestinationId}, TS{channel.Definition.Slot + 1})"
             : $"{channel.Name} (TG {channel.Definition.DestinationId}, {channel.ModeText})";
 
+    private static IReadOnlyList<ChannelViewModel> ApplyTalkgroupAuthority(
+        SystemViewModel system,
+        TalkgroupAuthorityRecord authority)
+    {
+        var channelsById = system.Channels.ToDictionary(
+            channel => new ChannelId(channel.SessionId));
+        var newlyUnavailable = new List<ChannelViewModel>();
+        foreach (TalkgroupAuthorityChannelRecord channelAuthority in authority.Channels)
+        {
+            if (!channelsById.TryGetValue(
+                    channelAuthority.ChannelId,
+                    out ChannelViewModel? channel))
+            {
+                continue;
+            }
+
+            FneTalkgroupAvailability previous = channel.TalkgroupAvailability;
+            FneTalkgroupAvailability next = channelAuthority.State switch
+            {
+                TargetAuthorityState.Available => FneTalkgroupAvailability.Available,
+                TargetAuthorityState.Unavailable => FneTalkgroupAvailability.Unavailable,
+                _ => FneTalkgroupAvailability.Pending
+            };
+            channel.ApplyTalkgroupAvailability(next);
+            if (previous != FneTalkgroupAvailability.Unavailable &&
+                next == FneTalkgroupAvailability.Unavailable)
+            {
+                newlyUnavailable.Add(channel);
+            }
+        }
+
+        return newlyUnavailable;
+    }
+
     private void HandleSubscribedSystemStatus(object? sender, FneConnectionStatus status)
     {
         if (sender is SystemViewModel system)
             HandleSystemStatus(system, status);
     }
 
-    private void HandleSubscribedSystemTraffic(object? sender, FneTrafficFrame traffic)
+    private void HandleSubscribedSystemTraffic(object? sender, RadioTrafficRecord traffic)
     {
-        if (sender is SystemViewModel system)
+        SystemViewModel? system = Systems.FirstOrDefault(candidate => candidate.Id == traffic.SystemId);
+        if (system is not null)
             HandleSystemTraffic(system, traffic);
     }
 

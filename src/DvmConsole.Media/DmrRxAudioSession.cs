@@ -1,5 +1,5 @@
 using DvmConsole.Audio;
-using DvmConsole.FneClient;
+using DvmConsole.Core.Runtime;
 using DvmConsole.Vocoder;
 
 namespace DvmConsole.Media;
@@ -48,11 +48,11 @@ public sealed class DmrRxAudioSession : IAsyncDisposable
     public int FramesDecoded { get; private set; }
     public long MalformedPackets { get; private set; }
 
-    public async ValueTask<int> ProcessAsync(FneTrafficFrame traffic, CancellationToken cancellationToken = default)
+    public async ValueTask<int> ProcessAsync(IRadioMediaFrame traffic, CancellationToken cancellationToken = default)
     {
         ObjectDisposedException.ThrowIf(disposed, this);
         ArgumentNullException.ThrowIfNull(traffic);
-        if (traffic.Protocol != FneTrafficProtocol.Dmr)
+        if (traffic.Protocol != RadioMediaProtocol.Dmr)
             return 0;
 
         if (activeStreamId != 0 && activeStreamId != traffic.StreamId)

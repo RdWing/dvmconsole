@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <RootNamespace>DvmConsole.Configuration.Yaml</RootNamespace>
+    <IsTrimmable>true</IsTrimmable>
+    <EnableTrimAnalyzer>true</EnableTrimAnalyzer>
+    <EnableAotAnalyzer>true</EnableAotAnalyzer>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../DvmConsole.Application/DvmConsole.Application.csproj" />
+    <ProjectReference Include="../DvmConsole.Core/DvmConsole.Core.csproj" />
+  </ItemGroup>
+</Project>

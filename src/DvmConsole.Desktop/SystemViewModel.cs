@@ -1,16 +1,24 @@
 using Avalonia.Media;
+using DvmConsole.Application;
 using DvmConsole.Core.Diagnostics;
 using DvmConsole.Core.Runtime;
 using DvmConsole.Core.Settings;
 using DvmConsole.FneClient;
 using DvmConsole.Media;
+using DvmConsole.Presentation;
 using System.ComponentModel;
 
 namespace DvmConsole.Desktop;
 
-public sealed class SystemViewModel : IFneTrafficEndpoint, INotifyPropertyChanged, IAsyncDisposable
+public sealed class SystemViewModel :
+    IFneTrafficEndpoint,
+    IChannelAudioRouteSystemViewModel,
+    IConnectionSystemViewModel,
+    IRecorderSystemViewModel,
+    INotifyPropertyChanged,
+    IAsyncDisposable
 {
-    private readonly FneConnection connection;
+    private readonly IFneRadioSession radioSession;
     private readonly FneConnectionOptions options;
     private string connectionStatus = "Disconnected";
     private readonly object keyRequestSync = new();
@@ -32,15 +40,25 @@ public sealed class SystemViewModel : IFneTrafficEndpoint, INotifyPropertyChange
         string endpoint,
         IEnumerable<ChannelViewModel>? channels = null,
         IEnumerable<ZoneViewModel>? zones = null,
-        int accentIndex = 0)
+        int accentIndex = 0,
+        IRadioSessionFactory? radioSessionFactory = null,
+        bool hasCallPriority = false)
     {
         this.options = options ?? throw new ArgumentNullException(nameof(options));
-        connection = new FneConnection(this.options);
         verboseLoggingEnabled = options.EnableVerboseLogging;
         Name = name;
         Endpoint = endpoint;
         Channels = channels?.ToArray() ?? [];
         Zones = zones?.ToArray() ?? [];
+        HasCallPriority = hasCallPriority;
+        var defaultFactory = new FneRadioSessionFactory(
+            this.options,
+            () => Channels.Select(channel => channel.ToTransmitDescriptor()).ToArray());
+        IRadioSessionFactory factory = radioSessionFactory ?? defaultFactory;
+        RadioSystemDescriptor descriptor = factory is FneRadioSessionFactory fneFactory
+            ? fneFactory.Descriptor
+            : defaultFactory.Descriptor;
+        radioSession = CreateRadioSession(factory, descriptor);
         rxJitterBufferModes = CreateJitterBufferModes(new RxJitterBufferSetting());
         foreach (RxJitterBufferModeViewModel mode in rxJitterBufferModes)
             mode.PropertyChanged += HandleJitterBufferModePropertyChanged;
@@ -51,27 +69,32 @@ public sealed class SystemViewModel : IFneTrafficEndpoint, INotifyPropertyChange
                 zone.Channels.Any(channel => channel.IsReceivePresentationActive));
         foreach (ChannelViewModel channel in Channels)
         {
+            channel.SetHasCallPriority(HasCallPriority);
             channel.SetReceivePresentationOwnerResolver(() => Channels.FirstOrDefault(candidate =>
                 SameResource(channel, candidate) && candidate.HasLocalReceivePresentation));
             channel.PropertyChanged += HandleChannelPropertyChanged;
         }
-        connection.StatusChanged += HandleConnectionStatus;
-        connection.LogReceived += HandleLogReceived;
-        connection.TrafficReceived += HandleTrafficReceived;
-        connection.KeyResponseReceived += HandleKeyResponse;
-        connection.TalkgroupAuthorityChanged += HandleTalkgroupAuthorityChanged;
+        radioSession.StatusChanged += HandleConnectionStatus;
+        radioSession.LogReceived += HandleLogReceived;
+        radioSession.KeyResponseReceived += HandleKeyResponse;
     }
 
     public event PropertyChangedEventHandler? PropertyChanged;
     public event EventHandler<FneConnectionStatus>? StatusChanged;
     public event EventHandler<FneLogEntry>? LogReceived;
-    public event EventHandler<FneTrafficFrame>? TrafficReceived;
     public event EventHandler<FneKeyResponse>? KeyResponseReceived;
-    public event EventHandler<FneTalkgroupAuthority>? TalkgroupAuthorityChanged;
     internal event EventHandler? JitterBufferChanged;
+    public SystemId Id => radioSession.SystemId;
     public string Name { get; }
     public string Endpoint { get; }
     public IReadOnlyList<ChannelViewModel> Channels { get; }
+    System.Collections.IEnumerable IChannelAudioRouteSystemViewModel.AudioRouteChannels => Channels;
+    System.Collections.IEnumerable IRecorderSystemViewModel.RecorderChannels => Channels;
+    IReadOnlyCollection<TransmitChannelDescriptor> IFneTrafficEndpoint.ChannelDescriptors
+        => Channels.Select(channel => channel.ToTransmitDescriptor()).ToArray();
+
+    IReadOnlyCollection<ChannelId> IFneTrafficEndpoint.ChannelIds
+        => Channels.Select(channel => new ChannelId(channel.SessionId)).ToArray();
     public IReadOnlyList<ZoneViewModel> Zones { get; }
     public ZoneViewModel? SelectedZone
     {
@@ -86,8 +109,10 @@ public sealed class SystemViewModel : IFneTrafficEndpoint, INotifyPropertyChange
     }
     public uint? SourceId => options.SourceId;
     public string Identity => options.Identity;
-    public bool IsConnected => connection.Status.State == FneConnectionState.Connected;
-    public bool IsConnectionActive => connection.Status.State is not (FneConnectionState.Disconnected or FneConnectionState.Faulted);
+    public bool HasCallPriority { get; }
+    internal IRadioSession RadioSession => radioSession;
+    public bool IsConnected => radioSession.IsConnected;
+    public bool IsConnectionActive => radioSession.IsConnectionActive;
     public bool IsSelected => isSelected;
     public bool IsReceiving => Channels.Any(channel => channel.IsReceivePresentationActive);
     public double ActivityBarOpacity => IsReceiving ? 1.0 : 0.12;
@@ -95,10 +120,10 @@ public sealed class SystemViewModel : IFneTrafficEndpoint, INotifyPropertyChange
         => $"{Name} · {Channels.Count(channel => channel.IsRecordingEnabled)} of {Channels.Count} TAR enabled";
     public IBrush StatusAccentBrush { get; }
     public string StatusGlyph => IsConnected ? "●" : "○";
-    public string ConnectionPillText => connection.Status.State.ToString().ToUpperInvariant();
+    public string ConnectionPillText => radioSession.Status.State.ToString().ToUpperInvariant();
     public string ConnectionActionText => IsConnectionActive ? $"Disconnect {Name}" : $"Start {Name}";
     public string ConnectionButtonText => IsConnectionActive ? "Disconnect" : "Connect";
-    public IBrush ConnectionBrush => new SolidColorBrush(Color.Parse(connection.Status.State switch
+    public IBrush ConnectionBrush => new SolidColorBrush(Color.Parse(radioSession.Status.State switch
     {
         FneConnectionState.Connected => "#00BE5A",
         FneConnectionState.Starting or
@@ -130,6 +155,8 @@ public sealed class SystemViewModel : IFneTrafficEndpoint, INotifyPropertyChange
         }
     }
     public IReadOnlyList<RxJitterBufferModeViewModel> RxJitterBufferModes => rxJitterBufferModes;
+    System.Collections.IEnumerable IConnectionSystemViewModel.RxJitterBufferModes
+        => RxJitterBufferModes;
     public string JitterBufferSummaryText
         => $"Applied: P25 {rxJitterBufferModes[0].SummaryText} · " +
            $"DMR {rxJitterBufferModes[1].SummaryText} · " +
@@ -167,11 +194,11 @@ public sealed class SystemViewModel : IFneTrafficEndpoint, INotifyPropertyChange
     public async Task StartAsync(CancellationToken cancellationToken = default)
     {
         ResetPacketDiagnostics();
-        await connection.StartOrReconnectAsync(cancellationToken).ConfigureAwait(false);
+        await radioSession.StartAsync(cancellationToken).ConfigureAwait(false);
     }
     public async Task StopAsync(CancellationToken cancellationToken = default)
     {
-        await connection.StopAsync(cancellationToken).ConfigureAwait(false);
+        await radioSession.StopAsync(cancellationToken).ConfigureAwait(false);
         lock (keyRequestSync)
             requestedP25Keys.Clear();
     }
@@ -181,15 +208,15 @@ public sealed class SystemViewModel : IFneTrafficEndpoint, INotifyPropertyChange
         await StopAsync(cancellationToken).ConfigureAwait(false);
         await StartAsync(cancellationToken).ConfigureAwait(false);
     }
-    public uint CreateStreamId() => connection.CreateStreamId();
+    public uint CreateStreamId() => radioSession.CreateStreamId();
     public FneTalkgroupAvailability GetTalkgroupAvailability(
         FneTrafficProtocol protocol,
         uint destinationId,
         byte runtimeSlot)
-        => connection.TalkgroupAuthority.GetAvailability(protocol, destinationId, runtimeSlot);
+        => radioSession.GetTalkgroupAvailability(protocol, destinationId, runtimeSlot);
     public void SendTraffic(FneTrafficProtocol protocol, ReadOnlySpan<byte> payload, ushort packetSequence, uint streamId)
     {
-        connection.SendTraffic(protocol, payload, packetSequence, streamId);
+        radioSession.SendTraffic(protocol, payload, packetSequence, streamId);
         trafficStatistics.ObserveSend(payload.Length);
         Volatile.Write(ref trafficDiagnosticsDirty, 1);
         if (!Volatile.Read(ref verboseLoggingEnabled))
@@ -206,7 +233,7 @@ public sealed class SystemViewModel : IFneTrafficEndpoint, INotifyPropertyChange
     internal void SetVerboseLogging(bool enabled)
     {
         Volatile.Write(ref verboseLoggingEnabled, enabled);
-        connection.SetVerboseLogging(enabled);
+        radioSession.SetVerboseLogging(enabled);
     }
 
     public void RequestP25Key(byte algorithmId, ushort keyId)
@@ -219,7 +246,7 @@ public sealed class SystemViewModel : IFneTrafficEndpoint, INotifyPropertyChange
 
         try
         {
-            connection.RequestP25Key(algorithmId, keyId);
+            radioSession.RequestP25Key(algorithmId, keyId);
         }
         catch
         {
@@ -230,7 +257,7 @@ public sealed class SystemViewModel : IFneTrafficEndpoint, INotifyPropertyChange
     }
 
     public void SendP25SubscriberCommand(P25SubscriberCommand command, uint destinationId)
-        => connection.SendP25SubscriberCommand(command, destinationId);
+        => radioSession.SendP25SubscriberCommand(command, destinationId);
 
     public void ApplyStatus(FneConnectionStatus status)
     {
@@ -358,12 +385,10 @@ public sealed class SystemViewModel : IFneTrafficEndpoint, INotifyPropertyChange
             mode.PropertyChanged -= HandleJitterBufferModePropertyChanged;
         foreach (ChannelViewModel channel in Channels)
             channel.PropertyChanged -= HandleChannelPropertyChanged;
-        connection.StatusChanged -= HandleConnectionStatus;
-        connection.LogReceived -= HandleLogReceived;
-        connection.TrafficReceived -= HandleTrafficReceived;
-        connection.KeyResponseReceived -= HandleKeyResponse;
-        connection.TalkgroupAuthorityChanged -= HandleTalkgroupAuthorityChanged;
-        await connection.DisposeAsync().ConfigureAwait(false);
+        radioSession.StatusChanged -= HandleConnectionStatus;
+        radioSession.LogReceived -= HandleLogReceived;
+        radioSession.KeyResponseReceived -= HandleKeyResponse;
+        await radioSession.DisposeAsync().ConfigureAwait(false);
     }
 
     private void HandleConnectionStatus(object? sender, FneConnectionStatus status)
@@ -379,18 +404,6 @@ public sealed class SystemViewModel : IFneTrafficEndpoint, INotifyPropertyChange
     private void HandleLogReceived(object? sender, FneLogEntry entry)
     {
         LogReceived?.Invoke(this, entry);
-    }
-
-    private void HandleTrafficReceived(object? sender, FneTrafficFrame traffic)
-    {
-        TrafficReceived?.Invoke(this, traffic);
-    }
-
-    private void HandleTalkgroupAuthorityChanged(
-        object? sender,
-        FneTalkgroupAuthority authority)
-    {
-        TalkgroupAuthorityChanged?.Invoke(this, authority);
     }
 
     private void ResetPacketDiagnostics()
@@ -430,6 +443,24 @@ public sealed class SystemViewModel : IFneTrafficEndpoint, INotifyPropertyChange
                 settings.NxdnAdaptive,
                 packetMilliseconds: 80)
         ];
+
+    private static IFneRadioSession CreateRadioSession(
+        IRadioSessionFactory factory,
+        RadioSystemDescriptor descriptor)
+    {
+        IRadioSession createdSession = factory
+            .CreateAsync(descriptor)
+            .AsTask()
+            .GetAwaiter()
+            .GetResult();
+        if (createdSession is IFneRadioSession fneSession)
+            return fneSession;
+
+        string returnedType = createdSession.GetType().Name;
+        createdSession.DisposeAsync().AsTask().GetAwaiter().GetResult();
+        throw new InvalidOperationException(
+            $"Radio session factory returned '{returnedType}', which does not expose the desktop FNE capabilities required by the current host.");
+    }
 
     private static void SaturatingAdd(ref long target, long increment)
     {

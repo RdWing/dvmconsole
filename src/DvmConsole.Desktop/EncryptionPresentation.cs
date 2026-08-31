@@ -56,6 +56,19 @@ internal static class EncryptionPresentation
         };
     }
 
+    public static string AlgorithmAbbreviation(RadioMediaProtocol protocol, byte? algorithmId)
+        => AlgorithmAbbreviation(ToFneProtocol(protocol), algorithmId);
+
+    public static FneTrafficProtocol ToFneProtocol(RadioMediaProtocol protocol)
+        => protocol switch
+        {
+            RadioMediaProtocol.Dmr => FneTrafficProtocol.Dmr,
+            RadioMediaProtocol.P25 => FneTrafficProtocol.P25,
+            RadioMediaProtocol.Nxdn => FneTrafficProtocol.Nxdn,
+            RadioMediaProtocol.Analog => FneTrafficProtocol.Analog,
+            _ => throw new ArgumentOutOfRangeException(nameof(protocol))
+        };
+
     public static string AlgorithmDisplayName(FneTrafficProtocol protocol, byte? algorithmId)
         => protocol switch
         {

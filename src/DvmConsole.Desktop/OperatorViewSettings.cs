@@ -1,5 +1,6 @@
 using System.Text.Json;
 using DvmConsole.Core.Settings;
+using DvmConsole.Presentation;
 
 namespace DvmConsole.Desktop;
 
@@ -8,7 +9,7 @@ namespace DvmConsole.Desktop;
 // unchanged.
 internal sealed class OperatorViewSettings
 {
-    public const int CurrentSchemaVersion = 1;
+    public const int CurrentSchemaVersion = 2;
     public const double DefaultEngineeringHealthHeight = 92;
     public const double MinimumEngineeringHealthHeight = 72;
     public const double MaximumEngineeringHealthHeight = 240;
@@ -16,13 +17,15 @@ internal sealed class OperatorViewSettings
     public int SchemaVersion { get; set; } = CurrentSchemaVersion;
     public bool EngineeringHealthVisible { get; set; }
     public double EngineeringHealthHeight { get; set; } = DefaultEngineeringHealthHeight;
+    public ConsoleRendererPreference ChannelRenderer { get; set; } = ConsoleRendererPreference.Cards;
 
     public OperatorViewSettings Snapshot()
         => new()
         {
             SchemaVersion = SchemaVersion,
             EngineeringHealthVisible = EngineeringHealthVisible,
-            EngineeringHealthHeight = EngineeringHealthHeight
+            EngineeringHealthHeight = EngineeringHealthHeight,
+            ChannelRenderer = ChannelRenderer
         };
 }
 
@@ -56,7 +59,7 @@ internal sealed class OperatorViewStore
                     fileStore.ReadAllText(),
                     DesktopSettingsJsonContext.Default.OperatorViewSettings)
                 ?? throw new JsonException("Operator view settings were empty.");
-            if (settings.SchemaVersion != OperatorViewSettings.CurrentSchemaVersion)
+            if (settings.SchemaVersion is < 1 or > OperatorViewSettings.CurrentSchemaVersion)
                 throw new JsonException("Unsupported operator view settings schema.");
             Normalize(settings);
             return settings;
@@ -83,6 +86,8 @@ internal sealed class OperatorViewStore
     private static void Normalize(OperatorViewSettings settings)
     {
         settings.SchemaVersion = OperatorViewSettings.CurrentSchemaVersion;
+        if (!Enum.IsDefined(settings.ChannelRenderer))
+            settings.ChannelRenderer = ConsoleRendererPreference.Cards;
         settings.EngineeringHealthHeight = double.IsFinite(settings.EngineeringHealthHeight)
             ? Math.Clamp(
                 settings.EngineeringHealthHeight,

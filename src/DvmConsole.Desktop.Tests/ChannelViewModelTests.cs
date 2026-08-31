@@ -1,3 +1,4 @@
+using DvmConsole.Application;
 using DvmConsole.Core.Configuration;
 using DvmConsole.Core.Runtime;
 using DvmConsole.Desktop;
@@ -960,6 +961,27 @@ public sealed class ChannelViewModelTests
     }
 
     [Fact]
+    public void CallPriorityKeepsPttAvailableDuringReceivePresentation()
+    {
+        var channel = new ChannelViewModel(new ChannelConfiguration
+        {
+            Name = "Dispatch",
+            System = "Test",
+            Tgid = "101",
+            Mode = "dmr",
+            Slot = 1
+        });
+        channel.SetAudioEnabled(true);
+        channel.SetHasCallPriority(true);
+
+        channel.MarkReceivePlaybackActive(sourceId: 42, streamId: 7);
+
+        Assert.True(channel.HasCallPriority);
+        Assert.True(channel.IsReceivePresentationActive);
+        Assert.True(channel.IsPttControlEnabled);
+    }
+
+    [Fact]
     public void EncryptedP25RefreshesCapabilitiesAfterRuntimeKeyArrival()
     {
         var keyRing = new P25KeyRing();
@@ -1076,18 +1098,18 @@ public sealed class ChannelViewModelTests
             SelectableEncryption = true
         }, keyRing);
 
-        ChannelRuntimeDefinition secureDefinition = ChannelTransmitDefinitionFactory.Create(channel);
+        ChannelRuntimeDefinition secureDefinition = ChannelTransmitDefinitionFactory.Create(channel.ToTransmitDescriptor());
         P25TxEncryptionOptions secureOptions = Assert.IsType<P25TxEncryptionOptions>(
-            ChannelTransmitDefinitionFactory.CreateEncryptionOptions(channel, secureDefinition, keyRing));
+            ChannelTransmitDefinitionFactory.CreateEncryptionOptions(channel.ToTransmitDescriptor(), secureDefinition, keyRing));
         Assert.True(secureDefinition.IsEncrypted);
         Assert.Equal(P25Defines.P25_ALGO_AES, secureOptions.AlgorithmId);
         Assert.Equal((ushort)0x50, secureOptions.KeyId);
 
         channel.RestoreTransmitEncryption(false);
-        ChannelRuntimeDefinition clearDefinition = ChannelTransmitDefinitionFactory.Create(channel);
+        ChannelRuntimeDefinition clearDefinition = ChannelTransmitDefinitionFactory.Create(channel.ToTransmitDescriptor());
 
         Assert.False(clearDefinition.IsEncrypted);
-        Assert.Null(ChannelTransmitDefinitionFactory.CreateEncryptionOptions(channel, clearDefinition, keyRing));
+        Assert.Null(ChannelTransmitDefinitionFactory.CreateEncryptionOptions(channel.ToTransmitDescriptor(), clearDefinition, keyRing));
     }
 
     [Fact]
@@ -1118,16 +1140,16 @@ public sealed class ChannelViewModelTests
             SelectableEncryption = true
         }, dmrKeyResolver: keyRing);
 
-        ChannelRuntimeDefinition secureDefinition = ChannelTransmitDefinitionFactory.Create(channel);
+        ChannelRuntimeDefinition secureDefinition = ChannelTransmitDefinitionFactory.Create(channel.ToTransmitDescriptor());
         DmrPrivacyOptions secureOptions = Assert.IsType<DmrPrivacyOptions>(
-            ChannelTransmitDefinitionFactory.CreateDmrPrivacyOptions(channel, secureDefinition, keyRing));
+            ChannelTransmitDefinitionFactory.CreateDmrPrivacyOptions(channel.ToTransmitDescriptor(), secureDefinition, keyRing));
         Assert.Equal(DmrPrivacyAlgorithms.DesOfb, secureOptions.AlgorithmId);
         Assert.Equal((byte)3, secureOptions.KeyId);
 
         channel.RestoreTransmitEncryption(false);
-        ChannelRuntimeDefinition clearDefinition = ChannelTransmitDefinitionFactory.Create(channel);
+        ChannelRuntimeDefinition clearDefinition = ChannelTransmitDefinitionFactory.Create(channel.ToTransmitDescriptor());
         Assert.False(clearDefinition.IsEncrypted);
-        Assert.Null(ChannelTransmitDefinitionFactory.CreateDmrPrivacyOptions(channel, clearDefinition, keyRing));
+        Assert.Null(ChannelTransmitDefinitionFactory.CreateDmrPrivacyOptions(channel.ToTransmitDescriptor(), clearDefinition, keyRing));
     }
 
     [Fact]
@@ -1157,16 +1179,16 @@ public sealed class ChannelViewModelTests
             SelectableEncryption = true
         }, nxdnKeyResolver: keyRing);
 
-        ChannelRuntimeDefinition secureDefinition = ChannelTransmitDefinitionFactory.Create(channel);
+        ChannelRuntimeDefinition secureDefinition = ChannelTransmitDefinitionFactory.Create(channel.ToTransmitDescriptor());
         NxdnPrivacyOptions secureOptions = Assert.IsType<NxdnPrivacyOptions>(
-            ChannelTransmitDefinitionFactory.CreateNxdnPrivacyOptions(channel, secureDefinition, keyRing));
+            ChannelTransmitDefinitionFactory.CreateNxdnPrivacyOptions(channel.ToTransmitDescriptor(), secureDefinition, keyRing));
         Assert.Equal(NxdnPrivacyAlgorithms.Des, secureOptions.AlgorithmId);
         Assert.Equal((byte)3, secureOptions.KeyId);
 
         channel.RestoreTransmitEncryption(false);
-        ChannelRuntimeDefinition clearDefinition = ChannelTransmitDefinitionFactory.Create(channel);
+        ChannelRuntimeDefinition clearDefinition = ChannelTransmitDefinitionFactory.Create(channel.ToTransmitDescriptor());
         Assert.False(clearDefinition.IsEncrypted);
-        Assert.Null(ChannelTransmitDefinitionFactory.CreateNxdnPrivacyOptions(channel, clearDefinition, keyRing));
+        Assert.Null(ChannelTransmitDefinitionFactory.CreateNxdnPrivacyOptions(channel.ToTransmitDescriptor(), clearDefinition, keyRing));
     }
 
     [Fact]

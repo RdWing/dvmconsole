@@ -1,17 +1,21 @@
-using Avalonia.Threading;
+using DvmConsole.Application;
 
 namespace DvmConsole.Desktop;
 
 internal sealed class ConsoleSessionRuntime : IAsyncDisposable
 {
     private readonly ConsoleSessionServices services;
+    private readonly IApplicationScheduler scheduler;
     private readonly object timerOwnershipSync = new();
-    private readonly DispatcherTimerRegistrationGroup timers = new();
+    private readonly ScheduledWorkRegistrationGroup timers = new();
     private bool timerOwnershipRegistered;
 
-    public ConsoleSessionRuntime(ConsoleSessionServices services)
+    public ConsoleSessionRuntime(
+        ConsoleSessionServices services,
+        IApplicationScheduler? scheduler = null)
     {
         this.services = services ?? throw new ArgumentNullException(nameof(services));
+        this.scheduler = scheduler ?? AvaloniaApplicationScheduler.Instance;
     }
 
     public void StartTimer(TimeSpan interval, EventHandler tick)
@@ -23,23 +27,25 @@ internal sealed class ConsoleSessionRuntime : IAsyncDisposable
         bool startImmediately)
     {
         ArgumentNullException.ThrowIfNull(tick);
-        var timer = new DispatcherTimer
-        {
-            Interval = interval
-        };
-        timer.Tick += tick;
-        var registration = new ConsoleSessionTimer(timer, tick);
+        ConsoleSessionTimer? registration = null;
         try
         {
             EnsureTimerOwnership();
-            if (startImmediately)
-                registration.Start();
+            IScheduledWork work = scheduler.CreatePeriodic(
+                interval,
+                _ =>
+                {
+                    tick(this, EventArgs.Empty);
+                    return ValueTask.CompletedTask;
+                },
+                startImmediately);
+            registration = new ConsoleSessionTimer(work);
             timers.Add(registration);
             return registration;
         }
         catch
         {
-            registration.Dispose();
+            registration?.Dispose();
             throw;
         }
     }
@@ -60,26 +66,24 @@ internal sealed class ConsoleSessionRuntime : IAsyncDisposable
         }
     }
 
-    internal sealed class ConsoleSessionTimer(
-        DispatcherTimer timer,
-        EventHandler tick) : IDisposable
+    internal sealed class ConsoleSessionTimer(IScheduledWork work) : IDisposable
     {
-        public bool IsRunning => timer.IsEnabled;
+        public bool IsRunning => work.IsRunning;
 
         public void Start()
-            => timer.Start();
+            => work.Start();
 
         public void Stop()
-            => timer.Stop();
+            => work.Stop();
 
         public void Dispose()
         {
-            timer.Stop();
-            timer.Tick -= tick;
+            work.Stop();
+            work.DisposeAsync().AsTask().GetAwaiter().GetResult();
         }
     }
 
-    private sealed class DispatcherTimerRegistrationGroup : IDisposable
+    private sealed class ScheduledWorkRegistrationGroup : IDisposable
     {
         private readonly object sync = new();
         private readonly List<ConsoleSessionTimer> registrations = [];

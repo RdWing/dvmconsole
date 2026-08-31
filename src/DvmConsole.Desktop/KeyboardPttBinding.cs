@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using DvmConsole.Audio;
+using DvmConsole.Ptt;
 
 namespace DvmConsole.Desktop;
 

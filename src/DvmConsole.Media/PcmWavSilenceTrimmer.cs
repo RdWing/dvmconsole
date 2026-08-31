@@ -4,8 +4,9 @@ using DvmConsole.Audio;
 namespace DvmConsole.Media;
 
 // Applies the legacy TAR silence-trim policy to a completed mono PCM WAV
-// without buffering the call in memory. The scan uses 20 ms activity windows,
-// a 400-sample threshold, and retains 120 ms of padding around activity.
+// without buffering the call in memory or owning its storage location. The
+// scan uses 20 ms activity windows, a 400-sample threshold, and retains 120 ms
+// of padding around activity.
 public static class PcmWavSilenceTrimmer
 {
     private const int HeaderLength = 44;
@@ -13,21 +14,37 @@ public static class PcmWavSilenceTrimmer
     private const int DefaultWindowSamples = 160;
     private const int DefaultPaddingMilliseconds = 120;
 
-    public static PcmWavTrimResult TrimFile(
-        string path,
+    public static PcmWavTrimResult Trim(
+        Stream source,
+        Stream destination,
         PcmAudioFormat format,
         short silenceThreshold = DefaultSilenceThreshold,
         int windowSamples = DefaultWindowSamples,
         int paddingMilliseconds = DefaultPaddingMilliseconds)
     {
-        PcmWavTrimAnalysis analysis = AnalyzeFile(
-            path,
+        ArgumentNullException.ThrowIfNull(destination);
+        if (!destination.CanWrite || !destination.CanSeek)
+        {
+            throw new ArgumentException(
+                "Silence trimming requires a writable, seekable destination stream.",
+                nameof(destination));
+        }
+        if (ReferenceEquals(source, destination))
+        {
+            throw new ArgumentException(
+                "Silence trimming requires separate source and destination streams.",
+                nameof(destination));
+        }
+
+        PcmWavTrimAnalysis analysis = Analyze(
+            source,
             format,
             silenceThreshold,
             windowSamples,
             paddingMilliseconds);
-        RewriteFile(
-            Path.GetFullPath(path),
+        WriteRange(
+            source,
+            destination,
             format,
             analysis.StartSample,
             analysis.Result.OutputSamples);
@@ -36,15 +53,21 @@ public static class PcmWavSilenceTrimmer
 
     // Computes the legacy trim bounds without modifying the durable source.
     // Finalizers can encode this range directly and retain the WAV for retry.
-    public static PcmWavTrimAnalysis AnalyzeFile(
-        string path,
+    public static PcmWavTrimAnalysis Analyze(
+        Stream input,
         PcmAudioFormat format,
         short silenceThreshold = DefaultSilenceThreshold,
         int windowSamples = DefaultWindowSamples,
         int paddingMilliseconds = DefaultPaddingMilliseconds)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+        ArgumentNullException.ThrowIfNull(input);
         ArgumentNullException.ThrowIfNull(format);
+        if (!input.CanRead || !input.CanSeek)
+        {
+            throw new ArgumentException(
+                "Silence trimming requires a readable, seekable source stream.",
+                nameof(input));
+        }
         if (format.BitsPerSample != 16 || format.Channels != 1)
             throw new ArgumentException("Silence trimming requires mono 16-bit PCM.", nameof(format));
         if (silenceThreshold < 0)
@@ -54,13 +77,8 @@ public static class PcmWavSilenceTrimmer
         if (paddingMilliseconds < 0)
             throw new ArgumentOutOfRangeException(nameof(paddingMilliseconds));
 
-        string fullPath = Path.GetFullPath(path);
-        ScanResult scan;
-        using (FileStream input = new(fullPath, FileMode.Open, FileAccess.Read, FileShare.Read))
-        {
-            long dataBytes = ReadDataBytes(input);
-            scan = Scan(input, dataBytes, silenceThreshold, windowSamples);
-        }
+        long dataBytes = ReadDataBytes(input);
+        ScanResult scan = Scan(input, dataBytes, silenceThreshold, windowSamples);
 
         long startSample = 0;
         long endSample = Math.Max(-1, scan.TotalSamples - 1);
@@ -84,7 +102,7 @@ public static class PcmWavSilenceTrimmer
     }
 
     private static ScanResult Scan(
-        FileStream input,
+        Stream input,
         long dataBytes,
         short silenceThreshold,
         int windowSamples)
@@ -169,52 +187,39 @@ public static class PcmWavSilenceTrimmer
             activeSampleCount);
     }
 
-    private static void RewriteFile(
-        string path,
+    private static void WriteRange(
+        Stream input,
+        Stream output,
         PcmAudioFormat format,
         long startSample,
         long outputSamples)
     {
-        string temporaryPath = $"{path}.{Environment.ProcessId}.{Guid.NewGuid():N}.trim.tmp";
-        try
+        input.Position = HeaderLength + checked(startSample * sizeof(short));
+        long bytesRemaining = checked(outputSamples * sizeof(short));
+        byte[] bytes = new byte[32 * 1024];
+        short[] samples = new short[bytes.Length / sizeof(short)];
+
+        using var writer = new PcmWavFileWriter(output, format, leaveOpen: true);
+        while (bytesRemaining > 0)
         {
-            using (FileStream input = new(path, FileMode.Open, FileAccess.Read, FileShare.Read))
-            using (PcmWavFileWriter writer = new(temporaryPath, format))
+            int requestedBytes = (int)Math.Min(bytes.Length, bytesRemaining);
+            int bytesRead = input.Read(bytes, 0, requestedBytes);
+            if (bytesRead <= 0 || (bytesRead & 1) != 0)
+                throw new EndOfStreamException("The WAV data chunk ended unexpectedly.");
+
+            int sampleCount = bytesRead / sizeof(short);
+            for (int index = 0; index < sampleCount; index++)
             {
-                input.Position = HeaderLength + checked(startSample * sizeof(short));
-                long bytesRemaining = checked(outputSamples * sizeof(short));
-                byte[] bytes = new byte[32 * 1024];
-                short[] samples = new short[bytes.Length / sizeof(short)];
-
-                while (bytesRemaining > 0)
-                {
-                    int requestedBytes = (int)Math.Min(bytes.Length, bytesRemaining);
-                    int bytesRead = input.Read(bytes, 0, requestedBytes);
-                    if (bytesRead <= 0 || (bytesRead & 1) != 0)
-                        throw new EndOfStreamException("The WAV data chunk ended unexpectedly.");
-
-                    int sampleCount = bytesRead / sizeof(short);
-                    for (int index = 0; index < sampleCount; index++)
-                    {
-                        samples[index] = BinaryPrimitives.ReadInt16LittleEndian(
-                            bytes.AsSpan(index * sizeof(short), sizeof(short)));
-                    }
-
-                    writer.Write(samples.AsSpan(0, sampleCount));
-                    bytesRemaining -= bytesRead;
-                }
+                samples[index] = BinaryPrimitives.ReadInt16LittleEndian(
+                    bytes.AsSpan(index * sizeof(short), sizeof(short)));
             }
 
-            File.Move(temporaryPath, path, overwrite: true);
-        }
-        finally
-        {
-            if (File.Exists(temporaryPath))
-                File.Delete(temporaryPath);
+            writer.Write(samples.AsSpan(0, sampleCount));
+            bytesRemaining -= bytesRead;
         }
     }
 
-    private static long ReadDataBytes(FileStream input)
+    private static long ReadDataBytes(Stream input)
     {
         if (input.Length < HeaderLength)
             throw new InvalidDataException("The WAV file is shorter than its PCM header.");

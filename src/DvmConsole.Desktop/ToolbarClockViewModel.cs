@@ -3,17 +3,18 @@ using System.Globalization;
 using System.Runtime.CompilerServices;
 using Avalonia.Media;
 using DvmConsole.Core.Settings;
+using DvmConsole.Presentation;
 
 namespace DvmConsole.Desktop;
 
-public sealed record ToolbarClockColorOption(string Label, string ColorHex)
+public sealed record ToolbarClockColorOption(string Label, string ColorHex) : IToolbarClockColorOption
 {
     public IBrush ColorBrush => new SolidColorBrush(Color.Parse(ColorHex));
 }
 
-public sealed record ToolbarClockUtcOffsetOption(int OffsetHours, string Label);
+public sealed record ToolbarClockUtcOffsetOption(int OffsetHours, string Label) : IToolbarClockUtcOffsetOption;
 
-public sealed class ToolbarClockViewModel : INotifyPropertyChanged
+public sealed class ToolbarClockViewModel : INotifyPropertyChanged, IToolbarClockViewModel
 {
     private static readonly IReadOnlyList<ToolbarClockUtcOffsetOption> utcOffsetOptions =
         Enumerable.Range(-12, 27)
@@ -92,6 +93,12 @@ public sealed class ToolbarClockViewModel : INotifyPropertyChanged
         }
     }
 
+    IToolbarClockUtcOffsetOption? IToolbarClockViewModel.SelectedUtcOffsetOption
+    {
+        get => SelectedUtcOffsetOption;
+        set => SelectedUtcOffsetOption = value as ToolbarClockUtcOffsetOption;
+    }
+
     public string TimeZoneLabel
         => TryGetUtcOffset(out int offsetHours)
             ? FormatUtcOffsetLabel(offsetHours)
@@ -125,6 +132,19 @@ public sealed class ToolbarClockViewModel : INotifyPropertyChanged
             ColorHex = value.ColorHex;
         }
     }
+
+    IToolbarClockColorOption IToolbarClockViewModel.SelectedColorOption
+    {
+        get => SelectedColorOption;
+        set
+        {
+            if (value is ToolbarClockColorOption option)
+                SelectedColorOption = option;
+        }
+    }
+
+    System.Collections.IEnumerable IToolbarClockViewModel.UtcOffsetOptions => UtcOffsetOptions;
+    System.Collections.IEnumerable IToolbarClockViewModel.ColorOptions => ColorOptions;
 
     public string ColorLabel
         => colorOptions.First(option => option.ColorHex.Equals(ColorHex, StringComparison.OrdinalIgnoreCase)).Label;

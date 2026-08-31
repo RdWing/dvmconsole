@@ -11,7 +11,8 @@ internal sealed record OperatorDialogParts(
     TextBlock MessageText,
     Button PrimaryButton,
     Button? CancelButton = null,
-    TextBox? Input = null);
+    TextBox? Input = null,
+    Button? SecondaryButton = null);
 
 internal sealed record OperatorDialogLayout(
     double Width,
@@ -29,7 +30,26 @@ internal static class OperatorDialogFactory
         => Create(title, message, closeLabel, includeCancel: false, inputWatermark: null);
 
     public static OperatorDialogParts CreateConfirmation(string title, string message, string confirmLabel)
-        => Create(title, message, confirmLabel, includeCancel: true, inputWatermark: null);
+        => Create(
+            title,
+            message,
+            confirmLabel,
+            includeCancel: true,
+            inputWatermark: null,
+            secondaryLabel: null);
+
+    public static OperatorDialogParts CreateChoice(
+        string title,
+        string message,
+        string primaryLabel,
+        string secondaryLabel)
+        => Create(
+            title,
+            message,
+            primaryLabel,
+            includeCancel: true,
+            inputWatermark: null,
+            secondaryLabel: secondaryLabel);
 
     public static OperatorDialogParts CreateTextPrompt(
         string title,
@@ -43,7 +63,8 @@ internal static class OperatorDialogFactory
         string message,
         string primaryLabel,
         bool includeCancel,
-        string? inputWatermark)
+        string? inputWatermark,
+        string? secondaryLabel = null)
     {
         var messageText = new TextBlock { Text = message, TextWrapping = TextWrapping.Wrap };
         var messageScroller = new ScrollViewer
@@ -58,6 +79,9 @@ internal static class OperatorDialogFactory
             : new TextBox { Watermark = inputWatermark, MinWidth = 320 };
         var primaryButton = new Button { Content = primaryLabel, MinWidth = 88 };
         Button? cancelButton = includeCancel ? new Button { Content = "Cancel", MinWidth = 88 } : null;
+        Button? secondaryButton = secondaryLabel is null
+            ? null
+            : new Button { Content = secondaryLabel, MinWidth = 88 };
         var actions = new StackPanel
         {
             Orientation = Orientation.Horizontal,
@@ -66,6 +90,8 @@ internal static class OperatorDialogFactory
         };
         if (cancelButton is not null)
             actions.Children.Add(cancelButton);
+        if (secondaryButton is not null)
+            actions.Children.Add(secondaryButton);
         actions.Children.Add(primaryButton);
 
         var content = new StackPanel { Margin = new Thickness(20), Spacing = 14 };
@@ -85,6 +111,13 @@ internal static class OperatorDialogFactory
             WindowStartupLocation = WindowStartupLocation.CenterOwner,
             Content = content
         };
-        return new OperatorDialogParts(window, messageScroller, messageText, primaryButton, cancelButton, input);
+        return new OperatorDialogParts(
+            window,
+            messageScroller,
+            messageText,
+            primaryButton,
+            cancelButton,
+            input,
+            secondaryButton);
     }
 }

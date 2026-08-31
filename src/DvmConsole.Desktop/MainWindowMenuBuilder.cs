@@ -2,6 +2,7 @@ using Avalonia.Controls;
 using Avalonia.Interactivity;
 using Avalonia.Media;
 using DvmConsole.Audio;
+using DvmConsole.Ptt;
 
 namespace DvmConsole.Desktop;
 

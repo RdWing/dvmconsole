@@ -8,97 +8,83 @@ public sealed class OggOpusTagsTests
     [Fact]
     public async Task RangeEncodingUsesOnlyTheRequestedPcmDuration()
     {
-        string root = Path.Combine(
-            Path.GetTempPath(),
-            "dvmconsole-opus-range-tests",
-            Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(root);
-        string wavPath = Path.Combine(root, "source.wav");
-        string opusPath = Path.Combine(root, "recording.opus");
         const int rangeSamples = 1_237;
+        using MemoryStream wave = CreateWave(Enumerable.Repeat((short)1200, 4_000));
+        using var opus = new MemoryStream();
 
-        try
-        {
-            WriteWaveFile(wavPath, Enumerable.Repeat((short)1200, 4_000).ToArray());
-            await OpusRecordingEncoder.EncodeWaveFileRangeAsync(
-                wavPath,
-                opusPath,
-                startSample: 911,
-                sampleCount: rangeSamples);
+        await OpusRecordingEncoder.EncodeWaveStreamRangeAsync(
+            wave,
+            opus,
+            startSample: 911,
+            sampleCount: rangeSamples);
 
-            (ushort preSkip, long finalGranule) = ReadOpusTiming(opusPath);
+        (ushort preSkip, long finalGranule) = ReadOpusTiming(opus.ToArray());
 
-            Assert.Equal(preSkip + rangeSamples * 6L, finalGranule);
-        }
-        finally
-        {
-            if (Directory.Exists(root))
-                Directory.Delete(root, recursive: true);
-        }
+        Assert.Equal(preSkip + rangeSamples * 6L, finalGranule);
+    }
+
+    [Fact]
+    public async Task RangeEncodingSupportsCallerOwnedStreams()
+    {
+        const int rangeSamples = 777;
+        using MemoryStream wave = CreateWave(Enumerable.Repeat((short)900, 2_000));
+        using var opus = new MemoryStream();
+
+        await OpusRecordingEncoder.EncodeWaveStreamRangeAsync(
+            wave,
+            opus,
+            startSample: 123,
+            sampleCount: rangeSamples);
+
+        Assert.True(wave.CanRead);
+        Assert.True(opus.CanWrite);
+        (ushort preSkip, long finalGranule) = ReadOpusTiming(opus.ToArray());
+        Assert.Equal(preSkip + rangeSamples * 6L, finalGranule);
     }
 
     [Fact]
     public async Task FinalGranuleMatchesSourceDurationForPartialOpusFrame()
     {
-        string root = Path.Combine(Path.GetTempPath(), "dvmconsole-opus-duration-tests", Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(root);
-        string wavPath = Path.Combine(root, "source.wav");
-        string opusPath = Path.Combine(root, "recording.opus");
         const int sourceSampleCount = 8_123;
+        using MemoryStream wave = CreateWave(Enumerable.Repeat((short)1200, sourceSampleCount));
+        using var opus = new MemoryStream();
 
-        try
-        {
-            WriteWaveFile(wavPath, Enumerable.Repeat((short)1200, sourceSampleCount).ToArray());
-            await OpusRecordingEncoder.EncodeWaveFileAsync(wavPath, opusPath);
+        await OpusRecordingEncoder.EncodeWaveStreamAsync(wave, opus);
 
-            (ushort preSkip, long finalGranule) = ReadOpusTiming(opusPath);
+        (ushort preSkip, long finalGranule) = ReadOpusTiming(opus.ToArray());
 
-            Assert.Equal(preSkip + sourceSampleCount * 6L, finalGranule);
-        }
-        finally
-        {
-            if (Directory.Exists(root))
-                Directory.Delete(root, recursive: true);
-        }
+        Assert.Equal(preSkip + sourceSampleCount * 6L, finalGranule);
     }
 
     [Fact]
-    public async Task WritesAndAtomicallyUpdatesTagsWithoutBreakingAudio()
+    public async Task UpdatesTagsToACallerOwnedDestinationWithoutBreakingAudio()
     {
-        string root = Path.Combine(Path.GetTempPath(), "dvmconsole-ogg-tags-tests", Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(root);
-        string wavPath = Path.Combine(root, "source.wav");
-        string opusPath = Path.Combine(root, "recording.opus");
+        using MemoryStream wave = CreateWave(Enumerable.Repeat((short)1200, 800));
+        using var opus = new MemoryStream();
+        await OpusRecordingEncoder.EncodeWaveStreamAsync(
+            wave,
+            opus,
+            new Dictionary<string, string> { ["ORIGINAL"] = "present" });
+        byte[] originalOpus = opus.ToArray();
+        short[] decodedBeforeUpdate = await DecodeAllSamplesAsync(originalOpus);
 
-        try
-        {
-            WriteWaveFile(wavPath, Enumerable.Repeat((short)1200, 800).ToArray());
-            await OpusRecordingEncoder.EncodeWaveFileAsync(
-                wavPath,
-                opusPath,
-                new Dictionary<string, string> { ["ORIGINAL"] = "present" });
-            short[] decodedBeforeUpdate = await DecodeAllSamplesAsync(opusPath);
+        using var input = new MemoryStream(originalOpus);
+        using var updated = new MemoryStream();
+        OggOpusTags.Set(input, updated, "DVMCONSOLE_METADATA", new string('x', 2048));
 
-            OggOpusTags.Set(opusPath, "DVMCONSOLE_METADATA", new string('x', 2048));
+        updated.Position = 0;
+        OggOpusTagSet tags = OggOpusTags.Read(updated);
+        Assert.Equal("present", tags.Fields["ORIGINAL"]);
+        Assert.Equal(new string('x', 2048), tags.Fields["DVMCONSOLE_METADATA"]);
 
-            OggOpusTagSet tags = OggOpusTags.Read(opusPath);
-            Assert.Equal("present", tags.Fields["ORIGINAL"]);
-            Assert.Equal(new string('x', 2048), tags.Fields["DVMCONSOLE_METADATA"]);
-
-            short[] decodedAfterUpdate = await DecodeAllSamplesAsync(opusPath);
-            Assert.NotEmpty(decodedAfterUpdate);
-            Assert.Equal(decodedBeforeUpdate, decodedAfterUpdate);
-        }
-        finally
-        {
-            if (Directory.Exists(root))
-                Directory.Delete(root, recursive: true);
-        }
+        short[] decodedAfterUpdate = await DecodeAllSamplesAsync(updated.ToArray());
+        Assert.NotEmpty(decodedAfterUpdate);
+        Assert.Equal(decodedBeforeUpdate, decodedAfterUpdate);
     }
 
-    private static async Task<short[]> DecodeAllSamplesAsync(string path)
+    private static async Task<short[]> DecodeAllSamplesAsync(byte[] encoded)
     {
-        await using FileStream source = File.OpenRead(path);
+        await using var source = new MemoryStream(encoded);
         await using IAudioPcmStreamReader reader = await PcmStreamDecoder.OpenAsync(source);
         var decoded = new List<short>();
         short[] buffer = new short[1600];
@@ -111,12 +97,13 @@ public sealed class OggOpusTagsTests
         }
     }
 
-    private static void WriteWaveFile(string path, IReadOnlyCollection<short> samples)
+    private static MemoryStream CreateWave(IEnumerable<short> sourceSamples)
     {
+        short[] samples = sourceSamples.ToArray();
         const int sampleRate = 8000;
         const short channels = 1;
         const short bitsPerSample = 16;
-        byte[] data = new byte[samples.Count * sizeof(short)];
+        byte[] data = new byte[samples.Length * sizeof(short)];
         int offset = 0;
         foreach (short sample in samples)
         {
@@ -124,8 +111,8 @@ public sealed class OggOpusTagsTests
             offset += sizeof(short);
         }
 
-        using var output = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None);
-        using var writer = new BinaryWriter(output);
+        var output = new MemoryStream();
+        using var writer = new BinaryWriter(output, System.Text.Encoding.UTF8, leaveOpen: true);
         writer.Write("RIFF"u8);
         writer.Write(36 + data.Length);
         writer.Write("WAVEfmt "u8);
@@ -139,11 +126,13 @@ public sealed class OggOpusTagsTests
         writer.Write("data"u8);
         writer.Write(data.Length);
         writer.Write(data);
+        writer.Flush();
+        output.Position = 0;
+        return output;
     }
 
-    private static (ushort PreSkip, long FinalGranule) ReadOpusTiming(string path)
+    private static (ushort PreSkip, long FinalGranule) ReadOpusTiming(byte[] file)
     {
-        byte[] file = File.ReadAllBytes(path);
         ushort? preSkip = null;
         long finalGranule = -1;
         int offset = 0;

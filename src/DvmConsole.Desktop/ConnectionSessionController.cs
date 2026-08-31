@@ -1,20 +1,20 @@
+using DvmConsole.Application;
 using DvmConsole.FneClient;
 
 namespace DvmConsole.Desktop;
 
+/// <summary>
+/// Adapts the portable radio connection coordinator to the current desktop
+/// FNE view models and preserves the established operator-facing status text.
+/// </summary>
 internal sealed class ConnectionSessionController
 {
-    private readonly SemaphoreSlim transitionGate = new(1, 1);
-    private readonly object startupCancellationSync = new();
-    private readonly HashSet<CancellationTokenSource> startupCancellations = [];
     private readonly IReadOnlyList<SystemViewModel> systems;
-    private readonly Func<CancellationToken, Task> synchronizePatchSources;
-    private readonly Func<CancellationToken, Task> stopPatchSources;
-    private readonly Action stopPatchForwarding;
-    private readonly Action<bool> setBusy;
     private readonly Action<string> setStatus;
     private readonly Action<SystemViewModel> selectSystem;
     private readonly Action<SystemViewModel, FneConnectionStatus> publishStatus;
+    private readonly IReadOnlyDictionary<SystemId, SystemViewModel> systemsById;
+    private readonly RadioConnectionCoordinator inner;
 
     public ConnectionSessionController(
         IReadOnlyList<SystemViewModel> systems,
@@ -27,62 +27,37 @@ internal sealed class ConnectionSessionController
         Action<SystemViewModel, FneConnectionStatus> publishStatus)
     {
         this.systems = systems ?? throw new ArgumentNullException(nameof(systems));
-        this.synchronizePatchSources = synchronizePatchSources ?? throw new ArgumentNullException(nameof(synchronizePatchSources));
-        this.stopPatchSources = stopPatchSources ?? throw new ArgumentNullException(nameof(stopPatchSources));
-        this.stopPatchForwarding = stopPatchForwarding ?? throw new ArgumentNullException(nameof(stopPatchForwarding));
-        this.setBusy = setBusy ?? throw new ArgumentNullException(nameof(setBusy));
+        ArgumentNullException.ThrowIfNull(synchronizePatchSources);
+        ArgumentNullException.ThrowIfNull(stopPatchSources);
+        ArgumentNullException.ThrowIfNull(stopPatchForwarding);
+        ArgumentNullException.ThrowIfNull(setBusy);
         this.setStatus = setStatus ?? throw new ArgumentNullException(nameof(setStatus));
         this.selectSystem = selectSystem ?? throw new ArgumentNullException(nameof(selectSystem));
         this.publishStatus = publishStatus ?? throw new ArgumentNullException(nameof(publishStatus));
+
+        systemsById = systems.ToDictionary(system => SystemId.FromName(system.Name));
+        inner = new RadioConnectionCoordinator(
+            systems.Select(system => new RadioConnectionEndpoint(
+                SystemId.FromName(system.Name),
+                system.Name,
+                () => system.IsConnectionActive,
+                cancellationToken => new ValueTask(system.StartAsync(cancellationToken)),
+                cancellationToken => new ValueTask(system.StopAsync(cancellationToken)))),
+            cancellationToken => new ValueTask(synchronizePatchSources(cancellationToken)),
+            cancellationToken => new ValueTask(stopPatchSources(cancellationToken)),
+            stopPatchForwarding,
+            setBusy,
+            HandleTransition);
     }
 
     public Task ConnectAsync()
-        => RunStartupTransitionAsync(ConnectCoreAsync);
-
-    private async Task ConnectCoreAsync(CancellationToken cancellationToken)
-    {
-        setBusy(true);
-        setStatus("Starting FNE connection services...");
-        try
-        {
-            await Task.WhenAll(systems.Select(system => StartSystemAsync(system, cancellationToken)));
-            cancellationToken.ThrowIfCancellationRequested();
-            await synchronizePatchSources(cancellationToken).ConfigureAwait(false);
-            setStatus("FNE connection services started; waiting for login acknowledgements.");
-        }
-        finally
-        {
-            setBusy(false);
-        }
-    }
+        => inner.ConnectAsync();
 
     public Task DisconnectAsync()
         => DisconnectAsync(CancellationToken.None);
 
     public Task DisconnectAsync(CancellationToken cancellationToken)
-    {
-        CancelStartupTransitions();
-        return RunExclusiveAsync(
-            () => DisconnectCoreAsync(cancellationToken),
-            cancellationToken);
-    }
-
-    private async Task DisconnectCoreAsync(CancellationToken cancellationToken)
-    {
-        setBusy(true);
-        setStatus("Stopping FNE connection services...");
-        try
-        {
-            await stopPatchSources(cancellationToken).ConfigureAwait(false);
-            stopPatchForwarding();
-            await Task.WhenAll(systems.Select(system => system.StopAsync(cancellationToken)));
-            setStatus("FNE connections stopped.");
-        }
-        finally
-        {
-            setBusy(false);
-        }
-    }
+        => inner.DisconnectAsync(cancellationToken);
 
     public Task ToggleAsync(SystemViewModel system)
     {
@@ -90,120 +65,58 @@ internal sealed class ConnectionSessionController
         if (!systems.Contains(system))
             throw new ArgumentException("The FNE is not part of this console.", nameof(system));
 
-        return RunStartupTransitionAsync(
-            cancellationToken => ToggleCoreAsync(system, cancellationToken));
+        selectSystem(system);
+        return inner.ToggleAsync(SystemId.FromName(system.Name));
     }
 
-    private async Task ToggleCoreAsync(
-        SystemViewModel system,
-        CancellationToken cancellationToken)
+    private void HandleTransition(RadioConnectionTransition transition)
     {
-        selectSystem(system);
-        if (system.IsConnectionActive)
+        switch (transition.Kind)
         {
-            setStatus($"Stopping {system.Name}...");
-            try
-            {
-                await system.StopAsync(cancellationToken);
-                setStatus($"{system.Name}: disconnected.");
-            }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-            {
-                throw;
-            }
-            catch (Exception exception)
-            {
-                setStatus($"{system.Name}: disconnect failed — {exception.Message}");
-            }
+            case RadioConnectionTransitionKind.StartingAll:
+                setStatus("Starting FNE connection services...");
+                break;
+            case RadioConnectionTransitionKind.StartedAll:
+                setStatus("FNE connection services started; waiting for login acknowledgements.");
+                break;
+            case RadioConnectionTransitionKind.StoppingAll:
+                setStatus("Stopping FNE connection services...");
+                break;
+            case RadioConnectionTransitionKind.StoppedAll:
+                setStatus("FNE connections stopped.");
+                break;
+            case RadioConnectionTransitionKind.StartingSystem:
+                setStatus($"Starting {transition.SystemName}...");
+                break;
+            case RadioConnectionTransitionKind.StoppingSystem:
+                setStatus($"Stopping {transition.SystemName}...");
+                break;
+            case RadioConnectionTransitionKind.SystemStopped:
+                setStatus($"{transition.SystemName}: disconnected.");
+                break;
+            case RadioConnectionTransitionKind.SystemStartFaulted:
+                PublishStartFault(transition);
+                break;
+            case RadioConnectionTransitionKind.SystemStopFaulted:
+                setStatus($"{transition.SystemName}: disconnect failed — {transition.Exception?.Message}");
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(transition));
+        }
+    }
+
+    private void PublishStartFault(RadioConnectionTransition transition)
+    {
+        if (transition.SystemId is not SystemId systemId ||
+            !systemsById.TryGetValue(systemId, out SystemViewModel? system))
+        {
             return;
         }
 
-        setStatus($"Starting {system.Name}...");
-        await StartSystemAsync(system, cancellationToken);
-        cancellationToken.ThrowIfCancellationRequested();
-        await synchronizePatchSources(cancellationToken);
-    }
-
-    private async Task RunStartupTransitionAsync(
-        Func<CancellationToken, Task> operation,
-        CancellationToken cancellationToken = default)
-    {
-        using CancellationTokenSource startupCancellation = cancellationToken.CanBeCanceled
-            ? CancellationTokenSource.CreateLinkedTokenSource(cancellationToken)
-            : new CancellationTokenSource();
-        lock (startupCancellationSync)
-            startupCancellations.Add(startupCancellation);
-
-        try
-        {
-            await RunExclusiveAsync(
-                () => operation(startupCancellation.Token),
-                startupCancellation.Token);
-        }
-        finally
-        {
-            lock (startupCancellationSync)
-                startupCancellations.Remove(startupCancellation);
-        }
-    }
-
-    private void CancelStartupTransitions()
-    {
-        CancellationTokenSource[] pending;
-        lock (startupCancellationSync)
-            pending = startupCancellations.ToArray();
-
-        foreach (CancellationTokenSource cancellation in pending)
-        {
-            try
-            {
-                cancellation.Cancel();
-            }
-            catch (ObjectDisposedException)
-            {
-                // A completed startup can leave the snapshot while cancellation
-                // is being delivered. Its transition no longer needs preemption.
-            }
-        }
-    }
-
-    private async Task RunExclusiveAsync(
-        Func<Task> operation,
-        CancellationToken cancellationToken = default)
-    {
-        // These callbacks update UI-bound state. Preserve the caller's
-        // synchronization context even when this transition had to wait for
-        // an earlier connect or disconnect to finish.
-        await transitionGate.WaitAsync(cancellationToken);
-        try
-        {
-            await operation();
-        }
-        finally
-        {
-            transitionGate.Release();
-        }
-    }
-
-    private async Task StartSystemAsync(
-        SystemViewModel system,
-        CancellationToken cancellationToken)
-    {
-        try
-        {
-            await system.StartAsync(cancellationToken).ConfigureAwait(false);
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-            throw;
-        }
-        catch (Exception exception)
-        {
-            publishStatus(system, new FneConnectionStatus(
-                system.Name,
-                FneConnectionState.Faulted,
-                exception.Message,
-                DateTimeOffset.UtcNow));
-        }
+        publishStatus(system, new FneConnectionStatus(
+            system.Name,
+            FneConnectionState.Faulted,
+            transition.Exception?.Message ?? "The radio connection could not start.",
+            DateTimeOffset.UtcNow));
     }
 }

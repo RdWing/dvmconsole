@@ -1,5 +1,6 @@
 using DvmConsole.Core.Configuration;
 using DvmConsole.Desktop;
+using DvmConsole.Presentation;
 using Xunit;
 
 namespace DvmConsole.Desktop.Tests;

@@ -2,7 +2,7 @@ using DvmConsole.Core.Settings;
 
 namespace DvmConsole.Desktop;
 
-public sealed class AudioInputPresetViewModel
+public sealed class AudioInputPresetViewModel : DvmConsole.Presentation.IAudioInputPresetViewModel
 {
     public AudioInputPresetViewModel(AudioInputPresetSetting setting)
     {

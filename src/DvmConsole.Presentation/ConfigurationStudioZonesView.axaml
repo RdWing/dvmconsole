@@ -1,0 +1,395 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:presentation="using:DvmConsole.Presentation"
+             xmlns:config="using:DvmConsole.Core.Configuration"
+             x:Class="DvmConsole.Presentation.ConfigurationStudioZonesView"
+             x:Name="ZonePageRoot"
+             x:DataType="presentation:ConfigurationStudioViewModel">
+  <UserControl.Resources>
+    <presentation:StringEqualsConverter x:Key="StringEqualsConverter"/>
+  </UserControl.Resources>
+  <UserControl.Styles>
+    <Style Selector="Border.table-cell">
+      <Setter Property="BorderBrush" Value="{DynamicResource StudioLineBrush}"/>
+      <Setter Property="BorderThickness" Value="1,0,0,0"/>
+      <Setter Property="Padding" Value="10,0"/>
+    </Style>
+    <Style Selector="Expander.live-layout /template/ ToggleButton">
+      <Setter Property="Background" Value="{DynamicResource StudioCanvasBrush}"/>
+      <Setter Property="BorderThickness" Value="0"/>
+      <Setter Property="HorizontalContentAlignment" Value="Left"/>
+      <Setter Property="Padding" Value="12,6"/>
+    </Style>
+    <Style Selector="Expander.live-layout /template/ ToggleButton:pointerover">
+      <Setter Property="Background" Value="{DynamicResource ButtonHoverBrush}"/>
+    </Style>
+    <Style Selector="ListBox.channel-grid">
+      <Setter Property="Background" Value="Transparent"/>
+      <Setter Property="BorderThickness" Value="0"/>
+    </Style>
+    <Style Selector="ListBox.channel-grid &gt; ListBoxItem">
+      <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+      <Setter Property="Padding" Value="0"/>
+      <Setter Property="MinHeight" Value="36"/>
+    </Style>
+    <Style Selector="ListBox.channel-grid &gt; ListBoxItem:selected">
+      <Setter Property="Background" Value="{DynamicResource StudioSelectionBrush}"/>
+      <Setter Property="Foreground" Value="White"/>
+    </Style>
+    <Style Selector="TextBox">
+      <Setter Property="MinHeight" Value="34"/>
+      <Setter Property="TextAlignment" Value="Left"/>
+      <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+      <Setter Property="Background" Value="{DynamicResource StudioFieldBrush}"/>
+      <Setter Property="BorderBrush" Value="{DynamicResource StudioLineBrush}"/>
+    </Style>
+    <Style Selector="ComboBox">
+      <Setter Property="MinHeight" Value="34"/>
+      <Setter Property="HorizontalAlignment" Value="Stretch"/>
+      <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+      <Setter Property="Background" Value="{DynamicResource StudioFieldBrush}"/>
+      <Setter Property="BorderBrush" Value="{DynamicResource StudioLineBrush}"/>
+    </Style>
+    <Style Selector="NumericUpDown">
+      <Setter Property="MinHeight" Value="34"/>
+      <Setter Property="HorizontalAlignment" Value="Stretch"/>
+      <Setter Property="Background" Value="{DynamicResource StudioFieldBrush}"/>
+      <Setter Property="BorderBrush" Value="{DynamicResource StudioLineBrush}"/>
+    </Style>
+    <Style Selector="ToggleButton.segment">
+      <Setter Property="Background" Value="Transparent"/>
+      <Setter Property="BorderBrush" Value="{DynamicResource StudioLineBrush}"/>
+      <Setter Property="BorderThickness" Value="1"/>
+      <Setter Property="CornerRadius" Value="0"/>
+      <Setter Property="Padding" Value="12,7"/>
+    </Style>
+    <Style Selector="ToggleButton.segment:checked">
+      <Setter Property="Background" Value="{DynamicResource StudioSelectionBrush}"/>
+      <Setter Property="BorderBrush" Value="{DynamicResource StudioAccentBrush}"/>
+    </Style>
+    <Style Selector="ToggleButton.color-swatch">
+      <Setter Property="Width" Value="27"/>
+      <Setter Property="Height" Value="27"/>
+      <Setter Property="Padding" Value="0"/>
+      <Setter Property="CornerRadius" Value="14"/>
+      <Setter Property="BorderBrush" Value="{DynamicResource StudioLineBrush}"/>
+      <Setter Property="BorderThickness" Value="1"/>
+    </Style>
+    <Style Selector="ToggleButton.color-swatch:checked">
+      <Setter Property="BorderBrush" Value="{DynamicResource StudioAccentBrush}"/>
+      <Setter Property="BorderThickness" Value="3"/>
+    </Style>
+  </UserControl.Styles>
+  <Grid x:Name="ZoneLayout" IsVisible="{Binding IsZones}" ColumnDefinitions="*,316" MinHeight="0">
+    <Grid x:Name="ChannelPane" RowDefinitions="55,*,Auto" MinHeight="0">
+      <Border x:Name="ZoneHeader"
+              Background="{DynamicResource StudioCanvasBrush}"
+              BorderBrush="{DynamicResource StudioLineBrush}"
+              BorderThickness="0,0,0,1"
+              Padding="20,0,12,0">
+        <Grid x:Name="ZoneHeaderGrid" ColumnDefinitions="*,216,58" ColumnSpacing="10">
+          <TextBlock x:Name="ZoneHeading"
+                     VerticalAlignment="Center"
+                     FontSize="16"
+                     FontWeight="SemiBold"
+                     Text="{Binding SelectedZoneHeading}"
+                     TextTrimming="CharacterEllipsis"/>
+          <TextBox x:Name="ChannelSearchBox"
+                   Grid.Column="1"
+                   VerticalAlignment="Center"
+                   Watermark="Search channels"
+                   Text="{Binding ChannelSearchText, Mode=TwoWay}"
+                   AutomationProperties.Name="Search channels"/>
+          <Menu x:Name="ZoneEditMenu" Grid.Column="2" VerticalAlignment="Center" Background="Transparent" MinHeight="44">
+            <MenuItem x:Name="editMenuRoot" Header="Edit">
+              <MenuItem Header="Add channel" Tag="AddChannel" Click="HandleEditMenuClick"/>
+              <MenuItem Header="Duplicate channel" Tag="DuplicateChannel" Click="HandleEditMenuClick"/>
+              <MenuItem Header="Delete channel" Tag="DeleteChannel" Click="HandleEditMenuClick"/>
+              <Separator/>
+              <MenuItem Header="Move channel up" Tag="MoveChannelUp" Click="HandleEditMenuClick"/>
+              <MenuItem Header="Move channel down" Tag="MoveChannelDown" Click="HandleEditMenuClick"/>
+              <Separator/>
+              <MenuItem Header="Apply selected card size" Tag="ApplySelectedCardSize" Click="HandleEditMenuClick"/>
+              <MenuItem Header="Set selected rows RX only" Tag="SetSelectedRowsRxOnly" Click="HandleEditMenuClick"/>
+              <MenuItem Header="Set selected rows TX capable" Tag="SetSelectedRowsTxCapable" Click="HandleEditMenuClick"/>
+              <Separator/>
+              <MenuItem Header="Add zone" Tag="AddZone" Click="HandleEditMenuClick"/>
+              <MenuItem Header="Duplicate zone" Tag="DuplicateZone" Click="HandleEditMenuClick"/>
+              <MenuItem Header="Delete zone" Tag="DeleteZone" Click="HandleEditMenuClick"/>
+            </MenuItem>
+          </Menu>
+        </Grid>
+      </Border>
+      <Grid Grid.Row="1" RowDefinitions="*,Auto" Background="{DynamicResource StudioCanvasBrush}" ClipToBounds="True">
+        <Grid x:Name="DesktopChannelTable" RowDefinitions="37,*">
+          <Border Background="{DynamicResource StudioPanelBrush}"
+                  BorderBrush="{DynamicResource StudioLineBrush}"
+                  BorderThickness="0,0,0,1">
+            <Grid ColumnDefinitions="48,1.45*,1.15*,105,52,1.0*,78,90">
+              <Border Grid.Column="1" Classes="table-cell"><TextBlock VerticalAlignment="Center" FontWeight="Medium" Text="Name"/></Border>
+              <Border Grid.Column="2" Classes="table-cell"><TextBlock VerticalAlignment="Center" FontWeight="Medium" Text="Destination ID"/></Border>
+              <Border Grid.Column="3" Classes="table-cell"><TextBlock VerticalAlignment="Center" FontWeight="Medium" Text="Mode"/></Border>
+              <Border Grid.Column="4" Classes="table-cell" Padding="0"><TextBlock HorizontalAlignment="Center" VerticalAlignment="Center" FontWeight="Medium" Text="Slot"/></Border>
+              <Border Grid.Column="5" Classes="table-cell"><TextBlock VerticalAlignment="Center" FontWeight="Medium" Text="Encryption"/></Border>
+              <Border Grid.Column="6" Classes="table-cell" Padding="0"><TextBlock HorizontalAlignment="Center" VerticalAlignment="Center" FontWeight="Medium" Text="RX only"/></Border>
+              <Border Grid.Column="7" Classes="table-cell" Padding="0"><TextBlock HorizontalAlignment="Center" VerticalAlignment="Center" FontWeight="Medium" Text="Card Size"/></Border>
+            </Grid>
+          </Border>
+          <ListBox x:Name="channelList"
+                   Grid.Row="1"
+                   Classes="channel-grid"
+                   SelectionMode="Multiple"
+                   AutoScrollToSelectedItem="False"
+                   ScrollViewer.BringIntoViewOnFocusChange="False"
+                   ScrollViewer.VerticalScrollBarVisibility="Auto"
+                   ItemsSource="{Binding VisibleChannelRows}"
+                   SelectedItem="{Binding SelectedChannelRow, Mode=TwoWay}"
+                   AutomationProperties.Name="Channels">
+            <ListBox.ItemTemplate>
+              <DataTemplate x:DataType="presentation:ConfigurationChannelRow">
+                <Border Height="36" BorderBrush="{DynamicResource StudioLineBrush}" BorderThickness="0,0,0,1">
+                  <Grid ColumnDefinitions="48,1.45*,1.15*,105,52,1.0*,78,90">
+                    <TextBlock HorizontalAlignment="Center" VerticalAlignment="Center" Text="{Binding Number}"/>
+                    <Border Grid.Column="1" Classes="table-cell"><TextBlock VerticalAlignment="Center" Text="{Binding Name}" TextTrimming="CharacterEllipsis"/></Border>
+                    <Border Grid.Column="2" Classes="table-cell"><TextBlock VerticalAlignment="Center" Text="{Binding DestinationText}" TextTrimming="CharacterEllipsis"/></Border>
+                    <Border Grid.Column="3" Classes="table-cell"><TextBlock VerticalAlignment="Center" Text="{Binding ModeText}"/></Border>
+                    <Border Grid.Column="4" Classes="table-cell" Padding="0"><TextBlock HorizontalAlignment="Center" VerticalAlignment="Center" Text="{Binding SlotText}"/></Border>
+                    <Border Grid.Column="5" Classes="table-cell"><TextBlock VerticalAlignment="Center" Text="{Binding EncryptionText}" TextTrimming="CharacterEllipsis"/></Border>
+                    <Border Grid.Column="6" Classes="table-cell" Padding="0">
+                      <CheckBox HorizontalAlignment="Center"
+                                VerticalAlignment="Center"
+                                IsChecked="{Binding RxOnly}"
+                                IsHitTestVisible="False"
+                                AutomationProperties.Name="Receive only"/>
+                    </Border>
+                    <Border Grid.Column="7" Classes="table-cell" Padding="0"><TextBlock HorizontalAlignment="Center" VerticalAlignment="Center" Text="{Binding CardSizeText}"/></Border>
+                  </Grid>
+                </Border>
+              </DataTemplate>
+            </ListBox.ItemTemplate>
+          </ListBox>
+        </Grid>
+        <ListBox x:Name="narrowChannelList"
+                 IsVisible="False"
+                 Classes="channel-grid"
+                 SelectionMode="Multiple"
+                 AutoScrollToSelectedItem="False"
+                 ScrollViewer.BringIntoViewOnFocusChange="False"
+                 ScrollViewer.VerticalScrollBarVisibility="Auto"
+                 ItemsSource="{Binding VisibleChannelRows}"
+                 SelectedItem="{Binding SelectedChannelRow, Mode=TwoWay}"
+                 AutomationProperties.Name="Channels">
+          <ListBox.ItemTemplate>
+            <DataTemplate x:DataType="presentation:ConfigurationChannelRow">
+              <Border MinHeight="72" Padding="10,8" BorderBrush="{DynamicResource StudioLineBrush}" BorderThickness="0,0,0,1">
+                <StackPanel Spacing="4">
+                  <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="8">
+                    <TextBlock Classes="caption" VerticalAlignment="Center" Text="{Binding Number, StringFormat='#{0}'}"/>
+                    <TextBlock Grid.Column="1" FontWeight="SemiBold" Text="{Binding Name}" TextTrimming="CharacterEllipsis"/>
+                    <TextBlock Grid.Column="2" Text="{Binding DestinationText}" TextTrimming="CharacterEllipsis"/>
+                  </Grid>
+                  <WrapPanel ItemSpacing="12" LineSpacing="3">
+                    <TextBlock Text="{Binding ModeText}"/>
+                    <TextBlock Text="{Binding SlotText, StringFormat='Slot {0}'}"/>
+                    <TextBlock Text="{Binding EncryptionText}"/>
+                    <CheckBox Content="RX only"
+                              IsChecked="{Binding RxOnly}"
+                              IsHitTestVisible="False"
+                              AutomationProperties.Name="Receive only"/>
+                    <TextBlock Text="{Binding CardSizeText, StringFormat='Card {0}'}"/>
+                  </WrapPanel>
+                </StackPanel>
+              </Border>
+            </DataTemplate>
+          </ListBox.ItemTemplate>
+        </ListBox>
+        <Border x:Name="liveZoneLayoutDrawer"
+                Grid.Row="1"
+                Background="{DynamicResource StudioCanvasBrush}"
+                BorderBrush="{DynamicResource StudioLineBrush}"
+                BorderThickness="0,1,0,0"
+                ClipToBounds="True">
+          <Expander Classes="live-layout"
+                    Background="{DynamicResource StudioCanvasBrush}"
+                    HorizontalContentAlignment="Stretch"
+                    IsExpanded="{Binding IsZonePreviewExpanded, Mode=TwoWay}"
+                    AutomationProperties.Name="Live zone layout">
+            <Expander.Header>
+              <TextBlock Margin="4,7" FontSize="14" Text="Live zone layout"/>
+            </Expander.Header>
+            <Border Height="300"
+                    Background="{DynamicResource StudioCanvasBrush}"
+                    BorderBrush="{DynamicResource StudioLineBrush}"
+                    BorderThickness="0,1,0,0">
+              <Grid RowDefinitions="Auto,*">
+                <Grid Margin="14,9,14,7" ColumnDefinitions="*,Auto" ColumnSpacing="12">
+                  <TextBlock Classes="caption" Text="Drag cards to edit the same two-dimensional layout used by the main console." TextWrapping="Wrap"/>
+                  <TextBlock Grid.Column="1" Classes="caption" Text="Controls are preview-only"/>
+                </Grid>
+                <ScrollViewer Grid.Row="1" HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto" Padding="12,2,10,10">
+                  <ItemsControl ItemsSource="{Binding PreviewChannels}"
+                                Width="{Binding PreviewCanvasWidth}"
+                                Height="{Binding PreviewCanvasHeight}"
+                                HorizontalAlignment="Left"
+                                VerticalAlignment="Top">
+                    <ItemsControl.ItemsPanel>
+                      <ItemsPanelTemplate><Canvas/></ItemsPanelTemplate>
+                    </ItemsControl.ItemsPanel>
+                    <ItemsControl.ItemContainerTheme>
+                      <ControlTheme TargetType="ContentPresenter" x:DataType="presentation:IConfigurationChannelPreviewViewModel">
+                        <Setter Property="Canvas.Left" Value="{Binding X}"/>
+                        <Setter Property="Canvas.Top" Value="{Binding Y}"/>
+                      </ControlTheme>
+                    </ItemsControl.ItemContainerTheme>
+                    <ItemsControl.ItemTemplate>
+                      <DataTemplate x:DataType="presentation:IConfigurationChannelPreviewViewModel">
+                        <Border Classes="channel-card"
+                                Width="{Binding CardWidth}"
+                                Height="{Binding CardHeight}"
+                                Background="{Binding Card.CardBackgroundBrush}"
+                                BorderBrush="{Binding BorderBrush}"
+                                BorderThickness="1"
+                                CornerRadius="6"
+                                Padding="5,5,5,4"
+                                ClipToBounds="True"
+                                Focusable="True"
+                                PointerPressed="HandlePreviewPointerPressed"
+                                PointerMoved="HandlePreviewPointerMoved"
+                                PointerReleased="HandlePreviewPointerReleased"
+                                PointerCaptureLost="HandlePreviewPointerCaptureLost"
+                                ToolTip.Tip="Drag to move this channel in the main console layout">
+                          <presentation:ChannelCardContent
+                              DataContext="{Binding Card}"
+                              UiFontSize="{Binding $parent[UserControl].((presentation:ConfigurationStudioViewModel)DataContext).PreviewUiFontSize}"
+                              UiSmallFontSize="{Binding $parent[UserControl].((presentation:ConfigurationStudioViewModel)DataContext).PreviewUiSmallFontSize}"
+                              IsHitTestVisible="False"/>
+                        </Border>
+                      </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                  </ItemsControl>
+                </ScrollViewer>
+              </Grid>
+            </Border>
+          </Expander>
+        </Border>
+      </Grid>
+    </Grid>
+    <Border x:Name="ChannelInspector"
+            Grid.Column="1"
+            Background="{DynamicResource StudioInspectorBrush}"
+            BorderBrush="{DynamicResource StudioLineBrush}"
+            BorderThickness="1,0,0,0">
+      <ScrollViewer HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
+        <StackPanel Margin="18,18,18,20" Spacing="8" IsEnabled="{Binding CanEdit}">
+          <TextBlock FontSize="16" FontWeight="SemiBold" Text="Zone settings"/>
+          <TextBlock Classes="caption" Text="Assigned FNE system"/>
+          <ComboBox x:Name="zoneSystemEditor"
+                    ItemsSource="{Binding Systems}"
+                    SelectedValueBinding="{Binding Name}"
+                    SelectedValue="{Binding SelectedZoneSystemName, Mode=TwoWay}"
+                    SelectionChanged="HandleZoneSystemChanged"
+                    AutomationProperties.Name="Assigned FNE system"/>
+          <TextBlock Classes="caption"
+                     Text="Every channel in this zone uses the assigned FNE system. Studio writes the system value into each channel for YAML compatibility."
+                     TextWrapping="Wrap"/>
+          <Border Height="1" Margin="0,8" Background="{DynamicResource StudioLineBrush}"/>
+          <TextBlock Margin="0,0,0,8" FontSize="16" FontWeight="SemiBold" Text="Channel settings"/>
+          <TextBlock Text="Name *"/>
+          <TextBox Text="{Binding SelectedChannel.Name, Mode=TwoWay}" LostFocus="HandleDraftFieldEdit" AutomationProperties.Name="Channel name"/>
+          <TextBlock Margin="0,8,0,0" Text="Destination ID *"/>
+          <TextBox Text="{Binding SelectedChannel.Tgid, Mode=TwoWay}" LostFocus="HandleDraftFieldEdit" AutomationProperties.Name="Channel destination ID"/>
+          <TextBlock Margin="0,8,0,0" Text="Mode *"/>
+          <ComboBox x:Name="channelModeEditor"
+                    ItemsSource="{Binding ModeOptions}"
+                    SelectedValueBinding="{Binding Value}"
+                    SelectedValue="{Binding SelectedChannel.Mode, Mode=TwoWay}"
+                    SelectionChanged="HandleChannelModeChanged"
+                    AutomationProperties.Name="Channel mode">
+            <ComboBox.ItemTemplate>
+              <DataTemplate x:DataType="config:ConfigurationProtocolOption"><TextBlock Text="{Binding DisplayName}"/></DataTemplate>
+            </ComboBox.ItemTemplate>
+          </ComboBox>
+          <StackPanel x:Name="dmrSlotSettings" Spacing="8" IsVisible="{Binding IsSelectedChannelDmr}">
+            <TextBlock Margin="0,8,0,0" Text="DMR slot *"/>
+            <NumericUpDown x:Name="dmrSlotEditor"
+                           Minimum="1"
+                           Maximum="2"
+                           Increment="1"
+                           FormatString="0"
+                           Value="{Binding SelectedChannel.Slot, Mode=TwoWay}"
+                           LostFocus="HandleDraftFieldEdit"
+                           AutomationProperties.Name="DMR slot"/>
+          </StackPanel>
+          <TextBlock Margin="0,8,0,0" Text="Encryption algorithm *"/>
+          <ComboBox ItemsSource="{Binding AvailableChannelAlgorithms}"
+                    SelectedItem="{Binding SelectedChannelAlgorithm, Mode=TwoWay}"
+                    SelectionChanged="HandleChannelAlgorithmChanged"
+                    AutomationProperties.Name="Channel encryption algorithm">
+            <ComboBox.ItemTemplate>
+              <DataTemplate x:DataType="config:EncryptionAlgorithmOption"><TextBlock Text="{Binding DisplayName}"/></DataTemplate>
+            </ComboBox.ItemTemplate>
+          </ComboBox>
+          <TextBlock Margin="0,8,0,0" Text="Key ID (hex) *"/>
+          <Border Background="{DynamicResource StudioFieldBrush}"
+                  BorderBrush="{DynamicResource StudioLineBrush}"
+                  BorderThickness="1"
+                  CornerRadius="3"
+                  IsEnabled="{Binding ChannelEncryptionUsesKey}">
+            <Grid ColumnDefinitions="Auto,*">
+              <TextBlock Margin="10,0,2,0" VerticalAlignment="Center" Foreground="{DynamicResource StudioMutedBrush}" Text="0x"/>
+              <TextBox x:Name="ChannelKeyIdEditor"
+                       Grid.Column="1"
+                       MinHeight="32"
+                       BorderThickness="0"
+                       Text="{Binding SelectedChannelKeyIdHexDigits, Mode=TwoWay}"
+                       LostFocus="HandleDraftFieldEdit"
+                       AutomationProperties.Name="Channel encryption key ID"/>
+            </Grid>
+          </Border>
+          <CheckBox Margin="0,10,0,0"
+                    Content="Selectable encryption"
+                    IsChecked="{Binding SelectedChannel.SelectableEncryption, Mode=TwoWay}"
+                    Click="HandleDraftFieldEdit"
+                    AutomationProperties.Name="Selectable encryption"/>
+          <CheckBox Margin="0,4,0,0"
+                    Content="RX only"
+                    IsChecked="{Binding SelectedChannel.RxOnly, Mode=TwoWay}"
+                    Click="HandleDraftFieldEdit"
+                    AutomationProperties.Name="Receive only channel"/>
+          <TextBlock Margin="0,14,0,0" Text="Card size *"/>
+          <Grid ColumnDefinitions="*,*,*">
+            <ToggleButton Classes="segment"
+                          Content="Small"
+                          Tag="small"
+                          IsChecked="{Binding SelectedChannel.CardSize, Mode=OneWay, Converter={StaticResource StringEqualsConverter}, ConverterParameter=small}"
+                          Click="HandleCardSizeClick"
+                          AutomationProperties.Name="Small channel card"/>
+            <ToggleButton Grid.Column="1"
+                          Classes="segment"
+                          Content="Normal"
+                          Tag="normal"
+                          IsChecked="{Binding SelectedChannel.CardSize, Mode=OneWay, Converter={StaticResource StringEqualsConverter}, ConverterParameter=normal}"
+                          Click="HandleCardSizeClick"
+                          AutomationProperties.Name="Normal channel card"/>
+            <ToggleButton Grid.Column="2"
+                          Classes="segment"
+                          Content="Large"
+                          Tag="large"
+                          IsChecked="{Binding SelectedChannel.CardSize, Mode=OneWay, Converter={StaticResource StringEqualsConverter}, ConverterParameter=large}"
+                          Click="HandleCardSizeClick"
+                          AutomationProperties.Name="Large channel card"/>
+          </Grid>
+          <TextBlock Margin="0,14,0,0" Text="Resource color"/>
+          <WrapPanel ItemSpacing="13" LineSpacing="8">
+            <ToggleButton Classes="color-swatch" Background="#087CF1" Tag="#087CF1" IsChecked="{Binding SelectedChannel.ResourceColor, Mode=OneWay, Converter={StaticResource StringEqualsConverter}, ConverterParameter=#087CF1}" Click="HandleResourceColorClick" AutomationProperties.Name="Blue resource color"/>
+            <ToggleButton Classes="color-swatch" Background="#22D3EE" Tag="#22D3EE" IsChecked="{Binding SelectedChannel.ResourceColor, Mode=OneWay, Converter={StaticResource StringEqualsConverter}, ConverterParameter=#22D3EE}" Click="HandleResourceColorClick" AutomationProperties.Name="Cyan resource color"/>
+            <ToggleButton Classes="color-swatch" Background="#65B95A" Tag="#65B95A" IsChecked="{Binding SelectedChannel.ResourceColor, Mode=OneWay, Converter={StaticResource StringEqualsConverter}, ConverterParameter=#65B95A}" Click="HandleResourceColorClick" AutomationProperties.Name="Green resource color"/>
+            <ToggleButton Classes="color-swatch" Background="#F47A1F" Tag="#F47A1F" IsChecked="{Binding SelectedChannel.ResourceColor, Mode=OneWay, Converter={StaticResource StringEqualsConverter}, ConverterParameter=#F47A1F}" Click="HandleResourceColorClick" AutomationProperties.Name="Orange resource color"/>
+            <ToggleButton Classes="color-swatch" Background="#7E36D4" Tag="#7E36D4" IsChecked="{Binding SelectedChannel.ResourceColor, Mode=OneWay, Converter={StaticResource StringEqualsConverter}, ConverterParameter=#7E36D4}" Click="HandleResourceColorClick" AutomationProperties.Name="Purple resource color"/>
+            <ToggleButton Classes="color-swatch" Background="#DC2F60" Tag="#DC2F60" IsChecked="{Binding SelectedChannel.ResourceColor, Mode=OneWay, Converter={StaticResource StringEqualsConverter}, ConverterParameter=#DC2F60}" Click="HandleResourceColorClick" AutomationProperties.Name="Red resource color"/>
+          </WrapPanel>
+        </StackPanel>
+      </ScrollViewer>
+    </Border>
+  </Grid>
+</UserControl>

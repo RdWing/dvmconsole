@@ -91,7 +91,7 @@ public sealed class FneConnectionTests
 
         Assert.Equal("TYF_OP1", peer.Information.Details.Identity);
         Assert.Equal(FneConnection.SoftwareIdentifier, peer.Information.Details.Software);
-        Assert.Equal("DVMC_NEO_0.5.5", peer.Information.Details.Software);
+        Assert.Equal("DVMC_NEO_0.6.0", peer.Information.Details.Software);
         Assert.Equal(options.PeerId, peer.Information.PeerID);
         Assert.Equal(fnecore.ConnectionState.WAITING_LOGIN, peer.Information.State);
         Assert.Equal(fnecore.LogLevel.DEBUG, peer.LogLevel);
@@ -476,6 +476,34 @@ public sealed class FneConnectionTests
 
         Assert.Same(FneTalkgroupAuthority.Pending, connection.TalkgroupAuthority);
         Assert.Equal(publishedAfterStop, published.Count);
+    }
+
+    [Fact]
+    public async Task ChunkedActiveTalkgroupAnnouncementsAccumulateWithinTheSession()
+    {
+        var sessions = new RecordingPeerSessionFactory();
+        await using var connection = new FneConnection(
+            new FneConnectionOptions("Test", "Test", "127.0.0.1", 62031, 1, null, false, null),
+            TimeProvider.System,
+            new LoopbackEndpointResolver(),
+            sessions);
+
+        await connection.StartAsync();
+        RecordingPeerSession session = sessions.Single();
+        session.Callbacks.TalkgroupAnnouncementReceived(new FneTalkgroupAnnouncement(
+            ContainsActiveTalkgroups: true,
+            [new FneTalkgroupAnnouncementEntry(748, 1, false, false)]));
+        session.Callbacks.TalkgroupAnnouncementReceived(new FneTalkgroupAnnouncement(
+            ContainsActiveTalkgroups: true,
+            [new FneTalkgroupAnnouncementEntry(747, 1, false, false)]));
+
+        Assert.Equal(
+            FneTalkgroupAvailability.Available,
+            connection.TalkgroupAuthority.GetAvailability(FneTrafficProtocol.P25, 748, 0));
+        Assert.Equal(
+            FneTalkgroupAvailability.Available,
+            connection.TalkgroupAuthority.GetAvailability(FneTrafficProtocol.P25, 747, 0));
+        Assert.Equal(2, connection.TalkgroupAuthority.Rules.Count(rule => rule.IsActive));
     }
 
     [Fact]

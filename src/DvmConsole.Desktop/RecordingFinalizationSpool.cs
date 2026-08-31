@@ -1,5 +1,5 @@
 using DvmConsole.Audio;
-using DvmConsole.FneClient;
+using DvmConsole.Core.Runtime;
 using System.Text.Json;
 
 namespace DvmConsole.Desktop;
@@ -13,7 +13,7 @@ internal sealed record RecordingFinalizationDescriptor(
     int SampleRate,
     int Channels,
     int BitsPerSample,
-    FneTrafficProtocol Protocol,
+    RadioMediaProtocol Protocol,
     string ProtocolText,
     string Direction,
     string RecordingSourceType,
@@ -31,7 +31,8 @@ internal sealed record RecordingFinalizationDescriptor(
     ushort? EncryptionKeyId,
     int? RetentionDays,
     bool? IsEncryptionKnown = null,
-    long? ReceiveEpisodeId = null)
+    long? ReceiveEpisodeId = null,
+    Guid? RecordingId = null)
 {
     public PcmAudioFormat Format => new(SampleRate, Channels, BitsPerSample);
     // Descriptors written before schema 4 have no known-state property; their
@@ -218,7 +219,7 @@ internal sealed class RecordingFinalizationSpool
         if (!Directory.Exists(activePath))
             return;
 
-        var describedWavePaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var describedWavePaths = new HashSet<string>(FileSystemPathIdentity.Comparer);
         foreach (string descriptorPath in Directory.EnumerateFiles(
                      activePath,
                      $"*{DescriptorSuffix}",
@@ -232,9 +233,9 @@ internal sealed class RecordingFinalizationSpool
                         DesktopSettingsJsonContext.Default.RecordingFinalizationDescriptor)
                     ?? throw new InvalidDataException("The finalization descriptor was empty.");
                 Validate(descriptor, requireFiles: true);
-                if (!Path.GetFullPath(descriptorPath).Equals(
-                        GetDescriptorPath(descriptor.JobId),
-                        StringComparison.OrdinalIgnoreCase))
+                if (!FileSystemPathIdentity.AreEquivalent(
+                        descriptorPath,
+                        GetDescriptorPath(descriptor.JobId)))
                 {
                     throw new InvalidDataException(
                         "The finalization descriptor name does not match its job identifier.");
@@ -284,7 +285,7 @@ internal sealed class RecordingFinalizationSpool
         if (descriptor.JobId == Guid.Empty)
             throw new InvalidDataException("A finalization job identifier is required.");
         string descriptorRoot = Path.GetFullPath(descriptor.RootPath);
-        if (!descriptorRoot.Equals(rootPath, StringComparison.OrdinalIgnoreCase))
+        if (!FileSystemPathIdentity.AreEquivalent(descriptorRoot, rootPath))
             throw new InvalidDataException("The finalization job belongs to a different recording root.");
         string wavePath = Path.GetFullPath(descriptor.WavePath);
         string outputPath = Path.GetFullPath(descriptor.OutputPath);
@@ -325,13 +326,7 @@ internal sealed class RecordingFinalizationSpool
         => Path.Combine(activePath, $"{jobId:N}{DescriptorSuffix}");
 
     private static bool IsUnderRoot(string root, string path)
-    {
-        string normalizedRoot = Path.GetFullPath(root).TrimEnd(
-            Path.DirectorySeparatorChar,
-            Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
-        string normalizedPath = Path.GetFullPath(path);
-        return normalizedPath.StartsWith(normalizedRoot, StringComparison.OrdinalIgnoreCase);
-    }
+        => FileSystemPathIdentity.IsUnderRoot(root, path);
 
     private static void TryDelete(string path)
     {

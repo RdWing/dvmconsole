@@ -5,12 +5,16 @@ public sealed class CodeplugStudioState
     public Dictionary<string, string> ZoneSystemAssignments { get; set; }
         = new(StringComparer.OrdinalIgnoreCase);
 
+    // Neo operator policy. It intentionally remains outside interoperable YAML.
+    public List<string> CallPrioritySystemNames { get; set; } = [];
+
     public CodeplugStudioState Clone()
         => new()
         {
             ZoneSystemAssignments = new Dictionary<string, string>(
                 ZoneSystemAssignments,
-                StringComparer.OrdinalIgnoreCase)
+                StringComparer.OrdinalIgnoreCase),
+            CallPrioritySystemNames = CallPrioritySystemNames.ToList()
         };
 }
 

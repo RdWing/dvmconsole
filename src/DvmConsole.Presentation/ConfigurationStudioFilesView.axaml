@@ -1,0 +1,90 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:config="using:DvmConsole.Core.Configuration"
+             xmlns:presentation="using:DvmConsole.Presentation"
+             x:Class="DvmConsole.Presentation.ConfigurationStudioFilesView"
+             x:DataType="presentation:ConfigurationStudioViewModel">
+  <ScrollViewer Margin="18" IsVisible="{Binding IsFiles}">
+    <StackPanel Spacing="10">
+      <TextBlock Classes="heading" Text="Files &amp; Interoperability"/>
+      <Border Classes="panel">
+        <StackPanel Spacing="6">
+          <TextBlock Classes="subheading" Text="Referenced files"/>
+          <TextBlock Classes="caption" Text="Key file"/>
+          <TextBox Text="{Binding Configuration.KeyFile, Mode=TwoWay}" LostFocus="HandleDraftFieldEdit"/>
+          <TextBlock Classes="caption" Text="RID alias paths"/>
+          <ItemsControl ItemsSource="{Binding Systems}">
+            <ItemsControl.ItemTemplate>
+              <DataTemplate x:DataType="config:SystemConfiguration">
+                <Grid ColumnDefinitions="180,*" ColumnSpacing="8" Margin="0,2">
+                  <TextBlock VerticalAlignment="Center" Text="{Binding Name}"/>
+                  <TextBox Grid.Column="1" Text="{Binding AliasPath, Mode=TwoWay}" LostFocus="HandleDraftFieldEdit"/>
+                </Grid>
+              </DataTemplate>
+            </ItemsControl.ItemTemplate>
+          </ItemsControl>
+        </StackPanel>
+      </Border>
+      <Border Classes="panel">
+        <StackPanel Spacing="6">
+          <Grid ColumnDefinitions="*,Auto">
+            <StackPanel>
+              <TextBlock Classes="subheading" Text="RID aliases"/>
+              <TextBlock Classes="caption" Text="Aliases remain in their referenced YAML files."/>
+            </StackPanel>
+            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="4">
+              <Button Content="Add" AutomationProperties.Name="Add RID alias" Click="HandleAddAliasClick"/>
+              <Button Content="Delete" AutomationProperties.Name="Delete RID alias" Click="HandleDeleteAliasClick"/>
+            </StackPanel>
+          </Grid>
+          <ListBox Classes="dense-list" MaxHeight="220" ItemsSource="{Binding Aliases}" SelectedItem="{Binding SelectedAlias, Mode=TwoWay}">
+            <ListBox.ItemTemplate>
+              <DataTemplate x:DataType="presentation:ConfigurationAliasRow">
+                <Border Classes="dense-row">
+                  <Grid ColumnDefinitions="Auto,*,2*" ColumnSpacing="10">
+                    <TextBlock Text="{Binding Alias.Rid}"/>
+                    <TextBlock Grid.Column="1" Text="{Binding Alias.Alias}"/>
+                    <TextBlock Grid.Column="2" Classes="caption" Text="{Binding Identifier}" TextTrimming="CharacterEllipsis"/>
+                  </Grid>
+                </Border>
+              </DataTemplate>
+            </ListBox.ItemTemplate>
+          </ListBox>
+          <Grid ColumnDefinitions="*,2*" ColumnSpacing="8">
+            <StackPanel>
+              <TextBlock Classes="caption" Text="RID"/>
+              <NumericUpDown Minimum="0" Maximum="4294967295" Value="{Binding SelectedAlias.Alias.Rid, Mode=TwoWay}" LostFocus="HandleAliasFieldEdit"/>
+            </StackPanel>
+            <StackPanel Grid.Column="1">
+              <TextBlock Classes="caption" Text="Alias"/>
+              <TextBox Text="{Binding SelectedAlias.Alias.Alias, Mode=TwoWay}" LostFocus="HandleAliasFieldEdit"/>
+            </StackPanel>
+          </Grid>
+        </StackPanel>
+      </Border>
+      <Border Classes="panel">
+        <StackPanel Spacing="6">
+          <TextBlock Classes="subheading" Text="Unknown YAML fields"/>
+          <TextBlock Text="{Binding UnknownFieldsText}" TextWrapping="Wrap"/>
+          <ItemsControl ItemsSource="{Binding Document.UnknownFields}">
+            <ItemsControl.ItemTemplate>
+              <DataTemplate x:DataType="config:UnknownConfigurationField"><TextBlock Text="{Binding DisplayText}"/></DataTemplate>
+            </ItemsControl.ItemTemplate>
+          </ItemsControl>
+        </StackPanel>
+      </Border>
+      <Border Classes="panel">
+        <StackPanel Spacing="6">
+          <TextBlock Classes="subheading" Text="Exports"/>
+          <TextBlock Classes="caption"
+                     Text="A full interoperable copy includes credentials and references to local key material. A sanitized support copy removes credentials, key material, addresses, URLs, and operational identifiers. Sanitized export is unavailable for YAML that opened read-only because its unsupported constructs cannot be interpreted safely."
+                     TextWrapping="Wrap"/>
+          <WrapPanel ItemSpacing="6" LineSpacing="6">
+            <Button Content="Export full copy&#x2026;" AutomationProperties.Name="Export full configuration copy" Click="HandleExportFullClick"/>
+            <Button Content="Export sanitized support copy&#x2026;" AutomationProperties.Name="Export sanitized support copy" Click="HandleExportSanitizedClick" IsEnabled="{Binding CanExportSanitized}"/>
+          </WrapPanel>
+        </StackPanel>
+      </Border>
+    </StackPanel>
+  </ScrollViewer>
+</UserControl>
