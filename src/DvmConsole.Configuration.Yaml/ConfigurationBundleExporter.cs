@@ -80,6 +80,7 @@ public static class ConfigurationBundleExporter
             exportYaml = document.Serialize();
         }
 
+        _ = ParseAndValidate(exportYaml, destination.Primary.DisplayName);
         await WriteTextAsync(destination.Primary, exportYaml, cancellationToken).ConfigureAwait(false);
         foreach ((string name, byte[] content) in companions)
         {
@@ -91,15 +92,20 @@ public static class ConfigurationBundleExporter
 
         byte[] exportedPrimary = await ReadAllBytesAsync(destination.Primary, cancellationToken)
             .ConfigureAwait(false);
-        _ = ParseAndValidate(DecodeYaml(exportedPrimary), destination.Primary.DisplayName);
-        foreach (string name in companions.Keys)
+        string exportedYaml = DecodeYaml(exportedPrimary);
+        if (!string.Equals(exportedYaml, exportYaml, StringComparison.Ordinal))
+            throw new IOException("The exported codeplug did not match the bytes written to the destination.");
+        _ = ParseAndValidate(exportedYaml, destination.Primary.DisplayName);
+        foreach ((string name, byte[] expectedContent) in companions)
         {
             IReadableDocument? exported = await destination
                 .ResolveExportedCompanionAsync(name, cancellationToken)
                 .ConfigureAwait(false);
             if (exported is null)
                 throw new IOException($"Exported companion '{name}' could not be read back.");
-            _ = await ReadAllBytesAsync(exported, cancellationToken).ConfigureAwait(false);
+            byte[] actualContent = await ReadAllBytesAsync(exported, cancellationToken).ConfigureAwait(false);
+            if (!actualContent.AsSpan().SequenceEqual(expectedContent))
+                throw new IOException($"Exported companion '{name}' did not match the bytes written to the destination.");
         }
 
         return new ConfigurationBundleExportResult(

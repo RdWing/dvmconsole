@@ -1,6 +1,7 @@
 using System.Runtime.CompilerServices;
 using System.Text;
 using DvmConsole.Application;
+using DvmConsole.Core.Configuration;
 using Xunit;
 
 namespace DvmConsole.Configuration.Yaml.Tests;
@@ -226,6 +227,47 @@ public sealed class ManagedConfigurationLibraryTests : IDisposable
         Assert.Equal("keys: []\n", export.GetCompanion("keys.clear").Text);
         Assert.Equal("[]\n", export.GetCompanion("alias.yml").Text);
         Assert.Equal(yaml, source.PrimaryDocument.Text);
+    }
+
+    [Fact]
+    public async Task ImportRecoversZoneEntriesMisplacedUnderSystems()
+    {
+        const string malformedYaml = """
+            systems:
+              - name: Test FNE
+                identity: Console
+                address: 127.0.0.1
+                port: 62031
+                peerId: 1
+                rid: "1001"
+              - name: Dispatch
+                tabColor: '#FF6F61'
+                channels:
+                  - name: Main
+                    system: Test FNE
+                    tgid: 101
+                    mode: p25
+            groups: []
+            """;
+        var source = new MemoryDocumentSet("misplaced-zone.yml", "file-id:misplaced-zone", malformedYaml);
+        var library = new ManagedConfigurationLibrary(root);
+
+        ConfigurationImportResult imported = await library.ImportAsync(source, new());
+        var export = new MemoryDocumentSet("export.yml", "export-id", string.Empty);
+        await library.ExportAsync(imported.Reference, export, new(Sanitized: false));
+
+        Assert.Contains(
+            "Recovered 1 zone entry from the systems list: Dispatch.",
+            imported.Warnings);
+        Assert.Contains("zones:", export.PrimaryDocument.Text, StringComparison.Ordinal);
+        Assert.Contains("name: Dispatch", export.PrimaryDocument.Text, StringComparison.Ordinal);
+        Assert.Contains("name: Main", export.PrimaryDocument.Text, StringComparison.Ordinal);
+        ConfigurationDocument exportedDocument = ConfigurationDocument.Parse(export.PrimaryDocument.Text);
+        Assert.Single(exportedDocument.Configuration.Systems);
+        ZoneConfiguration exportedZone = Assert.Single(exportedDocument.Configuration.Zones);
+        Assert.Equal("Dispatch", exportedZone.Name);
+        Assert.Single(exportedZone.Channels);
+        Assert.Equal(malformedYaml, source.PrimaryDocument.Text);
     }
 
     [Fact]
