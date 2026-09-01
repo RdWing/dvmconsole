@@ -37,14 +37,14 @@ public sealed class ConfigurationStudioManagedCompanionTests
                     port: 62031
                     peerId: 1
                     rid: "1001"
-                    aliasPath: "{{firstAliases}}"
+                    aliasPath: '{{firstAliases}}'
                   - name: TYF
                     identity: TYF Console
                     address: 127.0.0.1
                     port: 62032
                     peerId: 2
                     rid: "2002"
-                    aliasPath: "{{secondAliases}}"
+                    aliasPath: '{{secondAliases}}'
                   - name: No Aliases
                     identity: New Console
                     address: 127.0.0.1

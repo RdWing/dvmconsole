@@ -359,7 +359,7 @@ public sealed class ConfigurationStudioRenderTests
             string libraryRoot = Path.Combine(
                 Path.GetDirectoryName(demoState.UserSettingsPath)!,
                 "ConfigurationLibrary");
-            var library = new ManagedConfigurationLibrary(libraryRoot);
+            ManagedConfigurationLibrary library = mainWindow.ConfigurationLibrary;
             ConfigurationSummary originalSummary = Assert.Single(
                 await ReadAllAsync(library.ListAsync()),
                 summary => summary.Id == originalReference.Id);
@@ -1043,14 +1043,10 @@ public sealed class ConfigurationStudioRenderTests
             settingsStore,
             new OperatorViewStore(demoState.OperatorViewPath),
             demoMode: true);
-        string libraryRoot = Path.Combine(
-            Path.GetDirectoryName(demoState.UserSettingsPath)!,
-            "ConfigurationLibrary");
-
         try
         {
             mainWindow.Show();
-            var library = new ManagedConfigurationLibrary(libraryRoot);
+            ManagedConfigurationLibrary library = mainWindow.ConfigurationLibrary;
             int catalogCountBefore = await CountAsync(library.ListAsync());
 
             await mainWindow.OpenConfigurationStudioAsync(
