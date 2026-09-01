@@ -274,6 +274,74 @@ public sealed class ConfigurationStudioRenderTests
     }
 
     [AvaloniaFact]
+    public async Task PendingSystemDeleteKeepsItsOriginalTargetAndRejectsDuplicateRequests()
+    {
+        string demoCodeplug = Path.Combine(AppContext.BaseDirectory, "Demo", "codeplug.yml");
+        using DemoSessionState demoState = DemoSessionState.Create();
+        var mainWindow = new MainWindow(
+            demoCodeplug,
+            new UserSettingsStore(demoState.UserSettingsPath),
+            new OperatorViewStore(demoState.OperatorViewPath),
+            demoMode: true);
+        ConfigurationStudioWindow studio = mainWindow.CreateConfigurationStudioForCapture(
+            ConfigurationStudioSection.Systems);
+
+        try
+        {
+            mainWindow.Show();
+            studio.Show(mainWindow);
+            ConfigurationStudioViewModel viewModel = studio.StudioViewModel;
+            Assert.True(viewModel.Systems.Count >= 2);
+            SystemConfiguration originalTarget = viewModel.Systems[0];
+            SystemConfiguration otherSystem = viewModel.Systems[1];
+            viewModel.SelectedSystem = originalTarget;
+            var confirmation = new TaskCompletionSource<bool>(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            int confirmationCount = 0;
+            studio.DialogConfirmationOverride = (_, _, _) =>
+            {
+                confirmationCount++;
+                return confirmation.Task;
+            };
+
+            Task firstDelete = studio.DeleteSelectedSystemForCaptureAsync();
+            viewModel.SelectedSystem = otherSystem;
+            Task duplicateDelete = studio.DeleteSelectedSystemForCaptureAsync();
+
+            Assert.True(duplicateDelete.IsCompleted);
+            Assert.Equal(1, confirmationCount);
+            confirmation.SetResult(true);
+            await firstDelete;
+
+            Assert.DoesNotContain(originalTarget, viewModel.Configuration.Systems);
+            Assert.Contains(otherSystem, viewModel.Configuration.Systems);
+            Assert.Equal(
+                viewModel.Configuration.Systems.Count,
+                viewModel.Configuration.Systems.Distinct().Count());
+            Assert.DoesNotContain(
+                viewModel.ConfigurationHierarchy,
+                node => ReferenceEquals(node.System, originalTarget));
+            Assert.Equal(
+                viewModel.Configuration.Systems.Count,
+                viewModel.ConfigurationHierarchy.Count(node => node.System is not null));
+
+            viewModel.Undo();
+            Assert.Equal(
+                viewModel.Configuration.Systems.Count,
+                viewModel.ConfigurationHierarchy.Count(node => node.System is not null));
+            viewModel.Redo();
+            Assert.Equal(
+                viewModel.Configuration.Systems.Count,
+                viewModel.ConfigurationHierarchy.Count(node => node.System is not null));
+        }
+        finally
+        {
+            studio.CloseForSessionReplacement();
+            mainWindow.Close();
+        }
+    }
+
+    [AvaloniaFact]
     public void LegacyCodeplugImportRestoresPrePhaseOneChannelCardCoordinates()
     {
         string demoCodeplug = Path.Combine(AppContext.BaseDirectory, "Demo", "codeplug.yml");

@@ -29,6 +29,7 @@ public sealed partial class ConfigurationStudioWindow : Window
     private bool ready;
     private bool allowClose;
     private int saveOperationInProgress;
+    private int deleteSystemOperationInProgress;
 
     public ConfigurationStudioWindow()
     {
@@ -111,6 +112,8 @@ public sealed partial class ConfigurationStudioWindow : Window
     internal Func<string, string, Task>? MessageOverride { get; set; }
     internal Task<bool> ReviewAndSaveForCaptureAsync(bool saveCopy = false, bool offerReload = true)
         => ReviewAndSaveAsync(saveCopy, offerReload);
+    internal Task DeleteSelectedSystemForCaptureAsync()
+        => DeleteSelectedSystemAsync();
 
     private void HandleOpened(object? sender, EventArgs e)
         => ready = true;
@@ -222,9 +225,30 @@ public sealed partial class ConfigurationStudioWindow : Window
     }
     private async void HandleSharedDeleteSystemRequested(object? sender, EventArgs e)
     {
-        if (viewModel.SelectedSystem is { } system &&
-            await ConfirmAsync("Delete system", $"Delete '{system.Name}'? Channels that reference it will be reported as errors until reassigned.", "Delete"))
-            viewModel.DeleteSystem();
+        await DeleteSelectedSystemAsync();
+    }
+
+    private async Task DeleteSelectedSystemAsync()
+    {
+        if (Interlocked.Exchange(ref deleteSystemOperationInProgress, 1) != 0)
+            return;
+
+        try
+        {
+            if (viewModel.SelectedSystem is not { } system)
+                return;
+            if (await ConfirmAsync(
+                    "Delete system",
+                    $"Delete '{system.Name}'? Channels that reference it will be reported as errors until reassigned.",
+                    "Delete"))
+            {
+                viewModel.DeleteSystem(system);
+            }
+        }
+        finally
+        {
+            Volatile.Write(ref deleteSystemOperationInProgress, 0);
+        }
     }
     private IEnumerable<ChannelConfiguration> SelectedChannelRows()
         => this.FindControl<ConfigurationStudioView>("studioView")?.ZonesView.GetSelectedChannelRows() ?? [];

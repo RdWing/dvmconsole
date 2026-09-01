@@ -213,12 +213,19 @@ public sealed partial class MainWindow : Window
         Deactivated += async (_, _) =>
         {
             pttKeyRouter.UpdateInputFocus(null);
+            if (Volatile.Read(ref shutdownStarted) != 0)
+                return;
             try
             {
                 await sessionHost.ApplicationSession.FlushSettingsAsync(CancellationToken.None).ConfigureAwait(false);
             }
+            catch (ObjectDisposedException) when (Volatile.Read(ref shutdownStarted) != 0)
+            {
+                // Hiding the window during shutdown raises Deactivated. The
+                // session may finish disposing before an in-flight flush resumes.
+            }
             catch (Exception exception) when (
-                exception is IOException or UnauthorizedAccessException or ObjectDisposedException)
+                exception is IOException or UnauthorizedAccessException)
             {
                 DesktopCrashLog.Write("Operator settings persistence", exception);
                 await Dispatcher.UIThread.InvokeAsync(() =>

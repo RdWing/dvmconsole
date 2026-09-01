@@ -788,6 +788,13 @@ public sealed class ConfigurationStudioViewModel :
     public void DeleteSystem()
     {
         if (SelectedSystem is { } system)
+            DeleteSystem(system);
+    }
+
+    public void DeleteSystem(SystemConfiguration system)
+    {
+        ArgumentNullException.ThrowIfNull(system);
+        if (Configuration.Systems.Contains(system))
             Mutate(() => Configuration.Systems.Remove(system));
     }
 
@@ -1699,6 +1706,30 @@ public sealed class ConfigurationStudioViewModel :
 
     private void RefreshConfigurationHierarchy(string? query = null)
     {
+        HashSet<SystemConfiguration> currentSystems = Configuration.Systems.ToHashSet();
+        HashSet<ZoneConfiguration> currentZones = Configuration.Zones.ToHashSet();
+        HashSet<ChannelConfiguration> currentChannels = Configuration.Zones
+            .SelectMany(zone => zone.Channels)
+            .ToHashSet();
+        foreach (SystemConfiguration removed in systemHierarchyNodes.Keys
+                     .Where(system => !currentSystems.Contains(system))
+                     .ToArray())
+        {
+            systemHierarchyNodes.Remove(removed);
+        }
+        foreach (ZoneConfiguration removed in zoneHierarchyNodes.Keys
+                     .Where(zone => !currentZones.Contains(zone))
+                     .ToArray())
+        {
+            zoneHierarchyNodes.Remove(removed);
+        }
+        foreach (ChannelConfiguration removed in channelHierarchyNodes.Keys
+                     .Where(channel => !currentChannels.Contains(channel))
+                     .ToArray())
+        {
+            channelHierarchyNodes.Remove(removed);
+        }
+
         string normalized = (query ?? searchText).Trim();
         bool Matches(string value) => normalized.Length == 0 ||
             value.Contains(normalized, StringComparison.OrdinalIgnoreCase);
