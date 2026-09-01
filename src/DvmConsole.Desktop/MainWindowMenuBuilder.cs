@@ -1,8 +1,10 @@
 using Avalonia.Controls;
 using Avalonia.Interactivity;
 using Avalonia.Media;
+using DvmConsole.Application;
 using DvmConsole.Audio;
 using DvmConsole.Ptt;
+using System.Globalization;
 
 namespace DvmConsole.Desktop;
 
@@ -62,9 +64,9 @@ internal static class MainWindowMenuBuilder
         menu.IsEnabled = true;
     }
 
-    public static void ReplaceRecentCodeplugItems(
+    public static void ReplaceRecentManagedConfigurationItems(
         MenuItem menu,
-        IEnumerable<string> entries,
+        IEnumerable<ConfigurationSummary> entries,
         string emptyHeader,
         EventHandler<RoutedEventArgs> clickHandler)
     {
@@ -72,7 +74,11 @@ internal static class MainWindowMenuBuilder
         ArgumentNullException.ThrowIfNull(entries);
         ArgumentNullException.ThrowIfNull(clickHandler);
 
-        string[] values = entries.ToArray();
+        ConfigurationSummary[] values = entries
+            .Where(summary => !summary.IsLegacyCandidate && summary.LastOpenedAt.HasValue)
+            .OrderByDescending(summary => summary.LastOpenedAt)
+            .Take(10)
+            .ToArray();
         menu.Items.Clear();
         if (values.Length == 0)
         {
@@ -81,9 +87,11 @@ internal static class MainWindowMenuBuilder
             return;
         }
 
-        foreach (string value in values)
+        foreach (ConfigurationSummary summary in values)
         {
-            RecentCodeplugPresentation presentation = RecentCodeplugPresentation.FromPath(value);
+            ConfigurationReference reference = new(summary.Id, summary.CurrentRevision);
+            string revision = summary.CurrentRevision.Value.ToString("N", CultureInfo.InvariantCulture)[..8];
+            string opened = summary.LastOpenedAt!.Value.LocalDateTime.ToString("g", CultureInfo.CurrentCulture);
             var header = new StackPanel
             {
                 MaxWidth = 520,
@@ -92,21 +100,21 @@ internal static class MainWindowMenuBuilder
                 {
                     new TextBlock
                     {
-                        Text = presentation.FileName,
+                        Text = summary.Name,
                         FontWeight = FontWeight.SemiBold,
                         TextTrimming = TextTrimming.CharacterEllipsis
                     },
                     new TextBlock
                     {
-                        Text = presentation.ParentPath,
+                        Text = $"Revision {revision} · opened {opened}",
                         Opacity = 0.7,
                         FontSize = 11,
                         TextTrimming = TextTrimming.CharacterEllipsis
                     }
                 }
             };
-            var item = new MenuItem { Header = header, Tag = presentation.FullPath };
-            ToolTip.SetTip(item, presentation.FullPath);
+            var item = new MenuItem { Header = header, Tag = reference };
+            ToolTip.SetTip(item, $"{summary.Name}\nManaged revision {summary.CurrentRevision.Value:N}");
             item.Click += clickHandler;
             menu.Items.Add(item);
         }

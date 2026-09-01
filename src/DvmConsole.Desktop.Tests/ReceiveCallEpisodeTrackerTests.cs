@@ -11,7 +11,7 @@ public sealed class ReceiveCallEpisodeTrackerTests
     [Fact]
     public void UsesProtocolFramingToDefineContinuationWindows()
     {
-        Assert.Equal(TimeSpan.FromMilliseconds(1_800),
+        Assert.Equal(TimeSpan.FromMilliseconds(900),
             ReceiveCallEpisodePolicy.GetContinuationWindow(FneTrafficProtocol.P25));
         Assert.Equal(TimeSpan.FromMilliseconds(600),
             ReceiveCallEpisodePolicy.GetContinuationWindow(FneTrafficProtocol.Dmr));
@@ -34,7 +34,7 @@ public sealed class ReceiveCallEpisodeTrackerTests
         ReceiveCallEpisodeObservation second = tracker.Observe(
             "SKYNET",
             P25(streamId: 11, sourceId: 3_206_223),
-            now.AddMilliseconds(1_800))!.Value;
+            now.AddMilliseconds(900))!.Value;
 
         Assert.True(first.EpisodeStarted);
         Assert.False(second.EpisodeStarted);
@@ -56,7 +56,7 @@ public sealed class ReceiveCallEpisodeTrackerTests
         ReceiveCallEpisodeObservation second = tracker.Observe(
             "SKYNET",
             P25(streamId: 11, sourceId: 3_206_223),
-            now.AddMilliseconds(1_801))!.Value;
+            now.AddMilliseconds(901))!.Value;
 
         Assert.NotEqual(first.EpisodeId, second.EpisodeId);
         Assert.True(second.EpisodeStarted);
@@ -138,10 +138,10 @@ public sealed class ReceiveCallEpisodeTrackerTests
             P25(streamId: 10, sourceId: 3_206_223, terminator: true),
             now.AddSeconds(1))!.Value;
         Assert.Equal(first.EpisodeId, terminator.EpisodeId);
-        Assert.Empty(tracker.Advance(now.AddMilliseconds(1_800)));
+        Assert.Empty(tracker.Advance(now.AddMilliseconds(900)));
 
         ReceiveCallEpisodeSnapshot completed = Assert.Single(
-            tracker.Advance(now.AddMilliseconds(1_801)));
+            tracker.Advance(now.AddMilliseconds(901)));
         Assert.Equal(first.EpisodeId, completed.EpisodeId);
         Assert.Equal(now, completed.LastActivityAt);
     }
@@ -163,7 +163,7 @@ public sealed class ReceiveCallEpisodeTrackerTests
     }
 
     [Fact]
-    public void OaklandFireFloodBecomesTwoEpisodesBecauseSourcesAreInterleaved()
+    public void OaklandFireFloodSplitsOnlyTheSourceBeyondTheShorterP25Window()
     {
         var tracker = new ReceiveCallEpisodeTracker();
         DateTimeOffset start = DateTimeOffset.UnixEpoch;
@@ -209,17 +209,15 @@ public sealed class ReceiveCallEpisodeTrackerTests
         }
 
         Assert.Equal(2, episodesBySource.Count);
-        Assert.All(episodesBySource.Values, episodeIds => Assert.Single(episodeIds));
-        Assert.NotEqual(
-            episodesBySource[3_206_223].Single(),
-            episodesBySource[3_211_515].Single());
+        Assert.Single(episodesBySource[3_206_223]);
+        Assert.Equal(2, episodesBySource[3_211_515].Count);
 
         Assert.True(tracker.TryGet(
             "SKYNET", FneTrafficProtocol.P25, 2_901_990_152, out var oaklandFirst));
         Assert.True(tracker.TryGet(
             "SKYNET", FneTrafficProtocol.P25, 3_374_572_107, out var oaklandSecond));
         Assert.Equal(11, oaklandFirst.StreamIds.Count);
-        Assert.Equal(11, oaklandSecond.StreamIds.Count);
+        Assert.Equal(10, oaklandSecond.StreamIds.Count);
     }
 
     [Fact]

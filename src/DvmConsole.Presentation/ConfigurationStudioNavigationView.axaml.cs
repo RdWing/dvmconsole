@@ -30,6 +30,10 @@ public sealed partial class ConfigurationStudioNavigationView : UserControl
 
     private void HandleOverviewClick(object? sender, RoutedEventArgs e)
         => Publish(ConfigurationStudioSection.Overview);
+    private void HandleSystemsClick(object? sender, RoutedEventArgs e)
+        => Publish(ConfigurationStudioSection.Systems);
+    private void HandleZonesClick(object? sender, RoutedEventArgs e)
+        => Publish(ConfigurationStudioSection.Zones);
     private void HandleStreamsClick(object? sender, RoutedEventArgs e)
         => Publish(ConfigurationStudioSection.Streams);
     private void HandleGroupsClick(object? sender, RoutedEventArgs e)

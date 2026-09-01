@@ -102,7 +102,8 @@ public sealed partial class MainWindow : Window
         // unresolved when the compiled XAML is loaded from a published
         // self-contained apphost. Resolve them from the window name scope
         // before the startup menu refreshes run.
-        recentCodeplugsMenu ??= this.FindControl<MenuItem>("recentCodeplugsMenu");
+        recentManagedConfigurationsMenu ??= this.FindControl<MenuItem>("recentManagedConfigurationsMenu")
+            ?? throw new InvalidOperationException("The managed recent configurations menu was not initialized.");
         namedSettingsProfileLoadMenu ??= this.FindControl<MenuItem>("namedSettingsProfileLoadMenu");
         namedSettingsProfileDeleteMenu ??= this.FindControl<MenuItem>("namedSettingsProfileDeleteMenu");
         toolbarClocks ??= this.FindControl<ItemsControl>("toolbarClocks")
@@ -151,9 +152,9 @@ public sealed partial class MainWindow : Window
         sessionHost = new MainWindowSessionHost(
             initialViewModel,
             HandleActivityHistoryCollectionChanging,
-            ApplySessionDataContext,
-            CloseModelessViewModelWindows,
-            CloseAllModelessWindows);
+            replacement => AvaloniaStorageThreading.Invoke(() => ApplySessionDataContext(replacement)),
+            () => AvaloniaStorageThreading.Invoke(CloseModelessViewModelWindows),
+            () => AvaloniaStorageThreading.Invoke(CloseAllModelessWindows));
         listRenderer = new ChannelListView();
         listRenderer.Attach(sessionHost.ApplicationSession, channelPtt, () => viewModel.TogglePttMode);
         applicationLifecycle = new DesktopApplicationLifecycle(this);
@@ -173,7 +174,11 @@ public sealed partial class MainWindow : Window
         AddHandler(InputElement.PointerPressedEvent, HandlePttPointerPressed, RoutingStrategies.Tunnel, true);
         AddHandler(InputElement.PointerReleasedEvent, HandlePttPointerReleased, RoutingStrategies.Tunnel, true);
         AddHandler(InputElement.PointerCaptureLostEvent, HandlePttPointerCaptureLost, RoutingStrategies.Bubble, true);
-        RefreshRecentCodeplugMenu();
+        MainWindowMenuBuilder.ReplaceRecentManagedConfigurationItems(
+            recentManagedConfigurationsMenu,
+            [],
+            "No recently opened configurations",
+            HandleOpenRecentManagedConfigurationClick);
         RefreshNamedSettingsProfileMenus();
         Opened += async (_, _) =>
         {
@@ -183,6 +188,19 @@ public sealed partial class MainWindow : Window
             ConfigureTransientChannelScrollBars();
             ConfigureTransientScrollBars(activityScrollViewer);
             await sessionHost.StartAsync();
+            if (activeConfiguration is not null)
+            {
+                try
+                {
+                    await configurationLibrary.ActivateAsync(activeConfiguration);
+                }
+                catch (Exception exception) when (
+                    exception is IOException or UnauthorizedAccessException or InvalidDataException)
+                {
+                    DesktopCrashLog.Write("Managed configuration recent timestamp", exception);
+                }
+            }
+            await RefreshRecentManagedConfigurationMenuAsync();
             if (pendingStartupConfigurationImportPath is { } pendingImport)
             {
                 pendingStartupConfigurationImportPath = null;
@@ -195,12 +213,19 @@ public sealed partial class MainWindow : Window
         Deactivated += async (_, _) =>
         {
             pttKeyRouter.UpdateInputFocus(null);
+            if (Volatile.Read(ref shutdownStarted) != 0)
+                return;
             try
             {
                 await sessionHost.ApplicationSession.FlushSettingsAsync(CancellationToken.None).ConfigureAwait(false);
             }
+            catch (ObjectDisposedException) when (Volatile.Read(ref shutdownStarted) != 0)
+            {
+                // Hiding the window during shutdown raises Deactivated. The
+                // session may finish disposing before an in-flight flush resumes.
+            }
             catch (Exception exception) when (
-                exception is IOException or UnauthorizedAccessException or ObjectDisposedException)
+                exception is IOException or UnauthorizedAccessException)
             {
                 DesktopCrashLog.Write("Operator settings persistence", exception);
                 await Dispatcher.UIThread.InvokeAsync(() =>
@@ -710,7 +735,7 @@ public sealed partial class MainWindow : Window
         return null;
     }
 
-    private async void HandleOpenCodeplugClick(object? sender, RoutedEventArgs e)
+    private async void HandleImportCodeplugClick(object? sender, RoutedEventArgs e)
     {
         if (!StorageProvider.CanOpen)
         {
@@ -723,7 +748,7 @@ public sealed partial class MainWindow : Window
         {
             files = await StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
             {
-                Title = "Open Codeplug",
+                Title = "Import Codeplug",
                 AllowMultiple = false,
                 FileTypeFilter =
                 [
@@ -738,21 +763,38 @@ public sealed partial class MainWindow : Window
         }
         catch (Exception exception)
         {
-            await ShowCodeplugErrorAsync($"The codeplug picker could not be opened.\n\n{exception.Message}");
+            DesktopCrashLog.Write("Import codeplug picker", exception);
+            await AvaloniaStorageThreading.InvokeAsync(() => ShowCodeplugErrorAsync(
+                $"The codeplug picker could not be opened.\n\n{exception.Message}"));
             return;
         }
 
         if (files.Count == 0)
             return;
 
-        using var source = new AvaloniaStorageConfigurationImportDocumentSet(files[0]);
-        await OpenCodeplugAsync(source, legacyPath: files[0].TryGetLocalPath());
+        try
+        {
+            IStorageFile selected = files[0];
+            string? legacyPath = await AvaloniaStorageThreading.Invoke(selected.TryGetLocalPath);
+            using AvaloniaStorageConfigurationImportDocumentSet source = await AvaloniaStorageThreading.Invoke(
+                () => new AvaloniaStorageConfigurationImportDocumentSet(selected));
+            await AvaloniaStorageThreading.InvokeAsync(() => OpenCodeplugAsync(source, legacyPath));
+        }
+        catch (Exception exception) when (
+            exception is IOException or UnauthorizedAccessException or InvalidDataException or InvalidOperationException)
+        {
+            DesktopCrashLog.Write("Import codeplug picker document", exception);
+            await AvaloniaStorageThreading.InvokeAsync(() => ShowCodeplugErrorAsync(
+                $"The selected codeplug could not be imported.\n\n{exception.Message}"));
+        }
     }
 
-    private async void HandleOpenRecentCodeplugClick(object? sender, RoutedEventArgs e)
+    private async void HandleOpenRecentManagedConfigurationClick(object? sender, RoutedEventArgs e)
     {
-        if (sender is MenuItem { Tag: string path })
-            await OpenCodeplugAsync(path);
+        if (sender is not MenuItem { Tag: ConfigurationReference configuration })
+            return;
+
+        await ActivateManagedConfigurationAsync(configuration);
     }
 
     private async Task OpenCodeplugAsync(string path)
@@ -766,7 +808,7 @@ public sealed partial class MainWindow : Window
         string? legacyPath)
     {
         if (configurationStudioWindow is { } studio &&
-            !await studio.ConfirmSessionReplacementAsync())
+            !await AvaloniaStorageThreading.InvokeAsync(studio.ConfirmSessionReplacementAsync))
             return;
         configurationStudioWindow = null;
 
@@ -785,8 +827,10 @@ public sealed partial class MainWindow : Window
         {
             return;
         }
-        catch (Exception exception) when (exception is IOException or InvalidDataException or UnauthorizedAccessException)
+        catch (Exception exception) when (
+            exception is IOException or InvalidDataException or UnauthorizedAccessException or InvalidOperationException)
         {
+            DesktopCrashLog.Write("Open codeplug import", exception);
             await ShowCodeplugErrorAsync(
                 $"The configuration could not be imported into the managed library.\n\n{exception.Message}");
             return;
@@ -806,6 +850,7 @@ public sealed partial class MainWindow : Window
         catch (Exception exception) when (
             exception is IOException or UnauthorizedAccessException or InvalidDataException or InvalidOperationException)
         {
+            DesktopCrashLog.Write("Open codeplug activation", exception);
             await ShowCodeplugErrorAsync(
                 $"The imported configuration could not be activated.\n\n{exception.Message}");
         }
@@ -880,16 +925,16 @@ public sealed partial class MainWindow : Window
         AvaloniaStorageConfigurationImportDocumentSet source,
         IReadOnlyList<string> references)
     {
-        if (!StorageProvider.CanOpen)
+        if (!await AvaloniaStorageThreading.Invoke(() => StorageProvider.CanOpen))
             return false;
         foreach (string reference in references)
         {
-            IReadOnlyList<IStorageFile> selected = await StorageProvider.OpenFilePickerAsync(
-                new FilePickerOpenOptions
+            IReadOnlyList<IStorageFile> selected = await AvaloniaStorageThreading.InvokeAsync(
+                () => StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
                 {
                     Title = $"Select companion for {reference}",
                     AllowMultiple = false
-                });
+                }));
             if (selected.Count == 0)
                 return false;
             source.AddExplicitCompanion(reference, selected[0]);
@@ -1049,7 +1094,12 @@ public sealed partial class MainWindow : Window
             await OpenCodeplugAsync(item.LegacyOriginIdentity);
             return true;
         }
-        ConfigurationReference configuration = item.Reference;
+        return await ActivateManagedConfigurationAsync(item.Reference);
+    }
+
+    private async Task<bool> ActivateManagedConfigurationAsync(ConfigurationReference configuration)
+    {
+        ArgumentNullException.ThrowIfNull(configuration);
         if (configurationStudioWindow is { } studio &&
             !await studio.ConfirmSessionReplacementAsync())
         {
@@ -1108,12 +1158,29 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private void RefreshRecentCodeplugMenu()
-        => MainWindowMenuBuilder.ReplaceRecentCodeplugItems(
-            recentCodeplugsMenu,
-            viewModel.RecentCodeplugPaths,
-            "No recent codeplugs",
-            HandleOpenRecentCodeplugClick);
+    private async Task RefreshRecentManagedConfigurationMenuAsync()
+    {
+        var configurations = new List<ConfigurationSummary>();
+        string emptyHeader = "No recently opened configurations";
+        try
+        {
+            await foreach (ConfigurationSummary summary in configurationLibrary.ListAsync())
+                configurations.Add(summary);
+        }
+        catch (Exception exception) when (
+            exception is IOException or UnauthorizedAccessException or InvalidDataException)
+        {
+            DesktopCrashLog.Write("Recent managed configurations", exception);
+            emptyHeader = "Recent configurations unavailable";
+        }
+
+        AvaloniaStorageThreading.Invoke(() =>
+            MainWindowMenuBuilder.ReplaceRecentManagedConfigurationItems(
+                recentManagedConfigurationsMenu,
+                configurations,
+                emptyHeader,
+                HandleOpenRecentManagedConfigurationClick));
+    }
 
     private void RefreshNamedSettingsProfileMenus()
     {
@@ -1340,15 +1407,18 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private async Task ReplaceViewModelAsync(MainWindowViewModel replacement)
+    internal async Task ReplaceViewModelAsync(MainWindowViewModel replacement)
     {
         await channelPtt.ReleaseAllAsync();
-        await listRenderer.DetachAsync();
+        await AvaloniaStorageThreading.InvokeAsync(() => listRenderer.DetachAsync().AsTask());
         await sessionHost.ReplaceAsync(replacement);
-        listRenderer.Attach(sessionHost.ApplicationSession, channelPtt, () => viewModel.TogglePttMode);
-        ApplyChannelRenderer(Bounds.Width, releasePtt: false);
-        RefreshRecentCodeplugMenu();
-        RefreshNamedSettingsProfileMenus();
+        AvaloniaStorageThreading.Invoke(() =>
+        {
+            listRenderer.Attach(sessionHost.ApplicationSession, channelPtt, () => viewModel.TogglePttMode);
+            ApplyChannelRenderer(Bounds.Width, releasePtt: false);
+            RefreshNamedSettingsProfileMenus();
+        });
+        await RefreshRecentManagedConfigurationMenuAsync();
     }
 
     private void CloseModelessViewModelWindows()
@@ -1384,7 +1454,11 @@ public sealed partial class MainWindow : Window
         library?.Close();
     }
 
-    private async Task<bool> ConfirmAsync(string title, string message, string confirmLabel = "Reset")
+    private Task<bool> ConfirmAsync(string title, string message, string confirmLabel = "Reset")
+        => AvaloniaStorageThreading.InvokeAsync(
+            () => ConfirmOnUiThreadAsync(title, message, confirmLabel));
+
+    private async Task<bool> ConfirmOnUiThreadAsync(string title, string message, string confirmLabel)
     {
         bool confirmed = false;
         OperatorDialogParts parts = OperatorDialogFactory.CreateConfirmation(title, message, confirmLabel);
@@ -1422,7 +1496,10 @@ public sealed partial class MainWindow : Window
         AppleUniformTypeIdentifiers = ["public.json"]
     };
 
-    private async Task ShowCodeplugErrorAsync(string message)
+    private Task ShowCodeplugErrorAsync(string message)
+        => AvaloniaStorageThreading.InvokeAsync(() => ShowCodeplugErrorOnUiThreadAsync(message));
+
+    private async Task ShowCodeplugErrorOnUiThreadAsync(string message)
     {
         OperatorDialogParts parts = OperatorDialogFactory.CreateMessage("Unable to open codeplug", message, "OK");
         AttachPttInputSafety(parts.Window);
@@ -1570,7 +1647,10 @@ public sealed partial class MainWindow : Window
         return $"{version} ({revision[..Math.Min(7, revision.Length)]})";
     }
 
-    private async Task ShowInformationAsync(string title, string message)
+    private Task ShowInformationAsync(string title, string message)
+        => AvaloniaStorageThreading.InvokeAsync(() => ShowInformationOnUiThreadAsync(title, message));
+
+    private async Task ShowInformationOnUiThreadAsync(string title, string message)
     {
         OperatorDialogParts parts = OperatorDialogFactory.CreateMessage(title, message, "OK");
         AttachPttInputSafety(parts.Window);

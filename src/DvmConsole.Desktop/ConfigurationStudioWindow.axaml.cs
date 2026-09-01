@@ -29,6 +29,7 @@ public sealed partial class ConfigurationStudioWindow : Window
     private bool ready;
     private bool allowClose;
     private int saveOperationInProgress;
+    private int deleteSystemOperationInProgress;
 
     public ConfigurationStudioWindow()
     {
@@ -107,6 +108,12 @@ public sealed partial class ConfigurationStudioWindow : Window
         => savePlanner.BuildReviewText(plan);
     internal Func<string, string, string, Task<bool>>? EditMenuConfirmationOverride { get; set; }
     internal Func<Task<ConfigurationDraftReplacementChoice>>? DraftReplacementChoiceOverride { get; set; }
+    internal Func<string, string, string, Task<bool>>? DialogConfirmationOverride { get; set; }
+    internal Func<string, string, Task>? MessageOverride { get; set; }
+    internal Task<bool> ReviewAndSaveForCaptureAsync(bool saveCopy = false, bool offerReload = true)
+        => ReviewAndSaveAsync(saveCopy, offerReload);
+    internal Task DeleteSelectedSystemForCaptureAsync()
+        => DeleteSelectedSystemAsync();
 
     private void HandleOpened(object? sender, EventArgs e)
         => ready = true;
@@ -218,9 +225,30 @@ public sealed partial class ConfigurationStudioWindow : Window
     }
     private async void HandleSharedDeleteSystemRequested(object? sender, EventArgs e)
     {
-        if (viewModel.SelectedSystem is { } system &&
-            await ConfirmAsync("Delete system", $"Delete '{system.Name}'? Channels that reference it will be reported as errors until reassigned.", "Delete"))
-            viewModel.DeleteSystem();
+        await DeleteSelectedSystemAsync();
+    }
+
+    private async Task DeleteSelectedSystemAsync()
+    {
+        if (Interlocked.Exchange(ref deleteSystemOperationInProgress, 1) != 0)
+            return;
+
+        try
+        {
+            if (viewModel.SelectedSystem is not { } system)
+                return;
+            if (await ConfirmAsync(
+                    "Delete system",
+                    $"Delete '{system.Name}'? Channels that reference it will be reported as errors until reassigned.",
+                    "Delete"))
+            {
+                viewModel.DeleteSystem(system);
+            }
+        }
+        finally
+        {
+            Volatile.Write(ref deleteSystemOperationInProgress, 0);
+        }
     }
     private IEnumerable<ChannelConfiguration> SelectedChannelRows()
         => this.FindControl<ConfigurationStudioView>("studioView")?.ZonesView.GetSelectedChannelRows() ?? [];
@@ -251,6 +279,97 @@ public sealed partial class ConfigurationStudioWindow : Window
             await ConfirmAsync("Delete RID alias", $"Delete RID {row.Alias.Rid} ({row.Alias.Alias}) from its alias file?", "Delete"))
         {
             viewModel.DeleteAlias();
+        }
+    }
+
+    private async void HandleSharedBrowseKeyFileRequested(object? sender, EventArgs e)
+    {
+        IStorageFile? file = await PickCompanionFileAsync(
+            "Choose encryption key file",
+            new FilePickerFileType("Encryption key file")
+            {
+                Patterns = ["*.clear", "*.yml", "*.yaml"],
+                MimeTypes = ["application/yaml", "text/yaml", "text/plain"]
+            });
+        if (file is null)
+            return;
+
+        await ImportSelectedCompanionAsync(
+            file,
+            (name, content) => viewModel.AttachKeyFile(name, content),
+            "The key file could not be added to managed storage.");
+    }
+
+    private async void HandleSharedBrowseAliasFileRequested(
+        object? sender,
+        ConfigurationStudioAliasFileEventArgs e)
+    {
+        IStorageFile? file = await PickCompanionFileAsync(
+            $"Choose RID alias file for {e.System.Name}",
+            new FilePickerFileType("RID alias file")
+            {
+                Patterns = ["*.yml", "*.yaml"],
+                MimeTypes = ["application/yaml", "text/yaml", "text/plain"]
+            });
+        if (file is null)
+            return;
+
+        await ImportSelectedCompanionAsync(
+            file,
+            (name, content) => viewModel.AttachAliasFile(e.System, name, content),
+            "The RID alias file could not be added to managed storage.");
+    }
+
+    private async Task<IStorageFile?> PickCompanionFileAsync(
+        string title,
+        FilePickerFileType fileType)
+    {
+        if (!StorageProvider.CanOpen)
+        {
+            await ShowMessageAsync(
+                "File picker unavailable",
+                "This platform did not provide an available file picker.");
+            return null;
+        }
+
+        IReadOnlyList<IStorageFile> files = await StorageProvider.OpenFilePickerAsync(
+            new FilePickerOpenOptions
+            {
+                Title = title,
+                AllowMultiple = false,
+                FileTypeFilter = [fileType]
+            });
+        return files.Count == 0 ? null : files[0];
+    }
+
+    private async Task ImportSelectedCompanionAsync(
+        IStorageFile file,
+        Func<string, string, string> attach,
+        string failureMessage)
+    {
+        try
+        {
+            string displayName = await AvaloniaStorageThreading.Invoke(() => file.Name);
+            await using Stream stream = await AvaloniaStorageThreading.InvokeAsync(file.OpenReadAsync);
+            using var reader = new StreamReader(stream, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
+            string content = await reader.ReadToEndAsync();
+            string managedReference = await AvaloniaStorageThreading.Invoke(() => attach(displayName, content));
+            await AvaloniaStorageThreading.InvokeAsync(() => ShowMessageAsync(
+                "Managed companion added",
+                $"{managedReference} is now staged with this configuration. The selected original was not changed."));
+        }
+        catch (Exception exception) when (
+            exception is IOException or UnauthorizedAccessException or InvalidDataException or InvalidOperationException or
+            FormatException or YamlDotNet.Core.YamlException)
+        {
+            DesktopCrashLog.Write("Configuration Studio companion import", exception);
+            await AvaloniaStorageThreading.InvokeAsync(() => ShowMessageAsync(
+                "Unable to add companion",
+                $"{failureMessage}\n\n{exception.Message}"));
+        }
+        finally
+        {
+            AvaloniaStorageThreading.Invoke(file.Dispose);
         }
     }
 
@@ -331,10 +450,34 @@ public sealed partial class ConfigurationStudioWindow : Window
     }
 
     private async void HandleReviewAndSaveClick(object? sender, RoutedEventArgs e)
-        => await ReviewAndSaveAsync(saveCopy: false);
+        => await HandleSaveCommandAsync(saveCopy: false);
 
     private async void HandleSaveAsClick(object? sender, RoutedEventArgs e)
-        => await ReviewAndSaveAsync(saveCopy: true);
+        => await HandleSaveCommandAsync(saveCopy: true);
+
+    private async Task HandleSaveCommandAsync(bool saveCopy)
+    {
+        try
+        {
+            await ReviewAndSaveAsync(saveCopy);
+        }
+        catch (Exception exception)
+        {
+            DesktopCrashLog.Write("Configuration Studio save command", exception);
+            if (!IsVisible)
+                return;
+            try
+            {
+                await ShowMessageAsync(
+                    "Configuration save failed",
+                    $"The save workflow could not finish. Any committed managed revision remains recoverable.\n\n{exception.Message}");
+            }
+            catch (Exception reportingException)
+            {
+                DesktopCrashLog.Write("Configuration Studio save error reporting", reportingException);
+            }
+        }
+    }
 
     private async Task<bool> ReviewAndSaveAsync(bool saveCopy, bool offerReload = true)
     {
@@ -492,7 +635,15 @@ public sealed partial class ConfigurationStudioWindow : Window
 
             const string normalTitle = "DVM Console Configuration Studio";
             Title = $"{normalTitle} — Disconnecting and reloading…";
-            studioView.IsEnabled = false;
+            ConfigurationStudioView? reloadingView = this.FindControl<ConfigurationStudioView>("studioView");
+            if (reloadingView is null)
+            {
+                await ShowMessageAsync(
+                    "Reload unavailable",
+                    "The managed revision was saved, but Configuration Studio is no longer attached to its editor view.");
+                return false;
+            }
+            reloadingView.IsEnabled = false;
             try
             {
                 await reload(commit.Reference);
@@ -501,7 +652,7 @@ public sealed partial class ConfigurationStudioWindow : Window
             {
                 if (IsVisible)
                 {
-                    studioView.IsEnabled = true;
+                    reloadingView.IsEnabled = true;
                     Title = normalTitle;
                 }
             }
@@ -538,7 +689,7 @@ public sealed partial class ConfigurationStudioWindow : Window
 
     private async Task WriteExportAsync(IStorageFile file, bool sanitized)
     {
-        string displayName = file.Name;
+        string displayName = await AvaloniaStorageThreading.Invoke(() => file.Name);
         try
         {
             string sourcePath = viewModel.Document.SourcePath ?? Path.Combine(
@@ -546,19 +697,29 @@ public sealed partial class ConfigurationStudioWindow : Window
                 "ConfigurationDraftPreview",
                 "codeplug.yml");
             var source = new DesktopConfigurationDocumentSet(sourcePath);
-            using var destination = new AvaloniaStorageConfigurationDocumentSet(file);
-            await ConfigurationBundleExporter.ExportAsync(
+            using AvaloniaStorageConfigurationDocumentSet destination = await AvaloniaStorageThreading.Invoke(
+                () => new AvaloniaStorageConfigurationDocumentSet(file));
+            ConfigurationBundleExportResult result = await ConfigurationBundleExporter.ExportAsync(
                 viewModel.FullExportText,
                 source,
                 destination,
                 new ConfigurationExportOptions(
                     Sanitized: sanitized,
                     IncludeCompanions: !sanitized));
-            await ShowMessageAsync("Export complete", displayName);
+            string[] omitted = result.OmittedCompanionReferences.ToArray();
+            string title = omitted.Length == 0
+                ? "Export complete"
+                : "Export complete with omitted files";
+            string message = omitted.Length == 0
+                ? displayName
+                : $"{displayName}\n\nThe YAML was exported, but these referenced companion files were not found and could not be copied:\n\n" +
+                  string.Join(Environment.NewLine, omitted.Select(reference => $"• {reference}"));
+            await AvaloniaStorageThreading.InvokeAsync(() => ShowMessageAsync(title, message));
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or InvalidDataException or InvalidOperationException)
         {
-            await ShowMessageAsync("Export failed", exception.Message);
+            DesktopCrashLog.Write("Configuration Studio export", exception);
+            await AvaloniaStorageThreading.InvokeAsync(() => ShowMessageAsync("Export failed", exception.Message));
         }
     }
 
@@ -586,6 +747,9 @@ public sealed partial class ConfigurationStudioWindow : Window
 
     private async Task<bool> ConfirmAsync(string title, string message, string confirmLabel)
     {
+        if (DialogConfirmationOverride is { } confirm)
+            return await confirm(title, message, confirmLabel);
+
         bool confirmed = false;
         OperatorDialogParts parts = OperatorDialogFactory.CreateConfirmation(title, message, confirmLabel);
         parts.CancelButton!.Click += (_, _) => parts.Window.Close();
@@ -651,6 +815,12 @@ public sealed partial class ConfigurationStudioWindow : Window
 
     private async Task ShowMessageAsync(string title, string message)
     {
+        if (MessageOverride is { } show)
+        {
+            await show(title, message);
+            return;
+        }
+
         OperatorDialogParts parts = OperatorDialogFactory.CreateMessage(title, message, "OK");
         parts.PrimaryButton.Click += (_, _) => parts.Window.Close();
         await parts.Window.ShowDialog(this);

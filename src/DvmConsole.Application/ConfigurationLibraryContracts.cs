@@ -9,7 +9,8 @@ public sealed record ConfigurationSummary(
     bool PendingReload,
     bool IsReadOnly,
     bool IsLegacyCandidate,
-    string? LegacyOriginIdentity = null);
+    string? LegacyOriginIdentity = null,
+    DateTimeOffset? LastOpenedAt = null);
 
 public sealed record LegacyConfigurationCandidate(
     string DisplayName,

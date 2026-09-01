@@ -13,6 +13,7 @@ public sealed class ConfigurationStudioViewModel :
     INotifyPropertyChanged,
     IConfigurationStudioNavigationViewModel
 {
+    private const string NewlySelectedCompanionBaseline = "\0selected-managed-companion";
     private static readonly IBrush ErrorIndicatorBrush = new SolidColorBrush(Color.Parse("#E5484D"));
     private static readonly IBrush WarningIndicatorBrush = new SolidColorBrush(Color.Parse("#F2B134"));
     private static readonly IBrush ValidIndicatorBrush = new SolidColorBrush(Color.Parse("#5AC878"));
@@ -219,6 +220,7 @@ public sealed class ConfigurationStudioViewModel :
         ? "Fix these issues before saving"
         : "Configuration warnings";
     public string SystemNavigationHeading => $"FNE Systems ({Systems.Count})";
+    public string ZoneNavigationHeading => $"Zones & Channels ({Zones.Count})";
     public string StreamNavigationHeading => $"Web Streams ({Streams.Count})";
     public string GroupNavigationHeading => $"Groups ({Groups.Count})";
     public string KeyNavigationHeading => $"Encryption Keys ({KeyEntries.Count})";
@@ -248,6 +250,9 @@ public sealed class ConfigurationStudioViewModel :
         : $"{document.UnknownFields.Count} unmatched field(s) will be preserved when their containing item is retained.";
     public string FullExportText => document.IsReadOnly ? document.SourceText : document.Serialize();
     public string KeyFileIdentifierText => keyFileIdentifier ?? "No key file is referenced.";
+    public string KeyFileReferenceText => string.IsNullOrWhiteSpace(Configuration.KeyFile)
+        ? "No managed key file selected"
+        : Configuration.KeyFile;
     public bool HasKeyFile => keyFileIdentifier is not null;
     public bool CanUseOperationalGroups =>
         runtimeContext.IsActiveConfiguration(configurationId, documentIdentity);
@@ -544,6 +549,92 @@ public sealed class ConfigurationStudioViewModel :
         RefreshCollections(preserveSelection: true);
     }
 
+    public string AttachKeyFile(string suggestedName, string content)
+    {
+        if (!CanEdit)
+            throw new InvalidOperationException("This configuration is read-only.");
+        ArgumentException.ThrowIfNullOrWhiteSpace(suggestedName);
+        ArgumentNullException.ThrowIfNull(content);
+
+        KeyContainer selectedKeys = KeyFileLoader.Parse(content);
+        ConfigurationStudioDraftSnapshot before = currentSnapshot;
+        string reference = CreateManagedCompanionReference(
+            suggestedName,
+            Configuration.Systems.Select(system => system.AliasPath));
+        Configuration.KeyFile = reference;
+        keyContainer = selectedKeys;
+        keyFileIdentifier = reference;
+        keyFileHash = null;
+        keyFileSnapshot = NewlySelectedCompanionBaseline;
+        keyFileLoadError = null;
+        keyFileLoadIsWarning = false;
+        loadedKeyReference = reference;
+        Replace(KeyEntries, keyContainer.Keys);
+        SelectedKey = KeyEntries.FirstOrDefault();
+        CompleteDraftTransition(before, markDocumentDirty: true);
+        RefreshValidation();
+        NotifyDocumentState();
+        OnPropertyChanged(nameof(Configuration));
+        OnPropertyChanged(nameof(KeyFileReferenceText));
+        OnPropertyChanged(nameof(KeyFileIdentifierText));
+        OnPropertyChanged(nameof(HasKeyFile));
+        OnPropertyChanged(nameof(IsKeyFileDirty));
+        return reference;
+    }
+
+    public string AttachAliasFile(
+        SystemConfiguration system,
+        string suggestedName,
+        string content)
+    {
+        if (!CanEdit)
+            throw new InvalidOperationException("This configuration is read-only.");
+        ArgumentNullException.ThrowIfNull(system);
+        ArgumentException.ThrowIfNullOrWhiteSpace(suggestedName);
+        ArgumentNullException.ThrowIfNull(content);
+        if (!Configuration.Systems.Contains(system))
+            throw new ArgumentException("The selected system is not part of this configuration.", nameof(system));
+
+        List<RadioAlias> selectedAliases = AliasFileLoader.Parse(content);
+        ConfigurationStudioDraftSnapshot before = currentSnapshot;
+        string previousReference = system.AliasPath;
+        string? previousIdentifier = FindAliasTableIdentifier(previousReference);
+        string reference = CreateManagedCompanionReference(
+            suggestedName,
+            Configuration.Systems
+                .Where(candidate => !ReferenceEquals(candidate, system))
+                .Select(candidate => candidate.AliasPath)
+                .Append(Configuration.KeyFile));
+        system.AliasPath = reference;
+        aliasTables[reference] = selectedAliases;
+        aliasFileHashes.Remove(reference);
+        aliasFileSnapshots[reference] = NewlySelectedCompanionBaseline;
+        if (previousIdentifier is not null &&
+            !string.Equals(previousIdentifier, reference, StringComparison.OrdinalIgnoreCase) &&
+            !Configuration.Systems.Any(candidate =>
+                !ReferenceEquals(candidate, system) &&
+                string.Equals(candidate.AliasPath, previousReference, StringComparison.OrdinalIgnoreCase)))
+        {
+            aliasTables.Remove(previousIdentifier);
+            aliasFileHashes.Remove(previousIdentifier);
+            aliasFileSnapshots.Remove(previousIdentifier);
+        }
+        aliasLoadErrors.RemoveAll(message =>
+            message.Contains($"'{system.Name}'", StringComparison.OrdinalIgnoreCase));
+        aliasLoadWarnings.RemoveAll(message =>
+            message.Contains($"'{system.Name}'", StringComparison.OrdinalIgnoreCase));
+        loadedAliasReference = CreateAliasReference();
+        RebuildAliasRows(reference);
+        CompleteDraftTransition(before, markDocumentDirty: true);
+        RefreshCollections(preserveSelection: true);
+        RefreshValidation();
+        NotifyDocumentState();
+        OnPropertyChanged(nameof(Configuration));
+        OnPropertyChanged(nameof(SelectedSystem));
+        OnPropertyChanged(nameof(AliasFilesDirty));
+        return reference;
+    }
+
     public void CommitZoneSystemEdit()
     {
         CommitFieldEdit();
@@ -697,6 +788,13 @@ public sealed class ConfigurationStudioViewModel :
     public void DeleteSystem()
     {
         if (SelectedSystem is { } system)
+            DeleteSystem(system);
+    }
+
+    public void DeleteSystem(SystemConfiguration system)
+    {
+        ArgumentNullException.ThrowIfNull(system);
+        if (Configuration.Systems.Contains(system))
             Mutate(() => Configuration.Systems.Remove(system));
     }
 
@@ -1487,6 +1585,62 @@ public sealed class ConfigurationStudioViewModel :
     private string CreateAliasReference()
         => string.Join("\u001F", Configuration.Systems.Select(system => system.AliasPath ?? string.Empty));
 
+    private static string CreateManagedCompanionReference(
+        string suggestedName,
+        IEnumerable<string?> reservedReferences)
+    {
+        string fileName = GetPortableFileName(suggestedName);
+        if (fileName.Length == 0 || fileName is "." or "..")
+            throw new InvalidDataException("The selected document does not have a usable file name.");
+
+        var reserved = reservedReferences
+            .Where(reference => !string.IsNullOrWhiteSpace(reference))
+            .Select(reference => GetPortableFileName(reference!))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        if (!reserved.Contains(fileName))
+            return fileName;
+
+        int extensionIndex = fileName.LastIndexOf('.');
+        string extension = extensionIndex > 0 ? fileName[extensionIndex..] : string.Empty;
+        string stem = extensionIndex > 0 ? fileName[..extensionIndex] : fileName;
+        for (int suffix = 2; ; suffix++)
+        {
+            string candidate = $"{stem}-{suffix}{extension}";
+            if (!reserved.Contains(candidate))
+                return candidate;
+        }
+    }
+
+    private string? FindAliasTableIdentifier(string reference)
+    {
+        if (aliasTables.ContainsKey(reference))
+            return reference;
+        string fileName = GetPortableFileName(reference);
+        string[] matches = aliasTables.Keys
+            .Where(identifier => string.Equals(
+                GetPortableFileName(identifier),
+                fileName,
+                StringComparison.OrdinalIgnoreCase))
+            .ToArray();
+        return matches.Length == 1 ? matches[0] : null;
+    }
+
+    private static string GetPortableFileName(string value)
+    {
+        string normalized = value.Trim().Replace('\\', '/');
+        return normalized[(normalized.LastIndexOf('/') + 1)..];
+    }
+
+    private void RebuildAliasRows(string selectedIdentifier)
+    {
+        Aliases.Clear();
+        foreach (KeyValuePair<string, List<RadioAlias>> table in aliasTables)
+            foreach (RadioAlias alias in table.Value)
+                Aliases.Add(new ConfigurationAliasRow(table.Key, alias));
+        SelectedAlias = Aliases.FirstOrDefault(row =>
+            string.Equals(row.Identifier, selectedIdentifier, StringComparison.OrdinalIgnoreCase));
+    }
+
     private void InitializeDraftZoneSystems(IReadOnlyDictionary<string, string> savedZoneSystemAssignments)
     {
         string fallback = Configuration.Systems.FirstOrDefault()?.Name ?? string.Empty;
@@ -1552,6 +1706,30 @@ public sealed class ConfigurationStudioViewModel :
 
     private void RefreshConfigurationHierarchy(string? query = null)
     {
+        HashSet<SystemConfiguration> currentSystems = Configuration.Systems.ToHashSet();
+        HashSet<ZoneConfiguration> currentZones = Configuration.Zones.ToHashSet();
+        HashSet<ChannelConfiguration> currentChannels = Configuration.Zones
+            .SelectMany(zone => zone.Channels)
+            .ToHashSet();
+        foreach (SystemConfiguration removed in systemHierarchyNodes.Keys
+                     .Where(system => !currentSystems.Contains(system))
+                     .ToArray())
+        {
+            systemHierarchyNodes.Remove(removed);
+        }
+        foreach (ZoneConfiguration removed in zoneHierarchyNodes.Keys
+                     .Where(zone => !currentZones.Contains(zone))
+                     .ToArray())
+        {
+            zoneHierarchyNodes.Remove(removed);
+        }
+        foreach (ChannelConfiguration removed in channelHierarchyNodes.Keys
+                     .Where(channel => !currentChannels.Contains(channel))
+                     .ToArray())
+        {
+            channelHierarchyNodes.Remove(removed);
+        }
+
         string normalized = (query ?? searchText).Trim();
         bool Matches(string value) => normalized.Length == 0 ||
             value.Contains(normalized, StringComparison.OrdinalIgnoreCase);
@@ -1916,7 +2094,7 @@ public sealed class ConfigurationStudioViewModel :
                      nameof(ConfigurationShapeText), nameof(UnknownFieldsText), nameof(LayoutChanged),
                      nameof(ValidationStatusText), nameof(ValidationDrawerHeading), nameof(ValidationIndicatorBrush),
                      nameof(HasValidationIssues), nameof(HasWarnings), nameof(SelectedZoneHeading),
-                     nameof(SystemNavigationHeading),
+                     nameof(SystemNavigationHeading), nameof(ZoneNavigationHeading),
                      nameof(StreamNavigationHeading), nameof(GroupNavigationHeading),
                      nameof(KeyNavigationHeading), nameof(FileNavigationHeading),
                      nameof(PreviewCanvasWidth), nameof(PreviewCanvasHeight)

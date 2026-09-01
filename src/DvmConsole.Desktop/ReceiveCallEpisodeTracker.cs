@@ -6,19 +6,19 @@ namespace DvmConsole.Desktop;
 
 internal static class ReceiveCallEpisodePolicy
 {
-    private static readonly TimeSpan P25PacketDuration = TimeSpan.FromMilliseconds(180);
+    private static readonly TimeSpan P25ContinuationWindow = TimeSpan.FromMilliseconds(900);
     private static readonly TimeSpan DmrPacketDuration = TimeSpan.FromMilliseconds(60);
     private static readonly TimeSpan NxdnPacketDuration = TimeSpan.FromMilliseconds(80);
 
     // A replacement stream belongs to the same logical call only while it can
-    // still plausibly be delayed media from the configured receive horizon.
-    // One additional protocol packet admits a boundary packet without turning
-    // ordinary later push-to-talk activity into the previous call.
+    // still plausibly be delayed media. P25 deliberately uses a shorter window
+    // than its maximum adaptive jitter horizon so TAR closes promptly; a P25
+    // replacement delayed by more than 900 ms starts a new logical call.
+    // DMR and NXDN retain their maximum jitter horizon plus one protocol packet.
     public static TimeSpan GetContinuationWindow(FneTrafficProtocol protocol)
         => protocol switch
         {
-            FneTrafficProtocol.P25 => TimeSpan.FromMilliseconds(
-                RxJitterBufferSetting.MaximumP25Milliseconds) + P25PacketDuration,
+            FneTrafficProtocol.P25 => P25ContinuationWindow,
             FneTrafficProtocol.Dmr => TimeSpan.FromMilliseconds(
                 RxJitterBufferSetting.MaximumDmrMilliseconds) + DmrPacketDuration,
             FneTrafficProtocol.Nxdn => TimeSpan.FromMilliseconds(

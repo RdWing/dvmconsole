@@ -5,13 +5,16 @@ using DvmConsole.Core.Configuration;
 
 namespace DvmConsole.Configuration.Yaml;
 
+public sealed record ConfigurationBundleExportResult(
+    IReadOnlyList<string> OmittedCompanionReferences);
+
 // Exports an in-memory Studio document without giving Presentation or the
 // portable configuration layer a filesystem path. This is separate from the
 // library revision exporter because exporting a dirty Studio draft must not
 // commit it or change its dirty baseline.
 public static class ConfigurationBundleExporter
 {
-    public static async ValueTask ExportAsync(
+    public static async ValueTask<ConfigurationBundleExportResult> ExportAsync(
         string yaml,
         IImportDocumentSet companionSource,
         IExportDocumentSet destination,
@@ -25,6 +28,7 @@ public static class ConfigurationBundleExporter
 
         ConfigurationDocument document = ParseAndValidate(yaml, destination.Primary.DisplayName);
         var companions = new Dictionary<string, byte[]>(StringComparer.OrdinalIgnoreCase);
+        var omittedCompanionReferences = new List<string>();
         string exportYaml;
         if (options.Sanitized)
         {
@@ -52,8 +56,20 @@ public static class ConfigurationBundleExporter
                     .ResolveCompanionAsync(reference, cancellationToken)
                     .ConfigureAwait(false);
                 if (companion is null)
-                    throw new FileNotFoundException($"Companion '{reference}' could not be included in the export bundle.");
-                byte[] content = await ReadAllBytesAsync(companion, cancellationToken).ConfigureAwait(false);
+                {
+                    omittedCompanionReferences.Add(reference);
+                    continue;
+                }
+                byte[] content;
+                try
+                {
+                    content = await ReadAllBytesAsync(companion, cancellationToken).ConfigureAwait(false);
+                }
+                catch (Exception exception) when (exception is FileNotFoundException or DirectoryNotFoundException)
+                {
+                    omittedCompanionReferences.Add(reference);
+                    continue;
+                }
                 string name = AllocateCompanionName(reference, content, companions);
                 companions[name] = content;
                 rewrites[reference] = "./" + name;
@@ -85,6 +101,9 @@ public static class ConfigurationBundleExporter
                 throw new IOException($"Exported companion '{name}' could not be read back.");
             _ = await ReadAllBytesAsync(exported, cancellationToken).ConfigureAwait(false);
         }
+
+        return new ConfigurationBundleExportResult(
+            Array.AsReadOnly(omittedCompanionReferences.ToArray()));
     }
 
     private static ConfigurationDocument ParseAndValidate(string yaml, string displayName)

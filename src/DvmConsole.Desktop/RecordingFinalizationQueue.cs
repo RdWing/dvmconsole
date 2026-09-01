@@ -5,23 +5,31 @@ namespace DvmConsole.Desktop;
 internal sealed class RecordingFinalizationQueue : IAsyncDisposable
 {
     public const int DefaultCapacity = 256;
+    internal static readonly TimeSpan DefaultShutdownDrainTimeout = TimeSpan.FromMilliseconds(750);
+    internal static readonly TimeSpan DefaultCancellationAcknowledgementTimeout = TimeSpan.FromMilliseconds(250);
     private readonly Channel<RecordingFinalizationJob> jobs;
     private readonly int capacity;
     private readonly CancellationTokenSource cancellation = new();
     private readonly Task worker;
     private readonly TimeSpan shutdownDrainTimeout;
+    private readonly TimeSpan cancellationAcknowledgementTimeout;
     private int disposeStarted;
 
     public RecordingFinalizationQueue(
         int capacity = DefaultCapacity,
-        TimeSpan? shutdownDrainTimeout = null)
+        TimeSpan? shutdownDrainTimeout = null,
+        TimeSpan? cancellationAcknowledgementTimeout = null)
     {
         if (capacity <= 0)
             throw new ArgumentOutOfRangeException(nameof(capacity));
         this.capacity = capacity;
-        this.shutdownDrainTimeout = shutdownDrainTimeout ?? TimeSpan.FromSeconds(8);
+        this.shutdownDrainTimeout = shutdownDrainTimeout ?? DefaultShutdownDrainTimeout;
         if (this.shutdownDrainTimeout <= TimeSpan.Zero)
             throw new ArgumentOutOfRangeException(nameof(shutdownDrainTimeout));
+        this.cancellationAcknowledgementTimeout = cancellationAcknowledgementTimeout
+            ?? DefaultCancellationAcknowledgementTimeout;
+        if (this.cancellationAcknowledgementTimeout <= TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(nameof(cancellationAcknowledgementTimeout));
         jobs = Channel.CreateBounded<RecordingFinalizationJob>(
             new BoundedChannelOptions(capacity)
             {
@@ -35,6 +43,7 @@ internal sealed class RecordingFinalizationQueue : IAsyncDisposable
 
     public event EventHandler<RecordingFinalizationResult>? Finalized;
     public int Capacity => capacity;
+    internal Task Completion => worker;
 
     public ValueTask EnqueueAsync(
         RecordingFinalizationJob job,
@@ -58,13 +67,20 @@ internal sealed class RecordingFinalizationQueue : IAsyncDisposable
             return;
 
         jobs.Writer.TryComplete();
+        bool disposeCancellationHere = true;
         try
         {
-            Task completed = await Task.WhenAny(
-                worker,
-                Task.Delay(shutdownDrainTimeout)).ConfigureAwait(false);
-            if (!ReferenceEquals(completed, worker))
+            if (!await WaitForWorkerAsync(shutdownDrainTimeout).ConfigureAwait(false))
+            {
                 cancellation.Cancel();
+                if (!await WaitForWorkerAsync(cancellationAcknowledgementTimeout).ConfigureAwait(false))
+                {
+                    disposeCancellationHere = false;
+                    TaskObservation.Observe(AwaitWorkerAndDisposeCancellationAsync());
+                    return;
+                }
+            }
+
             try
             {
                 await worker.ConfigureAwait(false);
@@ -76,7 +92,39 @@ internal sealed class RecordingFinalizationQueue : IAsyncDisposable
         }
         finally
         {
-            cancellation.Cancel();
+            if (disposeCancellationHere)
+            {
+                cancellation.Cancel();
+                cancellation.Dispose();
+            }
+        }
+    }
+
+    private async Task<bool> WaitForWorkerAsync(TimeSpan timeout)
+    {
+        if (worker.IsCompleted)
+            return true;
+
+        using var timeoutCancellation = new CancellationTokenSource();
+        Task timeoutTask = Task.Delay(timeout, timeoutCancellation.Token);
+        Task completed = await Task.WhenAny(worker, timeoutTask).ConfigureAwait(false);
+        if (ReferenceEquals(completed, worker))
+            timeoutCancellation.Cancel();
+        return ReferenceEquals(completed, worker);
+    }
+
+    private async Task AwaitWorkerAndDisposeCancellationAsync()
+    {
+        try
+        {
+            await worker.ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
+        {
+            // Durable descriptors remain available for the next startup.
+        }
+        finally
+        {
             cancellation.Dispose();
         }
     }
@@ -102,6 +150,9 @@ internal sealed class RecordingFinalizationQueue : IAsyncDisposable
                     {
                         result = new RecordingFinalizationResult(null, job.StreamId, exception.Message, exception);
                     }
+
+                    if (cancellation.IsCancellationRequested)
+                        return;
 
                     bool retry = result.Error is (IOException or UnauthorizedAccessException) &&
                         attempt < job.MaximumAttempts;

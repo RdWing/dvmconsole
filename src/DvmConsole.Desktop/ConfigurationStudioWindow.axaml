@@ -32,6 +32,8 @@
       ToggleMultiSelectPttRequested="HandleSharedMultiSelectPttRequested"
       DeleteKeyRequested="HandleSharedDeleteKeyRequested"
       DeleteAliasRequested="HandleSharedDeleteAliasRequested"
+      BrowseKeyFileRequested="HandleSharedBrowseKeyFileRequested"
+      BrowseAliasFileRequested="HandleSharedBrowseAliasFileRequested"
       ExportFullRequested="HandleSharedExportFullRequested"
       ExportSanitizedRequested="HandleSharedExportSanitizedRequested"
       SaveCopyRequested="HandleSharedSaveCopyRequested"

@@ -7,6 +7,16 @@ namespace DvmConsole.Desktop.Tests;
 
 public sealed class OperatorInterfaceGateTests
 {
+    [Fact]
+    public void FileMenuSeparatesExternalImportFromManagedRecentConfigurations()
+    {
+        string shell = ReadDesktopSource("MainWindow.axaml");
+
+        Assert.Contains("Header=\"Import Codeplug…\"", shell, StringComparison.Ordinal);
+        Assert.Contains("Header=\"Open Recent\" x:Name=\"recentManagedConfigurationsMenu\"", shell, StringComparison.Ordinal);
+        Assert.DoesNotContain("Header=\"Open Codeplug…\"", shell, StringComparison.Ordinal);
+    }
+
     [Theory]
     [InlineData(880, false, false, false, true)]
     [InlineData(919, false, false, false, true)]

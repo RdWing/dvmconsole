@@ -17,6 +17,7 @@ internal sealed class CatalogEntryState
     public Guid CurrentRevision { get; set; }
     public DateTimeOffset CreatedAt { get; set; }
     public DateTimeOffset ModifiedAt { get; set; }
+    public DateTimeOffset? LastOpenedAt { get; set; }
     public bool IsReadOnly { get; set; }
     public bool IsLegacyCandidate { get; set; }
     public string? OriginIdentity { get; set; }

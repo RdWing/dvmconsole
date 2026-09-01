@@ -17,7 +17,13 @@
                     VerticalScrollBarVisibility="Auto">
         <StackPanel Margin="14,3,10,16" Spacing="2">
           <Button Classes="nav-button" Content="Overview" Click="HandleOverviewClick" AutomationProperties.Name="Configuration overview" />
-          <TextBlock Margin="8,8,6,3" FontWeight="SemiBold" Text="{Binding SystemNavigationHeading}" />
+          <Button x:Name="SystemsNavigationButton"
+                  Classes="nav-button"
+                  Margin="0,8,0,0"
+                  FontWeight="SemiBold"
+                  Content="{Binding SystemNavigationHeading}"
+                  Click="HandleSystemsClick"
+                  AutomationProperties.Name="FNE systems" />
           <TreeView x:Name="ConfigurationTree"
                     Classes="configuration-tree"
                     Margin="0,0,0,6"
@@ -34,6 +40,9 @@
               </TreeDataTemplate>
             </TreeView.ItemTemplate>
           </TreeView>
+          <Button x:Name="ZonesNavigationButton" Classes="nav-button"
+                  Content="{Binding ZoneNavigationHeading}" Click="HandleZonesClick"
+                  AutomationProperties.Name="Zones and channels" />
           <Button Classes="nav-button" Content="{Binding StreamNavigationHeading}" Click="HandleStreamsClick" AutomationProperties.Name="Web stream configurations" />
           <Button x:Name="GroupsNavigationButton" Classes="nav-button" Content="{Binding GroupNavigationHeading}" Click="HandleGroupsClick" AutomationProperties.Name="Group configurations" />
           <Button x:Name="EncryptionKeysNavigationButton" Classes="nav-button" Content="{Binding KeyNavigationHeading}" Click="HandleEncryptionKeysClick" AutomationProperties.Name="Encryption keys" />

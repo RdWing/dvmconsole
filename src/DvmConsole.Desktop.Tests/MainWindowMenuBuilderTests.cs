@@ -1,4 +1,5 @@
 using Avalonia.Controls;
+using DvmConsole.Application;
 using DvmConsole.Audio;
 using DvmConsole.Ptt;
 using Xunit;
@@ -23,18 +24,58 @@ public sealed class MainWindowMenuBuilderTests
     }
 
     [Fact]
-    public void RecentCodeplugItemPreservesFullPathInTagAndTooltip()
+    public void RecentManagedConfigurationsUseReferencesAndMostRecentFirst()
     {
-        string path = "/Users/operator/a/very/long/codeplug/location/dispatch.yml";
+        DateTimeOffset now = DateTimeOffset.Now;
+        ConfigurationSummary older = Summary("Night Dispatch", now.AddHours(-2));
+        ConfigurationSummary newer = Summary("Day Dispatch", now.AddMinutes(-5));
         var menu = new MenuItem();
 
-        MainWindowMenuBuilder.ReplaceRecentCodeplugItems(menu, [path], "None", (_, _) => { });
+        MainWindowMenuBuilder.ReplaceRecentManagedConfigurationItems(
+            menu,
+            [older, Summary("Never Opened", null), Summary("Legacy Path", now, isLegacy: true), newer],
+            "None",
+            (_, _) => { });
 
-        MenuItem item = Assert.IsType<MenuItem>(Assert.Single(menu.Items));
-        Assert.Equal(path, item.Tag);
-        Assert.Equal(path, ToolTip.GetTip(item));
-        StackPanel header = Assert.IsType<StackPanel>(item.Header);
-        Assert.Equal("dispatch.yml", Assert.IsType<TextBlock>(header.Children[0]).Text);
+        MenuItem[] items = menu.Items.Cast<MenuItem>().ToArray();
+        Assert.Equal(2, items.Length);
+        Assert.Equal(
+            new ConfigurationReference(newer.Id, newer.CurrentRevision),
+            Assert.IsType<ConfigurationReference>(items[0].Tag));
+        StackPanel header = Assert.IsType<StackPanel>(items[0].Header);
+        Assert.Equal("Day Dispatch", Assert.IsType<TextBlock>(header.Children[0]).Text);
+        Assert.Contains("Revision", Assert.IsType<TextBlock>(header.Children[1]).Text, StringComparison.Ordinal);
+        Assert.DoesNotContain("/", ToolTip.GetTip(items[0])?.ToString(), StringComparison.Ordinal);
         Assert.True(header.MaxWidth <= 560);
     }
+
+    [Fact]
+    public void RecentManagedConfigurationsAreBoundedToTenItems()
+    {
+        DateTimeOffset now = DateTimeOffset.Now;
+        var menu = new MenuItem();
+
+        MainWindowMenuBuilder.ReplaceRecentManagedConfigurationItems(
+            menu,
+            Enumerable.Range(0, 12).Select(index => Summary($"Configuration {index}", now.AddMinutes(-index))),
+            "None",
+            (_, _) => { });
+
+        Assert.Equal(10, menu.Items.Count);
+    }
+
+    private static ConfigurationSummary Summary(
+        string name,
+        DateTimeOffset? lastOpenedAt,
+        bool isLegacy = false)
+        => new(
+            ConfigurationId.New(),
+            name,
+            ConfigurationRevision.New(),
+            DateTimeOffset.Now,
+            IsActive: false,
+            PendingReload: false,
+            IsReadOnly: false,
+            IsLegacyCandidate: isLegacy,
+            LastOpenedAt: lastOpenedAt);
 }

@@ -98,7 +98,13 @@
             <TextBlock Classes="caption" Text="KMF preshared key"/>
             <TextBox PasswordChar="&#x25CF;" Text="{Binding SelectedSystem.KmfPresharedKey, Mode=TwoWay}" LostFocus="HandleDraftFieldEdit" AutomationProperties.Name="KMF preshared key"/>
             <TextBlock Classes="caption" Text="RID alias reference"/>
-            <TextBox Text="{Binding SelectedSystem.AliasPath, Mode=TwoWay}" LostFocus="HandleDraftFieldEdit" AutomationProperties.Name="RID alias reference"/>
+            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+              <Border Padding="10,8" BorderBrush="{DynamicResource StudioLineBrush}" BorderThickness="1" CornerRadius="4">
+                <TextBlock x:Name="SelectedAliasFileReference" Text="{Binding SelectedSystem.AliasPath}" TextTrimming="CharacterEllipsis" VerticalAlignment="Center"/>
+              </Border>
+              <Button x:Name="SelectedAliasBrowseButton" Grid.Column="1" Content="Browse&#x2026;" Click="HandleBrowseAliasFileClick"
+                      IsEnabled="{Binding CanEdit}" AutomationProperties.Name="Choose managed RID alias file"/>
+            </Grid>
           </StackPanel>
         </Border>
       </Grid>
