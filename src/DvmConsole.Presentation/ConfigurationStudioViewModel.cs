@@ -963,8 +963,24 @@ public sealed class ConfigurationStudioViewModel :
 
     public void AddKey()
     {
-        if (!HasKeyFile)
+        if (!CanEdit)
             return;
+        ConfigurationStudioDraftSnapshot before = currentSnapshot;
+        if (!HasKeyFile)
+        {
+            string reference = CreateManagedCompanionReference(
+                "keys.clear",
+                Configuration.Systems.Select(system => system.AliasPath));
+            Configuration.KeyFile = reference;
+            keyContainer = new KeyContainer();
+            keyFileIdentifier = reference;
+            keyFileHash = null;
+            keyFileSnapshot = NewlySelectedCompanionBaseline;
+            keyFileLoadError = null;
+            keyFileLoadIsWarning = false;
+            loadedKeyReference = reference;
+            Replace(KeyEntries, keyContainer.Keys);
+        }
         EncryptionAlgorithmOption algorithm = EncryptionAlgorithmCatalog.ForKeyProtocol("p25")[0];
         var key = new KeyEntry
         {
@@ -978,7 +994,15 @@ public sealed class ConfigurationStudioViewModel :
         SelectedKey = key;
         keyFileLoadError = null;
         keyFileLoadIsWarning = false;
-        CommitKeyEdit();
+        RefreshKeyEditorState();
+        CompleteDraftTransition(before, markDocumentDirty: true);
+        RefreshValidation();
+        NotifyDocumentState();
+        OnPropertyChanged(nameof(Configuration));
+        OnPropertyChanged(nameof(KeyFileReferenceText));
+        OnPropertyChanged(nameof(KeyFileIdentifierText));
+        OnPropertyChanged(nameof(HasKeyFile));
+        OnPropertyChanged(nameof(IsKeyFileDirty));
     }
 
     public void DeleteKey()

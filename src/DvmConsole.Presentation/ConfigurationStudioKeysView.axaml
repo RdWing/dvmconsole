@@ -11,7 +11,7 @@
         <TextBlock Classes="caption" Text="{Binding KeyFileIdentifierText}"/>
       </StackPanel>
       <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="5">
-        <Button Content="Add" AutomationProperties.Name="Add encryption key" Click="HandleAddKeyClick" IsEnabled="{Binding HasKeyFile}"/>
+        <Button Content="Add" AutomationProperties.Name="Add encryption key" Click="HandleAddKeyClick" IsEnabled="{Binding CanEdit}"/>
         <Button Content="Delete" AutomationProperties.Name="Delete encryption key" Click="HandleDeleteKeyClick" IsEnabled="{Binding HasKeyFile}"/>
       </StackPanel>
     </Grid>
