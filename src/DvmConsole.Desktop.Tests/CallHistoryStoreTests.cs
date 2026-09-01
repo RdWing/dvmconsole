@@ -44,6 +44,25 @@ public sealed class CallHistoryStoreTests
     }
 
     [Fact]
+    public void SerializesCatalogRefreshWithLiveHistoryMutation()
+    {
+        var store = new CallHistoryStore(maxEntries: 2_000);
+
+        Parallel.For(0, 2_000, index =>
+        {
+            if (index % 2 == 0)
+            {
+                store.Add(CreateEntry(checked((uint)index + 1)));
+                return;
+            }
+
+            store.ReplaceRecordingCatalog([]);
+        });
+
+        Assert.Equal(1_000, store.Entries.Count(entry => !entry.IsRecordingOnly));
+    }
+
+    [Fact]
     public void AddsNewestCallsFirstAndTrimsOldEntries()
     {
         var store = new CallHistoryStore(maxEntries: 2);

@@ -262,9 +262,24 @@ public sealed class AudioMixerTests
         finally
         {
             await clientLane.DisposeAsync();
-            await clientMixer.DisposeAsync();
+            await DisposeFaultedMixerAsync(clientMixer);
             await sharedLane.DisposeAsync();
-            await sharedMixer.DisposeAsync();
+            await DisposeFaultedMixerAsync(sharedMixer);
+        }
+
+        static async Task DisposeFaultedMixerAsync(AudioMixer mixer)
+        {
+            try
+            {
+                await mixer.DisposeAsync();
+            }
+            catch (IOException exception) when (
+                exception.Message == "The shared audio mixer stopped.")
+            {
+                // The test deliberately stalls the physical callback. Disposal
+                // must still complete even though the expected mixer fault is
+                // propagated to the caller.
+            }
         }
     }
 
