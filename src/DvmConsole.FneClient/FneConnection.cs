@@ -542,7 +542,7 @@ public sealed class FneConnection : IAsyncDisposable
         string version = string.IsNullOrWhiteSpace(informationalVersion)
             ? fallbackVersion
             : informationalVersion.Trim().Split('+', 2)[0];
-        return $"DVMC_NEO_{version}";
+        return $"NEO_{version}";
     }
 
     private void HandlePeerConnected(object? sender, PeerConnectedEvent args)
