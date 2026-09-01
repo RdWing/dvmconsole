@@ -79,6 +79,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   fields instead of spinner controls for FNE Port and Peer ID in Configuration
   Studio. DMR slot selection now uses a two-choice dropdown in both editors,
   while RID aliases use a plain numeric text field.
+- Keep live call-history updates and recording-catalog refreshes from modifying
+  the same history collection at once during session teardown.
 - Fit Configuration Studio's initial size and position within the current
   display's working area, including displays that use desktop scaling.
 - Commit Studio edits against the managed identity of the document being
