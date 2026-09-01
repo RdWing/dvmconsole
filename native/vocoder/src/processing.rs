@@ -2,7 +2,7 @@ use blip25_vocoder::enhancement::{Biquad, ClassicalConfig, Compressor, Enhanceme
 
 use crate::{MODE_DMR, MODE_NXDN, MODE_P25_PHASE2};
 
-pub(crate) const RX_OUTPUT_GAIN_DB: f32 = 9.0;
+pub(crate) const RX_OUTPUT_GAIN_DB: f32 = 6.0;
 pub(crate) const RX_BOUNDARY_FADE_SAMPLES: usize = 40;
 pub(crate) const RX_COMPRESSOR_ATTACK_MS: f32 = 10.0;
 pub(crate) const RX_COMPRESSOR_RELEASE_MS: f32 = 250.0;

@@ -1,6 +1,7 @@
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Interactivity;
+using Avalonia.Threading;
 using DvmConsole.Core.Configuration;
 
 namespace DvmConsole.Presentation;
@@ -12,6 +13,7 @@ public sealed partial class ConfigurationStudioView : UserControl
     private bool responsiveLayoutInitialized;
     private bool narrowLayout;
     private bool phoneLayout;
+    private int historyRestoreSettlementVersion;
 
     public ConfigurationStudioView()
     {
@@ -62,8 +64,27 @@ public sealed partial class ConfigurationStudioView : UserControl
             ViewModel?.NavigateToIssue(issue);
     }
 
-    private void HandleUndoClick(object? sender, RoutedEventArgs e) => ViewModel?.Undo();
-    private void HandleRedoClick(object? sender, RoutedEventArgs e) => ViewModel?.Redo();
+    private void HandleUndoClick(object? sender, RoutedEventArgs e)
+        => RestoreHistory(static viewModel => viewModel.Undo());
+
+    private void HandleRedoClick(object? sender, RoutedEventArgs e)
+        => RestoreHistory(static viewModel => viewModel.Redo());
+
+    private void RestoreHistory(Action<ConfigurationStudioViewModel> restore)
+    {
+        if (ViewModel is not { } viewModel)
+            return;
+
+        int version = ++historyRestoreSettlementVersion;
+        viewModel.BeginHistoryRestoreBindingSettlement();
+        restore(viewModel);
+        Dispatcher.UIThread.Post(() =>
+        {
+            if (version == historyRestoreSettlementVersion)
+                viewModel.CompleteHistoryRestoreBindingSettlement();
+        }, DispatcherPriority.ContextIdle);
+    }
+
     private void HandleSaveAsClick(object? sender, RoutedEventArgs e)
         => SaveCopyRequested?.Invoke(this, EventArgs.Empty);
     private void HandleReviewAndSaveClick(object? sender, RoutedEventArgs e)

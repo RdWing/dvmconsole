@@ -14,6 +14,7 @@ public sealed class DocumentationCatalogTests
 
         Assert.NotEmpty(pages);
         Assert.All(pages, page => Assert.True(File.Exists(page.FilePath)));
+        Assert.Contains(pages, page => page.Title == "Configuration Troubleshooting");
         Assert.Contains("DVM Console", await catalog.ReadAsync(pages[0]));
     }
 

@@ -26,6 +26,8 @@ public sealed class ManagedConfigurationLibrary : IConfigurationLibrary, IActive
         {
             AtomicLibraryFile.Recover(catalogPath, ConfigurationLibraryJsonContext.Default.CatalogState);
             CatalogState catalog = LoadCatalog();
+            if (RecoverMissingRevisionReferences(catalog))
+                SaveCatalog(catalog);
             activeConfiguration = catalog.Active is null
                 ? null
                 : new ConfigurationReference(
@@ -695,7 +697,7 @@ public sealed class ManagedConfigurationLibrary : IConfigurationLibrary, IActive
             metadata,
             ConfigurationLibraryJsonContext.Default.RevisionMetadataState);
         AtomicLibraryFile.Write(
-            Path.Combine(EntryRoot(entry.Id), "current.json"),
+            CurrentRevisionPath(entry.Id),
             new CurrentRevisionState { Revision = revision },
             ConfigurationLibraryJsonContext.Default.CurrentRevisionState);
 
@@ -1112,6 +1114,113 @@ public sealed class ManagedConfigurationLibrary : IConfigurationLibrary, IActive
     private void SaveCatalog(CatalogState catalog)
         => AtomicLibraryFile.Write(catalogPath, catalog, ConfigurationLibraryJsonContext.Default.CatalogState);
 
+    private bool RecoverMissingRevisionReferences(CatalogState catalog)
+    {
+        bool changed = false;
+        foreach (CatalogEntryState entry in catalog.Entries)
+        {
+            if (entry.CurrentRevision == Guid.Empty || IsUsableRevision(entry.Id, entry.CurrentRevision))
+                continue;
+
+            Guid? recoveredRevision = ReadCurrentRevisionPointer(entry.Id) ??
+                                      FindNewestUsableRevision(entry.Id);
+            if (recoveredRevision is not Guid revision)
+                continue;
+
+            entry.CurrentRevision = revision;
+            AtomicLibraryFile.Write(
+                CurrentRevisionPath(entry.Id),
+                new CurrentRevisionState { Revision = revision },
+                ConfigurationLibraryJsonContext.Default.CurrentRevisionState);
+            changed = true;
+        }
+
+        if (catalog.Active is not { } active)
+            return changed;
+
+        CatalogEntryState? activeEntry = catalog.Entries.FirstOrDefault(entry => entry.Id == active.Id);
+        if (activeEntry is null)
+        {
+            catalog.Active = null;
+            return true;
+        }
+
+        if (IsUsableRevision(active.Id, active.Revision))
+            return changed;
+
+        if (activeEntry.CurrentRevision != Guid.Empty &&
+            IsUsableRevision(activeEntry.Id, activeEntry.CurrentRevision))
+        {
+            active.Revision = activeEntry.CurrentRevision;
+        }
+        else
+        {
+            catalog.Active = null;
+        }
+        return true;
+    }
+
+    private Guid? ReadCurrentRevisionPointer(Guid id)
+    {
+        string path = CurrentRevisionPath(id);
+        if (!File.Exists(path) && !File.Exists(path + ".pending") && !File.Exists(path + ".backup"))
+            return null;
+        try
+        {
+            AtomicLibraryFile.Recover(path, ConfigurationLibraryJsonContext.Default.CurrentRevisionState);
+            Guid revision = AtomicLibraryFile.Read(
+                path,
+                ConfigurationLibraryJsonContext.Default.CurrentRevisionState).Revision;
+            return IsUsableRevision(id, revision) ? revision : null;
+        }
+        catch (Exception exception) when (
+            exception is IOException or UnauthorizedAccessException or InvalidDataException)
+        {
+            return null;
+        }
+    }
+
+    private Guid? FindNewestUsableRevision(Guid id)
+    {
+        string revisionsRoot = Path.Combine(EntryRoot(id), "revisions");
+        if (!Directory.Exists(revisionsRoot))
+            return null;
+
+        var candidates = new List<(Guid Revision, DateTimeOffset CommittedAt)>();
+        foreach (string directory in Directory.EnumerateDirectories(revisionsRoot))
+        {
+            if (!Guid.TryParseExact(Path.GetFileName(directory), "N", out Guid revision) ||
+                !IsUsableRevision(id, revision))
+            {
+                continue;
+            }
+            try
+            {
+                RevisionMetadataState metadata = ReadRevisionMetadata(directory);
+                if (metadata.Id == id && metadata.Revision == revision)
+                    candidates.Add((revision, metadata.CommittedAt));
+            }
+            catch (Exception exception) when (
+                exception is IOException or UnauthorizedAccessException or InvalidDataException)
+            {
+                // A partially restored revision is not a recovery candidate.
+            }
+        }
+        return candidates
+            .OrderByDescending(candidate => candidate.CommittedAt)
+            .Select(candidate => (Guid?)candidate.Revision)
+            .FirstOrDefault();
+    }
+
+    private bool IsUsableRevision(Guid id, Guid revision)
+    {
+        if (revision == Guid.Empty)
+            return false;
+        string revisionRoot = RevisionRoot(id, revision);
+        return File.Exists(Path.Combine(revisionRoot, "codeplug.yml")) &&
+               File.Exists(Path.Combine(revisionRoot, "revision.json"));
+    }
+
     private static CatalogEntryState GetEntry(CatalogState catalog, ConfigurationId id)
         => catalog.Entries.FirstOrDefault(entry => entry.Id == id.Value)
             ?? throw new KeyNotFoundException($"Unknown configuration ID '{id}'.");
@@ -1208,6 +1317,7 @@ public sealed class ManagedConfigurationLibrary : IConfigurationLibrary, IActive
 
     private string EntryRoot(Guid id) => Path.Combine(root, "entries", id.ToString("N"));
     private string TrashRoot(Guid id) => Path.Combine(root, "trash", id.ToString("N"));
+    private string CurrentRevisionPath(Guid id) => Path.Combine(EntryRoot(id), "current.json");
     private string RevisionRoot(Guid id, Guid revision)
         => Path.Combine(EntryRoot(id), "revisions", revision.ToString("N"));
     private string DraftRoot(Guid id) => Path.Combine(DraftsRoot, id.ToString("N"));

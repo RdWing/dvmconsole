@@ -3,9 +3,11 @@ using DvmConsole.Application;
 namespace DvmConsole.Presentation;
 
 /// <summary>
-/// Converges host deactivation, suspension, and shutdown on the same
-/// renderer-neutral PTT release operation. A host may raise these events more
-/// than once; ChannelPttController makes every release idempotent.
+/// Converges host suspension and shutdown on the same renderer-neutral PTT
+/// release operation. Ordinary desktop deactivation is not a release boundary:
+/// a latched transmission must survive the operator focusing another window.
+/// A host may raise the release events more than once; ChannelPttController
+/// makes every release idempotent.
 /// </summary>
 public sealed class ChannelPttLifecycleBinding : IAsyncDisposable
 {
@@ -24,7 +26,6 @@ public sealed class ChannelPttLifecycleBinding : IAsyncDisposable
         this.lifecycle = lifecycle ?? throw new ArgumentNullException(nameof(lifecycle));
         this.releaseAll = releaseAll ?? throw new ArgumentNullException(nameof(releaseAll));
         this.faultHandler = faultHandler;
-        lifecycle.Deactivated += HandleReleaseBoundary;
         lifecycle.Suspending += HandleReleaseBoundary;
         lifecycle.Stopping += HandleReleaseBoundary;
     }
@@ -39,7 +40,6 @@ public sealed class ChannelPttLifecycleBinding : IAsyncDisposable
     {
         if (Interlocked.Exchange(ref disposed, 1) != 0)
             return;
-        lifecycle.Deactivated -= HandleReleaseBoundary;
         lifecycle.Suspending -= HandleReleaseBoundary;
         lifecycle.Stopping -= HandleReleaseBoundary;
         ScheduleRelease();

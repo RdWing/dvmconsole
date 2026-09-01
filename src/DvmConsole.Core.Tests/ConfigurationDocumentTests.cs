@@ -208,6 +208,11 @@ public sealed class ConfigurationDocumentTests
         Assert.DoesNotContain("stream.example.test", sanitized, StringComparison.Ordinal);
         Assert.DoesNotContain("tgid: '101'", sanitized, StringComparison.Ordinal);
         Assert.Contains("redacted.invalid", sanitized, StringComparison.Ordinal);
+        ConfigurationDocument reparsed = ConfigurationDocument.Parse(sanitized);
+        Assert.DoesNotContain(reparsed.Validate(), issue => issue.IsError);
+        Assert.All(
+            reparsed.Configuration.Zones.SelectMany(zone => zone.Channels),
+            channel => Assert.Equal("1", channel.Tgid));
     }
 
     [Fact]

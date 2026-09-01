@@ -11,6 +11,7 @@ public sealed record ConfigurationStudioKeyCompanion(
 
 public sealed record ConfigurationStudioAliasCompanion(
     string Identifier,
+    IReadOnlyList<string> References,
     string Content,
     string? ContentHash);
 

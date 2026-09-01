@@ -13,10 +13,13 @@ File > Configuration Studio
 ```
 
 To create a configuration from scratch, choose **File > New Configuration**.
-To import an existing YAML codeplug, choose **File > Open Codeplug**. The
+To import an existing YAML codeplug, choose **File > Import Codeplug**. The
 Studio is a separate, modeless window, so you can refer to the main console
 while editing. Opening a Studio section again brings the existing window
 forward.
+
+**File > Open Recent** lists recently opened managed revisions, not external
+YAML paths. Use it to return to a configuration that is already in the library.
 
 Use **File > Configuration Library** to activate, duplicate, remove, or restore
 managed configurations. Only committed revisions can be activated. Removing an
@@ -50,10 +53,13 @@ never guessed.
 
 ## Finding and editing configuration
 
-The left side groups configuration as FNE systems, zones, and channels. Open a
-system to see its zones, then open a zone to see its channels. The disclosure
-arrows show which branches can be opened or closed. Search checks the complete
-hierarchy as well as the other Studio sections.
+The left side groups each zone and channel directly beneath its FNE system;
+there is no duplicate top-level Zones & Channels item. Open a system to see its
+zones, then open a zone to see its channels. The disclosure arrows show which
+branches can be opened or closed, including the currently selected branch.
+The complete navigation rail scrolls when the pointer is over either the tree
+or the surrounding section links. Search checks the complete hierarchy as well
+as the other Studio sections.
 
 Most editors use the same layout:
 
@@ -73,11 +79,15 @@ it.
 ## Systems
 
 The FNE Systems page covers the connection name, identity, address, port, peer
-ID, console RID, password, transport encryption, transport mode, transport
-preshared key, KMF preshared key, and RID alias path.
+ID, console RID, call-priority policy, password, transport encryption,
+transport mode, transport preshared key, and KMF preshared key. Select **Add
+channel** to open a new channel for the selected FNE; Studio creates that
+system's first zone when needed. RID alias ownership and import are managed
+under **Files & Interoperability**.
 
 Passwords and preshared keys stay masked. Validation messages name the field but
-never include its value.
+never include its value. Port and Peer ID are plain numeric text fields without
+increment/decrement spinner buttons.
 
 ![FNE system inspector](../../Assets/configuration-studio-system.png)
 
@@ -99,6 +109,15 @@ encryption, receive-only state, resource color, and card size. DMR channels
 also include a slot. The valid card sizes are `small`, `normal`, and `large`.
 The channel list has its own scrollbar, so the layout drawer never hides rows
 that still need editing.
+
+On desktop-sized Studio windows, edit the channel name, destination ID, mode,
+DMR slot, encryption algorithm, receive-only state, and card size directly in
+the table. Selecting or focusing an inline editor also selects that channel;
+the table and right-side inspector stay synchronized and share the same
+validation and Undo/Redo history. Use the inspector for key ID, selectable
+encryption, and resource color. When the inspector would leave too little room
+for usable columns, Studio switches to a compact channel list and keeps the
+selected channel's fields in the inspector instead of clipping table values.
 
 Select several channel rows to apply the current card size or change their
 receive-only state together.
@@ -125,6 +144,28 @@ that follow it.
 
 The main operator workspace keeps its existing card layout and controls.
 Configuration Studio is the place to edit definitions and prepare a layout.
+
+## Encryption keys and RID aliases
+
+The first time you select **Add** under Encryption Keys, Studio creates a
+managed `keys.clear` companion if the configuration does not already reference
+one. Enter the key protocol, algorithm, hexadecimal key ID, and key material,
+then select the channel and use the same algorithm and key ID there.
+
+Under **Files & Interoperability**, use **Browse…** to choose an existing key
+file. For RID aliases, select the owning FNE and use **Choose file…** to open
+the operating system's file picker. Studio parses the selection, copies its
+contents into that FNE's current managed draft, and replaces only that FNE's
+portable reference. The original file and other FNE alias lists are never
+edited, and internal managed-runtime paths are not shown in the alias table.
+
+If the selected FNE has no alias file, one **Add** creates its managed
+`aliases.yml` companion and selects the first editable row. Enter the RID and
+alias in the fields below the list; the selected row updates immediately.
+
+When a new configuration has an FNE system but no zone, adding the first
+channel creates the required zone automatically. This keeps the initial setup
+path continuous from FNE system to channel and encryption.
 
 ## Web streams
 
@@ -175,7 +216,9 @@ authorization.
   URLs, identifiers, and references to local key material. Treat it as a
   secret.
 - A sanitized support copy removes those values and is suitable for attaching
-  to a troubleshooting report.
+  to a troubleshooting report. Removed required identifiers are replaced with
+  non-secret placeholders so the support copy remains valid YAML that DVM
+  Console can import for diagnosis.
 
 Exports use the platform's selected document handle. Companion files are
 written beside the YAML with safe relative references, and DVM Console reads

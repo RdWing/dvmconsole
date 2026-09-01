@@ -12,7 +12,7 @@ namespace DvmConsole.Presentation;
 
 public sealed partial class ConfigurationStudioZonesView : UserControl
 {
-    private const double NarrowWidth = 880;
+    private const double NarrowWidth = 1180;
     private const double PhoneWidth = 400;
     private ConfigurationStudioViewModel? subscribedViewModel;
     private int queuedSelectionCommitVersion;
@@ -83,9 +83,68 @@ public sealed partial class ConfigurationStudioZonesView : UserControl
             viewModel.CommitFieldEdit();
     }
 
+    private void HandleInlineChannelEditorFocus(object? sender, GotFocusEventArgs e)
+    {
+        if (sender is Control { DataContext: ConfigurationChannelRow row } && ViewModel is { } viewModel)
+            viewModel.SelectedChannelRow = row;
+    }
+
+    private void HandleInlineChannelFieldEdit(object? sender, RoutedEventArgs e)
+    {
+        if (!IsLoaded || sender is not Control { DataContext: ConfigurationChannelRow row } ||
+            ViewModel is not { } viewModel)
+        {
+            return;
+        }
+
+        if (e is SelectionChangedEventArgs && sender is ComboBox selectionEditor &&
+            !IsUserSelectionChange(selectionEditor))
+            return;
+
+        viewModel.SelectedChannelRow = row;
+        if (e is SelectionChangedEventArgs)
+            QueueSelectionCommit(viewModel.CommitFieldEdit);
+        else
+            viewModel.CommitFieldEdit();
+    }
+
+    private void HandleInlineChannelModeChanged(object? sender, SelectionChangedEventArgs e)
+    {
+        if (!IsLoaded || sender is not ComboBox { DataContext: ConfigurationChannelRow row } selectionEditor ||
+            !IsUserSelectionChange(selectionEditor) ||
+            ViewModel is not { } viewModel)
+        {
+            return;
+        }
+
+        viewModel.SelectedChannelRow = row;
+        QueueSelectionCommit(() =>
+        {
+            viewModel.CommitChannelModeEdit();
+            SynchronizeDmrSlotVisibility();
+        });
+    }
+
+    private void HandleInlineChannelAlgorithmChanged(object? sender, SelectionChangedEventArgs e)
+    {
+        if (!IsLoaded || sender is not ComboBox { DataContext: ConfigurationChannelRow row } selectionEditor ||
+            !IsUserSelectionChange(selectionEditor) ||
+            ViewModel is not { } viewModel)
+        {
+            return;
+        }
+
+        viewModel.SelectedChannelRow = row;
+        QueueSelectionCommit(viewModel.CommitChannelAlgorithmEdit);
+    }
+
+    private static bool IsUserSelectionChange(ComboBox editor)
+        => editor.IsKeyboardFocusWithin || editor.IsDropDownOpen;
+
     private void HandleChannelModeChanged(object? sender, SelectionChangedEventArgs e)
     {
-        if (IsLoaded && ViewModel is { } viewModel)
+        if (IsLoaded && sender is ComboBox selectionEditor &&
+            IsUserSelectionChange(selectionEditor) && ViewModel is { } viewModel)
         {
             QueueSelectionCommit(() =>
             {
@@ -97,13 +156,24 @@ public sealed partial class ConfigurationStudioZonesView : UserControl
 
     private void HandleChannelAlgorithmChanged(object? sender, SelectionChangedEventArgs e)
     {
-        if (IsLoaded && ViewModel is { } viewModel)
+        if (IsLoaded && sender is ComboBox selectionEditor &&
+            IsUserSelectionChange(selectionEditor) && ViewModel is { } viewModel)
             QueueSelectionCommit(viewModel.CommitChannelAlgorithmEdit);
+    }
+
+    private void HandleChannelSlotChanged(object? sender, SelectionChangedEventArgs e)
+    {
+        if (IsLoaded && sender is ComboBox selectionEditor &&
+            IsUserSelectionChange(selectionEditor) && ViewModel is { } viewModel)
+        {
+            QueueSelectionCommit(viewModel.CommitFieldEdit);
+        }
     }
 
     private void HandleZoneSystemChanged(object? sender, SelectionChangedEventArgs e)
     {
-        if (IsLoaded && sender is ComboBox { SelectedItem: SystemConfiguration } &&
+        if (IsLoaded && sender is ComboBox { SelectedItem: SystemConfiguration } selectionEditor &&
+            IsUserSelectionChange(selectionEditor) &&
             ViewModel is { } viewModel)
         {
             QueueSelectionCommit(viewModel.CommitZoneSystemEdit);

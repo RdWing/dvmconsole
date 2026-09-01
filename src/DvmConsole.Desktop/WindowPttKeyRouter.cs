@@ -53,9 +53,11 @@ internal sealed class WindowPttKeyRouter
         return key is Key.Space or (>= Key.F1 and <= Key.F19);
     }
 
-    public void UpdateInputFocus(object? focusedElement)
+    public void UpdateInputFocus(object? focusedElement, bool isWindowActive = true)
     {
-        bool suppressed = WindowPttInputGuard.ShouldSuppressSpacePtt(focusedElement);
+        bool suppressed = WindowPttInputGuard.ShouldSuppressSpacePtt(
+            focusedElement,
+            isWindowActive);
         if (spaceInputSuppressed == suppressed)
             return;
         spaceInputSuppressed = suppressed;
@@ -87,6 +89,9 @@ internal sealed class WindowPttKeyRouter
 
 internal static class WindowPttInputGuard
 {
+    public static bool ShouldSuppressSpacePtt(object? focusedElement, bool isWindowActive)
+        => isWindowActive && ShouldSuppressSpacePtt(focusedElement);
+
     public static bool ShouldSuppressSpacePtt(object? focusedElement)
     {
         if (IsInsideChannelPttSurface(focusedElement))

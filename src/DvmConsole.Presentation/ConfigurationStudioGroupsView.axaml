@@ -17,7 +17,7 @@
                  Text="YAML stores group name and type. Membership, one-way source order, and enabled state remain codeplug-scoped operator settings."
                  TextWrapping="Wrap"/>
       <Grid x:Name="GroupsBody" ColumnDefinitions="2*,3*" ColumnSpacing="10">
-        <Border x:Name="GroupDefinitionsPanel" Classes="panel">
+        <Border x:Name="GroupDefinitionsPanel" Classes="panel" IsEnabled="{Binding CanEdit}">
           <StackPanel Spacing="6">
             <WrapPanel ItemSpacing="8" LineSpacing="8">
               <TextBlock Classes="subheading" Width="180" VerticalAlignment="Center" Text="Definitions"/>

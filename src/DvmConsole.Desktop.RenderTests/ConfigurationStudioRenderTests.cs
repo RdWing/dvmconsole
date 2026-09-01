@@ -38,6 +38,181 @@ public sealed class ConfigurationStudioRenderTests
     };
 
     [AvaloniaFact]
+    public async Task NewUserConfigurationEncryptionJourneyRemainsContinuousAndValid()
+    {
+        string? captureDirectory = Environment.GetEnvironmentVariable("DVMCONSOLE_NEW_USER_AUDIT_DIR");
+        string demoCodeplug = Path.Combine(AppContext.BaseDirectory, "Demo", "codeplug.yml");
+        using DemoSessionState demoState = DemoSessionState.Create();
+        var mainWindow = new MainWindow(
+            demoCodeplug,
+            new UserSettingsStore(demoState.UserSettingsPath),
+            new OperatorViewStore(demoState.OperatorViewPath),
+            demoMode: true);
+
+        async Task CaptureAsync(ConfigurationStudioWindow studio, string fileName)
+        {
+            studio.InvalidateMeasure();
+            studio.UpdateLayout();
+            await App.WaitForRenderAsync();
+            if (!string.IsNullOrWhiteSpace(captureDirectory))
+            {
+                Directory.CreateDirectory(captureDirectory);
+                App.SaveVisual(studio, Path.Combine(captureDirectory, fileName));
+            }
+        }
+
+        try
+        {
+            mainWindow.Show();
+            await mainWindow.OpenConfigurationStudioAsync(
+                ConfigurationStudioSection.Overview,
+                createNew: true);
+            ConfigurationStudioWindow studio = Assert.IsType<ConfigurationStudioWindow>(
+                mainWindow.OpenConfigurationStudioWindow);
+            ConfigurationStudioViewModel viewModel = studio.StudioViewModel;
+            await CaptureAsync(studio, "01-new-configuration.png");
+
+            viewModel.SelectSection(ConfigurationStudioSection.Systems);
+            viewModel.AddSystem();
+            Assert.Single(viewModel.Systems);
+            Assert.Equal(string.Empty, viewModel.SelectedSystem!.AliasPath);
+            await CaptureAsync(studio, "02-fne-system-added.png");
+
+            viewModel.AddChannelToSelectedSystem();
+            Assert.True(viewModel.IsZones);
+            Assert.Single(viewModel.Zones);
+            Assert.Single(viewModel.SelectedZone!.Channels);
+            await CaptureAsync(studio, "03-channel-added.png");
+
+            viewModel.SelectSection(ConfigurationStudioSection.EncryptionKeys);
+            viewModel.AddKey();
+            viewModel.SelectedKey!.Key =
+                "000102030405060708090A0B0C0D0E0F101112131415161718191A1B1C1D1E1F";
+            viewModel.CommitKeyEdit();
+            Assert.Equal("keys.clear", viewModel.Configuration.KeyFile);
+            await CaptureAsync(studio, "04-configuration-key-added.png");
+
+            viewModel.SelectSection(ConfigurationStudioSection.Zones);
+            viewModel.SelectedChannelAlgorithm = Assert.Single(
+                viewModel.AvailableChannelAlgorithms,
+                option => option.ConfigurationValue == "aes");
+            Assert.Equal("aes", viewModel.SelectedChannel!.Algo);
+            viewModel.SelectedChannelKeyIdHexDigits = "1";
+            Assert.Equal("aes", viewModel.SelectedChannel!.Algo);
+            viewModel.CommitChannelAlgorithmEdit();
+            Assert.Equal("aes", viewModel.SelectedChannel!.Algo);
+            Assert.Equal("0x1", viewModel.SelectedChannel.KeyId);
+            Assert.DoesNotContain(viewModel.ValidationIssues, issue => issue.IsError);
+            await CaptureAsync(studio, "05-channel-encryption-configured.png");
+        }
+        finally
+        {
+            mainWindow.OpenConfigurationStudioWindow?.CloseForSessionReplacement();
+            mainWindow.Close();
+        }
+    }
+
+    [AvaloniaFact]
+    public async Task DesktopChannelTableEditsUseTheStudioDraftPipeline()
+    {
+        string demoCodeplug = Path.Combine(AppContext.BaseDirectory, "Demo", "codeplug.yml");
+        using DemoSessionState demoState = DemoSessionState.Create();
+        var mainWindow = new MainWindow(
+            demoCodeplug,
+            new UserSettingsStore(demoState.UserSettingsPath),
+            new OperatorViewStore(demoState.OperatorViewPath),
+            demoMode: true);
+
+        try
+        {
+            mainWindow.Show();
+            ConfigurationStudioWindow studio = mainWindow.CreateConfigurationStudioForCapture(
+                ConfigurationStudioSection.Zones);
+            studio.Width = 1488;
+            studio.Height = 760;
+            studio.Show(mainWindow);
+            studio.UpdateLayout();
+            await App.WaitForRenderAsync();
+
+            ConfigurationStudioViewModel viewModel = studio.StudioViewModel;
+            ConfigurationStudioZonesView zones = studio.FindControl<ConfigurationStudioView>("studioView")!.ZonesView;
+            ListBox channelList = zones.FindControl<ListBox>("channelList")!;
+            ConfigurationChannelRow row = viewModel.VisibleChannelRows[0];
+            viewModel.SelectedChannelRow = row;
+            channelList.ScrollIntoView(row);
+            studio.UpdateLayout();
+
+            ListBoxItem container = Assert.IsType<ListBoxItem>(channelList.ContainerFromItem(row));
+            TextBox nameEditor = FindEditor<TextBox>(container, "Edit channel name");
+            TextBox destinationEditor = FindEditor<TextBox>(container, "Edit channel destination ID");
+            ComboBox modeEditor = FindEditor<ComboBox>(container, "Edit channel mode");
+            ComboBox slotEditor = FindEditor<ComboBox>(container, "Edit DMR slot");
+            ComboBox algorithmEditor = FindEditor<ComboBox>(container, "Edit channel encryption algorithm");
+            CheckBox rxOnlyEditor = FindEditor<CheckBox>(container, "Edit receive only");
+            ComboBox cardSizeEditor = FindEditor<ComboBox>(container, "Edit channel card size");
+
+            Assert.All(
+                new Control[] { nameEditor, destinationEditor, modeEditor, algorithmEditor, rxOnlyEditor, cardSizeEditor },
+                editor =>
+                {
+                    Assert.True(editor.IsEnabled);
+                    Assert.True(editor.IsHitTestVisible);
+                });
+
+            nameEditor.Focus();
+            nameEditor.Text = "Inline Table Channel";
+            await FlushSelectionCommitAsync();
+            nameEditor.RaiseEvent(new RoutedEventArgs(InputElement.LostFocusEvent));
+            Assert.Equal("Inline Table Channel", row.Channel.Name);
+
+            destinationEditor.Focus();
+            destinationEditor.Text = "4095";
+            await FlushSelectionCommitAsync();
+            destinationEditor.RaiseEvent(new RoutedEventArgs(InputElement.LostFocusEvent));
+            Assert.Equal("4095", row.Channel.Tgid);
+
+            modeEditor.Focus();
+            modeEditor.SelectedValue = "dmr";
+            await FlushSelectionCommitAsync();
+            Assert.Equal("dmr", row.Channel.Mode);
+            Assert.True(slotEditor.IsEnabled);
+
+            slotEditor.Focus();
+            slotEditor.SelectedItem = 2;
+            await FlushSelectionCommitAsync();
+            Assert.Equal(2, row.Channel.Slot);
+
+            algorithmEditor.Focus();
+            algorithmEditor.SelectedItem = Assert.Single(
+                row.AvailableAlgorithms,
+                option => option.ConfigurationValue == "aes");
+            await FlushSelectionCommitAsync();
+            Assert.Equal("aes", row.Channel.Algo);
+
+            rxOnlyEditor.IsChecked = true;
+            rxOnlyEditor.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            Assert.True(row.Channel.RxOnly);
+
+            cardSizeEditor.Focus();
+            cardSizeEditor.SelectedItem = Assert.Single(
+                row.CardSizeOptions,
+                option => option.Value == "large");
+            await FlushSelectionCommitAsync();
+            Assert.Equal("large", row.Channel.CardSize);
+
+            Assert.Same(row.Channel, viewModel.SelectedChannel);
+            Assert.True(viewModel.CanUndo);
+            Assert.Equal("Inline Table Channel", FindEditor<TextBox>(zones, "Channel name").Text);
+            Assert.Equal("4095", FindEditor<TextBox>(zones, "Channel destination ID").Text);
+        }
+        finally
+        {
+            mainWindow.OpenConfigurationStudioWindow?.CloseForSessionReplacement();
+            mainWindow.Close();
+        }
+    }
+
+    [AvaloniaFact]
     public async Task PickerStorageOperationsStartedByWorkerRunOnUiThread()
     {
         (bool Metadata, bool AsyncOperation, bool Workflow, bool Disposal) result = await Task.Run(async () =>
@@ -98,7 +273,220 @@ public sealed class ConfigurationStudioRenderTests
     }
 
     [AvaloniaFact]
+    public async Task CardMouseClickUnkeysTransmissionStartedOutsideCardController()
+    {
+        string demoCodeplug = Path.Combine(AppContext.BaseDirectory, "Demo", "codeplug.yml");
+        using DemoSessionState demoState = DemoSessionState.Create();
+        var mainWindow = new MainWindow(
+            demoCodeplug,
+            new UserSettingsStore(demoState.UserSettingsPath),
+            new OperatorViewStore(demoState.OperatorViewPath),
+            demoMode: true);
+
+        try
+        {
+            mainWindow.Show();
+            mainWindow.UpdateLayout();
+            MainWindowViewModel viewModel = Assert.IsType<MainWindowViewModel>(mainWindow.DataContext);
+            viewModel.TogglePttMode = true;
+            ChannelViewModel channel = viewModel.SelectedSystem!.SelectedZone!.Channels[0];
+            if (channel.IsTransmitting)
+                await viewModel.StopChannelTransmitAsync(channel);
+            await WaitUntilAsync(() => !channel.IsTransmitting);
+            channel.SetTransmitEnabled(true, streamId: 1234);
+            Button ptt = Assert.Single(
+                mainWindow.GetVisualDescendants().OfType<Button>(),
+                button => button.Classes.Contains("ptt") && ReferenceEquals(button.DataContext, channel));
+            Point point = ptt.TranslatePoint(
+                new Point(ptt.Bounds.Width / 2, ptt.Bounds.Height / 2),
+                mainWindow)!.Value;
+
+            mainWindow.MouseDown(point, MouseButton.Left, RawInputModifiers.None);
+            mainWindow.MouseUp(point, MouseButton.Left, RawInputModifiers.None);
+
+            await WaitUntilAsync(() => !channel.IsTransmitting);
+        }
+        finally
+        {
+            mainWindow.Close();
+        }
+    }
+
+    [AvaloniaFact]
+    public async Task StudioNeverCommitsAReplacementSessionOverThePreviouslyActiveLibraryEntry()
+    {
+        string demoCodeplug = Path.Combine(AppContext.BaseDirectory, "Demo", "codeplug.yml");
+        using DemoSessionState demoState = DemoSessionState.Create();
+        var settingsStore = new UserSettingsStore(demoState.UserSettingsPath);
+        var mainWindow = new MainWindow(
+            demoCodeplug,
+            settingsStore,
+            new OperatorViewStore(demoState.OperatorViewPath),
+            demoMode: true);
+
+        try
+        {
+            mainWindow.Show();
+            MainWindowViewModel original = Assert.IsType<MainWindowViewModel>(mainWindow.DataContext);
+            ConfigurationReference originalReference = Assert.IsType<ConfigurationReference>(
+                original.ConfigurationReference);
+
+            MainWindowViewModel replacement = MainWindowViewModel.Load(
+                demoCodeplug,
+                settingsStore,
+                networkDisabledDemo: true,
+                useLegacyPathFallback: false);
+            replacement.InitializeDemoScenario();
+            Assert.Null(replacement.ConfigurationReference);
+            await mainWindow.ReplaceViewModelAsync(replacement);
+
+            await mainWindow.OpenConfigurationStudioAsync(
+                ConfigurationStudioSection.Systems,
+                createNew: false);
+            ConfigurationStudioWindow studio = Assert.IsType<ConfigurationStudioWindow>(
+                mainWindow.OpenConfigurationStudioWindow);
+            studio.StudioViewModel.AddSystem();
+            studio.StudioViewModel.SelectedSystem!.Name = "Independent Session FNE";
+            studio.StudioViewModel.CommitFieldEdit();
+            studio.DialogConfirmationOverride = (_, _, _) => Task.FromResult(true);
+            studio.MessageOverride = (_, _) => Task.CompletedTask;
+
+            bool saved = await studio.ReviewAndSaveForCaptureAsync(offerReload: false);
+
+            Assert.True(saved);
+            ConfigurationId committedId = Assert.IsType<ConfigurationId>(studio.ManagedConfigurationId);
+            Assert.NotEqual(originalReference.Id, committedId);
+            string libraryRoot = Path.Combine(
+                Path.GetDirectoryName(demoState.UserSettingsPath)!,
+                "ConfigurationLibrary");
+            var library = new ManagedConfigurationLibrary(libraryRoot);
+            ConfigurationSummary originalSummary = Assert.Single(
+                await ReadAllAsync(library.ListAsync()),
+                summary => summary.Id == originalReference.Id);
+            Assert.Equal(originalReference.Revision, originalSummary.CurrentRevision);
+            ConfigurationDraft committedDraft = await library.OpenDraftAsync(committedId);
+            Assert.Contains("Independent Session FNE", committedDraft.Yaml, StringComparison.Ordinal);
+        }
+        finally
+        {
+            mainWindow.OpenConfigurationStudioWindow?.CloseForSessionReplacement();
+            mainWindow.Close();
+        }
+    }
+
+    [AvaloniaFact]
+    public async Task NewConfigurationSaveCanLoadCommittedFneIntoRunningConsole()
+    {
+        string demoCodeplug = Path.Combine(AppContext.BaseDirectory, "Demo", "codeplug.yml");
+        using DemoSessionState demoState = DemoSessionState.Create();
+        var mainWindow = new MainWindow(
+            demoCodeplug,
+            new UserSettingsStore(demoState.UserSettingsPath),
+            new OperatorViewStore(demoState.OperatorViewPath),
+            demoMode: true);
+
+        try
+        {
+            mainWindow.Show();
+            await mainWindow.OpenConfigurationStudioAsync(
+                ConfigurationStudioSection.Systems,
+                createNew: true);
+            ConfigurationStudioWindow studio = Assert.IsType<ConfigurationStudioWindow>(
+                mainWindow.OpenConfigurationStudioWindow);
+            studio.StudioViewModel.AddSystem();
+            SystemConfiguration savedSystem = Assert.Single(studio.StudioViewModel.Systems);
+            savedSystem.Name = "Saved FNE";
+            savedSystem.PeerId = 7001;
+            savedSystem.Rid = "7001";
+            studio.StudioViewModel.CommitFieldEdit();
+            var confirmationTitles = new List<string>();
+            studio.DialogConfirmationOverride = (title, _, _) =>
+            {
+                confirmationTitles.Add(title);
+                return Task.FromResult(true);
+            };
+            studio.MessageOverride = (_, _) => Task.CompletedTask;
+
+            bool saved = await studio.ReviewAndSaveForCaptureAsync();
+
+            Assert.True(saved);
+            Assert.Contains("Review & Save", confirmationTitles);
+            Assert.Contains("Load saved configuration?", confirmationTitles);
+            Assert.False(studio.IsVisible);
+            MainWindowViewModel loaded = Assert.IsType<MainWindowViewModel>(mainWindow.DataContext);
+            Assert.Equal(studio.ManagedConfigurationId, loaded.ConfigurationReference?.Id);
+            Assert.Contains(loaded.Systems, system => system.Name == "Saved FNE");
+        }
+        finally
+        {
+            mainWindow.OpenConfigurationStudioWindow?.CloseForSessionReplacement();
+            mainWindow.Close();
+        }
+    }
+
+    [AvaloniaFact]
     public async Task SaveAndReloadCanCloseStudioWithoutResumingAgainstDetachedView()
+    {
+        string demoCodeplug = Path.Combine(AppContext.BaseDirectory, "Demo", "codeplug.yml");
+        using DemoSessionState demoState = DemoSessionState.Create();
+        var mainWindow = new MainWindow(
+            demoCodeplug,
+            new UserSettingsStore(demoState.UserSettingsPath),
+            new OperatorViewStore(demoState.OperatorViewPath),
+            demoMode: true);
+
+        try
+        {
+            mainWindow.Show();
+            await mainWindow.OpenConfigurationStudioAsync(
+                ConfigurationStudioSection.Systems,
+                createNew: false);
+            ConfigurationStudioWindow studio = Assert.IsType<ConfigurationStudioWindow>(
+                mainWindow.OpenConfigurationStudioWindow);
+            ConfigurationReference originalReference = Assert.IsType<ConfigurationReference>(
+                Assert.IsType<MainWindowViewModel>(mainWindow.DataContext).ConfigurationReference);
+            studio.StudioViewModel.AddSystem();
+            SystemConfiguration added = studio.StudioViewModel.SelectedSystem!;
+            added.Name = "Added FNE";
+            added.PeerId = 7101;
+            added.Rid = "7101";
+            studio.StudioViewModel.CommitFieldEdit();
+            studio.StudioViewModel.DuplicateSystem();
+            SystemConfiguration duplicate = studio.StudioViewModel.SelectedSystem!;
+            duplicate.Name = "Duplicated FNE";
+            duplicate.PeerId = 7102;
+            duplicate.Rid = "7102";
+            studio.StudioViewModel.CommitFieldEdit();
+            int confirmations = 0;
+            studio.DialogConfirmationOverride = (_, _, _) =>
+            {
+                confirmations++;
+                return Task.FromResult(true);
+            };
+            studio.MessageOverride = (_, _) => Task.CompletedTask;
+
+            bool saved = await studio.ReviewAndSaveForCaptureAsync();
+
+            Assert.True(saved);
+            Assert.Equal(2, confirmations);
+            Assert.False(studio.IsVisible);
+            Assert.Null(mainWindow.OpenConfigurationStudioWindow);
+            MainWindowViewModel loaded = Assert.IsType<MainWindowViewModel>(mainWindow.DataContext);
+            Assert.True(loaded.IsCodeplugLoaded);
+            Assert.Equal(originalReference.Id, loaded.ConfigurationReference?.Id);
+            Assert.NotEqual(originalReference.Revision, loaded.ConfigurationReference?.Revision);
+            Assert.Contains(loaded.Systems, system => system.Name == "Added FNE");
+            Assert.Contains(loaded.Systems, system => system.Name == "Duplicated FNE");
+        }
+        finally
+        {
+            mainWindow.OpenConfigurationStudioWindow?.CloseForSessionReplacement();
+            mainWindow.Close();
+        }
+    }
+
+    [AvaloniaFact]
+    public async Task PostCommitMaterializationFailureReportsRecoverableRevisionTruthfully()
     {
         string demoCodeplug = Path.Combine(AppContext.BaseDirectory, "Demo", "codeplug.yml");
         using DemoSessionState demoState = DemoSessionState.Create();
@@ -116,21 +504,25 @@ public sealed class ConfigurationStudioRenderTests
                 createNew: false);
             ConfigurationStudioWindow studio = Assert.IsType<ConfigurationStudioWindow>(
                 mainWindow.OpenConfigurationStudioWindow);
-            int confirmations = 0;
-            studio.DialogConfirmationOverride = (_, _, _) =>
+            var messages = new List<(string Title, string Message)>();
+            studio.DialogConfirmationOverride = (_, _, _) => Task.FromResult(true);
+            studio.MessageOverride = (title, message) =>
             {
-                confirmations++;
-                return Task.FromResult(true);
+                messages.Add((title, message));
+                return Task.CompletedTask;
             };
-            studio.MessageOverride = (_, _) => Task.CompletedTask;
+            studio.ConfigurationMaterializationOverride = _ =>
+                ValueTask.FromException<string>(new IOException("Injected materialization failure"));
 
-            bool saved = await studio.ReviewAndSaveForCaptureAsync();
+            bool saved = await studio.ReviewAndSaveForCaptureAsync(offerReload: false);
 
             Assert.True(saved);
-            Assert.Equal(2, confirmations);
-            Assert.False(studio.IsVisible);
-            Assert.Null(mainWindow.OpenConfigurationStudioWindow);
-            Assert.True(Assert.IsType<MainWindowViewModel>(mainWindow.DataContext).IsCodeplugLoaded);
+            Assert.NotNull(studio.ManagedConfigurationId);
+            (string title, string message) = Assert.Single(messages);
+            Assert.Equal("Configuration committed with a follow-up failure", title);
+            Assert.Contains("remains recoverable", message, StringComparison.Ordinal);
+            Assert.Contains("Injected materialization failure", message, StringComparison.Ordinal);
+            Assert.DoesNotContain("No partial save was kept", message, StringComparison.Ordinal);
         }
         finally
         {
@@ -170,11 +562,13 @@ public sealed class ConfigurationStudioRenderTests
                 files.FindControl<TextBlock>("KeyFileReference")!.Text,
                 StringComparison.Ordinal);
             Assert.Equal("Browse…", files.FindControl<Button>("KeyFileBrowseButton")!.Content);
-            Assert.Equal(
-                2,
-                references.GetVisualDescendants()
-                    .OfType<Button>()
-                    .Count(button => AutomationProperties.GetName(button) == "Choose managed RID alias file"));
+            Assert.DoesNotContain(
+                references.GetVisualDescendants().OfType<Button>(),
+                button => AutomationProperties.GetName(button) == "Choose managed RID alias file");
+            Button aliasPicker = Assert.Single(
+                files.GetVisualDescendants().OfType<Button>(),
+                button => AutomationProperties.GetName(button) == "Choose managed RID alias file");
+            Assert.Same(studio.StudioViewModel.SelectedAliasSystem, aliasPicker.Tag);
         }
         finally
         {
@@ -235,7 +629,7 @@ public sealed class ConfigurationStudioRenderTests
     }
 
     [AvaloniaFact]
-    public void EmptyConfigurationHierarchyStillNavigatesToSystemsAndZones()
+    public void SelectedSystemCanCreateItsFirstZoneAndChannelWithoutASeparateZonesNavigationButton()
     {
         string demoCodeplug = Path.Combine(AppContext.BaseDirectory, "Demo", "codeplug.yml");
         using DemoSessionState demoState = DemoSessionState.Create();
@@ -250,7 +644,6 @@ public sealed class ConfigurationStudioRenderTests
 
         try
         {
-            studio.StudioViewModel.ConfigurationHierarchy.Clear();
             mainWindow.Show();
             studio.Show(mainWindow);
             studio.UpdateLayout();
@@ -259,12 +652,271 @@ public sealed class ConfigurationStudioRenderTests
                 .FindControl<ConfigurationStudioView>("studioView")!
                 .FindControl<ConfigurationStudioNavigationView>("Navigation")!;
             Button systems = navigation.FindControl<Button>("SystemsNavigationButton")!;
-            Button zones = navigation.FindControl<Button>("ZonesNavigationButton")!;
+            Assert.Null(navigation.FindControl<Button>("ZonesNavigationButton"));
 
             systems.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            studio.UpdateLayout();
             Assert.True(studio.StudioViewModel.IsSystems);
-            zones.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            int originalZoneCount = studio.StudioViewModel.Zones.Count;
+            SystemConfiguration selectedSystem = Assert.IsType<SystemConfiguration>(studio.StudioViewModel.SelectedSystem);
+            Button addChannel = studio.GetVisualDescendants()
+                .OfType<Button>()
+                .Single(button => AutomationProperties.GetName(button) == "Add channel to selected FNE system");
+            addChannel.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+
             Assert.True(studio.StudioViewModel.IsZones);
+            Assert.True(studio.StudioViewModel.Zones.Count >= originalZoneCount);
+            Assert.Equal(selectedSystem.Name, studio.StudioViewModel.SelectedChannel!.System);
+            Assert.Contains(
+                studio.StudioViewModel.ConfigurationHierarchy.SelectMany(root => root.Children),
+                node => ReferenceEquals(node.Zone, studio.StudioViewModel.SelectedZone));
+        }
+        finally
+        {
+            studio.CloseForSessionReplacement();
+            mainWindow.Close();
+        }
+    }
+
+    [AvaloniaFact]
+    public async Task SelectedZoneHierarchyBranchStaysCollapsed()
+    {
+        string demoCodeplug = Path.Combine(AppContext.BaseDirectory, "Demo", "codeplug.yml");
+        using DemoSessionState demoState = DemoSessionState.Create();
+        var mainWindow = new MainWindow(
+            demoCodeplug,
+            new UserSettingsStore(demoState.UserSettingsPath),
+            new OperatorViewStore(demoState.OperatorViewPath),
+            demoMode: true);
+        ConfigurationStudioWindow studio = mainWindow.CreateConfigurationStudioForCapture(
+            ConfigurationStudioSection.Zones);
+
+        try
+        {
+            mainWindow.Show();
+            studio.Show(mainWindow);
+            studio.UpdateLayout();
+
+            ConfigurationStudioViewModel viewModel = studio.StudioViewModel;
+            ConfigurationHierarchyNode zoneNode = viewModel.ConfigurationHierarchy
+                .SelectMany(system => system.Children)
+                .First(zone => zone.Children.Count > 0);
+            ConfigurationHierarchyNode channelNode = zoneNode.Children[0];
+            viewModel.SelectedHierarchyNode = channelNode;
+            Assert.True(zoneNode.IsExpanded);
+
+            zoneNode.IsExpanded = false;
+            await FlushSelectionCommitAsync();
+            viewModel.CommitFieldEdit();
+            await FlushSelectionCommitAsync();
+
+            Assert.False(zoneNode.IsExpanded);
+        }
+        finally
+        {
+            studio.CloseForSessionReplacement();
+            mainWindow.Close();
+        }
+    }
+
+    [AvaloniaFact]
+    public async Task OneAddCreatesAnImmediatelyEditableRidAliasRow()
+    {
+        string demoCodeplug = Path.Combine(AppContext.BaseDirectory, "Demo", "codeplug.yml");
+        using DemoSessionState demoState = DemoSessionState.Create();
+        var mainWindow = new MainWindow(
+            demoCodeplug,
+            new UserSettingsStore(demoState.UserSettingsPath),
+            new OperatorViewStore(demoState.OperatorViewPath),
+            demoMode: true);
+        ConfigurationStudioWindow studio = mainWindow.CreateConfigurationStudioForCapture(
+            ConfigurationStudioSection.Files);
+
+        try
+        {
+            mainWindow.Show();
+            studio.Show(mainWindow);
+            studio.UpdateLayout();
+
+            ConfigurationStudioViewModel viewModel = studio.StudioViewModel;
+            ConfigurationStudioFilesView files = Assert.Single(
+                studio.GetVisualDescendants().OfType<ConfigurationStudioFilesView>());
+            int originalCount = viewModel.Aliases.Count;
+            Button addAlias = files.GetVisualDescendants()
+                .OfType<Button>()
+                .Single(button => AutomationProperties.GetName(button) == "Add RID alias");
+            addAlias.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            await FlushSelectionCommitAsync();
+
+            ConfigurationAliasRow row = Assert.IsType<ConfigurationAliasRow>(viewModel.SelectedAlias);
+            Assert.Equal(originalCount + 1, viewModel.Aliases.Count);
+            Assert.True(files.FindControl<Grid>("AliasFields")!.IsEnabled);
+
+            TextBox rid = files.FindControl<TextBox>("AliasRidEditor")!;
+            TextBox alias = files.FindControl<TextBox>("AliasNameEditor")!;
+            rid.Text = "4242";
+            rid.RaiseEvent(new RoutedEventArgs(InputElement.LostFocusEvent));
+            alias.Text = "Dispatch";
+            alias.RaiseEvent(new RoutedEventArgs(InputElement.LostFocusEvent));
+            await FlushSelectionCommitAsync();
+
+            Assert.Equal(4242u, row.Rid);
+            Assert.Equal("Dispatch", row.Name);
+            Assert.Equal(originalCount + 1, viewModel.Aliases.Count);
+            Assert.True(viewModel.IsDirty);
+        }
+        finally
+        {
+            studio.CloseForSessionReplacement();
+            mainWindow.Close();
+        }
+    }
+
+    [AvaloniaFact]
+    public void SystemsAddAndDuplicateButtonsDoNotReenterCollectionRefresh()
+    {
+        string demoCodeplug = Path.Combine(AppContext.BaseDirectory, "Demo", "codeplug.yml");
+        using DemoSessionState demoState = DemoSessionState.Create();
+        var mainWindow = new MainWindow(
+            demoCodeplug,
+            new UserSettingsStore(demoState.UserSettingsPath),
+            new OperatorViewStore(demoState.OperatorViewPath),
+            demoMode: true);
+        ConfigurationStudioWindow studio = mainWindow.CreateConfigurationStudioForCapture(
+            ConfigurationStudioSection.Systems);
+        studio.StudioViewModel.SelectedSystem!.TransportEncryptionMode = "cbc";
+
+        try
+        {
+            mainWindow.Show();
+            studio.Show(mainWindow);
+            studio.UpdateLayout();
+            ConfigurationStudioViewModel viewModel = studio.StudioViewModel;
+            int initialCount = viewModel.Systems.Count;
+            ConfigurationStudioSystemsView systemsView = Assert.Single(
+                studio.GetVisualDescendants().OfType<ConfigurationStudioSystemsView>());
+            Button add = Assert.Single(
+                systemsView.GetVisualDescendants().OfType<Button>(),
+                button => Equals(button.Content, "Add"));
+            Button duplicate = Assert.Single(
+                systemsView.GetVisualDescendants().OfType<Button>(),
+                button => Equals(button.Content, "Duplicate"));
+
+            add.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            studio.UpdateLayout();
+
+            Assert.Equal(initialCount + 1, viewModel.Systems.Count);
+            Assert.Same(viewModel.Systems[^1], viewModel.SelectedSystem);
+            Assert.StartsWith("New System", viewModel.SelectedSystem!.Name, StringComparison.Ordinal);
+
+            SystemConfiguration original = viewModel.Systems[0];
+            viewModel.SelectedSystem = original;
+            duplicate.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            studio.UpdateLayout();
+
+            Assert.Equal(initialCount + 2, viewModel.Systems.Count);
+            Assert.Same(viewModel.Systems[^1], viewModel.SelectedSystem);
+            Assert.Equal($"{original.Name} Copy", viewModel.SelectedSystem!.Name);
+            Assert.Equal(viewModel.Systems.Count, viewModel.Systems.Distinct().Count());
+            Assert.Equal(viewModel.Systems.Count, viewModel.Configuration.Systems.Count);
+        }
+        finally
+        {
+            studio.CloseForSessionReplacement();
+            mainWindow.Close();
+        }
+    }
+
+    [AvaloniaFact]
+    public async Task FnePortAndPeerIdPlainTextFieldsCommitNumericValues()
+    {
+        string demoCodeplug = Path.Combine(AppContext.BaseDirectory, "Demo", "codeplug.yml");
+        using DemoSessionState demoState = DemoSessionState.Create();
+        var mainWindow = new MainWindow(
+            demoCodeplug,
+            new UserSettingsStore(demoState.UserSettingsPath),
+            new OperatorViewStore(demoState.OperatorViewPath),
+            demoMode: true);
+        ConfigurationStudioWindow studio = mainWindow.CreateConfigurationStudioForCapture(
+            ConfigurationStudioSection.Systems);
+
+        try
+        {
+            mainWindow.Show();
+            studio.Show(mainWindow);
+            studio.UpdateLayout();
+
+            ConfigurationStudioSystemsView systems = Assert.Single(
+                studio.GetVisualDescendants().OfType<ConfigurationStudioSystemsView>());
+            TextBox port = Assert.Single(
+                systems.GetVisualDescendants().OfType<TextBox>(),
+                editor => AutomationProperties.GetName(editor) == "System port");
+            TextBox peerId = Assert.Single(
+                systems.GetVisualDescendants().OfType<TextBox>(),
+                editor => AutomationProperties.GetName(editor) == "System peer ID");
+
+            port.Focus();
+            port.Text = "62032";
+            port.RaiseEvent(new RoutedEventArgs(InputElement.LostFocusEvent));
+            peerId.Focus();
+            peerId.Text = "1234567";
+            peerId.RaiseEvent(new RoutedEventArgs(InputElement.LostFocusEvent));
+            await FlushSelectionCommitAsync();
+            studio.StudioViewModel.CommitFieldEdit();
+
+            Assert.Equal(62032, studio.StudioViewModel.SelectedSystem!.Port);
+            Assert.Equal(1234567u, studio.StudioViewModel.SelectedSystem.PeerId);
+            Assert.True(studio.StudioViewModel.IsDirty);
+        }
+        finally
+        {
+            studio.CloseForSessionReplacement();
+            mainWindow.Close();
+        }
+    }
+
+    [AvaloniaFact]
+    public async Task UndoKeepsRedoAvailableWhileRestoredBindingsSettle()
+    {
+        string demoCodeplug = Path.Combine(AppContext.BaseDirectory, "Demo", "codeplug.yml");
+        using DemoSessionState demoState = DemoSessionState.Create();
+        var mainWindow = new MainWindow(
+            demoCodeplug,
+            new UserSettingsStore(demoState.UserSettingsPath),
+            new OperatorViewStore(demoState.OperatorViewPath),
+            demoMode: true);
+        ConfigurationStudioWindow studio = mainWindow.CreateConfigurationStudioForCapture(
+            ConfigurationStudioSection.Groups);
+
+        try
+        {
+            mainWindow.Show();
+            studio.Show(mainWindow);
+            studio.UpdateLayout();
+            ConfigurationStudioViewModel viewModel = studio.StudioViewModel;
+            int initialCount = viewModel.Groups.Count;
+            Button[] buttons = studio.GetVisualDescendants().OfType<Button>().ToArray();
+            Button add = Assert.Single(buttons, button => AutomationProperties.GetName(button) == "Add group");
+            Button undo = Assert.Single(buttons, button => AutomationProperties.GetName(button) == "Undo configuration edit");
+            Button redo = Assert.Single(buttons, button => AutomationProperties.GetName(button) == "Redo configuration edit");
+
+            add.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            Assert.Equal(initialCount + 1, viewModel.Groups.Count);
+            undo.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            Assert.Equal(initialCount, viewModel.Groups.Count);
+            Assert.True(viewModel.CanRedo);
+
+            // A restored ComboBox/TextBox can emit a generated edit event as
+            // its new item and selection bindings settle. That must not turn
+            // into a new edit which erases the redo branch.
+            viewModel.CommitFieldEdit();
+            Assert.True(viewModel.CanRedo);
+
+            await Dispatcher.UIThread.InvokeAsync(static () => { }, DispatcherPriority.ContextIdle);
+            studio.UpdateLayout();
+            Assert.True(redo.IsEnabled);
+            redo.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            Assert.Equal(initialCount + 1, viewModel.Groups.Count);
         }
         finally
         {
@@ -519,6 +1171,7 @@ public sealed class ConfigurationStudioRenderTests
     }
 
     [AvaloniaTheory]
+    [InlineData(1200, false)]
     [InlineData(880, false)]
     [InlineData(599, true)]
     [InlineData(390, false)]
@@ -579,6 +1232,12 @@ public sealed class ConfigurationStudioRenderTests
             host.Content = zones;
             host.UpdateLayout();
             AssertPortableZonesPage(zones, width);
+            string? widthAuditDirectory = Environment.GetEnvironmentVariable("DVMCONSOLE_STUDIO_WIDTH_AUDIT_DIR");
+            if (!string.IsNullOrWhiteSpace(widthAuditDirectory))
+            {
+                Directory.CreateDirectory(widthAuditDirectory);
+                App.SaveVisual(zones, Path.Combine(widthAuditDirectory, $"zones-{width:0}.png"));
+            }
 
             var shell = new ConfigurationStudioView { DataContext = viewModel };
             host.Content = shell;
@@ -653,8 +1312,19 @@ public sealed class ConfigurationStudioRenderTests
         Assert.True(
             layout.DesiredSize.Width <= page.Bounds.Width + 1,
             $"Studio zones desired width {layout.DesiredSize.Width} exceeded {page.Bounds.Width} at {width} logical pixels.");
-        Assert.Equal(width < 880, narrowList.IsVisible);
-        Assert.Equal(width >= 880, desktopTable.IsVisible);
+        Assert.Equal(width < 1180, narrowList.IsVisible);
+        Assert.Equal(width >= 1180, desktopTable.IsVisible);
+        if (desktopTable.IsVisible)
+        {
+            Grid columns = desktopTable.GetVisualDescendants()
+                .OfType<Grid>()
+                .First(grid => grid.ColumnDefinitions.Count == 8);
+            Assert.True(columns.ColumnDefinitions[1].ActualWidth >= 230, "The channel Name column is too narrow.");
+            Assert.True(columns.ColumnDefinitions[2].ActualWidth >= 90, "The Destination ID column is too narrow.");
+            Assert.True(columns.ColumnDefinitions[3].ActualWidth >= 130, "The Mode column is too narrow.");
+            Assert.True(columns.ColumnDefinitions[4].ActualWidth >= 60, "The DMR Slot column is too narrow.");
+            Assert.True(columns.ColumnDefinitions[5].ActualWidth >= 120, "The Encryption column is too narrow.");
+        }
 
         Control[] interactive = page.GetVisualDescendants().OfType<Control>()
             .Where(control => control.IsEffectivelyVisible)
@@ -715,7 +1385,8 @@ public sealed class ConfigurationStudioRenderTests
             studio.UpdateLayout();
 
             ScrollViewer channelScrollViewer = Assert.Single(
-                channelList.GetVisualDescendants().OfType<ScrollViewer>());
+                channelList.GetVisualDescendants().OfType<ScrollViewer>(),
+                scroller => ReferenceEquals(scroller.TemplatedParent, channelList));
             double selectedOffset = channelScrollViewer.Offset.Y;
             Assert.True(selectedOffset > 0);
 
@@ -931,14 +1602,13 @@ public sealed class ConfigurationStudioRenderTests
         Assert.Contains(viewModel.ProtocolOptions, option => option.Value == "p25" && option.DisplayName == "P25 Phase 1");
         Assert.Contains("mode: p25", viewModel.Document.Serialize(), StringComparison.Ordinal);
 
-        NumericUpDown slotEditor = zones.FindControl<NumericUpDown>("dmrSlotEditor")!;
+        ComboBox slotEditor = zones.FindControl<ComboBox>("dmrSlotEditor")!;
         StackPanel slotSettings = zones.FindControl<StackPanel>("dmrSlotSettings")!;
         ListBox channelList = zones.FindControl<ListBox>("channelList")!;
         Border layoutDrawer = zones.FindControl<Border>("liveZoneLayoutDrawer")!;
         Assert.False(viewModel.IsSelectedChannelDmr);
         Assert.False(slotSettings.IsVisible);
-        Assert.Equal("0", slotEditor.FormatString);
-        Assert.Equal(1m, slotEditor.Increment);
+        Assert.Equal(new object[] { 1, 2 }, slotEditor.Items.Cast<object>().ToArray());
         Assert.Equal(ScrollBarVisibility.Auto, ScrollViewer.GetVerticalScrollBarVisibility(channelList));
         studio.UpdateLayout();
         Assert.True(channelList.Bounds.Height > 0);
@@ -966,6 +1636,7 @@ public sealed class ConfigurationStudioRenderTests
         Assert.Equal("0x50", viewModel.SelectedChannel.KeyId);
 
         ComboBox modeEditor = zones.FindControl<ComboBox>("channelModeEditor")!;
+        modeEditor.Focus();
         modeEditor.SelectedValue = "dmr";
         await FlushSelectionCommitAsync();
         studio.UpdateLayout();
@@ -973,6 +1644,8 @@ public sealed class ConfigurationStudioRenderTests
         Assert.True(slotSettings.IsVisible);
         Assert.Equal("dmr", viewModel.SelectedChannel.Mode);
 
+        modeEditor = zones.FindControl<ComboBox>("channelModeEditor")!;
+        modeEditor.Focus();
         modeEditor.SelectedValue = "p25";
         await FlushSelectionCommitAsync();
         studio.UpdateLayout();
@@ -984,6 +1657,7 @@ public sealed class ConfigurationStudioRenderTests
         SystemConfiguration alternateSystem = Assert.Single(viewModel.Systems, system =>
             !string.Equals(system.Name, originalSystem, StringComparison.OrdinalIgnoreCase));
         ComboBox zoneSystemEditor = zones.FindControl<ComboBox>("zoneSystemEditor")!;
+        zoneSystemEditor.Focus();
         zoneSystemEditor.SelectedValue = alternateSystem.Name;
         await FlushSelectionCommitAsync();
         Assert.Equal(alternateSystem.Name, viewModel.SelectedZoneSystemName);
@@ -991,6 +1665,8 @@ public sealed class ConfigurationStudioRenderTests
         Assert.Contains(
             viewModel.ConfigurationHierarchy.Single(node => ReferenceEquals(node.System, alternateSystem)).Children,
             node => ReferenceEquals(node.Zone, assignedZone));
+        zoneSystemEditor = zones.FindControl<ComboBox>("zoneSystemEditor")!;
+        zoneSystemEditor.Focus();
         zoneSystemEditor.SelectedValue = originalSystem;
         await FlushSelectionCommitAsync();
 
@@ -1034,6 +1710,20 @@ public sealed class ConfigurationStudioRenderTests
         await Dispatcher.UIThread.InvokeAsync(static () => { }, DispatcherPriority.Background);
         await Dispatcher.UIThread.InvokeAsync(static () => { }, DispatcherPriority.Background);
     }
+
+    private static async Task WaitUntilAsync(Func<bool> predicate)
+    {
+        for (int attempt = 0; attempt < 100 && !predicate(); attempt++)
+        {
+            await Dispatcher.UIThread.InvokeAsync(static () => { }, DispatcherPriority.Background);
+            await Task.Delay(10);
+        }
+        Assert.True(predicate());
+    }
+
+    private static T FindEditor<T>(Control root, string automationName) where T : Control
+        => Assert.Single(root.GetVisualDescendants().OfType<T>(), control =>
+            string.Equals(AutomationProperties.GetName(control), automationName, StringComparison.Ordinal));
 
     private static bool IsWithinViewport(Control control, ScrollViewer scroller)
     {

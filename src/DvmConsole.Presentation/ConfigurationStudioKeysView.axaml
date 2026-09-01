@@ -12,7 +12,7 @@
       </StackPanel>
       <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="5">
         <Button Content="Add" AutomationProperties.Name="Add encryption key" Click="HandleAddKeyClick" IsEnabled="{Binding CanEdit}"/>
-        <Button Content="Delete" AutomationProperties.Name="Delete encryption key" Click="HandleDeleteKeyClick" IsEnabled="{Binding HasKeyFile}"/>
+        <Button Content="Delete" AutomationProperties.Name="Delete encryption key" Click="HandleDeleteKeyClick" IsEnabled="{Binding CanEditKeyFile}"/>
       </StackPanel>
     </Grid>
     <Grid Grid.Row="1" ColumnDefinitions="3*,2*" ColumnSpacing="10" MinHeight="0">
@@ -47,17 +47,17 @@
           </ListBox>
         </Grid>
       </Border>
-      <Border Grid.Column="1" Classes="panel">
-        <StackPanel Spacing="6" IsEnabled="{Binding HasKeyFile}">
+      <Border x:Name="KeyInspector" Grid.Column="1" Classes="panel">
+        <StackPanel Spacing="6" IsEnabled="{Binding CanEditKeyFile}">
           <TextBlock Classes="subheading" Text="Key Inspector"/>
           <TextBlock Classes="caption" Text="Protocol"/>
-          <ComboBox ItemsSource="{Binding ProtocolOptions}" SelectedValueBinding="{Binding Value}" SelectedValue="{Binding SelectedKeyProtocol, Mode=TwoWay}" SelectionChanged="HandleKeyProtocolChanged">
+          <ComboBox ItemsSource="{Binding ProtocolOptions}" SelectedValueBinding="{Binding Value}" SelectedValue="{Binding SelectedKeyProtocol, Mode=TwoWay}" SelectionChanged="HandleKeyProtocolChanged" AutomationProperties.Name="Encryption key protocol">
             <ComboBox.ItemTemplate>
               <DataTemplate x:DataType="config:ConfigurationProtocolOption"><TextBlock Text="{Binding DisplayName}"/></DataTemplate>
             </ComboBox.ItemTemplate>
           </ComboBox>
           <TextBlock Classes="caption" Text="Encryption algorithm"/>
-          <ComboBox ItemsSource="{Binding AvailableKeyAlgorithms}" SelectedItem="{Binding SelectedKeyAlgorithm, Mode=TwoWay}" SelectionChanged="HandleKeyAlgorithmChanged">
+          <ComboBox ItemsSource="{Binding AvailableKeyAlgorithms}" SelectedItem="{Binding SelectedKeyAlgorithm, Mode=TwoWay}" SelectionChanged="HandleKeyAlgorithmChanged" AutomationProperties.Name="Encryption key algorithm">
             <ComboBox.ItemTemplate>
               <DataTemplate x:DataType="config:EncryptionAlgorithmOption">
                 <Grid ColumnDefinitions="*,Auto" ColumnSpacing="10">
@@ -73,11 +73,11 @@
           <Border Background="{DynamicResource StudioFieldBrush}" BorderBrush="{DynamicResource StudioLineBrush}" BorderThickness="1" CornerRadius="3">
             <Grid ColumnDefinitions="Auto,*">
               <TextBlock Margin="10,0,2,0" VerticalAlignment="Center" Foreground="{DynamicResource StudioMutedBrush}" Text="0x"/>
-              <TextBox Grid.Column="1" MinHeight="32" BorderThickness="0" Text="{Binding SelectedKeyIdHexDigits, Mode=TwoWay}" LostFocus="HandleKeyFieldEdit"/>
+              <TextBox Grid.Column="1" MinHeight="32" BorderThickness="0" Text="{Binding SelectedKeyIdHexDigits, Mode=TwoWay}" LostFocus="HandleKeyFieldEdit" AutomationProperties.Name="Encryption key ID"/>
             </Grid>
           </Border>
           <TextBlock Classes="caption" Text="Key material (hex)"/>
-          <TextBox PasswordChar="&#x25CF;" Text="{Binding SelectedKey.Key, Mode=TwoWay}" LostFocus="HandleKeyFieldEdit"/>
+          <TextBox PasswordChar="&#x25CF;" Text="{Binding SelectedKey.Key, Mode=TwoWay}" LostFocus="HandleKeyFieldEdit" AutomationProperties.Name="Encryption key material"/>
           <TextBlock Classes="caption" Text="Required length"/>
           <TextBlock Text="{Binding SelectedKey.RequiredLength}"/>
           <TextBlock Classes="caption" Text="Key material stays masked and is never included in diagnostics. FNE/KMM-delivered P25 Phase 1 keys are runtime-only and cannot be written back here." TextWrapping="Wrap"/>

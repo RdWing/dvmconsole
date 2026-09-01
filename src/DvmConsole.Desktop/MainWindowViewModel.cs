@@ -1401,6 +1401,8 @@ public sealed partial class MainWindowViewModel :
         set => pttSettings.SelectedGlobalPttKey = value;
     }
 
+    internal KeyboardPttKey AppliedGlobalPttKey => pttSession.GlobalKey;
+
     public Task ApplyGlobalPttKeySelectionAsync()
         => SetGlobalPttKeyAsync(SelectedGlobalPttKey);
 
@@ -1414,6 +1416,8 @@ public sealed partial class MainWindowViewModel :
         get => pttSettings.SelectedActiveSystemPttKey;
         set => pttSettings.SelectedActiveSystemPttKey = value;
     }
+
+    internal KeyboardPttKey AppliedActiveSystemPttKey => pttSession.ActiveSystemKey;
 
     public Task ApplyActiveSystemPttKeySelectionAsync()
         => SetActiveSystemPttKeyAsync(SelectedActiveSystemPttKey);
@@ -3329,20 +3333,45 @@ public sealed partial class MainWindowViewModel :
 
     private void HandleAudioMeterTick(object? sender, EventArgs e)
     {
-        foreach (ChannelAudioMeterUpdate update in audioMeterPipeline.Advance())
+        IReadOnlyList<ChannelAudioMeterUpdate> updates = audioMeterPipeline.Advance();
+        foreach (ChannelAudioMeterUpdate update in CoalesceReceiveMeterUpdates(updates))
         {
-            if (update.Direction == ChannelAudioDirection.Receive)
-                ResolveChannel(update.ChannelId).SetPresentedReceiveAudioLevel(update.Level, update.PeakLevel);
-            else
-                ResolveChannel(update.ChannelId).SetAudioLevel(
-                    update.Level,
-                    update.Direction,
-                    update.StreamId,
-                    update.PeakLevel);
+            ResolveChannel(update.ChannelId).SetPresentedReceiveAudioLevel(
+                update.Level,
+                update.PeakLevel);
+        }
+
+        foreach (ChannelAudioMeterUpdate update in updates.Where(candidate =>
+                     candidate.Direction == ChannelAudioDirection.Transmit))
+        {
+            ResolveChannel(update.ChannelId).SetAudioLevel(
+                update.Level,
+                update.Direction,
+                update.StreamId,
+                update.PeakLevel);
         }
 
         if (!audioMeterPipeline.HasActivity)
             audioMeterTimer.Stop();
+    }
+
+    internal static IReadOnlyList<ChannelAudioMeterUpdate> CoalesceReceiveMeterUpdates(
+        IEnumerable<ChannelAudioMeterUpdate> updates)
+    {
+        ArgumentNullException.ThrowIfNull(updates);
+        return updates
+            .Where(update => update.Direction == ChannelAudioDirection.Receive)
+            .GroupBy(update => update.ChannelId)
+            .Select(group =>
+            {
+                ChannelAudioMeterUpdate representative = group.First();
+                return representative with
+                {
+                    Level = group.Max(update => update.Level),
+                    PeakLevel = group.Max(update => update.PeakLevel)
+                };
+            })
+            .ToArray();
     }
 
     private void StartAudioMeterTimer()

@@ -10,8 +10,8 @@ View > Groups
 
 **View > Groups** opens Studio on the Groups page. The codeplug stores each
 group's name and type. DVM Console stores membership, one-way direction, source
-order, and enabled state in operator settings under the codeplug's normalized
-path. Two codeplugs can use the same group name without sharing state.
+order, and enabled state as operator state for the managed configuration. Two
+managed configurations can use the same group name without sharing state.
 
 ![Groups page](../../Assets/configuration-studio-groups.png)
 
@@ -169,7 +169,7 @@ indicator takes priority in the card indicator area.
 | --- | --- | --- |
 | Patch members | Yes | Always sticky |
 | Patch enabled state | No | Only sticky when Retain Patch State on Startup is enabled |
-| Multi-select members | Yes | Stored for the current codeplug path |
+| Multi-select members | Yes | Stored for the managed configuration |
 | Edit mode | No | Clears when editing stops or the Groups window closes |
 
 ---

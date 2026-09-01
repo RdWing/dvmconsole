@@ -88,6 +88,11 @@ scripts/smoke-desktop-macos.sh \
   /tmp/DVMConsole-osx-arm64.app configs/codeplug.example.yml
 ```
 
+The desktop smoke opens the real windows and exercises every distinct
+Configuration Studio action route. File pickers, confirmations, managed saves,
+and exports use an isolated temporary library with deterministic selections;
+the supplied codeplug and the operator's managed library are not modified.
+
 Use `osx-x64` instead of `osx-arm64` when packaging for an Intel Mac.
 
 These commands create `DVMConsole.app` and a ZIP containing the bundle.
@@ -139,7 +144,7 @@ docs/user-guide
 
 # Tagged releases
 
-Pushing a version tag such as `v0.6.1` starts the macOS and Windows test and
+Pushing a version tag such as `v0.6.2` starts the macOS and Windows test and
 packaging matrix. Both macOS jobs smoke-test the packaged application bundle.
 The Windows job runs the Avalonia headful smoke test. Add version-matched release
 notes before pushing the tag.

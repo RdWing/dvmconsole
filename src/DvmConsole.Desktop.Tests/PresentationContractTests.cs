@@ -115,6 +115,24 @@ public sealed class PresentationContractTests
     }
 
     [Fact]
+    public async Task ExplicitUnkeyStopsATransmissionStartedByAnotherPttSource()
+    {
+        ChannelId channel = CreateDescriptor().Id;
+        var stops = new List<ChannelId>();
+        await using var controller = new ChannelPttController(
+            static (_, _) => ValueTask.FromResult(true),
+            (id, _) =>
+            {
+                stops.Add(id);
+                return ValueTask.CompletedTask;
+            });
+
+        await controller.UnkeyAsync(channel);
+
+        Assert.Equal([channel], stops);
+    }
+
+    [Fact]
     public void EquivalentListStateAndMeterSamplesDoNotRaiseRedundantProperties()
     {
         ChannelDescriptor descriptor = CreateDescriptor();
@@ -134,7 +152,7 @@ public sealed class PresentationContractTests
     }
 
     [Fact]
-    public async Task LifecycleBoundariesReleasePttThroughOneIdempotentPath()
+    public async Task WindowDeactivationPreservesPttWhileSuspendAndStopReleaseIt()
     {
         ChannelId channel = CreateDescriptor().Id;
         int starts = 0;
@@ -155,18 +173,21 @@ public sealed class PresentationContractTests
             lifecycle,
             controller.ReleaseAllAsync);
 
-        await controller.PressAsync(channel);
+        await controller.ToggleAsync(channel);
         lifecycle.RaiseDeactivated();
         await binding.WaitForIdleAsync();
-        await controller.PressAsync(channel);
+
+        Assert.Equal(1, starts);
+        Assert.Equal(0, stops);
+
         lifecycle.RaiseSuspending();
         await binding.WaitForIdleAsync();
         await controller.PressAsync(channel);
         lifecycle.RaiseStopping();
         await binding.WaitForIdleAsync();
 
-        Assert.Equal(3, starts);
-        Assert.Equal(3, stops);
+        Assert.Equal(2, starts);
+        Assert.Equal(2, stops);
     }
 
     private static ChannelDescriptor CreateDescriptor()

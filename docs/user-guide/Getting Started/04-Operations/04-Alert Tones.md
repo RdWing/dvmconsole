@@ -46,16 +46,19 @@ FNE talkgroup table does not allow Dispatch (TG 748, TS2); PTT disabled.
 Open from:
 
 ```
-Commands > Tones > QCII / alert tones
+Commands > Tones
 ```
 
-From the Tones page, operators can:
+The **TONES** toolbar button opens the same page. From there, operators can:
 
-- view custom alert tones
-- add a new alert tone
-- delete a custom alert tone
+- import, send, and delete custom alert audio
+- build an ordered tone and silence pattern
 - save and send DTMF or generated-tone presets
 - send a Quick Call II two-tone page
+
+Pattern rows label their two value fields **Frequency** and **Duration (sec)**.
+Each frequency must be from 300 to 2500 Hz. All pattern steps remain in one
+transmitted call.
 
 The normal settings system saves these changes.
 
@@ -68,9 +71,9 @@ radio transmission.
 
 # Audio file requirements
 
-DVM Console accepts PCM WAV or MPEG audio up to 30 seconds and converts it to
-the 8 kHz mono transmit path. If decoding fails, it shows an error without
-keying an `ALERT` resource.
+DVM Console accepts PCM WAV, MPEG/MP3, and Ogg Opus audio up to 30 seconds and
+converts it to the 8 kHz mono transmit path. If decoding fails, it shows an
+error without keying an `ALERT` resource.
 
 Imported assets are sent as ordinary audio in every digital mode. DVM Console
 does not reinterpret a steady section as a generated tone. Generated tones,

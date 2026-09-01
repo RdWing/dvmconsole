@@ -124,7 +124,12 @@ public sealed partial class ChannelListView : UserControl
         }
         e.Handled = true;
         if (useTogglePtt())
-            await viewModel.TogglePttAsync(item.Id);
+        {
+            if (item.IsTransmitting)
+                await viewModel.UnkeyPttAsync(item.Id);
+            else
+                await viewModel.TogglePttAsync(item.Id);
+        }
         else
         {
             e.Pointer.Capture(button);
@@ -165,7 +170,12 @@ public sealed partial class ChannelListView : UserControl
         }
         e.Handled = true;
         if (useTogglePtt())
-            await viewModel.TogglePttAsync(item.Id);
+        {
+            if (item.IsTransmitting)
+                await viewModel.UnkeyPttAsync(item.Id);
+            else
+                await viewModel.TogglePttAsync(item.Id);
+        }
         else
             await viewModel.PressPttAsync(item.Id);
     }

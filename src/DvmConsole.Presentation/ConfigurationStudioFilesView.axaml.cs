@@ -1,5 +1,6 @@
 using Avalonia.Controls;
 using Avalonia.Interactivity;
+using Avalonia.Threading;
 using DvmConsole.Core.Configuration;
 
 namespace DvmConsole.Presentation;
@@ -21,7 +22,15 @@ public sealed partial class ConfigurationStudioFilesView : UserControl
 
     private void HandleDraftFieldEdit(object? sender, RoutedEventArgs e) => ViewModel?.CommitFieldEdit();
     private void HandleAliasFieldEdit(object? sender, RoutedEventArgs e) => ViewModel?.CommitAliasEdit();
-    private void HandleAddAliasClick(object? sender, RoutedEventArgs e) => ViewModel?.AddAlias();
+    private void HandleAddAliasClick(object? sender, RoutedEventArgs e)
+    {
+        ViewModel?.AddAlias();
+        Dispatcher.UIThread.Post(() =>
+        {
+            if (this.FindControl<TextBox>("AliasRidEditor") is { } ridEditor)
+                ridEditor.Focus();
+        }, DispatcherPriority.Input);
+    }
     private void HandleDeleteAliasClick(object? sender, RoutedEventArgs e)
         => DeleteAliasRequested?.Invoke(this, EventArgs.Empty);
     private void HandleBrowseKeyFileClick(object? sender, RoutedEventArgs e)

@@ -157,12 +157,6 @@
       <Setter Property="Background" Value="{DynamicResource StudioFieldBrush}"/>
       <Setter Property="BorderBrush" Value="{DynamicResource StudioLineBrush}"/>
     </Style>
-    <Style Selector="NumericUpDown">
-      <Setter Property="MinHeight" Value="34"/>
-      <Setter Property="HorizontalAlignment" Value="Stretch"/>
-      <Setter Property="Background" Value="{DynamicResource StudioFieldBrush}"/>
-      <Setter Property="BorderBrush" Value="{DynamicResource StudioLineBrush}"/>
-    </Style>
     <Style Selector="ToggleButton.segment">
       <Setter Property="Background" Value="Transparent"/>
       <Setter Property="BorderBrush" Value="{DynamicResource StudioLineBrush}"/>
@@ -262,8 +256,7 @@
       <Grid x:Name="PageHost" Grid.Column="1" MinHeight="0" Background="{DynamicResource StudioCanvasBrush}">
         <presentation:ConfigurationStudioOverviewView/>
         <presentation:ConfigurationStudioSystemsView
-            DeleteRequested="HandleSharedDeleteSystemRequested"
-            BrowseAliasFileRequested="HandleSharedBrowseAliasFileRequested"/>
+            DeleteRequested="HandleSharedDeleteSystemRequested"/>
         <presentation:ConfigurationStudioZonesView x:Name="zonesView"
             EditCommandRequested="HandleSharedStudioEditCommandRequested"/>
         <presentation:ConfigurationStudioStreamsView
@@ -303,14 +296,16 @@
               <TextBlock FontWeight="SemiBold" Text="{Binding ValidationDrawerHeading}"/>
               <TextBlock Classes="caption" Text="Choose an issue to open the section that needs attention."/>
             </StackPanel>
-            <Button Grid.Column="2" VerticalAlignment="Center" Content="Close" Click="HandleToggleValidationDrawerClick"/>
+            <Button Grid.Column="2" VerticalAlignment="Center" Content="Close" Click="HandleToggleValidationDrawerClick"
+                    AutomationProperties.Name="Close configuration validation details"/>
           </Grid>
         </Border>
         <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
           <ItemsControl ItemsSource="{Binding ValidationIssues}">
             <ItemsControl.ItemTemplate>
               <DataTemplate x:DataType="config:ConfigurationValidationIssue">
-                <Button Classes="issue-row" Tag="{Binding}" Click="HandleValidationIssueClick">
+                <Button Classes="issue-row" Tag="{Binding}" Click="HandleValidationIssueClick"
+                        AutomationProperties.Name="Open configuration validation issue">
                   <Grid ColumnDefinitions="82,150,210,*" ColumnSpacing="10">
                     <TextBlock FontWeight="SemiBold" Text="{Binding Severity}"/>
                     <TextBlock Grid.Column="1" Text="{Binding Domain}" TextTrimming="CharacterEllipsis"/>

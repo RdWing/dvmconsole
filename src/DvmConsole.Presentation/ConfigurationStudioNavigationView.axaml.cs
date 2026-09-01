@@ -1,4 +1,6 @@
+using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.VisualTree;
 
@@ -32,8 +34,6 @@ public sealed partial class ConfigurationStudioNavigationView : UserControl
         => Publish(ConfigurationStudioSection.Overview);
     private void HandleSystemsClick(object? sender, RoutedEventArgs e)
         => Publish(ConfigurationStudioSection.Systems);
-    private void HandleZonesClick(object? sender, RoutedEventArgs e)
-        => Publish(ConfigurationStudioSection.Zones);
     private void HandleStreamsClick(object? sender, RoutedEventArgs e)
         => Publish(ConfigurationStudioSection.Streams);
     private void HandleGroupsClick(object? sender, RoutedEventArgs e)
@@ -45,4 +45,17 @@ public sealed partial class ConfigurationStudioNavigationView : UserControl
 
     private void Publish(ConfigurationStudioSection section)
         => SectionRequested?.Invoke(this, new ConfigurationStudioSectionEventArgs(section));
+
+    private void HandleHierarchyWheelChanged(object? sender, PointerWheelEventArgs e)
+    {
+        ScrollViewer scroller = NavigationScroller;
+        double maximumOffset = Math.Max(0, scroller.Extent.Height - scroller.Viewport.Height);
+        double nextOffset = Math.Clamp(scroller.Offset.Y - (e.Delta.Y * 48), 0, maximumOffset);
+        if (Math.Abs(nextOffset - scroller.Offset.Y) < 0.01)
+            return;
+
+        scroller.Offset = new Vector(scroller.Offset.X, nextOffset);
+        e.Handled = true;
+    }
+
 }

@@ -88,6 +88,54 @@ public sealed class ManagedConfigurationLibraryTests : IDisposable
     }
 
     [Fact]
+    public async Task StartupRepairsRestoredCatalogPointersFromTheLastExistingRevision()
+    {
+        var library = new ManagedConfigurationLibrary(root);
+        ConfigurationDraft draft = await library.CreateDraftAsync("Primary");
+        ConfigurationCommit first = await library.CommitAsync(draft with { Yaml = ValidYaml });
+        await library.ActivateAsync(first.Reference);
+        string currentPath = CurrentRevisionPath(first.Reference.Id);
+        string firstCurrentPointer = File.ReadAllText(currentPath);
+
+        ConfigurationDraft edit = await library.OpenDraftAsync(first.Reference.Id);
+        ConfigurationCommit second = await library.CommitAsync(edit with
+        {
+            Yaml = ValidYaml + "\ncustomField: retained\n",
+            IsDirty = true
+        });
+        await library.ActivateAsync(second.Reference);
+
+        File.WriteAllText(currentPath, firstCurrentPointer);
+        Directory.Delete(Path.GetDirectoryName(RevisionYaml(second.Reference))!, recursive: true);
+
+        var restored = new ManagedConfigurationLibrary(root);
+
+        Assert.Equal(first.Reference, restored.Active);
+        ConfigurationSummary summary = Assert.Single(await ReadAllAsync(restored.ListAsync()));
+        Assert.Equal(first.Reference.Revision, summary.CurrentRevision);
+        Assert.True(summary.IsActive);
+        Assert.False(summary.PendingReload);
+        var destination = new MemoryDocumentSet("export.yml", "export:test", string.Empty);
+        await restored.ExportAsync(first.Reference, destination, new ConfigurationExportOptions(false));
+        Assert.Contains("name: Test", destination.PrimaryDocument.Text, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task StartupDeactivatesAnEntryWhenNoRestoredRevisionExists()
+    {
+        var library = new ManagedConfigurationLibrary(root);
+        ConfigurationDraft draft = await library.CreateDraftAsync("Primary");
+        ConfigurationCommit commit = await library.CommitAsync(draft with { Yaml = ValidYaml });
+        await library.ActivateAsync(commit.Reference);
+        Directory.Delete(Path.GetDirectoryName(RevisionYaml(commit.Reference))!, recursive: true);
+
+        var restored = new ManagedConfigurationLibrary(root);
+
+        Assert.Null(restored.Active);
+        Assert.False(Assert.Single(await ReadAllAsync(restored.ListAsync())).IsActive);
+    }
+
+    [Fact]
     public async Task ActivationPersistsTheManagedConfigurationLastOpenedTime()
     {
         var clock = new MutableClock(new DateTimeOffset(2026, 8, 31, 12, 0, 0, TimeSpan.Zero));
@@ -209,7 +257,14 @@ public sealed class ManagedConfigurationLibraryTests : IDisposable
                 peerId: 1
                 rid: "1001"
                 aliasPath: ./alias.yml
-            zones: []
+            zones:
+              - name: Operations
+                channels:
+                  - name: Dispatch
+                    system: Test
+                    tgid: "101"
+                    mode: p25
+                    card_size: normal
             groups: []
             """;
         var source = new MemoryDocumentSet("legacy.yml", "file-id:one", yaml);
@@ -531,6 +586,9 @@ public sealed class ManagedConfigurationLibraryTests : IDisposable
         Assert.DoesNotContain("secret", destination.PrimaryDocument.Text, StringComparison.Ordinal);
         Assert.DoesNotContain("127.0.0.1", destination.PrimaryDocument.Text, StringComparison.Ordinal);
         Assert.DoesNotContain("alias.yml", destination.PrimaryDocument.Text, StringComparison.Ordinal);
+        Assert.DoesNotContain("tgid: '101'", destination.PrimaryDocument.Text, StringComparison.Ordinal);
+        ConfigurationDocument reparsed = ConfigurationDocument.Parse(destination.PrimaryDocument.Text);
+        Assert.DoesNotContain(reparsed.Validate(), issue => issue.IsError);
     }
 
     [Fact]
@@ -577,6 +635,9 @@ public sealed class ManagedConfigurationLibraryTests : IDisposable
             "revisions",
             reference.Revision.Value.ToString("N"),
             "codeplug.yml");
+
+    private string CurrentRevisionPath(ConfigurationId id)
+        => Path.Combine(root, "entries", id.Value.ToString("N"), "current.json");
 
     private static async Task<List<T>> ReadAllAsync<T>(IAsyncEnumerable<T> source)
     {

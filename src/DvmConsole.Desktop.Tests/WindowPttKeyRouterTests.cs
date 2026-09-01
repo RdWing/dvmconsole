@@ -34,6 +34,15 @@ public sealed class WindowPttKeyRouterTests
     }
 
     [Fact]
+    public void LosingWindowActivationClearsFocusSuppressionForGlobalPtt()
+    {
+        var editor = new TextBox();
+
+        Assert.True(WindowPttInputGuard.ShouldSuppressSpacePtt(editor, isWindowActive: true));
+        Assert.False(WindowPttInputGuard.ShouldSuppressSpacePtt(editor, isWindowActive: false));
+    }
+
+    [Fact]
     public void SuppressesSpacePttForInteractiveControlsButNotChannelSurface()
     {
         Assert.True(WindowPttInputGuard.ShouldSuppressSpacePtt(new Button()));

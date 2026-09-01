@@ -226,6 +226,7 @@ public sealed class ConfigurationDocument
             system.Password = null;
             system.PresharedKey = null;
             system.KmfPresharedKey = null;
+            system.Encrypted = false;
             system.PeerId = 0;
             system.Rid = string.Empty;
             system.AliasPath = string.Empty;
@@ -234,7 +235,12 @@ public sealed class ConfigurationDocument
         foreach (ZoneConfiguration zone in sanitized.Zones)
         {
             foreach (ChannelConfiguration channel in zone.Channels)
-                channel.Tgid = "0";
+            {
+                // Keep the support copy valid while removing the operational
+                // destination. Zero is rejected by the normal configuration
+                // contract, so use a harmless non-zero placeholder.
+                channel.Tgid = "1";
+            }
             foreach (WebStreamConfiguration stream in zone.WebStreams)
             {
                 stream.Url = "https://redacted.invalid/";

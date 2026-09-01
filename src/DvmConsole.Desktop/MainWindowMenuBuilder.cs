@@ -16,6 +16,7 @@ internal static class MainWindowMenuBuilder
     public static void ReplacePttKeyItems(
         MenuItem menu,
         string disabledHeader,
+        KeyboardPttKey selectedKey,
         EventHandler<RoutedEventArgs> clickHandler)
     {
         ArgumentNullException.ThrowIfNull(menu);
@@ -28,10 +29,24 @@ internal static class MainWindowMenuBuilder
             var item = new MenuItem
             {
                 Header = key == KeyboardPttKey.None ? disabledHeader : key.ToString(),
-                Tag = key.ToString()
+                Tag = key.ToString(),
+                ToggleType = MenuItemToggleType.Radio,
+                IsChecked = key == selectedKey
             };
             item.Click += clickHandler;
             menu.Items.Add(item);
+        }
+    }
+
+    public static void UpdatePttKeySelection(MenuItem menu, KeyboardPttKey selectedKey)
+    {
+        ArgumentNullException.ThrowIfNull(menu);
+
+        foreach (MenuItem item in menu.Items.OfType<MenuItem>())
+        {
+            item.IsChecked = item.Tag is string value &&
+                Enum.TryParse(value, ignoreCase: true, out KeyboardPttKey key) &&
+                key == selectedKey;
         }
     }
 

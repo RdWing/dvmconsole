@@ -18,8 +18,8 @@
                      Text="One aggregate list; zone ownership remains explicit in YAML"
                      TextWrapping="Wrap"/>
         </StackPanel>
-        <Button Content="Add" AutomationProperties.Name="Add web stream" Click="HandleAddStreamClick"/>
-        <Button Content="Delete" AutomationProperties.Name="Delete web stream" Click="HandleDeleteStreamClick"/>
+        <Button Content="Add" AutomationProperties.Name="Add web stream" Click="HandleAddStreamClick" IsEnabled="{Binding CanEdit}"/>
+        <Button Content="Delete" AutomationProperties.Name="Delete web stream" Click="HandleDeleteStreamClick" IsEnabled="{Binding CanEdit}"/>
       </WrapPanel>
       <Grid x:Name="StreamsBody" ColumnDefinitions="3*,2*" ColumnSpacing="10" MinHeight="0">
         <Border x:Name="StreamsListPanel" Classes="panel" Padding="0">

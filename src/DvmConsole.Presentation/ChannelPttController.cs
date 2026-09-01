@@ -2,9 +2,9 @@ using DvmConsole.Application;
 
 namespace DvmConsole.Presentation;
 
-// Renderer-neutral PTT intent reconciler shared by Cards and List. Every
-// lifecycle exit converges on ReleaseAllAsync, which is safe to call more than
-// once and while a slow transmitter is still starting.
+// Renderer-neutral PTT intent reconciler shared by Cards and List. Suspension,
+// shutdown, and renderer replacement converge on ReleaseAllAsync, which is safe
+// to call more than once and while a slow transmitter is still starting.
 public sealed class ChannelPttController : IAsyncDisposable
 {
     private readonly Func<ChannelId, CancellationToken, ValueTask<bool>> start;
@@ -61,6 +61,35 @@ public sealed class ChannelPttController : IAsyncDisposable
                 latched.Remove(channelId);
         }
         await ReconcileAsync(channelId, cancellationToken);
+    }
+
+    // A renderer can observe an active transmission that was started by a
+    // different PTT source (for example, a keyboard binding).  In that case a
+    // visible Release control must be authoritative even though this
+    // controller has no matching held/latched entry.
+    public async ValueTask UnkeyAsync(
+        ChannelId channelId,
+        CancellationToken cancellationToken = default)
+    {
+        lock (sync)
+        {
+            if (disposed)
+                return;
+            held.Remove(channelId);
+            latched.Remove(channelId);
+        }
+
+        await gate.WaitAsync(cancellationToken);
+        try
+        {
+            lock (sync)
+                active.Remove(channelId);
+            await stop(channelId, cancellationToken);
+        }
+        finally
+        {
+            gate.Release();
+        }
     }
 
     public async ValueTask ReleaseAllAsync(CancellationToken cancellationToken = default)

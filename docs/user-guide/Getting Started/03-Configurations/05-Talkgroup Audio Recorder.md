@@ -1,256 +1,175 @@
 # Talkgroup Audio Recorder
 
-The built-in **Talkgroup Audio Recorder (TAR)** saves selected talkgroups as
-local `.opus` files. Each new recording contains its catalog metadata and does
-not need a separate `.json` file.
+Talkgroup Audio Recorder (TAR) saves selected calls as local `.opus` files. Each
+recording contains its catalog metadata, so new recordings do not need a
+separate `.json` sidecar.
 
 ---
 
 # Opening TAR
 
-Open TAR from:
+Use either of these menu paths:
 
-```
+```text
 Tools > Talkgroup Audio Recorder > Viewer
 Tools > Talkgroup Audio Recorder > Configuration
 ```
 
-Use **Viewer** to review and play recordings. Use **Configuration** to select the
-recording folder and the talkgroups to record.
+**Viewer** opens Event History for search, playback, export, and file actions.
+**Configuration** opens the Recorder page, where you choose the recording
+location, retention period, channels, and ignored subscriber IDs.
 
 ---
 
 # What TAR records
 
-TAR creates one recording per call instead of one continuous file.
+TAR creates one file per call. It can record:
 
-It can record:
+- received audio on TAR-enabled channels
+- console transmit audio sent through TAR-enabled channels
 
-- received call audio on TAR-enabled talkgroups
-- console-originated transmit audio on TAR-enabled talkgroups
-
-Recording a received call does not depend on live speaker selection. Arming TAR
-for a resource is enough to decode and record its inbound calls; the card does
-not also need RX selected. Speaker playback remains off until the operator
-selects the card separately. Global, system, and zone mute controls also affect
-speaker playback only. A muted resource continues to deliver decoded audio to
-TAR without opening a speaker lane.
-
-TAR records console-originated transmit audio when an armed resource takes part
-in the transmission.
+Recording does not depend on local speaker selection. A channel can record an
+incoming call while its live RX audio is off or muted. System, zone, and global
+output mute controls affect speaker playback only.
 
 ---
 
-# Recording folder
+# Recording location
 
-TAR requires a valid recording folder.
+DVM Console stores recordings in its application-data `Recordings` folder by
+default. On desktop systems, the Recorder page can use an external folder
+instead:
 
-The default location is `DVMConsole/TAR` under the current user's Documents
-folder.
+1. Select **Browse…** and choose a folder.
+2. Select **Apply location**.
 
-You can change this in:
-
-```
-Tools > Talkgroup Audio Recorder > Configuration
-```
-
-If the folder does not exist, DVM Console creates it when you save the TAR
-settings.
+DVM Console validates the location before switching to it. If the change fails,
+the current recording location stays active.
 
 ---
 
 # Enabling recording
 
-In the TAR Configuration window:
+The Recorder page groups channels by FNE system. For each channel:
 
-- channels are grouped by console tab
-- each row is keyed by TGID
-- click the `TAR` control to enable or disable recording
-- optionally enter ignored subscriber IDs in **Ignore RIDs**
+- Select the recording button to turn TAR on or off.
+- Enter radio IDs in **Ignored RIDs, comma separated** when calls from those
+  subscribers should not be recorded on that channel.
+- Select **Save ignored RIDs** after changing the list.
 
-After you enable TAR for a talkgroup, recording starts automatically when
-matching traffic arrives. Selecting the resource card for live listening is a
-separate choice.
-
-Use ignored subscriber IDs to exclude known announcements or other unwanted
-sources from TAR on a specific talkgroup.
-
-Enter multiple ignored subscriber IDs separated by commas, spaces, or semicolons.
-
-Example:
+Ignored IDs can be separated by commas, spaces, or semicolons. For example:
 
 ```text
 1001, 1002 1003;1004
 ```
 
----
-
-# Channel indicator
-
-When TAR is enabled for a talkgroup, the resource card shows a purple:
-
-```text
-TAR
-```
-
-button in the card's bottom control row.
-
-If TAR is disabled for the talkgroup, the button is hidden.
+The same TAR control appears in the channel card's bottom row. Its colored state
+shows whether recording is armed. Clicking the channel card still controls live
+speaker playback separately.
 
 ---
 
-# Viewer basics
+# Event History
 
-The TAR Viewer lists the newest recordings first.
+Event History combines current-session calls and events with TAR recordings
+found in the recording catalog. Open it from **View > History**, the Activity
+heading, or **Tools > Talkgroup Audio Recorder > Viewer**.
 
-Default fields:
+Each row can show the time, system, channel, direction, protocol, duration,
+encryption state, source information, and talkgroup. Rows with a recording have
+these actions:
 
-- Time
-- Duration
-- Channel
-- TG
-- Source ID
-- Alias
+- **Play** starts playback through the master output device.
+- **Stop** stops recording playback.
+- **Open** selects the file in Finder or File Explorer.
+- **Delete** removes that recording after confirmation.
 
-Use the **Columns** button in the TAR Viewer to show or hide additional fields such as:
-
-- Direction
-- Protocol
-- System
-- Encryption
-
-Viewer actions:
-
-- Refresh
-- Play
-- Stop
-- Open Folder
-- Delete
-
-Completed TAR recordings remain available in History after their live call rows
-age past the in-memory session limit. This changes only how History represents
-the recording. File deletion still follows the configured TAR retention policy.
+**Export CSV…** exports the loaded Event History entries. **Clear session**
+clears the current History list but does not delete TAR files. A completed TAR
+recording can remain in History after its live call row ages out of the
+in-memory session list.
 
 ---
 
-# Advanced filters
+# Search and filters
 
-Expand **Advanced Filters** in the TAR Viewer to narrow the recording list.
+The search box checks events, calls, aliases, IDs, filenames, and diagnostics.
+Expand **Advanced filters** to narrow the list by:
 
-Available filters include:
+- direction
+- protocol
+- encryption state
+- system
+- channel
+- talkgroup ID
+- subscriber ID
+- alias
+- start and end date
 
-- free text search across key fields
-- Direction
-- Protocol
-- Encryption
-- System
-- Channel
-- Talkgroup ID
-- Subscriber ID
-- Alias
-- Start Date
-- End Date
-
-Use **Clear Filters** to reset the current filter set.
-
-The Clear and Secure filters include only recordings with that confirmed
-encryption state. A recording marked Unknown does not appear in either result.
+Select **Clear filters** to reset the search and advanced filters. The Clear and
+Secure filters include only recordings with that confirmed encryption state.
+A recording marked Unknown does not appear in either result.
 
 ---
 
 # Retention
 
-For each TAR-enabled talkgroup, **Keep Days** controls how long recordings stay
-on disk. Retention cleanup deletes files.
+**Retention days** applies to the recording catalog as a whole. Enter a whole
+number from 0 to 3650 and select **Apply and prune**.
 
-Behavior:
+- `0` disables automatic age-based pruning.
+- A positive value removes completed recordings whose UTC end time is older
+  than the selected number of days.
+- Applying a shorter period can delete older recordings immediately.
 
-- TAR scans metadata embedded in saved `.opus` recordings
-- TAR checks the current configured retention for that TGID
-- if a recording is older than the allowed age, TAR deletes the `.opus` file
-
-Important notes:
-
-- `0` days means keep recordings indefinitely
-- retention is based on the recording end time in UTC
-- cleanup uses the **current** TAR config for that TGID at cleanup time
-- if you later shorten retention for a talkgroup, older existing recordings for that talkgroup can be deleted on the next cleanup pass
-
-Cleanup runs when:
-
-- TAR configuration is saved
-- the console loads a codeplug and TAR initializes
+DVM Console also checks retention when it loads the recording catalog.
 
 ---
 
 # Recording folder structure
 
-TAR organizes recordings by date and system.
-
-Folder layout:
+TAR organizes recordings by local date and system:
 
 ```text
-<TAR Root>\
-  YYYY-MM-DD\
-    <SystemName>\
+<Recording root>/
+  YYYY-MM-DD/
+    <SystemName>/
       <time>_<system>_<talkgroup>_<rid>_<UNKNOWN-or-CLEAR-or-SECURE_algorithm>_<stream>.opus
 ```
 
-Example structure:
-
-```text
-TAR\
-  2026-05-02\
-    System1\
-      221530125_System1_3100_1001_SECURE_AES_42.opus
-```
-
-The date folder and filename use the local system time zone. Embedded metadata
-keeps the UTC start and end timestamps. `UNKNOWN` means the call ended before
-the console received enough on-air metadata to classify it as clear or secure.
+The date folder and filename use local time. Embedded metadata keeps UTC start
+and end timestamps. `UNKNOWN` means the call ended before DVM Console received
+enough on-air metadata to classify it as clear or secure.
 
 ---
 
-# Metadata
+# Embedded metadata
 
-Each new recording stores its catalog metadata in an OpusTags field inside the
-`.opus` file.
-
-TAR does not scan, migrate, or delete legacy `.json` sidecars. An older
-recording appears in the Viewer only if its `.opus` file already contains the
-metadata.
-
-Metadata includes:
+New recordings store catalog metadata in an OpusTags field inside the `.opus`
+file. The metadata can include:
 
 - recording direction (`RX` or `TX`)
 - protocol
-- UTC start time
-- UTC end time
+- UTC start and end time
 - duration
-- system name
-- channel name
-- talkgroup ID
-- subscriber ID
-- subscriber alias
-- encryption state (`Unknown`, `Clear`, or `Secure`)
-- protocol encryption algorithm and numeric identifier, when known
-- encryption key ID in numeric and display form, when known
-- stream ID
-- receive episode ID for exact History correlation, when available
-- file size
-- sample rate / bit depth / channel count
+- system, channel, and talkgroup
+- subscriber ID and resolved alias
+- encryption state, algorithm, and key ID when known
+- stream ID and receive episode ID when available
+- file size, sample rate, bit depth, and channel count
 
-The TAR Viewer reads this metadata. Other tools that inspect OpusTags can read
-it as well. New recordings do not embed the local recording root or catalog
-path. The Viewer reconstructs those fields from the file it opened.
+The recording does not embed the local root or catalog path. Event History
+reconstructs those values from the file it opened.
+
+DVM Console does not migrate legacy `.json` sidecars. An older `.opus` file
+appears in the catalog only when it already contains supported embedded
+metadata.
 
 ---
 
-# Notes
+# Recording finalization
 
-- TAR records to `.opus` without requiring an external media process
-- TAR targets 9 kbps mono Opus in VOIP mode with variable bitrate enabled
-- TAR embeds catalog metadata in each new `.opus` recording
-- TAR trims leading and trailing silence before finalizing the saved file
-- TAR viewer playback uses the configured master output device
-- deleting a recording from the Viewer removes only its `.opus` file
+TAR trims leading and trailing silence, encodes 9 kbps mono Opus in VOIP mode,
+and embeds metadata when the call closes. Finalization runs in the background.
+During shutdown, DVM Console exits as soon as queued finalization finishes. A
+stalled item remains subject to the bounded shutdown timeout and recovery spool.

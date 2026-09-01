@@ -27,6 +27,7 @@
           <TreeView x:Name="ConfigurationTree"
                     Classes="configuration-tree"
                     Margin="0,0,0,6"
+                    PointerWheelChanged="HandleHierarchyWheelChanged"
                     ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                     ScrollViewer.VerticalScrollBarVisibility="Disabled"
                     ItemsSource="{Binding ConfigurationHierarchy}"
@@ -40,9 +41,6 @@
               </TreeDataTemplate>
             </TreeView.ItemTemplate>
           </TreeView>
-          <Button x:Name="ZonesNavigationButton" Classes="nav-button"
-                  Content="{Binding ZoneNavigationHeading}" Click="HandleZonesClick"
-                  AutomationProperties.Name="Zones and channels" />
           <Button Classes="nav-button" Content="{Binding StreamNavigationHeading}" Click="HandleStreamsClick" AutomationProperties.Name="Web stream configurations" />
           <Button x:Name="GroupsNavigationButton" Classes="nav-button" Content="{Binding GroupNavigationHeading}" Click="HandleGroupsClick" AutomationProperties.Name="Group configurations" />
           <Button x:Name="EncryptionKeysNavigationButton" Classes="nav-button" Content="{Binding KeyNavigationHeading}" Click="HandleEncryptionKeysClick" AutomationProperties.Name="Encryption keys" />
