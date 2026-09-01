@@ -9,7 +9,6 @@
     <Style Selector="CheckBox"><Setter Property="MinHeight" Value="44"/></Style>
     <Style Selector="ComboBox"><Setter Property="MinHeight" Value="44"/></Style>
     <Style Selector="TextBox"><Setter Property="MinHeight" Value="44"/></Style>
-    <Style Selector="NumericUpDown"><Setter Property="MinHeight" Value="44"/></Style>
   </UserControl.Styles>
   <ScrollViewer x:Name="SystemsScroller" Margin="18" IsVisible="{Binding IsSystems}">
     <StackPanel Spacing="10">
@@ -17,12 +16,17 @@
         <StackPanel Width="320">
           <TextBlock Classes="heading" Text="FNE Systems"/>
           <TextBlock Classes="caption"
-                     Text="Connection identity, transport, credentials, and alias file"
+                     Text="Connection identity, transport, credentials, and call priority"
                      TextWrapping="Wrap"/>
         </StackPanel>
-        <Button Content="Add" AutomationProperties.Name="Add system" Click="HandleAddSystemClick"/>
-        <Button Content="Duplicate" AutomationProperties.Name="Duplicate system" Click="HandleDuplicateSystemClick"/>
-        <Button Content="Delete" AutomationProperties.Name="Delete system" Click="HandleDeleteSystemClick"/>
+        <Button Content="Add" AutomationProperties.Name="Add system" Click="HandleAddSystemClick" IsEnabled="{Binding CanEdit}"/>
+        <Button Content="Duplicate" AutomationProperties.Name="Duplicate system" Click="HandleDuplicateSystemClick" IsEnabled="{Binding CanEdit}"/>
+        <Button Content="Delete" AutomationProperties.Name="Delete system" Click="HandleDeleteSystemClick" IsEnabled="{Binding CanEdit}"/>
+        <Button Content="Add channel"
+                AutomationProperties.Name="Add channel to selected FNE system"
+                Click="HandleAddChannelClick"
+                IsEnabled="{Binding CanAddChannelToSelectedSystem}"
+                ToolTip.Tip="Adds a channel to this FNE system and creates its first zone when needed."/>
       </WrapPanel>
       <Grid x:Name="SystemsBody" ColumnDefinitions="3*,2*" ColumnSpacing="10">
         <Border x:Name="SystemsListPanel" Classes="panel" Padding="0">
@@ -66,11 +70,11 @@
             <WrapPanel ItemSpacing="8" LineSpacing="8">
               <StackPanel Width="140">
                 <TextBlock Classes="caption" Text="Port"/>
-                <NumericUpDown Minimum="1" Maximum="65535" Value="{Binding SelectedSystem.Port, Mode=TwoWay}" LostFocus="HandleDraftFieldEdit" AutomationProperties.Name="System port"/>
+                <TextBox Text="{Binding SelectedSystem.Port, Mode=TwoWay}" LostFocus="HandleDraftFieldEdit" AutomationProperties.Name="System port"/>
               </StackPanel>
               <StackPanel Width="140">
                 <TextBlock Classes="caption" Text="Peer ID"/>
-                <NumericUpDown Minimum="0" Maximum="4294967295" Value="{Binding SelectedSystem.PeerId, Mode=TwoWay}" LostFocus="HandleDraftFieldEdit" AutomationProperties.Name="System peer ID"/>
+                <TextBox Text="{Binding SelectedSystem.PeerId, Mode=TwoWay}" LostFocus="HandleDraftFieldEdit" AutomationProperties.Name="System peer ID"/>
               </StackPanel>
             </WrapPanel>
             <TextBlock Classes="caption" Text="Radio ID (RID)"/>
@@ -97,14 +101,6 @@
             <TextBox PasswordChar="&#x25CF;" Text="{Binding SelectedSystem.PresharedKey, Mode=TwoWay}" LostFocus="HandleDraftFieldEdit" AutomationProperties.Name="Transport preshared key"/>
             <TextBlock Classes="caption" Text="KMF preshared key"/>
             <TextBox PasswordChar="&#x25CF;" Text="{Binding SelectedSystem.KmfPresharedKey, Mode=TwoWay}" LostFocus="HandleDraftFieldEdit" AutomationProperties.Name="KMF preshared key"/>
-            <TextBlock Classes="caption" Text="RID alias reference"/>
-            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
-              <Border Padding="10,8" BorderBrush="{DynamicResource StudioLineBrush}" BorderThickness="1" CornerRadius="4">
-                <TextBlock x:Name="SelectedAliasFileReference" Text="{Binding SelectedSystem.AliasPath}" TextTrimming="CharacterEllipsis" VerticalAlignment="Center"/>
-              </Border>
-              <Button x:Name="SelectedAliasBrowseButton" Grid.Column="1" Content="Browse&#x2026;" Click="HandleBrowseAliasFileClick"
-                      IsEnabled="{Binding CanEdit}" AutomationProperties.Name="Choose managed RID alias file"/>
-            </Grid>
           </StackPanel>
         </Border>
       </Grid>

@@ -19,6 +19,7 @@ internal sealed class DocumentationCatalog
         "Getting Started/03-Configurations/03-RID Aliases.md",
         "Getting Started/03-Configurations/04-Groups and Patching.md",
         "Getting Started/03-Configurations/05-Talkgroup Audio Recorder.md",
+        "Getting Started/03-Configurations/06-Configuration Troubleshooting.md",
         "Getting Started/04-Operations/01-Console Operation.md",
         "Getting Started/04-Operations/02-Settings Reference.md",
         "Getting Started/04-Operations/03-Audio Settings.md",

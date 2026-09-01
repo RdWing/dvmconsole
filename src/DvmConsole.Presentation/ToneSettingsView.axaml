@@ -51,8 +51,12 @@
         <StackPanel Spacing="8">
           <TextBlock FontWeight="SemiBold" Text="Alert / QCII tone pattern"/>
           <TextBlock Classes="caption"
-                     Text="Build an ordered pattern of 300–2500 Hz tones and silent holds. Every step remains in one call."
+                     Text="Build an ordered pattern of 300 to 2500 Hz tones and silent holds. Every step remains in one call."
                      TextWrapping="Wrap"/>
+          <Grid ColumnDefinitions="92,110,110,*" ColumnSpacing="8" Margin="0,0,0,-3">
+            <TextBlock Grid.Column="1" Classes="caption" Text="Frequency"/>
+            <TextBlock Grid.Column="2" Classes="caption" Text="Duration (sec)"/>
+          </Grid>
           <ItemsControl ItemsSource="{Binding ToneSequenceSteps}">
             <ItemsControl.ItemTemplate>
               <DataTemplate x:DataType="presentation:IToneSequenceStepViewModel">
@@ -61,7 +65,7 @@
                             IsChecked="{Binding IsSilence, Mode=TwoWay}"
                             AutomationProperties.Name="Silent tone step"/>
                   <TextBox Width="110"
-                           Watermark="300–2500 Hz"
+                           Watermark="300 to 2500 Hz"
                            Text="{Binding FrequencyText, Mode=TwoWay}"
                            AutomationProperties.Name="Tone step frequency"/>
                   <TextBox Width="110"
@@ -120,7 +124,7 @@
         <StackPanel Spacing="8">
           <TextBlock FontWeight="SemiBold" Text="Custom alert assets"/>
           <TextBlock Classes="caption"
-                     Text="Import PCM WAV, MPEG, or Ogg Opus audio up to 30 seconds. Audio is decoded to 8 kHz mono; sustained single tones use the optimized P25 tone path while all other audio uses the normal voice encoder."
+                     Text="Import PCM WAV, MPEG/MP3, or Ogg Opus audio up to 30 seconds. Imported audio uses the normal 8 kHz mono transmit path."
                      TextWrapping="Wrap"/>
           <WrapPanel ItemSpacing="8" LineSpacing="8">
             <TextBox Width="240"

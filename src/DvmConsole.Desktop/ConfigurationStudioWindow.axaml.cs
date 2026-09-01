@@ -1,5 +1,7 @@
+using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Interactivity;
+using Avalonia.Platform;
 using Avalonia.Platform.Storage;
 using DvmConsole.Application;
 using DvmConsole.Core.Configuration;
@@ -110,10 +112,31 @@ public sealed partial class ConfigurationStudioWindow : Window
     internal Func<Task<ConfigurationDraftReplacementChoice>>? DraftReplacementChoiceOverride { get; set; }
     internal Func<string, string, string, Task<bool>>? DialogConfirmationOverride { get; set; }
     internal Func<string, string, Task>? MessageOverride { get; set; }
+    internal Func<ConfigurationReference, ValueTask<string>>? ConfigurationMaterializationOverride { get; set; }
+    internal Func<string, FilePickerFileType, Task<IStorageFile?>>? CompanionFilePickerOverride { get; set; }
+    internal Func<string, string, Task<IStorageFile?>>? CodeplugSaveFilePickerOverride { get; set; }
     internal Task<bool> ReviewAndSaveForCaptureAsync(bool saveCopy = false, bool offerReload = true)
         => ReviewAndSaveAsync(saveCopy, offerReload);
     internal Task DeleteSelectedSystemForCaptureAsync()
         => DeleteSelectedSystemAsync();
+
+    internal void FitInitialBoundsToDisplay(Screen? screen)
+    {
+        if (screen is null)
+            return;
+
+        ConfigurationStudioInitialPlacement placement =
+            ConfigurationStudioInitialPlacement.FitToWorkingArea(
+                new Size(Width, Height),
+                screen.WorkingArea,
+                screen.Scaling);
+        MinWidth = Math.Min(MinWidth, placement.Size.Width);
+        MinHeight = Math.Min(MinHeight, placement.Size.Height);
+        Width = placement.Size.Width;
+        Height = placement.Size.Height;
+        Position = placement.Position;
+        WindowStartupLocation = WindowStartupLocation.Manual;
+    }
 
     private void HandleOpened(object? sender, EventArgs e)
         => ready = true;
@@ -324,6 +347,9 @@ public sealed partial class ConfigurationStudioWindow : Window
         string title,
         FilePickerFileType fileType)
     {
+        if (CompanionFilePickerOverride is { } pick)
+            return await pick(title, fileType);
+
         if (!StorageProvider.CanOpen)
         {
             await ShowMessageAsync(
@@ -532,7 +558,7 @@ public sealed partial class ConfigurationStudioWindow : Window
         if (!await ConfirmAsync("Review & Save", savePlanner.BuildReviewText(plan), action))
             return false;
 
-        ConfigurationCommit commit;
+        ConfigurationCommit? committed = null;
         try
         {
             string yaml = plan.Files.First(file => file.Category == "Codeplug").Content;
@@ -560,7 +586,7 @@ public sealed partial class ConfigurationStudioWindow : Window
             draft = await configurationLibrary.StageDraftAsync(
                 draft with { Yaml = yaml, IsDirty = true },
                 companions);
-            commit = await configurationLibrary.CommitAsync(draft);
+            committed = await configurationLibrary.CommitAsync(draft);
 
             ConfigurationFileChange[] settingsChanges = plan.Files
                 .Where(file => file.Category == "Operator settings")
@@ -571,14 +597,16 @@ public sealed partial class ConfigurationStudioWindow : Window
             if (settingsChanges.Length > 0)
                 _ = ConfigurationSaveTransaction.Execute(new ConfigurationSavePlan(settingsChanges, []), backupRoot);
 
-            string managedPath = await configurationMaterializer.MaterializeAsync(commit.Reference);
+            string managedPath = ConfigurationMaterializationOverride is { } materialize
+                ? await materialize(committed.Reference)
+                : await configurationMaterializer.MaterializeAsync(committed.Reference);
             UserSettings committedSettings = settingsStore.Load();
             if (saveCopy && runtimeViewModel.ConfigurationReference is { } sourceConfiguration)
             {
                 ConfigurationOperatorStateStore.Copy(
                     committedSettings,
                     sourceConfiguration.Id.ToString(),
-                    commit.Reference.Id.ToString(),
+                    committed.Reference.Id.ToString(),
                     includeWebStreamAuthorization: false);
             }
             CodeplugGroupState copiedGroupState =
@@ -587,7 +615,7 @@ public sealed partial class ConfigurationStudioWindow : Window
                 CodeplugStudioStateStore.CopyForSaveAs(committedSettings, planPath, managedPath);
             ConfigurationOperatorStateStore.UpdateDocumentState(
                 committedSettings,
-                commit.Reference.Id.ToString(),
+                committed.Reference.Id.ToString(),
                 copiedGroupState,
                 copiedStudioState);
             settingsStore.Save(committedSettings);
@@ -602,8 +630,8 @@ public sealed partial class ConfigurationStudioWindow : Window
             {
                 settingsPersistenceFailure = exception;
             }
-            viewModel.AcceptSaved(managedPath, commit.Reference.Id, plan);
-            managedConfigurationId = commit.Reference.Id;
+            viewModel.AcceptSaved(managedPath, committed.Reference.Id, plan);
+            managedConfigurationId = committed.Reference.Id;
             await ShowMessageAsync(
                 "Configuration saved",
                 saveCopy
@@ -612,18 +640,42 @@ public sealed partial class ConfigurationStudioWindow : Window
                     : "Committed a new immutable managed revision." +
                       DescribeSettingsPersistenceWarning(settingsPersistenceFailure));
         }
-        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or InvalidOperationException)
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or
+            InvalidDataException or InvalidOperationException)
         {
-            await ShowMessageAsync("Configuration save failed", $"No partial save was kept. Restricted backups remain available when originals were staged.\n\n{exception.Message}");
-            return false;
+            if (committed is null)
+            {
+                await ShowMessageAsync(
+                    "Configuration save failed",
+                    $"No managed revision was committed. Restricted backups remain available when originals were staged.\n\n{exception.Message}");
+                return false;
+            }
+
+            managedConfigurationId = committed.Reference.Id;
+            await ShowMessageAsync(
+                "Configuration committed with a follow-up failure",
+                $"Managed revision {committed.Reference.Revision} was committed and remains recoverable in the Configuration Library, " +
+                "but Studio could not finish materializing it or rebasing operator settings. Reopen the managed configuration before making more edits.\n\n" +
+                exception.Message);
+            return true;
         }
 
+        ConfigurationCommit commit = committed;
+
+        bool updatesActiveConfiguration =
+            runtimeViewModel.ConfigurationReference?.Id == commit.Reference.Id;
         if (offerReload &&
-            !saveCopy && runtimeViewModel.ConfigurationReference?.Id == commit.Reference.Id &&
+            !saveCopy &&
             await ConfirmAsync(
-                "Reload active configuration?",
-                "The running FNE sessions still use the previous managed revision. Disconnect and reload now, or cancel to keep the new revision pending without changing the active session.",
-                "Disconnect and reload"))
+                updatesActiveConfiguration
+                    ? "Reload active configuration?"
+                    : "Load saved configuration?",
+                updatesActiveConfiguration
+                    ? "The running FNE sessions still use the previous managed revision. Disconnect and reload now, or cancel to keep the new revision pending without changing the active session."
+                    : "This configuration is saved, but the console is still displaying a different configuration. Disconnect that configuration and load this one now, or cancel to leave this saved configuration in the library.",
+                updatesActiveConfiguration
+                    ? "Disconnect and reload"
+                    : "Disconnect and load"))
         {
             if (ReloadRequested is not { } reload)
             {
@@ -696,7 +748,10 @@ public sealed partial class ConfigurationStudioWindow : Window
                 Path.GetDirectoryName(settingsStore.Path) ?? AppContext.BaseDirectory,
                 "ConfigurationDraftPreview",
                 "codeplug.yml");
-            var source = new DesktopConfigurationDocumentSet(sourcePath);
+            var materializedSource = new DesktopConfigurationDocumentSet(sourcePath);
+            var source = new ConfigurationStudioExportDocumentSet(
+                materializedSource,
+                viewModel.CaptureExportCompanionContents());
             using AvaloniaStorageConfigurationDocumentSet destination = await AvaloniaStorageThreading.Invoke(
                 () => new AvaloniaStorageConfigurationDocumentSet(file));
             ConfigurationBundleExportResult result = await ConfigurationBundleExporter.ExportAsync(
@@ -727,8 +782,16 @@ public sealed partial class ConfigurationStudioWindow : Window
         string title,
         string suggestedName = "codeplug.yml")
     {
+        if (CodeplugSaveFilePickerOverride is { } pick)
+            return await pick(title, suggestedName);
+
         if (!StorageProvider.CanSave)
+        {
+            await ShowMessageAsync(
+                "File picker unavailable",
+                "This platform did not provide an available save-file picker.");
             return null;
+        }
         return await StorageProvider.SaveFilePickerAsync(new FilePickerSaveOptions
         {
             Title = title,
@@ -767,6 +830,32 @@ public sealed partial class ConfigurationStudioWindow : Window
         OperatorDialogParts parts = OperatorDialogFactory.CreateChoice(
             "Save configuration draft?",
             "Starting another configuration closes this Studio draft. Save it first, discard it, or cancel and keep editing.",
+            "Save",
+            "Discard");
+        parts.CancelButton!.Click += (_, _) => parts.Window.Close();
+        parts.SecondaryButton!.Click += (_, _) =>
+        {
+            choice = ConfigurationDraftReplacementChoice.Discard;
+            parts.Window.Close();
+        };
+        parts.PrimaryButton.Click += (_, _) =>
+        {
+            choice = ConfigurationDraftReplacementChoice.Save;
+            parts.Window.Close();
+        };
+        await parts.Window.ShowDialog(this);
+        return choice;
+    }
+
+    private async Task<ConfigurationDraftReplacementChoice> ChooseCloseDraftAsync()
+    {
+        if (DraftReplacementChoiceOverride is { } choose)
+            return await choose();
+
+        ConfigurationDraftReplacementChoice choice = ConfigurationDraftReplacementChoice.Cancel;
+        OperatorDialogParts parts = OperatorDialogFactory.CreateChoice(
+            "Save configuration draft?",
+            "This draft has changes that have not been saved. Save it before closing, discard it, or cancel and keep editing.",
             "Save",
             "Discard");
         parts.CancelButton!.Click += (_, _) => parts.Window.Close();
@@ -831,10 +920,15 @@ public sealed partial class ConfigurationStudioWindow : Window
         if (allowClose || !viewModel.IsDirty)
             return;
         e.Cancel = true;
-        if (await ConfirmAsync(
-                "Discard configuration draft?",
-                "This draft has changes that have not been saved. Close Configuration Studio and discard them?",
-                "Discard draft"))
+        ConfigurationDraftReplacementChoice choice = await ChooseCloseDraftAsync();
+        if (choice == ConfigurationDraftReplacementChoice.Save)
+        {
+            if (!await ReviewAndSaveAsync(saveCopy: false))
+                return;
+            allowClose = true;
+            Close();
+        }
+        else if (choice == ConfigurationDraftReplacementChoice.Discard)
         {
             await DiscardManagedDraftAsync();
             allowClose = true;

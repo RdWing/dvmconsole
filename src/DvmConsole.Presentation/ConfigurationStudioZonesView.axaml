@@ -50,11 +50,22 @@
       <Setter Property="Background" Value="{DynamicResource StudioFieldBrush}"/>
       <Setter Property="BorderBrush" Value="{DynamicResource StudioLineBrush}"/>
     </Style>
-    <Style Selector="NumericUpDown">
-      <Setter Property="MinHeight" Value="34"/>
-      <Setter Property="HorizontalAlignment" Value="Stretch"/>
-      <Setter Property="Background" Value="{DynamicResource StudioFieldBrush}"/>
-      <Setter Property="BorderBrush" Value="{DynamicResource StudioLineBrush}"/>
+    <Style Selector="TextBox.table-editor">
+      <Setter Property="MinHeight" Value="0"/>
+      <Setter Property="Height" Value="35"/>
+      <Setter Property="Padding" Value="9,0"/>
+      <Setter Property="Background" Value="Transparent"/>
+      <Setter Property="BorderThickness" Value="0"/>
+    </Style>
+    <Style Selector="ComboBox.table-editor">
+      <Setter Property="MinHeight" Value="0"/>
+      <Setter Property="Height" Value="35"/>
+      <Setter Property="Padding" Value="8,0"/>
+      <Setter Property="Background" Value="Transparent"/>
+      <Setter Property="BorderThickness" Value="0"/>
+    </Style>
+    <Style Selector="TextBox.table-editor:pointerover, ComboBox.table-editor:pointerover">
+      <Setter Property="Background" Value="{DynamicResource ButtonHoverBrush}"/>
     </Style>
     <Style Selector="ToggleButton.segment">
       <Setter Property="Background" Value="Transparent"/>
@@ -100,7 +111,7 @@
                    Watermark="Search channels"
                    Text="{Binding ChannelSearchText, Mode=TwoWay}"
                    AutomationProperties.Name="Search channels"/>
-          <Menu x:Name="ZoneEditMenu" Grid.Column="2" VerticalAlignment="Center" Background="Transparent" MinHeight="44">
+            <Menu x:Name="ZoneEditMenu" Grid.Column="2" VerticalAlignment="Center" Background="Transparent" MinHeight="44" IsEnabled="{Binding CanEdit}">
             <MenuItem x:Name="editMenuRoot" Header="Edit">
               <MenuItem Header="Add channel" Tag="AddChannel" Click="HandleEditMenuClick"/>
               <MenuItem Header="Duplicate channel" Tag="DuplicateChannel" Click="HandleEditMenuClick"/>
@@ -125,7 +136,7 @@
           <Border Background="{DynamicResource StudioPanelBrush}"
                   BorderBrush="{DynamicResource StudioLineBrush}"
                   BorderThickness="0,0,0,1">
-            <Grid ColumnDefinitions="48,1.45*,1.15*,105,52,1.0*,78,90">
+            <Grid ColumnDefinitions="48,1.65*,96,140,64,0.9*,72,84">
               <Border Grid.Column="1" Classes="table-cell"><TextBlock VerticalAlignment="Center" FontWeight="Medium" Text="Name"/></Border>
               <Border Grid.Column="2" Classes="table-cell"><TextBlock VerticalAlignment="Center" FontWeight="Medium" Text="Destination ID"/></Border>
               <Border Grid.Column="3" Classes="table-cell"><TextBlock VerticalAlignment="Center" FontWeight="Medium" Text="Mode"/></Border>
@@ -148,21 +159,83 @@
             <ListBox.ItemTemplate>
               <DataTemplate x:DataType="presentation:ConfigurationChannelRow">
                 <Border Height="36" BorderBrush="{DynamicResource StudioLineBrush}" BorderThickness="0,0,0,1">
-                  <Grid ColumnDefinitions="48,1.45*,1.15*,105,52,1.0*,78,90">
+                  <Grid ColumnDefinitions="48,1.65*,96,140,64,0.9*,72,84">
                     <TextBlock HorizontalAlignment="Center" VerticalAlignment="Center" Text="{Binding Number}"/>
-                    <Border Grid.Column="1" Classes="table-cell"><TextBlock VerticalAlignment="Center" Text="{Binding Name}" TextTrimming="CharacterEllipsis"/></Border>
-                    <Border Grid.Column="2" Classes="table-cell"><TextBlock VerticalAlignment="Center" Text="{Binding DestinationText}" TextTrimming="CharacterEllipsis"/></Border>
-                    <Border Grid.Column="3" Classes="table-cell"><TextBlock VerticalAlignment="Center" Text="{Binding ModeText}"/></Border>
-                    <Border Grid.Column="4" Classes="table-cell" Padding="0"><TextBlock HorizontalAlignment="Center" VerticalAlignment="Center" Text="{Binding SlotText}"/></Border>
-                    <Border Grid.Column="5" Classes="table-cell"><TextBlock VerticalAlignment="Center" Text="{Binding EncryptionText}" TextTrimming="CharacterEllipsis"/></Border>
+                    <Border Grid.Column="1" Classes="table-cell" Padding="0">
+                      <TextBox Classes="table-editor"
+                               Text="{Binding Name, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                               IsEnabled="{Binding CanEdit}"
+                               GotFocus="HandleInlineChannelEditorFocus"
+                               LostFocus="HandleInlineChannelFieldEdit"
+                               AutomationProperties.Name="Edit channel name"/>
+                    </Border>
+                    <Border Grid.Column="2" Classes="table-cell" Padding="0">
+                      <TextBox Classes="table-editor"
+                               Text="{Binding DestinationId, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                               IsEnabled="{Binding CanEdit}"
+                               GotFocus="HandleInlineChannelEditorFocus"
+                               LostFocus="HandleInlineChannelFieldEdit"
+                               AutomationProperties.Name="Edit channel destination ID"/>
+                    </Border>
+                    <Border Grid.Column="3" Classes="table-cell" Padding="0">
+                      <ComboBox Classes="table-editor"
+                                ItemsSource="{Binding ModeOptions}"
+                                SelectedValueBinding="{Binding Value}"
+                                SelectedValue="{Binding Mode, Mode=TwoWay}"
+                                IsEnabled="{Binding CanEdit}"
+                                GotFocus="HandleInlineChannelEditorFocus"
+                                SelectionChanged="HandleInlineChannelModeChanged"
+                                AutomationProperties.Name="Edit channel mode">
+                        <ComboBox.ItemTemplate>
+                          <DataTemplate x:DataType="config:ConfigurationProtocolOption"><TextBlock Text="{Binding DisplayName}"/></DataTemplate>
+                        </ComboBox.ItemTemplate>
+                      </ComboBox>
+                    </Border>
+                    <Border Grid.Column="4" Classes="table-cell" Padding="0">
+                      <ComboBox Classes="table-editor"
+                                ItemsSource="{Binding SlotOptions}"
+                                SelectedItem="{Binding Slot, Mode=TwoWay}"
+                                IsEnabled="{Binding CanEditSlot}"
+                                IsVisible="{Binding IsDmr}"
+                                GotFocus="HandleInlineChannelEditorFocus"
+                                SelectionChanged="HandleInlineChannelFieldEdit"
+                                AutomationProperties.Name="Edit DMR slot"/>
+                    </Border>
+                    <Border Grid.Column="5" Classes="table-cell" Padding="0">
+                      <ComboBox Classes="table-editor"
+                                ItemsSource="{Binding AvailableAlgorithms}"
+                                SelectedItem="{Binding SelectedAlgorithm, Mode=TwoWay}"
+                                IsEnabled="{Binding CanEdit}"
+                                GotFocus="HandleInlineChannelEditorFocus"
+                                SelectionChanged="HandleInlineChannelAlgorithmChanged"
+                                AutomationProperties.Name="Edit channel encryption algorithm">
+                        <ComboBox.ItemTemplate>
+                          <DataTemplate x:DataType="config:EncryptionAlgorithmOption"><TextBlock Text="{Binding DisplayName}"/></DataTemplate>
+                        </ComboBox.ItemTemplate>
+                      </ComboBox>
+                    </Border>
                     <Border Grid.Column="6" Classes="table-cell" Padding="0">
                       <CheckBox HorizontalAlignment="Center"
                                 VerticalAlignment="Center"
-                                IsChecked="{Binding RxOnly}"
-                                IsHitTestVisible="False"
-                                AutomationProperties.Name="Receive only"/>
+                                IsChecked="{Binding RxOnly, Mode=TwoWay}"
+                                IsEnabled="{Binding CanEdit}"
+                                GotFocus="HandleInlineChannelEditorFocus"
+                                Click="HandleInlineChannelFieldEdit"
+                                AutomationProperties.Name="Edit receive only"/>
                     </Border>
-                    <Border Grid.Column="7" Classes="table-cell" Padding="0"><TextBlock HorizontalAlignment="Center" VerticalAlignment="Center" Text="{Binding CardSizeText}"/></Border>
+                    <Border Grid.Column="7" Classes="table-cell" Padding="0">
+                      <ComboBox Classes="table-editor"
+                                ItemsSource="{Binding CardSizeOptions}"
+                                SelectedItem="{Binding SelectedCardSize, Mode=TwoWay}"
+                                IsEnabled="{Binding CanEdit}"
+                                GotFocus="HandleInlineChannelEditorFocus"
+                                SelectionChanged="HandleInlineChannelFieldEdit"
+                                AutomationProperties.Name="Edit channel card size">
+                        <ComboBox.ItemTemplate>
+                          <DataTemplate x:DataType="presentation:ConfigurationCardSizeOption"><TextBlock Text="{Binding DisplayName}"/></DataTemplate>
+                        </ComboBox.ItemTemplate>
+                      </ComboBox>
+                    </Border>
                   </Grid>
                 </Border>
               </DataTemplate>
@@ -295,14 +368,14 @@
           <Border Height="1" Margin="0,8" Background="{DynamicResource StudioLineBrush}"/>
           <TextBlock Margin="0,0,0,8" FontSize="16" FontWeight="SemiBold" Text="Channel settings"/>
           <TextBlock Text="Name *"/>
-          <TextBox Text="{Binding SelectedChannel.Name, Mode=TwoWay}" LostFocus="HandleDraftFieldEdit" AutomationProperties.Name="Channel name"/>
+          <TextBox Text="{Binding SelectedChannelRow.Name, Mode=TwoWay}" LostFocus="HandleDraftFieldEdit" AutomationProperties.Name="Channel name"/>
           <TextBlock Margin="0,8,0,0" Text="Destination ID *"/>
-          <TextBox Text="{Binding SelectedChannel.Tgid, Mode=TwoWay}" LostFocus="HandleDraftFieldEdit" AutomationProperties.Name="Channel destination ID"/>
+          <TextBox Text="{Binding SelectedChannelRow.DestinationId, Mode=TwoWay}" LostFocus="HandleDraftFieldEdit" AutomationProperties.Name="Channel destination ID"/>
           <TextBlock Margin="0,8,0,0" Text="Mode *"/>
           <ComboBox x:Name="channelModeEditor"
                     ItemsSource="{Binding ModeOptions}"
                     SelectedValueBinding="{Binding Value}"
-                    SelectedValue="{Binding SelectedChannel.Mode, Mode=TwoWay}"
+                    SelectedValue="{Binding SelectedChannelRow.Mode, Mode=TwoWay}"
                     SelectionChanged="HandleChannelModeChanged"
                     AutomationProperties.Name="Channel mode">
             <ComboBox.ItemTemplate>
@@ -311,14 +384,11 @@
           </ComboBox>
           <StackPanel x:Name="dmrSlotSettings" Spacing="8" IsVisible="{Binding IsSelectedChannelDmr}">
             <TextBlock Margin="0,8,0,0" Text="DMR slot *"/>
-            <NumericUpDown x:Name="dmrSlotEditor"
-                           Minimum="1"
-                           Maximum="2"
-                           Increment="1"
-                           FormatString="0"
-                           Value="{Binding SelectedChannel.Slot, Mode=TwoWay}"
-                           LostFocus="HandleDraftFieldEdit"
-                           AutomationProperties.Name="DMR slot"/>
+            <ComboBox x:Name="dmrSlotEditor"
+                      ItemsSource="{Binding SelectedChannelRow.SlotOptions}"
+                      SelectedItem="{Binding SelectedChannelRow.Slot, Mode=TwoWay}"
+                      SelectionChanged="HandleChannelSlotChanged"
+                      AutomationProperties.Name="DMR slot"/>
           </StackPanel>
           <TextBlock Margin="0,8,0,0" Text="Encryption algorithm *"/>
           <ComboBox ItemsSource="{Binding AvailableChannelAlgorithms}"
@@ -353,7 +423,7 @@
                     AutomationProperties.Name="Selectable encryption"/>
           <CheckBox Margin="0,4,0,0"
                     Content="RX only"
-                    IsChecked="{Binding SelectedChannel.RxOnly, Mode=TwoWay}"
+                    IsChecked="{Binding SelectedChannelRow.RxOnly, Mode=TwoWay}"
                     Click="HandleDraftFieldEdit"
                     AutomationProperties.Name="Receive only channel"/>
           <TextBlock Margin="0,14,0,0" Text="Card size *"/>

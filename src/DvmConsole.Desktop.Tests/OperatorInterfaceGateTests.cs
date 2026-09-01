@@ -275,6 +275,121 @@ public sealed class OperatorInterfaceGateTests
     }
 
     [Fact]
+    public void ConfigurationStudioReadOnlyModeDisablesEveryCompanionAndGroupEditor()
+    {
+        XDocument groups = XDocument.Parse(ReadPresentationSource("ConfigurationStudioGroupsView.axaml"));
+        XDocument keys = XDocument.Parse(ReadPresentationSource("ConfigurationStudioKeysView.axaml"));
+        XDocument files = XDocument.Parse(ReadPresentationSource("ConfigurationStudioFilesView.axaml"));
+        XDocument zones = XDocument.Parse(ReadPresentationSource("ConfigurationStudioZonesView.axaml"));
+
+        XElement groupDefinitions = groups.Descendants().Single(element =>
+            Attribute(element, "Name") == "GroupDefinitionsPanel");
+        XElement keyInspector = keys.Descendants().Single(element =>
+            Attribute(element, "Name") == "KeyInspector");
+        XElement aliasActions = files.Descendants().Single(element =>
+            Attribute(element, "Name") == "AliasActions");
+        XElement aliasFields = files.Descendants().Single(element =>
+            Attribute(element, "Name") == "AliasFields");
+
+        Assert.Equal("{Binding CanEdit}", Attribute(groupDefinitions, "IsEnabled"));
+        Assert.Equal("{Binding CanEditKeyFile}", Attribute(keyInspector.Elements().Single(), "IsEnabled"));
+        Assert.Equal("{Binding CanEdit}", Attribute(aliasActions, "IsEnabled"));
+        Assert.Equal("{Binding CanEditSelectedAlias}", Attribute(aliasFields, "IsEnabled"));
+        foreach (string automationName in new[]
+                 {
+                     "Edit channel name",
+                     "Edit channel destination ID",
+                     "Edit channel mode",
+                     "Edit channel encryption algorithm",
+                     "Edit receive only",
+                     "Edit channel card size"
+                 })
+        {
+            XElement inlineEditor = zones.Descendants().Single(element =>
+                Attribute(element, "AutomationProperties.Name") == automationName);
+            Assert.Equal("{Binding CanEdit}", Attribute(inlineEditor, "IsEnabled"));
+        }
+        XElement slotEditor = zones.Descendants().Single(element =>
+            Attribute(element, "AutomationProperties.Name") == "Edit DMR slot");
+        Assert.Equal("{Binding CanEditSlot}", Attribute(slotEditor, "IsEnabled"));
+        Assert.Equal("{Binding IsDmr}", Attribute(slotEditor, "IsVisible"));
+    }
+
+    [Fact]
+    public void ConfigurationStudioChannelTableProtectsModeAndSlotWidths()
+    {
+        XDocument zones = XDocument.Parse(ReadPresentationSource("ConfigurationStudioZonesView.axaml"));
+
+        Assert.Equal(
+            2,
+            zones.Descendants().Count(element =>
+                Attribute(element, "ColumnDefinitions") == "48,1.65*,96,140,64,0.9*,72,84"));
+    }
+
+    [Fact]
+    public void ConfigurationStudioFnePortAndPeerIdUsePlainTextFields()
+    {
+        XDocument systems = XDocument.Parse(ReadPresentationSource("ConfigurationStudioSystemsView.axaml"));
+
+        XElement port = systems.Descendants().Single(element =>
+            Attribute(element, "AutomationProperties.Name") == "System port");
+        XElement peerId = systems.Descendants().Single(element =>
+            Attribute(element, "AutomationProperties.Name") == "System peer ID");
+
+        Assert.Equal("TextBox", port.Name.LocalName);
+        Assert.Equal("TextBox", peerId.Name.LocalName);
+    }
+
+    [Fact]
+    public void ConfigurationStudioUsesDropdownsForDmrSlotsAndPlainTextForRidAliases()
+    {
+        XDocument zones = XDocument.Parse(ReadPresentationSource("ConfigurationStudioZonesView.axaml"));
+        XDocument files = XDocument.Parse(ReadPresentationSource("ConfigurationStudioFilesView.axaml"));
+
+        XElement inlineSlot = zones.Descendants().Single(element =>
+            Attribute(element, "AutomationProperties.Name") == "Edit DMR slot");
+        XElement inspectorSlot = zones.Descendants().Single(element =>
+            Attribute(element, "AutomationProperties.Name") == "DMR slot");
+        XElement aliasRid = files.Descendants().Single(element =>
+            Attribute(element, "AutomationProperties.Name") == "RID alias radio ID");
+
+        Assert.Equal("ComboBox", inlineSlot.Name.LocalName);
+        Assert.Equal("ComboBox", inspectorSlot.Name.LocalName);
+        Assert.Equal("TextBox", aliasRid.Name.LocalName);
+        Assert.DoesNotContain(zones.Descendants(), element => element.Name.LocalName == "NumericUpDown");
+        Assert.DoesNotContain(files.Descendants(), element => element.Name.LocalName == "NumericUpDown");
+    }
+
+    [Fact]
+    public void ConfigurationStudioRidAliasRowsDoNotExposeMaterializedPaths()
+    {
+        XDocument files = XDocument.Parse(ReadPresentationSource("ConfigurationStudioFilesView.axaml"));
+
+        Assert.DoesNotContain(
+            files.Descendants(),
+            element => Attribute(element, "Text") == "{Binding Identifier}");
+        XElement import = files.Descendants().Single(element =>
+            Attribute(element, "AutomationProperties.Name") == "Choose managed RID alias file");
+        Assert.Equal("Choose file…", Attribute(import, "Content"));
+        Assert.Equal("{Binding SelectedAliasSystem}", Attribute(import, "Tag"));
+    }
+
+    [Fact]
+    public void AlertAndQuickCallPatternFieldsHaveExplicitUnitLabels()
+    {
+        XDocument tones = XDocument.Parse(ReadPresentationSource("ToneSettingsView.axaml"));
+        string[] labels = tones.Descendants()
+            .Where(element => element.Name.LocalName == "TextBlock")
+            .Select(element => Attribute(element, "Text"))
+            .Where(text => text is not null)
+            .Cast<string>()
+            .ToArray();
+
+        Assert.Contains("Frequency", labels);
+        Assert.Contains("Duration (sec)", labels);
+    }
+
+    [Fact]
     public void ChannelAudioMeterClipsAFullWidthThresholdScale()
     {
         XDocument sharedCard = XDocument.Parse(ReadPresentationSource("ChannelCardContent.axaml"));

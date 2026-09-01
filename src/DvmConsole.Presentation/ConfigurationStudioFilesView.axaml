@@ -18,33 +18,29 @@
             <Button x:Name="KeyFileBrowseButton" Grid.Column="1" Content="Browse&#x2026;" Click="HandleBrowseKeyFileClick"
                     IsEnabled="{Binding CanEdit}" AutomationProperties.Name="Choose managed key file"/>
           </Grid>
-          <TextBlock Classes="caption" Text="RID alias files"/>
-          <ItemsControl ItemsSource="{Binding Systems}">
-            <ItemsControl.ItemTemplate>
-              <DataTemplate x:DataType="config:SystemConfiguration">
-                <Grid ColumnDefinitions="180,*,Auto" ColumnSpacing="8" Margin="0,2">
-                  <TextBlock VerticalAlignment="Center" Text="{Binding Name}"/>
-                  <Border Grid.Column="1" Padding="10,8" BorderBrush="{DynamicResource StudioLineBrush}" BorderThickness="1" CornerRadius="4">
-                    <TextBlock Text="{Binding AliasPath}" TextTrimming="CharacterEllipsis" VerticalAlignment="Center"/>
-                  </Border>
-                  <Button Grid.Column="2" Content="Browse&#x2026;" Tag="{Binding}"
-                          Click="HandleBrowseAliasFileClick"
-                          IsEnabled="{Binding $parent[UserControl].((presentation:ConfigurationStudioViewModel)DataContext).CanEdit}"
-                          AutomationProperties.Name="Choose managed RID alias file"/>
-                </Grid>
-              </DataTemplate>
-            </ItemsControl.ItemTemplate>
-          </ItemsControl>
         </StackPanel>
       </Border>
       <Border Classes="panel">
         <StackPanel Spacing="6">
-          <Grid ColumnDefinitions="*,Auto">
+          <Grid ColumnDefinitions="*,220,Auto" ColumnSpacing="8">
             <StackPanel>
               <TextBlock Classes="subheading" Text="RID aliases"/>
-              <TextBlock Classes="caption" Text="Aliases remain in their referenced YAML files."/>
+              <TextBlock Classes="caption" Text="Choose the FNE system whose managed alias file you want to edit."/>
             </StackPanel>
-            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="4">
+            <ComboBox Grid.Column="1"
+                      ItemsSource="{Binding Systems}"
+                      SelectedItem="{Binding SelectedAliasSystem, Mode=TwoWay}"
+                      IsEnabled="{Binding CanEdit}"
+                      AutomationProperties.Name="RID alias file owner">
+              <ComboBox.ItemTemplate>
+                <DataTemplate x:DataType="config:SystemConfiguration"><TextBlock Text="{Binding Name}"/></DataTemplate>
+              </ComboBox.ItemTemplate>
+            </ComboBox>
+            <StackPanel x:Name="AliasActions" Grid.Column="2" Orientation="Horizontal" Spacing="4" IsEnabled="{Binding CanEdit}">
+              <Button Content="Choose file&#x2026;"
+                      Tag="{Binding SelectedAliasSystem}"
+                      AutomationProperties.Name="Choose managed RID alias file"
+                      Click="HandleBrowseAliasFileClick"/>
               <Button Content="Add" AutomationProperties.Name="Add RID alias" Click="HandleAddAliasClick"/>
               <Button Content="Delete" AutomationProperties.Name="Delete RID alias" Click="HandleDeleteAliasClick"/>
             </StackPanel>
@@ -53,23 +49,22 @@
             <ListBox.ItemTemplate>
               <DataTemplate x:DataType="presentation:ConfigurationAliasRow">
                 <Border Classes="dense-row">
-                  <Grid ColumnDefinitions="Auto,*,2*" ColumnSpacing="10">
-                    <TextBlock Text="{Binding Alias.Rid}"/>
-                    <TextBlock Grid.Column="1" Text="{Binding Alias.Alias}"/>
-                    <TextBlock Grid.Column="2" Classes="caption" Text="{Binding Identifier}" TextTrimming="CharacterEllipsis"/>
+                  <Grid ColumnDefinitions="Auto,*" ColumnSpacing="10">
+                    <TextBlock Text="{Binding Rid}"/>
+                    <TextBlock Grid.Column="1" Text="{Binding Name}"/>
                   </Grid>
                 </Border>
               </DataTemplate>
             </ListBox.ItemTemplate>
           </ListBox>
-          <Grid ColumnDefinitions="*,2*" ColumnSpacing="8">
+          <Grid x:Name="AliasFields" ColumnDefinitions="*,2*" ColumnSpacing="8" IsEnabled="{Binding CanEditSelectedAlias}">
             <StackPanel>
               <TextBlock Classes="caption" Text="RID"/>
-              <NumericUpDown Minimum="0" Maximum="4294967295" Value="{Binding SelectedAlias.Alias.Rid, Mode=TwoWay}" LostFocus="HandleAliasFieldEdit"/>
+              <TextBox x:Name="AliasRidEditor" Text="{Binding SelectedAlias.Rid, Mode=TwoWay}" LostFocus="HandleAliasFieldEdit" AutomationProperties.Name="RID alias radio ID"/>
             </StackPanel>
             <StackPanel Grid.Column="1">
               <TextBlock Classes="caption" Text="Alias"/>
-              <TextBox Text="{Binding SelectedAlias.Alias.Alias, Mode=TwoWay}" LostFocus="HandleAliasFieldEdit"/>
+              <TextBox x:Name="AliasNameEditor" Text="{Binding SelectedAlias.Name, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" LostFocus="HandleAliasFieldEdit" AutomationProperties.Name="RID alias name"/>
             </StackPanel>
           </Grid>
         </StackPanel>

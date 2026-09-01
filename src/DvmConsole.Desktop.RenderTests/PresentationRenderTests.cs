@@ -320,6 +320,44 @@ public sealed class PresentationRenderTests
     }
 
     [AvaloniaFact]
+    public async Task ListReleaseButtonUnkeysTransmissionStartedByAnotherPttSource()
+    {
+        var commands = new RecordingConsoleCommands();
+        await using ConsoleApplicationSession session = CreateSession(3, commands);
+        await using var ptt = new ChannelPttController(
+            commands.BeginPttAsync,
+            commands.EndPttAsync);
+        var list = new ChannelListView();
+        list.Attach(session, ptt, static () => true);
+        var host = new Window { Width = 880, Height = 500, Content = list };
+
+        try
+        {
+            host.Show();
+            host.UpdateLayout();
+            Button releaseButton = Assert.Single(
+                list.GetVisualDescendants().OfType<Button>(),
+                button => button.Classes.Contains("ptt") &&
+                    button.DataContext is ChannelListItemViewModel { IsTransmitting: true });
+            Point point = releaseButton.TranslatePoint(
+                new Point(releaseButton.Bounds.Width / 2, releaseButton.Bounds.Height / 2),
+                host)!.Value;
+
+            host.MouseDown(point, MouseButton.Left, RawInputModifiers.None);
+            host.MouseUp(point, MouseButton.Left, RawInputModifiers.None);
+            await Dispatcher.UIThread.InvokeAsync(static () => { }, DispatcherPriority.Background);
+
+            Assert.Equal(0, commands.PttStarts);
+            Assert.Equal(1, commands.PttStops);
+        }
+        finally
+        {
+            await list.DetachAsync();
+            host.Close();
+        }
+    }
+
+    [AvaloniaFact]
     public async Task ExpandingAListRowPreservesItsViewportPosition()
     {
         await using ConsoleApplicationSession session = CreateSession(channelCount: 34);

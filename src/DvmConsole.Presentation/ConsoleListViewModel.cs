@@ -37,6 +37,9 @@ public sealed class ConsoleListViewModel : IAsyncDisposable
     public ValueTask TogglePttAsync(ChannelId channelId, CancellationToken cancellationToken = default)
         => ptt.ToggleAsync(channelId, cancellationToken);
 
+    public ValueTask UnkeyPttAsync(ChannelId channelId, CancellationToken cancellationToken = default)
+        => ptt.UnkeyAsync(channelId, cancellationToken);
+
     public ValueTask ReleaseAllPttAsync(CancellationToken cancellationToken = default)
         => ptt.ReleaseAllAsync(cancellationToken);
 

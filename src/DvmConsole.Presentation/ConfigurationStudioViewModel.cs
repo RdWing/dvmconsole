@@ -56,6 +56,7 @@ public sealed class ConfigurationStudioViewModel :
     private string? keyFileLoadError;
     private bool keyFileLoadIsWarning;
     private readonly Dictionary<string, List<RadioAlias>> aliasTables = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, string> aliasReferenceIdentifiers = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, string> aliasFileHashes = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, string> aliasFileSnapshots = new(StringComparer.OrdinalIgnoreCase);
     private readonly List<string> aliasLoadErrors = [];
@@ -68,11 +69,16 @@ public sealed class ConfigurationStudioViewModel :
     private bool isValidationDrawerOpen;
     private string selectedChannelKeyIdHexDigits = string.Empty;
     private string selectedKeyIdHexDigits = string.Empty;
+    private bool selectedKeyIdInputInvalid;
+    private SystemConfiguration? selectedAliasSystem;
     private EncryptionAlgorithmOption? selectedChannelAlgorithm;
     private EncryptionAlgorithmOption? selectedKeyAlgorithm;
     private IReadOnlyList<EncryptionAlgorithmOption> availableChannelAlgorithms = [];
     private IReadOnlyList<EncryptionAlgorithmOption> availableKeyAlgorithms = [];
     private readonly Dictionary<Guid, string> lastSystemRenameTargets = [];
+    private bool fieldCommitInProgress;
+    private bool collectionRefreshInProgress;
+    private bool historyRestoreSettling;
 
     public ConfigurationStudioViewModel(
         ConfigurationDocument document,
@@ -103,7 +109,7 @@ public sealed class ConfigurationStudioViewModel :
             new(ConfigurationStudioSection.Streams, "Web Streams", "Streams across all zones"),
             new(ConfigurationStudioSection.Groups, "Groups", "Definitions and operator state"),
             new(ConfigurationStudioSection.EncryptionKeys, "Encryption Keys", "Referenced local key file"),
-            new(ConfigurationStudioSection.Files, "Files & Interoperability", "Paths, aliases, YAML, and exports")
+            new(ConfigurationStudioSection.Files, "Files & Interoperability", "Managed companions, YAML, and exports")
         ];
         selectedNavigation = Navigation.First(item => item.Section == initialSection);
         foreach (OriginalSystemIdentity system in migrationPlanner.OriginalSystems)
@@ -115,6 +121,7 @@ public sealed class ConfigurationStudioViewModel :
         InitializeDraftZoneSystems(initialState.ZoneSystemAssignments);
         InitializeDraftCallPrioritySystems(initialState.CallPrioritySystemNames);
         InitializeDraftWidgetPositions();
+        unassignedHierarchyNode.PropertyChanged += HandleHierarchyNodePropertyChanged;
         LoadReferencedCompanions();
         RefreshCollections();
         currentSnapshot = CaptureDraftSnapshot();
@@ -152,6 +159,8 @@ public sealed class ConfigurationStudioViewModel :
     public ConfigurationDocument Document => document;
     public ConsoleConfiguration Configuration => document.Configuration;
     public bool CanEdit => !document.IsReadOnly;
+    public bool CanEditSelectedAlias => CanEdit && SelectedAlias is not null;
+    public bool CanAddChannelToSelectedSystem => CanEdit && SelectedSystem is not null;
     public bool CanSaveDraft => CanEdit && IsDirty;
     public bool CanExportSanitized => !document.IsReadOnly;
     public bool IsDirty => !string.Equals(currentSnapshot.Fingerprint, savedFingerprint, StringComparison.Ordinal);
@@ -254,6 +263,7 @@ public sealed class ConfigurationStudioViewModel :
         ? "No managed key file selected"
         : Configuration.KeyFile;
     public bool HasKeyFile => keyFileIdentifier is not null;
+    public bool CanEditKeyFile => CanEdit && HasKeyFile;
     public bool CanUseOperationalGroups =>
         runtimeContext.IsActiveConfiguration(configurationId, documentIdentity);
     public string OperationalGroupHint => CanUseOperationalGroups
@@ -269,7 +279,10 @@ public sealed class ConfigurationStudioViewModel :
         get => selectedChannelAlgorithm;
         set
         {
-            if (SelectedChannel is null || value is null || !SetField(ref selectedChannelAlgorithm, value))
+            if (SelectedChannel is null || value is null ||
+                !availableChannelAlgorithms.Any(option =>
+                    string.Equals(option.ConfigurationValue, value.ConfigurationValue, StringComparison.OrdinalIgnoreCase)) ||
+                !SetField(ref selectedChannelAlgorithm, value))
                 return;
             SelectedChannel.Algo = value.ConfigurationValue;
             OnPropertyChanged(nameof(ChannelEncryptionUsesKey));
@@ -282,6 +295,7 @@ public sealed class ConfigurationStudioViewModel :
         set
         {
             if (SelectedKey is null || value?.AlgorithmId is not int algorithmId ||
+                !availableKeyAlgorithms.Any(option => option.AlgorithmId == algorithmId) ||
                 !SetField(ref selectedKeyAlgorithm, value))
                 return;
             SelectedKey.AlgId = algorithmId;
@@ -326,13 +340,13 @@ public sealed class ConfigurationStudioViewModel :
             string normalized = EncryptionAlgorithmCatalog.StripHexPrefix(value).Trim().ToUpperInvariant();
             if (!SetField(ref selectedKeyIdHexDigits, normalized) || SelectedKey is null)
                 return;
-            SelectedKey.KeyId = ushort.TryParse(
+            selectedKeyIdInputInvalid = !ushort.TryParse(
                 normalized,
                 NumberStyles.AllowHexSpecifier,
                 CultureInfo.InvariantCulture,
-                out ushort keyId)
-                ? keyId
-                : (ushort)0;
+                out ushort keyId);
+            if (!selectedKeyIdInputInvalid)
+                SelectedKey.KeyId = keyId;
         }
     }
 
@@ -385,7 +399,10 @@ public sealed class ConfigurationStudioViewModel :
         set
         {
             if (SetField(ref selectedSystem, value))
+            {
                 OnPropertyChanged(nameof(SelectedSystemHasCallPriority));
+                OnPropertyChanged(nameof(CanAddChannelToSelectedSystem));
+            }
         }
     }
     public bool SelectedSystemHasCallPriority
@@ -442,12 +459,17 @@ public sealed class ConfigurationStudioViewModel :
                 preview.IsSelected = ReferenceEquals(preview.Channel, value);
             if (value is not null && channelHierarchyNodes.TryGetValue(value, out ConfigurationHierarchyNode? channelNode))
             {
-                if (!ReferenceEquals(selectedHierarchyNode, channelNode))
+                bool preserveCollapsedBranch = channelNode.Zone is not null &&
+                    zoneHierarchyNodes.TryGetValue(channelNode.Zone, out ConfigurationHierarchyNode? collapsedZoneNode) &&
+                    !collapsedZoneNode.IsExpanded &&
+                    ReferenceEquals(selectedHierarchyNode, collapsedZoneNode);
+                if (!preserveCollapsedBranch && !ReferenceEquals(selectedHierarchyNode, channelNode))
                 {
                     selectedHierarchyNode = channelNode;
                     OnPropertyChanged(nameof(SelectedHierarchyNode));
                 }
-                if (channelNode.Zone is not null && zoneHierarchyNodes.TryGetValue(channelNode.Zone, out ConfigurationHierarchyNode? zoneNode))
+                if (!preserveCollapsedBranch && channelNode.Zone is not null &&
+                    zoneHierarchyNodes.TryGetValue(channelNode.Zone, out ConfigurationHierarchyNode? zoneNode))
                 {
                     zoneNode.IsExpanded = true;
                     ConfigurationHierarchyNode? systemNode = ConfigurationHierarchy.FirstOrDefault(node => node.Children.Contains(zoneNode));
@@ -491,7 +513,41 @@ public sealed class ConfigurationStudioViewModel :
     public ConfigurationAliasRow? SelectedAlias
     {
         get => selectedAlias;
-        set => SetField(ref selectedAlias, value);
+        set
+        {
+            if (!SetField(ref selectedAlias, value))
+                return;
+            OnPropertyChanged(nameof(CanEditSelectedAlias));
+            if (value is null)
+                return;
+            SystemConfiguration? owner = Systems.FirstOrDefault(system =>
+                string.Equals(
+                    FindAliasTableIdentifier(system.AliasPath),
+                    value.Identifier,
+                    StringComparison.OrdinalIgnoreCase));
+            if (owner is not null && !ReferenceEquals(selectedAliasSystem, owner))
+            {
+                selectedAliasSystem = owner;
+                OnPropertyChanged(nameof(SelectedAliasSystem));
+            }
+        }
+    }
+
+    public SystemConfiguration? SelectedAliasSystem
+    {
+        get => selectedAliasSystem;
+        set
+        {
+            if (!SetField(ref selectedAliasSystem, value))
+                return;
+            string? identifier = value is null ? null : FindAliasTableIdentifier(value.AliasPath);
+            SelectedAlias = identifier is null
+                ? null
+                : Aliases.FirstOrDefault(row => string.Equals(
+                    row.Identifier,
+                    identifier,
+                    StringComparison.OrdinalIgnoreCase));
+        }
     }
 
     public ConfigurationHierarchyNode? SelectedHierarchyNode
@@ -510,6 +566,7 @@ public sealed class ConfigurationStudioViewModel :
             else if (value.Zone is not null)
             {
                 SelectedZone = value.Zone;
+                SelectedChannel = null;
                 SelectSection(ConfigurationStudioSection.Zones);
             }
             else if (value.System is not null)
@@ -531,22 +588,40 @@ public sealed class ConfigurationStudioViewModel :
 
     public void CommitFieldEdit()
     {
-        if (!CanEdit)
+        // Rebuilding a bound collection changes selections and can raise
+        // editor SelectionChanged/LostFocus events synchronously. Those are
+        // binding feedback, not new user edits, and must not recursively
+        // rebuild the same collections.
+        if (!CanEdit || fieldCommitInProgress || collectionRefreshInProgress || historyRestoreSettling)
             return;
-        ConfigurationStudioDraftSnapshot before = currentSnapshot;
-        identities.Synchronize(Configuration);
-        ApplySystemRenameReferences();
-        string aliasReference = CreateAliasReference();
-        if (!string.Equals(loadedKeyReference, Configuration.KeyFile, StringComparison.Ordinal) ||
-            !string.Equals(loadedAliasReference, aliasReference, StringComparison.Ordinal))
+
+        fieldCommitInProgress = true;
+        try
         {
-            LoadReferencedCompanions();
+            ConfigurationStudioDraftSnapshot before = currentSnapshot;
+            identities.Synchronize(Configuration);
+            ApplySystemRenameReferences();
+            string aliasReference = CreateAliasReference();
+            if (!string.Equals(loadedKeyReference, Configuration.KeyFile, StringComparison.Ordinal) ||
+                !string.Equals(loadedAliasReference, aliasReference, StringComparison.Ordinal))
+            {
+                LoadReferencedCompanions();
+            }
+            SynchronizeDraftZoneSystems();
+            SynchronizeDraftCallPrioritySystems();
+            SynchronizeDraftWidgetPositions();
+            CompleteDraftTransition(before, markDocumentDirty: true);
+            RefreshCollections(preserveSelection: true);
+            // Channel rows edit the same mutable configuration object as the
+            // inspector. Re-announce the selected object so bindings on both
+            // surfaces stay synchronized even when the selected reference did
+            // not change during the collection refresh.
+            OnPropertyChanged(nameof(SelectedChannel));
         }
-        SynchronizeDraftZoneSystems();
-        SynchronizeDraftCallPrioritySystems();
-        SynchronizeDraftWidgetPositions();
-        CompleteDraftTransition(before, markDocumentDirty: true);
-        RefreshCollections(preserveSelection: true);
+        finally
+        {
+            fieldCommitInProgress = false;
+        }
     }
 
     public string AttachKeyFile(string suggestedName, string content)
@@ -578,6 +653,7 @@ public sealed class ConfigurationStudioViewModel :
         OnPropertyChanged(nameof(KeyFileReferenceText));
         OnPropertyChanged(nameof(KeyFileIdentifierText));
         OnPropertyChanged(nameof(HasKeyFile));
+        OnPropertyChanged(nameof(CanEditKeyFile));
         OnPropertyChanged(nameof(IsKeyFileDirty));
         return reference;
     }
@@ -607,6 +683,7 @@ public sealed class ConfigurationStudioViewModel :
                 .Append(Configuration.KeyFile));
         system.AliasPath = reference;
         aliasTables[reference] = selectedAliases;
+        aliasReferenceIdentifiers[reference] = reference;
         aliasFileHashes.Remove(reference);
         aliasFileSnapshots[reference] = NewlySelectedCompanionBaseline;
         if (previousIdentifier is not null &&
@@ -643,6 +720,8 @@ public sealed class ConfigurationStudioViewModel :
 
     public void CommitKeyEdit()
     {
+        if (!CanEdit || historyRestoreSettling)
+            return;
         ConfigurationStudioDraftSnapshot before = currentSnapshot;
         KeyEntry? selection = SelectedKey;
         if (selection is not null)
@@ -652,7 +731,8 @@ public sealed class ConfigurationStudioViewModel :
                 KeyEntries[index] = selection;
         }
         SelectedKey = selection;
-        RefreshKeyEditorState();
+        if (!selectedKeyIdInputInvalid)
+            RefreshKeyEditorState();
         CompleteDraftTransition(before);
         RefreshValidation();
         NotifyDocumentState();
@@ -660,7 +740,7 @@ public sealed class ConfigurationStudioViewModel :
 
     public void CommitChannelModeEdit()
     {
-        if (SelectedChannel is null)
+        if (SelectedChannel is null || historyRestoreSettling)
             return;
         RefreshChannelAlgorithmOptions(normalizeUnsupported: true);
         RefreshChannelKeyIdText();
@@ -670,12 +750,17 @@ public sealed class ConfigurationStudioViewModel :
 
     public void CommitChannelAlgorithmEdit()
     {
+        if (historyRestoreSettling)
+            return;
+        RefreshChannelAlgorithmOptions(normalizeUnsupported: false);
         RefreshChannelKeyIdText();
         CommitFieldEdit();
     }
 
     public void CommitKeyProtocolEdit()
     {
+        if (historyRestoreSettling)
+            return;
         RefreshKeyAlgorithmOptions(normalizeUnsupported: true);
         CommitKeyEdit();
     }
@@ -711,6 +796,20 @@ public sealed class ConfigurationStudioViewModel :
                 break;
             case "Web Streams":
                 SelectSection(ConfigurationStudioSection.Streams);
+                if (firstIndex is int streamZoneIndex &&
+                    streamZoneIndex >= 0 && streamZoneIndex < Zones.Count)
+                {
+                    ZoneConfiguration streamZone = Zones[streamZoneIndex];
+                    int? streamIndex = ParseIndexedPath(issue.Path, "web_streams");
+                    if (streamIndex is int index &&
+                        index >= 0 && index < streamZone.WebStreams.Count)
+                    {
+                        WebStreamConfiguration stream = streamZone.WebStreams[index];
+                        SelectedStream = Streams.FirstOrDefault(row =>
+                            ReferenceEquals(row.Zone, streamZone) &&
+                            ReferenceEquals(row.Stream, stream));
+                    }
+                }
                 break;
             case "Groups":
                 SelectSection(ConfigurationStudioSection.Groups);
@@ -730,6 +829,8 @@ public sealed class ConfigurationStudioViewModel :
 
     public void CommitAliasEdit()
     {
+        if (!CanEdit || historyRestoreSettling)
+            return;
         CompleteDraftTransition(currentSnapshot);
         RefreshValidation();
         NotifyDocumentState();
@@ -749,6 +850,12 @@ public sealed class ConfigurationStudioViewModel :
         RestoreDraftSnapshot(snapshot);
     }
 
+    internal void BeginHistoryRestoreBindingSettlement()
+        => historyRestoreSettling = true;
+
+    internal void CompleteHistoryRestoreBindingSettlement()
+        => historyRestoreSettling = false;
+
     public void AddSystem()
     {
         Mutate(() => Configuration.Systems.Add(new SystemConfiguration
@@ -757,7 +864,8 @@ public sealed class ConfigurationStudioViewModel :
             Address = "127.0.0.1",
             Port = 62031,
             Identity = "DVM Console",
-            TransportEncryptionMode = "auto"
+            TransportEncryptionMode = "auto",
+            AliasPath = string.Empty
         }));
         SelectedSystem = Configuration.Systems.Last();
     }
@@ -817,13 +925,46 @@ public sealed class ConfigurationStudioViewModel :
         if (SelectedZone is null)
             return;
         ZoneConfiguration source = SelectedZone;
+        var usedChannelNames = Configuration.Zones
+            .SelectMany(zone => zone.Channels)
+            .GroupBy(channel => channel.System ?? string.Empty, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(
+                group => group.Key,
+                group => group.Select(channel => channel.Name).ToHashSet(StringComparer.OrdinalIgnoreCase),
+                StringComparer.OrdinalIgnoreCase);
+        var usedStreamNames = Configuration.Zones
+            .SelectMany(zone => zone.WebStreams)
+            .Select(stream => stream.Name)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var copiedChannels = new List<ChannelConfiguration>(source.Channels.Count);
+        foreach (ChannelConfiguration sourceChannel in source.Channels)
+        {
+            ChannelConfiguration channel = CloneChannel(sourceChannel);
+            string systemName = channel.System ?? string.Empty;
+            if (!usedChannelNames.TryGetValue(systemName, out HashSet<string>? names))
+            {
+                names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                usedChannelNames[systemName] = names;
+            }
+            channel.Name = UniqueName($"{sourceChannel.Name} Copy", names);
+            names.Add(channel.Name);
+            copiedChannels.Add(channel);
+        }
+        var copiedStreams = new List<WebStreamConfiguration>(source.WebStreams.Count);
+        foreach (WebStreamConfiguration sourceStream in source.WebStreams)
+        {
+            WebStreamConfiguration stream = CloneStream(sourceStream);
+            stream.Name = UniqueName($"{sourceStream.Name} Copy", usedStreamNames);
+            usedStreamNames.Add(stream.Name);
+            copiedStreams.Add(stream);
+        }
         var copy = new ZoneConfiguration
         {
             Name = UniqueName($"{source.Name} Copy", Configuration.Zones.Select(zone => zone.Name)),
             TabColor = source.TabColor,
             TabTextColor = source.TabTextColor,
-            Channels = source.Channels.Select(CloneChannel).ToList(),
-            WebStreams = source.WebStreams.Select(CloneStream).ToList()
+            Channels = copiedChannels,
+            WebStreams = copiedStreams
         };
         Mutate(() =>
         {
@@ -842,6 +983,8 @@ public sealed class ConfigurationStudioViewModel :
     public void AddChannel()
     {
         if (SelectedZone is null)
+            AddZone();
+        if (SelectedZone is null)
             return;
         string systemName = GetDraftZoneSystemName(SelectedZone);
         Mutate(() => SelectedZone.Channels.Add(new ChannelConfiguration
@@ -852,6 +995,46 @@ public sealed class ConfigurationStudioViewModel :
             CardSize = "normal"
         }));
         SelectedChannel = SelectedZone.Channels.Last();
+    }
+
+    public void AddChannelToSelectedSystem()
+    {
+        if (!CanEdit || SelectedSystem is not { } system)
+            return;
+
+        string systemName = system.Name;
+        ZoneConfiguration? zone = SelectedZone is { } selectedZone &&
+                                  string.Equals(GetDraftZoneSystemName(selectedZone), systemName, StringComparison.OrdinalIgnoreCase)
+            ? selectedZone
+            : Configuration.Zones.FirstOrDefault(candidate =>
+                string.Equals(GetDraftZoneSystemName(candidate), systemName, StringComparison.OrdinalIgnoreCase));
+        bool addZone = zone is null;
+        zone ??= new ZoneConfiguration
+        {
+            Name = UniqueName($"{systemName} Zone", Configuration.Zones.Select(candidate => candidate.Name))
+        };
+        var channel = new ChannelConfiguration
+        {
+            Name = UniqueName(
+                "New Channel",
+                Configuration.Zones.SelectMany(candidate => candidate.Channels).Select(candidate => candidate.Name)),
+            System = systemName,
+            Tgid = "1",
+            CardSize = "normal"
+        };
+
+        Mutate(() =>
+        {
+            if (addZone)
+            {
+                Configuration.Zones.Add(zone);
+                draftZoneSystemNames[zone] = systemName;
+            }
+            zone.Channels.Add(channel);
+        });
+        SelectedZone = zone;
+        SelectedChannel = channel;
+        SelectSection(ConfigurationStudioSection.Zones);
     }
 
     public void DuplicateChannel()
@@ -963,8 +1146,24 @@ public sealed class ConfigurationStudioViewModel :
 
     public void AddKey()
     {
-        if (!HasKeyFile)
+        if (!CanEdit)
             return;
+        ConfigurationStudioDraftSnapshot before = currentSnapshot;
+        if (!HasKeyFile)
+        {
+            string reference = CreateManagedCompanionReference(
+                "keys.clear",
+                Configuration.Systems.Select(system => system.AliasPath));
+            Configuration.KeyFile = reference;
+            keyContainer = new KeyContainer();
+            keyFileIdentifier = reference;
+            keyFileHash = null;
+            keyFileSnapshot = NewlySelectedCompanionBaseline;
+            keyFileLoadError = null;
+            keyFileLoadIsWarning = false;
+            loadedKeyReference = reference;
+            Replace(KeyEntries, keyContainer.Keys);
+        }
         EncryptionAlgorithmOption algorithm = EncryptionAlgorithmCatalog.ForKeyProtocol("p25")[0];
         var key = new KeyEntry
         {
@@ -978,12 +1177,21 @@ public sealed class ConfigurationStudioViewModel :
         SelectedKey = key;
         keyFileLoadError = null;
         keyFileLoadIsWarning = false;
-        CommitKeyEdit();
+        RefreshKeyEditorState();
+        CompleteDraftTransition(before, markDocumentDirty: true);
+        RefreshValidation();
+        NotifyDocumentState();
+        OnPropertyChanged(nameof(Configuration));
+        OnPropertyChanged(nameof(KeyFileReferenceText));
+        OnPropertyChanged(nameof(KeyFileIdentifierText));
+        OnPropertyChanged(nameof(HasKeyFile));
+        OnPropertyChanged(nameof(CanEditKeyFile));
+        OnPropertyChanged(nameof(IsKeyFileDirty));
     }
 
     public void DeleteKey()
     {
-        if (SelectedKey is not { } key)
+        if (!CanEdit || SelectedKey is not { } key)
             return;
         keyContainer.Keys.Remove(key);
         KeyEntries.Remove(key);
@@ -993,21 +1201,46 @@ public sealed class ConfigurationStudioViewModel :
 
     public void AddAlias()
     {
-        KeyValuePair<string, List<RadioAlias>> table = aliasTables.FirstOrDefault();
-        if (string.IsNullOrWhiteSpace(table.Key))
+        if (!CanEdit)
             return;
-        uint nextRid = table.Value.Count == 0 ? 1 : table.Value.Max(alias => alias.Rid) + 1;
-        var alias = new RadioAlias { Rid = nextRid, Alias = "New Alias" };
-        table.Value.Add(alias);
-        var row = new ConfigurationAliasRow(table.Key, alias);
-        Aliases.Add(row);
-        SelectedAlias = row;
-        CommitAliasEdit();
+        SystemConfiguration? system = SelectedAliasSystem ?? SelectedSystem ?? Systems.FirstOrDefault();
+        if (system is null)
+            return;
+
+        ConfigurationStudioDraftSnapshot before = currentSnapshot;
+        string? identifier = FindAliasTableIdentifier(system.AliasPath);
+        if (identifier is null)
+        {
+            identifier = CreateManagedCompanionReference(
+                "aliases.yml",
+                Configuration.Systems
+                    .Where(candidate => !ReferenceEquals(candidate, system))
+                    .Select(candidate => candidate.AliasPath)
+                    .Append(Configuration.KeyFile));
+            system.AliasPath = identifier;
+            aliasTables[identifier] = [];
+            aliasReferenceIdentifiers[identifier] = identifier;
+            aliasFileSnapshots[identifier] = NewlySelectedCompanionBaseline;
+            loadedAliasReference = CreateAliasReference();
+        }
+
+        List<RadioAlias> table = aliasTables[identifier];
+        uint nextRid = NextAvailableRid(table);
+        var alias = new RadioAlias { Rid = nextRid, Alias = string.Empty };
+        table.Add(alias);
+        CompleteDraftTransition(before, markDocumentDirty: true);
+        RebuildAliasRows(identifier);
+        SelectedAlias = Aliases.First(row => ReferenceEquals(row.Alias, alias));
+        RefreshValidation();
+        NotifyDocumentState();
+        OnPropertyChanged(nameof(Configuration));
+        OnPropertyChanged(nameof(AliasFilesDirty));
     }
 
     public void DeleteAlias()
     {
-        if (SelectedAlias is not { } row || !aliasTables.TryGetValue(row.Identifier, out List<RadioAlias>? table))
+        if (!CanEdit || SelectedAlias is not { } row ||
+            !aliasTables.TryGetValue(row.Identifier, out List<RadioAlias>? table))
             return;
         table.Remove(row.Alias);
         Aliases.Remove(row);
@@ -1046,6 +1279,22 @@ public sealed class ConfigurationStudioViewModel :
             new Dictionary<string, string>(aliasFileHashes, StringComparer.OrdinalIgnoreCase),
             new Dictionary<string, string>(aliasFileSnapshots, StringComparer.OrdinalIgnoreCase),
             ValidationIssues.ToArray());
+
+    internal IReadOnlyDictionary<string, string> CaptureExportCompanionContents()
+    {
+        var contents = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        if (keyFileIdentifier is not null && !string.IsNullOrWhiteSpace(Configuration.KeyFile))
+            contents[Configuration.KeyFile] = KeyFileLoader.Serialize(keyContainer);
+        foreach (SystemConfiguration system in Configuration.Systems)
+        {
+            if (string.IsNullOrWhiteSpace(system.AliasPath))
+                continue;
+            string? identifier = FindAliasTableIdentifier(system.AliasPath);
+            if (identifier is not null && aliasTables.TryGetValue(identifier, out List<RadioAlias>? aliases))
+                contents[system.AliasPath] = AliasFileLoader.Serialize(aliases);
+        }
+        return contents;
+    }
 
     internal void ApplyOperatorStateForSave(UserSettings settings, string destinationIdentity)
     {
@@ -1339,18 +1588,22 @@ public sealed class ConfigurationStudioViewModel :
 
     private void RefreshChannelAlgorithmOptions(bool normalizeUnsupported)
     {
-        availableChannelAlgorithms = EncryptionAlgorithmCatalog.ForChannelMode(SelectedChannel?.Mode);
-        OnPropertyChanged(nameof(AvailableChannelAlgorithms));
+        IReadOnlyList<EncryptionAlgorithmOption> nextAlgorithms =
+            EncryptionAlgorithmCatalog.ForChannelMode(SelectedChannel?.Mode);
         EncryptionAlgorithmOption? option = EncryptionAlgorithmCatalog.FindChannelOption(
             SelectedChannel?.Mode,
             SelectedChannel?.Algo);
         if (option is null && normalizeUnsupported)
         {
-            option = availableChannelAlgorithms.Count > 0 ? availableChannelAlgorithms[0] : null;
+            option = nextAlgorithms.Count > 0 ? nextAlgorithms[0] : null;
             if (SelectedChannel is not null && option is not null)
                 SelectedChannel.Algo = option.ConfigurationValue;
         }
+        bool algorithmsChanged = !availableChannelAlgorithms.SequenceEqual(nextAlgorithms);
+        availableChannelAlgorithms = nextAlgorithms;
         selectedChannelAlgorithm = option;
+        if (algorithmsChanged)
+            OnPropertyChanged(nameof(AvailableChannelAlgorithms));
         OnPropertyChanged(nameof(SelectedChannelAlgorithm));
         OnPropertyChanged(nameof(ChannelEncryptionUsesKey));
     }
@@ -1366,6 +1619,7 @@ public sealed class ConfigurationStudioViewModel :
     private void RefreshKeyEditorState()
     {
         RefreshKeyAlgorithmOptions(normalizeUnsupported: false);
+        selectedKeyIdInputInvalid = false;
         selectedKeyIdHexDigits = SelectedKey is null
             ? string.Empty
             : SelectedKey.KeyId.ToString("X", CultureInfo.InvariantCulture);
@@ -1374,45 +1628,63 @@ public sealed class ConfigurationStudioViewModel :
 
     private void RefreshKeyAlgorithmOptions(bool normalizeUnsupported)
     {
-        availableKeyAlgorithms = EncryptionAlgorithmCatalog.ForKeyProtocol(SelectedKey?.Protocol);
-        OnPropertyChanged(nameof(AvailableKeyAlgorithms));
+        IReadOnlyList<EncryptionAlgorithmOption> nextAlgorithms =
+            EncryptionAlgorithmCatalog.ForKeyProtocol(SelectedKey?.Protocol);
         EncryptionAlgorithmOption? option = SelectedKey is null
             ? null
             : EncryptionAlgorithmCatalog.FindKeyOption(SelectedKey.Protocol, SelectedKey.AlgId);
         if (option is null && normalizeUnsupported)
         {
-            option = availableKeyAlgorithms.Count > 0 ? availableKeyAlgorithms[0] : null;
+            option = nextAlgorithms.Count > 0 ? nextAlgorithms[0] : null;
             if (SelectedKey is not null && option?.AlgorithmId is int algorithmId)
                 SelectedKey.AlgId = algorithmId;
         }
+        bool algorithmsChanged = !availableKeyAlgorithms.SequenceEqual(nextAlgorithms);
+        availableKeyAlgorithms = nextAlgorithms;
         selectedKeyAlgorithm = option;
+        if (algorithmsChanged)
+            OnPropertyChanged(nameof(AvailableKeyAlgorithms));
         OnPropertyChanged(nameof(SelectedKeyAlgorithm));
         OnPropertyChanged(nameof(SelectedKeyAlgorithmIdText));
     }
 
     private void RefreshCollections(bool preserveSelection = false)
     {
-        string? systemName = preserveSelection ? SelectedSystem?.Name : null;
-        string? zoneName = preserveSelection ? SelectedZone?.Name : null;
-        string? channelName = preserveSelection ? SelectedChannel?.Name : null;
-        string? streamName = preserveSelection ? SelectedStream?.Stream.Name : null;
-        string? groupName = preserveSelection ? SelectedGroup?.Name : null;
+        if (collectionRefreshInProgress)
+            return;
 
-        Replace(Systems, Configuration.Systems);
-        Replace(Zones, Configuration.Zones);
-        SynchronizeDraftCallPrioritySystems();
-        SynchronizeDraftZoneSystems();
-        Replace(Streams, Configuration.Zones.SelectMany(zone => zone.WebStreams.Select(stream => new ConfigurationStreamRow(zone, stream))));
-        Replace(Groups, Configuration.Groups);
-        SelectedSystem = Systems.FirstOrDefault(system => string.Equals(system.Name, systemName, StringComparison.OrdinalIgnoreCase)) ?? Systems.FirstOrDefault();
-        SelectedZone = Zones.FirstOrDefault(zone => string.Equals(zone.Name, zoneName, StringComparison.OrdinalIgnoreCase)) ?? Zones.FirstOrDefault();
-        RefreshChannelsAndPreview();
-        SelectedChannel = Channels.FirstOrDefault(channel => string.Equals(channel.Name, channelName, StringComparison.OrdinalIgnoreCase)) ?? Channels.FirstOrDefault();
-        SelectedStream = Streams.FirstOrDefault(row => string.Equals(row.Stream.Name, streamName, StringComparison.OrdinalIgnoreCase)) ?? Streams.FirstOrDefault();
-        SelectedGroup = Groups.FirstOrDefault(group => string.Equals(group.Name, groupName, StringComparison.OrdinalIgnoreCase)) ?? Groups.FirstOrDefault();
-        RefreshConfigurationHierarchy();
-        RefreshValidation();
-        NotifyDocumentState();
+        collectionRefreshInProgress = true;
+        try
+        {
+            string? systemName = preserveSelection ? SelectedSystem?.Name : null;
+            string? zoneName = preserveSelection ? SelectedZone?.Name : null;
+            string? channelName = preserveSelection ? SelectedChannel?.Name : null;
+            string? streamName = preserveSelection ? SelectedStream?.Stream.Name : null;
+            string? groupName = preserveSelection ? SelectedGroup?.Name : null;
+            string? aliasSystemName = preserveSelection ? SelectedAliasSystem?.Name : null;
+
+            Replace(Systems, Configuration.Systems);
+            Replace(Zones, Configuration.Zones);
+            SynchronizeDraftCallPrioritySystems();
+            SynchronizeDraftZoneSystems();
+            Replace(Streams, Configuration.Zones.SelectMany(zone => zone.WebStreams.Select(stream => new ConfigurationStreamRow(zone, stream))));
+            Replace(Groups, Configuration.Groups);
+            SelectedSystem = Systems.FirstOrDefault(system => string.Equals(system.Name, systemName, StringComparison.OrdinalIgnoreCase)) ?? Systems.FirstOrDefault();
+            SelectedZone = Zones.FirstOrDefault(zone => string.Equals(zone.Name, zoneName, StringComparison.OrdinalIgnoreCase)) ?? Zones.FirstOrDefault();
+            RefreshChannelsAndPreview();
+            SelectedChannel = Channels.FirstOrDefault(channel => string.Equals(channel.Name, channelName, StringComparison.OrdinalIgnoreCase)) ?? Channels.FirstOrDefault();
+            SelectedStream = Streams.FirstOrDefault(row => string.Equals(row.Stream.Name, streamName, StringComparison.OrdinalIgnoreCase)) ?? Streams.FirstOrDefault();
+            SelectedGroup = Groups.FirstOrDefault(group => string.Equals(group.Name, groupName, StringComparison.OrdinalIgnoreCase)) ?? Groups.FirstOrDefault();
+            SelectedAliasSystem = Systems.FirstOrDefault(system =>
+                string.Equals(system.Name, aliasSystemName, StringComparison.OrdinalIgnoreCase)) ?? Systems.FirstOrDefault();
+            RefreshConfigurationHierarchy();
+            RefreshValidation();
+            NotifyDocumentState();
+        }
+        finally
+        {
+            collectionRefreshInProgress = false;
+        }
     }
 
     private void RefreshChannelsAndPreview()
@@ -1471,7 +1743,7 @@ public sealed class ConfigurationStudioViewModel :
         {
             if (!channelRows.TryGetValue(channel, out ConfigurationChannelRow? row))
             {
-                row = new ConfigurationChannelRow(index + 1, channel);
+                row = new ConfigurationChannelRow(index + 1, channel, CanEdit);
                 channelRows[channel] = row;
             }
             row.Refresh(index + 1);
@@ -1522,7 +1794,22 @@ public sealed class ConfigurationStudioViewModel :
     }
 
     private IEnumerable<ConfigurationValidationIssue> ValidateKeys()
-        => KeyFileValidator.Validate(keyContainer);
+    {
+        foreach (ConfigurationValidationIssue issue in KeyFileValidator.Validate(keyContainer))
+            yield return issue;
+        if (selectedKeyIdInputInvalid && SelectedKey is { } selected)
+        {
+            int index = keyContainer.Keys.IndexOf(selected);
+            if (index >= 0)
+            {
+                yield return new ConfigurationValidationIssue(
+                    ConfigurationValidationSeverity.Error,
+                    "Encryption Keys",
+                    $"keys[{index}].keyId",
+                    $"Key {index + 1} must use a hexadecimal key ID.");
+            }
+        }
+    }
 
     private void LoadReferencedCompanions()
     {
@@ -1554,8 +1841,10 @@ public sealed class ConfigurationStudioViewModel :
         }
         OnPropertyChanged(nameof(KeyFileIdentifierText));
         OnPropertyChanged(nameof(HasKeyFile));
+        OnPropertyChanged(nameof(CanEditKeyFile));
 
         aliasTables.Clear();
+        aliasReferenceIdentifiers.Clear();
         aliasFileHashes.Clear();
         aliasFileSnapshots.Clear();
         aliasLoadErrors.Clear();
@@ -1568,6 +1857,8 @@ public sealed class ConfigurationStudioViewModel :
                 ? []
                 : AliasFileLoader.Parse(aliasFile.Content);
             aliasTables[aliasFile.Identifier] = aliases;
+            foreach (string reference in aliasFile.References)
+                aliasReferenceIdentifiers[reference] = aliasFile.Identifier;
             if (aliasFile.ContentHash is not null)
                 aliasFileHashes[aliasFile.Identifier] = aliasFile.ContentHash;
             aliasFileSnapshots[aliasFile.Identifier] = AliasFileLoader.Serialize(aliases);
@@ -1579,6 +1870,9 @@ public sealed class ConfigurationStudioViewModel :
             foreach (RadioAlias alias in table.Value)
                 Aliases.Add(new ConfigurationAliasRow(table.Key, alias));
         SelectedAlias = Aliases.FirstOrDefault();
+        SelectedAliasSystem = SelectedAliasSystem is not null && Systems.Contains(SelectedAliasSystem)
+            ? SelectedAliasSystem
+            : Systems.FirstOrDefault();
         OnPropertyChanged(nameof(AliasFilesDirty));
     }
 
@@ -1613,8 +1907,14 @@ public sealed class ConfigurationStudioViewModel :
 
     private string? FindAliasTableIdentifier(string reference)
     {
+        if (string.IsNullOrWhiteSpace(reference))
+            return null;
         if (aliasTables.ContainsKey(reference))
             return reference;
+        if (aliasReferenceIdentifiers.TryGetValue(reference, out string? identifier) &&
+            aliasTables.ContainsKey(identifier))
+            return identifier;
+
         string fileName = GetPortableFileName(reference);
         string[] matches = aliasTables.Keys
             .Where(identifier => string.Equals(
@@ -1639,6 +1939,19 @@ public sealed class ConfigurationStudioViewModel :
                 Aliases.Add(new ConfigurationAliasRow(table.Key, alias));
         SelectedAlias = Aliases.FirstOrDefault(row =>
             string.Equals(row.Identifier, selectedIdentifier, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static uint NextAvailableRid(IReadOnlyCollection<RadioAlias> aliases)
+    {
+        var used = aliases.Select(alias => alias.Rid).ToHashSet();
+        for (uint candidate = 1; candidate < uint.MaxValue; candidate++)
+        {
+            if (!used.Contains(candidate))
+                return candidate;
+        }
+        if (!used.Contains(uint.MaxValue))
+            return uint.MaxValue;
+        throw new InvalidOperationException("The selected alias file has no available RID values.");
     }
 
     private void InitializeDraftZoneSystems(IReadOnlyDictionary<string, string> savedZoneSystemAssignments)
@@ -1740,6 +2053,7 @@ public sealed class ConfigurationStudioViewModel :
             if (!systemHierarchyNodes.TryGetValue(system, out ConfigurationHierarchyNode? systemNode))
             {
                 systemNode = new ConfigurationHierarchyNode(system.Name, system: system, isExpanded: true);
+                systemNode.PropertyChanged += HandleHierarchyNodePropertyChanged;
                 systemHierarchyNodes[system] = systemNode;
             }
 
@@ -1808,24 +2122,43 @@ public sealed class ConfigurationStudioViewModel :
             selectedHierarchyNode = currentNode;
             OnPropertyChanged(nameof(SelectedHierarchyNode));
         }
-        if (SelectedZone is not null && zoneHierarchyNodes.TryGetValue(SelectedZone, out ConfigurationHierarchyNode? currentZoneNode))
-        {
-            currentZoneNode.IsExpanded = true;
-            ConfigurationHierarchyNode? parentSystemNode = roots.FirstOrDefault(root => root.Children.Contains(currentZoneNode));
-            if (parentSystemNode is not null)
-                parentSystemNode.IsExpanded = true;
-        }
     }
 
     private ConfigurationHierarchyNode GetZoneHierarchyNode(ZoneConfiguration zone)
     {
         if (!zoneHierarchyNodes.TryGetValue(zone, out ConfigurationHierarchyNode? node))
         {
-            node = new ConfigurationHierarchyNode(zone.Name, zone: zone);
+            node = new ConfigurationHierarchyNode(
+                zone.Name,
+                zone: zone,
+                isExpanded: ReferenceEquals(zone, SelectedZone));
+            node.PropertyChanged += HandleHierarchyNodePropertyChanged;
             zoneHierarchyNodes[zone] = node;
         }
         return node;
     }
+
+    private void HandleHierarchyNodePropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName != nameof(ConfigurationHierarchyNode.IsExpanded) ||
+            sender is not ConfigurationHierarchyNode { IsExpanded: false } collapsedNode ||
+            selectedHierarchyNode is not { } selectedNode ||
+            ReferenceEquals(collapsedNode, selectedNode) ||
+            !ContainsHierarchyNode(collapsedNode, selectedNode))
+        {
+            return;
+        }
+
+        // Tree controls keep a selected descendant visible by reopening its
+        // parent. Select the collapsed branch itself so the user's choice wins.
+        SelectedHierarchyNode = collapsedNode;
+    }
+
+    private static bool ContainsHierarchyNode(
+        ConfigurationHierarchyNode ancestor,
+        ConfigurationHierarchyNode candidate)
+        => ancestor.Children.Any(child =>
+            ReferenceEquals(child, candidate) || ContainsHierarchyNode(child, candidate));
 
     private ConfigurationHierarchyNode GetChannelHierarchyNode(
         ZoneConfiguration zone,

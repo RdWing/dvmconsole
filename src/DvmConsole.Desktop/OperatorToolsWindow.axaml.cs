@@ -84,7 +84,7 @@ public sealed partial class OperatorToolsWindow : Window
         LayoutUpdated += HandleWindowLayoutUpdated;
         Closed += HandleClosed;
         Activated += (_, _) => UpdatePttFocusSuppression();
-        Deactivated += (_, _) => pttKeyRouter.UpdateInputFocus(null);
+        Deactivated += (_, _) => pttKeyRouter.UpdateInputFocus(null, isWindowActive: false);
         ScheduleHistoryViewportHook();
     }
 
@@ -363,7 +363,7 @@ public sealed partial class OperatorToolsWindow : Window
     private void UpdatePttFocusSuppression()
     {
         if (!closed)
-            pttKeyRouter.UpdateInputFocus(FocusManager?.GetFocusedElement());
+            pttKeyRouter.UpdateInputFocus(FocusManager?.GetFocusedElement(), IsActive);
     }
 
     private void TryRevealClockSettings()

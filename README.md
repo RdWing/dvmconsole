@@ -36,9 +36,7 @@ For amateur and educational use. **Not for public- or life-safety operation.**
 <sub>Public example configuration shown; no operational system data is included.</sub>
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/user-guide/Assets/configuration-studio-zone.png">
-  <source media="(prefers-color-scheme: light)" srcset="docs/user-guide/Assets/configuration-studio-zone-light.png">
-  <img alt="Configuration Studio zone editor showing the system, zone, and channel hierarchy, channel table, settings inspector, and live zone layout" src="docs/user-guide/Assets/configuration-studio-zone.png" width="100%">
+  <img alt="Responsive Configuration Studio zone editor showing the FNE hierarchy, channel editor, settings inspector, and live zone layout" src="docs/user-guide/Assets/configuration-studio-zone.png" width="100%">
 </picture>
 
 <sub>Configuration Studio shown with the sanitized demo codeplug.</sub>
@@ -62,14 +60,25 @@ isolated audio state keep simultaneous calls separate.
 
 ## What’s new in DVM Console NEO
 
-### 0.6.1 — Small hotfix release
+### 0.6.2: Configuration and PTT reliability
+
+Version 0.6.2 fixes managed codeplug import, export, companion-file handling,
+and Configuration Studio's first-time setup path. Alias import uses one native
+picker for the selected FNE and keeps managed runtime paths out of the editor.
+The release also fixes responsive channel editing and keyboard PTT, tightens
+receive episode grouping, and stops waiting after shutdown recording work has
+finished.
+
+[Read the 0.6.2 release notes →](docs/releases/v0.6.2.md)
+
+### 0.6.1: Small hotfix release
 
 Version 0.6.1 fixes control state, PTT input, row expansion, and window placement
 in the compact List workspace. It also expands the network-disabled demo.
 
 [Read the 0.6.1 release notes →](docs/releases/v0.6.1.md)
 
-### 0.6.0 — Portability-first runtime and shared presentation
+### 0.6.0: Portability-first runtime and shared presentation
 
 Version 0.6.0 completes the first portability refactor while keeping macOS and
 Windows as the supported runtime targets.
@@ -99,13 +108,13 @@ web-stream cancellation, and native-audio cleanup.
 ## Download DVM Console NEO
 
 Download the package for the destination computer and extract the entire
-archive before starting DVM Console NEO. Version 0.6.1 uses these filenames:
+archive before starting DVM Console NEO. Version 0.6.2 uses these filenames:
 
 | Platform | Package | Requirements |
 | --- | --- | --- |
-| Apple Silicon Mac | `dvmconsole-0.6.1-osx-arm64.zip` | macOS 14 or newer |
-| Intel Mac | `dvmconsole-0.6.1-osx-x64.zip` | macOS 14 or newer |
-| Windows PC | `dvmconsole-0.6.1-win-x64.zip` | Windows x64 |
+| Apple Silicon Mac | `dvmconsole-0.6.2-osx-arm64.zip` | macOS 14 or newer |
+| Intel Mac | `dvmconsole-0.6.2-osx-x64.zip` | macOS 14 or newer |
+| Windows PC | `dvmconsole-0.6.2-win-x64.zip` | Windows x64 |
 
 **[Download the latest release →](https://github.com/RdWing/dvmconsole/releases/latest)**
 
@@ -125,7 +134,8 @@ archive before starting DVM Console NEO. Version 0.6.1 uses these filenames:
    xattr -dr com.apple.quarantine "/Applications/DVMConsole.app"
    ```
 
-3. Open DVM Console NEO normally and use **Open Codeplug** to load `codeplug.yml`.
+3. Open DVM Console NEO normally and use **Import Codeplug** to add
+   `codeplug.yml` to the managed Configuration Library.
 
 macOS may request local-network access for FNE, microphone access for PTT, and
 Accessibility or Input Monitoring access for OS-global PTT.
@@ -141,7 +151,8 @@ starting it again.
 
 1. Choose **Extract All** in File Explorer.
 2. Start `DvmConsole.exe` from the extracted folder.
-3. Use **Open Codeplug** to load `codeplug.yml`.
+3. Use **Import Codeplug** to add `codeplug.yml` to the managed Configuration
+   Library.
 
 If Microsoft Defender SmartScreen warns about the unsigned package, continue
 only after confirming that the archive came from an RdWing GitHub Release.

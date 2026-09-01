@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using System.Text;
 using DvmConsole.Application;
 using DvmConsole.Core.Configuration;
+using YamlDotNet.RepresentationModel;
 
 namespace DvmConsole.Configuration.Yaml;
 
@@ -25,6 +26,8 @@ public sealed class ManagedConfigurationLibrary : IConfigurationLibrary, IActive
         {
             AtomicLibraryFile.Recover(catalogPath, ConfigurationLibraryJsonContext.Default.CatalogState);
             CatalogState catalog = LoadCatalog();
+            if (RecoverMissingRevisionReferences(catalog))
+                SaveCatalog(catalog);
             activeConfiguration = catalog.Active is null
                 ? null
                 : new ConfigurationReference(
@@ -123,9 +126,12 @@ public sealed class ManagedConfigurationLibrary : IConfigurationLibrary, IActive
         {
             byte[] primary = await ReadAllBytesAsync(source.Primary, cancellationToken).ConfigureAwait(false);
             string yaml = DecodeYaml(primary);
+            (yaml, string? compatibilityWarning) = RepairMisplacedZoneEntries(yaml);
             ConfigurationDocument document = ParseAndValidate(yaml, source.Primary.DisplayName);
             (string managedYaml, Dictionary<string, byte[]> companions, List<string> warnings) =
                 await PrepareImportBundleAsync(document, source, options, cancellationToken).ConfigureAwait(false);
+            if (compatibilityWarning is not null)
+                warnings.Insert(0, compatibilityWarning);
             string fingerprint = ComputeFingerprint(primary, companions);
             string? origin = NormalizeOrigin(source.Primary.OriginIdentity);
             CatalogState catalog = LoadCatalog();
@@ -423,7 +429,10 @@ public sealed class ManagedConfigurationLibrary : IConfigurationLibrary, IActive
                 exportYaml = document.Serialize();
             }
 
+            _ = ParseAndValidate(exportYaml, destination.Primary.DisplayName);
+
             await WriteTextAsync(destination.Primary, exportYaml, cancellationToken).ConfigureAwait(false);
+            var expectedCompanions = new Dictionary<string, byte[]>(StringComparer.OrdinalIgnoreCase);
             if (!options.Sanitized && options.IncludeCompanions)
             {
                 foreach (string companionName in metadata.CompanionNames)
@@ -432,11 +441,16 @@ public sealed class ManagedConfigurationLibrary : IConfigurationLibrary, IActive
                         .CreateCompanionAsync(companionName, cancellationToken)
                         .ConfigureAwait(false);
                     byte[] content = File.ReadAllBytes(Path.Combine(revisionRoot, "companions", companionName));
+                    expectedCompanions[companionName] = content;
                     await WriteBytesAsync(target, content, cancellationToken).ConfigureAwait(false);
                 }
             }
 
-            await ValidateExportReadbackAsync(destination, options, metadata.CompanionNames, cancellationToken)
+            await ValidateExportReadbackAsync(
+                    destination,
+                    exportYaml,
+                    expectedCompanions,
+                    cancellationToken)
                 .ConfigureAwait(false);
         }
         finally
@@ -683,7 +697,7 @@ public sealed class ManagedConfigurationLibrary : IConfigurationLibrary, IActive
             metadata,
             ConfigurationLibraryJsonContext.Default.RevisionMetadataState);
         AtomicLibraryFile.Write(
-            Path.Combine(EntryRoot(entry.Id), "current.json"),
+            CurrentRevisionPath(entry.Id),
             new CurrentRevisionState { Revision = revision },
             ConfigurationLibraryJsonContext.Default.CurrentRevisionState);
 
@@ -787,23 +801,101 @@ public sealed class ManagedConfigurationLibrary : IConfigurationLibrary, IActive
         return document;
     }
 
+    private static (string Yaml, string? Warning) RepairMisplacedZoneEntries(string yaml)
+    {
+        var stream = new YamlStream();
+        using (var reader = new StringReader(yaml))
+            stream.Load(reader);
+        if (stream.Documents.Count != 1 ||
+            stream.Documents[0].RootNode is not YamlMappingNode root ||
+            !TryGetMappingValue(root, "systems", out YamlSequenceNode? systems) ||
+            systems is null)
+        {
+            return (yaml, null);
+        }
+
+        YamlMappingNode[] misplacedZones = systems.Children
+            .OfType<YamlMappingNode>()
+            .Where(IsMisplacedZone)
+            .ToArray();
+        if (misplacedZones.Length == 0)
+            return (yaml, null);
+
+        if (!TryGetMappingValue(root, "zones", out YamlSequenceNode? zones) || zones is null)
+        {
+            zones = [];
+            root.Add("zones", zones);
+        }
+        foreach (YamlMappingNode zone in misplacedZones)
+        {
+            systems.Children.Remove(zone);
+            zones.Add(zone);
+        }
+
+        using var writer = new StringWriter();
+        stream.Save(writer, assignAnchors: false);
+        string[] names = misplacedZones
+            .Select(zone => TryGetScalarValue(zone, "name") ?? "unnamed")
+            .ToArray();
+        return (
+            writer.ToString(),
+            $"Recovered {misplacedZones.Length} zone entr{(misplacedZones.Length == 1 ? "y" : "ies")} " +
+            $"from the systems list: {string.Join(", ", names)}.");
+    }
+
+    private static bool IsMisplacedZone(YamlMappingNode candidate)
+    {
+        bool hasZoneContent = TryGetMappingValue(candidate, "channels", out YamlSequenceNode? channels) &&
+                              channels is not null ||
+                              TryGetMappingValue(candidate, "web_streams", out YamlSequenceNode? streams) &&
+                              streams is not null;
+        if (!hasZoneContent)
+            return false;
+
+        string[] systemFields =
+        [
+            "address", "identity", "port", "password", "presharedKey", "kmfPresharedKey",
+            "encrypted", "transportEncryptionMode", "peerId", "rid", "aliasPath"
+        ];
+        return systemFields.All(field => !TryGetMappingValue(candidate, field, out YamlNode? _));
+    }
+
+    private static string? TryGetScalarValue(YamlMappingNode mapping, string name)
+        => TryGetMappingValue(mapping, name, out YamlScalarNode? value) ? value?.Value : null;
+
+    private static bool TryGetMappingValue<TNode>(
+        YamlMappingNode mapping,
+        string name,
+        out TNode? value)
+        where TNode : YamlNode
+    {
+        KeyValuePair<YamlNode, YamlNode> entry = mapping.Children.FirstOrDefault(candidate =>
+            candidate.Key is YamlScalarNode scalar &&
+            string.Equals(scalar.Value, name, StringComparison.Ordinal));
+        value = entry.Value as TNode;
+        return value is not null;
+    }
+
     private async ValueTask ValidateExportReadbackAsync(
         IExportDocumentSet destination,
-        ConfigurationExportOptions options,
-        IReadOnlyList<string> companionNames,
+        string expectedYaml,
+        IReadOnlyDictionary<string, byte[]> expectedCompanions,
         CancellationToken cancellationToken)
     {
         byte[] primary = await ReadAllBytesAsync(destination.Primary, cancellationToken).ConfigureAwait(false);
-        _ = ParseAndValidate(DecodeYaml(primary), destination.Primary.DisplayName);
-        if (options.Sanitized || !options.IncludeCompanions)
-            return;
-        foreach (string name in companionNames)
+        string readbackYaml = DecodeYaml(primary);
+        if (!string.Equals(readbackYaml, expectedYaml, StringComparison.Ordinal))
+            throw new IOException("The exported codeplug did not match the bytes written to the destination.");
+        _ = ParseAndValidate(readbackYaml, destination.Primary.DisplayName);
+        foreach ((string name, byte[] expectedContent) in expectedCompanions)
         {
             IReadableDocument? companion = await destination.ResolveExportedCompanionAsync(name, cancellationToken)
                 .ConfigureAwait(false);
             if (companion is null)
                 throw new IOException($"Exported companion '{name}' could not be read back.");
-            _ = await ReadAllBytesAsync(companion, cancellationToken).ConfigureAwait(false);
+            byte[] actualContent = await ReadAllBytesAsync(companion, cancellationToken).ConfigureAwait(false);
+            if (!actualContent.AsSpan().SequenceEqual(expectedContent))
+                throw new IOException($"Exported companion '{name}' did not match the bytes written to the destination.");
         }
     }
 
@@ -1022,6 +1114,113 @@ public sealed class ManagedConfigurationLibrary : IConfigurationLibrary, IActive
     private void SaveCatalog(CatalogState catalog)
         => AtomicLibraryFile.Write(catalogPath, catalog, ConfigurationLibraryJsonContext.Default.CatalogState);
 
+    private bool RecoverMissingRevisionReferences(CatalogState catalog)
+    {
+        bool changed = false;
+        foreach (CatalogEntryState entry in catalog.Entries)
+        {
+            if (entry.CurrentRevision == Guid.Empty || IsUsableRevision(entry.Id, entry.CurrentRevision))
+                continue;
+
+            Guid? recoveredRevision = ReadCurrentRevisionPointer(entry.Id) ??
+                                      FindNewestUsableRevision(entry.Id);
+            if (recoveredRevision is not Guid revision)
+                continue;
+
+            entry.CurrentRevision = revision;
+            AtomicLibraryFile.Write(
+                CurrentRevisionPath(entry.Id),
+                new CurrentRevisionState { Revision = revision },
+                ConfigurationLibraryJsonContext.Default.CurrentRevisionState);
+            changed = true;
+        }
+
+        if (catalog.Active is not { } active)
+            return changed;
+
+        CatalogEntryState? activeEntry = catalog.Entries.FirstOrDefault(entry => entry.Id == active.Id);
+        if (activeEntry is null)
+        {
+            catalog.Active = null;
+            return true;
+        }
+
+        if (IsUsableRevision(active.Id, active.Revision))
+            return changed;
+
+        if (activeEntry.CurrentRevision != Guid.Empty &&
+            IsUsableRevision(activeEntry.Id, activeEntry.CurrentRevision))
+        {
+            active.Revision = activeEntry.CurrentRevision;
+        }
+        else
+        {
+            catalog.Active = null;
+        }
+        return true;
+    }
+
+    private Guid? ReadCurrentRevisionPointer(Guid id)
+    {
+        string path = CurrentRevisionPath(id);
+        if (!File.Exists(path) && !File.Exists(path + ".pending") && !File.Exists(path + ".backup"))
+            return null;
+        try
+        {
+            AtomicLibraryFile.Recover(path, ConfigurationLibraryJsonContext.Default.CurrentRevisionState);
+            Guid revision = AtomicLibraryFile.Read(
+                path,
+                ConfigurationLibraryJsonContext.Default.CurrentRevisionState).Revision;
+            return IsUsableRevision(id, revision) ? revision : null;
+        }
+        catch (Exception exception) when (
+            exception is IOException or UnauthorizedAccessException or InvalidDataException)
+        {
+            return null;
+        }
+    }
+
+    private Guid? FindNewestUsableRevision(Guid id)
+    {
+        string revisionsRoot = Path.Combine(EntryRoot(id), "revisions");
+        if (!Directory.Exists(revisionsRoot))
+            return null;
+
+        var candidates = new List<(Guid Revision, DateTimeOffset CommittedAt)>();
+        foreach (string directory in Directory.EnumerateDirectories(revisionsRoot))
+        {
+            if (!Guid.TryParseExact(Path.GetFileName(directory), "N", out Guid revision) ||
+                !IsUsableRevision(id, revision))
+            {
+                continue;
+            }
+            try
+            {
+                RevisionMetadataState metadata = ReadRevisionMetadata(directory);
+                if (metadata.Id == id && metadata.Revision == revision)
+                    candidates.Add((revision, metadata.CommittedAt));
+            }
+            catch (Exception exception) when (
+                exception is IOException or UnauthorizedAccessException or InvalidDataException)
+            {
+                // A partially restored revision is not a recovery candidate.
+            }
+        }
+        return candidates
+            .OrderByDescending(candidate => candidate.CommittedAt)
+            .Select(candidate => (Guid?)candidate.Revision)
+            .FirstOrDefault();
+    }
+
+    private bool IsUsableRevision(Guid id, Guid revision)
+    {
+        if (revision == Guid.Empty)
+            return false;
+        string revisionRoot = RevisionRoot(id, revision);
+        return File.Exists(Path.Combine(revisionRoot, "codeplug.yml")) &&
+               File.Exists(Path.Combine(revisionRoot, "revision.json"));
+    }
+
     private static CatalogEntryState GetEntry(CatalogState catalog, ConfigurationId id)
         => catalog.Entries.FirstOrDefault(entry => entry.Id == id.Value)
             ?? throw new KeyNotFoundException($"Unknown configuration ID '{id}'.");
@@ -1118,6 +1317,7 @@ public sealed class ManagedConfigurationLibrary : IConfigurationLibrary, IActive
 
     private string EntryRoot(Guid id) => Path.Combine(root, "entries", id.ToString("N"));
     private string TrashRoot(Guid id) => Path.Combine(root, "trash", id.ToString("N"));
+    private string CurrentRevisionPath(Guid id) => Path.Combine(EntryRoot(id), "current.json");
     private string RevisionRoot(Guid id, Guid revision)
         => Path.Combine(EntryRoot(id), "revisions", revision.ToString("N"));
     private string DraftRoot(Guid id) => Path.Combine(DraftsRoot, id.ToString("N"));

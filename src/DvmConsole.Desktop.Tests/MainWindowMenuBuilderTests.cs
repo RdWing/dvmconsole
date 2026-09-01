@@ -13,7 +13,11 @@ public sealed class MainWindowMenuBuilderTests
     {
         var menu = new MenuItem();
 
-        MainWindowMenuBuilder.ReplacePttKeyItems(menu, "Disabled", (_, _) => { });
+        MainWindowMenuBuilder.ReplacePttKeyItems(
+            menu,
+            "Disabled",
+            KeyboardPttKey.F8,
+            (_, _) => { });
 
         MenuItem[] items = menu.Items.Cast<MenuItem>().ToArray();
         Assert.Equal(Enum.GetValues<KeyboardPttKey>().Length, items.Length);
@@ -21,6 +25,26 @@ public sealed class MainWindowMenuBuilderTests
         Assert.Equal("None", items[0].Tag);
         Assert.Equal("F19", items[^1].Header);
         Assert.Equal("F19", items[^1].Tag);
+        Assert.All(items, item => Assert.Equal(MenuItemToggleType.Radio, item.ToggleType));
+        Assert.Single(items, item => item.IsChecked);
+        Assert.True(items.Single(item => Equals(item.Tag, "F8")).IsChecked);
+    }
+
+    [Fact]
+    public void PttKeySelectionCanBeRefreshedFromTheLiveBinding()
+    {
+        var menu = new MenuItem();
+        MainWindowMenuBuilder.ReplacePttKeyItems(
+            menu,
+            "Disabled",
+            KeyboardPttKey.None,
+            (_, _) => { });
+
+        MainWindowMenuBuilder.UpdatePttKeySelection(menu, KeyboardPttKey.Space);
+
+        MenuItem[] items = menu.Items.Cast<MenuItem>().ToArray();
+        Assert.Single(items, item => item.IsChecked);
+        Assert.True(items.Single(item => Equals(item.Tag, "Space")).IsChecked);
     }
 
     [Fact]

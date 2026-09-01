@@ -6,7 +6,7 @@ This page describes the settings available to operators.
 
 # Settings menu
 
-## Toggle Push To Talk Mode
+## Toggle push-to-talk mode
 
 When enabled, each PTT click starts or stops transmit. When disabled, PTT uses
 press-and-hold behavior.
@@ -19,7 +19,7 @@ Off
 
 DVM Console saves this setting.
 
-## Talk Permit Tone
+## Talk permit tone
 
 When enabled, DVM Console plays a short local tone when transmit begins.
 
@@ -27,12 +27,21 @@ This is local operator feedback only; it is not transmitted. Global,
 active-system, and serial PTT wait for the cue to complete before microphone
 audio is released, including when the shared PTT setting uses toggle mode.
 
-## Connection Chimes
+## Connection chimes
 
 Connection chimes are enabled by default. Turn them off to silence local
 feedback when an FNE connects or disconnects.
 
-## Monitor Generated Tones Locally
+This option is on the General page under **Settings > All console settings**.
+
+## Verbose logging
+
+**Enable verbose logging** is on the General page under **Settings > All
+console settings**. It adds per-packet, PCM-level, and routine keepalive details
+to Debug Logs. Leave it off unless those details are needed because it can use
+more CPU and memory on a busy system.
+
+## Monitor generated tones locally
 
 Generated-tone monitoring is enabled by default. Turn it off to transmit alert
 tones, DTMF, generated-tone presets, and QCII pages without playing the local
@@ -41,7 +50,9 @@ monitor copy through the selected speaker route.
 This setting affects only local monitoring. It does not change transmitted
 audio.
 
-## Interface Size
+This option is on the General page under **Settings > All console settings**.
+
+## Interface size
 
 Open **Settings > All console settings** and use the Appearance controls to
 adjust the main console and Console Settings display.
@@ -49,11 +60,11 @@ adjust the main console and Console Settings display.
 - **Text size** changes the inherited application font size.
 - **Interface scale** scales the main console and Console Settings UI.
 
-These settings apply immediately and are stored in `UserSettings` schema 9. The
-optional Engineering Health rail stores only its visibility and height in
-`OperatorView.json`. It does not move or rewrite channel cards.
+These settings apply immediately. The optional Engineering Health rail stores
+its visibility and height separately and does not move or rewrite channel
+cards.
 
-## Mute RX Audio While Transmitting
+## Mute RX audio while transmitting
 
 When enabled, DVM Console mutes local RX speaker playback during transmit.
 
@@ -63,7 +74,7 @@ local speaker output is muted.
 Use this with speakers to reduce the chance that received audio feeds back into
 the microphone.
 
-## Retain Patch State on Startup
+## Retain patch state on startup
 
 When enabled, DVM Console restores each patch's active state at startup.
 
@@ -76,7 +87,7 @@ Default:
 Off
 ```
 
-## Restore Selected Channels On Startup
+## Restore selected channels on startup
 
 When enabled, DVM Console restores selected resources at startup.
 
@@ -112,7 +123,7 @@ group collapses first. Alert shortcuts then move into **MORE**, followed by
 **TONES** and the clocks. The transition accounts for interface scale and the
 number of enabled clocks.
 
-## Audio Settings
+## Audio settings
 
 This opens the Audio page in Console Settings.
 
@@ -136,31 +147,29 @@ transaction. If reconfiguration fails, it restores the previous input, output,
 processing options, and warm-microphone state. The failed settings are not
 saved, and Audio status and Debug Logs report the problem.
 
-## Import / Export Settings
+## Import and export settings
 
-This opens Settings Transfer, which moves console preferences between machines
-without manually copying `UserSettings.json`.
+Use **File > Export Settings…** to save the current console settings as a
+JSON profile. The file includes layout, audio routing, TAR settings, group
+operator state, custom alert settings, clocks, startup preferences, history
+preferences, PTT keybinds, and selectable-encryption state. It does not include
+the Configuration Library, recordings, or managed alert audio files. Reimport
+custom alert audio after moving settings to another computer.
 
-The transfer file is a portable JSON file. You can choose which categories to export or import, including:
+Use **File > Import Settings…** to apply a complete exported profile. DVM
+Console reloads the current managed configuration so imported layout and
+routing changes take effect. The import does not switch to a different managed
+configuration.
 
-- console layout and widget positions
-- audio routing and volumes
-- TAR configuration
-- patch and multi-select group state
-- custom alert tones
-- toolbar clocks
-- startup restore state
-- operator preferences
-- call history window preferences
-- keybinds and selectable encryption state
+## Named settings profiles
 
-Press `Ctrl+A` in the transfer window to select all categories.
+**File > Settings Profiles** stores named profiles on the current computer.
+**Save current profile…** captures the current settings. **Load profile** shows
+a summary and restores the saved operator settings after confirmation. It keeps
+the active managed configuration and current channel selection. **Delete
+profile** removes a saved profile after confirmation.
 
-An import replaces only the selected categories. DVM Console reloads the
-current codeplug and widgets so layout and routing changes take effect
-immediately.
-
-## Reset Settings
+## Reset settings
 
 This clears saved user settings.
 
@@ -223,7 +232,9 @@ only the newest 100 entries matching its current filters.
 
 ## Groups
 
-Opens Console Settings on the Groups page.
+Opens Configuration Studio on the Groups page. Group definitions stay in the
+managed YAML revision. Membership, direction, and enabled state are saved as
+operator state for that managed configuration.
 
 ## Keep Window on Top
 
@@ -283,13 +294,13 @@ clean connection and can learn up to nine.
 
 Only protocol-aligned durations are offered:
 
-- P25: zero through nine 180 ms LDUs; adaptive range 0–1620 ms.
-- DMR: zero through nine 60 ms packets; adaptive range 0–540 ms.
-- NXDN: zero through nine 80 ms packets; adaptive range 0–720 ms.
+- P25: zero through nine 180 ms LDUs; adaptive range 0 to 1620 ms.
+- DMR: zero through nine 60 ms packets; adaptive range 0 to 540 ms.
+- NXDN: zero through nine 80 ms packets; adaptive range 0 to 720 ms.
 
 The fixed or learned duration is added to the decode and speaker path. Under
 normal conditions, estimated packet-arrival-to-speaker latency is the stream's
-jitter target plus about 80–110 ms. The audio device can add a route-dependent
+jitter target plus about 80 to 110 ms. The audio device can add a route-dependent
 delay that DVM Console cannot measure. Turning the jitter buffer off minimizes
 latency but removes the chance to reorder packets.
 

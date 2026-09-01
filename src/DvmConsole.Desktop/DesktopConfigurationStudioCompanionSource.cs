@@ -50,12 +50,22 @@ internal sealed class DesktopConfigurationStudioCompanionSource : IConfiguration
                     string identifier = ConfigurationLoader.ResolvePath(
                         document.Configuration,
                         system.AliasPath);
-                    if (aliases.ContainsKey(identifier))
+                    if (aliases.TryGetValue(identifier, out ConfigurationStudioAliasCompanion? existing))
+                    {
+                        aliases[identifier] = existing with
+                        {
+                            References = existing.References
+                                .Append(system.AliasPath)
+                                .Distinct(StringComparer.OrdinalIgnoreCase)
+                                .ToArray()
+                        };
                         continue;
+                    }
                     if (!File.Exists(identifier))
                     {
                         aliases[identifier] = new ConfigurationStudioAliasCompanion(
                             identifier,
+                            [system.AliasPath],
                             string.Empty,
                             null);
                         warnings.Add($"Alias file for system '{system.Name}' does not exist yet: {identifier}");
@@ -64,6 +74,7 @@ internal sealed class DesktopConfigurationStudioCompanionSource : IConfiguration
                     List<RadioAlias> loaded = AliasFileLoader.Load(identifier);
                     aliases[identifier] = new ConfigurationStudioAliasCompanion(
                         identifier,
+                        [system.AliasPath],
                         AliasFileLoader.Serialize(loaded),
                         ConfigurationDocument.ComputeFileHash(identifier));
                 }

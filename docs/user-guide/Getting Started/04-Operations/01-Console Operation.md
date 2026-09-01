@@ -38,9 +38,9 @@ output route remain in Audio settings so the line layout stays compact.
 
 The volume slider defaults to its center position and uses the same slightly
 sticky center behavior as Cards. Expansion is session-only and never changes a
-saved card position. Any row recycling, renderer change, navigation,
-deactivation, session replacement, or shutdown releases held PTT through the
-same idempotent controller used by Cards.
+saved card position. Any row recycling, renderer change, navigation, session
+replacement, or shutdown releases held PTT through the same idempotent
+controller used by Cards.
 
 ---
 
@@ -103,10 +103,14 @@ DVM Console supports press-and-hold and toggle PTT.
 Toggle PTT mode is controlled by:
 
 ```
-Settings > Toggle Push To Talk Mode
+Settings > Toggle push-to-talk mode
 ```
 
 Toggle PTT is off by default. If changed, the preference is saved.
+
+A channel keyed in toggle mode remains keyed when DVM Console loses window
+focus. Suspension, session replacement, shutdown, or pressing its PTT control
+again releases the channel.
 
 PTT is unavailable while a channel is receiving. Clicking its disabled PTT
 control does not change the channel's RX selection. When PTT is released, DVM
@@ -138,7 +142,13 @@ Global PTT keys every channel with `TX` armed. Active-system PTT keys only the
 armed channels in the system tab that is active when PTT starts. PTT requires
 at least one transmit-capable channel in the applicable scope.
 
-Choose separate keys under **Channels > Global PTT key** and **Channels > Active-system PTT key**, or configure both under **Console Settings > PTT**. Space and F1 through F19 are supported, and each enabled binding must use a unique key. Both bindings use the same saved press-and-hold or toggle PTT setting. On macOS, OS-global capture may require Accessibility or Input Monitoring permission. When global capture is unavailable, the keys still work while the application has keyboard focus.
+Choose separate keys under **Channels > Global PTT key** and **Channels >
+Active-system PTT key**, or configure both under **Console Settings > PTT**.
+Space and F1 through F19 are supported, and each enabled binding must use a
+unique key. Both bindings use the same saved press-and-hold or toggle PTT
+setting. On macOS, OS-global capture may require Accessibility or Input
+Monitoring permission. When global capture is unavailable, the keys still work
+while the application has keyboard focus.
 
 The focused-window Space binding does not consume Space while an editable field
 or ordinary interactive control has focus. OS-global capture remains available
@@ -146,7 +156,10 @@ where supported. During transmit, the status field at the bottom identifies
 whether PTT came from the window-local keyboard, OS-global keyboard, serial
 hardware, or a channel control.
 
-Under **Console Settings > PTT > Serial hardware PTT**, select **Limit serial PTT to TX-selected resources in the active system** to give the serial device the same active-system scope. Leave it clear for the serial device to key every `TX`-selected resource across systems.
+Under **Console Settings > PTT > Serial hardware PTT**, select **Limit serial
+PTT to TX-selected resources in the active system** to give the serial device
+the same active-system scope. Leave it clear for the serial device to key every
+`TX`-selected resource across systems.
 
 Serial and OS-global keyboard PTT are desktop-only capabilities. On-screen PTT
 does not depend on a physical input source.
@@ -162,8 +175,9 @@ the main console.
 
 The talk permit tone uses the selected output device for card, global, and
 active-system PTT. Global and active-system keybinds complete this cue in both
-press-and-hold and toggle mode before microphone audio is released. Use
-**Audio > Test talk permit tone** when checking the route.
+press-and-hold and toggle mode before microphone audio is released. Open
+**Audio > Audio settings** and select **Test talk permit tone** when checking
+the route.
 
 ---
 
@@ -204,7 +218,8 @@ a later authoritative table permits it.
 When a selected resource receives traffic, its card shows RX activity and
 source information.
 
-Tabs show an audio activity icon when a resource on that tab is receiving. Long tab names are trimmed so the activity icon remains visible.
+Tabs show an audio activity icon when a resource on that tab is receiving. Long
+tab names are trimmed so the activity icon remains visible.
 
 ---
 
@@ -212,9 +227,12 @@ Tabs show an audio activity icon when a resource on that tab is receiving. Long 
 
 Codeplug-defined web stream chips appear on their configured zone tabs.
 
-Click a stream chip to start or stop playback. Streams load in the off state unless **Restore Selected Channels On Startup** is enabled and the stream was active at shutdown.
+Click a stream chip to start or stop playback. Streams load in the off state
+unless **Restore selected channels on startup** is enabled and the stream was
+active at shutdown.
 
-Stream chips use a compact volume slider. User volume changes are saved by stream name, and the chip turns green when audio is detected.
+Stream chips use a compact volume slider. User volume changes are saved by
+stream name, and the chip turns green when audio is detected.
 
 The chip turns amber while connecting. DVM Console tries up to three times
 before marking the stream down.
@@ -245,7 +263,8 @@ When enabled:
 
 - selected resources are restored on startup
 - saved volume for restored resources is restored
-- configured encrypted P25 resources request keys through KMM after their FNE connects and use the local key file as fallback
+- configured encrypted P25 resources request keys through KMM after their FNE
+  connects and use the local key file as fallback
 
 When disabled:
 

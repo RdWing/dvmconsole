@@ -8,8 +8,8 @@ connects, the console requests every configured P25 Phase 1 algorithm and key
 ID through KMM. A valid key from that FNE takes precedence over the local YAML
 fallback. DMR and NXDN privacy keys come from the local YAML file.
 
-Open **File > Configuration Studio > Encryption Keys** to edit the referenced
-local key file. Choose a protocol, then choose an algorithm by name. Studio
+Open **File > Configuration Studio**, then select **Encryption Keys** to edit
+the referenced local key file. Choose a protocol, then choose an algorithm by name. Studio
 fills in the protocol-specific algorithm ID for you. For example, P25 Phase 1
 AES-256 uses `0x84`, while DMR AES-256 uses `0x05`. The table shows both the
 name and ID so the saved value is easy to check. The inspector never displays
@@ -38,16 +38,22 @@ deployment.
 
 ---
 
-# Key file location
+# Managed key file
 
-Reference the key file with `keyFile` in the codeplug:
+If the configuration does not have a key file, selecting **Add** on the
+Encryption Keys page creates a managed `keys.clear` companion and the first
+editable entry. To use an existing key file, open **Files & Interoperability**
+and select **Browse…**. Studio copies the selected file into the managed draft;
+it does not edit the external source.
+
+A portable exported codeplug uses a relative reference:
 
 ```yaml
-keyFile: "Full/Path/To/Keyfile.clear"
+keyFile: "./keys.clear"
 ```
 
-The key file is optional when FNE/KMM supplies every required key. If present,
-the file provides fallback keys for all configured systems.
+The key file is optional when FNE/KMM supplies every required P25 Phase 1 key.
+DMR and NXDN privacy keys use the managed local key file.
 
 ---
 
@@ -170,7 +176,9 @@ never applies a response from one FNE to another, even when both use the same
 algorithm and key ID. If the connection drops, DVM Console removes its KMM keys
 and restores any available local keys.
 
-Clear and MI-instruction KMM responses are accepted. Peer-encrypted KMM responses require the system's separate `kmfPresharedKey`; the FNE transport `presharedKey` is never reused for this purpose.
+Clear and MI-instruction KMM responses are accepted. Peer-encrypted KMM
+responses require the system's separate `kmfPresharedKey`; the FNE transport
+`presharedKey` is never reused for this purpose.
 
 ---
 

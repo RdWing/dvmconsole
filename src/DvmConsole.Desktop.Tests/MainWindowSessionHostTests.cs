@@ -296,6 +296,98 @@ public sealed class MainWindowSessionHostTests
         }
     }
 
+    [Fact]
+    public async Task DeactivationFlushWaitsForSessionReplacement()
+    {
+        string directory = Path.Combine(
+            Path.GetTempPath(),
+            "dvmconsole-session-host-tests",
+            Guid.NewGuid().ToString("N"));
+        var store = new UserSettingsStore(Path.Combine(directory, "UserSettings.json"));
+        var initial = new MainWindowViewModel("Initial session", [], [], CreateOptions(store));
+        MainWindowViewModel? replacement = new(
+            "Replacement session",
+            [],
+            [],
+            CreateOptions(store));
+        var quiesceEntered = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var allowReplacement = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        MainWindowSessionHost? host = null;
+
+        try
+        {
+            host = new MainWindowSessionHost(
+                initial,
+                (_, _) => { },
+                _ => { },
+                () => { },
+                () => { },
+                async (candidate, cancellationToken) =>
+                {
+                    if (!ReferenceEquals(candidate, initial))
+                        return;
+                    quiesceEntered.TrySetResult();
+                    await allowReplacement.Task.WaitAsync(cancellationToken);
+                });
+
+            Task replacementTask = host.ReplaceAsync(replacement);
+            await quiesceEntered.Task;
+            Task flushTask = host.FlushSettingsIfActiveAsync();
+
+            Assert.False(flushTask.IsCompleted);
+            allowReplacement.TrySetResult();
+            await Task.WhenAll(replacementTask, flushTask);
+            replacement = null;
+        }
+        finally
+        {
+            allowReplacement.TrySetResult();
+            if (replacement is not null)
+                await replacement.DisposeAsync();
+            if (host is not null)
+                await host.DisposeAsync();
+            else
+                await initial.DisposeAsync();
+            if (Directory.Exists(directory))
+                Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task DeactivationFlushAfterShutdownIsANoOp()
+    {
+        string directory = Path.Combine(
+            Path.GetTempPath(),
+            "dvmconsole-session-host-tests",
+            Guid.NewGuid().ToString("N"));
+        var store = new UserSettingsStore(Path.Combine(directory, "UserSettings.json"));
+        var viewModel = new MainWindowViewModel(
+            "Initial session",
+            [],
+            [],
+            CreateOptions(store));
+        var host = new MainWindowSessionHost(
+            viewModel,
+            (_, _) => { },
+            _ => { },
+            () => { },
+            () => { });
+
+        try
+        {
+            await host.DisposeAsync();
+
+            await host.FlushSettingsIfActiveAsync();
+        }
+        finally
+        {
+            if (Directory.Exists(directory))
+                Directory.Delete(directory, recursive: true);
+        }
+    }
+
     private static MainWindowViewModelOptions CreateOptions(UserSettingsStore store)
         => new(
             UserSettingsStore: store,

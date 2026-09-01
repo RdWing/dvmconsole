@@ -97,7 +97,6 @@ public sealed partial class MainWindow : Window
         (configurationPath, activeConfiguration, migrateLegacyConfigurationOperatorState) =
             ResolveInitialConfiguration(configurationPath);
         InitializeComponent();
-        PopulatePttKeyMenus();
         // Avalonia can leave named controls declared inside nested MenuItems
         // unresolved when the compiled XAML is loaded from a published
         // self-contained apphost. Resolve them from the window name scope
@@ -134,6 +133,7 @@ public sealed partial class MainWindow : Window
             configurationPath,
             activeConfiguration,
             migrateLegacyConfigurationOperatorState);
+        PopulatePttKeyMenus(initialViewModel);
         operatorViewSettings = LoadOperatorViewSettings();
         operatorViewWriter = new LatestOperatorViewWriter(
             this.operatorViewStore.Save,
@@ -212,12 +212,12 @@ public sealed partial class MainWindow : Window
         Activated += (_, _) => UpdatePttFocusSuppression();
         Deactivated += async (_, _) =>
         {
-            pttKeyRouter.UpdateInputFocus(null);
+            pttKeyRouter.UpdateInputFocus(null, isWindowActive: false);
             if (Volatile.Read(ref shutdownStarted) != 0)
                 return;
             try
             {
-                await sessionHost.ApplicationSession.FlushSettingsAsync(CancellationToken.None).ConfigureAwait(false);
+                await sessionHost.FlushSettingsIfActiveAsync(CancellationToken.None).ConfigureAwait(false);
             }
             catch (ObjectDisposedException) when (Volatile.Read(ref shutdownStarted) != 0)
             {
@@ -682,7 +682,11 @@ public sealed partial class MainWindow : Window
         e.Handled = true;
         if (viewModel.TogglePttMode)
         {
-            await channelPtt.ToggleAsync(new ChannelId(channel.SessionId));
+            ChannelId channelId = new(channel.SessionId);
+            if (channel.IsTransmitting)
+                await channelPtt.UnkeyAsync(channelId);
+            else
+                await channelPtt.ToggleAsync(channelId);
         }
         else
         {
@@ -713,7 +717,13 @@ public sealed partial class MainWindow : Window
     {
         ArgumentNullException.ThrowIfNull(channel);
         if (viewModel.TogglePttMode)
-            await channelPtt.ToggleAsync(new ChannelId(channel.SessionId));
+        {
+            ChannelId channelId = new(channel.SessionId);
+            if (channel.IsTransmitting)
+                await channelPtt.UnkeyAsync(channelId);
+            else
+                await channelPtt.ToggleAsync(channelId);
+        }
         else
             await channelPtt.PressAsync(new ChannelId(channel.SessionId));
     }
@@ -994,7 +1004,13 @@ public sealed partial class MainWindow : Window
             return;
         }
         ConfigurationDocument document;
-        ConfigurationId? studioConfigurationId = createNew ? null : activeConfiguration?.Id;
+        // The session owns the document being edited, so its managed identity is
+        // authoritative. The window-level active reference can briefly lag a
+        // session replacement; using it here could commit this document as a
+        // revision of an unrelated library entry.
+        ConfigurationId? studioConfigurationId = createNew
+            ? null
+            : viewModel.ConfigurationReference?.Id;
         try
         {
             string? path = viewModel.CurrentCodeplugPath;
@@ -1029,6 +1045,8 @@ public sealed partial class MainWindow : Window
         AttachPttInputSafety(configurationStudioWindow);
         configurationStudioWindow.ReloadRequested += ReloadManagedConfigurationAsync;
         configurationStudioWindow.Closed += (_, _) => configurationStudioWindow = null;
+        configurationStudioWindow.FitInitialBoundsToDisplay(
+            Screens.ScreenFromWindow(this) ?? Screens.Primary);
         configurationStudioWindow.Show();
     }
 
@@ -1062,7 +1080,7 @@ public sealed partial class MainWindow : Window
             sessionUserSettingsStore,
             configurationLibrary,
             configurationMaterializer,
-            activeConfiguration?.Id,
+            viewModel.ConfigurationReference?.Id,
             section)
         {
             Width = 1488,
@@ -1662,7 +1680,9 @@ public sealed partial class MainWindow : Window
     {
         ArgumentNullException.ThrowIfNull(window);
         void Refresh()
-            => pttKeyRouter.UpdateInputFocus(window.FocusManager?.GetFocusedElement());
+            => pttKeyRouter.UpdateInputFocus(
+                window.FocusManager?.GetFocusedElement(),
+                window.IsActive);
 
         window.AddHandler(
             InputElement.GotFocusEvent,
@@ -1675,7 +1695,7 @@ public sealed partial class MainWindow : Window
             RoutingStrategies.Bubble,
             true);
         window.Activated += (_, _) => Refresh();
-        window.Deactivated += (_, _) => pttKeyRouter.UpdateInputFocus(null);
+        window.Deactivated += (_, _) => pttKeyRouter.UpdateInputFocus(null, isWindowActive: false);
     }
 
     private void HandleTransmitSelectionClick(object? sender, RoutedEventArgs e)
@@ -1733,6 +1753,7 @@ public sealed partial class MainWindow : Window
             !Enum.TryParse(value, ignoreCase: true, out KeyboardPttKey key))
             return;
         await viewModel.SetGlobalPttKeyAsync(key);
+        RefreshPttKeyMenuSelections();
     }
 
     private async void HandleActiveSystemPttKeyClick(object? sender, RoutedEventArgs e)
@@ -1741,6 +1762,7 @@ public sealed partial class MainWindow : Window
             !Enum.TryParse(value, ignoreCase: true, out KeyboardPttKey key))
             return;
         await viewModel.SetActiveSystemPttKeyAsync(key);
+        RefreshPttKeyMenuSelections();
     }
 
     private void HandleExitClick(object? sender, RoutedEventArgs e) => Close();
@@ -1761,7 +1783,7 @@ public sealed partial class MainWindow : Window
         => Dispatcher.UIThread.Post(UpdatePttFocusSuppression, DispatcherPriority.Input);
 
     private void UpdatePttFocusSuppression()
-        => pttKeyRouter.UpdateInputFocus(FocusManager?.GetFocusedElement());
+        => pttKeyRouter.UpdateInputFocus(FocusManager?.GetFocusedElement(), IsActive);
 
     internal static bool TryMapPttKey(Key key, out KeyboardPttKey pttKey)
         => WindowPttKeyRouter.TryMap(key, out pttKey);
@@ -1810,7 +1832,7 @@ public sealed partial class MainWindow : Window
         Avalonia.Markup.Xaml.AvaloniaXamlLoader.Load(this);
     }
 
-    private void PopulatePttKeyMenus()
+    private void PopulatePttKeyMenus(MainWindowViewModel initialViewModel)
     {
         MenuItem globalMenu = this.FindControl<MenuItem>("globalPttKeyMenu")
             ?? throw new InvalidOperationException("The global PTT key menu was not initialized.");
@@ -1819,11 +1841,27 @@ public sealed partial class MainWindow : Window
         MainWindowMenuBuilder.ReplacePttKeyItems(
             globalMenu,
             "None (keyboard PTT disabled)",
+            initialViewModel.AppliedGlobalPttKey,
             HandleGlobalPttKeyClick);
         MainWindowMenuBuilder.ReplacePttKeyItems(
             activeSystemMenu,
             "None (active-system PTT disabled)",
+            initialViewModel.AppliedActiveSystemPttKey,
             HandleActiveSystemPttKeyClick);
+        globalMenu.SubmenuOpened += (_, _) => RefreshPttKeyMenuSelections();
+        activeSystemMenu.SubmenuOpened += (_, _) => RefreshPttKeyMenuSelections();
+    }
+
+    private void RefreshPttKeyMenuSelections()
+    {
+        MenuItem globalMenu = this.FindControl<MenuItem>("globalPttKeyMenu")
+            ?? throw new InvalidOperationException("The global PTT key menu was not initialized.");
+        MenuItem activeSystemMenu = this.FindControl<MenuItem>("activeSystemPttKeyMenu")
+            ?? throw new InvalidOperationException("The active-system PTT key menu was not initialized.");
+        MainWindowMenuBuilder.UpdatePttKeySelection(globalMenu, viewModel.AppliedGlobalPttKey);
+        MainWindowMenuBuilder.UpdatePttKeySelection(
+            activeSystemMenu,
+            viewModel.AppliedActiveSystemPttKey);
     }
 
     private void HandleOpenRecordingClick(object? sender, RoutedEventArgs e)

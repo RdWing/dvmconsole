@@ -34,6 +34,15 @@ public sealed class WindowPttKeyRouterTests
     }
 
     [Fact]
+    public void LosingWindowActivationClearsFocusSuppressionForGlobalPtt()
+    {
+        var editor = new TextBox();
+
+        Assert.True(WindowPttInputGuard.ShouldSuppressSpacePtt(editor, isWindowActive: true));
+        Assert.False(WindowPttInputGuard.ShouldSuppressSpacePtt(editor, isWindowActive: false));
+    }
+
+    [Fact]
     public void SuppressesSpacePttForInteractiveControlsButNotChannelSurface()
     {
         Assert.True(WindowPttInputGuard.ShouldSuppressSpacePtt(new Button()));
@@ -41,5 +50,21 @@ public sealed class WindowPttKeyRouterTests
         Assert.False(WindowPttInputGuard.ShouldSuppressSpacePtt(new Button { Classes = { "ptt" } }));
         Assert.False(WindowPttInputGuard.ShouldSuppressSpacePtt(new ListBox { Classes = { "channel-list" } }));
         Assert.False(WindowPttInputGuard.ShouldSuppressSpacePtt(new Border { Focusable = true }));
+    }
+
+    [Theory]
+    [InlineData("channel-list")]
+    [InlineData("channel-card")]
+    public void AllowsSpacePttAfterFocusingChannelControls(string surfaceClass)
+    {
+        var focusedButton = new Button();
+        var surface = new Border
+        {
+            Classes = { surfaceClass },
+            Child = focusedButton
+        };
+
+        Assert.False(WindowPttInputGuard.ShouldSuppressSpacePtt(focusedButton));
+        GC.KeepAlive(surface);
     }
 }

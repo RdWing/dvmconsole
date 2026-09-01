@@ -16,6 +16,7 @@ internal sealed class MainWindowSessionHost : IAsyncDisposable
     private MainWindowViewModel viewModel;
     private IConsoleApplicationSession applicationSession;
     private ChannelPttController cardPtt;
+    private int disposalStarted;
 
     public MainWindowSessionHost(
         MainWindowViewModel initialViewModel,
@@ -44,6 +45,26 @@ internal sealed class MainWindowSessionHost : IAsyncDisposable
 
     public ValueTask StartAsync()
         => viewModel.StartKeyboardPttAsync();
+
+    // Window deactivation can overlap a configuration replacement or final
+    // shutdown. Keep the settings writer inside the same ownership gate as
+    // those transitions so it can never outlive the session being flushed.
+    public async Task FlushSettingsIfActiveAsync(CancellationToken cancellationToken = default)
+    {
+        if (Volatile.Read(ref disposalStarted) != 0)
+            return;
+
+        await transitionGate.WaitAsync(cancellationToken);
+        try
+        {
+            if (Volatile.Read(ref disposalStarted) == 0)
+                await applicationSession.FlushSettingsAsync(cancellationToken);
+        }
+        finally
+        {
+            transitionGate.Release();
+        }
+    }
 
     // A replacement session reloads operator settings from the shared store.
     // Flush the outgoing session before constructing that replacement so two
@@ -120,6 +141,7 @@ internal sealed class MainWindowSessionHost : IAsyncDisposable
 
     private async Task DisposeCoreAsync()
     {
+        Volatile.Write(ref disposalStarted, 1);
         await transitionGate.WaitAsync();
         try
         {

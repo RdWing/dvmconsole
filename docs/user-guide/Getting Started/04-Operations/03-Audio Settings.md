@@ -112,9 +112,9 @@ Use the default route for most resources. Set an override when a talkgroup must
 always use another speaker or audio interface.
 
 Web stream output overrides, volume, and position are keyed by stream name.
-Automatic startup also checks the codeplug path, canonical URL, and credentials
-used when the operator started the stream. Keep the name and definition stable
-to retain all saved behavior.
+Automatic startup also checks the managed configuration, canonical URL, and
+credentials used when the operator started the stream. Keep the name and
+definition stable to retain all saved behavior.
 
 ---
 

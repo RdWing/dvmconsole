@@ -103,6 +103,37 @@ public sealed class ChannelAudioMeterPipelineTests
     }
 
     [Fact]
+    public void RapidReceiveStreamTurnoverCannotBlankTheCurrentChannelMeter()
+    {
+        ChannelViewModel channel = CreateReceivingChannel(FneTrafficProtocol.P25, streamId: 8);
+        var pipeline = new ChannelAudioMeterPipeline();
+
+        pipeline.Observe(
+            channel,
+            streamId: 8,
+            Enumerable.Repeat((short)12_000, 160).ToArray(),
+            ChannelAudioDirection.Receive);
+        // A delayed silent tail from the prior call can be published after the
+        // current call's meter sample during rapid stream turnover.
+        pipeline.Observe(
+            channel,
+            streamId: 7,
+            new short[160],
+            ChannelAudioDirection.Receive);
+
+        ChannelAudioMeterUpdate[] physicalUpdates = pipeline.Advance().ToArray();
+        Assert.Contains(physicalUpdates, update => update.StreamId == 8 && update.Level > 0);
+        Assert.Contains(physicalUpdates, update => update.StreamId == 7 && update.Level == 0);
+
+        ChannelAudioMeterUpdate presented = Assert.Single(
+            MainWindowViewModel.CoalesceReceiveMeterUpdates(physicalUpdates));
+        Assert.True(presented.Level > 0);
+        Assert.Equal(
+            physicalUpdates.Max(update => update.PeakLevel),
+            presented.PeakLevel);
+    }
+
+    [Fact]
     public void FastReceiveStreamCanPresentBeforeUiLifecycleCatchesUp()
     {
         var channel = new ChannelViewModel(new ChannelConfiguration

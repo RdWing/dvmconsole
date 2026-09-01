@@ -6,6 +6,93 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.6.2] - 2026-09-01
+
+### Added
+
+- Add file pickers for encryption-key and RID-alias companions in Configuration
+  Studio. Selected files are copied into the managed draft and referenced by a
+  portable managed filename; the originals remain unchanged.
+- Show the applied key with a radio indicator in the global and active-system
+  PTT menus, and label Alert/QCII pattern fields as frequency and duration in
+  seconds.
+
+### Changed
+
+- Rename **Open Codeplug** to **Import Codeplug** and make **Open Recent** list
+  recently opened managed revisions instead of external source paths.
+- Identify FNE clients as `NEO_<version>`, shorten the P25 logical-call
+  continuation window from 1.8 seconds to 0.9 seconds, and finish shutdown as
+  soon as recording finalization completes instead of waiting a fixed grace
+  period.
+
+### Fixed
+
+- Keep codeplug import, managed activation, Studio save/reload, and file-picker
+  callbacks on the correct UI thread. Import can also recover zone entries
+  misplaced under `systems`, reports the repair, and leaves the source file
+  unchanged.
+- Read exported YAML and companions back byte-for-byte before reporting
+  success. Missing optional companions are reported and omitted without
+  blocking the YAML export, while dirty Studio exports use the current managed
+  key and alias contents. Sanitized copies now replace removed operational
+  values with valid non-secret placeholders, so normal export validation does
+  not reject the support copy.
+- Make the new-configuration path continuous from FNE system to zone, channel,
+  managed key, alias, and encrypted-channel setup. Prevent duplicate names and
+  unstable collection state when adding, duplicating, or deleting systems and
+  when duplicating zones. System selection changes no longer feed editor events
+  recursively into collection rebuilds and exhaust the application stack.
+  Keep read-only editors and validation navigation consistent, and retain the
+  Redo action while restored editor bindings settle after Undo.
+- Edit channel name, destination, mode, DMR slot, encryption algorithm,
+  receive-only state, and card size directly in the desktop channel table,
+  synchronized with the channel inspector and normal Undo/Redo history. Keep
+  the destination column compact, give channel names the largest flexible
+  share, protect the mode and DMR-slot controls from clipping, and hide the
+  slot control for non-DMR channels. When the inspector leaves too little room
+  for those controls, switch to the compact channel list instead of clipping
+  the desktop table.
+- Keep zones and channels inline under their FNE systems instead of duplicating
+  them as a top-level navigation item. Make the full navigation rail scroll
+  reliably, let a selected zone branch stay collapsed, and let a selected FNE
+  create its first zone and channel directly.
+- Make a newly added RID alias editable immediately and update its row as the
+  RID and alias are entered, without requiring a second Add and cleanup pass.
+  Selecting an FNE now resolves its exact managed alias copy even when another
+  FNE uses a file with the same name; if it has no alias file, Add creates the
+  portable managed file and its first editable row. Import/replace copies a
+  selected alias list into that FNE's current managed draft without changing
+  another FNE, and the editor no longer exposes internal runtime paths.
+- Preserve a valid encryption key ID while an invalid hexadecimal edit is being
+  corrected, create `keys.clear` or `aliases.yml` when the first managed entry
+  is added, and report committed revisions truthfully if later materialization
+  or settings reconciliation fails.
+- Keep Space PTT available on channel controls and keep toggle-mode card PTT
+  and system-wide keyboard PTT keyed when the DVM Console window loses focus.
+  A visible **Release** control now unkeys from live channel state even if the
+  transmission originated from another PTT source or source bookkeeping fell
+  out of sync. Suspension, shutdown, and physical key release continue to
+  unkey normally.
+- Prevent an older physical stream's decaying meter state from blanking the
+  current receive meter during rapid call turnover, and use plain numeric text
+  fields instead of spinner controls for FNE Port and Peer ID in Configuration
+  Studio. DMR slot selection now uses a two-choice dropdown in both editors,
+  while RID aliases use a plain numeric text field.
+- Fit Configuration Studio's initial size and position within the current
+  display's working area, including displays that use desktop scaling.
+- Commit Studio edits against the managed identity of the document being
+  edited, preventing a stale window identity from revising an unrelated
+  library entry. Newly saved configurations can now disconnect and load
+  immediately, and added or duplicated FNE systems appear after reload.
+- Repair restored managed-library catalog pointers from an existing current or
+  newest valid revision during startup, and safely deactivate an entry when no
+  recoverable revision remains.
+- Include Configuration Troubleshooting in the in-app documentation and update
+  the guide for managed key and alias files, current TAR controls and retention,
+  tone routes and formats, named settings profiles, and Configuration Studio's
+  current navigation.
+
 ## [0.6.1] - 2026-08-31
 
 ### Added
@@ -905,7 +992,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Add patches, multi-select groups, call history, recordings, web streams, clocks, layouts, themes, startup behavior, and in-application operator documentation.
 - Add support for local and KMM-provided P25 encryption keys while preserving compatibility with existing variable-length AES key material.
 
-[Unreleased]: https://github.com/RdWing/dvmconsole/compare/v0.6.1...HEAD
+[Unreleased]: https://github.com/RdWing/dvmconsole/compare/v0.6.2...HEAD
+[0.6.2]: https://github.com/RdWing/dvmconsole/compare/v0.6.1...v0.6.2
 [0.6.1]: https://github.com/RdWing/dvmconsole/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/RdWing/dvmconsole/compare/v0.5.5...v0.6.0
 [0.5.5]: https://github.com/RdWing/dvmconsole/compare/v0.5.4...v0.5.5

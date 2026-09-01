@@ -1,6 +1,5 @@
 using Avalonia.Controls;
 using Avalonia.Interactivity;
-using DvmConsole.Core.Configuration;
 
 namespace DvmConsole.Presentation;
 
@@ -15,20 +14,14 @@ public sealed partial class ConfigurationStudioSystemsView : UserControl
     }
 
     public event EventHandler? DeleteRequested;
-    public event EventHandler<ConfigurationStudioAliasFileEventArgs>? BrowseAliasFileRequested;
 
     private ConfigurationStudioViewModel? ViewModel => DataContext as ConfigurationStudioViewModel;
 
     private void HandleAddSystemClick(object? sender, RoutedEventArgs e) => ViewModel?.AddSystem();
     private void HandleDuplicateSystemClick(object? sender, RoutedEventArgs e) => ViewModel?.DuplicateSystem();
+    private void HandleAddChannelClick(object? sender, RoutedEventArgs e) => ViewModel?.AddChannelToSelectedSystem();
     private void HandleDeleteSystemClick(object? sender, RoutedEventArgs e)
         => DeleteRequested?.Invoke(this, EventArgs.Empty);
-    private void HandleBrowseAliasFileClick(object? sender, RoutedEventArgs e)
-    {
-        if (ViewModel?.SelectedSystem is SystemConfiguration system)
-            BrowseAliasFileRequested?.Invoke(this, new ConfigurationStudioAliasFileEventArgs(system));
-    }
-
     private void HandleDraftFieldEdit(object? sender, RoutedEventArgs e)
     {
         if (IsLoaded)

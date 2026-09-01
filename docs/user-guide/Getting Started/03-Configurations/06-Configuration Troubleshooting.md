@@ -2,10 +2,13 @@
 
 ## A referenced file is missing
 
-Open **Files & Interoperability** and check `keyFile` and each system's alias
-path. Relative paths start from the codeplug's folder. A missing key file blocks
-secure operation for keys that are not available through FNE/KMM. A missing
-alias file leaves calls usable but shows numeric RIDs.
+Open **Files & Interoperability**. Use **Browse** to replace the managed key
+file. For aliases, select the affected FNE and use **Choose file…** to import a
+replacement through the operating system picker. Studio copies the selection
+into that configuration's managed draft without changing the external source
+or another FNE's alias list. A missing key file blocks secure operation for
+keys that are not available through FNE/KMM. A missing alias file leaves calls
+usable but shows numeric RIDs; select **Add** to create its first managed entry.
 
 ## Review & Save is disabled by errors
 
@@ -38,17 +41,20 @@ Enable and multi-select PTT controls work only when Studio is editing the
 codeplug loaded in the main console. Save a new draft, load it in the console,
 and reopen the Groups page to use those controls.
 
-## A file changed outside Studio
+## An imported source changed outside DVM Console
 
-Studio compares each source file with the copy it opened. If the hashes differ,
-it will not overwrite the external change. Save the draft as a copy, or close
-and reopen Studio to work from the changed file.
+The managed revision does not change when its original YAML or companion files
+change. Use **File > Import Codeplug** again to bring in the new external
+content. If both the source and its managed configuration have changed, DVM
+Console asks whether to import it as a new configuration, replace the managed
+entry with a recoverable revision, or cancel.
 
 ## The codeplug saved but the console did not change
 
 Saving does not hot-apply systems, zones, channels, or streams to a running
 session. Choose **Disconnect and reload** after Review & Save, or load the saved
-codeplug later with **File > Open Codeplug**.
+managed revision later with **File > Open Recent** or **File > Configuration
+Library**.
 
 ## Reload failed
 

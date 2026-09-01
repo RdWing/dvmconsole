@@ -74,9 +74,8 @@ Choose **View > Engineering Health** to open the optional telemetry rail. It is
 hidden by default and has no transmit, mute, routing, or recording controls. The
 rail reports receive queue pressure and latency, microphone state, generation
 and cadence, transmit backlog, TAR finalization and catalog work, route
-recovery, and connection health for the selected system. DVM Console stores its
-visibility and height in `OperatorView.json`; this does not change
-`UserSettings` schema 7 or channel-card positions.
+recovery, and connection health for the selected system. DVM Console stores the
+rail's visibility and height separately from channel-card positions.
 
 ## Channel interaction
 
