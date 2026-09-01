@@ -261,7 +261,9 @@
       <presentation:ConfigurationStudioNavigationView x:Name="Navigation" SectionRequested="HandleSharedSectionNavigationRequested" />
       <Grid x:Name="PageHost" Grid.Column="1" MinHeight="0" Background="{DynamicResource StudioCanvasBrush}">
         <presentation:ConfigurationStudioOverviewView/>
-        <presentation:ConfigurationStudioSystemsView DeleteRequested="HandleSharedDeleteSystemRequested"/>
+        <presentation:ConfigurationStudioSystemsView
+            DeleteRequested="HandleSharedDeleteSystemRequested"
+            BrowseAliasFileRequested="HandleSharedBrowseAliasFileRequested"/>
         <presentation:ConfigurationStudioZonesView x:Name="zonesView"
             EditCommandRequested="HandleSharedStudioEditCommandRequested"/>
         <presentation:ConfigurationStudioStreamsView
@@ -276,6 +278,8 @@
             DeleteRequested="HandleSharedDeleteKeyRequested"/>
         <presentation:ConfigurationStudioFilesView
             DeleteAliasRequested="HandleSharedDeleteAliasRequested"
+            BrowseKeyFileRequested="HandleSharedBrowseKeyFileRequested"
+            BrowseAliasFileRequested="HandleSharedBrowseAliasFileRequested"
             ExportFullRequested="HandleSharedExportFullRequested"
             ExportSanitizedRequested="HandleSharedExportSanitizedRequested"/>
       </Grid>

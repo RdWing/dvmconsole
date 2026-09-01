@@ -38,6 +38,152 @@ public sealed class ConfigurationStudioRenderTests
     };
 
     [AvaloniaFact]
+    public async Task PickerStorageOperationsStartedByWorkerRunOnUiThread()
+    {
+        (bool Metadata, bool AsyncOperation, bool Workflow, bool Disposal) result = await Task.Run(async () =>
+        {
+            bool metadata = await AvaloniaStorageThreading.Invoke(
+                Dispatcher.UIThread.CheckAccess);
+            bool asyncOperation = await AvaloniaStorageThreading.InvokeAsync(() =>
+                Task.FromResult(Dispatcher.UIThread.CheckAccess()));
+            bool workflow = false;
+            await AvaloniaStorageThreading.InvokeAsync(async () =>
+            {
+                await Task.Yield();
+                workflow = Dispatcher.UIThread.CheckAccess();
+            });
+            bool disposal = false;
+            AvaloniaStorageThreading.Invoke(() =>
+            {
+                disposal = Dispatcher.UIThread.CheckAccess();
+            });
+            return (metadata, asyncOperation, workflow, disposal);
+        });
+
+        Assert.True(result.Metadata);
+        Assert.True(result.AsyncOperation);
+        Assert.True(result.Workflow);
+        Assert.True(result.Disposal);
+    }
+
+    [AvaloniaFact]
+    public async Task SessionReplacementStartedByWorkerMarshalsAvaloniaState()
+    {
+        string demoCodeplug = Path.Combine(AppContext.BaseDirectory, "Demo", "codeplug.yml");
+        using DemoSessionState demoState = DemoSessionState.Create();
+        var settingsStore = new UserSettingsStore(demoState.UserSettingsPath);
+        var mainWindow = new MainWindow(
+            demoCodeplug,
+            settingsStore,
+            new OperatorViewStore(demoState.OperatorViewPath),
+            demoMode: true);
+        MainWindowViewModel replacement = MainWindowViewModel.Load(
+            demoCodeplug,
+            settingsStore,
+            networkDisabledDemo: true,
+            useLegacyPathFallback: false);
+        replacement.InitializeDemoScenario();
+
+        try
+        {
+            mainWindow.Show();
+            await Task.Run(() => mainWindow.ReplaceViewModelAsync(replacement));
+
+            Assert.Same(replacement, mainWindow.DataContext);
+        }
+        finally
+        {
+            mainWindow.Close();
+        }
+    }
+
+    [AvaloniaFact]
+    public async Task SaveAndReloadCanCloseStudioWithoutResumingAgainstDetachedView()
+    {
+        string demoCodeplug = Path.Combine(AppContext.BaseDirectory, "Demo", "codeplug.yml");
+        using DemoSessionState demoState = DemoSessionState.Create();
+        var mainWindow = new MainWindow(
+            demoCodeplug,
+            new UserSettingsStore(demoState.UserSettingsPath),
+            new OperatorViewStore(demoState.OperatorViewPath),
+            demoMode: true);
+
+        try
+        {
+            mainWindow.Show();
+            await mainWindow.OpenConfigurationStudioAsync(
+                ConfigurationStudioSection.Overview,
+                createNew: false);
+            ConfigurationStudioWindow studio = Assert.IsType<ConfigurationStudioWindow>(
+                mainWindow.OpenConfigurationStudioWindow);
+            int confirmations = 0;
+            studio.DialogConfirmationOverride = (_, _, _) =>
+            {
+                confirmations++;
+                return Task.FromResult(true);
+            };
+            studio.MessageOverride = (_, _) => Task.CompletedTask;
+
+            bool saved = await studio.ReviewAndSaveForCaptureAsync();
+
+            Assert.True(saved);
+            Assert.Equal(2, confirmations);
+            Assert.False(studio.IsVisible);
+            Assert.Null(mainWindow.OpenConfigurationStudioWindow);
+            Assert.True(Assert.IsType<MainWindowViewModel>(mainWindow.DataContext).IsCodeplugLoaded);
+        }
+        finally
+        {
+            mainWindow.OpenConfigurationStudioWindow?.CloseForSessionReplacement();
+            mainWindow.Close();
+        }
+    }
+
+    [AvaloniaFact]
+    public void ConfigurationCompanionsUseManagedReferencesAndBrowseActions()
+    {
+        string demoCodeplug = Path.Combine(AppContext.BaseDirectory, "Demo", "codeplug.yml");
+        using DemoSessionState demoState = DemoSessionState.Create();
+        var mainWindow = new MainWindow(
+            demoCodeplug,
+            new UserSettingsStore(demoState.UserSettingsPath),
+            new OperatorViewStore(demoState.OperatorViewPath),
+            demoMode: true);
+        ConfigurationStudioWindow studio = mainWindow.CreateConfigurationStudioForCapture(
+            ConfigurationStudioSection.Files);
+
+        try
+        {
+            mainWindow.Show();
+            studio.Show(mainWindow);
+            studio.UpdateLayout();
+
+            ConfigurationStudioFilesView files = studio
+                .FindControl<ConfigurationStudioView>("studioView")!
+                .GetVisualDescendants()
+                .OfType<ConfigurationStudioFilesView>()
+                .Single();
+            Border references = files.FindControl<Border>("ReferencedFilesPanel")!;
+            Assert.Empty(references.GetVisualDescendants().OfType<TextBox>());
+            Assert.EndsWith(
+                "keys.clear",
+                files.FindControl<TextBlock>("KeyFileReference")!.Text,
+                StringComparison.Ordinal);
+            Assert.Equal("Browse…", files.FindControl<Button>("KeyFileBrowseButton")!.Content);
+            Assert.Equal(
+                2,
+                references.GetVisualDescendants()
+                    .OfType<Button>()
+                    .Count(button => AutomationProperties.GetName(button) == "Choose managed RID alias file"));
+        }
+        finally
+        {
+            studio.CloseForSessionReplacement();
+            mainWindow.Close();
+        }
+    }
+
+    [AvaloniaFact]
     public void ConfigurationStudioHierarchyWheelScrollsTheWholeNavigationSidebar()
     {
         string demoCodeplug = Path.Combine(AppContext.BaseDirectory, "Demo", "codeplug.yml");
@@ -80,6 +226,45 @@ public sealed class ConfigurationStudioRenderTests
             Assert.True(scroller.Offset.Y > 0);
             Assert.True(IsWithinViewport(groups, scroller));
             Assert.True(IsWithinViewport(encryptionKeys, scroller));
+        }
+        finally
+        {
+            studio.CloseForSessionReplacement();
+            mainWindow.Close();
+        }
+    }
+
+    [AvaloniaFact]
+    public void EmptyConfigurationHierarchyStillNavigatesToSystemsAndZones()
+    {
+        string demoCodeplug = Path.Combine(AppContext.BaseDirectory, "Demo", "codeplug.yml");
+        using DemoSessionState demoState = DemoSessionState.Create();
+        var settingsStore = new UserSettingsStore(demoState.UserSettingsPath);
+        var mainWindow = new MainWindow(
+            demoCodeplug,
+            settingsStore,
+            new OperatorViewStore(demoState.OperatorViewPath),
+            demoMode: true);
+        ConfigurationStudioWindow studio = mainWindow.CreateConfigurationStudioForCapture(
+            ConfigurationStudioSection.Overview);
+
+        try
+        {
+            studio.StudioViewModel.ConfigurationHierarchy.Clear();
+            mainWindow.Show();
+            studio.Show(mainWindow);
+            studio.UpdateLayout();
+
+            ConfigurationStudioNavigationView navigation = studio
+                .FindControl<ConfigurationStudioView>("studioView")!
+                .FindControl<ConfigurationStudioNavigationView>("Navigation")!;
+            Button systems = navigation.FindControl<Button>("SystemsNavigationButton")!;
+            Button zones = navigation.FindControl<Button>("ZonesNavigationButton")!;
+
+            systems.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            Assert.True(studio.StudioViewModel.IsSystems);
+            zones.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            Assert.True(studio.StudioViewModel.IsZones);
         }
         finally
         {

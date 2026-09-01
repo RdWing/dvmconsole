@@ -87,6 +87,24 @@ public sealed class ManagedConfigurationLibraryTests : IDisposable
     }
 
     [Fact]
+    public async Task ActivationPersistsTheManagedConfigurationLastOpenedTime()
+    {
+        var clock = new MutableClock(new DateTimeOffset(2026, 8, 31, 12, 0, 0, TimeSpan.Zero));
+        var library = new ManagedConfigurationLibrary(root, clock);
+        ConfigurationDraft draft = await library.CreateDraftAsync("Primary");
+        ConfigurationCommit commit = await library.CommitAsync(draft with { Yaml = ValidYaml });
+        Assert.Null(Assert.Single(await ReadAllAsync(library.ListAsync())).LastOpenedAt);
+
+        clock.UtcNow = clock.UtcNow.AddMinutes(7);
+        await library.ActivateAsync(commit.Reference);
+
+        ConfigurationSummary activated = Assert.Single(await ReadAllAsync(library.ListAsync()));
+        Assert.Equal(clock.UtcNow, activated.LastOpenedAt);
+        var reopenedLibrary = new ManagedConfigurationLibrary(root);
+        Assert.Equal(clock.UtcNow, Assert.Single(await ReadAllAsync(reopenedLibrary.ListAsync())).LastOpenedAt);
+    }
+
+    [Fact]
     public async Task ReimportUsesOriginAndFingerprintWithoutTouchingTheSource()
     {
         var library = new ManagedConfigurationLibrary(root);
@@ -473,6 +491,23 @@ public sealed class ManagedConfigurationLibraryTests : IDisposable
         Assert.DoesNotContain("alias.yml", destination.PrimaryDocument.Text, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task DirtyStudioExportKeepsYamlWhenOptionalCompanionIsMissing()
+    {
+        var source = new MemoryDocumentSet("draft.yml", "draft-origin", ValidYaml);
+        var destination = new MemoryDocumentSet("portable.yml", "export-origin", string.Empty);
+
+        ConfigurationBundleExportResult result = await ConfigurationBundleExporter.ExportAsync(
+            ValidYaml,
+            source,
+            destination,
+            new ConfigurationExportOptions(Sanitized: false));
+
+        Assert.Contains("aliasPath: ./alias.yml", destination.PrimaryDocument.Text, StringComparison.Ordinal);
+        Assert.Equal(["./alias.yml"], result.OmittedCompanionReferences);
+        Assert.Throws<KeyNotFoundException>(() => destination.GetCompanion("alias.yml"));
+    }
+
     public void Dispose()
     {
         if (Directory.Exists(root))
@@ -485,6 +520,11 @@ public sealed class ManagedConfigurationLibraryTests : IDisposable
         {
             // A synchronous desktop-startup bridge cannot pump posted work.
         }
+    }
+
+    private sealed class MutableClock(DateTimeOffset utcNow) : IClock
+    {
+        public DateTimeOffset UtcNow { get; set; } = utcNow;
     }
 
     private string RevisionYaml(ConfigurationReference reference)

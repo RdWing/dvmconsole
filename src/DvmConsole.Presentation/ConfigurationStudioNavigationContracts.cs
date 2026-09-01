@@ -14,6 +14,7 @@ public interface IConfigurationStudioNavigationViewModel
 {
     string SearchText { get; set; }
     string SystemNavigationHeading { get; }
+    string ZoneNavigationHeading { get; }
     string StreamNavigationHeading { get; }
     string GroupNavigationHeading { get; }
     string KeyNavigationHeading { get; }

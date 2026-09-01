@@ -65,8 +65,8 @@
             <MenuItem Header="Configuration Studio…" Click="HandleConfigurationStudioClick" />
             <MenuItem Header="Configuration Library…" Click="HandleConfigurationLibraryClick" />
             <Separator />
-            <MenuItem Header="Open Codeplug…" Click="HandleOpenCodeplugClick" />
-            <MenuItem Header="Open Recent" x:Name="recentCodeplugsMenu" />
+            <MenuItem Header="Import Codeplug…" Click="HandleImportCodeplugClick" />
+            <MenuItem Header="Open Recent" x:Name="recentManagedConfigurationsMenu" />
             <MenuItem Header="Import Settings…" Click="HandleImportSettingsClick" />
             <MenuItem Header="Export Settings…" Click="HandleExportSettingsClick" />
             <Separator />

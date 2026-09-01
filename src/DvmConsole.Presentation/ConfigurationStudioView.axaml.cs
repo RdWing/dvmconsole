@@ -30,6 +30,8 @@ public sealed partial class ConfigurationStudioView : UserControl
     public event EventHandler<PatchGroupEventArgs>? ToggleMultiSelectPttRequested;
     public event EventHandler? DeleteKeyRequested;
     public event EventHandler? DeleteAliasRequested;
+    public event EventHandler? BrowseKeyFileRequested;
+    public event EventHandler<ConfigurationStudioAliasFileEventArgs>? BrowseAliasFileRequested;
     public event EventHandler? ExportFullRequested;
     public event EventHandler? ExportSanitizedRequested;
     public event EventHandler? SaveCopyRequested;
@@ -91,6 +93,12 @@ public sealed partial class ConfigurationStudioView : UserControl
         => DeleteKeyRequested?.Invoke(this, EventArgs.Empty);
     private void HandleSharedDeleteAliasRequested(object? sender, EventArgs e)
         => DeleteAliasRequested?.Invoke(this, EventArgs.Empty);
+    private void HandleSharedBrowseKeyFileRequested(object? sender, EventArgs e)
+        => BrowseKeyFileRequested?.Invoke(this, EventArgs.Empty);
+    private void HandleSharedBrowseAliasFileRequested(
+        object? sender,
+        ConfigurationStudioAliasFileEventArgs e)
+        => BrowseAliasFileRequested?.Invoke(this, e);
     private void HandleSharedExportFullRequested(object? sender, EventArgs e)
         => ExportFullRequested?.Invoke(this, EventArgs.Empty);
     private void HandleSharedExportSanitizedRequested(object? sender, EventArgs e)

@@ -1,5 +1,6 @@
 using DvmConsole.Application;
 using Avalonia.Platform.Storage;
+using Avalonia.Threading;
 
 namespace DvmConsole.Desktop;
 
@@ -145,10 +146,14 @@ internal sealed class AvaloniaStorageConfigurationDocumentSet : IExportDocumentS
         cancellationToken.ThrowIfCancellationRequested();
         string name = EnsureSafeName(safeRelativeName);
         IStorageFolder folder = await GetParentAsync().ConfigureAwait(false);
-        IStorageFile file = await folder.CreateFileAsync(name).ConfigureAwait(false)
+        IStorageFile file = await AvaloniaStorageThreading
+            .InvokeAsync(() => folder.CreateFileAsync(name))
+            .ConfigureAwait(false)
             ?? throw new IOException($"The selected export folder could not create companion '{name}'.");
         companions[name] = file;
-        return new AvaloniaStorageConfigurationDocument(file);
+        return await AvaloniaStorageThreading
+            .Invoke(() => (IWritableDocument)new AvaloniaStorageConfigurationDocument(file))
+            .ConfigureAwait(false);
     }
 
     public async ValueTask<IReadableDocument?> ResolveExportedCompanionAsync(
@@ -160,28 +165,37 @@ internal sealed class AvaloniaStorageConfigurationDocumentSet : IExportDocumentS
         if (!companions.TryGetValue(name, out IStorageFile? file))
         {
             IStorageFolder folder = await GetParentAsync().ConfigureAwait(false);
-            file = await folder.GetFileAsync(name).ConfigureAwait(false);
+            file = await AvaloniaStorageThreading
+                .InvokeAsync(() => folder.GetFileAsync(name))
+                .ConfigureAwait(false);
             if (file is null)
                 return null;
             companions[name] = file;
         }
-        return new AvaloniaStorageConfigurationDocument(file);
+        return await AvaloniaStorageThreading
+            .Invoke(() => (IReadableDocument)new AvaloniaStorageConfigurationDocument(file))
+            .ConfigureAwait(false);
     }
 
     public void Dispose()
     {
         if (Interlocked.Exchange(ref disposed, 1) != 0)
             return;
-        foreach (IStorageFile companion in companions.Values.Distinct())
-            companion.Dispose();
-        parent?.Dispose();
-        primary.Dispose();
+        AvaloniaStorageThreading.Invoke(() =>
+        {
+            foreach (IStorageFile companion in companions.Values.Distinct())
+                companion.Dispose();
+            parent?.Dispose();
+            primary.Dispose();
+        });
     }
 
     private async Task<IStorageFolder> GetParentAsync()
     {
         ObjectDisposedException.ThrowIf(Volatile.Read(ref disposed) != 0, this);
-        return parent ??= await primary.GetParentAsync().ConfigureAwait(false)
+        return parent ??= await AvaloniaStorageThreading
+            .InvokeAsync(primary.GetParentAsync)
+            .ConfigureAwait(false)
             ?? throw new IOException("The selected export document did not expose a parent folder for companion files.");
     }
 
@@ -197,20 +211,101 @@ internal sealed class AvaloniaStorageConfigurationDocumentSet : IExportDocumentS
 internal sealed class AvaloniaStorageConfigurationDocument(IStorageFile file) : IWritableDocument
 {
     private readonly IStorageFile file = file ?? throw new ArgumentNullException(nameof(file));
+    private readonly string displayName = file.Name;
+    private readonly string? originIdentity = file.Path?.ToString();
 
-    public string DisplayName => file.Name;
-    public string? OriginIdentity => file.Path?.ToString();
+    public string DisplayName => displayName;
+    public string? OriginIdentity => originIdentity;
 
     public ValueTask<Stream> OpenReadAsync(CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        return new ValueTask<Stream>(file.OpenReadAsync());
+        return new ValueTask<Stream>(
+            AvaloniaStorageThreading.InvokeAsync(file.OpenReadAsync));
     }
 
     public ValueTask<Stream> OpenWriteAsync(CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        return new ValueTask<Stream>(file.OpenWriteAsync());
+        return new ValueTask<Stream>(
+            AvaloniaStorageThreading.InvokeAsync(file.OpenWriteAsync));
+    }
+}
+
+internal static class AvaloniaStorageThreading
+{
+    public static void Invoke(Action operation)
+    {
+        ArgumentNullException.ThrowIfNull(operation);
+        if (Dispatcher.UIThread.CheckAccess())
+        {
+            operation();
+            return;
+        }
+
+        var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Dispatcher.UIThread.Post(() =>
+        {
+            try
+            {
+                operation();
+                completion.TrySetResult();
+            }
+            catch (Exception exception)
+            {
+                completion.TrySetException(exception);
+            }
+        });
+        completion.Task.GetAwaiter().GetResult();
+    }
+
+    public static Task<T> Invoke<T>(Func<T> operation)
+    {
+        ArgumentNullException.ThrowIfNull(operation);
+        return InvokeAsync(() => Task.FromResult(operation()));
+    }
+
+    public static Task InvokeAsync(Func<Task> operation)
+    {
+        ArgumentNullException.ThrowIfNull(operation);
+        if (Dispatcher.UIThread.CheckAccess())
+            return operation();
+
+        var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Dispatcher.UIThread.Post(async () =>
+        {
+            try
+            {
+                await operation();
+                completion.TrySetResult();
+            }
+            catch (Exception exception)
+            {
+                completion.TrySetException(exception);
+            }
+        });
+        return completion.Task;
+    }
+
+    public static Task<T> InvokeAsync<T>(Func<Task<T>> operation)
+    {
+        ArgumentNullException.ThrowIfNull(operation);
+        if (Dispatcher.UIThread.CheckAccess())
+            return operation();
+
+        var completion = new TaskCompletionSource<T>(TaskCreationOptions.RunContinuationsAsynchronously);
+        Dispatcher.UIThread.Post(async () =>
+        {
+            try
+            {
+                completion.TrySetResult(await operation());
+            }
+            catch (Exception exception)
+            {
+                completion.TrySetException(exception);
+            }
+        });
+        return completion.Task;
     }
 }
 
@@ -245,7 +340,7 @@ internal sealed class AvaloniaStorageConfigurationImportDocumentSet : IImportDoc
         if (explicitlySelectedCompanions.TryGetValue(reference, out IStorageFile? previous))
         {
             openedItems.Remove(previous);
-            previous.Dispose();
+            AvaloniaStorageThreading.Invoke(previous.Dispose);
         }
         explicitlySelectedCompanions[reference] = file;
         openedItems.Add(file);
@@ -258,7 +353,11 @@ internal sealed class AvaloniaStorageConfigurationImportDocumentSet : IImportDoc
         cancellationToken.ThrowIfCancellationRequested();
         ObjectDisposedException.ThrowIf(Volatile.Read(ref disposed) != 0, this);
         if (explicitlySelectedCompanions.TryGetValue(relativeReference, out IStorageFile? selected))
-            return new AvaloniaStorageConfigurationDocument(selected);
+        {
+            return await AvaloniaStorageThreading
+                .Invoke(() => (IReadableDocument)new AvaloniaStorageConfigurationDocument(selected))
+                .ConfigureAwait(false);
+        }
         string[] segments = SafeSegments(relativeReference);
         if (segments.Length == 0)
             return null;
@@ -266,34 +365,45 @@ internal sealed class AvaloniaStorageConfigurationImportDocumentSet : IImportDoc
         IStorageFolder folder = await GetParentAsync().ConfigureAwait(false);
         for (int index = 0; index < segments.Length - 1; index++)
         {
-            IStorageFolder? child = await folder.GetFolderAsync(segments[index]).ConfigureAwait(false);
+            IStorageFolder? child = await AvaloniaStorageThreading
+                .InvokeAsync(() => folder.GetFolderAsync(segments[index]))
+                .ConfigureAwait(false);
             if (child is null)
                 return null;
             openedItems.Add(child);
             folder = child;
         }
 
-        IStorageFile? file = await folder.GetFileAsync(segments[^1]).ConfigureAwait(false);
+        IStorageFile? file = await AvaloniaStorageThreading
+            .InvokeAsync(() => folder.GetFileAsync(segments[^1]))
+            .ConfigureAwait(false);
         if (file is null)
             return null;
         openedItems.Add(file);
-        return new AvaloniaStorageConfigurationDocument(file);
+        return await AvaloniaStorageThreading
+            .Invoke(() => (IReadableDocument)new AvaloniaStorageConfigurationDocument(file))
+            .ConfigureAwait(false);
     }
 
     public void Dispose()
     {
         if (Interlocked.Exchange(ref disposed, 1) != 0)
             return;
-        foreach (IDisposable item in openedItems.Distinct())
-            item.Dispose();
-        parent?.Dispose();
-        primary.Dispose();
+        AvaloniaStorageThreading.Invoke(() =>
+        {
+            foreach (IDisposable item in openedItems.Distinct())
+                item.Dispose();
+            parent?.Dispose();
+            primary.Dispose();
+        });
     }
 
     private async Task<IStorageFolder> GetParentAsync()
     {
         ObjectDisposedException.ThrowIf(Volatile.Read(ref disposed) != 0, this);
-        return parent ??= await primary.GetParentAsync().ConfigureAwait(false)
+        return parent ??= await AvaloniaStorageThreading
+            .InvokeAsync(primary.GetParentAsync)
+            .ConfigureAwait(false)
             ?? throw new IOException("The selected configuration did not expose a folder for companion files.");
     }
 

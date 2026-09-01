@@ -583,6 +583,7 @@ public sealed class ManagedConfigurationLibrary : IConfigurationLibrary, IActive
                 Id = configuration.Id.Value,
                 Revision = configuration.Revision.Value
             };
+            entry.LastOpenedAt = clock.UtcNow;
             SaveCatalog(catalog);
             Volatile.Write(ref activeConfiguration, configuration);
         }
@@ -1040,7 +1041,8 @@ public sealed class ManagedConfigurationLibrary : IConfigurationLibrary, IActive
             active && catalog.Active!.Revision != entry.CurrentRevision,
             entry.IsReadOnly,
             entry.IsLegacyCandidate,
-            entry.IsLegacyCandidate ? entry.OriginIdentity : null);
+            entry.IsLegacyCandidate ? entry.OriginIdentity : null,
+            entry.LastOpenedAt);
     }
 
     private static ConfigurationSummary ToTrashSummary(CatalogEntryState entry)
