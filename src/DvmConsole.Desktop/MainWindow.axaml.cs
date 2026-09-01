@@ -62,6 +62,7 @@ public sealed partial class MainWindow : Window
     private int shutdownStarted;
     private bool shutdownComplete;
     internal ConfigurationStudioWindow? OpenConfigurationStudioWindow => configurationStudioWindow;
+    internal ManagedConfigurationLibrary ConfigurationLibrary => configurationLibrary;
 
     public MainWindow() : this(null)
     {
