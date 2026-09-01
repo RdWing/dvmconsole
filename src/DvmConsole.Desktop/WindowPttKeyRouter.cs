@@ -89,17 +89,15 @@ internal static class WindowPttInputGuard
 {
     public static bool ShouldSuppressSpacePtt(object? focusedElement)
     {
+        if (IsInsideChannelPttSurface(focusedElement))
+            return false;
+
         for (Visual? visual = focusedElement as Visual;
              visual is not null;
              visual = visual.GetVisualParent())
         {
-            if (visual is Button button)
-                return !button.Classes.Contains("ptt");
-
-            if (visual is ListBox list && list.Classes.Contains("channel-list"))
-                return false;
-
             if (visual is TextBox or
+                Button or
                 SelectingItemsControl or
                 Slider or
                 ScrollBar or
@@ -108,6 +106,24 @@ internal static class WindowPttInputGuard
                 TimePicker or
                 MenuItem or
                 TabItem)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool IsInsideChannelPttSurface(object? focusedElement)
+    {
+        for (Visual? visual = focusedElement as Visual;
+             visual is not null;
+             visual = visual.GetVisualParent())
+        {
+            if (visual is Control control &&
+                (control.Classes.Contains("ptt") ||
+                 control.Classes.Contains("channel-list") ||
+                 control.Classes.Contains("channel-card")))
             {
                 return true;
             }
